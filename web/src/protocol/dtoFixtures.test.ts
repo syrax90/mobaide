@@ -23,6 +23,7 @@ import {
   customAgentTypeSchema,
   customTypeDeletedSchema,
   firstAgentPairedSchema,
+  sessionModeOrderSchema,
   templateDeletedSchema,
   templateSchema,
 } from './dto/userEvents';
@@ -54,6 +55,7 @@ const REGISTRY: Readonly<Record<string, z.ZodType>> = {
   CustomAgentTypeDto: customAgentTypeSchema,
   CustomTypeDeletedPayload: customTypeDeletedSchema,
   FirstAgentPairedPayload: firstAgentPairedSchema,
+  SessionModeOrderDto: sessionModeOrderSchema,
   VoiceStatusResponse: voiceStatusSchema,
 };
 

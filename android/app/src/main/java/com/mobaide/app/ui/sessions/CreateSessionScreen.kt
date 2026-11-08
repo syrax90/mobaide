@@ -1,5 +1,20 @@
 package com.mobaide.app.ui.sessions
 
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.selected
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -45,11 +60,9 @@ import androidx.compose.material3.CardDefaults
 import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.InputChip
@@ -78,7 +91,6 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -88,7 +100,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -97,6 +108,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.ui.common.pathBrowseHint
+import com.mobaide.app.ui.common.DragHandleIcon
 import com.mobaide.app.ui.common.PathSuggestionsUi
 import com.mobaide.app.ui.common.PathTextField
 import com.mobaide.app.ui.common.SecretTextField
@@ -202,19 +214,15 @@ fun CreateSessionScreen(
         },
         snackbarHost = { PixelSnackbarHost(snackbar) },
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(16.dp)
-                // The app is edge-to-edge, so adjustResize never shrinks the window: the
-                // keyboard arrives only as an inset. Consume it above verticalScroll so the
-                // viewport shrinks and the focused field scrolls clear of the keyboard.
-                // Scaffold already inset this content by systemBars — add only the excess.
-                .windowInsetsPadding(WindowInsets.ime.exclude(WindowInsets.systemBars))
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+        // The app is edge-to-edge, so adjustResize never shrinks the window: the
+        // keyboard arrives only as an inset. Consume it above the scroll container so
+        // the viewport shrinks and the focused field scrolls clear of the keyboard.
+        // Scaffold already inset this content by systemBars — add only the excess.
+        val bodyModifier = Modifier
+            .fillMaxSize()
+            .padding(padding)
+            .windowInsetsPadding(WindowInsets.ime.exclude(WindowInsets.systemBars))
+        run {
             val storedProject = (state.selection as? ProjectSelection.Stored)?.let { sel ->
                 state.projects.firstOrNull { it.name == sel.name }
             }
@@ -235,11 +243,13 @@ fun CreateSessionScreen(
             }
 
             when (state.step) {
-                CreateSessionStep.ProjectSelect -> ProjectSelectSection(
+                CreateSessionStep.ProjectSelect -> ProjectSelectStep(
                     state = state,
-                    selectedProject = storedProject,
-                    customPathSelected = customPathSelected,
+                    customPathSelected = customPathSelected != null,
+                    modifier = bodyModifier,
                     onSelect = viewModel::selectProject,
+                    onReorder = viewModel::reorderProjects,
+                    onMove = viewModel::moveProject,
                     onCustomPathSelected = viewModel::selectCustomPath,
                     onCustomPathChange = viewModel::setCustomPathDraft,
                     onPickRecentCustomPath = viewModel::pickRecentCustomPath,
@@ -250,46 +260,53 @@ fun CreateSessionScreen(
                     onCreateProjectClicked = projectsViewModel::openCreateSheet,
                     onContinue = viewModel::confirmProject,
                 )
-                CreateSessionStep.ModePick -> ModePickerSection(
+                CreateSessionStep.ModePick -> ModePickerStep(
                     header = modeHeader,
-                    selectedMode = state.selectedMode,
-                    claudeEnabled = state.claudeEnabled,
-                    codexEnabled = state.codexEnabled,
-                    antigravityEnabled = state.antigravityEnabled,
-                    autoScanEnabled = state.autoScanEnabled,
-                    submitting = state.submitting,
-                    customTypes = state.customTypes,
+                    state = state,
+                    modifier = bodyModifier,
                     onChooseMode = viewModel::chooseMode,
                     onAddCustomType = { viewModel.openTypeEditor(null) },
                     onEditCustomType = viewModel::openTypeEditor,
                     onDeleteCustomType = viewModel::requestDeleteType,
+                    onReorder = viewModel::reorderModes,
+                    onMove = viewModel::moveMode,
                 )
-                CreateSessionStep.StandardConfig -> StandardConfigSection(
-                    state = state,
-                    showWorktreeToggle = state.selection is ProjectSelection.Stored &&
-                        storedProject?.is_git == true,
-                    viewModel = viewModel,
-                )
-                CreateSessionStep.CodexConfig -> CodexConfigSection(
-                    state = state,
-                    showWorktreeToggle = state.selection is ProjectSelection.Stored &&
-                        storedProject?.is_git == true,
-                    viewModel = viewModel,
-                )
-                CreateSessionStep.AntigravityConfig -> AntigravityConfigSection(
-                    state = state,
-                    showWorktreeToggle = state.selection is ProjectSelection.Stored &&
-                        storedProject?.is_git == true,
-                    viewModel = viewModel,
-                )
-                CreateSessionStep.AutoScanConfig -> AutoScanConfigSection(
-                    state = state,
-                    viewModel = viewModel,
-                )
-                CreateSessionStep.TerminalConfig -> TerminalConfigSection(
-                    state = state,
-                    viewModel = viewModel,
-                )
+                else -> Column(
+                    modifier = bodyModifier
+                        .padding(16.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    when (state.step) {
+                        CreateSessionStep.StandardConfig -> StandardConfigSection(
+                            state = state,
+                            showWorktreeToggle = state.selection is ProjectSelection.Stored &&
+                                storedProject?.is_git == true,
+                            viewModel = viewModel,
+                        )
+                        CreateSessionStep.CodexConfig -> CodexConfigSection(
+                            state = state,
+                            showWorktreeToggle = state.selection is ProjectSelection.Stored &&
+                                storedProject?.is_git == true,
+                            viewModel = viewModel,
+                        )
+                        CreateSessionStep.AntigravityConfig -> AntigravityConfigSection(
+                            state = state,
+                            showWorktreeToggle = state.selection is ProjectSelection.Stored &&
+                                storedProject?.is_git == true,
+                            viewModel = viewModel,
+                        )
+                        CreateSessionStep.AutoScanConfig -> AutoScanConfigSection(
+                            state = state,
+                            viewModel = viewModel,
+                        )
+                        CreateSessionStep.TerminalConfig -> TerminalConfigSection(
+                            state = state,
+                            viewModel = viewModel,
+                        )
+                        CreateSessionStep.ProjectSelect, CreateSessionStep.ModePick -> Unit
+                    }
+                }
             }
         }
     }
@@ -461,13 +478,94 @@ private fun CodexLoginDialog(
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+private const val PROJECT_KEY = "project:"
+private const val MODE_KEY = "mode:"
+private val HANDLE_WIDTH = 48.dp
+private const val REORDER_HINT = "Drag a handle to reorder — the order syncs to all your devices."
+
+/** [this] with the item keyed [fromKey] moved to where [toKey] is. */
+private fun <T> List<T>.movedByKey(fromKey: Any?, toKey: Any?, keyOf: (T) -> String): List<T> {
+    val from = indexOfFirst { keyOf(it) == fromKey }
+    val to = indexOfFirst { keyOf(it) == toKey }
+    if (from < 0 || to < 0 || from == to) return this
+    return toMutableList().apply { add(to, removeAt(from)) }
+}
+
+/**
+ * TalkBack's way to reorder: "Move up" / "Move down" actions on the row's card,
+ * since a screen-reader user cannot drag the handle.
+ */
+private fun Modifier.moveActions(index: Int, count: Int, onMove: (Int, Int) -> Unit): Modifier =
+    if (count < 2) this else semantics {
+        customActions = buildList {
+            if (index > 0) {
+                add(CustomAccessibilityAction("Move up") { onMove(index, index - 1); true })
+            }
+            if (index < count - 1) {
+                add(CustomAccessibilityAction("Move down") { onMove(index, index + 1); true })
+            }
+        }
+    }
+
+/**
+ * A wizard row: the drag handle in a gutter left of the card.
+ * A row that cannot move keeps the handle's width empty when [reserveHandle],
+ * so all cards in the list line up.
+ */
 @Composable
-private fun ProjectSelectSection(
+private fun HandleRow(
+    handle: (@Composable () -> Unit)?,
+    reserveHandle: Boolean,
+    content: @Composable () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        when {
+            handle != null -> handle()
+            reserveHandle -> Spacer(Modifier.width(HANDLE_WIDTH))
+        }
+        Box(modifier = Modifier.weight(1f)) { content() }
+    }
+}
+
+/**
+ * The grip a row is dragged by. Outside the card on purpose: a tap here hits
+ * nothing, so a press that never turns into a drag cannot pick the card.
+ */
+@Composable
+private fun WizardDragHandle(label: String, dragging: Boolean, modifier: Modifier) {
+    Box(
+        modifier = modifier
+            .width(HANDLE_WIDTH)
+            .height(48.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        DragHandleIcon(
+            contentDescription = "Reorder $label",
+            tint = if (dragging) MaterialTheme.pixel.brand2 else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * Project step. Each stored project is a card: tap selects it, the handle drags
+ * it. The order saved is the agent's own project order, so every client shows
+ * it. "Custom path…" and "Create new project…" stay last and do not move.
+ *
+ * A LazyColumn rather than the config steps' scrolling Column, so a drag near
+ * the top or bottom edge scrolls the list.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ProjectSelectStep(
     state: CreateSessionUiState,
-    selectedProject: com.mobaide.app.data.network.dto.ProjectInfo?,
-    customPathSelected: ProjectSelection.CustomPath?,
+    customPathSelected: Boolean,
+    modifier: Modifier,
     onSelect: (String) -> Unit,
+    onReorder: (List<String>) -> Unit,
+    onMove: (Int, Int) -> Unit,
     onCustomPathSelected: () -> Unit,
     onCustomPathChange: (String) -> Unit,
     onPickRecentCustomPath: (String) -> Unit,
@@ -478,133 +576,241 @@ private fun ProjectSelectSection(
     onCreateProjectClicked: () -> Unit,
     onContinue: () -> Unit,
 ) {
-    var dropdownExpanded by remember { mutableStateOf(false) }
-    val displayValue = when (val sel = state.selection) {
-        is ProjectSelection.Stored -> sel.name
-        is ProjectSelection.CustomPath -> "Custom path"
-        ProjectSelection.None ->
-            if (state.isLoadingProjects) "Loading…" else "Select project"
+    val listState = rememberLazyListState()
+    val haptic = LocalHapticFeedback.current
+    // Moved in the drag's own frame, so the library sees each swap at once. The
+    // view model's order replaces it on every upstream change — except during a
+    // drag, where the answer to the previous drop would undo the swaps so far.
+    var display by remember { mutableStateOf(state.projects) }
+    val reorderState = rememberReorderableLazyListState(listState) { from, to ->
+        display = display.movedByKey(from.key, to.key) { PROJECT_KEY + it.name }
+        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
     }
-    ExposedDropdownMenuBox(
-        expanded = dropdownExpanded,
-        onExpandedChange = { dropdownExpanded = !dropdownExpanded },
-    ) {
-        OutlinedTextField(
-            colors = PixelTextFieldDefaults.colors(),
-            value = displayValue,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text("Project") },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = dropdownExpanded) },
-            modifier = Modifier.menuAnchor().fillMaxWidth(),
-        )
-        DropdownMenu(
-            expanded = dropdownExpanded,
-            onDismissRequest = { dropdownExpanded = false },
-        ) {
-            state.projects.forEach { project ->
-                DropdownMenuItem(
-                    text = { Text(project.name) },
-                    onClick = {
-                        onSelect(project.name)
-                        dropdownExpanded = false
-                    },
-                )
-            }
-            if (state.projects.isNotEmpty()) {
-                HorizontalDivider(thickness = 2.dp)
-            }
-            DropdownMenuItem(
-                text = {
-                    Column {
-                        Text("Custom path…")
-                        Text(
-                            text = "Run once — no project is created",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                },
-                leadingIcon = {
-                    Icon(Icons.Default.FolderOpen, contentDescription = null)
-                },
-                modifier = Modifier.semantics {
-                    role = Role.Button
-                    contentDescription = "Custom path"
-                },
-                onClick = {
-                    dropdownExpanded = false
-                    onCustomPathSelected()
-                },
-            )
-            DropdownMenuItem(
-                text = { Text("Create new project…") },
-                leadingIcon = {
-                    Icon(Icons.Default.Add, contentDescription = null)
-                },
-                modifier = Modifier.semantics {
-                    role = Role.Button
-                    contentDescription = "Create new project"
-                },
-                onClick = {
-                    dropdownExpanded = false
-                    onCreateProjectClicked()
-                },
-            )
-        }
+    LaunchedEffect(state.projects, reorderState.isAnyItemDragging) {
+        if (!reorderState.isAnyItemDragging) display = state.projects
     }
-
-    selectedProject?.let { project ->
-        Text(
-            text = project.path,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (project.has_linear_key) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Check,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(16.dp),
-                )
-                Text(
-                    text = "Linear key configured",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-
-    if (customPathSelected != null) {
-        CustomPathPanel(
-            state = state,
-            onDraftChange = onCustomPathChange,
-            onPickRecent = onPickRecentCustomPath,
-            onRemoveRecent = onRemoveRecentCustomPath,
-            suggestions = customPathSuggestions,
-            onFocusChange = onCustomPathFocusChange,
-            onPickSuggestion = onPickCustomPathSuggestion,
-        )
-    }
-
+    val reorderable = display.size > 1
+    val selectedName = (state.selection as? ProjectSelection.Stored)?.name
     val canContinue = when (val sel = state.selection) {
         is ProjectSelection.Stored -> true
         is ProjectSelection.CustomPath ->
             state.customPathDraft.isNotBlank() && state.customPathError == null
         ProjectSelection.None -> false
     }
-    PixelButton(
-        style = PixelButtonStyle.Primary,
-        onClick = onContinue,
-        enabled = canContinue,
-        modifier = Modifier.fillMaxWidth(),
+
+    LazyColumn(
+        state = listState,
+        modifier = modifier,
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Continue")
+        item(key = "project_header") {
+            WizardListHeader(
+                title = "Project",
+                hint = if (reorderable) REORDER_HINT else null,
+            )
+        }
+        if (display.isEmpty()) {
+            item(key = "project_empty") {
+                Text(
+                    text = if (state.isLoadingProjects) {
+                        "Loading projects…"
+                    } else {
+                        "This agent has no projects yet. Create one, or run once in a custom path."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        itemsIndexed(display, key = { _, project -> PROJECT_KEY + project.name }) { index, project ->
+            ReorderableItem(reorderState, key = PROJECT_KEY + project.name) { isDragging ->
+                val handleModifier = Modifier.draggableHandle(
+                    onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) },
+                    onDragStopped = { onReorder(display.map { it.name }) },
+                )
+                HandleRow(
+                    handle = if (reorderable) {
+                        { WizardDragHandle(project.name, isDragging, handleModifier) }
+                    } else {
+                        null
+                    },
+                    reserveHandle = false,
+                ) {
+                    ProjectPickCard(
+                        project = project,
+                        selected = project.name == selectedName,
+                        dragging = isDragging,
+                        onClick = { onSelect(project.name) },
+                        modifier = Modifier.moveActions(index, display.size, onMove),
+                    )
+                }
+            }
+        }
+        item(key = "custom_path_row") {
+            HandleRow(handle = null, reserveHandle = reorderable) {
+                WizardActionCard(
+                    title = "Custom path…",
+                    subtitle = "Run once — no project is created",
+                    icon = Icons.Default.FolderOpen,
+                    selected = customPathSelected,
+                    onClick = onCustomPathSelected,
+                    contentDescription = "Custom path",
+                    testTag = "project_custom_path",
+                )
+            }
+        }
+        item(key = "create_project_row") {
+            HandleRow(handle = null, reserveHandle = reorderable) {
+                WizardActionCard(
+                    title = "Create new project…",
+                    subtitle = "Name + path, saved on this agent for next time",
+                    icon = Icons.Default.Add,
+                    selected = false,
+                    onClick = onCreateProjectClicked,
+                    contentDescription = "Create new project",
+                    testTag = "project_create",
+                )
+            }
+        }
+        if (customPathSelected) {
+            item(key = "custom_path_panel") {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CustomPathPanel(
+                        state = state,
+                        onDraftChange = onCustomPathChange,
+                        onPickRecent = onPickRecentCustomPath,
+                        onRemoveRecent = onRemoveRecentCustomPath,
+                        suggestions = customPathSuggestions,
+                        onFocusChange = onCustomPathFocusChange,
+                        onPickSuggestion = onPickCustomPathSuggestion,
+                    )
+                }
+            }
+        }
+        item(key = "project_continue") {
+            PixelButton(
+                style = PixelButtonStyle.Primary,
+                onClick = onContinue,
+                enabled = canContinue,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Continue")
+            }
+        }
+    }
+}
+
+/** A list's title, with an optional one-line hint under it. */
+@Composable
+private fun WizardListHeader(title: String, hint: String?) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(text = title, style = MaterialTheme.typography.titleMedium)
+        if (hint != null) {
+            Text(
+                text = hint,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private val selectedCardColors: CardColors
+    @Composable get() = CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+    )
+
+private val transparentListColors: ListItemColors
+    @Composable get() = ListItemDefaults.colors(containerColor = Color.Transparent)
+
+/** A stored project on the project step. */
+@Composable
+private fun ProjectPickCard(
+    project: com.mobaide.app.data.network.dto.ProjectInfo,
+    selected: Boolean,
+    dragging: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        onClick = onClick,
+        colors = if (selected || dragging) selectedCardColors else CardDefaults.cardColors(),
+        border = BorderStroke(
+            2.dp,
+            if (selected || dragging) MaterialTheme.pixel.brand2 else MaterialTheme.pixel.surface2,
+        ),
+        modifier = modifier
+            .fillMaxWidth()
+            .semantics { this.selected = selected }
+            .testTag("project_row_${project.name}"),
+    ) {
+        ListItem(
+            headlineContent = {
+                Text(project.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            },
+            supportingContent = {
+                Column {
+                    Text(project.path, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (!project.path_exists) {
+                        Text(
+                            text = "Folder not found on the agent",
+                            color = MaterialTheme.pixel.warning,
+                        )
+                    }
+                    if (project.has_linear_key) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Check,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Text("Linear key configured")
+                        }
+                    }
+                }
+            },
+            colors = transparentListColors,
+        )
+    }
+}
+
+/** A fixed row under a reorderable list ("Custom path…", "Create new project…"). */
+@Composable
+private fun WizardActionCard(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    selected: Boolean,
+    onClick: () -> Unit,
+    contentDescription: String,
+    testTag: String,
+) {
+    Card(
+        onClick = onClick,
+        colors = if (selected) selectedCardColors else CardDefaults.cardColors(),
+        border = BorderStroke(
+            2.dp,
+            if (selected) MaterialTheme.pixel.brand2 else MaterialTheme.pixel.surface2,
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics {
+                this.contentDescription = contentDescription
+                this.selected = selected
+            }
+            .testTag(testTag),
+    ) {
+        ListItem(
+            headlineContent = { Text(title) },
+            supportingContent = { Text(subtitle) },
+            leadingContent = { Icon(icon, contentDescription = null) },
+            colors = transparentListColors,
+        )
     }
 }
 
@@ -687,43 +893,26 @@ private data class ModeHeader(
  * moves the wizard on (`onChooseMode`), so each card carries a trailing chevron
  * to read as navigation. The selected highlight survives for the return trip
  * via Back.
+ *
+ * Built-in and custom cards share one list in the account's saved order; the
+ * handle drags a card, and "Add custom agent…" stays last.
  */
 @Composable
-private fun ModePickerSection(
+private fun ModePickerStep(
     header: ModeHeader,
-    selectedMode: CreateSessionMode?,
-    claudeEnabled: Boolean,
-    codexEnabled: Boolean,
-    antigravityEnabled: Boolean,
-    autoScanEnabled: Boolean,
-    submitting: Boolean,
-    customTypes: List<CustomAgentTypeDto>,
+    state: CreateSessionUiState,
+    modifier: Modifier,
     onChooseMode: (CreateSessionMode) -> Unit,
     onAddCustomType: () -> Unit,
     onEditCustomType: (CustomAgentTypeDto) -> Unit,
     onDeleteCustomType: (CustomAgentTypeDto) -> Unit,
+    onReorder: (List<String>) -> Unit,
+    onMove: (Int, Int) -> Unit,
 ) {
-    Text(
-        text = header.title,
-        style = MaterialTheme.typography.titleMedium,
-    )
-    header.subtitle?.let {
-        Text(
-            text = it,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-
-    val selectedColors = CardDefaults.cardColors(
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-    )
-    // Transparent container so the ElevatedCard (incl. its dimmed disabled
-    // colour) shows through; the disabled variant also fades the text to the
+    val submitting = state.submitting
+    // Transparent container so the Card (incl. its dimmed disabled colour)
+    // shows through; the disabled variant also fades the text to the
     // Material disabled-content alpha so a grayed-out card reads as inert.
-    val enabledList = ListItemDefaults.colors(
-        containerColor = Color.Transparent,
-    )
     val disabledList = ListItemDefaults.colors(
         containerColor = Color.Transparent,
         headlineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
@@ -738,6 +927,7 @@ private fun ModePickerSection(
         leadingIconColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
         trailingIconColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
     )
+    val enabledList = transparentListColors
     // A card the agent can't run keeps the yellow reason text; one greyed only
     // because a launch is already in flight is plainly inert.
     val listColorsFor: (Boolean) -> ListItemColors = { available ->
@@ -748,197 +938,205 @@ private fun ModePickerSection(
         }
     }
 
-    Card(
-        onClick = { onChooseMode(CreateSessionMode.Standard) },
-        enabled = claudeEnabled && !submitting,
-        colors = if (selectedMode == CreateSessionMode.Standard) selectedColors else CardDefaults.cardColors(),
-        border = BorderStroke(
-            2.dp,
-            if (selectedMode == CreateSessionMode.Standard) MaterialTheme.pixel.brand2
-            else MaterialTheme.pixel.surface2,
-        ),
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("mode_card_standard"),
+    val listState = rememberLazyListState()
+    val haptic = LocalHapticFeedback.current
+    val modes = state.orderedModes
+    // Moved in the drag's own frame; the saved order replaces it on change,
+    // but not during a drag.
+    var display by remember { mutableStateOf(modes) }
+    val reorderState = rememberReorderableLazyListState(listState) { from, to ->
+        display = display.movedByKey(from.key, to.key) { MODE_KEY + it.orderId }
+        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    }
+    LaunchedEffect(modes, reorderState.isAnyItemDragging) {
+        if (!reorderState.isAnyItemDragging) display = modes
+    }
+
+    LazyColumn(
+        state = listState,
+        modifier = modifier,
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        ListItem(
-            headlineContent = { Text("Claude code session") },
-            supportingContent = {
+        item(key = "mode_header") {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(text = header.title, style = MaterialTheme.typography.titleMedium)
+                header.subtitle?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Text(
-                    if (claudeEnabled) "Configure and launch a Claude session."
-                    else "Claude CLI is not installed on the agent.",
+                    text = REORDER_HINT,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
                 )
-            },
-            trailingContent = { ModeChevron() },
-            colors = listColorsFor(claudeEnabled),
-        )
-    }
-
-    Card(
-        onClick = { onChooseMode(CreateSessionMode.Codex) },
-        enabled = codexEnabled && !submitting,
-        colors = if (selectedMode == CreateSessionMode.Codex) selectedColors else CardDefaults.cardColors(),
-        border = BorderStroke(
-            2.dp,
-            if (selectedMode == CreateSessionMode.Codex) MaterialTheme.pixel.brand2
-            else MaterialTheme.pixel.surface2,
-        ),
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("mode_card_codex"),
-    ) {
-        ListItem(
-            headlineContent = { Text("Codex session") },
-            supportingContent = {
-                Text(
-                    if (codexEnabled) "Configure and launch an OpenAI Codex session."
-                    else "Codex CLI is not installed on the agent.",
+            }
+        }
+        itemsIndexed(display, key = { _, mode -> MODE_KEY + mode.orderId }) { index, mode ->
+            ReorderableItem(reorderState, key = MODE_KEY + mode.orderId) { isDragging ->
+                val handleModifier = Modifier.draggableHandle(
+                    onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) },
+                    onDragStopped = { onReorder(display.map { it.orderId }) },
                 )
-            },
-            trailingContent = { ModeChevron() },
-            colors = listColorsFor(codexEnabled),
-        )
-    }
-
-    Card(
-        onClick = { onChooseMode(CreateSessionMode.Antigravity) },
-        enabled = antigravityEnabled && !submitting,
-        colors = if (selectedMode == CreateSessionMode.Antigravity) selectedColors else CardDefaults.cardColors(),
-        border = BorderStroke(
-            2.dp,
-            if (selectedMode == CreateSessionMode.Antigravity) MaterialTheme.pixel.brand2
-            else MaterialTheme.pixel.surface2,
-        ),
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("mode_card_antigravity"),
-    ) {
-        ListItem(
-            headlineContent = { Text("Antigravity session") },
-            supportingContent = {
-                Text(
-                    if (antigravityEnabled) "Configure and launch a Google Antigravity session."
-                    else "Antigravity CLI (agy) is not installed on the agent.",
-                )
-            },
-            trailingContent = { ModeChevron() },
-            colors = listColorsFor(antigravityEnabled),
-        )
-    }
-
-    Card(
-        onClick = { onChooseMode(CreateSessionMode.AutoScan) },
-        enabled = autoScanEnabled && !submitting,
-        colors = if (selectedMode == CreateSessionMode.AutoScan) selectedColors else CardDefaults.cardColors(),
-        border = BorderStroke(
-            2.dp,
-            if (selectedMode == CreateSessionMode.AutoScan) MaterialTheme.pixel.brand2
-            else MaterialTheme.pixel.surface2,
-        ),
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("mode_card_autoscan"),
-    ) {
-        ListItem(
-            headlineContent = { Text("Auto Scan mode") },
-            supportingContent = {
-                Text(
-                    when {
-                        !claudeEnabled -> "Auto Scan needs the Claude CLI, which isn't installed on the agent."
-                        !autoScanEnabled -> "Auto Scan needs a Linear API key for this project."
-                        else -> "Scan Linear for matching issues and launch sessions."
-                    },
-                )
-            },
-            trailingContent = { ModeChevron() },
-            colors = listColorsFor(autoScanEnabled),
-        )
-    }
-
-    Card(
-        onClick = { onChooseMode(CreateSessionMode.CustomShell) },
-        enabled = !submitting,
-        colors = if (selectedMode == CreateSessionMode.CustomShell) selectedColors else CardDefaults.cardColors(),
-        border = BorderStroke(
-            2.dp,
-            if (selectedMode == CreateSessionMode.CustomShell) MaterialTheme.pixel.brand2
-            else MaterialTheme.pixel.surface2,
-        ),
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("mode_card_terminal"),
-    ) {
-        ListItem(
-            headlineContent = { Text("Terminal") },
-            supportingContent = { Text("Bash / cmd in the chosen directory") },
-            leadingContent = {
-                Icon(
-                    imageVector = Icons.Filled.Terminal,
-                    contentDescription = null,
-                )
-            },
-            trailingContent = { ModeChevron() },
-            colors = listColorsFor(true),
-        )
-    }
-
-    customTypes.forEach { type ->
-        key(type.id) {
-            CustomAgentTypeCard(
-                type = type,
-                selected = selectedMode == CreateSessionMode.Custom(type.id),
-                selectedColors = selectedColors,
-                listColors = listColorsFor(true),
-                onPick = { onChooseMode(CreateSessionMode.Custom(type.id)) },
-                onEdit = { onEditCustomType(type) },
-                onDelete = { onDeleteCustomType(type) },
-            )
+                val customType = (mode as? CreateSessionMode.Custom)?.let { custom ->
+                    state.customTypes.firstOrNull { it.id == custom.typeId }
+                }
+                val title = customType?.name ?: builtInModeTitle(mode)
+                HandleRow(
+                    handle = { WizardDragHandle(title, isDragging, handleModifier) },
+                    reserveHandle = true,
+                ) {
+                    val cardModifier = Modifier.moveActions(index, display.size, onMove)
+                    if (customType != null) {
+                        CustomAgentTypeCard(
+                            type = customType,
+                            selected = state.selectedMode == mode || isDragging,
+                            selectedColors = selectedCardColors,
+                            listColors = listColorsFor(true),
+                            onPick = { onChooseMode(mode) },
+                            onEdit = { onEditCustomType(customType) },
+                            onDelete = { onDeleteCustomType(customType) },
+                            modifier = cardModifier,
+                        )
+                    } else {
+                        BuiltInModeCard(
+                            mode = mode,
+                            state = state,
+                            highlighted = state.selectedMode == mode || isDragging,
+                            listColorsFor = listColorsFor,
+                            onChoose = { onChooseMode(mode) },
+                            modifier = cardModifier,
+                        )
+                    }
+                }
+            }
+        }
+        // Always enabled — the 20-type cap is not gated client-side (the cached
+        // list can be stale); the editor surfaces the server's 409 inline instead.
+        item(key = "add_custom_type") {
+            HandleRow(handle = null, reserveHandle = true) {
+                Card(
+                    onClick = onAddCustomType,
+                    enabled = !submitting,
+                    border = BorderStroke(2.dp, MaterialTheme.pixel.surface2),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("add_custom_type_card"),
+                ) {
+                    ListItem(
+                        headlineContent = { Text("Add custom agent…") },
+                        supportingContent = { Text("Name + launch command, synced to your account") },
+                        leadingContent = {
+                            Icon(
+                                imageVector = Icons.Filled.Add,
+                                contentDescription = null,
+                            )
+                        },
+                        colors = listColorsFor(true),
+                    )
+                }
+            }
+        }
+        // Terminal and custom agent types on a non-git target launch straight from
+        // this step, so it needs its own progress affordance — the config steps'
+        // "Creating…" button never renders on that path.
+        if (submitting) {
+            item(key = "mode_pick_submitting") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("mode_pick_submitting"),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PixelBlinkCursor(
+                        height = 20.dp,
+                    )
+                    Text(
+                        text = "Creating session…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
     }
+}
 
-    // Always enabled — the 20-type cap is not gated client-side (the cached
-    // list can be stale); the editor surfaces the server's 409 inline instead.
+private fun builtInModeTitle(mode: CreateSessionMode): String = when (mode) {
+    CreateSessionMode.Standard -> "Claude code session"
+    CreateSessionMode.Codex -> "Codex session"
+    CreateSessionMode.Antigravity -> "Antigravity session"
+    CreateSessionMode.AutoScan -> "Auto Scan mode"
+    CreateSessionMode.CustomShell -> "Terminal"
+    is CreateSessionMode.Custom -> "Custom agent"
+}
+
+/** One built-in mode card: its copy, its availability, and its test tag. */
+@Composable
+private fun BuiltInModeCard(
+    mode: CreateSessionMode,
+    state: CreateSessionUiState,
+    highlighted: Boolean,
+    listColorsFor: (Boolean) -> ListItemColors,
+    onChoose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val available = state.isModeEnabled(mode)
+    val (subtitle, tag) = when (mode) {
+        CreateSessionMode.Standard -> Pair(
+            if (state.claudeEnabled) "Configure and launch a Claude session."
+            else "Claude CLI is not installed on the agent.",
+            "mode_card_standard",
+        )
+        CreateSessionMode.Codex -> Pair(
+            if (state.codexEnabled) "Configure and launch an OpenAI Codex session."
+            else "Codex CLI is not installed on the agent.",
+            "mode_card_codex",
+        )
+        CreateSessionMode.Antigravity -> Pair(
+            if (state.antigravityEnabled) "Configure and launch a Google Antigravity session."
+            else "Antigravity CLI (agy) is not installed on the agent.",
+            "mode_card_antigravity",
+        )
+        CreateSessionMode.AutoScan -> Pair(
+            when {
+                !state.claudeEnabled -> "Auto Scan needs the Claude CLI, which isn't installed on the agent."
+                !state.autoScanEnabled -> "Auto Scan needs a Linear API key for this project."
+                else -> "Scan Linear for matching issues and launch sessions."
+            },
+            "mode_card_autoscan",
+        )
+        CreateSessionMode.CustomShell -> Pair("Bash / cmd in the chosen directory", "mode_card_terminal")
+        is CreateSessionMode.Custom -> Pair("", "mode_card_custom")
+    }
     Card(
-        onClick = onAddCustomType,
-        enabled = !submitting,
-        border = BorderStroke(2.dp, MaterialTheme.pixel.surface2),
-        modifier = Modifier
+        onClick = onChoose,
+        enabled = available && !state.submitting,
+        colors = if (highlighted) selectedCardColors else CardDefaults.cardColors(),
+        border = BorderStroke(
+            2.dp,
+            if (highlighted) MaterialTheme.pixel.brand2 else MaterialTheme.pixel.surface2,
+        ),
+        modifier = modifier
             .fillMaxWidth()
-            .testTag("add_custom_type_card"),
+            .testTag(tag),
     ) {
         ListItem(
-            headlineContent = { Text("Add custom agent…") },
-            supportingContent = { Text("Name + launch command, synced to your account") },
-            leadingContent = {
-                Icon(
-                    imageVector = Icons.Filled.Add,
-                    contentDescription = null,
-                )
+            headlineContent = { Text(builtInModeTitle(mode)) },
+            supportingContent = { Text(subtitle) },
+            leadingContent = if (mode == CreateSessionMode.CustomShell) {
+                { Icon(imageVector = Icons.Filled.Terminal, contentDescription = null) }
+            } else {
+                null
             },
-            colors = listColorsFor(true),
+            trailingContent = { ModeChevron() },
+            colors = listColorsFor(available),
         )
-    }
-
-    // Terminal and custom agent types on a non-git target launch straight from
-    // this step, so it needs its own progress affordance — the config steps'
-    // "Creating…" button never renders on that path.
-    if (submitting) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("mode_pick_submitting"),
-            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            PixelBlinkCursor(
-                height = 20.dp,
-            )
-            Text(
-                text = "Creating session…",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
     }
 }
 
@@ -970,6 +1168,7 @@ private fun CustomAgentTypeCard(
     onPick: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     Box(modifier = Modifier.fillMaxWidth()) {
@@ -979,7 +1178,7 @@ private fun CustomAgentTypeCard(
                 2.dp,
                 if (selected) MaterialTheme.pixel.brand2 else MaterialTheme.pixel.surface2,
             ),
-            modifier = Modifier
+            modifier = modifier
                 .fillMaxWidth()
                 .testTag("custom_type_card_${type.id}")
                 .combinedClickable(

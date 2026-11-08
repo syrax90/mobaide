@@ -176,7 +176,7 @@ class _StubApp:
 
     Carries an ``app.state.config`` shape with ``host`` / ``port``
     attributes — the production ``_run_agent`` reads these directly to
-    pass to ``uvicorn.Config`` / ``uvicorn.run``. We do NOT construct a
+    pass to ``uvicorn.Config``. We do NOT construct a
     real ``FastAPI`` or ``AgentConfig`` here: the test is about the
     event-loop / Runner contract, not the app configuration, and
     importing the real ``create_app`` would drag in the full agent
@@ -227,7 +227,13 @@ class _FakeServer:
 
     def __init__(self, config: _FakeConfig) -> None:
         self.config = config
+        self.started = True
+        self.should_exit = False
+        self.run_calls = 0
         _FakeServer.instances.append(self)
+
+    def run(self) -> None:
+        self.run_calls += 1
 
     def serve(self):
         async def _serve_coro() -> None:
@@ -331,8 +337,8 @@ class TestRunAgentEventLoopRunner:
     subcommand path. ``_run_agent`` works around this by dropping down
     to ``uvicorn.Server.serve()`` and running it on an
     ``asyncio.Runner`` we explicitly construct with
-    ``loop_factory=asyncio.SelectorEventLoop``. POSIX retains the
-    simpler ``uvicorn.run(...)`` path.
+    ``loop_factory=asyncio.SelectorEventLoop``. POSIX drives the same
+    ``uvicorn.Server`` through ``Server.run()``.
 
     These tests pin both branches at the call-shape level. They do NOT
     invoke real uvicorn (we'd need a free port + signal handling) —
@@ -340,8 +346,8 @@ class TestRunAgentEventLoopRunner:
     verify the dispatch contract. A regression that reverts to
     ``uvicorn.run`` on Windows (the original Proactor-strands-recv bug)
     would fail the Windows test; a regression that forces the Runner
-    path on POSIX (unnecessary, and would break signal forwarding)
-    would fail the POSIX test.
+    path on POSIX, or that goes back to ``uvicorn.run`` (whose private
+    Server ``request_restart`` cannot stop), would fail the POSIX test.
     """
 
     def test_run_agent_uses_selector_event_loop_runner_on_windows(
@@ -432,7 +438,7 @@ class TestRunAgentEventLoopRunner:
             f"{recorder['uvicorn_run_calls']!r}"
         )
 
-    def test_run_agent_uses_uvicorn_run_on_posix(
+    def test_run_agent_uses_server_run_on_posix(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -441,42 +447,25 @@ class TestRunAgentEventLoopRunner:
 
         _main._run_agent()
 
-        # uvicorn.Config + uvicorn.Server are STILL constructed on the
-        # POSIX branch in the dual-path code path; the platform fork only
-        # decides whether the resulting server is driven via Runner.run
-        # or via uvicorn.run. Pin that those constructions still
-        # happen.
         assert len(_FakeConfig.instances) == 1, (
             f"uvicorn.Config must still be constructed on POSIX; got "
             f"{len(_FakeConfig.instances)} constructions"
         )
+        cfg = _FakeConfig.instances[0]
+        assert cfg.app is recorder["stub_app"]
+        assert (cfg.host, cfg.port) == ("127.0.0.1", 9988)
 
-        # Exactly one ``uvicorn.run`` call with the stub app and
-        # host/port from app.state.config. This is the POSIX-path
-        # contract — simple, signal-aware, no Runner gymnastics.
-        assert len(recorder["uvicorn_run_calls"]) == 1, (
-            f"expected exactly one uvicorn.run call on POSIX; got "
-            f"{len(recorder['uvicorn_run_calls'])}: "
+        # POSIX drives the same ``uvicorn.Server`` instance through
+        # ``Server.run`` (uvicorn's own loop + signal handling), so
+        # ``request_restart`` can stop it. ``uvicorn.run`` would build a
+        # private Server that nothing else can reach.
+        assert len(_FakeServer.instances) == 1
+        server = _FakeServer.instances[0]
+        assert server.config is cfg
+        assert server.run_calls == 1
+        assert recorder["uvicorn_run_calls"] == [], (
+            f"uvicorn.run must NOT be called on POSIX; got "
             f"{recorder['uvicorn_run_calls']!r}"
-        )
-        args, kwargs = recorder["uvicorn_run_calls"][0]
-        # ``_run_agent`` calls ``uvicorn.run(app, host=..., port=...)``
-        # — positional app, keyword host/port. Allow either calling
-        # convention defensively so a future refactor that promotes
-        # host/port to positional doesn't fail this test for the wrong
-        # reason; the contract is "app reaches uvicorn.run with the
-        # right host/port", not the exact kwarg/positional split.
-        assert args[0] is recorder["stub_app"], (
-            "uvicorn.run must receive the create_app() result as the "
-            "app argument"
-        )
-        assert kwargs.get("host") == "127.0.0.1", (
-            f"uvicorn.run host kwarg must come from app.state.config.host; "
-            f"got {kwargs.get('host')!r}"
-        )
-        assert kwargs.get("port") == 9988, (
-            f"uvicorn.run port kwarg must come from app.state.config.port; "
-            f"got {kwargs.get('port')!r}"
         )
 
         # The smoking-gun negative assertion: ``asyncio.Runner`` was NOT

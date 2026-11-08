@@ -33,8 +33,20 @@ final class CreateSessionModel {
         /// mirrored).
         case custom(String)
 
-        /// The static mode cards, in render order; custom-type cards follow.
+        /// The static mode cards, in default order; custom-type cards follow.
         static let builtIn: [Mode] = [.standard, .codex, .antigravity, .autoScan, .shell]
+
+        /// The id `/api/session-mode-order` stores for this card.
+        var orderId: String {
+            switch self {
+            case .standard: return "claude"
+            case .codex: return "codex"
+            case .antigravity: return "antigravity"
+            case .autoScan: return "auto_scan"
+            case .shell: return "shell"
+            case .custom(let id): return "custom_\(id)"
+            }
+        }
 
         var isCustom: Bool {
             if case .custom = self { return true }
@@ -99,6 +111,12 @@ final class CreateSessionModel {
 
     // Custom agent types (proto-v7)
     private(set) var customTypes: [CustomAgentTypeDto] = []
+    /// The account's mode-picker order (mode ids); empty = default order.
+    private(set) var modeOrder: [String] = []
+    /// The project order a save in flight carries, so a late answer to an
+    /// earlier save cannot overwrite a newer drop.
+    private var pendingProjectOrder: [String]?
+    private var projectOrderSaveTail: Task<Void, Never>?
     var typeEditorTarget: CustomTypeEditorTarget? {
         didSet { if typeEditorTarget != oldValue { typeEditorError = nil } }
     }
@@ -190,6 +208,10 @@ final class CreateSessionModel {
     private let tokenStore: TokenStore
     private let customAgentTypesRepository: CustomAgentTypesRepository
     private let autoScanRepository: AutoScanRepository
+    /// The agent's live project list (`projects.changed`), so an order saved
+    /// on another device shows while the wizard is open. Optional so a model
+    /// built without it keeps the one-shot `load()` snapshot.
+    private let projectsRepository: ProjectsRepository?
     private let navBroadcaster = Broadcaster<String>(replay: .none)
     /// Carries a project name to the Auto Scan monitor. Separate from
     /// `navBroadcaster` (which carries a session id) because the two lead to
@@ -217,6 +239,7 @@ final class CreateSessionModel {
         tokenStore: TokenStore,
         customAgentTypesRepository: CustomAgentTypesRepository,
         autoScanRepository: AutoScanRepository,
+        projectsRepository: ProjectsRepository? = nil,
         autoScanProject: String? = nil
     ) {
         self.agentAPI = agentAPI
@@ -225,8 +248,10 @@ final class CreateSessionModel {
         self.tokenStore = tokenStore
         self.customAgentTypesRepository = customAgentTypesRepository
         self.autoScanRepository = autoScanRepository
+        self.projectsRepository = projectsRepository
         self.autoScanProjectPreset = autoScanProject
         self.customTypes = customAgentTypesRepository.currentTypes
+        self.modeOrder = customAgentTypesRepository.currentModeOrder
         self.activeScans = autoScanRepository.currentScans
         applyPrefill()
     }
@@ -425,7 +450,9 @@ final class CreateSessionModel {
                 await refreshCliAvailability()
             }
         } catch {
-            // Non-fatal: the wizard still allows a custom path.
+            // Non-fatal: the wizard still allows a custom path. The repository's
+            // cached list is not a fallback — it is not scoped to this account
+            // or agent.
         }
     }
 
@@ -543,6 +570,132 @@ final class CreateSessionModel {
         try? await customAgentTypesRepository.refreshCustomTypes()
     }
 
+    // MARK: - Reorder
+
+    func observeModeOrder() async {
+        for await order in customAgentTypesRepository.modeOrder() {
+            modeOrder = order
+        }
+    }
+
+    /// Best-effort cold-start seed of the mode order.
+    func refreshModeOrder() async {
+        try? await customAgentTypesRepository.refreshModeOrder()
+    }
+
+    /// The mode-picker cards, built-in and custom, in the account's order.
+    var orderedModes: [Mode] {
+        Self.orderModes(Mode.builtIn + customTypes.map { .custom($0.id) }, by: modeOrder)
+    }
+
+    /// Put `modes` in the saved `order`. A mode the order names is ranked by
+    /// its place there; a mode it does not name (a custom type created after
+    /// the last reorder, a mode a newer client added) keeps its default place
+    /// among the other unnamed modes, after the named ones. Same rule on
+    /// Android and web.
+    static func orderModes(_ modes: [Mode], by order: [String]) -> [Mode] {
+        guard !order.isEmpty else { return modes }
+        var rank: [String: Int] = [:]
+        for (index, id) in order.enumerated() where rank[id] == nil {
+            rank[id] = index
+        }
+        return modes.enumerated()
+            .map { (key: rank[$0.element.orderId] ?? order.count + $0.offset, mode: $0.element) }
+            .sorted { $0.key < $1.key }
+            .map(\.mode)
+    }
+
+    /// Save the account's mode order after a drag; the repository shows the
+    /// new order at once and reverts it if the save fails.
+    func moveModes(fromOffsets source: IndexSet, toOffset destination: Int) {
+        var ids = orderedModes.map(\.orderId)
+        let before = ids
+        ids.move(fromOffsets: source, toOffset: destination)
+        guard ids != before else { return }
+        Task { [weak self, customAgentTypesRepository] in
+            do {
+                try await customAgentTypesRepository.saveModeOrder(ids)
+            } catch {
+                self?.error = "Reorder failed — reverted."
+            }
+        }
+    }
+
+    /// Save the agent's project order after a drag (every client shows it).
+    /// Saves run one at a time, in the order the user made them.
+    func moveProjects(fromOffsets source: IndexSet, toOffset destination: Int) {
+        let before = projects.map(\.name)
+        projects.move(fromOffsets: source, toOffset: destination)
+        let names = projects.map(\.name)
+        guard names != before else { return }
+        pendingProjectOrder = names
+        let previous = projectOrderSaveTail
+        let agentAPI = self.agentAPI
+        let save = Task { @MainActor [weak self] in
+            await previous?.value
+            do {
+                let saved = try await agentAPI.reorderProjects(ProjectOrderRequest(names: names))
+                self?.projectOrderSaved(names, saved)
+            } catch {
+                self?.projectOrderFailed(names)
+            }
+        }
+        projectOrderSaveTail = Task { await save.value }
+    }
+
+    private func projectOrderSaved(_ names: [String], _ saved: [ProjectInfo]) {
+        // Take the confirmed `order` values even while a newer drop is
+        // pending, so a later failure reverts to what the agent holds.
+        let confirmed = Dictionary(saved.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        projects = projects.map { confirmed[$0.name] ?? $0 }
+        guard pendingProjectOrder == names else { return }
+        pendingProjectOrder = nil
+        applyServerProjects(saved)
+    }
+
+    /// Mirrors the repository's push-driven list into the wizard. The value the
+    /// stream replays on subscribe is skipped: it can predate this agent (the
+    /// repository is not purged on sign-out), and `load()` fetches the list
+    /// itself. Every push after it is applied. The repository seeds its stream
+    /// with `[]`, so the first element is always that replay.
+    func observeProjects() async {
+        guard let projectsRepository else { return }
+        var isReplay = true
+        for await list in projectsRepository.projects() {
+            defer { isReplay = false }
+            if isReplay { continue }
+            applyServerProjects(list)
+        }
+    }
+
+    /// Show a server list: projects created inline are kept, and a drop whose
+    /// save is still in flight keeps its order until the server matches it.
+    private func applyServerProjects(_ list: [ProjectInfo]) {
+        var merged = list
+        for created in locallyCreatedProjects where !merged.contains(where: { $0.name == created.name }) {
+            merged.append(created)
+        }
+        merged.sort { $0.order < $1.order }
+        if let pending = pendingProjectOrder {
+            if merged.map(\.name) == pending {
+                pendingProjectOrder = nil
+            } else {
+                let rank = Dictionary(pending.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+                merged.sort { (rank[$0.name] ?? Int.max) < (rank[$1.name] ?? Int.max) }
+            }
+        }
+        projects = merged
+    }
+
+    /// A local move never touches `order`, so sorting by it restores the
+    /// server's order.
+    private func projectOrderFailed(_ names: [String]) {
+        guard pendingProjectOrder == names else { return }
+        pendingProjectOrder = nil
+        projects.sort { $0.order < $1.order }
+        error = "Reorder failed — reverted."
+    }
+
     // MARK: - Navigation between steps
 
     var canContinueProject: Bool {
@@ -561,10 +714,9 @@ final class CreateSessionModel {
     /// Called after `ProjectFormSheet` reports a successful create (New Session
     /// inline "Create new project…"). Mirrors Android `onProjectCreated`: selects
     /// the returned project and gates worktree/branch off its own `is_git`. The
-    /// project is merged into this wizard's one-shot `projects` snapshot (loaded
-    /// once via `agentAPI.getProjects()`, not observing the `projects.changed`
-    /// bus) so `selectedProject`/`showsGitOptions` resolve immediately; the
-    /// app-wide `ProjectsRepository` reconciles independently.
+    /// project is merged into this wizard's `projects` at once, so
+    /// `selectedProject`/`showsGitOptions` resolve before the `projects.changed`
+    /// echo reaches `observeProjects()`.
     func onProjectCreated(_ project: ProjectInfo) {
         Self.upsert(project, into: &projects)
         Self.upsert(project, into: &locallyCreatedProjects)
@@ -586,9 +738,9 @@ final class CreateSessionModel {
     }
 
     /// Enters "Custom path…" mode and loads the per-agent recents. Re-selecting
-    /// while already in the mode only refreshes them: unlike Android's dropdown
-    /// item this row stays on screen, so a stray second tap must not wipe a
-    /// draft the user has already typed.
+    /// while already in the mode only refreshes them: the row stays on screen
+    /// (as on Android), so a stray second tap must not wipe a draft the user
+    /// has already typed.
     func selectCustomPath() {
         if case .customPath = selection {
             refreshRecentCustomPaths()

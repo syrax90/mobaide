@@ -3,6 +3,7 @@ package com.mobaide.app.ui.login
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mobaide.app.data.repository.AuthRepository
+import com.mobaide.app.data.repository.passwordLengthError
 import com.mobaide.app.data.repository.PasswordResetOutcome
 import com.mobaide.app.data.repository.ResetPasswordError
 import com.mobaide.app.data.repository.ResetPasswordFailure
@@ -74,8 +75,8 @@ class ResetPasswordViewModel @Inject constructor(
             emitError("Enter the $CODE_LENGTH-digit code we emailed you")
             return
         }
-        if (state.newPassword.length < MIN_PASSWORD_LENGTH) {
-            emitError("Password must be at least $MIN_PASSWORD_LENGTH characters")
+        passwordLengthError(state.newPassword)?.let {
+            emitError(it)
             return
         }
         if (state.newPassword != state.confirmPassword) {
@@ -171,7 +172,6 @@ class ResetPasswordViewModel @Inject constructor(
 
     private companion object {
         const val CODE_LENGTH = 6
-        const val MIN_PASSWORD_LENGTH = 8
         const val DEFAULT_COOLDOWN_SECONDS = 60
     }
 }

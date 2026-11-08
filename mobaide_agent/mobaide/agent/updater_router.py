@@ -6,20 +6,19 @@ invokes ``StagedBinaryUpdater.force_update_now`` — the same code path as
 ``mobaide-agent update``, but skipping the activity-awareness deferral so
 the user can pre-empt the wait.
 
-The ``staged`` outcome path defers ``sys.exit(EXIT_RESTART_REQUESTED)``
-into a FastAPI ``BackgroundTask`` so the response is flushed before the
-worker exits — without it the phone sees a connection error even on a
-successful stage.
+The ``staged`` outcome path defers ``request_restart`` into a FastAPI
+``BackgroundTask`` so the response is flushed before the agent stops —
+without it the phone sees a connection error even on a successful stage.
+A bare ``sys.exit`` there would not stop the agent: the task runs in a
+worker thread and uvicorn swallows the ``SystemExit``.
 """
 from __future__ import annotations
-
-import sys
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 
 from .auth.dependencies import get_current_user
 from .logging import get_logger
-from .updater import EXIT_RESTART_REQUESTED
+from .restart import request_restart
 
 logger = get_logger(__name__)
 
@@ -41,7 +40,7 @@ async def force_update_now(
     can surface a meaningful toast. On ``"staged"`` the supervisor restart
     is scheduled as a FastAPI background task that runs *after* the HTTP
     response is flushed, so the client receives the 200 reliably before
-    the worker exits with code ``EXIT_RESTART_REQUESTED``.
+    the agent exits with code ``EXIT_RESTART_REQUESTED``.
     """
     updater = getattr(request.app.state, "updater", None)
     relay_client = getattr(request.app.state, "relay_client", None)
@@ -65,5 +64,5 @@ async def force_update_now(
     )
     logger.info("updater.force_update_now outcome=%s", outcome)
     if outcome == "staged":
-        background_tasks.add_task(sys.exit, EXIT_RESTART_REQUESTED)
+        background_tasks.add_task(request_restart)
     return {"outcome": outcome}

@@ -80,6 +80,50 @@ final class AuthRepositoryTests: XCTestCase {
         }
     }
 
+    func testLogin429ThrowsLoginRateLimitedWithServerWait() async {
+        StubURLProtocol.enqueue(status: 429, body: """
+        {"detail":{"error":"login_rate_limited","retry_after_seconds":420}}
+        """)
+
+        do {
+            _ = try await repository.loginWithPassword(email: "a@example.com", password: "wrong")
+            XCTFail("expected LoginRateLimited")
+        } catch let limited as LoginRateLimited {
+            XCTAssertEqual(limited.retryAfterSeconds, 420)
+            XCTAssertFalse(harness.userIdentityStore.isUserLoggedIn())
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+    }
+
+    func testLogin429WithoutBodyFallsBackToRelayWindow() async {
+        StubURLProtocol.enqueue(status: 429, body: "garbage")
+
+        do {
+            _ = try await repository.loginWithPassword(email: "a@example.com", password: "wrong")
+            XCTFail("expected LoginRateLimited")
+        } catch let limited as LoginRateLimited {
+            XCTAssertEqual(limited.retryAfterSeconds, 900)
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+    }
+
+    func testLoginRateLimitedMessageRoundsUpToWholeMinutes() {
+        XCTAssertEqual(
+            LoginRateLimited(retryAfterSeconds: 900).userMessage,
+            "Too many sign-in attempts. Try again in 15 minutes, or reset your password."
+        )
+        XCTAssertEqual(
+            LoginRateLimited(retryAfterSeconds: 61).userMessage,
+            "Too many sign-in attempts. Try again in 2 minutes, or reset your password."
+        )
+        XCTAssertEqual(
+            LoginRateLimited(retryAfterSeconds: 60).userMessage,
+            "Too many sign-in attempts. Try again in 1 minute, or reset your password."
+        )
+    }
+
     func testAdminRoleIsRejected() async {
         StubURLProtocol.enqueue(status: 200, body: """
         {"access_token":"jwt-1","user_id":"u1","email":"admin@example.com","role":"admin"}

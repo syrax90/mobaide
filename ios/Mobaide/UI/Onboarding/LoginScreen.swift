@@ -242,6 +242,8 @@ final class LoginModel {
             handleAuthResult(result)
         } catch is AdminLoginNotSupported {
             emitError(AdminLoginNotSupported.userMessage)
+        } catch let limited as LoginRateLimited {
+            emitError(limited.userMessage)
         } catch let apiError as APIError {
             if apiError.code == 401 {
                 emitError("Invalid email or password")

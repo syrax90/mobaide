@@ -9,6 +9,7 @@ import { useToastStore } from '../../stores/toastStore';
 import {
   maskEmail,
   networkRateLimitedMessage,
+  passwordLengthError,
   resetPasswordMessage,
   shouldClearCode,
 } from './authCopy';
@@ -45,8 +46,9 @@ export function ResetPassword() {
       setError('Enter the 6-digit code we emailed you');
       return;
     }
-    if (values.newPassword.length < 8) {
-      setError('Password must be at least 8 characters');
+    const lengthError = passwordLengthError(values.newPassword);
+    if (lengthError !== null) {
+      setError(lengthError);
       return;
     }
     if (values.newPassword !== values.confirmPassword) {

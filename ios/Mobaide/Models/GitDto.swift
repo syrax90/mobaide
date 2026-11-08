@@ -172,11 +172,14 @@ struct GitBranchCreateRequest: Codable, Equatable, Sendable {
     let name: String
     let start_point: String?
     let checkout: Bool
+    /// Skips the busy-holder refusal after the user confirmed it.
+    var force: Bool
 
-    init(name: String, start_point: String? = nil, checkout: Bool = false) {
+    init(name: String, start_point: String? = nil, checkout: Bool = false, force: Bool = false) {
         self.name = name
         self.start_point = start_point
         self.checkout = checkout
+        self.force = force
     }
 }
 
@@ -186,12 +189,28 @@ extension GitBranchCreateRequest {
         name = try container.decode(String.self, forKey: .name)
         start_point = try container.decodeIfPresent(String.self, forKey: .start_point)
         checkout = try container.decodeIfPresent(Bool.self, forKey: .checkout) ?? false
+        force = try container.decodeIfPresent(Bool.self, forKey: .force) ?? false
     }
 }
 
 /// `POST /api/projects/{name}/git/checkout`; `ref` is a row's `branch` verbatim.
+/// `force` skips the busy-holder refusal after the user confirmed it.
 struct GitCheckoutRequest: Codable, Equatable, Sendable {
     let ref: String
+    let force: Bool
+
+    init(ref: String, force: Bool = false) {
+        self.ref = ref
+        self.force = force
+    }
+}
+
+extension GitCheckoutRequest {
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        ref = try container.decode(String.self, forKey: .ref)
+        force = try container.decodeIfPresent(Bool.self, forKey: .force) ?? false
+    }
 }
 
 struct GitBranchResponse: Codable, Equatable, Sendable {

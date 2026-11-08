@@ -243,6 +243,19 @@ struct CentralAPI: Sendable {
         try await executeNoContent(method: "DELETE", path: "/api/custom-agent-types/\(typeId)", bearer: userToken)
     }
 
+    func getSessionModeOrder(userToken: String) async throws -> SessionModeOrderDto {
+        try await execute(method: "GET", path: "/api/session-mode-order", bearer: userToken)
+    }
+
+    func putSessionModeOrder(userToken: String, order: [String]) async throws -> SessionModeOrderDto {
+        try await execute(
+            method: "PUT",
+            path: "/api/session-mode-order",
+            body: UpdateSessionModeOrderRequest(order: order),
+            bearer: userToken
+        )
+    }
+
     // MARK: - Plumbing
 
     private func baseURL() -> String {

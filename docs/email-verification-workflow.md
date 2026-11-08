@@ -57,6 +57,7 @@ real owner's social sign-in.
 | Resend too soon | 429 with `Retry-After` header. Android disables the "Resend" button for the returned seconds. |
 | Resend beyond hourly cap | 429 with a much longer `Retry-After`. |
 | Duplicate email on register | 409 as before. |
+| Register password too short or long | 422 unless the password is 8-128 characters, same rule as reset. Login has no length rule, so older short passwords still sign in. |
 | Re-register an abandoned signup | An unverified, password-only account (no Google/Apple link) whose code window is over (the TTL has elapsed, consumed codes included) is taken over by `POST /api/auth/register`: the password and sign-up ad attribution are replaced, a fresh code is sent, and the answer is `verification_required` like a first signup. While a code is still within its TTL, and for verified or Google/Apple-linked accounts, register still answers 409. The takeover uses the per-email resend limiter, so it can answer 429 `resend_rate_limited` with the same body and `Retry-After` as `/resend-verification`. |
 
 `POST /api/auth/verify-email` accepts an optional `password`. After a correct
@@ -108,6 +109,7 @@ it is not forgotten if the server ever scales out.
 | `EMAIL_VERIFICATION_MAX_ATTEMPTS` | `5` | Wrong guesses allowed per code before the token is invalidated. |
 | `EMAIL_VERIFICATION_RESEND_COOLDOWN_SECONDS` | `60` | Minimum gap between resends for the same email. |
 | `EMAIL_VERIFICATION_RESEND_HOURLY_CAP` | `3` | Max resends per email in any rolling 1-hour window. |
+| `EMAIL_VERIFICATION_IP_HOURLY_CAP` | `20` | Max `/register` + `/resend-verification` calls per client IP in any rolling 1-hour window (one shared bucket). `0` disables it. |
 | `SMTP_*` | see `.env.example` | SMTP connection. Swap to Resend / Postmark / SES in prod. |
 
 ## Disabling for CI
@@ -159,8 +161,10 @@ other value) keeps the real-SMTP behaviour described above.
   let an attacker brute-force the hashes offline.
 * Consumption is a single atomic CAS (`UPDATE ... WHERE consumed_at IS NULL
   AND attempts < max AND expires_at > now`) — no TOCTOU, no double-use.
-* Wrong codes bump an `attempts` counter; once it reaches the configured max,
-  even the correct code is rejected and the user must request a new one.
+* Every guess, right or wrong, bumps an `attempts` counter in the same atomic
+  statement that checks the code, so the cap holds under concurrent requests.
+  Once it reaches the configured max, even the correct code is rejected and
+  the user must request a new one.
 * Raw codes appear only in the rendered email. Nothing in the logs, nothing
   in the database, nothing in error responses.
 * Rate limiting is per normalised email, which prevents an attacker from

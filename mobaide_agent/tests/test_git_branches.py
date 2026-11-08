@@ -190,12 +190,15 @@ async def _create(
     *,
     start_point: str | None = None,
     checkout: bool = False,
+    force: bool = False,
     bus: FakeEventBus | None = None,
     session_manager=None,
     autoscan_manager=None,
 ) -> GitBranchResponse:
     return await create_branch(
-        GitBranchCreateRequest(name=name, start_point=start_point, checkout=checkout),
+        GitBranchCreateRequest(
+            name=name, start_point=start_point, checkout=checkout, force=force,
+        ),
         project_name="proj",
         project_root=root,
         manager=_manager(),
@@ -210,12 +213,13 @@ async def _checkout(
     root: str,
     ref: str,
     *,
+    force: bool = False,
     bus: FakeEventBus | None = None,
     session_manager=None,
     autoscan_manager=None,
 ) -> GitBranchResponse:
     return await checkout_ref(
-        GitCheckoutRequest(ref=ref),
+        GitCheckoutRequest(ref=ref, force=force),
         project_name="proj",
         project_root=root,
         manager=_manager(),
@@ -494,6 +498,14 @@ class TestCreateBranch:
         assert _local_branches(local) == ["feature/a", "main"]
         assert _head(local) == "main"
 
+    async def test_force_creates_and_checks_out_under_a_session_in_the_root(self, local):
+        resp = await _create(
+            local, "feature/a", checkout=True, force=True, session_manager=_sessions(local),
+        )
+
+        assert resp == GitBranchResponse(branch="feature/a", checked_out=True, created=True)
+        assert _head(local) == "feature/a"
+
     async def test_a_running_job_refuses_a_plain_create_before_queuing_on_its_lock(
         self, local, monkeypatch
     ):
@@ -633,6 +645,41 @@ class TestCheckoutRef:
 
         assert resp == GitBranchResponse(branch="target", checked_out=True, created=False)
         assert _head(feat) == "target"
+        assert _head(local) == "main"
+
+    async def test_force_checks_out_under_a_session_or_auto_scan_item_in_the_root(
+        self, local
+    ):
+        run_git_sync(local, "branch", "target")
+        bus = FakeEventBus()
+
+        async def list_all_workitems():
+            return {"proj": [types.SimpleNamespace(worktree_path=local)]}
+
+        resp = await _checkout(
+            local, "target", force=True, bus=bus,
+            session_manager=_sessions(local),
+            autoscan_manager=types.SimpleNamespace(list_all_workitems=list_all_workitems),
+        )
+
+        assert resp == GitBranchResponse(branch="target", checked_out=True, created=False)
+        assert _head(local) == "target"
+        assert len(bus.published) == 1
+
+    async def test_force_does_not_skip_the_operation_in_progress_refusal(
+        self, local, monkeypatch
+    ):
+        run_git_sync(local, "branch", "target")
+
+        async def merging(_toplevel):
+            return "merging"
+
+        monkeypatch.setattr(service, "repo_state", merging)
+
+        with pytest.raises(GitRefusedError) as info:
+            await _checkout(local, "target", force=True, session_manager=_sessions(local))
+
+        assert info.value.code == "operation_in_progress"
         assert _head(local) == "main"
 
     async def test_an_auto_scan_item_in_the_root_blocks_too(self, local):

@@ -1,6 +1,7 @@
 """Tests for the Database layer."""
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -1383,7 +1384,7 @@ class TestPushColumnsMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 22
+        assert (await cursor.fetchone())[0] == 23
         cursor = await db.conn.execute("PRAGMA table_info(mobile_devices)")
         columns = {r[1] for r in await cursor.fetchall()}
         assert {"platform", "push_token", "push_environment"} <= columns
@@ -1516,6 +1517,158 @@ class TestUnverifiedSignupGuards:
         assert (await db.get_user_by_id(user_id))["password_hash"] == "h"
 
 
+_CODE_TOKEN_KINDS = [
+    pytest.param(
+        "create_verification_token",
+        "consume_verification_token",
+        id="verification",
+    ),
+    pytest.param(
+        "create_password_reset_token",
+        "consume_password_reset_token",
+        id="password_reset",
+    ),
+]
+
+
+@pytest.mark.parametrize(("create_name", "consume_name"), _CODE_TOKEN_KINDS)
+class TestCodeTokenAttemptCap:
+    async def _issue(self, db: Database, create_name: str) -> str:
+        user_id = await _create_test_user(db)
+        await getattr(db, create_name)(user_id, "right-hash", ttl_seconds=300)
+        return user_id
+
+    async def test_concurrent_wrong_guesses_cannot_exceed_the_cap(
+        self, db: Database, create_name: str, consume_name: str
+    ):
+        user_id = await self._issue(db, create_name)
+        consume = getattr(db, consume_name)
+
+        outcomes = await asyncio.gather(
+            *(consume(user_id, f"wrong-{i}", 5) for i in range(50)),
+            consume(user_id, "right-hash", 5),
+        )
+
+        assert outcomes[:-1].count("invalid") == 5
+        assert outcomes[:-1].count("exhausted") == 45
+        assert outcomes[-1] == "exhausted"
+
+    async def test_rollbacks_from_other_requests_cannot_erase_counted_guesses(
+        self, db: Database, create_name: str, consume_name: str
+    ):
+        user_id = await self._issue(db, create_name)
+        consume = getattr(db, consume_name)
+        await db.create_custom_agent_type(user_id, "dup", "echo")
+
+        results = await asyncio.gather(
+            *(
+                call
+                for i in range(50)
+                for call in (
+                    consume(user_id, f"wrong-{i}", 5),
+                    db.create_custom_agent_type(user_id, "dup", "echo"),
+                )
+            ),
+            return_exceptions=True,
+        )
+        outcomes = results[0::2]
+
+        assert all(isinstance(r, sqlite3.IntegrityError) for r in results[1::2])
+        assert outcomes.count("invalid") == 5
+        assert outcomes.count("exhausted") == 45
+        assert await consume(user_id, "right-hash", 5) == "exhausted"
+
+    async def test_attempts_survive_close_and_reconnect(
+        self, tmp_path, create_name: str, consume_name: str
+    ):
+        db_path = str(tmp_path / "reconnect.db")
+        first = Database(db_path)
+        await first.connect()
+        user_id = await self._issue(first, create_name)
+        for _ in range(5):
+            assert await getattr(first, consume_name)(user_id, "wrong", 5) == "invalid"
+        await first.close()
+
+        second = Database(db_path)
+        await second.connect()
+        try:
+            outcome = await getattr(second, consume_name)(user_id, "right-hash", 5)
+        finally:
+            await second.close()
+
+        assert outcome == "exhausted"
+
+    async def test_guess_during_open_multi_chunk_read_leaves_connection_usable(
+        self, db: Database, create_name: str, consume_name: str
+    ):
+        user_id = await self._issue(db, create_name)
+        consume = getattr(db, consume_name)
+        for i in range(100):
+            await db.create_user(email=f"reader-{i}@test.local", password_hash="h")
+
+        cursor = await db.conn.execute("SELECT id FROM users")
+        rows = cursor.__aiter__()
+        await rows.__anext__()
+
+        assert await consume(user_id, "wrong", 5) == "invalid"
+        await db.update_user_password(user_id, "mid-read-hash")
+        rest = [row async for row in rows]
+
+        assert 1 + len(rest) == 101
+        assert db.conn.in_transaction is False
+        await db.update_user_password(user_id, "after-read-hash")
+        user = await db.get_user_by_id(user_id)
+        assert user["password_hash"] == "after-read-hash"
+        assert await consume(user_id, "right-hash", 5) == "ok"
+
+    async def test_concurrent_correct_guesses_consume_the_code_once(
+        self, db: Database, create_name: str, consume_name: str
+    ):
+        user_id = await self._issue(db, create_name)
+        consume = getattr(db, consume_name)
+
+        outcomes = await asyncio.gather(
+            *(consume(user_id, "right-hash", 5) for _ in range(3))
+        )
+
+        assert sorted(outcomes) == ["invalid", "invalid", "ok"]
+
+    async def test_correct_guess_after_four_misses_succeeds(
+        self, db: Database, create_name: str, consume_name: str
+    ):
+        user_id = await self._issue(db, create_name)
+        consume = getattr(db, consume_name)
+        for _ in range(4):
+            assert await consume(user_id, "wrong", 5) == "invalid"
+
+        assert await consume(user_id, "right-hash", 5) == "ok"
+
+    async def test_correct_guess_after_five_misses_is_exhausted(
+        self, db: Database, create_name: str, consume_name: str
+    ):
+        user_id = await self._issue(db, create_name)
+        consume = getattr(db, consume_name)
+        for _ in range(5):
+            assert await consume(user_id, "wrong", 5) == "invalid"
+
+        assert await consume(user_id, "right-hash", 5) == "exhausted"
+
+    async def test_expired_code_reports_expired(
+        self, db: Database, create_name: str, consume_name: str
+    ):
+        user_id = await _create_test_user(db)
+        await getattr(db, create_name)(user_id, "right-hash", ttl_seconds=0)
+
+        assert await getattr(db, consume_name)(user_id, "right-hash", 5) == "expired"
+
+    async def test_no_issued_code_is_invalid(
+        self, db: Database, create_name: str, consume_name: str
+    ):
+        user_id = await _create_test_user(db)
+
+        assert await getattr(db, consume_name)(user_id, "right-hash", 5) == "invalid"
+
+
 class TestAdminOwnedAgentPurgeMigration:
     """Verify that migration v4 purges admin-owned agents + dependents.
 
@@ -1577,7 +1730,7 @@ class TestAdminOwnedAgentPurgeMigration:
 
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 22
+        assert row[0] == 23
 
         # v4 purges admin-owned agents + their cascade rows.
         assert await db.get_agent(admin_agent_id) is None
@@ -1607,7 +1760,7 @@ class TestAdminOwnedAgentPurgeMigration:
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 22
+        assert row[0] == 23
         await db.close()
 
 
@@ -2544,7 +2697,7 @@ class TestCustomAgentTypesMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 22
+        assert (await cursor.fetchone())[0] == 23
 
         # Table is usable and the NOCASE unique index came back with it.
         row = await db.create_custom_agent_type(owner, "Aider", "c1")
@@ -2558,7 +2711,7 @@ class TestCustomAgentTypesMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 22
+        assert (await cursor.fetchone())[0] == 23
         assert await db.get_custom_agent_type(row["id"]) is not None
         await db.close()
 
@@ -2723,7 +2876,7 @@ class TestAgentUninstallMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 22
+        assert (await cursor.fetchone())[0] == 23
         # Pre-existing agents read as not supporting uninstall until their
         # next handshake says otherwise.
         assert (await db.get_agent(agent_id))["supports_uninstall"] == 0
@@ -2735,7 +2888,7 @@ class TestAgentUninstallMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 22
+        assert (await cursor.fetchone())[0] == 23
         assert await db.match_uninstall_request(agent_id, raw_token) is True
         await db.close()
 
@@ -2769,7 +2922,7 @@ class TestDeviceTokenRevocationMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 22
+        assert (await cursor.fetchone())[0] == 23
         # A device revoked before the upgrade loses its old tokens with it.
         assert await db.device_tokens_valid_after("dev-gone") == int(
             datetime.fromisoformat(revoked_at).timestamp()

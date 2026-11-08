@@ -267,11 +267,15 @@ final class RecordingCustomTypeSync: CustomTypeSyncApplying, @unchecked Sendable
     private var deletesStorage: [String] = []
     private var refreshCountStorage = 0
     private var clearCountStorage = 0
+    private var modeOrdersStorage: [SessionModeOrderDto] = []
+    private var modeOrderRefreshCountStorage = 0
 
     var upserts: [CustomAgentTypeDto] { lock.withLock { upsertsStorage } }
     var deletes: [String] { lock.withLock { deletesStorage } }
     var refreshCount: Int { lock.withLock { refreshCountStorage } }
     var clearCount: Int { lock.withLock { clearCountStorage } }
+    var modeOrders: [SessionModeOrderDto] { lock.withLock { modeOrdersStorage } }
+    var modeOrderRefreshCount: Int { lock.withLock { modeOrderRefreshCountStorage } }
 
     func applyUpserted(_ type: CustomAgentTypeDto) async {
         lock.withLock { upsertsStorage.append(type) }
@@ -283,6 +287,14 @@ final class RecordingCustomTypeSync: CustomTypeSyncApplying, @unchecked Sendable
 
     func refreshCustomTypes() async throws {
         lock.withLock { refreshCountStorage += 1 }
+    }
+
+    func applyModeOrder(_ order: SessionModeOrderDto) async {
+        lock.withLock { modeOrdersStorage.append(order) }
+    }
+
+    func refreshModeOrder() async throws {
+        lock.withLock { modeOrderRefreshCountStorage += 1 }
     }
 
     func clear() async {

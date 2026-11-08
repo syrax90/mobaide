@@ -28,6 +28,8 @@ import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.ui.common.PathSuggestionsController
 import com.mobaide.app.ui.common.PathSuggestionsUi
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -37,6 +39,9 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
@@ -61,6 +66,40 @@ sealed interface CreateSessionMode {
     data object AutoScan : CreateSessionMode
     data object CustomShell : CreateSessionMode
     data class Custom(val typeId: String) : CreateSessionMode
+}
+
+/** The id `/api/session-mode-order` stores for a mode-picker card. */
+val CreateSessionMode.orderId: String
+    get() = when (this) {
+        CreateSessionMode.Standard -> "claude"
+        CreateSessionMode.Codex -> "codex"
+        CreateSessionMode.Antigravity -> "antigravity"
+        CreateSessionMode.AutoScan -> "auto_scan"
+        CreateSessionMode.CustomShell -> "shell"
+        is CreateSessionMode.Custom -> "custom_$typeId"
+    }
+
+/** The built-in mode cards in their default order; custom types follow. */
+val BUILT_IN_MODES: List<CreateSessionMode> = listOf(
+    CreateSessionMode.Standard,
+    CreateSessionMode.Codex,
+    CreateSessionMode.Antigravity,
+    CreateSessionMode.AutoScan,
+    CreateSessionMode.CustomShell,
+)
+
+/**
+ * Put [modes] in the account's saved [order]. A mode the order names is
+ * ranked by its place there; a mode it does not name (a custom type created
+ * after the last reorder, a mode a newer client added) keeps its default place
+ * among the other unnamed modes, after the named ones. Same rule on iOS and web.
+ */
+fun orderModes(modes: List<CreateSessionMode>, order: List<String>): List<CreateSessionMode> {
+    if (order.isEmpty()) return modes
+    val rank = order.withIndex().associate { (index, id) -> id to index }
+    return modes.withIndex()
+        .sortedBy { (index, mode) -> rank[mode.orderId] ?: (order.size + index) }
+        .map { it.value }
 }
 
 /** Custom-agent-type editor sheet state; a null [Open.target] means "create". */
@@ -184,12 +223,19 @@ data class CreateSessionUiState(
     // The repository cache is the source of truth; UserEventBus keeps it in
     // sync across devices via custom_type.* events.
     val customTypes: List<CustomAgentTypeDto> = emptyList(),
+    // The account's mode-picker order (mode ids), synced through
+    // CustomAgentTypesRepository; empty = default order.
+    val modeOrder: List<String> = emptyList(),
     val typeEditor: TypeEditorState = TypeEditorState.Hidden,
     val typeEditorError: String? = null,
     val typeEditorSaving: Boolean = false,
     val deleteTypeTarget: CustomAgentTypeDto? = null,
     val deleteTypeInFlight: Boolean = false,
 )
+
+/** The mode-picker cards, built-in and custom, in the account's order. */
+val CreateSessionUiState.orderedModes: List<CreateSessionMode>
+    get() = orderModes(BUILT_IN_MODES + customTypes.map { CreateSessionMode.Custom(it.id) }, modeOrder)
 
 /**
  * Read-only projection: the name of a stored project, or `null` for any
@@ -403,12 +449,14 @@ class CreateSessionViewModel @Inject constructor(
         viewModelScope.launch {
             val last = preferencesStore.getLastUsedProjectName()
             projectsRepository.observeProjects().collect { projects ->
+                serverProjects = projects
+                val display = displayProjects()
                 _uiState.update { state ->
                     val resolved = state.selection.takeUnless { it is ProjectSelection.None }
                         ?: projects.firstOrNull { it.name == last }?.let { ProjectSelection.Stored(it.name) }
                         ?: ProjectSelection.None
                     state.copy(
-                        projects = projects,
+                        projects = display,
                         isLoadingProjects = projects.isEmpty(),
                         selection = resolved,
                     )
@@ -434,6 +482,12 @@ class CreateSessionViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
+            customAgentTypesRepository.observeModeOrder().collect { order ->
+                _uiState.update { it.copy(modeOrder = order) }
+            }
+        }
+
+        viewModelScope.launch {
             // Best-effort cold-start seed: the connect-time reconcile in
             // UserEventBus owns steady-state freshness, but this screen can
             // mount before the user-events socket connects.
@@ -442,6 +496,11 @@ class CreateSessionViewModel @Inject constructor(
             } catch (_: Exception) {
                 // The picker just shows no custom cards until a refresh lands.
             }
+            try {
+                customAgentTypesRepository.refreshModeOrder()
+            } catch (_: Exception) {
+                // The cards keep their default order until a refresh lands.
+            }
         }
 
         viewModelScope.launch {
@@ -449,13 +508,15 @@ class CreateSessionViewModel @Inject constructor(
             try {
                 val projects = projectsRepository.listProjects()
                 val last = preferencesStore.getLastUsedProjectName()
+                if (serverProjects.isEmpty()) serverProjects = projects
+                val display = displayProjects()
                 _uiState.update { state ->
                     if (state.projects.isEmpty()) {
                         val resolved = state.selection.takeUnless { it is ProjectSelection.None }
                             ?: projects.firstOrNull { it.name == last }?.let { ProjectSelection.Stored(it.name) }
                             ?: ProjectSelection.None
                         state.copy(
-                            projects = projects,
+                            projects = display,
                             isLoadingProjects = false,
                             selection = resolved,
                         )
@@ -467,6 +528,85 @@ class CreateSessionViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(isLoadingProjects = false, error = "Failed to load projects: ${e.message}")
                 }
+            }
+        }
+    }
+
+    // The latest project list the agent sent, and the order a drop is saving.
+    // Both are touched only on viewModelScope's main dispatcher.
+    private var serverProjects: List<ProjectInfo> = emptyList()
+    private var pendingProjectOrder: List<String>? = null
+    private val projectOrderMutex = Mutex()
+
+    /**
+     * [serverProjects] in the order to show: the server's own, or the order a
+     * save in flight carries until the server's list matches it.
+     */
+    private fun displayProjects(): List<ProjectInfo> {
+        val sorted = serverProjects.sortedBy { it.order }
+        val pending = pendingProjectOrder ?: return sorted
+        if (sorted.map { it.name } == pending) {
+            pendingProjectOrder = null
+            return sorted
+        }
+        val rank = pending.withIndex().associate { (index, name) -> name to index }
+        return sorted.sortedBy { rank[it.name] ?: Int.MAX_VALUE }
+    }
+
+    /** Move one project row by index — the accessibility "Move up / down" path. */
+    fun moveProject(from: Int, to: Int) {
+        val names = _uiState.value.projects.map { it.name }
+        if (from !in names.indices || to !in names.indices || from == to) return
+        reorderProjects(names.toMutableList().apply { add(to, removeAt(from)) })
+    }
+
+    /**
+     * Save a new project order (the agent's own, so every client shows it) and
+     * show it at once. Saves run one at a time, and finish even if the user
+     * leaves the wizard right after the drop.
+     */
+    fun reorderProjects(names: List<String>) {
+        if (names == _uiState.value.projects.map { it.name }) return
+        pendingProjectOrder = names
+        _uiState.update { it.copy(projects = displayProjects()) }
+        viewModelScope.launch {
+            try {
+                val saved = withContext(NonCancellable) {
+                    projectOrderMutex.withLock { projectsRepository.reorderProjects(names) }
+                }
+                // The answer is the agent's re-sorted list; take it rather than
+                // wait for the `projects.changed` echo, which a down events
+                // socket would never deliver.
+                serverProjects = saved
+                if (pendingProjectOrder == names) pendingProjectOrder = null
+                _uiState.update { it.copy(projects = displayProjects()) }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (pendingProjectOrder == names) {
+                    pendingProjectOrder = null
+                    _uiState.update { it.copy(projects = displayProjects()) }
+                    _transientMessages.tryEmit("Reorder failed — reverted.")
+                }
+            }
+        }
+    }
+
+    /** Move one mode card by index — the accessibility "Move up / down" path. */
+    fun moveMode(from: Int, to: Int) {
+        val ids = _uiState.value.orderedModes.map { it.orderId }
+        if (from !in ids.indices || to !in ids.indices || from == to) return
+        reorderModes(ids.toMutableList().apply { add(to, removeAt(from)) })
+    }
+
+    /** Save the account's mode-picker order; the repository shows it at once. */
+    fun reorderModes(ids: List<String>) {
+        if (ids == _uiState.value.orderedModes.map { it.orderId }) return
+        viewModelScope.launch {
+            try {
+                customAgentTypesRepository.saveModeOrder(ids)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                _transientMessages.tryEmit("Reorder failed — reverted.")
             }
         }
     }
@@ -501,20 +641,24 @@ class CreateSessionViewModel @Inject constructor(
     /**
      * Switches the picker into "Custom path…" mode. Loads any per-agent
      * recents asynchronously so the chips show up as soon as the panel
-     * renders. Clears any prior draft / error.
+     * renders. Clears any prior draft / error — unless the mode is already on:
+     * the row stays on screen, so a second tap only refreshes the recents and
+     * must not wipe a path the user has typed (iOS `selectCustomPath`).
      */
     fun selectCustomPath() {
-        _uiState.update {
-            it.copy(
-                selection = ProjectSelection.CustomPath(""),
-                customPathDraft = "",
-                customPathError = null,
-                worktree = false,
-                branchName = "",
-            )
+        if (_uiState.value.selection !is ProjectSelection.CustomPath) {
+            _uiState.update {
+                it.copy(
+                    selection = ProjectSelection.CustomPath(""),
+                    customPathDraft = "",
+                    customPathError = null,
+                    worktree = false,
+                    branchName = "",
+                )
+            }
+            customPathSuggestions.onTextChange("")
+            customPathSuggestions.probe()
         }
-        customPathSuggestions.onTextChange("")
-        customPathSuggestions.probe()
         val scope = agentScopeKey() ?: return
         viewModelScope.launch {
             // Guarded like removeRecentCustomPath below: a DataStore fault on the

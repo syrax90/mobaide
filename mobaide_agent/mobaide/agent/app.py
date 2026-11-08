@@ -72,6 +72,7 @@ from .install_paths import (
 from .logging import bind_request_context, clear_request_context, get_logger
 from .logging_setup import configure_logging, shutdown_logging
 from .projects.router import router as projects_router
+from .restart import restart_requested
 from .sessions.router import router as sessions_router
 from .events import EventBus
 from .fs.models import FS_CAPABILITIES
@@ -136,6 +137,7 @@ def _build_updater(app: FastAPI):
       updater off ``__version__`` — from staging over and destroying the
       installed release when its version differs from the published manifest.
     """
+    from mobaide.agent.restart import request_restart
     from mobaide.agent.updater import InstallLayout, StagedBinaryUpdater
 
     layout = InstallLayout(prefix=default_prefix())
@@ -160,6 +162,7 @@ def _build_updater(app: FastAPI):
         session_manager=app.state.session_manager,
         current_version=__version__,
         busy_probe=voice.busy if voice is not None else None,
+        exit_func=request_restart,
     )
 
 
@@ -248,10 +251,11 @@ async def _start_relay_in_process(
     2. **Pre-connect HTTPS bootstrap** — when the updater exists and a
        manifest URL can be derived from ``RELAY_SERVER_URL``, fetch the
        signed manifest over HTTPS and apply it if newer than the
-       running version. If an update is staged, the updater invokes
-       ``sys.exit(EXIT_RESTART_REQUESTED)`` from within
-       ``consider_manifest`` and the supervisor respawns into the
-       fresh release; the relay client is never started on this run.
+       running version. If an update is staged, the updater calls
+       ``request_restart`` (the server shuts down and the process exits
+       with ``EXIT_RESTART_REQUESTED``, so the supervisor respawns into
+       the fresh release) and this helper returns without starting the
+       relay client.
        This is the side-channel that breaks the chicken-and-egg loop
        when a protocol bump strands an older agent.
     3. Wire the relay-side manifest callback (in-band push from the
@@ -269,15 +273,14 @@ async def _start_relay_in_process(
 
     if updater is not None and manifest_url is not None:
         outcome = await run_https_update_check(updater, manifest_url)
-        # Outcome "staged" means consider_manifest has already invoked
-        # sys.exit(75); under test injection sys.exit is monkeypatched so
-        # we fall through and continue startup. Any other outcome
-        # (no_change, deferred, signature_failed, unreachable) keeps the
-        # cold-boot path going.
         logger.info(
             "agent.pre_connect_update_check outcome=%s url=%s",
             outcome, manifest_url,
         )
+        if outcome == "staged":
+            app.state.relay_client = None
+            app.state.updater = None
+            return
 
     # Allow a cleartext ws:// relay only under an explicit opt-in: MOBAIDE_ENV=test
     # (disposable local E2E) or MOBAIDE_AGENT_ALLOW_INSECURE_WS=1. Otherwise a
@@ -483,9 +486,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 # supervisor — was fragile in practice: any link breaking
                 # left the running process with stale empty credentials
                 # in memory, no observable error, and no recovery short
-                # of a manual restart. The auto-updater still uses
-                # ``sys.exit(75)`` because a binary swap genuinely needs
-                # a fresh process; pairing does not.
+                # of a manual restart. The auto-updater still exits with
+                # 75 (via ``request_restart``) because a binary swap
+                # genuinely needs a fresh process; pairing does not.
                 try:
                     new_relay_cfg = RelayConfig(
                         # server_url is preserved from .env, mirroring
@@ -574,9 +577,10 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             app.state.relay_client = None
             app.state.updater = None
             app.state.https_poll_task = None
-        # After the relay branch: a pre-connect update check that stages a
-        # release exits (75) before any voice work starts.
-        await app.state.voice.start()
+        # A pre-connect update check that staged a release has already asked
+        # for the restart; start no voice work in a process that is stopping.
+        if not restart_requested():
+            await app.state.voice.start()
         yield
         logger.info("agent.shutting_down")
         models_warmup = getattr(app.state, "cli_models_warmup", None)

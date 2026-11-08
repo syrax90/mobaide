@@ -32,6 +32,7 @@ from .marketing.loader import (
     render_sitemap,
     render_voice_input,
 )
+from .session_mode_order.service import SessionModeOrderService
 from .shortcuts.service import ShortcutService
 from .static_files import CachedStaticFiles, resolve_static_dir
 from .templates.service import TemplateService
@@ -240,6 +241,10 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             cooldown_seconds=config.password_reset_email_cooldown_seconds,
             hourly_cap=config.password_reset_email_hourly_cap,
         )
+        email_verification_ip_limiter = ResendRateLimiter(
+            cooldown_seconds=0,
+            hourly_cap=config.email_verification_ip_hourly_cap,
+        )
         # Per-IP limiter has no cooldown — only the rolling hourly cap. Same
         # in-memory caveat as resend_limiter (documented in rate_limit.py).
         reset_ip_limiter = ResendRateLimiter(
@@ -270,8 +275,23 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             cooldown_seconds=0,
             hourly_cap=config.pairing_initiate_ip_hourly_cap,
         )
+        # Sized well past the default: eviction resets a bucket's count, so
+        # a spray of junk addresses must be large before it reaches one.
+        login_email_limiter = ResendRateLimiter(
+            cooldown_seconds=0,
+            hourly_cap=config.login_email_failure_cap,
+            window_seconds=config.login_failure_window_seconds,
+            max_keys=100_000,
+        )
+        login_ip_limiter = ResendRateLimiter(
+            cooldown_seconds=0,
+            hourly_cap=config.login_ip_failure_cap,
+            window_seconds=config.login_failure_window_seconds,
+            max_keys=100_000,
+        )
         app.state.email_sender = email_sender
         app.state.resend_limiter = resend_limiter
+        app.state.email_verification_ip_limiter = email_verification_ip_limiter
         app.state.reset_email_limiter = reset_email_limiter
         app.state.reset_ip_limiter = reset_ip_limiter
         app.state.device_code_mint_limiter = device_code_mint_limiter
@@ -285,6 +305,8 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             resend_limiter=resend_limiter,
             reset_email_limiter=reset_email_limiter,
             routing=app.state.routing,
+            login_email_limiter=login_email_limiter,
+            login_ip_limiter=login_ip_limiter,
         )
         await app.state.auth_service.seed_admin_user()
         app.state.pairing_service = PairingService(db)
@@ -293,6 +315,9 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         app.state.template_service = TemplateService(db, app.state.routing)
         app.state.shortcut_service = ShortcutService(db, app.state.routing)
         app.state.custom_agent_type_service = CustomAgentTypeService(
+            db, app.state.routing
+        )
+        app.state.session_mode_order_service = SessionModeOrderService(
             db, app.state.routing
         )
 
@@ -503,6 +528,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     from .relay.mobile_proxy import router as mobile_proxy_router
     from .relay.mobile_ws import router as mobile_ws_router
     from .relay.user_ws import router as user_ws_router
+    from .session_mode_order.router import router as session_mode_order_router
     from .shortcuts.router import router as shortcuts_router
     from .templates.router import router as templates_router
 
@@ -526,6 +552,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     app.include_router(templates_router)
     app.include_router(shortcuts_router)
     app.include_router(custom_agent_types_router)
+    app.include_router(session_mode_order_router)
     app.include_router(ads_router)
 
     if config.enable_api_docs:

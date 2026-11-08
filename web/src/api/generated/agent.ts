@@ -22,7 +22,7 @@ export interface paths {
          *     can surface a meaningful toast. On ``"staged"`` the supervisor restart
          *     is scheduled as a FastAPI background task that runs *after* the HTTP
          *     response is flushed, so the client receives the 200 reliably before
-         *     the worker exits with code ``EXIT_RESTART_REQUESTED``.
+         *     the agent exits with code ``EXIT_RESTART_REQUESTED``.
          */
         post: operations["force_update_now_api_agent_update_force_now_post"];
         delete?: never;
@@ -338,7 +338,7 @@ export interface paths {
          *
          *     Returns 409 with ``{busy_by: [...]}`` while a session or auto-scan work
          *     item runs in the project root (a linked worktree's session does not
-         *     count), and a coded 409 — ``dirty``, ``checked_out_elsewhere``,
+         *     count) unless ``force`` is set, and a coded 409 — ``dirty``, ``checked_out_elsewhere``,
          *     ``operation_in_progress``, ``job_running`` — for the states git or the
          *     agent refuse to switch in; ``404 ref_not_found`` for a ref that is
          *     neither a local nor a remote-tracking branch.
@@ -1418,7 +1418,8 @@ export interface components {
          * GitBranchCreateRequest
          * @description ``POST /branches``: create ``name`` at ``start_point`` (``HEAD`` of the
          *     project root when omitted); ``checkout`` switches the project root to
-         *     it in the same call and is subject to the checkout refusals.
+         *     it in the same call and is subject to the checkout refusals; ``force``
+         *     skips the busy-holder refusal after the user confirmed it.
          */
         GitBranchCreateRequest: {
             /**
@@ -1426,6 +1427,11 @@ export interface components {
              * @default false
              */
             checkout: boolean;
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
             /** Name */
             name: string;
             /** Start Point */
@@ -1450,9 +1456,15 @@ export interface components {
          * @description ``POST /checkout``: ``ref`` is a local branch name or a
          *     ``<remote>/<name>`` remote-tracking branch as listed by ``GET /items``;
          *     a remote ref without a local branch of that name gets one created,
-         *     tracking it.
+         *     tracking it. ``force`` skips the busy-holder refusal after the user
+         *     confirmed it; every other checkout refusal still applies.
          */
         GitCheckoutRequest: {
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
             /** Ref */
             ref: string;
         };

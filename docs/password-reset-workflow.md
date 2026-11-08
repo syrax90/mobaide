@@ -62,7 +62,7 @@ be used to enumerate either the address itself or its verification state.
 | Unverified user | `200 {"status":"ok"}` (silent) | Same generic message — never reveals state. |
 | Per-email cap hit | `200 {"status":"ok"}` (silent throttle, no email sent) | Same generic message. |
 | Per-IP cap hit | `429 {"detail":{"error":"reset_ip_rate_limited","retry_after_seconds":N}}` plus `Retry-After` header | "Too many requests from this network. Try again in Ns." |
-| Wrong code | `400 {"detail":{"error":"reset_code_invalid"}}` | "That code isn't right. Try again." Attempt counter bumps; after `PASSWORD_RESET_MAX_ATTEMPTS` the active token is invalidated. |
+| Wrong code | `400 {"detail":{"error":"reset_code_invalid"}}` | "That code isn't right. Try again." Every guess (right or wrong) bumps the attempt counter atomically; after `PASSWORD_RESET_MAX_ATTEMPTS` the active token is invalidated. |
 | Expired code | `410 {"detail":{"error":"reset_code_expired"}}` | "That code expired. Tap Resend to get a new one." |
 | Exhausted attempts | `429 {"detail":{"error":"reset_attempts_exhausted"}}` | "Too many attempts. Request a new code." |
 | New = current password | `400 {"detail":{"error":"new_password_same_as_old"}}` | "New password must differ from your current password." |
@@ -86,6 +86,9 @@ without the flag does NOT start it. Production deployments never bring it up.
 | `PASSWORD_RESET_EMAIL_COOLDOWN_SECONDS` | `60` | Minimum gap between reset emails for the same address. |
 | `PASSWORD_RESET_EMAIL_HOURLY_CAP` | `3` | Max resends per email in any rolling 1-hour window. |
 | `PASSWORD_RESET_IP_HOURLY_CAP` | `10` | Max reset requests from any one source IP per rolling hour. Hits `429`. |
+| `LOGIN_EMAIL_FAILURE_CAP` | `10` | Wrong sign-in passwords per email in the window before sign-in answers `429` `login_rate_limited`. `0` disables. A successful reset clears this lockout. |
+| `LOGIN_IP_FAILURE_CAP` | `50` | Same, per source IP. `0` disables. Needs `FORWARDED_ALLOW_IPS` behind a proxy. |
+| `LOGIN_FAILURE_WINDOW_SECONDS` | `900` | Sliding window for both sign-in failure caps. |
 
 ## Production notes
 

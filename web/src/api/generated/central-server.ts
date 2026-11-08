@@ -821,6 +821,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/session-mode-order": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session Mode Order
+         * @description The caller's mode-picker order; an empty ``order`` means default.
+         */
+        get: operations["get_session_mode_order_api_session_mode_order_get"];
+        /**
+         * Put Session Mode Order
+         * @description Replace the order and push ``session_mode_order.updated`` to the
+         *     caller's other connected devices.
+         */
+        put: operations["put_session_mode_order_api_session_mode_order_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/shortcuts": {
         parameters: {
             query?: never;
@@ -1722,6 +1747,22 @@ export interface components {
             status: string;
         };
         /**
+         * SessionModeOrder
+         * @description The user's mode-picker order, as REST and the push event carry it.
+         *
+         *     ``order`` lists mode ids (``claude``, ``codex``, ``shell``,
+         *     ``custom_<id>``, ...) top to bottom; an empty list means the default
+         *     order. ``version`` is 0 and ``updated_at`` null until the first save.
+         */
+        SessionModeOrder: {
+            /** Order */
+            order: string[];
+            /** Updated At */
+            updated_at: string | null;
+            /** Version */
+            version: number;
+        };
+        /**
          * ShortcutSummary
          * @description Wire shape for a saved shortcut returned to clients.
          */
@@ -1800,6 +1841,16 @@ export interface components {
             command?: string | null;
             /** Name */
             name?: string | null;
+        };
+        /**
+         * UpdateSessionModeOrderRequest
+         * @description Full replace of the order. Ids are stored opaquely: the server does
+         *     not check them against the built-in set or the live custom types, and
+         *     clients place a mode the list does not name after the ones it does.
+         */
+        UpdateSessionModeOrderRequest: {
+            /** Order */
+            order: string[];
         };
         /**
          * UpdateShortcutRequest
@@ -3085,6 +3136,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrustPinResponse"];
+                };
+            };
+        };
+    };
+    get_session_mode_order_api_session_mode_order_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionModeOrder"];
+                };
+            };
+        };
+    };
+    put_session_mode_order_api_session_mode_order_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSessionModeOrderRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionModeOrder"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -1,6 +1,7 @@
 package com.mobaide.app.ui.projects.git
 
 import com.mobaide.app.data.network.dto.BusyHolder
+import com.mobaide.app.data.network.dto.GitBranchCreateRequest
 import com.mobaide.app.data.network.dto.GitBranchResponse
 import com.mobaide.app.data.network.dto.GitDeleteItem
 import com.mobaide.app.data.network.dto.GitDeleteResultItem
@@ -50,6 +51,9 @@ data class GitUiState(
 
     /** When non-null, the screen renders the busy-conflict dialog. */
     val busyDialog: List<BusyHolder>? = null,
+
+    /** When non-null, the screen offers to retry this refused checkout with `force`. */
+    val busyCheckoutPrompt: BusyCheckoutPrompt? = null,
 
     /** When non-null, the screen renders the force-delete confirmation. */
     val forceDeletePrompt: ForceDeletePrompt? = null,
@@ -113,6 +117,18 @@ data class ForceDeletePrompt(
     val items: List<PendingDelete>,
     val refs: List<String>,
 )
+
+/** A checkout the busy guard refused; the user may retry it with `force`. */
+data class BusyCheckoutPrompt(
+    val holders: List<BusyHolder>,
+    val branch: String,
+    val retry: Retry,
+) {
+    sealed interface Retry {
+        data class Checkout(val ref: String) : Retry
+        data class Create(val request: GitBranchCreateRequest) : Retry
+    }
+}
 
 /** One-shot screen events. */
 sealed interface GitUiEvent {
@@ -190,6 +206,17 @@ internal fun matchesFilter(item: GitItem, filter: String): Boolean {
 internal fun checkoutConfirmMessage(branch: String, projectName: String): String =
     "Check out $branch in the project folder of $projectName? " +
         "Sessions started in that folder afterwards use this branch."
+
+internal const val BUSY_CHECKOUT_TITLE = "Project folder in use"
+
+/** Body of the soft busy prompt; the holders follow it. Same copy on iOS and the web. */
+internal fun busyCheckoutMessage(branch: String): String =
+    "These items work in the project folder. Checking out $branch changes " +
+        "the files under them. Check out anyway?"
+
+/** A forced retry still refused: only an agent without `force` does that. */
+internal const val BUSY_CHECKOUT_UNSUPPORTED =
+    "The project folder is still in use. Update the agent to check out anyway."
 
 internal fun checkedOutMessage(result: GitBranchResponse): String = "Checked out ${result.branch}"
 

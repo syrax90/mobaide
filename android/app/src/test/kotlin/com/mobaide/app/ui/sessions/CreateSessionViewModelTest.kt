@@ -127,7 +127,9 @@ class CreateSessionViewModelTest {
         val customTypesFlow = MutableStateFlow<List<CustomAgentTypeDto>>(emptyList())
         val customTypesRepo = mockk<CustomAgentTypesRepository>()
         every { customTypesRepo.observeTypes() } returns customTypesFlow
+        every { customTypesRepo.observeModeOrder() } returns MutableStateFlow(emptyList())
         coEvery { customTypesRepo.refreshTypes() } just Runs
+        coEvery { customTypesRepo.refreshModeOrder() } just Runs
 
         // Strict too: the custom-path folder suggestions reach the agent only
         // once their field gains focus.

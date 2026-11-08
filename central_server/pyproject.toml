@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "central-server"
-version = "0.2.19"
+version = "0.2.21"
 description = "Central relay server for Mobaide — WebSocket relay with user-owned agent management"
 requires-python = ">=3.12"
 dependencies = [
@@ -13,7 +13,9 @@ dependencies = [
     # key that __main__.py pins; an older cached uvicorn dies at startup.
     "uvicorn[standard]>=0.49",
     "PyJWT",
-    "aiosqlite",
+    # <1: Database._consume_code_token relies on the private
+    # Connection._execute / _conn pair.
+    "aiosqlite>=0.20,<1",
     "structlog>=24.1",
     "asgi-correlation-id>=4.3",
     "orjson",

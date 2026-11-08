@@ -1,17 +1,17 @@
-"""The CloudflareOrigin Caddyfile must trust Cloudflare's edge ranges.
+"""The prod Caddyfiles must hand the relay one unspoofable client address.
 
-Behind the orange cloud the peer Caddy sees is a Cloudflare edge; without
-``trusted_proxies`` Caddy discards Cloudflare's ``X-Forwarded-For`` and the
-relay attributes every apex request to Cloudflare — breaking per-IP rate
-limits and the ad-consent network fingerprint, which has to match a sign-up
-that reaches the gray-cloud ``app.mobaide.com`` directly. The LetsEncrypt
-mode has no proxy in front and must trust nothing.
+The address must come from ``Cf-Connecting-Ip`` only: Cloudflare appends to a
+client-written ``X-Forwarded-For``, so its leftmost entry — the one uvicorn
+reads — is attacker-controlled. Every ``reverse_proxy`` in both modes replaces
+``X-Forwarded-For`` with Caddy's resolved ``{client_ip}``.
 """
 from __future__ import annotations
 
 import ipaddress
 import re
 from pathlib import Path
+
+import pytest
 
 _PROD_DIR = Path(__file__).resolve().parents[2] / "deploy" / "prod"
 
@@ -24,6 +24,42 @@ CLOUDFLARE_RANGES = (
     "2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32",
     "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
 )
+
+
+_CADDYFILES = ("Caddyfile.CloudflareOrigin", "Caddyfile.LetsEncrypt")
+
+
+def _directive_lines(filename: str) -> list[str]:
+    """Stripped non-blank lines with ``#`` comments removed."""
+    source = (_PROD_DIR / filename).read_text(encoding="utf-8")
+    lines = (re.sub(r"(^|\s)#.*$", "", line).strip() for line in source.splitlines())
+    return [line for line in lines if line]
+
+
+def _block_body(lines: list[str], opener: int) -> list[str]:
+    """Directive lines inside the block opened on ``lines[opener]``."""
+    depth = 0
+    for index in range(opener, len(lines)):
+        depth += lines[index].count("{") - lines[index].count("}")
+        if depth == 0:
+            return lines[opener + 1:index]
+    raise AssertionError(f"unclosed block at {lines[opener]!r}")
+
+
+def _reverse_proxy_blocks(filename: str) -> list[list[str]]:
+    lines = _directive_lines(filename)
+    openers = [i for i, line in enumerate(lines) if line.split()[0] == "reverse_proxy"]
+    for i in openers:
+        assert lines[i].endswith("{"), f"{filename}: {lines[i]!r} has no header_up block"
+    return [_block_body(lines, i) for i in openers]
+
+
+def _client_ip_header_lines(filename: str) -> list[list[str]]:
+    return [
+        line.split()[1:]
+        for line in _directive_lines(filename)
+        if line.split()[0] == "client_ip_headers"
+    ]
 
 
 def _trusted_proxy_ranges(filename: str) -> list[str]:
@@ -48,3 +84,27 @@ def test_cloudflare_origin_global_options_come_first() -> None:
 
 def test_lets_encrypt_mode_trusts_no_proxy() -> None:
     assert _trusted_proxy_ranges("Caddyfile.LetsEncrypt") == []
+
+
+def test_cloudflare_origin_reads_the_client_ip_only_from_cf_connecting_ip() -> None:
+    """An ``X-Forwarded-For`` fallback here would reopen the spoof."""
+    lines = _directive_lines("Caddyfile.CloudflareOrigin")
+    global_options = _block_body(lines, lines.index("{"))
+    assert "client_ip_headers Cf-Connecting-Ip" in global_options
+    assert _client_ip_header_lines("Caddyfile.CloudflareOrigin") == [["Cf-Connecting-Ip"]]
+
+
+def test_lets_encrypt_mode_reads_no_client_ip_header() -> None:
+    """With no trusted proxy in front, any client IP header is client-written."""
+    assert _client_ip_header_lines("Caddyfile.LetsEncrypt") == []
+
+
+@pytest.mark.parametrize("filename", _CADDYFILES)
+def test_every_reverse_proxy_replaces_x_forwarded_for_with_the_resolved_client_ip(
+    filename: str,
+) -> None:
+    blocks = _reverse_proxy_blocks(filename)
+    assert len(blocks) >= 2  # the (app_mobaide) @backend handler and the apex block
+    for body in blocks:
+        xff = [line for line in body if re.search(r"(?i)\bX-Forwarded-For\b", line)]
+        assert xff == ["header_up X-Forwarded-For {client_ip}"]

@@ -17,6 +17,8 @@
  * `sessionCache.ts` and `projectsCache.ts`: `sessions.changed` and
  * `projects.changed` are complete lists, and `session.updated` /
  * `session.attention` carry a whole row each, so there is no delta to drift.
+ * On the user channel, `session_mode_order.updated` is the one event of this
+ * kind: it carries the whole versioned order (`sessionModeOrderCache.ts`).
  *
  * That split is the rule for every agent-channel event: an event carrying the
  * new state is **written**, an event carrying only a pointer to it is
@@ -54,6 +56,7 @@ import { applyAutoScanSnapshot, applyAutoScanStatus } from './autoscanCache';
 import { applyProjectsSnapshot } from './projectsCache';
 import { applySessionsSnapshot, applySessionUpsert } from './sessionCache';
 import { applySessionGitJobEvent } from './sessionGitJobCache';
+import { applySessionModeOrderEvent } from './sessionModeOrderCache';
 import { applyVoiceSnapshot } from './voiceCache';
 import { markSessionsSnapshotApplied } from './sessionsSyncStore';
 import {
@@ -187,10 +190,23 @@ export function routeUserEvent(envelope: EventEnvelope): BridgeOutcome {
   return { kind: 'invalidated', type: envelope.type, keys: rule.keys(envelope.payload) };
 }
 
+const SESSION_MODE_ORDER_UPDATED = 'session_mode_order.updated';
+
 export function applyUserEventEnvelope(
   client: QueryClient,
   envelope: EventEnvelope,
 ): BridgeOutcome {
+  // The one user event that carries the whole new state, so it is written
+  // rather than invalidated (see `sessionModeOrderCache.ts`).
+  if (envelope.type === SESSION_MODE_ORDER_UPDATED) {
+    const result = applySessionModeOrderEvent(client, envelope.payload);
+    if (result === 'dropped') return { kind: 'dropped' };
+    return {
+      kind: 'patched',
+      type: envelope.type,
+      keys: result === 'applied' ? [queryKeys.sessionModeOrder()] : [],
+    };
+  }
   const outcome = routeUserEvent(envelope);
   if (outcome.kind === 'invalidated') invalidate(client, outcome.keys);
   return outcome;
@@ -340,6 +356,7 @@ export function refreshOnUserEventsConnect(client: QueryClient): void {
     queryKeys.agents(),
     queryKeys.templates(),
     queryKeys.customAgentTypes(),
+    queryKeys.sessionModeOrder(),
   ]);
 }
 

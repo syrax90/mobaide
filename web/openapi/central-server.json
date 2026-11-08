@@ -1480,6 +1480,40 @@
         "title": "ResetPasswordResponse",
         "type": "object"
       },
+      "SessionModeOrder": {
+        "description": "The user's mode-picker order, as REST and the push event carry it.\n\n``order`` lists mode ids (``claude``, ``codex``, ``shell``,\n``custom_<id>``, ...) top to bottom; an empty list means the default\norder. ``version`` is 0 and ``updated_at`` null until the first save.",
+        "properties": {
+          "order": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Order",
+            "type": "array"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "order",
+          "version",
+          "updated_at"
+        ],
+        "title": "SessionModeOrder",
+        "type": "object"
+      },
       "ShortcutSummary": {
         "description": "Wire shape for a saved shortcut returned to clients.",
         "properties": {
@@ -1667,6 +1701,25 @@
         "title": "UpdateCustomAgentTypeRequest",
         "type": "object"
       },
+      "UpdateSessionModeOrderRequest": {
+        "description": "Full replace of the order. Ids are stored opaquely: the server does\nnot check them against the built-in set or the live custom types, and\nclients place a mode the list does not name after the ones it does.",
+        "properties": {
+          "order": {
+            "items": {
+              "pattern": "^[a-z0-9_]{1,32}$",
+              "type": "string"
+            },
+            "maxItems": 64,
+            "title": "Order",
+            "type": "array"
+          }
+        },
+        "required": [
+          "order"
+        ],
+        "title": "UpdateSessionModeOrderRequest",
+        "type": "object"
+      },
       "UpdateShortcutRequest": {
         "description": "Rename-only update. ``name`` is required so an empty body cannot\nsilently clear it; ``\"\"`` (or an explicit null) clears the name back to\nNULL \u2014 the Android client's JSON encoder omits null-valued defaults, so\nthe empty string is the only clear form it can express on the wire.",
         "properties": {
@@ -1831,6 +1884,8 @@
             "type": "string"
           },
           "password": {
+            "maxLength": 128,
+            "minLength": 8,
             "title": "Password",
             "type": "string"
           },
@@ -3455,6 +3510,68 @@
         "summary": "Get Trust Pin",
         "tags": [
           "pairing"
+        ]
+      }
+    },
+    "/api/session-mode-order": {
+      "get": {
+        "description": "The caller's mode-picker order; an empty ``order`` means default.",
+        "operationId": "get_session_mode_order_api_session_mode_order_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionModeOrder"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Session Mode Order",
+        "tags": [
+          "session-mode-order"
+        ]
+      },
+      "put": {
+        "description": "Replace the order and push ``session_mode_order.updated`` to the\ncaller's other connected devices.",
+        "operationId": "put_session_mode_order_api_session_mode_order_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSessionModeOrderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionModeOrder"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Session Mode Order",
+        "tags": [
+          "session-mode-order"
         ]
       }
     },

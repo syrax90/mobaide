@@ -210,6 +210,34 @@ class TestCodeFailureModes:
         with pytest.raises(VerificationAttemptsExhaustedError):
             await verify_service.verify_email("frank@example.com", real_code)
 
+    async def test_concurrent_guesses_cannot_exceed_attempt_cap(
+        self,
+        verify_service: AuthService,
+        verify_db: Database,
+        fake_sender: _FakeEmailSender,
+        verify_config: CentralServerConfig,
+    ):
+        await verify_service.register_user("ivan@example.com", "hunter22", None)
+        await asyncio.sleep(0)
+        _, real_code, _ = fake_sender.messages[-1]
+        wrong_codes = [f"{n:06d}" for n in range(30) if f"{n:06d}" != real_code]
+
+        results = await asyncio.gather(
+            *(
+                verify_service.verify_email("ivan@example.com", code)
+                for code in [*wrong_codes, real_code]
+            ),
+            return_exceptions=True,
+        )
+
+        invalid = [
+            r for r in results if isinstance(r, InvalidVerificationCodeError)
+        ]
+        assert len(invalid) == verify_config.email_verification_max_attempts
+        assert isinstance(results[-1], VerificationAttemptsExhaustedError)
+        user = await verify_db.get_user_by_email("ivan@example.com")
+        assert not user["email_verified"]
+
     async def test_expired_token_is_rejected(
         self,
         verify_config: CentralServerConfig,
@@ -909,6 +937,78 @@ class TestRouterIntegration:
             json={"email": "q@example.com", "password": "firstpass1"},
         )
         assert replaced.status_code == 401
+
+    @pytest.mark.parametrize(
+        "email",
+        [
+            "r1@example.com, r2@example.com",
+            "Alice <r1@example.com>",
+            "r1@example.com\r\nBcc: r2@example.com",
+        ],
+    )
+    async def test_register_refuses_more_than_one_mailbox(
+        self,
+        verify_client,
+        verify_db: Database,
+        fake_sender: _FakeEmailSender,
+        email: str,
+    ):
+        resp = await verify_client.post(
+            "/api/auth/register",
+            json={"email": email, "password": "hunter22"},
+        )
+        assert resp.status_code == 422
+        assert "Enter a single valid email address" in resp.text
+
+        await asyncio.sleep(0)
+        assert fake_sender.messages == []
+        assert await verify_db.get_user_by_email(email) is None
+        assert await verify_db.get_user_by_email("r1@example.com") is None
+
+    async def test_ip_cap_is_shared_by_register_and_resend(
+        self,
+        verify_app,
+        verify_client,
+        verify_db: Database,
+        fake_sender: _FakeEmailSender,
+    ):
+        # ASGITransport reports one synthetic client host, so every call
+        # below lands in the same per-IP bucket.
+        verify_app.state.email_verification_ip_limiter = ResendRateLimiter(
+            cooldown_seconds=0, hourly_cap=2,
+        )
+        first = await verify_client.post(
+            "/api/auth/register",
+            json={"email": "s1@example.com", "password": "hunter22"},
+        )
+        assert first.status_code == 200
+        resend = await verify_client.post(
+            "/api/auth/resend-verification",
+            json={"email": "nobody@example.com"},
+        )
+        assert resend.status_code == 200
+
+        blocked = await verify_client.post(
+            "/api/auth/register",
+            json={"email": "s2@example.com", "password": "hunter22"},
+        )
+        assert blocked.status_code == 429
+        detail = blocked.json()["detail"]
+        assert detail["error"] == "resend_rate_limited"
+        assert detail["cooldown_seconds_remaining"] > 0
+        assert blocked.headers.get("Retry-After") == str(
+            detail["cooldown_seconds_remaining"]
+        )
+        await asyncio.sleep(0)
+        assert await verify_db.get_user_by_email("s2@example.com") is None
+        assert [m[0] for m in fake_sender.messages] == ["s1@example.com"]
+
+        blocked_resend = await verify_client.post(
+            "/api/auth/resend-verification",
+            json={"email": "s1@example.com"},
+        )
+        assert blocked_resend.status_code == 429
+        assert blocked_resend.json()["detail"]["error"] == "resend_rate_limited"
 
 # -- Mailpit integration (opt-in) ---------------------------------------------
 

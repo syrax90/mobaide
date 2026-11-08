@@ -3,6 +3,10 @@
 APP_PROTOCOL_VERSION = 7
 MIN_SERVER_PROTOCOL_VERSION = 6
 
+// App version (MARKETING_VERSION / CURRENT_PROJECT_VERSION), bumped by
+// release-please.
+#include "Version.xcconfig"
+
 // Developer-local overrides (CENTRAL_SERVER_URL, Google client ids) —
 // gitignored; copy Local.xcconfig.example to Local.xcconfig to use
 // (android/local.properties parity).

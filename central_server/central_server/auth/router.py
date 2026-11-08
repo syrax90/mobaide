@@ -38,6 +38,7 @@ from .service import (
     ExpiredVerificationCodeError,
     InvalidResetCodeError,
     InvalidVerificationCodeError,
+    LoginRateLimitedError,
     NewPasswordSameAsOldError,
     ResendRateLimitedError,
     ResetAttemptsExhaustedError,
@@ -135,12 +136,28 @@ async def _apply_refreshable_session(
     )
 
 
+async def _require_verification_mail_ip_quota(request: Request) -> None:
+    """Cap mail-sending requests per IP, shared by register and resend.
+
+    The 429 reuses the ``resend_rate_limited`` shape because every client
+    already renders it. Falls open if the limiter isn't wired.
+    """
+    limiter = getattr(request.app.state, "email_verification_ip_limiter", None)
+    if limiter is None:
+        return
+    ip = request.client.host if request.client else "unknown"
+    wait = await limiter.try_acquire(f"ip:{ip}")
+    if wait is not None:
+        raise _resend_rate_limited(ResendRateLimitedError(wait))
+
+
 @router.post("/register", response_model=AuthTokenResponse)
 async def register(
     request: Request,
     http_response: Response,
     body: UserRegisterRequest,
     background_tasks: BackgroundTasks,
+    _ip: None = Depends(_require_verification_mail_ip_quota),
 ):
     """Register a new user with email + password.
 
@@ -188,7 +205,18 @@ async def login(
     auth_service = request.app.state.auth_service
     try:
         user_id, role, token, scheduled_deletion_at = await auth_service.login_user(
-            body.email, body.password
+            body.email,
+            body.password,
+            client_ip=request.client.host if request.client else None,
+        )
+    except LoginRateLimitedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "error": "login_rate_limited",
+                "retry_after_seconds": exc.retry_after_seconds,
+            },
+            headers={"Retry-After": str(exc.retry_after_seconds)},
         )
     except VerificationRequiredError as exc:
         raise HTTPException(
@@ -443,6 +471,7 @@ async def resend_verification(
     request: Request,
     body: ResendVerificationRequest,
     background_tasks: BackgroundTasks,
+    _ip: None = Depends(_require_verification_mail_ip_quota),
 ):
     """Issue a fresh verification code (rate-limited)."""
     auth_service = request.app.state.auth_service

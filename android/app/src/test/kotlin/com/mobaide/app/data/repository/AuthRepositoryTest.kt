@@ -150,6 +150,37 @@ class AuthRepositoryTest {
         }
     }
 
+    @Test
+    fun loginWithPassword_on429_throwsLoginRateLimited_withServerWait() = runTest {
+        val centralApi = newCentralApi()
+        val body = """{"detail":{"error":"login_rate_limited","retry_after_seconds":420}}"""
+        coEvery { centralApi.login(any(), any()) } throws ApiException(429, body)
+        val sessionManager = mockk<SessionManager>(relaxUnitFun = true)
+
+        val repo = newRepo(centralApi = centralApi, sessionManager = sessionManager)
+        try {
+            repo.loginWithPassword("x@test.com", "wrong")
+            fail("expected LoginRateLimitedException")
+        } catch (e: LoginRateLimitedException) {
+            assertEquals(420, e.retryAfterSeconds)
+        }
+        verify(exactly = 0) { sessionManager.markUserLoggedIn() }
+    }
+
+    @Test
+    fun loginWithPassword_on429WithoutBody_fallsBackToRelayWindow() = runTest {
+        val centralApi = newCentralApi()
+        coEvery { centralApi.login(any(), any()) } throws ApiException(429, "")
+
+        val repo = newRepo(centralApi = centralApi)
+        try {
+            repo.loginWithPassword("x@test.com", "wrong")
+            fail("expected LoginRateLimitedException")
+        } catch (e: LoginRateLimitedException) {
+            assertEquals(900, e.retryAfterSeconds)
+        }
+    }
+
     // ---- loginWithGoogle ----------------------------------------------------
 
     @Test

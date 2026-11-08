@@ -9,6 +9,7 @@ import com.mobaide.app.data.network.WebSocketManager
 import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.data.network.dto.CustomTypeDeletedPayload
+import com.mobaide.app.data.network.dto.SessionModeOrderDto
 import com.mobaide.app.data.network.dto.ShortcutDeletedPayload
 import com.mobaide.app.data.network.dto.ShortcutDto
 import com.mobaide.app.data.network.dto.TemplateDeletedPayload
@@ -154,6 +155,11 @@ class UserEventBus @Inject constructor(
                     Log.w(TAG, "refreshTypes on WS connect failed", t)
                 }
                 try {
+                    customAgentTypesRepository.refreshModeOrder()
+                } catch (t: Throwable) {
+                    Log.w(TAG, "refreshModeOrder on WS connect failed", t)
+                }
+                try {
                     agentPairedConversion.reconcile()
                 } catch (t: Throwable) {
                     Log.w(TAG, "conversion reconcile on WS connect failed", t)
@@ -248,6 +254,15 @@ class UserEventBus @Inject constructor(
                 // The server cascades the type's saved shortcuts in the same
                 // transaction without per-shortcut events — mirror it locally.
                 shortcutsRepository.purgeKind("custom_${p.id}")
+            }
+            "session_mode_order.updated" -> {
+                val order = try {
+                    json.decodeFromJsonElement(SessionModeOrderDto.serializer(), payload)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Malformed session_mode_order.updated payload", t)
+                    return
+                }
+                customAgentTypesRepository.applyModeOrder(order)
             }
             "account.first_agent_paired" -> {
                 try {

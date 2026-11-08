@@ -16,21 +16,71 @@ jobs:
       pull-requests: write
     steps:
       - id: release
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
         with:
-          # RELEASE_PLEASE_TOKEN must be a PAT with `workflow` scope so the tag
-          # push it makes triggers the downstream release-agent / release-server
-          # / release-android workflows. Falling back to GITHUB_TOKEN works for
-          # PR creation but tag-pushes from GITHUB_TOKEN will NOT fire other
-          # workflows — operators must push the tag manually in that case.
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN on purpose: the tags it pushes start no other
+          # workflow, so a merge never ships a release by itself. The operator
+          # ships each tag with deploy/prod/release_agent.py or
+          # release_android.py, which hold the signing keys locally.
+          token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      # release-please bumps MARKETING_VERSION (the `x-release-please-version`
+      # line) but has no updater for a plain counter, so this step bumps the
+      # iOS build number (CURRENT_PROJECT_VERSION) to main's value + 1 on the
+      # release PR branch. It runs on every push and is idempotent: it does
+      # nothing when the release PR carries no iOS release or already has the
+      # right build number. When release-please regenerates the branch from
+      # main, the commit is lost and this step adds it again.
+      - name: Bump the iOS build number on the release PR
+        env:
+          BRANCH: release-please--branches--main
+          VERSION_FILE: ios/Config/Version.xcconfig
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git init -q bump && cd bump
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          if ! git fetch -q --depth=1 origin main "${BRANCH}"; then
+            echo "No release PR branch; nothing to do."
+            exit 0
+          fi
+          # A release PR branch that release-please has not regenerated
+          # since the version moved to Version.xcconfig has no such file.
+          for ref in origin/main "origin/${BRANCH}"; do
+            if ! git cat-file -e "${ref}:${VERSION_FILE}" 2>/dev/null; then
+              echo "${VERSION_FILE} is not on ${ref}; nothing to do."
+              exit 0
+            fi
+          done
+          read_setting() { git show "$1:${VERSION_FILE}" | sed -nE "s/^$2 = ([0-9.]+).*/\1/p"; }
+          main_version=$(read_setting origin/main MARKETING_VERSION)
+          pr_version=$(read_setting "origin/${BRANCH}" MARKETING_VERSION)
+          if [ "${main_version}" = "${pr_version}" ]; then
+            echo "Release PR has no iOS release (${main_version}); nothing to do."
+            exit 0
+          fi
+          main_build=$(read_setting origin/main CURRENT_PROJECT_VERSION)
+          pr_build=$(read_setting "origin/${BRANCH}" CURRENT_PROJECT_VERSION)
+          want_build=$((main_build + 1))
+          if [ "${pr_build}" = "${want_build}" ]; then
+            echo "iOS build number is already ${want_build}."
+            exit 0
+          fi
+          git checkout -q -b release "origin/${BRANCH}"
+          sed -i -E "s/^CURRENT_PROJECT_VERSION = [0-9]+/CURRENT_PROJECT_VERSION = ${want_build}/" "${VERSION_FILE}"
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -am "chore(ios): bump build number to ${want_build}"
+          git push -q origin "HEAD:${BRANCH}"
+          echo "iOS ${pr_version} build number: ${main_build} -> ${want_build}"
 
       - name: Delete empty source-repo Releases (keep tags)
         if: ${{ steps.release.outputs.releases_created == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PATHS_RELEASED: ${{ steps.release.outputs.paths_released }}
           ALL_OUTPUTS: ${{ toJSON(steps.release.outputs) }}
         # release-please-action v4 binds tag-push and GitHub Release creation

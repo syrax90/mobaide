@@ -226,7 +226,8 @@ extension ResetIpRateLimitedDetail {
 }
 
 /// FastAPI 429 body from /api/auth/forgot-password or /api/auth/reset-password
-/// when the per-IP cap is exhausted: `{"detail": {error, retry_after_seconds}}`.
+/// when the per-IP cap is exhausted, and from /api/auth/login after too many
+/// wrong passwords: `{"detail": {error, retry_after_seconds}}`.
 struct ResetIpRateLimitedErrorBody: Codable, Equatable, Sendable {
     let detail: ResetIpRateLimitedDetail
 }

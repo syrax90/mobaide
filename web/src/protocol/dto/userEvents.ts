@@ -68,8 +68,21 @@ export const firstAgentPairedSchema = z.looseObject({
   agent_id: z.string(),
 });
 
+/**
+ * The account's order of the create-session mode picker: `session_mode_order
+ * .updated`, and the body `GET`/`PUT /api/session-mode-order` answer with.
+ * `order` names mode ids top to bottom (empty = default order); `version`
+ * grows on every change, so a push older than the cache is dropped.
+ */
+export const sessionModeOrderSchema = z.looseObject({
+  order: z.array(z.string()),
+  version: z.number(),
+  updated_at: optionalWireString(),
+});
+
 export type Template = z.infer<typeof templateSchema>;
 export type CustomAgentType = z.infer<typeof customAgentTypeSchema>;
 export type AgentStatusChanged = z.infer<typeof agentStatusChangedSchema>;
 export type SessionAttention = z.infer<typeof sessionAttentionSchema>;
 export type FirstAgentPaired = z.infer<typeof firstAgentPairedSchema>;
+export type SessionModeOrder = z.infer<typeof sessionModeOrderSchema>;

@@ -1,5 +1,30 @@
 # central_server Changelog
 
+## [0.2.21](https://github.com/syrax90/claude_mobile/compare/server-v0.2.20...server-v0.2.21) (2026-11-05)
+
+
+### Bug Fixes
+
+* **deploy:** take the client IP from Cf-Connecting-Ip, not X-Forwarded-For ([ac8e164](https://github.com/syrax90/claude_mobile/commit/ac8e164d9454548376479628ea5c954de70565d0))
+* **deploy:** take the client IP from Cf-Connecting-Ip, not X-Forwarded-For ([981fb45](https://github.com/syrax90/claude_mobile/commit/981fb45a5f4b9d8200ef4d9c3664d652d2f8b2b1)), closes [#791](https://github.com/syrax90/claude_mobile/issues/791)
+* **server:** throttle password sign-in and require 8+ char passwords ([c40f660](https://github.com/syrax90/claude_mobile/commit/c40f6604595d8063a1b13da2a9410ceac3941c59))
+* **server:** throttle password sign-in and require 8+ char passwords ([03773e0](https://github.com/syrax90/claude_mobile/commit/03773e0b42f4ad7044fdcc278efec169682f4268))
+* **server:** validate register email and rate limit verification mail ([4f79a5c](https://github.com/syrax90/claude_mobile/commit/4f79a5c5f152c3eea19c63ce11d207ea303c938b))
+* **server:** validate register email and rate limit verification mail ([b9eee0b](https://github.com/syrax90/claude_mobile/commit/b9eee0b41298a8359e7f07978ba21eb5ef02af4d))
+
+## [0.2.20](https://github.com/syrax90/claude_mobile/compare/server-v0.2.19...server-v0.2.20) (2026-11-04)
+
+
+### Features
+
+* drag-to-reorder projects and agents in the new-session wizard ([5ef2a0f](https://github.com/syrax90/claude_mobile/commit/5ef2a0ffa5d135fe81819bf53c04186aaab6118f))
+* drag-to-reorder projects and agents in the new-session wizard ([2182e09](https://github.com/syrax90/claude_mobile/commit/2182e0917636f9d520a33fe3d84b2c41fc8f0b03))
+
+
+### Documentation
+
+* rewrite the README for public visitors ([9ea850d](https://github.com/syrax90/claude_mobile/commit/9ea850dbdb4d9e8eec7e197becaf2591f23e6c13))
+
 ## [0.2.19](https://github.com/syrax90/claude_mobile/compare/server-v0.2.18...server-v0.2.19) (2026-10-30)
 
 

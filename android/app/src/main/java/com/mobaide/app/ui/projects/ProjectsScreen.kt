@@ -1,5 +1,10 @@
 package com.mobaide.app.ui.projects
 
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -7,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -42,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.ui.common.DeleteSwipeBackground
+import com.mobaide.app.ui.common.DragHandleIcon
 import kotlinx.coroutines.withTimeoutOrNull
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
@@ -202,17 +207,34 @@ private fun ProjectList(
 ) {
     val lazyListState = rememberLazyListState()
     // Local display list updated synchronously in `onMove` so the Reorderable library
-    // sees the new order within the same frame. The VM's StateFlow remains the source
-    // of truth; LaunchedEffect re-syncs on every upstream change (including server reverts).
+    // sees the new order within the same frame; it is saved once, on drop. The VM's
+    // StateFlow remains the source of truth; LaunchedEffect re-syncs on every upstream
+    // change (including server reverts), except during a drag.
     var display by remember { mutableStateOf(projects) }
-    LaunchedEffect(projects) { display = projects }
 
     val reorderState = rememberReorderableLazyListState(lazyListState) { from, to ->
         val current = display.toMutableList()
         val moved = current.removeAt(from.index)
         current.add(to.index, moved)
         display = current
-        onReorder(current.map { it.name })
+    }
+    LaunchedEffect(projects, reorderState.isAnyItemDragging) {
+        if (!reorderState.isAnyItemDragging) display = projects
+    }
+    // The handle's gesture keeps the callback from its first touch, so read the
+    // current list through these rather than through the captured parameters.
+    val latestProjects by rememberUpdatedState(projects)
+    val latestOnReorder by rememberUpdatedState(onReorder)
+    // One PATCH per drop, not one per swap: concurrent PATCHes of intermediate
+    // orders could land out of order and persist one the user dragged past.
+    val commitDrop = {
+        val names = display.map { it.name }
+        if (names != latestProjects.map { it.name }) latestOnReorder(names)
+    }
+    // TalkBack's way to reorder, since a screen-reader user cannot drag.
+    val moveBy = { from: Int, delta: Int ->
+        display = display.toMutableList().apply { add(from + delta, removeAt(from)) }
+        commitDrop()
     }
 
     LazyColumn(
@@ -221,13 +243,13 @@ private fun ProjectList(
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        items(items = display, key = { it.name }) { project ->
+        itemsIndexed(items = display, key = { _, it -> it.name }) { index, project ->
             ReorderableItem(reorderState, key = project.name) { _ ->
                 // Captured here because `draggableHandle` is only available
                 // within the ReorderableCollectionItemScope receiver. The
                 // resulting Modifier is pure data and can be applied deeper
                 // in the tree — in this case, to the drag-handle icon.
-                val handleModifier = Modifier.draggableHandle()
+                val handleModifier = Modifier.draggableHandle(onDragStopped = { commitDrop() })
                 val dismissState = rememberSwipeToDismissBoxState(
                     confirmValueChange = { value ->
                         if (value == SwipeToDismissBoxValue.EndToStart) {
@@ -250,11 +272,22 @@ private fun ProjectList(
                         busy = busy.contains(project.name),
                         onClick = { onOpen(project) },
                         dragHandle = {
+                            // The whole 48dp box takes the drag, not just the icon.
                             Box(
-                                modifier = Modifier.size(40.dp),
+                                modifier = Modifier.size(48.dp).then(handleModifier),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                DragHandleIcon(modifier = handleModifier)
+                                DragHandleIcon()
+                            }
+                        },
+                        modifier = Modifier.semantics {
+                            customActions = buildList {
+                                if (index > 0) {
+                                    add(CustomAccessibilityAction("Move up") { moveBy(index, -1); true })
+                                }
+                                if (index < display.lastIndex) {
+                                    add(CustomAccessibilityAction("Move down") { moveBy(index, 1); true })
+                                }
                             }
                         },
                     )

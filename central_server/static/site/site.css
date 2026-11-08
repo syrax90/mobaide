@@ -231,6 +231,21 @@ strong {
   color: var(--accent);
 }
 
+/* Icon only, no star count. The 44px box meets the touch-target minimum. */
+.site-nav .nav-gh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin: -10px -10px -10px 0;
+}
+
+.nav-gh svg {
+  display: block;
+  fill: currentColor;
+}
+
 .btn,
 .btn-ghost {
   display: inline-block;
@@ -1564,7 +1579,7 @@ h1 {
 }
 
 @media (max-width: 560px) {
-  .site-nav a:not(.btn-ghost) {
+  .site-nav a:not(.btn-ghost):not(.nav-gh) {
     display: none;
   }
 

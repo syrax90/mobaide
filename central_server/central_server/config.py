@@ -286,6 +286,10 @@ class CentralServerConfig:
     email_verification_max_attempts: int = 5
     email_verification_resend_cooldown_seconds: int = 60
     email_verification_resend_hourly_cap: int = 3
+    # /register and /resend-verification are anonymous and mail a caller-chosen
+    # address, so a per-email cap alone lets one client mail any number of
+    # strangers. Shared by both endpoints; 0 disables the cap.
+    email_verification_ip_hourly_cap: int = 20
 
     # Password reset (OTP-in-app flow; see docs/password-reset-workflow.md).
     # TTL chosen at 30 min per NIST SP 800-63-4 guidance (link/OTP ≤60 min).
@@ -297,6 +301,13 @@ class CentralServerConfig:
     password_reset_email_cooldown_seconds: int = 60
     password_reset_email_hourly_cap: int = 3
     password_reset_ip_hourly_cap: int = 10
+
+    # Password sign-in throttle; only wrong passwords count, 0 disables. The
+    # per-email cap stops a guesser spreading across addresses; the per-IP cap
+    # slows credential stuffing across many accounts.
+    login_email_failure_cap: int = 10
+    login_ip_failure_cap: int = 50
+    login_failure_window_seconds: int = 900
 
     # Account self-deletion. Industry-norm soft-delete grace period
     # (X 30d, Spotify 7d, Pinterest 14d). Sweeper interval is a balance
@@ -534,6 +545,9 @@ class CentralServerConfig:
             email_verification_resend_hourly_cap=int(
                 os.getenv("EMAIL_VERIFICATION_RESEND_HOURLY_CAP", "3"),
             ),
+            email_verification_ip_hourly_cap=int(
+                os.getenv("EMAIL_VERIFICATION_IP_HOURLY_CAP", "20"),
+            ),
             password_reset_ttl_minutes=int(
                 os.getenv("PASSWORD_RESET_TTL_MINUTES", "30"),
             ),
@@ -548,6 +562,15 @@ class CentralServerConfig:
             ),
             password_reset_ip_hourly_cap=int(
                 os.getenv("PASSWORD_RESET_IP_HOURLY_CAP", "10"),
+            ),
+            login_email_failure_cap=int(
+                os.getenv("LOGIN_EMAIL_FAILURE_CAP", "10"),
+            ),
+            login_ip_failure_cap=int(
+                os.getenv("LOGIN_IP_FAILURE_CAP", "50"),
+            ),
+            login_failure_window_seconds=int(
+                os.getenv("LOGIN_FAILURE_WINDOW_SECONDS", "900"),
             ),
             account_deletion_grace_days=int(
                 os.getenv("ACCOUNT_DELETION_GRACE_DAYS", "14"),

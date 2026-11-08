@@ -6,6 +6,7 @@ import com.mobaide.app.data.auth.UserIdentityStore
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WebSocketManager
 import com.mobaide.app.data.network.WsEvent
+import com.mobaide.app.data.network.dto.SessionModeOrderDto
 import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.repository.AgentRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
@@ -1150,5 +1151,84 @@ class UserEventBusTest {
         verify(timeout = 2000, exactly = 1) { fx.templatesRepository.clear() }
         verify(timeout = 2000, exactly = 1) { fx.shortcutsRepository.clear() }
         verify(timeout = 2000, exactly = 1) { fx.customAgentTypesRepository.clear() }
+    }
+
+
+    /** The fixture predates the mode order, so stub its two hooks per test. */
+    private fun Fixture.stubModeOrderHooks() {
+        every { customAgentTypesRepository.applyModeOrder(any()) } just Runs
+        coEvery { customAgentTypesRepository.refreshModeOrder() } just Runs
+    }
+
+    @Test
+    fun connected_event_alsoTriggersRefreshModeOrder() = runTest {
+        // A session_mode_order.updated that fired while offline is only
+        // recovered by the reconnect reconcile.
+        val fx = newBus()
+        fx.stubModeOrderHooks()
+        fx.bus.start()
+        awaitSubscribed(fx.connEvents)
+
+        emit(fx.connEvents, WsEvent.Connected)
+
+        coVerify(timeout = 2000, exactly = 1) { fx.customAgentTypesRepository.refreshModeOrder() }
+
+        fx.bus.stop()
+    }
+
+    @Test
+    fun message_sessionModeOrderUpdated_callsApplyModeOrder_withParsedDto() = runTest {
+        val fx = newBus()
+        fx.stubModeOrderHooks()
+        fx.bus.start()
+        awaitSubscribed(fx.connEvents)
+
+        emit(
+            fx.connEvents,
+            WsEvent.Message(
+                """{"type":"session_mode_order.updated","payload":{"order":["shell","custom_ab12cd34ef56","claude"],"version":4,"updated_at":"2026-11-04T10:00:00Z"}}""",
+            ),
+        )
+
+        verify(timeout = 2000, exactly = 1) {
+            fx.customAgentTypesRepository.applyModeOrder(
+                SessionModeOrderDto(
+                    order = listOf("shell", "custom_ab12cd34ef56", "claude"),
+                    version = 4,
+                    updated_at = "2026-11-04T10:00:00Z",
+                ),
+            )
+        }
+
+        fx.bus.stop()
+    }
+
+    @Test
+    fun message_sessionModeOrderUpdatedMalformedPayload_isSilentlySkipped() = runTest {
+        // `order` must be a list of strings; a guessed default would wipe the
+        // user's arrangement on every device.
+        val fx = newBus()
+        fx.stubModeOrderHooks()
+        fx.bus.start()
+        awaitSubscribed(fx.connEvents)
+
+        emit(
+            fx.connEvents,
+            WsEvent.Message(
+                """{"type":"session_mode_order.updated","payload":{"order":"shell","version":4}}""",
+            ),
+        )
+        emit(
+            fx.connEvents,
+            WsEvent.Message(
+                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
+            ),
+        )
+        verify(timeout = 2000, exactly = 1) {
+            fx.agentRepository.updateAgentOnline("sync", true)
+        }
+        verify(exactly = 0) { fx.customAgentTypesRepository.applyModeOrder(any()) }
+
+        fx.bus.stop()
     }
 }

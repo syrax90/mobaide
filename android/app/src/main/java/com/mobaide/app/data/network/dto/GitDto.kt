@@ -114,11 +114,16 @@ data class GitBranchCreateRequest(
     val name: String,
     val start_point: String? = null,
     val checkout: Boolean = false,
+    /** Skips the busy-holder refusal after the user confirmed it. */
+    val force: Boolean = false,
 )
 
-/** `POST /api/projects/{name}/git/checkout`; `ref` is a row's `branch` verbatim. */
+/**
+ * `POST /api/projects/{name}/git/checkout`; `ref` is a row's `branch` verbatim.
+ * `force` skips the busy-holder refusal after the user confirmed it.
+ */
 @Serializable
-data class GitCheckoutRequest(val ref: String)
+data class GitCheckoutRequest(val ref: String, val force: Boolean = false)
 
 @Serializable
 data class GitBranchResponse(

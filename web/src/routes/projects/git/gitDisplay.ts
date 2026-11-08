@@ -279,6 +279,20 @@ export function checkoutConfirmMessage(branch: string, projectName: string): str
   );
 }
 
+export const BUSY_CHECKOUT_TITLE = 'Project folder in use';
+
+/** Body of the soft busy prompt; the screen lists the holders under it. */
+export function busyCheckoutMessage(branch: string): string {
+  return (
+    `These items work in the project folder. Checking out ${branch} changes ` +
+    'the files under them. Check out anyway?'
+  );
+}
+
+/** A forced retry still refused: only an agent without `force` does that. */
+export const BUSY_CHECKOUT_UNSUPPORTED =
+  'The project folder is still in use. Update the agent to check out anyway.';
+
 export function checkedOutMessage(result: GitBranchResult): string {
   return `Checked out ${result.branch}`;
 }

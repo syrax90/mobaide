@@ -71,6 +71,14 @@ def test_heartbeat_flush_interval_default_and_env(monkeypatch):
     assert CentralServerConfig.from_env().heartbeat_flush_interval_seconds == 15
 
 
+def test_email_verification_ip_hourly_cap_default_and_env(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.delenv("EMAIL_VERIFICATION_IP_HOURLY_CAP", raising=False)
+    assert CentralServerConfig.from_env().email_verification_ip_hourly_cap == 20
+    monkeypatch.setenv("EMAIL_VERIFICATION_IP_HOURLY_CAP", "0")
+    assert CentralServerConfig.from_env().email_verification_ip_hourly_cap == 0
+
+
 def test_ttl_env_vars_parse_positive_integers(monkeypatch):
     """Explicit positive TTLs override the finite defaults and are parsed as ints."""
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
@@ -362,3 +370,28 @@ def test_pairing_initiate_ip_hourly_cap_default_and_env(monkeypatch):
     assert CentralServerConfig.from_env().pairing_initiate_ip_hourly_cap == 120
     monkeypatch.setenv("PAIRING_INITIATE_IP_HOURLY_CAP", "0")
     assert CentralServerConfig.from_env().pairing_initiate_ip_hourly_cap == 0
+
+
+def test_login_throttle_defaults(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "s")
+    for name in (
+        "LOGIN_EMAIL_FAILURE_CAP",
+        "LOGIN_IP_FAILURE_CAP",
+        "LOGIN_FAILURE_WINDOW_SECONDS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    config = CentralServerConfig.from_env()
+    assert config.login_email_failure_cap == 10
+    assert config.login_ip_failure_cap == 50
+    assert config.login_failure_window_seconds == 900
+
+
+def test_login_throttle_knobs_are_read_from_env(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "s")
+    monkeypatch.setenv("LOGIN_EMAIL_FAILURE_CAP", "4")
+    monkeypatch.setenv("LOGIN_IP_FAILURE_CAP", "0")
+    monkeypatch.setenv("LOGIN_FAILURE_WINDOW_SECONDS", "120")
+    config = CentralServerConfig.from_env()
+    assert config.login_email_failure_cap == 4
+    assert config.login_ip_failure_cap == 0
+    assert config.login_failure_window_seconds == 120
