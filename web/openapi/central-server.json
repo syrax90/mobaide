@@ -3942,6 +3942,102 @@
         ]
       }
     },
+    "/api/v1/agent/releases/{sha256}/{filename}": {
+      "get": {
+        "operationId": "get_release_file_api_v1_agent_releases__sha256___filename__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sha256",
+            "required": true,
+            "schema": {
+              "title": "Sha256",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "filename",
+            "required": true,
+            "schema": {
+              "title": "Filename",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Release File",
+        "tags": [
+          "manifest"
+        ]
+      },
+      "head": {
+        "operationId": "get_release_file_api_v1_agent_releases__sha256___filename__head",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sha256",
+            "required": true,
+            "schema": {
+              "title": "Sha256",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "filename",
+            "required": true,
+            "schema": {
+              "title": "Filename",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Release File",
+        "tags": [
+          "manifest"
+        ]
+      }
+    },
     "/api/v1/agent/trust_key": {
       "get": {
         "description": "Return the manifest-signing public key for agent-side bootstrap.\n\nThe agent's auto-updater needs this key (pinned at\n``<prefix>/trust/central_server.pub``) to verify Ed25519 signatures on\nevery release manifest. The install scripts and the\n``mobaide-agent fetch-trust-key`` CLI fetch this endpoint when the\noperator hasn't pre-set ``MOBAIDE_AGENT_TRUST_KEY_B64``. Returns 503\nwhen ``MANIFEST_SIGNING_PUBLIC_KEY`` is unset on this server \u2014 agents\ncannot bootstrap auto-update against a server that has no signing key\nconfigured. Anonymous: matches the public ``manifest.json`` contract,\nso unpaired install hosts can fetch it before having any credentials.",
