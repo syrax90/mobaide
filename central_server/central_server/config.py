@@ -341,6 +341,8 @@ class CentralServerConfig:
     # pipeline and does NOT consume this private key.
     manifest_signing_private_key_b64: str | None = None
     manifest_store_path: str = "data/agent_manifest.json"
+    # Content-addressed agent release files the manifest URLs point at.
+    agent_release_dir: str = "data/agent_releases"
     # Public base URL the agent and mobile use to talk to this server.
     # When set, ``POST /api/pairing/initiate`` embeds it in the QR payload.
     # When unset, falls back to the Host header from the initiate request.
@@ -594,6 +596,11 @@ class CentralServerConfig:
                 "MANIFEST_STORE_PATH",
                 "agent_manifest.json",
                 "data/agent_manifest.json",
+            ),
+            agent_release_dir=_storage_path(
+                "AGENT_RELEASE_DIR",
+                "agent_releases",
+                "data/agent_releases",
             ),
             public_base_url=os.getenv("PUBLIC_BASE_URL") or None,
             site_base_url=_env_origin("SITE_BASE_URL", _DEFAULT_SITE_BASE_URL),

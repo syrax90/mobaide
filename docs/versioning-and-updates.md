@@ -62,7 +62,7 @@ Both scripts work the same way:
 - They run on macOS, Linux and Windows (Python 3.12+).
 
 ```bash
-python deploy/prod/release_agent.py [VERSION] [--skip-publish] [--clobber] [--force] [--release-dir DIR]
+python deploy/prod/release_agent.py [VERSION] [--skip-publish] [--force] [--release-dir DIR]
 python deploy/prod/release_android.py [VERSION] [--skip-upload] [--force] [--release-dir DIR]
 ```
 
@@ -115,13 +115,14 @@ Shared helpers live in `deploy/prod/release_common.py`.
    tarball with Python `tarfile` (no `__pycache__`, no `*.pyc`, owner
    normalised). Computes SHA-256 values.
 4. Signs the **Ed25519 manifest** (same canonical body as before).
-5. Runs `gh release create agent-vX.Y.Z --repo syrax90/mobaide-agent-releases`
-   with your `gh` login. The SHA-256 values go in the release notes. It refuses
-   an existing release unless you pass `--clobber`.
-6. Runs an anonymous reachability gate over every manifest URL (details under
-   [Agent rollout manifest](#agent-rollout-manifest)).
+5. PUTs the tarball and the wheel to `central_server`, which stores them by
+   SHA-256 (details under [Release file hosting](#release-file-hosting)).
+6. Downloads every manifest URL anonymously and checks its SHA-256.
 7. POSTs the manifest to `central_server` with retries.
 8. Reads `/api/v1/agent/manifest.json` back and compares the version.
+
+You can run the script again for the same version at any time. The rebuild
+makes new bytes, so the files get new URLs and nothing is overwritten.
 
 `--skip-publish` stops after step 4. The script needs `uv`, `gh`, and the
 `cryptography` package (`pip install cryptography`).
@@ -228,7 +229,7 @@ creates an empty GitHub Release on this repo with the tag (see
 release-please-action issue #1034). A follow-up step in `release-please.yml`
 deletes it and keeps the tag, so the Releases tab here stays empty for
 `agent-v*` / `server-v*` / `android-v*` / `ios-v*` / `web-v*`. Artifacts live elsewhere:
-agent in the public `mobaide-agent-releases` sibling repo; android in Play
+agent files on `central_server` itself; android in Play
 Console; server and web on the production host. A Release that appears briefly
 and vanishes is that cleanup step, not a bug.
 
@@ -378,29 +379,25 @@ Keep a backup of the folder in a password manager.
 | File | Used by | Content |
 |------|---------|---------|
 | `agent/manifest-signing-key` | `release_agent.py` | Ed25519 private key that signs the manifest: base64 of the 32 raw bytes (the old `AGENT_MANIFEST_PRIVATE_KEY` format), or a PEM file. |
-| `agent/release-token` | `release_agent.py` | Token for `POST /api/internal/agent_manifest`. |
+| `agent/release-token` | `release_agent.py` | Token for `PUT /api/internal/agent_release/...` and `POST /api/internal/agent_manifest`. |
 | `android/upload.keystore` | `release_android.py` | Play upload key. |
 | `android/signing.properties` | `release_android.py` | `storePassword`, `keyPassword`, `keyAlias`. |
 | `android/google-web-client-id` | `release_android.py` | Google OAuth web client ID, one line. |
 | `android/google-services.json` | `release_android.py` | Firebase config of the release app. |
 | `android/play-service-account.json` | `release_android.py` | Service account that uploads to the Play Console internal track. |
 
-`release_agent.py` also needs a `gh` login with write access to
-`syrax90/mobaide-agent-releases`. No releases-repo PAT and no repo variable
-exist.
-
 **Failure modes:**
 
 * Signing key missing, or its public half differs from
   `/api/v1/agent/trust_key`: the script stops before it creates a release.
   Nothing changes anywhere.
-* Release `agent-vX.Y.Z` already exists in the releases repo: the script stops,
-  unless you pass `--clobber`.
-* An asset is not anonymously reachable: the script stops before it posts the
-  manifest, and the previous manifest keeps serving.
-* `agent/release-token` missing or wrong: the release in the releases repo
-  exists, but the POST fails, and the previous manifest keeps serving. Fix the
-  token and re-run with `--clobber`.
+* `agent/release-token` missing or wrong: the upload fails with HTTP 401 before
+  anything is stored. The previous manifest keeps serving. Fix the token and
+  run the script again.
+* The relay has no upload endpoint (HTTP 404 or 405): `central_server` is older
+  than the script. Deploy `central_server` first.
+* A file does not download anonymously, or its SHA-256 differs: the script
+  stops before it posts the manifest, and the previous manifest keeps serving.
 * The bundle is not signed with the upload key: `release_android.py` stops
   before the upload.
 
@@ -530,9 +527,9 @@ be running. It is a small JSON document:
 {
   "body": {
     "version": "0.2.0",
-    "tarball_url": "https://github.com/syrax90/mobaide-agent-releases/releases/download/agent-v0.2.0/mobaide-agent-0.2.0.tar.gz",
+    "tarball_url": "https://api.mobaide.com/api/v1/agent/releases/a1b2.../mobaide-agent-0.2.0.tar.gz",
     "tarball_sha256": "a1b2...",
-    "wheel_url": "https://github.com/syrax90/mobaide-agent-releases/releases/download/agent-v0.2.0/mobaide_agent-0.2.0-py3-none-any.whl",
+    "wheel_url": "https://api.mobaide.com/api/v1/agent/releases/c3d4.../mobaide_agent-0.2.0-py3-none-any.whl",
     "wheel_sha256": "c3d4...",
     "released_at": "2026-04-26T10:30:00+00:00",
     "min_central_server_version": "0.1.0"
@@ -549,20 +546,16 @@ be running. It is a small JSON document:
     `MANIFEST_SIGNING_PUBLIC_KEY` and pinned on each agent host at
     `<prefix>/trust/central_server.pub`.
 * **Publishing** — `release_agent.py`:
-  1. creates a GitHub Release in the public sibling repo
-     (`syrax90/mobaide-agent-releases`) with the tarball, wheel, and
-     `manifest.json` attached;
-  2. runs the **anonymous reachability gate** — a 1-byte ranged GET, with
-     retries, against every URL the signed manifest references — and refuses
-     to proceed if any URL is not anonymously reachable (privacy mismatch,
-     asset-name typo, missing upload);
+  1. uploads the tarball and the wheel to `central_server` (see
+     [Release file hosting](#release-file-hosting));
+  2. runs the **anonymous download gate**: a full GET, with retries, of every
+     URL the signed manifest names, and a SHA-256 check of each body. It stops
+     if any URL fails or serves other bytes;
   3. only then POSTs the record to `POST /api/internal/agent_manifest` on
      `central_server` with header `X-Release-Token: <agent/release-token>`.
 
   The route validates the signature **before** persisting; an invalid
-  signature returns 400 and the manifest is not stored. The gate uses a ranged
-  GET rather than HEAD because CDN redirect targets can reject HEAD with
-  403/405; retries absorb CDN propagation lag.
+  signature returns 400 and the manifest is not stored.
 * **Distribution**
   * Agents receive the signed manifest inline in the `auth_ok` reply on the
     agent tunnel and in `agent_manifest_update` CH_CONTROL push frames
@@ -574,29 +567,38 @@ be running. It is a small JSON document:
     (`broadcast_manifest_update`), so running agents get it within one
     heartbeat without a reconnect.
 
-### Releases repo bootstrap
+### Release file hosting
 
-Release artifacts live in a dedicated **public** sibling repo, not in the
-source repo (`syrax90/mobaide`). Anonymous installs cannot reach a private
-repo's GitHub Release assets, so the sibling repo keeps installs working
-whatever the source repo's visibility is. One-time bootstrap:
+`central_server` hosts the agent release files itself. Until 0.3.22 they lived
+in GitHub Releases of `syrax90/mobaide-agent-releases`. Anonymous downloads
+from there failed with HTTP 504 for long periods, for every repository, so the
+update path no longer depends on GitHub.
 
-1. **Create the public repo** (e.g. `syrax90/mobaide-agent-releases`),
-   Visibility = Public. A one-line README is enough; only release artifacts
-   live here.
-2. **Check your `gh` login** has write access to that repo. `release_agent.py`
-   publishes with it. No PAT and no repo variable are needed; the repo name is
-   a constant in the script.
-3. **Cut a release** as usual, then run `release_agent.py`. The script signs
-   the manifest with URLs that point at the public repo, creates the GitHub
-   Release there, runs the reachability gate against the public URLs, then
-   publishes the manifest to `central_server`.
+| Endpoint | Access | Purpose |
+|---|---|---|
+| `PUT /api/internal/agent_release/{sha256}/{filename}` | `X-Release-Token` | Upload one file. The body is the raw bytes. |
+| `GET` or `HEAD /api/v1/agent/releases/{sha256}/{filename}` | Anonymous | Download one file. Range requests work. |
+
+* **Content-addressed.** The URL holds the SHA-256 of the file. The server
+  rejects an upload whose body has another digest (HTTP 400). A second upload
+  of the same file returns `"created": false` and changes nothing.
+* **Cache-safe.** A file response carries
+  `Cache-Control: public, max-age=31536000, immutable`, so the Cloudflare edge
+  can keep it. A 404 carries `no-store`, so a miss is never cached.
+* **Storage.** Files live in `AGENT_RELEASE_DIR` (default
+  `data/agent_releases`, inside the `central-server-data` volume in
+  production). Each upload keeps the newest 20 files and the files of the live
+  manifest, and deletes older ones. This leaves room to roll back about 10
+  releases. One file can be at most 32 MiB.
+* **Clients.** Agents and the install scripts download whatever URL the signed
+  manifest names, and check the SHA-256. They need no change, and older agents
+  work too.
 
 If a previous release left a stale manifest record on `central_server`
-that points at unreachable URLs (e.g. the pre-bootstrap state), clear it by
-deleting the file at the configured `MANIFEST_STORE_PATH` on the central_server
-host (default `data/agent_manifest.json`). The endpoint then returns 404 ("no
-manifest published yet") until the next successful `release_agent.py` run.
+that points at unreachable URLs, clear it by deleting the file at the
+configured `MANIFEST_STORE_PATH` on the central_server host (default
+`data/agent_manifest.json`). The endpoint then returns 404 ("no manifest
+published yet") until the next successful `release_agent.py` run.
 
 ## Auto-update on the agent (staged-binary swap)
 
