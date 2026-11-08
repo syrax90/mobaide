@@ -547,7 +547,9 @@ describe('GitScreen new branch', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
 
     await waitFor(() => {
-      expect(api.creates).toEqual([{ name: 'feature/new', start_point: 'main', checkout: true }]);
+      expect(api.creates).toEqual([
+        { name: 'feature/new', start_point: 'main', checkout: true, force: false },
+      ]);
     });
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).toBeNull();
@@ -566,7 +568,7 @@ describe('GitScreen new branch', () => {
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
       'A branch named feature/new already exists.',
     );
-    expect(api.creates).toEqual([{ name: 'feature/new', checkout: false }]);
+    expect(api.creates).toEqual([{ name: 'feature/new', checkout: false, force: false }]);
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(lastToast()).toBeUndefined();
   });
@@ -582,7 +584,9 @@ describe('GitScreen new branch', () => {
     const busy = await screen.findByRole('alertdialog', { name: 'Project folder in use' });
     expect(within(busy).getByText('Session: /repo')).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(api.creates).toEqual([{ name: 'feature/new', start_point: 'main', checkout: true }]);
+    expect(api.creates).toEqual([
+      { name: 'feature/new', start_point: 'main', checkout: true, force: false },
+    ]);
     expect(lastToast()).toBeUndefined();
 
     api.createOutcome = undefined;
@@ -592,7 +596,7 @@ describe('GitScreen new branch', () => {
       expect(lastToast()).toBe('Created and checked out feature/new');
     });
     expect(api.creates).toEqual([
-      { name: 'feature/new', start_point: 'main', checkout: true },
+      { name: 'feature/new', start_point: 'main', checkout: true, force: false },
       { name: 'feature/new', start_point: 'main', checkout: true, force: true },
     ]);
   });

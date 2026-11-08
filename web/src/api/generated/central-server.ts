@@ -972,6 +972,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agent/releases/{sha256}/{filename}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Release File */
+        get: operations["get_release_file_api_v1_agent_releases__sha256___filename__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** Get Release File */
+        head: operations["get_release_file_api_v1_agent_releases__sha256___filename__head"];
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agent/trust_key": {
         parameters: {
             query?: never;
@@ -3474,6 +3492,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ManifestResponse"];
+                };
+            };
+        };
+    };
+    get_release_file_api_v1_agent_releases__sha256___filename__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sha256: string;
+                filename: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_release_file_api_v1_agent_releases__sha256___filename__head: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sha256: string;
+                filename: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -75,6 +75,7 @@ export function GitNewBranchDialog({
       name: trimmed,
       ...(startPoint === null ? {} : { start_point: startPoint }),
       checkout,
+      force: false,
     };
     try {
       const result = await create(request);
