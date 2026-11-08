@@ -2257,7 +2257,9 @@ class RelayClient:
                     resp = await voice.create_dictation()
                 elif method == "POST" and route == "cleanup":
                     cleanup_request = VoiceCleanupRequest.model_validate(body or {})
-                    resp = await voice.cleanup_transcript(cleanup_request.text)
+                    resp = await voice.cleanup_transcript(
+                        cleanup_request.text, cleanup_request.kind
+                    )
                 elif method == "PUT" and route == "cleanup/settings":
                     settings_request = VoiceCleanupSettingsRequest.model_validate(body or {})
                     resp = voice.set_cleanup_enabled(settings_request.enabled)

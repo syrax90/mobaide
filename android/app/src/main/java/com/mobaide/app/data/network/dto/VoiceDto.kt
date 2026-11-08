@@ -109,10 +109,14 @@ data class VoiceDictationFinishRequest(
     val last_seq: Int,
 )
 
-/** `POST /api/voice/cleanup`: 1–6000 characters. */
+/**
+ * `POST /api/voice/cleanup`: [text] is 1–6000 characters; [kind] is the
+ * session kind's wire name, whose CLI the agent runs.
+ */
 @Serializable
 data class VoiceCleanupRequest(
     val text: String,
+    val kind: String,
 )
 
 /** `PUT /api/voice/cleanup/settings`; answers the full [VoiceStatusResponse]. */

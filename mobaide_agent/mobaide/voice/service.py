@@ -319,12 +319,12 @@ class VoiceService:
     async def delete_dictation(self, dictation_id: str) -> None:
         await self._dictations.abort(dictation_id)
 
-    async def cleanup_transcript(self, text: str) -> VoiceCleanupResponse:
-        """Tidy a transcript with the user's Claude Code; independent of the
-        speech model's install state."""
+    async def cleanup_transcript(self, text: str, kind: str = "claude") -> VoiceCleanupResponse:
+        """Tidy a transcript with the CLI of a ``kind`` session; independent
+        of the speech model's install state."""
         if self._cleaner is None:
             raise cleanup_unavailable()
-        return VoiceCleanupResponse(text=await self._cleaner.clean(text))
+        return VoiceCleanupResponse(text=await self._cleaner.clean(text, kind))
 
     def set_cleanup_enabled(self, enabled: bool) -> VoiceStatusResponse:
         """Store the transcript-cleanup choice for every client and announce

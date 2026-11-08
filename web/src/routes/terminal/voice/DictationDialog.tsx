@@ -41,6 +41,8 @@ interface DictationDialogProps {
   onSkipReviewChange: (skip: boolean) => void;
   /** The agent can clean up transcripts in this session. */
   cleanupAvailable: boolean;
+  /** The session's kind, which names its AI agent in cleanup errors. */
+  sessionKind?: string;
   cleanUp: boolean;
   /** The agent did not store the last change of `cleanUp`. */
   cleanUpSaveFailed?: boolean;
@@ -107,6 +109,7 @@ export function DictationDialog({
   skipReview,
   onSkipReviewChange,
   cleanupAvailable,
+  sessionKind,
   cleanUp,
   cleanUpSaveFailed = false,
   onCleanUpChange,
@@ -350,7 +353,7 @@ export function DictationDialog({
             <>
               <p className="page-note" role="status">
                 Couldn&rsquo;t clean up the text, so it&rsquo;s shown as heard.{' '}
-                {cleanupErrorCopy(failedCleanup.code, agentName)}
+                {cleanupErrorCopy(failedCleanup.code, agentName, sessionKind)}
               </p>
               {failedCleanup.message !== null && failedCleanup.message !== '' && (
                 <details className="voice-details">

@@ -16,6 +16,7 @@ import { VoiceApiError, type VoiceApi } from '../voice/voiceApi';
 
 type DictationResponse = components['schemas']['VoiceDictationResponse'];
 type DictationResult = components['schemas']['VoiceDictationResultResponse'];
+type CleanupRequest = components['schemas']['VoiceCleanupRequest'];
 type CleanupResult = components['schemas']['VoiceCleanupResponse'];
 
 /** Turn any failure of a voice request into a `VoiceApiError`. */
@@ -111,16 +112,23 @@ export async function setVoiceCleanup(agentId: string, enabled: boolean): Promis
 }
 
 /**
- * Tidies a transcript with Claude Code on the agent (fillers, self-corrections,
- * punctuation, technical terms). The agent answers within 20 s.
+ * Tidies a transcript with the AI agent of a `kind` session on the agent
+ * (fillers, self-corrections, punctuation, technical terms). The agent
+ * answers within 20 s.
  */
 export async function cleanupTranscript(
   agentId: string,
   text: string,
+  kind: string,
   signal: AbortSignal,
 ): Promise<string> {
+  // Any kind the agent listed in `cleanup_kinds`, which may be newer than
+  // the generated enum.
   const body: CleanupResult = await call(() =>
-    createAgentClient(agentId).POST('/api/voice/cleanup', { body: { text }, signal }),
+    createAgentClient(agentId).POST('/api/voice/cleanup', {
+      body: { text, kind: kind as CleanupRequest['kind'] },
+      signal,
+    }),
   );
   return body.text;
 }

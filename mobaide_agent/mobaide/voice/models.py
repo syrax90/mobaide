@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from .cleanup import MAX_CLEANUP_CHARS
+from .cleanup import CLEANUP_KINDS, MAX_CLEANUP_CHARS, CleanupKind
 from .dictation import MAX_CHUNK_BYTES, MAX_SECONDS, SAMPLE_RATE
 
 # Advertised as ``capabilities.voice`` on ``GET /api/version`` (both
@@ -19,9 +19,10 @@ VOICE_CAPABILITIES: dict[str, object] = {
     "sample_rate": SAMPLE_RATE,
     "max_seconds": MAX_SECONDS,
     "max_chunk_bytes": MAX_CHUNK_BYTES,
-    # ``POST /api/voice/cleanup`` exists; whether Claude Code is installed is
-    # only known when it runs.
+    # ``POST /api/voice/cleanup`` exists, for sessions of these kinds; whether
+    # their CLI is installed is only known when it runs.
     "cleanup": True,
+    "cleanup_kinds": list(CLEANUP_KINDS),
 }
 
 
@@ -127,7 +128,11 @@ class VoiceDictationResultResponse(BaseModel):
 
 
 class VoiceCleanupRequest(BaseModel):
+    """``kind`` is the session's kind: its CLI cleans up the text. Clients
+    from before ``cleanup_kinds`` send none and mean Claude Code."""
+
     text: str = Field(min_length=1, max_length=MAX_CLEANUP_CHARS)
+    kind: CleanupKind = "claude"
 
 
 class VoiceCleanupSettingsRequest(BaseModel):

@@ -25,7 +25,12 @@ from mobaide.relay.client import RelayClient
 from mobaide.relay.envelope import CH_CONTROL, CH_SESSIONS_LIST, decode
 from mobaide.voice import host
 from mobaide.voice import service as service_module
-from mobaide.voice.cleanup import MAX_CLEANUP_CHARS, TranscriptCleaner
+from mobaide.voice.cleanup import (
+    MAX_CLEANUP_CHARS,
+    ClaudeCleanup,
+    CodexCleanup,
+    TranscriptCleaner,
+)
 from mobaide.voice.models import VOICE_CAPABILITIES, VoiceDictationResultResponse
 from mobaide.voice.service import VoiceService
 
@@ -258,12 +263,14 @@ class TestFullFlow:
 
 
 class _Claude:
-    """``claude -p`` as the cleaner runs it, answering ``text``; with
-    ``installed`` off the binary does not resolve."""
+    """``claude -p`` or ``codex exec`` as the cleaner runs them, answering
+    ``text`` and recording each argv; with ``installed`` off the Claude
+    binary does not resolve."""
 
     def __init__(self) -> None:
         self.text = "Fix the login bug."
         self.installed = True
+        self.argvs: list[list[str]] = []
 
     def resolve(self) -> str:
         if not self.installed:
@@ -271,8 +278,16 @@ class _Claude:
         return "claude"
 
     def __call__(self, argv, **_kwargs) -> CmdResult:
+        self.argvs.append(list(argv))
+        if argv[0] == "codex":
+            item = {"type": "item.completed", "item": {"type": "agent_message", "text": self.text}}
+            return CmdResult(rc=0, stdout=json.dumps(item).encode() + b"\n", stderr=b"")
         payload = {"type": "result", "subtype": "success", "is_error": False, "result": self.text}
         return CmdResult(rc=0, stdout=json.dumps(payload).encode(), stderr=b"")
+
+
+async def _signed_in(_binary, _env) -> bool:
+    return True
 
 
 class TestCleanup:
@@ -284,7 +299,12 @@ class TestCleanup:
             voice_dir=tmp_path / "voice",
             fake=True,
             cleaner=TranscriptCleaner(
-                resolve_binary=claude.resolve, work_dir=tmp_path / "voice-cleanup", run=claude
+                clis={
+                    "claude": ClaudeCleanup(claude.resolve),
+                    "codex": CodexCleanup(lambda: "codex", lambda: None, auth_present=_signed_in),
+                },
+                work_dir=tmp_path / "voice-cleanup",
+                run=claude,
             ),
         )
         original = voice_app.state.voice
@@ -301,6 +321,19 @@ class TestCleanup:
         assert resp.status_code == 200
         assert resp.json() == {"text": "Fix the login bug."}
 
+    async def test_session_kind_picks_the_cli_on_both_transports(self, http, headers, relay, claude):
+        body = {"text": "um fix the uh login bug", "kind": "codex"}
+
+        resp = await _assert_parity(http, headers, relay, "POST", CLEANUP, body)
+
+        assert resp.json() == {"text": "Fix the login bug."}
+        assert [argv[:2] for argv in claude.argvs] == [["codex", "exec"], ["codex", "exec"]]
+
+    async def test_no_kind_means_claude_code(self, http, headers, relay, claude):
+        await _assert_parity(http, headers, relay, "POST", CLEANUP, {"text": "hello"})
+
+        assert [argv[0] for argv in claude.argvs] == ["claude", "claude"]
+
     async def test_missing_claude_code_is_503_on_both_transports(self, http, headers, relay, claude):
         claude.installed = False
 
@@ -311,8 +344,15 @@ class TestCleanup:
 
     @pytest.mark.parametrize(
         "body",
-        [{}, {"text": ""}, {"text": "x" * (MAX_CLEANUP_CHARS + 1)}, {"text": 42}],
-        ids=["missing", "empty", "too_long", "not_text"],
+        [
+            {},
+            {"text": ""},
+            {"text": "x" * (MAX_CLEANUP_CHARS + 1)},
+            {"text": 42},
+            {"text": "hello", "kind": "shell"},
+            {"text": "hello", "kind": None},
+        ],
+        ids=["missing", "empty", "too_long", "not_text", "unknown_kind", "null_kind"],
     )
     async def test_invalid_bodies_are_422_on_both_transports(self, http, headers, relay, claude, body):
         resp = await http.post(CLEANUP, headers=headers, json=body)

@@ -1,6 +1,7 @@
 package com.mobaide.app.data.repository
 
 import com.mobaide.app.data.auth.SessionManager
+import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.events.AgentEvent
 import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.network.RestApi
@@ -12,6 +13,7 @@ import com.mobaide.app.data.voice.VoiceApiException
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -23,6 +25,18 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
+import okio.Buffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -152,5 +166,41 @@ class VoiceRepositoryTest {
         saving.await()
 
         assertEquals(pushed, repo.status.value)
+    }
+
+    @Test
+    fun cleanup_sendsTheSessionKindWithTheTranscript() = runTest {
+        val client = mockk<OkHttpClient>()
+        val tokenStore = mockk<TokenStore>()
+        every { tokenStore.getEffectiveBaseUrl() } returns "https://api.example.com"
+        val captured = slot<Request>()
+        val call = mockk<Call>()
+        every { client.newCall(capture(captured)) } returns call
+        every { call.enqueue(any()) } answers {
+            val response = Response.Builder()
+                .request(captured.captured)
+                .protocol(Protocol.HTTP_1_1)
+                .code(200)
+                .message("OK")
+                .body("""{"text":"Run the tests with --watch."}""".toResponseBody("application/json".toMediaType()))
+                .build()
+            firstArg<Callback>().onResponse(call, response)
+        }
+        val repo = VoiceRepository(RestApi(client, tokenStore), bus, sessionManager)
+
+        val cleaned = repo.cleanup("uh run the tests dash dash watch", "codex")
+
+        assertEquals("Run the tests with --watch.", cleaned)
+        assertEquals("/api/voice/cleanup", captured.captured.url.encodedPath)
+        val body = Buffer().also { captured.captured.body!!.writeTo(it) }.readUtf8()
+        assertEquals(
+            JsonObject(
+                mapOf(
+                    "text" to JsonPrimitive("uh run the tests dash dash watch"),
+                    "kind" to JsonPrimitive("codex"),
+                ),
+            ),
+            Json.parseToJsonElement(body),
+        )
     }
 }

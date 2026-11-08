@@ -12,6 +12,7 @@ import {
   hasGitSync,
   voiceCapability,
   voiceCleanupCapability,
+  voiceCleanupKinds,
   type AgentVersionInfo,
 } from './agentVersion';
 
@@ -320,5 +321,44 @@ describe('voiceCleanupCapability', () => {
     const probe = capabilities === undefined ? undefined : info(capabilities);
 
     expect(voiceCleanupCapability(probe)).toBe(false);
+  });
+});
+
+describe('voiceCleanupKinds', () => {
+  const VOICE = { dictation: true, sample_rate: 16000, max_seconds: 120, max_chunk_bytes: 65536 };
+
+  it('lists the session kinds the agent advertises', () => {
+    const probe = info({ voice: { ...VOICE, cleanup: true, cleanup_kinds: ['claude', 'codex', 'antigravity'] } });
+
+    expect(voiceCleanupKinds(probe)).toEqual(['claude', 'codex', 'antigravity']);
+  });
+
+  it('keeps a kind this build does not know, so a newer agent can offer it', () => {
+    const probe = info({ voice: { ...VOICE, cleanup: true, cleanup_kinds: ['codex', 'opencode'] } });
+
+    expect(voiceCleanupKinds(probe)).toEqual(['codex', 'opencode']);
+  });
+
+  it('drops entries that are not strings', () => {
+    const probe = info({ voice: { ...VOICE, cleanup: true, cleanup_kinds: ['codex', 7, null, { kind: 'x' }] } });
+
+    expect(voiceCleanupKinds(probe)).toEqual(['codex']);
+  });
+
+  const CLAUDE_ONLY: [string, unknown][] = [
+    ['no list (an agent before Codex and Antigravity cleanup)', undefined],
+    ['a list of the wrong shape', 'claude,codex'],
+    ['a null list', null],
+  ];
+
+  it.each(CLAUDE_ONLY)('reads %s as Claude Code only', (_label, kinds) => {
+    const voice = kinds === undefined ? { ...VOICE, cleanup: true } : { ...VOICE, cleanup: true, cleanup_kinds: kinds };
+
+    expect(voiceCleanupKinds(info({ voice }))).toEqual(['claude']);
+  });
+
+  it('lists nothing without cleanup: true, whatever the list says', () => {
+    expect(voiceCleanupKinds(undefined)).toEqual([]);
+    expect(voiceCleanupKinds(info({ voice: { ...VOICE, cleanup: false, cleanup_kinds: ['codex'] } }))).toEqual([]);
   });
 });

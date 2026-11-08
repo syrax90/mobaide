@@ -474,11 +474,11 @@ class RestApi(
         executeRaw(Request.Builder().url(voiceUrl("dictations", dictationId).build()).delete().build())
 
     // Cancellable: a cancelled dictation stops waiting for its cleanup at once.
-    suspend fun cleanupVoiceTranscript(text: String): VoiceCleanupResponse =
+    suspend fun cleanupVoiceTranscript(text: String, kind: String): VoiceCleanupResponse =
         executeCancellable(
             Request.Builder()
                 .url(voiceUrl("cleanup").build())
-                .post(json.encodeToString(VoiceCleanupRequest(text)).toRequestBody(jsonMediaType))
+                .post(json.encodeToString(VoiceCleanupRequest(text, kind)).toRequestBody(jsonMediaType))
                 .build(),
         )
 

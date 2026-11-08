@@ -70,9 +70,9 @@ final class VoiceInputModel {
     /// The agent can clean up transcripts (`capabilities.voice.cleanup`).
     var cleanupSupported: Bool { capability?.cleanup == true }
 
-    /// ...and this session's AI agent can do it. Only Claude Code so far: the
-    /// agent runs its CLI.
-    var cleanupOffered: Bool { cleanupSupported && sessionKind == .claude }
+    /// ...for this session's kind (`capabilities.voice.cleanup_kinds`): the
+    /// agent runs that kind's CLI.
+    var cleanupOffered: Bool { capability?.cleansUp(for: sessionKind) == true }
 
     /// Probe the agent once per screen visit; run from the view's `.task`.
     func load() async {
@@ -214,9 +214,9 @@ final class VoiceInputModel {
     }
 
     private func activeCleaner() -> TranscriptCleaner? {
-        guard cleanupOffered, cleanUp else { return nil }
+        guard cleanupOffered, cleanUp, let kind = sessionKind?.wireName else { return nil }
         let repository = repository
-        return { text in try await repository.cleanup(text: text) }
+        return { text in try await repository.cleanup(text: text, kind: kind) }
     }
 
     private func handleTransition(_ state: DictationState, controller: DictationController?) {
@@ -238,7 +238,7 @@ final class VoiceInputModel {
             if let cleanupError {
                 onNotice?(
                     "Couldn't clean up the text, so it's inserted as heard. "
-                        + VoiceErrorCopy.cleanup(cleanupError.code, agent: agentName)
+                        + VoiceErrorCopy.cleanup(cleanupError.code, agent: agentName, kind: sessionKind?.wireName)
                 )
             }
             Task { controller?.dismiss() }

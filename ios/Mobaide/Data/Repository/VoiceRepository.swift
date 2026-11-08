@@ -103,11 +103,11 @@ final class VoiceRepository {
         }
     }
 
-    /// The session's AI agent cleans up `text` on the connected agent's
-    /// computer (within 20 s).
-    nonisolated func cleanup(text: String) async throws -> String {
+    /// The CLI of session kind `kind` cleans up `text` on the connected
+    /// agent's computer (within 20 s).
+    nonisolated func cleanup(text: String, kind: String) async throws -> String {
         do {
-            return try await agentAPI.cleanupVoiceTranscript(text: text).text
+            return try await agentAPI.cleanupVoiceTranscript(text: text, kind: kind).text
         } catch {
             throw VoiceApiError.map(error)
         }

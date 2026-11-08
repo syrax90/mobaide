@@ -122,21 +122,21 @@ describe('createVoiceApi', () => {
 });
 
 describe('cleanupTranscript', () => {
-  it('posts the transcript with the signal given and reads back the cleaned text', async () => {
+  it('posts the transcript and the session kind with the signal given and reads back the cleaned text', async () => {
     agent.results.push({
       data: { text: 'Fix the login bug.' },
       response: new Response(null, { status: 200 }),
     });
     const signal = new AbortController().signal;
 
-    const cleaned = await cleanupTranscript('a1', 'um fix the uh login bug', signal);
+    const cleaned = await cleanupTranscript('a1', 'um fix the uh login bug', 'codex', signal);
 
     expect(cleaned).toBe('Fix the login bug.');
     expect(agent.requests[0]).toMatchObject({
       agentId: 'a1',
       method: 'POST',
       path: '/api/voice/cleanup',
-      init: { body: { text: 'um fix the uh login bug' }, signal },
+      init: { body: { text: 'um fix the uh login bug', kind: 'codex' }, signal },
     });
   });
 
@@ -146,7 +146,7 @@ describe('cleanupTranscript', () => {
       response: new Response(null, { status: 409 }),
     });
 
-    const cleaning = cleanupTranscript('a1', 'hello', new AbortController().signal);
+    const cleaning = cleanupTranscript('a1', 'hello', 'claude', new AbortController().signal);
 
     await expect(cleaning).rejects.toBeInstanceOf(VoiceApiError);
     await expect(cleaning).rejects.toMatchObject({

@@ -45,7 +45,7 @@ import { spliceTranscript, useAgentName, useDictation } from '../../voice/useDic
 import type { DictationState } from '../../voice/dictationController';
 import {
   useVoiceCapability,
-  useVoiceCleanupCapability,
+  useVoiceCleanupKinds,
   useVoiceCleanupSetting,
   useVoiceStatus,
 } from '../../voice/useVoiceStatus';
@@ -214,10 +214,14 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
   const voiceStatus = useVoiceStatus(model.agentId, voiceCapability !== null);
   const micHidden = useMicHidden(model.agentId);
   const micMode = voiceMicMode(voiceCapability, voiceStatus.data, micHidden);
-  // Transcript cleanup runs the session's AI agent on the agent's computer;
-  // only Claude Code can do it so far, and there the CLI is known to be there.
-  const cleanupAvailable =
-    useVoiceCleanupCapability(model.agentId).data === true && session?.kind === 'claude';
+  // Transcript cleanup runs the session's AI agent on the agent's computer,
+  // offered for the session kinds the agent lists; there the CLI is known to
+  // be there.
+  const cleanupKinds = useVoiceCleanupKinds(model.agentId).data;
+  const sessionKind = session?.kind;
+  const cleanupKind =
+    sessionKind !== undefined && cleanupKinds?.includes(sessionKind) === true ? sessionKind : null;
+  const cleanupAvailable = cleanupKind !== null;
   const cleanUp = useVoiceCleanupSetting(model.agentId, voiceStatus.data);
   // A capability only while voice is ready: any other state disposes the
   // controller, which cancels a recording the agent can no longer take.
@@ -225,7 +229,7 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
     model.agentId,
     model.sessionId,
     micMode === 'ready' ? voiceCapability : null,
-    cleanupAvailable && cleanUp.on,
+    cleanupKind === null ? null : { kind: cleanupKind, on: cleanUp.on },
   );
   const [voiceSetupOpen, setVoiceSetupOpen] = useState(false);
   const agentName = useAgentName(model.agentId);
@@ -693,6 +697,7 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
               setSkipReview(model.agentId, skip);
             }}
             cleanupAvailable={cleanupAvailable}
+            sessionKind={sessionKind}
             cleanUp={cleanUp.on}
             cleanUpSaveFailed={cleanUp.failed}
             onCleanUpChange={cleanUp.set}

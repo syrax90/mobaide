@@ -160,7 +160,8 @@ cadence; they do **not** gate compatibility.
 * Additive delta within proto-v7 (2026-11-03, voice transcript cleanup —
   web, Android and iOS): **one additive REST route, one additive capability
   key, no version bump.** An opt-in, per-agent client setting, offered in
-  Claude Code sessions only for now, has the session's AI agent tidy a
+  Claude Code sessions at first (Codex and Antigravity below), has the
+  session's AI agent tidy a
   dictated transcript before the review: fillers, stutters and false starts
   go, self-corrections keep the final version, and punctuation and technical
   terms are fixed.
@@ -211,6 +212,41 @@ cadence; they do **not** gate compatibility.
     * The first-opt-in privacy notice stays per device.
     * Golden fixtures: ``VoiceCleanupSettingsRequest.json``; every
       ``VoiceStatusResponse.json`` case carries ``cleanup_enabled``.
+  * Codex and Antigravity sessions clean up too, each with its own CLI's
+    cheapest model (2026-11-08):
+    * ``capabilities.voice`` gains ``"cleanup_kinds": ["claude", "codex",
+      "antigravity"]``, the session kinds the agent can clean up for.
+      Clients offer cleanup in a session whose ``kind`` is in the list. An
+      agent with ``"cleanup": true`` and no ``cleanup_kinds`` (or a
+      malformed one) means ``["claude"]``.
+    * ``VoiceCleanupRequest`` gains ``kind`` (one of those strings; absent
+      means ``"claude"``, anything else is a ``422``). Clients always send
+      the session's kind. The agent runs that kind's CLI, resolved like its
+      sessions (``MOBAIDE_CODEX_BIN`` / ``MOBAIDE_AGY_BIN``, PATH,
+      fallbacks), in the same directory and with the same limits:
+      * ``codex``: ``codex exec --model <first Luna in the cached catalog,
+        else gpt-6-luna> -c model_reasoning_effort=low -c
+        model_instructions_file=cleanup-prompt.md -c features.shell_tool=false
+        -c features.unified_exec=false -c features.hooks=false -c
+        web_search=disabled --sandbox read-only --skip-git-repo-check
+        --ephemeral --ignore-user-config --ignore-rules --json -``, transcript
+        on stdin. ``codex login status`` runs first: signed out is
+        ``cleanup_failed`` at once.
+      * ``antigravity``: ``agy --model <first Gemini Flash on low thinking
+        in the cached list, else gemini-3.8-flash-low> --input-format
+        stream-json --output-format stream-json --disable-slash-commands
+        --settings antigravity-settings.json``. The settings file sets
+        ``toolPermission: strict``, so headless ``agy`` denies every tool.
+        The rules and the transcript go in one stream-json user message on
+        stdin (``agy`` has no system-prompt option). Antigravity keeps the
+        run in its own local conversation history.
+    * Errors keep their codes; ``message`` names the CLI.
+      ``cleanup_outdated`` also covers a Codex that rejects a flag or
+      ignores ``model_instructions_file``, and an ``agy`` that rejects a
+      flag; the hint is ``codex update`` / ``agy update``. An ``agy`` turn
+      that tried a tool is ``cleanup_failed``.
+    * Golden fixtures: every ``VoiceCleanupRequest.json`` case carries
+      ``kind``; the ``voice_capability`` case carries ``cleanup_kinds``.
 * Additive delta within proto-v7 (2026-10-19, Claude focus view toggle):
   **additive optional field, no version bump.** ``claude_options`` gains
   ``focus_mode`` — bool or null, default ``null``. The agent merges it into the

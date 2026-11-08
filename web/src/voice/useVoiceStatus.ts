@@ -9,7 +9,11 @@ import {
   toVoiceApiError,
 } from '../api/voiceRepository';
 import { queryKeys, wsBackedQueryOptions } from '../lib/queryKeys';
-import { voiceCapability, voiceCleanupCapability } from '../protocol/dto/agentVersion';
+import {
+  voiceCapability,
+  voiceCleanupCapability,
+  voiceCleanupKinds,
+} from '../protocol/dto/agentVersion';
 import { VOICE_STATE, type VoiceStatus } from '../protocol/dto/voice';
 
 /** Re-probed no more often than this: a capability only moves on an agent update. */
@@ -41,6 +45,18 @@ export function useVoiceCleanupCapability(agentId: string, enabled = true) {
     enabled,
     staleTime: CAPABILITIES_STALE_MS,
     select: voiceCleanupCapability,
+    meta: { silent: true },
+  });
+}
+
+/** `capabilities.voice.cleanup_kinds`, from the same cached probe. */
+export function useVoiceCleanupKinds(agentId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.agentCapabilities(agentId),
+    queryFn: () => fetchAgentCapabilities(agentId),
+    enabled,
+    staleTime: CAPABILITIES_STALE_MS,
+    select: voiceCleanupKinds,
     meta: { silent: true },
   });
 }
