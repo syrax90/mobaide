@@ -18,7 +18,8 @@
     },
     { "name": "respond_form_decline", "command": { "id": "c-10", "op": "respond", "request_id": "r:12", "action": "decline" } },
     { "name": "dequeue", "command": { "id": "c-11", "op": "dequeue", "queue_id": "q:14" } },
-    { "name": "restart", "command": { "id": "c-12", "op": "restart" } }
+    { "name": "restart", "command": { "id": "c-12", "op": "restart" } },
+    { "name": "steer", "command": { "id": "c-13", "op": "steer", "queue_id": "q:14" } }
   ],
   "server": [
     {
@@ -126,7 +127,8 @@
           "queue": [{ "id": "q:14", "text": "Also update the README", "images": 0 }],
           "prompt_caps": { "image": true },
           "turn_started_at": "2026-11-07T12:00:05+00:00",
-          "cancelling": false
+          "cancelling": false,
+          "steering": true
         },
         "items": [
           { "id": "u:1", "type": "user", "text": "Fix the login bug", "attachments": [{ "kind": "image", "mime": "image/png" }], "at": "2026-11-07T12:00:05+00:00" },

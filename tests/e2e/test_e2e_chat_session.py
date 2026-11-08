@@ -179,7 +179,10 @@ def test_chat_session_over_the_relay(e2e_stack, spawn_agent, tmp_path):
 
     version = client.proxy_request(agent_id, token, "GET", "api/version")
     assert version.status_code == 200
-    assert version.json()["capabilities"]["chat"] == {"claude": {"resume": True}}
+    assert version.json()["capabilities"]["chat"] == {
+        "claude": {"resume": True, "live": False},
+        "codex": {"resume": True, "live": False},
+    }
 
     stored_path = f"api/chat/claude/sessions?cwd={quote(cwd)}"
     stored = client.proxy_request(agent_id, token, "GET", stored_path)
@@ -222,8 +225,8 @@ def test_chat_is_refused_for_a_kind_without_a_chat_agent(e2e_stack):
     token = client.mint_mobile_token(e2e_stack.agent_id)
 
     refused = client.proxy_request(
-        e2e_stack.agent_id, token, "POST", "api/sessions", {"cli": "codex", "ui": "chat", "cwd": "/tmp"}
+        e2e_stack.agent_id, token, "POST", "api/sessions", {"cli": "antigravity", "ui": "chat", "cwd": "/tmp"}
     )
 
     assert refused.status_code == 400
-    assert refused.json()["detail"] == "The chat view is not available for codex sessions"
+    assert refused.json()["detail"] == "The chat view is not available for antigravity sessions"

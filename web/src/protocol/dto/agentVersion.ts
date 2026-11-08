@@ -255,7 +255,7 @@ export function gitCapabilities(info: AgentVersionInfo | undefined): GitCapabili
  */
 export type ChatSupport =
   | { kind: 'unknown' }
-  | { kind: 'available'; resume: boolean }
+  | { kind: 'available'; resume: boolean; live: boolean }
   | { kind: 'outdated' }
   | { kind: 'unavailable' };
 
@@ -267,7 +267,7 @@ export function chatSupport(info: AgentVersionInfo | undefined, agentKind: strin
   }
   if (!Object.hasOwn(chat, agentKind)) return { kind: 'unavailable' };
   const entry = (chat as Record<string, unknown>)[agentKind];
-  const resume =
-    typeof entry === 'object' && entry !== null && (entry as { resume?: unknown }).resume === true;
-  return { kind: 'available', resume };
+  const flag = (key: 'resume' | 'live') =>
+    typeof entry === 'object' && entry !== null && (entry as Record<string, unknown>)[key] === true;
+  return { kind: 'available', resume: flag('resume'), live: flag('live') };
 }

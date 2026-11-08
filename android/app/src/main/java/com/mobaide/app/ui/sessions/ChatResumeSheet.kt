@@ -101,7 +101,11 @@ private fun ChatResumeContent(
                 modifier = Modifier.semantics { heading() },
             )
             Text(
-                text = "If the session is still open in a terminal on your PC, close it there first.",
+                text = if (state.live) {
+                    "A session that is open on your PC stays in sync: both sides see every message."
+                } else {
+                    "If the session is still open in a terminal on your PC, close it there first."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

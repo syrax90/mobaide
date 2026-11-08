@@ -85,6 +85,7 @@ export function applyLaunchPrefs(base: WizardState, prefs: LaunchPrefs): WizardS
             approval: prefs.codex.approval,
             fullAuto: prefs.codex.fullAuto,
             reasoningEffort: prefs.codex.reasoningEffort,
+            terminalUi: prefs.codex.terminalUi,
           },
     antigravity:
       antigravity === null
@@ -154,6 +155,7 @@ export function launchPrefsFromState(
           approval: state.codex.approval,
           fullAuto: state.codex.fullAuto,
           reasoningEffort: state.codex.reasoningEffort,
+          terminalUi: state.codex.terminalUi,
         },
       };
     case 'antigravity':

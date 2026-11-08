@@ -17,6 +17,7 @@ from typing import Any
 from mobaide import __version__
 
 from .agents import ChatAgentSpec, ChatAgentUnavailableError
+from .install import AdapterInstallError
 from .rpc import ERR_METHOD_NOT_FOUND, AcpConnection, AcpProcessError, AcpRpcError
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,8 @@ class ChatCatalog:
             plan = await spec.catalog_plan()  # type: ignore[attr-defined]
         except ChatAgentUnavailableError as exc:
             raise ChatCatalogError(503, str(exc)) from None
+        except AdapterInstallError as exc:
+            raise ChatCatalogError(502, str(exc)) from None
 
         async def no_requests(method: str, params: Any) -> Any:
             raise AcpRpcError(ERR_METHOD_NOT_FOUND, f"Method not found: {method}")

@@ -1,7 +1,10 @@
 """Chat sessions driven end to end against the scripted fake ACP agent
 (``mobaide/acp/fake_agent.py``, a real subprocess): start, prompts, the
 message queue, cancel, permission and form requests, config changes, a
-crash with restart, and opening a stored session.
+crash with restart, opening a stored session, the adapter install on first
+use, Send now (steering), command output (and how often it is re-sent), and
+turns that another app on the PC runs in a shared Codex session (a Stop it
+never answers, a turn already running when the chat opens).
 
 ``TimelineMirror`` keeps what a chat client keeps, applied from the
 session's ``'a'`` frames the way the clients do it: a new epoch or a gap
@@ -22,6 +25,7 @@ import pytest
 
 from mobaide.acp import session as session_mod
 from mobaide.acp.agents import ChatLaunchPlan, ConfigIntent, fake_agent_argv
+from mobaide.acp.install import AdapterInstallError
 from mobaide.acp.session import ChatSession
 from mobaide.core.models import SessionConfig, SessionState
 
@@ -73,6 +77,171 @@ for line in sys.stdin:
     send({"id": msg["id"], "result": result})
 """
 MINI_AGENT_ARGV = [sys.executable, "-c", MINI_AGENT]
+
+# Logs every method it gets to the file named by argv[1]. Advertises
+# ``session/close`` and steering; a prompt streams "Working" and is answered
+# only by ``session/cancel``; ``_session/steering`` is never answered.
+LOGGING_AGENT = r"""
+import json, sys
+log = open(sys.argv[1], "a", encoding="utf-8")
+pending = None
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method is None:
+        continue
+    log.write(method + "\n")
+    log.flush()
+    if method == "session/cancel":
+        if pending is not None:
+            send({"id": pending, "result": {"stopReason": "cancelled"}})
+            pending = None
+        continue
+    if "id" not in msg:
+        continue
+    if method == "initialize":
+        result = {"protocolVersion": 1, "_meta": {"steering": {"supported": True}},
+                  "agentCapabilities": {"sessionCapabilities": {"close": {}}}}
+    elif method == "session/new":
+        result = {"sessionId": "logged"}
+    elif method == "session/prompt":
+        send({"method": "session/update", "params": {"sessionId": "logged", "update": {
+            "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Working"}}}})
+        pending = msg["id"]
+        continue
+    elif method == "_session/steering":
+        continue
+    elif method == "session/close":
+        result = {}
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+
+
+def _logging_agent(log) -> list[str]:
+    return [sys.executable, "-c", LOGGING_AGENT, str(log)]
+
+
+def _methods(log) -> list[str]:
+    return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
+
+# A Codex-like agent on a shared app-server. Prompt ``external`` is answered,
+# then another app's turn starts and never ends; ``session/cancel`` is ignored.
+# ``--busy-at-start``: that turn runs at open and ends 1 s later.
+SHARED_HOST_AGENT = r"""
+import json, sys, threading, time
+lock = threading.Lock()
+
+def send(message):
+    with lock:
+        sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+        sys.stdout.flush()
+
+def thread_status(kind):
+    send({"method": "session/update", "params": {"sessionId": "shared", "update": {
+        "sessionUpdate": "session_info_update", "_meta": {"codex": {"threadStatus": {"type": kind}}}}}})
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg or "method" not in msg:
+        continue
+    method = msg["method"]
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentCapabilities": {}}
+    elif method == "session/new":
+        if "--busy-at-start" in sys.argv:
+            thread_status("active")
+            threading.Timer(1.0, thread_status, ("idle",)).start()
+        result = {"sessionId": "shared"}
+    elif method == "session/prompt":
+        text = " ".join(block.get("text", "") for block in msg["params"]["prompt"])
+        send({"method": "session/update", "params": {"sessionId": "shared", "update": {
+            "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "echo " + text}}}})
+        send({"id": msg["id"], "result": {"stopReason": "end_turn"}})
+        if text == "external":
+            time.sleep(0.2)
+            thread_status("active")
+        continue
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+SHARED_HOST_AGENT_ARGV = [sys.executable, "-c", SHARED_HOST_AGENT]
+
+# Streams command output as terminal ``_meta`` the way codex-acp does. The
+# prompt picks the script: ``retitle`` runs one command whose output arrives
+# in chunks 0.1 s apart, one of them with a new title; ``interleave`` runs
+# three commands whose output chunks alternate (a, b, a, c).
+CONSOLE_AGENT = r"""
+import json, sys, time
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+def update(body, pause):
+    send({"method": "session/update", "params": {"sessionId": "console", "update": body}})
+    time.sleep(pause)
+
+def start(tool, pause=0.0):
+    update({"sessionUpdate": "tool_call", "toolCallId": tool, "title": tool, "kind": "execute",
+            "status": "in_progress", "content": [{"type": "terminal", "terminalId": tool}]}, pause)
+
+def output(tool, data, pause=0.0, **fields):
+    update({"sessionUpdate": "tool_call_update", "toolCallId": tool, **fields,
+            "_meta": {"terminal_output_delta": {"terminal_id": tool, "data": data}}}, pause)
+
+def finish(tool, data):
+    update({"sessionUpdate": "tool_call_update", "toolCallId": tool, "status": "completed",
+            "_meta": {"terminal_output_delta": {"terminal_id": tool, "data": data},
+                      "terminal_exit": {"terminal_id": tool, "exit_code": 0, "signal": None}}}, 0.0)
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg or "method" not in msg:
+        continue
+    method = msg["method"]
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentCapabilities": {}}
+    elif method == "session/new":
+        result = {"sessionId": "console"}
+    elif method == "session/prompt":
+        text = " ".join(block.get("text", "") for block in msg["params"]["prompt"])
+        if text == "retitle":
+            start("make", pause=0.1)
+            for n in range(3):
+                output("make", f"line {n}\n", pause=0.1)
+            output("make", "line 3\n", pause=0.1, title="make test")
+            for n in range(4, 7):
+                output("make", f"line {n}\n", pause=0.1)
+            finish("make", "done\n")
+        elif text == "interleave":
+            start("a")
+            output("a", "a1\n")
+            start("b")
+            output("b", "b1\n")
+            output("a", "a2\n")
+            start("c")
+            output("c", "c1\n")
+            finish("a", "a3\n")
+            finish("b", "b2\n")
+            finish("c", "c2\n")
+        result = {"stopReason": "end_turn"}
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+CONSOLE_AGENT_ARGV = [sys.executable, "-c", CONSOLE_AGENT]
 
 
 class FakeTrust:
@@ -285,6 +454,15 @@ class TestStart:
         values = {o["id"]: o["value"] for o in m.state["config"]}
         assert values == {"mode": "plan", "model": "fast", "effort": "high", "fast": True}
         assert m.texts("user") == ["hello there"]
+
+    async def test_a_required_mode_the_agent_does_not_offer_fails_the_start(self, open_chat):
+        m = await open_chat(
+            initial_config=[ConfigIntent("no-such-mode", category="mode", required=True)]
+        )
+        await m.until(lambda: m.status == "error")
+
+        message = "Could not set the no-such-mode mode, so the session did not start"
+        assert message in m.state["error"]
 
     async def test_load_opens_a_stored_session_with_its_history(self, open_chat):
         m = await open_chat(load_session_id="external-1111", initial_prompt="not sent on load")
@@ -851,3 +1029,341 @@ class TestSyncAndStop:
         assert m.status == "stopped"
         assert m.session.is_alive() is False
         assert not psutil.pid_exists(pid)
+
+
+def _notices(m: TimelineMirror) -> list[str]:
+    return [n.get("title", "") for n in m.of_type("notice")]
+
+
+class TestAdapterInstall:
+    async def test_the_adapter_is_installed_before_the_first_start(self, open_chat):
+        installs: list[int] = []
+
+        def ensure() -> list[str]:
+            installs.append(1)
+            return fake_agent_argv()
+
+        m = await open_chat(ensure_argv=ensure)
+
+        assert m.status == "ready"
+        assert installs == [1]
+        assert "Setting up the Claude Code chat on your PC" in _notices(m)
+        assert m.session.pid is not None
+
+    async def test_a_failed_install_shows_the_error_and_restart_tries_again(self, open_chat):
+        outcomes: list[Any] = [
+            AdapterInstallError("Could not download @agentclientprotocol/codex-acp@2.5.0: E404"),
+            fake_agent_argv(),
+        ]
+
+        def ensure() -> list[str]:
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        m = await open_chat(ensure_argv=ensure)
+
+        message = "Could not download @agentclientprotocol/codex-acp@2.5.0: E404"
+        assert m.status == "error"
+        assert m.state["error"] == message
+        assert m.texts("error") == [message]
+        refused = await m.command("prompt", text="hello")
+        assert refused["error"] == "The agent is not running. Use Restart to start it again."
+
+        assert (await m.command("restart"))["ok"] is True
+        await m.until(lambda: m.status == "ready")
+
+        assert outcomes == []
+        await m.command("prompt", text="hello")
+        await m.until(_turn_done(m, "You said: hello"))
+
+    async def test_an_unexpected_install_failure_also_offers_restart(self, open_chat):
+        outcomes: list[Any] = [RuntimeError("the adapter folder is locked"), fake_agent_argv()]
+
+        def ensure() -> list[str]:
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        m = await open_chat(ensure_argv=ensure)
+
+        message = "Could not set up the chat: the adapter folder is locked"
+        assert m.status == "error"
+        assert m.state["error"] == message
+        assert m.texts("error") == [message]
+
+        assert (await m.command("restart"))["ok"] is True
+        await m.until(lambda: m.status == "ready")
+
+        assert outcomes == []
+
+
+class TestSteering:
+    async def test_send_now_puts_a_queued_message_into_the_running_turn(self, open_chat):
+        m = await open_chat()
+        assert m.state["steering"] is True
+        await m.command("prompt", text="slow")
+        await m.until(lambda: m.status == "running" and bool(m.of_type("agent")))
+        queued = await m.command("prompt", text="also check the README")
+
+        steered = await m.command("steer", queue_id=queued["data"]["queue_id"])
+
+        assert steered["data"] == {"steered": True}
+        await m.until(lambda: m.state["queue"] == [] and len(m.texts("user")) == 2)
+        assert m.texts("user") == ["slow", "also check the README"]
+        await m.until(
+            lambda: any("(Noted mid-turn: also check the README)" in t for t in m.texts("agent"))
+        )
+        assert m.status == "running"
+
+        await m.command("cancel")
+        await m.until(lambda: m.status == "ready")
+        # Steered, so never sent again as a prompt of its own.
+        assert m.texts("user") == ["slow", "also check the README"]
+        assert not any("You said:" in t for t in m.texts("agent"))
+
+    async def test_an_agent_without_steering_keeps_the_message_queued(self, open_chat):
+        m = await open_chat(argv=MINI_AGENT_ARGV)
+        assert m.state["steering"] is False
+        await m.command("prompt", text="hang")
+        await m.until(lambda: "Working" in m.texts("agent"))
+        queued = await m.command("prompt", text="later")
+        queue_id = queued["data"]["queue_id"]
+
+        refused = await m.command("steer", queue_id=queue_id)
+
+        assert refused["error"] == "This agent cannot take a message during a turn"
+        assert m.state["queue"] == [{"id": queue_id, "text": "later", "images": 0}]
+
+    async def test_an_unknown_message(self, open_chat):
+        m = await open_chat()
+
+        result = await m.command("steer", queue_id="q:999")
+
+        assert result["error"] == "This message was already sent"
+
+    async def test_a_message_being_steered_is_neither_dequeued_nor_sent_by_the_queue(
+        self, open_chat, tmp_path
+    ):
+        log = tmp_path / "agent.log"
+        m = await open_chat(argv=_logging_agent(log))
+        await m.command("prompt", text="work")
+        await m.until(lambda: "Working" in m.texts("agent"))
+        queued = await m.command("prompt", text="later")
+        queue_id = queued["data"]["queue_id"]
+        # The agent never answers: the steer request stays in flight.
+        await m.session.handle_command(orjson.dumps({"id": "s1", "op": "steer", "queue_id": queue_id}))
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 10
+        while "_session/steering" not in _methods(log):
+            assert loop.time() < deadline, _methods(log)
+            await asyncio.sleep(0.02)
+
+        refused = await m.command("dequeue", queue_id=queue_id)
+        assert refused["error"] == "This message is being sent now"
+
+        await m.command("cancel")
+        await m.until(lambda: m.status == "ready")
+
+        assert m.texts("user") == ["work"]
+        assert _methods(log).count("session/prompt") == 1
+        assert [q["id"] for q in m.state["queue"]] == [queue_id]
+        assert "s1" not in m.results
+
+
+class TestExternalTurns:
+    """Codex's shared app-server: a message typed into Codex on the PC runs
+    a turn this chat did not start (``threadStatus`` in ``_meta``)."""
+
+    async def _external_turn_running(self, m: TimelineMirror) -> None:
+        await m.command("prompt", text="external")
+        await m.until(_turn_done(m, "Sure. Watch for a message from your PC next."))
+        await m.until(lambda: "Message sent from another app on your PC" in _notices(m))
+        assert m.status == "running"
+
+    async def test_a_message_sent_meanwhile_waits_for_the_other_turn(self, open_chat):
+        m = await open_chat(argv=fake_agent_argv("codex"))
+        await self._external_turn_running(m)
+
+        queued = await m.command("prompt", text="hello")
+
+        assert queued["data"]["queued"] is True
+        await m.until(_turn_done(m, "You said: hello"))
+        assert "This answer is for a message typed into Codex on the PC." in m.texts("agent")
+        assert m.texts("user") == ["external", "hello"]
+        assert m.state["queue"] == []
+
+    async def test_the_other_turn_ending_makes_the_chat_ready(self, open_chat):
+        m = await open_chat(argv=fake_agent_argv("codex"))
+        await self._external_turn_running(m)
+
+        await m.until(lambda: m.status == "ready")
+
+        assert m.state["turn_started_at"] is None
+        assert "This answer is for a message typed into Codex on the PC." in m.texts("agent")
+
+    async def test_stop_cancels_the_other_turn(self, open_chat):
+        m = await open_chat(argv=fake_agent_argv("codex"))
+        await self._external_turn_running(m)
+
+        cancelled = await m.command("cancel")
+
+        assert cancelled["data"] == {"cancelled": True}
+        await m.until(lambda: m.status == "ready" and m.state["cancelling"] is False)
+        assert "This answer is for a message typed into Codex on the PC." not in m.texts("agent")
+
+    async def test_a_stop_the_other_app_never_answers_frees_the_chat(self, open_chat, monkeypatch):
+        """Its app-server went away: no idle status ever comes."""
+        monkeypatch.setattr(session_mod, "CANCEL_GRACE", 0.5)
+        m = await open_chat(argv=SHARED_HOST_AGENT_ARGV)
+        await m.command("prompt", text="external")
+        await m.until(
+            lambda: m.status == "running" and "Message sent from another app on your PC" in _notices(m)
+        )
+        queued = await m.command("prompt", text="hello")
+        assert queued["data"]["queued"] is True
+
+        cancelled = await m.command("cancel")
+
+        assert cancelled["data"] == {"cancelled": True}
+        assert m.state["cancelling"] is True
+        await m.until(_turn_done(m, "echo hello"))
+        assert m.texts("user") == ["external", "hello"]
+        assert m.state["cancelling"] is False
+        assert m.state["queue"] == []
+
+    async def test_a_turn_running_when_the_chat_opens_holds_the_first_message(self, open_chat):
+        m = await open_chat(argv=[*SHARED_HOST_AGENT_ARGV, "--busy-at-start"], initial_prompt="hello")
+
+        await m.until(
+            lambda: m.status == "running" and [q["text"] for q in m.state["queue"]] == ["hello"]
+        )
+        assert "Message sent from another app on your PC" in _notices(m)
+        assert m.texts("user") == []
+
+        await m.until(_turn_done(m, "echo hello"))
+        assert m.texts("user") == ["hello"]
+        assert m.state["queue"] == []
+
+
+def _sent_items(m: TimelineMirror, item_id: str) -> list[dict[str, Any]]:
+    """Each full copy of the item the session sent, in order."""
+    return [
+        ev["item"]
+        for f in m.frames
+        if f["t"] == "events"
+        for ev in f["events"]
+        if ev["type"] == "item" and ev["item"]["id"] == item_id
+    ]
+
+
+class TestCommandOutput:
+    async def test_terminal_output_becomes_one_console_part(self, open_chat, monkeypatch):
+        monkeypatch.setattr(session_mod, "CONSOLE_RENDER_INTERVAL", 0.05)
+        m = await open_chat(argv=fake_agent_argv("codex"))
+
+        await m.command("prompt", text="tools")
+        await m.until(_turn_done(m, "Done: I updated `main()` and the tests pass."))
+
+        run = next(t for t in m.of_type("tool") if t["title"] == "pytest -q")
+        assert run["status"] == "completed"
+        assert run["content"] == [
+            {
+                "type": "text",
+                "text": (
+                    "```console\n"
+                    "============ test session starts ============\n"
+                    "collected 4 items\n"
+                    "\n"
+                    "tests/test_app.py ....\n"
+                    "\n"
+                    "4 passed in 0.12s\n"
+                    "```"
+                ),
+            }
+        ]
+        sent = [
+            ev["item"]
+            for f in m.frames
+            if f["t"] == "events"
+            for ev in f["events"]
+            if ev["type"] == "item" and ev["item"]["id"] == run["id"]
+        ]
+        assert all(p["type"] != "terminal" for item in sent for p in item["content"])
+        running = [
+            p["text"]
+            for item in sent
+            if item["status"] == "in_progress"
+            for p in item["content"]
+            if p["type"] == "text"
+        ]
+        assert any(
+            text.startswith("```console\n============ test session starts") and "4 passed" not in text
+            for text in running
+        ), running
+
+    async def test_output_alone_waits_for_the_render_and_other_changes_go_out_at_once(
+        self, open_chat, monkeypatch
+    ):
+        """No render runs here before the command ends: only the start, the
+        new title and the end re-send the tool, not each output chunk."""
+        monkeypatch.setattr(session_mod, "CONSOLE_RENDER_INTERVAL", 3600.0)
+        m = await open_chat(argv=CONSOLE_AGENT_ARGV)
+
+        await m.command("prompt", text="retitle")
+        await m.until(lambda: m.status == "ready" and m.items.get("make", {}).get("status") == "completed")
+
+        sent = _sent_items(m, "make")
+        assert [(item["status"], item["title"]) for item in sent] == [
+            ("in_progress", "make"),
+            ("in_progress", "make test"),
+            ("completed", "make test"),
+        ]
+        [part] = m.items["make"]["content"]
+        assert "line 0" in part["text"] and "done" in part["text"]
+
+    async def test_the_least_recently_updated_command_loses_its_output_first(
+        self, open_chat, monkeypatch
+    ):
+        monkeypatch.setattr(session_mod, "CONSOLE_RENDER_INTERVAL", 3600.0)
+        monkeypatch.setattr(session_mod, "CONSOLE_TOOLS_MAX", 2)
+        m = await open_chat(argv=CONSOLE_AGENT_ARGV)
+
+        await m.command("prompt", text="interleave")
+        await m.until(
+            lambda: m.status == "ready"
+            and all(m.items.get(t, {}).get("status") == "completed" for t in ("a", "b", "c"))
+        )
+
+        def output(tool: str) -> str:
+            return "".join(p.get("text", "") for p in m.items[tool]["content"])
+
+        assert "a1\na2\na3" in output("a")
+        assert "b1" not in output("b") and "b2" in output("b")
+
+
+class TestSharedHost:
+    @pytest.mark.parametrize(
+        ("shared", "busy", "sent"),
+        [
+            (True, True, ["session/cancel"]),
+            (True, False, []),
+            (False, False, ["session/close"]),
+        ],
+        ids=["shared-own-turn", "shared-idle", "private"],
+    )
+    async def test_closing_the_chat(self, open_chat, tmp_path, shared, busy, sent):
+        """On a shared host, ``session/close`` would also end the session for
+        the other apps: only this chat's own turn is cancelled."""
+        log = tmp_path / "agent.log"
+        m = await open_chat(argv=_logging_agent(log), shared_host=shared)
+        if busy:
+            await m.command("prompt", text="work")
+            await m.until(lambda: "Working" in m.texts("agent"))
+
+        await m.session.stop()
+
+        assert m.session.state == SessionState.STOPPED
+        assert [x for x in _methods(log) if x in ("session/cancel", "session/close")] == sent

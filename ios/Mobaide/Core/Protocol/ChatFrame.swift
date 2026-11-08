@@ -63,6 +63,11 @@ struct ChatCommand: Encodable, Equatable, Sendable {
         ChatCommand(id: id, op: "dequeue", queue_id: queueId)
     }
 
+    /// Sends a queued message into the running turn now.
+    static func steer(id: String, queueId: String) -> ChatCommand {
+        ChatCommand(id: id, op: "steer", queue_id: queueId)
+    }
+
     static func restart(id: String) -> ChatCommand {
         ChatCommand(id: id, op: "restart")
     }

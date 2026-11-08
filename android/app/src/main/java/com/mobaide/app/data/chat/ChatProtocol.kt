@@ -112,6 +112,13 @@ object ChatProtocol {
         put("queue_id", queueId)
     }
 
+    /** Send a queued message into the running turn now. */
+    fun steer(id: String, queueId: String): JsonObject = buildJsonObject {
+        put("id", id)
+        put("op", "steer")
+        put("queue_id", queueId)
+    }
+
     private fun op(id: String, op: String): JsonObject = buildJsonObject {
         put("id", id)
         put("op", op)

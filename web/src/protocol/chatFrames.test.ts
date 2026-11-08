@@ -51,6 +51,7 @@ const BUILDERS: Readonly<Record<string, () => ChatCommand>> = {
   respond_form_decline: () => formResponseCommand('r:12', 'decline'),
   dequeue: () => ({ op: 'dequeue', queue_id: 'q:14' }),
   restart: () => ({ op: 'restart' }),
+  steer: () => ({ op: 'steer', queue_id: 'q:14' }),
 };
 
 function agentBytes(frame: unknown): Uint8Array {
@@ -128,6 +129,7 @@ describe('chat frame golden fixtures', () => {
     ]);
     expect(state.queue).toEqual([{ id: 'q:14', text: 'Also update the README', images: 0 }]);
     expect(state.prompt_caps.image).toBe(true);
+    expect(state.steering).toBe(true);
     const tool = frame.items[3];
     expect(tool?.type === 'tool' ? tool.content[0]?.type : null).toBe('diff');
   });
@@ -201,8 +203,9 @@ describe('chat capability', () => {
   it('reads capabilities.chat', () => {
     const withChat = versions.cases.find((entry) => entry.name === 'chat_capability');
     const info = agentVersionSchema.parse(withChat?.wire);
-    expect(chatSupport(info, 'claude')).toEqual({ kind: 'available', resume: true });
-    expect(chatSupport(info, 'codex')).toEqual({ kind: 'unavailable' });
+    expect(chatSupport(info, 'claude')).toEqual({ kind: 'available', resume: true, live: false });
+    expect(chatSupport(info, 'codex')).toEqual({ kind: 'available', resume: true, live: true });
+    expect(chatSupport(info, 'antigravity')).toEqual({ kind: 'unavailable' });
     expect(chatSupport(agentVersionSchema.parse({ ...info, capabilities: {} }), 'claude')).toEqual({
       kind: 'outdated',
     });

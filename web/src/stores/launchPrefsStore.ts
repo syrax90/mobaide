@@ -62,6 +62,8 @@ export interface CodexLaunchPrefs {
    * wire or a device boundary, so the wider type costs no interop.
    */
   reasoningEffort: CodexReasoningEffort | null;
+  /** Codex's "Terminal UI" toggle; a blob from before it existed reads as off. */
+  terminalUi: boolean;
 }
 
 /** Android `AntigravityLaunchPrefs`, iOS `AntigravityLaunchPrefs`. */
@@ -132,6 +134,7 @@ export const CODEX_PREFS_DEFAULTS: CodexLaunchPrefs = {
   approval: 'on-request',
   fullAuto: false,
   reasoningEffort: 'high',
+  terminalUi: false,
 };
 
 export const ANTIGRAVITY_PREFS_DEFAULTS: AntigravityLaunchPrefs = {
@@ -266,16 +269,18 @@ function sanitizeCodexPrefs(raw: unknown): CodexLaunchPrefs | null {
     CODEX_PREFS_DEFAULTS.reasoningEffort,
     isCodexReasoningEffort,
   );
+  const terminalUi = field(raw, 'terminalUi', CODEX_PREFS_DEFAULTS.terminalUi, isBoolean);
   if (
     model === undefined ||
     sandbox === undefined ||
     approval === undefined ||
     fullAuto === undefined ||
-    reasoningEffort === undefined
+    reasoningEffort === undefined ||
+    terminalUi === undefined
   ) {
     return null;
   }
-  return { model, sandbox, approval, fullAuto, reasoningEffort };
+  return { model, sandbox, approval, fullAuto, reasoningEffort, terminalUi };
 }
 
 function sanitizeAntigravityPrefs(raw: unknown): AntigravityLaunchPrefs | null {

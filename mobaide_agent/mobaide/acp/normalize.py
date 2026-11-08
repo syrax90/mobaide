@@ -8,6 +8,9 @@ functions never raise on malformed agent data; unknown shapes degrade to
 from __future__ import annotations
 
 import difflib
+import posixpath
+import re
+import shlex
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -35,6 +38,9 @@ CONFIG_VALUES_MAX = 200
 FORM_FIELDS_MAX = 20
 FORM_OPTIONS_MAX = 50
 PERMISSION_OPTIONS_MAX = 8
+# Command output kept per tool call, and shown while it still runs.
+CONSOLE_KEEP_MAX = 128 * 1024
+CONSOLE_LIVE_MAX = 8 * 1024
 
 TOOL_KINDS = frozenset(
     {"read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"}
@@ -97,6 +103,41 @@ def compact_json(value: Any, limit: int = INPUT_JSON_MAX) -> str | None:
     return capped
 
 
+_SHELLS = frozenset({"sh", "bash", "zsh", "fish", "dash"})
+_SYSTEM_BIN_DIRS = frozenset({"/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"})
+
+
+def unwrap_shell(command: str) -> str:
+    """``/bin/zsh -lc "<cmd>"`` → ``<cmd>``: the wrapper some agents report
+    around every command says nothing to the reader.
+
+    Only a system shell is dropped: ``./bash -c "git status"`` runs a file
+    from the project, and an approval card must show that.
+    """
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return command
+    if len(parts) != 3 or parts[1] not in ("-c", "-lc", "-ic") or not parts[2].strip():
+        return command
+    shell = parts[0]
+    system = shell in _SHELLS or (
+        posixpath.dirname(shell) in _SYSTEM_BIN_DIRS and posixpath.basename(shell) in _SHELLS
+    )
+    return parts[2] if system else command
+
+
+def _unquote_title(title: str) -> str:
+    """A title that is one quoted shell word, as some agents send a command."""
+    if len(title) < 2 or title[0] != title[-1] or title[0] not in "\"'":
+        return title
+    try:
+        parts = shlex.split(title)
+    except ValueError:
+        return title
+    return parts[0] if len(parts) == 1 and parts[0].strip() else title
+
+
 def subtitle_from_input(raw_input: Any) -> str | None:
     if isinstance(raw_input, str):
         return _one_line(raw_input) if raw_input.strip() else None
@@ -105,6 +146,8 @@ def subtitle_from_input(raw_input: Any) -> str | None:
     for key in _SUBTITLE_KEYS:
         value = raw_input.get(key)
         if isinstance(value, str) and value.strip():
+            if key in ("command", "cmd"):
+                value = unwrap_shell(value)
             return _one_line(value)
         if isinstance(value, list) and value and all(isinstance(v, str) for v in value):
             return _one_line(" ".join(value))
@@ -273,7 +316,7 @@ def merge_tool_update(item: dict[str, Any], update: Mapping[str, Any]) -> None:
     """
     title = _str(update.get("title"))
     if title:
-        item["title"] = _one_line(title, 200)
+        item["title"] = _one_line(_unquote_title(unwrap_shell(title.strip())), 200)
     kind = update.get("kind")
     if isinstance(kind, str):
         item["kind"] = kind if kind in TOOL_KINDS else "other"
@@ -623,3 +666,76 @@ def coerce_form_values(
             value = value[:10_000]
         content[key] = value
     return content, None
+
+
+_ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[ -/]+[0-~]|[@-Z\\-_])")
+
+
+def console_text(raw: str) -> str:
+    """Terminal output as plain text: no escape sequences, and a carriage
+    return overwrites its line, as on screen (progress bars)."""
+    text = _ANSI.sub("", raw).replace("\r\n", "\n")
+    if "\r" in text:
+        text = "\n".join(line.rsplit("\r", 1)[-1] for line in text.split("\n"))
+    return text
+
+
+def console_part(output: str, *, live: bool, exit_code: int | None) -> dict[str, Any] | None:
+    """Command output as a fenced ``console`` text part.
+
+    While the command runs only the tail is shown, like a terminal; once it
+    ends, the head and the tail.
+    """
+    text = console_text(output).rstrip("\n")
+    truncated = False
+    if live and len(text) > CONSOLE_LIVE_MAX:
+        text = "…\n" + text[-CONSOLE_LIVE_MAX:]
+        truncated = True
+    elif not live:
+        text, truncated = cap_text(text)
+    if not text and exit_code in (None, 0):
+        return None
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(3, longest + 1)
+    body = f"{fence}console\n{text}\n{fence}" if text else ""
+    if exit_code not in (None, 0):
+        body = f"{body}\nExit code {exit_code}".lstrip("\n")
+    part: dict[str, Any] = {"type": "text", "text": body}
+    if truncated:
+        part["truncated"] = True
+    return part
+
+
+def terminal_meta(update: Mapping[str, Any]) -> tuple[str | None, bool, int | None, bool]:
+    """``(text, replaces, exit_code, exited)`` from the terminal ``_meta`` of
+    a tool call update (``terminal_output`` replaces the output so far,
+    ``terminal_output_delta`` adds to it)."""
+    meta = update.get("_meta")
+    if not isinstance(meta, Mapping):
+        return None, False, None, False
+    text: str | None = None
+    replaces = False
+    full = meta.get("terminal_output")
+    delta = meta.get("terminal_output_delta")
+    if isinstance(full, Mapping) and isinstance(full.get("data"), str):
+        text, replaces = full["data"], True
+    elif isinstance(delta, Mapping) and isinstance(delta.get("data"), str):
+        text = delta["data"]
+    exit_info = meta.get("terminal_exit")
+    exited = isinstance(exit_info, Mapping)
+    code = exit_info.get("exit_code") if exited else None  # type: ignore[union-attr]
+    return text, replaces, code if isinstance(code, int) and not isinstance(code, bool) else None, exited
+
+
+def thread_busy(update: Mapping[str, Any]) -> bool | None:
+    """Whether the agent reports its session busy (Codex sends its thread
+    status in ``session_info_update._meta``); None when it says nothing."""
+    meta = update.get("_meta")
+    codex = meta.get("codex") if isinstance(meta, Mapping) else None
+    status = codex.get("threadStatus") if isinstance(codex, Mapping) else None
+    kind = status.get("type") if isinstance(status, Mapping) else None
+    if kind == "active":
+        return True
+    if kind in ("idle", "notLoaded", "systemError"):
+        return False
+    return None

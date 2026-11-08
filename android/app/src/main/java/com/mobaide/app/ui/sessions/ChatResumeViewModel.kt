@@ -33,6 +33,10 @@ sealed interface ChatResumeListState {
 }
 
 data class ChatResumeUiState(
+    /** The agent kind whose stored sessions are listed (`claude` or `codex`). */
+    val kind: String = "claude",
+    /** The sessions stay in sync with the agent's own apps on the PC. */
+    val live: Boolean = false,
     /** The folder "This folder" lists; null when the wizard has none, which forces All folders. */
     val folder: String? = null,
     val allFolders: Boolean = false,
@@ -40,8 +44,8 @@ data class ChatResumeUiState(
 )
 
 /**
- * "Continue a session": the sessions Claude Code stored on the PC, newest first,
- * one page at a time. Fetch-only; the first page can take a few seconds because
+ * "Continue a session": the sessions the agent (Claude Code or Codex) stored on
+ * the PC, newest first, one page at a time. Fetch-only; the first page can take a few seconds because
  * the agent starts its process to answer.
  */
 @HiltViewModel
@@ -55,15 +59,20 @@ class ChatResumeViewModel @Inject constructor(
     private var loadJob: Job? = null
     private var opened = false
 
-    fun open(folder: String?) {
+    fun open(kind: String, folder: String?, live: Boolean) {
         opened = true
-        _uiState.value = ChatResumeUiState(folder = folder, allFolders = folder == null)
+        _uiState.value = ChatResumeUiState(
+            kind = kind,
+            live = live,
+            folder = folder,
+            allFolders = folder == null,
+        )
         loadFirstPage()
     }
 
     /** Reopens after process death, when the sheet is restored but nothing was loaded. */
-    fun ensureOpen(folder: String?) {
-        if (!opened) open(folder)
+    fun ensureOpen(kind: String, folder: String?, live: Boolean) {
+        if (!opened) open(kind, folder, live)
     }
 
     fun setAllFolders(all: Boolean) {
@@ -83,7 +92,7 @@ class ChatResumeViewModel @Inject constructor(
         val scope = _uiState.value
         loadJob = viewModelScope.launch {
             try {
-                val page = sessionRepository.listChatSessions(KIND, cwdFor(scope), cursor)
+                val page = sessionRepository.listChatSessions(scope.kind, cwdFor(scope), cursor)
                 val current = _uiState.value.list as? ChatResumeListState.Loaded ?: return@launch
                 val known = current.rows.mapTo(HashSet()) { it.session_id }
                 setList(
@@ -108,7 +117,7 @@ class ChatResumeViewModel @Inject constructor(
         val scope = _uiState.value
         loadJob = viewModelScope.launch {
             try {
-                val page = sessionRepository.listChatSessions(KIND, cwdFor(scope), null)
+                val page = sessionRepository.listChatSessions(scope.kind, cwdFor(scope), null)
                 setList(
                     if (page.sessions.isEmpty()) {
                         ChatResumeListState.Empty
@@ -143,8 +152,4 @@ class ChatResumeViewModel @Inject constructor(
             else -> null
         }
     }.getOrNull()?.takeIf { it.isNotBlank() }
-
-    private companion object {
-        const val KIND = "claude"
-    }
 }

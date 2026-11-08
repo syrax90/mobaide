@@ -66,6 +66,7 @@ class ChatFramesFixtureTest {
         "respond_form_decline" to { id -> ChatProtocol.respondForm(id, "r:12", "decline", null) },
         "dequeue" to { id -> ChatProtocol.dequeue(id, "q:14") },
         "restart" to { id -> ChatProtocol.restart(id) },
+        "steer" to { id -> ChatProtocol.steer(id, "q:14") },
     )
 
     private fun sync(id: String, request: ChatSyncRequest): JsonObject = when (request) {
@@ -167,6 +168,7 @@ class ChatFramesFixtureTest {
         )
         assertEquals(listOf(ChatQueuedMessage("q:14", "Also update the README", 0)), state.queue)
         assertTrue(state.promptImages)
+        assertTrue(state.steering)
     }
 
     @Test

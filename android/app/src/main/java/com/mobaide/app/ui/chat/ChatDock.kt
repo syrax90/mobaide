@@ -198,6 +198,10 @@ fun ChatQueueRows(
     enabled: Boolean,
     onDequeue: (String) -> Unit,
     modifier: Modifier = Modifier,
+    // Non-null while the agent can take a message during the running turn.
+    onSendNow: ((String) -> Unit)? = null,
+    // Rows with a command in flight: their buttons wait for its answer.
+    busy: Set<String> = emptySet(),
 ) {
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         queue.forEach { message ->
@@ -226,7 +230,17 @@ fun ChatQueueRows(
                         modifier = Modifier.padding(start = 6.dp),
                     )
                 }
-                IconButton(onClick = { onDequeue(message.id) }, enabled = enabled) {
+                val rowEnabled = enabled && message.id !in busy
+                if (onSendNow != null) {
+                    IconButton(onClick = { onSendNow(message.id) }, enabled = rowEnabled) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "Send now",
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+                IconButton(onClick = { onDequeue(message.id) }, enabled = rowEnabled) {
                     Icon(Icons.Default.Close, contentDescription = "Remove queued message", modifier = Modifier.size(18.dp))
                 }
             }
@@ -613,6 +627,7 @@ private fun ChatDockPreview() {
                 queue = listOf(ChatQueuedMessage("q:1", "Also update the README", 0)),
                 enabled = true,
                 onDequeue = {},
+                onSendNow = {},
             )
             ChatConfigChips(
                 config = listOf(

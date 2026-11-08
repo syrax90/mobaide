@@ -194,7 +194,9 @@ enum ChatCapability: Equatable, Sendable {
     case unsupportedAgent
     /// `capabilities.chat` without this kind: the PC cannot run it (no Node.js).
     case unavailable
-    case available(resume: Bool)
+    /// `resume`: it can list and continue stored sessions; `live`: those
+    /// sessions stay in sync with the agent's own apps on the PC.
+    case available(resume: Bool, live: Bool)
 
     var isAvailable: Bool {
         if case .available = self { return true }
@@ -202,7 +204,12 @@ enum ChatCapability: Equatable, Sendable {
     }
 
     var canResume: Bool {
-        if case .available(true) = self { return true }
+        if case .available(true, _) = self { return true }
+        return false
+    }
+
+    var isLive: Bool {
+        if case .available(_, true) = self { return true }
         return false
     }
 }
@@ -211,7 +218,10 @@ extension VersionInfoResponse {
     func chatCapability(_ kind: String) -> ChatCapability {
         guard let chat = capabilities["chat"]?.objectValue else { return .unsupportedAgent }
         guard let entry = chat[kind] else { return .unavailable }
-        return .available(resume: entry["resume"]?.boolValue == true)
+        return .available(
+            resume: entry["resume"]?.boolValue == true,
+            live: entry["live"]?.boolValue == true
+        )
     }
 }
 

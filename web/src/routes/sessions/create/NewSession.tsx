@@ -58,6 +58,7 @@ import {
   buildCreateRequest,
   buildResumeRequest,
   buildStartScanRequest,
+  chatAgentKind,
   type StartScanRequest,
 } from './buildCreateRequest';
 import { ResumeSessionDialog } from './ResumeSessionDialog';
@@ -570,16 +571,18 @@ export function NewSession() {
     },
     onError: (cause, request) => {
       const failure = classifyCreateError(cause, request);
+      if (failure.kind === 'codexAuthRequired') {
+        // A Codex resume, too: the sign-in re-sends that same request.
+        pendingRequest.current = request;
+        setResumeOpen(false);
+        setCodexLoginError(null);
+        setShowCodexLogin(true);
+        return;
+      }
       // A resume failure belongs to the picker, which is still open over the
       // config step and would hide a message written there.
       if (request.chat_resume_id !== undefined && request.chat_resume_id !== null) {
         setResumeError(failure.message);
-        return;
-      }
-      if (failure.kind === 'codexAuthRequired') {
-        pendingRequest.current = request;
-        setCodexLoginError(null);
-        setShowCodexLogin(true);
         return;
       }
       if (failure.kind === 'customTypeDeleted') {
@@ -677,7 +680,7 @@ export function NewSession() {
       state: { ...state, selection: location.selection },
       mode: location.mode,
       project,
-      chat: chatSupport(capabilities.data, 'claude'),
+      chat: chatSupport(capabilities.data, chatAgentKind(location.mode) ?? 'claude'),
     };
     const request =
       location.mode === 'auto_scan'
@@ -712,15 +715,18 @@ export function NewSession() {
       void navigate(terminalPath(resolvedAgentId, open));
       return;
     }
-    if (location.mode === null) return;
+    const kind = chatAgentKind(location.mode);
+    if (location.mode === null || kind === null) return;
     const context = {
       state: { ...state, selection: location.selection },
       mode: location.mode,
       project,
     };
-    pendingPrefs.current = launchPrefsFromState(state, 'claude');
-    create.mutate(buildResumeRequest(context, stored));
+    pendingPrefs.current = launchPrefsFromState(state, kind);
+    create.mutate(buildResumeRequest(context, kind, stored));
   };
+  const resumeKind = chatAgentKind(location.mode);
+  const resumeChat = chatSupport(capabilities.data, resumeKind ?? 'claude');
 
   const resumeFolder =
     location.selection.kind === 'stored'
@@ -883,9 +889,11 @@ export function NewSession() {
         />
       ) : null}
 
-      {resumeOpen && (
+      {resumeOpen && resumeKind !== null && (
         <ResumeSessionDialog
           agentId={resolvedAgentId}
+          kind={resumeKind}
+          live={resumeChat.kind === 'available' && resumeChat.live}
           folder={resumeFolder}
           opening={resuming}
           error={resumeError}

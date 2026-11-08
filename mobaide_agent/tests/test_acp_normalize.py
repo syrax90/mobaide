@@ -1,6 +1,6 @@
 """Pure-function tests for the ACP → chat wire conversions: text and diff
 caps, content parts, tool merges, config options, plans, usage, permission
-options and elicitation forms."""
+options, elicitation forms, terminal output and Codex thread status."""
 from __future__ import annotations
 
 import pytest
@@ -40,6 +40,52 @@ class TestSubtitleFromInput:
     @pytest.mark.parametrize("raw", [None, 42, {"other": "x"}, "   ", {"command": "  "}])
     def test_nothing_to_show(self, raw):
         assert nz.subtitle_from_input(raw) is None
+
+    @pytest.mark.parametrize(
+        ("raw", "subtitle"),
+        [
+            ({"command": '/bin/zsh -lc "pytest -q"'}, "pytest -q"),
+            ({"cmd": "bash -c 'ls -la'"}, "ls -la"),
+            ({"file_path": "/bin/zsh -lc x"}, "/bin/zsh -lc x"),
+        ],
+        ids=["command", "cmd", "not-a-command-key"],
+    )
+    def test_the_shell_wrapper_around_a_command_is_dropped(self, raw, subtitle):
+        assert nz.subtitle_from_input(raw) == subtitle
+
+
+class TestUnwrapShell:
+    @pytest.mark.parametrize(
+        ("command", "unwrapped"),
+        [
+            ('/bin/zsh -lc "git status"', "git status"),
+            ("bash -c 'echo hi && ls'", "echo hi && ls"),
+            ("/usr/bin/sh -ic 'make'", "make"),
+            ("python -c 'print(1)'", "python -c 'print(1)'"),
+            ("bash -c 'make' extra", "bash -c 'make' extra"),
+            ("bash -x 'make'", "bash -x 'make'"),
+            ('bash -lc "  "', 'bash -lc "  "'),
+            ('bash -lc "unterminated', 'bash -lc "unterminated'),
+            ("pytest -q", "pytest -q"),
+            ('./bash -lc "x"', './bash -lc "x"'),
+            ('/tmp/x/zsh -c "y"', '/tmp/x/zsh -c "y"'),
+        ],
+        ids=[
+            "zsh-login",
+            "bash",
+            "interactive-sh",
+            "not-a-shell",
+            "extra-argument",
+            "other-flag",
+            "blank-command",
+            "unbalanced-quote",
+            "plain",
+            "project-relative-shell",
+            "shell-outside-system-dirs",
+        ],
+    )
+    def test_unwrap(self, command, unwrapped):
+        assert nz.unwrap_shell(command) == unwrapped
 
 
 class TestUnifiedDiff:
@@ -229,6 +275,23 @@ class TestMergeToolUpdate:
         nz.merge_tool_update(item, {"locations": [{"path": "/p/b.py"}]})
 
         assert item["subtitle"] == "/p/b.py"
+
+    @pytest.mark.parametrize(
+        ("title", "shown"),
+        [
+            ('/bin/zsh -lc "pytest -q"', "pytest -q"),
+            ('"pytest -q"', "pytest -q"),
+            ("'npm test'", "npm test"),
+            ('"a" and "b"', '"a" and "b"'),
+            ('"unbalanced', '"unbalanced'),
+        ],
+        ids=["shell-wrapper", "double-quoted", "single-quoted", "two-words", "unbalanced"],
+    )
+    def test_a_command_title_is_shown_without_its_wrapper_or_quotes(self, title, shown):
+        item = nz.new_tool_item("call-1")
+        nz.merge_tool_update(item, {"title": title})
+
+        assert item["title"] == shown
 
 
 class TestConfigOptions:
@@ -502,3 +565,120 @@ class TestCoerceFormValues:
         content, error = nz.coerce_form_values(fields, "nope")
         assert content is None
         assert error == "“Framework” is required"
+
+
+class TestConsoleText:
+    def test_color_and_title_sequences_are_removed(self):
+        raw = "\x1b[32mok\x1b[0m \x1b]0;window title\x07done\x1b[K"
+
+        assert nz.console_text(raw) == "ok done"
+
+    def test_a_charset_designation_is_removed(self):
+        """``tput sgr0`` on an xterm-like TERM prints ``ESC ( B ESC [ m``."""
+        raw = "\x1b[1mbold\x1b(B\x1b[m plain"
+
+        assert nz.console_text(raw) == "bold plain"
+
+    def test_a_carriage_return_overwrites_its_line(self):
+        assert nz.console_text("10%\r50%\r100%\r\nnext\r\n") == "100%\nnext\n"
+
+
+class TestConsolePart:
+    def test_short_output(self):
+        assert nz.console_part("a\nb\n", live=True, exit_code=None) == {
+            "type": "text",
+            "text": "```console\na\nb\n```",
+        }
+
+    def test_running_output_shows_only_its_tail(self):
+        output = "old\n" * 10 + "y" * nz.CONSOLE_LIVE_MAX
+
+        part = nz.console_part(output, live=True, exit_code=None)
+
+        assert part["truncated"] is True
+        assert part["text"] == f"```console\n…\n{'y' * nz.CONSOLE_LIVE_MAX}\n```"
+
+    def test_finished_output_keeps_its_head_and_tail(self):
+        output = "H" * nz.TEXT_PART_MAX + "T" * 100
+
+        part = nz.console_part(output, live=False, exit_code=0)
+
+        assert part["truncated"] is True
+        assert part["text"].startswith("```console\nHHH")
+        assert part["text"].endswith("T" * 100 + "\n```")
+        assert "characters not shown" in part["text"]
+
+    def test_a_failed_command_shows_its_exit_code(self):
+        part = nz.console_part("boom\n", live=False, exit_code=2)
+
+        assert part == {"type": "text", "text": "```console\nboom\n```\nExit code 2"}
+
+    @pytest.mark.parametrize(
+        ("output", "exit_code", "expected"),
+        [
+            ("", None, None),
+            ("\n\n", 0, None),
+            ("", 1, {"type": "text", "text": "Exit code 1"}),
+        ],
+        ids=["nothing-yet", "silent-success", "silent-failure"],
+    )
+    def test_no_output(self, output, exit_code, expected):
+        assert nz.console_part(output, live=False, exit_code=exit_code) == expected
+
+    def test_backticks_in_the_output_get_a_longer_fence(self):
+        part = nz.console_part("```py\nx\n```", live=False, exit_code=None)
+
+        assert part["text"] == "````console\n```py\nx\n```\n````"
+
+
+class TestTerminalMeta:
+    @pytest.mark.parametrize(
+        ("update", "expected"),
+        [
+            ({}, (None, False, None, False)),
+            ({"_meta": "x"}, (None, False, None, False)),
+            ({"_meta": {"terminal_output": {"data": "all"}}}, ("all", True, None, False)),
+            ({"_meta": {"terminal_output_delta": {"data": "more"}}}, ("more", False, None, False)),
+            ({"_meta": {"terminal_output_delta": {"data": 5}}}, (None, False, None, False)),
+            (
+                {"_meta": {"terminal_output_delta": {"data": "end\n"}, "terminal_exit": {"exit_code": 3}}},
+                ("end\n", False, 3, True),
+            ),
+            ({"_meta": {"terminal_exit": {"exit_code": None, "signal": "SIGKILL"}}}, (None, False, None, True)),
+            ({"_meta": {"terminal_exit": {"exit_code": True}}}, (None, False, None, True)),
+        ],
+        ids=[
+            "no-meta",
+            "meta-not-object",
+            "full-output",
+            "delta",
+            "data-not-text",
+            "delta-and-exit",
+            "killed-by-signal",
+            "bool-exit-code",
+        ],
+    )
+    def test_reads_output_and_exit(self, update, expected):
+        assert nz.terminal_meta(update) == expected
+
+
+class TestThreadBusy:
+    @pytest.mark.parametrize(
+        ("status", "busy"),
+        [
+            ({"type": "active", "activeFlags": []}, True),
+            ({"type": "idle"}, False),
+            ({"type": "notLoaded"}, False),
+            ({"type": "systemError"}, False),
+            ({"type": "somethingNew"}, None),
+            ("active", None),
+        ],
+    )
+    def test_codex_thread_status(self, status, busy):
+        update = {"sessionUpdate": "session_info_update", "_meta": {"codex": {"threadStatus": status}}}
+
+        assert nz.thread_busy(update) is busy
+
+    @pytest.mark.parametrize("update", [{}, {"_meta": {}}, {"_meta": {"codex": {}}}, {"title": "x"}])
+    def test_nothing_said(self, update):
+        assert nz.thread_busy(update) is None

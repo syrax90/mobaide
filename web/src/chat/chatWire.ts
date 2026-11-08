@@ -306,6 +306,7 @@ const STATE_FIELDS = {
   prompt_caps: z.object({ image: flag }).catch({ image: false }),
   turn_started_at: nullableText,
   cancelling: flag,
+  steering: flag,
 };
 
 type StateFields = typeof STATE_FIELDS;
@@ -327,6 +328,7 @@ export const INITIAL_CHAT_STATE: ChatState = {
   prompt_caps: { image: false },
   turn_started_at: null,
   cancelling: false,
+  steering: false,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -466,6 +468,7 @@ export type ChatCommand =
       values?: Record<string, FormValue>;
     }
   | { op: 'dequeue'; queue_id: string }
+  | { op: 'steer'; queue_id: string }
   | { op: 'restart' };
 
 export function syncCommand(resume: { epoch: string; seq: number } | null): ChatCommand {

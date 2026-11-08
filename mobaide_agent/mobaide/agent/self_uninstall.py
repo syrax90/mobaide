@@ -78,6 +78,8 @@ PREFIX_ENTRIES: tuple[str, ...] = (
     "agent.err.log",
     "users.json",
     "projects.json",
+    # The pinned ACP adapters of chat sessions (mobaide/acp/install.py).
+    "acp-adapters",
     *VOICE_PREFIX_ENTRIES,
 )
 

@@ -109,6 +109,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mobaide.app.data.network.dto.ChatSupport
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.ui.common.pathBrowseHint
 import com.mobaide.app.ui.common.DragHandleIcon
@@ -290,7 +291,11 @@ fun CreateSessionScreen(
                                 storedProject?.is_git == true,
                             viewModel = viewModel,
                             onContinueSession = {
-                                chatResumeViewModel.open(state.selectedFolder)
+                                chatResumeViewModel.open(
+                                    "claude",
+                                    state.selectedFolder,
+                                    (state.claudeChat as? ChatSupport.Available)?.live == true,
+                                )
                                 showResume = true
                             },
                         )
@@ -299,6 +304,14 @@ fun CreateSessionScreen(
                             showWorktreeToggle = state.selection is ProjectSelection.Stored &&
                                 storedProject?.is_git == true,
                             viewModel = viewModel,
+                            onContinueSession = {
+                                chatResumeViewModel.open(
+                                    "codex",
+                                    state.selectedFolder,
+                                    (state.codexChat as? ChatSupport.Available)?.live == true,
+                                )
+                                showResume = true
+                            },
                         )
                         CreateSessionStep.AntigravityConfig -> AntigravityConfigSection(
                             state = state,
@@ -321,8 +334,20 @@ fun CreateSessionScreen(
         }
     }
 
-    if (showResume && state.step == CreateSessionStep.StandardConfig) {
-        LaunchedEffect(Unit) { chatResumeViewModel.ensureOpen(state.selectedFolder) }
+    val resumeKind = when (state.step) {
+        CreateSessionStep.StandardConfig -> "claude"
+        CreateSessionStep.CodexConfig -> "codex"
+        else -> null
+    }
+    if (showResume && resumeKind != null) {
+        val resumeChat = if (resumeKind == "codex") state.codexChat else state.claudeChat
+        LaunchedEffect(resumeKind) {
+            chatResumeViewModel.ensureOpen(
+                resumeKind,
+                state.selectedFolder,
+                (resumeChat as? ChatSupport.Available)?.live == true,
+            )
+        }
         ChatResumeSheet(
             state = resumeState,
             onSetAllFolders = chatResumeViewModel::setAllFolders,
@@ -331,7 +356,7 @@ fun CreateSessionScreen(
             onPick = { row ->
                 showResume = false
                 val openId = row.open_session_id
-                if (openId != null) onSessionCreated(openId) else viewModel.resumeChatSession(row)
+                if (openId != null) onSessionCreated(openId) else viewModel.resumeChatSession(resumeKind, row)
             },
             onDismiss = { showResume = false },
         )
@@ -1324,17 +1349,10 @@ private fun StandardConfigSection(
         onAppendSystemPromptChange = viewModel::setClaudeAppendSystemPrompt,
         showDebug = !state.claudeUsesChat,
         leadingContent = {
-            val lockedHint = state.claudeChatUnavailableHint
-            ToggleRow(
-                label = "Terminal UI",
-                checked = state.claudeTerminalUi || lockedHint != null,
+            TerminalUiToggle(
+                checked = state.claudeTerminalUi,
+                lockedHint = state.claudeChatUnavailableHint,
                 onChange = viewModel::toggleTerminalUi,
-                enabled = lockedHint == null,
-            )
-            Text(
-                text = lockedHint ?: "Use the classic terminal instead of the chat view.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },
     )
@@ -1349,14 +1367,43 @@ private fun StandardConfigSection(
     }
 }
 
+/** "Terminal UI" under Advanced: the classic terminal instead of the chat view. */
+@Composable
+private fun TerminalUiToggle(checked: Boolean, lockedHint: String?, onChange: (Boolean) -> Unit) {
+    ToggleRow(
+        label = "Terminal UI",
+        checked = checked || lockedHint != null,
+        onChange = onChange,
+        enabled = lockedHint == null,
+    )
+    Text(
+        text = lockedHint ?: "Use the classic terminal instead of the chat view.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CodexConfigSection(
     state: CreateSessionUiState,
     showWorktreeToggle: Boolean,
     viewModel: CreateSessionViewModel,
+    onContinueSession: () -> Unit,
 ) {
     val preset = state.codexPreset
+
+    if (state.codexResumeAvailable) {
+        WizardActionCard(
+            title = "Continue a session",
+            subtitle = "Open a Codex session started on your PC, for example in a terminal.",
+            icon = Icons.Outlined.History,
+            selected = false,
+            onClick = onContinueSession,
+            contentDescription = "Continue a session",
+            testTag = "continue_chat_session",
+        )
+    }
 
     Text("Autonomy", style = MaterialTheme.typography.labelLarge)
     val presets = listOf(
@@ -1415,6 +1462,11 @@ private fun CodexConfigSection(
     }
     if (advancedExpanded) {
         val fullAuto = state.codexFullAuto
+        TerminalUiToggle(
+            checked = state.codexTerminalUi,
+            lockedHint = state.codexChatUnavailableHint,
+            onChange = viewModel::toggleCodexTerminalUi,
+        )
         Text("Sandbox (-s)", style = MaterialTheme.typography.labelLarge)
         val sandboxes = listOf(
             "read-only" to "Read-only",

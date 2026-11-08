@@ -82,14 +82,23 @@ final class ContinueSessionModel {
 /// started outside Mobaide), in this folder or in all folders.
 struct ContinueSessionSheet: View {
     let onPick: (ChatStoredSession) -> Void
+    /// The sessions stay in sync with the agent's own apps on the PC.
+    let live: Bool
 
     @State private var model: ContinueSessionModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.mobaideColors) private var colors
 
-    init(agentAPI: AgentAPI, folder: String?, onPick: @escaping (ChatStoredSession) -> Void) {
+    init(
+        agentAPI: AgentAPI,
+        kind: String,
+        live: Bool,
+        folder: String?,
+        onPick: @escaping (ChatStoredSession) -> Void
+    ) {
         self.onPick = onPick
-        _model = State(initialValue: ContinueSessionModel(agentAPI: agentAPI, kind: "claude", folder: folder))
+        self.live = live
+        _model = State(initialValue: ContinueSessionModel(agentAPI: agentAPI, kind: kind, folder: folder))
     }
 
     var body: some View {
@@ -97,7 +106,9 @@ struct ContinueSessionSheet: View {
             List {
                 Section {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("If the session is still open in a terminal on your PC, close it there first.")
+                        Text(live
+                            ? "A session that is open on your PC stays in sync: both sides see every message."
+                            : "If the session is still open in a terminal on your PC, close it there first.")
                             .font(.footnote)
                             .foregroundStyle(colors.textMuted)
                         if model.folder != nil {

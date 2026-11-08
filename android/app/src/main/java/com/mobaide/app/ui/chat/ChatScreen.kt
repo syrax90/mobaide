@@ -383,6 +383,7 @@ fun ChatScreen(
                     onStop = viewModel::stop,
                     onRemoveImage = viewModel::removeImage,
                     onDequeue = viewModel::dequeue,
+                    onSendNow = viewModel::steer,
                     onPermission = viewModel::respondPermission,
                     onFormValue = viewModel::updateFormValue,
                     onFormAction = viewModel::respondForm,
@@ -491,6 +492,7 @@ private fun ChatDockArea(
     onStop: () -> Unit,
     onRemoveImage: (Long) -> Unit,
     onDequeue: (String) -> Unit,
+    onSendNow: (String) -> Unit,
     onPermission: (ChatRequest.Permission, String) -> Unit,
     onFormValue: (ChatRequest.Form, String, ChatFormValue) -> Unit,
     onFormAction: (ChatRequest.Form, String) -> Unit,
@@ -538,7 +540,15 @@ private fun ChatDockArea(
             }
             if (ui.state.plan.isNotEmpty()) ChatPlanBar(plan = ui.state.plan)
             if (ui.state.queue.isNotEmpty()) {
-                ChatQueueRows(queue = ui.state.queue, enabled = ui.live, onDequeue = onDequeue)
+                ChatQueueRows(
+                    queue = ui.state.queue,
+                    enabled = ui.live,
+                    onDequeue = onDequeue,
+                    onSendNow = onSendNow.takeIf {
+                        ui.state.steering && ui.state.status == ChatStatus.RUNNING
+                    },
+                    busy = ui.queueBusy,
+                )
             }
             if (suggestions != null) {
                 SlashSuggestions(

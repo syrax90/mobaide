@@ -13,7 +13,7 @@ import { ClaudeAdvancedPanel } from './panels/ClaudeAdvancedPanel';
 import { ClaudeOptionsPanel } from './panels/ClaudeOptionsPanel';
 import { CodexOptionsPanel } from './panels/CodexOptionsPanel';
 import { WorktreeSection } from './panels/WorktreeSection';
-import { claudeUsesChat } from './buildCreateRequest';
+import { chatAgentKind, usesChatView } from './buildCreateRequest';
 import {
   addDirsError,
   isCustomMode,
@@ -76,8 +76,10 @@ export function ConfigStep({
   onBack,
   onContinueSession,
 }: ConfigStepProps) {
-  const chat = chatSupport(capabilities, 'claude');
-  const usesChat = mode === 'claude' && claudeUsesChat(state.claude, chat);
+  const chatKind = chatAgentKind(mode);
+  const chat = chatSupport(capabilities, chatKind ?? 'claude');
+  const terminalUi = chatKind === 'codex' ? state.codex.terminalUi : state.claude.terminalUi;
+  const usesChat = chatKind !== null && usesChatView(terminalUi, chat);
   const canResume = usesChat && chat.kind === 'available' && chat.resume;
   // A worktree needs a stored git project; a one-off path has no repo to branch.
   const showsGitOptions =
@@ -97,7 +99,9 @@ export function ConfigStep({
           <div className="resume-entry-text">
             <h3>Continue a session</h3>
             <p className="field-hint">
-              Open a Claude Code session started on your PC, for example in a terminal.
+              {chatKind === 'codex'
+                ? 'Open a Codex session started on your PC, for example in a terminal.'
+                : 'Open a Claude Code session started on your PC, for example in a terminal.'}
             </p>
           </div>
           <button
@@ -126,6 +130,7 @@ export function ConfigStep({
           models={cliModels(capabilities, 'codex')}
           modelDetails={cliModelDetails(capabilities, 'codex')}
           dispatch={dispatch}
+          chat={chat}
         />
       )}
       {mode === 'antigravity' && (

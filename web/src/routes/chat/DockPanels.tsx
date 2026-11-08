@@ -2,7 +2,7 @@ import { useId, useState } from 'react';
 import type { ChatResult, ChatSessionModel } from '../../chat/chatModel';
 import type { ChatPlanEntry, ChatQueued } from '../../chat/chatWire';
 import { useToastStore } from '../../stores/toastStore';
-import { CheckIcon, ChevronIcon, CircleIcon, CrossIcon } from './ChatIcons';
+import { CheckIcon, ChevronIcon, CircleIcon, CrossIcon, SendIcon } from './ChatIcons';
 
 export function toastFailure(result: ChatResult, prefix: string): void {
   if (result.ok) return;
@@ -63,17 +63,33 @@ export function PlanBar({ plan }: { plan: readonly ChatPlanEntry[] }) {
   );
 }
 
+const ALREADY_SENT = 'This message was already sent';
+
 export function QueueList({
   model,
   queue,
   live,
+  canSteer,
 }: {
   model: ChatSessionModel;
   queue: readonly ChatQueued[];
   live: boolean;
+  /** The agent takes a message during the running turn ("Send now"). */
+  canSteer: boolean;
 }) {
-  const [removing, setRemoving] = useState<ReadonlySet<string>>(new Set());
+  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   if (queue.length === 0) return null;
+  const run = (id: string, action: Promise<ChatResult>, failure: string) => {
+    setBusy((current) => new Set(current).add(id));
+    void action.then((result) => {
+      setBusy((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+      if (!result.ok && result.error !== ALREADY_SENT) toastFailure(result, failure);
+    });
+  };
   return (
     <ul className="chat-queue" aria-label="Queued messages">
       {queue.map((entry) => (
@@ -82,24 +98,28 @@ export function QueueList({
           <span className="chat-queue-text">
             {entry.text === '' ? `${String(entry.images)} image(s)` : entry.text}
           </span>
+          {canSteer && (
+            <button
+              type="button"
+              className="chat-icon-button"
+              aria-label="Send now"
+              title="Send now, into the running turn"
+              disabled={!live || busy.has(entry.id)}
+              onClick={() => {
+                run(entry.id, model.steer(entry.id), 'Could not send the message now');
+              }}
+            >
+              <SendIcon />
+            </button>
+          )}
           <button
             type="button"
             className="chat-icon-button"
             aria-label="Remove from queue"
             title="Remove from queue"
-            disabled={!live || removing.has(entry.id)}
+            disabled={!live || busy.has(entry.id)}
             onClick={() => {
-              setRemoving((current) => new Set(current).add(entry.id));
-              void model.dequeue(entry.id).then((result) => {
-                setRemoving((current) => {
-                  const next = new Set(current);
-                  next.delete(entry.id);
-                  return next;
-                });
-                if (!result.ok && result.error !== 'This message was already sent') {
-                  toastFailure(result, 'Could not remove the message');
-                }
-              });
+              run(entry.id, model.dequeue(entry.id), 'Could not remove the message');
             }}
           >
             <CrossIcon />

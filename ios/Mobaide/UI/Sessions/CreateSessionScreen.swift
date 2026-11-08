@@ -23,6 +23,7 @@ private struct CreateSessionContent: View {
     @State private var projectSheet: ProjectFormMode?
     @State private var pathSuggestions: PathSuggestionsModel
     @State private var claudeAdvancedExpanded = false
+    @State private var codexAdvancedExpanded = false
     @State private var autoScanAdvancedExpanded = false
     @State private var showContinueSession = false
     @State private var pendingContinue: ChatStoredSession?
@@ -112,7 +113,12 @@ private struct CreateSessionContent: View {
             pendingContinue = nil
             Task { await model.continueSession(stored) }
         }) {
-            ContinueSessionSheet(agentAPI: container.agentAPI, folder: model.continueFolder) { stored in
+            ContinueSessionSheet(
+                agentAPI: container.agentAPI,
+                kind: model.continueKind,
+                live: model.continueIsLive,
+                folder: model.continueFolder
+            ) { stored in
                 pendingContinue = stored
             }
         }
@@ -190,7 +196,9 @@ private struct CreateSessionContent: View {
     }
 
     private var codexLoginPresented: Binding<Bool> {
-        Binding(get: { model.showCodexLogin }, set: { if !$0 { model.cancelCodexLogin() } })
+        // Hiding only: the alert also closes after "Log in", before its Task
+        // reads the key and the pending resume. Cancel clears them itself.
+        Binding(get: { model.showCodexLogin }, set: { if !$0 { model.hideCodexLogin() } })
     }
 
     private var typeDeletePresented: Binding<Bool> {
@@ -410,6 +418,9 @@ private struct CreateSessionContent: View {
             if model.mode == .standard {
                 claudeAdvancedSection
             }
+            if model.mode == .codex {
+                codexAdvancedSection
+            }
             Section {
                 Button {
                     Task { await model.create() }
@@ -510,6 +521,12 @@ private struct CreateSessionContent: View {
             }
             Toggle("Skip permissions", isOn: $model.skipPermissions)
         }
+        continueSessionSection(agentName: "Claude Code")
+    }
+
+    /// "Continue a session" for the agents whose sessions open in the chat view.
+    @ViewBuilder
+    private func continueSessionSection(agentName: String) -> some View {
         if model.canContinueSession {
             Section {
                 Button {
@@ -521,7 +538,7 @@ private struct CreateSessionContent: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Continue a session")
                                 .foregroundStyle(colors.text)
-                            Text("Open a Claude Code session started on your PC, for example in a terminal.")
+                            Text("Open a \(agentName) session started on your PC, for example in a terminal.")
                                 .font(.caption)
                                 .foregroundStyle(colors.textMuted)
                         }
@@ -539,6 +556,16 @@ private struct CreateSessionContent: View {
                 .disabled(model.submitting)
             }
         }
+    }
+
+    /// "Terminal UI" under Advanced: the classic terminal instead of the chat view.
+    @ViewBuilder
+    private func terminalUIToggle(_ isOn: Binding<Bool>, unavailableReason: String?) -> some View {
+        Toggle("Terminal UI", isOn: isOn)
+            .disabled(unavailableReason != nil)
+        Text(unavailableReason ?? "Use the classic terminal instead of the chat view.")
+            .font(.footnote)
+            .foregroundStyle(unavailableReason != nil ? colors.warning : colors.textMuted)
     }
 
     /// Rendered after the Worktree section, so the main options stay on top.
@@ -609,11 +636,7 @@ private struct CreateSessionContent: View {
         Section {
             DisclosureGroup("Advanced", isExpanded: isExpanded) {
                 if let terminalUI {
-                    Toggle("Terminal UI", isOn: terminalUI)
-                        .disabled(model.chatUnavailable)
-                    Text(model.chatUnavailableReason ?? "Use the classic terminal instead of the chat view.")
-                        .font(.footnote)
-                        .foregroundStyle(model.chatUnavailable ? colors.warning : colors.textMuted)
+                    terminalUIToggle(terminalUI, unavailableReason: model.chatUnavailableReason)
                 }
                 Toggle("No memory", isOn: noMemory)
                 Toggle("Fast mode (Opus only)", isOn: fastMode)
@@ -636,10 +659,20 @@ private struct CreateSessionContent: View {
     @ViewBuilder
     private var codexConfig: some View {
         @Bindable var model = model
-        Section(header: PixelSectionHeader("Autonomy")) {
-            Button("Read only") { applyCodexPreset(sandbox: "read-only", approval: "on-request", fullAuto: false) }
-            Button("Auto") { applyCodexPreset(sandbox: "workspace-write", approval: "on-request", fullAuto: false) }
-            Button("Full access") { applyCodexPreset(sandbox: "danger-full-access", approval: "never", fullAuto: true) }
+        // Sandbox and approval live under Advanced, so the preset rows show
+        // which one the current pair matches (none for a hand-picked pair).
+        Section {
+            ForEach(CodexAutonomyPreset.allCases, id: \.self) { preset in
+                selectableRow(preset.title, subtitle: preset.subtitle, selected: model.codexPreset == preset) {
+                    model.applyCodexPreset(preset)
+                }
+            }
+        } header: {
+            PixelSectionHeader("Autonomy")
+        } footer: {
+            if model.codexPreset == nil {
+                PixelSectionFooter("Custom sandbox/approval set in Advanced.")
+            }
         }
         Section(header: PixelSectionHeader("Codex")) {
             // Routed through setCodexModel (not a bare binding) so a stranded
@@ -664,14 +697,37 @@ private struct CreateSessionContent: View {
             Picker("Reasoning effort", selection: $model.codexReasoningEffort) {
                 ForEach(effortOptions, id: \.self) { Text($0).tag($0) }
             }
-            Picker("Sandbox", selection: $model.codexSandbox) {
-                ForEach(CreateSessionModel.codexSandboxes, id: \.self) { Text($0).tag($0) }
+        }
+        continueSessionSection(agentName: "Codex")
+    }
+
+    /// Collapsed like the Claude Code one; rendered after the Worktree section.
+    @ViewBuilder
+    private var codexAdvancedSection: some View {
+        @Bindable var model = model
+        Section {
+            DisclosureGroup("Advanced", isExpanded: $codexAdvancedExpanded) {
+                terminalUIToggle(
+                    Binding(
+                        get: { model.codexTerminalUI || model.codexChatUnavailable },
+                        set: { model.codexTerminalUI = $0 }
+                    ),
+                    unavailableReason: model.codexChatUnavailableReason
+                )
+                Picker("Sandbox", selection: $model.codexSandbox) {
+                    ForEach(CreateSessionModel.codexSandboxes, id: \.self) { Text($0).tag($0) }
+                }
+                .disabled(model.codexFullAuto)
+                Picker("Approval", selection: $model.codexApproval) {
+                    ForEach(CreateSessionModel.codexApprovals, id: \.self) { Text($0).tag($0) }
+                }
+                .disabled(model.codexFullAuto)
+                if model.codexFullAuto {
+                    Text("Sandbox and approval are ignored in Full-access (--yolo).")
+                        .font(.footnote)
+                        .foregroundStyle(colors.textMuted)
+                }
             }
-            .disabled(model.codexFullAuto)
-            Picker("Approval", selection: $model.codexApproval) {
-                ForEach(CreateSessionModel.codexApprovals, id: \.self) { Text($0).tag($0) }
-            }
-            .disabled(model.codexFullAuto)
         }
     }
 
@@ -740,12 +796,6 @@ private struct CreateSessionContent: View {
 
     // MARK: - Helpers
 
-    private func applyCodexPreset(sandbox: String, approval: String, fullAuto: Bool) {
-        model.codexSandbox = sandbox
-        model.codexApproval = approval
-        model.codexFullAuto = fullAuto
-    }
-
     private func selectableRow(
         _ title: String,
         subtitle: String? = nil,
@@ -766,6 +816,7 @@ private struct CreateSessionContent: View {
                 PixelRadio(isSelected: selected)
             }
         }
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     /// Tap fills the field; swipe forgets the path. Head truncation keeps the

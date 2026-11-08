@@ -10,18 +10,23 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
 from mobaide.agent._env_writer import atomic_write
+from mobaide.core.codex_auth import codex_home
 
 
 class WorkspaceTrust(Protocol):
     """Whether the agent may load a folder's own configuration."""
 
-    prompt_title: str
-    prompt_text: str
+    @property
+    def prompt_title(self) -> str: ...
+
+    @property
+    def prompt_text(self) -> str: ...
 
     def is_trusted(self) -> bool: ...
 
@@ -138,4 +143,131 @@ class ClaudeFolderTrust:
         projects[folder] = entry
         mode = path.stat().st_mode & 0o777 if path.exists() else None
         atomic_write(path, json.dumps(data, indent=2), mode=mode)
+        return True
+
+
+def codex_config_path(env: Mapping[str, str] | None = None) -> Path:
+    """The ``config.toml`` of the Codex CLI started with ``env``."""
+    return Path(codex_home(env if env is not None else os.environ)) / "config.toml"
+
+
+def _append_codex_trust(text: str, folder: str) -> str:
+    # A JSON string is a valid TOML basic string for any real path.
+    block = f'[projects.{json.dumps(folder, ensure_ascii=False)}]\ntrust_level = "trusted"\n'
+    if not text:
+        return block
+    return text + ("\n" if text.endswith("\n") else "\n\n") + block
+
+
+def _main_worktree_root(root: Path) -> Path | None:
+    """The main checkout of the linked git worktree at ``root``, or None.
+
+    A linked worktree's ``.git`` is a file naming ``<main>/.git/worktrees/<n>``;
+    Codex trusts such a worktree through its main checkout.
+    """
+    dotgit = root / ".git"
+    try:
+        text = dotgit.read_text(encoding="utf-8").strip() if dotgit.is_file() else ""
+    except OSError:
+        return None
+    if not text.startswith("gitdir:"):
+        return None
+    gitdir = Path(os.path.realpath(root / text[len("gitdir:"):].strip()))
+    try:
+        common = Path(os.path.realpath(gitdir / (gitdir / "commondir").read_text(encoding="utf-8").strip()))
+    except OSError:
+        if gitdir.parent.name != "worktrees":
+            return None
+        common = gitdir.parent.parent
+    if common.name != ".git" or common.parent == root:
+        return None
+    return common.parent
+
+
+def _codex_trust_candidates(cwd: str) -> list[str]:
+    """The keys Codex looks up, in its order: the folder (real path, then as
+    given), then its git repository root, then the main checkout of a linked
+    worktree. No other parent folder counts."""
+    folder = Path(os.path.realpath(cwd))
+    keys = [*_spellings(str(folder)), *_spellings(os.path.abspath(cwd))]
+    root = _repo_root(folder)
+    if root is not None:
+        if root != folder:
+            keys.extend(_spellings(str(root)))
+        main = _main_worktree_root(root)
+        if main is not None:
+            keys.extend(_spellings(str(main)))
+    return list(dict.fromkeys(keys))
+
+
+class CodexFolderTrust:
+    """Codex's own trust record: ``[projects."<dir>"] trust_level`` in
+    ``config.toml``. The first recorded key decides (see
+    :func:`_codex_trust_candidates`), and Codex records a repository by its
+    root."""
+
+    prompt_title = "Trust this folder?"
+
+    def __init__(self, cwd: str, config_path: Path | None = None) -> None:
+        self._cwd = cwd
+        self._config_path = config_path or codex_config_path()
+
+    def _record_folder(self) -> str:
+        folder = Path(os.path.realpath(self._cwd))
+        root = _repo_root(folder)
+        if root is None:
+            return str(folder)
+        return str(_main_worktree_root(root) or root)
+
+    @property
+    def prompt_text(self) -> str:
+        text = (
+            "Codex will use this folder's settings, hooks and MCP servers. "
+            "They can run commands on your PC. Only trust a folder whose files you know."
+        )
+        if too_broad_to_record(self._record_folder()):
+            text += " Trust for this folder lasts for this session only."
+        return text
+
+    def _load(self) -> dict[str, Any]:
+        try:
+            return tomllib.loads(self._config_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def is_trusted(self) -> bool:
+        projects = self._load().get("projects")
+        if not isinstance(projects, dict):
+            return False
+        for folder in _codex_trust_candidates(self._cwd):
+            if folder in projects:
+                entry = projects[folder]
+                return isinstance(entry, dict) and entry.get("trust_level") == "trusted"
+        return False
+
+    def grant(self) -> bool:
+        """Append the trust record (atomic rewrite).
+
+        Returns False, and writes nothing, for a folder too broad to record
+        or one the file already lists: an edit of an existing table could
+        break the user's own formatting, so that trust lasts for the session.
+        """
+        folder = self._record_folder()
+        if too_broad_to_record(folder):
+            return False
+        path = self._config_path
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        # Never rewrite a file this code cannot read back whole.
+        before = tomllib.loads(text)
+        projects = before.get("projects", {})
+        if not isinstance(projects, dict):
+            raise ValueError(f"{path}: projects is not a table")
+        if folder in projects:
+            return False
+        updated = _append_codex_trust(text, folder)
+        expected = {**before, "projects": {**projects, folder: {"trust_level": "trusted"}}}
+        if tomllib.loads(updated) != expected:
+            raise ValueError(f"{path}: could not add the trust record safely")
+        mode = path.stat().st_mode & 0o777 if path.exists() else None
+        atomic_write(path, updated, mode=mode)
         return True

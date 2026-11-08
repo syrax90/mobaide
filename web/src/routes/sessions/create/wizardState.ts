@@ -79,6 +79,8 @@ export interface CodexBucket {
   approval: CodexApproval;
   fullAuto: boolean;
   reasoningEffort: CodexReasoningEffort | null;
+  /** The classic terminal instead of the chat view. */
+  terminalUi: boolean;
 }
 
 export interface AntigravityBucket {
@@ -154,6 +156,7 @@ export const INITIAL_WIZARD_STATE: WizardState = {
     approval: 'on-request',
     fullAuto: false,
     reasoningEffort: 'high',
+    terminalUi: false,
   },
   antigravity: { model: null, skipPermissions: false, sandbox: false, addDirsDraft: '' },
   git: { worktree: false, branchName: '' },
@@ -317,6 +320,7 @@ export type WizardAction =
   | { type: 'setCodexReasoningEffort'; effort: CodexReasoningEffort | null }
   | { type: 'setCodexSandbox'; sandbox: CodexSandbox }
   | { type: 'setCodexApproval'; approval: CodexApproval }
+  | { type: 'setCodexTerminalUi'; value: boolean }
   | { type: 'setAntigravityModel'; model: string | null }
   | { type: 'setAntigravitySkipPermissions'; value: boolean }
   | { type: 'setAntigravitySandbox'; value: boolean }
@@ -489,6 +493,9 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
 
     case 'setCodexApproval':
       return { ...state, codex: { ...state.codex, approval: action.approval } };
+
+    case 'setCodexTerminalUi':
+      return { ...state, codex: { ...state.codex, terminalUi: action.value } };
 
     case 'setAntigravityModel':
       return { ...state, antigravity: { ...state.antigravity, model: action.model } };

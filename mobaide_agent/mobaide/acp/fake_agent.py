@@ -1,15 +1,21 @@
 """A scripted ACP agent for tests and for UI checks on a local stack.
 
-Run with ``python -m mobaide.acp.fake_agent``. ``MOBAIDE_ENV=test`` makes the
-chat sessions use it instead of a real agent, so every chat UI state can be
-reached without an account or network. The prompt text picks the scenario:
+Run with ``python -m mobaide.acp.fake_agent [--flavor codex]``.
+``MOBAIDE_ENV=test`` makes the chat sessions use it instead of a real agent,
+so every chat UI state can be reached without an account or network. The
+flavor picks the config options and names of the agent it stands in for. The
+prompt text picks the scenario:
 
-* ``tools`` — read, edit (with a diff) and execute tool calls;
+* ``tools`` — read, edit (with a diff) and execute tool calls (the Codex
+  flavor streams the command output as terminal ``_meta``);
 * ``permission`` — a command that waits for approval;
 * ``question`` — a form with single choice, multiple choice and text;
 * ``plan`` — a plan that progresses step by step;
 * ``markdown`` — a long Markdown answer (headings, lists, code, table);
-* ``slow`` — a slow stream, to try Stop and the message queue;
+* ``slow`` — a slow stream, to try Stop, the message queue and Send now
+  (``_session/steering``);
+* ``external`` — after the answer, a turn that another app on the PC
+  started (thread status ``_meta`` as Codex sends it);
 * ``fail`` — the turn fails with an error;
 * ``crash`` — the process exits;
 * anything else — a short echo with a thought.
@@ -36,6 +42,19 @@ MODELS = [
     {"value": "smart", "name": "Smart model", "description": "Best quality"},
 ]
 EFFORTS = [{"value": v, "name": v.capitalize()} for v in ("low", "medium", "high", "max")]
+
+CODEX_MODES = [
+    {"value": "read-only", "name": "Read-only", "description": "Requires approval to edit files and access the internet."},
+    {"value": "workspace-write", "name": "Workspace access", "description": "Edit workspace files; ask before writing outside the workspace or accessing the network."},
+    {"value": "agent", "name": "Auto review", "description": "Only ask for actions detected as potentially unsafe"},
+    {"value": "agent-full-access", "name": "Full access", "description": "Unrestricted access to the internet and any file on your computer"},
+]
+CODEX_COLLABORATION = [{"value": "default", "name": "Default"}, {"value": "plan", "name": "Plan"}]
+CODEX_MODELS = [
+    {"value": "gpt-5.6-terra", "name": "5.6 Terra"},
+    {"value": "gpt-6.1-sol", "name": "6.1 Sol"},
+]
+CODEX_EFFORTS = [{"value": v, "name": v.capitalize()} for v in ("low", "medium", "high", "xhigh")]
 
 MARKDOWN = """## Result
 
@@ -67,8 +86,10 @@ That's all."""
 
 
 class FakeAgent:
-    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(self, loop: asyncio.AbstractEventLoop, flavor: str = "claude") -> None:
         self.loop = loop
+        self.codex = flavor == "codex"
+        self.steers: dict[str, list[str]] = {}
         self.write_lock = threading.Lock()
         self.next_id = 1000
         self.pending: dict[int, asyncio.Future[Any]] = {}
@@ -96,6 +117,14 @@ class FakeAgent:
 
     def config(self, sid: str) -> list[dict[str, Any]]:
         s = self.sessions[sid]
+        if self.codex:
+            return [
+                {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": s["mode"], "options": CODEX_MODES},
+                {"id": "collaboration_mode", "name": "Collaboration mode", "category": "collaboration_mode", "type": "select", "currentValue": s["collaboration_mode"], "options": CODEX_COLLABORATION},
+                {"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": s["model"], "options": CODEX_MODELS},
+                {"id": "reasoning_effort", "name": "Reasoning effort", "category": "thought_level", "type": "select", "currentValue": s["reasoning_effort"], "options": CODEX_EFFORTS},
+                {"id": "fast-mode", "name": "Fast mode", "category": "model_config", "type": "boolean", "currentValue": s["fast-mode"]},
+            ]
         return [
             {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": s["mode"], "options": MODES},
             {"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": s["model"], "options": MODELS},
@@ -114,20 +143,33 @@ class FakeAgent:
             "title": title,
             "used": 1200,
         }
+        if self.codex:
+            self.sessions[sid].update(
+                {"mode": "agent", "collaboration_mode": "default", "model": "gpt-5.6-terra",
+                 "reasoning_effort": "medium", "fast-mode": False}
+            )
         return sid
 
+    def config_ids(self) -> tuple[str, ...]:
+        if self.codex:
+            return ("mode", "collaboration_mode", "model", "reasoning_effort", "fast-mode")
+        return ("mode", "model", "effort", "fast")
+
     def commands(self, sid: str) -> None:
-        self.update(
-            sid,
-            {
-                "sessionUpdate": "available_commands_update",
-                "availableCommands": [
-                    {"name": "review", "description": "Review the current changes", "input": {"hint": "what to focus on"}},
-                    {"name": "test", "description": "Run the project tests"},
-                    {"name": "compact", "description": "Compact the conversation context"},
-                ],
-            },
-        )
+        if self.codex:
+            available = [
+                {"name": "plan", "description": "Turn plan mode on.", "input": None},
+                {"name": "review", "description": "Review uncommitted changes, or review with custom instructions.", "input": {"hint": "optional review instructions"}},
+                {"name": "status", "description": "Display session configuration and token usage.", "input": None},
+                {"name": "compact", "description": "Summarize conversation to avoid hitting the context limit.", "input": None},
+            ]
+        else:
+            available = [
+                {"name": "review", "description": "Review the current changes", "input": {"hint": "what to focus on"}},
+                {"name": "test", "description": "Run the project tests"},
+                {"name": "compact", "description": "Compact the conversation context"},
+            ]
+        self.update(sid, {"sessionUpdate": "available_commands_update", "availableCommands": available})
 
     async def handle(self, msg: dict[str, Any]) -> None:
         method = msg.get("method")
@@ -149,6 +191,11 @@ class FakeAgent:
 
     async def dispatch(self, method: str, params: dict[str, Any]) -> Any:
         if method == "initialize":
+            info = (
+                {"name": "fake-codex-acp", "title": "Codex", "version": "1.0.0"}
+                if self.codex
+                else {"name": "fake-acp-agent", "title": "Fake Agent", "version": "1.0.0"}
+            )
             return {
                 "protocolVersion": 1,
                 "agentCapabilities": {
@@ -156,8 +203,9 @@ class FakeAgent:
                     "promptCapabilities": {"image": True, "embeddedContext": True},
                     "sessionCapabilities": {"list": {}, "close": {}, "resume": {}, "systemPrompt": {}},
                 },
-                "agentInfo": {"name": "fake-acp-agent", "title": "Fake Agent", "version": "1.0.0"},
+                "agentInfo": info,
                 "authMethods": [],
+                "_meta": {"steering": {"supported": True}},
             }
         if method == "session/new":
             sid = self.new_session(params.get("cwd") or os.getcwd())
@@ -166,10 +214,15 @@ class FakeAgent:
         if method == "session/list":
             cwd = params.get("cwd") or os.getcwd()
             now = datetime.now(UTC).isoformat()
+            titles = (
+                ("Add retries to the sync job", "Explain the cache layer")
+                if self.codex
+                else ("Refactor the login flow", "Fix flaky upload test")
+            )
             return {
                 "sessions": [
-                    {"sessionId": "external-1111", "cwd": cwd, "title": "Refactor the login flow", "updatedAt": now},
-                    {"sessionId": "external-2222", "cwd": cwd, "title": "Fix flaky upload test", "updatedAt": now},
+                    {"sessionId": "external-1111", "cwd": cwd, "title": titles[0], "updatedAt": now},
+                    {"sessionId": "external-2222", "cwd": cwd, "title": titles[1], "updatedAt": now},
                 ]
             }
         if method == "session/load":
@@ -191,7 +244,7 @@ class FakeAgent:
             if s is None:
                 raise _RpcError(-32002, "Unknown session")
             config_id = params.get("configId")
-            if config_id not in ("mode", "model", "effort", "fast"):
+            if config_id not in self.config_ids():
                 raise _RpcError(-32602, "Unknown config option")
             s[config_id] = params.get("value")
             return {"configOptions": self.config(sid)}
@@ -210,6 +263,14 @@ class FakeAgent:
         if method == "session/cancel":
             self.cancelled.add(str(params.get("sessionId")))
             return None
+        if method == "_session/steering":
+            sid = params.get("sessionId")
+            turn = self.turns.get(sid) if isinstance(sid, str) else None
+            if turn is None or turn.done():
+                return {"outcome": "promptRequired", "reason": "noRunningTurn"}
+            text = " ".join(b.get("text", "") for b in params.get("prompt") or [] if b.get("type") == "text")
+            self.steers.setdefault(sid, []).append(text.strip())
+            return {"outcome": "injected"}
         raise _RpcError(-32601, f"Method not found: {method}")
 
     async def replay(self, sid: str) -> None:
@@ -229,6 +290,12 @@ class FakeAgent:
         for i, word in enumerate(words):
             if self.stopped(sid):
                 return False
+            steers = self.steers.pop(sid, None)
+            if steers:
+                mid = str(uuid.uuid4())
+                for note in steers:
+                    self.update(sid, {"sessionUpdate": kind, "messageId": mid,
+                                      "content": {"type": "text", "text": f"(Noted mid-turn: {note}) "}})
             chunk = word if i == 0 else " " + word
             self.update(sid, {"sessionUpdate": kind, "messageId": mid, "content": {"type": "text", "text": chunk}})
             await asyncio.sleep(delay)
@@ -263,6 +330,9 @@ class FakeAgent:
             ok = await self.stream(sid, MARKDOWN, delay=0.01)
         elif "slow" in lower:
             ok = await self.stream(sid, "Working slowly " + "and steadily " * 40 + "— done.", delay=0.15)
+        elif "external" in lower:
+            ok = await self.stream(sid, "Sure. Watch for a message from your PC next.")
+            self.loop.call_later(1.0, lambda: asyncio.ensure_future(self.external_turn(sid)))
         else:
             ok = await self.stream(sid, "Let me think about that.", kind="agent_thought_chunk")
             if ok:
@@ -273,6 +343,18 @@ class FakeAgent:
         s["used"] += 2500
         self.update(sid, {"sessionUpdate": "usage_update", "used": s["used"], "size": 200000, "cost": {"amount": round(s["used"] / 1e6, 4), "currency": "USD"}})
         return {"stopReason": "end_turn" if ok else "cancelled"}
+
+    def thread_status(self, sid: str, kind: str) -> None:
+        status: dict[str, Any] = {"type": kind}
+        if kind == "active":
+            status["activeFlags"] = []
+        self.update(sid, {"sessionUpdate": "session_info_update", "_meta": {"codex": {"threadStatus": status}}})
+
+    async def external_turn(self, sid: str) -> None:
+        self.thread_status(sid, "active")
+        await asyncio.sleep(0.3)
+        await self.stream(sid, "This answer is for a message typed into Codex on the PC.", delay=0.05)
+        self.thread_status(sid, "idle")
 
     def tool_id(self, name: str) -> str:
         self.tool_seq += 1
@@ -293,13 +375,27 @@ class FakeAgent:
         await asyncio.sleep(0.3)
         self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": edit, "status": "completed",
                           "content": [{"type": "diff", "path": path, "oldText": "def main():\n    print('hi')\n", "newText": "def main() -> None:\n    print('hello, world')\n    return None\n"}]})
-        self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": run, "title": "pytest -q", "kind": "execute", "status": "in_progress",
-                          "rawInput": {"command": "pytest -q", "description": "Run the tests"}})
-        await asyncio.sleep(0.6)
-        if self.stopped(sid):
-            return False
-        self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": run, "status": "completed",
-                          "content": [{"type": "content", "content": {"type": "text", "text": "```console\n....\n4 passed in 0.12s\n```"}}]})
+        if self.codex:
+            self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": run, "title": "pytest -q", "kind": "execute", "status": "in_progress",
+                              "rawInput": {"command": "pytest -q", "cwd": cwd}, "content": [{"type": "terminal", "terminalId": run}]})
+            for chunk in ("============ test session starts ============\n", "collected 4 items\n\n", "tests/test_app.py \x1b[32m....\x1b[0m"):
+                await asyncio.sleep(0.25)
+                self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": run,
+                                  "_meta": {"terminal_output_delta": {"terminal_id": run, "data": chunk}}})
+            await asyncio.sleep(0.3)
+            if self.stopped(sid):
+                return False
+            self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": run, "status": "completed",
+                              "_meta": {"terminal_output_delta": {"terminal_id": run, "data": "\n\n4 passed in 0.12s\n"},
+                                        "terminal_exit": {"terminal_id": run, "exit_code": 0, "signal": None}}})
+        else:
+            self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": run, "title": "pytest -q", "kind": "execute", "status": "in_progress",
+                              "rawInput": {"command": "pytest -q", "description": "Run the tests"}})
+            await asyncio.sleep(0.6)
+            if self.stopped(sid):
+                return False
+            self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": run, "status": "completed",
+                              "content": [{"type": "content", "content": {"type": "text", "text": "```console\n....\n4 passed in 0.12s\n```"}}]})
         self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": search, "title": "Search for TODO", "kind": "search", "status": "failed",
                           "rawInput": {"pattern": "TODO"}, "rawOutput": "rg: permission denied: secrets/"})
         return await self.stream(sid, "Done: I updated `main()` and the tests pass.")
@@ -381,9 +477,12 @@ class _RpcError(Exception):
 
 
 def main() -> None:
+    flavor = "claude"
+    if "--flavor" in sys.argv[1:-1]:
+        flavor = sys.argv[sys.argv.index("--flavor") + 1]
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    agent = FakeAgent(loop)
+    agent = FakeAgent(loop, flavor)
     inbox: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
 
     def reader() -> None:

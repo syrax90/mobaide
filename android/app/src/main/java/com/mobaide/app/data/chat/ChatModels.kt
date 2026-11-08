@@ -234,6 +234,8 @@ data class ChatState(
     val promptImages: Boolean = false,
     val turnStartedAt: String? = null,
     val cancelling: Boolean = false,
+    // The agent takes a message during a running turn ("Send now" on queued messages).
+    val steering: Boolean = false,
 )
 
 /** Lenient decoding of the agent's JSON: a malformed field never drops its whole frame. */
@@ -281,6 +283,7 @@ internal object ChatJson {
         promptImages = obj.obj("prompt_caps")?.bool("image") == true,
         turnStartedAt = obj.str("turn_started_at"),
         cancelling = obj.bool("cancelling") == true,
+        steering = obj.bool("steering") == true,
     )
 
     private fun configOption(obj: JsonObject): ChatConfigOption? {

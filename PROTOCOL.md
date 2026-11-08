@@ -123,6 +123,37 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-08: Codex chat sessions, live Codex sessions, Send now
+
+Additive delta within proto-v7 (2026-11-08): **one capability key, one chat command, one chat state key. No version bump; `central_server` is untouched.**
+
+Codex sessions open in the chat view too (`ui: "chat"` with `cli: "codex"`), through [`@agentclientprotocol/codex-acp`](https://github.com/agentclientprotocol/codex-acp). It runs the host's own `codex app-server` (`CODEX_PATH`), so chat and terminal sessions share the CLI version, login, settings and stored sessions.
+
+| Where | Change |
+|-------|--------|
+| `capabilities.chat` | A `codex` entry when the adapter can run. Every entry gains `live`: `true` when sessions stay in sync with the agent's own apps on the PC (Codex on macOS and Linux). Missing `live` reads as `false`. |
+| `'c'` command `steer` | `queue_id`. Sends a queued message into the running turn now (`_session/steering` with `idleBehavior: "promptRequired"`). `data: {steered: true}` when the turn took it (the message leaves the queue and shows as a `user` item); `{steered: false}` when no turn could take it (it stays first in the queue and runs next). A `dequeue` of a message being steered fails. |
+| State key `steering` | `true` when the agent can take a message during a turn (`initialize._meta.steering.supported`). Clients offer **Send now** on queued messages only then. |
+
+* Codex options map onto the session: `full_auto`, or sandbox `danger-full-access` with `approval: never` → mode `agent-full-access`; sandbox `read-only` → `read-only`; anything else → `workspace-write`, where a person (not Codex's reviewer model) approves each step outside the sandbox (the chat's mode chip offers Auto review). The mode is required: when the agent cannot apply it, the session does not start (error with Restart) instead of running in the agent's default mode. `model` → `model`, `reasoning_effort` → `reasoning_effort`, `initial_prompt` → the first prompt. A Codex sign-in that is missing answers `409 codex_auth_required`, as for terminal sessions.
+* Codex's trust record is `[projects."<folder>"] trust_level` in `$CODEX_HOME/config.toml` (default `~/.codex`). Like Codex, the agent looks up the folder (real path, then as given), then its git repository root, then the main checkout of a linked worktree; the first key found decides, and no other parent folder counts. `trust` appends a `trust_level = "trusted"` table for the main checkout (or the repository root, or the folder), and records nothing for the home folder, a folder above it, a root, or a folder the file already lists (that trust lasts for the session).
+
+#### Live Codex sessions
+
+`codex` in a terminal keeps its sessions in Codex's shared app-server (the daemon behind `codex agents`, control socket `$CODEX_HOME/app-server-control/app-server-control.sock`, JSON-RPC over a WebSocket). When that socket answers at session start, the chat session joins it through `mobaide/acp/codex_bridge.py`, a stdio-to-WebSocket relay that the adapter starts as its app-server. Mobaide never starts the daemon itself, and uses a private app-server instead on Windows, for a project with a conda env (the daemon runs commands with its own environment), or when the socket does not answer.
+
+* "Continue a session" then opens a session that is live in a terminal: both sides see the conversation and can send messages.
+* Codex reports its thread status in `session_info_update._meta.codex.threadStatus`. A turn that another app started shows as `status: "running"` after a `notice` item ("Message sent from another app on your PC"), also when it was already running as the chat opened; the adapter does not forward that message's text. Prompts sent meanwhile wait in the queue, and `cancel` stops that turn (after 15 s without an end report the chat returns to `ready`).
+* Closing the chat cancels only the turn it started and does not send `session/close`, which would stop a turn of the other app.
+
+#### Command output
+
+Tool calls can carry command output in `_meta` instead of content: `terminal_output` (replaces) and `terminal_output_delta` (appends) `{terminal_id, data}`, and `terminal_exit` `{exit_code}` (Codex always; Claude Code for background commands). The agent turns it into one `text` part, a fenced `console` block without escape sequences (a carriage return overwrites its line), plus `Exit code N` when it is not 0. While the command runs, the part holds the last 8 KB and the item is re-sent at most every 0.3 s; when it ends, the usual 32 KB head and tail of the last 128 KB. `terminal` content parts are dropped.
+
+#### Adapter install
+
+The PC agent no longer runs the adapters through `npx`: `npm exec` exports its own settings (`npm_config_ignore_scripts` …) into the adapter, and from there into every command the coding agent runs. The adapters are pinned (`claude-agent-acp@0.101.0`, `codex-acp@2.5.0`), installed once with `npm install --ignore-scripts --omit=optional --before=<release date>` into `<state prefix>/acp-adapters/<name>-<version>/`, and started with `node`. `--before` resolves the adapters' dependency ranges to versions published before the pinned release. Optional dependencies are the adapters' bundled copies of the CLIs, which chat sessions never use. The first chat session after an install or an update shows a "Setting up …" notice while npm runs. An adapter command on PATH, or `MOBAIDE_ACP_CLAUDE_COMMAND` / `MOBAIDE_ACP_CODEX_COMMAND`, still wins. Test mode runs the fake agent with `--flavor codex` for Codex.
+
 ### Delta 2026-11-07: chat sessions (ACP)
 
 Additive delta within proto-v7 (2026-11-07): **one session wire field, two create fields, one capability key, one REST route and two frame types on the existing per-session socket. No version bump, and `central_server` is untouched** (the REST proxy and the session socket are opaque to it).
@@ -193,7 +224,7 @@ Chat sessions use the same `/ws/session/{id}` and `CH_SESSION_IO` channel. Two f
 | `session/set_config_option`, `session/set_mode` | Mode, model, effort and other options. |
 | `session/request_permission`, `elicitation/create` (form) | Approval cards and question forms (Claude's AskUserQuestion). |
 
-An agent run over ACP skips its own "trust this folder?" prompt. So before `session/new` or `session/load`, the PC agent checks the agent's trust record (for Claude Code, `projects[<folder or a parent>].hasTrustDialogAccepted` in `~/.claude.json`, real paths only, and parents only up to the enclosing git repository root — stricter than the CLI, which walks every parent). For a folder that is not trusted, it publishes a `permission` request (`tool_call_id: null`, options `trust` / `decline`) in the normal `requests` state. `trust` records the trust the way the CLI does and continues; for the home folder, a folder above it or a root it records nothing, and the trust lasts for this session only (Restart does not ask again). `decline` ends the start with an error that offers Restart. The adapter process itself runs in the home folder, and `npx` runs with `--ignore-scripts`.
+An agent run over ACP skips its own "trust this folder?" prompt. So before `session/new` or `session/load`, the PC agent checks the agent's trust record (for Claude Code, `projects[<folder or a parent>].hasTrustDialogAccepted` in `~/.claude.json`, real paths only, and parents only up to the enclosing git repository root — stricter than the CLI, which walks every parent). For a folder that is not trusted, it publishes a `permission` request (`tool_call_id: null`, options `trust` / `decline`) in the normal `requests` state. `trust` records the trust the way the CLI does and continues; for the home folder, a folder above it or a root it records nothing, and the trust lasts for this session only (Restart does not ask again). `decline` ends the start with an error that offers Restart. The adapter process itself runs in the home folder (how it is installed: Delta 2026-11-08).
 
 #### Chat golden fixtures
 

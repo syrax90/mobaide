@@ -73,6 +73,7 @@ final class ChatSessionModel {
     private(set) var answering: [String: String] = [:]
     private(set) var formErrors: [String: String] = [:]
     private(set) var configOverrides: [String: ChatConfigValue] = [:]
+    /// Queued messages with a remove or a Send now in flight.
     private(set) var dequeuing: Set<String> = []
     private(set) var restarting = false
     /// Rows the user expanded; kept here so a row scrolled out of the lazy
@@ -119,6 +120,7 @@ final class ChatSessionModel {
         case setConfig(configId: String)
         case respond(requestId: String)
         case dequeue(queueId: String)
+        case steer(queueId: String)
         case cancel
         case restart
 
@@ -441,8 +443,14 @@ final class ChatSessionModel {
         case .dequeue(let queueId):
             guard !result.ok else { return }
             dequeuing.remove(queueId)
-            if let error = result.error {
-                message = ToastMessage(text: error)
+            if let error = result.error, error != "This message was already sent" {
+                message = ToastMessage(text: error, tone: .danger)
+            }
+        case .steer(let queueId):
+            // A message the turn did not take stays queued and runs next.
+            dequeuing.remove(queueId)
+            if !result.ok, let error = result.error, error != "This message was already sent" {
+                message = ToastMessage(text: error, tone: .danger)
             }
         case .cancel:
             if !result.ok, let error = result.error {
@@ -497,7 +505,7 @@ final class ChatSessionModel {
             configOverrides[configId] = nil
         case .respond(let requestId):
             answering[requestId] = nil
-        case .dequeue(let queueId):
+        case .dequeue(let queueId), .steer(let queueId):
             dequeuing.remove(queueId)
         case .restart:
             restarting = false
@@ -626,6 +634,15 @@ final class ChatSessionModel {
         guard isLive, !dequeuing.contains(queued.id) else { return }
         dequeuing.insert(queued.id)
         enqueue(.dequeue(id: nextCommandId(), queueId: queued.id), pending: .dequeue(queueId: queued.id))
+    }
+
+    /// "Send now": the agent takes a queued message during the running turn.
+    var canSteer: Bool { state.steering && isRunning }
+
+    func steer(_ queued: ChatQueuedMessage) {
+        guard isLive, canSteer, !dequeuing.contains(queued.id) else { return }
+        dequeuing.insert(queued.id)
+        enqueue(.steer(id: nextCommandId(), queueId: queued.id), pending: .steer(queueId: queued.id))
     }
 
     func restart() {

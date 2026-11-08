@@ -523,6 +523,7 @@ struct ChatStatePatch: Sendable, Decodable {
     var promptImages: Bool?
     var turnStartedAt: String??
     var cancelling: Bool?
+    var steering: Bool?
 
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: ChatKey.self)
@@ -550,6 +551,7 @@ struct ChatStatePatch: Sendable, Decodable {
         }
         turnStartedAt = nullable(String.self, "turn_started_at")
         if c.has("cancelling") { cancelling = c.bool("cancelling") ?? false }
+        if c.has("steering") { steering = c.bool("steering") ?? false }
     }
 }
 
@@ -569,6 +571,8 @@ struct ChatState: Equatable, Sendable {
     var promptImages = false
     var turnStartedAt: String?
     var cancelling = false
+    /// The agent takes a message during a running turn ("Send now").
+    var steering = false
 
     mutating func apply(_ patch: ChatStatePatch) {
         if let value = patch.status { status = value }
@@ -586,6 +590,7 @@ struct ChatState: Equatable, Sendable {
         if let value = patch.promptImages { promptImages = value }
         if let value = patch.turnStartedAt { turnStartedAt = value }
         if let value = patch.cancelling { cancelling = value }
+        if let value = patch.steering { steering = value }
     }
 
     /// Unknown statuses read as `ready`.

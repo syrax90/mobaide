@@ -6,11 +6,15 @@ import { ErrorState } from '../../../components/ErrorState';
 import { Modal } from '../../../components/Modal';
 import { queryKeys } from '../../../lib/queryKeys';
 import type { ChatStoredSession } from '../../../protocol/dto/chatSessions';
+import type { ChatAgentKind } from './buildCreateRequest';
 
 type Scope = 'folder' | 'all';
 
 interface ResumeSessionDialogProps {
   agentId: string;
+  kind: ChatAgentKind;
+  /** Sessions stay in sync with the agent's own apps on the PC (`capabilities.chat.<kind>.live`). */
+  live: boolean;
   /** The selected project's or typed folder's path; `null` offers only All folders. */
   folder: string | null;
   /** The stored session being opened right now. */
@@ -21,12 +25,14 @@ interface ResumeSessionDialogProps {
 }
 
 /**
- * "Continue a session": the Claude Code sessions stored on the PC — also the
- * ones started outside Mobaide — newest first, a page at a time. Picking one
+ * "Continue a session": the agent's sessions stored on the PC — also the ones
+ * started outside Mobaide — newest first, a page at a time. Picking one
  * continues it in a new chat session, or opens the session already showing it.
  */
 export function ResumeSessionDialog({
   agentId,
+  kind,
+  live,
   folder,
   opening,
   error,
@@ -40,9 +46,9 @@ export function ResumeSessionDialog({
   const cwd = scope === 'folder' ? folder : null;
 
   const sessions = useInfiniteQuery({
-    queryKey: queryKeys.chatStoredSessions(agentId, 'claude', cwd),
+    queryKey: queryKeys.chatStoredSessions(agentId, kind, cwd),
     queryFn: ({ pageParam, signal }) =>
-      listChatSessions(agentId, 'claude', { cwd: cwd ?? undefined, cursor: pageParam, signal }),
+      listChatSessions(agentId, kind, { cwd: cwd ?? undefined, cursor: pageParam, signal }),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.next_cursor ?? null,
     staleTime: 0,
@@ -56,7 +62,11 @@ export function ResumeSessionDialog({
   return (
     <Modal labelledBy={titleId} onClose={onClose} dismissible={!busy} className="resume-dialog">
       <h2 id={titleId}>Continue a session</h2>
-      <p className="page-note">If the session is still open in a terminal on your PC, close it there first.</p>
+      <p className="page-note">
+        {live
+          ? 'A session that is open on your PC stays in sync: both sides see every message.'
+          : 'If the session is still open in a terminal on your PC, close it there first.'}
+      </p>
 
       <fieldset className="resume-scope">
         <legend className="visually-hidden">Which folders</legend>

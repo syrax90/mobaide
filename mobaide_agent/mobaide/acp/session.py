@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import collections
 import logging
 import os
 import time
@@ -26,6 +27,7 @@ from mobaide.core.models import SessionConfig, SessionEvent, SessionInfo, Sessio
 
 from . import normalize as nz
 from .agents import ChatLaunchPlan, ConfigIntent
+from .install import INSTALL_POOL, AdapterInstallError
 from .rpc import (
     ERR_AUTH_REQUIRED,
     ERR_METHOD_NOT_FOUND,
@@ -50,6 +52,13 @@ IMAGES_B64_TOTAL_MAX = 3_500_000
 IMAGE_MIMES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
 QUEUE_MAX = 10
 CANCEL_GRACE = 15.0
+# How long closing a session on a shared host waits for its own turn to stop.
+SHARED_CANCEL_WAIT = 3.0
+STEER_TIMEOUT = 30.0
+STEER_METHOD = "_session/steering"
+# Command output of a running tool is re-rendered at most this often.
+CONSOLE_RENDER_INTERVAL = 0.3
+CONSOLE_TOOLS_MAX = 64
 ACP_PROTOCOL_VERSION = 1
 
 CLIENT_CAPABILITIES: dict[str, Any] = {
@@ -84,6 +93,20 @@ class _QueuedPrompt:
     key: str
     text: str
     images: list[dict[str, str]]
+    # A steer request for it is in flight: the queue must not send it too.
+    steering: bool = False
+
+
+@dataclass
+class _Console:
+    """Command output of one tool call (``_meta.terminal_output*``)."""
+
+    output: str = ""
+    exit_code: int | None = None
+    part: dict[str, Any] | None = None
+    render: asyncio.TimerHandle | None = None
+    # The final render ran and ``output`` was released.
+    final: bool = False
 
 
 class ChatCommandError(Exception):
@@ -142,6 +165,12 @@ class ChatSession:
         self._trust_granted = False
         self._pending_config: list[ConfigIntent] = list(plan.initial_config)
         self._initial_prompt: str | None = plan.initial_prompt
+        self._steering = False
+        # A turn another client of a shared host started (see thread_busy).
+        self._external_turn = False
+        # The last busy report that came while the session was opening.
+        self._busy_before_ready = False
+        self._consoles: collections.OrderedDict[str, _Console] = collections.OrderedDict()
 
     @property
     def state(self) -> SessionState:
@@ -210,14 +239,60 @@ class ChatSession:
         )
 
     async def start(self) -> None:
-        """Spawn the agent; the ACP handshake continues in the background."""
-        await self._spawn()
+        """Spawn the agent; the ACP handshake continues in the background.
+
+        An adapter that is not installed yet is installed and spawned in the
+        background too, so its errors show in the chat with Restart.
+        """
+        if self._plan.ensure_argv is None:
+            await self._spawn()
         self._state = SessionState.RUNNING
         self._put_event(SessionEvent("started", self.session_id))
         self._bootstrap_task = asyncio.create_task(
-            self._bootstrap(load_id=self._load_session_id),
+            self._start_agent(load_id=self._load_session_id),
             name=f"chat-bootstrap-{self.session_id}",
         )
+
+    async def _start_agent(self, *, load_id: str | None) -> None:
+        if self._conn is None or not self._conn.alive:
+            if not await self._spawn_with_install():
+                return
+        await self._bootstrap(load_id=load_id)
+
+    async def _spawn_with_install(self) -> bool:
+        ensure = self._plan.ensure_argv
+        if ensure is not None:
+            self._timeline.patch_state(status="starting", error=None, urgent=True)
+            self._timeline.upsert(
+                {
+                    "id": self._next_id("n"),
+                    "type": "notice",
+                    "severity": "info",
+                    "title": f"Setting up the {self._agent_title} chat on your PC",
+                    "text": "This happens once and can take a minute.",
+                }
+            )
+            try:
+                argv = await asyncio.get_running_loop().run_in_executor(INSTALL_POOL, ensure)
+            except AdapterInstallError as exc:
+                self._fail_start(str(exc))
+                return False
+            except Exception as exc:
+                logger.exception("chat.adapter_install_failed session=%s", self.session_id)
+                self._fail_start(f"Could not set up the chat: {exc}")
+                return False
+            self._plan.argv[:] = argv
+            self._plan.ensure_argv = None
+        try:
+            await self._spawn()
+        except OSError as exc:
+            self._fail_start(str(exc) or "The agent could not start")
+            return False
+        if self._stopping:
+            if self._conn is not None:
+                await self._conn.close(grace=0.5)
+            return False
+        return True
 
     async def stop(self, force: bool = False) -> None:
         if self._state in (SessionState.STOPPED, SessionState.STOPPING):
@@ -225,14 +300,19 @@ class ChatSession:
         self._stopping = True
         self._state = SessionState.STOPPING
         self._disarm_cancel_watchdog()
+        if self._plan.shared_host:
+            await self._stop_own_turn()
         for task in (self._bootstrap_task, self._turn_task, *self._command_tasks):
             if task is not None and not task.done():
                 task.cancel()
         self._resolve_all_requests_cancelled()
         conn = self._conn
         if conn is not None:
+            # On a shared host, session/close would also stop a turn that
+            # another app runs: dropping the connection leaves it to them.
             if (
                 not force
+                and not self._plan.shared_host
                 and conn.alive
                 and self._acp_session_id
                 and self._session_cap("close")
@@ -244,10 +324,26 @@ class ChatSession:
                 except Exception:
                     pass
             await conn.close(grace=0.5 if force else CLOSE_TIMEOUT)
+        self._drop_consoles()
         self._timeline.patch_state(status="stopped", urgent=True)
         self._timeline.close()
         self._state = SessionState.STOPPED
         self._put_event(SessionEvent("stopped", self.session_id))
+
+    async def _stop_own_turn(self) -> None:
+        """Cancel the turn this session started and give it a moment to end."""
+        turn, conn = self._turn_task, self._conn
+        if turn is None or turn.done() or conn is None or not conn.alive or not self._acp_session_id:
+            return
+        if not self._prompt_dispatched:
+            self._cancel_before_dispatch = True
+        else:
+            conn.notify("session/cancel", {"sessionId": self._acp_session_id})
+        self._resolve_all_requests_cancelled()
+        try:
+            await asyncio.wait_for(asyncio.shield(turn), SHARED_CANCEL_WAIT)
+        except (TimeoutError, asyncio.CancelledError, Exception):
+            pass
 
     def sync_frame(self, epoch: Any, after_seq: Any) -> bytes:
         """The answer to a client ``sync``: missed events, or a snapshot."""
@@ -274,7 +370,7 @@ class ChatSession:
         if op == "sync":
             self._emit_frame(self.sync_frame(cmd.get("epoch"), cmd.get("after_seq")))
             return
-        if op in ("set_config", "restart"):
+        if op in ("set_config", "restart", "steer"):
             # These wait on the agent; running them aside keeps a later
             # cancel or prompt from queueing behind them.
             task = asyncio.create_task(self._run_command(op, cmd, cmd_id))
@@ -308,6 +404,8 @@ class ChatSession:
             return self._cmd_dequeue(cmd)
         if op == "restart":
             return await self._cmd_restart()
+        if op == "steer":
+            return await self._cmd_steer(cmd)
         raise ChatCommandError(f"Unknown command: {op}")
 
     async def _spawn(self) -> None:
@@ -373,6 +471,9 @@ class ChatSession:
             info: dict[str, Any] = raw_info if isinstance(raw_info, dict) else {}
             raw_prompt_caps = self._agent_caps.get("promptCapabilities")
             prompt_caps: dict[str, Any] = raw_prompt_caps if isinstance(raw_prompt_caps, dict) else {}
+            raw_meta = init.get("_meta")
+            steering = raw_meta.get("steering") if isinstance(raw_meta, dict) else None
+            self._steering = isinstance(steering, dict) and steering.get("supported") is True
             tl.patch_state(
                 agent={
                     "name": str(info.get("name") or ""),
@@ -380,6 +481,7 @@ class ChatSession:
                     "version": str(info.get("version") or ""),
                 },
                 prompt_caps={"image": bool(prompt_caps.get("image"))},
+                steering=self._steering,
             )
             if not await self._ensure_trusted():
                 return
@@ -411,10 +513,15 @@ class ChatSession:
             await self._apply_initial_config(pending)
             self._ready.set()
             tl.patch_state(status="ready", urgent=True)
+            busy_before, self._busy_before_ready = self._busy_before_ready, False
+            if busy_before:
+                self._on_agent_busy(True)
             initial_prompt, self._initial_prompt = self._initial_prompt, None
             if initial_prompt and not load_id:
                 self._queue.insert(0, _QueuedPrompt(self._next_id("q"), initial_prompt, []))
-            if self._queue:
+            if self._external_turn:
+                self._publish_queue()
+            elif self._queue:
                 self._start_next_prompt()
         except asyncio.CancelledError:
             raise
@@ -494,20 +601,31 @@ class ChatSession:
         self._timeline.patch_state(config=options)
 
     async def _apply_initial_config(self, intents: list[ConfigIntent]) -> None:
+        """Apply the wizard's choices. A ``required`` one (a sandbox) that
+        cannot be applied stops the start: the agent's default may allow more."""
         for intent in intents:
             option = self._match_config(intent)
+            refused = f"Could not set the {intent.value} mode, so the session did not start"
             if option is None:
+                if intent.required:
+                    raise AcpProcessError(refused)
                 continue
             if option["type"] == "boolean":
                 if not isinstance(intent.value, bool) or option["value"] == intent.value:
                     continue
             else:
                 allowed = {v["value"] for v in option["options"]}
-                if intent.value not in allowed or option["value"] == intent.value:
+                if intent.value not in allowed:
+                    if intent.required:
+                        raise AcpProcessError(refused)
+                    continue
+                if option["value"] == intent.value:
                     continue
             try:
                 await self._set_config(option, intent.value)
             except (AcpRpcError, TimeoutError) as exc:
+                if intent.required:
+                    raise AcpProcessError(f"{refused}: {exc}") from None
                 logger.info(
                     "chat.initial_config_skipped session=%s option=%s: %s",
                     self.session_id,
@@ -603,7 +721,8 @@ class ChatSession:
     def _enqueue_or_send(self, text: str, images: list[dict[str, str]]) -> str | None:
         busy = (
             not self._ready.is_set()
-            or (self._turn_task is not None and not self._turn_task.done())
+            or self._own_turn_running()
+            or self._external_turn
             or bool(self._queue)
         )
         if not busy:
@@ -614,10 +733,13 @@ class ChatSession:
         key = self._next_id("q")
         self._queue.append(_QueuedPrompt(key, text, images))
         self._publish_queue()
-        if self._ready.is_set() and (self._turn_task is None or self._turn_task.done()):
+        if self._ready.is_set() and not self._own_turn_running() and not self._external_turn:
             self._start_next_prompt()
             return None
         return key
+
+    def _own_turn_running(self) -> bool:
+        return self._turn_task is not None and not self._turn_task.done()
 
     def _publish_queue(self) -> None:
         self._timeline.patch_state(
@@ -626,9 +748,10 @@ class ChatSession:
         )
 
     def _start_next_prompt(self) -> None:
-        if not self._queue:
+        nxt = next((q for q in self._queue if not q.steering), None)
+        if nxt is None:
             return
-        nxt = self._queue.pop(0)
+        self._queue.remove(nxt)
         self._publish_queue()
         self._start_prompt(nxt.text, nxt.images)
 
@@ -642,11 +765,7 @@ class ChatSession:
             "at": _now_iso(),
         }
         self._timeline.upsert(user_item)
-        blocks: list[dict[str, Any]] = []
-        if text:
-            blocks.append({"type": "text", "text": text})
-        for img in images:
-            blocks.append({"type": "image", "mimeType": img["mime"], "data": img["data"]})
+        blocks = _prompt_blocks(text, images)
         self._clear_attention()
         self._timeline.patch_state(
             status="running", turn_started_at=_now_iso(), cancelling=False, urgent=True
@@ -701,7 +820,7 @@ class ChatSession:
                 }
             )
         alive = self._conn is not None and self._conn.alive
-        if self._queue and alive and not self._stopping:
+        if any(not q.steering for q in self._queue) and alive and not self._stopping:
             tl.patch_state(status="ready", turn_started_at=None, cancelling=False)
             self._start_next_prompt()
             return
@@ -715,7 +834,16 @@ class ChatSession:
             self._set_attention("turn_finished")
 
     async def _cmd_cancel(self) -> dict[str, Any]:
-        running = self._turn_task is not None and not self._turn_task.done()
+        running = self._own_turn_running()
+        if not running and self._external_turn:
+            conn = self._conn
+            if conn is None or not conn.alive or not self._acp_session_id:
+                return {"cancelled": False}
+            conn.notify("session/cancel", {"sessionId": self._acp_session_id})
+            self._resolve_all_requests_cancelled()
+            self._timeline.patch_state(cancelling=True, urgent=True)
+            self._arm_external_watchdog()
+            return {"cancelled": True}
         if not running:
             return {"cancelled": False}
         conn = self._conn
@@ -755,6 +883,27 @@ class ChatSession:
         if self._cancel_watchdog is not None:
             self._cancel_watchdog.cancel()
             self._cancel_watchdog = None
+
+    def _arm_external_watchdog(self) -> None:
+        """A turn of another app that never reports its end after Stop (its
+        app-server went away) must not hold this chat in "running"."""
+        if self._cancel_watchdog is not None:
+            return
+        conn = self._conn
+
+        def fire() -> None:
+            self._cancel_watchdog = None
+            if (
+                self._external_turn
+                and not self._stopping
+                and conn is self._conn
+                and conn is not None
+                and conn.alive
+            ):
+                logger.warning("chat.external_cancel_unanswered session=%s", self.session_id)
+                self._on_agent_busy(False)
+
+        self._cancel_watchdog = asyncio.get_running_loop().call_later(CANCEL_GRACE, fire)
 
     async def _cmd_set_config(self, cmd: dict[str, Any]) -> dict[str, Any]:
         config_id = cmd.get("config_id")
@@ -807,12 +956,68 @@ class ChatSession:
 
     def _cmd_dequeue(self, cmd: dict[str, Any]) -> dict[str, Any]:
         key = cmd.get("queue_id")
+        if any(q.key == key and q.steering for q in self._queue):
+            raise ChatCommandError("This message is being sent now")
         before = len(self._queue)
         self._queue = [q for q in self._queue if q.key != key]
         if len(self._queue) == before:
             raise ChatCommandError("This message was already sent")
         self._publish_queue()
         return {}
+
+    async def _cmd_steer(self, cmd: dict[str, Any]) -> dict[str, Any]:
+        """Send a queued message into the running turn now (``_session/steering``)."""
+        key = cmd.get("queue_id")
+        queued = next((q for q in self._queue if q.key == key), None)
+        if queued is None or queued.steering:
+            raise ChatCommandError("This message was already sent")
+        if not self._own_turn_running() and not self._external_turn:
+            # Idle: the queue sends it as the next prompt anyway.
+            if self._ready.is_set():
+                self._start_next_prompt()
+            return {"steered": False}
+        if not self._steering:
+            raise ChatCommandError("This agent cannot take a message during a turn")
+        conn = self._require_conn()
+        queued.steering = True
+        try:
+            result = await conn.request(
+                STEER_METHOD,
+                {
+                    "sessionId": self._acp_session_id,
+                    "prompt": _prompt_blocks(queued.text, queued.images),
+                    "_meta": {"steering": {"idleBehavior": "promptRequired"}},
+                },
+                STEER_TIMEOUT,
+            )
+        except AcpRpcError as exc:
+            raise ChatCommandError(self._describe_rpc_error(exc)) from None
+        except TimeoutError:
+            raise ChatCommandError("The agent did not answer in time") from None
+        finally:
+            queued.steering = False
+        outcome = result.get("outcome") if isinstance(result, dict) else None
+        if outcome == "injected":
+            if queued in self._queue:
+                self._queue.remove(queued)
+                self._publish_queue()
+            self._close_streaming_items()
+            self._timeline.upsert(
+                {
+                    "id": self._next_id("u"),
+                    "type": "user",
+                    "text": queued.text,
+                    "attachments": [{"kind": "image", "mime": img["mime"]} for img in queued.images],
+                    "at": _now_iso(),
+                }
+            )
+            return {"steered": True}
+        # The turn ended meanwhile: the message stays first in the queue.
+        if self._ready.is_set() and not self._own_turn_running() and not self._external_turn:
+            self._start_next_prompt()
+        if outcome == "promptRequired":
+            return {"steered": False}
+        raise ChatCommandError("The agent could not take the message now")
 
     async def _cmd_restart(self) -> dict[str, Any]:
         if self._stopping:
@@ -859,16 +1064,13 @@ class ChatSession:
             # The reload replays the conversation, plan included.
             self._timeline.reset()
             self._close_streaming_items()
+            self._drop_consoles()
             self._timeline.patch_state(plan=[])
         self._timeline.patch_state(status="starting", error=None, requests=[], urgent=True)
-        try:
-            await self._spawn()
-        except OSError as exc:
-            self._fail_start(str(exc))
-            return
-        if self._stopping:
-            if self._conn is not None:
-                await self._conn.close(grace=0.5)
+        self._external_turn = False
+        self._busy_before_ready = False
+        self._disarm_cancel_watchdog()
+        if not await self._spawn_with_install():
             return
         self._exit_reason = None
         self._clear_attention()
@@ -890,6 +1092,10 @@ class ChatSession:
     def _apply_update(self, update: dict[str, Any]) -> None:
         tl = self._timeline
         kind = update.get("sessionUpdate")
+        if kind == "session_info_update":
+            busy = nz.thread_busy(update)
+            if busy is not None:
+                self._on_agent_busy(busy)
         if kind == "agent_message_chunk":
             self._append_message("agent", update)
         elif kind == "agent_thought_chunk":
@@ -947,6 +1153,37 @@ class ChatSession:
                 item = tl.get(f"cmp-{cid}")
                 if item is not None:
                     tl.append_text(item["id"], part["text"])
+
+    def _on_agent_busy(self, busy: bool) -> None:
+        """A turn this session did not start (another client of a shared
+        host): show it as running, and hold queued messages until it ends."""
+        if not self._ready.is_set():
+            # Joining a session while another app's turn runs.
+            self._busy_before_ready = busy
+            return
+        if self._own_turn_running():
+            return
+        tl = self._timeline
+        if busy and not self._external_turn:
+            self._external_turn = True
+            self._close_streaming_items()
+            tl.upsert(
+                {
+                    "id": self._next_id("n"),
+                    "type": "notice",
+                    "severity": "info",
+                    "title": "Message sent from another app on your PC",
+                    "text": "",
+                }
+            )
+            tl.patch_state(status="running", turn_started_at=_now_iso(), cancelling=False, urgent=True)
+        elif not busy and self._external_turn:
+            self._external_turn = False
+            self._disarm_cancel_watchdog()
+            self._close_streaming_items()
+            tl.patch_state(status="ready", turn_started_at=None, cancelling=False, urgent=True)
+            if self._queue:
+                self._start_next_prompt()
 
     def _append_message(self, role: str, update: dict[str, Any]) -> None:
         part = nz.content_block_part(update.get("content"))
@@ -1014,6 +1251,7 @@ class ChatSession:
         if item is None:
             item = nz.new_tool_item(tool_id)
         nz.merge_tool_update(item, update)
+        deferred = self._apply_console(tool_id, item, update)
         self._current_agent_item = self._current_thought_item = self._current_user_item = None
         # A finished tool is sent at once, except in a session/load replay,
         # where one frame per tool would flood the event queue.
@@ -1021,13 +1259,93 @@ class ChatSession:
         urgent = terminal and tl.state.get("status") != "loading"
         if is_new or create:
             tl.upsert(item, urgent=urgent)
-        else:
+        elif not (deferred and update.keys() <= _OUTPUT_ONLY_KEYS):
+            # An output chunk alone changes nothing until its render runs.
             tl.touch(tool_id, urgent=urgent)
         if terminal:
             for pending in list(self._requests.values()):
                 if pending.tool_call_id == tool_id and not pending.future.done():
                     pending.future.set_result(self._cancel_outcome(pending))
                     self._drop_request(pending.key)
+
+    def _apply_console(self, tool_id: str, item: dict[str, Any], update: dict[str, Any]) -> bool:
+        """Turn terminal output (``_meta.terminal_output*``) into a text part.
+
+        A ``terminal`` content part names a client-side terminal, which
+        Mobaide never creates; the output it would show goes into the item.
+        Returns True when the new output waits for a delayed render.
+        """
+        text, replaces, exit_code, exited = nz.terminal_meta(update)
+        console = self._consoles.get(tool_id)
+        if console is None and text is None and not exited:
+            if any(p.get("type") == "terminal" for p in item["content"]):
+                item["content"] = [p for p in item["content"] if p.get("type") != "terminal"]
+            return False
+        if console is None:
+            console = self._consoles[tool_id] = _Console()
+            while len(self._consoles) > CONSOLE_TOOLS_MAX:
+                _, old = self._consoles.popitem(last=False)
+                if old.render is not None:
+                    old.render.cancel()
+        else:
+            self._consoles.move_to_end(tool_id)
+            if console.final and text is None:
+                # Finished: keep the shown output, nothing new to render.
+                self._strip_terminal_parts(item, console)
+                return False
+            console.final = False
+        if text is not None:
+            output = text if replaces else console.output + text
+            console.output = output[-nz.CONSOLE_KEEP_MAX:]
+        if exited:
+            console.exit_code = exit_code
+        finished = exited or item["status"] in nz.TERMINAL_TOOL_STATUSES
+        if finished or text is None:
+            self._render_console(tool_id, item, console, live=not finished)
+            return False
+        if console.render is None:
+            # Re-sending the whole item on every chunk would flood the clients.
+            console.render = asyncio.get_running_loop().call_later(
+                CONSOLE_RENDER_INTERVAL, self._render_console_later, tool_id
+            )
+        else:
+            self._strip_terminal_parts(item, console)
+        return True
+
+    def _render_console_later(self, tool_id: str) -> None:
+        console = self._consoles.get(tool_id)
+        if console is not None:
+            console.render = None
+        item = self._timeline.get(tool_id)
+        if console is None or item is None:
+            return
+        live = item["status"] not in nz.TERMINAL_TOOL_STATUSES and console.exit_code is None
+        self._render_console(tool_id, item, console, live=live)
+        self._timeline.touch(tool_id)
+
+    def _render_console(self, tool_id: str, item: dict[str, Any], console: _Console, *, live: bool) -> None:
+        if console.render is not None and not live:
+            console.render.cancel()
+            console.render = None
+        part = nz.console_part(console.output, live=live, exit_code=console.exit_code)
+        parts = self._strip_terminal_parts(item, console)
+        item["content"] = [*parts[: nz.TOOL_PARTS_MAX - 1], part] if part is not None else parts
+        console.part = part
+        console.final = not live
+        if console.final:
+            # The part holds what is shown; the raw output is no longer needed.
+            console.output = ""
+
+    @staticmethod
+    def _strip_terminal_parts(item: dict[str, Any], console: _Console) -> list[dict[str, Any]]:
+        """Drop ``terminal`` parts; keep the last rendered output at the end
+        until the next render. Returns the parts without that output."""
+        parts = [p for p in item["content"] if p.get("type") != "terminal" and p is not console.part]
+        if console.part is not None:
+            item["content"] = [*parts[: nz.TOOL_PARTS_MAX - 1], console.part]
+        else:
+            item["content"] = parts
+        return parts
 
     def _apply_compaction(self, update: dict[str, Any]) -> None:
         cid = update.get("compactionId")
@@ -1064,6 +1382,12 @@ class ChatSession:
             new_options.append(opt)
         if changed:
             self._timeline.patch_state(config=new_options)
+
+    def _drop_consoles(self) -> None:
+        for console in self._consoles.values():
+            if console.render is not None:
+                console.render.cancel()
+        self._consoles.clear()
 
     def _close_streaming_items(self) -> None:
         self._current_agent_item = None
@@ -1181,6 +1505,8 @@ class ChatSession:
         # A Restart closes the old process itself: that exit is not news.
         if self._stopping or self._restarting:
             return
+        self._external_turn = False
+        self._disarm_cancel_watchdog()
         conn = self._conn
         message = "The agent process exited"
         if self._cancel_forced:
@@ -1262,5 +1588,17 @@ class ChatSession:
         return f"{prefix}:{self._counter}"
 
 
+_OUTPUT_ONLY_KEYS = frozenset({"sessionUpdate", "toolCallId", "_meta"})
+
+
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _prompt_blocks(text: str, images: list[dict[str, str]]) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = []
+    if text:
+        blocks.append({"type": "text", "text": text})
+    for img in images:
+        blocks.append({"type": "image", "mimeType": img["mime"], "data": img["data"]})
+    return blocks

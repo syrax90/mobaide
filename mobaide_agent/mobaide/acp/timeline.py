@@ -47,6 +47,7 @@ def default_state() -> dict[str, Any]:
         "prompt_caps": {"image": False},
         "turn_started_at": None,
         "cancelling": False,
+        "steering": False,
     }
 
 

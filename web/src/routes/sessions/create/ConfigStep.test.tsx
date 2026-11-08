@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ProjectSummary } from '../../../api/projectRepository';
+import { agentVersionSchema, type AgentVersionInfo } from '../../../protocol/dto/agentVersion';
 import { ConfigStep } from './ConfigStep';
 import {
   INITIAL_WIZARD_STATE,
@@ -24,7 +25,12 @@ const STATE: WizardState = {
   selection: { kind: 'stored', name: gitProject.name },
 };
 
-function renderStep(mode: WizardMode, state: WizardState = STATE): WizardAction[] {
+function renderStep(
+  mode: WizardMode,
+  state: WizardState = STATE,
+  capabilities?: AgentVersionInfo,
+  onContinueSession?: () => void,
+): WizardAction[] {
   const actions: WizardAction[] = [];
   render(
     <ConfigStep
@@ -32,7 +38,8 @@ function renderStep(mode: WizardMode, state: WizardState = STATE): WizardAction[
       state={state}
       selection={state.selection}
       project={gitProject}
-      capabilities={undefined}
+      capabilities={capabilities}
+      onContinueSession={onContinueSession}
       customTypes={[]}
       submitting={false}
       error={null}
@@ -139,5 +146,63 @@ describe('ConfigStep — Auto Scan layout', () => {
       flag: 'focusMode',
       value: true,
     });
+  });
+});
+
+function versionWithChat(chat: Record<string, unknown>): AgentVersionInfo {
+  return agentVersionSchema.parse({
+    name: 'mobaide_agent',
+    server_version: '0.3.23',
+    protocol_versions: [6, 7],
+    min_client_version: 6,
+    capabilities: { chat },
+  });
+}
+
+describe('ConfigStep — Codex chat view', () => {
+  const CODEX_RESUMES = versionWithChat({ codex: { resume: true, live: true } });
+
+  it('puts Terminal UI first in the Codex Advanced, off by default', () => {
+    const actions = renderStep('codex');
+
+    const details = advancedSummary().closest('details');
+    expect(details).not.toHaveAttribute('open');
+    const toggle = screen.getByLabelText('Terminal UI');
+    expect(details?.querySelector('input')).toBe(toggle);
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toBeEnabled();
+
+    fireEvent.click(toggle);
+
+    expect(actions).toContainEqual({ type: 'setCodexTerminalUi', value: true });
+  });
+
+  it('holds Terminal UI on where the PC has no Codex chat', () => {
+    renderStep('codex', STATE, versionWithChat({ claude: { resume: true } }));
+
+    const toggle = screen.getByLabelText('Terminal UI');
+    expect(toggle).toBeChecked();
+    expect(toggle).toBeDisabled();
+    expect(screen.getByText('The chat view needs Node.js on your PC.')).toBeInTheDocument();
+  });
+
+  it('offers to continue a Codex session where the PC can resume one', () => {
+    renderStep('codex', STATE, CODEX_RESUMES, () => undefined);
+
+    expect(
+      screen.getByText('Open a Codex session started on your PC, for example in a terminal.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue a session…' })).toBeEnabled();
+  });
+
+  it('offers no Continue entry for a Codex launch in the terminal', () => {
+    renderStep(
+      'codex',
+      { ...STATE, codex: { ...STATE.codex, terminalUi: true } },
+      CODEX_RESUMES,
+      () => undefined,
+    );
+
+    expect(screen.queryByText('Continue a session…')).not.toBeInTheDocument();
   });
 });

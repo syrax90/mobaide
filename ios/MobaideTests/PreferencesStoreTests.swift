@@ -55,6 +55,16 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertNil(store.getLastUsedClaudeOptions())
     }
 
+    func testCodexTerminalUIRoundTripsAndAnOlderBlobReadsAsOff() {
+        store.setLastUsedCodexOptions(CodexLaunchPrefs(terminalUI: true))
+        XCTAssertEqual(store.getLastUsedCodexOptions()?.terminalUI, true)
+
+        defaults.set(#"{"sandbox":"read-only","fullAuto":true}"#, forKey: PreferencesStore.keyLastUsedCodexOptions)
+        let older = store.getLastUsedCodexOptions()
+        XCTAssertEqual(older?.sandbox, "read-only")
+        XCTAssertEqual(older?.terminalUI, false)
+    }
+
     func testClaudeLaunchPrefsRoundTripSkipPermissionsAndNoMemory() {
         store.setLastUsedClaudeOptions(ClaudeLaunchPrefs(skipPermissions: true, noMemory: true))
         let saved = store.getLastUsedClaudeOptions()

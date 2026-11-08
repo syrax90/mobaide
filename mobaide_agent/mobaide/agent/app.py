@@ -63,6 +63,7 @@ from .install_paths import (
     default_prefix,
     manifest_url_from_relay_server_url,
     read_trust_public_key,
+    state_prefix,
 )
 from .logging import bind_request_context, clear_request_context, get_logger
 from .logging_setup import configure_logging, shutdown_logging
@@ -792,7 +793,11 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     app.state.chat_agents = build_chat_agents(
         app.state.cli_launchers,
         test_mode=config.is_test_mode,
-        command_overrides={"claude": config.acp_claude_command},
+        command_overrides={
+            "claude": config.acp_claude_command,
+            "codex": config.acp_codex_command,
+        },
+        adapters_dir=state_prefix(test_mode=config.is_test_mode) / "acp-adapters",
     )
     app.state.chat_catalog = ChatCatalog(app.state.chat_agents)
 

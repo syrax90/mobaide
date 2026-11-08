@@ -120,6 +120,7 @@ describe('applyLaunchPrefs', () => {
         approval: 'never',
         fullAuto: true,
         reasoningEffort: null,
+        terminalUi: true,
       },
     });
 
@@ -129,6 +130,7 @@ describe('applyLaunchPrefs', () => {
       approval: 'never',
       fullAuto: true,
       reasoningEffort: null,
+      terminalUi: true,
     });
   });
 
@@ -185,6 +187,12 @@ describe('launchPrefsFromState', () => {
       kind: 'antigravity',
       prefs: { model: 'Gemini 3.5 Flash (High)', skipPermissions: true, sandbox: false },
     });
+  });
+
+  it('remembers the Codex Terminal UI choice', () => {
+    const terminal: WizardState = { ...dialled, codex: { ...dialled.codex, terminalUi: true } };
+
+    expect(launchPrefsFromState(terminal, 'codex')?.prefs).toMatchObject({ terminalUi: true });
   });
 
   it('leaves the per-session fields out of the snapshot', () => {

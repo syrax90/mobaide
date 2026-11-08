@@ -113,6 +113,7 @@ class ChatViewModel @Inject constructor(
         data class Config(val configId: String) : PendingCommand
         data class Respond(val requestId: String) : PendingCommand
         data class Simple(val failure: String?) : PendingCommand
+        data class Queue(val queueId: String, val failure: String?) : PendingCommand
         data object Restart : PendingCommand
     }
 
@@ -270,6 +271,7 @@ class ChatViewModel @Inject constructor(
                 answering = emptyMap(),
                 config = ui.state.config,
                 restarting = false,
+                queueBusy = emptySet(),
             )
         }
     }
@@ -330,6 +332,7 @@ class ChatViewModel @Inject constructor(
             }
         }
         val requestIds = state.requests.mapTo(HashSet()) { it.id }
+        val queueIds = state.queue.mapTo(HashSet()) { it.id }
         _ui.update { ui ->
             ui.copy(
                 loaded = true,
@@ -341,6 +344,7 @@ class ChatViewModel @Inject constructor(
                 requestErrors = ui.requestErrors.filterKeys { it in requestIds },
                 formDrafts = ui.formDrafts.filterKeys { it in requestIds },
                 restarting = ui.restarting && state.status == ChatStatus.ERROR,
+                queueBusy = ui.queueBusy.filterTo(HashSet()) { it in queueIds },
             )
         }
     }
@@ -391,6 +395,14 @@ class ChatViewModel @Inject constructor(
             is PendingCommand.Simple -> if (!result.ok && command.failure != null) {
                 reviewPromptCoordinator.noteError()
                 _messages.trySend(result.error ?: command.failure)
+            }
+            is PendingCommand.Queue -> {
+                _ui.update { it.copy(queueBusy = it.queueBusy - command.queueId) }
+                // A double tap, or a turn that just ended, makes this harmless.
+                if (!result.ok && command.failure != null && result.error != ALREADY_SENT) {
+                    reviewPromptCoordinator.noteError()
+                    _messages.trySend(result.error ?: command.failure)
+                }
             }
             PendingCommand.Restart -> {
                 _ui.update { it.copy(restarting = false) }
@@ -469,9 +481,24 @@ class ChatViewModel @Inject constructor(
         _ui.update { it.copy(restarting = true) }
     }
 
-    fun dequeue(queueId: String) {
-        if (!_ui.value.live) return
-        sendSimple(failure = null) { id -> ChatProtocol.dequeue(id, queueId) }
+    fun dequeue(queueId: String) = sendQueueCommand(queueId, "Could not remove the message") { id ->
+        ChatProtocol.dequeue(id, queueId)
+    }
+
+    fun steer(queueId: String) = sendQueueCommand(queueId, "Could not send the message now") { id ->
+        ChatProtocol.steer(id, queueId)
+    }
+
+    private fun sendQueueCommand(queueId: String, failure: String?, build: (String) -> JsonObject) {
+        val ui = _ui.value
+        if (!ui.live || queueId in ui.queueBusy) return
+        val id = nextCommandId()
+        if (!send(build(id))) {
+            if (failure != null) _messages.trySend("Not connected. Try again.")
+            return
+        }
+        pending[id] = PendingCommand.Queue(queueId, failure)
+        _ui.update { it.copy(queueBusy = it.queueBusy + queueId) }
     }
 
     private fun sendSimple(failure: String?, build: (String) -> JsonObject) {
@@ -723,6 +750,7 @@ class ChatViewModel @Inject constructor(
         const val FORM_DECLINE = "decline"
         const val FORM_CANCEL = "cancel"
         private const val ALREADY_ANSWERED = "This request was already answered"
+        private const val ALREADY_SENT = "This message was already sent"
         private const val PROMPT_TEXT_MAX = 100_000
         private const val IMAGES_TOTAL_MAX = 3_500_000
         private const val BACKGROUND_PAUSE_MS = 30_000L

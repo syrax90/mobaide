@@ -15,13 +15,14 @@ For the short overview, see the [README](../README.md). The wire contract itself
 
 ## Chat Sessions
 
-Claude Code sessions open in a **chat view** by default: messages, tool calls, diffs, plans, permission prompts and questions are native UI on Android, iOS and the web, instead of a terminal.
+Claude Code and Codex sessions open in a **chat view** by default: messages, tool calls, diffs, plans, permission prompts and questions are native UI on Android, iOS and the web, instead of a terminal.
 
-- **How it works.** The agent runs the coding agent over the [Agent Client Protocol](https://agentclientprotocol.com) (ACP) and streams a structured timeline. For Claude Code it uses the ACP adapter `@agentclientprotocol/claude-agent-acp`, which drives the PC's own `claude` binary, so login, settings and CLI version are the same as in a terminal session.
+- **How it works.** The agent runs the coding agent over the [Agent Client Protocol](https://agentclientprotocol.com) (ACP) and streams a structured timeline. Claude Code uses the ACP adapter `@agentclientprotocol/claude-agent-acp`, which drives the PC's own `claude` binary. Codex uses `@agentclientprotocol/codex-acp`, which drives the PC's own `codex app-server` (`CODEX_PATH`). Login, settings and CLI version are the same as in a terminal session.
 - **Agent-agnostic.** The chat UI renders only ACP concepts (messages, tool kinds, config options, slash commands). Another ACP agent needs only a launch spec in `mobaide_agent/mobaide/acp/agents.py`.
-- **Requirements on the PC.** `claude-agent-acp` on PATH, or Node.js 22+ for `npx`. Otherwise the wizard shows why and creates a terminal session. `MOBAIDE_ACP_CLAUDE_COMMAND` in the agent's env file overrides the command.
-- **Adapter safety.** The `npx` adapter runs with `--ignore-scripts`, in the PC's home folder.
-- **Folder trust.** Before a chat session opens a folder Claude Code has not trusted, the chat asks **Trust this folder?**. Trust is recorded in `~/.claude.json`, like the CLI. For the home folder, a folder above it, or a root, trust lasts for this session only. Parent folders count only up to the enclosing git repo root. Declining ends the start; Restart offers the choice again.
+- **Requirements on the PC.** Node.js 22+, or an adapter command on PATH. Otherwise the wizard shows why and creates a terminal session. `MOBAIDE_ACP_CLAUDE_COMMAND` and `MOBAIDE_ACP_CODEX_COMMAND` in the agent's env file override the adapter commands.
+- **Adapter install.** The agent installs each adapter once, at a pinned version, into `<state prefix>/acp-adapters/`. It uses `npm install --ignore-scripts --omit=optional --before=<release date>` and runs the adapter with `node`, not `npx`. The first chat shows "Setting up the ... chat on your PC". Uninstalling the agent removes `acp-adapters`.
+- **Codex modes.** Read-only maps to the read-only mode. Auto (workspace-write) maps to Workspace access, and a person approves anything outside it. Full access maps to full access only with `full_auto`, or `danger-full-access` with approval `never`. The mode is required: if the agent cannot apply it, the session does not start.
+- **Folder trust.** Before a chat session opens a folder Claude Code has not trusted, the chat asks **Trust this folder?**. Trust is recorded in `~/.claude.json`, like the CLI. For Codex, the chat reads and writes `[projects."<dir>"] trust_level` in `$CODEX_HOME/config.toml`, with the same lookup order as Codex, including linked worktrees. For the home folder, a folder above it, or a root, trust lasts for this session only. Parent folders count only up to the enclosing git repo root. Declining ends the start; Restart offers the choice again.
 
 ### What the chat view offers
 
@@ -29,16 +30,19 @@ Claude Code sessions open in a **chat view** by default: messages, tool calls, d
 |---|---|
 | Timeline | Markdown answers, collapsible thinking, one compact card per tool call (icon by kind, status, `+N −M` for edits; tap for the diff, output and input). |
 | Approvals | Permission prompts and multiple-choice questions appear as a card above the composer, with the agent's own options. The first answer from any device wins. |
-| Composer | Slash-command suggestions, image attachments (when the agent accepts images), voice input, prompt templates. Messages sent while the agent works are queued and can be removed. |
+| Composer | Slash-command suggestions, image attachments (when the agent accepts images), voice input, prompt templates. Messages sent while the agent works are queued. You can remove one, or tap **Send now** to steer the agent with it. |
 | Controls | Stop, and chips for the mode, model, effort and other agent options. Context usage and cost in the top bar. Plan progress above the composer. |
+| Command output | Command output shows as a console block, with a live tail while the command runs. |
 | Sync | Every open device shows the same state; a reconnect fetches only what it missed. |
 
-The terminal's control-key bar and custom keyboard shortcuts are not part of the chat view: they send raw terminal bytes. Stop and the mode chip replace Esc / Ctrl+C and Shift+Tab.
+The terminal's control-key bar and custom keyboard shortcut buttons are not part of the chat view: they send raw terminal bytes. Templates and slash commands work in the chat view. Stop and the mode chip replace Esc / Ctrl+C and Shift+Tab.
 
 ### Terminal UI and continuing sessions
 
-- **Terminal UI.** The Claude Code page of the new-session wizard has a **Terminal UI** toggle under Advanced, off by default. On, the session runs in the classic terminal (needed for TUI-only features such as Rewind). Focus view and Debug logging apply only to terminal sessions.
-- **Continue a session.** The same page offers **Continue a session**: a list of the Claude Code sessions stored on the PC, for this folder or all folders, including sessions started outside Mobaide (for example by running `claude` in a terminal). Picking one opens it in the chat view with its history. Close it in the other terminal first: two writers on one session interleave.
+- **Terminal UI.** The Claude Code and Codex pages of the new-session wizard has a **Terminal UI** toggle under Advanced, off by default and remembered. On, the session runs in the classic terminal (needed for TUI-only features such as Rewind). Focus view and Debug logging apply only to terminal sessions.
+- **Continue a session.** The same pages offer **Continue a session**: a list of the Claude Code or Codex sessions stored on the PC, for this folder or all folders, including sessions started outside Mobaide (for example by running `claude` in a terminal). Picking one opens it in the chat view with its history.
+- **Live Codex sessions.** When the Codex shared app-server runs (the daemon that `codex` in a terminal starts), chat sessions join it through `mobaide/acp/codex_bridge.py`. A session open in a terminal and on the phone stay in sync both ways. This works on macOS and Linux, not on Windows, and not for projects with a conda env. A message typed in another app shows as **Message sent from another app on your PC**, followed by its answer. The adapter does not forward the text of that message. Closing the chat cancels only its own turn.
+- **Claude Code sessions.** There is no live attach. Close the session in the other terminal first: two writers on one session interleave.
 
 The wire details are in [PROTOCOL.md](../PROTOCOL.md).
 
@@ -192,9 +196,9 @@ A one-time, dismissible explainer sits above the sessions list on all three clie
 
 > **Sessions started outside Mobaide won't appear here**
 >
-> Mobaide lists only sessions its own agent started. To continue a Claude Code session from your PC, start a new Claude Code session and choose Continue a session.
+> Mobaide lists only sessions its own agent started. To continue a Claude Code or Codex session from your PC, start a new session and choose Continue a session.
 
-The list itself never shows outside sessions: the agent's `SessionManager` owns every session it lists. Claude Code sessions started elsewhere can be continued in the chat view through [Continue a session](#terminal-ui-and-continuing-sessions); there is no live attach to a running TUI.
+The list itself never shows outside sessions: the agent's `SessionManager` owns every session it lists. Sessions started elsewhere can be continued in the chat view through [Continue a session](#terminal-ui-and-continuing-sessions). Codex sessions can also join the live shared app-server; Claude Code has no live attach to a running TUI.
 
 Dismissal is permanent and device-local (Android DataStore, iOS `UserDefaults`, web `localStorage`), and it survives app restart and sign-out.
 

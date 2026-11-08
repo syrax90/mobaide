@@ -228,6 +228,11 @@ export class ChatSessionModel {
     return this.command({ op: 'dequeue', queue_id: queueId });
   }
 
+  /** Send a queued message into the running turn now. */
+  steer(queueId: string): Promise<ChatResult> {
+    return this.command({ op: 'steer', queue_id: queueId });
+  }
+
   answerPermission(requestId: string, optionId: string): Promise<ChatResult> {
     return this.command({ op: 'respond', request_id: requestId, option_id: optionId });
   }

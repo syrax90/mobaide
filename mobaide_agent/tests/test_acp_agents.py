@@ -1,29 +1,38 @@
-"""Tests for the ACP launch specs: which command starts the Claude chat
-adapter, the create-session options as ACP config intents, the launch plan
-and the ``capabilities.chat`` map."""
+"""Tests for the ACP launch specs: which command starts the Claude and Codex
+chat adapters (including the pinned install on first use), the
+create-session options as ACP config intents, the launch plan (Codex's shared
+app-server included) and the ``capabilities.chat`` map."""
 from __future__ import annotations
 
 import json
 import os
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from mobaide.acp import agents
+from mobaide.acp import agents, codex_bridge
 from mobaide.acp.agents import (
-    CLAUDE_ACP_PACKAGE,
     ChatAgentUnavailableError,
     ClaudeChatSpec,
+    CodexChatSpec,
     ConfigIntent,
     build_chat_agents,
     build_chat_capabilities,
     claude_config_intents,
+    codex_config_intents,
+    codex_mode,
 )
+from mobaide.acp.install import INSTALLED_MARKER
+from mobaide.acp.trust import CodexFolderTrust
 from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError, ClaudeOptions
 from mobaide.core.cli_launcher import AdHocLaunch, LaunchSpec
+from mobaide.core.codex_launcher import CodexBinaryNotFoundError, CodexOptions
+from mobaide.core.projects_config import ProjectConfig
 from tests.conftest import skip_if_not_linux
+from tests.test_acp_install import fake_npm
 
 
 class FakeLauncher:
@@ -51,9 +60,36 @@ class FakeLauncher:
         )
 
 
+class FakeCodexLauncher:
+    """The two ``CodexLauncher`` calls a chat spec makes."""
+
+    def __init__(
+        self, binary: str | None = "/opt/codex/bin/codex", env: dict[str, str] | None = None
+    ) -> None:
+        self.binary = binary
+        self.env = env or {}
+
+    def resolve_binary(self) -> str:
+        if self.binary is None:
+            raise CodexBinaryNotFoundError(["/nowhere/codex"])
+        return self.binary
+
+    async def build(self, target, options, session_id=None) -> LaunchSpec:
+        cwd = target.path if isinstance(target, ProjectConfig) else target.cwd
+        return LaunchSpec(
+            argv=["codex"], cwd=cwd, env={"PATH": "/usr/bin", "LAUNCHER": "1", **self.env}
+        )
+
+
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    for name in (agents.CLAUDE_ACP_COMMAND_ENV, agents.REAL_IN_TEST_ENV, "CLAUDE_CODE_EXECUTABLE"):
+    for name in (
+        agents.CLAUDE_ACP_COMMAND_ENV,
+        agents.CODEX_ACP_COMMAND_ENV,
+        agents.REAL_IN_TEST_ENV,
+        "CLAUDE_CODE_EXECUTABLE",
+        "CODEX_PATH",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -73,6 +109,37 @@ def _install(directory: Path, name: str) -> str:
     path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
     return str(path)
+
+
+def _installed_adapter(root: Path, adapter) -> Path:
+    """A complete pinned install of ``adapter`` under ``root``; returns its entry."""
+    base = root / adapter.folder_name
+    package = base.joinpath("node_modules", *adapter.package.split("/"))
+    (package / "dist").mkdir(parents=True)
+    entry = package / "dist" / "index.js"
+    entry.write_text("// adapter\n", encoding="utf-8")
+    (package / "package.json").write_text(
+        json.dumps({"bin": {adapter.bin_name: "dist/index.js"}}), encoding="utf-8"
+    )
+    (base / INSTALLED_MARKER).write_text(adapter.version, encoding="utf-8")
+    return entry.resolve()
+
+
+@pytest.fixture(autouse=True)
+def _no_shared_codex(monkeypatch):
+    """No Codex app-server answers unless a test says so (never the host's)."""
+    monkeypatch.setattr(codex_bridge, "socket_reachable", lambda _path, timeout=1.0: False)
+
+
+def _socket_answers(monkeypatch) -> list[str]:
+    probed: list[str] = []
+
+    def reachable(path: str, timeout: float = 1.0) -> bool:
+        probed.append(path)
+        return True
+
+    monkeypatch.setattr(codex_bridge, "socket_reachable", reachable)
+    return probed
 
 
 class TestCommandResolution:
@@ -106,23 +173,46 @@ class TestCommandResolution:
         assert spec.command() == [adapter]
 
     @skip_if_not_linux
-    def test_adapter_on_path_is_preferred_over_npx(self, bin_dir):
+    def test_adapter_on_path_is_preferred_over_the_pinned_install(self, bin_dir, tmp_path):
         adapter = _install(bin_dir, agents.CLAUDE_ACP_BIN)
-        _install(bin_dir, "npx")
-        spec = ClaudeChatSpec(FakeLauncher())
+        _install(bin_dir, "node")
+        adapters = tmp_path / "adapters"
+        _installed_adapter(adapters, agents.CLAUDE_ADAPTER)
+        spec = ClaudeChatSpec(FakeLauncher(), adapters_dir=adapters)
 
         assert spec.command() == [adapter]
 
     @skip_if_not_linux
-    def test_npx_runs_the_pinned_package_without_install_scripts(self, bin_dir):
-        npx = _install(bin_dir, "npx")
-        spec = ClaudeChatSpec(FakeLauncher())
+    def test_the_pinned_install_runs_with_node_not_npx(self, bin_dir, tmp_path):
+        node = _install(bin_dir, "node")
+        _install(bin_dir, "npx")
+        adapters = tmp_path / "adapters"
+        entry = _installed_adapter(adapters, agents.CLAUDE_ADAPTER)
+        spec = ClaudeChatSpec(FakeLauncher(), adapters_dir=adapters)
 
-        assert spec.command() == [npx, "--yes", "--ignore-scripts", CLAUDE_ACP_PACKAGE]
+        assert spec.command() == [node, str(entry)]
         assert spec.available() is True
 
-    def test_nothing_installed_means_unavailable(self, bin_dir):
-        spec = ClaudeChatSpec(FakeLauncher())
+    @skip_if_not_linux
+    def test_node_and_npm_without_an_install_mean_install_on_first_use(self, bin_dir, tmp_path):
+        _install(bin_dir, "node")
+        _install(bin_dir, "npm")
+        spec = ClaudeChatSpec(FakeLauncher(), adapters_dir=tmp_path / "adapters")
+
+        assert spec.command() is None
+        assert spec.available() is True
+
+    @skip_if_not_linux
+    @pytest.mark.parametrize(
+        ("tools", "with_adapters_dir"),
+        [((), True), (("npx",), True), (("node",), True), (("node", "npm"), False)],
+        ids=["nothing", "npx-only", "node-without-npm", "no-adapters-dir"],
+    )
+    def test_unavailable(self, bin_dir, tmp_path, tools, with_adapters_dir):
+        for tool in tools:
+            _install(bin_dir, tool)
+        adapters = tmp_path / "adapters" if with_adapters_dir else None
+        spec = ClaudeChatSpec(FakeLauncher(), adapters_dir=adapters)
 
         assert spec.command() is None
         assert spec.available() is False
@@ -134,7 +224,7 @@ class TestCommandResolution:
         spec = ClaudeChatSpec(FakeLauncher())
         assert spec.available() is False
 
-        _install(bin_dir, "npx")
+        _install(bin_dir, agents.CLAUDE_ACP_BIN)
         now[0] += agents.AVAILABILITY_TTL - 1
         assert spec.available() is False
 
@@ -268,9 +358,10 @@ class TestClaudeConfigIntents:
 
 
 class _StubSpec:
-    def __init__(self, available, resume=True):
+    def __init__(self, available, resume=True, live=False):
         self._available = available
         self.supports_resume = resume
+        self.live_sessions = live
 
     def available(self):
         if isinstance(self._available, Exception):
@@ -286,18 +377,262 @@ class TestCapabilitiesAndRegistry:
                 "codex": _StubSpec(False),
                 "broken": _StubSpec(RuntimeError("probe failed")),
                 "other": _StubSpec(True, resume=False),
+                "live": _StubSpec(True, live=True),
             }
         )
-        assert caps == {"claude": {"resume": True}, "other": {"resume": False}}
+        assert caps == {
+            "claude": {"resume": True, "live": False},
+            "other": {"resume": False, "live": False},
+            "live": {"resume": True, "live": True},
+        }
 
-    def test_registry_has_claude_only_with_a_claude_launcher(self):
-        assert build_chat_agents({"codex": object()}) == {}
+    def test_registry_has_a_spec_per_chat_capable_launcher(self):
+        assert build_chat_agents({"antigravity": object()}) == {}
 
         specs = build_chat_agents(
-            {"claude": FakeLauncher()},
+            {"claude": FakeLauncher(), "codex": FakeCodexLauncher(), "antigravity": object()},
             test_mode=True,
-            command_overrides={"claude": "custom --acp"},
+            command_overrides={"claude": "custom --acp", "codex": "codex-adapter --x"},
         )
 
-        assert list(specs) == ["claude"]
+        assert list(specs) == ["claude", "codex"]
         assert specs["claude"].command() == ["custom", "--acp"]
+        assert specs["codex"].command() == ["codex-adapter", "--x"]
+
+    def test_codex_capability_in_test_mode_is_not_live(self, bin_dir):
+        specs = build_chat_agents({"codex": FakeCodexLauncher()}, test_mode=True)
+
+        assert build_chat_capabilities(specs) == {"codex": {"resume": True, "live": False}}
+
+
+class TestPinnedInstallOnFirstUse:
+    @skip_if_not_linux
+    async def test_prepare_leaves_the_install_to_the_session(self, bin_dir, tmp_path):
+        node = _install(bin_dir, "node")
+        fake_npm(bin_dir)
+        adapters = tmp_path / "adapters"
+        launcher = FakeCodexLauncher(
+            env={"FAKE_NPM_LOG": str(tmp_path / "npm.log"), "FAKE_NPM_BIN_NAME": "codex-acp"}
+        )
+        spec = CodexChatSpec(launcher, adapters_dir=adapters)
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), CodexOptions())
+
+        assert plan.argv == []
+        assert plan.ensure_argv is not None
+        assert not adapters.exists()
+
+        argv = plan.ensure_argv()
+
+        entry = adapters / "codex-acp-2.5.0" / "node_modules" / "@agentclientprotocol" / "codex-acp"
+        assert argv == [node, str((entry / "dist" / "index.js").resolve())]
+        # The next session starts at once.
+        assert spec.command() == argv
+
+    @skip_if_not_linux
+    async def test_an_installed_adapter_needs_no_install_step(self, bin_dir, tmp_path):
+        node = _install(bin_dir, "node")
+        adapters = tmp_path / "adapters"
+        entry = _installed_adapter(adapters, agents.CODEX_ADAPTER)
+        spec = CodexChatSpec(FakeCodexLauncher(), adapters_dir=adapters)
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), CodexOptions())
+
+        assert plan.argv == [node, str(entry)]
+        assert plan.ensure_argv is None
+
+
+class TestCodexConfigIntents:
+    @pytest.mark.parametrize(
+        ("options", "mode"),
+        [
+            (CodexOptions(full_auto=True, sandbox="read-only"), "agent-full-access"),
+            (CodexOptions(sandbox="danger-full-access", approval="never"), "agent-full-access"),
+            (CodexOptions(sandbox="danger-full-access", approval="on-request"), "workspace-write"),
+            (CodexOptions(sandbox="read-only", approval="never"), "read-only"),
+            (CodexOptions(sandbox="workspace-write", approval="never"), "workspace-write"),
+            (CodexOptions(sandbox="workspace-write", approval="on-request"), "workspace-write"),
+            (CodexOptions(sandbox="workspace-write", approval="untrusted"), "workspace-write"),
+        ],
+        ids=[
+            "full-auto-wins",
+            "danger-never-ask",
+            "danger-still-asks",
+            "read-only",
+            "never-ask-in-workspace",
+            "on-request",
+            "untrusted",
+        ],
+    )
+    def test_sandbox_and_approval_pick_the_mode(self, options, mode):
+        assert codex_mode(options) == mode
+
+    def test_model_and_reasoning_effort(self):
+        intents = codex_config_intents(
+            CodexOptions(model="gpt-5.6-terra", approval="on-request", reasoning_effort="xhigh")
+        )
+
+        assert intents == [
+            ConfigIntent("workspace-write", category="mode", required=True),
+            ConfigIntent("gpt-5.6-terra", category="model"),
+            ConfigIntent("xhigh", category="thought_level"),
+        ]
+
+    def test_only_the_mode_without_model_or_effort(self):
+        intents = codex_config_intents(CodexOptions(reasoning_effort=None))
+
+        assert intents == [ConfigIntent("workspace-write", category="mode", required=True)]
+
+
+class TestCodexPrepare:
+    async def test_plan_runs_the_host_codex_with_the_mapped_options(
+        self, bin_dir, tmp_path, monkeypatch
+    ):
+        project = tmp_path / "project"
+        project.mkdir()
+        codex_home = tmp_path / "codex-home"
+        codex_home.mkdir()
+        (codex_home / "config.toml").write_text(
+            f'[projects.{json.dumps(os.path.realpath(project))}]\ntrust_level = "trusted"\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "host-codex-home"))
+        launcher = FakeCodexLauncher(env={"CODEX_HOME": str(codex_home)})
+        spec = CodexChatSpec(launcher, command_override="adapter")
+        options = CodexOptions(
+            model="gpt-5.6-terra",
+            sandbox="read-only",
+            approval="on-request",
+            reasoning_effort="low",
+            initial_prompt="Run the tests",
+        )
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(project)), options)
+
+        assert plan.argv == ["adapter"]
+        assert plan.cwd == str(project)
+        assert plan.process_cwd == os.path.expanduser("~")
+        assert plan.env["LAUNCHER"] == "1"
+        assert plan.env["CODEX_PATH"] == "/opt/codex/bin/codex"
+        assert plan.env["PATH"].split(os.pathsep)[0] == "/opt/codex/bin"
+        assert plan.initial_config == [
+            ConfigIntent("read-only", category="mode", required=True),
+            ConfigIntent("gpt-5.6-terra", category="model"),
+            ConfigIntent("low", category="thought_level"),
+        ]
+        assert plan.initial_prompt == "Run the tests"
+        assert plan.shared_host is False
+        assert isinstance(plan.trust, CodexFolderTrust)
+        assert plan.trust.is_trusted() is True
+
+    async def test_missing_codex_binary_leaves_the_adapter_default(self, bin_dir, tmp_path, monkeypatch):
+        _socket_answers(monkeypatch)
+        spec = CodexChatSpec(
+            FakeCodexLauncher(binary=None),
+            command_override="adapter",
+            adapters_dir=tmp_path / "adapters",
+        )
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), CodexOptions())
+
+        assert "CODEX_PATH" not in plan.env
+        assert plan.shared_host is False
+
+    async def test_host_codex_path_is_kept_and_never_shared(self, bin_dir, tmp_path, monkeypatch):
+        monkeypatch.setenv("CODEX_PATH", "/custom/codex")
+        probed = _socket_answers(monkeypatch)
+        spec = CodexChatSpec(
+            FakeCodexLauncher(), command_override="adapter", adapters_dir=tmp_path / "adapters"
+        )
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), CodexOptions())
+
+        assert "CODEX_PATH" not in plan.env
+        assert plan.shared_host is False
+        assert probed == []
+
+    @skip_if_not_linux
+    async def test_a_running_shared_app_server_is_joined_through_the_bridge(
+        self, bin_dir, tmp_path, monkeypatch
+    ):
+        codex = tmp_path / "codex-bin" / "codex"
+        codex.parent.mkdir()
+        codex.write_text('#!/bin/sh\necho "real codex $*"\n', encoding="utf-8")
+        codex.chmod(0o755)
+        codex_home = tmp_path / "codex-home"
+        probed = _socket_answers(monkeypatch)
+        adapters = tmp_path / "adapters"
+        launcher = FakeCodexLauncher(binary=str(codex), env={"CODEX_HOME": str(codex_home)})
+        spec = CodexChatSpec(launcher, command_override="adapter", adapters_dir=adapters)
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), CodexOptions())
+        again = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), CodexOptions())
+
+        assert plan.shared_host is True
+        assert probed[0] == os.path.join(
+            codex_home, "app-server-control", "app-server-control.sock"
+        )
+        wrapper = Path(plan.env["CODEX_PATH"])
+        assert wrapper.parent == adapters
+        assert again.env["CODEX_PATH"] == str(wrapper)
+        assert os.listdir(adapters) == [wrapper.name]
+
+        def run(*args: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [str(wrapper), *args],
+                env={"PATH": "/usr/bin:/bin", "CODEX_HOME": str(codex_home)},
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+        assert run("login", "status").stdout == "real codex login status\n"
+        # Nothing listens in this test, so the bridge runs a private app-server.
+        assert run("app-server").stdout == "real codex app-server\n"
+
+    @pytest.mark.parametrize("case", ["conda-project", "no-adapters-dir", "fake-agent"])
+    async def test_a_private_app_server_where_sharing_does_not_apply(
+        self, bin_dir, tmp_path, monkeypatch, case
+    ):
+        _socket_answers(monkeypatch)
+        adapters = tmp_path / "adapters"
+        target = AdHocLaunch(cwd=str(tmp_path))
+        if case == "conda-project":
+            target = ProjectConfig(name="ml", path=str(tmp_path), conda_env="ml")
+        spec = CodexChatSpec(
+            FakeCodexLauncher(),
+            command_override=None if case == "fake-agent" else "adapter",
+            test_mode=case == "fake-agent",
+            adapters_dir=None if case == "no-adapters-dir" else adapters,
+        )
+
+        plan = await spec.prepare(target, CodexOptions())
+
+        assert plan.shared_host is False
+        assert plan.env["CODEX_PATH"] == "/opt/codex/bin/codex"
+        assert not adapters.exists()
+
+    async def test_fake_agent_is_the_codex_flavor_without_a_trust_gate(self, bin_dir, tmp_path):
+        spec = CodexChatSpec(FakeCodexLauncher(), test_mode=True)
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), CodexOptions())
+
+        assert plan.argv[-2:] == ["--flavor", "codex"]
+        assert os.path.basename(plan.argv[1]) == "fake_agent.py"
+        assert plan.trust is None
+        assert spec.live_sessions is False
+
+    def test_a_real_adapter_keeps_sessions_live_on_posix(self, bin_dir):
+        spec = CodexChatSpec(FakeCodexLauncher(), command_override="adapter")
+
+        assert spec.live_sessions is (sys.platform != "win32")
+
+    async def test_catalog_plan_runs_in_home_with_the_host_codex(self, bin_dir):
+        spec = CodexChatSpec(FakeCodexLauncher(), command_override="adapter")
+
+        plan = await spec.catalog_plan()
+
+        assert plan.argv == ["adapter"]
+        assert plan.cwd == os.path.expanduser("~")
+        assert plan.env["CODEX_PATH"] == "/opt/codex/bin/codex"
+        assert plan.initial_config == []

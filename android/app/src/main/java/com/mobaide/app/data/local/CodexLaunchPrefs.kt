@@ -16,4 +16,6 @@ data class CodexLaunchPrefs(
     val approval: String = "on-request",
     val fullAuto: Boolean = false,
     val reasoningEffort: String = "high",
+    // The classic terminal instead of the chat view. Older blobs decode to off.
+    val terminalUi: Boolean = false,
 )

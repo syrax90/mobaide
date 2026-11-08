@@ -1,6 +1,7 @@
+import { CheckboxField } from '../../../../components/form/CheckboxField';
 import { SelectField } from '../../../../components/form/SelectField';
 import { CODEX_APPROVALS, CODEX_SANDBOXES } from '../../../../protocol/dto/sessionCreate';
-import type { CliModelDetail } from '../../../../protocol/dto/agentVersion';
+import type { ChatSupport, CliModelDetail } from '../../../../protocol/dto/agentVersion';
 import {
   CODEX_MODELS,
   codexEffortsFor,
@@ -11,6 +12,7 @@ import {
   type CodexSandbox,
   type WizardAction,
 } from '../wizardState';
+import { terminalUiHint } from './ClaudeAdvancedPanel';
 import { modelOptions } from './ClaudeOptionsPanel';
 
 interface CodexOptionsPanelProps {
@@ -18,6 +20,8 @@ interface CodexOptionsPanelProps {
   models: readonly string[] | null;
   modelDetails: readonly CliModelDetail[] | null;
   dispatch: (action: WizardAction) => void;
+  /** Shows the Terminal UI toggle, gated on this PC's chat support for Codex. */
+  chat?: ChatSupport;
 }
 
 const PRESETS: readonly { preset: CodexPreset; label: string; description: string }[] = [
@@ -43,8 +47,10 @@ export function CodexOptionsPanel({
   models,
   modelDetails,
   dispatch,
+  chat,
 }: CodexOptionsPanelProps) {
   const active = codexPreset(bucket);
+  const chatBlocked = chat?.kind === 'outdated' || chat?.kind === 'unavailable';
   const efforts = codexEffortsFor(modelDetails, bucket.model);
   // Same keep-selected repair as `modelOptions`: a restored or late-probe
   // effort outside the advertised set must stay renderable, or the controlled
@@ -105,8 +111,19 @@ export function CodexOptionsPanel({
         }}
       />
 
-      <details className="advanced">
+      <details className="advanced advanced-stack">
         <summary>Advanced</summary>
+        {chat !== undefined && (
+          <CheckboxField
+            label="Terminal UI"
+            checked={bucket.terminalUi || chatBlocked}
+            disabled={chatBlocked}
+            hint={terminalUiHint(chat)}
+            onChange={(value) => {
+              dispatch({ type: 'setCodexTerminalUi', value });
+            }}
+          />
+        )}
         <SelectField
           label="Sandbox"
           value={bucket.sandbox}

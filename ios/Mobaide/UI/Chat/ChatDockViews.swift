@@ -148,6 +148,20 @@ struct ChatQueueList: View {
                         PixelLoadingBlock(width: 7, height: 12)
                             .frame(width: 44, height: 44)
                     } else {
+                        if model.canSteer {
+                            Button {
+                                model.steer(queued)
+                            } label: {
+                                Image(systemName: "arrow.up")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(colors.accent)
+                                    .frame(width: 44, height: 44)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!model.isLive)
+                            .accessibilityLabel("Send now")
+                        }
                         Button {
                             model.dequeue(queued)
                         } label: {

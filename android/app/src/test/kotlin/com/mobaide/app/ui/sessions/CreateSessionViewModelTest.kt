@@ -8,6 +8,7 @@ import com.mobaide.app.data.local.CodexLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.RestApi
+import com.mobaide.app.data.network.dto.ChatStoredSession
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CliModelDetail
 import com.mobaide.app.data.network.dto.CodexLoginResponse
@@ -33,6 +34,7 @@ import io.mockk.slot
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -3942,5 +3944,202 @@ class CreateSessionViewModelTest {
         gate.complete(SessionResponse("sess-gated", "starting", "2026-07-30T00:00:00Z"))
         advanceUntilIdle()
         coVerify(exactly = 1) { fx.sessionRepo.createSession(any()) }
+    }
+
+    private fun chatVersion(chat: String): VersionInfoResponse = VersionInfoResponse(
+        name = "mobaide_agent",
+        server_version = "0.3.23",
+        protocol_versions = listOf(7),
+        min_client_version = 6,
+        capabilities = Json.parseToJsonElement(
+            """{"cli":{"codex":{"available":true}},"chat":$chat}""",
+        ).jsonObject,
+    )
+
+    private fun TestScope.codexSubmit(
+        fx: Fixture,
+        setUp: (CreateSessionViewModel) -> Unit = {},
+    ): Pair<CreateSessionRequest, CodexLaunchPrefs> {
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-codex-chat", "starting", "2026-11-08T00:00:00Z")
+        val prefsSlot = slot<CodexLaunchPrefs>()
+        coEvery { fx.prefs.setLastUsedCodexOptions(capture(prefsSlot)) } just Runs
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCodexMode()
+        setUp(vm)
+        vm.submitCodex()
+        advanceUntilIdle()
+        return requestSlot.captured to prefsSlot.captured
+    }
+
+    @Test
+    fun submitCodex_byDefault_opensTheChatView() = runTest {
+        val (request, saved) = codexSubmit(newFixture())
+
+        assertEquals(SessionResponse.UI_CHAT, request.ui)
+        assertFalse(saved.terminalUi)
+    }
+
+    @Test
+    fun submitCodex_withTerminalUi_opensTheTerminal_andRemembersTheChoice() = runTest {
+        val (request, saved) = codexSubmit(newFixture()) { it.toggleCodexTerminalUi(true) }
+
+        assertEquals(SessionResponse.UI_TERMINAL, request.ui)
+        assertTrue(saved.terminalUi)
+    }
+
+    @Test
+    fun submitCodex_whereThePcHasNoCodexChat_opensTheTerminal() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns chatVersion("""{"claude":{"resume":true}}""")
+
+        val (request, _) = codexSubmit(fx) { vm ->
+            vm.refreshCliAvailability()
+            advanceUntilIdle()
+            assertEquals("The chat view needs Node.js on your PC.", vm.uiState.value.codexChatUnavailableHint)
+            assertFalse(vm.uiState.value.codexResumeAvailable)
+        }
+
+        assertEquals(SessionResponse.UI_TERMINAL, request.ui)
+    }
+
+    @Test
+    fun codexResume_isOffered_onlyForTheChatView() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            chatVersion("""{"codex":{"resume":true,"live":true}}""")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.codexResumeAvailable)
+        assertNull(vm.uiState.value.codexChatUnavailableHint)
+
+        vm.toggleCodexTerminalUi(true)
+
+        assertFalse(vm.uiState.value.codexResumeAvailable)
+    }
+
+    @Test
+    fun init_restoresTheCodexTerminalUiChoice() = runTest {
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedCodexOptions() } returns CodexLaunchPrefs(terminalUi = true)
+
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.codexTerminalUi)
+    }
+
+    @Test
+    fun resumeChatSession_codex_sendsTheCodexOptionsWithoutAWorktree() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-resumed", "starting", "2026-11-08T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCodexMode()
+        vm.selectCodexPreset(CodexAutonomyPreset.ReadOnly)
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+        vm.resumeChatSession("codex", ChatStoredSession(session_id = "external-2222", cwd = "/p/alpha/"))
+        advanceUntilIdle()
+
+        val request = requestSlot.captured
+        assertEquals("codex", request.cli)
+        assertEquals("alpha", request.project_name)
+        assertNull(request.cwd)
+        assertEquals(SessionResponse.UI_CHAT, request.ui)
+        assertEquals("external-2222", request.chat_resume_id)
+        assertNull(request.claude_options)
+        val options = request.codex_options
+        assertNotNull(options)
+        assertEquals("read-only", options!!.sandbox)
+        assertFalse(options.worktree)
+        assertNull(options.branch_name)
+    }
+
+    @Test
+    fun resumeChatSession_codex_inAnotherFolder_sendsThatFolder() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-resumed", "starting", "2026-11-08T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCodexMode()
+        vm.resumeChatSession("codex", ChatStoredSession(session_id = "external-1111", cwd = "/srv/other"))
+        advanceUntilIdle()
+
+        assertNull(requestSlot.captured.project_name)
+        assertEquals("/srv/other", requestSlot.captured.cwd)
+        assertEquals("codex", requestSlot.captured.cli)
+    }
+
+    /** A Codex resume whose create needs a Codex sign-in first; returns every create sent. */
+    private fun TestScope.codexResumeNeedingSignIn(fx: Fixture, vm: CreateSessionViewModel): List<CreateSessionRequest> {
+        val requests = mutableListOf<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requests)) } throws
+            ApiException(409, """{"detail":{"codex_auth_required":true}}""") andThen
+            SessionResponse("sess-resumed", "starting", "2026-11-08T00:00:00Z")
+        coEvery { fx.sessionRepo.codexLogin("sk-user-key") } returns CodexLoginResponse(authenticated = true)
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCodexMode()
+        vm.resumeChatSession("codex", ChatStoredSession(session_id = "external-2222", cwd = "/srv/other"))
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.codexLoginVisible)
+        return requests
+    }
+
+    @Test
+    fun submitCodexLogin_afterACodexResumeNeededIt_resendsThatSameResume() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requests = codexResumeNeedingSignIn(fx, vm)
+
+        vm.setCodexApiKeyDraft("sk-user-key")
+        vm.submitCodexLogin()
+        advanceUntilIdle()
+
+        assertEquals(2, requests.size)
+        assertEquals(requests[0], requests[1])
+        assertEquals("external-2222", requests[1].chat_resume_id)
+        assertEquals("/srv/other", requests[1].cwd)
+        assertFalse(vm.uiState.value.codexLoginVisible)
+    }
+
+    @Test
+    fun dismissCodexLogin_forgetsThePendingResume_soALaterLoginStartsANewSession() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requests = codexResumeNeedingSignIn(fx, vm)
+
+        vm.dismissCodexLogin()
+        vm.setCodexApiKeyDraft("sk-user-key")
+        vm.submitCodexLogin()
+        advanceUntilIdle()
+
+        assertEquals(2, requests.size)
+        assertNull(requests[1].chat_resume_id)
+        assertEquals("alpha", requests[1].project_name)
+        assertEquals("codex", requests[1].cli)
     }
 }

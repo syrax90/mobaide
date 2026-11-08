@@ -200,6 +200,10 @@ data class CreateSessionUiState(
     val codexApproval: String = "on-request",
     val codexFullAuto: Boolean = false,
     val codexReasoningEffort: String = "high",
+    // Codex: start the classic terminal instead of the chat view.
+    val codexTerminalUi: Boolean = false,
+    // capabilities.chat for Codex from the ModePick probe; null = not probed yet.
+    val codexChat: ChatSupport? = null,
     // Antigravity launch options (AntigravityConfig step). The two booleans are
     // mutually exclusive (server rejects the pair with a 422); the setters
     // enforce it. addDirsDraft is the raw text of the additional-directories
@@ -278,23 +282,33 @@ fun CreateSessionUiState.codexEffortsFor(model: String?): List<String> =
         ?: CreateSessionViewModel.REASONING_EFFORTS
 
 /**
- * Whether a Claude Code session starts in the chat view: the Terminal UI toggle
- * is off and the PC is not known to lack chat support (unknown = the agent decides).
+ * Whether a session starts in the chat view: the Terminal UI toggle is off and
+ * the PC is not known to lack chat support (unknown = the agent decides).
  */
-val CreateSessionUiState.claudeUsesChat: Boolean
-    get() = !claudeTerminalUi && (claudeChat == null || claudeChat is ChatSupport.Available)
+private fun usesChat(terminalUi: Boolean, chat: ChatSupport?): Boolean =
+    !terminalUi && (chat == null || chat is ChatSupport.Available)
 
-/** Why the Terminal UI toggle is locked on, or null while the chat view is possible. */
-val CreateSessionUiState.claudeChatUnavailableHint: String?
-    get() = when (claudeChat) {
-        ChatSupport.AgentOutdated -> "Update Mobaide on your PC to use the chat view."
-        ChatSupport.Unavailable -> "The chat view needs Node.js on your PC."
-        else -> null
-    }
+/** Why a Terminal UI toggle is locked on, or null while the chat view is possible. */
+fun chatUnavailableHint(chat: ChatSupport?): String? = when (chat) {
+    ChatSupport.AgentOutdated -> "Update Mobaide on your PC to use the chat view."
+    ChatSupport.Unavailable -> "The chat view needs Node.js on your PC."
+    else -> null
+}
+
+val CreateSessionUiState.claudeUsesChat: Boolean get() = usesChat(claudeTerminalUi, claudeChat)
+
+val CreateSessionUiState.claudeChatUnavailableHint: String? get() = chatUnavailableHint(claudeChat)
 
 /** "Continue a session" is offered: chat view, and the agent can list stored sessions. */
 val CreateSessionUiState.claudeResumeAvailable: Boolean
     get() = claudeUsesChat && (claudeChat as? ChatSupport.Available)?.resume == true
+
+val CreateSessionUiState.codexUsesChat: Boolean get() = usesChat(codexTerminalUi, codexChat)
+
+val CreateSessionUiState.codexChatUnavailableHint: String? get() = chatUnavailableHint(codexChat)
+
+val CreateSessionUiState.codexResumeAvailable: Boolean
+    get() = codexUsesChat && (codexChat as? ChatSupport.Available)?.resume == true
 
 /** The folder "This folder" lists: the selected project's path, or the custom path. */
 val CreateSessionUiState.selectedFolder: String?
@@ -339,6 +353,7 @@ private fun CreateSessionUiState.toCodexLaunchPrefs() = CodexLaunchPrefs(
     approval = codexApproval,
     fullAuto = codexFullAuto,
     reasoningEffort = codexReasoningEffort,
+    terminalUi = codexTerminalUi,
 )
 
 /** Snapshot of the Antigravity launch controls for persistence / re-defaulting. */
@@ -454,6 +469,7 @@ class CreateSessionViewModel @Inject constructor(
                         codexSandbox = saved.sandbox,
                         codexApproval = saved.approval,
                         codexFullAuto = saved.fullAuto,
+                        codexTerminalUi = saved.terminalUi,
                         // The DataStore read races the ModePick capability
                         // probe: when the probe already resolved, its
                         // reconcile ran before this restore landed, so the
@@ -839,6 +855,7 @@ class CreateSessionViewModel @Inject constructor(
                     it.copy(
                         claudeAvailable = version.cliAvailable("claude"),
                         claudeChat = version.chatSupport("claude"),
+                        codexChat = version.chatSupport("codex"),
                         codexAvailable = version.cliAvailable("codex"),
                         antigravityAvailable = version.cliAvailable("antigravity"),
                         codexModels = version.cliModels("codex"),
@@ -1035,6 +1052,8 @@ class CreateSessionViewModel @Inject constructor(
     fun toggleSkipPermissions(v: Boolean) = _uiState.update { it.copy(skipPermissions = v) }
     fun toggleFocusMode(v: Boolean) = _uiState.update { it.copy(focusMode = v) }
     fun toggleTerminalUi(v: Boolean) = _uiState.update { it.copy(claudeTerminalUi = v) }
+
+    fun toggleCodexTerminalUi(v: Boolean) = _uiState.update { it.copy(codexTerminalUi = v) }
     fun setClaudeModel(v: String?) = _uiState.update {
         // Clamp the effort if the new model doesn't support the current level
         // (e.g. xhigh/max → high when switching to haiku, the only capped model).
@@ -1191,40 +1210,56 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     /**
-     * Continue a stored Claude Code session in a new chat session: the current
-     * Claude options without a worktree, in the selected project when its folder
-     * is the row's folder, otherwise in the row's folder itself.
+     * Continue a stored Claude Code or Codex session ([kind]) in a new chat
+     * session: the agent's current options without a worktree, in the selected
+     * project when its folder is the row's folder, otherwise in the row's folder.
      */
-    fun resumeChatSession(row: ChatStoredSession) {
+    fun resumeChatSession(kind: String, row: ChatStoredSession) {
         val state = _uiState.value
         if (state.submitting) return
         val project = (state.selection as? ProjectSelection.Stored)?.let { sel ->
             state.projects.firstOrNull { it.name == sel.name }
         }?.takeIf { samePath(it.path, row.cwd) }
-        val options = ClaudeOptionsModel(
-            no_memory = state.noMemory,
-            skip_permissions = state.skipPermissions,
-            model = state.claudeModel,
-            effort = state.claudeEffort,
-            fast_mode = state.claudeFastMode,
-            ultracode = state.claudeUltracode,
-            debug = state.claudeDebug,
-            focus_mode = state.focusMode,
-            append_system_prompt = state.claudeAppendSystemPrompt.takeIf { it.isNotBlank() },
-            worktree = false,
+        val base = CreateSessionRequest(
+            project_name = project?.name,
+            cwd = if (project == null) row.cwd else null,
+            ui = SessionResponse.UI_CHAT,
+            chat_resume_id = row.session_id,
         )
+        val request = if (kind == "codex") {
+            base.copy(cli = "codex", codex_options = state.codexOptions(worktree = false, branchName = null))
+        } else {
+            base.copy(
+                cli = "claude",
+                claude_options = ClaudeOptionsModel(
+                    no_memory = state.noMemory,
+                    skip_permissions = state.skipPermissions,
+                    model = state.claudeModel,
+                    effort = state.claudeEffort,
+                    fast_mode = state.claudeFastMode,
+                    ultracode = state.claudeUltracode,
+                    debug = state.claudeDebug,
+                    focus_mode = state.focusMode,
+                    append_system_prompt = state.claudeAppendSystemPrompt.takeIf { it.isNotBlank() },
+                    worktree = false,
+                ),
+            )
+        }
         submitSession(
             selection = if (project != null) ProjectSelection.Stored(project.name) else ProjectSelection.None,
-            request = CreateSessionRequest(
-                project_name = project?.name,
-                cwd = if (project == null) row.cwd else null,
-                cli = "claude",
-                claude_options = options,
-                ui = SessionResponse.UI_CHAT,
-                chat_resume_id = row.session_id,
-            ),
+            request = request,
         )
     }
+
+    private fun CreateSessionUiState.codexOptions(worktree: Boolean, branchName: String?) = CodexOptionsModel(
+        model = codexModel?.takeIf { it.isNotBlank() },
+        sandbox = codexSandbox,
+        approval = codexApproval,
+        reasoning_effort = codexReasoningEffort,
+        full_auto = codexFullAuto,
+        worktree = worktree,
+        branch_name = branchName,
+    )
 
     private fun samePath(a: String, b: String): Boolean =
         a.trimEnd('/', '\\') == b.trimEnd('/', '\\')
@@ -1232,15 +1267,11 @@ class CreateSessionViewModel @Inject constructor(
     fun submitCodex() {
         val state = _uiState.value
         if (state.submitting) return
-        val codexOptions = CodexOptionsModel(
-            model = state.codexModel?.takeIf { it.isNotBlank() },
-            sandbox = state.codexSandbox,
-            approval = state.codexApproval,
-            reasoning_effort = state.codexReasoningEffort,
-            full_auto = state.codexFullAuto,
+        val codexOptions = state.codexOptions(
             worktree = state.worktree,
-            branch_name = state.branchName.takeIf { it.isNotBlank() },
+            branchName = state.branchName.takeIf { it.isNotBlank() },
         )
+        val ui = if (state.codexUsesChat) SessionResponse.UI_CHAT else SessionResponse.UI_TERMINAL
         when (val sel = state.selection) {
             is ProjectSelection.Stored -> submitSession(
                 selection = sel,
@@ -1248,6 +1279,7 @@ class CreateSessionViewModel @Inject constructor(
                     project_name = sel.name,
                     cli = "codex",
                     codex_options = codexOptions,
+                    ui = ui,
                 ),
             )
             is ProjectSelection.CustomPath -> {
@@ -1259,6 +1291,7 @@ class CreateSessionViewModel @Inject constructor(
                         cwd = sel.path,
                         cli = "codex",
                         codex_options = codexOptions.copy(worktree = false, branch_name = null),
+                        ui = ui,
                     ),
                 )
             }
@@ -1311,14 +1344,17 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     /** Closes the Codex login dialog and wipes the typed key from memory. */
-    fun dismissCodexLogin() = _uiState.update {
-        it.copy(
-            codexLoginVisible = false,
-            codexApiKeyDraft = "",
-            codexApiKeyVisible = false,
-            codexLoginSubmitting = false,
-            codexLoginError = null,
-        )
+    fun dismissCodexLogin() {
+        pendingCodexResume = null
+        _uiState.update {
+            it.copy(
+                codexLoginVisible = false,
+                codexApiKeyDraft = "",
+                codexApiKeyVisible = false,
+                codexLoginSubmitting = false,
+                codexLoginError = null,
+            )
+        }
     }
 
     /**
@@ -1343,7 +1379,10 @@ class CreateSessionViewModel @Inject constructor(
                         codexLoginError = null,
                     )
                 }
-                submitCodex()
+                // A "Continue a session" retries that same request, not a new session.
+                val resume = pendingCodexResume
+                pendingCodexResume = null
+                if (resume != null) submitSession(resume.first, resume.second) else submitCodex()
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(codexLoginSubmitting = false, codexLoginError = codexLoginErrorMessage(e))
@@ -1527,6 +1566,9 @@ class CreateSessionViewModel @Inject constructor(
         }
     }
 
+    /** The Codex resume that hit `codex_auth_required`, re-sent after the sign-in. */
+    private var pendingCodexResume: Pair<ProjectSelection, CreateSessionRequest>? = null
+
     private fun submitSession(selection: ProjectSelection, request: CreateSessionRequest) {
         viewModelScope.launch {
             _uiState.update { it.copy(submitting = true) }
@@ -1568,6 +1610,7 @@ class CreateSessionViewModel @Inject constructor(
                     // marker drives this (not the status code) — the server sends
                     // 409, not 401, so the AuthInterceptor's refresh-retry on 401
                     // can't swallow the marker before we read it.
+                    pendingCodexResume = (selection to request).takeIf { request.chat_resume_id != null }
                     _uiState.update {
                         it.copy(submitting = false, codexLoginVisible = true, codexLoginError = null)
                     }

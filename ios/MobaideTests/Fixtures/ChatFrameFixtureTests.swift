@@ -56,6 +56,7 @@ final class ChatFrameFixtureTests: XCTestCase {
             "respond_form_decline": { .respondForm(id: $0, requestId: "r:12", action: "decline", values: nil) },
             "dequeue": { .dequeue(id: $0, queueId: "q:14") },
             "restart": { .restart(id: $0) },
+            "steer": { .steer(id: $0, queueId: "q:14") },
         ]
     }
 
@@ -183,6 +184,7 @@ final class ChatFrameFixtureTests: XCTestCase {
         XCTAssertEqual(state.queue.map(\.id), ["q:14"])
         XCTAssertEqual(state.queue.map(\.text), ["Also update the README"])
         XCTAssertTrue(state.promptImages)
+        XCTAssertTrue(state.steering)
     }
 
     func testEventsBatchAppliesOnTopOfTheSnapshot() throws {

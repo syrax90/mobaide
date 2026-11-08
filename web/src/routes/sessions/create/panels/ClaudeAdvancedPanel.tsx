@@ -11,7 +11,8 @@ interface ClaudeAdvancedPanelProps {
   chat?: ChatSupport;
 }
 
-function terminalUiHint(chat: ChatSupport): string {
+/** The hint under a "Terminal UI" toggle. */
+export function terminalUiHint(chat: ChatSupport): string {
   if (chat.kind === 'outdated') return 'Update Mobaide on your PC to use the chat view.';
   if (chat.kind === 'unavailable') return 'The chat view needs Node.js on your PC.';
   return 'Use the classic terminal instead of the chat view.';

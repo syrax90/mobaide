@@ -308,7 +308,11 @@ class TestChatRest:
         resp = await client.get("/api/version", headers=auth_headers)
 
         assert resp.status_code == 200
-        assert resp.json()["capabilities"]["chat"] == {"claude": {"resume": True}}
+        # The fake agent never joins a shared Codex app-server: not live.
+        assert resp.json()["capabilities"]["chat"] == {
+            "claude": {"resume": True, "live": False},
+            "codex": {"resume": True, "live": False},
+        }
 
     async def test_create_chat_session(self, client, auth_headers, tmp_path):
         resp = await client.post("/api/sessions", headers=auth_headers, json=_chat_body(tmp_path))
@@ -341,7 +345,10 @@ class TestChatRest:
     @pytest.mark.parametrize(
         ("body", "detail"),
         [
-            ({"cli": "codex", "ui": "chat"}, "The chat view is not available for codex sessions"),
+            (
+                {"cli": "antigravity", "ui": "chat"},
+                "The chat view is not available for antigravity sessions",
+            ),
             ({"cli": "claude", "chat_resume_id": "abc"}, "chat_resume_id needs ui=chat"),
         ],
         ids=["no-chat-agent", "resume-needs-chat"],
@@ -357,13 +364,52 @@ class TestChatRest:
     @pytest.mark.parametrize(
         ("url", "status"),
         [
-            ("/api/chat/codex/sessions", 404),
+            ("/api/chat/antigravity/sessions", 404),
             ("/api/chat/claude/sessions?cwd=relative", 400),
         ],
     )
     async def test_list_refusals(self, client, auth_headers, url, status):
         resp = await client.get(url, headers=auth_headers)
         assert resp.status_code == status
+
+    async def test_codex_chat_session_and_its_stored_sessions(self, client, auth_headers, tmp_path):
+        body = {
+            "cli": "codex",
+            "ui": "chat",
+            "cwd": str(tmp_path),
+            "codex_options": {"sandbox": "workspace-write", "approval": "on-request"},
+        }
+
+        created = await client.post("/api/sessions", headers=auth_headers, json=body)
+        listed = await client.get(f"/api/chat/codex/sessions?cwd={tmp_path}", headers=auth_headers)
+
+        assert created.status_code == 201
+        assert created.json()["ui"] == "chat"
+        assert listed.status_code == 200
+        assert [r["title"] for r in listed.json()["sessions"]] == [
+            "Add retries to the sync job",
+            "Explain the cache layer",
+        ]
+
+    async def test_codex_resume_reuses_the_open_session(self, client, auth_headers, tmp_path):
+        body = {
+            "cli": "codex",
+            "ui": "chat",
+            "cwd": str(tmp_path),
+            "codex_options": {},
+            "chat_resume_id": "external-2222",
+        }
+
+        opened = await client.post("/api/sessions", headers=auth_headers, json=body)
+        again = await client.post("/api/sessions", headers=auth_headers, json=body)
+        rows = await client.get(f"/api/chat/codex/sessions?cwd={tmp_path}", headers=auth_headers)
+
+        session_id = opened.json()["session_id"]
+        assert again.json()["session_id"] == session_id
+        assert {r["session_id"]: r["open_session_id"] for r in rows.json()["sessions"]} == {
+            "external-1111": None,
+            "external-2222": session_id,
+        }
 
     async def test_list_needs_auth(self, client):
         resp = await client.get("/api/chat/claude/sessions")

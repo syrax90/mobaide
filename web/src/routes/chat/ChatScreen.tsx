@@ -302,7 +302,12 @@ function ChatView({ model, session, headerLabel }: ChatViewProps) {
           <div className="chat-column chat-dock-column">
             <RequestDock model={model} requests={state.requests} live={live} />
             <PlanBar plan={state.plan} />
-            <QueueList model={model} queue={state.queue} live={live} />
+            <QueueList
+              model={model}
+              queue={state.queue}
+              live={live}
+              canSteer={state.steering && state.status === 'running'}
+            />
             <ConfigChips
               model={model}
               config={state.config}

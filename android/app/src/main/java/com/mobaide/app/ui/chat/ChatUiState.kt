@@ -51,6 +51,8 @@ data class ChatUiState(
     val imagesLoading: Boolean = false,
     /** A `restart` this client sent has no result yet. */
     val restarting: Boolean = false,
+    /** Queued messages with a remove or a Send now in flight. */
+    val queueBusy: Set<String> = emptySet(),
 ) {
     val status: String get() = if (sessionClosed) ChatStatus.STOPPED else state.status
 
