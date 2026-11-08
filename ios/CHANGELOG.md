@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.19](https://github.com/syrax90/mobaide/compare/ios-v1.0.18...ios-v1.0.19) (2026-11-08)
+
+
+### Features
+
+* **agent,web,android,ios,server:** AI cleanup of dictated text ([#835](https://github.com/syrax90/mobaide/issues/835)) ([596856d](https://github.com/syrax90/mobaide/commit/596856d50924c51145047a58f6e2f97e3d3a2306))
+* **git:** allow checkout while sessions use the project folder ([#828](https://github.com/syrax90/mobaide/issues/828)) ([b9311a6](https://github.com/syrax90/mobaide/commit/b9311a6d8bd1eb266856f4b5999b0809fc2b77a1))
+
 ## [1.0.18](https://github.com/syrax90/claude_mobile/compare/ios-v1.0.17...ios-v1.0.18) (2026-11-05)
 
 
