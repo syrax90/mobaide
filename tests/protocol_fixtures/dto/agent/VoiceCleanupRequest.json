@@ -4,7 +4,22 @@
     {
       "name": "transcript_as_heard",
       "wire": {
-        "text": "um so rename use session model to uh use the shared hook"
+        "text": "um so rename use session model to uh use the shared hook",
+        "kind": "claude"
+      }
+    },
+    {
+      "name": "codex_session",
+      "wire": {
+        "text": "uh run the tests dash dash watch",
+        "kind": "codex"
+      }
+    },
+    {
+      "name": "antigravity_session",
+      "wire": {
+        "text": "um fix the reduce her in the store",
+        "kind": "antigravity"
       }
     }
   ]

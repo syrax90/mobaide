@@ -121,7 +121,7 @@ async def voice_dictation_delete(dictation_id: str, request: Request) -> Respons
 @router.post("/cleanup", response_model=VoiceCleanupResponse)
 async def voice_cleanup(body: VoiceCleanupRequest, request: Request) -> VoiceCleanupResponse:
     try:
-        return await _service(request).cleanup_transcript(body.text)
+        return await _service(request).cleanup_transcript(body.text, body.kind)
     except VoiceError as exc:
         _raise_mapped(exc)
 

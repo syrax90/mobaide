@@ -100,8 +100,12 @@ class VoiceRepository(
         }
     }
 
-    /** The session's AI agent cleans up [text] on the connected agent's computer (within 20 s). */
-    suspend fun cleanup(text: String): String = voiceCall { restApi.cleanupVoiceTranscript(text).text }
+    /**
+     * The CLI of session kind [kind] (a wire name) cleans up [text] on the
+     * connected agent's computer (within 20 s).
+     */
+    suspend fun cleanup(text: String, kind: String): String =
+        voiceCall { restApi.cleanupVoiceTranscript(text, kind).text }
 
     /** The dictation routes of the connected agent, for the uploader. */
     fun dictationApi(sessionId: String?): VoiceApi = object : VoiceApi {

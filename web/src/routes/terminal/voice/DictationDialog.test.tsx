@@ -48,6 +48,7 @@ const dialog = (
     canSend?: boolean;
     skipReview?: boolean;
     cleanupAvailable?: boolean;
+    sessionKind?: string;
     cleanUp?: boolean;
   } = {},
 ) => (
@@ -85,6 +86,7 @@ const dialog = (
       calls.skip.push(skip);
     }}
     cleanupAvailable={options.cleanupAvailable ?? false}
+    sessionKind={options.sessionKind ?? 'claude'}
     cleanUp={options.cleanUp ?? false}
     onCleanUpChange={(on) => {
       calls.cleanUp.push(on);
@@ -382,6 +384,21 @@ describe('DictationDialog cleanup', () => {
     expect(screen.getByText('Details')).toBeInTheDocument();
     expect(screen.getByText('error: unknown option')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Show original' })).toBeNull();
+  });
+
+  it('names the session\'s own AI agent in the reason', () => {
+    const calls = newCalls();
+    const failed: DictationState = {
+      kind: 'result',
+      text: 'um fix the bug',
+      cleanupError: { code: VOICE_CODE.cleanupOutdated, message: null },
+    };
+
+    const { rerender } = render(dialog(calls, failed, true, { sessionKind: 'codex' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Codex on laptop is too old. Run "codex update" there.');
+
+    rerender(dialog(calls, failed, true, { sessionKind: 'antigravity' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Antigravity on laptop is too old. Run "agy update" there.');
   });
 
   it('leaves Details out of a failure the agent never explained', () => {

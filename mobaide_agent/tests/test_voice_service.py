@@ -33,7 +33,7 @@ from mobaide.voice.catalog import (
     CatalogFile,
     RuntimeTarget,
 )
-from mobaide.voice.cleanup import TranscriptCleaner
+from mobaide.voice.cleanup import ClaudeCleanup, CodexCleanup, TranscriptCleaner
 from mobaide.voice.download import DownloadError, FakeFetcher
 from mobaide.voice.errors import VoiceError
 from mobaide.voice.helper import TranscribeResult
@@ -1154,7 +1154,7 @@ class TestCleanup:
     def make_cleaner(self, tmp_path):
         def make(claude: _Claude) -> TranscriptCleaner:
             return TranscriptCleaner(
-                resolve_binary=lambda: str(tmp_path / "bin" / "claude"),
+                clis={"claude": ClaudeCleanup(lambda: str(tmp_path / "bin" / "claude"))},
                 work_dir=tmp_path / "voice-cleanup",
                 run=claude,
             )
@@ -1174,6 +1174,29 @@ class TestCleanup:
 
         assert response == VoiceCleanupResponse(text="Hello there.")
         assert service.status().state == "not_installed"
+
+    async def test_the_session_kind_reaches_the_cleaner(self, make_service, tmp_path):
+        argvs: list[list[str]] = []
+
+        def codex(argv, **_kwargs) -> CmdResult:
+            argvs.append(list(argv))
+            item = {"type": "item.completed", "item": {"type": "agent_message", "text": "Hi."}}
+            done = {"type": "turn.completed"}
+            return CmdResult(rc=0, stdout=f"{json.dumps(item)}\n{json.dumps(done)}".encode(), stderr=b"")
+
+        async def signed_in(_binary, _env) -> bool:
+            return True
+
+        cleaner = TranscriptCleaner(
+            clis={"codex": CodexCleanup(lambda: "codex", lambda: None, auth_present=signed_in)},
+            work_dir=tmp_path / "voice-cleanup",
+            run=codex,
+        )
+
+        response = await make_service(cleaner=cleaner).cleanup_transcript("um hi", "codex")
+
+        assert response == VoiceCleanupResponse(text="Hi.")
+        assert argvs[0][:2] == ["codex", "exec"]
 
     async def test_busy_while_a_cleanup_runs(self, make_service, make_cleaner):
         claude = _Claude()

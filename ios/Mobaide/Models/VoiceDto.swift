@@ -153,9 +153,11 @@ struct VoiceDictationFinishRequest: Codable, Equatable, Sendable {
     let last_seq: Int
 }
 
-/// `POST /api/voice/cleanup`: 1–6000 characters.
+/// `POST /api/voice/cleanup`: 1–6000 characters, cleaned up by the CLI of
+/// `kind`, the session's kind (one of `capabilities.voice.cleanup_kinds`).
 struct VoiceCleanupRequest: Codable, Equatable, Sendable {
     let text: String
+    let kind: String
 }
 
 /// `PUT /api/voice/cleanup/settings`: the cleanup choice for every client of the agent.

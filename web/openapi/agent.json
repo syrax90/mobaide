@@ -2904,7 +2904,18 @@
         "type": "object"
       },
       "VoiceCleanupRequest": {
+        "description": "``kind`` is the session's kind: its CLI cleans up the text. Clients\nfrom before ``cleanup_kinds`` send none and mean Claude Code.",
         "properties": {
+          "kind": {
+            "default": "claude",
+            "enum": [
+              "claude",
+              "codex",
+              "antigravity"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
           "text": {
             "maxLength": 6000,
             "minLength": 1,

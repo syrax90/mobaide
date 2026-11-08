@@ -8,6 +8,8 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
@@ -130,7 +132,22 @@ class VoiceDtoFixtureTest {
         val response = fixture("VoiceCleanupResponse").decode(VoiceCleanupResponse.serializer(), "cleaned")
 
         assertEquals("um so rename use session model to uh use the shared hook", request.text)
+        assertEquals("claude", request.kind)
         assertEquals("Rename useSessionModel to use the shared hook.", response.text)
+    }
+
+    @Test
+    fun cleanup_carriesTheSessionKind() {
+        val requests = fixture("VoiceCleanupRequest")
+
+        assertEquals(
+            VoiceCleanupRequest("uh run the tests dash dash watch", "codex"),
+            requests.decode(VoiceCleanupRequest.serializer(), "codex_session"),
+        )
+        assertEquals(
+            VoiceCleanupRequest("um fix the reduce her in the store", "antigravity"),
+            requests.decode(VoiceCleanupRequest.serializer(), "antigravity_session"),
+        )
     }
 
     @Test
@@ -164,7 +181,13 @@ class VoiceDtoFixtureTest {
             .cases.associateBy { it.name }
 
         assertEquals(
-            VoiceCapability(sampleRate = 16000, maxSeconds = 120, maxChunkBytes = 65536, cleanup = true),
+            VoiceCapability(
+                sampleRate = 16000,
+                maxSeconds = 120,
+                maxChunkBytes = 65536,
+                cleanup = true,
+                cleanupKinds = listOf("claude", "codex", "antigravity"),
+            ),
             cases.getValue("voice_capability").wire.voiceCapability(),
         )
         assertNull(cases.getValue("missing_capabilities_defaults_to_empty_object").wire.voiceCapability())
@@ -206,28 +229,32 @@ class VoiceDtoFixtureTest {
         assertNull(version(voice(maxChunkBytes = "65536")).voiceCapability())
     }
 
+    private fun capability(cleanup: JsonElement?, kinds: JsonElement? = null) = VersionInfoResponse(
+        name = "mobaide-agent",
+        server_version = "1.0.0",
+        protocol_versions = listOf(7),
+        min_client_version = 1,
+        capabilities = buildJsonObject {
+            put(
+                "voice",
+                buildJsonObject {
+                    put("dictation", true)
+                    put("sample_rate", 16000)
+                    put("max_seconds", 120)
+                    put("max_chunk_bytes", 65536)
+                    if (cleanup != null) put("cleanup", cleanup)
+                    if (kinds != null) put("cleanup_kinds", kinds)
+                },
+            )
+        },
+    ).voiceCapability()
+
     @Test
     fun voiceCapability_cleanupIsOnlyAnExplicitTrue_andAMalformedKeyKeepsDictation() {
-        fun capability(cleanup: JsonElement?) = VersionInfoResponse(
-            name = "mobaide-agent",
-            server_version = "1.0.0",
-            protocol_versions = listOf(7),
-            min_client_version = 1,
-            capabilities = buildJsonObject {
-                put(
-                    "voice",
-                    buildJsonObject {
-                        put("dictation", true)
-                        put("sample_rate", 16000)
-                        put("max_seconds", 120)
-                        put("max_chunk_bytes", 65536)
-                        if (cleanup != null) put("cleanup", cleanup)
-                    },
-                )
-            },
-        ).voiceCapability()
-
-        assertEquals(VoiceCapability(16000, 120, 65536, cleanup = true), capability(JsonPrimitive(true)))
+        assertEquals(
+            VoiceCapability(16000, 120, 65536, cleanup = true, cleanupKinds = listOf("claude")),
+            capability(JsonPrimitive(true)),
+        )
         assertEquals(VoiceCapability(16000, 120, 65536, cleanup = false), capability(null))
         assertEquals(VoiceCapability(16000, 120, 65536, cleanup = false), capability(JsonPrimitive(false)))
         assertEquals(VoiceCapability(16000, 120, 65536, cleanup = false), capability(JsonPrimitive("true")))
@@ -237,5 +264,34 @@ class VoiceDtoFixtureTest {
             VoiceCapability(16000, 120, 65536, cleanup = false),
             capability(buildJsonObject { put("enabled", true) }),
         )
+    }
+
+    @Test
+    fun voiceCapability_cleanupKinds_defaultToClaude_andAMalformedListKeepsCleanup() {
+        fun kinds(cleanup: JsonElement, kinds: JsonElement?) = capability(cleanup, kinds)?.cleanupKinds
+
+        val on = JsonPrimitive(true)
+        assertEquals(listOf("codex"), kinds(on, buildJsonArray { add("codex") }))
+        assertEquals(listOf("claude"), kinds(on, null))
+        assertEquals(listOf("claude"), kinds(on, JsonPrimitive("codex")))
+        assertEquals(listOf("claude"), kinds(on, buildJsonObject { put("codex", true) }))
+        assertEquals(listOf("claude"), kinds(on, JsonNull))
+        assertEquals(
+            listOf("claude", "antigravity"),
+            kinds(
+                on,
+                buildJsonArray {
+                    add("claude")
+                    add(1)
+                    add(true)
+                    add(JsonNull)
+                    add(buildJsonObject { put("kind", "codex") })
+                    add("antigravity")
+                },
+            ),
+        )
+        assertEquals(emptyList<String>(), kinds(on, buildJsonArray {}))
+        assertEquals(emptyList<String>(), kinds(JsonPrimitive(false), buildJsonArray { add("codex") }))
+        assertEquals(emptyList<String>(), kinds(JsonPrimitive("true"), buildJsonArray { add("codex") }))
     }
 }

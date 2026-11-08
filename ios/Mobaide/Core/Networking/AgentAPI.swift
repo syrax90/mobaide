@@ -356,8 +356,12 @@ struct AgentAPI: Sendable {
         )
     }
 
-    func cleanupVoiceTranscript(text: String) async throws -> VoiceCleanupResponse {
-        try await execute(method: "POST", url: "\(try await base())/api/voice/cleanup", body: VoiceCleanupRequest(text: text))
+    func cleanupVoiceTranscript(text: String, kind: String) async throws -> VoiceCleanupResponse {
+        try await execute(
+            method: "POST",
+            url: "\(try await base())/api/voice/cleanup",
+            body: VoiceCleanupRequest(text: text, kind: kind)
+        )
     }
 
     func setVoiceCleanup(enabled: Bool) async throws -> VoiceStatusResponse {

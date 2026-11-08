@@ -143,7 +143,8 @@ SITE_CSP = (
 # three clients share. Transcript cleanup: off until the user turns it on in
 # any of the three clients, run by the session's own AI agent under the
 # user's own login with its cheapest model (cleanup.py runs
-# `claude -p --model haiku`), and a failed cleanup falls back to the
+# `claude -p --model haiku`, `codex exec` on a Luna model and `agy` on
+# Gemini Flash), and a failed cleanup falls back to the
 # transcript as heard on every client. Lower case, matched against a
 # lower-cased body.
 VOICE_VERIFIED_CLAIMS = (
@@ -157,6 +158,8 @@ VOICE_VERIFIED_CLAIMS = (
     "the session's own ai agent",
     "its cheapest model",
     "claude code uses claude haiku",
+    "codex uses gpt luna",
+    "antigravity uses gemini flash",
     "under your own account",
     "if a cleanup fails, you get the text as heard",
 )

@@ -2364,8 +2364,18 @@ export interface components {
             /** Error Type */
             type: string;
         };
-        /** VoiceCleanupRequest */
+        /**
+         * VoiceCleanupRequest
+         * @description ``kind`` is the session's kind: its CLI cleans up the text. Clients
+         *     from before ``cleanup_kinds`` send none and mean Claude Code.
+         */
         VoiceCleanupRequest: {
+            /**
+             * Kind
+             * @default claude
+             * @enum {string}
+             */
+            kind: "claude" | "codex" | "antigravity";
             /** Text */
             text: string;
         };
