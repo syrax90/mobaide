@@ -233,6 +233,35 @@ async def test_backoff_doubles_and_is_capped(tmp_path):
     assert server.hosts().count("mirror.test") == 8
 
 
+async def test_a_failed_host_is_tried_last_for_the_next_files(tmp_path):
+    """A dead mirror costs its retries once per model, not once per file."""
+    server = _Server({"mirror.test": [_connect_error], "fallback.test": [_full()]})
+    fetcher = _fetcher(server, _Sleeps(), attempts=2)
+
+    await fetcher.fetch(_file(), tmp_path / "a", _Progress())
+    await fetcher.fetch(_file(), tmp_path / "b", _Progress())
+
+    assert server.hosts() == ["mirror.test", "mirror.test", "fallback.test", "fallback.test"]
+
+
+async def test_a_failed_host_that_serves_a_file_again_regains_its_place(tmp_path):
+    server = _Server({
+        "mirror.test": [_status(404), _full()],
+        "fallback.test": [_full(), _status(404)],
+    })
+    fetcher = _fetcher(server, _Sleeps())
+
+    await fetcher.fetch(_file(), tmp_path / "a", _Progress())
+    await fetcher.fetch(_file(), tmp_path / "b", _Progress())
+    await fetcher.fetch(_file(), tmp_path / "c", _Progress())
+
+    assert server.hosts() == [
+        "mirror.test", "fallback.test",
+        "fallback.test", "mirror.test",
+        "mirror.test",
+    ]
+
+
 async def test_every_source_failing_raises_the_last_error(tmp_path):
     server = _Server({"mirror.test": [_status(503)], "fallback.test": [_status(403)]})
 

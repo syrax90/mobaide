@@ -986,11 +986,29 @@ Removing the agent with **Also uninstall Mobaide from this computer** deletes th
 
 #### Voice downloads
 
-Model files come from the `voice-model-parakeet-tdt-0.6b-v3-int8` release in the public releases repo (`github.com`), falling back to the pinned upstream Hugging Face revision (`huggingface.co`). The two runtime wheels come from PyPI (`files.pythonhosted.org`). Allow those hosts on a filtering proxy.
+Model files come from our mirror (`dl.mobaide.com`, see *Voice model mirror*), falling back to the pinned upstream Hugging Face revision (`huggingface.co`). The two runtime wheels come from PyPI (`files.pythonhosted.org`). Allow those hosts on a filtering proxy.
 
 - Every file's size and SHA-256 are pinned, so a captive-portal page or a truncated mirror is rejected (`hash_mismatch`) and the next source is tried.
+- A host that failed one file is tried last for the next files, so a dead mirror delays only the first file. A success puts the host back in its catalog place.
+- Agents 0.3.23 and older try a GitHub release first. Anonymous GitHub downloads time out, so these agents wait several minutes per file before they use Hugging Face. They still finish the install.
 - Downloads honour `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` and resume from `*.part` files after a network drop, a sleeping laptop, or an agent restart. A `failed` install waits for the user to retry.
 - Offline, enabling fails with `network`; once installed, dictation needs no internet.
+
+#### Voice model mirror
+
+`dl.mobaide.com` is a public Cloudflare R2 bucket on a custom domain. It holds only the voice-model files.
+
+- **Why R2.** R2 has no egress fees, and 0.67 GB is inside its free storage tier. It serves the 652 MB encoder, which the relay's Cloudflare plan cannot cache (512 MB limit). The downloads also stay off the relay's uplink.
+- **Layout.** A file lives at `voice/<model-id>/<sha256>/<name>`, the path of its catalog URL (`mirror_url()` in `mobaide/voice/catalog.py`). A re-pinned file gets a new key, so an old URL never changes meaning.
+- **Fill it.** `python deploy/prod/upload_voice_model.py` uploads every catalog file the bucket lacks, then downloads each one anonymously from `dl.mobaide.com` and checks size and SHA-256. It gets the files from Hugging Face, or from `--source-dir` (for example an agent's `voice/models/<model-id>/`). Re-running is safe.
+- **Check it.** `python deploy/prod/upload_voice_model.py --check` only downloads and checks. It needs no credentials.
+- **Credentials.** `<release dir>/voice/r2.properties` holds `account_id`, `bucket`, `access_key_id` and `secret_access_key`. Use an R2 API token with **Object Read & Write** on this bucket only. Uploading needs `boto3` 1.36 or newer.
+- **When to run it.** Run it before you release an agent whose catalog has a new or re-pinned model file. Otherwise agents fall back to Hugging Face for that file.
+- **One-time setup.**
+  1. In the Cloudflare dashboard, create an R2 bucket (for example `mobaide-downloads`).
+  2. In the bucket's **Settings → Custom Domains**, connect `dl.mobaide.com`. Keep the `r2.dev` public URL disabled.
+  3. In **R2 → Manage API tokens**, create a token with **Object Read & Write** on that bucket. Put its keys into `voice/r2.properties` (chmod 600).
+  4. Run the script, then `--check`.
 
 #### Voice CLI
 

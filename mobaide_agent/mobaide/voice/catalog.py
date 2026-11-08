@@ -181,14 +181,18 @@ def resolve_runtime() -> tuple[RuntimeTarget | None, str | None]:
     return RuntimeTarget(key=key, wheels=(core, binding)), None
 
 
-_PARAKEET_MIRROR = (
-    "https://github.com/syrax90/mobaide-agent-releases/releases/download/"
-    "voice-model-parakeet-tdt-0.6b-v3-int8/"
-)
+# Our own mirror: a Cloudflare R2 bucket that deploy/prod/upload_voice_model.py
+# fills. The path holds the SHA-256, so a URL never changes meaning.
+VOICE_MIRROR_BASE = "https://dl.mobaide.com/voice/"
+_PARAKEET_ID = "parakeet-tdt-0.6b-v3-int8"
 _PARAKEET_HF = (
     "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/"
     "resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78/"
 )
+
+
+def mirror_url(model_id: str, name: str, sha256: str) -> str:
+    return f"{VOICE_MIRROR_BASE}{model_id}/{sha256}/{name}"
 
 
 def _parakeet_file(name: str, size: int, sha256: str, hf_path: str | None = None) -> CatalogFile:
@@ -196,12 +200,12 @@ def _parakeet_file(name: str, size: int, sha256: str, hf_path: str | None = None
         name=name,
         size=size,
         sha256=sha256,
-        urls=(_PARAKEET_MIRROR + name, _PARAKEET_HF + (hf_path or name)),
+        urls=(mirror_url(_PARAKEET_ID, name, sha256), _PARAKEET_HF + (hf_path or name)),
     )
 
 
 PARAKEET_V3 = ModelSpec(
-    id="parakeet-tdt-0.6b-v3-int8",
+    id=_PARAKEET_ID,
     name="NVIDIA Parakeet TDT 0.6B v3 (int8)",
     engine="sherpa_transducer",
     languages=(
