@@ -1,7 +1,8 @@
 """Chat sessions driven end to end against the scripted fake ACP agent
 (``mobaide/acp/fake_agent.py``, a real subprocess): start, prompts, the
 message queue, cancel, permission and form requests, config changes, a
-crash with restart, opening a stored session, the adapter install on first
+crash with restart, a sandbox mode that every Restart must apply again,
+opening a stored session, the adapter install on first
 use, Send now (steering), command output (and how often it is re-sent), and
 turns that another app on the PC runs in a shared Codex session (a Stop it
 never answers, a turn already running when the chat opens).
@@ -242,6 +243,110 @@ for line in sys.stdin:
     send({"id": msg["id"], "result": result})
 """
 CONSOLE_AGENT_ARGV = [sys.executable, "-c", CONSOLE_AGENT]
+
+# A Codex-like sandbox ``mode`` that starts at ``agent``. While the file named
+# by argv[1] exists, ``session/set_config_option`` is refused. The prompt
+# ``crash`` exits; anything else is echoed.
+SANDBOX_AGENT = r"""
+import json, os, sys
+refuse = sys.argv[1]
+mode = "agent"
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+def config():
+    return [{"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": mode,
+             "options": [{"value": "read-only", "name": "Read-only"}, {"value": "agent", "name": "Agent"}]}]
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg or "method" not in msg:
+        continue
+    method = msg["method"]
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentCapabilities": {}}
+    elif method == "session/new":
+        result = {"sessionId": "sandbox", "configOptions": config()}
+    elif method == "session/set_config_option":
+        if os.path.exists(refuse):
+            send({"id": msg["id"], "error": {"code": -32603, "message": "Sandbox unavailable"}})
+            continue
+        mode = msg["params"]["value"]
+        result = {"configOptions": config()}
+    elif method == "session/prompt":
+        text = " ".join(block.get("text", "") for block in msg["params"]["prompt"])
+        if text == "crash":
+            sys.exit(3)
+        send({"method": "session/update", "params": {"sessionId": "sandbox", "update": {
+            "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "echo " + text}}}})
+        result = {"stopReason": "end_turn"}
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+
+
+def _sandbox_agent(refuse) -> list[str]:
+    return [sys.executable, "-c", SANDBOX_AGENT, str(refuse)]
+
+
+# Advertises steering. The prompt ``work`` streams "Working" and waits;
+# ``_session/steering`` ends that turn at once and is refused only after the
+# file named by argv[1] exists. Any other prompt is echoed.
+LATE_STEER_AGENT = r"""
+import json, os, sys, threading, time
+release = sys.argv[1]
+lock = threading.Lock()
+pending = None
+
+def send(message):
+    with lock:
+        sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+        sys.stdout.flush()
+
+def chunk(text):
+    send({"method": "session/update", "params": {"sessionId": "late", "update": {
+        "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}}})
+
+def refuse_when_released(steer_id):
+    while not os.path.exists(release):
+        time.sleep(0.02)
+    send({"id": steer_id, "error": {"code": -32603, "message": "No turn to steer"}})
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg or "method" not in msg:
+        continue
+    method = msg["method"]
+    if method == "initialize":
+        result = {"protocolVersion": 1, "_meta": {"steering": {"supported": True}}, "agentCapabilities": {}}
+    elif method == "session/new":
+        result = {"sessionId": "late"}
+    elif method == "session/prompt":
+        text = " ".join(block.get("text", "") for block in msg["params"]["prompt"])
+        if text == "work":
+            chunk("Working")
+            pending = msg["id"]
+            continue
+        chunk("echo " + text)
+        result = {"stopReason": "end_turn"}
+    elif method == "_session/steering":
+        send({"id": pending, "result": {"stopReason": "end_turn"}})
+        pending = None
+        threading.Thread(target=refuse_when_released, args=(msg["id"],), daemon=True).start()
+        continue
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+
+
+def _late_steer_agent(release) -> list[str]:
+    return [sys.executable, "-c", LATE_STEER_AGENT, str(release)]
 
 
 class FakeTrust:
@@ -996,6 +1101,59 @@ class TestCrashAndRestart:
         assert m.texts("user") == ["first", "crash", "second"]
         assert m.texts("agent") == ["echo first", "echo second"]
 
+    async def test_a_refused_sandbox_mode_fails_each_restart_until_the_agent_applies_it(
+        self, open_chat, tmp_path
+    ):
+        """The agent's default (``agent``) allows more than the user chose: a
+        Restart must retry the launch mode, not start with that default."""
+        refuse = tmp_path / "refuse"
+        refuse.touch()
+        m = await open_chat(
+            argv=_sandbox_agent(refuse),
+            initial_config=[ConfigIntent("read-only", category="mode", required=True)],
+        )
+
+        message = "Could not set the read-only mode, so the session did not start"
+        assert m.status == "error"
+        assert m.state["error"].startswith(message)
+
+        assert (await m.command("restart"))["ok"] is True
+        await m.until(lambda: m.status == "ready" or len(m.texts("error")) == 2)
+
+        assert m.status == "error"
+        assert m.state["error"].startswith(message)
+        refused = await m.command("prompt", text="hello")
+        assert refused["error"] == "The agent is not running. Use Restart to start it again."
+
+        refuse.unlink()
+        assert (await m.command("restart"))["ok"] is True
+        await m.until(lambda: m.status == "ready" or len(m.texts("error")) == 3)
+
+        assert m.status == "ready"
+        assert {o["id"]: o["value"] for o in m.state["config"]} == {"mode": "read-only"}
+
+    async def test_a_restart_after_a_crash_keeps_the_sandbox_mode_required(
+        self, open_chat, tmp_path
+    ):
+        refuse = tmp_path / "refuse"
+        m = await open_chat(
+            argv=_sandbox_agent(refuse),
+            initial_config=[ConfigIntent("read-only", category="mode", required=True)],
+        )
+        assert m.status == "ready"
+        assert {o["id"]: o["value"] for o in m.state["config"]} == {"mode": "read-only"}
+        await m.command("prompt", text="crash")
+        await m.until(lambda: m.status == "error")
+        refuse.touch()
+
+        assert (await m.command("restart"))["ok"] is True
+        await m.until(lambda: m.status == "ready" or len(m.texts("error")) == 2)
+
+        assert m.status == "error"
+        assert m.state["error"].startswith(
+            "Could not set the read-only mode, so the session did not start"
+        )
+
 
 class TestSyncAndStop:
     async def test_sync_replays_missed_events_or_sends_a_snapshot(self, open_chat):
@@ -1171,6 +1329,31 @@ class TestSteering:
         assert _methods(log).count("session/prompt") == 1
         assert [q["id"] for q in m.state["queue"]] == [queue_id]
         assert "s1" not in m.results
+
+    async def test_a_refused_send_now_after_the_turn_ended_sends_the_message_next(
+        self, open_chat, tmp_path
+    ):
+        """The turn ended while Send now was in flight, so the queue skipped
+        the message; the agent then refused it. It must not stay queued."""
+        release = tmp_path / "release"
+        m = await open_chat(argv=_late_steer_agent(release))
+        await m.command("prompt", text="work")
+        await m.until(lambda: "Working" in m.texts("agent"))
+        queued = await m.command("prompt", text="later")
+        queue_id = queued["data"]["queue_id"]
+
+        await m.session.handle_command(orjson.dumps({"id": "s1", "op": "steer", "queue_id": queue_id}))
+        await m.until(lambda: m.status == "ready")
+        assert [q["id"] for q in m.state["queue"]] == [queue_id]
+        assert "s1" not in m.results
+        release.touch()
+
+        await m.until(lambda: "s1" in m.results)
+
+        assert m.results["s1"]["error"] == "No turn to steer"
+        assert m.state["queue"] == []
+        assert m.texts("user") == ["work", "later"]
+        await m.until(_turn_done(m, "echo later"))
 
 
 class TestExternalTurns:

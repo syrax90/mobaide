@@ -164,6 +164,11 @@ class ChatSession:
         self._cancel_forced = False
         self._trust_granted = False
         self._pending_config: list[ConfigIntent] = list(plan.initial_config)
+        # Categories whose launch value must hold (a sandbox): a Restart keeps
+        # them required, so it can never start wider than the user chose.
+        self._required_categories = {
+            i.category for i in plan.initial_config if i.required and i.category
+        }
         self._initial_prompt: str | None = plan.initial_prompt
         self._steering = False
         # A turn another client of a shared host started (see thread_busy).
@@ -509,8 +514,9 @@ class ChatSession:
             tl.patch_state(acp_session_id=self._acp_session_id)
             self._apply_setup_result(result if isinstance(result, dict) else {})
             # Applied on a resume too: the user picked these in the wizard.
-            pending, self._pending_config = self._pending_config, []
-            await self._apply_initial_config(pending)
+            # Cleared only once applied: a Restart after a failure retries them.
+            await self._apply_initial_config(self._pending_config)
+            self._pending_config = []
             self._ready.set()
             tl.patch_state(status="ready", urgent=True)
             busy_before, self._busy_before_ready = self._busy_before_ready, False
@@ -740,6 +746,17 @@ class ChatSession:
 
     def _own_turn_running(self) -> bool:
         return self._turn_task is not None and not self._turn_task.done()
+
+    def _start_queue_if_idle(self) -> None:
+        alive = self._conn is not None and self._conn.alive
+        if (
+            alive
+            and not self._stopping
+            and self._ready.is_set()
+            and not self._own_turn_running()
+            and not self._external_turn
+        ):
+            self._start_next_prompt()
 
     def _publish_queue(self) -> None:
         self._timeline.patch_state(
@@ -973,13 +990,14 @@ class ChatSession:
             raise ChatCommandError("This message was already sent")
         if not self._own_turn_running() and not self._external_turn:
             # Idle: the queue sends it as the next prompt anyway.
-            if self._ready.is_set():
-                self._start_next_prompt()
+            self._start_queue_if_idle()
             return {"steered": False}
         if not self._steering:
             raise ChatCommandError("This agent cannot take a message during a turn")
         conn = self._require_conn()
         queued.steering = True
+        failure: ChatCommandError | None = None
+        result: Any = None
         try:
             result = await conn.request(
                 STEER_METHOD,
@@ -991,11 +1009,15 @@ class ChatSession:
                 STEER_TIMEOUT,
             )
         except AcpRpcError as exc:
-            raise ChatCommandError(self._describe_rpc_error(exc)) from None
+            failure = ChatCommandError(self._describe_rpc_error(exc))
         except TimeoutError:
-            raise ChatCommandError("The agent did not answer in time") from None
+            failure = ChatCommandError("The agent did not answer in time")
         finally:
             queued.steering = False
+        if failure is not None:
+            # The turn may have ended meanwhile and skipped this message.
+            self._start_queue_if_idle()
+            raise failure
         outcome = result.get("outcome") if isinstance(result, dict) else None
         if outcome == "injected":
             if queued in self._queue:
@@ -1013,8 +1035,7 @@ class ChatSession:
             )
             return {"steered": True}
         # The turn ended meanwhile: the message stays first in the queue.
-        if self._ready.is_set() and not self._own_turn_running() and not self._external_turn:
-            self._start_next_prompt()
+        self._start_queue_if_idle()
         if outcome == "promptRequired":
             return {"steered": False}
         raise ChatCommandError("The agent could not take the message now")
@@ -1043,14 +1064,27 @@ class ChatSession:
             self._turn_task.cancel()
         self._resolve_all_requests_cancelled()
         # The reloaded session starts with the agent's defaults: re-apply
-        # the values the user had chosen.
-        chosen = [
-            ConfigIntent(opt["value"], option_id=opt["id"])
-            for opt in self._timeline.state.get("config") or []
-            if isinstance(opt, dict) and "value" in opt
-        ]
-        if chosen:
-            self._pending_config = chosen
+        # the values the user had chosen. A start that failed before applying
+        # the launch choices retries those instead of the agent's defaults.
+        if not self._pending_config:
+            restored = [
+                ConfigIntent(
+                    opt["value"],
+                    option_id=opt["id"],
+                    category=opt.get("category"),
+                    required=opt.get("category") in self._required_categories,
+                )
+                for opt in self._timeline.state.get("config") or []
+                if isinstance(opt, dict) and "value" in opt
+            ]
+            # A required option the agent no longer lists falls back to the
+            # launch choice, which then fails closed if it cannot be applied.
+            covered = {i.category for i in restored if i.required}
+            restored += [
+                i for i in self._plan.initial_config
+                if i.required and i.category not in covered
+            ]
+            self._pending_config = restored
         if self._conn is not None:
             await self._conn.close(grace=0.5)
         load_id = self._acp_session_id or self._load_session_id

@@ -71,8 +71,10 @@ struct SessionDetailScreen: View {
 
 /// Holds a session whose row is not known yet until its `ui` is: the live list
 /// or a one-shot read, whichever answers first. A session missing from a read
-/// list, or no answer in time, opens the terminal screen, which already
-/// handles a session that is gone.
+/// list, or from the agent's synced list, opens the terminal screen, which
+/// already handles a session that is gone. Like Android and web there is no
+/// timeout: a guess would stick, and a chat session would open in the
+/// terminal screen.
 private struct SessionUIResolver: View {
     let container: AppContainer
     let sessionId: String
@@ -81,7 +83,6 @@ private struct SessionUIResolver: View {
     private enum Answer: Sendable {
         case found(isChat: Bool)
         case missing
-        case unknown
     }
 
     var body: some View {
@@ -115,21 +116,30 @@ private struct SessionUIResolver: View {
                 sink.yield(.missing)
             }
         }
-        let timeout = Task {
-            try? await Task.sleep(for: .seconds(10))
-            sink.yield(.missing)
+        let repository = container.sessionRepository
+        let syncedStates = repository.sessionsSyncedStates()
+        // Ends the wait when the read fails: the agent's own list is synced
+        // and has no such session.
+        let synced = Task { @MainActor in
+            for await isSynced in syncedStates where isSynced {
+                if let row = repository.currentSessions.first(where: { $0.session_id == sessionId }) {
+                    sink.yield(.found(isChat: row.isChat))
+                } else {
+                    sink.yield(.missing)
+                }
+                return
+            }
         }
         defer {
             live.cancel()
             read.cancel()
-            timeout.cancel()
+            synced.cancel()
             sink.finish()
         }
         for await answer in answers {
             switch answer {
             case .found(let isChat): return isChat
             case .missing: return false
-            case .unknown: continue
             }
         }
         return false
