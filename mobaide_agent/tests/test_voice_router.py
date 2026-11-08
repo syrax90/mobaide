@@ -281,7 +281,9 @@ class _Claude:
         self.argvs.append(list(argv))
         if argv[0] == "codex":
             item = {"type": "item.completed", "item": {"type": "agent_message", "text": self.text}}
-            return CmdResult(rc=0, stdout=json.dumps(item).encode() + b"\n", stderr=b"")
+            done = {"type": "turn.completed"}
+            stdout = f"{json.dumps(item)}\n{json.dumps(done)}\n".encode()
+            return CmdResult(rc=0, stdout=stdout, stderr=b"")
         payload = {"type": "result", "subtype": "success", "is_error": False, "result": self.text}
         return CmdResult(rc=0, stdout=json.dumps(payload).encode(), stderr=b"")
 

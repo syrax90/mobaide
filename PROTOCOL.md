@@ -230,8 +230,9 @@ cadence; they do **not** gate compatibility.
         -c features.unified_exec=false -c features.hooks=false -c
         web_search=disabled --sandbox read-only --skip-git-repo-check
         --ephemeral --ignore-user-config --ignore-rules --json -``, transcript
-        on stdin. ``codex login status`` runs first: signed out is
-        ``cleanup_failed`` at once.
+        on stdin. ``codex login status`` runs first, inside the same 20 s
+        budget: signed out is ``cleanup_failed`` at once. Only a run that
+        exits 0 after ``turn.completed`` counts as a cleanup.
       * ``antigravity``: ``agy --model <first Gemini Flash on low thinking
         in the cached list, else gemini-3.8-flash-low> --input-format
         stream-json --output-format stream-json --disable-slash-commands

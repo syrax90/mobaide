@@ -202,7 +202,9 @@ def _codex_error_text(message: str) -> str:
 
 def parse_codex_result(result: CmdResult, source: str) -> str:
     """The cleaned text from one ``codex exec --json`` run (JSONL events), or
-    a coded ``VoiceError``. An empty answer keeps ``source``."""
+    a coded ``VoiceError``. Only a run that exits 0 after ``turn.completed``
+    counts: a crash or a cut-off stream may follow a message. An empty
+    answer keeps ``source``."""
     name = "Codex"
     if result.timed_out:
         raise _timed_out(name)
@@ -210,6 +212,7 @@ def parse_codex_result(result: CmdResult, source: str) -> str:
     if result.rc != 0 and "unexpected argument" in stderr:
         raise _outdated(name, "codex update")
     answer: str | None = None
+    completed = False
     turn_error: str | None = None
     last_error: str | None = None
     for event in _lines(result.stdout):
@@ -224,15 +227,23 @@ def parse_codex_result(result: CmdResult, source: str) -> str:
                 # Codex ignores a config key it does not know, which would
                 # leave the transcript to its default coding-agent prompt.
                 raise _outdated(name, "codex update")
+        elif kind == "turn.completed":
+            completed = True
         elif kind == "turn.failed":
             error = event.get("error")
             message = error.get("message") if isinstance(error, dict) else None
             turn_error = message if isinstance(message, str) else ""
         elif kind == "error" and isinstance(event.get("message"), str):
             last_error = event["message"]
-    if turn_error is not None or answer is None:
-        message = turn_error or last_error or stderr
-        raise _failed(_short(_codex_error_text(message)) or f"{name} exited with code {result.rc}.")
+    if turn_error is not None or not completed or result.rc != 0 or answer is None:
+        message = _short(_codex_error_text(turn_error or last_error or stderr))
+        if not message:
+            message = (
+                f"{name} exited with code {result.rc}."
+                if result.rc != 0
+                else f"{name} stopped before it finished answering."
+            )
+        raise _failed(message)
     return _finish(answer, source, name)
 
 
@@ -480,15 +491,25 @@ class TranscriptCleaner:
         self._handles.add(handle)
         started = time.monotonic()
         try:
+            # One budget for the preparation (Codex's sign-in probe may take
+            # 10 s) and the run, so the answer still beats the relay's 30 s.
             try:
-                command = await cli.command(source)
+                command = await asyncio.wait_for(cli.command(source), CLEANUP_TIMEOUT_SECONDS)
+                timeout = started + CLEANUP_TIMEOUT_SECONDS - time.monotonic()
+                if timeout <= 0:
+                    raise TimeoutError
+            except TimeoutError as exc:
+                self._handles.discard(handle)
+                raise _timed_out(cli.name) from exc
             except BaseException:
                 self._handles.discard(handle)
                 raise
             # The slot is held until the worker thread returns, not until the
             # caller stops waiting: a cancelled request (the relay stopping, a
             # client gone) must not let more CLIs run than the cap allows.
-            work = asyncio.ensure_future(asyncio.to_thread(self._run_blocking, cli, command, handle))
+            work = asyncio.ensure_future(
+                asyncio.to_thread(self._run_blocking, cli, command, handle, timeout)
+            )
             work.add_done_callback(lambda done: self._release(handle, done))
             try:
                 result = await asyncio.shield(work)
@@ -526,13 +547,15 @@ class TranscriptCleaner:
         # ``ProcessHandle.cancel`` blocks in ``taskkill`` on Windows.
         await asyncio.to_thread(lambda: [handle.cancel() for handle in handles])
 
-    def _run_blocking(self, cli: CleanupCli, command: CleanupCommand, handle: ProcessHandle) -> CmdResult:
+    def _run_blocking(
+        self, cli: CleanupCli, command: CleanupCommand, handle: ProcessHandle, timeout: float
+    ) -> CmdResult:
         try:
             self._ensure_files(cli.files)
             return self._run(
                 command.argv,
                 cwd=str(self._work_dir),
-                timeout=CLEANUP_TIMEOUT_SECONDS,
+                timeout=timeout,
                 max_bytes=_MAX_OUTPUT_BYTES,
                 env=command.env,
                 stdin=command.stdin,

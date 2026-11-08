@@ -23,6 +23,7 @@ from mobaide.core.antigravity_launcher import AntigravityBinaryNotFoundError
 from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError
 from mobaide.core.codex_launcher import CodexBinaryNotFoundError
 from mobaide.core.git_exec import CmdResult, ProcessHandle
+from mobaide.voice import cleanup as cleanup_module
 from mobaide.voice.cleanup import (
     _MAX_OUTPUT_BYTES,
     ANTIGRAVITY_CLEANUP_MODEL,
@@ -283,7 +284,7 @@ class TestCommand:
         ]
         assert call["stdin"] == b"<transcript>\num fix the bug uh then run the tests\n</transcript>"
         assert call["cwd"] == str(work_dir)
-        assert call["timeout"] == CLEANUP_TIMEOUT_SECONDS
+        assert CLEANUP_TIMEOUT_SECONDS - 1 < call["timeout"] <= CLEANUP_TIMEOUT_SECONDS
         assert call["max_bytes"] == _MAX_OUTPUT_BYTES
         assert isinstance(call["handle"], ProcessHandle)
 
@@ -584,6 +585,7 @@ class TestParseCodexResult:
         result = _jsonl(
             {"type": "item.completed", "item": {"type": "agent_message", "text": "First."}},
             {"type": "item.completed", "item": {"type": "agent_message", "text": "Last."}},
+            {"type": "turn.completed"},
         )
 
         assert parse_codex_result(result, "text") == "Last."
@@ -596,6 +598,7 @@ class TestParseCodexResult:
             {"type": "item.completed", "item": {"type": "error", "message": "`features.hooks` is ignored."}},
             {"type": "error", "message": "Reconnecting... 1/5"},
             {"type": "item.completed", "item": {"type": "agent_message", "text": "Done."}},
+            {"type": "turn.completed"},
         )
         result = CmdResult(rc=0, stdout=b"not json\n" + result.stdout, stderr=b"")
 
@@ -614,6 +617,29 @@ class TestParseCodexResult:
 
         assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_failed")
         assert excinfo.value.message == "The model is not supported."
+
+    def test_answer_without_a_completed_turn_is_not_a_cleanup(self):
+        # The stream stopped (a crash, or output past the cap) after the message.
+        result = _jsonl(
+            {"type": "turn.started"},
+            {"type": "item.completed", "item": {"type": "agent_message", "text": "Half a sente"}},
+        )
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_codex_result(result, "half a sentence")
+
+        assert (excinfo.value.code, excinfo.value.message) == (
+            "cleanup_failed", "Codex stopped before it finished answering."
+        )
+
+    def test_answer_from_a_run_that_exited_non_zero_is_not_a_cleanup(self):
+        result = _codex_answer("Fix the bug.")
+        result = CmdResult(rc=1, stdout=result.stdout, stderr=b"thread 'main' panicked\n")
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_codex_result(result, "um fix the bug")
+
+        assert (excinfo.value.code, excinfo.value.message) == ("cleanup_failed", "thread 'main' panicked")
 
     def test_failed_turn_with_plain_text_keeps_it(self):
         result = _jsonl(
@@ -816,7 +842,7 @@ class TestCodexCommand:
         ]
         assert call["stdin"] == b"<transcript>\num fix the bug uh then run the tests\n</transcript>"
         assert call["cwd"] == str(work_dir)
-        assert call["timeout"] == CLEANUP_TIMEOUT_SECONDS
+        assert CLEANUP_TIMEOUT_SECONDS - 1 < call["timeout"] <= CLEANUP_TIMEOUT_SECONDS
         assert call["env"]["PATH"].split(os.pathsep)[0] == os.path.dirname(codex_binary)
         assert (work_dir / PROMPT_FILE).read_text(encoding="utf-8") == CLEANUP_PROMPT
 
@@ -905,7 +931,7 @@ class TestAntigravityCommand:
             "--settings", "antigravity-settings.json",
         ]
         assert call["cwd"] == str(work_dir)
-        assert call["timeout"] == CLEANUP_TIMEOUT_SECONDS
+        assert CLEANUP_TIMEOUT_SECONDS - 1 < call["timeout"] <= CLEANUP_TIMEOUT_SECONDS
         settings = json.loads((work_dir / "antigravity-settings.json").read_text(encoding="utf-8"))
         assert settings == {"toolPermission": "strict"}
         assert call["env"]["PATH"].split(os.pathsep)[0] == os.path.dirname(agy_binary)
@@ -1023,6 +1049,44 @@ class TestKinds:
 
         assert not cleaner.busy()
         assert run.calls == []
+
+    async def test_the_sign_in_check_spends_the_same_budget_as_the_run(self, work_dir, binary):
+        async def slow_auth(_binary, _env) -> bool:
+            await asyncio.sleep(0.3)
+            return True
+
+        run = _Claude(_codex_answer("Hi."))
+        cleaner = TranscriptCleaner(
+            clis={"codex": CodexCleanup(lambda: binary, lambda: CODEX_MODELS, auth_present=slow_auth)},
+            work_dir=work_dir,
+            run=run,
+        )
+
+        await cleaner.clean("hi", "codex")
+
+        assert run.calls[0]["timeout"] <= CLEANUP_TIMEOUT_SECONDS - 0.3
+
+    async def test_a_sign_in_check_past_the_budget_is_cleanup_timeout(self, work_dir, binary, monkeypatch):
+        monkeypatch.setattr(cleanup_module, "CLEANUP_TIMEOUT_SECONDS", 0.05)
+
+        async def hung_auth(_binary, _env) -> bool:
+            await asyncio.sleep(10)
+            return True
+
+        run = _Claude()
+        cleaner = TranscriptCleaner(
+            clis={"codex": CodexCleanup(lambda: binary, lambda: CODEX_MODELS, auth_present=hung_auth)},
+            work_dir=work_dir,
+            run=run,
+        )
+
+        with pytest.raises(VoiceError) as excinfo:
+            await cleaner.clean("hi", "codex")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_timeout")
+        assert excinfo.value.message == "Codex took too long to answer."
+        assert run.calls == []
+        assert not cleaner.busy()
 
     async def test_logs_name_the_kind_and_model_but_never_the_text(self, work_dir, binary, caplog):
         cleaner = TranscriptCleaner(

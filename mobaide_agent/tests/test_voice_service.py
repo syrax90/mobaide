@@ -1181,7 +1181,8 @@ class TestCleanup:
         def codex(argv, **_kwargs) -> CmdResult:
             argvs.append(list(argv))
             item = {"type": "item.completed", "item": {"type": "agent_message", "text": "Hi."}}
-            return CmdResult(rc=0, stdout=json.dumps(item).encode(), stderr=b"")
+            done = {"type": "turn.completed"}
+            return CmdResult(rc=0, stdout=f"{json.dumps(item)}\n{json.dumps(done)}".encode(), stderr=b"")
 
         async def signed_in(_binary, _env) -> bool:
             return True
