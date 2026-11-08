@@ -206,6 +206,21 @@ final class AgentAPITests: XCTestCase {
         )
     }
 
+    func testVoiceCleanupPostsTheTextWithTheSessionKind() async throws {
+        StubURLProtocol.enqueue(status: 200, body: #"{"text":"Run the tests with --watch."}"#)
+
+        let answer = try await makeAPI().cleanupVoiceTranscript(text: "uh run the tests dash dash watch", kind: "codex")
+
+        XCTAssertEqual(answer, VoiceCleanupResponse(text: "Run the tests with --watch."))
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(request.url?.absoluteString, "http://agent.example.com/api/voice/cleanup")
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(
+            try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[0]),
+            ["text": "uh run the tests dash dash watch", "kind": "codex"]
+        )
+    }
+
     func testGitItemsDeleteUsesColonSuffixPost() async throws {
         StubURLProtocol.enqueue(status: 200, body: #"{"results":[]}"#)
         _ = try await makeAPI().deleteGitItems(

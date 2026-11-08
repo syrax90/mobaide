@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from .cleanup import CLEANUP_KINDS, MAX_CLEANUP_CHARS, CleanupKind
 from .dictation import MAX_CHUNK_BYTES, MAX_SECONDS, SAMPLE_RATE
 
 # Advertised as ``capabilities.voice`` on ``GET /api/version`` (both
@@ -18,6 +19,10 @@ VOICE_CAPABILITIES: dict[str, object] = {
     "sample_rate": SAMPLE_RATE,
     "max_seconds": MAX_SECONDS,
     "max_chunk_bytes": MAX_CHUNK_BYTES,
+    # ``POST /api/voice/cleanup`` exists, for sessions of these kinds; whether
+    # their CLI is installed is only known when it runs.
+    "cleanup": True,
+    "cleanup_kinds": list(CLEANUP_KINDS),
 }
 
 
@@ -65,6 +70,8 @@ class VoiceStatusResponse(BaseModel):
     self-test) once ``ready``. ``repairing`` is true while an enabled voice
     keeps its verified model and only needs its runtime again (after a
     Python upgrade): cancelling then stops without deleting the model.
+    ``cleanup_enabled`` is the user's transcript-cleanup choice for this
+    agent, shared by every client; it does not depend on the install state.
     """
 
     state: str
@@ -75,6 +82,7 @@ class VoiceStatusResponse(BaseModel):
     host: VoiceHostInfo
     speed_factor: float | None
     error: VoiceErrorInfo | None
+    cleanup_enabled: bool
 
 
 class VoiceInstallRequest(BaseModel):
@@ -117,3 +125,24 @@ class VoiceDictationResultResponse(BaseModel):
     state: str
     text: str | None
     duration_ms: int
+
+
+class VoiceCleanupRequest(BaseModel):
+    """``kind`` is the session's kind: its CLI cleans up the text. Clients
+    from before ``cleanup_kinds`` send none and mean Claude Code."""
+
+    text: str = Field(min_length=1, max_length=MAX_CLEANUP_CHARS)
+    kind: CleanupKind = "claude"
+
+
+class VoiceCleanupSettingsRequest(BaseModel):
+    """``PUT /api/voice/cleanup/settings``: turn transcript cleanup on or off
+    for every client of this agent."""
+
+    enabled: bool = Field(strict=True)
+
+
+class VoiceCleanupResponse(BaseModel):
+    """The cleaned transcript; the original when there was nothing to clean."""
+
+    text: str

@@ -38,6 +38,35 @@ export function dictationErrorCopy(code: string, agent: string): string {
   }
 }
 
+/** The AI agent of a session kind, and the command that updates it. */
+const CLEANUP_CLIS: Readonly<Record<string, { name: string; update: string }>> = {
+  claude: { name: 'Claude Code', update: 'claude update' },
+  codex: { name: 'Codex', update: 'codex update' },
+  antigravity: { name: 'Antigravity', update: 'agy update' },
+};
+
+/** Why a cleanup failed in a `kind` session; the transcript is shown as heard. */
+export function cleanupErrorCopy(code: string, agent: string, kind: string | undefined): string {
+  const cli = kind !== undefined && Object.hasOwn(CLEANUP_CLIS, kind) ? CLEANUP_CLIS[kind] : undefined;
+  const name = cli?.name ?? "The session's AI agent";
+  switch (code) {
+    case VOICE_CODE.cleanupUnavailable:
+      return `${name} isn't installed on ${agent}.`;
+    case VOICE_CODE.cleanupOutdated:
+      return cli === undefined
+        ? `${name} on ${agent} is too old. Update it there.`
+        : `${name} on ${agent} is too old. Run "${cli.update}" there.`;
+    case VOICE_CODE.cleanupBusy:
+      return 'Another cleanup was still running.';
+    case VOICE_CODE.cleanupTimeout:
+      return `${name} took too long.`;
+    case VOICE_CODE.network:
+      return 'The connection dropped.';
+    default:
+      return `${name} reported an error.`;
+  }
+}
+
 /** Why an install ended `failed` (`VoiceStatus.error.code`). */
 export function installErrorCopy(code: string, repairing: boolean): string {
   switch (code) {

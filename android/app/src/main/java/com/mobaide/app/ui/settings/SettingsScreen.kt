@@ -182,6 +182,7 @@ fun SettingsScreen(
                 onRemove = voiceViewModel::remove,
                 onReinstall = voiceViewModel::reinstall,
                 onShowMicChange = { show -> voiceViewModel.setMicHidden(!show) },
+                onCleanUpChange = voiceViewModel::setCleanUp,
             )
 
             HorizontalDivider(thickness = 2.dp)

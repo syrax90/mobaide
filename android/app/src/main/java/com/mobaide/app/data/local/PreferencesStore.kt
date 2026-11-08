@@ -35,6 +35,7 @@ class PreferencesStore(private val context: Context) {
     private val keyTerminalStaticColumns = intPreferencesKey("terminal_static_columns")
     private val keyExternalSessionsNoticeDismissed =
         booleanPreferencesKey("external_sessions_notice_dismissed")
+    private val keyVoiceCleanupNoticeSeen = booleanPreferencesKey("voice_cleanup_notice_seen")
 
     // Device-local, not account-scoped (device backups carry them): no sign-out
     // sweep touches them, since the store's quota follows the device's store
@@ -104,6 +105,14 @@ class PreferencesStore(private val context: Context) {
             if (hidden) prefs[keyVoiceMicHidden(agentKey)] = true
             else prefs.remove(keyVoiceMicHidden(agentKey))
         }
+    }
+
+    /** The user pressed "Got it" on the notice shown before the first cleanup opt-in. */
+    val voiceCleanupNoticeSeen: Flow<Boolean> =
+        context.dataStore.data.map { it[keyVoiceCleanupNoticeSeen] ?: false }
+
+    suspend fun setVoiceCleanupNoticeSeen() {
+        context.dataStore.edit { prefs -> prefs[keyVoiceCleanupNoticeSeen] = true }
     }
 
     val terminalStaticColumns: Flow<Int> =

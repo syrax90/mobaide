@@ -968,7 +968,7 @@ The model is NVIDIA Parakeet TDT 0.6B v3 (int8 ONNX, 25 European languages inclu
 A helper process (`python -P -m mobaide.voice.worker`, same interpreter as the agent) starts on the first dictation, at below-normal priority with 2 inference threads and no console window.
 
 - It exits after 3 idle minutes, which returns all of its memory to the OS, and is recycled after an hour or 500 requests. The agent process itself never loads the model.
-- While a dictation is open, the auto-updater defers its restart (a forced update, and the `mobaide-agent update` CLI, do not wait).
+- While a dictation is open or a transcript cleanup is running, the auto-updater defers its restart (a forced update, and the `mobaide-agent update` CLI, do not wait).
 
 #### Where voice files live
 
@@ -977,6 +977,8 @@ A helper process (`python -P -m mobaide.voice.worker`, same interpreter as the a
 - `settings.json` holds the on/off choice and the last install outcome.
 - `models/<model-id>/` holds the model plus its `NOTICE` (CC BY 4.0 attribution: created by NVIDIA, int8 ONNX export by k2-fsa/sherpa-onnx).
 - `runtime/<sherpa-onnx-version>-<python tag>-<platform>/` holds the sherpa-onnx runtime, unpacked from hash-pinned PyPI wheels. A Python upgrade fetches a new runtime; the model stays.
+
+The opt-in transcript cleanup (docs/voice-input.md) keeps its small prompt and settings files in a sibling directory, `<state prefix>/voice-cleanup/`. It needs no download and does not depend on the model.
 
 `MOBAIDE_VOICE_DIR` overrides the location. A relative path is anchored under the state prefix. The CLI reads it from the agent's environment or `.env`, and `--voice-dir` overrides both.
 
@@ -1006,6 +1008,8 @@ The CLI works on the same files and lock as the running agent; the apps see the 
 #### Voice privacy, testing and troubleshooting
 
 **Privacy.** Audio is held in memory only, transcribed, and dropped; neither audio nor transcript text is logged or written to disk — logs carry only sizes, durations, timings and error codes.
+
+The one way the text leaves the PC is the opt-in transcript cleanup (web, Android and iOS; Claude Code, Codex and Antigravity sessions). The agent hands the transcript to the session's CLI on that computer, which sends it to Anthropic, OpenAI or Google under the user's own login. The agent still never logs or stores it (docs/voice-input.md, *Transcript cleanup*).
 
 **Testing without the model.** `MOBAIDE_VOICE_FAKE=1` swaps in a tiny generated model and a deterministic engine under `<state prefix>/voice-fake/`. `tests/e2e/manual_stack.py up --fake-voice` sets it.
 

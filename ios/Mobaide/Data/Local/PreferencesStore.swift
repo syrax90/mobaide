@@ -15,6 +15,7 @@ struct PreferencesStore: @unchecked Sendable {
     static let keyTerminalDisplayMode = "terminal_display_mode"
     static let keyTerminalStaticColumns = "terminal_static_columns"
     static let keyExternalSessionsNoticeDismissed = "external_sessions_notice_dismissed"
+    static let keyVoiceCleanupNoticeSeen = "voice_cleanup_notice_seen"
     // Device-local, not account-scoped (device backups carry them): no sign-out
     // sweep touches them, since the store's quota follows the device's store
     // account, not the Mobaide one.
@@ -170,6 +171,16 @@ struct PreferencesStore: @unchecked Sendable {
         } else {
             defaults.removeObject(forKey: Self.voiceMicHiddenKey(agentKey: agentKey))
         }
+    }
+
+    /// The user pressed "Got it" on the notice shown before the first cleanup
+    /// opt-in on this device.
+    func isVoiceCleanupNoticeSeen() -> Bool {
+        defaults.bool(forKey: Self.keyVoiceCleanupNoticeSeen)
+    }
+
+    func setVoiceCleanupNoticeSeen() {
+        defaults.set(true, forKey: Self.keyVoiceCleanupNoticeSeen)
     }
 
     func getCachedLinearLabels(projectName: String) -> [LinearLabelDto] {

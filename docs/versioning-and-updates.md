@@ -765,7 +765,8 @@ Properties guaranteed by `StagedBinaryUpdater` (`mobaide_agent/.../updater.py`):
   * The explicit `mobaide-agent update` CLI verb is an operator opt-in that
     deliberately bypasses this guard.
 * **Activity awareness** — defers the swap while any session is running, or
-  while voice dictation is open or still being transcribed. Deferral retries
+  while voice dictation is open or still being transcribed, or a transcript
+  cleanup is running. Deferral retries
   after 30 minutes; a single pending update deferred for >24h logs a `WARN`.
 * **Supervisor restart** — the running agent calls
   `mobaide.agent.restart.request_restart`. It stops the uvicorn server

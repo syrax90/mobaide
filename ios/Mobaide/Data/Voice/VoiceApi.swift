@@ -76,6 +76,12 @@ enum VoiceCodes {
     static let chunkTooLarge = "chunk_too_large"
     static let badAudio = "bad_audio"
     static let transcriptionFailed = "transcription_failed"
+    static let cleanupUnavailable = "cleanup_unavailable"
+    static let cleanupOutdated = "cleanup_outdated"
+    static let cleanupBusy = "cleanup_busy"
+    /// Also the client's own code when the agent's answer never arrives.
+    static let cleanupTimeout = "cleanup_timeout"
+    static let cleanupFailed = "cleanup_failed"
     // Client-side codes, never sent by the agent.
     static let network = "network"
     static let transcriptionTimeout = "transcription_timeout"

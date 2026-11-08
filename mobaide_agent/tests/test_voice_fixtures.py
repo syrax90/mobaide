@@ -22,6 +22,9 @@ import pytest
 from mobaide.voice.dictation import MAX_CHUNK_BYTES, SAMPLE_RATE, _decode_chunk
 from mobaide.voice.models import (
     VOICE_CAPABILITIES,
+    VoiceCleanupRequest,
+    VoiceCleanupResponse,
+    VoiceCleanupSettingsRequest,
     VoiceDictationAudioRequest,
     VoiceDictationAudioResponse,
     VoiceDictationCreateRequest,
@@ -48,6 +51,9 @@ _MODELS = {
     "VoiceDictationAudioResponse": VoiceDictationAudioResponse,
     "VoiceDictationFinishRequest": VoiceDictationFinishRequest,
     "VoiceDictationResultResponse": VoiceDictationResultResponse,
+    "VoiceCleanupRequest": VoiceCleanupRequest,
+    "VoiceCleanupResponse": VoiceCleanupResponse,
+    "VoiceCleanupSettingsRequest": VoiceCleanupSettingsRequest,
 }
 
 

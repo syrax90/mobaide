@@ -1,7 +1,9 @@
 package com.mobaide.app.data.network.dto
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
@@ -132,6 +134,13 @@ data class VoiceCapability(
     val sampleRate: Int,
     val maxSeconds: Int,
     val maxChunkBytes: Int,
+    /** `cleanup`: `POST /api/voice/cleanup` exists (explicit JSON `true` only). */
+    val cleanup: Boolean = false,
+    /**
+     * `cleanup_kinds`: the session kinds the agent cleans up for. Empty
+     * without [cleanup]; `["claude"]` from an agent that predates the key.
+     */
+    val cleanupKinds: List<String> = emptyList(),
 )
 
 /**
@@ -145,10 +154,20 @@ fun VersionInfoResponse.voiceCapability(): VoiceCapability? = runCatching {
     if (dictation.isString || dictation.booleanOrNull != true) return@runCatching null
     fun positive(key: String): Int? =
         voice[key]?.jsonPrimitive?.takeIf { !it.isString }?.intOrNull?.takeIf { it > 0 }
+    // A malformed key must not cost the whole capability.
+    val cleanup = (voice["cleanup"] as? JsonPrimitive)?.let { !it.isString && it.booleanOrNull == true } == true
     VoiceCapability(
         sampleRate = positive("sample_rate") ?: return@runCatching null,
         maxSeconds = positive("max_seconds") ?: return@runCatching null,
         maxChunkBytes = positive("max_chunk_bytes") ?: return@runCatching null,
+        cleanup = cleanup,
+        cleanupKinds = if (cleanup) {
+            (voice["cleanup_kinds"] as? JsonArray)
+                ?.mapNotNull { kind -> (kind as? JsonPrimitive)?.takeIf { it.isString }?.content }
+                ?: listOf("claude")
+        } else {
+            emptyList()
+        },
     )
 }.getOrNull()
 

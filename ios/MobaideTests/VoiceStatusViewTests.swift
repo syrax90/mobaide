@@ -34,6 +34,23 @@ final class VoiceStatusViewTests: XCTestCase {
         )
     }
 
+    func testCleanupChoiceIsOffWhenTheAgentOmitsIt() throws {
+        var wire = try JSONSerialization.jsonObject(with: JSONEncoder().encode(status())) as! [String: Any]
+        wire.removeValue(forKey: "cleanup_enabled")
+        let decoded = try JSONDecoder().decode(
+            VoiceStatusResponse.self, from: JSONSerialization.data(withJSONObject: wire)
+        )
+
+        XCTAssertFalse(decoded.cleanup_enabled)
+    }
+
+    func testWithCleanupChangesOnlyTheCleanupChoice() {
+        let on = status().withCleanup(true)
+
+        XCTAssertTrue(on.cleanup_enabled)
+        XCTAssertEqual(on.withCleanup(false), status())
+    }
+
     func testMicModeMapsEveryKnownStateAndHidesTheRest() {
         let expected: [(String, VoiceMicMode)] = [
             (VoiceStatusResponse.stateNotInstalled, .off),

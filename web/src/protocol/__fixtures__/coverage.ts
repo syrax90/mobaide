@@ -57,8 +57,9 @@ const OWNER = {
    * the path fields' suggestions, is a plain REST body on the same footing.
    *
    * #737's voice dictation and install bodies are REST-only and follow them
-   * here too; `VoiceStatusResponse` also rides the `voice.changed` event and
-   * keeps its Zod mirror.
+   * here too, as do the transcript cleanup request and response;
+   * `VoiceStatusResponse` also rides the `voice.changed` event and keeps its
+   * Zod mirror.
    */
   generated: 'shipped — typed by the generated OpenAPI schema',
   /** Editing a custom agent type on web: CLA-231. */
@@ -157,6 +158,9 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/agent/StopScanRequest.json': OWNER.generated,
   'dto/agent/TokenRequest.json': OWNER.generated,
   'dto/agent/TokenResponse.json': OWNER.generated,
+  'dto/agent/VoiceCleanupRequest.json': OWNER.generated,
+  'dto/agent/VoiceCleanupResponse.json': OWNER.generated,
+  'dto/agent/VoiceCleanupSettingsRequest.json': OWNER.generated,
   'dto/agent/VoiceDictationAudioRequest.json': OWNER.generated,
   'dto/agent/VoiceDictationAudioResponse.json': OWNER.generated,
   'dto/agent/VoiceDictationCreateRequest.json': OWNER.generated,

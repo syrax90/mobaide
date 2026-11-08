@@ -7,14 +7,17 @@ import androidx.lifecycle.viewModelScope
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.local.PreferencesStore
+import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.VoiceCapability
 import com.mobaide.app.data.network.dto.VoiceStatusResponse
+import com.mobaide.app.data.network.dto.wireName
 import com.mobaide.app.data.repository.AgentRepository
 import com.mobaide.app.data.repository.VoiceRepository
 import com.mobaide.app.data.voice.AudioRecordRecorder
 import com.mobaide.app.data.voice.DictationController
 import com.mobaide.app.data.voice.DictationState
 import com.mobaide.app.data.voice.InterruptReason
+import com.mobaide.app.data.voice.TranscriptCleaner
 import com.mobaide.app.data.voice.VoiceApiException
 import com.mobaide.app.data.voice.VoiceCodes
 import com.mobaide.app.data.voice.VoiceErrorCopy
@@ -57,11 +60,23 @@ data class VoiceUiState(
     val dictation: DictationState = DictationState.Idle,
     val setupVisible: Boolean = false,
     val action: VoiceActionState = VoiceActionState(),
+    /** The agent can clean up transcripts (`capabilities.voice.cleanup`). */
+    val cleanupSupported: Boolean = false,
+    /** ...and this session's AI agent can do it: the setup sheet offers the toggle. */
+    val cleanupOffered: Boolean = false,
+    val cleanUp: Boolean = false,
+    /** The agent refused or missed the last cleanup change; the toggle shows its old value. */
+    val cleanupError: String? = null,
+    /** "Got it" was pressed on the notice shown before the first opt-in. */
+    val cleanupNoticeSeen: Boolean = false,
 )
 
 sealed interface VoiceEvent {
-    /** Put the transcript at the composer's cursor; never send it. */
-    data class InsertTranscript(val text: String) : VoiceEvent
+    /**
+     * Put the transcript at the composer's cursor; never send it. [notice]
+     * says why it was not cleaned up, for a snackbar.
+     */
+    data class InsertTranscript(val text: String, val notice: String? = null) : VoiceEvent
 }
 
 const val DEFAULT_AGENT_NAME = "your computer"
@@ -91,14 +106,23 @@ class VoiceViewModel @Inject constructor(
     private val permissionFailure = MutableStateFlow<DictationState.Failed?>(null)
     private val setupVisible = MutableStateFlow(false)
     private val actionState = MutableStateFlow(VoiceActionState())
+    private val sessionKind = MutableStateFlow<SessionKind?>(null)
+    private val cleanupError = MutableStateFlow<String?>(null)
     private val _events = Channel<VoiceEvent>(Channel.BUFFERED)
     val events: Flow<VoiceEvent> = _events.receiveAsFlow()
 
     private var controller: DictationController? = null
     private var controllerJob: Job? = null
+    /** The session kind (wire name) the last cleanup ran for, for its failure notice. */
+    private var cleanupKind: String? = null
 
     private val micHidden: Flow<Boolean> =
         agentKey?.let(preferencesStore::voiceMicHidden) ?: flowOf(false)
+
+    private val cleanupPrefs: Flow<CleanupPrefs> =
+        combine(preferencesStore.voiceCleanupNoticeSeen, sessionKind, cleanupError) { seen, kind, error ->
+            CleanupPrefs(seen, kind, error)
+        }
 
     private val agentName: Flow<String> = agentRepository.observeAgents().map { agents ->
         val id = tokenStore.getAgentId()
@@ -130,10 +154,10 @@ class VoiceViewModel @Inject constructor(
             Quad(c, s, h, n)
         },
         dictation,
-        setupVisible,
-        actionState,
+        combine(setupVisible, actionState) { setup, action -> setup to action },
+        cleanupPrefs,
         queuedPoll,
-    ) { base, dictation, setup, action, _ ->
+    ) { base, dictation, (setup, action), cleanup, _ ->
         val (capability, status, hidden, name) = base
         VoiceUiState(
             micMode = VoiceStatusView.micMode(capability.second, status, hidden),
@@ -145,6 +169,11 @@ class VoiceViewModel @Inject constructor(
             dictation = dictation,
             setupVisible = setup,
             action = action,
+            cleanupSupported = capability.second?.cleanup == true,
+            cleanupOffered = capability.second.cleansUp(cleanup.kind),
+            cleanUp = status?.cleanup_enabled == true,
+            cleanupError = cleanup.error,
+            cleanupNoticeSeen = cleanup.noticeSeen,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), VoiceUiState())
 
@@ -214,6 +243,7 @@ class VoiceViewModel @Inject constructor(
     fun hideSetup() {
         setupVisible.value = false
         actionState.value = VoiceActionState()
+        cleanupError.value = null
     }
 
     fun refreshStatus() {
@@ -229,6 +259,28 @@ class VoiceViewModel @Inject constructor(
         val key = agentKey ?: return
         viewModelScope.launch { preferencesStore.setVoiceMicHidden(key, hidden) }
         if (hidden) setupVisible.value = false
+    }
+
+    /** The terminal's session; null on Settings, where no transcript is cleaned up. */
+    fun setSessionKind(kind: SessionKind?) {
+        sessionKind.value = kind
+    }
+
+    /**
+     * Stored on the agent, so every client of it shares the choice. Turning
+     * cleanup on also records the notice as seen on this device: the UI shows
+     * the notice first, and calls this only after "Got it".
+     */
+    fun setCleanUp(on: Boolean) {
+        cleanupError.value = null
+        viewModelScope.launch {
+            if (on) preferencesStore.setVoiceCleanupNoticeSeen()
+            try {
+                voiceRepository.setCleanup(on)
+            } catch (e: VoiceApiException) {
+                cleanupError.value = "Couldn't save this setting on ${uiState.value.agentName}. Try again."
+            }
+        }
     }
 
     private fun runAction(action: suspend () -> Unit) {
@@ -257,6 +309,15 @@ class VoiceViewModel @Inject constructor(
             sampleRate = capability.sampleRate,
             maxSeconds = capability.maxSeconds,
             scope = viewModelScope,
+            cleaner = {
+                val kind = sessionKind.value?.takeIf { capability.cleansUp(it) }?.wireName
+                if (kind != null && voiceRepository.status.value?.cleanup_enabled == true) {
+                    cleanupKind = kind
+                    TranscriptCleaner { text -> voiceRepository.cleanup(text, kind) }
+                } else {
+                    null
+                }
+            },
         )
         controller = created
         controllerJob = viewModelScope.launch {
@@ -266,7 +327,11 @@ class VoiceViewModel @Inject constructor(
                 // says it is: re-read it so the mic shows the real state.
                 if (state is DictationState.Failed && state.code == VoiceCodes.NOT_READY) refreshStatus()
                 if (state is DictationState.Result) {
-                    _events.send(VoiceEvent.InsertTranscript(state.text))
+                    val notice = state.cleanupError?.let {
+                        "Couldn't clean up the text, so it's inserted as heard. " +
+                            VoiceErrorCopy.cleanup(it.code, uiState.value.agentName, cleanupKind)
+                    }
+                    _events.send(VoiceEvent.InsertTranscript(state.text, notice))
                     created.dismiss()
                 }
             }
@@ -286,6 +351,8 @@ class VoiceViewModel @Inject constructor(
         disposeController()
     }
 
+    private data class CleanupPrefs(val noticeSeen: Boolean, val kind: SessionKind?, val error: String?)
+
     private data class Quad(
         val capability: Pair<Boolean, VoiceCapability?>,
         val status: VoiceStatusResponse?,
@@ -297,3 +364,7 @@ class VoiceViewModel @Inject constructor(
         const val QUEUED_POLL_MS = 4_000L
     }
 }
+
+/** The agent runs the CLI of the session's kind, so it cleans up only for the kinds it lists. */
+private fun VoiceCapability?.cleansUp(kind: SessionKind?): Boolean =
+    this != null && cleanup && kind != null && kind.wireName in cleanupKinds

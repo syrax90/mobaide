@@ -15,8 +15,16 @@ interface VoicePrefsState {
    * text in the composer, which is the review.
    */
   skipReviewAgents: Record<string, true>;
+  /**
+   * The user pressed "Got it" on the cleanup notice, which comes before the
+   * first opt-in on this browser. Mirrors `voice_cleanup_notice_seen` on
+   * Android and iOS. The cleanup choice itself is stored on the agent
+   * (`cleanup_enabled` in the voice status), shared by every client.
+   */
+  cleanupNoticeSeen: boolean;
   setMicHidden: (agentId: string, hidden: boolean) => void;
   setSkipReview: (agentId: string, skip: boolean) => void;
+  acknowledgeCleanupNotice: () => void;
   forgetAgent: (agentId: string) => void;
 }
 
@@ -65,6 +73,7 @@ export const useVoicePrefsStore = create<VoicePrefsState>()(
     (set) => ({
       hiddenAgents: {},
       skipReviewAgents: {},
+      cleanupNoticeSeen: false,
       setMicHidden: (agentId, hidden) => {
         safely(() => {
           set((state) => ({ hiddenAgents: withAgent(state.hiddenAgents, agentId, hidden) }));
@@ -75,10 +84,16 @@ export const useVoicePrefsStore = create<VoicePrefsState>()(
           set((state) => ({ skipReviewAgents: withAgent(state.skipReviewAgents, agentId, skip) }));
         });
       },
+      acknowledgeCleanupNotice: () => {
+        safely(() => {
+          set({ cleanupNoticeSeen: true });
+        });
+      },
       forgetAgent: (agentId) => {
         safely(() => {
           set((state) =>
-            Object.hasOwn(state.hiddenAgents, agentId) || Object.hasOwn(state.skipReviewAgents, agentId)
+            Object.hasOwn(state.hiddenAgents, agentId) ||
+            Object.hasOwn(state.skipReviewAgents, agentId)
               ? {
                   hiddenAgents: withoutAgent(state.hiddenAgents, agentId),
                   skipReviewAgents: withoutAgent(state.skipReviewAgents, agentId),
@@ -96,11 +111,13 @@ export const useVoicePrefsStore = create<VoicePrefsState>()(
           ...current,
           hiddenAgents: cleanAgentMap(stored?.hiddenAgents),
           skipReviewAgents: cleanAgentMap(stored?.skipReviewAgents),
+          cleanupNoticeSeen: stored?.cleanupNoticeSeen === true,
         };
       },
       partialize: (state) => ({
         hiddenAgents: state.hiddenAgents,
         skipReviewAgents: state.skipReviewAgents,
+        cleanupNoticeSeen: state.cleanupNoticeSeen,
       }),
     },
   ),

@@ -16,7 +16,11 @@ enum DictationState: Equatable, Sendable {
     /// uploads are behind (network trouble) while recording carries on.
     case recording(elapsedMs: Int, level: Float, remainingSeconds: Int?, lagging: Bool)
     case transcribing(interruptedBy: InterruptReason?, lagging: Bool)
-    case result(String)
+    /// The session's AI agent is cleaning up the transcript as heard.
+    case cleaning(String)
+    /// `cleanupError` says why a cleanup failed; the text is then the
+    /// transcript as heard.
+    case result(String, cleanupError: VoiceCleanupError? = nil)
     case empty
     /// `message` is the agent's raw text, shown only behind "Details";
     /// `hasAudio` means Retry needs no new recording.
@@ -24,7 +28,7 @@ enum DictationState: Equatable, Sendable {
 
     var isActive: Bool {
         switch self {
-        case .starting, .recording, .transcribing: return true
+        case .starting, .recording, .transcribing, .cleaning: return true
         default: return false
         }
     }
@@ -34,6 +38,14 @@ enum DictationState: Equatable, Sendable {
         return false
     }
 }
+
+struct VoiceCleanupError: Equatable, Sendable {
+    let code: String
+    let message: String?
+}
+
+/// Cleans up a transcript; throws a `VoiceApiError`.
+typealias TranscriptCleaner = @Sendable (String) async throws -> String
 
 /// Callbacks from the capture thread.
 struct VoiceRecorderSink: Sendable {
@@ -61,6 +73,10 @@ struct VoiceRecorderError: Error, Equatable, Sendable {
 /// One dictation at a time, as the UI sees it: microphone → buffer → uploader
 /// → transcript. Elapsed time is counted in samples, so the countdown and the
 /// agent's `max_seconds` agree exactly.
+///
+/// `cleaner` is read when a transcript arrives, so a setting changed while
+/// recording applies to that transcript: how to clean it up, or nil to hand
+/// it over as heard.
 @MainActor
 @Observable
 final class DictationController {
@@ -79,30 +95,36 @@ final class DictationController {
     @ObservationIgnored private let sampleRate: Int
     @ObservationIgnored private let maxSeconds: Int
     @ObservationIgnored private let clock: any VoiceClock
+    @ObservationIgnored private let cleaner: @MainActor () -> TranscriptCleaner?
 
     /// Bumped by every new dictation and every cancel; stale callbacks compare it.
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var recorder: (any VoiceRecorder)?
     @ObservationIgnored private var buffer: PcmBuffer?
     @ObservationIgnored private var uploader: DictationUploader?
+    @ObservationIgnored private var cleanupTask: Task<Void, Never>?
     @ObservationIgnored private var level: Float = 0
     @ObservationIgnored private var lagging = false
     @ObservationIgnored private var disposed = false
 
     private static let countdownSeconds = 15
+    /// Above the agent's 20 s budget and the relay's 30 s wait.
+    private static let cleanupTimeout = 35.0
 
     init(
         api: any VoiceApi,
         makeRecorder: @escaping @MainActor () -> any VoiceRecorder,
         sampleRate: Int,
         maxSeconds: Int,
-        clock: any VoiceClock = SystemVoiceClock()
+        clock: any VoiceClock = SystemVoiceClock(),
+        cleaner: @escaping @MainActor () -> TranscriptCleaner? = { nil }
     ) {
         self.api = api
         self.makeRecorder = makeRecorder
         self.sampleRate = sampleRate
         self.maxSeconds = maxSeconds
         self.clock = clock
+        self.cleaner = cleaner
     }
 
     /// The mic button: start, stop, or abandon a start that is still opening.
@@ -110,7 +132,7 @@ final class DictationController {
         switch state {
         case .recording: stop()
         case .starting: cancel()
-        case .transcribing: break
+        case .transcribing, .cleaning: break
         default: start()
         }
     }
@@ -137,7 +159,12 @@ final class DictationController {
                 },
                 done: { [weak self] text in
                     guard let self, generation == self.generation else { return }
-                    self.finish(with: text.isEmpty ? .empty : .result(text))
+                    guard !text.isEmpty, let cleaner = self.cleaner() else {
+                        self.finish(with: text.isEmpty ? .empty : .result(text))
+                        return
+                    }
+                    self.finish(with: .cleaning(text))
+                    self.cleanUp(generation: generation, text: text, cleaner: cleaner)
                 },
                 failed: { [weak self] failure in
                     guard let self, generation == self.generation else { return }
@@ -271,6 +298,35 @@ final class DictationController {
         )
     }
 
+    /// A cleanup that fails in any way hands over the transcript as heard.
+    private func cleanUp(generation: Int, text: String, cleaner: @escaping TranscriptCleaner) {
+        cleanupTask = Task { [weak self] in
+            let next: DictationState
+            do {
+                if let answer = try await DictationUploader.withTimeout(Self.cleanupTimeout, { try await cleaner(text) }) {
+                    let cleaned = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let heard = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    next = cleaned.isEmpty || cleaned == heard ? .result(text) : .result(cleaned)
+                } else {
+                    next = .result(text, cleanupError: VoiceCleanupError(code: VoiceCodes.cleanupTimeout, message: nil))
+                }
+            } catch is CancellationError {
+                return
+            } catch let error as VoiceApiError {
+                let code = error.network ? VoiceCodes.network : (error.code ?? VoiceCodes.generic)
+                next = .result(text, cleanupError: VoiceCleanupError(code: code, message: error.detailMessage ?? error.message))
+            } catch {
+                next = .result(
+                    text,
+                    cleanupError: VoiceCleanupError(code: VoiceCodes.generic, message: error.localizedDescription)
+                )
+            }
+            guard let self, generation == self.generation, case .cleaning = self.state else { return }
+            self.cleanupTask = nil
+            self.state = next
+        }
+    }
+
     private func fail(_ failure: UploadFailure) {
         let generation = generation
         let recorder = recorder
@@ -296,6 +352,8 @@ final class DictationController {
     }
 
     private func discard() {
+        cleanupTask?.cancel()
+        cleanupTask = nil
         if let recorder {
             Task { await recorder.stop() }
         }

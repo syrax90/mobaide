@@ -13,6 +13,9 @@ from mobaide.agent.auth.dependencies import get_current_user
 
 from .errors import VoiceError, http_error_for
 from .models import (
+    VoiceCleanupRequest,
+    VoiceCleanupResponse,
+    VoiceCleanupSettingsRequest,
     VoiceDictationAudioRequest,
     VoiceDictationAudioResponse,
     VoiceDictationCreateRequest,
@@ -113,3 +116,21 @@ async def voice_dictation_finish(
 async def voice_dictation_delete(dictation_id: str, request: Request) -> Response:
     await _service(request).delete_dictation(dictation_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/cleanup", response_model=VoiceCleanupResponse)
+async def voice_cleanup(body: VoiceCleanupRequest, request: Request) -> VoiceCleanupResponse:
+    try:
+        return await _service(request).cleanup_transcript(body.text, body.kind)
+    except VoiceError as exc:
+        _raise_mapped(exc)
+
+
+@router.put("/cleanup/settings", response_model=VoiceStatusResponse)
+async def voice_cleanup_settings(
+    body: VoiceCleanupSettingsRequest, request: Request
+) -> VoiceStatusResponse:
+    try:
+        return _service(request).set_cleanup_enabled(body.enabled)
+    except VoiceError as exc:
+        _raise_mapped(exc)

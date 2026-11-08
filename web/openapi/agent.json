@@ -2913,6 +2913,60 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "VoiceCleanupRequest": {
+        "description": "``kind`` is the session's kind: its CLI cleans up the text. Clients\nfrom before ``cleanup_kinds`` send none and mean Claude Code.",
+        "properties": {
+          "kind": {
+            "default": "claude",
+            "enum": [
+              "claude",
+              "codex",
+              "antigravity"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 6000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "VoiceCleanupRequest",
+        "type": "object"
+      },
+      "VoiceCleanupResponse": {
+        "description": "The cleaned transcript; the original when there was nothing to clean.",
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "VoiceCleanupResponse",
+        "type": "object"
+      },
+      "VoiceCleanupSettingsRequest": {
+        "description": "``PUT /api/voice/cleanup/settings``: turn transcript cleanup on or off\nfor every client of this agent.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "VoiceCleanupSettingsRequest",
+        "type": "object"
+      },
       "VoiceDictationAudioRequest": {
         "properties": {
           "pcm16_b64": {
@@ -3220,8 +3274,12 @@
         "type": "object"
       },
       "VoiceStatusResponse": {
-        "description": "``GET /api/voice/status`` and the ``voice.changed`` event payload.\n\n``state``: ``unsupported`` | ``not_installed`` | ``queued`` |\n``downloading`` | ``verifying`` | ``ready`` | ``failed``. ``progress`` is\nset while ``downloading``; ``error`` while ``failed``; ``speed_factor``\n(seconds of speech transcribed per second of CPU time, from the install\nself-test) once ``ready``. ``repairing`` is true while an enabled voice\nkeeps its verified model and only needs its runtime again (after a\nPython upgrade): cancelling then stops without deleting the model.",
+        "description": "``GET /api/voice/status`` and the ``voice.changed`` event payload.\n\n``state``: ``unsupported`` | ``not_installed`` | ``queued`` |\n``downloading`` | ``verifying`` | ``ready`` | ``failed``. ``progress`` is\nset while ``downloading``; ``error`` while ``failed``; ``speed_factor``\n(seconds of speech transcribed per second of CPU time, from the install\nself-test) once ``ready``. ``repairing`` is true while an enabled voice\nkeeps its verified model and only needs its runtime again (after a\nPython upgrade): cancelling then stops without deleting the model.\n``cleanup_enabled`` is the user's transcript-cleanup choice for this\nagent, shared by every client; it does not depend on the install state.",
         "properties": {
+          "cleanup_enabled": {
+            "title": "Cleanup Enabled",
+            "type": "boolean"
+          },
           "enabled": {
             "title": "Enabled",
             "type": "boolean"
@@ -3280,7 +3338,8 @@
           "progress",
           "host",
           "speed_factor",
-          "error"
+          "error",
+          "cleanup_enabled"
         ],
         "title": "VoiceStatusResponse",
         "type": "object"
@@ -5467,6 +5526,88 @@
         "summary": "Version Info",
         "tags": [
           "version"
+        ]
+      }
+    },
+    "/api/voice/cleanup": {
+      "post": {
+        "operationId": "voice_cleanup_api_voice_cleanup_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoiceCleanupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceCleanupResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Voice Cleanup",
+        "tags": [
+          "voice"
+        ]
+      }
+    },
+    "/api/voice/cleanup/settings": {
+      "put": {
+        "operationId": "voice_cleanup_settings_api_voice_cleanup_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoiceCleanupSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Voice Cleanup Settings",
+        "tags": [
+          "voice"
         ]
       }
     },

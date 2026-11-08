@@ -5,15 +5,19 @@ import com.mobaide.app.testing.FakeUploaderClock
 import com.mobaide.app.testing.FakeVoiceApi
 import com.mobaide.app.testing.Reply
 import com.mobaide.app.testing.refusal
+import com.mobaide.app.testing.networkError
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -21,7 +25,7 @@ import org.junit.Test
 /**
  * [DictationController]'s transitions with a fake microphone and the scripted
  * agent, on virtual time: Idle → Starting → Recording → Transcribing →
- * Result | Empty | Failed, plus cancel, retry, dismiss and dispose.
+ * (Cleaning →) Result | Empty | Failed, plus cancel, retry, dismiss and dispose.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class DictationControllerTest {
@@ -31,20 +35,62 @@ class DictationControllerTest {
         val recorder = FakeRecorder()
         val states = mutableListOf<DictationState>()
 
-        fun controller(maxSeconds: Int = 120) = DictationController(
+        fun controller(
+            maxSeconds: Int = 120,
+            cleaner: () -> TranscriptCleaner? = { null },
+        ) = DictationController(
             api = api,
             createRecorder = { recorder },
             sampleRate = 16_000,
             maxSeconds = maxSeconds,
             scope = scope,
             clock = FakeUploaderClock(test.testScheduler),
+            cleaner = cleaner,
         )
 
         fun settle() = test.advanceUntilIdle()
 
-        fun recording(maxSeconds: Int = 120): DictationController = controller(maxSeconds).also {
+        fun recording(
+            maxSeconds: Int = 120,
+            cleaner: () -> TranscriptCleaner? = { null },
+        ): DictationController = controller(maxSeconds, cleaner).also {
             it.start()
             settle()
+        }
+
+        /**
+         * A recorded second, stopped and transcribed as "hello world", with
+         * [cleaner] asked to clean it up. Virtual time stands still, so a held
+         * cleanup is still running.
+         */
+        fun cleaning(cleaner: FakeCleaner): DictationController = recording(cleaner = { cleaner }).also {
+            recorder.speak(1)
+            settle()
+            it.stop()
+            test.testScheduler.runCurrent()
+        }
+    }
+
+    /** The session's AI agent on the agent's computer, answering [reply]; every transcript is kept. */
+    private class FakeCleaner : TranscriptCleaner {
+        val calls = mutableListOf<String>()
+        var reply: Reply<String> = Reply.Ok("Hello, world.")
+
+        override suspend fun clean(text: String): String {
+            calls += text
+            return when (val reply = reply) {
+                is Reply.Ok -> reply.value
+                is Reply.Fail -> throw reply.error
+                is Reply.Hold -> {
+                    reply.entered = true
+                    try {
+                        reply.answer.await()
+                    } catch (e: CancellationException) {
+                        reply.aborted = true
+                        throw e
+                    }
+                }
+            }
         }
     }
 
@@ -282,5 +328,149 @@ class DictationControllerTest {
         settle()
 
         assertEquals(1, recorder.stops)
+    }
+
+    @Test
+    fun cleanup_cleansTheTranscriptUpBeforeHandingItBack() = controllerTest {
+        val held = Reply.Hold<String>()
+        val cleaner = FakeCleaner().apply { reply = held }
+        val dictation = cleaning(cleaner)
+
+        assertEquals(DictationState.Cleaning("hello world"), dictation.state.value)
+        held.answer.complete("Hello, world.")
+        settle()
+
+        assertEquals(DictationState.Result("Hello, world."), dictation.state.value)
+        assertEquals(listOf("hello world"), cleaner.calls)
+    }
+
+    @Test
+    fun cleanup_thatComesBackUnchangedOrEmpty_handsBackAPlainResult() = controllerTest {
+        for (answer in listOf("hello world", "  hello world\n", "  ")) {
+            val cleaner = FakeCleaner().apply { reply = Reply.Ok(answer) }
+            val dictation = cleaning(cleaner)
+            settle()
+
+            assertEquals(answer, DictationState.Result("hello world"), dictation.state.value)
+            dictation.dismiss()
+        }
+    }
+
+    @Test
+    fun cleanup_thatFails_handsOverTheTranscriptAsHeard_sayingWhy() = controllerTest {
+        val failures = listOf(
+            refusal(503, VoiceCodes.CLEANUP_OUTDATED, detailMessage = "Run claude update.") to
+                CleanupError(VoiceCodes.CLEANUP_OUTDATED, "Run claude update."),
+            refusal(502, null) to CleanupError(VoiceCodes.GENERIC, "HTTP 502"),
+            networkError() to CleanupError(VoiceCodes.NETWORK, "offline"),
+            IllegalStateException("boom") to CleanupError(VoiceCodes.GENERIC, "boom"),
+        )
+        for ((error, expected) in failures) {
+            val cleaner = FakeCleaner().apply { reply = Reply.Fail(error) }
+            val dictation = cleaning(cleaner)
+            settle()
+
+            assertEquals(DictationState.Result("hello world", cleanupError = expected), dictation.state.value)
+            dictation.dismiss()
+        }
+    }
+
+    @Test
+    fun cleanup_waitsPastTheRelayTimeout_thenGivesUpAt35sWithTheTranscriptAsHeard() = controllerTest {
+        val held = Reply.Hold<String>()
+        val dictation = cleaning(FakeCleaner().apply { reply = held })
+
+        test.testScheduler.advanceTimeBy(30_000)
+        test.testScheduler.runCurrent()
+        assertEquals(DictationState.Cleaning("hello world"), dictation.state.value)
+
+        test.testScheduler.advanceTimeBy(5_000)
+        test.testScheduler.runCurrent()
+
+        assertTrue(held.aborted)
+        assertEquals(
+            DictationState.Result("hello world", CleanupError(VoiceCodes.CLEANUP_TIMEOUT, null)),
+            dictation.state.value,
+        )
+    }
+
+    @Test
+    fun cancel_whileCleaningUp_returnsToIdle_andAbortsTheRequest() = controllerTest {
+        val held = Reply.Hold<String>()
+        val dictation = cleaning(FakeCleaner().apply { reply = held })
+
+        dictation.cancel()
+        test.testScheduler.runCurrent()
+
+        assertTrue(held.aborted)
+        assertEquals(DictationState.Idle, dictation.state.value)
+    }
+
+    @Test
+    fun theMic_isIgnoredWhileCleaningUp() = controllerTest {
+        val dictation = cleaning(FakeCleaner().apply { reply = Reply.Hold<String>() })
+
+        dictation.toggle()
+        dictation.start()
+        test.testScheduler.runCurrent()
+
+        assertEquals(DictationState.Cleaning("hello world"), dictation.state.value)
+        assertEquals(1, api.log.count { it == "create" })
+    }
+
+    @Test
+    fun anAbandonedCleanupAnswer_neverReachesTheNextDictation() = controllerTest {
+        // A reply already on its way when the user cancels ignores the abort.
+        val answers = mutableListOf<CompletableDeferred<String>>()
+        val deaf = TranscriptCleaner {
+            val answer = CompletableDeferred<String>().also { answers += it }
+            withContext(NonCancellable) { answer.await() }
+        }
+        val dictation = recording(cleaner = { deaf })
+        recorder.speak(1)
+        settle()
+        dictation.stop()
+        test.testScheduler.runCurrent()
+        dictation.cancel()
+        dictation.start()
+        test.testScheduler.runCurrent()
+        recorder.speak(1)
+        test.testScheduler.runCurrent()
+        dictation.stop()
+        test.testScheduler.runCurrent()
+
+        answers[0].complete("Stale.")
+        test.testScheduler.runCurrent()
+        assertEquals(DictationState.Cleaning("hello world"), dictation.state.value)
+
+        answers[1].complete("Fresh.")
+        test.testScheduler.runCurrent()
+        assertEquals(DictationState.Result("Fresh."), dictation.state.value)
+    }
+
+    @Test
+    fun theCleanupSetting_isReadWhenTheTranscriptArrives_notWhenRecordingStarts() = controllerTest {
+        val cleaner = FakeCleaner()
+        var cleanUp = false
+        val dictation = recording(cleaner = { if (cleanUp) cleaner else null })
+        recorder.speak(1)
+        settle()
+
+        cleanUp = true
+        dictation.stop()
+        settle()
+
+        assertEquals(DictationState.Result("Hello, world."), dictation.state.value)
+    }
+
+    @Test
+    fun nothingHeard_sendsNothingToCleanUp() = controllerTest {
+        api.text = ""
+        val cleaner = FakeCleaner()
+        val dictation = cleaning(cleaner)
+        settle()
+
+        assertEquals(DictationState.Empty, dictation.state.value)
+        assertEquals(emptyList<String>(), cleaner.calls)
     }
 }

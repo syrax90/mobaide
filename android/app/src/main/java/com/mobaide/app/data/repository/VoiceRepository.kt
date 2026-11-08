@@ -83,6 +83,30 @@ class VoiceRepository(
         return install()
     }
 
+    /**
+     * The status shows [enabled] at once and goes back if the agent refuses.
+     * A snapshot that arrives meanwhile wins over both the rollback and the answer.
+     */
+    suspend fun setCleanup(enabled: Boolean): VoiceStatusResponse {
+        val previous = _status.value
+        val optimistic = previous?.copy(cleanup_enabled = enabled)
+        if (optimistic != null) _status.value = optimistic
+        return try {
+            voiceCall { restApi.setVoiceCleanupSettings(enabled) }
+                .also { _status.compareAndSet(optimistic, it) }
+        } catch (e: VoiceApiException) {
+            if (optimistic != null) _status.compareAndSet(optimistic, previous)
+            throw e
+        }
+    }
+
+    /**
+     * The CLI of session kind [kind] (a wire name) cleans up [text] on the
+     * connected agent's computer (within 20 s).
+     */
+    suspend fun cleanup(text: String, kind: String): String =
+        voiceCall { restApi.cleanupVoiceTranscript(text, kind).text }
+
     /** The dictation routes of the connected agent, for the uploader. */
     fun dictationApi(sessionId: String?): VoiceApi = object : VoiceApi {
         override suspend fun create(): VoiceDictationOpened = voiceCall {

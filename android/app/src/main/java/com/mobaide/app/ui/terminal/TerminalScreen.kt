@@ -192,10 +192,17 @@ fun TerminalScreen(
     LaunchedEffect(voiceViewModel) {
         voiceViewModel.events.collect { event ->
             when (event) {
-                is VoiceEvent.InsertTranscript -> viewModel.insertTranscript(event.text)
+                is VoiceEvent.InsertTranscript -> {
+                    viewModel.insertTranscript(event.text)
+                    // Launched, not awaited: a suspended showSnackbar would
+                    // hold back the next transcript.
+                    event.notice?.let { notice -> drawerScope.launch { snackbarHostState.showSnackbar(notice) } }
+                }
             }
         }
     }
+    // Transcript cleanup is offered by session kind.
+    LaunchedEffect(voiceViewModel, sessionKind) { voiceViewModel.setSessionKind(sessionKind) }
 
     // A tick when recording starts and when it stops.
     val voiceHaptics = LocalHapticFeedback.current
@@ -210,7 +217,11 @@ fun TerminalScreen(
     // The screen would time out and lock mid-dictation.
     val voiceView = LocalView.current
     val dictating = when (voiceState.dictation) {
-        DictationState.Starting, is DictationState.Recording, is DictationState.Transcribing -> true
+        DictationState.Starting,
+        is DictationState.Recording,
+        is DictationState.Transcribing,
+        is DictationState.Cleaning,
+        -> true
         else -> false
     }
     DisposableEffect(voiceView, dictating) {
@@ -594,6 +605,7 @@ fun TerminalScreen(
             onCancelInstall = voiceViewModel::cancelInstall,
             onRetry = voiceViewModel::install,
             onHideMic = { voiceViewModel.setMicHidden(true) },
+            onCleanUpChange = voiceViewModel::setCleanUp,
         )
     }
 

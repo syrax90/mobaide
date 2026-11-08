@@ -144,6 +144,8 @@ from mobaide.voice.errors import VoiceError
 from mobaide.voice.errors import http_error_for as voice_http_error_for
 from mobaide.voice.models import (
     VOICE_CAPABILITIES,
+    VoiceCleanupRequest,
+    VoiceCleanupSettingsRequest,
     VoiceDictationAudioRequest,
     VoiceDictationCreateRequest,
     VoiceDictationFinishRequest,
@@ -219,7 +221,7 @@ def _build_relay_ssl_context(
 # requests cannot pile up tasks.
 _VOICE_PATH_PREFIX = "/api/voice/"
 MAX_VOICE_PROXY_TASKS = 32
-_VOICE_ROUTE = re.compile(r"^/api/voice/(status|install|install/cancel|model|dictations)$")
+_VOICE_ROUTE = re.compile(r"^/api/voice/(status|install|install/cancel|model|dictations|cleanup|cleanup/settings)$")
 _VOICE_DICTATION_ROUTE = re.compile(r"^/api/voice/dictations/([^/]+)(?:/(audio|finish))?$")
 
 # PTY frame type bytes — must stay in sync with agent/ws/session_io.py.
@@ -2253,6 +2255,14 @@ class RelayClient:
                 elif method == "POST" and route == "dictations":
                     VoiceDictationCreateRequest.model_validate(body or {})
                     resp = await voice.create_dictation()
+                elif method == "POST" and route == "cleanup":
+                    cleanup_request = VoiceCleanupRequest.model_validate(body or {})
+                    resp = await voice.cleanup_transcript(
+                        cleanup_request.text, cleanup_request.kind
+                    )
+                elif method == "PUT" and route == "cleanup/settings":
+                    settings_request = VoiceCleanupSettingsRequest.model_validate(body or {})
+                    resp = voice.set_cleanup_enabled(settings_request.enabled)
                 else:
                     return None
             else:

@@ -41,6 +41,12 @@ from mobaide.relay.envelope import (
     MIN_CLIENT_PROTOCOL_VERSION,
     SUPPORTED_PROTOCOL_VERSIONS,
 )
+from mobaide.voice.cleanup import (
+    AntigravityCleanup,
+    ClaudeCleanup,
+    CodexCleanup,
+    TranscriptCleaner,
+)
 from mobaide.voice.models import VOICE_CAPABILITIES
 from mobaide.voice.router import router as voice_router
 from mobaide.voice.service import VoiceService
@@ -61,6 +67,7 @@ from .install_paths import (
     default_prefix,
     manifest_url_from_relay_server_url,
     read_trust_public_key,
+    state_prefix,
 )
 from .logging import bind_request_context, clear_request_context, get_logger
 from .logging_setup import configure_logging, shutdown_logging
@@ -797,6 +804,21 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         test_mode=config.is_test_mode,
         fake=config.voice_fake,
         publish=app.state.event_bus.publish,
+        # Opt-in transcript cleanup through the same CLI a session uses.
+        cleaner=TranscriptCleaner(
+            clis={
+                "claude": ClaudeCleanup(app.state.claude_launcher.resolve_binary),
+                "codex": CodexCleanup(
+                    app.state.codex_launcher.resolve_binary,
+                    lambda: app.state.codex_launcher.cached_models,
+                ),
+                "antigravity": AntigravityCleanup(
+                    app.state.antigravity_launcher.resolve_binary,
+                    lambda: app.state.antigravity_launcher.cached_models,
+                ),
+            },
+            work_dir=state_prefix(test_mode=config.is_test_mode) / "voice-cleanup",
+        ),
     )
     app.state.fanouts = {}  # session_id -> SessionEventFanout
 

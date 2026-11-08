@@ -16,7 +16,7 @@ Every documentation file in this repository, grouped by topic. Read this first, 
 
 | File | What it covers |
 |---|---|
-| [PROTOCOL.md](../PROTOCOL.md) | The wire contract: `protocol_version`, WebSocket close codes, the HTTPS-bootstrap update path, agent self-uninstall, voice input API, and the session and project git APIs (status, mutations, jobs, branches, rebase, conflict resolver). Also how to bump the version. |
+| [PROTOCOL.md](../PROTOCOL.md) | The wire contract: `protocol_version`, WebSocket close codes, the HTTPS-bootstrap update path, agent self-uninstall, voice input API (incl. the opt-in `POST /api/voice/cleanup` transcript cleanup), and the session and project git APIs (status, mutations, jobs, branches, rebase, conflict resolver). Also how to bump the version. |
 
 ## Clients
 
@@ -34,7 +34,7 @@ Every documentation file in this repository, grouped by topic. Read this first, 
 
 | File | What it covers |
 |---|---|
-| [voice-input.md](voice-input.md) | Voice input on Android, iOS and web: opt-in flow, per-platform module map, status → mic-button table, dictation rules, permissions and privacy, release checklist. |
+| [voice-input.md](voice-input.md) | Voice input on Android, iOS and web: opt-in flow, per-platform module map, status → mic-button table, dictation rules, opt-in transcript cleanup through the session's CLI (Claude Haiku, Codex Luna, Gemini Flash), permissions and privacy, release checklist. |
 | [qr-pairing.md](qr-pairing.md) | Agent pairing: QR flow and `MOBA1\|...` payload, printed pairing link, device-code direction, relay URL persistence, trust-key pinning, re-pair rules, operator runbook, troubleshooting. |
 
 ## Account workflows

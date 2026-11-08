@@ -51,7 +51,8 @@
           "reasons": []
         },
         "speed_factor": null,
-        "error": null
+        "error": null,
+        "cleanup_enabled": false
       },
       "decoded_canonical": {
         "state": "not_installed",
@@ -98,7 +99,8 @@
           "cpu_count": 10,
           "recommendation": "ok",
           "reasons": []
-        }
+        },
+        "cleanup_enabled": false
       }
     },
     {
@@ -159,7 +161,8 @@
           ]
         },
         "speed_factor": null,
-        "error": null
+        "error": null,
+        "cleanup_enabled": false
       },
       "decoded_canonical": {
         "state": "downloading",
@@ -215,7 +218,8 @@
               "message": "This computer has 8.6 GB of memory; dictation uses about 700 MB while it runs, which may slow other apps."
             }
           ]
-        }
+        },
+        "cleanup_enabled": false
       }
     },
     {
@@ -268,7 +272,8 @@
           "reasons": []
         },
         "speed_factor": 35.2,
-        "error": null
+        "error": null,
+        "cleanup_enabled": true
       },
       "decoded_canonical": {
         "state": "ready",
@@ -316,7 +321,8 @@
           "recommendation": "ok",
           "reasons": []
         },
-        "speed_factor": 35.2
+        "speed_factor": 35.2,
+        "cleanup_enabled": true
       }
     },
     {
@@ -372,7 +378,8 @@
         "error": {
           "code": "hash_mismatch",
           "message": "encoder.int8.onnx from huggingface.co failed verification."
-        }
+        },
+        "cleanup_enabled": false
       },
       "decoded_canonical": {
         "state": "failed",
@@ -423,7 +430,8 @@
         "error": {
           "code": "hash_mismatch",
           "message": "encoder.int8.onnx from huggingface.co failed verification."
-        }
+        },
+        "cleanup_enabled": false
       }
     },
     {
@@ -481,7 +489,8 @@
           ]
         },
         "speed_factor": null,
-        "error": null
+        "error": null,
+        "cleanup_enabled": false
       },
       "decoded_canonical": {
         "state": "unsupported",
@@ -533,7 +542,8 @@
               "message": "Voice input on Linux needs glibc 2.17 or newer (musl is not supported)."
             }
           ]
-        }
+        },
+        "cleanup_enabled": false
       }
     },
     {
@@ -589,7 +599,8 @@
           "reasons": []
         },
         "speed_factor": null,
-        "error": null
+        "error": null,
+        "cleanup_enabled": false
       },
       "decoded_canonical": {
         "state": "downloading",
@@ -640,7 +651,8 @@
           "cpu_count": 10,
           "recommendation": "ok",
           "reasons": []
-        }
+        },
+        "cleanup_enabled": false
       }
     },
     {
@@ -696,7 +708,8 @@
         "error": {
           "code": "interrupted",
           "message": "Voice needs a small update for this agent; retry to finish."
-        }
+        },
+        "cleanup_enabled": false
       },
       "decoded_canonical": {
         "state": "failed",
@@ -747,7 +760,8 @@
         "error": {
           "code": "interrupted",
           "message": "Voice needs a small update for this agent; retry to finish."
-        }
+        },
+        "cleanup_enabled": false
       }
     }
   ]

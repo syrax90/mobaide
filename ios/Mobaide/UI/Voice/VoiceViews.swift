@@ -31,8 +31,8 @@ struct VoiceMicButton: View {
 }
 
 /// Replaces the composer's buttons while a dictation runs: cancel, timer,
-/// level meter and stop while recording; progress while transcribing; the
-/// reason with Retry after a failure.
+/// level meter and stop while recording; progress while transcribing and
+/// cleaning up; the reason with Retry after a failure.
 struct VoiceDictationBar: View {
     let voice: VoiceInputModel
 
@@ -84,6 +84,13 @@ struct VoiceDictationBar: View {
         case .transcribing(let reason, let lagging):
             PixelLoadingBlock(width: 8, height: 12)
             Text(Self.transcribingLine(reason: reason, lagging: lagging, agent: voice.agentName))
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            cancelButton
+        // Part of transcribing to the user: the same bar, one line changed.
+        case .cleaning:
+            PixelLoadingBlock(width: 8, height: 12)
+            Text("Cleaning up the text…")
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
             cancelButton
@@ -226,6 +233,9 @@ struct VoicePanel: View {
                     Toggle("Show the mic in the command field", isOn: showMicBinding)
                         .toggleStyle(.pixelCheckbox)
                 }
+                if cleanupToggleShown(status) {
+                    VoiceCleanupToggle(voice: voice)
+                }
                 if settings, let notice = status.model.notice, !notice.isEmpty {
                     // Borderless: in a List row, default-style buttons all fire on any tap.
                 Button("Model license") { showLicense = true }
@@ -328,6 +338,21 @@ struct VoicePanel: View {
         }
     }
 
+    /// In Settings for an agent that supports cleanup; in the enable sheet once
+    /// voice is enabled in a session that can use it, so the first dictation is
+    /// already cleaned up.
+    private func cleanupToggleShown(_ status: VoiceStatusResponse) -> Bool {
+        if settings {
+            return voice.cleanupSupported && status.state != VoiceStatusResponse.stateUnsupported
+        }
+        return voice.cleanupOffered && [
+            VoiceStatusResponse.stateQueued,
+            VoiceStatusResponse.stateDownloading,
+            VoiceStatusResponse.stateVerifying,
+            VoiceStatusResponse.stateReady,
+        ].contains(status.state)
+    }
+
     private func lowResourcesWarning(_ reasons: [VoiceHostReason]) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("This computer may struggle with voice input.").fontWeight(.semibold)
@@ -355,6 +380,66 @@ struct VoicePanel: View {
 
     private var showMicBinding: Binding<Bool> {
         Binding(get: { !voice.micHidden }, set: { voice.setMicHidden(!$0) })
+    }
+}
+
+/// The transcript cleanup checkbox. The first time it is turned on, a notice
+/// says where the text goes, and the setting changes only after "Got it".
+private struct VoiceCleanupToggle: View {
+    let voice: VoiceInputModel
+
+    @Environment(\.mobaideColors) private var colors
+    @State private var noticeShown = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(VoiceCleanupCopy.toggleLabel, isOn: binding)
+                .toggleStyle(.pixelCheckbox)
+                .accessibilityIdentifier("voice_cleanup_checkbox")
+                .alert(VoiceCleanupCopy.noticeTitle, isPresented: $noticeShown) {
+                    Button("Got it") { voice.setCleanUp(true) }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text(VoiceCleanupCopy.notice(agent: voice.agentName))
+                }
+            if let error = voice.cleanupSaveError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(colors.danger)
+                    .accessibilityIdentifier("voice_cleanup_error")
+            }
+        }
+    }
+
+    private var binding: Binding<Bool> {
+        Binding(
+            get: { voice.cleanUp },
+            set: { on in
+                if !on {
+                    voice.setCleanUp(false)
+                } else if voice.cleanupNoticeSeen {
+                    voice.setCleanUp(true)
+                } else {
+                    noticeShown = true
+                }
+            }
+        )
+    }
+}
+
+enum VoiceCleanupCopy {
+    static let toggleLabel =
+        "Clean up dictated text with the session's AI agent: remove filler words, fix punctuation and technical terms"
+    static let noticeTitle = "Clean up dictated text"
+
+    static func notice(agent: String) -> String {
+        "The session's AI agent on \(agent) cleans up each transcript with its cheapest model: Claude Haiku "
+            + "for Claude Code, GPT Luna for Codex, Gemini Flash for Antigravity. It runs under your own account: "
+            + "the text goes to that agent's provider and counts toward your usage. Mobaide doesn't store it."
+    }
+
+    static func saveFailed(agent: String) -> String {
+        "Couldn't save this setting on \(agent). Try again."
     }
 }
 

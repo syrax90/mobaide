@@ -1,0 +1,17 @@
+{
+  "type": "VoiceCleanupSettingsRequest",
+  "cases": [
+    {
+      "name": "on",
+      "wire": {
+        "enabled": true
+      }
+    },
+    {
+      "name": "off",
+      "wire": {
+        "enabled": false
+      }
+    }
+  ]
+}
