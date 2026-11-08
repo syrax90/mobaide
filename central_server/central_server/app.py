@@ -43,6 +43,7 @@ from .logging_setup import (
     get_logger,
     shutdown_logging,
 )
+from .manifest.release_files import ReleaseFileStore
 from .manifest.store import ManifestStore
 from .monitoring import monitoring_loop
 from .pairing.service import PairingService
@@ -232,6 +233,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         # request so the synchronous file read never blocks the asyncio
         # event loop after startup.
         app.state.manifest_store.read()
+        app.state.release_file_store = ReleaseFileStore(config.agent_release_dir)
         email_sender = build_email_sender(config)
         resend_limiter = ResendRateLimiter(
             cooldown_seconds=config.email_verification_resend_cooldown_seconds,

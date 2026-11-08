@@ -119,7 +119,7 @@ python deploy/prod/deploy_central.py --force                      # allow dirty 
 └── .last_tag                    # short git sha of last deploy
 
 # Docker-managed, survive restarts:
-#   central-server-data (SQLite DB), caddy-data, caddy-config
+#   central-server-data (SQLite DB, agent manifest + release files), caddy-data, caddy-config
 ```
 
 ### How upgrades work

@@ -10,6 +10,7 @@ from central_server.auth.service import AuthService
 from central_server.config import CentralServerConfig
 from central_server.custom_agent_types.service import CustomAgentTypeService
 from central_server.db.database import Database
+from central_server.manifest.release_files import ReleaseFileStore
 from central_server.manifest.store import ManifestStore
 from central_server.pairing.service import PairingService
 from central_server.push import PushDispatcher
@@ -42,6 +43,7 @@ def config(tmp_path) -> CentralServerConfig:
         # Isolate manifest store per test so test_manifest_broadcast cannot
         # pollute test_version_handshake (pre-existing ordering bug).
         manifest_store_path=str(tmp_path / "manifest.json"),
+        agent_release_dir=str(tmp_path / "agent_releases"),
     )
 
 
@@ -66,6 +68,7 @@ async def app(config, db):
     application.state.db = db
     application.state.routing = RoutingTable()
     application.state.manifest_store = ManifestStore(config.manifest_store_path)
+    application.state.release_file_store = ReleaseFileStore(config.agent_release_dir)
     # ``routing`` is wired so endpoint tests of ``/api/auth/me/delete`` exercise
     # the WS-disconnect block in ``request_account_deletion``; without it the
     # service silently skips that branch and the wiring would not be exercised

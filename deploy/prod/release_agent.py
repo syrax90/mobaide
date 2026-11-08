@@ -5,28 +5,32 @@ Usage:
     python deploy/prod/release_agent.py                   # newest agent-vX.Y.Z tag
     python deploy/prod/release_agent.py 0.3.21            # a specific version
     python deploy/prod/release_agent.py --skip-publish    # build + sign only, publish nothing
-    python deploy/prod/release_agent.py --clobber         # replace the assets of an existing release
     python deploy/prod/release_agent.py --force           # allow a dirty working tree
 
 What it does:
-  1) Preflight: tools (git, gh, uv), clean tree, release dir keys, the tag
+  1) Preflight: tools (git, uv), clean tree, release dir keys, the tag
      matches origin, and the local signing key's public half equals the
      trust key the relay serves to agents
   2) Detached worktree at the tag: uv build (wheel + sdist), source tarball,
      SHA-256 of both
   3) Sign the manifest with the local Ed25519 key
-  4) gh release create agent-vX.Y.Z on the public releases repo (your gh login)
-  5) Check each asset downloads without a login
+  4) PUT the tarball and wheel to the relay, which stores them by SHA-256
+  5) Download each file anonymously from the manifest URL and check its SHA-256
   6) POST the manifest to the relay, then read it back and compare the version
 
-Keys come from the release dir (see release_common.py); nothing is stored on
-GitHub. Needs the `cryptography` package in the interpreter that runs this.
+The relay hosts the release files itself, at content-addressed URLs: anonymous
+GitHub release downloads proved too unreliable for the update path. Re-running
+a release is safe; a rebuilt file gets a new URL.
+
+Keys come from the release dir (see release_common.py). Needs the
+`cryptography` package in the interpreter that runs this.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import subprocess
 import sys
@@ -61,7 +65,6 @@ from release_common import (
     with_retries,
 )
 
-RELEASES_REPO = "syrax90/mobaide-agent-releases"
 CENTRAL_SERVER_URL = "https://api.mobaide.com"
 TAG_PREFIX = "agent-v"
 MIN_CENTRAL_SERVER_VERSION = "0.1.0"
@@ -159,15 +162,19 @@ def build_artifacts(src: Path, version: str, out_dir: Path) -> tuple[Path, Path]
     return wheel, tarball
 
 
-def sign_manifest(key, version: str, tarball_sha: str, wheel_sha: str) -> dict:
+def release_file_url(server_url: str, sha256: str, filename: str) -> str:
+    return f"{server_url}/api/v1/agent/releases/{sha256}/{filename}"
+
+
+def sign_manifest(key, version: str, server_url: str, tarball: Path, tarball_sha: str,
+                  wheel: Path, wheel_sha: str) -> dict:
     # Must stay byte-compatible with the canonical form the relay and the
     # agent verify: sorted keys, no whitespace.
-    base = f"https://github.com/{RELEASES_REPO}/releases/download/{TAG_PREFIX}{version}"
     body = {
         "version": version,
-        "tarball_url": f"{base}/mobaide-agent-{version}.tar.gz",
+        "tarball_url": release_file_url(server_url, tarball_sha, tarball.name),
         "tarball_sha256": tarball_sha,
-        "wheel_url": f"{base}/mobaide_agent-{version}-py3-none-any.whl",
+        "wheel_url": release_file_url(server_url, wheel_sha, wheel.name),
         "wheel_sha256": wheel_sha,
         "released_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "min_central_server_version": MIN_CENTRAL_SERVER_VERSION,
@@ -179,40 +186,34 @@ def sign_manifest(key, version: str, tarball_sha: str, wheel_sha: str) -> dict:
 
 
 # ------------------------------------------------------------ publish
-def release_exists(tag: str) -> bool:
-    r = subprocess.run(
-        ["gh", "release", "view", tag, "--repo", RELEASES_REPO, "--json", "tagName"],
-        capture_output=True, text=True,
-    )
-    return r.returncode == 0
-
-
-def create_release(tag: str, files: list[Path], notes: str, clobber: bool) -> None:
-    if release_exists(tag):
-        if not clobber:
+def upload_release_file(path: Path, sha256: str, token: str, server_url: str) -> None:
+    data = path.read_bytes()
+    try:
+        with_retries(
+            f"PUT {path.name}",
+            lambda: http_request(
+                f"{server_url}/api/internal/agent_release/{sha256}/{path.name}",
+                method="PUT",
+                data=data,
+                headers={"X-Release-Token": token, "Content-Type": "application/octet-stream"},
+                timeout=120,
+            ),
+        )
+    except ReleaseError as e:
+        if "HTTP 404" in str(e) or "HTTP 405" in str(e):
             raise ReleaseError(
-                f"{RELEASES_REPO} already has release {tag}. Re-run with --clobber to replace its assets."
-            )
-        warn(f"Release {tag} exists; replacing its assets (--clobber)")
-        cmd = ["gh", "release", "upload", tag, "--repo", RELEASES_REPO, "--clobber", *map(str, files)]
-    else:
-        cmd = [
-            "gh", "release", "create", tag, "--repo", RELEASES_REPO,
-            "--title", tag, "--notes", notes, *map(str, files),
-        ]
-    if subprocess.run(cmd).returncode != 0:
-        raise ReleaseError(f"gh failed for {tag} on {RELEASES_REPO}")
-    ok(f"Release {tag} on {RELEASES_REPO}")
+                f"{e}\nThe relay has no release-file upload endpoint yet. Deploy central_server first."
+            ) from e
+        raise
+    ok(f"Uploaded {path.name} to the relay")
 
 
-def check_anonymous_download(url: str) -> None:
-    # A 1-byte ranged GET, not HEAD: the CDN redirect target sometimes rejects
-    # HEAD. 4xx is retried because new release assets can 404 for a short time.
-    with_retries(
-        f"GET {url}",
-        lambda: http_request(url, headers={"Range": "bytes=0-0"}, timeout=30),
-        attempts=6, delay=10, retry_4xx=True,
-    )
+def check_anonymous_download(url: str, expected_sha: str) -> None:
+    """Fetch the file the way an agent does: no credentials, the exact URL."""
+    _, body = with_retries(f"GET {url}", lambda: http_request(url, timeout=120))
+    actual = hashlib.sha256(body).hexdigest()
+    if actual != expected_sha:
+        raise ReleaseError(f"{url} serves sha256 {actual}, expected {expected_sha}")
     ok(f"Anonymous download works: {url.rsplit('/', 1)[-1]}")
 
 
@@ -243,7 +244,7 @@ def run(args: argparse.Namespace) -> int:
     server_url = args.server_url.rstrip("/")
 
     step("Preflight")
-    require_tools("git", "uv", *(() if args.skip_publish else ("gh",)))
+    require_tools("git", "uv")
     if args.force:
         warn("--force: skipping clean-tree check")
     else:
@@ -264,7 +265,7 @@ def run(args: argparse.Namespace) -> int:
     dim(f"sha256 {wheel_sha}  {wheel.name}")
 
     step("Sign manifest")
-    record = sign_manifest(key, version, tarball_sha, wheel_sha)
+    record = sign_manifest(key, version, server_url, tarball, tarball_sha, wheel, wheel_sha)
     manifest = out_dir / "manifest.json"
     manifest.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     ok(f"Signed {manifest}")
@@ -275,15 +276,11 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     assert token is not None
-    step(f"Publish to {RELEASES_REPO}")
-    notes = (
-        f"mobaide_agent {version}, built from {commit}.\n\n"
-        "SHA-256:\n"
-        f"```\n{tarball_sha}  {tarball.name}\n{wheel_sha}  {wheel.name}\n```\n"
-    )
-    create_release(tag, [tarball, wheel, manifest], notes, args.clobber)
-    check_anonymous_download(record["body"]["tarball_url"])
-    check_anonymous_download(record["body"]["wheel_url"])
+    step(f"Upload release files to {server_url}")
+    upload_release_file(tarball, tarball_sha, token, server_url)
+    upload_release_file(wheel, wheel_sha, token, server_url)
+    check_anonymous_download(record["body"]["tarball_url"], tarball_sha)
+    check_anonymous_download(record["body"]["wheel_url"], wheel_sha)
 
     step(f"Publish manifest to {server_url}")
     publish_manifest(record, token, server_url)
@@ -297,7 +294,6 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Build, sign and publish an mobaide_agent release")
     p.add_argument("version", nargs="?", help="X.Y.Z (default: the newest agent-v tag)")
     p.add_argument("--skip-publish", action="store_true", help="build and sign only")
-    p.add_argument("--clobber", action="store_true", help="replace the assets of an existing release")
     p.add_argument("--force", action="store_true", help="allow a dirty working tree")
     p.add_argument("--release-dir", help="folder with the release keys (default: $MOBAIDE_RELEASE_DIR, else ~/.config/mobaide-release, on Windows %%LOCALAPPDATA%%\\mobaide-release)")
     p.add_argument("--server-url", default=CENTRAL_SERVER_URL, help=f"relay base URL (default: {CENTRAL_SERVER_URL})")

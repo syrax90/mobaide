@@ -4,6 +4,11 @@ The release pipeline POSTs a signed manifest to ``/api/internal/agent_manifest``
 with a release-time bearer token. Deployed agents fetch the latest manifest
 from ``/api/v1/agent/manifest.json`` and verify the signature locally before
 applying it via the staged-binary auto-updater.
+
+Before the manifest, the pipeline PUTs the tarball and wheel to
+``/api/internal/agent_release/{sha256}/{filename}``. Agents and the install
+scripts download them anonymously from ``/api/v1/agent/releases/...``, the
+URLs the signed manifest names.
 """
 from __future__ import annotations
 
@@ -14,11 +19,18 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from ..monitoring import record_send_queue_drop
 from ..relay.envelope import CH_CONTROL, encode
 from ..relay.routing import RoutingTable
+from .release_files import (
+    MAX_RELEASE_FILE_BYTES,
+    ReleaseFileError,
+    ReleaseStorageFullError,
+    valid_key,
+)
 from .store import (
     ManifestSignatureError,
     ManifestValidationError,
@@ -92,6 +104,93 @@ async def get_trust_key(request: Request) -> TrustKeyResponse:
     return TrustKeyResponse(public_key_b64=public_key_b64)
 
 
+def _require_release_token(request: Request, x_release_token: str | None) -> None:
+    expected = request.app.state.config.release_auth_token
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="Manifest publishing is disabled — RELEASE_AUTH_TOKEN is not configured",
+        )
+    if not x_release_token or not hmac.compare_digest(x_release_token, expected):
+        raise HTTPException(status_code=401, detail="Invalid release token")
+
+
+class ReleaseFileUploadResponse(BaseModel):
+    sha256: str
+    filename: str
+    created: bool
+
+
+@router.api_route(
+    "/api/v1/agent/releases/{sha256}/{filename}",
+    methods=["GET", "HEAD"],
+    tags=["manifest"],
+)
+async def get_release_file(sha256: str, filename: str, request: Request) -> FileResponse:
+    path = request.app.state.release_file_store.path_for(sha256, filename)
+    if path is None:
+        # no-store: Cloudflare caches a 404 on a .tar.gz path for minutes,
+        # which would hide a file uploaded right after the miss.
+        raise HTTPException(
+            status_code=404,
+            detail="Release file not found",
+            headers={"Cache-Control": "no-store"},
+        )
+    # The URL names the bytes, so it can be cached for good. octet-stream
+    # keeps Caddy's `encode` from re-compressing the tarball.
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename=filename,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@router.put(
+    "/api/internal/agent_release/{sha256}/{filename}",
+    response_model=ReleaseFileUploadResponse,
+    tags=["manifest"],
+    include_in_schema=False,
+)
+async def upload_release_file(
+    sha256: str,
+    filename: str,
+    request: Request,
+    x_release_token: str | None = Header(default=None, alias="X-Release-Token"),
+) -> ReleaseFileUploadResponse:
+    _require_release_token(request, x_release_token)
+    if not valid_key(sha256, filename):
+        raise HTTPException(
+            status_code=422,
+            detail="sha256 must be 64 lowercase hex chars and the filename a plain name",
+        )
+    data = bytearray()
+    async for chunk in request.stream():
+        data.extend(chunk)
+        if len(data) > MAX_RELEASE_FILE_BYTES:
+            raise HTTPException(status_code=413, detail="Release file is too large")
+
+    record = request.app.state.manifest_store.read()
+    protected = (
+        {str(record.body.get("tarball_sha256")), str(record.body.get("wheel_sha256"))}
+        if record is not None
+        else set()
+    )
+    try:
+        created = await asyncio.to_thread(
+            request.app.state.release_file_store.save,
+            sha256,
+            filename,
+            bytes(data),
+            protected=protected,
+        )
+    except ReleaseFileError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ReleaseStorageFullError as exc:
+        raise HTTPException(status_code=507, detail=str(exc)) from exc
+    return ReleaseFileUploadResponse(sha256=sha256, filename=filename, created=created)
+
+
 @router.post(
     "/api/internal/agent_manifest",
     response_model=ManifestResponse,
@@ -106,16 +205,8 @@ async def publish_manifest(
     request: Request,
     x_release_token: str | None = Header(default=None, alias="X-Release-Token"),
 ) -> ManifestResponse:
+    _require_release_token(request, x_release_token)
     config = request.app.state.config
-    expected = config.release_auth_token
-    if not expected:
-        raise HTTPException(
-            status_code=503,
-            detail="Manifest publishing is disabled — RELEASE_AUTH_TOKEN is not configured",
-        )
-    if not x_release_token or not hmac.compare_digest(x_release_token, expected):
-        raise HTTPException(status_code=401, detail="Invalid release token")
-
     store = request.app.state.manifest_store
     try:
         record = store.write(
