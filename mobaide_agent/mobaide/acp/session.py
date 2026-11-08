@@ -27,7 +27,7 @@ from mobaide.core.models import SessionConfig, SessionEvent, SessionInfo, Sessio
 
 from . import normalize as nz
 from .agents import ChatLaunchPlan, ConfigIntent
-from .install import INSTALL_POOL, AdapterInstallError
+from .install import INSTALL_POOL, PROBE_POOL, AdapterInstallError
 from .rpc import (
     ERR_AUTH_REQUIRED,
     ERR_METHOD_NOT_FOUND,
@@ -539,7 +539,11 @@ class ChatSession:
     async def _ensure_trusted(self) -> bool:
         """Ask the user to trust the folder unless the agent already does."""
         trust = self._plan.trust
-        if trust is None or self._trust_granted or await asyncio.to_thread(trust.is_trusted):
+        if trust is None or self._trust_granted:
+            return True
+        # Not the default executor: running terminal sessions hold its threads.
+        loop = asyncio.get_running_loop()
+        if await loop.run_in_executor(PROBE_POOL, trust.is_trusted):
             return True
         self._timeline.patch_state(status="starting")
         outcome = await self._await_request(
@@ -565,7 +569,7 @@ class ChatSession:
         # Covers a Restart of this session even when the trust is not saved.
         self._trust_granted = True
         try:
-            await asyncio.to_thread(trust.grant)
+            await loop.run_in_executor(PROBE_POOL, trust.grant)
         except (OSError, ValueError) as exc:
             logger.warning("chat.trust_grant_failed session=%s: %s", self.session_id, exc)
         return True

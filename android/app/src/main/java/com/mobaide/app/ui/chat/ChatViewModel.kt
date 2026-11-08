@@ -55,10 +55,12 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import okio.ByteString
@@ -447,7 +449,9 @@ class ChatViewModel @Inject constructor(
 
     fun sendPrompt() {
         val ui = _ui.value
-        if (!ui.canAct) return
+        // A message sent while images are still being read would leave them
+        // for the next one.
+        if (!ui.canAct || ui.imagesLoading) return
         val text = _composer.value.text.trim()
         val images = ui.images
         if (text.isEmpty() && images.isEmpty()) return
@@ -568,6 +572,7 @@ class ChatViewModel @Inject constructor(
     }
 
     fun addImages(uris: List<Uri>) {
+        if (_ui.value.imagesLoading) return
         val room = ChatImageEncoder.MAX_IMAGES - _ui.value.images.size
         if (room <= 0) {
             _messages.trySend("Attach at most ${ChatImageEncoder.MAX_IMAGES} images")
@@ -580,7 +585,12 @@ class ChatViewModel @Inject constructor(
             var failed = 0
             var tooLarge = false
             for (uri in uris.take(room)) {
-                val encoded = imageEncoder.encode(uri)
+                // Send waits for the batch, so a read that hangs (a cloud photo
+                // offline) must not block it for good. A blocking read ignores
+                // cancellation: await it with a timeout and drop a late result.
+                val pending = async { imageEncoder.encode(uri) }
+                val encoded = withTimeoutOrNull(IMAGE_LOAD_TIMEOUT_MS) { pending.await() }
+                if (encoded == null) pending.cancel()
                 if (encoded == null) {
                     failed += 1
                     continue
@@ -753,6 +763,7 @@ class ChatViewModel @Inject constructor(
         private const val ALREADY_SENT = "This message was already sent"
         private const val PROMPT_TEXT_MAX = 100_000
         private const val IMAGES_TOTAL_MAX = 3_500_000
+        private const val IMAGE_LOAD_TIMEOUT_MS = 120_000L
         private const val BACKGROUND_PAUSE_MS = 30_000L
     }
 }

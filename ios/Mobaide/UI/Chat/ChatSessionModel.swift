@@ -29,6 +29,7 @@ final class ChatSessionModel {
 
     static let maxImages = 4
     static let maxImageBase64 = 1_500_000
+    static let imageLoadTimeout: Duration = .seconds(120)
     /// All images of one prompt together; the frame must stay under the
     /// relay's 4 MiB limit.
     static let maxImagesBase64Total = 3_500_000
@@ -67,6 +68,7 @@ final class ChatSessionModel {
     private(set) var composerCursorRequest = 0
     private(set) var attachments: [ChatComposerImage] = []
     private(set) var preparingImages = 0
+    private var pendingImageLoads: Set<UUID> = []
     var message: ToastMessage?
 
     /// Request id → the option id (or form action) being sent.
@@ -693,28 +695,49 @@ final class ChatSessionModel {
         }
     }
 
-    func addImage(data: Data) {
+    /// Counts the image as preparing from the start of `load` (an iCloud photo
+    /// can take seconds), so Send waits for it. A load that does not finish in
+    /// `imageLoadTimeout` fails, so Send cannot stay blocked.
+    func addImage(loading load: @escaping @MainActor () async -> Data?) {
         guard canAttachImages else { return }
         preparingImages += 1
-        let limit = Self.maxImageBase64
+        let token = UUID()
+        pendingImageLoads.insert(token)
+        let timeout = Task { [weak self] in
+            try? await Task.sleep(for: Self.imageLoadTimeout)
+            guard !Task.isCancelled else { return }
+            await self?.finishImageLoad(token, data: nil)
+        }
         Task { [weak self] in
-            let prepared = await Task.detached(priority: .userInitiated) {
+            let data = await load()
+            timeout.cancel()
+            await self?.finishImageLoad(token, data: data)
+        }
+    }
+
+    private func finishImageLoad(_ token: UUID, data: Data?) async {
+        // The load and its timeout race; only the first one counts.
+        guard pendingImageLoads.remove(token) != nil else { return }
+        let limit = Self.maxImageBase64
+        let prepared: ChatImageEncoder.Prepared? = if let data {
+            await Task.detached(priority: .userInitiated) {
                 ChatImageEncoder.prepare(data, maxBase64: limit)
             }.value
-            guard let self else { return }
-            self.preparingImages -= 1
-            guard let prepared else {
-                self.message = ToastMessage(text: "This image could not be attached", tone: .danger)
-                return
-            }
-            guard self.attachments.count < Self.maxImages else { return }
-            let total = self.attachments.reduce(prepared.payload.data.utf8.count) { $0 + $1.payload.data.utf8.count }
-            guard total <= Self.maxImagesBase64Total else {
-                self.message = ToastMessage(text: "These images are too large to send together", tone: .danger)
-                return
-            }
-            self.attachments.append(ChatComposerImage(payload: prepared.payload, thumbnail: prepared.thumbnail))
+        } else {
+            nil
         }
+        preparingImages -= 1
+        guard let prepared else {
+            message = ToastMessage(text: "This image could not be attached", tone: .danger)
+            return
+        }
+        guard attachments.count < Self.maxImages else { return }
+        let total = attachments.reduce(prepared.payload.data.utf8.count) { $0 + $1.payload.data.utf8.count }
+        guard total <= Self.maxImagesBase64Total else {
+            message = ToastMessage(text: "These images are too large to send together", tone: .danger)
+            return
+        }
+        attachments.append(ChatComposerImage(payload: prepared.payload, thumbnail: prepared.thumbnail))
     }
 
     func removeImage(_ id: UUID) {

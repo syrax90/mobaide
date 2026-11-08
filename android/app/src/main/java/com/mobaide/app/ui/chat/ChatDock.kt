@@ -487,7 +487,7 @@ fun ChatComposer(
             } else {
                 ComposerActions(
                     showAttach = showAttach,
-                    attachEnabled = inputEnabled && images.size < ChatImageEncoder.MAX_IMAGES,
+                    attachEnabled = inputEnabled && !imagesLoading && images.size < ChatImageEncoder.MAX_IMAGES,
                     canSaveTemplate = value.text.isNotBlank(),
                     onAttach = onAttach,
                     onOpenTemplates = onOpenTemplates,
@@ -498,7 +498,7 @@ fun ChatComposer(
                 SendButton(
                     stop = showStop,
                     queue = running && hasContent,
-                    enabled = canAct && (showStop || hasContent),
+                    enabled = canAct && (showStop || (hasContent && !imagesLoading)),
                     onClick = if (showStop) onStop else onSend,
                 )
             }

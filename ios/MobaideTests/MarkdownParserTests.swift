@@ -13,6 +13,41 @@ final class MarkdownParserTests: XCTestCase {
         )
     }
 
+    func testHeadingDropsAClosingHashRunOnlyAfterASpace() {
+        let cases: [(String, MarkdownBlock)] = [
+            ("# foo #", .heading(level: 1, text: "foo")),
+            ("# foo#", .heading(level: 1, text: "foo#")),
+            ("### ###", .heading(level: 3, text: "")),
+            ("#", .heading(level: 1, text: "")),
+            ("# foo \\#", .heading(level: 1, text: "foo \\#")),
+            ("## foo ##   ", .heading(level: 2, text: "foo")),
+            ("#\tfoo\t#", .heading(level: 1, text: "foo")),
+            ("# foo # bar", .heading(level: 1, text: "foo # bar")),
+            ("   ###### six", .heading(level: 6, text: "six")),
+        ]
+        for (source, block) in cases {
+            XCTAssertEqual(MarkdownParser.parse(source), [block], source)
+        }
+        for source in ["#5 bolt", "#hashtag", "####### seven"] {
+            XCTAssertEqual(MarkdownParser.parse(source), [.paragraph(source)], source)
+        }
+    }
+
+    func testHeadingWithALongRunOfInnerSpacesParsesWithoutBacktracking() {
+        let spaces = String(repeating: " ", count: 20_000)
+        var open: [MarkdownBlock] = []
+        var closed: [MarkdownBlock] = []
+
+        let elapsed = ContinuousClock().measure {
+            open = MarkdownParser.parse("# a" + spaces + "b")
+            closed = MarkdownParser.parse("# a" + spaces + "#" + spaces)
+        }
+
+        XCTAssertEqual(open, [.heading(level: 1, text: "a" + spaces + "b")])
+        XCTAssertEqual(closed, [.heading(level: 1, text: "a")])
+        XCTAssertLessThan(elapsed, .seconds(1))
+    }
+
     func testFencedCodeKeepsItsLanguageAndRawText() {
         XCTAssertEqual(
             MarkdownParser.parse("```python\nx = 1\n\n# not a heading\n```\nafter"),
@@ -50,6 +85,28 @@ final class MarkdownParserTests: XCTestCase {
                 Item(task: false, blocks: [.paragraph("todo")]),
                 Item(task: nil, blocks: [.paragraph("plain")]),
             ]))]
+        )
+    }
+
+    func testAListItemContinuesAcrossALongRunOfBlankLinesInOnePass() {
+        let blanks = String(repeating: "\n", count: 20_000)
+        var blocks: [MarkdownBlock] = []
+
+        let elapsed = ContinuousClock().measure {
+            blocks = MarkdownParser.parse("- a\n" + blanks + "  b\n- c")
+        }
+
+        XCTAssertEqual(blocks, [.list(MarkdownList(ordered: false, start: 1, items: [
+            Item(task: nil, blocks: [.paragraph("a"), .paragraph("b")]),
+            Item(task: nil, blocks: [.paragraph("c")]),
+        ]))])
+        XCTAssertLessThan(elapsed, .seconds(1))
+    }
+
+    func testABlankRunBeforeAnUnindentedLineEndsTheList() {
+        XCTAssertEqual(
+            MarkdownParser.parse("- a\n\n\n\nb"),
+            [.list(MarkdownList(ordered: false, start: 1, items: [Item(task: nil, blocks: [.paragraph("a")])])), .paragraph("b")]
         )
     }
 
@@ -98,5 +155,15 @@ final class MarkdownParserTests: XCTestCase {
         XCTAssertEqual(depth, MarkdownParser.maxDepth)
         guard case .paragraph(let rest)? = current.first else { return XCTFail("no innermost paragraph") }
         XCTAssertTrue(rest.hasSuffix(" deep"))
+    }
+
+    func testWhitespaceOnlyLinesBelowTheDepthLimitAreDropped() {
+        let markers = String(repeating: ">", count: MarkdownParser.maxDepth)
+        var expected: [MarkdownBlock] = []
+        for _ in 0..<MarkdownParser.maxDepth {
+            expected = [.quote(expected)]
+        }
+
+        XCTAssertEqual(MarkdownParser.parse(markers + "\n" + markers), expected)
     }
 }

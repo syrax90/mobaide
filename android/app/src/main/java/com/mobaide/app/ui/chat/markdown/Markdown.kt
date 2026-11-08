@@ -67,12 +67,13 @@ object Markdown {
     }
 }
 
-private val FENCE = Regex("^ {0,3}(`{3,}|~{3,})\\s*([^`\\s]*)?.*$")
-private val HEADING = Regex("^ {0,3}(#{1,6})(?:[ \\t]+(.*?))?(?:[ \\t]+#+)?[ \\t]*$")
-private val RULE = Regex("^ {0,3}([-*_])(?:[ \\t]*\\1){2,}[ \\t]*$")
-private val QUOTE = Regex("^ {0,3}> ?(.*)$")
-private val LIST_ITEM = Regex("^([ \\t]*)([-*+]|\\d{1,9}[.)])([ \\t]+(.*))?$")
-private val TABLE_SEPARATOR = Regex("^\\s*\\|?\\s*:?-+:?\\s*(\\|\\s*:?-+:?\\s*)*\\|?\\s*$")
+// DOT_MATCHES_ALL: lines never hold `\n`, but `.` must also cross U+2028,
+// U+2029 and U+0085, or a failed match backtracks quadratically on a long line.
+private val FENCE = Regex("^ {0,3}(`{3,}|~{3,})\\s*([^`\\s]*)?.*$", RegexOption.DOT_MATCHES_ALL)
+private val QUOTE = Regex("^ {0,3}> ?(.*)$", RegexOption.DOT_MATCHES_ALL)
+private val LIST_ITEM = Regex("^([ \\t]*)([-*+]|\\d{1,9}[.)])([ \\t]+(.*))?$", RegexOption.DOT_MATCHES_ALL)
+// Quotes, lists and emphasis nested deeper than this stay literal text.
+private const val MAX_DEPTH = 12
 private val TASK = Regex("^\\[([ xX])](?:[ \\t]+(.*))?$", RegexOption.DOT_MATCHES_ALL)
 
 private fun indentOf(line: String): Int {
@@ -102,10 +103,56 @@ private fun dropIndent(line: String, count: Int): String {
     return line.substring(i)
 }
 
-private class BlockParser(private val lines: List<String>) {
+/**
+ * An ATX heading as (level, text): up to three spaces, one to six `#`, then a
+ * space, a tab or the end. A closing `#` run after a space is dropped. A scan:
+ * the regex backtracked quadratically on a long run of spaces.
+ */
+private fun heading(line: String): Pair<Int, String>? {
+    var i = 0
+    while (i < 3 && i < line.length && line[i] == ' ') i++
+    var level = 0
+    while (i + level < line.length && line[i + level] == '#') level++
+    if (level !in 1..6) return null
+    val next = line.getOrNull(i + level)
+    if (next != null && next != ' ' && next != '\t') return null
+    var text = line.substring(i + level).trim(' ', '\t')
+    val open = text.trimEnd('#')
+    if (open.length < text.length && (open.isEmpty() || open.last() == ' ' || open.last() == '\t')) {
+        text = open.trimEnd(' ', '\t')
+    }
+    return level to text
+}
+
+/**
+ * A thematic break: up to three spaces, then three or more of one of `-`, `*`
+ * or `_` with only spaces or tabs between. A scan, not a regex: the JVM regex
+ * engine recurses once per repeat and overflows on a long line.
+ */
+private fun isRule(line: String): Boolean {
+    var i = 0
+    while (i < 3 && i < line.length && line[i] == ' ') i++
+    val marker = line.getOrNull(i) ?: return false
+    if (marker != '-' && marker != '*' && marker != '_') return false
+    var count = 0
+    for (j in i until line.length) {
+        when (line[j]) {
+            marker -> count++
+            ' ', '\t' -> Unit
+            else -> return false
+        }
+    }
+    return count >= 3
+}
+
+private class BlockParser(private val lines: List<String>, private val depth: Int = 0) {
     private var pos = 0
 
     fun parse(): List<MdBlock> {
+        if (depth >= MAX_DEPTH) {
+            val text = lines.joinToString("\n") { it.trim() }
+            return if (text.isBlank()) emptyList() else listOf(MdBlock.Paragraph(Markdown.parseInline(text)))
+        }
         val blocks = ArrayList<MdBlock>()
         while (pos < lines.size) {
             val line = lines[pos]
@@ -120,11 +167,11 @@ private class BlockParser(private val lines: List<String>) {
 
     private fun block(line: String): MdBlock {
         FENCE.matchEntire(line)?.let { return fence(it) }
-        HEADING.matchEntire(line)?.let { match ->
+        heading(line)?.let { (level, text) ->
             pos++
-            return MdBlock.Heading(match.groupValues[1].length, Markdown.parseInline(match.groupValues[2].trim()))
+            return MdBlock.Heading(level, Markdown.parseInline(text.trim()))
         }
-        if (RULE.matches(line)) {
+        if (isRule(line)) {
             pos++
             return MdBlock.Rule
         }
@@ -162,11 +209,11 @@ private class BlockParser(private val lines: List<String>) {
             inner += match.groupValues[1]
             pos++
         }
-        return MdBlock.Quote(BlockParser(inner).parse())
+        return MdBlock.Quote(BlockParser(inner, depth + 1).parse())
     }
 
     private fun startsBlock(line: String): Boolean =
-        FENCE.matches(line) || HEADING.matches(line) || RULE.matches(line) || QUOTE.matches(line) ||
+        FENCE.matches(line) || heading(line) != null || isRule(line) || QUOTE.matches(line) ||
             LIST_ITEM.matches(line)
 
     private fun paragraph(): MdBlock {
@@ -229,7 +276,7 @@ private class BlockParser(private val lines: List<String>) {
             checked = task.groupValues[1] != " "
             body[0] = task.groupValues[2]
         }
-        return MdListItem(checked, BlockParser(body).parse())
+        return MdListItem(checked, BlockParser(body, depth + 1).parse())
     }
 
     private fun isTableStart(at: Int): Boolean {
@@ -237,8 +284,17 @@ private class BlockParser(private val lines: List<String>) {
         val header = lines[at]
         if (!header.contains('|')) return false
         val separator = lines[at + 1]
-        if (!separator.contains('-') || !TABLE_SEPARATOR.matches(separator)) return false
+        if (!separator.contains('-') || !isSeparatorRow(separator)) return false
         return splitRow(header).size == splitRow(separator).size
+    }
+
+    // Every cell is `:?-+:?`. A scan, like `isRule`: a repeated regex group
+    // overflows the JVM stack on a long row.
+    private fun isSeparatorRow(line: String): Boolean = splitRow(line).all { raw ->
+        val cell = raw.trim()
+        val start = if (cell.startsWith(':')) 1 else 0
+        val end = if (cell.length > start && cell.endsWith(':')) cell.length - 1 else cell.length
+        end > start && (start until end).all { cell[it] == '-' }
     }
 
     private fun table(): MdBlock {
@@ -298,11 +354,17 @@ private const val ESCAPABLE = "\\`*_{}[]()#+-.!|~<>\"'"
 /** CommonMark caps a link label at 999 characters; it also bounds the bracket scan. */
 private const val MAX_LINK_LABEL = 999
 
+/** Bounds the destination scan, so text full of unclosed `[a](` stays linear. */
+private const val MAX_LINK_DESTINATION = 2048
+
 private class InlineParser(private val src: String) {
 
     fun parse(): List<MdInline> = parseRange(0, src.length)
 
-    private fun parseRange(from: Int, to: Int, allowLinks: Boolean = true): List<MdInline> {
+    private fun parseRange(from: Int, to: Int, allowLinks: Boolean = true, depth: Int = 0): List<MdInline> {
+        if (depth >= MAX_DEPTH) {
+            return if (from < to) listOf(MdInline.Text(src.substring(from, to))) else emptyList()
+        }
         val out = ArrayList<MdInline>()
         val text = StringBuilder()
         fun flush() {
@@ -392,7 +454,7 @@ private class InlineParser(private val src: String) {
                     } else {
                         flush()
                         // CommonMark forbids links inside a link label.
-                        val children = parseRange(link.labelStart, link.labelEnd, allowLinks = false)
+                        val children = parseRange(link.labelStart, link.labelEnd, allowLinks = false, depth = depth + 1)
                         if (Markdown.isSafeUrl(link.url)) out += MdInline.Link(link.url, children) else out += children
                         jumpedOver(i, link.end)
                         i = link.end
@@ -405,7 +467,7 @@ private class InlineParser(private val src: String) {
                         i += 2
                     } else {
                         flush()
-                        out += MdInline.Bold(parseRange(i + 2, close, allowLinks))
+                        out += MdInline.Bold(parseRange(i + 2, close, allowLinks, depth + 1))
                         i = close + 2
                     }
                 }
@@ -416,7 +478,7 @@ private class InlineParser(private val src: String) {
                         i++
                     } else {
                         flush()
-                        out += MdInline.Italic(parseRange(i + 1, close, allowLinks))
+                        out += MdInline.Italic(parseRange(i + 1, close, allowLinks, depth + 1))
                         i = close + 1
                     }
                 }
@@ -427,7 +489,7 @@ private class InlineParser(private val src: String) {
                         i += 2
                     } else {
                         flush()
-                        out += MdInline.Strike(parseRange(i + 2, close, allowLinks))
+                        out += MdInline.Strike(parseRange(i + 2, close, allowLinks, depth + 1))
                         i = close + 2
                     }
                 }
@@ -540,7 +602,8 @@ private class InlineParser(private val src: String) {
         var j = labelEnd + 2
         var parens = 1
         val urlStart = j
-        while (j < to) {
+        val urlLimit = minOf(to, urlStart + MAX_LINK_DESTINATION)
+        while (j < urlLimit) {
             when (src[j]) {
                 '(' -> parens++
                 ')' -> {
@@ -551,7 +614,7 @@ private class InlineParser(private val src: String) {
             }
             j++
         }
-        if (j >= to) return null
+        if (j >= urlLimit) return null
         var target = src.substring(urlStart, j).trim()
         val titleAt = target.indexOfFirst { it == ' ' }
         if (titleAt > 0) target = target.substring(0, titleAt)
@@ -582,14 +645,19 @@ private class InlineParser(private val src: String) {
     private fun autolinkEnd(at: Int, to: Int): Int {
         var end = at
         while (end < to && !src[end].isWhitespace() && src[end] != '<' && src[end] != '>' && src[end] != '`') end++
+        // Counted once: recounting per trailing `)` was quadratic.
+        var opens = 0
+        var closes = 0
+        for (k in at until end) {
+            if (src[k] == '(') opens++ else if (src[k] == ')') closes++
+        }
         while (end > at) {
             val last = src[end - 1]
             if (last in ".,;:!?*_~'\"") {
                 end--
-            } else if (last == ')') {
-                val opens = src.substring(at, end).count { it == '(' }
-                val closes = src.substring(at, end).count { it == ')' }
-                if (closes > opens) end-- else break
+            } else if (last == ')' && closes > opens) {
+                closes--
+                end--
             } else {
                 break
             }

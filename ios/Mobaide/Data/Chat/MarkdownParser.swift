@@ -52,7 +52,7 @@ enum MarkdownParser {
     private static func parseBlocks(_ lines: [String], depth: Int) -> [MarkdownBlock] {
         guard depth < maxDepth else {
             let text = lines.map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: "\n")
-            return text.isEmpty ? [] : [.paragraph(text)]
+            return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : [.paragraph(text)]
         }
         var blocks: [MarkdownBlock] = []
         var paragraph: [String] = []
@@ -157,9 +157,10 @@ enum MarkdownParser {
                     var next = index + 1
                     while next < lines.count, isBlank(lines[next]) { next += 1 }
                     guard next < lines.count, leadingSpaces(lines[next]) >= marker.contentIndent else { break }
-                    itemLines.append("")
+                    // The whole blank run at once: the look-ahead already scanned it.
+                    itemLines.append(contentsOf: repeatElement("", count: next - index))
                     previousBlank = true
-                    index += 1
+                    index = next
                     continue
                 }
                 let indent = leadingSpaces(line)
@@ -265,8 +266,14 @@ enum MarkdownParser {
         let after = rest.dropFirst(level)
         guard after.isEmpty || after.first == " " || after.first == "\t" else { return nil }
         var text = after.trimmingCharacters(in: .whitespaces)
-        if let closing = text.range(of: #"(^|\s+)#+$"#, options: .regularExpression) {
-            text = String(text[..<closing.lowerBound])
+        // A scan, not a regex: the regex backtracked quadratically on a long
+        // run of spaces before the closing `#` run.
+        let open = text.reversed().drop { $0 == "#" }.count
+        if open < text.count {
+            let kept = text.prefix(open)
+            if kept.isEmpty || kept.last == " " || kept.last == "\t" {
+                text = kept.trimmingCharacters(in: .whitespaces)
+            }
         }
         return (level, text)
     }

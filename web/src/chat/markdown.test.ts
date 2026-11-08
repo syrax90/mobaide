@@ -104,6 +104,21 @@ describe('parseMarkdown blocks', () => {
     ]);
   });
 
+  it('reads a separator row of 20 000 cells', () => {
+    const columns = 20_000;
+    expect(parseMarkdown(`${'|a'.repeat(columns)}|\n${'|-'.repeat(columns)}|`)).toEqual([
+      {
+        t: 'table',
+        align: Array(columns).fill(null),
+        head: Array.from({ length: columns }, () => [text('a')]),
+        rows: [],
+      },
+    ]);
+    expect(parseMarkdown(`a|b\n${'|-'.repeat(columns)}|`)).toEqual([
+      para(text('a|b'), { t: 'br' }, text(`${'|-'.repeat(columns)}|`)),
+    ]);
+  });
+
   it('reads quotes and rules, and a paragraph ends at a block', () => {
     expect(parseMarkdown('> Note: **run** it\nplain\n---\n# Title')).toEqual([
       { t: 'quote', c: [para(text('Note: '), { t: 'strong', c: [text('run')] }, text(' it'))] },
@@ -115,6 +130,142 @@ describe('parseMarkdown blocks', () => {
 
   it('treats CRLF as a line break', () => {
     expect(parseMarkdown('a\r\nb')).toEqual([para(text('a'), { t: 'br' }, text('b'))]);
+  });
+
+  it.each([
+    ['U+2028', '\u2028'],
+    ['U+2029', '\u2029'],
+  ])('reads a list item, a fence and a quote whose line holds a %s', (_name, sep) => {
+    expect(parseMarkdown(`- a${sep}b`)).toEqual([
+      { t: 'list', ordered: false, start: 1, items: [{ task: null, c: [para(text(`a${sep}b`))] }] },
+    ]);
+    expect(parseMarkdown(`\`\`\`py x${sep}y\ncode\n\`\`\``)).toEqual([
+      { t: 'code', lang: 'py', text: 'code' },
+    ]);
+    expect(parseMarkdown(`> a${sep}b`)).toEqual([{ t: 'quote', c: [para(text(`a${sep}b`))] }]);
+  });
+
+  it(
+    'reads a 128 000-character list or fence line holding a U+2028 without backtracking',
+    () => {
+      expect(parseMarkdown(`- ${' '.repeat(128_000)}a\u2028b`)).toEqual([
+        { t: 'list', ordered: false, start: 1, items: [{ task: null, c: [para(text('a\u2028b'))] }] },
+      ]);
+      expect(parseMarkdown(`${'`'.repeat(128_000)}py x\u2028y`)).toEqual([
+        { t: 'code', lang: 'py', text: '' },
+      ]);
+    },
+    1_000,
+  );
+
+  it(
+    'continues a list item across a run of 100 000 blank lines in one pass',
+    () => {
+      expect(parseMarkdown(`- a\n${'\n'.repeat(100_000)}  b\n- c`)).toEqual([
+        {
+          t: 'list',
+          ordered: false,
+          start: 1,
+          items: [
+            { task: null, c: [para(text('a')), para(text('b'))] },
+            { task: null, c: [para(text('c'))] },
+          ],
+        },
+      ]);
+    },
+    1_000,
+  );
+
+  it('ends a list at a blank run followed by an unindented line', () => {
+    expect(parseMarkdown('- a\n\n\n\nb')).toEqual([
+      { t: 'list', ordered: false, start: 1, items: [{ task: null, c: [para(text('a'))] }] },
+      para(text('b')),
+    ]);
+  });
+});
+
+describe('parseMarkdown headings', () => {
+  it.each<[string, number, MdInline[]]>([
+    ['# foo #', 1, [text('foo')]],
+    ['# foo#', 1, [text('foo#')]],
+    ['### ###', 3, []],
+    ['#', 1, []],
+    ['# foo \\#', 1, [text('foo #')]],
+    ['## foo ##   ', 2, [text('foo')]],
+    ['#\tfoo\t#', 1, [text('foo')]],
+    ['# foo # bar', 1, [text('foo # bar')]],
+    ['   ###### six', 6, [text('six')]],
+  ])('reads %j as a level %i heading', (source, level, c) => {
+    expect(parseMarkdown(source)).toEqual([{ t: 'h', level, c }]);
+  });
+
+  it.each(['#5 bolt', '#hashtag', '####### seven'])('keeps %j a paragraph', (source) => {
+    expect(parseMarkdown(source)).toEqual([para(text(source))]);
+  });
+
+  it(
+    'reads a heading with 120 000 inner spaces without backtracking',
+    () => {
+      const spaces = ' '.repeat(120_000);
+      expect(parseMarkdown(`# a${spaces}b`)).toEqual([
+        { t: 'h', level: 1, c: [text(`a${spaces}b`)] },
+      ]);
+      expect(parseMarkdown(`# a${spaces}#${spaces}`)).toEqual([
+        { t: 'h', level: 1, c: [text('a')] },
+      ]);
+    },
+    1_000,
+  );
+});
+
+describe('parseMarkdown nesting depth', () => {
+  function nested(levels: number, wrap: (c: unknown[]) => unknown, inner: unknown[]): unknown[] {
+    let blocks = inner;
+    for (let level = 0; level < levels; level += 1) blocks = [wrap(blocks)];
+    return blocks;
+  }
+
+  const quote = (c: unknown[]) => ({ t: 'quote', c });
+  const bullet = (c: unknown[]) => ({
+    t: 'list',
+    ordered: false,
+    start: 1,
+    items: [{ task: null, c }],
+  });
+
+  it('nests 12 quote levels and keeps deeper markers as one literal paragraph', () => {
+    expect(parseMarkdown(`${'>'.repeat(12)} deep`)).toEqual(
+      nested(12, quote, [para(text('deep'))]),
+    );
+    expect(parseMarkdown(`${'>'.repeat(10_000)} deep`)).toEqual(
+      nested(12, quote, [para(text(`${'>'.repeat(9_988)} deep`))]),
+    );
+  });
+
+  it('nests 12 list levels and keeps deeper markers as one literal paragraph', () => {
+    expect(parseMarkdown(`${'- '.repeat(12)}deep`)).toEqual(
+      nested(12, bullet, [para(text('deep'))]),
+    );
+    expect(parseMarkdown(`${'- '.repeat(10_000)}deep`)).toEqual(
+      nested(12, bullet, [para(text(`${'- '.repeat(9_988)}deep`))]),
+    );
+  });
+
+  it('drops whitespace-only lines below the depth limit', () => {
+    expect(parseMarkdown(`${'>'.repeat(12)}\n${'>'.repeat(12)}`)).toEqual(nested(12, quote, []));
+  });
+
+  it.each([
+    ['*', 'strong'],
+    ['_', 'strong'],
+    ['~', 'del'],
+  ])('nests a run of 20 000 %j markers 12 levels deep and keeps the rest literal', (marker, t) => {
+    expect(parseMarkdown(`a ${marker.repeat(20_000)}`)).toEqual([
+      {
+        t: 'p',
+        c: [text('a '), ...nested(12, (c) => ({ t, c }), [text(marker.repeat(19_952))])],
+      },
+    ]);
   });
 });
 
@@ -221,6 +372,20 @@ describe('parseInline unmatched delimiters', () => {
     1_000,
   );
 
+  it(
+    'scans 1 000 unclosed brackets over 400 unmatched code runs without rescanning',
+    () => {
+      const runs = Array.from({ length: 400 }, (_, n) => '`'.repeat(n + 1)).join('a');
+      const source = `${'['.repeat(1_000)}${runs}`;
+      expect(parseInline(source)).toEqual([text(source)]);
+    },
+    1_000,
+  );
+
+  it('reads a code span that a failed link scan already skipped', () => {
+    expect(parseInline('[`a]` b')).toEqual([text('['), { t: 'code', v: 'a]' }, text(' b')]);
+  });
+
   it('caps a link label at 999 characters', () => {
     const label = 'a'.repeat(999);
     expect(parseInline(`[${label}](https://e.com)`)).toEqual([
@@ -234,4 +399,96 @@ describe('parseInline unmatched delimiters', () => {
       text(')'),
     ]);
   });
+
+  it('links a 2 000-character destination', () => {
+    const url = 'https://e.com/'.padEnd(2_000, 'a');
+    expect(parseInline(`[x](${url})`)).toEqual([{ t: 'link', href: url, c: [text('x')] }]);
+    expect(parseInline(`[x](<${url}>)`)).toEqual([{ t: 'link', href: url, c: [text('x')] }]);
+  });
+
+  const longUrl = 'https://e.com/'.padEnd(3_000, 'a');
+  const longTitle = 't'.repeat(3_000);
+
+  it.each<[string, string, MdInline[]]>([
+    [
+      'destination',
+      `[x](${longUrl})`,
+      [text('[x]('), { t: 'link', href: longUrl, c: [text(longUrl)] }, text(')')],
+    ],
+    [
+      'angle-bracket destination',
+      `[x](<${longUrl}>)`,
+      [text('[x]('), { t: 'link', href: longUrl, c: [text(longUrl)] }, text(')')],
+    ],
+    [
+      'title',
+      `[x](https://e.com "${longTitle}")`,
+      [
+        text('[x]('),
+        { t: 'link', href: 'https://e.com/', c: [text('https://e.com')] },
+        text(` "${longTitle}")`),
+      ],
+    ],
+  ])('keeps a link whose %s runs past 2 048 characters literal', (_part, source, expected) => {
+    expect(parseInline(source)).toEqual(expected);
+  });
+
+  it('counts the destination and the title against one 2 048-character bound', () => {
+    const url = 'https://e.com/'.padEnd(1_500, 'a');
+    const title = 't'.repeat(1_000);
+    const autolink: MdInline = { t: 'link', href: url, c: [text(url)] };
+    expect(parseInline(`[x](<${url}> "${title}")`)).toEqual([
+      text('[x]('),
+      autolink,
+      text(` "${title}")`),
+    ]);
+    expect(parseInline(`[x](${url} "${title}")`)).toEqual([
+      text('[x]('),
+      autolink,
+      text(` "${title}")`),
+    ]);
+
+    const shortUrl = 'https://e.com/'.padEnd(1_000, 'a');
+    expect(parseInline(`[x](<${shortUrl}> "${'t'.repeat(500)}")`)).toEqual([
+      { t: 'link', href: shortUrl, c: [text('x')] },
+    ]);
+  });
+
+  it('trims unbalanced closing parens and punctuation from a bare URL together', () => {
+    expect(parseInline('(see https://e.com/w_(x)).')).toEqual([
+      text('(see '),
+      { t: 'link', href: 'https://e.com/w_(x)', c: [text('https://e.com/w_(x)')] },
+      text(').'),
+    ]);
+  });
+
+  it(
+    'trims 40 000 unbalanced closing parens from a bare URL in one pass',
+    () => {
+      const closes = ')'.repeat(40_000);
+      expect(parseInline(`see https://e.com/a${closes}`)).toEqual([
+        text('see '),
+        { t: 'link', href: 'https://e.com/a', c: [text('https://e.com/a')] },
+        text(closes),
+      ]);
+    },
+    1_000,
+  );
+
+  it('keeps a bare URL that fails safeHref as one text run up to the next space', () => {
+    expect(parseInline('x http://^/https://e.com')).toEqual([text('x http://^/https://e.com')]);
+    expect(parseInline('see http://^/ ok https://e.com')).toEqual([
+      text('see http://^/ ok '),
+      { t: 'link', href: 'https://e.com/', c: [text('https://e.com')] },
+    ]);
+  });
+
+  it(
+    'keeps a run of 30 000 rejected bare URLs as text in one pass',
+    () => {
+      const source = `x ${'http://^/'.repeat(30_000)}`;
+      expect(parseInline(source)).toEqual([text(source)]);
+    },
+    1_000,
+  );
 });

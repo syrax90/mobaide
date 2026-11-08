@@ -65,13 +65,7 @@ struct ChatComposer: View {
             guard !items.isEmpty else { return }
             pickerItems = []
             for item in items {
-                Task {
-                    guard let data = try? await item.loadTransferable(type: Data.self) else {
-                        model.message = ToastMessage(text: "This image could not be attached", tone: .danger)
-                        return
-                    }
-                    model.addImage(data: data)
-                }
+                model.addImage { try? await item.loadTransferable(type: Data.self) }
             }
         }
     }

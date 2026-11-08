@@ -160,6 +160,14 @@ class MarkdownTest {
         }
     }
 
+    @Test(timeout = 2_000)
+    fun longRunOfOneMarker_staysText() {
+        listOf("*", "_", "~").forEach { marker ->
+            val source = "a " + marker.repeat(20_000)
+            assertEquals(marker, listOf(para(text(source))), Markdown.parse(source))
+        }
+    }
+
     @Test
     fun linkLabel_isCappedAt999Characters() {
         val label = "a".repeat(999)
@@ -180,6 +188,70 @@ class MarkdownTest {
     }
 
     @Test
+    fun linkDestination_of2000Characters_links() {
+        val url = "https://e.com/".padEnd(2_000, 'a')
+        val link = MdInline.Link(url, listOf(text("x")))
+        assertEquals(listOf(link), Markdown.parseInline("[x]($url)"))
+        assertEquals(listOf(link), Markdown.parseInline("[x](<$url>)"))
+    }
+
+    @Test
+    fun linkDestinationOrTitlePast2048Characters_staysLiteral() {
+        val url = "https://e.com/".padEnd(3_000, 'a')
+        val autolink = MdInline.Link(url, listOf(text(url)))
+        assertEquals(listOf(text("[x]("), autolink, text(")")), Markdown.parseInline("[x]($url)"))
+        assertEquals(listOf(text("[x]("), autolink, text(")")), Markdown.parseInline("[x](<$url>)"))
+        val title = "t".repeat(3_000)
+        assertEquals(
+            listOf(
+                text("[x]("),
+                MdInline.Link("https://e.com", listOf(text("https://e.com"))),
+                text(" \"$title\")"),
+            ),
+            Markdown.parseInline("[x](https://e.com \"$title\")"),
+        )
+    }
+
+    @Test
+    fun linkDestinationAndTitle_shareOne2048CharacterBound() {
+        val url = "https://e.com/".padEnd(1_500, 'a')
+        val title = "t".repeat(1_000)
+        val literal = listOf(text("[x]("), MdInline.Link(url, listOf(text(url))), text(" \"$title\")"))
+        assertEquals(literal, Markdown.parseInline("[x](<$url> \"$title\")"))
+        assertEquals(literal, Markdown.parseInline("[x]($url \"$title\")"))
+        val shortUrl = "https://e.com/".padEnd(1_000, 'a')
+        assertEquals(
+            listOf(MdInline.Link(shortUrl, listOf(text("x")))),
+            Markdown.parseInline("[x](<$shortUrl> \"${"t".repeat(500)}\")"),
+        )
+    }
+
+    @Test
+    fun bareUrl_dropsUnbalancedClosingParensAndPunctuationTogether() {
+        assertEquals(
+            listOf(
+                text("(see "),
+                MdInline.Link("https://e.com/w_(x)", listOf(text("https://e.com/w_(x)"))),
+                text(")."),
+            ),
+            Markdown.parseInline("(see https://e.com/w_(x))."),
+        )
+    }
+
+    @Test(timeout = 2_000)
+    fun bareUrl_followedBy40000ClosingParens_trimsInOnePass() {
+        val closes = ")".repeat(40_000)
+        assertEquals(
+            listOf(
+                text("see "),
+                MdInline.Link("https://e.com/a", listOf(text("https://e.com/a"))),
+                text(closes),
+            ),
+            Markdown.parseInline("see https://e.com/a$closes"),
+        )
+    }
+
+    @Test
     fun blocks_headingAndParagraph() {
         assertEquals(
             listOf(
@@ -187,6 +259,39 @@ class MarkdownTest {
                 para(text("first"), MdInline.LineBreak, text("second")),
             ),
             Markdown.parse("## Result ##\n\nfirst\nsecond"),
+        )
+    }
+
+    @Test
+    fun blocks_headingDropsAClosingHashRunOnlyAfterASpace() {
+        listOf(
+            "# foo #" to MdBlock.Heading(1, listOf(text("foo"))),
+            "# foo#" to MdBlock.Heading(1, listOf(text("foo#"))),
+            "### ###" to MdBlock.Heading(3, emptyList()),
+            "#" to MdBlock.Heading(1, emptyList()),
+            "# foo \\#" to MdBlock.Heading(1, listOf(text("foo #"))),
+            "## foo ##   " to MdBlock.Heading(2, listOf(text("foo"))),
+            "#\tfoo\t#" to MdBlock.Heading(1, listOf(text("foo"))),
+            "# foo # bar" to MdBlock.Heading(1, listOf(text("foo # bar"))),
+            "   ###### six" to MdBlock.Heading(6, listOf(text("six"))),
+        ).forEach { (source, heading) ->
+            assertEquals(source, listOf(heading), Markdown.parse(source))
+        }
+        listOf("#5 bolt", "#hashtag", "####### seven").forEach { source ->
+            assertEquals(source, listOf(para(text(source))), Markdown.parse(source))
+        }
+    }
+
+    @Test(timeout = 2_000)
+    fun blocks_headingWith120000InnerSpaces_parsesWithoutBacktracking() {
+        val spaces = " ".repeat(120_000)
+        assertEquals(
+            listOf(MdBlock.Heading(1, listOf(text("a${spaces}b")))),
+            Markdown.parse("# a${spaces}b"),
+        )
+        assertEquals(
+            listOf(MdBlock.Heading(1, listOf(text("a")))),
+            Markdown.parse("# a$spaces#$spaces"),
         )
     }
 
@@ -286,6 +391,40 @@ class MarkdownTest {
     }
 
     @Test
+    fun blocks_separatorCellsAreDashesWithOptionalColonsAtTheEnds() {
+        assertEquals(
+            listOf(
+                MdBlock.Table(
+                    header = listOf(listOf(text("a")), listOf(text("b")), listOf(text("c"))),
+                    aligns = listOf(MdAlign.Center, MdAlign.Start, MdAlign.End),
+                    rows = emptyList(),
+                ),
+            ),
+            Markdown.parse("| a | b | c |\n| :-: | --- | -: |"),
+        )
+        listOf("-:- | ---", ": | ---", ":: | ---", "-- - | ---").forEach { separator ->
+            assertEquals(
+                separator,
+                listOf(para(text("a | b"), MdInline.LineBreak, text(separator))),
+                Markdown.parse("a | b\n$separator"),
+            )
+        }
+    }
+
+    @Test
+    fun blocks_separatorRowOf20000Cells_parsesWithoutStackOverflow() {
+        val columns = 20_000
+        assertEquals(
+            listOf(MdBlock.Table(List(columns) { listOf(text("a")) }, List(columns) { MdAlign.Start }, emptyList())),
+            Markdown.parse("|a".repeat(columns) + "|\n" + "|-".repeat(columns) + "|"),
+        )
+        assertEquals(
+            listOf(para(text("a|b"), MdInline.LineBreak, text("|-".repeat(columns) + "|"))),
+            Markdown.parse("a|b\n" + "|-".repeat(columns) + "|"),
+        )
+    }
+
+    @Test
     fun blocks_quoteRuleAndHeadingEndAParagraph() {
         assertEquals(
             listOf(
@@ -301,5 +440,52 @@ class MarkdownTest {
     @Test
     fun blocks_crlfIsALineBreak() {
         assertEquals(listOf(para(text("a"), MdInline.LineBreak, text("b"))), Markdown.parse("a\r\nb"))
+    }
+
+    private fun bulletOf(vararg inlines: MdInline): MdBlock =
+        MdBlock.ListBlock(false, 1, listOf(MdListItem(null, listOf(para(*inlines)))))
+
+    @Test
+    fun blocks_listFenceAndQuoteLinesHoldingALineSeparator_stillParse() {
+        listOf("U+2028" to "\u2028", "U+2029" to "\u2029", "U+0085" to "\u0085").forEach { (name, separator) ->
+            assertEquals(name, listOf(bulletOf(text("a${separator}b"))), Markdown.parse("- a${separator}b"))
+            assertEquals(name, listOf(MdBlock.Code("py", "code")), Markdown.parse("```py x${separator}y\ncode\n```"))
+            assertEquals(
+                name,
+                listOf(MdBlock.Quote(listOf(para(text("a${separator}b"))))),
+                Markdown.parse("> a${separator}b"),
+            )
+        }
+    }
+
+    @Test(timeout = 2_000)
+    fun blocks_longListOrFenceLineHoldingALineSeparator_parsesWithoutBacktracking() {
+        assertEquals(listOf(bulletOf(text("a\u2028b"))), Markdown.parse("- " + " ".repeat(64_000) + "a\u2028b"))
+        assertEquals(listOf(MdBlock.Code("py", "")), Markdown.parse("`".repeat(64_000) + "py x\u2028y"))
+    }
+
+    private fun nested(levels: Int, wrap: (List<MdBlock>) -> MdBlock, inner: List<MdBlock>): List<MdBlock> =
+        (1..levels).fold(inner) { blocks, _ -> listOf(wrap(blocks)) }
+
+    private val quote: (List<MdBlock>) -> MdBlock = { MdBlock.Quote(it) }
+
+    private val bullet: (List<MdBlock>) -> MdBlock = { MdBlock.ListBlock(false, 1, listOf(MdListItem(null, it))) }
+
+    @Test
+    fun blocks_quotesNestTwelveLevels_andDeeperMarkersStayOneParagraph() {
+        assertEquals(nested(12, quote, listOf(para(text("deep")))), Markdown.parse(">".repeat(12) + " deep"))
+        assertEquals(
+            nested(12, quote, listOf(para(text(">".repeat(9_988) + " deep")))),
+            Markdown.parse(">".repeat(10_000) + " deep"),
+        )
+    }
+
+    @Test
+    fun blocks_listsNestTwelveLevels_andDeeperMarkersStayOneParagraph() {
+        assertEquals(nested(12, bullet, listOf(para(text("deep")))), Markdown.parse("- ".repeat(12) + "deep"))
+        assertEquals(
+            nested(12, bullet, listOf(para(text("- ".repeat(9_988) + "deep")))),
+            Markdown.parse("- ".repeat(10_000) + "deep"),
+        )
     }
 }

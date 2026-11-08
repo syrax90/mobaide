@@ -32,13 +32,16 @@ export type MdBlock =
   | { t: 'hr' }
   | { t: 'table'; align: MdAlign[]; head: MdInline[][]; rows: MdInline[][][] };
 
-const FENCE_OPEN = /^( {0,3})(`{3,}|~{3,})(.*)$/;
+// `s`: lines never hold `\n`, but `.` must also cross U+2028/U+2029, or a
+// failed match backtracks quadratically on a long line.
+const FENCE_OPEN = /^( {0,3})(`{3,}|~{3,})(.*)$/s;
 const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
-const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
 const RULE = /^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$/;
-const QUOTE = /^ {0,3}> ?(.*)$/;
-const LIST_ITEM = /^( *)([-*+]|\d{1,9}[.)])(?:[ \t]+(.*))?$/;
-const TABLE_SEPARATOR = /^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
+const QUOTE = /^ {0,3}> ?(.*)$/s;
+const LIST_ITEM = /^( *)([-*+]|\d{1,9}[.)])(?:[ \t]+(.*))?$/s;
+/** Quotes, lists and emphasis nested deeper than this stay literal text. */
+const MAX_DEPTH = 12;
+const SEPARATOR_CELL = /^:?-+:?$/;
 const TASK = /^\[([ xX])\](?:[ \t]+|$)/;
 
 export function safeHref(raw: string): string | null {
@@ -121,14 +124,41 @@ function tableAlign(cell: string): MdAlign {
   return null;
 }
 
+/**
+ * An ATX heading: up to three spaces, one to six `#`, then a space, a tab or
+ * the end. A closing `#` run after a space is dropped. A scan, not a regex:
+ * the regex backtracks quadratically on a long run of spaces.
+ */
+function matchHeading(line: string): { level: number; text: string } | null {
+  let i = 0;
+  while (i < 3 && line[i] === ' ') i += 1;
+  let level = 0;
+  while (line[i + level] === '#') level += 1;
+  if (level < 1 || level > 6) return null;
+  const next = line[i + level];
+  if (next !== undefined && next !== ' ' && next !== '\t') return null;
+  let text = line.slice(i + level).replace(/^[ \t]+/, '');
+  let end = text.length;
+  while (end > 0 && (text[end - 1] === ' ' || text[end - 1] === '\t')) end -= 1;
+  text = text.slice(0, end);
+  let hashes = end;
+  while (hashes > 0 && text[hashes - 1] === '#') hashes -= 1;
+  if (hashes < end && (hashes === 0 || text[hashes - 1] === ' ' || text[hashes - 1] === '\t')) {
+    while (hashes > 0 && (text[hashes - 1] === ' ' || text[hashes - 1] === '\t')) hashes -= 1;
+    text = text.slice(0, hashes);
+  }
+  return { level, text };
+}
+
 function startsTable(lines: readonly string[], i: number): boolean {
   const head = lines[i];
   const separator = lines[i + 1];
   if (head === undefined || separator === undefined) return false;
-  if (!head.includes('|') || !TABLE_SEPARATOR.test(separator) || !separator.includes('-')) {
-    return false;
-  }
-  return splitRow(head).length === splitRow(separator).length;
+  if (!head.includes('|') || !separator.includes('-')) return false;
+  const cells = splitRow(separator);
+  // Per trimmed cell: a whole-row regex backtracks quadratically on spaces.
+  if (!cells.every((cell) => SEPARATOR_CELL.test(cell.trim()))) return false;
+  return splitRow(head).length === cells.length;
 }
 
 /** Whether `line` begins a block that ends a paragraph. */
@@ -136,7 +166,7 @@ function interrupts(lines: readonly string[], i: number): boolean {
   const line = lines[i] ?? '';
   return (
     fenceOpen(line) !== null ||
-    HEADING.test(line) ||
+    matchHeading(line) !== null ||
     RULE.test(line) ||
     QUOTE.test(line) ||
     LIST_ITEM.test(line) ||
@@ -144,7 +174,11 @@ function interrupts(lines: readonly string[], i: number): boolean {
   );
 }
 
-function parseList(lines: readonly string[], start: number): { block: MdBlock; next: number } {
+function parseList(
+  lines: readonly string[],
+  start: number,
+  depth: number,
+): { block: MdBlock; next: number } {
   const first = LIST_ITEM.exec(lines[start] ?? '');
   const baseIndent = (first?.[1] ?? '').length;
   const ordered = /\d/.test(first?.[2] ?? '');
@@ -168,9 +202,9 @@ function parseList(lines: readonly string[], start: number): { block: MdBlock; n
           indentOf(nextLine) >= baseIndent &&
           /\d/.test(nextItem[2] ?? '') === ordered);
       if (!continues) break;
-      current.lines.push('');
+      // The whole blank run at once: the look-ahead above already scanned it.
+      for (; i < j; i += 1) current.lines.push('');
       previousBlank = true;
-      i += 1;
       continue;
     }
     const item = LIST_ITEM.exec(line);
@@ -207,13 +241,17 @@ function parseList(lines: readonly string[], start: number): { block: MdBlock; n
     const body = task === null ? itemLines : [head.slice(task[0].length), ...itemLines.slice(1)];
     return {
       task: task === null ? null : task[1] !== ' ',
-      c: parseBlockLines(body),
+      c: parseBlockLines(body, depth + 1),
     };
   });
   return { block: { t: 'list', ordered, start: startNumber, items: parsedItems }, next: i };
 }
 
-function parseBlockLines(lines: readonly string[]): MdBlock[] {
+function parseBlockLines(lines: readonly string[], depth = 0): MdBlock[] {
+  if (depth >= MAX_DEPTH) {
+    const text = lines.map((line) => line.trim()).join('\n');
+    return text.trim() === '' ? [] : [{ t: 'p', c: parseInline(text) }];
+  }
   const out: MdBlock[] = [];
   let i = 0;
   while (i < lines.length) {
@@ -246,13 +284,9 @@ function parseBlockLines(lines: readonly string[]): MdBlock[] {
       continue;
     }
 
-    const heading = HEADING.exec(line);
+    const heading = matchHeading(line);
     if (heading !== null) {
-      out.push({
-        t: 'h',
-        level: (heading[1] ?? '#').length,
-        c: parseInline(heading[2] ?? ''),
-      });
+      out.push({ t: 'h', level: heading.level, c: parseInline(heading.text) });
       i += 1;
       continue;
     }
@@ -271,12 +305,12 @@ function parseBlockLines(lines: readonly string[]): MdBlock[] {
         inner.push(match[1] ?? '');
         i += 1;
       }
-      out.push({ t: 'quote', c: parseBlockLines(inner) });
+      out.push({ t: 'quote', c: parseBlockLines(inner, depth + 1) });
       continue;
     }
 
     if (LIST_ITEM.test(line)) {
-      const { block, next } = parseList(lines, i);
+      const { block, next } = parseList(lines, i, depth);
       out.push(block);
       i = next;
       continue;
@@ -318,7 +352,7 @@ export function parseMarkdown(source: string): MdBlock[] {
 
 const ESCAPABLE = new Set('\\`*_{}[]()#+-.!|~<>"\'');
 const WORD = /[\p{L}\p{N}]/u;
-const TRAILING_URL_PUNCTUATION = /[.,;:!?'"*_~]+$/;
+const TRAILING_URL_PUNCTUATION = '.,;:!?\'"*_~';
 
 function isWordChar(ch: string | undefined): boolean {
   return ch !== undefined && WORD.test(ch);
@@ -348,6 +382,22 @@ function findCodeClose(s: string, from: number, run: number): number {
   return -1;
 }
 
+/** `findCodeClose` remembered per start, so repeated scans from one run cost nothing. */
+type CodeCloser = (from: number, run: number) => number;
+
+function codeCloser(s: string): CodeCloser {
+  const known = new Map<number, number>();
+  return (from, run) => {
+    const key = from * (s.length + 1) + run;
+    let close = known.get(key);
+    if (close === undefined) {
+      close = findCodeClose(s, from, run);
+      known.set(key, close);
+    }
+    return close;
+  };
+}
+
 interface LinkMatch {
   label: string;
   url: string;
@@ -356,12 +406,23 @@ interface LinkMatch {
 
 /** A longer label stays literal text, so an unclosed `[` never scans far. */
 const MAX_LINK_LABEL = 999;
+/** Bounds the destination scan, so text full of unclosed `[a](` stays linear. */
+const MAX_LINK_DESTINATION = 2048;
 
-function matchLink(s: string, open: number): LinkMatch | null {
+/** The first `ch` in `s` within `max` characters from `from`, or -1. */
+function indexWithin(s: string, ch: string, from: number, max: number): number {
+  const end = Math.min(s.length, from + max);
+  for (let i = from; i < end; i += 1) {
+    if (s[i] === ch) return i;
+  }
+  return -1;
+}
+
+function matchLink(s: string, open: number, codeClose: CodeCloser): LinkMatch | null {
   let depth = 0;
   let close = -1;
-  const limit = Math.min(s.length, open + MAX_LINK_LABEL + 2);
-  for (let j = open; j < limit; j += 1) {
+  const labelLimit = Math.min(s.length, open + MAX_LINK_LABEL + 2);
+  for (let j = open; j < labelLimit; j += 1) {
     const ch = s[j];
     if (ch === '\\') {
       j += 1;
@@ -369,7 +430,7 @@ function matchLink(s: string, open: number): LinkMatch | null {
     }
     if (ch === '`') {
       const run = runLength(s, j, '`');
-      const end = findCodeClose(s, j + run, run);
+      const end = codeClose(j + run, run);
       j = end === -1 ? j + run - 1 : end + run - 1;
       continue;
     }
@@ -384,17 +445,19 @@ function matchLink(s: string, open: number): LinkMatch | null {
   }
   if (close === -1 || s[close + 1] !== '(') return null;
   let k = close + 2;
-  while (s[k] === ' ') k += 1;
+  // One bound for everything inside the parentheses, as on Android.
+  const limit = Math.min(s.length, k + MAX_LINK_DESTINATION);
+  while (k < limit && s[k] === ' ') k += 1;
   let url = '';
   if (s[k] === '<') {
-    const end = s.indexOf('>', k);
+    const end = indexWithin(s, '>', k, limit - k);
     if (end === -1) return null;
     url = s.slice(k + 1, end);
     k = end + 1;
   } else {
     let parens = 0;
     const begin = k;
-    while (k < s.length) {
+    while (k < limit) {
       const ch = s[k];
       if (ch === undefined || /\s/.test(ch)) break;
       if (ch === '(') parens += 1;
@@ -404,22 +467,29 @@ function matchLink(s: string, open: number): LinkMatch | null {
       }
       k += 1;
     }
+    if (k === limit && limit < s.length) return null;
     url = s.slice(begin, k);
   }
-  while (s[k] === ' ') k += 1;
+  while (k < limit && s[k] === ' ') k += 1;
   const quote = s[k];
   if (quote === '"' || quote === "'") {
-    const end = s.indexOf(quote, k + 1);
+    const end = indexWithin(s, quote, k + 1, limit - k - 1);
     if (end === -1) return null;
     k = end + 1;
-    while (s[k] === ' ') k += 1;
+    while (k < limit && s[k] === ' ') k += 1;
   }
-  if (s[k] !== ')') return null;
+  if (k >= limit || s[k] !== ')') return null;
   return { label: s.slice(open + 1, close), url, end: k + 1 };
 }
 
 /** The closing delimiter for an emphasis run starting at `from`, or -1. */
-function findEmphasisClose(s: string, from: number, ch: string, size: number): number {
+function findEmphasisClose(
+  s: string,
+  from: number,
+  ch: string,
+  size: number,
+  codeClose: CodeCloser,
+): number {
   let j = from;
   while (j < s.length) {
     const c = s[j];
@@ -429,7 +499,7 @@ function findEmphasisClose(s: string, from: number, ch: string, size: number): n
     }
     if (c === '`') {
       const run = runLength(s, j, '`');
-      const end = findCodeClose(s, j + run, run);
+      const end = codeClose(j + run, run);
       j = end === -1 ? j + run : end + run;
       continue;
     }
@@ -454,21 +524,34 @@ function findEmphasisClose(s: string, from: number, ch: string, size: number): n
   return -1;
 }
 
+/** Drops trailing punctuation and unbalanced `)` from a bare URL, in one pass. */
 function trimUrl(url: string): string {
-  let out = url.replace(TRAILING_URL_PUNCTUATION, '');
-  while (out.endsWith(')')) {
-    const opens = out.split('(').length - 1;
-    const closes = out.split(')').length - 1;
-    if (closes <= opens) break;
-    out = out.slice(0, -1).replace(TRAILING_URL_PUNCTUATION, '');
+  let opens = 0;
+  let closes = 0;
+  for (let i = 0; i < url.length; i += 1) {
+    if (url[i] === '(') opens += 1;
+    else if (url[i] === ')') closes += 1;
   }
-  return out;
+  let end = url.length;
+  while (end > 0) {
+    const ch = url[end - 1] ?? '';
+    if (TRAILING_URL_PUNCTUATION.includes(ch)) {
+      end -= 1;
+    } else if (ch === ')' && closes > opens) {
+      closes -= 1;
+      end -= 1;
+    } else {
+      break;
+    }
+  }
+  return url.slice(0, end);
 }
 
 /** The only characters that make a closer scan step differently from `parseInline`. */
 const SCAN_STEP = /[`\\]/;
 
-export function parseInline(source: string, allowLinks = true): MdInline[] {
+export function parseInline(source: string, allowLinks = true, depth = 0): MdInline[] {
+  if (depth >= MAX_DEPTH) return source === '' ? [] : [{ t: 'text', v: source }];
   const out: MdInline[] = [];
   let buffer = '';
   const flush = (): void => {
@@ -478,6 +561,7 @@ export function parseInline(source: string, allowLinks = true): MdInline[] {
     }
   };
   const s = source;
+  const codeClose = codeCloser(s);
 
   // A closer search that found nothing from `from` finds nothing from any
   // later start: it would scan a suffix of the same text in the same steps.
@@ -528,7 +612,7 @@ export function parseInline(source: string, allowLinks = true): MdInline[] {
 
     if (ch === '`') {
       const run = runLength(s, i, '`');
-      const close = findCodeClose(s, i + run, run);
+      const close = codeClose(i + run, run);
       if (close !== -1) {
         let code = s.slice(i + run, close).replace(/\n/g, ' ');
         if (code.length > 2 && code.startsWith(' ') && code.endsWith(' ') && code.trim() !== '') {
@@ -546,11 +630,11 @@ export function parseInline(source: string, allowLinks = true): MdInline[] {
 
     if (allowLinks && (ch === '[' || (ch === '!' && s[i + 1] === '['))) {
       const open = ch === '!' ? i + 1 : i;
-      const link = matchLink(s, open);
+      const link = matchLink(s, open, codeClose);
       if (link !== null) {
         flush();
         const href = safeHref(link.url);
-        const label = parseInline(link.label, false);
+        const label = parseInline(link.label, false, depth + 1);
         const children = label.length > 0 ? label : [{ t: 'text' as const, v: link.url }];
         if (href !== null) out.push({ t: 'link', href, c: children });
         else out.push(...children);
@@ -582,15 +666,20 @@ export function parseInline(source: string, allowLinks = true): MdInline[] {
           i = jumpOver(i, i + url.length);
           continue;
         }
+        // A rejected run stays text as a whole (as on Android): retrying it
+        // from every later `http` rescans the rest of the run each time.
+        buffer += bare[0];
+        i += bare[0].length;
+        continue;
       }
     }
 
     if (ch === '~' && s[i + 1] === '~' && !isSpace(s[i + 2])) {
       const from = i + 2;
-      const close = findClose('~~', from, () => findEmphasisClose(s, from, '~', 2));
+      const close = findClose('~~', from, () => findEmphasisClose(s, from, '~', 2, codeClose));
       if (close !== -1 && !isSpace(s[close - 1])) {
         flush();
-        out.push({ t: 'del', c: parseInline(s.slice(i + 2, close), allowLinks) });
+        out.push({ t: 'del', c: parseInline(s.slice(i + 2, close), allowLinks, depth + 1) });
         i = jumpOver(i, close + 2);
         continue;
       }
@@ -601,20 +690,20 @@ export function parseInline(source: string, allowLinks = true): MdInline[] {
       const leftOk = ch === '*' || !isWordChar(s[i - 1]);
       if (run >= 2 && leftOk && !isSpace(s[i + 2])) {
         const from = i + 2;
-        const close = findClose(ch + ch, from, () => findEmphasisClose(s, from, ch, 2));
+        const close = findClose(ch + ch, from, () => findEmphasisClose(s, from, ch, 2, codeClose));
         if (close !== -1) {
           flush();
-          out.push({ t: 'strong', c: parseInline(s.slice(i + 2, close), allowLinks) });
+          out.push({ t: 'strong', c: parseInline(s.slice(i + 2, close), allowLinks, depth + 1) });
           i = close + 2;
           continue;
         }
       }
       if (leftOk && !isSpace(s[i + 1])) {
         const from = i + 1;
-        const close = findClose(ch, from, () => findEmphasisClose(s, from, ch, 1));
+        const close = findClose(ch, from, () => findEmphasisClose(s, from, ch, 1, codeClose));
         if (close !== -1) {
           flush();
-          out.push({ t: 'em', c: parseInline(s.slice(i + 1, close), allowLinks) });
+          out.push({ t: 'em', c: parseInline(s.slice(i + 1, close), allowLinks, depth + 1) });
           i = close + 1;
           continue;
         }
