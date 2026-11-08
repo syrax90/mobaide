@@ -84,10 +84,10 @@ class TestModelCatalog:
             assert _SHA256.match(file.sha256), file.name
             assert file.size > 0
             mirror, fallback = file.urls
-            assert mirror.startswith(
-                "https://github.com/syrax90/mobaide-agent-releases/releases/download/"
+            # Content-addressed, so re-pinning a file never reuses a URL.
+            assert mirror == (
+                f"https://dl.mobaide.com/voice/{PARAKEET_V3.id}/{file.sha256}/{file.name}"
             )
-            assert mirror.endswith("/" + file.name)
             assert fallback.startswith("https://huggingface.co/")
             # A pinned revision, never a moving branch.
             assert "/resolve/main/" not in fallback

@@ -406,7 +406,7 @@
       <li><span class="px-bullet"></span>Going through the relay, the audio is TLS-encrypted on every hop and goes only to your own agent.</li>
       <li><span class="px-bullet"></span>The relay routes it in memory and keeps neither the audio nor the text.</li>
       <li><span class="px-bullet"></span>Your agent holds the audio in memory until the text is ready, then drops it. It never logs or saves the audio or the text.</li>
-      <li><span class="px-bullet"></span>No third-party speech service is involved. The only extra downloads are the model and its runtime, once, from GitHub (Hugging Face as a fallback) and PyPI.</li>
+      <li><span class="px-bullet"></span>No third-party speech service is involved. The only extra downloads are the model and its runtime, once, from the Mobaide download mirror (Hugging Face as a fallback) and PyPI.</li>
       <li><span class="px-bullet"></span>Transcript cleanup is optional and off until you turn it on. When it is on, your agent hands each transcript to the session's own AI agent on your computer, which cleans it up with its cheapest model under your own account — Claude Code uses Claude Haiku, Codex uses GPT Luna and Antigravity uses Gemini Flash. The text then goes to that agent's provider, like the prompts you send, and counts toward your usage. Mobaide still stores none of it.</li>
     </ul>
     <p class="fineprint">
