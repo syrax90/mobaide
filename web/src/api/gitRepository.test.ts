@@ -94,23 +94,30 @@ describe('createGitBranch', () => {
     ok({ branch: 'feature-a', checked_out: false, created: true });
 
     await expect(
-      createGitBranch('a1', 'proj', { name: 'feature-a', start_point: 'main', checkout: false }),
+      createGitBranch('a1', 'proj', {
+        name: 'feature-a',
+        start_point: 'main',
+        checkout: false,
+        force: false,
+      }),
     ).resolves.toEqual({ branch: 'feature-a', checked_out: false, created: true });
 
     expect(lastRequest()).toMatchObject({
       method: 'POST',
       path: '/api/projects/{name}/git/branches',
       params: { path: { name: 'proj' } },
-      body: { name: 'feature-a', start_point: 'main', checkout: false },
+      body: { name: 'feature-a', start_point: 'main', checkout: false, force: false },
     });
   });
 
   it('types a coded refusal like the session routes', async () => {
     refuse(409, { code: 'exists', message: 'feature-a' });
 
-    const error = await createGitBranch('a1', 'proj', { name: 'feature-a', checkout: false }).catch(
-      (failure: unknown) => failure,
-    );
+    const error = await createGitBranch('a1', 'proj', {
+      name: 'feature-a',
+      checkout: false,
+      force: false,
+    }).catch((failure: unknown) => failure);
 
     expect(error).toBeInstanceOf(SessionGitError);
     expect(error).toMatchObject({ kind: 'git', code: 'exists', detailMessage: 'feature-a' });
@@ -127,7 +134,7 @@ describe('checkoutGitRef', () => {
       method: 'POST',
       path: '/api/projects/{name}/git/checkout',
       params: { path: { name: 'proj' } },
-      body: { ref: 'origin/feature-a' },
+      body: { ref: 'origin/feature-a', force: false },
     });
   });
 

@@ -193,7 +193,7 @@ export async function checkoutGitRef(
 ): Promise<GitBranchResult> {
   const { data, error, response } = await createAgentClient(agentId).POST(
     '/api/projects/{name}/git/checkout',
-    { params: { path: { name: projectName } }, body: force ? { ref, force } : { ref } },
+    { params: { path: { name: projectName } }, body: { ref, force } },
   );
   if (error !== undefined || data === undefined) {
     throw toBranchError(toApiError(response, error));
