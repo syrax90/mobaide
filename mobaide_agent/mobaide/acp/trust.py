@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
@@ -17,6 +18,19 @@ from typing import Any, Protocol
 
 from mobaide.agent._env_writer import atomic_write
 from mobaide.core.codex_auth import codex_home
+
+
+_config_locks: dict[str, threading.Lock] = {}
+_config_locks_guard = threading.Lock()
+
+
+def _config_lock(path: Path) -> threading.Lock:
+    """One lock per config file: concurrent grants for different folders
+    each read, extend and replace the whole file, and would drop each other's
+    record."""
+    key = os.path.realpath(path)
+    with _config_locks_guard:
+        return _config_locks.setdefault(key, threading.Lock())
 
 
 class WorkspaceTrust(Protocol):
@@ -124,6 +138,10 @@ class ClaudeFolderTrust:
         """
         if too_broad_to_record(self._cwd):
             return False
+        with _config_lock(self._config_path):
+            return self._grant_locked()
+
+    def _grant_locked(self) -> bool:
         path = self._config_path
         data: dict[str, Any] = {}
         if path.exists():
@@ -255,6 +273,10 @@ class CodexFolderTrust:
         folder = self._record_folder()
         if too_broad_to_record(folder):
             return False
+        with _config_lock(self._config_path):
+            return self._grant_locked(folder)
+
+    def _grant_locked(self, folder: str) -> bool:
         path = self._config_path
         text = path.read_text(encoding="utf-8") if path.exists() else ""
         # Never rewrite a file this code cannot read back whole.

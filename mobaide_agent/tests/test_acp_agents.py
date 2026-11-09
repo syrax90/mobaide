@@ -331,7 +331,12 @@ class TestPrepare:
 class TestClaudeConfigIntents:
     def test_plan_mode_wins_over_skip_permissions(self):
         intents = claude_config_intents(ClaudeOptions(plan_mode=True, skip_permissions=True))
-        assert intents == [ConfigIntent("plan", category="mode")]
+        assert intents == [ConfigIntent("plan", category="mode", required=True)]
+
+    def test_bypass_permissions_is_not_required(self):
+        # Falling back to the agent's default asks more, never less.
+        intents = claude_config_intents(ClaudeOptions(skip_permissions=True))
+        assert intents[0].required is False
 
     def test_skip_permissions_means_bypass(self):
         intents = claude_config_intents(ClaudeOptions(skip_permissions=True))

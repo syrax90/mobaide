@@ -703,3 +703,55 @@ class TestCodexGitFileLayouts:
             os.path.realpath(superproject),
             os.path.realpath(sub),
         ]
+
+
+class TestConcurrentGrants:
+    """Two chat sessions approving trust for different folders at once each
+    read, extend and replace the whole config file; neither record may be
+    lost."""
+
+    @staticmethod
+    def _slow_writes(monkeypatch) -> None:
+        import threading
+        import time
+
+        import mobaide.acp.trust as trust_module
+
+        real_write = trust_module.atomic_write
+        first = threading.Event()
+
+        def slow_write(path, text, mode=None):
+            # The first writer holds its stale copy while the other one runs.
+            if not first.is_set():
+                first.set()
+                time.sleep(0.2)
+            real_write(path, text, mode=mode)
+
+        monkeypatch.setattr(trust_module, "atomic_write", slow_write)
+
+    @staticmethod
+    def _grant_both(grants) -> list[bool]:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            return list(pool.map(lambda grant: grant(), grants))
+
+    def test_claude_keeps_both_records(self, tmp_path, monkeypatch):
+        self._slow_writes(monkeypatch)
+        config = tmp_path / ".claude.json"
+        a, b = _project(tmp_path, "a"), _project(tmp_path, "b")
+        trusts = [ClaudeFolderTrust(str(f), config_path=config) for f in (a, b)]
+
+        assert self._grant_both([t.grant for t in trusts]) == [True, True]
+
+        assert all(t.is_trusted() for t in trusts)
+
+    def test_codex_keeps_both_records(self, tmp_path, monkeypatch):
+        self._slow_writes(monkeypatch)
+        config = tmp_path / "config.toml"
+        a, b = _project(tmp_path, "a"), _project(tmp_path, "b")
+        trusts = [CodexFolderTrust(str(f), config_path=config) for f in (a, b)]
+
+        assert self._grant_both([t.grant for t in trusts]) == [True, True]
+
+        assert all(t.is_trusted() for t in trusts)

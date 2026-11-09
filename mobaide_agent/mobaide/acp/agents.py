@@ -483,7 +483,8 @@ def claude_config_intents(options: ClaudeOptions) -> list[ConfigIntent]:
     """Map the Claude create-session options onto ACP config values."""
     intents: list[ConfigIntent] = []
     if options.plan_mode:
-        intents.append(ConfigIntent("plan", category="mode"))
+        # Plan mode restricts what the agent may do: never start without it.
+        intents.append(ConfigIntent("plan", category="mode", required=True))
     elif options.skip_permissions:
         intents.append(ConfigIntent("bypassPermissions", category="mode"))
     if options.model:

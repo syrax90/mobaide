@@ -169,7 +169,7 @@ A session can now run in the structured **chat UI**. The agent then starts an [A
 | Session wire dict | `ui`: `"chat"` or `"terminal"`. Clients open the chat screen for `"chat"` and the terminal for anything else. |
 
 * `ui: "chat"` for a kind without a chat agent → `400`. No runnable adapter on the host → `503` with `chat_unavailable: true`.
-* Claude options map onto the ACP session: `skip_permissions` / `plan_mode` → the `mode` config option, `model` / `effort` / `fast_mode` / `ultracode` → the matching config options, `append_system_prompt` → `systemPrompt` (append), `initial_prompt` → the first prompt (new sessions only). The config options also apply to a resumed session, and Restart re-applies the values in use before it. `debug` and `focus_mode` are terminal-only.
+* Claude options map onto the ACP session: `skip_permissions` / `plan_mode` → the `mode` config option (plan mode is required: when the agent cannot apply it, the session does not start, as for the Codex mode), `model` / `effort` / `fast_mode` / `ultracode` → the matching config options, `append_system_prompt` → `systemPrompt` (append), `initial_prompt` → the first prompt (new sessions only). The config options also apply to a resumed session, and Restart re-applies the values in use before it. `debug` and `focus_mode` are terminal-only.
 * The env file key `MOBAIDE_ACP_CLAUDE_COMMAND` overrides the adapter command. `MOBAIDE_ENV=test` runs the scripted fake agent `mobaide/acp/fake_agent.py` (set `MOBAIDE_ACP_REAL=1` to keep the real one).
 
 #### Stored sessions route

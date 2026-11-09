@@ -26,8 +26,9 @@ class EncodedChatImage(
 
 /**
  * Turns a picked image into what a chat prompt may carry: the longest side at most
- * [MAX_SIDE] px, JPEG, and base64 no larger than [MAX_BASE64]. EXIF rotation is
- * applied first so a phone photo is not sent sideways.
+ * [MAX_SIDE] px, JPEG, and base64 no larger than [MAX_BASE64]. The EXIF orientation
+ * (rotation and mirroring) is applied first: the JPEG carries no EXIF, so a phone
+ * photo would otherwise be sent sideways or mirrored.
  */
 @Singleton
 class ChatImageEncoder @Inject constructor(
@@ -51,18 +52,13 @@ class ChatImageEncoder @Inject constructor(
             BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
         } ?: return null
 
-        val rotation = runCatching {
+        val orientation = runCatching {
             resolver.openInputStream(uri)?.use { stream ->
-                when (ExifInterface(stream).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
-                    ExifInterface.ORIENTATION_ROTATE_90 -> 90f
-                    ExifInterface.ORIENTATION_ROTATE_180 -> 180f
-                    ExifInterface.ORIENTATION_ROTATE_270 -> 270f
-                    else -> 0f
-                }
+                ExifInterface(stream).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
             }
-        }.getOrNull() ?: 0f
+        }.getOrNull() ?: ExifInterface.ORIENTATION_NORMAL
 
-        var bitmap = scaled(decoded, MAX_SIDE, rotation)
+        var bitmap = scaled(decoded, MAX_SIDE, orientationMatrix(orientation))
         if (bitmap.hasAlpha()) bitmap = onWhite(bitmap)
 
         var quality = 80
@@ -73,25 +69,44 @@ class ChatImageEncoder @Inject constructor(
             } else {
                 val side = (max(bitmap.width, bitmap.height) * 0.75f).roundToInt()
                 if (side < MIN_SIDE) return null
-                bitmap = scaled(bitmap, side, 0f)
+                bitmap = scaled(bitmap, side, null)
             }
             data = jpegBase64(bitmap, quality)
         }
         return EncodedChatImage(
             payload = ChatImagePayload(mime = "image/jpeg", data = data),
-            thumbnail = scaled(bitmap, THUMB_SIDE, 0f),
+            thumbnail = scaled(bitmap, THUMB_SIDE, null),
         )
     }
 
-    private fun scaled(source: Bitmap, maxSide: Int, rotation: Float): Bitmap {
+    /** [source] at most [maxSide] px on its longest side, then turned by [orientation]. */
+    private fun scaled(source: Bitmap, maxSide: Int, orientation: Matrix?): Bitmap {
         val longest = max(source.width, source.height)
         val factor = if (longest > maxSide) maxSide.toFloat() / longest else 1f
-        if (factor == 1f && rotation == 0f) return source
+        if (factor == 1f && orientation == null) return source
         val matrix = Matrix().apply {
-            postScale(factor, factor)
-            if (rotation != 0f) postRotate(rotation)
+            setScale(factor, factor)
+            if (orientation != null) postConcat(orientation)
         }
         return Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
+    }
+
+    /** The transform that shows an image stored with EXIF [orientation] upright; null when none is needed. */
+    private fun orientationMatrix(orientation: Int): Matrix? = when (orientation) {
+        ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> Matrix().apply { setScale(-1f, 1f) }
+        ExifInterface.ORIENTATION_ROTATE_180 -> Matrix().apply { setRotate(180f) }
+        ExifInterface.ORIENTATION_FLIP_VERTICAL -> Matrix().apply { setScale(1f, -1f) }
+        ExifInterface.ORIENTATION_TRANSPOSE -> Matrix().apply {
+            setRotate(90f)
+            postScale(-1f, 1f)
+        }
+        ExifInterface.ORIENTATION_ROTATE_90 -> Matrix().apply { setRotate(90f) }
+        ExifInterface.ORIENTATION_TRANSVERSE -> Matrix().apply {
+            setRotate(-90f)
+            postScale(-1f, 1f)
+        }
+        ExifInterface.ORIENTATION_ROTATE_270 -> Matrix().apply { setRotate(270f) }
+        else -> null
     }
 
     private fun onWhite(source: Bitmap): Bitmap {
