@@ -19,13 +19,18 @@ export function RootLayout() {
               alt="Mobaide"
             />
           </NavLink>
+          {/* `end`: without it `/` matches every route and the tab would
+              stay underlined on every screen. */}
+          <NavLink to="/" end>
+            Sessions
+          </NavLink>
           <NavLink to="/agents">Agents</NavLink>
           <NavLink to="/projects">Projects</NavLink>
           <NavLink to="/templates">Templates</NavLink>
           <NavLink to="/account">Account</NavLink>
           {/* Devices is deliberately not here: Settings and Account both link
-              to it, and a seventh top-level entry buys nothing on a screen
-              where the first five are the daily ones. */}
+              to it, and another top-level entry buys nothing on a screen
+              where the others are the daily ones. */}
           <NavLink to="/settings">Settings</NavLink>
         </nav>
         <ThemePicker />
