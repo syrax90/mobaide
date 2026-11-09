@@ -206,3 +206,57 @@ describe('ConfigStep — Codex chat view', () => {
     expect(screen.queryByText('Continue a session…')).not.toBeInTheDocument();
   });
 });
+
+describe('ConfigStep — Antigravity chat view', () => {
+  const AGY_RESUMES = versionWithChat({ antigravity: { resume: true, live: false } });
+
+  it('keeps Terminal UI in a collapsed Advanced, off by default', () => {
+    const actions = renderStep('antigravity');
+
+    const details = advancedSummary().closest('details');
+    expect(details).not.toHaveAttribute('open');
+    const toggle = screen.getByLabelText('Terminal UI');
+    expect(details?.contains(toggle)).toBe(true);
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toBeEnabled();
+
+    fireEvent.click(toggle);
+
+    expect(actions).toContainEqual({ type: 'setAntigravityTerminalUi', value: true });
+  });
+
+  it('holds Terminal UI on where the PC has no Antigravity chat, and says how to get it', () => {
+    renderStep('antigravity', STATE, versionWithChat({ claude: { resume: true } }));
+
+    const toggle = screen.getByLabelText('Terminal UI');
+    expect(toggle).toBeChecked();
+    expect(toggle).toBeDisabled();
+    expect(
+      screen.getByText(
+        'The chat view needs a newer Antigravity CLI on your PC: run agy update there.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('offers to continue an Antigravity conversation where the PC can resume one', () => {
+    renderStep('antigravity', STATE, AGY_RESUMES, () => undefined);
+
+    expect(
+      screen.getByText(
+        'Open an Antigravity conversation started on your PC, for example with agy in a terminal.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue a session…' })).toBeEnabled();
+  });
+
+  it('offers no Continue entry for an Antigravity launch in the terminal', () => {
+    renderStep(
+      'antigravity',
+      { ...STATE, antigravity: { ...STATE.antigravity, terminalUi: true } },
+      AGY_RESUMES,
+      () => undefined,
+    );
+
+    expect(screen.queryByText('Continue a session…')).not.toBeInTheDocument();
+  });
+});

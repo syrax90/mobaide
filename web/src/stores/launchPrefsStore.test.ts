@@ -32,7 +32,12 @@ const CODEX_BLOB = {
   terminalUi: true,
 } as const;
 
-const ANTIGRAVITY_BLOB = { model: 'Gemini 3.1 Pro (High)', skipPermissions: true, sandbox: false };
+const ANTIGRAVITY_BLOB = {
+  model: 'Gemini 3.1 Pro (High)',
+  skipPermissions: true,
+  sandbox: false,
+  terminalUi: true,
+};
 
 const CLAUDE_DEFAULTS = {
   model: null,
@@ -101,7 +106,12 @@ describe('hydration', () => {
       reasoningEffort: 'high',
       terminalUi: false,
     });
-    expect(prefs.antigravity).toEqual({ model: null, skipPermissions: false, sandbox: false });
+    expect(prefs.antigravity).toEqual({
+      model: null,
+      skipPermissions: false,
+      sandbox: false,
+      terminalUi: false,
+    });
   });
 
   it('restores Codex Terminal UI off for a blob saved before the toggle existed', async () => {
@@ -115,6 +125,21 @@ describe('hydration', () => {
 
   it('voids the Codex bucket for a wrong-typed terminalUi', async () => {
     expect((await rehydrateWith({ codex: { ...CODEX_BLOB, terminalUi: 'on' } })).codex).toBeNull();
+  });
+
+  it('restores Antigravity Terminal UI off for a blob saved before the toggle existed', async () => {
+    const legacy: Record<string, unknown> = { ...ANTIGRAVITY_BLOB };
+    delete legacy.terminalUi;
+
+    const prefs = await rehydrateWith({ antigravity: legacy });
+
+    expect(prefs.antigravity).toEqual({ ...ANTIGRAVITY_BLOB, terminalUi: false });
+  });
+
+  it('voids the Antigravity bucket for a wrong-typed terminalUi', async () => {
+    const prefs = await rehydrateWith({ antigravity: { ...ANTIGRAVITY_BLOB, terminalUi: 1 } });
+
+    expect(prefs.antigravity).toBeNull();
   });
 
   it('restores focus view on for a blob saved before the toggle existed', async () => {

@@ -237,6 +237,13 @@ private fun StoredSessionRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            if (row.open_elsewhere && row.open_session_id == null) {
+                Text(
+                    text = "Open in another app on your PC. Close it there first.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.pixel.warning,
+                )
+            }
             if (showFolder) {
                 MiddleEllipsisText(
                     text = row.cwd,

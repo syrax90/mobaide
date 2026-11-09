@@ -323,6 +323,127 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertFalse(model.submitting)
     }
 
+    // MARK: - Antigravity chat view
+
+    func testAntigravityOpensTheChatViewUnlessTerminalUIIsOn() throws {
+        let model = makeModel()
+        model.selection = .stored("a")
+        XCTAssertEqual(try XCTUnwrap(model.buildRequest(mode: .antigravity)).ui, "chat")
+
+        model.antigravityTerminalUI = true
+
+        XCTAssertEqual(try XCTUnwrap(model.buildRequest(mode: .antigravity)).ui, "terminal")
+    }
+
+    func testAntigravityWithoutChatOnThePCOpensTheTerminalAndPointsToAgyUpdate() async throws {
+        let model = await modelWithChat(#"{"claude":{"resume":true}}"#)
+        model.selection = .stored("a")
+        model.mode = .antigravity
+
+        let request = try XCTUnwrap(model.buildRequest(mode: .antigravity))
+
+        XCTAssertEqual(request.ui, "terminal")
+        XCTAssertEqual(
+            model.antigravityChatUnavailableReason,
+            "The chat view needs a newer Antigravity CLI on your PC: run agy update there."
+        )
+        XCTAssertFalse(model.canContinueSession)
+    }
+
+    func testAntigravityContinueIsOfferedOnlyForTheChatView() async {
+        let model = await modelWithChat(
+            #"{"codex":{"resume":true,"live":true},"antigravity":{"resume":true,"live":false}}"#
+        )
+        model.mode = .antigravity
+
+        XCTAssertTrue(model.canContinueSession)
+        XCTAssertEqual(model.continueKind, "antigravity")
+        XCTAssertFalse(model.continueIsLive, "Antigravity's own capability, not Codex's")
+
+        model.codexTerminalUI = true
+        XCTAssertTrue(model.canContinueSession, "another agent's Terminal UI toggle")
+
+        model.antigravityTerminalUI = true
+
+        XCTAssertFalse(model.canContinueSession)
+    }
+
+    func testAntigravityContinueRequestUsesTheAntigravityOptionsWithoutAWorktree() {
+        let model = makeModel()
+        model.mode = .antigravity
+        model.selection = .stored("a")
+        model.antigravityModel = "Gemini 3.8 Flash (High)"
+        model.setAntigravitySandbox(true)
+        model.antigravityAddDirs = "/x, /y"
+        model.worktree = true
+        model.branchName = "feature/x"
+        let stored = ChatStoredSession(
+            session_id: "external-2222", cwd: "/srv/other", title: nil, updated_at: nil, open_session_id: nil
+        )
+
+        let request = model.continueRequest(for: stored)
+
+        XCTAssertEqual(request.cli, "antigravity")
+        XCTAssertEqual(request.ui, "chat")
+        XCTAssertEqual(request.chat_resume_id, "external-2222")
+        XCTAssertEqual(request.cwd, "/srv/other")
+        XCTAssertNil(request.project_name)
+        XCTAssertNil(request.claude_options)
+        XCTAssertNil(request.codex_options)
+        XCTAssertEqual(request.antigravity_options?.model, "Gemini 3.8 Flash (High)")
+        XCTAssertEqual(request.antigravity_options?.sandbox, true)
+        XCTAssertEqual(request.antigravity_options?.add_dirs, ["/x", "/y"])
+        XCTAssertEqual(request.antigravity_options?.worktree, false)
+        XCTAssertNil(request.antigravity_options?.branch_name)
+    }
+
+    func testAntigravityTerminalUIIsRestoredFromTheLastLaunch() {
+        let prefs = isolatedPrefs()
+        prefs.setLastUsedAntigravityOptions(AntigravityLaunchPrefs(terminalUI: true))
+
+        let model = makeModel(prefs: prefs)
+
+        XCTAssertTrue(model.antigravityTerminalUI)
+        XCTAssertFalse(model.codexTerminalUI)
+    }
+
+    func testCreateSendsAndRemembersTheAntigravityTerminalUIChoice() async throws {
+        StubURLProtocol.reset()
+        let prefs = isolatedPrefs()
+        let model = stubbedModel(prefs: prefs)
+        model.selection = .stored("a")
+        model.mode = .antigravity
+        model.antigravityTerminalUI = true
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"session_id":"s-new","state":"starting","created_at":"t"}"#
+        )
+
+        await model.create()
+
+        XCTAssertNil(model.error)
+        let body = try XCTUnwrap(try createBodies().last)
+        XCTAssertEqual(body["cli"] as? String, "antigravity")
+        XCTAssertEqual(body["ui"] as? String, "terminal")
+        XCTAssertEqual(prefs.getLastUsedAntigravityOptions()?.terminalUI, true)
+    }
+
+    func testChatUnavailableReasonNamesWhatEachAgentNeeds() {
+        XCTAssertEqual(
+            CreateSessionModel.chatUnavailableReason(.unavailable),
+            "The chat view needs Node.js on your PC."
+        )
+        XCTAssertEqual(
+            CreateSessionModel.chatUnavailableReason(.unavailable, kind: "antigravity"),
+            "The chat view needs a newer Antigravity CLI on your PC: run agy update there."
+        )
+        XCTAssertEqual(
+            CreateSessionModel.chatUnavailableReason(.unsupportedAgent, kind: "antigravity"),
+            "Update Mobaide on your PC to use the chat view."
+        )
+        XCTAssertNil(CreateSessionModel.chatUnavailableReason(nil, kind: "antigravity"))
+    }
+
     // MARK: - Codex continue after the Codex sign-in
 
     private let externalSession = ChatStoredSession(

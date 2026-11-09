@@ -1254,6 +1254,11 @@ export interface components {
         ChatStoredSession: {
             /** Cwd */
             cwd: string;
+            /**
+             * Open Elsewhere
+             * @default false
+             */
+            open_elsewhere: boolean;
             /** Open Session Id */
             open_session_id?: string | null;
             /** Session Id */

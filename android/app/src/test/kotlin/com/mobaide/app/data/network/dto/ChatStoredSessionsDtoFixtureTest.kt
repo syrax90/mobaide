@@ -76,6 +76,19 @@ class ChatStoredSessionsDtoFixtureTest {
     }
 
     @Test
+    fun rowOpenInAnotherApp_decodesOpenElsewhere() {
+        val rows = decode("row_open_in_another_app").sessions
+
+        assertEquals(listOf(true, false), rows.map { it.open_elsewhere })
+        assertEquals(listOf(null, "a1b2c3d4e5f6"), rows.map { it.open_session_id })
+    }
+
+    @Test
+    fun aRowFromAnAgentWithoutTheField_isNotOpenElsewhere() {
+        assertEquals(listOf(false, false), decode("page_with_open_session").sessions.map { it.open_elsewhere })
+    }
+
+    @Test
     fun emptyLastPage_hasNoCursor() {
         assertEquals(ChatStoredSessionsResponse(sessions = emptyList(), next_cursor = null), decode("empty_last_page"))
     }

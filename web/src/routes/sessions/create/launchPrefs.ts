@@ -99,6 +99,7 @@ export function applyLaunchPrefs(base: WizardState, prefs: LaunchPrefs): WizardS
             sandbox: antigravity.sandbox && !antigravity.skipPermissions,
             // Additional directories are per-session, never persisted.
             addDirsDraft: base.antigravity.addDirsDraft,
+            terminalUi: antigravity.terminalUi,
           },
   };
 }
@@ -165,6 +166,7 @@ export function launchPrefsFromState(
           model: state.antigravity.model,
           skipPermissions: state.antigravity.skipPermissions,
           sandbox: state.antigravity.sandbox,
+          terminalUi: state.antigravity.terminalUi,
         },
       };
     default:

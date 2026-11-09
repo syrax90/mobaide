@@ -222,6 +222,11 @@ final class CreateSessionModel {
     var antigravitySkipPermissions = false
     var antigravitySandbox = false
     var antigravityAddDirs = ""
+    /// Off by default: an Antigravity session opens in the chat view whenever
+    /// the agent can run it.
+    var antigravityTerminalUI = false
+    /// `capabilities.chat.antigravity`; nil until the probe answers.
+    private(set) var antigravityChatCapability: ChatCapability?
 
     // Shared git options
     var worktree = false
@@ -316,27 +321,52 @@ final class CreateSessionModel {
 
     var codexChatUnavailableReason: String? { Self.chatUnavailableReason(codexChatCapability) }
 
-    static func chatUnavailableReason(_ capability: ChatCapability?) -> String? {
+    var antigravityChatUnavailable: Bool { antigravityChatCapability.map { !$0.isAvailable } ?? false }
+
+    /// The Antigravity session will open in the chat view.
+    var antigravityUsesChat: Bool { !antigravityTerminalUI && !antigravityChatUnavailable }
+
+    var antigravityChatUnavailableReason: String? {
+        Self.chatUnavailableReason(antigravityChatCapability, kind: "antigravity")
+    }
+
+    static func chatUnavailableReason(_ capability: ChatCapability?, kind: String = "claude") -> String? {
         switch capability {
         case .unsupportedAgent?: return "Update Mobaide on your PC to use the chat view."
-        case .unavailable?: return "The chat view needs Node.js on your PC."
+        case .unavailable?:
+            return kind == "antigravity"
+                ? "The chat view needs a newer Antigravity CLI on your PC: run agy update there."
+                : "The chat view needs Node.js on your PC."
         default: return nil
         }
     }
 
     /// The agent kind whose stored conversations "Continue a session" lists.
-    var continueKind: String { mode == .codex ? "codex" : "claude" }
+    var continueKind: String {
+        switch mode {
+        case .codex: return "codex"
+        case .antigravity: return "antigravity"
+        default: return "claude"
+        }
+    }
+
+    private var continueCapability: ChatCapability? {
+        switch mode {
+        case .codex: return codexChatCapability
+        case .antigravity: return antigravityChatCapability
+        default: return chatCapability
+        }
+    }
 
     /// Those conversations stay in sync with the agent's own apps on the PC.
-    var continueIsLive: Bool {
-        (mode == .codex ? codexChatCapability : chatCapability)?.isLive == true
-    }
+    var continueIsLive: Bool { continueCapability?.isLive == true }
 
     /// "Continue a session" lists the agent's stored conversations.
     var canContinueSession: Bool {
         switch mode {
         case .standard: return claudeUsesChat && chatCapability?.canResume == true
         case .codex: return codexUsesChat && codexChatCapability?.canResume == true
+        case .antigravity: return antigravityUsesChat && antigravityChatCapability?.canResume == true
         default: return false
         }
     }
@@ -586,6 +616,7 @@ final class CreateSessionModel {
         claudeAvailable = version.cliAvailable("claude")
         chatCapability = version.chatCapability("claude")
         codexChatCapability = version.chatCapability("codex")
+        antigravityChatCapability = version.chatCapability("antigravity")
         codexAvailable = version.cliAvailable("codex")
         antigravityAvailable = version.cliAvailable("antigravity")
         if let models = version.cliModels("codex"), !models.isEmpty { codexModels = models }
@@ -1248,15 +1279,13 @@ final class CreateSessionModel {
                 ui: codexUsesChat ? "chat" : "terminal"
             )
         case .antigravity:
-            let options = AntigravityOptionsModel(
-                model: antigravityModel,
-                skip_permissions: antigravitySkipPermissions,
-                sandbox: antigravitySandbox,
-                add_dirs: Self.parseAddDirs(antigravityAddDirs),
-                worktree: effectiveWorktree,
-                branch_name: effectiveBranch
+            return CreateSessionRequest(
+                cwd: cwd,
+                project_name: projectName,
+                cli: "antigravity",
+                antigravity_options: antigravityOptions(worktree: effectiveWorktree, branchName: effectiveBranch),
+                ui: antigravityUsesChat ? "chat" : "terminal"
             )
-            return CreateSessionRequest(cwd: cwd, project_name: projectName, cli: "antigravity", antigravity_options: options)
         case .shell:
             return CreateSessionRequest(
                 cwd: cwd,
@@ -1306,6 +1335,17 @@ final class CreateSessionModel {
         )
     }
 
+    private func antigravityOptions(worktree: Bool, branchName: String?) -> AntigravityOptionsModel {
+        AntigravityOptionsModel(
+            model: antigravityModel,
+            skip_permissions: antigravitySkipPermissions,
+            sandbox: antigravitySandbox,
+            add_dirs: Self.parseAddDirs(antigravityAddDirs),
+            worktree: worktree,
+            branch_name: branchName
+        )
+    }
+
     private func codexLaunchPrefs() -> CodexLaunchPrefs {
         CodexLaunchPrefs(
             model: codexModel,
@@ -1320,9 +1360,9 @@ final class CreateSessionModel {
     // MARK: - Continue a session
 
     /// Continues a stored conversation in a new chat session with the current
-    /// Claude Code or Codex options (never in a worktree). It runs in the
-    /// selected project when that is the conversation's folder, otherwise in
-    /// its folder alone.
+    /// options of its agent (never in a worktree). It runs in the selected
+    /// project when that is the conversation's folder, otherwise in its folder
+    /// alone.
     func continueRequest(for stored: ChatStoredSession) -> CreateSessionRequest {
         let folder = stored.cwd ?? continueFolder
         var projectName: String?
@@ -1337,6 +1377,16 @@ final class CreateSessionModel {
                 project_name: projectName,
                 cli: "codex",
                 codex_options: codexOptions(worktree: false, branchName: nil),
+                ui: "chat",
+                chat_resume_id: stored.session_id
+            )
+        }
+        if mode == .antigravity {
+            return CreateSessionRequest(
+                cwd: cwd,
+                project_name: projectName,
+                cli: "antigravity",
+                antigravity_options: antigravityOptions(worktree: false, branchName: nil),
                 ui: "chat",
                 chat_resume_id: stored.session_id
             )
@@ -1455,7 +1505,8 @@ final class CreateSessionModel {
             preferencesStore.setLastUsedAntigravityOptions(AntigravityLaunchPrefs(
                 model: antigravityModel,
                 skipPermissions: antigravitySkipPermissions,
-                sandbox: antigravitySandbox
+                sandbox: antigravitySandbox,
+                terminalUI: antigravityTerminalUI
             ))
         // Auto Scan persists its own bucket from `startAutoScan`, which never
         // routes through `create()`.
@@ -1503,6 +1554,7 @@ final class CreateSessionModel {
             antigravityModel = antigravity.model
             antigravitySkipPermissions = antigravity.skipPermissions
             antigravitySandbox = antigravity.sandbox && !antigravity.skipPermissions
+            antigravityTerminalUI = antigravity.terminalUI
         }
     }
 

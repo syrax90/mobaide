@@ -28,6 +28,7 @@ from mobaide.core.models import SessionConfig, SessionEvent, SessionInfo, Sessio
 from . import normalize as nz
 from .agents import ChatLaunchPlan, ConfigIntent
 from .install import INSTALL_POOL, PROBE_POOL, AdapterInstallError
+from .presence import PresenceHold
 from .rpc import (
     ERR_AUTH_REQUIRED,
     ERR_METHOD_NOT_FOUND,
@@ -176,6 +177,9 @@ class ChatSession:
         # The last busy report that came while the session was opening.
         self._busy_before_ready = False
         self._consoles: collections.OrderedDict[str, _Console] = collections.OrderedDict()
+        self._presence_hold: PresenceHold | None = None
+        # The conversation was open in another app when this session took it.
+        self._presence_conflict = False
 
     @property
     def state(self) -> SessionState:
@@ -329,6 +333,7 @@ class ChatSession:
                 except Exception:
                     pass
             await conn.close(grace=0.5 if force else CLOSE_TIMEOUT)
+        self._release_presence()
         self._drop_consoles()
         self._timeline.patch_state(status="stopped", urgent=True)
         self._timeline.close()
@@ -491,6 +496,8 @@ class ChatSession:
             if not await self._ensure_trusted():
                 return
             setup_params: dict[str, Any] = {"cwd": self._plan.cwd, "mcpServers": []}
+            if self._plan.additional_dirs and self._session_cap("additionalDirectories"):
+                setup_params["additionalDirectories"] = list(self._plan.additional_dirs)
             if self._plan.system_prompt_append and self._session_cap("systemPrompt"):
                 setup_params["systemPrompt"] = {
                     "mode": "append",
@@ -512,10 +519,15 @@ class ChatSession:
                 self._acp_session_id = sid
             self._close_streaming_items()
             tl.patch_state(acp_session_id=self._acp_session_id)
-            self._apply_setup_result(result if isinstance(result, dict) else {})
+            setup_result = result if isinstance(result, dict) else {}
+            self._apply_setup_result(setup_result)
+            await self._hold_presence()
+            pending = self._pending_config
+            if self._plan.config_resolver is not None:
+                pending = self._plan.config_resolver(setup_result, pending)
             # Applied on a resume too: the user picked these in the wizard.
             # Cleared only once applied: a Restart after a failure retries them.
-            await self._apply_initial_config(self._pending_config)
+            await self._apply_initial_config(pending)
             self._pending_config = []
             self._ready.set()
             tl.patch_state(status="ready", urgent=True)
@@ -573,6 +585,59 @@ class ChatSession:
         except (OSError, ValueError) as exc:
             logger.warning("chat.trust_grant_failed session=%s: %s", self.session_id, exc)
         return True
+
+    async def _hold_presence(self) -> None:
+        """Mark the conversation open, as the agent's own apps do, so they
+        warn before a second app writes to it. When another app already has
+        it open, say so once: both would overwrite each other's messages."""
+        presence, sid = self._plan.presence, self._acp_session_id
+        if presence is None or sid is None:
+            return
+        hold = self._presence_hold
+        if hold is not None and hold.session_id == sid:
+            return
+        self._release_presence()
+        loop = asyncio.get_running_loop()
+        acquiring = loop.run_in_executor(PROBE_POOL, presence.acquire, sid)
+        try:
+            hold = await asyncio.shield(acquiring)
+        except asyncio.CancelledError:
+            # The thread still takes the lock: drop it once it has.
+            acquiring.add_done_callback(_release_acquired)
+            raise
+        except Exception:
+            logger.exception("chat.presence_failed session=%s", self.session_id)
+            return
+        if self._stopping:
+            if hold is not None:
+                hold.release()
+            return
+        self._presence_hold = hold
+        if hold is not None:
+            self._presence_conflict = False
+            return
+        if self._presence_conflict:
+            return
+        if await loop.run_in_executor(PROBE_POOL, presence.open_elsewhere, sid):
+            self._presence_conflict = True
+            self._timeline.upsert(
+                {
+                    "id": self._next_id("n"),
+                    "type": "notice",
+                    "severity": "warning",
+                    "title": "This conversation is also open in another app on your PC",
+                    "text": (
+                        f"{self._agent_title} keeps a separate copy in each app, so messages "
+                        "sent from both can overwrite each other. Close it in the other app "
+                        "before you continue here."
+                    ),
+                }
+            )
+
+    def _release_presence(self) -> None:
+        hold, self._presence_hold = self._presence_hold, None
+        if hold is not None:
+            hold.release()
 
     def _fail_start(self, message: str) -> None:
         logger.warning("chat.start_failed session=%s: %s", self.session_id, message)
@@ -802,6 +867,8 @@ class ChatSession:
         stop_reason: str | None = None
         try:
             conn = self._require_conn()
+            if self._presence_hold is None and self._plan.presence is not None:
+                await self._hold_presence()
             if self._cancel_before_dispatch:
                 # Stopped before the prompt reached the agent: never send it.
                 stop_reason = "cancelled"
@@ -1101,6 +1168,8 @@ class ChatSession:
         if can_load:
             # The reload replays the conversation, plan included.
             self._timeline.reset()
+            # The reset dropped the "open in another app" notice: re-check.
+            self._presence_conflict = False
             self._close_streaming_items()
             self._drop_consoles()
             self._timeline.patch_state(plan=[])
@@ -1559,6 +1628,7 @@ class ChatSession:
             if tail:
                 message = f"{message}: {tail[-1][:300]}"
         logger.warning("chat.agent_exited session=%s: %s", self.session_id, message)
+        self._release_presence()
         self._resolve_all_requests_cancelled()
         self._mark_running_tools("failed")
         if self._timeline.state.get("status") != "error":
@@ -1627,6 +1697,14 @@ class ChatSession:
 
 
 _OUTPUT_ONLY_KEYS = frozenset({"sessionUpdate", "toolCallId", "_meta"})
+
+
+def _release_acquired(future: asyncio.Future[PresenceHold | None]) -> None:
+    if future.cancelled() or future.exception() is not None:
+        return
+    hold = future.result()
+    if hold is not None:
+        hold.release()
 
 
 def _now_iso() -> str:

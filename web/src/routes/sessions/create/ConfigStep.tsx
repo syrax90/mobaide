@@ -13,7 +13,7 @@ import { ClaudeAdvancedPanel } from './panels/ClaudeAdvancedPanel';
 import { ClaudeOptionsPanel } from './panels/ClaudeOptionsPanel';
 import { CodexOptionsPanel } from './panels/CodexOptionsPanel';
 import { WorktreeSection } from './panels/WorktreeSection';
-import { chatAgentKind, usesChatView } from './buildCreateRequest';
+import { chatAgentKind, terminalUiOf, usesChatView, type ChatAgentKind } from './buildCreateRequest';
 import {
   addDirsError,
   isCustomMode,
@@ -62,6 +62,17 @@ export function modeTitle(
   }
 }
 
+function continueHint(kind: ChatAgentKind | null): string {
+  switch (kind) {
+    case 'codex':
+      return 'Open a Codex session started on your PC, for example in a terminal.';
+    case 'antigravity':
+      return 'Open an Antigravity conversation started on your PC, for example with agy in a terminal.';
+    default:
+      return 'Open a Claude Code session started on your PC, for example in a terminal.';
+  }
+}
+
 export function ConfigStep({
   mode,
   state,
@@ -78,8 +89,7 @@ export function ConfigStep({
 }: ConfigStepProps) {
   const chatKind = chatAgentKind(mode);
   const chat = chatSupport(capabilities, chatKind ?? 'claude');
-  const terminalUi = chatKind === 'codex' ? state.codex.terminalUi : state.claude.terminalUi;
-  const usesChat = chatKind !== null && usesChatView(terminalUi, chat);
+  const usesChat = chatKind !== null && usesChatView(terminalUiOf(state, chatKind), chat);
   const canResume = usesChat && chat.kind === 'available' && chat.resume;
   // A worktree needs a stored git project; a one-off path has no repo to branch.
   const showsGitOptions =
@@ -98,11 +108,7 @@ export function ConfigStep({
         <div className="option-group resume-entry">
           <div className="resume-entry-text">
             <h3>Continue a session</h3>
-            <p className="field-hint">
-              {chatKind === 'codex'
-                ? 'Open a Codex session started on your PC, for example in a terminal.'
-                : 'Open a Claude Code session started on your PC, for example in a terminal.'}
-            </p>
+            <p className="field-hint">{continueHint(chatKind)}</p>
           </div>
           <button
             type="button"
@@ -137,6 +143,7 @@ export function ConfigStep({
         <AntigravityOptionsPanel
           bucket={state.antigravity}
           models={cliModels(capabilities, 'antigravity')}
+          chat={chat}
           dispatch={dispatch}
         />
       )}

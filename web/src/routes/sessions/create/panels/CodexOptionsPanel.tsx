@@ -118,7 +118,7 @@ export function CodexOptionsPanel({
             label="Terminal UI"
             checked={bucket.terminalUi || chatBlocked}
             disabled={chatBlocked}
-            hint={terminalUiHint(chat)}
+            hint={terminalUiHint(chat, 'codex')}
             onChange={(value) => {
               dispatch({ type: 'setCodexTerminalUi', value });
             }}

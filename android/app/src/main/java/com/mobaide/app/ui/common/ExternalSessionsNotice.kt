@@ -69,9 +69,9 @@ fun ExternalSessionsNotice(
         }
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = "Mobaide lists only sessions its own agent started. To continue a Claude Code or " +
-                "Codex session from your PC, start a new session of that agent and choose " +
-                "Continue a session.",
+            text = "Mobaide lists only sessions its own agent started. To continue a Claude Code, " +
+                "Codex or Antigravity session from your PC, start a new session of that agent " +
+                "and choose Continue a session.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

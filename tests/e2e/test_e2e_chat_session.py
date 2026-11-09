@@ -29,6 +29,7 @@ _CHAT_AGENT_ENV = {
     "MOBAIDE_CLAUDE_BIN": sys.executable,
     "MOBAIDE_ACP_REAL": "",
     "MOBAIDE_ACP_CLAUDE_COMMAND": "",
+    "MOBAIDE_ACP_ANTIGRAVITY_COMMAND": "",
 }
 
 
@@ -182,6 +183,7 @@ def test_chat_session_over_the_relay(e2e_stack, spawn_agent, tmp_path):
     assert version.json()["capabilities"]["chat"] == {
         "claude": {"resume": True, "live": False},
         "codex": {"resume": True, "live": False},
+        "antigravity": {"resume": True, "live": False},
     }
 
     stored_path = f"api/chat/claude/sessions?cwd={quote(cwd)}"
@@ -191,6 +193,16 @@ def test_chat_session_over_the_relay(e2e_stack, spawn_agent, tmp_path):
     assert [r["session_id"] for r in rows] == ["external-1111", "external-2222"]
     assert {r["cwd"] for r in rows} == {cwd}
     assert {r["open_session_id"] for r in rows} == {None}
+
+    # Antigravity lists every folder: the agent keeps this one's rows, newest
+    # first, each saying whether another app on the PC has it open.
+    agy_path = f"api/chat/antigravity/sessions?cwd={quote(cwd)}"
+    agy_rows = client.proxy_request(agent_id, token, "GET", agy_path)
+    assert agy_rows.status_code == 200, agy_rows.text
+    assert [(r["session_id"], r["open_elsewhere"]) for r in agy_rows.json()["sessions"]] == [
+        ("external-1111", False),
+        ("external-2222", False),
+    ]
 
     chat_body = {
         "cli": "claude",
@@ -225,8 +237,8 @@ def test_chat_is_refused_for_a_kind_without_a_chat_agent(e2e_stack):
     token = client.mint_mobile_token(e2e_stack.agent_id)
 
     refused = client.proxy_request(
-        e2e_stack.agent_id, token, "POST", "api/sessions", {"cli": "antigravity", "ui": "chat", "cwd": "/tmp"}
+        e2e_stack.agent_id, token, "POST", "api/sessions", {"ui": "chat", "cwd": "/tmp"}
     )
 
     assert refused.status_code == 400
-    assert refused.json()["detail"] == "The chat view is not available for antigravity sessions"
+    assert refused.json()["detail"] == "The chat view is not available for shell sessions"

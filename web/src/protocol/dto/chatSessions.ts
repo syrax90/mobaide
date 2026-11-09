@@ -3,7 +3,7 @@
  * pinned by `tests/protocol_fixtures/dto/agent/ChatStoredSessionsResponse.json`.
  */
 import { z } from 'zod';
-import { optionalWireString } from '../wireSchema';
+import { optionalWireBoolean, optionalWireString } from '../wireSchema';
 
 export const chatStoredSessionSchema = z.looseObject({
   session_id: z.string(),
@@ -12,6 +12,8 @@ export const chatStoredSessionSchema = z.looseObject({
   updated_at: optionalWireString(),
   /** The open Mobaide session that already shows this row: open it, never a copy. */
   open_session_id: optionalWireString(),
+  /** Another app on the PC has it open (Antigravity): sending from both can overwrite messages. */
+  open_elsewhere: optionalWireBoolean(),
 });
 
 export const chatStoredSessionsResponseSchema = z.looseObject({

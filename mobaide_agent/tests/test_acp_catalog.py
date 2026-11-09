@@ -1,25 +1,40 @@
 """Stored chat sessions: the ``ChatCatalog`` lister (against the fake ACP
-agent and a tiny scripted one), the shared ``wire`` helpers, and the
-direct REST surface in test mode (``GET /api/chat/{kind}/sessions``, chat
-create and resume, ``capabilities.chat``)."""
+agent and tiny scripted ones, including an Antigravity-like agent that lists
+every folder at once), the shared ``wire`` helpers, and the direct REST
+surface in test mode (``GET /api/chat/{kind}/sessions``, chat create and
+resume, ``capabilities.chat``)."""
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from mobaide.acp import agents as agents_mod
 from mobaide.acp import catalog as catalog_mod
 from mobaide.acp.agents import ChatAgentUnavailableError, ChatLaunchPlan, fake_agent_argv
 from mobaide.acp.catalog import ChatCatalog, ChatCatalogError
 from mobaide.acp.wire import chat_request_error, list_chat_sessions, match_chat_sessions_route
 from mobaide.agent.app import create_app
+from mobaide.agent.sessions.models import ChatStoredSessionsResponse
 from mobaide.core.models import SessionKind
 from tests.conftest import TEST_PASSWORD, TEST_USERNAME
 
 pytestmark = pytest.mark.timeout(60)
+
+# Resolved from this file, never the CWD.
+_CHAT_FIXTURE = (
+    Path(__file__).resolve().parents[2]
+    / "tests"
+    / "protocol_fixtures"
+    / "dto"
+    / "agent"
+    / "ChatStoredSessionsResponse.json"
+)
 
 # Answers ``initialize`` and ``session/list`` only. MINI_AGENT_MODE=nolist
 # drops the list capability; =badcursor rejects every list call.
@@ -86,12 +101,57 @@ def _mini(mode: str = "") -> StubSpec:
     return StubSpec([sys.executable, "-c", MINI_AGENT], env={"MINI_AGENT_MODE": mode})
 
 
+# Like ``agy acp``: ``session/list`` answers the rows in AGENT_ROWS (JSON)
+# whatever ``cwd`` it is given, in the order given. AGENT_RESULT (JSON), when
+# set, is the whole answer instead.
+ALL_FOLDERS_AGENT = r"""
+import json, os, sys
+rows = json.loads(os.environ["AGENT_ROWS"])
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg or "method" not in msg:
+        continue
+    if msg["method"] == "initialize":
+        caps = {"loadSession": True, "sessionCapabilities": {"list": {}}}
+        reply = {"result": {"protocolVersion": 1, "agentCapabilities": caps}}
+    elif "AGENT_RESULT" in os.environ:
+        reply = {"result": json.loads(os.environ["AGENT_RESULT"])}
+    else:
+        reply = {"result": {"sessions": rows}}
+    reply.update({"jsonrpc": "2.0", "id": msg["id"]})
+    sys.stdout.write(json.dumps(reply) + "\n")
+    sys.stdout.flush()
+"""
+
+
+class FakePresence:
+    """The conversations another app on the PC has open."""
+
+    def __init__(self, *open_ids: str) -> None:
+        self.open_ids = set(open_ids)
+
+    def open_elsewhere(self, session_id: str) -> bool:
+        return session_id in self.open_ids
+
+
+class AllFoldersSpec(StubSpec):
+    kind = "antigravity"
+    display_name = "Antigravity"
+    lists_all_folders = True
+
+    def __init__(self, rows: list[object], presence: FakePresence | None = None) -> None:
+        super().__init__(
+            [sys.executable, "-c", ALL_FOLDERS_AGENT], env={"AGENT_ROWS": json.dumps(rows)}
+        )
+        self.presence = presence
+
+
 @pytest.fixture
 async def make_catalog():
     catalogs: list[ChatCatalog] = []
 
-    def make(spec: StubSpec) -> ChatCatalog:
-        catalog = ChatCatalog({"claude": spec})
+    def make(spec: StubSpec, kind: str = "claude") -> ChatCatalog:
+        catalog = ChatCatalog({kind: spec})
         catalogs.append(catalog)
         return catalog
 
@@ -147,6 +207,7 @@ class TestChatCatalog:
                 "title": "Many words",
                 "updated_at": "2026-11-07T10:00:00Z",
                 "open_session_id": None,
+                "open_elsewhere": False,
             }
         ]
 
@@ -193,6 +254,88 @@ class TestChatCatalog:
 
         assert excinfo.value.status == 502
         assert excinfo.value.detail.startswith("Could not start Stub Agent")
+
+
+class TestAllFoldersLister:
+    """An agent whose ``session/list`` ignores ``cwd`` (Antigravity): the
+    catalog keeps the folder's rows, newest first, and marks the ones another
+    app on the PC has open."""
+
+    @pytest.fixture
+    def folders(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        link = tmp_path / "link"
+        if sys.platform != "win32":
+            link.symlink_to(project, target_is_directory=True)
+        rows = [
+            {"sessionId": "old", "cwd": str(project), "title": "Old", "updatedAt": "2026-11-07T10:00:00Z"},
+            {"sessionId": "other", "cwd": "/elsewhere/other-project", "updatedAt": "2026-11-09T10:00:00Z"},
+            {"sessionId": "undated", "cwd": str(project)},
+            {"sessionId": "new", "cwd": str(link), "title": "New", "updatedAt": "2026-11-09T08:00:00Z"},
+            {"sessionId": "no-folder", "updatedAt": "2026-11-09T11:00:00Z"},
+        ]
+        return project, link, rows
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks")
+    @pytest.mark.parametrize("asked", ["folder", "symlink"])
+    async def test_the_rows_of_the_folder_newest_first(self, make_catalog, folders, asked):
+        project, link, rows = folders
+        catalog = make_catalog(AllFoldersSpec(rows, FakePresence("old")), kind="antigravity")
+
+        page = await catalog.list_sessions(
+            "antigravity", cwd=str(project if asked == "folder" else link), cursor=None
+        )
+
+        assert [(r["session_id"], r["open_elsewhere"]) for r in page["sessions"]] == [
+            ("new", False),
+            ("old", True),
+            ("undated", False),
+        ]
+        assert all(r["open_session_id"] is None for r in page["sessions"])
+        assert page["next_cursor"] is None
+
+    async def test_all_folders_newest_first(self, make_catalog, folders):
+        _project, _link, rows = folders
+        catalog = make_catalog(AllFoldersSpec(rows), kind="antigravity")
+
+        page = await catalog.list_sessions("antigravity", cwd=None, cursor=None)
+
+        assert [r["session_id"] for r in page["sessions"]] == ["other", "new", "old", "undated"]
+        assert {r["open_elsewhere"] for r in page["sessions"]} == {False}
+
+    async def test_a_page_keeps_the_newest_rows(self, make_catalog, tmp_path):
+        rows = [
+            {"sessionId": f"s{i:03}", "cwd": str(tmp_path), "updatedAt": f"2026-11-09T00:{i // 60:02}:{i % 60:02}Z"}
+            for i in range(catalog_mod.PAGE_MAX + 20)
+        ]
+        catalog = make_catalog(AllFoldersSpec(rows), kind="antigravity")
+
+        page = await catalog.list_sessions("antigravity", cwd=str(tmp_path), cursor=None)
+
+        ids = [r["session_id"] for r in page["sessions"]]
+        assert len(ids) == catalog_mod.PAGE_MAX
+        assert ids[0] == f"s{catalog_mod.PAGE_MAX + 19:03}"
+        assert ids[-1] == "s020"
+
+    @pytest.mark.parametrize(
+        "result",
+        [None, [], "junk", {"sessions": "junk"}],
+        ids=["null", "list", "string", "sessions-not-a-list"],
+    )
+    @pytest.mark.parametrize("cwd", ["folder", None], ids=["one-folder", "all-folders"])
+    async def test_an_answer_that_is_not_a_page_lists_nothing(
+        self, make_catalog, tmp_path, result, cwd
+    ):
+        spec = AllFoldersSpec([], FakePresence())
+        spec.env["AGENT_RESULT"] = json.dumps(result)
+        catalog = make_catalog(spec, kind="antigravity")
+
+        page = await catalog.list_sessions(
+            "antigravity", cwd=str(tmp_path) if cwd else None, cursor=None
+        )
+
+        assert page == {"sessions": [], "next_cursor": None}
 
 
 class FakeManager:
@@ -267,6 +410,37 @@ class TestWire:
         assert body["next_cursor"] == "n"
         assert catalog.calls == [("claude", None, "c1")]
 
+    async def test_a_row_open_in_mobaide_is_not_open_in_another_app(self):
+        """The presence lock another app sees is Mobaide's own session."""
+        catalog = FakeCatalog(
+            page={
+                "sessions": [
+                    {"session_id": "a", "cwd": "/p", "open_session_id": None, "open_elsewhere": True},
+                    {"session_id": "b", "cwd": "/p", "open_session_id": None, "open_elsewhere": True},
+                ],
+                "next_cursor": None,
+            }
+        )
+        manager = FakeManager(
+            open_sessions={("antigravity", "b"): SimpleNamespace(session_id="mob-7")}
+        )
+
+        status, body = await list_chat_sessions(catalog, manager, "antigravity", cwd="/p", cursor=None)
+
+        assert status == 200
+        assert [(r["open_session_id"], r["open_elsewhere"]) for r in body["sessions"]] == [
+            (None, True),
+            ("mob-7", False),
+        ]
+
+    def test_the_agent_model_sends_the_golden_wire(self):
+        """The Python arm of the fixture the three clients decode: a page as
+        the agent sends it now, every key present."""
+        cases = json.loads(_CHAT_FIXTURE.read_text(encoding="utf-8"))["cases"]
+        wire = next(c["wire"] for c in cases if c["name"] == "row_open_in_another_app")
+
+        assert ChatStoredSessionsResponse.model_validate(wire).model_dump(mode="json") == wire
+
     async def test_catalog_errors_become_status_and_detail(self):
         catalog = FakeCatalog(error=ChatCatalogError(409, "cannot list"))
 
@@ -278,6 +452,13 @@ class TestWire:
     async def test_no_catalog_is_404(self):
         status, body = await list_chat_sessions(None, FakeManager(), "claude", cwd=None, cursor=None)
         assert (status, body) == (404, {"detail": "Chat sessions are not available on this agent"})
+
+
+@pytest.fixture(autouse=True)
+def _antigravity_data_in_tmp(tmp_path, monkeypatch):
+    """The app's Antigravity spec probes presence markers under a temp
+    folder, never the host's ``~/.gemini``."""
+    monkeypatch.setattr(agents_mod, "default_app_data_dir", lambda: tmp_path / "agy-data")
 
 
 @pytest.fixture
@@ -312,6 +493,7 @@ class TestChatRest:
         assert resp.json()["capabilities"]["chat"] == {
             "claude": {"resume": True, "live": False},
             "codex": {"resume": True, "live": False},
+            "antigravity": {"resume": True, "live": False},
         }
 
     async def test_create_chat_session(self, client, auth_headers, tmp_path):
@@ -345,10 +527,7 @@ class TestChatRest:
     @pytest.mark.parametrize(
         ("body", "detail"),
         [
-            (
-                {"cli": "antigravity", "ui": "chat"},
-                "The chat view is not available for antigravity sessions",
-            ),
+            ({"ui": "chat"}, "The chat view is not available for shell sessions"),
             ({"cli": "claude", "chat_resume_id": "abc"}, "chat_resume_id needs ui=chat"),
         ],
         ids=["no-chat-agent", "resume-needs-chat"],
@@ -364,7 +543,7 @@ class TestChatRest:
     @pytest.mark.parametrize(
         ("url", "status"),
         [
-            ("/api/chat/antigravity/sessions", 404),
+            ("/api/chat/shell/sessions", 404),
             ("/api/chat/claude/sessions?cwd=relative", 400),
         ],
     )
@@ -403,6 +582,50 @@ class TestChatRest:
         opened = await client.post("/api/sessions", headers=auth_headers, json=body)
         again = await client.post("/api/sessions", headers=auth_headers, json=body)
         rows = await client.get(f"/api/chat/codex/sessions?cwd={tmp_path}", headers=auth_headers)
+
+        session_id = opened.json()["session_id"]
+        assert again.json()["session_id"] == session_id
+        assert {r["session_id"]: r["open_session_id"] for r in rows.json()["sessions"]} == {
+            "external-1111": None,
+            "external-2222": session_id,
+        }
+
+    async def test_antigravity_chat_session_and_its_stored_sessions(
+        self, client, auth_headers, tmp_path
+    ):
+        body = {
+            "cli": "antigravity",
+            "ui": "chat",
+            "cwd": str(tmp_path),
+            "antigravity_options": {"model": "Gemini 3.8 Flash (Low)", "sandbox": True},
+        }
+
+        created = await client.post("/api/sessions", headers=auth_headers, json=body)
+        listed = await client.get(
+            f"/api/chat/antigravity/sessions?cwd={tmp_path}", headers=auth_headers
+        )
+
+        assert created.status_code == 201, created.text
+        assert created.json()["ui"] == "chat"
+        assert listed.status_code == 200
+        # The agent lists every folder; only this one's rows, newest first.
+        assert [(r["title"], r["open_elsewhere"]) for r in listed.json()["sessions"]] == [
+            ("Refactor the login flow", False),
+            ("Fix flaky upload test", False),
+        ]
+
+    async def test_antigravity_resume_reuses_the_open_session(self, client, auth_headers, tmp_path):
+        body = {
+            "cli": "antigravity",
+            "ui": "chat",
+            "cwd": str(tmp_path),
+            "antigravity_options": {"worktree": False},
+            "chat_resume_id": "external-2222",
+        }
+
+        opened = await client.post("/api/sessions", headers=auth_headers, json=body)
+        again = await client.post("/api/sessions", headers=auth_headers, json=body)
+        rows = await client.get(f"/api/chat/antigravity/sessions?cwd={tmp_path}", headers=auth_headers)
 
         session_id = opened.json()["session_id"]
         assert again.json()["session_id"] == session_id

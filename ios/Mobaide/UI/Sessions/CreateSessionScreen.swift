@@ -24,6 +24,7 @@ private struct CreateSessionContent: View {
     @State private var pathSuggestions: PathSuggestionsModel
     @State private var claudeAdvancedExpanded = false
     @State private var codexAdvancedExpanded = false
+    @State private var antigravityAdvancedExpanded = false
     @State private var autoScanAdvancedExpanded = false
     @State private var showContinueSession = false
     @State private var pendingContinue: ChatStoredSession?
@@ -421,6 +422,9 @@ private struct CreateSessionContent: View {
             if model.mode == .codex {
                 codexAdvancedSection
             }
+            if model.mode == .antigravity {
+                antigravityAdvancedSection
+            }
             Section {
                 Button {
                     Task { await model.create() }
@@ -526,7 +530,10 @@ private struct CreateSessionContent: View {
 
     /// "Continue a session" for the agents whose sessions open in the chat view.
     @ViewBuilder
-    private func continueSessionSection(agentName: String) -> some View {
+    private func continueSessionSection(
+        agentName: String,
+        hint: String? = nil
+    ) -> some View {
         if model.canContinueSession {
             Section {
                 Button {
@@ -538,7 +545,7 @@ private struct CreateSessionContent: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Continue a session")
                                 .foregroundStyle(colors.text)
-                            Text("Open a \(agentName) session started on your PC, for example in a terminal.")
+                            Text(hint ?? "Open a \(agentName) session started on your PC, for example in a terminal.")
                                 .font(.caption)
                                 .foregroundStyle(colors.textMuted)
                         }
@@ -752,6 +759,26 @@ private struct CreateSessionContent: View {
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .pixelField()
+        }
+        continueSessionSection(
+            agentName: "Antigravity",
+            hint: "Open an Antigravity conversation started on your PC, for example with agy in a terminal."
+        )
+    }
+
+    /// Collapsed like the Codex one; rendered after the Worktree section.
+    @ViewBuilder
+    private var antigravityAdvancedSection: some View {
+        Section {
+            DisclosureGroup("Advanced", isExpanded: $antigravityAdvancedExpanded) {
+                terminalUIToggle(
+                    Binding(
+                        get: { model.antigravityTerminalUI || model.antigravityChatUnavailable },
+                        set: { model.antigravityTerminalUI = $0 }
+                    ),
+                    unavailableReason: model.antigravityChatUnavailableReason
+                )
+            }
         }
     }
 

@@ -1,25 +1,31 @@
 import { CheckboxField } from '../../../../components/form/CheckboxField';
 import { SelectField } from '../../../../components/form/SelectField';
 import { TextAreaField } from '../../../../components/form/TextAreaField';
+import type { ChatSupport } from '../../../../protocol/dto/agentVersion';
 import {
   addDirsError,
   ANTIGRAVITY_MODELS,
   type AntigravityBucket,
   type WizardAction,
 } from '../wizardState';
+import { terminalUiHint } from './ClaudeAdvancedPanel';
 import { modelOptions } from './ClaudeOptionsPanel';
 
 interface AntigravityOptionsPanelProps {
   bucket: AntigravityBucket;
   models: readonly string[] | null;
   dispatch: (action: WizardAction) => void;
+  /** Shows the Terminal UI toggle, gated on this PC's chat support for Antigravity. */
+  chat?: ChatSupport;
 }
 
 export function AntigravityOptionsPanel({
   bucket,
   models,
   dispatch,
+  chat,
 }: AntigravityOptionsPanelProps) {
+  const chatBlocked = chat?.kind === 'outdated' || chat?.kind === 'unavailable';
   return (
     <div className="option-group">
       <SelectField
@@ -61,6 +67,20 @@ export function AntigravityOptionsPanel({
           dispatch({ type: 'setAntigravityAddDirs', draft });
         }}
       />
+      {chat !== undefined && (
+        <details className="advanced advanced-stack">
+          <summary>Advanced</summary>
+          <CheckboxField
+            label="Terminal UI"
+            checked={bucket.terminalUi || chatBlocked}
+            disabled={chatBlocked}
+            hint={terminalUiHint(chat, 'antigravity')}
+            onChange={(value) => {
+              dispatch({ type: 'setAntigravityTerminalUi', value });
+            }}
+          />
+        </details>
+      )}
     </div>
   );
 }

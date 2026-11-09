@@ -123,6 +123,26 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-09: Antigravity chat sessions
+
+Additive delta within proto-v7 (2026-11-09): **one capability entry, one row field, one create-field mapping. No version bump; `central_server` is untouched.**
+
+Antigravity sessions open in the chat view too (`ui: "chat"` with `cli: "antigravity"`). There is no adapter: the chat session runs the ACP server built into the Antigravity CLI, `agy acp`, with the `agy` that terminal sessions use (`MOBAIDE_AGY_BIN`, then PATH). So chat and terminal sessions share the CLI version, Google sign-in, settings and stored conversations.
+
+| Where | Change |
+|-------|--------|
+| `capabilities.chat` | An `antigravity` entry (`resume: true`, `live: false`) when `agy` is found and `agy help acp` succeeds (a yes or no answer is kept until the binary changes; a missing `agy` or a failed probe is checked again after 30 s). |
+| `ChatStoredSessionsResponse` rows | `open_elsewhere` (bool, default `false`): another app on the PC has the conversation open, so messages sent from both apps can overwrite each other. Only Antigravity sets it. Clients show a warning on the row; they still let the user open it. |
+| Antigravity options in a chat create | `skip_permissions` → `agy acp --dangerously-skip-permissions`, `sandbox` → `agy acp --sandbox`, `add_dirs` → `additionalDirectories` of `session/new` and `session/load` (made absolute against the session folder), `model` (a name from `agy models`, e.g. `Gemini 3.8 Flash (High)`) → the `model` config option plus `thought_level` when the name carries a thinking level. A name the agent no longer offers is skipped. `worktree` / `branch_name` as for terminal sessions. |
+
+* `agy acp` works in its own working directory, not in the `cwd` of `session/new`, so each chat session is a separate `agy acp` process started in the session folder. The session list process runs in the home folder.
+* `agy`'s `session/list` ignores its `cwd` filter and is not sorted. The PC agent keeps the rows of the requested folder (compared as real paths) and sorts them newest first.
+* Folder trust: `agy acp` skips the "Do you trust the contents of this project?" prompt of the `agy` TUI. The PC agent asks in the chat (as for Claude Code and Codex). The record is `trustedWorkspaces` in `~/.gemini/antigravity-cli/settings.json`; like `agy`, only the exact folder (real path) counts, never a parent or the repository root. `trust` appends the real path, and records nothing for the home folder, a folder above it or a root (that trust lasts for the session).
+* Conversation lock: every `agy` process that opens a conversation holds an exclusive `flock` on `~/.gemini/antigravity-cli/presence/<conversation id>.lock`, and a second `agy` warns that "sending messages from both may cause conflicts". `agy acp` takes no such lock, so the chat session takes it after `session/new` or `session/load` and keeps it until the chat closes or the agent exits; an `agy` in a terminal then shows its warning. When another app already holds it, the chat shows a `notice` item (severity `warning`) and tries again before each turn. Not on Windows.
+* Continuing a conversation is not live: a conversation still open in an `agy` terminal does not show that terminal's new messages, and the terminal does not show the chat's. `agy acp` has no `_session/steering`, so clients offer no **Send now**.
+* Command output: `agy` reports a finished command as one text, `Command exited with code N.` followed by `Command output:` and the output, or by `No output from the command.`. The PC agent turns it into the same `console` part as other agents' command output (see Delta 2026-11-08, Command output).
+* The env file key `MOBAIDE_ACP_ANTIGRAVITY_COMMAND` overrides the command. Test mode runs the fake agent with `--flavor antigravity`.
+
 ### Delta 2026-11-08: Codex chat sessions, live Codex sessions, Send now
 
 Additive delta within proto-v7 (2026-11-08): **one capability key, one chat command, one chat state key. No version bump; `central_server` is untouched.**

@@ -3,9 +3,11 @@
 message queue, cancel, permission and form requests, config changes, a
 crash with restart, a sandbox mode that every Restart must apply again,
 opening a stored session, the adapter install on first
-use, Send now (steering), command output (and how often it is re-sent), and
+use, Send now (steering), command output (and how often it is re-sent),
 turns that another app on the PC runs in a shared Codex session (a Stop it
-never answers, a turn already running when the chat opens).
+never answers, a turn already running when the chat opens), extra folders
+(``additionalDirectories``), the Antigravity model name resolved into the
+session's options, and Antigravity's "conversation already open" lock.
 
 ``TimelineMirror`` keeps what a chat client keeps, applied from the
 session's ``'a'`` frames the way the clients do it: a new epoch or a gap
@@ -18,6 +20,9 @@ import functools
 import itertools
 import os
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Callable
 
 import orjson
@@ -25,8 +30,14 @@ import psutil
 import pytest
 
 from mobaide.acp import session as session_mod
-from mobaide.acp.agents import ChatLaunchPlan, ConfigIntent, fake_agent_argv
+from mobaide.acp.agents import (
+    ChatLaunchPlan,
+    ConfigIntent,
+    fake_agent_argv,
+    resolve_antigravity_config,
+)
 from mobaide.acp.install import AdapterInstallError
+from mobaide.acp.presence import ConversationPresence
 from mobaide.acp.session import ChatSession
 from mobaide.core.models import SessionConfig, SessionState
 
@@ -1550,3 +1561,219 @@ class TestSharedHost:
 
         assert m.session.state == SessionState.STOPPED
         assert [x for x in _methods(log) if x in ("session/cancel", "session/close")] == sent
+
+
+# Logs each request as one JSON line ``{"method", "params"}`` to argv[1].
+# argv[2] ``dirs`` advertises ``sessionCapabilities.additionalDirectories``.
+PARAMS_AGENT = r"""
+import json, sys
+log = open(sys.argv[1], "a", encoding="utf-8")
+session_caps = {"additionalDirectories": {}} if sys.argv[2] == "dirs" else {}
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg or "method" not in msg:
+        continue
+    method = msg["method"]
+    log.write(json.dumps({"method": method, "params": msg.get("params")}) + "\n")
+    log.flush()
+    if method == "initialize":
+        caps = {"loadSession": True, "sessionCapabilities": session_caps}
+        result = {"protocolVersion": 1, "agentCapabilities": caps}
+    elif method == "session/new":
+        result = {"sessionId": "params-1"}
+    elif method == "session/load":
+        result = {}
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+
+
+def _params_agent(log, *, advertises_dirs: bool) -> list[str]:
+    return [sys.executable, "-c", PARAMS_AGENT, str(log), "dirs" if advertises_dirs else "none"]
+
+
+def _setup_params(log) -> dict[str, Any]:
+    for line in log.read_text(encoding="utf-8").splitlines():
+        entry = orjson.loads(line)
+        if entry["method"] in ("session/new", "session/load"):
+            return entry["params"]
+    raise AssertionError("the agent got neither session/new nor session/load")
+
+
+class TestAdditionalDirectories:
+    @pytest.mark.parametrize("load_session_id", [None, "conv-9"], ids=["new", "load"])
+    async def test_extra_folders_go_to_an_agent_that_takes_them(
+        self, open_chat, tmp_path, load_session_id
+    ):
+        log = tmp_path / "agent.log"
+
+        m = await open_chat(
+            load_session_id=load_session_id,
+            argv=_params_agent(log, advertises_dirs=True),
+            additional_dirs=["/srv/shared", "/srv/docs"],
+        )
+
+        assert m.status == "ready"
+        params = _setup_params(log)
+        assert params["cwd"] == str(tmp_path)
+        assert params["additionalDirectories"] == ["/srv/shared", "/srv/docs"]
+
+    async def test_an_agent_that_does_not_take_them_gets_none(self, open_chat, tmp_path):
+        log = tmp_path / "agent.log"
+
+        m = await open_chat(
+            argv=_params_agent(log, advertises_dirs=False), additional_dirs=["/srv/shared"]
+        )
+
+        assert m.status == "ready"
+        assert "additionalDirectories" not in _setup_params(log)
+
+
+class TestAntigravityModel:
+    @pytest.mark.parametrize(
+        ("model", "values"),
+        [
+            (
+                "Gemini 3.8 Flash (Low)",
+                {"model": "gemini-3.8-flash", "thought_level": "low", "mode": "default"},
+            ),
+            ("Claude Sonnet 4.6 (Thinking)", {"model": "claude-sonnet-4-6", "mode": "default"}),
+        ],
+        ids=["model-with-level", "model-without-levels"],
+    )
+    async def test_the_wizard_model_name_sets_the_session_options(self, open_chat, model, values):
+        m = await open_chat(
+            argv=fake_agent_argv("antigravity"),
+            initial_config=[ConfigIntent(model, category="model")],
+            config_resolver=resolve_antigravity_config,
+        )
+
+        assert m.status == "ready"
+        await m.until(lambda: {o["id"]: o["value"] for o in m.state["config"]} == values)
+
+
+@contextmanager
+def _other_app_holds(path: Path) -> Iterator[None]:
+    """Another app's ``agy`` presence lock (``flock`` belongs to an open
+    file, so a second descriptor here stands in for another process)."""
+    import fcntl
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield
+    finally:
+        os.close(fd)
+
+
+def _free_for_another_app(path: Path) -> bool:
+    import fcntl
+
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    finally:
+        os.close(fd)
+    return True
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the presence lock is POSIX only")
+class TestConversationPresence:
+    """A chat on an Antigravity conversation holds ``agy``'s presence lock
+    while the conversation is open, and warns once when another app on the
+    PC has it open."""
+
+    WARNING = "This conversation is also open in another app on your PC"
+
+    @staticmethod
+    def _lock(tmp_path: Path, session_id: str) -> Path:
+        return tmp_path / "agy" / "presence" / f"{session_id}.lock"
+
+    async def _open(self, open_chat, tmp_path: Path, load_session_id: str | None = "external-1111"):
+        return await open_chat(
+            load_session_id=load_session_id,
+            argv=fake_agent_argv("antigravity"),
+            presence=ConversationPresence(tmp_path / "agy"),
+        )
+
+    async def test_the_chat_holds_the_conversation_until_it_stops(self, open_chat, tmp_path):
+        lock = self._lock(tmp_path, "external-1111")
+
+        m = await self._open(open_chat, tmp_path)
+
+        assert m.status == "ready"
+        assert _free_for_another_app(lock) is False
+        assert self.WARNING not in _notices(m)
+
+        await m.session.stop()
+        await m.until(lambda: "stopped" in m.session_events)
+
+        assert _free_for_another_app(lock) is True
+
+    async def test_a_new_conversation_is_held_by_the_id_the_agent_gave_it(self, open_chat, tmp_path):
+        m = await self._open(open_chat, tmp_path, load_session_id=None)
+
+        assert m.status == "ready"
+        assert _free_for_another_app(self._lock(tmp_path, m.state["acp_session_id"])) is False
+
+    async def test_another_app_on_the_conversation_gets_one_warning(self, open_chat, tmp_path):
+        lock = self._lock(tmp_path, "external-1111")
+        with _other_app_holds(lock):
+            m = await self._open(open_chat, tmp_path)
+            assert m.status == "ready"
+            await m.until(lambda: self.WARNING in _notices(m))
+
+            await m.command("prompt", text="hello")
+            await m.until(_turn_done(m, "You said: hello"))
+
+            assert _notices(m).count(self.WARNING) == 1
+            notice = next(n for n in m.of_type("notice") if n.get("title") == self.WARNING)
+            assert notice["severity"] == "warning"
+
+        # The other app closed it: the next turn takes the conversation.
+        await m.command("prompt", text="again")
+        await m.until(_turn_done(m, "You said: again"))
+
+        assert _free_for_another_app(lock) is False
+        assert _notices(m).count(self.WARNING) == 1
+
+    async def test_a_restart_warns_again_while_another_app_still_has_it(self, open_chat, tmp_path):
+        """The reload clears the timeline, warning included."""
+        lock = self._lock(tmp_path, "external-1111")
+        with _other_app_holds(lock):
+            m = await self._open(open_chat, tmp_path)
+            await m.until(lambda: self.WARNING in _notices(m))
+            await m.command("prompt", text="crash now")
+            await m.until(lambda: m.status == "error")
+            old_epoch = m.epoch
+
+            assert (await m.command("restart"))["ok"] is True
+            await m.until(lambda: m.status == "ready" and m.epoch != old_epoch)
+            await m.until(lambda: self.WARNING in _notices(m))
+
+            assert _notices(m).count(self.WARNING) == 1
+
+    async def test_a_crash_lets_the_conversation_go_and_restart_takes_it_back(
+        self, open_chat, tmp_path
+    ):
+        lock = self._lock(tmp_path, "external-1111")
+        m = await self._open(open_chat, tmp_path)
+        await m.command("prompt", text="crash now")
+        await m.until(lambda: m.status == "error")
+
+        assert _free_for_another_app(lock) is True
+
+        assert (await m.command("restart"))["ok"] is True
+        await m.until(lambda: m.status == "ready" and m.state.get("title") == "Earlier session")
+
+        assert _free_for_another_app(lock) is False
