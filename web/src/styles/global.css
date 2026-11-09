@@ -121,8 +121,8 @@ a {
   color: var(--accent);
 }
 
-/* The brand doubles as the Sessions link and is active on `/`; excluding it
-   keeps the underline meaning "current page" rather than decorating the mark. */
+/* The brand also links to Sessions and is active on `/`; excluding it keeps
+   the underline on the Sessions tab rather than decorating the mark. */
 .app-nav a[aria-current='page']:not(.app-brand) {
   color: var(--text);
   box-shadow: 0 2px 0 0 var(--brand);
