@@ -20,7 +20,7 @@ import functools
 import itertools
 import os
 import sys
-from collections.abc import Iterator
+from collections.abc import Awaitable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
@@ -1659,6 +1659,48 @@ class TestAntigravityModel:
         await m.until(lambda: {o["id"]: o["value"] for o in m.state["config"]} == values)
 
 
+# Logs each request to argv[1] as one line: the method, and for a prompt its
+# text after a space. Opens earlier sessions and echoes prompts. While the
+# file named by argv[2] exists, ``session/load`` is refused.
+RELOAD_AGENT = r"""
+import json, os, sys
+log = open(sys.argv[1], "a", encoding="utf-8")
+refuse = sys.argv[2]
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg or "method" not in msg:
+        continue
+    method, params = msg["method"], msg.get("params") or {}
+    text = " ".join(block.get("text", "") for block in params.get("prompt") or [])
+    log.write(f"{method} {text}".strip() + "\n")
+    log.flush()
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentCapabilities": {"loadSession": True}}
+    elif method == "session/load":
+        if os.path.exists(refuse):
+            send({"id": msg["id"], "error": {"code": -32603, "message": "Conversation unavailable"}})
+            continue
+        result = {}
+    elif method == "session/prompt":
+        send({"method": "session/update", "params": {"sessionId": params["sessionId"], "update": {
+            "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "echo " + text}}}})
+        result = {"stopReason": "end_turn"}
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+
+
+def _reload_agent(log, refuse) -> list[str]:
+    return [sys.executable, "-c", RELOAD_AGENT, str(log), str(refuse)]
+
+
 @contextmanager
 def _other_app_holds(path: Path) -> Iterator[None]:
     """Another app's ``agy`` presence lock (``flock`` belongs to an open
@@ -1691,20 +1733,49 @@ def _free_for_another_app(path: Path) -> bool:
 class TestConversationPresence:
     """A chat on an Antigravity conversation holds ``agy``'s presence lock
     while the conversation is open, and warns once when another app on the
-    PC has it open."""
+    PC has it open. When that app closes it, the next message loads the
+    conversation again before it is sent."""
 
     WARNING = "This conversation is also open in another app on your PC"
+    LOADED = "Loaded the latest messages"
 
     @staticmethod
     def _lock(tmp_path: Path, session_id: str) -> Path:
         return tmp_path / "agy" / "presence" / f"{session_id}.lock"
 
-    async def _open(self, open_chat, tmp_path: Path, load_session_id: str | None = "external-1111"):
+    async def _open(
+        self,
+        open_chat,
+        tmp_path: Path,
+        load_session_id: str | None = "external-1111",
+        argv: list[str] | None = None,
+    ):
         return await open_chat(
             load_session_id=load_session_id,
-            argv=fake_agent_argv("antigravity"),
+            argv=argv or fake_agent_argv("antigravity"),
             presence=ConversationPresence(tmp_path / "agy"),
         )
+
+    async def _open_while_another_app_has_it(self, open_chat, tmp_path: Path, log: Path):
+        """The chat opens with the warning; then the other app closes it."""
+        with _other_app_holds(self._lock(tmp_path, "external-1111")):
+            m = await self._open(open_chat, tmp_path, argv=_reload_agent(log, tmp_path / "refuse"))
+            await m.until(lambda: self.WARNING in _notices(m))
+        return m
+
+    @staticmethod
+    def _before_the_reload(
+        monkeypatch, session: ChatSession, step: Callable[[], Awaitable[None]]
+    ) -> None:
+        """Runs ``step`` after the turn gave its message to the reload, before
+        the old agent process starts to close."""
+        reload = session._reload_conversation
+
+        async def step_then_reload() -> None:
+            await step()
+            await reload()
+
+        monkeypatch.setattr(session, "_reload_conversation", step_then_reload)
 
     async def test_the_chat_holds_the_conversation_until_it_stops(self, open_chat, tmp_path):
         lock = self._lock(tmp_path, "external-1111")
@@ -1740,12 +1811,230 @@ class TestConversationPresence:
             notice = next(n for n in m.of_type("notice") if n.get("title") == self.WARNING)
             assert notice["severity"] == "warning"
 
-        # The other app closed it: the next turn takes the conversation.
+        # The other app closed it, maybe after turns of its own: the next
+        # turn takes the conversation and loads it again before it sends.
+        old_epoch = m.epoch
         await m.command("prompt", text="again")
         await m.until(_turn_done(m, "You said: again"))
 
+        assert m.epoch != old_epoch
         assert _free_for_another_app(lock) is False
-        assert _notices(m).count(self.WARNING) == 1
+        assert _notices(m) == [self.LOADED]
+
+    async def test_the_message_after_the_other_app_closes_it_is_sent_once_after_the_reload(
+        self, open_chat, tmp_path
+    ):
+        log = tmp_path / "agent.log"
+        m = await self._open_while_another_app_has_it(open_chat, tmp_path, log)
+        old_epoch = m.epoch
+
+        await m.command("prompt", text="again")
+        await m.until(_turn_done(m, "echo again"))
+
+        assert m.epoch != old_epoch
+        assert _methods(log) == [
+            "initialize",
+            "session/load",
+            "initialize",
+            "session/load",
+            "session/prompt again",
+        ]
+        assert [item["type"] for item in m.items.values()] == ["notice", "user", "agent"]
+        assert _notices(m) == [self.LOADED]
+        assert m.texts("user") == ["again"]
+        assert m.state["queue"] == []
+
+    async def test_a_message_sent_while_the_conversation_reloads_goes_out_after_the_first(
+        self, open_chat, tmp_path, monkeypatch
+    ):
+        """The old agent process is about to close: neither message may
+        start on it."""
+        log = tmp_path / "agent.log"
+        m = await self._open_while_another_app_has_it(open_chat, tmp_path, log)
+        queues: list[list[str]] = []
+
+        async def second_message() -> None:
+            await m.session.handle_command(b'{"id": "second", "op": "prompt", "text": "second"}')
+            queues.append([q["text"] for q in m.session.timeline.state["queue"]])
+
+        self._before_the_reload(monkeypatch, m.session, second_message)
+
+        await m.command("prompt", text="again")
+        await m.until(_turn_done(m, "echo second"))
+
+        assert m.results["second"]["data"]["queued"] is True
+        assert queues == [["again", "second"]]
+        assert _methods(log) == [
+            "initialize",
+            "session/load",
+            "initialize",
+            "session/load",
+            "session/prompt again",
+            "session/prompt second",
+        ]
+        assert m.texts("user") == ["again", "second"]
+        assert m.texts("agent") == ["echo again", "echo second"]
+        assert m.state["queue"] == []
+        assert _notices(m) == [self.LOADED]
+        notice = m.of_type("notice")[0]
+        assert notice["severity"] == "info"
+        assert "your message" not in notice["text"]
+
+    async def test_while_the_conversation_reloads_stop_has_no_turn_and_keeps_the_message(
+        self, open_chat, tmp_path, monkeypatch
+    ):
+        log = tmp_path / "agent.log"
+        m = await self._open_while_another_app_has_it(open_chat, tmp_path, log)
+        seen: list[dict[str, Any]] = []
+
+        async def stop() -> None:
+            state = m.session.timeline.state
+            seen.append({k: state.get(k) for k in ("status", "turn_started_at", "cancelling")})
+            await m.session.handle_command(b'{"id": "stop", "op": "cancel"}')
+            seen.append({"queue": [q["text"] for q in state["queue"]]})
+
+        self._before_the_reload(monkeypatch, m.session, stop)
+
+        await m.command("prompt", text="again")
+        await m.until(_turn_done(m, "echo again"))
+
+        assert seen == [
+            {"status": "starting", "turn_started_at": None, "cancelling": False},
+            {"queue": ["again"]},
+        ]
+        assert m.results["stop"]["data"] == {"cancelled": False}
+        assert _methods(log) == [
+            "initialize",
+            "session/load",
+            "initialize",
+            "session/load",
+            "session/prompt again",
+        ]
+        assert m.of_type("turn_end") == []
+        assert m.state["queue"] == []
+        assert m.state["cancelling"] is False
+
+    @pytest.mark.parametrize("lock_at_open", [True, False], ids=["held-at-open", "taken-by-a-turn"])
+    async def test_without_another_app_messages_are_sent_without_a_reload(
+        self, open_chat, tmp_path, lock_at_open
+    ):
+        """``taken-by-a-turn``: the presence folder cannot be made while the
+        chat opens, so the first turn takes the lock with no conflict seen."""
+        log = tmp_path / "agent.log"
+        blocker = tmp_path / "agy" / "presence"
+        if not lock_at_open:
+            blocker.parent.mkdir(parents=True)
+            blocker.write_text("")
+        m = await self._open(open_chat, tmp_path, argv=_reload_agent(log, tmp_path / "refuse"))
+        assert self.WARNING not in _notices(m)
+        if not lock_at_open:
+            blocker.unlink()
+        epoch = m.epoch
+
+        await m.command("prompt", text="one")
+        await m.until(_turn_done(m, "echo one"))
+        await m.command("prompt", text="two")
+        await m.until(_turn_done(m, "echo two"))
+
+        assert m.epoch == epoch
+        assert _methods(log) == [
+            "initialize",
+            "session/load",
+            "session/prompt one",
+            "session/prompt two",
+        ]
+        assert self.LOADED not in _notices(m)
+        assert _free_for_another_app(self._lock(tmp_path, "external-1111")) is False
+
+    async def test_while_another_app_still_has_it_messages_are_sent_without_a_reload(
+        self, open_chat, tmp_path
+    ):
+        log = tmp_path / "agent.log"
+        with _other_app_holds(self._lock(tmp_path, "external-1111")):
+            m = await self._open(open_chat, tmp_path, argv=_reload_agent(log, tmp_path / "refuse"))
+            await m.until(lambda: self.WARNING in _notices(m))
+            epoch = m.epoch
+
+            await m.command("prompt", text="one")
+            await m.until(_turn_done(m, "echo one"))
+            await m.command("prompt", text="two")
+            await m.until(_turn_done(m, "echo two"))
+
+            assert m.epoch == epoch
+            assert _methods(log) == [
+                "initialize",
+                "session/load",
+                "session/prompt one",
+                "session/prompt two",
+            ]
+            assert _notices(m) == [self.WARNING]
+
+    async def test_a_stop_while_the_turn_takes_the_conversation_sends_nothing(
+        self, open_chat, tmp_path
+    ):
+        """Prompt and Stop handled in one loop tick: the turn takes the lock
+        with the Stop already pending, so it neither sends nor reloads."""
+        log = tmp_path / "agent.log"
+        m = await self._open_while_another_app_has_it(open_chat, tmp_path, log)
+        epoch = m.epoch
+
+        await m.session.handle_command(b'{"op": "prompt", "text": "again"}')
+        cancelled = await m.command("cancel")
+
+        assert cancelled["data"] == {"cancelled": True}
+        await m.until(lambda: m.status == "ready" and bool(m.of_type("turn_end")))
+        assert [t["stop_reason"] for t in m.of_type("turn_end")] == ["cancelled"]
+        assert m.epoch == epoch
+        assert _methods(log) == ["initialize", "session/load"]
+        assert self.LOADED not in _notices(m)
+        assert m.state["queue"] == []
+
+    async def test_after_such_a_stop_the_next_message_still_reloads_first(
+        self, open_chat, tmp_path
+    ):
+        """The stopped turn took the lock but sent nothing: the agent still
+        has the copy from before the other app's turns."""
+        log = tmp_path / "agent.log"
+        m = await self._open_while_another_app_has_it(open_chat, tmp_path, log)
+        await m.session.handle_command(b'{"op": "prompt", "text": "stopped"}')
+        await m.command("cancel")
+        await m.until(lambda: m.status == "ready" and bool(m.of_type("turn_end")))
+        epoch = m.epoch
+
+        await m.command("prompt", text="again")
+        await m.until(_turn_done(m, "echo again"))
+
+        assert _methods(log) == [
+            "initialize",
+            "session/load",
+            "initialize",
+            "session/load",
+            "session/prompt again",
+        ]
+        assert m.epoch != epoch
+        assert _notices(m) == [self.LOADED]
+
+    async def test_a_reload_the_agent_refuses_keeps_the_message_for_restart(
+        self, open_chat, tmp_path
+    ):
+        log, refuse = tmp_path / "agent.log", tmp_path / "refuse"
+        m = await self._open_while_another_app_has_it(open_chat, tmp_path, log)
+        refuse.touch()
+
+        await m.command("prompt", text="again")
+        await m.until(lambda: m.status == "error")
+
+        assert "session/prompt again" not in _methods(log)
+        assert [q["text"] for q in m.state["queue"]] == ["again"]
+        assert self.LOADED not in _notices(m)
+
+        refuse.unlink()
+        assert (await m.command("restart"))["ok"] is True
+        await m.until(_turn_done(m, "echo again"))
+
+        assert _methods(log).count("session/prompt again") == 1
+        assert self.LOADED not in _notices(m)
+        assert m.state["queue"] == []
 
     async def test_a_restart_warns_again_while_another_app_still_has_it(self, open_chat, tmp_path):
         """The reload clears the timeline, warning included."""
