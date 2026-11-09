@@ -15,6 +15,7 @@ struct CodexOptionsModel: Codable, Equatable, Sendable {
     let initial_prompt: String?
     let worktree: Bool
     let branch_name: String?
+    let base_branch: String?
 
     init(
         model: String? = nil,
@@ -24,7 +25,8 @@ struct CodexOptionsModel: Codable, Equatable, Sendable {
         full_auto: Bool = false,
         initial_prompt: String? = nil,
         worktree: Bool = false,
-        branch_name: String? = nil
+        branch_name: String? = nil,
+        base_branch: String? = nil
     ) {
         self.model = model
         self.sandbox = sandbox
@@ -34,6 +36,7 @@ struct CodexOptionsModel: Codable, Equatable, Sendable {
         self.initial_prompt = initial_prompt
         self.worktree = worktree
         self.branch_name = branch_name
+        self.base_branch = base_branch
     }
 }
 
@@ -47,6 +50,7 @@ extension CodexOptionsModel {
         case initial_prompt
         case worktree
         case branch_name
+        case base_branch
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -59,6 +63,7 @@ extension CodexOptionsModel {
         try container.encodeIfPresent(initial_prompt, forKey: .initial_prompt)
         try container.encode(worktree, forKey: .worktree)
         try container.encodeIfPresent(branch_name, forKey: .branch_name)
+        try container.encodeIfPresent(base_branch, forKey: .base_branch)
     }
 
     init(from decoder: any Decoder) throws {
@@ -75,5 +80,6 @@ extension CodexOptionsModel {
         initial_prompt = try container.decodeIfPresent(String.self, forKey: .initial_prompt)
         worktree = try container.decodeIfPresent(Bool.self, forKey: .worktree) ?? false
         branch_name = try container.decodeIfPresent(String.self, forKey: .branch_name)
+        base_branch = try container.decodeIfPresent(String.self, forKey: .base_branch)
     }
 }

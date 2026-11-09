@@ -109,6 +109,7 @@ enum FixtureRegistry {
         // GitDto.swift
         "GitItem": runner(GitItem.self),
         "GitItemsResponse": runner(GitItemsResponse.self),
+        "WorktreeBasesResponse": runner(WorktreeBasesResponse.self),
         "GitDeleteItem": runner(GitDeleteItem.self),
         "GitDeleteRequest": runner(GitDeleteRequest.self),
         "GitDeleteResultItem": runner(GitDeleteResultItem.self),

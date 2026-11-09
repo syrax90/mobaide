@@ -1,0 +1,65 @@
+{
+  "type": "WorktreeBasesResponse",
+  "cases": [
+    {
+      "name": "full",
+      "wire": {
+        "default": "origin/main",
+        "last_used": "origin/develop",
+        "refs": [
+          {
+            "ref": "origin/main",
+            "kind": "remote",
+            "subject": "Merge pull request #12",
+            "committed_at": "2026-11-08T10:15:00+00:00"
+          },
+          {
+            "ref": "origin/develop",
+            "kind": "remote",
+            "subject": "Add login screen",
+            "committed_at": "2026-11-07T18:02:11+01:00"
+          },
+          {
+            "ref": "wip/local",
+            "kind": "local",
+            "subject": null,
+            "committed_at": null
+          }
+        ]
+      },
+      "decoded_canonical": {
+        "default": "origin/main",
+        "last_used": "origin/develop",
+        "refs": [
+          {
+            "ref": "origin/main",
+            "kind": "remote",
+            "subject": "Merge pull request #12",
+            "committed_at": "2026-11-08T10:15:00+00:00"
+          },
+          {
+            "ref": "origin/develop",
+            "kind": "remote",
+            "subject": "Add login screen",
+            "committed_at": "2026-11-07T18:02:11+01:00"
+          },
+          {
+            "ref": "wip/local",
+            "kind": "local"
+          }
+        ]
+      }
+    },
+    {
+      "name": "no_default_no_refs",
+      "wire": {
+        "default": null,
+        "last_used": null,
+        "refs": []
+      },
+      "decoded_canonical": {
+        "refs": []
+      }
+    }
+  ]
+}

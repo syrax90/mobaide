@@ -124,6 +124,7 @@ struct CreateSessionRequest: Codable, Equatable, Sendable {
     let antigravity_options: AntigravityOptionsModel?
     let worktree: Bool
     let branch_name: String?
+    let base_branch: String?
 
     init(
         command: [String]? = nil,
@@ -137,7 +138,8 @@ struct CreateSessionRequest: Codable, Equatable, Sendable {
         codex_options: CodexOptionsModel? = nil,
         antigravity_options: AntigravityOptionsModel? = nil,
         worktree: Bool = false,
-        branch_name: String? = nil
+        branch_name: String? = nil,
+        base_branch: String? = nil
     ) {
         self.command = command
         self.cwd = cwd
@@ -151,6 +153,7 @@ struct CreateSessionRequest: Codable, Equatable, Sendable {
         self.antigravity_options = antigravity_options
         self.worktree = worktree
         self.branch_name = branch_name
+        self.base_branch = base_branch
     }
 }
 
@@ -169,6 +172,7 @@ extension CreateSessionRequest {
         antigravity_options = try container.decodeIfPresent(AntigravityOptionsModel.self, forKey: .antigravity_options)
         worktree = try container.decodeIfPresent(Bool.self, forKey: .worktree) ?? false
         branch_name = try container.decodeIfPresent(String.self, forKey: .branch_name)
+        base_branch = try container.decodeIfPresent(String.self, forKey: .base_branch)
     }
 }
 

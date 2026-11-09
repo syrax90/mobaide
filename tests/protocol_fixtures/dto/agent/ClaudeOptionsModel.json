@@ -10,6 +10,7 @@
         "initial_prompt": "fix the bug",
         "worktree": true,
         "branch_name": "feature/mobaide/x",
+        "base_branch": "origin/develop",
         "identifier": "CLA-97",
         "title": "Fix",
         "model": "opus",

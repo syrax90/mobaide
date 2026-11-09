@@ -145,6 +145,7 @@ class AntigravityOptions:
     # exactly like Codex; ignored for ad-hoc launches.
     worktree: bool = False
     branch_name: str | None = None
+    base_branch: str | None = None
 
     def __post_init__(self) -> None:
         if self.skip_permissions and self.sandbox:
@@ -258,6 +259,7 @@ class AntigravityLauncher:
             target,
             worktree=options.worktree,
             branch_name=options.branch_name,
+            base_branch=options.base_branch,
             worktree_mgr=self._worktree_mgr,
             fallback_prefix="antigravity-session",
         )

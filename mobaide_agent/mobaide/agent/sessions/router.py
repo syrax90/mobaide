@@ -133,6 +133,7 @@ async def create_session(
         antigravity_options=antigravity_options,
         worktree=body.worktree,
         branch_name=body.branch_name,
+        base_branch=body.base_branch,
         kind=kind,
     )
     try:

@@ -24,6 +24,7 @@ private struct CreateSessionContent: View {
     @State private var pathSuggestions: PathSuggestionsModel
     @State private var claudeAdvancedExpanded = false
     @State private var autoScanAdvancedExpanded = false
+    @State private var baseBranchPickerShown = false
     /// Reorder mode for the project and mode lists: rows show the native drag
     /// handles and a tap no longer picks (the Projects screen's Edit pattern).
     @State private var editMode: EditMode = .inactive
@@ -93,6 +94,12 @@ private struct CreateSessionContent: View {
         .task { await model.observeProjects() }
         .task { await model.refreshModeOrder() }
         .task { await model.observeScans() }
+        .task(id: model.worktreeBasesLoadKey) { await model.loadWorktreeBases() }
+        .sheet(isPresented: $baseBranchPickerShown) {
+            if case .loaded(let bases) = model.worktreeBases {
+                WorktreeBasePickerSheet(bases: bases, selected: model.baseBranch) { model.pickBaseBranch($0) }
+            }
+        }
         .onChange(of: model.step) { _, step in
             editMode = .inactive
             if step == .modePick {
@@ -669,8 +676,54 @@ private struct CreateSessionContent: View {
                         .textInputAutocapitalization(.never)
                         .pixelField()
                 }
+                if model.showsBaseBranchPicker {
+                    baseBranchRow
+                }
             }
         }
+    }
+
+    @ViewBuilder
+    private var baseBranchRow: some View {
+        switch model.worktreeBases {
+        case .failed:
+            HStack {
+                Text("Couldn't load branches")
+                    .font(.footnote)
+                    .foregroundStyle(colors.danger)
+                Spacer()
+                Button("Retry") {
+                    Task { await model.loadWorktreeBases(force: true) }
+                }
+                .buttonStyle(.borderless)
+            }
+        case .loaded:
+            Button {
+                baseBranchPickerShown = true
+            } label: {
+                baseBranchLabel(WorktreeBaseDisplay.label(model.baseBranch))
+            }
+            .accessibilityIdentifier("create-session-base-branch")
+        case .idle, .loading:
+            baseBranchLabel("Loading branches…")
+                .disabled(true)
+        }
+    }
+
+    private func baseBranchLabel(_ value: String) -> some View {
+        HStack {
+            Text("Base branch").foregroundStyle(colors.text)
+            Spacer()
+            Text(value)
+                .font(.body.monospaced())
+                .foregroundStyle(colors.textMuted)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(colors.textMuted)
+        }
+        .contentShape(Rectangle())
     }
 
     // MARK: - Helpers

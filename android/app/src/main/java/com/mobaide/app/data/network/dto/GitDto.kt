@@ -73,6 +73,34 @@ data class GitItem(
 @Serializable
 data class GitItemsResponse(val items: List<GitItem>)
 
+/** One ref a new session's worktree may start from: a local branch or `<remote>/<name>`. */
+@Serializable
+data class WorktreeBaseRef(
+    val ref: String,
+    val kind: String,
+    val subject: String? = null,
+    val committed_at: String? = null,
+) {
+    val isLocal: Boolean get() = kind == KIND_LOCAL
+
+    companion object {
+        const val KIND_LOCAL = "local"
+        const val KIND_REMOTE = "remote"
+    }
+}
+
+/**
+ * `GET /api/projects/{name}/git/worktree-bases`. [default] comes first in
+ * [refs], the rest newest first; [default] and [last_used] are null or a ref
+ * present in [refs].
+ */
+@Serializable
+data class WorktreeBasesResponse(
+    val default: String? = null,
+    val last_used: String? = null,
+    val refs: List<WorktreeBaseRef> = emptyList(),
+)
+
 @Serializable
 data class GitDeleteItem(
     val kind: String,

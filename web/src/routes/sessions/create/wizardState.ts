@@ -17,6 +17,7 @@ import type { CLAUDE_EFFORTS, CODEX_APPROVALS, CODEX_SANDBOXES } from '../../../
 import type { CliModelDetail } from '../../../protocol/dto/agentVersion';
 import type { ProjectSummary } from '../../../api/projectRepository';
 import { trimTrailingSeparator } from '../../../lib/pathCompletion';
+import type { WorktreeBasePick } from './worktreeBase';
 
 export type WizardStep = 'project' | 'mode' | 'config';
 
@@ -112,6 +113,11 @@ export interface WizardState {
   codex: CodexBucket;
   antigravity: AntigravityBucket;
   git: GitBucket;
+  /**
+   * The base branch the user picked by hand, if any. Not persisted: the agent
+   * remembers the last base per project and returns it as `last_used`.
+   */
+  worktreeBasePick: WorktreeBasePick | null;
   /** The project the Auto Scan prompt was seeded for, so edits are not discarded. */
   autoScanPromptSeededFor: string | null;
 }
@@ -154,6 +160,7 @@ export const INITIAL_WIZARD_STATE: WizardState = {
   },
   antigravity: { model: null, skipPermissions: false, sandbox: false, addDirsDraft: '' },
   git: { worktree: false, branchName: '' },
+  worktreeBasePick: null,
   autoScanPromptSeededFor: null,
 };
 
@@ -319,6 +326,7 @@ export type WizardAction =
   | { type: 'setAntigravityAddDirs'; draft: string }
   | { type: 'setWorktree'; value: boolean }
   | { type: 'setBranchName'; value: string }
+  | { type: 'setWorktreeBase'; pick: WorktreeBasePick }
   | { type: 'seedAutoScanPrompt'; projectName: string; prompt: string };
 
 function withClaudeBucket(
@@ -342,6 +350,10 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         // A non-git project cannot host a worktree, and leaving a stale branch
         // name behind would send it on the next launch.
         git: action.project.is_git ? state.git : { worktree: false, branchName: '' },
+        worktreeBasePick:
+          state.worktreeBasePick?.projectName === action.project.name
+            ? state.worktreeBasePick
+            : null,
       };
 
     case 'setCustomPathDraft': {
@@ -355,6 +367,7 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         // the field so the caret does not jump while typing.
         selection: { kind: 'customPath', path: trimTrailingSeparator(action.draft.trim()) },
         git: { worktree: false, branchName: '' },
+        worktreeBasePick: null,
       };
     }
 
@@ -519,6 +532,9 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
 
     case 'setBranchName':
       return { ...state, git: { ...state.git, branchName: action.value } };
+
+    case 'setWorktreeBase':
+      return { ...state, worktreeBasePick: action.pick };
 
     case 'seedAutoScanPrompt':
       // Seeded once per project: re-entering the step must not discard edits,

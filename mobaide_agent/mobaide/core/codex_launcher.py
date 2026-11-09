@@ -234,6 +234,7 @@ class CodexOptions:
     # exactly like Claude's Standard mode; ignored for ad-hoc launches.
     worktree: bool = False
     branch_name: str | None = None
+    base_branch: str | None = None
 
 
 class CodexLauncher:
@@ -375,6 +376,7 @@ class CodexLauncher:
             target,
             worktree=options.worktree,
             branch_name=options.branch_name,
+            base_branch=options.base_branch,
             worktree_mgr=self._worktree_mgr,
             fallback_prefix="codex-session",
         )

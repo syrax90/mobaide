@@ -2,9 +2,14 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { fetchAgentCapabilities } from '../../../api/agentCapabilities';
-import { cliModelDetails, cliModelsPending } from '../../../protocol/dto/agentVersion';
+import {
+  cliModelDetails,
+  cliModelsPending,
+  gitCapability,
+} from '../../../protocol/dto/agentVersion';
 import { startAutoScan } from '../../../api/autoscanRepository';
 import { codexLogin } from '../../../api/codexAuthRepository';
+import { listWorktreeBases } from '../../../api/gitRepository';
 import {
   createCustomAgentType,
   deleteCustomAgentType,
@@ -49,10 +54,11 @@ import { ProjectFormDialog } from '../../projects/ProjectFormDialog';
 import { moveAnnouncement, moveItem, reconcileOrder } from '../../projects/reorder';
 import { terminalPath } from '../terminalPath';
 import { CodexLoginDialog } from './CodexLoginDialog';
-import { ConfigStep } from './ConfigStep';
+import { ConfigStep, type WorktreeBasesView } from './ConfigStep';
 import { CreateCustomTypeDialog, DeleteCustomTypeDialog } from './CustomTypeDialogs';
 import { ModeStep } from './ModeStep';
 import { ProjectStep } from './ProjectStep';
+import { effectiveWorktreeBase } from './worktreeBase';
 import {
   buildCreateRequest,
   buildStartScanRequest,
@@ -260,6 +266,37 @@ export function NewSession() {
     if (selection.kind !== 'stored') return null;
     return projects.data?.find((entry) => entry.name === selection.name) ?? null;
   }, [projects.data, location.selection]);
+
+  // Fetched only while the picker can show: the config step of a launch mode,
+  // a stored git project with a worktree requested, and an agent that has the
+  // route. Re-read on each visit; `git.changed` invalidates it (see the key).
+  const worktreeBaseProject =
+    location.step === 'config' &&
+    location.mode !== null &&
+    location.mode !== 'auto_scan' &&
+    project?.is_git === true &&
+    state.git.worktree &&
+    gitCapability(capabilities.data, 'worktree_base')
+      ? project.name
+      : null;
+  const worktreeBasesQuery = useQuery({
+    queryKey: queryKeys.worktreeBases(resolvedAgentId, worktreeBaseProject ?? ''),
+    queryFn: () => listWorktreeBases(resolvedAgentId, worktreeBaseProject ?? ''),
+    enabled: resolvedAgentId !== '' && worktreeBaseProject !== null,
+  });
+  // A failed refetch keeps the last good list usable.
+  const worktreeBases: WorktreeBasesView = {
+    status:
+      worktreeBasesQuery.data !== undefined
+        ? 'ready'
+        : worktreeBasesQuery.isError
+          ? 'error'
+          : 'loading',
+    bases: worktreeBasesQuery.data,
+    retry: () => {
+      void worktreeBasesQuery.refetch();
+    },
+  };
 
   const cards = useMemo(
     () =>
@@ -662,7 +699,18 @@ export function NewSession() {
     // `parseWizardLocation` trims the custom path exactly as the reducer does,
     // and `resolveWizardLocation` has already clamped an unknown project or a
     // non-absolute path back to step one, so this cannot be invalid.
-    const context = { state: { ...state, selection: location.selection }, mode: location.mode, project };
+    // The picker's shown value is what goes out; `null` (agent default) while
+    // the list is loading or failed, or when the picker is hidden.
+    const worktreeBase =
+      worktreeBaseProject === null
+        ? null
+        : effectiveWorktreeBase(state.worktreeBasePick, worktreeBaseProject, worktreeBases.bases);
+    const context = {
+      state: { ...state, selection: location.selection },
+      mode: location.mode,
+      project,
+      worktreeBase,
+    };
     const request =
       location.mode === 'auto_scan'
         ? buildStartScanRequest(context)
@@ -819,6 +867,7 @@ export function NewSession() {
           project={project}
           capabilities={capabilities.data}
           customTypes={customTypes.data ?? []}
+          worktreeBases={worktreeBases}
           submitting={submitting}
           error={error}
           dispatch={dispatch}

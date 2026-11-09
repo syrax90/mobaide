@@ -174,6 +174,7 @@ class TestWorktreeManager:
             (0, "", ""),              # git worktree list (no match)
             (0, "", ""),              # git config core.longpaths
             (0, "", ""),              # git fetch origin
+            (1, "", ""),                    # symbolic-ref origin/HEAD (unset)
             (0, "", ""),              # git rev-parse origin/main  (exists)
             (0, "", ""),              # git worktree add --no-track -b
         ]
@@ -181,9 +182,9 @@ class TestWorktreeManager:
         result = await manager.create_worktree("cla-8-test", project_root)
         assert result.is_new is True
         assert result.branch == "feature/mobaide/cla-8-test"
-        assert mock_git.call_count == 5
+        assert mock_git.call_count == 6
 
-        worktree_add_call = mock_git.call_args_list[4]
+        worktree_add_call = mock_git.call_args_list[5]
         assert "--no-track" in worktree_add_call.args
         assert "-b" in worktree_add_call.args
         assert "origin/main" in worktree_add_call.args
@@ -200,6 +201,7 @@ class TestWorktreeManager:
             (0, "", ""),              # git worktree list (no match)
             (0, "", ""),              # git config
             (0, "", ""),              # git fetch
+            (1, "", ""),                    # symbolic-ref origin/HEAD (unset)
             (0, "", ""),              # git rev-parse origin/main
             (0, "", ""),              # git worktree add -b
         ]
@@ -208,7 +210,7 @@ class TestWorktreeManager:
             "my-dir", project_root, branch_name="feature/user-typed",
         )
         assert result.branch == "feature/user-typed"
-        worktree_add_call = mock_git.call_args_list[4]
+        worktree_add_call = mock_git.call_args_list[5]
         assert "feature/user-typed" in worktree_add_call.args
         # The prefix must NOT be applied when branch_name is given explicitly.
         assert "feature/mobaide/my-dir" not in worktree_add_call.args
@@ -245,6 +247,7 @@ class TestWorktreeManager:
             (0, "", ""),                    # git worktree list (no match)
             (0, "", ""),                    # git config
             (128, "", "network error"),     # git fetch (ignored)
+            (1, "", ""),                    # symbolic-ref origin/HEAD (unset)
             (128, "", "no origin/main"),    # rev-parse origin/main (missing)
             (0, "", ""),                    # rev-parse refs/heads/main (ok)
             (0, "", ""),                    # git worktree add -b
@@ -252,7 +255,7 @@ class TestWorktreeManager:
 
         result = await manager.create_worktree("cla-1", project_root)
         assert result.is_new is True
-        worktree_add_call = mock_git.call_args_list[5]
+        worktree_add_call = mock_git.call_args_list[6]
         assert "main" in worktree_add_call.args
         assert "origin/main" not in worktree_add_call.args
 
@@ -269,6 +272,7 @@ class TestWorktreeManager:
             (0, "", ""),                   # git worktree list (no match)
             (0, "", ""),                   # git config
             (128, "", "no remote"),        # git fetch
+            (1, "", ""),                    # symbolic-ref origin/HEAD (unset)
             (128, "", "no origin/main"),   # rev-parse origin/main
             (128, "", "no local main"),   # rev-parse refs/heads/main
             (0, "", ""),                   # git worktree add -b HEAD
@@ -276,7 +280,7 @@ class TestWorktreeManager:
 
         result = await manager.create_worktree("cla-1", project_root)
         assert result.is_new is True
-        worktree_add_call = mock_git.call_args_list[5]
+        worktree_add_call = mock_git.call_args_list[6]
         assert "HEAD" in worktree_add_call.args
 
     @patch("mobaide.linear.worktree._run_git")
@@ -291,6 +295,7 @@ class TestWorktreeManager:
             (0, "", ""),                                  # git worktree list (no match)
             (0, "", ""),                                  # git config
             (0, "", ""),                                  # git fetch
+            (1, "", ""),                    # symbolic-ref origin/HEAD (unset)
             (0, "", ""),                                  # rev-parse origin/main
             (128, "", "fatal: branch already exists"),    # worktree add -b fails
             (0, "", ""),                                  # worktree add (no -b)
@@ -298,7 +303,7 @@ class TestWorktreeManager:
 
         result = await manager.create_worktree("cla-8-test", project_root)
         assert result.is_new is True
-        assert mock_git.call_count == 6
+        assert mock_git.call_count == 7
 
     @patch("mobaide.linear.worktree._run_git")
     async def test_create_worktree_raises_on_total_failure(
@@ -314,6 +319,7 @@ class TestWorktreeManager:
             (0, "", ""),                   # git worktree list (no match)
             (0, "", ""),                   # git config
             (0, "", ""),                   # git fetch
+            (1, "", ""),                    # symbolic-ref origin/HEAD (unset)
             (0, "", ""),                   # rev-parse origin/main
             (128, "", "fatal: boom"),      # worktree add -b fails
             (128, "", "fatal: still no"), # worktree add fails too

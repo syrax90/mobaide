@@ -33,7 +33,8 @@ RESOLVED_LIMIT = 200
 # markers, which is what makes a "Mark resolved" row action safe to offer.
 # ``delete_remote`` lets ``POST /items:delete`` take ``remote_branch`` items.
 # ``conflicts`` covers the ``.../git/conflict`` routes and ``resolved_paths``
-# on status.
+# on status. ``worktree_base`` covers ``GET /worktree-bases`` and the
+# ``base_branch`` session-create field.
 GIT_CAPABILITIES: dict[str, bool] = {
     "changes": True,
     "stage": True,
@@ -47,6 +48,7 @@ GIT_CAPABILITIES: dict[str, bool] = {
     "resolve": True,
     "delete_remote": True,
     "conflicts": True,
+    "worktree_base": True,
 }
 MESSAGE_LIMIT = 64 * 1024
 JOB_LINE_LIMIT = 200

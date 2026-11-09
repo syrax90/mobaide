@@ -16,12 +16,15 @@ import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.CliModelDetail
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.data.network.dto.ProjectInfo
+import com.mobaide.app.data.network.dto.WorktreeBasesResponse
+import com.mobaide.app.data.network.dto.gitCapability
 import com.mobaide.app.data.network.dto.cliAvailable
 import com.mobaide.app.data.network.dto.cliModelDetails
 import com.mobaide.app.data.network.dto.cliModels
 import com.mobaide.app.data.network.dto.cliModelsPending
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
+import com.mobaide.app.data.repository.GitRepository
 import com.mobaide.app.data.repository.PathSuggestionRepository
 import com.mobaide.app.data.repository.ProjectsRepository
 import com.mobaide.app.data.repository.SessionRepository
@@ -29,6 +32,7 @@ import com.mobaide.app.ui.common.PathSuggestionsController
 import com.mobaide.app.ui.common.PathSuggestionsUi
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -130,6 +134,14 @@ sealed interface ProjectSelection {
     data class CustomPath(val path: String) : ProjectSelection
 }
 
+/** The worktree base-branch list of the selected project. */
+sealed interface BaseBranchesLoad {
+    data object Idle : BaseBranchesLoad
+    data object Loading : BaseBranchesLoad
+    data class Loaded(val response: WorktreeBasesResponse) : BaseBranchesLoad
+    data object Failed : BaseBranchesLoad
+}
+
 data class CreateSessionUiState(
     val step: CreateSessionStep = CreateSessionStep.ProjectSelect,
     val projects: List<ProjectInfo> = emptyList(),
@@ -203,6 +215,16 @@ data class CreateSessionUiState(
     val initialPrompt: String = "",
     val worktree: Boolean = false,
     val branchName: String = "",
+    // `capabilities.git.worktree_base`, read by the ModePick probe. Without it
+    // the agent ignores base_branch, so the picker stays hidden.
+    val worktreeBaseSupported: Boolean = false,
+    val baseBranches: BaseBranchesLoad = BaseBranchesLoad.Idle,
+    // The project [baseBranches] belongs to; a project change resets the list.
+    val baseBranchesProject: String? = null,
+    // null = the agent's default branch.
+    val baseBranch: String? = null,
+    // The user chose [baseBranch] on this screen, so a reload must not re-preselect.
+    val baseBranchPicked: Boolean = false,
     val submitting: Boolean = false,
     val autoScanStarting: Boolean = false,
     // Name of the stored project the AutoScan config step was last seeded for
@@ -244,6 +266,22 @@ val CreateSessionUiState.orderedModes: List<CreateSessionMode>
  */
 val CreateSessionUiState.selectedProjectName: String?
     get() = (selection as? ProjectSelection.Stored)?.name
+
+/** The base-branch field shows: worktree on, a stored git project, and an agent that reads the field. */
+val CreateSessionUiState.showBaseBranchPicker: Boolean
+    get() = worktreeBaseSupported && worktree &&
+        projects.firstOrNull { it.name == selectedProjectName }?.is_git == true
+
+/**
+ * The `base_branch` to send. Only a loaded list of the selected project
+ * yields one; loading or a failed list sends null (the agent's default).
+ */
+val CreateSessionUiState.effectiveBaseBranch: String?
+    get() = baseBranch.takeIf {
+        showBaseBranchPicker &&
+            baseBranches is BaseBranchesLoad.Loaded &&
+            baseBranchesProject == selectedProjectName
+    }
 
 /**
  * The autonomy preset currently reflected by the raw Codex sandbox/approval/
@@ -353,6 +391,7 @@ class CreateSessionViewModel @Inject constructor(
     private val tokenStore: TokenStore,
     private val customAgentTypesRepository: CustomAgentTypesRepository,
     pathSuggestionRepository: PathSuggestionRepository,
+    private val gitRepository: GitRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(CreateSessionUiState())
@@ -477,6 +516,19 @@ class CreateSessionViewModel @Inject constructor(
                         customTypes = types,
                         selectedMode = if (stillExists) selected else null,
                     )
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            // Refs moved on the agent: refresh a list already on screen.
+            gitRepository.changed.collect { name ->
+                val state = _uiState.value
+                if (name == state.baseBranchesProject &&
+                    state.baseBranches is BaseBranchesLoad.Loaded &&
+                    state.showBaseBranchPicker
+                ) {
+                    loadBaseBranches(name, silent = true)
                 }
             }
         }
@@ -611,15 +663,18 @@ class CreateSessionViewModel @Inject constructor(
         }
     }
 
-    fun selectProject(name: String) = _uiState.update {
-        val isGit = it.projects.firstOrNull { p -> p.name == name }?.is_git == true
-        it.copy(
-            selection = ProjectSelection.Stored(name),
-            customPathDraft = "",
-            customPathError = null,
-            worktree = if (isGit) it.worktree else false,
-            branchName = if (isGit) it.branchName else "",
-        )
+    fun selectProject(name: String) {
+        _uiState.update {
+            val isGit = it.projects.firstOrNull { p -> p.name == name }?.is_git == true
+            it.withBaseBranchesFor(name).copy(
+                selection = ProjectSelection.Stored(name),
+                customPathDraft = "",
+                customPathError = null,
+                worktree = if (isGit) it.worktree else false,
+                branchName = if (isGit) it.branchName else "",
+            )
+        }
+        ensureBaseBranches()
     }
 
     /**
@@ -629,7 +684,7 @@ class CreateSessionViewModel @Inject constructor(
      * `AgentEvent.ProjectsChanged` bus event.
      */
     fun onProjectCreated(project: ProjectInfo) = _uiState.update {
-        it.copy(
+        it.withBaseBranchesFor(project.name).copy(
             selection = ProjectSelection.Stored(project.name),
             customPathDraft = "",
             customPathError = null,
@@ -648,7 +703,7 @@ class CreateSessionViewModel @Inject constructor(
     fun selectCustomPath() {
         if (_uiState.value.selection !is ProjectSelection.CustomPath) {
             _uiState.update {
-                it.copy(
+                it.withBaseBranchesFor(null).copy(
                     selection = ProjectSelection.CustomPath(""),
                     customPathDraft = "",
                     customPathError = null,
@@ -806,6 +861,7 @@ class CreateSessionViewModel @Inject constructor(
                         codexModels = version.cliModels("codex"),
                         antigravityModels = version.cliModels("antigravity"),
                         codexModelDetails = codexDetails,
+                        worktreeBaseSupported = version.gitCapability("worktree_base"),
                         codexReasoningEffort = if (pending) {
                             it.codexReasoningEffort
                         } else {
@@ -818,6 +874,7 @@ class CreateSessionViewModel @Inject constructor(
                         cliAvailabilityLoading = false,
                     )
                 }
+                ensureBaseBranches()
                 if (!pending) {
                     warmupRetriesLeft = WARMUP_MAX_RETRIES
                 } else if (warmupRetriesLeft > 0) {
@@ -1050,7 +1107,77 @@ class CreateSessionViewModel @Inject constructor(
     fun setAutoScanClaudeAppendSystemPrompt(v: String) =
         _uiState.update { it.copy(autoScanClaudeAppendSystemPrompt = v) }
 
-    fun toggleWorktree(v: Boolean) = _uiState.update { it.copy(worktree = v) }
+    fun toggleWorktree(v: Boolean) {
+        _uiState.update { it.copy(worktree = v) }
+        ensureBaseBranches()
+    }
+
+    /** A pick from the base-branch sheet; null is the agent's default branch. */
+    fun selectBaseBranch(ref: String?) = _uiState.update {
+        it.copy(baseBranch = ref, baseBranchPicked = true)
+    }
+
+    fun retryBaseBranches() = ensureBaseBranches(force = true)
+
+    private var baseBranchesJob: Job? = null
+
+    /** Load the base-branch list once the picker shows, unless it is loaded or loading already. */
+    private fun ensureBaseBranches(force: Boolean = false) {
+        val state = _uiState.value
+        if (!state.showBaseBranchPicker) return
+        val project = state.selectedProjectName ?: return
+        val current = state.baseBranchesProject == project &&
+            (state.baseBranches is BaseBranchesLoad.Loading || state.baseBranches is BaseBranchesLoad.Loaded)
+        if (current && !force) return
+        loadBaseBranches(project, silent = false)
+    }
+
+    /** [silent] keeps the shown list while it reloads and keeps it on a failure. */
+    private fun loadBaseBranches(project: String, silent: Boolean) {
+        baseBranchesJob?.cancel()
+        if (!silent) {
+            _uiState.update {
+                it.copy(baseBranches = BaseBranchesLoad.Loading, baseBranchesProject = project)
+            }
+        }
+        baseBranchesJob = viewModelScope.launch {
+            val response = try {
+                gitRepository.worktreeBases(project)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            _uiState.update { state ->
+                if (state.baseBranchesProject != project) return@update state
+                when {
+                    response != null -> {
+                        val keepPick = state.baseBranchPicked &&
+                            (state.baseBranch == null || response.refs.any { it.ref == state.baseBranch })
+                        state.copy(
+                            baseBranches = BaseBranchesLoad.Loaded(response),
+                            baseBranch = if (keepPick) state.baseBranch else response.last_used ?: response.default,
+                            baseBranchPicked = keepPick,
+                        )
+                    }
+                    silent -> state
+                    else -> state.copy(baseBranches = BaseBranchesLoad.Failed)
+                }
+            }
+        }
+    }
+
+    /** Drops the base-branch list and the pick when the selection leaves its project. */
+    private fun CreateSessionUiState.withBaseBranchesFor(project: String?): CreateSessionUiState {
+        if (project != null && project == selectedProjectName) return this
+        baseBranchesJob?.cancel()
+        return copy(
+            baseBranches = BaseBranchesLoad.Idle,
+            baseBranchesProject = null,
+            baseBranch = null,
+            baseBranchPicked = false,
+        )
+    }
     fun setBranchName(v: String) = _uiState.update { it.copy(branchName = v) }
     fun setInitialPrompt(v: String) = _uiState.update { it.copy(initialPrompt = v) }
     fun clearError() = _uiState.update { it.copy(error = null) }
@@ -1124,6 +1251,7 @@ class CreateSessionViewModel @Inject constructor(
             append_system_prompt = state.claudeAppendSystemPrompt.takeIf { it.isNotBlank() },
             worktree = state.worktree,
             branch_name = state.branchName.takeIf { it.isNotBlank() },
+            base_branch = state.effectiveBaseBranch,
         )
         when (val sel = state.selection) {
             is ProjectSelection.Stored -> submitSession(
@@ -1140,7 +1268,7 @@ class CreateSessionViewModel @Inject constructor(
                     request = CreateSessionRequest(
                         project_name = null,
                         cwd = sel.path,
-                        claude_options = claudeOptions.copy(worktree = false, branch_name = null),
+                        claude_options = claudeOptions.copy(worktree = false, branch_name = null, base_branch = null),
                     ),
                 )
             }
@@ -1159,6 +1287,7 @@ class CreateSessionViewModel @Inject constructor(
             full_auto = state.codexFullAuto,
             worktree = state.worktree,
             branch_name = state.branchName.takeIf { it.isNotBlank() },
+            base_branch = state.effectiveBaseBranch,
         )
         when (val sel = state.selection) {
             is ProjectSelection.Stored -> submitSession(
@@ -1177,7 +1306,7 @@ class CreateSessionViewModel @Inject constructor(
                         project_name = null,
                         cwd = sel.path,
                         cli = "codex",
-                        codex_options = codexOptions.copy(worktree = false, branch_name = null),
+                        codex_options = codexOptions.copy(worktree = false, branch_name = null, base_branch = null),
                     ),
                 )
             }
@@ -1195,6 +1324,7 @@ class CreateSessionViewModel @Inject constructor(
             add_dirs = parseAddDirs(state.antigravityAddDirsDraft),
             worktree = state.worktree,
             branch_name = state.branchName.takeIf { it.isNotBlank() },
+            base_branch = state.effectiveBaseBranch,
         )
         when (val sel = state.selection) {
             is ProjectSelection.Stored -> submitSession(
@@ -1213,7 +1343,7 @@ class CreateSessionViewModel @Inject constructor(
                         project_name = null,
                         cwd = sel.path,
                         cli = "antigravity",
-                        antigravity_options = antigravityOptions.copy(worktree = false, branch_name = null),
+                        antigravity_options = antigravityOptions.copy(worktree = false, branch_name = null, base_branch = null),
                     ),
                 )
             }
@@ -1296,6 +1426,7 @@ class CreateSessionViewModel @Inject constructor(
                     claude_options = null,
                     worktree = state.worktree,
                     branch_name = state.branchName.takeIf { it.isNotBlank() },
+                    base_branch = state.effectiveBaseBranch,
                 ),
             )
             is ProjectSelection.CustomPath -> {

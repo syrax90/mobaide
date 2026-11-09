@@ -125,6 +125,8 @@ data class CreateSessionRequest(
     // instead carry worktree intent inside their own options block.
     val worktree: Boolean = false,
     val branch_name: String? = null,
+    // The ref the new worktree starts from; null = the agent's default branch.
+    val base_branch: String? = null,
 )
 
 @Serializable

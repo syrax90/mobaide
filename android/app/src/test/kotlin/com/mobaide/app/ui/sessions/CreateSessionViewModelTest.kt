@@ -17,8 +17,11 @@ import com.mobaide.app.data.network.dto.FsDirsResponse
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.VersionInfoResponse
+import com.mobaide.app.data.network.dto.WorktreeBaseRef
+import com.mobaide.app.data.network.dto.WorktreeBasesResponse
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
+import com.mobaide.app.data.repository.GitRepository
 import com.mobaide.app.data.repository.PathSuggestionRepository
 import com.mobaide.app.data.repository.ProjectsRepository
 import com.mobaide.app.data.repository.SessionRepository
@@ -32,6 +35,7 @@ import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -82,6 +86,8 @@ class CreateSessionViewModelTest {
         val customTypesRepo: CustomAgentTypesRepository,
         val customTypesFlow: MutableStateFlow<List<CustomAgentTypeDto>>,
         val restApi: RestApi,
+        val gitRepo: GitRepository,
+        val gitChanged: MutableSharedFlow<String>,
     )
 
     private fun newFixture(
@@ -135,9 +141,13 @@ class CreateSessionViewModelTest {
         // once their field gains focus.
         val restApi = mockk<RestApi>()
 
+        val gitRepo = mockk<GitRepository>()
+        val gitChanged = MutableSharedFlow<String>()
+        every { gitRepo.changed } returns gitChanged
+
         return Fixture(
             projectsRepo, sessionRepo, autoScanRepo, prefs, tokenStore, projectsFlow,
-            customTypesRepo, customTypesFlow, restApi,
+            customTypesRepo, customTypesFlow, restApi, gitRepo, gitChanged,
         )
     }
 
@@ -145,6 +155,7 @@ class CreateSessionViewModelTest {
         CreateSessionViewModel(
             projectsRepo, sessionRepo, autoScanRepo, prefs, tokenStore, customTypesRepo,
             PathSuggestionRepository(restApi, tokenStore),
+            gitRepo,
         )
 
     // ---- Wizard step flow --------------------------------------------------
@@ -3942,5 +3953,218 @@ class CreateSessionViewModelTest {
         gate.complete(SessionResponse("sess-gated", "starting", "2026-07-30T00:00:00Z"))
         advanceUntilIdle()
         coVerify(exactly = 1) { fx.sessionRepo.createSession(any()) }
+    }
+
+    // ---- Worktree base branch ----------------------------------------------
+
+    private fun worktreeBaseVersion(enabled: Boolean = true) = VersionInfoResponse(
+        name = "mobaide_agent",
+        server_version = "0.2.16",
+        protocol_versions = listOf(7),
+        min_client_version = 5,
+        capabilities = Json.parseToJsonElement(
+            if (enabled) """{"git":{"worktree_base":true}}""" else """{"git":{"branches":true}}""",
+        ).jsonObject,
+    )
+
+    private fun bases(default: String?, lastUsed: String?, vararg refs: String) = WorktreeBasesResponse(
+        default = default,
+        last_used = lastUsed,
+        refs = refs.map { WorktreeBaseRef(it, if ("/" in it) "remote" else "local") },
+    )
+
+    /** alpha (git) selected, ModePick probe run, worktree on. */
+    private suspend fun kotlinx.coroutines.test.TestScope.worktreeVm(
+        fx: Fixture,
+        capability: Boolean = true,
+    ): CreateSessionViewModel {
+        coEvery { fx.sessionRepo.getAgentVersion() } returns worktreeBaseVersion(capability)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+        vm.toggleWorktree(true)
+        advanceUntilIdle()
+        return vm
+    }
+
+    private fun Fixture.captureCreate(): io.mockk.CapturingSlot<CreateSessionRequest> {
+        val slot = slot<CreateSessionRequest>()
+        coEvery { sessionRepo.createSession(capture(slot)) } returns
+            SessionResponse(session_id = "s", state = "starting", created_at = "2026-11-09T00:00:00Z")
+        return slot
+    }
+
+    @Test
+    fun baseBranch_preselectsLastUsed_overDefault() = runTest {
+        val fx = newFixture()
+        coEvery { fx.gitRepo.worktreeBases("alpha") } returns
+            bases("origin/main", "origin/develop", "origin/main", "origin/develop", "wip")
+        val vm = worktreeVm(fx)
+
+        val s = vm.uiState.value
+        assertTrue(s.showBaseBranchPicker)
+        assertTrue(s.baseBranches is BaseBranchesLoad.Loaded)
+        assertEquals("origin/develop", s.baseBranch)
+        assertEquals("origin/develop", s.effectiveBaseBranch)
+    }
+
+    @Test
+    fun baseBranch_preselectsDefault_withoutLastUsed_andNullWithNeither() = runTest {
+        val fx = newFixture(
+            initialProjects = listOf(project("alpha"), project("gamma")),
+        )
+        coEvery { fx.gitRepo.worktreeBases("alpha") } returns bases("origin/main", null, "origin/main", "wip")
+        coEvery { fx.gitRepo.worktreeBases("gamma") } returns bases(null, null, "wip")
+        val vm = worktreeVm(fx)
+        assertEquals("origin/main", vm.uiState.value.baseBranch)
+
+        vm.selectProject("gamma")
+        advanceUntilIdle()
+        assertEquals("gamma", vm.uiState.value.baseBranchesProject)
+        assertNull(vm.uiState.value.baseBranch)
+        assertTrue(vm.uiState.value.baseBranches is BaseBranchesLoad.Loaded)
+    }
+
+    @Test
+    fun baseBranch_projectChange_resetsManualPick_andReloads() = runTest {
+        val fx = newFixture(
+            initialProjects = listOf(project("alpha"), project("gamma")),
+        )
+        coEvery { fx.gitRepo.worktreeBases("alpha") } returns
+            bases("origin/main", null, "origin/main", "feature/a")
+        coEvery { fx.gitRepo.worktreeBases("gamma") } returns
+            bases("origin/trunk", "origin/rel", "origin/trunk", "origin/rel")
+        val vm = worktreeVm(fx)
+
+        vm.selectBaseBranch("feature/a")
+        assertEquals("feature/a", vm.uiState.value.baseBranch)
+
+        vm.selectProject("gamma")
+        assertTrue(vm.uiState.value.baseBranches is BaseBranchesLoad.Loading)
+        assertFalse(vm.uiState.value.baseBranchPicked)
+        advanceUntilIdle()
+        assertEquals("origin/rel", vm.uiState.value.baseBranch)
+
+        // Re-selecting the same project keeps the list and the pick.
+        vm.selectBaseBranch(null)
+        vm.selectProject("gamma")
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.baseBranch)
+        assertTrue(vm.uiState.value.baseBranchPicked)
+        coVerify(exactly = 1) { fx.gitRepo.worktreeBases("gamma") }
+    }
+
+    @Test
+    fun baseBranch_manualPick_survivesARefresh() = runTest {
+        val fx = newFixture()
+        coEvery { fx.gitRepo.worktreeBases("alpha") } returns
+            bases("origin/main", "origin/develop", "origin/main", "origin/develop", "wip")
+        val vm = worktreeVm(fx)
+
+        vm.selectBaseBranch("wip")
+        fx.gitChanged.emit("alpha")
+        advanceUntilIdle()
+
+        assertEquals("wip", vm.uiState.value.baseBranch)
+        coVerify(exactly = 2) { fx.gitRepo.worktreeBases("alpha") }
+    }
+
+    @Test
+    fun baseBranch_capabilityAbsent_hidesPicker_andNeverLoadsOrSends() = runTest {
+        val fx = newFixture()
+        val slot = fx.captureCreate()
+        val vm = worktreeVm(fx, capability = false)
+
+        assertFalse(vm.uiState.value.showBaseBranchPicker)
+        assertEquals(BaseBranchesLoad.Idle, vm.uiState.value.baseBranches)
+        vm.selectStandardMode()
+        vm.submit()
+        advanceUntilIdle()
+
+        assertTrue(slot.captured.claude_options!!.worktree)
+        assertNull(slot.captured.claude_options!!.base_branch)
+        coVerify(exactly = 0) { fx.gitRepo.worktreeBases(any()) }
+    }
+
+    @Test
+    fun baseBranch_loadFailure_showsFailed_sendsNull_andRetryRecovers() = runTest {
+        val fx = newFixture()
+        coEvery { fx.gitRepo.worktreeBases("alpha") } throws RuntimeException("offline")
+        val slot = fx.captureCreate()
+        val vm = worktreeVm(fx)
+
+        assertEquals(BaseBranchesLoad.Failed, vm.uiState.value.baseBranches)
+        assertNull(vm.uiState.value.effectiveBaseBranch)
+        vm.selectStandardMode()
+        vm.submit()
+        advanceUntilIdle()
+        assertNull(slot.captured.claude_options!!.base_branch)
+
+        coEvery { fx.gitRepo.worktreeBases("alpha") } returns bases("origin/main", null, "origin/main")
+        vm.retryBaseBranches()
+        advanceUntilIdle()
+        assertEquals("origin/main", vm.uiState.value.effectiveBaseBranch)
+    }
+
+    @Test
+    fun baseBranch_isSentInTheActiveCliOptions() = runTest {
+        val fx = newFixture()
+        coEvery { fx.gitRepo.worktreeBases("alpha") } returns
+            bases("origin/main", "origin/develop", "origin/main", "origin/develop")
+        val slot = fx.captureCreate()
+        val vm = worktreeVm(fx)
+
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals("origin/develop", slot.captured.claude_options!!.base_branch)
+        assertNull(slot.captured.base_branch)
+
+        vm.submitCodex()
+        advanceUntilIdle()
+        assertEquals("origin/develop", slot.captured.codex_options!!.base_branch)
+
+        vm.selectBaseBranch("origin/main")
+        vm.submitAntigravity()
+        advanceUntilIdle()
+        assertEquals("origin/main", slot.captured.antigravity_options!!.base_branch)
+    }
+
+    @Test
+    fun baseBranch_terminalMode_isTopLevel() = runTest {
+        val fx = newFixture()
+        coEvery { fx.gitRepo.worktreeBases("alpha") } returns bases("origin/main", null, "origin/main")
+        val slot = fx.captureCreate()
+        val vm = worktreeVm(fx)
+
+        vm.selectTerminalMode()
+        vm.submitFromTerminalConfig()
+        advanceUntilIdle()
+
+        assertTrue(slot.captured.worktree)
+        assertEquals("origin/main", slot.captured.base_branch)
+        assertNull(slot.captured.claude_options)
+    }
+
+    @Test
+    fun baseBranch_notSent_whenWorktreeOff_orForAutoScan() = runTest {
+        val fx = newFixture()
+        coEvery { fx.gitRepo.worktreeBases("alpha") } returns bases("origin/main", null, "origin/main")
+        val slot = fx.captureCreate()
+        val optsSlot = slot<ClaudeOptionsModel>()
+        coEvery { fx.autoScanRepo.startScan("alpha", capture(optsSlot)) } just Runs
+        val vm = worktreeVm(fx)
+
+        vm.submitAutoScan()
+        advanceUntilIdle()
+        assertNull(optsSlot.captured.base_branch)
+
+        vm.toggleWorktree(false)
+        vm.submit()
+        advanceUntilIdle()
+        assertFalse(slot.captured.claude_options!!.worktree)
+        assertNull(slot.captured.claude_options!!.base_branch)
     }
 }

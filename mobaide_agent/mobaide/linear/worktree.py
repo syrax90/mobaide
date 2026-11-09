@@ -138,6 +138,7 @@ async def create_standard_worktree(
     branch_name: str | None,
     *,
     fallback_prefix: str = "claude-session",
+    base_branch: str | None = None,
 ) -> WorktreeResult:
     """Create a user-named worktree for Standard (Claude) or Terminal mode.
 
@@ -145,10 +146,16 @@ async def create_standard_worktree(
     (Terminal mode). A blank/``None`` ``branch_name`` gets a unique
     ``{fallback_prefix}-<hex>`` branch so two worktree-on sessions never
     collide on the same worktree directory; a supplied name is used verbatim.
+    A blank ``base_branch`` keeps the default start point.
     """
     branch = branch_name or f"{fallback_prefix}-{uuid.uuid4().hex[:8]}"
     slug = convert_to_worktree_slug("", branch)
-    return await mgr.create_worktree(slug, project_root, branch_name=branch)
+    return await mgr.create_worktree(
+        slug,
+        project_root,
+        branch_name=branch,
+        base_branch=(base_branch or "").strip() or None,
+    )
 
 
 async def _run_git(
@@ -336,42 +343,103 @@ class WorktreeManager:
             key = project_root
         return self._repo_locks[key]
 
+    async def _ref_resolves(self, project_root: str, ref: str) -> bool:
+        rc, _, _ = await _run_git(
+            "rev-parse", "--verify", "--quiet", "--end-of-options",
+            f"{ref}^{{commit}}",
+            cwd=project_root,
+        )
+        return rc == 0
+
+    async def default_base(self, project_root: str) -> str | None:
+        """The branch a worktree starts from when the client names none.
+
+        ``origin/HEAD`` (the remote's default branch, set by ``git clone`` or
+        ``git remote set-head``) wins, then ``origin/<main_branch>``, then the
+        local ``<main_branch>``. ``None`` means "branch from ``HEAD``". Reads
+        local refs only, so it never touches the network.
+        """
+        rc, stdout, _ = await _run_git(
+            "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD",
+            cwd=project_root,
+        )
+        origin_head = stdout.strip()
+        if rc == 0 and origin_head and await self._ref_resolves(
+            project_root, f"refs/remotes/{origin_head}",
+        ):
+            return origin_head
+        if await self._ref_resolves(
+            project_root, f"refs/remotes/origin/{self._main_branch}",
+        ):
+            return f"origin/{self._main_branch}"
+        if await self._ref_resolves(
+            project_root, f"refs/heads/{self._main_branch}",
+        ):
+            return self._main_branch
+        return None
+
+    async def _remote_of(self, project_root: str, ref: str) -> str | None:
+        """The configured remote ``ref`` (``<remote>/<branch>``) lives under;
+        the longest name wins because remote names may contain ``/``."""
+        rc, stdout, _ = await _run_git("remote", cwd=project_root)
+        if rc != 0:
+            return None
+        best: str | None = None
+        for remote in (line.strip() for line in stdout.splitlines()):
+            if remote and ref.startswith(remote + "/") and len(ref) > len(remote) + 1:
+                if best is None or len(remote) > len(best):
+                    best = remote
+        return best
+
+    async def _resolve_base(
+        self, project_root: str, base_branch: str,
+    ) -> str | None:
+        """Full refname of a client-chosen base, local branch first.
+
+        A remote-tracking base is fetched from its remote first (best-effort,
+        offline keeps the cached ref) so the worktree starts at the remote's
+        current tip. Full refnames keep a same-named tag from winning.
+        """
+        local = f"refs/heads/{base_branch}"
+        if await self._ref_resolves(project_root, local):
+            return local
+        remote = await self._remote_of(project_root, base_branch)
+        if remote is None:
+            return None
+        await _run_git("fetch", "--", remote, cwd=project_root)
+        tracking = f"refs/remotes/{base_branch}"
+        if await self._ref_resolves(project_root, tracking):
+            return tracking
+        return None
+
     async def _resolve_start_point(self, project_root: str) -> str:
         """Pick a commit-ish to branch from that actually exists in this repo.
 
-        The historical behavior — always branching from ``origin/<main>`` —
-        silently failed in common environments (repos using ``master``, no
-        ``origin`` remote, offline or auth-broken fetch). We now fall back
-        through origin → local → ``HEAD`` so a worktree can still be created.
+        Fetches ``origin`` first, then takes :meth:`default_base`, falling
+        back to ``HEAD`` so a worktree can still be created in a repo with
+        no ``origin`` and no ``<main_branch>``.
         """
         await _run_git("fetch", "origin", cwd=project_root)
-        origin_ref = f"origin/{self._main_branch}"
-        rc, _, _ = await _run_git(
-            "rev-parse", "--verify", "--quiet", origin_ref, cwd=project_root
-        )
-        if rc == 0:
-            return origin_ref
-
-        local_ref = f"refs/heads/{self._main_branch}"
-        rc, _, _ = await _run_git(
-            "rev-parse", "--verify", "--quiet", local_ref, cwd=project_root
-        )
-        if rc == 0:
-            return self._main_branch
-
+        base = await self.default_base(project_root)
+        if base is not None:
+            return base
         logger.warning(
-            "No origin/%s or local %s found, branching from HEAD",
+            "No origin/HEAD, origin/%s or local %s found, branching from HEAD",
             self._main_branch, self._main_branch,
         )
         return "HEAD"
 
-    @log_call(name="worktree.create_worktree", log_args=("slug", "branch_name"))
+    @log_call(
+        name="worktree.create_worktree",
+        log_args=("slug", "branch_name", "base_branch"),
+    )
     async def create_worktree(
         self,
         slug: str,
         project_root: str,
         *,
         branch_name: str | None = None,
+        base_branch: str | None = None,
     ) -> WorktreeResult:
         """Create a git worktree with an independent branch.
 
@@ -385,6 +453,10 @@ class WorktreeManager:
         worktree (``is_new=False``) rather than failing git's one-checkout
         rule.
 
+        ``base_branch`` names the local or remote-tracking branch a new
+        branch starts from; ``None`` takes the default start point. It is
+        ignored when an existing worktree or branch is reused.
+
         Raises ``WorktreeCreationError`` if the worktree cannot be created.
         The launcher surfaces this as HTTP 400 so the user sees the real
         git stderr instead of silently landing in the project root.
@@ -392,6 +464,7 @@ class WorktreeManager:
         async with self._lock_for(project_root):
             return await self._create_worktree_unlocked(
                 slug, project_root, branch_name=branch_name,
+                base_branch=base_branch,
             )
 
     async def _create_worktree_unlocked(
@@ -400,6 +473,7 @@ class WorktreeManager:
         project_root: str,
         *,
         branch_name: str | None,
+        base_branch: str | None = None,
     ) -> WorktreeResult:
         if branch_name is None:
             branch_name = (
@@ -416,6 +490,12 @@ class WorktreeManager:
                 branch=branch_name,
                 path=wt_dir,
                 stderr="branch name must not start with '-'",
+            )
+        if base_branch is not None and base_branch.startswith("-"):
+            raise WorktreeCreationError(
+                branch=branch_name,
+                path=wt_dir,
+                stderr="base branch must not start with '-'",
             )
 
         os.makedirs(resolved_base, exist_ok=True)
@@ -445,30 +525,49 @@ class WorktreeManager:
 
         await _run_git("config", "core.longpaths", "true", cwd=project_root)
 
-        start_point = await self._resolve_start_point(project_root)
+        # An existing branch keeps its own history, so a chosen base is moot
+        # and must not block reopening it (the base may be deleted by now).
+        reuse_branch = base_branch is not None and await self._ref_resolves(
+            project_root, f"refs/heads/{branch_name}",
+        )
+        if reuse_branch:
+            first_err = ""
+        else:
+            if base_branch is None:
+                start_point = await self._resolve_start_point(project_root)
+            else:
+                resolved = await self._resolve_base(project_root, base_branch)
+                if resolved is None:
+                    raise WorktreeCreationError(
+                        branch=branch_name,
+                        path=wt_dir,
+                        stderr=f"base branch '{base_branch}' not found",
+                    )
+                start_point = resolved
 
-        logger.info(
-            "Creating worktree at %s with branch %s from %s",
-            wt_dir,
-            branch_name,
-            start_point,
-        )
-        rc, _, stderr = await _run_git(
-            "worktree", "add", "--no-track", wt_dir, "-b", branch_name, start_point,
-            cwd=project_root,
-        )
-        if rc == 0:
-            logger.info("Worktree created successfully")
-            audit_event(
-                "audit.worktree.created",
-                target=wt_dir,
-                outcome="ok",
-                branch=branch_name,
+            logger.info(
+                "Creating worktree at %s with branch %s from %s",
+                wt_dir,
+                branch_name,
+                start_point,
             )
-            return WorktreeResult(path=wt_dir, is_new=True, branch=branch_name)
+            rc, _, stderr = await _run_git(
+                "worktree", "add", "--no-track", wt_dir, "-b", branch_name, start_point,
+                cwd=project_root,
+            )
+            if rc == 0:
+                logger.info("Worktree created successfully")
+                audit_event(
+                    "audit.worktree.created",
+                    target=wt_dir,
+                    outcome="ok",
+                    branch=branch_name,
+                )
+                return WorktreeResult(path=wt_dir, is_new=True, branch=branch_name)
 
-        first_err = stderr.strip()
-        logger.warning("Branch may already exist, retrying without -b: %s", first_err)
+            first_err = stderr.strip()
+            logger.warning("Branch may already exist, retrying without -b: %s", first_err)
+
         rc, _, stderr = await _run_git(
             "worktree", "add", "--", wt_dir, branch_name,
             cwd=project_root,
