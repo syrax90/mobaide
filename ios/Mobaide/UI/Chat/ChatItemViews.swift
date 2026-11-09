@@ -431,6 +431,15 @@ struct ChatContentPartView: View {
 private struct ChatInlineImage: View {
     let base64: String
     let cacheKey: String
+    /// The content, not just its length: an update may replace the image at
+    /// this index with another of the same size. Hashed once per view value.
+    private let fingerprint: String
+
+    init(base64: String, cacheKey: String) {
+        self.base64 = base64
+        self.cacheKey = cacheKey
+        fingerprint = "\(base64.utf8.count):\(base64.hashValue)"
+    }
 
     private static let maxSide: CGFloat = 280
 
@@ -441,7 +450,7 @@ private struct ChatInlineImage: View {
     /// Decoded at the drawn size, not the source size, so the cache holds many.
     private var maxPixelSize: Int { Int((Self.maxSide * displayScale).rounded(.up)) }
 
-    private var key: String { "\(cacheKey)|\(base64.utf8.count)|\(maxPixelSize)" }
+    private var key: String { "\(cacheKey)|\(fingerprint)|\(maxPixelSize)" }
 
     private var outcome: ChatImageDecoder.Outcome? {
         if let decoded, decoded.key == key { return decoded.outcome }
