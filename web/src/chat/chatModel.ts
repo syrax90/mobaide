@@ -16,6 +16,7 @@ import { onResume } from '../realtime/resumeOnFocus';
 import { onTabVisibility, tabHidden } from '../realtime/tabVisibility';
 import { realScheduler, type ChannelSend, type Scheduler } from '../realtime/webSocketChannel';
 import { mountedTerminal, onMountedTerminal } from '../terminal/watchedTerminal';
+import { MAX_CHAT_IMAGES, MAX_TOTAL_BASE64, type PreparedImage } from './chatImages';
 import {
   INITIAL_CHAT_TIMELINE,
   applyEvents,
@@ -111,6 +112,8 @@ export class ChatSessionModel {
   readonly store: UseBoundStore<StoreApi<ChatViewState>>;
   /** The composer's unsent text, kept across remounts of the screen. */
   draft = '';
+  /** The images attached to the draft; the model revokes their previews when disposed. */
+  draftImages: PreparedImage[] = [];
 
   private readonly channel: ChatSessionChannel;
   private readonly scheduler: Scheduler;
@@ -280,8 +283,32 @@ export class ChatSessionModel {
     this.cancelSettle?.();
     for (const dispose of this.disposers.splice(0)) dispose();
     this.resolvePending(CONNECTION_LOST);
+    for (const image of this.draftImages.splice(0)) URL.revokeObjectURL(image.previewUrl);
     this.channel.dispose();
     this.onDispose?.();
+  }
+
+  /**
+   * Put a prompt the agent did not take back into the draft, whether or not
+   * the composer is on screen: its text goes before what the user typed
+   * since, and its images before theirs, within the limits of one prompt.
+   */
+  restoreDraft(text: string, images: readonly PreparedImage[]): void {
+    if (this.draft.trim() === '') this.draft = text;
+    else if (text !== '') this.draft = `${text}\n${this.draft}`;
+    let total = 0;
+    const kept: PreparedImage[] = [];
+    for (const image of [...images, ...this.draftImages]) {
+      const fits =
+        kept.length < MAX_CHAT_IMAGES && total + image.data.length <= MAX_TOTAL_BASE64;
+      if (this.disposed || !fits) {
+        URL.revokeObjectURL(image.previewUrl);
+      } else {
+        kept.push(image);
+        total += image.data.length;
+      }
+    }
+    this.draftImages = kept;
   }
 
   private patch(next: Partial<ChatViewState>): void {

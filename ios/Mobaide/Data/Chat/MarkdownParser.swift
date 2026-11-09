@@ -38,6 +38,10 @@ struct MarkdownTable: Equatable, Sendable {
 
 enum MarkdownParser {
     static let maxDepth = 12
+    /// The empty cells one table may add. Each row is padded to the header's
+    /// width, so a wide header over many short rows would otherwise turn a
+    /// small message into millions of cells; the rows past the limit stay text.
+    static let maxPaddedCells = 10_000
 
     static func parse(_ text: String) -> [MarkdownBlock] {
         let lines = text.components(separatedBy: "\n").map { line -> String in
@@ -121,8 +125,12 @@ enum MarkdownParser {
                     flushParagraph()
                     index += 2
                     var rows: [[String]] = []
+                    var padded = 0
                     while index < lines.count, !isBlank(lines[index]), !startsBlock(lines[index]) {
-                        rows.append(normalize(splitRow(lines[index]), count: header.count))
+                        let cells = splitRow(lines[index])
+                        padded += max(0, header.count - cells.count)
+                        if padded > maxPaddedCells { break }
+                        rows.append(normalize(cells, count: header.count))
                         index += 1
                     }
                     blocks.append(.table(MarkdownTable(

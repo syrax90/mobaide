@@ -42,6 +42,12 @@ const LIST_ITEM = /^( *)([-*+]|\d{1,9}[.)])(?:[ \t]+(.*))?$/s;
 /** Quotes, lists and emphasis nested deeper than this stay literal text. */
 const MAX_DEPTH = 12;
 const SEPARATOR_CELL = /^:?-+:?$/;
+/**
+ * The empty cells one table may add. Each row is padded to the header's width,
+ * so a wide header over many short rows would otherwise turn a small message
+ * into millions of cells; the rows past the limit stay text.
+ */
+export const MAX_PADDED_CELLS = 10_000;
 const TASK = /^\[([ xX])\](?:[ \t]+|$)/;
 
 export function safeHref(raw: string): string | null {
@@ -320,11 +326,14 @@ function parseBlockLines(lines: readonly string[], depth = 0): MdBlock[] {
       const head = splitRow(line);
       const align = splitRow(lines[i + 1] ?? '').map(tableAlign);
       const rows: MdInline[][][] = [];
+      let padded = 0;
       i += 2;
       while (i < lines.length) {
         const row = lines[i] ?? '';
         if (isBlank(row) || !row.includes('|')) break;
         const cells = splitRow(row);
+        padded += Math.max(0, head.length - cells.length);
+        if (padded > MAX_PADDED_CELLS) break;
         rows.push(head.map((_, index) => parseInline(cells[index] ?? '')));
         i += 1;
       }

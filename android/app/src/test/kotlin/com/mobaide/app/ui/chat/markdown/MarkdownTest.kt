@@ -412,6 +412,16 @@ class MarkdownTest {
     }
 
     @Test
+    fun blocks_tableStopsWhereShortRowsWouldPadPastTheCellLimit() {
+        // 1 000 columns over rows of one cell: each row adds 999 empty cells.
+        val columns = 1_000
+        val blocks = Markdown.parse("|a".repeat(columns) + "|\n" + "|-".repeat(columns) + "|\n" + "x|\n".repeat(50))
+        assertEquals(2, blocks.size)
+        assertEquals(10, (blocks[0] as MdBlock.Table).rows.size)
+        assertTrue(blocks[1] is MdBlock.Paragraph)
+    }
+
+    @Test
     fun blocks_separatorRowOf20000Cells_parsesWithoutStackOverflow() {
         val columns = 20_000
         assertEquals(

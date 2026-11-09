@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   fakeScheduler,
   recordingSocketFactory,
@@ -6,6 +6,7 @@ import {
   type FakeSocket,
 } from '../realtime/__testing__/fakeSocket';
 import type { ChannelSend, WebSocketChannelOptions } from '../realtime/webSocketChannel';
+import { MAX_CHAT_IMAGES, MAX_TOTAL_BASE64, type PreparedImage } from './chatImages';
 import { CHAT_FRAME_TYPE } from './chatWire';
 
 // The model builds its own channel; the test hands that channel the fake
@@ -212,5 +213,68 @@ describe('ChatSessionModel deadlines', () => {
     fire(modelTimers, 4 * SYNC_TIMEOUT_MS);
 
     expect(model.state().connection).toBe('connecting');
+  });
+});
+
+describe('ChatSessionModel draft', () => {
+  const revoked: string[] = [];
+  const realRevoke = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL');
+
+  beforeEach(() => {
+    revoked.length = 0;
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      value: (url: string) => revoked.push(url),
+    });
+  });
+
+  afterEach(() => {
+    if (realRevoke === undefined) Reflect.deleteProperty(URL, 'revokeObjectURL');
+    else Object.defineProperty(URL, 'revokeObjectURL', realRevoke);
+  });
+
+  const image = (name: string, size = 10): PreparedImage => ({
+    mime: 'image/png',
+    data: 'x'.repeat(size),
+    name,
+    previewUrl: `blob:${name}`,
+  });
+
+  it('puts a rejected prompt back before what the user wrote since', async () => {
+    // No composer on screen: the user left the session while it was in flight.
+    const { model } = await harness();
+
+    model.restoreDraft('first', [image('a')]);
+    expect(model.draft).toBe('first');
+    expect(model.draftImages.map((entry) => entry.name)).toEqual(['a']);
+
+    model.draft = 'typed since';
+    model.restoreDraft('second', [image('b')]);
+    expect(model.draft).toBe('second\ntyped since');
+    expect(model.draftImages.map((entry) => entry.name)).toEqual(['b', 'a']);
+    expect(revoked).toEqual([]);
+  });
+
+  it('keeps the images within the limits of one prompt and revokes the rest', async () => {
+    const { model } = await harness();
+    model.draftImages = [image('c'), image('d'), image('e')];
+
+    model.restoreDraft('', [image('a'), image('b'), image('big', MAX_TOTAL_BASE64)]);
+
+    // Too large together with the others, then one past MAX_CHAT_IMAGES.
+    expect(MAX_CHAT_IMAGES).toBe(4);
+    expect(model.draftImages.map((entry) => entry.name)).toEqual(['a', 'b', 'c', 'd']);
+    expect(revoked).toEqual(['blob:big', 'blob:e']);
+  });
+
+  it('revokes the draft previews when disposed, and any restored after', async () => {
+    const { model } = await harness();
+    model.restoreDraft('text', [image('a')]);
+
+    model.dispose();
+    model.restoreDraft('late', [image('b')]);
+
+    expect(revoked).toEqual(['blob:a', 'blob:b']);
+    expect(model.draftImages).toEqual([]);
   });
 });

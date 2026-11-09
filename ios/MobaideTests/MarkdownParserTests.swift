@@ -132,6 +132,20 @@ final class MarkdownParserTests: XCTestCase {
         )
     }
 
+    func testTableStopsWhereShortRowsWouldPadPastTheCellLimit() {
+        // 1 000 columns over rows of one cell: each row adds 999 empty cells.
+        let columns = 1_000
+        let source = String(repeating: "|a", count: columns) + "|\n"
+            + String(repeating: "|-", count: columns) + "|\n"
+            + String(repeating: "x|\n", count: 50)
+        let blocks = MarkdownParser.parse(source)
+        XCTAssertEqual(blocks.count, 2)
+        guard case .table(let table) = blocks.first, case .paragraph = blocks.last else {
+            return XCTFail("expected a table, then a paragraph: \(blocks.map { "\($0)".prefix(20) })")
+        }
+        XCTAssertEqual(table.rows.count, 10)
+    }
+
     func testQuoteTakesLazyContinuationLines() {
         XCTAssertEqual(
             MarkdownParser.parse("> Note: **run** it\nlazy\n\n* * *\n# Title"),

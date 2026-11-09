@@ -89,7 +89,7 @@ export function Composer({
   handleRef,
 }: ComposerProps) {
   const [text, setTextState] = useState(() => model.draft);
-  const [images, setImages] = useState<PreparedImage[]>([]);
+  const [images, setImages] = useState<PreparedImage[]>(() => model.draftImages);
   const [preparing, setPreparing] = useState(0);
   const [active, setActive] = useState(0);
   const [dismissedFor, setDismissedFor] = useState<string | null>(null);
@@ -104,10 +104,14 @@ export function Composer({
   const listId = useId();
   const hintId = useId();
 
-  const commitImages = useCallback((next: PreparedImage[]) => {
-    imagesRef.current = next;
-    setImages(next);
-  }, []);
+  const commitImages = useCallback(
+    (next: PreparedImage[]) => {
+      imagesRef.current = next;
+      setImages(next);
+      model.draftImages = next;
+    },
+    [model],
+  );
 
   const setText = useCallback(
     (next: string) => {
@@ -115,14 +119,6 @@ export function Composer({
       model.draft = next;
     },
     [model],
-  );
-
-  // Previews still on screen when the composer goes away.
-  useEffect(
-    () => () => {
-      for (const image of imagesRef.current) URL.revokeObjectURL(image.previewUrl);
-    },
-    [],
   );
 
   useLayoutEffect(() => {
@@ -241,13 +237,11 @@ export function Composer({
           for (const image of attached) URL.revokeObjectURL(image.previewUrl);
           return;
         }
-        // Put the message back unless the user already started a new one.
-        if (fieldRef.current?.value === '' && imagesRef.current.length === 0) {
-          setText(body);
-          commitImages(attached);
-        } else {
-          for (const image of attached) URL.revokeObjectURL(image.previewUrl);
-        }
+        // Through the model: the user may have left the session meanwhile.
+        model.restoreDraft(body, attached);
+        setTextState(model.draft);
+        imagesRef.current = model.draftImages;
+        setImages(model.draftImages);
         useToastStore
           .getState()
           .show(

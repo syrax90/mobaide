@@ -119,6 +119,17 @@ describe('parseMarkdown blocks', () => {
     ]);
   });
 
+  it('stops a table whose short rows would pad past the cell limit', () => {
+    // 1 000 columns over rows of one cell: each row adds 999 empty cells.
+    const columns = 1_000;
+    const source = `${'|a'.repeat(columns)}|\n${'|-'.repeat(columns)}|\n${'x|\n'.repeat(50)}`;
+    const [table, rest, ...others] = parseMarkdown(source);
+    expect(table?.t).toBe('table');
+    expect(table?.t === 'table' ? table.rows.length : -1).toBe(10);
+    expect(rest?.t).toBe('p');
+    expect(others).toEqual([]);
+  });
+
   it('reads quotes and rules, and a paragraph ends at a block', () => {
     expect(parseMarkdown('> Note: **run** it\nplain\n---\n# Title')).toEqual([
       { t: 'quote', c: [para(text('Note: '), { t: 'strong', c: [text('run')] }, text(' it'))] },

@@ -74,6 +74,10 @@ private val QUOTE = Regex("^ {0,3}> ?(.*)$", RegexOption.DOT_MATCHES_ALL)
 private val LIST_ITEM = Regex("^([ \\t]*)([-*+]|\\d{1,9}[.)])([ \\t]+(.*))?$", RegexOption.DOT_MATCHES_ALL)
 // Quotes, lists and emphasis nested deeper than this stay literal text.
 private const val MAX_DEPTH = 12
+// The empty cells one table may add. Each row is padded to the header's width,
+// so a wide header over many short rows would otherwise turn a small message
+// into millions of cells; the rows past the limit stay text.
+internal const val MAX_PADDED_CELLS = 10_000
 private val TASK = Regex("^\\[([ xX])](?:[ \\t]+(.*))?$", RegexOption.DOT_MATCHES_ALL)
 
 private fun indentOf(line: String): Int {
@@ -309,8 +313,11 @@ private class BlockParser(private val lines: List<String>, private val depth: In
         }
         pos += 2
         val rows = ArrayList<List<List<MdInline>>>()
+        var padded = 0
         while (pos < lines.size && lines[pos].isNotBlank() && lines[pos].contains('|')) {
             val cells = splitRow(lines[pos])
+            padded += maxOf(0, header.size - cells.size)
+            if (padded > MAX_PADDED_CELLS) break
             rows += List(header.size) { i -> Markdown.parseInline(cells.getOrNull(i).orEmpty().trim()) }
             pos++
         }
