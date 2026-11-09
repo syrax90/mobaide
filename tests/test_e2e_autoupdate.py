@@ -36,6 +36,7 @@ from httpx import ASGITransport, AsyncClient
 
 from central_server.app import create_app
 from central_server.config import CentralServerConfig
+from central_server.manifest.release_files import ReleaseFileStore
 from central_server.manifest.store import ManifestStore
 from mobaide.agent.updater import InstallLayout, StagedBinaryUpdater
 from mobaide.manifest_signing import canonical_json
@@ -135,6 +136,7 @@ def server_config(tmp_path, signing_pair):
         release_auth_token=RELEASE_TOKEN,
         manifest_signing_public_key_b64=public_key_b64,
         manifest_store_path=str(tmp_path / "agent_manifest.json"),
+        agent_release_dir=str(tmp_path / "agent_releases"),
     )
 
 
@@ -154,6 +156,7 @@ async def server_app(server_config):
         app.state.db = db
         app.state.routing = RoutingTable()
         app.state.manifest_store = ManifestStore(server_config.manifest_store_path)
+        app.state.release_file_store = ReleaseFileStore(server_config.agent_release_dir)
         app.state.auth_service = AuthService(server_config, db)
         app.state.pairing_service = PairingService(db)
         app.state.agent_service = AgentService(db, app.state.routing)
