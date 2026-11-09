@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -26,6 +27,7 @@ from .codex_launcher import CodexLauncher, CodexOptions
 from .models import (
     SessionConfig,
     SessionInfo,
+    SessionKind,
     SessionState,
     session_to_wire_dict,
 )
@@ -34,6 +36,8 @@ from .pty_backend import PtyBackend, create_pty_backend
 from .session import TerminalSession
 
 if TYPE_CHECKING:
+    from mobaide.acp.agents import ChatAgentSpec
+    from mobaide.acp.session import ChatSession
     from mobaide.linear.worktree import WorktreeManager
 
 logger = get_logger(__name__)
@@ -59,8 +63,9 @@ class SessionManager:
         on_session_removed: Callable[[str], Awaitable[None] | None] | None = None,
         session_dto_factory: Callable[[SessionInfo], dict] | None = None,
         backend_factory: Callable[[], PtyBackend] = create_pty_backend,
+        chat_agents: Mapping[str, ChatAgentSpec] | None = None,
     ) -> None:
-        self._sessions: dict[str, TerminalSession] = {}
+        self._sessions: dict[str, TerminalSession | ChatSession] = {}
         self._lock = asyncio.Lock()
         self._max_sessions = max_sessions
         self._liveness_task: asyncio.Task[None] | None = None
@@ -80,6 +85,12 @@ class SessionManager:
         # platform backend; ``create_app`` swaps in ``FakePtyBackend`` when
         # ``MOBAIDE_ENV=test`` so a disposable agent spawns no real shells.
         self._backend_factory = backend_factory
+        # Agents that can run a session in the chat UI (over ACP), by kind.
+        self._chat_agents: Mapping[str, ChatAgentSpec] = chat_agents or {}
+
+    @property
+    def chat_agents(self) -> Mapping[str, ChatAgentSpec]:
+        return self._chat_agents
 
     async def _publish_sessions_changed(self) -> None:
         if self._event_bus is None:
@@ -98,7 +109,7 @@ class SessionManager:
         return self._max_sessions
 
     @log_call(name="session_manager.create_session", log_args=("config",))
-    async def create_session(self, config: SessionConfig) -> TerminalSession:
+    async def create_session(self, config: SessionConfig) -> TerminalSession | ChatSession:
         """Create, start, and register a new terminal session.
 
         Dispatch matrix on (``project_name``, managed-CLI options). A session is
@@ -116,7 +127,12 @@ class SessionManager:
           ``ProjectsStore``.
         * no project + shell → raw Terminal session in ``config.cwd`` (or the
           default cwd if ``cwd`` is also ``None``); no resolution required.
+
+        ``config.ui == "chat"`` takes the ACP path instead
+        (:meth:`_create_chat_session`).
         """
+        if config.ui == "chat":
+            return await self._create_chat_session(config)
         managed = (
             config.claude_options is not None
             or config.codex_options is not None
@@ -147,6 +163,91 @@ class SessionManager:
                 active=len(self._sessions),
                 max_sessions=self._max_sessions,
             )
+        await self._after_create(session)
+        return session
+
+    def find_chat_session(self, kind: str, chat_resume_id: str) -> ChatSession | None:
+        """The live chat session already showing the agent session
+        ``chat_resume_id``, if any."""
+        for session in self._sessions.values():
+            if getattr(session, "is_chat", False) is not True:
+                continue
+            info_kind = session.to_info().kind
+            info_kind = info_kind.value if isinstance(info_kind, SessionKind) else info_kind
+            if info_kind == kind and session.acp_session_id == chat_resume_id:  # type: ignore[union-attr]
+                return session  # type: ignore[return-value]
+        return None
+
+    async def _create_chat_session(self, config: SessionConfig) -> TerminalSession | ChatSession:
+        """Create a chat (ACP) session; reuses the open one for a resume."""
+        from mobaide.acp.session import ChatSession
+
+        kind = config.kind.value if isinstance(config.kind, SessionKind) else config.kind
+        spec = self._chat_agents.get(kind)
+        if spec is None:
+            raise ValueError(f"The chat view is not available for {kind} sessions")
+        if config.chat_resume_id:
+            existing = self.find_chat_session(kind, config.chat_resume_id)
+            if existing is not None:
+                return existing
+        options = (
+            config.claude_options
+            or config.codex_options
+            or config.antigravity_options
+        )
+        if config.chat_resume_id and options is not None and getattr(options, "worktree", False):
+            from dataclasses import replace
+
+            options = replace(options, worktree=False)
+        if config.project_name is not None:
+            if self._projects_store is None:
+                raise ValueError("project_name set but agent has no projects store")
+            project = self._projects_store.get(config.project_name)
+            if project is None:
+                raise KeyError(f"Project '{config.project_name}' not found")
+            target = project
+        else:
+            if config.cwd is None:
+                raise ValueError("cwd is required for a session without a project")
+            target = AdHocLaunch(cwd=config.cwd)
+        plan = await spec.prepare(target, options)
+        config.command = plan.argv
+        config.cwd = plan.cwd
+        config.env = plan.env
+        async with self._lock:
+            # Again under the lock: a concurrent resume of the same stored
+            # session may have registered while ``prepare`` awaited.
+            if config.chat_resume_id:
+                existing = self.find_chat_session(kind, config.chat_resume_id)
+                if existing is not None:
+                    return existing
+            if len(self._sessions) >= self._max_sessions:
+                raise MaxSessionsError(
+                    f"Maximum session limit ({self._max_sessions}) reached",
+                )
+            if config.session_id in self._sessions:
+                raise ValueError(
+                    f"Session with id '{config.session_id}' already exists",
+                )
+            session = ChatSession(
+                config,
+                plan,
+                agent_title=spec.display_name,
+                load_session_id=config.chat_resume_id,
+            )
+            await session.start()
+            self._sessions[config.session_id] = session
+            logger.info(
+                "session.created",
+                session_id=config.session_id,
+                ui="chat",
+                active=len(self._sessions),
+                max_sessions=self._max_sessions,
+            )
+        await self._after_create(session)
+        return session
+
+    async def _after_create(self, session: TerminalSession | ChatSession) -> None:
         # Eager hook (e.g. attach SessionEventFanout) so headless sessions
         # — like Auto Scan subsessions — start fanning out events without
         # requiring a /ws/session/{id} client to first attach.
@@ -159,7 +260,6 @@ class SessionManager:
                 logger.exception("session_manager.on_created_hook_failed")
         # Single source of truth for sessions.changed.
         await self._publish_sessions_changed()
-        return session
 
     def _launcher_and_options(
         self, config: SessionConfig,
@@ -283,7 +383,7 @@ class SessionManager:
         )
         return check_cwd_exists(result.path)
 
-    async def get_session(self, session_id: str) -> TerminalSession | None:
+    async def get_session(self, session_id: str) -> TerminalSession | ChatSession | None:
         """Look up a session by ID."""
         return self._sessions.get(session_id)
 
@@ -358,7 +458,7 @@ class SessionManager:
         async with self._lock:
             snapshot = list(self._sessions.items())
         for sid, session in snapshot:
-            if session.state == SessionState.RUNNING and not session._backend.is_alive():
+            if session.state == SessionState.RUNNING and not session.is_alive():
                 runtime_seconds = None
                 try:
                     from datetime import UTC, datetime

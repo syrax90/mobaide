@@ -103,6 +103,17 @@ class AgentConfig(BaseSettings):
         default=None, validation_alias="MOBAIDE_AGY_BIN",
     )
 
+    # Operator override for the command that starts the Claude Code ACP
+    # adapter of chat sessions (one shell-style command line). Typed for the
+    # same reason as ``claude_bin``: a .env line never reaches ``os.environ``.
+    acp_claude_command: str | None = Field(
+        default=None, validation_alias="MOBAIDE_ACP_CLAUDE_COMMAND",
+    )
+    # The same for the Codex ACP adapter.
+    acp_codex_command: str | None = Field(
+        default=None, validation_alias="MOBAIDE_ACP_CODEX_COMMAND",
+    )
+
     # The fake switch swaps the speech model for a tiny generated one and a
     # deterministic engine — the real install state machine and helper process
     # still run — so tests and client work never download the 670 MB model. The

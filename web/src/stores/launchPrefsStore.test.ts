@@ -20,6 +20,7 @@ const CLAUDE_BLOB = {
   planMode: true,
   debug: true,
   focusMode: true,
+  terminalUi: true,
 };
 
 const CODEX_BLOB = {
@@ -28,6 +29,7 @@ const CODEX_BLOB = {
   approval: 'never',
   fullAuto: true,
   reasoningEffort: 'minimal',
+  terminalUi: true,
 } as const;
 
 const ANTIGRAVITY_BLOB = { model: 'Gemini 3.1 Pro (High)', skipPermissions: true, sandbox: false };
@@ -43,6 +45,7 @@ const CLAUDE_DEFAULTS = {
   planMode: false,
   debug: false,
   focusMode: true,
+  terminalUi: false,
 } as const;
 
 async function rehydrateWith(state: Record<string, unknown>) {
@@ -96,8 +99,22 @@ describe('hydration', () => {
       approval: 'on-request',
       fullAuto: false,
       reasoningEffort: 'high',
+      terminalUi: false,
     });
     expect(prefs.antigravity).toEqual({ model: null, skipPermissions: false, sandbox: false });
+  });
+
+  it('restores Codex Terminal UI off for a blob saved before the toggle existed', async () => {
+    const legacy: Record<string, unknown> = { ...CODEX_BLOB };
+    delete legacy.terminalUi;
+
+    const prefs = await rehydrateWith({ codex: legacy });
+
+    expect(prefs.codex).toEqual({ ...CODEX_BLOB, terminalUi: false });
+  });
+
+  it('voids the Codex bucket for a wrong-typed terminalUi', async () => {
+    expect((await rehydrateWith({ codex: { ...CODEX_BLOB, terminalUi: 'on' } })).codex).toBeNull();
   });
 
   it('restores focus view on for a blob saved before the toggle existed', async () => {

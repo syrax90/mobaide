@@ -1,0 +1,194 @@
+{
+  "description": "Golden chat-session frames on the per-session socket (PROTOCOL.md, 'chat sessions'). A client command is the byte 0x63 ('c') followed by one UTF-8 JSON object; an agent frame is the byte 0x61 ('a') followed by one UTF-8 JSON object. Key order is not significant: compare parsed JSON.",
+  "commands": [
+    { "name": "sync_fresh", "command": { "id": "c-1", "op": "sync" } },
+    { "name": "sync_resume", "command": { "id": "c-2", "op": "sync", "epoch": "9f3a1c2b7d4e", "after_seq": 41 } },
+    { "name": "prompt_text", "command": { "id": "c-3", "op": "prompt", "text": "Fix the failing test" } },
+    {
+      "name": "prompt_with_image",
+      "command": { "id": "c-4", "op": "prompt", "text": "What is on this screen?", "images": [{ "mime": "image/png", "data": "iVBORw0KGgo=" }] }
+    },
+    { "name": "cancel", "command": { "id": "c-5", "op": "cancel" } },
+    { "name": "set_config_select", "command": { "id": "c-6", "op": "set_config", "config_id": "model", "value": "sonnet" } },
+    { "name": "set_config_boolean", "command": { "id": "c-7", "op": "set_config", "config_id": "fast", "value": true } },
+    { "name": "respond_permission", "command": { "id": "c-8", "op": "respond", "request_id": "r:9", "option_id": "allow" } },
+    {
+      "name": "respond_form_accept",
+      "command": { "id": "c-9", "op": "respond", "request_id": "r:12", "action": "accept", "values": { "framework": "vue", "extras": ["lint"], "strict": false } }
+    },
+    { "name": "respond_form_decline", "command": { "id": "c-10", "op": "respond", "request_id": "r:12", "action": "decline" } },
+    { "name": "dequeue", "command": { "id": "c-11", "op": "dequeue", "queue_id": "q:14" } },
+    { "name": "restart", "command": { "id": "c-12", "op": "restart" } },
+    { "name": "steer", "command": { "id": "c-13", "op": "steer", "queue_id": "q:14" } }
+  ],
+  "server": [
+    {
+      "name": "snapshot_full",
+      "frame": {
+        "t": "snapshot",
+        "epoch": "9f3a1c2b7d4e",
+        "seq": 41,
+        "truncated": false,
+        "state": {
+          "status": "running",
+          "error": null,
+          "agent": { "name": "@agentclientprotocol/claude-agent-acp", "title": "Claude Agent", "version": "0.101.0" },
+          "title": "Fix the login bug",
+          "cwd": "/home/user/proj",
+          "acp_session_id": "7d5de896-463a-4ea9-98b4-c24e3e20398d",
+          "config": [
+            {
+              "id": "mode",
+              "name": "Mode",
+              "description": "Session permission mode",
+              "category": "mode",
+              "type": "select",
+              "value": "default",
+              "options": [
+                { "value": "default", "name": "Manual", "description": "Always ask before making changes", "group": null },
+                { "value": "plan", "name": "Plan", "description": null, "group": null }
+              ]
+            },
+            {
+              "id": "model",
+              "name": "Model",
+              "description": null,
+              "category": "model",
+              "type": "select",
+              "value": "opus",
+              "options": [
+                { "value": "opus", "name": "Opus 5.5", "description": "For complex work", "group": null },
+                { "value": "sonnet", "name": "Sonnet 5.5", "description": null, "group": null }
+              ]
+            },
+            { "id": "fast", "name": "Fast mode", "description": null, "category": "model_config", "type": "boolean", "value": false, "options": [] }
+          ],
+          "commands": [
+            { "name": "review", "description": "Review the current changes", "hint": "what to focus on" },
+            { "name": "compact", "description": "Compact the conversation", "hint": null }
+          ],
+          "usage": { "used": 53000, "size": 200000, "cost": { "amount": 0.045, "currency": "USD" } },
+          "plan": [
+            { "content": "Read the code", "status": "completed", "priority": "high" },
+            { "content": "Write the fix", "status": "in_progress", "priority": "medium" },
+            { "content": "Run the tests", "status": "pending", "priority": "medium" }
+          ],
+          "requests": [
+            {
+              "id": "r:9",
+              "kind": "permission",
+              "tool_call_id": "toolu_02",
+              "title": "rm -rf build/",
+              "tool_kind": "execute",
+              "subtitle": "rm -rf build/",
+              "content": [],
+              "options": [
+                { "id": "allow", "name": "Allow once", "kind": "allow_once" },
+                { "id": "always", "name": "Always allow rm in this project", "kind": "allow_always" },
+                { "id": "reject", "name": "Reject", "kind": "reject_once" }
+              ]
+            },
+            {
+              "id": "r:12",
+              "kind": "form",
+              "tool_call_id": null,
+              "title": "How should I set up the project?",
+              "fields": [
+                {
+                  "key": "framework",
+                  "title": "Framework",
+                  "description": null,
+                  "required": true,
+                  "type": "select",
+                  "options": [
+                    { "value": "react", "label": "React", "description": "Component UI" },
+                    { "value": "vue", "label": "Vue", "description": null }
+                  ],
+                  "default": null
+                },
+                {
+                  "key": "extras",
+                  "title": "Extras",
+                  "description": null,
+                  "required": false,
+                  "type": "multiselect",
+                  "options": [
+                    { "value": "lint", "label": "Linting", "description": null },
+                    { "value": "tests", "label": "Tests", "description": null }
+                  ],
+                  "default": null
+                },
+                { "key": "name", "title": "Project name", "description": "Lowercase, no spaces", "required": false, "type": "text", "options": [], "default": null },
+                { "key": "strict", "title": "Strict mode", "description": null, "required": false, "type": "boolean", "options": [], "default": true },
+                { "key": "retries", "title": "Retries", "description": null, "required": false, "type": "integer", "options": [], "default": 3 }
+              ]
+            }
+          ],
+          "queue": [{ "id": "q:14", "text": "Also update the README", "images": 0 }],
+          "prompt_caps": { "image": true },
+          "turn_started_at": "2026-11-07T12:00:05+00:00",
+          "cancelling": false,
+          "steering": true
+        },
+        "items": [
+          { "id": "u:1", "type": "user", "text": "Fix the login bug", "attachments": [{ "kind": "image", "mime": "image/png" }], "at": "2026-11-07T12:00:05+00:00" },
+          { "id": "t:2", "type": "thought", "text": "The null check looks wrong." },
+          { "id": "m:3", "type": "agent", "text": "I'll **look** at `login.py` first." },
+          {
+            "id": "toolu_01",
+            "type": "tool",
+            "title": "Edit login.py",
+            "kind": "edit",
+            "status": "completed",
+            "subtitle": "/home/user/proj/login.py",
+            "locations": [{ "path": "/home/user/proj/login.py", "line": 12 }],
+            "content": [
+              {
+                "type": "diff",
+                "path": "/home/user/proj/login.py",
+                "new_file": false,
+                "diff": "@@ -1,2 +1,2 @@\n-if user:\n+if user is not None:\n     login(user)",
+                "added": 1,
+                "removed": 1,
+                "truncated": false
+              }
+            ],
+            "input": "{\n  \"file_path\": \"/home/user/proj/login.py\"\n}"
+          },
+          {
+            "id": "toolu_02",
+            "type": "tool",
+            "title": "rm -rf build/",
+            "kind": "execute",
+            "status": "pending",
+            "subtitle": "rm -rf build/",
+            "locations": [],
+            "content": [{ "type": "text", "text": "```console\nremoved build/\n```" }],
+            "input": null
+          },
+          { "id": "n:5", "type": "notice", "severity": "warning", "title": "MCP server unavailable", "text": "Continuing without it." },
+          { "id": "cmp-c1", "type": "compaction", "status": "completed", "text": "## Retained context" },
+          { "id": "end:6", "type": "turn_end", "stop_reason": "cancelled", "text": "Stopped" },
+          { "id": "err:7", "type": "error", "text": "The agent process exited with code 1" }
+        ]
+      }
+    },
+    {
+      "name": "events_batch",
+      "frame": {
+        "t": "events",
+        "epoch": "9f3a1c2b7d4e",
+        "seq": 45,
+        "events": [
+          { "type": "item", "seq": 42, "item": { "id": "m:8", "type": "agent", "text": "Done" } },
+          { "type": "append", "seq": 43, "id": "m:8", "text": ": the tests pass." },
+          { "type": "item", "seq": 44, "item": { "id": "toolu_03", "type": "tool", "title": "pytest -q", "kind": "execute", "status": "in_progress", "subtitle": "pytest -q", "locations": [], "content": [], "input": null } },
+          { "type": "state", "seq": 45, "patch": { "status": "ready", "turn_started_at": null, "requests": [] } }
+        ]
+      }
+    },
+    { "name": "events_empty_ack", "frame": { "t": "events", "epoch": "9f3a1c2b7d4e", "seq": 45, "events": [] } },
+    { "name": "result_ok", "frame": { "t": "result", "id": "c-3", "ok": true, "data": { "queued": true, "queue_id": "q:14" } } },
+    { "name": "result_error", "frame": { "t": "result", "id": "c-8", "ok": false, "error": "This request was already answered" } }
+  ]
+}

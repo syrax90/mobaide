@@ -1101,31 +1101,6 @@ final class TerminalSessionModel {
     }
 
     private func makeURLProvider() -> @Sendable () async throws -> String? {
-        let sessionId = self.sessionId
-        let tokenStore = self.tokenStore
-        let sessionManager = self.sessionManager
-        return {
-            guard await sessionManager.isLoggedIn() else { return nil }
-            if tokenStore.isAccessTokenExpiringSoon() {
-                if await sessionManager.refresh() == .terminal { return nil }
-            }
-            guard let token = tokenStore.getAccessToken() else { return nil }
-            let mode = tokenStore.getConnectionMode()
-            let base: String?
-            switch mode {
-            case .direct:
-                base = tokenStore.getAgentUrl()
-            case .relay:
-                base = tokenStore.getRelayServerUrl()
-            }
-            guard let base else { return nil }
-            return RelayRouting.webSocketURLString(
-                baseURL: base,
-                path: "ws/session/\(sessionId)",
-                mode: mode,
-                agentId: tokenStore.getAgentId(),
-                token: token
-            )
-        }
+        SessionSocketURL.provider(sessionId: sessionId, tokenStore: tokenStore, sessionManager: sessionManager)
     }
 }

@@ -12,13 +12,20 @@ from mobaide.core import (
     SessionConfig,
     SessionManager,
 )
+from mobaide.acp.agents import ChatAgentUnavailableError
+from mobaide.acp.wire import chat_request_error, list_chat_sessions
 from mobaide.core.models import resolve_spawn_args
 from mobaide.core.shell import resolve_default_shell
 from mobaide.linear.worktree import WorktreeCreationError
 
 from ..auth.dependencies import get_current_user
 from ..logging import audit_event, get_logger
-from .models import CreateSessionRequest, ScrollbackResponse, SessionResponse
+from .models import (
+    ChatStoredSessionsResponse,
+    CreateSessionRequest,
+    ScrollbackResponse,
+    SessionResponse,
+)
 
 logger = get_logger(__name__)
 
@@ -120,6 +127,9 @@ async def create_session(
         body.env,
         resolve_default_shell(),
     )
+    chat_error = chat_request_error(body.ui, kind, body.chat_resume_id, manager)
+    if chat_error is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=chat_error)
     config = SessionConfig(
         session_id=session_id,
         command=spawn_command,
@@ -134,6 +144,8 @@ async def create_session(
         worktree=body.worktree,
         branch_name=body.branch_name,
         kind=kind,
+        ui=body.ui or "terminal",
+        chat_resume_id=body.chat_resume_id,
     )
     try:
         session = await manager.create_session(config)
@@ -156,6 +168,11 @@ async def create_session(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"{exc.cli_name.capitalize()} CLI not found: {exc}",
+        )
+    except ChatAgentUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"detail": str(exc), "chat_unavailable": True},
         )
     except CliAuthRequiredError as exc:
         # CLI present but not signed in: client-actionable. Uses 409 (not 401) so
@@ -270,3 +287,44 @@ async def get_scrollback(
         lines=sliced,
         total=len(buf),
     )
+
+
+chat_router = APIRouter(
+    prefix="/api/chat",
+    tags=["chat"],
+    dependencies=[Depends(get_current_user)],
+)
+
+
+@chat_router.get(
+    "/{kind}/sessions",
+    response_model=ChatStoredSessionsResponse,
+    responses={
+        400: {"description": "Invalid cwd or cursor"},
+        404: {"description": "No chat agent of this kind"},
+        409: {"description": "The agent cannot list its sessions"},
+        502: {"description": "The agent failed"},
+        503: {"description": "The agent cannot run on this host"},
+    },
+)
+async def list_stored_chat_sessions(
+    kind: str,
+    request: Request,
+    cwd: str | None = None,
+    cursor: str | None = None,
+) -> ChatStoredSessionsResponse:
+    """Sessions the agent stored on this host, newest first.
+
+    Includes sessions started outside Mobaide, which a chat session can
+    continue (``chat_resume_id`` on create).
+    """
+    code, body = await list_chat_sessions(
+        getattr(request.app.state, "chat_catalog", None),
+        _get_manager(request),
+        kind,
+        cwd=cwd,
+        cursor=cursor,
+    )
+    if code != 200:
+        raise HTTPException(status_code=code, detail=body.get("detail"))
+    return ChatStoredSessionsResponse.model_validate(body)

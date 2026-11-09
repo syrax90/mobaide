@@ -241,6 +241,18 @@ describe('MenuButton opening', () => {
 
     expect(trigger()).toHaveAttribute('aria-expanded', 'false');
   });
+
+  it('stays open while the menu scrolls its own items', () => {
+    // A menu taller than its max height (the chat settings menu) scrolls to
+    // reach its lower choices; that must not dismiss it.
+    renderMenu();
+    fireEvent.click(trigger());
+
+    fireEvent.scroll(screen.getByRole('menu'));
+    fireEvent.scroll(menuItem('Changes…'));
+
+    expect(trigger()).toHaveAttribute('aria-expanded', 'true');
+  });
 });
 
 describe('MenuButton key walk', () => {

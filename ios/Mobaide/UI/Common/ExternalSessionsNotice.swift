@@ -15,9 +15,9 @@ struct ExternalSessionsNotice: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(colors.text)
             Text(
-                "Mobaide can only open sessions its own agent started. To control a session "
-                    + "from here, start it from Mobaide instead of launching it yourself on the "
-                    + "agent machine."
+                "Mobaide lists only sessions its own agent started. To continue a Claude Code or "
+                    + "Codex session from your PC, start a new session of that agent and choose "
+                    + "Continue a session."
             )
             .font(.footnote)
             .foregroundStyle(colors.textMuted)

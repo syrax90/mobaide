@@ -64,6 +64,20 @@ struct AgentAPI: Sendable {
         try await execute(method: "GET", url: "\(try await base())/api/sessions")
     }
 
+    /// `GET /api/chat/{kind}/sessions?cwd=&cursor=` — the agent's stored
+    /// conversations, including ones started outside Mobaide. The first call
+    /// can take seconds while the agent process starts.
+    func listChatSessions(kind: String, cwd: String?, cursor: String?) async throws -> ChatStoredSessionsResponse {
+        var query: [String] = []
+        if let cwd { query.append("cwd=\(Self.encodeQueryValue(cwd))") }
+        if let cursor { query.append("cursor=\(Self.encodeQueryValue(cursor))") }
+        let suffix = query.isEmpty ? "" : "?" + query.joined(separator: "&")
+        return try await execute(
+            method: "GET",
+            url: "\(try await base())/api/chat/\(Self.encodePathSegment(kind))/sessions\(suffix)"
+        )
+    }
+
     func codexLogin(apiKey: String) async throws -> CodexLoginResponse {
         try await execute(method: "POST", url: "\(try await base())/api/codex/login", body: CodexLoginRequest(api_key: apiKey))
     }

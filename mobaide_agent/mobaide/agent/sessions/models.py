@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from mobaide.acp.wire import CHAT_RESUME_ID_MAX, CHAT_RESUME_ID_PATTERN
 from mobaide.core.antigravity_launcher import AntigravityOptions
 from mobaide.core.claude_launcher import ClaudeOptions
 from mobaide.core.codex_launcher import CodexOptions
@@ -155,6 +156,14 @@ class CreateSessionRequest(BaseModel):
     # REST router never reads them (custom kinds are rejected there).
     resolved_command: str | None = None
     resolved_name: str | None = None
+    # ``"chat"`` starts the session in the structured chat UI (the agent
+    # runs over ACP); ``"terminal"`` or absent keeps the PTY session.
+    ui: Literal["terminal", "chat"] | None = None
+    # Chat only: the agent's stored session to continue (an id from
+    # ``GET /api/chat/{kind}/sessions``) instead of starting a new one.
+    chat_resume_id: str | None = Field(
+        default=None, max_length=CHAT_RESUME_ID_MAX, pattern=CHAT_RESUME_ID_PATTERN
+    )
 
 
 class SessionResponse(BaseModel):
@@ -179,6 +188,7 @@ class SessionResponse(BaseModel):
     kind_label: str | None = None
     attention: str | None = None
     exit_reason: str | None = None
+    ui: str = "terminal"
 
     @classmethod
     def from_info(cls, info: SessionInfo) -> SessionResponse:
@@ -189,3 +199,19 @@ class ScrollbackResponse(BaseModel):
     session_id: str
     lines: list[str]
     total: int
+
+
+class ChatStoredSession(BaseModel):
+    """One session the agent stored on the host (``session/list``)."""
+
+    session_id: str
+    cwd: str
+    title: str | None = None
+    updated_at: str | None = None
+    # The open Mobaide chat session that already shows it, if any.
+    open_session_id: str | None = None
+
+
+class ChatStoredSessionsResponse(BaseModel):
+    sessions: list[ChatStoredSession]
+    next_cursor: str | None = None

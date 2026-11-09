@@ -52,6 +52,8 @@ function restoreClaudeBucket(
     planMode: restorePlanMode ? saved.planMode : base.planMode,
     // Per-session: Auto Scan seeds it from the project's `auto_scan_prompt`.
     initialPrompt: base.initialPrompt,
+    // Auto Scan always runs in the terminal and has no such toggle.
+    terminalUi: bucketId === 'claude' ? saved.terminalUi : base.terminalUi,
   };
   // Display-only clamp, and the one place web improves on mobile: the effort
   // ladder narrows with the model, and both mobile clients restore the stored
@@ -83,6 +85,7 @@ export function applyLaunchPrefs(base: WizardState, prefs: LaunchPrefs): WizardS
             approval: prefs.codex.approval,
             fullAuto: prefs.codex.fullAuto,
             reasoningEffort: prefs.codex.reasoningEffort,
+            terminalUi: prefs.codex.terminalUi,
           },
     antigravity:
       antigravity === null
@@ -115,6 +118,7 @@ function claudePrefsFrom(bucket: ClaudeBucket): ClaudeLaunchPrefs {
     planMode: bucket.planMode,
     debug: bucket.debug,
     focusMode: bucket.focusMode,
+    terminalUi: bucket.terminalUi,
   };
 }
 
@@ -151,6 +155,7 @@ export function launchPrefsFromState(
           approval: state.codex.approval,
           fullAuto: state.codex.fullAuto,
           reasoningEffort: state.codex.reasoningEffort,
+          terminalUi: state.codex.terminalUi,
         },
       };
     case 'antigravity':

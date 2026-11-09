@@ -177,3 +177,29 @@ fun VersionInfoResponse.fsCapability(key: String): Boolean = runCatching {
         ?.get(key)?.jsonPrimitive
         ?.let { !it.isString && it.booleanOrNull == true }
 }.getOrNull() == true
+
+/** What `capabilities.chat` says about one agent kind. */
+sealed interface ChatSupport {
+    /**
+     * The kind can start in the chat UI; [resume] = it can list and continue stored
+     * sessions; [live] = those sessions stay in sync with the agent's own apps on the PC.
+     */
+    data class Available(val resume: Boolean, val live: Boolean = false) : ChatSupport
+
+    /** `capabilities.chat` is missing: an agent that predates chat sessions. */
+    data object AgentOutdated : ChatSupport
+
+    /** The agent knows chat sessions but cannot run this kind (no Node.js / npx). */
+    data object Unavailable : ChatSupport
+}
+
+fun VersionInfoResponse.chatSupport(kind: String): ChatSupport {
+    val chat = runCatching { capabilities["chat"]?.jsonObject }.getOrNull()
+        ?: return ChatSupport.AgentOutdated
+    val entry = runCatching { chat[kind]?.jsonObject }.getOrNull()
+        ?: return ChatSupport.Unavailable
+    fun flag(key: String) = runCatching {
+        entry[key]?.jsonPrimitive?.let { !it.isString && it.booleanOrNull == true }
+    }.getOrNull() == true
+    return ChatSupport.Available(resume = flag("resume"), live = flag("live"))
+}

@@ -29,6 +29,7 @@ import com.mobaide.app.data.review.ReviewPromptCoordinator
 import com.mobaide.app.notifications.AppForegroundTracker
 import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.mobaide.app.ui.sessions.sessionHeaderLabel
+import com.mobaide.app.ui.voice.withTranscript
 import com.termux.terminal.TerminalSession
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CoroutineStart
@@ -779,20 +780,7 @@ class TerminalViewModel @Inject constructor(
      * it. Never sends: the user reviews the text first.
      */
     fun insertTranscript(transcript: String) {
-        val clean = transcript.trim()
-        if (clean.isEmpty()) return
-        val current = _inputText.value
-        val start = current.selection.min.coerceIn(0, current.text.length)
-        val end = current.selection.max.coerceIn(start, current.text.length)
-        val before = current.text.substring(0, start)
-        val after = current.text.substring(end)
-        val lead = if (before.isNotEmpty() && !before.last().isWhitespace()) " " else ""
-        val trail = if (after.isNotEmpty() && !after.first().isWhitespace()) " " else ""
-        val inserted = lead + clean + trail
-        _inputText.value = TextFieldValue(
-            text = before + inserted + after,
-            selection = TextRange(before.length + inserted.length),
-        )
+        _inputText.value = _inputText.value.withTranscript(transcript) ?: return
         revealComposer()
     }
 

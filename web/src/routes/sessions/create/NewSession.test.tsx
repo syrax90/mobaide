@@ -132,6 +132,7 @@ const CLAUDE_AT_DEFAULTS = {
   planMode: false,
   debug: false,
   focusMode: true,
+  terminalUi: false,
 };
 
 const project = (name: string): ProjectInfo =>

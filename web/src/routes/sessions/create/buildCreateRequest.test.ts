@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { components } from '../../../api/generated/agent';
 import type { ProjectSummary } from '../../../api/projectRepository';
+import type { ChatSupport } from '../../../protocol/dto/agentVersion';
+import type { ChatStoredSession } from '../../../protocol/dto/chatSessions';
 import { createSessionRequestSchema } from '../../../protocol/dto/sessionCreate';
 import {
   buildCreateRequest,
+  buildResumeRequest,
   buildStartScanRequest,
   type CreateSessionRequest,
 } from './buildCreateRequest';
@@ -42,6 +45,7 @@ const POPULATED: WizardState = {
     noMemory: true,
     planMode: true,
     initialPrompt: 'claude prompt',
+    terminalUi: false,
   },
   autoScan: {
     model: 'haiku',
@@ -55,6 +59,7 @@ const POPULATED: WizardState = {
     noMemory: false,
     planMode: false,
     initialPrompt: 'scan the backlog',
+    terminalUi: false,
   },
   codex: {
     model: 'gpt-5.4',
@@ -62,6 +67,7 @@ const POPULATED: WizardState = {
     approval: 'never',
     fullAuto: true,
     reasoningEffort: null,
+    terminalUi: false,
   },
   antigravity: {
     model: 'Gemini 3.1 Pro (High)',
@@ -383,5 +389,86 @@ describe('focus_mode', () => {
     expect(build('claude', state).claude_options?.focus_mode).toBe(false);
     expect(scan?.claude_options?.focus_mode).toBe(true);
     expect(() => createSessionRequestSchema.parse(build('claude', state))).not.toThrow();
+  });
+});
+
+describe('Codex — chat view', () => {
+  const AVAILABLE: ChatSupport = { kind: 'available', resume: true, live: true };
+
+  it.each<[string, boolean, ChatSupport | undefined, 'chat' | 'terminal']>([
+    ['chat available', false, AVAILABLE, 'chat'],
+    ['probe still out', false, undefined, 'chat'],
+    ['Terminal UI on', true, AVAILABLE, 'terminal'],
+    ['no chat for Codex on this PC', false, { kind: 'unavailable' }, 'terminal'],
+    ['agent predates chat', false, { kind: 'outdated' }, 'terminal'],
+  ])('%s', (_name, terminalUi, chat, ui) => {
+    const request = buildCreateRequest({
+      state: { ...POPULATED, codex: { ...POPULATED.codex, terminalUi } },
+      mode: 'codex',
+      project: gitProject,
+      chat,
+    });
+
+    expect(request?.ui).toBe(ui);
+    expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
+  });
+});
+
+describe('buildResumeRequest', () => {
+  const stored: ChatStoredSession = {
+    session_id: 'external-2222',
+    cwd: gitProject.path,
+    title: 'Add retries to the sync job',
+    updated_at: '2026-11-08T10:00:00Z',
+    open_session_id: undefined,
+  };
+
+  it('continues a Codex session with the Codex options and never a worktree', () => {
+    const request = buildResumeRequest(
+      { state: POPULATED, mode: 'codex', project: gitProject },
+      'codex',
+      stored,
+    );
+
+    expect(request).toMatchObject({
+      project_name: 'mobaide',
+      cli: 'codex',
+      ui: 'chat',
+      chat_resume_id: 'external-2222',
+      worktree: false,
+    });
+    expect(request.codex_options).toMatchObject({
+      model: 'gpt-5.4',
+      sandbox: 'danger-full-access',
+      approval: 'never',
+      full_auto: true,
+      worktree: false,
+    });
+    expect(request.codex_options?.branch_name).toBeUndefined();
+    expect('claude_options' in request).toBe(false);
+    expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
+  });
+
+  it('keeps Codex options out of a Claude Code resume', () => {
+    const request = buildResumeRequest(
+      { state: POPULATED, mode: 'claude', project: gitProject },
+      'claude',
+      stored,
+    );
+
+    expect(request.cli).toBe('claude');
+    expect(request.claude_options).toMatchObject({ worktree: false });
+    expect('codex_options' in request).toBe(false);
+  });
+
+  it('sends the recorded folder as cwd when it is not the selected project', () => {
+    const request = buildResumeRequest(
+      { state: POPULATED, mode: 'codex', project: gitProject },
+      'codex',
+      { ...stored, cwd: '/srv/elsewhere' },
+    );
+
+    expect(request.cwd).toBe('/srv/elsewhere');
+    expect(request.project_name).toBeUndefined();
   });
 });

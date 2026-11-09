@@ -165,6 +165,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/chat/{kind}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Stored Chat Sessions
+         * @description Sessions the agent stored on this host, newest first.
+         *
+         *     Includes sessions started outside Mobaide, which a chat session can
+         *     continue (``chat_resume_id`` on create).
+         */
+        get: operations["list_stored_chat_sessions_api_chat__kind__sessions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/codex/login": {
         parameters: {
             query?: never;
@@ -1225,6 +1248,29 @@ export interface components {
             scans: components["schemas"]["AutoScanInstanceDto"][];
         };
         /**
+         * ChatStoredSession
+         * @description One session the agent stored on the host (``session/list``).
+         */
+        ChatStoredSession: {
+            /** Cwd */
+            cwd: string;
+            /** Open Session Id */
+            open_session_id?: string | null;
+            /** Session Id */
+            session_id: string;
+            /** Title */
+            title?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+        };
+        /** ChatStoredSessionsResponse */
+        ChatStoredSessionsResponse: {
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /** Sessions */
+            sessions: components["schemas"]["ChatStoredSession"][];
+        };
+        /**
          * ClaudeOptionsModel
          * @description Wire DTO for Claude CLI launch options (see :class:`ClaudeOptions`).
          *
@@ -1361,6 +1407,8 @@ export interface components {
             antigravity_options?: components["schemas"]["AntigravityOptionsModel"] | null;
             /** Branch Name */
             branch_name?: string | null;
+            /** Chat Resume Id */
+            chat_resume_id?: string | null;
             claude_options?: components["schemas"]["ClaudeOptionsModel"] | null;
             /** Cli */
             cli?: string | null;
@@ -1389,6 +1437,8 @@ export interface components {
              * @default 24
              */
             rows: number;
+            /** Ui */
+            ui?: ("terminal" | "chat") | null;
             /**
              * Worktree
              * @default false
@@ -2332,6 +2382,11 @@ export interface components {
             state: string;
             /** Title */
             title?: string | null;
+            /**
+             * Ui
+             * @default terminal
+             */
+            ui: string;
         };
         /** StartScanRequest */
         StartScanRequest: {
@@ -2792,6 +2847,75 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    list_stored_chat_sessions_api_chat__kind__sessions_get: {
+        parameters: {
+            query?: {
+                cwd?: string | null;
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                kind: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatStoredSessionsResponse"];
+                };
+            };
+            /** @description Invalid cwd or cursor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No chat agent of this kind */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The agent cannot list its sessions */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description The agent failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The agent cannot run on this host */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

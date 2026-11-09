@@ -1,4 +1,5 @@
 import {
+  chatSupport,
   cliModelDetails,
   cliModels,
   type AgentVersionInfo,
@@ -12,6 +13,7 @@ import { ClaudeAdvancedPanel } from './panels/ClaudeAdvancedPanel';
 import { ClaudeOptionsPanel } from './panels/ClaudeOptionsPanel';
 import { CodexOptionsPanel } from './panels/CodexOptionsPanel';
 import { WorktreeSection } from './panels/WorktreeSection';
+import { chatAgentKind, usesChatView } from './buildCreateRequest';
 import {
   addDirsError,
   isCustomMode,
@@ -34,6 +36,8 @@ interface ConfigStepProps {
   dispatch: (action: WizardAction) => void;
   onSubmit: () => void;
   onBack: () => void;
+  /** Open the "Continue a session" picker; shown only where the PC can resume. */
+  onContinueSession?: () => void;
 }
 
 export function modeTitle(
@@ -70,7 +74,13 @@ export function ConfigStep({
   dispatch,
   onSubmit,
   onBack,
+  onContinueSession,
 }: ConfigStepProps) {
+  const chatKind = chatAgentKind(mode);
+  const chat = chatSupport(capabilities, chatKind ?? 'claude');
+  const terminalUi = chatKind === 'codex' ? state.codex.terminalUi : state.claude.terminalUi;
+  const usesChat = chatKind !== null && usesChatView(terminalUi, chat);
+  const canResume = usesChat && chat.kind === 'available' && chat.resume;
   // A worktree needs a stored git project; a one-off path has no repo to branch.
   const showsGitOptions =
     selection.kind === 'stored' && project?.is_git === true && mode !== 'auto_scan';
@@ -84,12 +94,34 @@ export function ConfigStep({
     <div className="wizard-body">
       <h2>{modeTitle(mode, customTypes)}</h2>
 
+      {canResume && onContinueSession !== undefined && (
+        <div className="option-group resume-entry">
+          <div className="resume-entry-text">
+            <h3>Continue a session</h3>
+            <p className="field-hint">
+              {chatKind === 'codex'
+                ? 'Open a Codex session started on your PC, for example in a terminal.'
+                : 'Open a Claude Code session started on your PC, for example in a terminal.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="button"
+            disabled={submitting}
+            onClick={onContinueSession}
+          >
+            Continue a session…
+          </button>
+        </div>
+      )}
+
       {mode === 'claude' && (
         <ClaudeOptionsPanel
           bucket={state.claude}
           bucketId="claude"
           models={cliModels(capabilities, 'claude')}
           dispatch={dispatch}
+          showTerminalOptions={!usesChat}
         />
       )}
       {mode === 'codex' && (
@@ -98,6 +130,7 @@ export function ConfigStep({
           models={cliModels(capabilities, 'codex')}
           modelDetails={cliModelDetails(capabilities, 'codex')}
           dispatch={dispatch}
+          chat={chat}
         />
       )}
       {mode === 'antigravity' && (
@@ -125,7 +158,12 @@ export function ConfigStep({
       {showsGitOptions && <WorktreeSection git={state.git} dispatch={dispatch} />}
 
       {mode === 'claude' && (
-        <ClaudeAdvancedPanel bucket={state.claude} bucketId="claude" dispatch={dispatch} />
+        <ClaudeAdvancedPanel
+          bucket={state.claude}
+          bucketId="claude"
+          dispatch={dispatch}
+          chat={chat}
+        />
       )}
 
       {error !== null && <p className="field-error">{error}</p>}

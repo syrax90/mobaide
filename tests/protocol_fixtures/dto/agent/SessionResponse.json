@@ -68,6 +68,37 @@
         "kind": "custom_ab12cd34ef56",
         "kind_label": "Aider"
       }
+    },
+    {
+      "name": "chat_ui",
+      "wire": {
+        "session_id": "s6",
+        "state": "running",
+        "created_at": "2026-11-07T12:00:00Z",
+        "pid": 77,
+        "command": ["npx", "--yes", "@agentclientprotocol/claude-agent-acp@0.101.0"],
+        "cwd": "/home/user/proj",
+        "title": "Fix the login bug",
+        "project_name": "proj",
+        "kind": "claude",
+        "kind_label": null,
+        "attention": "turn_finished",
+        "exit_reason": null,
+        "ui": "chat"
+      },
+      "decoded_canonical": {
+        "session_id": "s6",
+        "state": "running",
+        "created_at": "2026-11-07T12:00:00Z",
+        "pid": 77,
+        "command": ["npx", "--yes", "@agentclientprotocol/claude-agent-acp@0.101.0"],
+        "cwd": "/home/user/proj",
+        "title": "Fix the login bug",
+        "project_name": "proj",
+        "kind": "claude",
+        "attention": "turn_finished",
+        "ui": "chat"
+      }
     }
   ]
 }

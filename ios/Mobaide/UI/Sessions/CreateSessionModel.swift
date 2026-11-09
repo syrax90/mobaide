@@ -158,6 +158,12 @@ final class CreateSessionModel {
     var claudeAppendSystemPrompt = ""
     var skipPermissions = false
     var noMemory = false
+    /// Off by default: a Claude Code session opens in the chat view whenever
+    /// the agent can run it.
+    var terminalUI = false
+    /// `capabilities.chat.claude`; nil until the probe answers, and chat is
+    /// then assumed available (the agent decides).
+    private(set) var chatCapability: ChatCapability?
 
     // Codex
     var codexModel: String?
@@ -165,6 +171,29 @@ final class CreateSessionModel {
     var codexApproval = "on-request"
     var codexFullAuto = false
     var codexReasoningEffort = "high"
+    /// Off by default: a Codex session opens in the chat view whenever the
+    /// agent can run it.
+    var codexTerminalUI = false
+
+    /// The autonomy preset the sandbox / approval pair matches; nil for a
+    /// hand-picked pair (Android `codexPreset`, web `codexPreset`).
+    var codexPreset: CodexAutonomyPreset? {
+        if codexFullAuto { return .fullAccess }
+        guard codexApproval == "on-request" else { return nil }
+        switch codexSandbox {
+        case "read-only": return .readOnly
+        case "workspace-write": return .auto
+        default: return nil
+        }
+    }
+
+    func applyCodexPreset(_ preset: CodexAutonomyPreset) {
+        codexSandbox = preset.sandbox
+        codexApproval = preset.approval
+        codexFullAuto = preset == .fullAccess
+    }
+    /// `capabilities.chat.codex`; nil until the probe answers.
+    private(set) var codexChatCapability: ChatCapability?
 
     // Auto Scan — its own option bucket, deliberately not shared with the
     // Claude Code fields above so the two modes remember separate choices.
@@ -200,6 +229,9 @@ final class CreateSessionModel {
 
     // Codex login
     private(set) var showCodexLogin = false
+    /// A Codex "Continue a session" that hit `codex_auth_required`: retried
+    /// after the sign-in instead of a new session.
+    private var pendingCodexContinue: ChatStoredSession?
     var codexApiKey = ""
 
     private let agentAPI: AgentAPI
@@ -267,6 +299,56 @@ final class CreateSessionModel {
     // MARK: - Availability
 
     var claudeEnabled: Bool { claudeAvailable != false }
+
+    /// The agent is known not to run the chat view, so the Terminal UI toggle
+    /// is locked on.
+    var chatUnavailable: Bool { chatCapability.map { !$0.isAvailable } ?? false }
+
+    /// The Claude Code session will open in the chat view.
+    var claudeUsesChat: Bool { !terminalUI && !chatUnavailable }
+
+    var chatUnavailableReason: String? { Self.chatUnavailableReason(chatCapability) }
+
+    var codexChatUnavailable: Bool { codexChatCapability.map { !$0.isAvailable } ?? false }
+
+    /// The Codex session will open in the chat view.
+    var codexUsesChat: Bool { !codexTerminalUI && !codexChatUnavailable }
+
+    var codexChatUnavailableReason: String? { Self.chatUnavailableReason(codexChatCapability) }
+
+    static func chatUnavailableReason(_ capability: ChatCapability?) -> String? {
+        switch capability {
+        case .unsupportedAgent?: return "Update Mobaide on your PC to use the chat view."
+        case .unavailable?: return "The chat view needs Node.js on your PC."
+        default: return nil
+        }
+    }
+
+    /// The agent kind whose stored conversations "Continue a session" lists.
+    var continueKind: String { mode == .codex ? "codex" : "claude" }
+
+    /// Those conversations stay in sync with the agent's own apps on the PC.
+    var continueIsLive: Bool {
+        (mode == .codex ? codexChatCapability : chatCapability)?.isLive == true
+    }
+
+    /// "Continue a session" lists the agent's stored conversations.
+    var canContinueSession: Bool {
+        switch mode {
+        case .standard: return claudeUsesChat && chatCapability?.canResume == true
+        case .codex: return codexUsesChat && codexChatCapability?.canResume == true
+        default: return false
+        }
+    }
+
+    /// The folder "This folder" lists: the selected project or the custom path.
+    var continueFolder: String? {
+        switch selection {
+        case .stored: return selectedProject?.path
+        case .customPath(let path): return path.isEmpty ? nil : path
+        case .none: return nil
+        }
+    }
     var codexEnabled: Bool { codexAvailable != false }
     var antigravityEnabled: Bool { antigravityAvailable != false }
 
@@ -502,6 +584,8 @@ final class CreateSessionModel {
     func refreshCliAvailability() async {
         guard let version = try? await agentAPI.getAgentVersion() else { return }
         claudeAvailable = version.cliAvailable("claude")
+        chatCapability = version.chatCapability("claude")
+        codexChatCapability = version.chatCapability("codex")
         codexAvailable = version.cliAvailable("codex")
         antigravityAvailable = version.cliAvailable("antigravity")
         if let models = version.cliModels("codex"), !models.isEmpty { codexModels = models }
@@ -881,6 +965,10 @@ final class CreateSessionModel {
         } catch let apiError as APIError where mode == .codex && apiError.errorBody.contains("codex_auth_required") {
             submitting = false
             showCodexLogin = true
+        } catch let apiError as APIError
+            where (mode == .standard || mode == .codex) && Self.chatUnavailableDetail(apiError.errorBody) != nil {
+            submitting = false
+            self.error = Self.chatUnavailableMessage(Self.chatUnavailableDetail(apiError.errorBody))
         } catch let apiError as APIError where Self.isAgentUpdateRequired(apiError.errorBody) {
             // Relay-side gate: the agent's live tunnel negotiated a protocol
             // too old to launch custom agent types.
@@ -914,11 +1002,17 @@ final class CreateSessionModel {
     func submitCodexLogin() async {
         let key = codexApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
+        let pending = pendingCodexContinue
+        pendingCodexContinue = nil
         showCodexLogin = false
         codexApiKey = ""
         do {
             _ = try await agentAPI.codexLogin(apiKey: key)
-            await create()
+            if let pending {
+                await continueSession(pending)
+            } else {
+                await create()
+            }
         } catch {
             self.error = "Codex login failed: \(String(describing: error))"
         }
@@ -927,6 +1021,11 @@ final class CreateSessionModel {
     func cancelCodexLogin() {
         showCodexLogin = false
         codexApiKey = ""
+        pendingCodexContinue = nil
+    }
+
+    func hideCodexLogin() {
+        showCodexLogin = false
     }
 
     // MARK: - Custom agent type editor / delete
@@ -1134,31 +1233,20 @@ final class CreateSessionModel {
         case .autoScan:
             return nil
         case .standard:
-            let options = ClaudeOptionsModel(
-                no_memory: noMemory,
-                skip_permissions: skipPermissions,
-                worktree: effectiveWorktree,
-                branch_name: effectiveBranch,
-                model: effectiveClaudeModel,
-                effort: effectiveClaudeEffort,
-                fast_mode: claudeFastMode,
-                ultracode: claudeUltracode,
-                append_system_prompt: Self.blankToNil(claudeAppendSystemPrompt),
-                debug: claudeDebug,
-                focus_mode: focusMode
+            return CreateSessionRequest(
+                cwd: cwd,
+                project_name: projectName,
+                claude_options: claudeOptions(worktree: effectiveWorktree, branchName: effectiveBranch),
+                ui: claudeUsesChat ? "chat" : "terminal"
             )
-            return CreateSessionRequest(cwd: cwd, project_name: projectName, claude_options: options)
         case .codex:
-            let options = CodexOptionsModel(
-                model: codexModel,
-                sandbox: codexSandbox,
-                approval: codexApproval,
-                reasoning_effort: codexReasoningEffort,
-                full_auto: codexFullAuto,
-                worktree: effectiveWorktree,
-                branch_name: effectiveBranch
+            return CreateSessionRequest(
+                cwd: cwd,
+                project_name: projectName,
+                cli: "codex",
+                codex_options: codexOptions(worktree: effectiveWorktree, branchName: effectiveBranch),
+                ui: codexUsesChat ? "chat" : "terminal"
             )
-            return CreateSessionRequest(cwd: cwd, project_name: projectName, cli: "codex", codex_options: options)
         case .antigravity:
             let options = AntigravityOptionsModel(
                 model: antigravityModel,
@@ -1190,6 +1278,152 @@ final class CreateSessionModel {
         }
     }
 
+    private func claudeOptions(worktree: Bool, branchName: String?) -> ClaudeOptionsModel {
+        ClaudeOptionsModel(
+            no_memory: noMemory,
+            skip_permissions: skipPermissions,
+            worktree: worktree,
+            branch_name: branchName,
+            model: effectiveClaudeModel,
+            effort: effectiveClaudeEffort,
+            fast_mode: claudeFastMode,
+            ultracode: claudeUltracode,
+            append_system_prompt: Self.blankToNil(claudeAppendSystemPrompt),
+            debug: claudeDebug,
+            focus_mode: focusMode
+        )
+    }
+
+    private func codexOptions(worktree: Bool, branchName: String?) -> CodexOptionsModel {
+        CodexOptionsModel(
+            model: codexModel,
+            sandbox: codexSandbox,
+            approval: codexApproval,
+            reasoning_effort: codexReasoningEffort,
+            full_auto: codexFullAuto,
+            worktree: worktree,
+            branch_name: branchName
+        )
+    }
+
+    private func codexLaunchPrefs() -> CodexLaunchPrefs {
+        CodexLaunchPrefs(
+            model: codexModel,
+            sandbox: codexSandbox,
+            approval: codexApproval,
+            fullAuto: codexFullAuto,
+            reasoningEffort: codexReasoningEffort,
+            terminalUI: codexTerminalUI
+        )
+    }
+
+    // MARK: - Continue a session
+
+    /// Continues a stored conversation in a new chat session with the current
+    /// Claude Code or Codex options (never in a worktree). It runs in the
+    /// selected project when that is the conversation's folder, otherwise in
+    /// its folder alone.
+    func continueRequest(for stored: ChatStoredSession) -> CreateSessionRequest {
+        let folder = stored.cwd ?? continueFolder
+        var projectName: String?
+        if case .stored(let name) = selection, let path = selectedProject?.path, let folder,
+           Self.samePath(path, folder) {
+            projectName = name
+        }
+        let cwd = projectName == nil ? folder : nil
+        if mode == .codex {
+            return CreateSessionRequest(
+                cwd: cwd,
+                project_name: projectName,
+                cli: "codex",
+                codex_options: codexOptions(worktree: false, branchName: nil),
+                ui: "chat",
+                chat_resume_id: stored.session_id
+            )
+        }
+        return CreateSessionRequest(
+            cwd: cwd,
+            project_name: projectName,
+            cli: "claude",
+            claude_options: claudeOptions(worktree: false, branchName: nil),
+            ui: "chat",
+            chat_resume_id: stored.session_id
+        )
+    }
+
+    /// Opens the session that already shows `stored`, or continues it in a new one.
+    func continueSession(_ stored: ChatStoredSession) async {
+        if let open = stored.open_session_id, !open.isEmpty {
+            navBroadcaster.emit(open)
+            return
+        }
+        guard !submitting else { return }
+        submitting = true
+        error = nil
+        do {
+            let response = try await sessionRepository.createSession(continueRequest(for: stored))
+            submitting = false
+            preferencesStore.setLastUsedSessionId(response.session_id)
+            if mode == .codex {
+                preferencesStore.setLastUsedCodexOptions(codexLaunchPrefs())
+            } else {
+                preferencesStore.setLastUsedClaudeOptions(claudeLaunchPrefs())
+            }
+            navBroadcaster.emit(response.session_id)
+        } catch let apiError as APIError where mode == .codex && apiError.errorBody.contains("codex_auth_required") {
+            submitting = false
+            pendingCodexContinue = stored
+            showCodexLogin = true
+        } catch let apiError as APIError where Self.chatUnavailableDetail(apiError.errorBody) != nil {
+            submitting = false
+            error = Self.chatUnavailableMessage(Self.chatUnavailableDetail(apiError.errorBody))
+        } catch {
+            submitting = false
+            self.error = "Failed to continue the session: \(String(describing: error))"
+        }
+    }
+
+    static func samePath(_ lhs: String, _ rhs: String) -> Bool {
+        PathCompletion.trimTrailingSeparator(lhs) == PathCompletion.trimTrailingSeparator(rhs)
+    }
+
+    /// The `detail` of a `503 {chat_unavailable: true}` — flat through the
+    /// relay, nested under `detail` from the agent directly; nil otherwise.
+    static func chatUnavailableDetail(_ errorBody: String) -> String? {
+        guard
+            let data = errorBody.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        if object["chat_unavailable"] as? Bool == true {
+            return object["detail"] as? String ?? ""
+        }
+        if let nested = object["detail"] as? [String: Any], nested["chat_unavailable"] as? Bool == true {
+            return nested["detail"] as? String ?? ""
+        }
+        return nil
+    }
+
+    static func chatUnavailableMessage(_ detail: String?) -> String {
+        let hint = "Turn on Terminal UI under Advanced to use the classic terminal."
+        guard let detail, !detail.isEmpty else { return "The chat view is not available. " + hint }
+        return detail.hasSuffix(".") ? "\(detail) \(hint)" : "\(detail). \(hint)"
+    }
+
+    private func claudeLaunchPrefs() -> ClaudeLaunchPrefs {
+        ClaudeLaunchPrefs(
+            model: effectiveClaudeModel,
+            effort: effectiveClaudeEffort,
+            fastMode: claudeFastMode,
+            ultracode: claudeUltracode,
+            appendSystemPrompt: claudeAppendSystemPrompt,
+            skipPermissions: skipPermissions,
+            noMemory: noMemory,
+            debug: claudeDebug,
+            focusMode: focusMode,
+            terminalUI: terminalUI
+        )
+    }
+
     private func persistLastUsed(
         selection: ProjectSelection,
         scopeKey: String?,
@@ -1214,25 +1448,9 @@ final class CreateSessionModel {
         preferencesStore.setLastUsedSessionId(response.session_id)
         switch mode {
         case .standard:
-            preferencesStore.setLastUsedClaudeOptions(ClaudeLaunchPrefs(
-                model: effectiveClaudeModel,
-                effort: effectiveClaudeEffort,
-                fastMode: claudeFastMode,
-                ultracode: claudeUltracode,
-                appendSystemPrompt: claudeAppendSystemPrompt,
-                skipPermissions: skipPermissions,
-                noMemory: noMemory,
-                debug: claudeDebug,
-                focusMode: focusMode
-            ))
+            preferencesStore.setLastUsedClaudeOptions(claudeLaunchPrefs())
         case .codex:
-            preferencesStore.setLastUsedCodexOptions(CodexLaunchPrefs(
-                model: codexModel,
-                sandbox: codexSandbox,
-                approval: codexApproval,
-                fullAuto: codexFullAuto,
-                reasoningEffort: codexReasoningEffort
-            ))
+            preferencesStore.setLastUsedCodexOptions(codexLaunchPrefs())
         case .antigravity:
             preferencesStore.setLastUsedAntigravityOptions(AntigravityLaunchPrefs(
                 model: antigravityModel,
@@ -1259,6 +1477,7 @@ final class CreateSessionModel {
             noMemory = claude.noMemory
             claudeDebug = claude.debug
             focusMode = claude.focusMode
+            terminalUI = claude.terminalUI
         }
         if let autoScan = preferencesStore.getLastUsedAutoScanOptions() {
             autoScanClaudeModel = autoScan.model
@@ -1278,6 +1497,7 @@ final class CreateSessionModel {
             codexApproval = codex.approval
             codexFullAuto = codex.fullAuto
             codexReasoningEffort = codex.reasoningEffort
+            codexTerminalUI = codex.terminalUI
         }
         if let antigravity = preferencesStore.getLastUsedAntigravityOptions() {
             antigravityModel = antigravity.model
@@ -1323,4 +1543,35 @@ final class CreateSessionModel {
         if !(isPosixAbsolute || isWindowsAbsolute) { return "Path must be absolute" }
         return nil
     }
+}
+
+/// Codex's sandbox × approval shortcuts in the create-session wizard.
+enum CodexAutonomyPreset: CaseIterable {
+    case readOnly, auto, fullAccess
+
+    var title: String {
+        switch self {
+        case .readOnly: return "Read only"
+        case .auto: return "Auto"
+        case .fullAccess: return "Full access"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .readOnly: return "Reads the project; asks before any change."
+        case .auto: return "Edits within the workspace; asks before risky actions."
+        case .fullAccess: return "No sandbox or approval prompts (--yolo)."
+        }
+    }
+
+    var sandbox: String {
+        switch self {
+        case .readOnly: return "read-only"
+        case .auto: return "workspace-write"
+        case .fullAccess: return "danger-full-access"
+        }
+    }
+
+    var approval: String { self == .fullAccess ? "never" : "on-request" }
 }

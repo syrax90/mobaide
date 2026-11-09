@@ -42,6 +42,7 @@ final class AppContainer {
     let customAgentTypesRepository: CustomAgentTypesRepository
     let deviceRepository: DeviceRepository
     let terminalSessionStore: TerminalSessionStore
+    let chatSessionStore: ChatSessionStore
     let router: Router
     let authStateModel: AuthStateModel
     let notificationService: NotificationService
@@ -216,6 +217,13 @@ final class AppContainer {
             reviewPrompt: reviewPromptCoordinator
         )
         self.terminalSessionStore = terminalSessionStore
+        self.chatSessionStore = ChatSessionStore(
+            webSocketFactory: webSocketFactory,
+            sessionManager: sessionManager,
+            tokenStore: tokenStore,
+            foregroundSessionTracker: foregroundSessionTracker,
+            reviewPrompt: reviewPromptCoordinator
+        )
         let sessionRepository = SessionRepository(
             agentAPI: agentAPI,
             agentEventBus: agentEventBus,
@@ -364,6 +372,7 @@ final class AppContainer {
         // this build cannot. Non-blocking — a network error is a no-op.
         Task { await versionGate.probe() }
         sessionRepository.start()
+        chatSessionStore.start(sessions: sessionRepository.sessions())
         projectsRepository.start()
         voiceRepository.start()
         autoScanRepository.start()

@@ -47,6 +47,10 @@ final class TerminalSessionStore {
         self.reviewPrompt = reviewPrompt
     }
 
+    func hasModel(_ id: String) -> Bool {
+        models[id] != nil
+    }
+
     func model(
         id: String,
         kind: SessionKind,

@@ -45,10 +45,12 @@ Mobaide bridges this gap with a client-agent-relay architecture:
       v
 [ Python Agent ]         (FastAPI / uvicorn, on the user's workstation)
       |
-      |  PTY
+      |  PTY (terminal sessions)  ·  ACP over stdio (chat sessions)
       v
-[ Claude / Codex / Antigravity CLI ]   (bash / cmd sessions)
+[ Claude / Codex / Antigravity CLI ]   (bash / cmd sessions, ACP adapters)
 ```
+
+Chat sessions run the coding agent through an [Agent Client Protocol](https://agentclientprotocol.com) adapter (`mobaide_agent/mobaide/acp/`) and stream a structured timeline on the same per-session socket. See [features.md](features.md#chat-sessions).
 
 ## Agent stack
 
@@ -65,6 +67,7 @@ Mobaide bridges this gap with a client-agent-relay architecture:
 | Component | Tech | Description |
 |-----------|------|-------------|
 | `mobaide_agent/mobaide/core/` | Python 3.12+ | PTY backend abstraction, session manager, domain models |
+| `mobaide_agent/mobaide/acp/` | Python 3.12+ | Chat sessions: ACP client over stdio, agent launch specs, timeline, stored-session listing |
 | `mobaide_agent/mobaide/agent/` | FastAPI | WebSocket endpoints, JWT auth, REST API |
 | `mobaide_agent/mobaide/linear/` | Python (gql) | Linear GraphQL client, Auto Scan engine, worktree manager |
 | `android/` | Kotlin / Compose | Android app — OkHttp WebSocket client, multi-session UI, terminal view |

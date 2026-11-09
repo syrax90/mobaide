@@ -185,6 +185,205 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertNil(request.claude_options)
     }
 
+    // MARK: - Codex chat view
+
+    /// `refreshCliAvailability` against a stubbed agent whose
+    /// `capabilities.chat` is `chatJSON`.
+    private func modelWithChat(_ chatJSON: String) async -> CreateSessionModel {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(status: 200, body: """
+        {"name":"agent","server_version":"1.0.0","protocol_versions":[7],"min_client_version":1,
+         "capabilities":{"cli":{"codex":{"available":true}},"chat":\(chatJSON)}}
+        """)
+        let model = stubbedModel()
+        await model.refreshCliAvailability()
+        return model
+    }
+
+    func testCodexOpensTheChatViewUnlessTerminalUIIsOn() throws {
+        let model = makeModel()
+        model.selection = .stored("a")
+        XCTAssertEqual(try XCTUnwrap(model.buildRequest(mode: .codex)).ui, "chat")
+
+        model.codexTerminalUI = true
+
+        XCTAssertEqual(try XCTUnwrap(model.buildRequest(mode: .codex)).ui, "terminal")
+    }
+
+    func testCodexWithoutChatOnThePCOpensTheTerminal() async throws {
+        let model = await modelWithChat(#"{"claude":{"resume":true}}"#)
+        model.selection = .stored("a")
+        model.mode = .codex
+
+        let request = try XCTUnwrap(model.buildRequest(mode: .codex))
+
+        XCTAssertEqual(request.ui, "terminal")
+        XCTAssertEqual(model.codexChatUnavailableReason, "The chat view needs Node.js on your PC.")
+        XCTAssertFalse(model.canContinueSession)
+    }
+
+    func testCodexContinueIsOfferedOnlyForTheChatView() async {
+        let model = await modelWithChat(#"{"claude":{"resume":true},"codex":{"resume":true,"live":true}}"#)
+        model.mode = .codex
+
+        XCTAssertTrue(model.canContinueSession)
+        XCTAssertEqual(model.continueKind, "codex")
+        XCTAssertTrue(model.continueIsLive)
+
+        model.codexTerminalUI = true
+
+        XCTAssertFalse(model.canContinueSession)
+    }
+
+    func testCodexContinueRequestUsesTheCodexOptionsWithoutAWorktree() {
+        let model = makeModel()
+        model.mode = .codex
+        model.selection = .stored("a")
+        model.codexSandbox = "read-only"
+        let stored = ChatStoredSession(
+            session_id: "external-2222", cwd: "/srv/other", title: nil, updated_at: nil, open_session_id: nil
+        )
+
+        let request = model.continueRequest(for: stored)
+
+        XCTAssertEqual(request.cli, "codex")
+        XCTAssertEqual(request.ui, "chat")
+        XCTAssertEqual(request.chat_resume_id, "external-2222")
+        XCTAssertEqual(request.cwd, "/srv/other")
+        XCTAssertNil(request.project_name)
+        XCTAssertNil(request.claude_options)
+        XCTAssertEqual(request.codex_options?.sandbox, "read-only")
+        XCTAssertEqual(request.codex_options?.worktree, false)
+        XCTAssertNil(request.codex_options?.branch_name)
+    }
+
+    func testCodexTerminalUIIsRestoredFromTheLastLaunch() {
+        let prefs = isolatedPrefs()
+        prefs.setLastUsedCodexOptions(CodexLaunchPrefs(terminalUI: true))
+
+        let model = makeModel(prefs: prefs)
+
+        XCTAssertTrue(model.codexTerminalUI)
+    }
+
+    func testEachCodexPresetSetsItsPairAndIsReportedBack() {
+        let model = makeModel()
+
+        model.applyCodexPreset(.fullAccess)
+
+        XCTAssertEqual(model.codexPreset, .fullAccess)
+        XCTAssertEqual(model.codexSandbox, "danger-full-access")
+        XCTAssertEqual(model.codexApproval, "never")
+        XCTAssertTrue(model.codexFullAuto)
+
+        model.applyCodexPreset(.readOnly)
+
+        XCTAssertEqual(model.codexPreset, .readOnly)
+        XCTAssertEqual(model.codexSandbox, "read-only")
+        XCTAssertEqual(model.codexApproval, "on-request")
+        XCTAssertFalse(model.codexFullAuto, "leaving Full access turns --yolo off")
+
+        model.applyCodexPreset(.auto)
+
+        XCTAssertEqual(model.codexPreset, .auto)
+        XCTAssertEqual(model.codexSandbox, "workspace-write")
+        XCTAssertEqual(model.codexApproval, "on-request")
+    }
+
+    func testAHandPickedCodexPairMatchesNoPresetUnlessFullAccessIsOn() {
+        let model = makeModel()
+        model.codexSandbox = "workspace-write"
+        model.codexApproval = "never"
+        XCTAssertNil(model.codexPreset)
+
+        model.codexSandbox = "danger-full-access"
+        model.codexApproval = "on-request"
+        XCTAssertNil(model.codexPreset)
+
+        model.codexFullAuto = true
+        XCTAssertEqual(model.codexPreset, .fullAccess, "Full access ignores the sandbox and approval")
+    }
+
+    func testCodexCreateWithoutChatOnThePCPointsToTerminalUI() async {
+        StubURLProtocol.reset()
+        let model = stubbedModel()
+        model.selection = .stored("a")
+        model.mode = .codex
+        StubURLProtocol.enqueue(
+            status: 503,
+            body: #"{"detail":{"detail":"The chat view needs Node.js 22 or later on the PC.","chat_unavailable":true}}"#
+        )
+
+        await model.create()
+
+        XCTAssertEqual(
+            model.error,
+            "The chat view needs Node.js 22 or later on the PC. Turn on Terminal UI under Advanced to use the classic terminal."
+        )
+        XCTAssertFalse(model.submitting)
+    }
+
+    // MARK: - Codex continue after the Codex sign-in
+
+    private let externalSession = ChatStoredSession(
+        session_id: "external-2222", cwd: "/srv/other", title: nil, updated_at: nil, open_session_id: nil
+    )
+
+    /// A Codex "Continue a session" whose create asks for the Codex sign-in.
+    private func codexContinueNeedingSignIn() async -> CreateSessionModel {
+        StubURLProtocol.reset()
+        let model = stubbedModel()
+        model.selection = .stored("a")
+        model.mode = .codex
+        StubURLProtocol.enqueue(status: 409, body: #"{"detail":{"codex_auth_required":true}}"#)
+        await model.continueSession(externalSession)
+        XCTAssertTrue(model.showCodexLogin)
+        return model
+    }
+
+    private func createBodies() throws -> [[String: Any]] {
+        try zip(StubURLProtocol.requests, StubURLProtocol.bodies)
+            .filter { $0.0.url?.path == "/api/sessions" && $0.0.httpMethod == "POST" }
+            .map { try XCTUnwrap(JSONSerialization.jsonObject(with: $0.1) as? [String: Any]) }
+    }
+
+    func testSigningInRetriesTheSameCodexContinue() async throws {
+        let model = await codexContinueNeedingSignIn()
+        StubURLProtocol.enqueue(status: 200, body: #"{"authenticated":true}"#)
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"session_id":"s-resumed","state":"starting","created_at":"t"}"#
+        )
+        model.codexApiKey = "sk-user-key"
+
+        await model.submitCodexLogin()
+
+        XCTAssertNil(model.error)
+        let bodies = try createBodies()
+        XCTAssertEqual(bodies.count, 2)
+        XCTAssertEqual(bodies.last?["chat_resume_id"] as? String, "external-2222")
+        XCTAssertEqual(bodies.last?["cwd"] as? String, "/srv/other")
+        XCTAssertEqual(bodies.last?["cli"] as? String, "codex")
+    }
+
+    func testCancellingTheCodexSignInForgetsTheContinue() async throws {
+        let model = await codexContinueNeedingSignIn()
+        model.cancelCodexLogin()
+        StubURLProtocol.enqueue(status: 200, body: #"{"authenticated":true}"#)
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"session_id":"s-new","state":"starting","created_at":"t"}"#
+        )
+        model.codexApiKey = "sk-user-key"
+
+        await model.submitCodexLogin()
+
+        let bodies = try createBodies()
+        XCTAssertEqual(bodies.count, 2)
+        XCTAssertNil(bodies.last?["chat_resume_id"] as? String, "a later sign-in starts a new session")
+        XCTAssertEqual(bodies.last?["project_name"] as? String, "a")
+    }
+
     /// `refreshCliAvailability` against a stubbed agent advertising per-model
     /// Codex effort sets (`capabilities.cli.codex.model_details`).
     private func modelWithCodexDetails() async -> CreateSessionModel {

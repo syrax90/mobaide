@@ -61,6 +61,10 @@ struct SessionResponse: Codable, Equatable, Sendable {
     let kind_label: String?
     let attention: String?
     let exit_reason: String?
+    /// `"chat"` or `"terminal"`; absent or any other value is the terminal.
+    let ui: String?
+
+    var isChat: Bool { ui == "chat" }
 
     init(
         session_id: String,
@@ -74,7 +78,8 @@ struct SessionResponse: Codable, Equatable, Sendable {
         kind: SessionKind,
         kind_label: String? = nil,
         attention: String?,
-        exit_reason: String?
+        exit_reason: String?,
+        ui: String? = nil
     ) {
         self.session_id = session_id
         self.state = state
@@ -88,6 +93,7 @@ struct SessionResponse: Codable, Equatable, Sendable {
         self.kind_label = kind_label
         self.attention = attention
         self.exit_reason = exit_reason
+        self.ui = ui
     }
 }
 
@@ -108,6 +114,7 @@ extension SessionResponse {
         kind_label = try container.decodeIfPresent(String.self, forKey: .kind_label)
         attention = try container.decodeIfPresent(String.self, forKey: .attention)
         exit_reason = try container.decodeIfPresent(String.self, forKey: .exit_reason)
+        ui = try container.decodeIfPresent(String.self, forKey: .ui)
     }
 }
 
@@ -124,6 +131,8 @@ struct CreateSessionRequest: Codable, Equatable, Sendable {
     let antigravity_options: AntigravityOptionsModel?
     let worktree: Bool
     let branch_name: String?
+    let ui: String?
+    let chat_resume_id: String?
 
     init(
         command: [String]? = nil,
@@ -137,7 +146,9 @@ struct CreateSessionRequest: Codable, Equatable, Sendable {
         codex_options: CodexOptionsModel? = nil,
         antigravity_options: AntigravityOptionsModel? = nil,
         worktree: Bool = false,
-        branch_name: String? = nil
+        branch_name: String? = nil,
+        ui: String? = nil,
+        chat_resume_id: String? = nil
     ) {
         self.command = command
         self.cwd = cwd
@@ -151,6 +162,8 @@ struct CreateSessionRequest: Codable, Equatable, Sendable {
         self.antigravity_options = antigravity_options
         self.worktree = worktree
         self.branch_name = branch_name
+        self.ui = ui
+        self.chat_resume_id = chat_resume_id
     }
 }
 
@@ -169,6 +182,8 @@ extension CreateSessionRequest {
         antigravity_options = try container.decodeIfPresent(AntigravityOptionsModel.self, forKey: .antigravity_options)
         worktree = try container.decodeIfPresent(Bool.self, forKey: .worktree) ?? false
         branch_name = try container.decodeIfPresent(String.self, forKey: .branch_name)
+        ui = try container.decodeIfPresent(String.self, forKey: .ui)
+        chat_resume_id = try container.decodeIfPresent(String.self, forKey: .chat_resume_id)
     }
 }
 

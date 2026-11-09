@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.outlined.History
 import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import com.mobaide.app.ui.common.pixel.PixelButton
 import com.mobaide.app.ui.common.pixel.PixelButtonStyle
@@ -93,6 +94,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -105,7 +107,9 @@ import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mobaide.app.data.network.dto.ChatSupport
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.ui.common.pathBrowseHint
 import com.mobaide.app.ui.common.DragHandleIcon
@@ -124,8 +128,11 @@ fun CreateSessionScreen(
     onBack: () -> Unit,
     onSessionCreated: (String) -> Unit,
     onAutoScanStarted: (String) -> Unit,
+    chatResumeViewModel: ChatResumeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val resumeState by chatResumeViewModel.uiState.collectAsStateWithLifecycle()
+    var showResume by rememberSaveable { mutableStateOf(false) }
     val projectsState by projectsViewModel.uiState.collectAsStateWithLifecycle()
     val customPathSuggestions by viewModel.customPathSuggestionState.collectAsStateWithLifecycle()
     val projectPathSuggestions by projectsViewModel.pathSuggestionState.collectAsStateWithLifecycle()
@@ -283,12 +290,28 @@ fun CreateSessionScreen(
                             showWorktreeToggle = state.selection is ProjectSelection.Stored &&
                                 storedProject?.is_git == true,
                             viewModel = viewModel,
+                            onContinueSession = {
+                                chatResumeViewModel.open(
+                                    "claude",
+                                    state.selectedFolder,
+                                    (state.claudeChat as? ChatSupport.Available)?.live == true,
+                                )
+                                showResume = true
+                            },
                         )
                         CreateSessionStep.CodexConfig -> CodexConfigSection(
                             state = state,
                             showWorktreeToggle = state.selection is ProjectSelection.Stored &&
                                 storedProject?.is_git == true,
                             viewModel = viewModel,
+                            onContinueSession = {
+                                chatResumeViewModel.open(
+                                    "codex",
+                                    state.selectedFolder,
+                                    (state.codexChat as? ChatSupport.Available)?.live == true,
+                                )
+                                showResume = true
+                            },
                         )
                         CreateSessionStep.AntigravityConfig -> AntigravityConfigSection(
                             state = state,
@@ -309,6 +332,34 @@ fun CreateSessionScreen(
                 }
             }
         }
+    }
+
+    val resumeKind = when (state.step) {
+        CreateSessionStep.StandardConfig -> "claude"
+        CreateSessionStep.CodexConfig -> "codex"
+        else -> null
+    }
+    if (showResume && resumeKind != null) {
+        val resumeChat = if (resumeKind == "codex") state.codexChat else state.claudeChat
+        LaunchedEffect(resumeKind) {
+            chatResumeViewModel.ensureOpen(
+                resumeKind,
+                state.selectedFolder,
+                (resumeChat as? ChatSupport.Available)?.live == true,
+            )
+        }
+        ChatResumeSheet(
+            state = resumeState,
+            onSetAllFolders = chatResumeViewModel::setAllFolders,
+            onRetry = chatResumeViewModel::retry,
+            onLoadMore = chatResumeViewModel::loadMore,
+            onPick = { row ->
+                showResume = false
+                val openId = row.open_session_id
+                if (openId != null) onSessionCreated(openId) else viewModel.resumeChatSession(resumeKind, row)
+            },
+            onDismiss = { showResume = false },
+        )
     }
 
     val form = projectsState.form
@@ -1242,7 +1293,19 @@ private fun StandardConfigSection(
     state: CreateSessionUiState,
     showWorktreeToggle: Boolean,
     viewModel: CreateSessionViewModel,
+    onContinueSession: () -> Unit,
 ) {
+    if (state.claudeResumeAvailable) {
+        WizardActionCard(
+            title = "Continue a session",
+            subtitle = "Open a Claude Code session started on your PC, for example in a terminal.",
+            icon = Icons.Outlined.History,
+            selected = false,
+            onClick = onContinueSession,
+            contentDescription = "Continue a session",
+            testTag = "continue_chat_session",
+        )
+    }
     ClaudeOptionControls(
         model = state.claudeModel,
         effort = state.claudeEffort,
@@ -1251,7 +1314,7 @@ private fun StandardConfigSection(
         onModelSelect = viewModel::setClaudeModel,
         onEffortSelect = viewModel::setClaudeEffort,
     )
-    FocusViewToggle(state.focusMode, viewModel::toggleFocusMode)
+    if (!state.claudeUsesChat) FocusViewToggle(state.focusMode, viewModel::toggleFocusMode)
     ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
 
     if (showWorktreeToggle) {
@@ -1284,6 +1347,14 @@ private fun StandardConfigSection(
         onUltracodeToggle = viewModel::toggleClaudeUltracode,
         onDebugToggle = viewModel::toggleClaudeDebug,
         onAppendSystemPromptChange = viewModel::setClaudeAppendSystemPrompt,
+        showDebug = !state.claudeUsesChat,
+        leadingContent = {
+            TerminalUiToggle(
+                checked = state.claudeTerminalUi,
+                lockedHint = state.claudeChatUnavailableHint,
+                onChange = viewModel::toggleTerminalUi,
+            )
+        },
     )
 
     PixelButton(
@@ -1296,14 +1367,43 @@ private fun StandardConfigSection(
     }
 }
 
+/** "Terminal UI" under Advanced: the classic terminal instead of the chat view. */
+@Composable
+private fun TerminalUiToggle(checked: Boolean, lockedHint: String?, onChange: (Boolean) -> Unit) {
+    ToggleRow(
+        label = "Terminal UI",
+        checked = checked || lockedHint != null,
+        onChange = onChange,
+        enabled = lockedHint == null,
+    )
+    Text(
+        text = lockedHint ?: "Use the classic terminal instead of the chat view.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CodexConfigSection(
     state: CreateSessionUiState,
     showWorktreeToggle: Boolean,
     viewModel: CreateSessionViewModel,
+    onContinueSession: () -> Unit,
 ) {
     val preset = state.codexPreset
+
+    if (state.codexResumeAvailable) {
+        WizardActionCard(
+            title = "Continue a session",
+            subtitle = "Open a Codex session started on your PC, for example in a terminal.",
+            icon = Icons.Outlined.History,
+            selected = false,
+            onClick = onContinueSession,
+            contentDescription = "Continue a session",
+            testTag = "continue_chat_session",
+        )
+    }
 
     Text("Autonomy", style = MaterialTheme.typography.labelLarge)
     val presets = listOf(
@@ -1362,6 +1462,11 @@ private fun CodexConfigSection(
     }
     if (advancedExpanded) {
         val fullAuto = state.codexFullAuto
+        TerminalUiToggle(
+            checked = state.codexTerminalUi,
+            lockedHint = state.codexChatUnavailableHint,
+            onChange = viewModel::toggleCodexTerminalUi,
+        )
         Text("Sandbox (-s)", style = MaterialTheme.typography.labelLarge)
         val sandboxes = listOf(
             "read-only" to "Read-only",
@@ -1637,6 +1742,8 @@ private fun ClaudeAdvancedOptions(
     onUltracodeToggle: (Boolean) -> Unit,
     onDebugToggle: (Boolean) -> Unit,
     onAppendSystemPromptChange: (String) -> Unit,
+    showDebug: Boolean = true,
+    leadingContent: (@Composable () -> Unit)? = null,
 ) {
     var advancedExpanded by remember { mutableStateOf(false) }
     PixelTextButton(
@@ -1650,15 +1757,18 @@ private fun ClaudeAdvancedOptions(
         Text("Advanced")
     }
     if (advancedExpanded) {
+        leadingContent?.invoke()
         ToggleRow("No memory", noMemory, onNoMemoryToggle)
         ToggleRow("Fast mode (Opus only)", fastMode, onFastModeToggle)
         ToggleRow("ultracode", ultracode, onUltracodeToggle)
-        ToggleRow("Debug logging", debug, onDebugToggle)
-        Text(
-            text = "Claude Code prints verbose diagnostics into the terminal.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        if (showDebug) {
+            ToggleRow("Debug logging", debug, onDebugToggle)
+            Text(
+                text = "Claude Code prints verbose diagnostics into the terminal.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         OutlinedTextField(
             colors = PixelTextFieldDefaults.colors(),
             value = appendSystemPrompt,

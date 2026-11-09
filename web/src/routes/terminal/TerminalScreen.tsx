@@ -1,11 +1,7 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { createTemplate } from '../../api/templateRepository';
-import { isApiError } from '../../api/errors';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { Link, useParams } from 'react-router';
 import { MenuButton } from '../../components/MenuButton';
 import { writeClipboardText } from '../../lib/clipboard';
-import { queryKeys } from '../../lib/queryKeys';
 import { sessionChannelName } from '../../realtime/channels';
 import { useKeyboardLock } from '../../keyboard/useKeyboardLock';
 import { useReloadGuard } from '../../keyboard/useReloadGuard';
@@ -16,42 +12,28 @@ import {
   setMountedTerminal,
   useTerminalStore,
 } from '../../terminal/terminalStore';
-import type { SessionResponse } from '../../protocol/dto/session';
+import { isChatSession, type SessionResponse } from '../../protocol/dto/session';
+import { acquireChat } from '../../chat/chatStore';
 import { isSessionRunning } from '../../protocol/dto/terminalState';
-import { useSessionsPanelStore } from '../../stores/sessionsPanelStore';
-import { peekStopHandOff, useStopHandOffStore } from '../../stores/stopHandOffStore';
 import { useTerminalPrefsStore } from '../../stores/terminalPrefsStore';
 import { useToastStore } from '../../stores/toastStore';
-import { useVisibleSessionStore } from '../../stores/visibleSessionStore';
 import type { TerminalSessionModel } from '../../terminal/sessionModel';
 import { stripControls } from '../../terminal/terminalPaste';
 import { TemplateEditorDialog } from '../templates/TemplateEditorDialog';
+import { useSaveTemplate } from '../templates/useSaveTemplate';
 import { ConnectionOverlay, overlayMessage } from './ConnectionOverlay';
-import { GitChangesPanel } from './git/GitChangesPanel';
-import { NO_GIT_CAPABILITIES, hasGitSync } from '../../protocol/dto/agentVersion';
-import { useSessionGitCapabilities } from './git/useSessionGit';
+import { useSessionGitMenu } from './git/useSessionGitMenu';
 import { JumpToBottom } from './JumpToBottom';
-import { SessionsPanel } from './SessionsPanel';
 import { TemplatesPicker } from './TemplatesPicker';
 import { TerminalScrollbar } from './TerminalScrollbar';
 import { TerminalSurface } from './TerminalSurface';
 import { useSessionGone } from './useSessionGone';
 import { useSessionHeaderLabel } from './useSessionHeaderLabel';
 import { useSessionRow } from './useSessionRow';
-import { DictationDialog } from './voice/DictationDialog';
+import { useSessionsPanelHost } from './useSessionsPanelHost';
+import { ComposerVoiceDialogs } from './voice/ComposerVoiceDialogs';
 import { VoiceButton } from './voice/VoiceButton';
-import { VoiceSetupDialog } from './voice/VoiceSetupDialog';
-import { spliceTranscript, useAgentName, useDictation } from '../../voice/useDictation';
-import type { DictationState } from '../../voice/dictationController';
-import {
-  useVoiceCapability,
-  useVoiceCleanupKinds,
-  useVoiceCleanupSetting,
-  useVoiceStatus,
-} from '../../voice/useVoiceStatus';
-import { useMicHidden, useSkipReview, useVoicePrefsStore } from '../../voice/voicePrefsStore';
-import { voiceMicMode } from '../../voice/voiceStatusView';
-import { useWideViewport } from './useWideViewport';
+import { useComposerVoice } from '../../voice/useComposerVoice';
 
 export function TerminalScreen() {
   const { agentId, sessionId } = useParams();
@@ -105,17 +87,6 @@ function TerminalRoute({ agentId, sessionId }: TerminalRouteProps) {
     };
   }, [key]);
 
-  // The suppression input both mobile clients call a `ForegroundSessionTracker`:
-  // an attention alert for the session already on screen is noise. Session id,
-  // not the channel key — that is what the event carries.
-  useEffect(() => {
-    const { setVisibleSession, clearVisibleSession } = useVisibleSessionStore.getState();
-    setVisibleSession(sessionId);
-    return () => {
-      clearVisibleSession(sessionId);
-    };
-  }, [sessionId]);
-
   if (model === undefined) {
     return <section className="terminal-page terminal-page-empty">Attaching…</section>;
   }
@@ -160,80 +131,22 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
   const view = model.state();
   const passCtrlV = useTerminalPrefsStore((state) => state.passCtrlVToTerminal);
   const setPassCtrlV = useTerminalPrefsStore((state) => state.setPassCtrlVToTerminal);
-  const queryClient = useQueryClient();
   const [panel, setPanel] = useState<TemplatePanel>({ kind: 'none' });
-  const [saveError, setSaveError] = useState<string | null>(null);
-  // Separate from `panel`: the Changes viewer is non-modal and may stay open
-  // under the template dialogs, and it returns focus to the menu that opened
-  // it rather than to the grid.
-  const [changesOpen, setChangesOpen] = useState(false);
-  // Read once, then cleared: this visit took over from a session stopped in the
-  // panel, which stays open and finishes the switch's motion.
-  const [handOff] = useState(() => peekStopHandOff(model.agentId, model.sessionId));
-  useEffect(() => {
-    if (handOff !== null) useStopHandOffStore.getState().clearHandOff(handOff);
-  }, [handOff]);
-  // The sessions panel: `open` is per visit, `pinned` persists. Docked beside
-  // the grid only when pinned on a wide viewport; otherwise it slides over.
-  const [sessionsOpen, setSessionsOpen] = useState(handOff?.overlayOpen === true);
-  // An overlay carried over from the previous terminal is already in place and
-  // must not slide in again; any later opening does.
-  const [overlayCarried, setOverlayCarried] = useState(handOff?.overlayOpen === true);
-  useEffect(() => {
-    if (!sessionsOpen) setOverlayCarried(false);
-  }, [sessionsOpen]);
-  const pinned = useSessionsPanelStore((state) => state.pinned);
-  const setPinned = useSessionsPanelStore((state) => state.setPinned);
-  const wide = useWideViewport();
-  const docked = pinned && wide;
-  const panelButtonRef = useRef<HTMLButtonElement>(null);
-  // A counter, not a flag: the panel may already be open when *Commit…* is
-  // picked again, and only a new value re-opens its dialog.
-  const [commitRequest, setCommitRequest] = useState(0);
-  const [syncRequest, setSyncRequest] = useState(0);
-  const [rebaseRequest, setRebaseRequest] = useState(0);
+  const { handOff, toggle: sessionsToggle, rail: sessionsRail } = useSessionsPanelHost({
+    agentId: model.agentId,
+    sessionId: model.sessionId,
+    onPrepareSession: (row) => {
+      if (isChatSession(row)) acquireChat(model.agentId, row.session_id);
+      else acquireTerminal(model.agentId, row.session_id);
+    },
+  });
   const moreRef = useRef<HTMLButtonElement>(null);
-  // The menu's *Commit…* entry exists only on an agent that advertises
-  // `capabilities.git.commit`, *Fetch / Pull / Push…* on any of the three
-  // job keys; the panel gates its own controls the same way.
-  const gitCapabilities =
-    useSessionGitCapabilities(model.agentId, session?.cwd !== undefined).data ??
-    NO_GIT_CAPABILITIES;
-  const canCommit = gitCapabilities.commit;
-  const canSync = hasGitSync(gitCapabilities);
-  // *Branches…* is a link to the project's Git screen, so it needs a
-  // project-backed session on top of the capability.
-  const branchesProject =
-    gitCapabilities.branches && session?.project_name !== undefined
-      ? session.project_name
-      : null;
-  // Voice input: the mic shows only on an agent that advertises
-  // `capabilities.voice`, styled by its live status (`voice.changed` arrives
-  // on the agent channel `useSessionGone` already holds open).
-  const voiceCapability = useVoiceCapability(model.agentId).data ?? null;
-  const voiceStatus = useVoiceStatus(model.agentId, voiceCapability !== null);
-  const micHidden = useMicHidden(model.agentId);
-  const micMode = voiceMicMode(voiceCapability, voiceStatus.data, micHidden);
-  // Transcript cleanup runs the session's AI agent on the agent's computer,
-  // offered for the session kinds the agent lists; there the CLI is known to
-  // be there.
-  const cleanupKinds = useVoiceCleanupKinds(model.agentId).data;
-  const sessionKind = session?.kind;
-  const cleanupKind =
-    sessionKind !== undefined && cleanupKinds?.includes(sessionKind) === true ? sessionKind : null;
-  const cleanupAvailable = cleanupKind !== null;
-  const cleanUp = useVoiceCleanupSetting(model.agentId, voiceStatus.data);
-  // A capability only while voice is ready: any other state disposes the
-  // controller, which cancels a recording the agent can no longer take.
-  const dictation = useDictation(
-    model.agentId,
-    model.sessionId,
-    micMode === 'ready' ? voiceCapability : null,
-    cleanupKind === null ? null : { kind: cleanupKind, on: cleanUp.on },
-  );
-  const [voiceSetupOpen, setVoiceSetupOpen] = useState(false);
-  const agentName = useAgentName(model.agentId);
-  const navigate = useNavigate();
+  const git = useSessionGitMenu({
+    agentId: model.agentId,
+    sessionId: model.sessionId,
+    session,
+    moreRef,
+  });
   const immersive = useKeyboardLock();
   // Shared with the scrollbar, whose `role="scrollbar"` has to name what it
   // controls.
@@ -253,35 +166,18 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
 
   // Pasted like a template — never with Enter — so the text waits on the
   // program's input line for the user to send.
-  const { carried, finish: finishDictation } = dictation;
   const insertTranscript = useCallback(
     (text: string): boolean => {
       if (!canSend || !model.pasteText(text)) return false;
       model.jumpToBottom();
-      finishDictation();
       return true;
     },
-    [canSend, model, finishDictation],
+    [canSend, model],
   );
-  // With the review turned off a result goes straight to the prompt; only a
-  // paste the session refuses falls back to showing it for review. Decided
-  // once per result: turning the review off from the review itself must not
-  // paste the text under the user's edits. A failed cleanup is always shown,
-  // so the user learns why the text was not cleaned up.
-  const skipReview = useSkipReview(model.agentId);
-  const setSkipReview = useVoicePrefsStore((state) => state.setSkipReview);
-  const result = dictation.state.kind === 'result' ? dictation.state : null;
-  const insertDirectly = skipReview && result?.cleanupError === undefined;
-  const [reviewed, setReviewed] = useState<DictationState | null>(null);
-  const autoInserting = insertDirectly && result !== null && result !== reviewed;
-  // A layout effect, so a result never paints as a dialog before it lands.
-  useLayoutEffect(() => {
-    if (result === null || result === reviewed) return;
-    const text = carried === null ? result.text : spliceTranscript(carried, result.text).text;
-    if (insertDirectly && insertTranscript(text)) return;
-    setReviewed(result);
-  }, [result, reviewed, insertDirectly, carried, insertTranscript]);
-  const dictationShown = (dictation.state.kind !== 'idle' || carried !== null) && !autoInserting;
+  const voice = useComposerVoice(model.agentId, model.sessionId, {
+    insert: insertTranscript,
+    sessionKind: session?.kind,
+  });
 
   // Ctrl+R is a chord people press in a terminal on purpose, and a reload costs
   // the whole replay. See `useReloadGuard` for why this is capture-phase and
@@ -298,40 +194,15 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
   // Keyed on whether *any* panel is open rather than on the picker alone, so
   // the picker-to-editor hop is not mistaken for a dismissal and does not pull
   // focus out of the editor it just opened.
-  const panelOpen =
-    panel.kind !== 'none' || voiceSetupOpen || dictationShown;
+  const panelOpen = panel.kind !== 'none' || voice.dialogOpen;
   const panelWasOpen = useRef(false);
   useEffect(() => {
     if (panelWasOpen.current && !panelOpen) model.focus();
     panelWasOpen.current = panelOpen;
   }, [panelOpen, model]);
 
-  const save = useMutation({
-    mutationFn: ({ name, body }: { name: string; body: string }) =>
-      createTemplate(name, body),
-    onSuccess: async (_data, variables) => {
-      // Closed first, then announced: `.toast-viewport` paints below the top
-      // layer, so a toast raised with the editor still open cannot be seen.
-      // Both land in one commit, so there is no frame showing neither.
-      //
-      // Deliberately without the `mounted` guard the clipboard toast below
-      // carries. That one reports a local side effect belonging to a screen the
-      // user has left; this one reports durable account state that stays true
-      // wherever they went.
-      setPanel({ kind: 'none' });
-      setSaveError(null);
-      useToastStore.getState().show(`Saved template "${variables.name}"`, 'success');
-      await queryClient.invalidateQueries({ queryKey: queryKeys.templates() });
-    },
-    // Inline, never a toast: this renders while the editor is still up, which
-    // is exactly where a toast would be invisible.
-    onError: (error: unknown) => {
-      setSaveError(
-        isApiError(error)
-          ? `Failed to save template: ${error.message}`
-          : 'Failed to save template',
-      );
-    },
+  const save = useSaveTemplate(() => {
+    setPanel({ kind: 'none' });
   });
 
   // A clipboard permission prompt can hold the write promise open long enough
@@ -347,58 +218,15 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
     };
   }, []);
 
-  const closeSessions = () => {
-    setSessionsOpen(false);
-    panelButtonRef.current?.focus();
-  };
-
-  const sessionsPanel = (
-    <SessionsPanel
-      agentId={model.agentId}
-      sessionId={model.sessionId}
-      docked={docked}
-      pinned={pinned}
-      onPinnedChange={(next) => {
-        setPinned(next);
-        // Unpinning on a wide screen turns the rail into an overlay; keep it
-        // on screen rather than making it vanish under the click.
-        if (!next && wide) setSessionsOpen(true);
-      }}
-      onClose={closeSessions}
-      handOff={handOff}
-    />
-  );
-
   return (
     <>
       {/* Beside `.terminal-page`, never inside it: that one is a column, and a
           child there would stack under the grid. `.app-main` lays the two out
           in a row, and the narrower stage refits the grid once. */}
-      {docked && <aside className="sessions-panel sessions-panel-docked">{sessionsPanel}</aside>}
-      {sessionsOpen && !docked && (
-        <SessionsPanelOverlay onClose={closeSessions} carried={overlayCarried}>
-          {sessionsPanel}
-        </SessionsPanelOverlay>
-      )}
+      {sessionsRail}
       <section className={`terminal-page${handOff !== null ? ' terminal-page-arriving' : ''}`}>
         <header className="terminal-bar">
-          <button
-            type="button"
-            className="button button-icon"
-            ref={panelButtonRef}
-            aria-label="Sessions"
-            aria-expanded={docked || sessionsOpen}
-            title="Switch session"
-            onClick={() => {
-              if (docked) {
-                setPinned(false);
-              } else {
-                setSessionsOpen((open) => !open);
-              }
-            }}
-          >
-            ☰
-          </button>
+          {sessionsToggle}
           <Link to="/" className="terminal-back">
             ← Sessions
           </Link>
@@ -426,17 +254,12 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
               <span className="terminal-toggle-label-short">Ctrl+V</span>
             </span>
           </label>
-          {micMode !== 'hidden' && (
+          {voice.micMode !== 'hidden' && (
             <VoiceButton
-              mode={micMode}
-              status={voiceStatus.data}
-              disabled={micMode === 'ready' && !canRecord}
-              onClick={() => {
-                // Synchronous on purpose: the recorder opens audio inside this
-                // click's user activation.
-                if (micMode === 'ready') dictation.toggle();
-                else setVoiceSetupOpen(true);
-              }}
+              mode={voice.micMode}
+              status={voice.status}
+              disabled={voice.micMode === 'ready' && !canRecord}
+              onClick={voice.onMicClick}
             />
           )}
           <button
@@ -466,78 +289,12 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
               {immersive.active ? 'Leave immersive' : 'Immersive'}
             </button>
           )}
-          {/* Only once the row carries a cwd, as on both mobile clients: the
-              git routes answer for the directory the session was spawned in,
-              and a row without one has nothing to show. */}
-          {session?.cwd !== undefined && (
+          {git.group !== null && (
             <MenuButton
               label="More options"
               className="button button-icon"
               triggerRef={moreRef}
-              groups={[
-                {
-                  id: 'git',
-                  label: 'Git',
-                  items: [
-                    {
-                      id: 'changes',
-                      label: 'Changes…',
-                      onSelect: () => {
-                        setChangesOpen(true);
-                      },
-                    },
-                    ...(canCommit
-                      ? [
-                          {
-                            id: 'commit',
-                            label: 'Commit…',
-                            onSelect: () => {
-                              setChangesOpen(true);
-                              setCommitRequest((n) => n + 1);
-                            },
-                          },
-                        ]
-                      : []),
-                    ...(canSync
-                      ? [
-                          {
-                            id: 'sync',
-                            label: 'Fetch / Pull / Push…',
-                            onSelect: () => {
-                              setChangesOpen(true);
-                              setSyncRequest((n) => n + 1);
-                            },
-                          },
-                        ]
-                      : []),
-                    ...(branchesProject !== null
-                      ? [
-                          {
-                            id: 'branches',
-                            label: 'Branches…',
-                            onSelect: () => {
-                              void navigate(
-                                `/agents/${encodeURIComponent(model.agentId)}/projects/${encodeURIComponent(branchesProject)}/git`,
-                              );
-                            },
-                          },
-                        ]
-                      : []),
-                    ...(gitCapabilities.rebase
-                      ? [
-                          {
-                            id: 'rebase',
-                            label: 'Rebase…',
-                            onSelect: () => {
-                              setChangesOpen(true);
-                              setRebaseRequest((n) => n + 1);
-                            },
-                          },
-                        ]
-                      : []),
-                  ],
-                },
-              ]}
+              groups={[git.group]}
             >
               ⋯
             </MenuButton>
@@ -579,7 +336,7 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
               setPanel({ kind: 'none' });
             }}
             onNewTemplate={() => {
-              setSaveError(null);
+              save.clearError();
               setPanel({ kind: 'editor', initialBody: panel.selection });
             }}
             onPick={(template) => {
@@ -649,131 +406,23 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
           <TemplateEditorDialog
             editing={null}
             initialBody={panel.initialBody}
-            busy={save.isPending}
-            error={saveError}
-            onSave={(name, body) => {
-              save.mutate({ name, body });
-            }}
+            busy={save.busy}
+            error={save.error}
+            onSave={save.save}
             // Back to the terminal rather than to the picker. A save has to close
             // everything for its toast to be visible, and two exits that land in
             // different places would be the surprising half of the pair.
             onCancel={() => {
               setPanel({ kind: 'none' });
-              setSaveError(null);
+              save.clearError();
             }}
           />
         )}
 
-        {voiceSetupOpen && (
-          <VoiceSetupDialog
-            agentId={model.agentId}
-            agentName={agentName}
-            status={voiceStatus.data}
-            loadFailed={voiceStatus.isError}
-            cleanupOffered={cleanupAvailable}
-            onClose={() => {
-              setVoiceSetupOpen(false);
-            }}
-          />
-        )}
+        <ComposerVoiceDialogs voice={voice} canSend={canSend} canRecord={canRecord} />
 
-        {dictationShown && (
-          <DictationDialog
-            state={dictation.state}
-            carried={carried}
-            agentName={agentName}
-            canSend={canSend}
-            canRecord={canRecord}
-            onStop={dictation.stop}
-            onCancel={dictation.cancel}
-            onRetry={dictation.retry}
-            onRecordAgain={dictation.toggle}
-            onDismiss={dictation.dismiss}
-            onContinue={dictation.continueFrom}
-            onDiscard={dictation.finish}
-            onInsert={insertTranscript}
-            skipReview={skipReview}
-            onSkipReviewChange={(skip) => {
-              setSkipReview(model.agentId, skip);
-            }}
-            cleanupAvailable={cleanupAvailable}
-            sessionKind={sessionKind}
-            cleanUp={cleanUp.on}
-            cleanUpSaveFailed={cleanUp.failed}
-            onCleanUpChange={cleanUp.set}
-            onCleanUpText={dictation.cleanUpText}
-          />
-        )}
-
-        {changesOpen && (
-          <GitChangesPanel
-            agentId={model.agentId}
-            sessionId={model.sessionId}
-            commitRequest={commitRequest}
-            syncRequest={syncRequest}
-            rebaseRequest={rebaseRequest}
-            projectName={session?.project_name ?? null}
-            onClose={() => {
-              setChangesOpen(false);
-              setCommitRequest(0);
-              setSyncRequest(0);
-              setRebaseRequest(0);
-              // Back to the menu button, not the grid: the viewer was reached
-              // from the header, and a keyboard user is still up there.
-              moreRef.current?.focus();
-            }}
-          />
-        )}
+        {git.panel}
       </section>
     </>
-  );
-}
-
-interface SessionsPanelOverlayProps {
-  onClose: () => void;
-  /** Already on screen before this mount (a stop hand-off): skip the slide-in. */
-  carried: boolean;
-  children: ReactNode;
-}
-
-/**
- * The slide-over form of the panel. `popover="auto"`, unlike the Changes
- * viewer's `manual`: a click into the terminal or Escape should dismiss it,
- * and the UA `::backdrop` is the scrim. Mounted only while open, the way that
- * viewer and `Modal` are, so the top-layer entry comes and goes with it.
- */
-function SessionsPanelOverlay({ onClose, carried, children }: SessionsPanelOverlayProps) {
-  const ref = useRef<HTMLElement>(null);
-  // Set while this component closes the popover itself (unmount: a switch, or
-  // a pin that turns it into the docked rail). The toggle event that follows
-  // is not a dismissal, and acting on it would pull focus out of the rail.
-  const unmounting = useRef(false);
-
-  useLayoutEffect(() => {
-    // Re-armed on every mount: StrictMode replays mount → cleanup → mount on
-    // one instance, and a latch left set would swallow every real dismissal.
-    unmounting.current = false;
-    const panel = ref.current;
-    panel?.showPopover();
-    return () => {
-      unmounting.current = true;
-      panel?.hidePopover();
-    };
-  }, []);
-
-  return (
-    <aside
-      ref={ref}
-      className={`sessions-panel${carried ? ' sessions-panel-carried' : ''}`}
-      popover="auto"
-      aria-label="Sessions panel"
-      onToggle={(event) => {
-        // Light dismiss and Escape close the popover without going through
-        // React; mirror that into state so the next click opens it again.
-        if (event.newState === 'closed' && !unmounting.current) onClose();
-      }}
-    >
-      {children}
-    </aside>
   );
 }

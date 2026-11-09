@@ -123,6 +123,113 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-08: Codex chat sessions, live Codex sessions, Send now
+
+Additive delta within proto-v7 (2026-11-08): **one capability key, one chat command, one chat state key. No version bump; `central_server` is untouched.**
+
+Codex sessions open in the chat view too (`ui: "chat"` with `cli: "codex"`), through [`@agentclientprotocol/codex-acp`](https://github.com/agentclientprotocol/codex-acp). It runs the host's own `codex app-server` (`CODEX_PATH`), so chat and terminal sessions share the CLI version, login, settings and stored sessions.
+
+| Where | Change |
+|-------|--------|
+| `capabilities.chat` | A `codex` entry when the adapter can run. Every entry gains `live`: `true` when sessions stay in sync with the agent's own apps on the PC (Codex on macOS and Linux). Missing `live` reads as `false`. |
+| `'c'` command `steer` | `queue_id`. Sends a queued message into the running turn now (`_session/steering` with `idleBehavior: "promptRequired"`). `data: {steered: true}` when the turn took it (the message leaves the queue and shows as a `user` item); `{steered: false}` when no turn could take it (it stays first in the queue and runs next). A `dequeue` of a message being steered fails. |
+| State key `steering` | `true` when the agent can take a message during a turn (`initialize._meta.steering.supported`). Clients offer **Send now** on queued messages only then. |
+
+* Codex options map onto the session: `full_auto`, or sandbox `danger-full-access` with `approval: never` → mode `agent-full-access`; sandbox `read-only` → `read-only`; anything else → `workspace-write`, where a person (not Codex's reviewer model) approves each step outside the sandbox (the chat's mode chip offers Auto review). The mode is required: when the agent cannot apply it, the session does not start (error with Restart) instead of running in the agent's default mode. `model` → `model`, `reasoning_effort` → `reasoning_effort`, `initial_prompt` → the first prompt. A Codex sign-in that is missing answers `409 codex_auth_required`, as for terminal sessions.
+* Codex's trust record is `[projects."<folder>"] trust_level` in `$CODEX_HOME/config.toml` (default `~/.codex`). Like Codex, the agent looks up the folder (real path, then as given), then its git repository root, then the main checkout of a linked worktree; the first key found decides, and no other parent folder counts. `trust` appends a `trust_level = "trusted"` table for the main checkout (or the repository root, or the folder), and records nothing for the home folder, a folder above it, a root, or a folder the file already lists (that trust lasts for the session).
+
+#### Live Codex sessions
+
+`codex` in a terminal keeps its sessions in Codex's shared app-server (the daemon behind `codex agents`, control socket `$CODEX_HOME/app-server-control/app-server-control.sock`, JSON-RPC over a WebSocket). When that socket answers at session start, the chat session joins it through `mobaide/acp/codex_bridge.py`, a stdio-to-WebSocket relay that the adapter starts as its app-server. Mobaide never starts the daemon itself, and uses a private app-server instead on Windows, for a project with a conda env (the daemon runs commands with its own environment), or when the socket does not answer.
+
+* "Continue a session" then opens a session that is live in a terminal: both sides see the conversation and can send messages.
+* Codex reports its thread status in `session_info_update._meta.codex.threadStatus`. A turn that another app started shows as `status: "running"` after a `notice` item ("Message sent from another app on your PC"), also when it was already running as the chat opened; the adapter does not forward that message's text. Prompts sent meanwhile wait in the queue, and `cancel` stops that turn (after 15 s without an end report the chat returns to `ready`).
+* Closing the chat cancels only the turn it started and does not send `session/close`, which would stop a turn of the other app.
+
+#### Command output
+
+Tool calls can carry command output in `_meta` instead of content: `terminal_output` (replaces) and `terminal_output_delta` (appends) `{terminal_id, data}`, and `terminal_exit` `{exit_code}` (Codex always; Claude Code for background commands). The agent turns it into one `text` part, a fenced `console` block without escape sequences (a carriage return overwrites its line), plus `Exit code N` when it is not 0. While the command runs, the part holds the last 8 KB and the item is re-sent at most every 0.3 s; when it ends, the usual 32 KB head and tail of the last 128 KB. `terminal` content parts are dropped.
+
+#### Adapter install
+
+The PC agent no longer runs the adapters through `npx`: `npm exec` exports its own settings (`npm_config_ignore_scripts` …) into the adapter, and from there into every command the coding agent runs. The adapters are pinned (`claude-agent-acp@0.101.0`, `codex-acp@2.5.0`), installed once with `npm install --ignore-scripts --omit=optional --before=<release date>` into `<state prefix>/acp-adapters/<name>-<version>/`, and started with `node`. `--before` resolves the adapters' dependency ranges to versions published before the pinned release. Optional dependencies are the adapters' bundled copies of the CLIs, which chat sessions never use. The first chat session after an install or an update shows a "Setting up …" notice while npm runs. An adapter command on PATH, or `MOBAIDE_ACP_CLAUDE_COMMAND` / `MOBAIDE_ACP_CODEX_COMMAND`, still wins. Test mode runs the fake agent with `--flavor codex` for Codex.
+
+### Delta 2026-11-07: chat sessions (ACP)
+
+Additive delta within proto-v7 (2026-11-07): **one session wire field, two create fields, one capability key, one REST route and two frame types on the existing per-session socket. No version bump, and `central_server` is untouched** (the REST proxy and the session socket are opaque to it).
+
+A session can now run in the structured **chat UI**. The agent then starts an [Agent Client Protocol](https://agentclientprotocol.com) agent (for Claude Code: `@agentclientprotocol/claude-agent-acp`, which drives the host's own `claude` binary) as a stdio JSON-RPC subprocess, and turns its updates into an agent-agnostic timeline. The code is `mobaide_agent/mobaide/acp/`.
+
+#### Chat capability, create fields and wire field
+
+| Where | Change |
+|-------|--------|
+| `GET /api/version` | `capabilities.chat` maps each agent kind that can start in the chat UI on this host to `{"resume": bool}`, e.g. `{"claude": {"resume": true}}`. A missing kind means "not on this host" (for Claude: no `claude-agent-acp` and no `npx`). A missing `chat` key means an older agent. |
+| `POST /api/sessions`, `create_session` | `ui`: `"chat"` \| `"terminal"` \| null (null = terminal). `chat_resume_id`: chat only, an id from the route below — continue that stored session instead of starting one. A resume of a session that is already open answers with the open session. |
+| Session wire dict | `ui`: `"chat"` or `"terminal"`. Clients open the chat screen for `"chat"` and the terminal for anything else. |
+
+* `ui: "chat"` for a kind without a chat agent → `400`. No runnable adapter on the host → `503` with `chat_unavailable: true`.
+* Claude options map onto the ACP session: `skip_permissions` / `plan_mode` → the `mode` config option (plan mode is required: when the agent cannot apply it, the session does not start, as for the Codex mode), `model` / `effort` / `fast_mode` / `ultracode` → the matching config options, `append_system_prompt` → `systemPrompt` (append), `initial_prompt` → the first prompt (new sessions only). The config options also apply to a resumed session, and Restart re-applies the values in use before it. `debug` and `focus_mode` are terminal-only.
+* The env file key `MOBAIDE_ACP_CLAUDE_COMMAND` overrides the adapter command. `MOBAIDE_ENV=test` runs the scripted fake agent `mobaide/acp/fake_agent.py` (set `MOBAIDE_ACP_REAL=1` to keep the real one).
+
+#### Stored sessions route
+
+`GET /api/chat/{kind}/sessions?cwd=<abs>&cursor=<opaque>` → `ChatStoredSessionsResponse` `{"sessions": [{"session_id", "cwd", "title", "updated_at", "open_session_id"}], "next_cursor"}`, newest first.
+
+* It lists every session the agent stored on the host, also those started outside Mobaide (for example `claude` in a terminal). This is how a client continues them; there is no live attach to a running TUI.
+* `open_session_id` names the open Mobaide chat session that already shows the row.
+* Errors carry `{"detail"}`: `400` bad `cwd` or cursor, `404` no chat agent of that kind, `409` the agent cannot list, `502` the agent failed, `503` it cannot run here.
+* On the relay it runs aside from the tunnel reader, like the voice routes: its first call starts the agent process.
+
+#### Chat frames on the session socket
+
+Chat sessions use the same `/ws/session/{id}` and `CH_SESSION_IO` channel. Two frame types join the PTY set; each payload is one UTF-8 JSON object:
+
+| Byte | Direction | Payload |
+|------|-----------|---------|
+| `0x63` `'c'` | client → agent | a command: `{"id", "op", …}` |
+| `0x61` `'a'` | agent → client | a frame: `snapshot`, `events` or `result` |
+
+* On attach the agent sends the state frame and, inside the usual `'b'` … `'e'` markers, one `'o'` frame telling a client without chat support to update. Chat clients ignore those three and send `sync`.
+* The relay broadcasts agent frames to every attached client, so frames are idempotent and command results carry the command `id`.
+
+| Command `op` | Fields | Effect |
+|--------------|--------|--------|
+| `sync` | `epoch?`, `after_seq?` | The missed `events` (or an empty `events` ack), else a `snapshot`. No `result`. |
+| `prompt` | `text`, `images?` (`[{mime, data}]`, ≤ 4, base64 ≤ 1.5 MB each and ≤ 3.5 MB together, so the frame stays under the 4 MiB tunnel limit) | Sends the message, or queues it while a turn runs (`data: {queued, queue_id}`). |
+| `cancel` | — | Cancels the turn (`session/cancel`); pending requests are answered as cancelled. |
+| `set_config` | `config_id`, `value` | `session/set_config_option` (or `session/set_mode` for agents without config options). |
+| `respond` | `request_id`, `option_id` or `action` + `values` | Answers a permission or a form question; the first answer wins. |
+| `dequeue` | `queue_id` | Removes a queued message. |
+| `restart` | — | After a failure: respawns the agent and reloads the conversation (new epoch). |
+
+| Frame `t` | Fields | Client action |
+|-----------|--------|---------------|
+| `snapshot` | `epoch`, `seq`, `truncated`, `state`, `items` | Replace everything. |
+| `events` | `epoch`, `seq`, `events[]` with own `seq` | Apply in order: `item` (upsert by `id`), `append` (add `text` to an item), `state` (shallow-merge `patch`). On a gap or another epoch, send `sync`. |
+| `result` | `id`, `ok`, `data?`, `error?` | Resolve the command with that `id`; ignore others. |
+
+* State keys: `status`, `error`, `agent`, `title`, `cwd`, `acp_session_id`, `config`, `commands`, `usage`, `plan`, `requests`, `queue`, `prompt_caps`, `turn_started_at`, `cancelling`.
+* Item types: `user`, `agent`, `thought`, `tool`, `notice`, `compaction`, `turn_end`, `error`. Tool content parts: `text`, `diff` (a unified diff the agent computes), `image`, `link`, `resource`, `terminal`.
+* Bounds: text parts 32 KB, message texts 256 KB, diffs 48 KB / 1 200 lines, a snapshot ~2 MB (`truncated` marks dropped older items).
+* Attention works as for terminal sessions: a pending request raises `awaiting_permission`, a finished turn `turn_finished`, an agent exit `ended` (`exit_reason: process_exited`).
+
+#### ACP use
+
+| ACP surface | Used for |
+|-------------|----------|
+| `initialize` | Client capabilities `session.notices`, `session.compaction`, `session.configOptions.boolean`, `elicitation.form`. No `fs` or `terminal`: the agent already works on the host. |
+| `session/new`, `session/load`, `session/list`, `session/close` | Create, continue (with history replay), list, close. |
+| `session/prompt`, `session/cancel`, `session/update` | Turns and the timeline. |
+| `session/set_config_option`, `session/set_mode` | Mode, model, effort and other options. |
+| `session/request_permission`, `elicitation/create` (form) | Approval cards and question forms (Claude's AskUserQuestion). |
+
+An agent run over ACP skips its own "trust this folder?" prompt. So before `session/new` or `session/load`, the PC agent checks the agent's trust record (for Claude Code, `projects[<folder or a parent>].hasTrustDialogAccepted` in `~/.claude.json`, real paths only, and parents only up to the enclosing git repository root — stricter than the CLI, which walks every parent). For a folder that is not trusted, it publishes a `permission` request (`tool_call_id: null`, options `trust` / `decline`) in the normal `requests` state. `trust` records the trust the way the CLI does and continues; for the home folder, a folder above it or a root it records nothing, and the trust lasts for this session only (Restart does not ask again). `decline` ends the start with an error that offers Restart. The adapter process itself runs in the home folder (how it is installed: Delta 2026-11-08).
+
+#### Chat golden fixtures
+
+`tests/protocol_fixtures/frames/chat_frames.json` (every command and frame), and `ChatStoredSessionsResponse.json` plus new cases in `SessionResponse.json`, `CreateSessionRequest.json` and `VersionInfoResponse.json` under `dto/agent/`.
+
 ### Delta 2026-11-04: reorderable new-session lists
 
 Additive delta within proto-v7 (2026-11-04, drag-to-reorder in the new-session wizard): **one additive ``central_server`` REST resource, one additive user-event kind, no version bump.** The agent is untouched.

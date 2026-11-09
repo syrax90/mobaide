@@ -221,6 +221,9 @@ class TerminalSession:
     def event_queue(self) -> asyncio.Queue[SessionEvent]:
         return self._event_queue
 
+    def is_alive(self) -> bool:
+        return self._backend.is_alive()
+
     async def start(self) -> None:
         """Spawn the PTY process and start the async reader loop."""
         self._backend.spawn(
