@@ -165,6 +165,17 @@ struct VoiceCapability: Equatable, Sendable {
     let sampleRate: Int
     let maxSeconds: Int
     let maxChunkBytes: Int
+    /// `cleanup`: `POST /api/voice/cleanup` exists (explicit `true` only).
+    var cleanup = false
+    /// `cleanup_kinds`: the session kinds the agent cleans up for. An agent
+    /// that predates the key cleans up for `claude` only.
+    var cleanupKinds: [String] = []
+
+    /// Whether a session of `kind` is offered transcript cleanup.
+    func cleansUp(for kind: SessionKind?) -> Bool {
+        guard cleanup, let kind else { return false }
+        return cleanupKinds.contains(kind.wireName)
+    }
 }
 
 extension VersionInfoResponse {
@@ -184,7 +195,19 @@ extension VersionInfoResponse {
         else {
             return nil
         }
-        return VoiceCapability(sampleRate: sampleRate, maxSeconds: maxSeconds, maxChunkBytes: maxChunkBytes)
+        var cleanup = false
+        var cleanupKinds: [String] = []
+        if case .bool(true)? = capabilities["voice"]?["cleanup"] {
+            cleanup = true
+            cleanupKinds = capabilities["voice"]?["cleanup_kinds"]?.arrayValue?.compactMap(\.stringValue) ?? ["claude"]
+        }
+        return VoiceCapability(
+            sampleRate: sampleRate,
+            maxSeconds: maxSeconds,
+            maxChunkBytes: maxChunkBytes,
+            cleanup: cleanup,
+            cleanupKinds: cleanupKinds
+        )
     }
 }
 

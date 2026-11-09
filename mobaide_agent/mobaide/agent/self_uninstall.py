@@ -81,6 +81,8 @@ PREFIX_ENTRIES: tuple[str, ...] = (
     # The pinned ACP adapters of chat sessions (mobaide/acp/install.py).
     "acp-adapters",
     *VOICE_PREFIX_ENTRIES,
+    # The transcript-cleanup work dir: only its prompt file.
+    "voice-cleanup",
 )
 
 # The `mobaide-agent` command a root install.sh puts on PATH, and the marker

@@ -181,5 +181,8 @@ enum FixtureRegistry {
         "VoiceDictationAudioResponse": runner(VoiceDictationAudioResponse.self),
         "VoiceDictationFinishRequest": runner(VoiceDictationFinishRequest.self),
         "VoiceDictationResultResponse": runner(VoiceDictationResultResponse.self),
+        "VoiceCleanupRequest": runner(VoiceCleanupRequest.self),
+        "VoiceCleanupResponse": runner(VoiceCleanupResponse.self),
+        "VoiceCleanupSettingsRequest": runner(VoiceCleanupSettingsRequest.self),
     ]
 }

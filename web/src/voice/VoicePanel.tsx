@@ -1,6 +1,12 @@
 import { useState, type ReactNode } from 'react';
 import { VOICE_RECOMMENDATION_LOW, VOICE_STATE, type VoiceStatus } from '../protocol/dto/voice';
-import { useVoiceActions, type VoiceAction } from './useVoiceStatus';
+import { CleanupToggle } from './CleanupToggle';
+import {
+  useVoiceActions,
+  useVoiceCleanupCapability,
+  useVoiceCleanupSetting,
+  type VoiceAction,
+} from './useVoiceStatus';
 import { isVoiceApiError } from './voiceApi';
 import { installErrorCopy, voiceActionErrorCopy } from './voiceErrorCopy';
 import { useMicHidden, useSkipReview, useVoicePrefsStore } from './voicePrefsStore';
@@ -22,6 +28,12 @@ interface VoicePanelProps {
   variant: 'setup' | 'settings';
   status: VoiceStatus | undefined;
   loadFailed: boolean;
+  /**
+   * The setup variant's session can clean up transcripts, so the cleanup
+   * toggle is offered once voice is enabled: the first dictation can use it.
+   * The settings variant reads the agent's capability instead.
+   */
+  cleanupOffered?: boolean;
   /** "Not now" / "Hide the mic" in the setup variant. */
   onDismiss?: () => void;
 }
@@ -37,6 +49,7 @@ export function VoicePanel({
   variant,
   status,
   loadFailed,
+  cleanupOffered = false,
   onDismiss,
 }: VoicePanelProps) {
   const actions = useVoiceActions(agentId);
@@ -44,8 +57,10 @@ export function VoicePanel({
   const setMicHidden = useVoicePrefsStore((state) => state.setMicHidden);
   const skipReview = useSkipReview(agentId);
   const setSkipReview = useVoicePrefsStore((state) => state.setSkipReview);
-  const [confirmRemove, setConfirmRemove] = useState(false);
   const settings = variant === 'settings';
+  const cleanupSupported = useVoiceCleanupCapability(agentId, settings).data === true;
+  const cleanUp = useVoiceCleanupSetting(agentId, status);
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   if (status === undefined) {
     return (
@@ -63,6 +78,13 @@ export function VoicePanel({
   const actionError = actions.error;
   const languages = languageNames(status.model.languages);
   const lowResources = status.host.recommendation === VOICE_RECOMMENDATION_LOW;
+  const cleanupToggleShown = settings
+    ? cleanupSupported && status.state !== VOICE_STATE.unsupported
+    : cleanupOffered &&
+      (status.state === VOICE_STATE.queued ||
+        status.state === VOICE_STATE.downloading ||
+        status.state === VOICE_STATE.verifying ||
+        status.state === VOICE_STATE.ready);
 
   const removeControls = settings && (
     <>
@@ -304,6 +326,15 @@ export function VoicePanel({
           />
           Review dictated text before it is inserted
         </label>
+      )}
+      {cleanupToggleShown && (
+        <CleanupToggle
+          className="voice-toggle"
+          agentName={agentName}
+          checked={cleanUp.on}
+          saveFailed={cleanUp.failed}
+          onChange={cleanUp.set}
+        />
       )}
       {settings && status.model.notice !== undefined && status.model.notice !== '' && (
         <details className="voice-details">

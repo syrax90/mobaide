@@ -16,6 +16,8 @@ import { VoiceApiError, type VoiceApi } from '../voice/voiceApi';
 
 type DictationResponse = components['schemas']['VoiceDictationResponse'];
 type DictationResult = components['schemas']['VoiceDictationResultResponse'];
+type CleanupRequest = components['schemas']['VoiceCleanupRequest'];
+type CleanupResult = components['schemas']['VoiceCleanupResponse'];
 
 /** Turn any failure of a voice request into a `VoiceApiError`. */
 export function toVoiceApiError(error: unknown): VoiceApiError {
@@ -99,6 +101,36 @@ export async function cancelVoiceInstall(agentId: string): Promise<VoiceStatus> 
 export async function removeVoice(agentId: string): Promise<VoiceStatus> {
   const body = await call(() => createAgentClient(agentId).DELETE('/api/voice/model'));
   return decodeStatus(body);
+}
+
+/** Turn transcript cleanup on or off for every client of this agent. */
+export async function setVoiceCleanup(agentId: string, enabled: boolean): Promise<VoiceStatus> {
+  const body = await call(() =>
+    createAgentClient(agentId).PUT('/api/voice/cleanup/settings', { body: { enabled } }),
+  );
+  return decodeStatus(body);
+}
+
+/**
+ * Tidies a transcript with the AI agent of a `kind` session on the agent
+ * (fillers, self-corrections, punctuation, technical terms). The agent
+ * answers within 20 s.
+ */
+export async function cleanupTranscript(
+  agentId: string,
+  text: string,
+  kind: string,
+  signal: AbortSignal,
+): Promise<string> {
+  // Any kind the agent listed in `cleanup_kinds`, which may be newer than
+  // the generated enum.
+  const body: CleanupResult = await call(() =>
+    createAgentClient(agentId).POST('/api/voice/cleanup', {
+      body: { text, kind: kind as CleanupRequest['kind'] },
+      signal,
+    }),
+  );
+  return body.text;
 }
 
 /** The dictation routes of one agent, for the uploader. */

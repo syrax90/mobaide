@@ -16,7 +16,7 @@ Every documentation file in this repository, grouped by topic. Read this first, 
 
 | File | What it covers |
 |---|---|
-| [PROTOCOL.md](../PROTOCOL.md) | The wire contract: `protocol_version`, WebSocket close codes, the HTTPS-bootstrap update path, agent self-uninstall, voice input API, and the session and project git APIs (status, mutations, jobs, branches, rebase, conflict resolver). Also how to bump the version. |
+| [PROTOCOL.md](../PROTOCOL.md) | The wire contract: `protocol_version`, WebSocket close codes, the HTTPS-bootstrap update path, agent self-uninstall, voice input API (incl. the opt-in `POST /api/voice/cleanup` transcript cleanup), and the session and project git APIs (status, mutations, jobs, branches, rebase, conflict resolver). Also how to bump the version. |
 
 ## Clients
 
@@ -34,7 +34,7 @@ Every documentation file in this repository, grouped by topic. Read this first, 
 
 | File | What it covers |
 |---|---|
-| [voice-input.md](voice-input.md) | Voice input on Android, iOS and web: opt-in flow, per-platform module map, status → mic-button table, dictation rules, permissions and privacy, release checklist. |
+| [voice-input.md](voice-input.md) | Voice input on Android, iOS and web: opt-in flow, per-platform module map, status → mic-button table, dictation rules, opt-in transcript cleanup through the session's CLI (Claude Haiku, Codex Luna, Gemini Flash), permissions and privacy, release checklist. |
 | [qr-pairing.md](qr-pairing.md) | Agent pairing: QR flow and `MOBA1\|...` payload, printed pairing link, device-code direction, relay URL persistence, trust-key pinning, re-pair rules, operator runbook, troubleshooting. |
 
 ## Account workflows
@@ -50,7 +50,7 @@ Every documentation file in this repository, grouped by topic. Read this first, 
 
 | File | What it covers |
 |---|---|
-| [deployment.md](deployment.md) | `deploy_all.py` (ship several components in order), central-server and web-SPA deploys, TLS certificates, capacity triggers, agent deployment per OS, agent uninstall, security headers and CSP, voice input operations, Google Ads conversion upload. |
+| [deployment.md](deployment.md) | `deploy_all.py` (ship several components in order), central-server and web-SPA deploys, TLS certificates, capacity triggers, agent deployment per OS, agent uninstall, security headers and CSP, voice input operations and the `dl.mobaide.com` voice-model mirror, Google Ads conversion upload. |
 | [bootstrap-mobaide.md](../deploy/prod/bootstrap-mobaide.md) | One-time VPS bootstrap before `deploy_central.py` runs: prerequisites, layout, `.env`, ufw, TLS mode, backups. |
 | [configuration-profiles.md](configuration-profiles.md) | One PowerShell command swaps env-specific files (agent `.env`, `android/local.properties`, TLS trust config) between named profiles. |
 | [central_server/CHANGELOG.md](../central_server/CHANGELOG.md) | `central_server` release notes, per `server-vX.Y.Z` tag. |

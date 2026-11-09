@@ -21,6 +21,7 @@ import com.mobaide.app.data.chat.ChatTimelineReducer
 import com.mobaide.app.data.network.TerminalProtocol
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WsEvent
+import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
@@ -72,6 +73,8 @@ import javax.inject.Inject
 data class ChatSessionHeader(
     val title: String = "",
     val kindLabel: String = "",
+    /** Null until the session row arrives. */
+    val kind: SessionKind? = null,
     val cwd: String? = null,
     val projectName: String? = null,
 )
@@ -170,6 +173,7 @@ class ChatViewModel @Inject constructor(
             ChatSessionHeader(
                 title = session.title?.takeIf { it.isNotBlank() } ?: kindLabel,
                 kindLabel = kindLabel,
+                kind = session.kind,
                 cwd = session.cwd,
                 projectName = session.project_name,
             )

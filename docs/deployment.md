@@ -119,7 +119,7 @@ python deploy/prod/deploy_central.py --force                      # allow dirty 
 └── .last_tag                    # short git sha of last deploy
 
 # Docker-managed, survive restarts:
-#   central-server-data (SQLite DB), caddy-data, caddy-config
+#   central-server-data (SQLite DB, agent manifest + release files), caddy-data, caddy-config
 ```
 
 ### How upgrades work
@@ -968,7 +968,7 @@ The model is NVIDIA Parakeet TDT 0.6B v3 (int8 ONNX, 25 European languages inclu
 A helper process (`python -P -m mobaide.voice.worker`, same interpreter as the agent) starts on the first dictation, at below-normal priority with 2 inference threads and no console window.
 
 - It exits after 3 idle minutes, which returns all of its memory to the OS, and is recycled after an hour or 500 requests. The agent process itself never loads the model.
-- While a dictation is open, the auto-updater defers its restart (a forced update, and the `mobaide-agent update` CLI, do not wait).
+- While a dictation is open or a transcript cleanup is running, the auto-updater defers its restart (a forced update, and the `mobaide-agent update` CLI, do not wait).
 
 #### Where voice files live
 
@@ -978,17 +978,37 @@ A helper process (`python -P -m mobaide.voice.worker`, same interpreter as the a
 - `models/<model-id>/` holds the model plus its `NOTICE` (CC BY 4.0 attribution: created by NVIDIA, int8 ONNX export by k2-fsa/sherpa-onnx).
 - `runtime/<sherpa-onnx-version>-<python tag>-<platform>/` holds the sherpa-onnx runtime, unpacked from hash-pinned PyPI wheels. A Python upgrade fetches a new runtime; the model stays.
 
+The opt-in transcript cleanup (docs/voice-input.md) keeps its small prompt and settings files in a sibling directory, `<state prefix>/voice-cleanup/`. It needs no download and does not depend on the model.
+
 `MOBAIDE_VOICE_DIR` overrides the location. A relative path is anchored under the state prefix. The CLI reads it from the agent's environment or `.env`, and `--voice-dir` overrides both.
 
 Removing the agent with **Also uninstall Mobaide from this computer** deletes the voice files too (see *Uninstalling the agent*).
 
 #### Voice downloads
 
-Model files come from the `voice-model-parakeet-tdt-0.6b-v3-int8` release in the public releases repo (`github.com`), falling back to the pinned upstream Hugging Face revision (`huggingface.co`). The two runtime wheels come from PyPI (`files.pythonhosted.org`). Allow those hosts on a filtering proxy.
+Model files come from our mirror (`dl.mobaide.com`, see *Voice model mirror*), falling back to the pinned upstream Hugging Face revision (`huggingface.co`). The two runtime wheels come from PyPI (`files.pythonhosted.org`). Allow those hosts on a filtering proxy.
 
 - Every file's size and SHA-256 are pinned, so a captive-portal page or a truncated mirror is rejected (`hash_mismatch`) and the next source is tried.
+- A host that failed one file is tried last for the next files, so a dead mirror delays only the first file. A success puts the host back in its catalog place.
+- Agents 0.3.23 and older try a GitHub release first. Anonymous GitHub downloads time out, so these agents wait several minutes per file before they use Hugging Face. They still finish the install.
 - Downloads honour `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` and resume from `*.part` files after a network drop, a sleeping laptop, or an agent restart. A `failed` install waits for the user to retry.
 - Offline, enabling fails with `network`; once installed, dictation needs no internet.
+
+#### Voice model mirror
+
+`dl.mobaide.com` is a public Cloudflare R2 bucket on a custom domain. It holds only the voice-model files.
+
+- **Why R2.** R2 has no egress fees, and 0.67 GB is inside its free storage tier. It serves the 652 MB encoder, which the relay's Cloudflare plan cannot cache (512 MB limit). The downloads also stay off the relay's uplink.
+- **Layout.** A file lives at `voice/<model-id>/<sha256>/<name>`, the path of its catalog URL (`mirror_url()` in `mobaide/voice/catalog.py`). A re-pinned file gets a new key, so an old URL never changes meaning.
+- **Fill it.** `python deploy/prod/upload_voice_model.py` uploads every catalog file the bucket lacks, then downloads each one anonymously from `dl.mobaide.com` and checks size and SHA-256. It gets the files from Hugging Face, or from `--source-dir` (for example an agent's `voice/models/<model-id>/`). Re-running is safe.
+- **Check it.** `python deploy/prod/upload_voice_model.py --check` only downloads and checks. It needs no credentials.
+- **Credentials.** `<release dir>/voice/r2.properties` holds `account_id`, `bucket`, `access_key_id` and `secret_access_key`. Use an R2 API token with **Object Read & Write** on this bucket only. Uploading needs `boto3` 1.36 or newer.
+- **When to run it.** Run it before you release an agent whose catalog has a new or re-pinned model file. Otherwise agents fall back to Hugging Face for that file.
+- **One-time setup.**
+  1. In the Cloudflare dashboard, create an R2 bucket (for example `mobaide-downloads`).
+  2. In the bucket's **Settings → Custom Domains**, connect `dl.mobaide.com`. Keep the `r2.dev` public URL disabled.
+  3. In **R2 → Manage API tokens**, create a token with **Object Read & Write** on that bucket. Put its keys into `voice/r2.properties` (chmod 600).
+  4. Run the script, then `--check`.
 
 #### Voice CLI
 
@@ -1006,6 +1026,8 @@ The CLI works on the same files and lock as the running agent; the apps see the 
 #### Voice privacy, testing and troubleshooting
 
 **Privacy.** Audio is held in memory only, transcribed, and dropped; neither audio nor transcript text is logged or written to disk — logs carry only sizes, durations, timings and error codes.
+
+The one way the text leaves the PC is the opt-in transcript cleanup (web, Android and iOS; Claude Code, Codex and Antigravity sessions). The agent hands the transcript to the session's CLI on that computer, which sends it to Anthropic, OpenAI or Google under the user's own login. The agent still never logs or stores it (docs/voice-input.md, *Transcript cleanup*).
 
 **Testing without the model.** `MOBAIDE_VOICE_FAKE=1` swaps in a tiny generated model and a deterministic engine under `<state prefix>/voice-fake/`. `tests/e2e/manual_stack.py up --fake-voice` sets it.
 

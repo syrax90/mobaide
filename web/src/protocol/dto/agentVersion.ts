@@ -221,6 +221,29 @@ export function voiceCapability(info: AgentVersionInfo | undefined): VoiceCapabi
   return { sampleRate, maxSeconds, maxChunkBytes };
 }
 
+/**
+ * `capabilities.voice.cleanup`: the agent can tidy a transcript with a
+ * session's AI agent (`POST /api/voice/cleanup`). Explicit `true` only.
+ */
+export function voiceCleanupCapability(info: AgentVersionInfo | undefined): boolean {
+  if (info === undefined) return false;
+  const voice = info.capabilities.voice;
+  if (typeof voice !== 'object' || voice === null) return false;
+  return Object.hasOwn(voice, 'cleanup') && (voice as Record<string, unknown>).cleanup === true;
+}
+
+/**
+ * `capabilities.voice.cleanup_kinds`: the session kinds whose AI agent can
+ * clean up a transcript. An agent with `cleanup` and no list (or a malformed
+ * one) predates Codex and Antigravity cleanup: Claude Code only.
+ */
+export function voiceCleanupKinds(info: AgentVersionInfo | undefined): readonly string[] {
+  if (!voiceCleanupCapability(info)) return [];
+  const kinds = (info?.capabilities.voice as Record<string, unknown>).cleanup_kinds;
+  if (!Array.isArray(kinds)) return ['claude'];
+  return kinds.filter((kind): kind is string => typeof kind === 'string');
+}
+
 /** `capabilities.fs.<key>`, with `gitCapability`'s explicit-`true` rule. */
 export function fsCapability(info: AgentVersionInfo | undefined, key: string): boolean {
   if (info === undefined) return false;

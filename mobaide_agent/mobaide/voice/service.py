@@ -36,6 +36,7 @@ from .catalog import (
     RuntimeTarget,
     resolve_runtime,
 )
+from .cleanup import TranscriptCleaner, cleanup_unavailable
 from .dictation import (
     MAX_CHUNK_BYTES,
     MAX_SECONDS,
@@ -48,6 +49,7 @@ from .helper import HelperError, LoadSpec, SttHelper, consume_exception
 from .host import assess, disk_shortfall, free_disk_bytes, runtime_reason
 from .locking import FileLock
 from .models import (
+    VoiceCleanupResponse,
     VoiceDictationAudioRequest,
     VoiceDictationAudioResponse,
     VoiceDictationFinishRequest,
@@ -69,11 +71,13 @@ from .store import (
     bytes_on_disk,
     gc_models,
     gc_runtimes,
+    load_cleanup_enabled,
     load_settings,
     model_ready,
     remove_tree,
     run_to_completion,
     runtime_ready,
+    save_cleanup_enabled,
     save_settings,
     write_model_marker,
 )
@@ -114,6 +118,7 @@ class VoiceService:
         publish: PublishFn | None = None,
         fetcher: Any | None = None,
         helper: SttHelper | None = None,
+        cleaner: TranscriptCleaner | None = None,
     ) -> None:
         self._voice_dir = Path(voice_dir) if voice_dir else None
         self._test_mode = test_mode
@@ -123,6 +128,7 @@ class VoiceService:
         self._fetcher = fetcher
         self._helper = helper if helper is not None else SttHelper()
         self._dictations = DictationManager(self._helper, self._ready_load_spec)
+        self._cleaner = cleaner
         self._publish_fn = publish
         self._paths: VoicePaths | None = None
         self._task: asyncio.Task[None] | None = None
@@ -148,9 +154,9 @@ class VoiceService:
         return self._paths
 
     def busy(self) -> bool:
-        """True while a dictation or a transcription is in progress (the
-        auto-updater defers its restart)."""
-        return self._dictations.busy()
+        """True while a dictation, a transcription or a cleanup is in
+        progress (the auto-updater defers its restart)."""
+        return self._dictations.busy() or (self._cleaner is not None and self._cleaner.busy())
 
     async def start(self) -> None:
         """Resume an install the last run did not finish, or repair a ready
@@ -187,6 +193,8 @@ class VoiceService:
                 task.cancel()
                 await asyncio.wait({task}, timeout=_SHUTDOWN_WAIT_SECONDS)
             await self._dictations.abort_all()
+            if self._cleaner is not None:
+                await self._cleaner.abort_all()
             await self._helper.stop()
         except Exception:
             logger.exception("voice.shutdown_failed")
@@ -246,6 +254,7 @@ class VoiceService:
             ),
             speed_factor=settings.speed_factor if state == STATE_READY else None,
             error=error,
+            cleanup_enabled=load_cleanup_enabled(paths),
         )
 
     async def install(self, model_id: str | None = None) -> VoiceStatusResponse:
@@ -309,6 +318,25 @@ class VoiceService:
 
     async def delete_dictation(self, dictation_id: str) -> None:
         await self._dictations.abort(dictation_id)
+
+    async def cleanup_transcript(self, text: str, kind: str = "claude") -> VoiceCleanupResponse:
+        """Tidy a transcript with the CLI of a ``kind`` session; independent
+        of the speech model's install state."""
+        if self._cleaner is None:
+            raise cleanup_unavailable()
+        return VoiceCleanupResponse(text=await self._cleaner.clean(text, kind))
+
+    def set_cleanup_enabled(self, enabled: bool) -> VoiceStatusResponse:
+        """Store the transcript-cleanup choice for every client and announce
+        it with ``voice.changed``."""
+        try:
+            save_cleanup_enabled(self.paths, enabled)
+        except OSError as exc:
+            raise VoiceError(
+                500, "storage_error", f"Cannot write voice settings: {exc.strerror or exc}"
+            ) from exc
+        self._publish(force=True)
+        return self.status()
 
     def _spec_for(self, model_id: str | None) -> ModelSpec:
         return self._models.get(model_id or "") or self._models[self._default_model_id]

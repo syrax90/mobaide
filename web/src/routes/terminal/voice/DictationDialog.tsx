@@ -1,8 +1,14 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Modal } from '../../../components/Modal';
-import type { DictationState, InterruptReason } from '../../../voice/dictationController';
+import { CleanupToggle } from '../../../voice/CleanupToggle';
+import type {
+  CleanupError,
+  CleanupOutcome,
+  DictationState,
+  InterruptReason,
+} from '../../../voice/dictationController';
 import { VOICE_CODE } from '../../../voice/voiceApi';
-import { dictationErrorCopy } from '../../../voice/voiceErrorCopy';
+import { cleanupErrorCopy, dictationErrorCopy } from '../../../voice/voiceErrorCopy';
 import { spliceTranscript, type CarriedText } from '../../../voice/useDictation';
 import { formatDuration } from '../../../voice/voiceStatusView';
 import { MicIcon } from './VoiceIcons';
@@ -33,7 +39,24 @@ interface DictationDialogProps {
   onInsert: (text: string) => boolean;
   skipReview: boolean;
   onSkipReviewChange: (skip: boolean) => void;
+  /** The agent can clean up transcripts in this session. */
+  cleanupAvailable: boolean;
+  /** The session's kind, which names its AI agent in cleanup errors. */
+  sessionKind?: string;
+  cleanUp: boolean;
+  /** The agent did not store the last change of `cleanUp`. */
+  cleanUpSaveFailed?: boolean;
+  onCleanUpChange: (cleanUp: boolean) => void;
+  /** Cleans up the review's text, when cleanup is turned on from the review. */
+  onCleanUpText: (text: string, abort: AbortController) => Promise<CleanupOutcome>;
 }
+
+/** The review's own cleanup, run when the toggle is turned on there. */
+type ReviewCleanup =
+  | { kind: 'running' }
+  | { kind: 'cleaned'; original: string; cleaned: string }
+  | { kind: 'unchanged' }
+  | { kind: 'failed'; error: CleanupError };
 
 function interruptionNote(reason: InterruptReason | null): string | null {
   switch (reason) {
@@ -62,6 +85,11 @@ const PERMISSION_HELP =
  * The review's mic records again; the new transcript goes in at the text's
  * cursor, and a cancel, an empty result or a failure returns to the review.
  *
+ * With cleanup on, the session's AI agent cleans up the transcript while the
+ * dialog still reads "Transcribing"; the review can swap back to the
+ * transcript as heard, and a failed cleanup shows it as heard. Turning
+ * cleanup on from the review cleans up the text already in it.
+ *
  * Esc cancels a recording or a transcription, and discards a result.
  */
 export function DictationDialog({
@@ -80,6 +108,12 @@ export function DictationDialog({
   onInsert,
   skipReview,
   onSkipReviewChange,
+  cleanupAvailable,
+  sessionKind,
+  cleanUp,
+  cleanUpSaveFailed = false,
+  onCleanUpChange,
+  onCleanUpText,
 }: DictationDialogProps) {
   const titleId = useId();
   const [draft, setDraft] = useState(() => {
@@ -87,28 +121,75 @@ export function DictationDialog({
     return carried === null ? state.text : spliceTranscript(carried, state.text).text;
   });
   const [insertRefused, setInsertRefused] = useState(false);
+  const [showingOriginal, setShowingOriginal] = useState(false);
+  const [reviewCleanup, setReviewCleanup] = useState<ReviewCleanup | null>(null);
+  const reviewCleanupAbortRef = useRef<AbortController | null>(null);
   const resultText = state.kind === 'result' ? state.text : null;
   const textRef = useRef<HTMLTextAreaElement>(null);
   // Where the cursor goes once a spliced transcript is in the field.
   const caretRef = useRef<number | null>(null);
+  // The draft of the version not showing (cleaned up or as heard), edits
+  // included, so swapping back and forth never loses them.
+  const otherDraftRef = useRef<string | null>(null);
   // Read when a result lands, not a dependency: `carried` is set while the
   // previous result is still showing, which must not re-insert it.
   const carriedRef = useRef(carried);
   carriedRef.current = carried;
 
+  const placeTranscript = useCallback((transcript: string) => {
+    const around = carriedRef.current;
+    if (around === null) {
+      setDraft(transcript);
+    } else {
+      const spliced = spliceTranscript(around, transcript);
+      caretRef.current = spliced.caret;
+      setDraft(spliced.text);
+    }
+  }, []);
+
   useEffect(() => {
     if (resultText !== null) {
-      const around = carriedRef.current;
-      if (around === null) {
-        setDraft(resultText);
-      } else {
-        const spliced = spliceTranscript(around, resultText);
-        caretRef.current = spliced.caret;
-        setDraft(spliced.text);
-      }
+      placeTranscript(resultText);
+      otherDraftRef.current = null;
+      setShowingOriginal(false);
       setInsertRefused(false);
+      setReviewCleanup(null);
     }
-  }, [resultText]);
+  }, [resultText, placeTranscript]);
+
+  // Closing the dialog drops a cleanup of the review's text.
+  useEffect(
+    () => () => {
+      const abort = reviewCleanupAbortRef.current;
+      reviewCleanupAbortRef.current = null;
+      abort?.abort();
+    },
+    [],
+  );
+
+  const cleanUpReview = (text: string) => {
+    const abort = new AbortController();
+    reviewCleanupAbortRef.current = abort;
+    setReviewCleanup({ kind: 'running' });
+    void onCleanUpText(text, abort).then((outcome) => {
+      if (reviewCleanupAbortRef.current !== abort) return;
+      reviewCleanupAbortRef.current = null;
+      switch (outcome.kind) {
+        case 'cleaned':
+          setDraft(outcome.text);
+          otherDraftRef.current = null;
+          setShowingOriginal(false);
+          setReviewCleanup({ kind: 'cleaned', original: text, cleaned: outcome.text });
+          break;
+        case 'unchanged':
+          setReviewCleanup({ kind: 'unchanged' });
+          break;
+        case 'failed':
+          setReviewCleanup({ kind: 'failed', error: outcome.error });
+          break;
+      }
+    });
+  };
 
   useLayoutEffect(() => {
     const caret = caretRef.current;
@@ -118,7 +199,11 @@ export function DictationDialog({
     field.setSelectionRange(caret, caret);
   }, [draft]);
 
-  const live = state.kind === 'starting' || state.kind === 'recording' || state.kind === 'transcribing';
+  const live =
+    state.kind === 'starting' ||
+    state.kind === 'recording' ||
+    state.kind === 'transcribing' ||
+    state.kind === 'cleaning';
 
   let title: string;
   let body: ReactNode;
@@ -190,9 +275,35 @@ export function DictationDialog({
       );
       break;
     }
+    case 'cleaning':
+      // Part of transcribing to the user: the same dialog, one line changed.
+      title = 'Transcribing';
+      body = <p role="status">Cleaning up the text…</p>;
+      actions = (
+        <button type="button" className="button" onClick={onCancel}>
+          Cancel
+        </button>
+      );
+      break;
     case 'idle':
     case 'result': {
       const more = draft.trim() !== '';
+      const reviewCleaning = reviewCleanup?.kind === 'running';
+      // The cleaned-up version and the text as heard, as whole review texts
+      // when the review's own cleanup made them; else from the result.
+      const reviewVersions = reviewCleanup?.kind === 'cleaned' ? reviewCleanup : null;
+      const original =
+        reviewVersions !== null
+          ? reviewVersions.original
+          : reviewCleanup === null && state.kind === 'result'
+            ? (state.original ?? null)
+            : null;
+      const failedCleanup =
+        reviewCleanup?.kind === 'failed'
+          ? reviewCleanup.error
+          : reviewCleanup === null && state.kind === 'result'
+            ? (state.cleanupError ?? null)
+            : null;
       const micLabel = more ? 'Dictate more at the cursor' : 'Dictate again';
       title = 'Review';
       body = (
@@ -207,11 +318,51 @@ export function DictationDialog({
             className="field-input field-textarea"
             rows={5}
             value={draft}
+            readOnly={reviewCleaning}
             autoFocus
             onChange={(event) => {
               setDraft(event.target.value);
             }}
           />
+          {reviewCleaning && <p role="status">Cleaning up the text…</p>}
+          {original !== null && (reviewVersions !== null || resultText !== null) && (
+            <p className="page-note">
+              {showingOriginal
+                ? 'Showing the text as heard.'
+                : 'Cleaned up by the session’s AI agent.'}{' '}
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => {
+                  const other = otherDraftRef.current;
+                  otherDraftRef.current = draft;
+                  if (other !== null) setDraft(other);
+                  else if (reviewVersions !== null) {
+                    setDraft(showingOriginal ? reviewVersions.cleaned : reviewVersions.original);
+                  } else if (resultText !== null) {
+                    placeTranscript(showingOriginal ? resultText : original);
+                  }
+                  setShowingOriginal(!showingOriginal);
+                }}
+              >
+                {showingOriginal ? 'Show cleaned up' : 'Show original'}
+              </button>
+            </p>
+          )}
+          {failedCleanup !== null && (
+            <>
+              <p className="page-note" role="status">
+                Couldn&rsquo;t clean up the text, so it&rsquo;s shown as heard.{' '}
+                {cleanupErrorCopy(failedCleanup.code, agentName, sessionKind)}
+              </p>
+              {failedCleanup.message !== null && failedCleanup.message !== '' && (
+                <details className="voice-details">
+                  <summary>Details</summary>
+                  <pre>{failedCleanup.message}</pre>
+                </details>
+              )}
+            </>
+          )}
           {(draft.length > PASTE_COLLAPSE_CHARS || draft.includes('\n')) && (
             <p className="page-note">
               Claude Code may show long text as [Pasted text]; it still receives all of it.
@@ -222,9 +373,25 @@ export function DictationDialog({
               The session isn&rsquo;t accepting input right now.
             </p>
           )}
+          {cleanupAvailable && (
+            <CleanupToggle
+              className="voice-review-skip"
+              agentName={agentName}
+              checked={cleanUp}
+              saveFailed={cleanUpSaveFailed}
+              disabled={reviewCleaning}
+              onChange={(on) => {
+                onCleanUpChange(on);
+                // The text in the review has not been cleaned up yet: do it
+                // now, not only from the next dictation on.
+                if (on && original === null && draft.trim() !== '') cleanUpReview(draft);
+              }}
+            />
+          )}
           <label className="voice-review-skip">
             <input
               type="checkbox"
+              disabled={reviewCleaning}
               checked={skipReview}
               onChange={(event) => {
                 onSkipReviewChange(event.target.checked);
@@ -246,7 +413,7 @@ export function DictationDialog({
             className="button voice-dictate-more"
             aria-label={micLabel}
             title={micLabel}
-            disabled={!canRecord}
+            disabled={!canRecord || reviewCleaning}
             onClick={() => {
               // The field keeps its selection after losing focus to this button.
               const field = textRef.current;
@@ -263,7 +430,7 @@ export function DictationDialog({
           <button
             type="button"
             className="button button-primary"
-            disabled={!canSend || draft.trim() === ''}
+            disabled={!canSend || draft.trim() === '' || reviewCleaning}
             onClick={() => {
               if (!onInsert(draft)) setInsertRefused(true);
             }}
@@ -344,7 +511,9 @@ export function DictationDialog({
           ? 'Recording'
           : state.kind === 'transcribing'
             ? 'Recording stopped. Transcribing'
-            : ''}
+            : state.kind === 'cleaning'
+              ? 'Cleaning up the text'
+              : ''}
       </p>
       {body}
       <div className="button-row voice-dialog-footer">{actions}</div>

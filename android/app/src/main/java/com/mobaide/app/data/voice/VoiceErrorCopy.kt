@@ -23,6 +23,38 @@ object VoiceErrorCopy {
         else -> "Voice input failed."
     }
 
+    /**
+     * Why a cleanup failed; the transcript is inserted as heard. [kind] is
+     * the wire name of the session kind whose CLI ran it.
+     */
+    fun cleanup(code: String, agent: String, kind: String?): String {
+        val name = cleanupCliName(kind)
+        return when (code) {
+            VoiceCodes.CLEANUP_UNAVAILABLE -> "$name isn't installed on $agent."
+            VoiceCodes.CLEANUP_OUTDATED -> cleanupUpdateCommand(kind)
+                ?.let { "$name on $agent is too old. Run \"$it\" there." }
+                ?: "$name on $agent is too old. Update it there."
+            VoiceCodes.CLEANUP_BUSY -> "Another cleanup was still running."
+            VoiceCodes.CLEANUP_TIMEOUT -> "$name took too long."
+            VoiceCodes.NETWORK -> "The connection dropped."
+            else -> "$name reported an error."
+        }
+    }
+
+    private fun cleanupCliName(kind: String?): String = when (kind) {
+        "claude" -> "Claude Code"
+        "codex" -> "Codex"
+        "antigravity" -> "Antigravity"
+        else -> "The session's AI agent"
+    }
+
+    private fun cleanupUpdateCommand(kind: String?): String? = when (kind) {
+        "claude" -> "claude update"
+        "codex" -> "codex update"
+        "antigravity" -> "agy update"
+        else -> null
+    }
+
     /** Why an install ended `failed` (`VoiceStatusResponse.error.code`). */
     fun install(code: String, repairing: Boolean): String = when (code) {
         "interrupted" ->

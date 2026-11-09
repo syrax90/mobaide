@@ -138,6 +138,9 @@ class HttpFetcher:
         self._client_factory = client_factory
         self._attempts = attempts_per_url
         self._sleep = sleep
+        # Hosts that already failed a file: later files try them last, so a
+        # dead mirror stalls one file, not every file of the model.
+        self._failed_hosts: set[str] = set()
 
     async def fetch(self, file: CatalogFile, directory: Path, on_progress: ProgressFn) -> Path:
         directory.mkdir(parents=True, exist_ok=True)
@@ -147,17 +150,20 @@ class HttpFetcher:
             on_progress(file.name, file.size)
             return final
         error = DownloadError("network", "No download source is configured.")
+        urls = sorted(file.urls, key=lambda url: _host(url) in self._failed_hosts)
         async with self._client_factory() as client:
-            for url in file.urls:
+            for url in urls:
                 try:
                     await self._from_source(client, url, file, part, on_progress)
                 except _NextSource as exc:
                     error = exc.error
+                    self._failed_hosts.add(_host(url))
                     logger.warning(
                         "voice.download_source_failed file=%s host=%s code=%s",
                         file.name, _host(url), error.code,
                     )
                     continue
+                self._failed_hosts.discard(_host(url))
                 try:
                     os.replace(part, final)
                 except OSError as exc:

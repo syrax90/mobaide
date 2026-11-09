@@ -178,7 +178,14 @@ fun TerminalScreen(
         viewModel.sessionEnded.collect { onSessionEnded() }
     }
 
-    val voice = rememberVoiceComposerSlots(voiceViewModel, onTranscript = viewModel::insertTranscript)
+    val voice = rememberVoiceComposerSlots(
+        voiceViewModel,
+        sessionKind = sessionKind,
+        onTranscript = viewModel::insertTranscript,
+        // Launched, not awaited: a suspended showSnackbar would hold back the
+        // next transcript.
+        onNotice = { notice -> drawerScope.launch { snackbarHostState.showSnackbar(notice) } },
+    )
     val micButton = voice.micButton
     val dictationBar = voice.dictationBar
 

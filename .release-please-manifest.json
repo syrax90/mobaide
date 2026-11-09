@@ -1,7 +1,7 @@
 {
-  "mobaide_agent": "0.3.22",
-  "central_server": "0.2.21",
-  "android": "3.6.16",
-  "web": "0.1.17",
-  "ios": "1.0.18"
+  "mobaide_agent": "0.3.24",
+  "central_server": "0.2.23",
+  "android": "3.6.17",
+  "web": "0.1.19",
+  "ios": "1.0.19"
 }

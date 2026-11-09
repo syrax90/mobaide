@@ -1,5 +1,20 @@
 # mobaide_agent Changelog
 
+## [0.3.24](https://github.com/syrax90/mobaide/compare/agent-v0.3.23...agent-v0.3.24) (2026-11-08)
+
+
+### Bug Fixes
+
+* **agent,server:** download the voice model from our R2 mirror, not GitHub ([#839](https://github.com/syrax90/mobaide/issues/839)) ([04c4c6c](https://github.com/syrax90/mobaide/commit/04c4c6c65ac65b29fccceae9defc8764a2bd543e))
+
+## [0.3.23](https://github.com/syrax90/mobaide/compare/agent-v0.3.22...agent-v0.3.23) (2026-11-08)
+
+
+### Features
+
+* **agent,web,android,ios,server:** AI cleanup of dictated text ([#835](https://github.com/syrax90/mobaide/issues/835)) ([596856d](https://github.com/syrax90/mobaide/commit/596856d50924c51145047a58f6e2f97e3d3a2306))
+* **git:** allow checkout while sessions use the project folder ([#828](https://github.com/syrax90/mobaide/issues/828)) ([b9311a6](https://github.com/syrax90/mobaide/commit/b9311a6d8bd1eb266856f4b5999b0809fc2b77a1))
+
 ## [0.3.22](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.21...agent-v0.3.22) (2026-11-04)
 
 

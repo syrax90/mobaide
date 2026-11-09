@@ -18,6 +18,8 @@ Layout:
         android/google-web-client-id
         android/google-services.json
         android/play-service-account.json
+        voice/r2.properties             account_id, bucket, access_key_id, secret_access_key
+                                        (upload_voice_model.py)
 """
 
 from __future__ import annotations

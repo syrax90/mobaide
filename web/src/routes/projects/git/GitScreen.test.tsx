@@ -28,6 +28,8 @@ const api = vi.hoisted(() => ({
   version: undefined as AgentVersionInfo | undefined,
   /** The refs `checkoutGitRef` was asked for; an `Error` outcome rejects the next one. */
   checkouts: [] as string[],
+  /** The `force` flag of each `checkouts` entry. */
+  checkoutForces: [] as boolean[],
   checkoutOutcome: undefined as Error | undefined,
   creates: [] as GitBranchCreateRequest[],
   createOutcome: undefined as Error | undefined,
@@ -54,8 +56,9 @@ vi.mock('../../../api/gitRepository', async (importOriginal) => {
           })),
       );
     },
-    checkoutGitRef: (_agentId: string, _project: string, ref: string) => {
+    checkoutGitRef: (_agentId: string, _project: string, ref: string, force = false) => {
       api.checkouts.push(ref);
+      api.checkoutForces.push(force);
       if (api.checkoutOutcome !== undefined) return Promise.reject(api.checkoutOutcome);
       const remote = ref.startsWith('origin/');
       return Promise.resolve({
@@ -166,6 +169,7 @@ beforeEach(() => {
   api.outcomes.length = 0;
   api.version = agentVersion({ branches: true });
   api.checkouts.length = 0;
+  api.checkoutForces.length = 0;
   api.checkoutOutcome = undefined;
   api.creates.length = 0;
   api.createOutcome = undefined;
@@ -451,17 +455,60 @@ describe('GitScreen check out', () => {
     expect(api.checkouts).toEqual([]);
   });
 
-  it('names the holders on a busy conflict', async () => {
+  const refuseAsBusy = async () => {
     rowsWithRemote();
     api.checkoutOutcome = new GitBusyError([holder({ kind: 'session', session_id: 's1', cwd: '/repo' })]);
     renderScreen();
     fireEvent.click(await screen.findByRole('button', { name: 'Check out feature-a' }));
     fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Check out' }));
+    const dialog = await screen.findByRole('alertdialog', { name: 'Project folder in use' });
+    return dialog;
+  };
 
-    const dialog = await screen.findByRole('alertdialog');
-    expect(within(dialog).getByText('Item is in use')).toBeInTheDocument();
+  it('names the holders on a busy conflict and offers to check out anyway', async () => {
+    const dialog = await refuseAsBusy();
+
     expect(within(dialog).getByText('Session: /repo')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Check out anyway' })).toBeInTheDocument();
     expect(api.checkouts).toEqual(['feature-a']);
+    expect(api.checkoutForces).toEqual([false]);
+  });
+
+  it('retries with force once the user confirms the busy prompt', async () => {
+    const dialog = await refuseAsBusy();
+    api.checkoutOutcome = undefined;
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Check out anyway' }));
+
+    await waitFor(() => {
+      expect(lastToast()).toBe('Checked out feature-a');
+    });
+    expect(api.checkouts).toEqual(['feature-a', 'feature-a']);
+    expect(api.checkoutForces).toEqual([false, true]);
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('sends nothing more when the busy prompt is cancelled', async () => {
+    const dialog = await refuseAsBusy();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(api.checkoutForces).toEqual([false]);
+  });
+
+  it('asks to update an agent that refuses a forced checkout', async () => {
+    const dialog = await refuseAsBusy();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Check out anyway' }));
+
+    await waitFor(() => {
+      expect(lastToast()).toBe(
+        'The project folder is still in use. Update the agent to check out anyway.',
+      );
+    });
+    expect(api.checkoutForces).toEqual([false, true]);
+    expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
   it('shows a coded refusal as its copy', async () => {
@@ -500,7 +547,9 @@ describe('GitScreen new branch', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
 
     await waitFor(() => {
-      expect(api.creates).toEqual([{ name: 'feature/new', start_point: 'main', checkout: true }]);
+      expect(api.creates).toEqual([
+        { name: 'feature/new', start_point: 'main', checkout: true, force: false },
+      ]);
     });
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).toBeNull();
@@ -519,7 +568,7 @@ describe('GitScreen new branch', () => {
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
       'A branch named feature/new already exists.',
     );
-    expect(api.creates).toEqual([{ name: 'feature/new', checkout: false }]);
+    expect(api.creates).toEqual([{ name: 'feature/new', checkout: false, force: false }]);
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(lastToast()).toBeUndefined();
   });
@@ -532,12 +581,24 @@ describe('GitScreen new branch', () => {
     fireEvent.click(within(dialog).getByLabelText(/Check out in the project folder of proj/));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
 
-    const busy = await screen.findByRole('alertdialog');
-    expect(within(busy).getByText('Item is in use')).toBeInTheDocument();
+    const busy = await screen.findByRole('alertdialog', { name: 'Project folder in use' });
     expect(within(busy).getByText('Session: /repo')).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(api.creates).toEqual([{ name: 'feature/new', start_point: 'main', checkout: true }]);
+    expect(api.creates).toEqual([
+      { name: 'feature/new', start_point: 'main', checkout: true, force: false },
+    ]);
     expect(lastToast()).toBeUndefined();
+
+    api.createOutcome = undefined;
+    fireEvent.click(within(busy).getByRole('button', { name: 'Check out anyway' }));
+
+    await waitFor(() => {
+      expect(lastToast()).toBe('Created and checked out feature/new');
+    });
+    expect(api.creates).toEqual([
+      { name: 'feature/new', start_point: 'main', checkout: true, force: false },
+      { name: 'feature/new', start_point: 'main', checkout: true, force: true },
+    ]);
   });
 
   it('closes with a plain toast when the busy 409 names no holders', async () => {

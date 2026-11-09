@@ -61,6 +61,8 @@ struct VoiceStatusResponse: Codable, Equatable, Sendable {
     let host: VoiceHostInfo
     let speed_factor: Double?
     let error: VoiceErrorInfo?
+    /// The agent's transcript-cleanup choice, shared by every client.
+    let cleanup_enabled: Bool
 
     init(
         state: String,
@@ -70,7 +72,8 @@ struct VoiceStatusResponse: Codable, Equatable, Sendable {
         progress: VoiceProgress? = nil,
         host: VoiceHostInfo,
         speed_factor: Double? = nil,
-        error: VoiceErrorInfo? = nil
+        error: VoiceErrorInfo? = nil,
+        cleanup_enabled: Bool = false
     ) {
         self.state = state
         self.enabled = enabled
@@ -80,6 +83,7 @@ struct VoiceStatusResponse: Codable, Equatable, Sendable {
         self.host = host
         self.speed_factor = speed_factor
         self.error = error
+        self.cleanup_enabled = cleanup_enabled
     }
 
     init(from decoder: any Decoder) throws {
@@ -92,6 +96,21 @@ struct VoiceStatusResponse: Codable, Equatable, Sendable {
         host = try container.decode(VoiceHostInfo.self, forKey: .host)
         speed_factor = try container.decodeIfPresent(Double.self, forKey: .speed_factor)
         error = try container.decodeIfPresent(VoiceErrorInfo.self, forKey: .error)
+        cleanup_enabled = try container.decodeIfPresent(Bool.self, forKey: .cleanup_enabled) ?? false
+    }
+
+    func withCleanup(_ on: Bool) -> VoiceStatusResponse {
+        VoiceStatusResponse(
+            state: state,
+            enabled: enabled,
+            repairing: repairing,
+            model: model,
+            progress: progress,
+            host: host,
+            speed_factor: speed_factor,
+            error: error,
+            cleanup_enabled: on
+        )
     }
 }
 
@@ -132,6 +151,23 @@ struct VoiceDictationAudioResponse: Codable, Equatable, Sendable {
 /// `last_seq`: the highest seq the agent accepted with a 200; -1 when none was.
 struct VoiceDictationFinishRequest: Codable, Equatable, Sendable {
     let last_seq: Int
+}
+
+/// `POST /api/voice/cleanup`: 1–6000 characters, cleaned up by the CLI of
+/// `kind`, the session's kind (one of `capabilities.voice.cleanup_kinds`).
+struct VoiceCleanupRequest: Codable, Equatable, Sendable {
+    let text: String
+    let kind: String
+}
+
+/// `PUT /api/voice/cleanup/settings`: the cleanup choice for every client of the agent.
+struct VoiceCleanupSettingsRequest: Codable, Equatable, Sendable {
+    let enabled: Bool
+}
+
+/// The cleaned transcript; the input when there was nothing to clean.
+struct VoiceCleanupResponse: Codable, Equatable, Sendable {
+    let text: String
 }
 
 /// `state` is `done` (`text` set) or `transcribing` (call finish again).

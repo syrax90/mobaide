@@ -173,7 +173,8 @@
         <h3>Your computer transcribes</h3>
         <p>
           The agent runs NVIDIA's open Parakeet speech model on its own CPU and
-          turns the audio into text. No cloud speech service is involved.
+          turns the audio into text. No cloud speech service is involved. If
+          you turn on cleanup, the session's own AI agent then tidies the text.
         </p>
       </li>
       <li class="flow-node">
@@ -405,7 +406,8 @@
       <li><span class="px-bullet"></span>Going through the relay, the audio is TLS-encrypted on every hop and goes only to your own agent.</li>
       <li><span class="px-bullet"></span>The relay routes it in memory and keeps neither the audio nor the text.</li>
       <li><span class="px-bullet"></span>Your agent holds the audio in memory until the text is ready, then drops it. It never logs or saves the audio or the text.</li>
-      <li><span class="px-bullet"></span>No third-party speech service is involved. The only extra downloads are the model and its runtime, once, from GitHub (Hugging Face as a fallback) and PyPI.</li>
+      <li><span class="px-bullet"></span>No third-party speech service is involved. The only extra downloads are the model and its runtime, once, from the Mobaide download mirror (Hugging Face as a fallback) and PyPI.</li>
+      <li><span class="px-bullet"></span>Transcript cleanup is optional and off until you turn it on. When it is on, your agent hands each transcript to the session's own AI agent on your computer, which cleans it up with its cheapest model under your own account — Claude Code uses Claude Haiku, Codex uses GPT Luna and Antigravity uses Gemini Flash. The text then goes to that agent's provider, like the prompts you send, and counts toward your usage. Mobaide still stores none of it.</li>
     </ul>
     <p class="fineprint">
       The <a href="/privacy.html">privacy policy</a> describes voice input in
@@ -436,6 +438,20 @@
         </p>
       </details>
 
+      <details>
+        <summary>Can it tidy up what I said?</summary>
+        <p>
+          Yes, if you want it to. Turn on <strong>Clean up dictated text</strong>
+          in the voice input settings, and the session's own AI agent removes
+          filler words and false starts and fixes punctuation and technical
+          terms before the text appears. It uses your own AI agent with its
+          cheapest model — Claude Haiku in Claude Code, GPT Luna in Codex,
+          Gemini Flash in Antigravity — under your account, so the text goes to
+          that agent's provider and counts toward your usage. The app tells you
+          this before you turn it on. If a cleanup fails, you get the text as
+          heard.
+        </p>
+      </details>
       <details>
         <summary>How long can I talk?</summary>
         <p>

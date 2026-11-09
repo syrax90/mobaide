@@ -29,11 +29,15 @@ import { useSessionGitCapabilities } from '../../terminal/git/useSessionGit';
 import { GitFolderRow, GitItemRow } from './GitItemRow';
 import { GitNewBranchDialog } from './GitNewBranchDialog';
 import {
+  BUSY_CHECKOUT_TITLE,
+  BUSY_CHECKOUT_UNSUPPORTED,
   FILTER_THRESHOLD,
   branchCreatedMessage,
+  busyCheckoutMessage,
   checkedOutMessage,
   checkoutConfirmMessage,
   checkoutErrorCopy,
+  createBranchErrorCopy,
   deleteFailureMessage,
   forceDeleteMessage,
   gitTreeRows,
@@ -57,6 +61,13 @@ import {
   type GitDeleteState,
   type PendingDelete,
 } from './gitDeleteMachine';
+
+/** A checkout the busy guard refused, kept so the user can retry it with `force`. */
+interface BusyCheckout {
+  holders: BusyHolder[];
+  branch: string;
+  retry: { kind: 'checkout'; item: GitItem } | { kind: 'create'; request: GitBranchCreateRequest };
+}
 
 /**
  * Branches and worktrees for one project as a folder tree (a branch name
@@ -93,6 +104,8 @@ export function GitScreen() {
   const [newBranchOpen, setNewBranchOpen] = useState(false);
   const [checkoutPrompt, setCheckoutPrompt] = useState<GitItem | null>(null);
   const checkoutCancelRef = useRef<HTMLButtonElement>(null);
+  const [busyCheckout, setBusyCheckout] = useState<BusyCheckout | null>(null);
+  const busyCheckoutCancelRef = useRef<HTMLButtonElement>(null);
 
   // The delete callbacks run from a timer and from mutation results, both of
   // which would otherwise close over whichever state existed when they were
@@ -159,15 +172,22 @@ export function GitScreen() {
     queryClient.invalidateQueries({ queryKey: queryKeys.gitItems(agentId, projectName) });
 
   const checkout = useMutation({
-    mutationFn: (item: GitItem) => checkoutGitRef(agentId, projectName, item.branch ?? ''),
+    mutationFn: ({ item, force }: { item: GitItem; force: boolean }) =>
+      checkoutGitRef(agentId, projectName, item.branch ?? '', force),
     onSuccess: (result) => {
       useToastStore.getState().show(checkedOutMessage(result), 'success');
       void invalidateItems();
     },
-    onError: (error: unknown, item) => {
+    onError: (error: unknown, { item, force }) => {
       if (error instanceof GitBusyError) {
-        if (error.holders !== null) setBusyDialog(error.holders);
-        else useToastStore.getState().show('The project folder is in use.', 'error');
+        if (force) useToastStore.getState().show(BUSY_CHECKOUT_UNSUPPORTED, 'error');
+        else if (error.holders !== null) {
+          setBusyCheckout({
+            holders: error.holders,
+            branch: primaryLabel(item),
+            retry: { kind: 'checkout', item },
+          });
+        } else useToastStore.getState().show('The project folder is in use.', 'error');
         return;
       }
       useToastStore.getState().show(checkoutErrorCopy(error, primaryLabel(item)), 'error');
@@ -179,6 +199,29 @@ export function GitScreen() {
       createGitBranch(agentId, projectName, request),
     onSuccess: () => void invalidateItems(),
   });
+
+  const forceBusyCheckout = (prompt: BusyCheckout) => {
+    const { retry } = prompt;
+    if (retry.kind === 'checkout') {
+      checkout.mutate({ item: retry.item, force: true });
+      return;
+    }
+    create.mutateAsync({ ...retry.request, force: true }).then(
+      (result) => {
+        useToastStore.getState().show(branchCreatedMessage(result), 'success');
+      },
+      (failure: unknown) => {
+        useToastStore
+          .getState()
+          .show(
+            failure instanceof GitBusyError
+              ? BUSY_CHECKOUT_UNSUPPORTED
+              : createBranchErrorCopy(failure, retry.request.name),
+            'error',
+          );
+      },
+    );
+  };
 
   const commitPending = () => {
     const { state, batch } = takePending(machineRef.current);
@@ -502,7 +545,7 @@ export function GitScreen() {
               onClick={() => {
                 const target = checkoutPrompt;
                 setCheckoutPrompt(null);
-                checkout.mutate(target);
+                checkout.mutate({ item: target, force: false });
               }}
             >
               Check out
@@ -534,12 +577,55 @@ export function GitScreen() {
             setNewBranchOpen(false);
             useToastStore.getState().show(branchCreatedMessage(result), 'success');
           }}
-          onBusy={(holders) => {
+          onBusy={(holders, request) => {
             setNewBranchOpen(false);
-            if (holders !== null) setBusyDialog(holders);
-            else useToastStore.getState().show('The project folder is in use.', 'error');
+            if (holders !== null) {
+              setBusyCheckout({ holders, branch: request.name, retry: { kind: 'create', request } });
+            } else useToastStore.getState().show('The project folder is in use.', 'error');
           }}
         />
+      )}
+
+      {busyCheckout !== null && (
+        <Modal
+          role="alertdialog"
+          labelledBy="busy-checkout-title"
+          initialFocus={busyCheckoutCancelRef}
+          onClose={() => {
+            setBusyCheckout(null);
+          }}
+        >
+          <h2 id="busy-checkout-title">{BUSY_CHECKOUT_TITLE}</h2>
+          <p>{busyCheckoutMessage(busyCheckout.branch)}</p>
+          <ul className="busy-holders">
+            {busyCheckout.holders.map((holder, index) => (
+              <li key={`${holder.kind}-${String(index)}`}>{busyHolderLine(holder)}</li>
+            ))}
+          </ul>
+          <div className="button-row">
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={() => {
+                const prompt = busyCheckout;
+                setBusyCheckout(null);
+                forceBusyCheckout(prompt);
+              }}
+            >
+              Check out anyway
+            </button>
+            <button
+              type="button"
+              ref={busyCheckoutCancelRef}
+              className="button"
+              onClick={() => {
+                setBusyCheckout(null);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </Modal>
       )}
 
       {busyDialog !== null && (

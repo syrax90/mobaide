@@ -45,6 +45,8 @@ interface ComposerProps {
   model: ChatSessionModel;
   /** "Claude Code" — names the placeholder. */
   kindLabel: string;
+  /** The session's kind (`claude`, `codex`…); undefined until its row arrives. */
+  sessionKind: string | undefined;
   live: boolean;
   /** The session is over: nothing can be typed or sent. */
   closed: boolean;
@@ -76,6 +78,7 @@ type TemplatePanel = { kind: 'none' } | { kind: 'picker' } | { kind: 'editor'; i
 export function Composer({
   model,
   kindLabel,
+  sessionKind,
   live,
   closed,
   halted,
@@ -337,7 +340,10 @@ export function Composer({
     },
     [closed, insertAtCaret],
   );
-  const voice = useComposerVoice(model.agentId, model.sessionId, { insert: insertTranscript });
+  const voice = useComposerVoice(model.agentId, model.sessionId, {
+    insert: insertTranscript,
+    sessionKind,
+  });
 
   const dialogOpen = panel.kind !== 'none' || voice.dialogOpen;
   const dialogWasOpen = useRef(false);

@@ -25,7 +25,7 @@ interface GitNewBranchDialogProps {
   onClose: () => void;
   onCreated: (result: GitBranchResult) => void;
   /** A `busy_by` 409 on create-with-checkout: the screen owns the holders dialog. */
-  onBusy: (holders: BusyHolder[] | null) => void;
+  onBusy: (holders: BusyHolder[] | null, request: GitBranchCreateRequest) => void;
 }
 
 /**
@@ -71,16 +71,18 @@ export function GitNewBranchDialog({
     if (!submittable) return;
     setError(null);
     const trimmed = name.trim();
+    const request: GitBranchCreateRequest = {
+      name: trimmed,
+      ...(startPoint === null ? {} : { start_point: startPoint }),
+      checkout,
+      force: false,
+    };
     try {
-      const result = await create({
-        name: trimmed,
-        ...(startPoint === null ? {} : { start_point: startPoint }),
-        checkout,
-      });
+      const result = await create(request);
       onCreated(result);
     } catch (failure: unknown) {
       if (failure instanceof GitBusyError) {
-        onBusy(failure.holders);
+        onBusy(failure.holders, request);
         return;
       }
       setError(createBranchErrorCopy(failure, trimmed));

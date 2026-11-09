@@ -361,7 +361,7 @@ export interface paths {
          *
          *     Returns 409 with ``{busy_by: [...]}`` while a session or auto-scan work
          *     item runs in the project root (a linked worktree's session does not
-         *     count), and a coded 409 — ``dirty``, ``checked_out_elsewhere``,
+         *     count) unless ``force`` is set, and a coded 409 — ``dirty``, ``checked_out_elsewhere``,
          *     ``operation_in_progress``, ``job_running`` — for the states git or the
          *     agent refuse to switch in; ``404 ref_not_found`` for a ref that is
          *     neither a local nor a remote-tracking branch.
@@ -889,6 +889,40 @@ export interface paths {
         /** Version Info */
         get: operations["version_info_api_version_get"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice/cleanup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Voice Cleanup */
+        post: operations["voice_cleanup_api_voice_cleanup_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice/cleanup/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Voice Cleanup Settings */
+        put: operations["voice_cleanup_settings_api_voice_cleanup_settings_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1434,7 +1468,8 @@ export interface components {
          * GitBranchCreateRequest
          * @description ``POST /branches``: create ``name`` at ``start_point`` (``HEAD`` of the
          *     project root when omitted); ``checkout`` switches the project root to
-         *     it in the same call and is subject to the checkout refusals.
+         *     it in the same call and is subject to the checkout refusals; ``force``
+         *     skips the busy-holder refusal after the user confirmed it.
          */
         GitBranchCreateRequest: {
             /**
@@ -1442,6 +1477,11 @@ export interface components {
              * @default false
              */
             checkout: boolean;
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
             /** Name */
             name: string;
             /** Start Point */
@@ -1466,9 +1506,15 @@ export interface components {
          * @description ``POST /checkout``: ``ref`` is a local branch name or a
          *     ``<remote>/<name>`` remote-tracking branch as listed by ``GET /items``;
          *     a remote ref without a local branch of that name gets one created,
-         *     tracking it.
+         *     tracking it. ``force`` skips the busy-holder refusal after the user
+         *     confirmed it; every other checkout refusal still applies.
          */
         GitCheckoutRequest: {
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
             /** Ref */
             ref: string;
         };
@@ -2385,6 +2431,38 @@ export interface components {
             /** Error Type */
             type: string;
         };
+        /**
+         * VoiceCleanupRequest
+         * @description ``kind`` is the session's kind: its CLI cleans up the text. Clients
+         *     from before ``cleanup_kinds`` send none and mean Claude Code.
+         */
+        VoiceCleanupRequest: {
+            /**
+             * Kind
+             * @default claude
+             * @enum {string}
+             */
+            kind: "claude" | "codex" | "antigravity";
+            /** Text */
+            text: string;
+        };
+        /**
+         * VoiceCleanupResponse
+         * @description The cleaned transcript; the original when there was nothing to clean.
+         */
+        VoiceCleanupResponse: {
+            /** Text */
+            text: string;
+        };
+        /**
+         * VoiceCleanupSettingsRequest
+         * @description ``PUT /api/voice/cleanup/settings``: turn transcript cleanup on or off
+         *     for every client of this agent.
+         */
+        VoiceCleanupSettingsRequest: {
+            /** Enabled */
+            enabled: boolean;
+        };
         /** VoiceDictationAudioRequest */
         VoiceDictationAudioRequest: {
             /** Pcm16 B64 */
@@ -2502,8 +2580,12 @@ export interface components {
          *     self-test) once ``ready``. ``repairing`` is true while an enabled voice
          *     keeps its verified model and only needs its runtime again (after a
          *     Python upgrade): cancelling then stops without deleting the model.
+         *     ``cleanup_enabled`` is the user's transcript-cleanup choice for this
+         *     agent, shared by every client; it does not depend on the install state.
          */
         VoiceStatusResponse: {
+            /** Cleanup Enabled */
+            cleanup_enabled: boolean;
             /** Enabled */
             enabled: boolean;
             error: components["schemas"]["VoiceErrorInfo"] | null;
@@ -4078,6 +4160,72 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    voice_cleanup_api_voice_cleanup_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VoiceCleanupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceCleanupResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    voice_cleanup_settings_api_voice_cleanup_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VoiceCleanupSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

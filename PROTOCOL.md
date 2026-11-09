@@ -252,6 +252,94 @@ Additive delta within proto-v7 (2026-11-04, drag-to-reorder in the new-session w
 
 Older clients ignore the event kind and never call the route, so they keep the default order.
 
+### Delta 2026-11-03: voice transcript cleanup
+
+Additive delta within proto-v7 (2026-11-03, voice transcript cleanup — web, Android and iOS): **one additive REST route, one additive capability key, no version bump.** An opt-in, per-agent client setting, offered in Claude Code sessions at first (Codex and Antigravity below), has the session's AI agent tidy a dictated transcript before the review: fillers, stutters and false starts go, self-corrections keep the final version, and punctuation and technical terms are fixed.
+
+* ``capabilities.voice`` gains ``"cleanup": true`` (the route exists;
+  whether Claude Code is installed is only known when it runs). Clients
+  offer the setting only when the key is present.
+* ``POST /api/voice/cleanup`` ``{"text"}`` (1–6000 characters) →
+  ``VoiceCleanupResponse {"text"}``: the cleaned text, or the input when
+  there was nothing to clean. It is independent of the speech model's
+  install state. The agent runs one hidden ``claude -p --model haiku
+  --effort low --safe-mode --no-session-persistence --tools=
+  --system-prompt-file cleanup-prompt.md --output-format json`` per call, with
+  the transcript on stdin (never argv) in an agent-owned directory that
+  holds only the prompt file, under the user's own Claude Code login. No
+  session is created, persisted or listed. It answers within 20 s (under
+  the relay's 30 s proxy timeout), runs at most two at once, and never
+  logs the text. A running cleanup, like an open dictation, makes the
+  auto-updater defer its restart. Both transports answer
+  byte-identically, and the relay runs the call off the tunnel reader
+  like the other voice routes.
+* Refusals (``{"detail": {"code", "message"}}``):
+  * ``503 cleanup_unavailable``: no Claude CLI, or an agent built without a
+    cleaner.
+  * ``503 cleanup_outdated``: the CLI predates ``--safe-mode`` (2.1.169).
+  * ``409 cleanup_busy``.
+  * ``503 cleanup_timeout``.
+  * ``503 cleanup_failed``: ``message`` carries the CLI's own error text,
+    such as "Not logged in". It also covers an answer longer than twice
+    the input plus 200 characters, which means the model replied to the
+    text instead of cleaning it.
+  * ``422`` validation.
+* Clients fall back to the raw transcript on any failure and say why. The
+  web review keeps the original one tap away. Clients wait at most 35 s
+  for the answer.
+* Golden fixtures: ``VoiceCleanupRequest.json`` and
+  ``VoiceCleanupResponse.json``. The ``voice_capability`` case in
+  ``VersionInfoResponse.json`` carries the new key.
+* The setting is stored on the agent, so every client of it shares one
+  choice (2026-11-07):
+  * ``VoiceStatusResponse`` gains ``cleanup_enabled`` (bool, always
+    emitted; clients read a missing key as ``false``). It does not depend
+    on the install state and survives ``DELETE /api/voice/model``.
+  * ``PUT /api/voice/cleanup/settings`` ``{"enabled": bool}`` (strict
+    bool) → the full ``VoiceStatusResponse``. The agent stores it in
+    ``<voice root>/cleanup.json`` and publishes ``voice.changed``, so the
+    other clients update live. ``500 storage_error`` when the file cannot
+    be written; ``422`` validation. Both transports answer identically.
+  * The first-opt-in privacy notice stays per device.
+  * Golden fixtures: ``VoiceCleanupSettingsRequest.json``; every
+    ``VoiceStatusResponse.json`` case carries ``cleanup_enabled``.
+* Codex and Antigravity sessions clean up too, each with its own CLI's
+  cheapest model (2026-11-08):
+  * ``capabilities.voice`` gains ``"cleanup_kinds": ["claude", "codex",
+    "antigravity"]``, the session kinds the agent can clean up for.
+    Clients offer cleanup in a session whose ``kind`` is in the list. An
+    agent with ``"cleanup": true`` and no ``cleanup_kinds`` (or a
+    malformed one) means ``["claude"]``.
+  * ``VoiceCleanupRequest`` gains ``kind`` (one of those strings; absent
+    means ``"claude"``, anything else is a ``422``). Clients always send
+    the session's kind. The agent runs that kind's CLI, resolved like its
+    sessions (``MOBAIDE_CODEX_BIN`` / ``MOBAIDE_AGY_BIN``, PATH,
+    fallbacks), in the same directory and with the same limits:
+    * ``codex``: ``codex exec --model <first Luna in the cached catalog,
+      else gpt-6-luna> -c model_reasoning_effort=low -c
+      model_instructions_file=cleanup-prompt.md -c features.shell_tool=false
+      -c features.unified_exec=false -c features.hooks=false -c
+      web_search=disabled --sandbox read-only --skip-git-repo-check
+      --ephemeral --ignore-user-config --ignore-rules --json -``, transcript
+      on stdin. ``codex login status`` runs first, inside the same 20 s
+      budget: signed out is ``cleanup_failed`` at once. Only a run that
+      exits 0 after ``turn.completed`` counts as a cleanup.
+    * ``antigravity``: ``agy --model <first Gemini Flash on low thinking
+      in the cached list, else gemini-3.8-flash-low> --input-format
+      stream-json --output-format stream-json --disable-slash-commands
+      --settings antigravity-settings.json``. The settings file sets
+      ``toolPermission: strict``, so headless ``agy`` denies every tool.
+      The rules and the transcript go in one stream-json user message on
+      stdin (``agy`` has no system-prompt option). Antigravity keeps the
+      run in its own local conversation history.
+  * Errors keep their codes; ``message`` names the CLI.
+    ``cleanup_outdated`` also covers a Codex that rejects a flag or
+    ignores ``model_instructions_file``, and an ``agy`` that rejects a
+    flag; the hint is ``codex update`` / ``agy update``. An ``agy`` turn
+    that tried a tool is ``cleanup_failed``.
+  * Golden fixtures: every ``VoiceCleanupRequest.json`` case carries
+    ``kind``; the ``voice_capability`` case carries ``cleanup_kinds``.
+
 ### Delta 2026-10-19: Claude focus view toggle
 
 Additive delta within proto-v7 (2026-10-19, Claude focus view toggle): **additive optional field, no version bump.** ``claude_options`` gains ``focus_mode`` — bool or null, default ``null``.
@@ -639,7 +727,7 @@ A start point naming a local or remote-tracking branch is resolved as that branc
 
 #### Checkout route
 
-``POST /api/projects/{name}/git/checkout`` ``{"ref"}`` → ``GitBranchResponse {"branch", "checked_out": true, "created"}``.
+``POST /api/projects/{name}/git/checkout`` ``{"ref", "force"?}`` → ``GitBranchResponse {"branch", "checked_out": true, "created"}``.
 
 ``ref`` is a row's ``branch`` verbatim: a local branch runs ``git switch --no-guess -- <ref>`` in the project root; a remote-tracking ``<remote>/<short>`` switches to the local ``<short>`` when it exists, else creates it tracking the remote (``git switch --no-guess --track -c <short> -- <remote>/<short>``, ``created: true``); anything else is ``404 {"detail": {"code": "ref_not_found"}}`` (detached checkouts are out of scope; ``400 bad_ref`` for an empty or ``-``-leading ref).
 
@@ -649,6 +737,7 @@ Checkout guards, all ``409``:
 
 * ``job_running`` (message = job id) while a fetch/pull/push job owns the repository — asked first, before queuing on the per-toplevel lock, so a running job's whole duration is never awaited only to be refused.
 * Then, once queued, the project-git ``{"detail": {"busy_by": [...]}}`` shape when a session or auto-scan item works in the project root. A holder counts when its realpath-normalised cwd is the root or lies below it and not inside a linked worktree, so a session in a sub-folder blocks and a session in a linked worktree does not.
+  ``force: true`` (on ``POST /checkout`` and on ``POST /branches`` with ``checkout``; default ``false``) skips only this guard. Clients send it after the user confirms the soft "Project folder in use" prompt. An agent older than the field ignores it and answers ``busy_by`` again; clients then ask the user to update the agent. Additive, no version bump.
 * ``operation_in_progress`` (message = ``merging`` / ``rebasing`` / ``cherry_picking`` / ``reverting`` / ``bisecting``).
 * ``dirty`` and ``checked_out_elsewhere`` (message = the worktree path) are git's own refusals classified from stderr. ``git switch`` carries unrelated local changes along and only refuses an overwrite, so a modified tree does not by itself block a checkout.
 

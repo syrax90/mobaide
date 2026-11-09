@@ -15,6 +15,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.voice.DictationState
 import com.mobaide.app.data.voice.VoiceMicMode
 
@@ -25,25 +26,33 @@ class VoiceComposerSlots(
 )
 
 /**
- * The voice wiring every composer shares: transcripts go to [onTranscript], a
- * tick marks start and stop, the screen stays on while dictating, and leaving
- * the screen cancels a dictation (a configuration change does not). Also hosts
- * the setup sheet.
+ * The voice wiring every composer shares: transcripts go to [onTranscript]
+ * (with any cleanup notice to [onNotice]), a tick marks start and stop, the
+ * screen stays on while dictating, and leaving the screen cancels a dictation
+ * (a configuration change does not). Also hosts the setup sheet. Transcript
+ * cleanup is offered by [sessionKind].
  */
 @Composable
 fun rememberVoiceComposerSlots(
     voiceViewModel: VoiceViewModel,
+    sessionKind: SessionKind?,
     onTranscript: (String) -> Unit,
+    onNotice: (String) -> Unit,
 ): VoiceComposerSlots {
     val voiceState by voiceViewModel.uiState.collectAsStateWithLifecycle()
     val latestOnTranscript by rememberUpdatedState(onTranscript)
+    val latestOnNotice by rememberUpdatedState(onNotice)
     LaunchedEffect(voiceViewModel) {
         voiceViewModel.events.collect { event ->
             when (event) {
-                is VoiceEvent.InsertTranscript -> latestOnTranscript(event.text)
+                is VoiceEvent.InsertTranscript -> {
+                    latestOnTranscript(event.text)
+                    event.notice?.let { latestOnNotice(it) }
+                }
             }
         }
     }
+    LaunchedEffect(voiceViewModel, sessionKind) { voiceViewModel.setSessionKind(sessionKind) }
 
     val haptics = LocalHapticFeedback.current
     val recording = voiceState.dictation is DictationState.Recording
@@ -56,7 +65,11 @@ fun rememberVoiceComposerSlots(
     }
     val view = LocalView.current
     val dictating = when (voiceState.dictation) {
-        DictationState.Starting, is DictationState.Recording, is DictationState.Transcribing -> true
+        DictationState.Starting,
+        is DictationState.Recording,
+        is DictationState.Transcribing,
+        is DictationState.Cleaning,
+        -> true
         else -> false
     }
     DisposableEffect(view, dictating) {
@@ -82,6 +95,7 @@ fun rememberVoiceComposerSlots(
             onCancelInstall = voiceViewModel::cancelInstall,
             onRetry = voiceViewModel::install,
             onHideMic = { voiceViewModel.setMicHidden(true) },
+            onCleanUpChange = voiceViewModel::setCleanUp,
         )
     }
 

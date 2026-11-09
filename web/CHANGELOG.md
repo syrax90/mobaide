@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.19](https://github.com/syrax90/mobaide/compare/web-v0.1.18...web-v0.1.19) (2026-11-08)
+
+
+### Bug Fixes
+
+* **web:** always send force on git branch create and checkout ([#838](https://github.com/syrax90/mobaide/issues/838)) ([bbd2301](https://github.com/syrax90/mobaide/commit/bbd230138349b98d1075946aeb318ff870228be5))
+
+## [0.1.18](https://github.com/syrax90/mobaide/compare/web-v0.1.17...web-v0.1.18) (2026-11-08)
+
+
+### Features
+
+* **agent,web,android,ios,server:** AI cleanup of dictated text ([#835](https://github.com/syrax90/mobaide/issues/835)) ([596856d](https://github.com/syrax90/mobaide/commit/596856d50924c51145047a58f6e2f97e3d3a2306))
+* **git:** allow checkout while sessions use the project folder ([#828](https://github.com/syrax90/mobaide/issues/828)) ([b9311a6](https://github.com/syrax90/mobaide/commit/b9311a6d8bd1eb266856f4b5999b0809fc2b77a1))
+
 ## [0.1.17](https://github.com/syrax90/claude_mobile/compare/web-v0.1.16...web-v0.1.17) (2026-11-05)
 
 

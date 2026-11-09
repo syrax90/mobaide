@@ -49,6 +49,8 @@ export const voiceStatusSchema = z.looseObject({
   host: voiceHostSchema,
   speed_factor: optionalWireNumber(),
   error: voiceReasonSchema.nullish().transform((value) => value ?? undefined),
+  /** The agent's transcript-cleanup choice, shared by every client. */
+  cleanup_enabled: optionalWireBoolean(),
 });
 
 export type VoiceStatus = z.infer<typeof voiceStatusSchema>;

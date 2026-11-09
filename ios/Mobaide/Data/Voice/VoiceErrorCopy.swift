@@ -24,6 +24,31 @@ enum VoiceErrorCopy {
         }
     }
 
+    /// Why a cleanup failed; the transcript is inserted as heard. `kind` is
+    /// the session kind the cleanup ran for, whose CLI the copy names.
+    static func cleanup(_ code: String, agent: String, kind: String?) -> String {
+        let (name, updateCommand) = cleanupCli(kind)
+        switch code {
+        case VoiceCodes.cleanupUnavailable: return "\(name) isn't installed on \(agent)."
+        case VoiceCodes.cleanupOutdated:
+            guard let updateCommand else { return "\(name) on \(agent) is too old. Update it there." }
+            return "\(name) on \(agent) is too old. Run \"\(updateCommand)\" there."
+        case VoiceCodes.cleanupBusy: return "Another cleanup was still running."
+        case VoiceCodes.cleanupTimeout: return "\(name) took too long."
+        case VoiceCodes.network: return "The connection dropped."
+        default: return "\(name) reported an error."
+        }
+    }
+
+    private static func cleanupCli(_ kind: String?) -> (name: String, updateCommand: String?) {
+        switch kind {
+        case "claude": return ("Claude Code", "claude update")
+        case "codex": return ("Codex", "codex update")
+        case "antigravity": return ("Antigravity", "agy update")
+        default: return ("The session's AI agent", nil)
+        }
+    }
+
     /// Why an install ended `failed` (`VoiceStatusResponse.error.code`).
     static func install(_ code: String, repairing: Bool) -> String {
         switch code {

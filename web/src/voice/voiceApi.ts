@@ -68,6 +68,12 @@ export const VOICE_CODE = {
   chunkTooLarge: 'chunk_too_large',
   badAudio: 'bad_audio',
   transcriptionFailed: 'transcription_failed',
+  cleanupUnavailable: 'cleanup_unavailable',
+  cleanupOutdated: 'cleanup_outdated',
+  cleanupBusy: 'cleanup_busy',
+  /** Also the client's own code when the agent's answer never arrives. */
+  cleanupTimeout: 'cleanup_timeout',
+  cleanupFailed: 'cleanup_failed',
   /** Client-side codes, never sent by the agent. */
   network: 'network',
   transcriptionTimeout: 'transcription_timeout',

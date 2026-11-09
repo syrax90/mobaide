@@ -1,0 +1,11 @@
+{
+  "type": "VoiceCleanupResponse",
+  "cases": [
+    {
+      "name": "cleaned",
+      "wire": {
+        "text": "Rename useSessionModel to use the shared hook."
+      }
+    }
+  ]
+}

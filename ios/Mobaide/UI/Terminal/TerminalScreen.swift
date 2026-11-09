@@ -265,6 +265,7 @@ private struct TerminalScreenContent: View {
         // was in flight is newer than the response, and the title is mutable.
         guard sessionRow == nil else { return }
         sessionRow = list?.first { $0.session_id == sessionId }
+        if let kind = sessionRow?.kind { voice.sessionKind = kind }
     }
 
     private static func typeNames(_ types: [CustomAgentTypeDto]) -> [String: String] {
@@ -519,6 +520,8 @@ private struct TerminalScreenContent: View {
         .task {
             // The transcript goes into the composer for review, never sent.
             voice.onTranscript = { [model] text in model.insertTranscript(text) }
+            voice.onNotice = { [model] text in model.terminalMessage = ToastMessage(text: text, tone: .warning) }
+            voice.sessionKind = sessionRow?.kind
             await voice.load()
         }
         .task { await voice.watchConnection() }
@@ -541,6 +544,8 @@ private struct TerminalScreenContent: View {
                 // would only flash an empty title bar.
                 if let row = sessions.first(where: { $0.session_id == sessionId }) {
                     sessionRow = row
+                    // Transcript cleanup is offered by session kind.
+                    voice.sessionKind = row.kind
                 }
                 checkSessionStillExists()
             }

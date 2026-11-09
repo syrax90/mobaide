@@ -20,6 +20,7 @@ export function ComposerVoiceDialogs({ voice, canSend, canRecord }: ComposerVoic
           agentName={voice.agentName}
           status={voice.status}
           loadFailed={voice.statusLoadFailed}
+          cleanupOffered={voice.cleanupAvailable}
           onClose={voice.closeSetup}
         />
       )}
@@ -40,6 +41,12 @@ export function ComposerVoiceDialogs({ voice, canSend, canRecord }: ComposerVoic
           onInsert={voice.insertTranscript}
           skipReview={voice.skipReview}
           onSkipReviewChange={voice.setSkipReview}
+          cleanupAvailable={voice.cleanupAvailable}
+          sessionKind={voice.sessionKind}
+          cleanUp={voice.cleanUp.on}
+          cleanUpSaveFailed={voice.cleanUp.failed}
+          onCleanUpChange={voice.cleanUp.set}
+          onCleanUpText={dictation.cleanUpText}
         />
       )}
     </>

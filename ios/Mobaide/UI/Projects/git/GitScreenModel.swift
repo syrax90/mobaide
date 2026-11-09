@@ -41,6 +41,10 @@ final class GitScreenModel {
     var undoToast: UndoToast?
     var forcePrompt: ForcePrompt?
     var busyDialog: [BusyHolder]?
+    /// A checkout the busy guard refused; the user may retry it with `force`.
+    var busyCheckoutPrompt: BusyCheckoutPrompt?
+    /// Kept apart from `busyCheckoutPrompt` for the same reason as `pendingCheckout`.
+    private var pendingBusyCheckout: BusyCheckoutPrompt?
     var message: String?
 
     /// Set from the screen's own task, never from `load()`: the tests pin the
@@ -340,7 +344,11 @@ final class GitScreenModel {
             if SessionGitError.isCancellation(error) { return }
             if let holders = Self.busyHolders(in: error) {
                 newBranch = nil
-                busyDialog = holders
+                offerForcedCheckout(BusyCheckoutPrompt(
+                    holders: holders,
+                    branch: trimmed,
+                    retry: .create(GitBranchCreateRequest(name: trimmed, start_point: startPoint, checkout: checkout))
+                ))
                 return
             }
             newBranch = NewBranchSheetState(
@@ -379,13 +387,67 @@ final class GitScreenModel {
         } catch {
             if SessionGitError.isCancellation(error) { return }
             if let holders = Self.busyHolders(in: error) {
-                busyDialog = holders
+                offerForcedCheckout(BusyCheckoutPrompt(
+                    holders: holders,
+                    branch: GitItemDisplay.primaryLabel(item),
+                    retry: .checkout(ref: ref)
+                ))
                 return
             }
             message = GitItemDisplay.checkoutErrorCopy(
                 SessionGitError.map(error),
                 branch: GitItemDisplay.primaryLabel(item)
             )
+        }
+    }
+
+    private func offerForcedCheckout(_ prompt: BusyCheckoutPrompt) {
+        pendingBusyCheckout = prompt
+        busyCheckoutPrompt = prompt
+    }
+
+    func dismissBusyCheckoutPrompt() {
+        pendingBusyCheckout = nil
+        busyCheckoutPrompt = nil
+    }
+
+    /// Retries the refused checkout with `force` after the user confirmed it.
+    func confirmBusyCheckout() {
+        guard let prompt = pendingBusyCheckout, !isCheckingOut else { return }
+        pendingBusyCheckout = nil
+        busyCheckoutPrompt = nil
+        isCheckingOut = true
+        Task { [weak self] in await self?.forceCheckout(prompt) }
+    }
+
+    private func forceCheckout(_ prompt: BusyCheckoutPrompt) async {
+        defer { isCheckingOut = false }
+        do {
+            switch prompt.retry {
+            case .checkout(let ref):
+                let result = try await agentAPI.checkoutGitRef(
+                    projectName: projectName,
+                    request: GitCheckoutRequest(ref: ref, force: true)
+                )
+                message = GitItemDisplay.checkedOutMessage(result)
+            case .create(var request):
+                request.force = true
+                let result = try await agentAPI.createGitBranch(projectName: projectName, request: request)
+                message = GitItemDisplay.branchCreatedMessage(result)
+            }
+        } catch {
+            if SessionGitError.isCancellation(error) { return }
+            if Self.busyHolders(in: error) != nil {
+                message = GitItemDisplay.busyCheckoutUnsupported
+                return
+            }
+            let mapped = SessionGitError.map(error)
+            switch prompt.retry {
+            case .checkout:
+                message = GitItemDisplay.checkoutErrorCopy(mapped, branch: prompt.branch)
+            case .create(let request):
+                message = GitItemDisplay.createBranchErrorCopy(mapped, name: request.name)
+            }
         }
     }
 
@@ -568,6 +630,18 @@ enum GitItemDisplay {
     }
 }
 
+/// A checkout the busy guard refused, kept so the user can retry it with `force`.
+struct BusyCheckoutPrompt: Equatable {
+    enum Retry: Equatable {
+        case checkout(ref: String)
+        case create(GitBranchCreateRequest)
+    }
+
+    let holders: [BusyHolder]
+    let branch: String
+    let retry: Retry
+}
+
 extension GitItemDisplay {
     static func remoteDeleteMessage(_ refs: [String]) -> String {
         let what = refs.count == 1 ? refs[0] : "\(refs.count) branches"
@@ -579,6 +653,18 @@ extension GitItemDisplay {
         "Check out \(branch) in the project folder of \(projectName)? "
             + "Sessions started in that folder afterwards use this branch."
     }
+
+    static let busyCheckoutTitle = "Project folder in use"
+
+    /// Body of the soft busy prompt; the holders follow it. Same copy on Android and the web.
+    static func busyCheckoutMessage(branch: String) -> String {
+        "These items work in the project folder. Checking out \(branch) changes "
+            + "the files under them. Check out anyway?"
+    }
+
+    /// A forced retry still refused: only an agent without `force` does that.
+    static let busyCheckoutUnsupported =
+        "The project folder is still in use. Update the agent to check out anyway."
 
     static func checkedOutMessage(_ result: GitBranchResponse) -> String {
         "Checked out \(result.branch)"

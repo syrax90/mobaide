@@ -174,7 +174,10 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
     },
     [canSend, model],
   );
-  const voice = useComposerVoice(model.agentId, model.sessionId, { insert: insertTranscript });
+  const voice = useComposerVoice(model.agentId, model.sessionId, {
+    insert: insertTranscript,
+    sessionKind: session?.kind,
+  });
 
   // Ctrl+R is a chord people press in a terminal on purpose, and a reload costs
   // the whole replay. See `useReloadGuard` for why this is capture-phase and

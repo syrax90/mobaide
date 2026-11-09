@@ -412,7 +412,17 @@ class GitViewModel @Inject constructor(
                 _uiState.update { it.copy(newBranch = null) }
                 _events.tryEmit(GitUiEvent.Message(branchCreatedMessage(result)))
             } catch (e: GitBusyException) {
-                _uiState.update { it.copy(newBranch = null, busyDialog = e.busyBy) }
+                val request = GitBranchCreateRequest(name = trimmed, start_point = startPoint, checkout = checkout)
+                _uiState.update {
+                    it.copy(
+                        newBranch = null,
+                        busyCheckoutPrompt = BusyCheckoutPrompt(
+                            holders = e.busyBy,
+                            branch = trimmed,
+                            retry = BusyCheckoutPrompt.Retry.Create(request),
+                        ),
+                    )
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -446,11 +456,55 @@ class GitViewModel @Inject constructor(
                 val result = gitRepository.checkout(projectName, ref)
                 _events.tryEmit(GitUiEvent.Message(checkedOutMessage(result)))
             } catch (e: GitBusyException) {
-                _uiState.update { it.copy(busyDialog = e.busyBy) }
+                _uiState.update {
+                    it.copy(
+                        busyCheckoutPrompt = BusyCheckoutPrompt(
+                            holders = e.busyBy,
+                            branch = primaryLabel(item),
+                            retry = BusyCheckoutPrompt.Retry.Checkout(ref),
+                        ),
+                    )
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _events.tryEmit(GitUiEvent.Message(checkoutErrorCopy(e, primaryLabel(item))))
+            } finally {
+                _uiState.update { it.copy(checkingOut = false) }
+            }
+        }
+    }
+
+    fun dismissBusyCheckoutPrompt() {
+        _uiState.update { it.copy(busyCheckoutPrompt = null) }
+    }
+
+    /** Retries the refused checkout with `force` after the user confirmed it. */
+    fun confirmBusyCheckout() {
+        val prompt = _uiState.value.busyCheckoutPrompt ?: return
+        if (_uiState.value.checkingOut) return
+        _uiState.update { it.copy(busyCheckoutPrompt = null, checkingOut = true) }
+        viewModelScope.launch {
+            try {
+                val message = when (val retry = prompt.retry) {
+                    is BusyCheckoutPrompt.Retry.Checkout ->
+                        checkedOutMessage(gitRepository.checkout(projectName, retry.ref, force = true))
+                    is BusyCheckoutPrompt.Retry.Create ->
+                        branchCreatedMessage(
+                            gitRepository.createBranch(projectName, retry.request.copy(force = true)),
+                        )
+                }
+                _events.tryEmit(GitUiEvent.Message(message))
+            } catch (e: GitBusyException) {
+                _events.tryEmit(GitUiEvent.Message(BUSY_CHECKOUT_UNSUPPORTED))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val copy = when (val retry = prompt.retry) {
+                    is BusyCheckoutPrompt.Retry.Checkout -> checkoutErrorCopy(e, prompt.branch)
+                    is BusyCheckoutPrompt.Retry.Create -> createBranchErrorCopy(e, retry.request.name)
+                }
+                _events.tryEmit(GitUiEvent.Message(copy))
             } finally {
                 _uiState.update { it.copy(checkingOut = false) }
             }

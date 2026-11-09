@@ -5,10 +5,15 @@ import {
   getVoiceStatus,
   installVoice,
   removeVoice,
+  setVoiceCleanup,
   toVoiceApiError,
 } from '../api/voiceRepository';
 import { queryKeys, wsBackedQueryOptions } from '../lib/queryKeys';
-import { voiceCapability } from '../protocol/dto/agentVersion';
+import {
+  voiceCapability,
+  voiceCleanupCapability,
+  voiceCleanupKinds,
+} from '../protocol/dto/agentVersion';
 import { VOICE_STATE, type VoiceStatus } from '../protocol/dto/voice';
 
 /** Re-probed no more often than this: a capability only moves on an agent update. */
@@ -28,6 +33,30 @@ export function useVoiceCapability(agentId: string, enabled = true) {
     enabled,
     staleTime: CAPABILITIES_STALE_MS,
     select: voiceCapability,
+    meta: { silent: true },
+  });
+}
+
+/** `capabilities.voice.cleanup`, from the same cached probe. */
+export function useVoiceCleanupCapability(agentId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.agentCapabilities(agentId),
+    queryFn: () => fetchAgentCapabilities(agentId),
+    enabled,
+    staleTime: CAPABILITIES_STALE_MS,
+    select: voiceCleanupCapability,
+    meta: { silent: true },
+  });
+}
+
+/** `capabilities.voice.cleanup_kinds`, from the same cached probe. */
+export function useVoiceCleanupKinds(agentId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.agentCapabilities(agentId),
+    queryFn: () => fetchAgentCapabilities(agentId),
+    enabled,
+    staleTime: CAPABILITIES_STALE_MS,
+    select: voiceCleanupKinds,
     meta: { silent: true },
   });
 }
@@ -77,4 +106,56 @@ export function useVoiceActions(agentId: string) {
     },
     meta: { silent: true },
   });
+}
+
+/**
+ * The agent's transcript-cleanup choice, stored on the agent so every client
+ * of it shares one setting. The cached status changes at once and goes back
+ * if the agent refuses; a snapshot that arrives meanwhile wins over both
+ * the rollback and the answer;
+ * `voice.changed` brings changes from other clients.
+ */
+export function useVoiceCleanupSetting(agentId: string, status: VoiceStatus | undefined) {
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: async (enabled: boolean): Promise<VoiceStatus> => {
+      try {
+        return await setVoiceCleanup(agentId, enabled);
+      } catch (error) {
+        throw toVoiceApiError(error);
+      }
+    },
+    onMutate: async (enabled) => {
+      const key = queryKeys.voiceStatus(agentId);
+      await queryClient.cancelQueries({ queryKey: key });
+      const previous = queryClient.getQueryData<VoiceStatus>(key);
+      if (previous === undefined) return undefined;
+      // The stored object, not the argument: structural sharing copies it.
+      const optimistic = queryClient.setQueryData<VoiceStatus>(key, {
+        ...previous,
+        cleanup_enabled: enabled,
+      });
+      return { previous, optimistic };
+    },
+    onError: (_error, _enabled, context) => {
+      // A `voice.changed` that arrived meanwhile is newer than both: keep it.
+      const key = queryKeys.voiceStatus(agentId);
+      if (context !== undefined && queryClient.getQueryData<VoiceStatus>(key) === context.optimistic) {
+        queryClient.setQueryData<VoiceStatus>(key, context.previous);
+      }
+    },
+    onSuccess: (next, _enabled, context) => {
+      // Same rule: the answer may be older than a snapshot that came first.
+      const key = queryKeys.voiceStatus(agentId);
+      if (queryClient.getQueryData<VoiceStatus>(key) === context?.optimistic) {
+        queryClient.setQueryData<VoiceStatus>(key, next);
+      }
+    },
+    meta: { silent: true },
+  });
+  return {
+    on: status?.cleanup_enabled === true,
+    set: mutation.mutate,
+    failed: mutation.isError,
+  };
 }

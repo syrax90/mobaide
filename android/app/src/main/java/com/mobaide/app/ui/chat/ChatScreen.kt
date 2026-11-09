@@ -177,7 +177,14 @@ fun ChatScreen(
         }
     }
 
-    val voice = rememberVoiceComposerSlots(voiceViewModel, onTranscript = viewModel::insertTranscript)
+    val voice = rememberVoiceComposerSlots(
+        voiceViewModel,
+        sessionKind = header.kind,
+        onTranscript = viewModel::insertTranscript,
+        // Launched, not awaited: a suspended showSnackbar would hold back the
+        // next transcript.
+        onNotice = { notice -> scope.launch { snackbarHostState.showSnackbar(notice) } },
+    )
     val pickImages = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(maxItems = 4),
     ) { uris -> viewModel.addImages(uris) }

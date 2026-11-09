@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listAgents } from '../api/agentRepository';
-import { createVoiceApi } from '../api/voiceRepository';
+import { cleanupTranscript, createVoiceApi } from '../api/voiceRepository';
 import { queryKeys, wsBackedQueryOptions } from '../lib/queryKeys';
 import type { VoiceCapability } from '../protocol/dto/agentVersion';
-import { DictationController, type DictationState } from './dictationController';
+import {
+  DictationController,
+  runCleanup,
+  type CleanupOutcome,
+  type DictationState,
+} from './dictationController';
 import { VOICE_CODE } from './voiceApi';
 import { WebAudioRecorder } from './recorder';
 
@@ -30,6 +35,12 @@ export function spliceTranscript(
   return { text: head + trail + after, caret: head.length };
 }
 
+/** Whether and with which session kind's AI agent transcripts are cleaned up. */
+export interface CleanupChoice {
+  kind: string;
+  on: boolean;
+}
+
 /**
  * One dictation controller per terminal (agent + session). A new pair of ids
  * — another session opened in the same route, an agent switch, leaving the
@@ -38,11 +49,18 @@ export function spliceTranscript(
  *
  * The actions call into the controller synchronously, which keeps the
  * click's user activation alive for the AudioContext.
+ *
+ * `cleanup` is null when the session's AI agent cannot clean up transcripts.
+ * Otherwise, while `on`, the AI agent of a `kind` session cleans up each
+ * transcript on the agent's computer before it is shown; it is read when the
+ * transcript arrives. `cleanUpText` does the same for the review's text, on
+ * request.
  */
 export function useDictation(
   agentId: string,
   sessionId: string,
   capability: VoiceCapability | null,
+  cleanup: CleanupChoice | null = null,
 ) {
   const [state, setState] = useState<DictationState>(IDLE);
   // The review's text around its cursor while the user dictates more: the
@@ -53,6 +71,10 @@ export function useDictation(
   const controllerRef = useRef<DictationController | null>(null);
   const sampleRate = capability?.sampleRate ?? null;
   const maxSeconds = capability?.maxSeconds ?? null;
+  const cleanupRef = useRef(cleanup);
+  useEffect(() => {
+    cleanupRef.current = cleanup;
+  }, [cleanup]);
 
   useEffect(() => {
     if (sampleRate === null || maxSeconds === null) return;
@@ -61,6 +83,11 @@ export function useDictation(
       createRecorder: () => new WebAudioRecorder(),
       sampleRate,
       maxSeconds,
+      cleaner: () => {
+        const choice = cleanupRef.current;
+        if (choice === null || !choice.on) return null;
+        return (text, signal) => cleanupTranscript(agentId, text, choice.kind, signal);
+      },
       onChange: (next) => {
         setState(next);
         // The agent says voice is not ready while the cached status says it
@@ -80,7 +107,10 @@ export function useDictation(
   }, [agentId, sessionId, sampleRate, maxSeconds, queryClient]);
 
   const active =
-    state.kind === 'starting' || state.kind === 'recording' || state.kind === 'transcribing';
+    state.kind === 'starting' ||
+    state.kind === 'recording' ||
+    state.kind === 'transcribing' ||
+    state.kind === 'cleaning';
   useKeepScreenAwake(active);
 
   const toggle = useCallback(() => {
@@ -95,6 +125,18 @@ export function useDictation(
   const retry = useCallback(() => {
     controllerRef.current?.retry();
   }, []);
+  const cleanUpText = useCallback(
+    (text: string, abort: AbortController): Promise<CleanupOutcome> => {
+      const choice = cleanupRef.current;
+      if (choice === null) return Promise.resolve({ kind: 'unchanged' });
+      return runCleanup(
+        (input, signal) => cleanupTranscript(agentId, input, choice.kind, signal),
+        text,
+        abort,
+      );
+    },
+    [agentId],
+  );
   const dismiss = useCallback(() => {
     controllerRef.current?.dismiss();
   }, []);
@@ -111,7 +153,18 @@ export function useDictation(
     controllerRef.current?.dismiss();
   }, []);
 
-  return { state, carried, toggle, stop, cancel, retry, dismiss, continueFrom, finish };
+  return {
+    state,
+    carried,
+    toggle,
+    stop,
+    cancel,
+    retry,
+    cleanUpText,
+    dismiss,
+    continueFrom,
+    finish,
+  };
 }
 
 /**

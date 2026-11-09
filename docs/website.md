@@ -501,6 +501,7 @@ answer and the shared footer; the sitemap lists it.
   | `host.py` | The 12 GB / 4 cores / 2 GB recommendation and the unsupported cases |
   | `dictation.py` | The two-minute cap |
   | `helper.py` | The three-minute idle exit |
+  | `cleanup.py` | The opt-in transcript cleanup through the session's AI agent, stated in *Where your voice goes* and the FAQ |
   | *Voice input* section of [`docs/deployment.md`](deployment.md) | Disk, download hosts, the CLI |
 
 - **The hero is a drawn mock** (`.voice-demo`, `.dict-*` in `site.css`, inside one

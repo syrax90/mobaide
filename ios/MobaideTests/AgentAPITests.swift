@@ -198,11 +198,26 @@ final class AgentAPITests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requests.map(\.httpMethod), ["POST", "POST"])
         XCTAssertEqual(
             try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[0]),
-            ["name": "x", "start_point": "origin/main", "checkout": false]
+            ["name": "x", "start_point": "origin/main", "checkout": false, "force": false]
         )
         XCTAssertEqual(
             try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[1]),
-            ["ref": "x"]
+            ["ref": "x", "force": false]
+        )
+    }
+
+    func testVoiceCleanupPostsTheTextWithTheSessionKind() async throws {
+        StubURLProtocol.enqueue(status: 200, body: #"{"text":"Run the tests with --watch."}"#)
+
+        let answer = try await makeAPI().cleanupVoiceTranscript(text: "uh run the tests dash dash watch", kind: "codex")
+
+        XCTAssertEqual(answer, VoiceCleanupResponse(text: "Run the tests with --watch."))
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(request.url?.absoluteString, "http://agent.example.com/api/voice/cleanup")
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(
+            try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[0]),
+            ["text": "uh run the tests dash dash watch", "kind": "codex"]
         )
     }
 

@@ -115,7 +115,7 @@ RELEASE_AUTH_TOKEN=<same string as agent/release-token in the local release key 
 MANIFEST_SIGNING_PUBLIC_KEY=<base64 Ed25519 public half of agent/manifest-signing-key in that folder>
 ```
 
-Without `RELEASE_AUTH_TOKEN`, the publish endpoint returns HTTP 503 and the script's publish step fails. The values **must match between your machine and the server**: the script sends `agent/release-token` in the `X-Release-Token` header, and the server compares it against `RELEASE_AUTH_TOKEN` byte-for-byte. The local key folder is described in [`docs/versioning-and-updates.md`](../../docs/versioning-and-updates.md#local-key-folder).
+Without `RELEASE_AUTH_TOKEN`, the upload and publish endpoints return HTTP 503 and the script's publish step fails. The values **must match between your machine and the server**: the script sends `agent/release-token` in the `X-Release-Token` header, and the server compares it against `RELEASE_AUTH_TOKEN` byte-for-byte. The local key folder is described in [`docs/versioning-and-updates.md`](../../docs/versioning-and-updates.md#local-key-folder).
 
 **Trust-key bootstrap.** `MANIFEST_SIGNING_PUBLIC_KEY` is also required for **agent-side trust-key bootstrap**: agent install scripts (`deploy/install.sh`, `deploy/install.ps1`) auto-fetch it from `GET /api/v1/agent/trust_key` to pin `<prefix>/trust/central_server.pub`, so operators need not set `MOBAIDE_AGENT_TRUST_KEY_B64` on every host. Without it, that endpoint returns HTTP 503 and agent installs fail closed (deliberately: agents whose auto-updater cannot verify rollouts must not ship).
 

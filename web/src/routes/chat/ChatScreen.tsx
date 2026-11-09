@@ -317,6 +317,7 @@ function ChatView({ model, session, headerLabel }: ChatViewProps) {
             <Composer
               model={model}
               kindLabel={kindLabel}
+              sessionKind={session?.kind}
               live={live}
               closed={closed}
               halted={state.status === 'error'}
