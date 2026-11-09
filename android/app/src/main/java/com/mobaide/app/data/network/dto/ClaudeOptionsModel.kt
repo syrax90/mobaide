@@ -17,6 +17,8 @@ data class ClaudeOptionsModel(
     val initial_prompt: String? = null,
     val worktree: Boolean = false,
     val branch_name: String? = null,
+    // The ref the new worktree starts from; null = the agent's default branch.
+    val base_branch: String? = null,
     val identifier: String? = null,
     val title: String? = null,
     val model: String? = null,

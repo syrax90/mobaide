@@ -59,6 +59,27 @@ class GitDtoFixtureTest {
         fixture("GitBranchCreateRequest").assertCanonicalDecodesLikeWire(GitBranchCreateRequest.serializer())
         fixture("GitCheckoutRequest").assertCanonicalDecodesLikeWire(GitCheckoutRequest.serializer())
         fixture("GitBranchResponse").assertCanonicalDecodesLikeWire(GitBranchResponse.serializer())
+        fixture("WorktreeBasesResponse").assertCanonicalDecodesLikeWire(WorktreeBasesResponse.serializer())
+    }
+
+    @Test
+    fun worktreeBases_keepDefaultFirst_lastUsed_andTheRefKinds() {
+        val fixture = fixture("WorktreeBasesResponse")
+
+        val full = fixture.decode(WorktreeBasesResponse.serializer(), "full")
+        val empty = fixture.decode(WorktreeBasesResponse.serializer(), "no_default_no_refs")
+
+        assertEquals("origin/main", full.default)
+        assertEquals("origin/develop", full.last_used)
+        assertEquals(listOf("origin/main", "origin/develop", "wip/local"), full.refs.map { it.ref })
+        assertEquals("2026-11-08T10:15:00+00:00", full.refs[0].committed_at)
+        assertFalse(full.refs[0].isLocal)
+        assertTrue(full.refs[2].isLocal)
+        assertNull(full.refs[2].subject)
+        assertNull(full.refs[2].committed_at)
+        assertNull(empty.default)
+        assertNull(empty.last_used)
+        assertTrue(empty.refs.isEmpty())
     }
 
     @Test

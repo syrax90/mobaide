@@ -9,6 +9,7 @@ import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
+import com.mobaide.app.data.repository.GitRepository
 import com.mobaide.app.data.repository.PathSuggestionRepository
 import com.mobaide.app.data.repository.ProjectsRepository
 import com.mobaide.app.data.repository.SessionRepository
@@ -20,6 +21,7 @@ import io.mockk.just
 import io.mockk.mockk
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -127,6 +129,9 @@ class CreateSessionViewModelReorderTest {
         val vm = CreateSessionViewModel(
             projectsRepo, sessionRepo, autoScanRepo, prefs, tokenStore, customTypesRepo,
             PathSuggestionRepository(restApi, tokenStore),
+            mockk<GitRepository>(relaxed = true) {
+                every { changed } returns MutableSharedFlow()
+            },
         )
         return Fixture(
             projectsRepo, projectsFlow, customTypesRepo, customTypesFlow, modeOrderFlow,

@@ -81,6 +81,9 @@ class ProjectRecord:
     order: int = 0
     auto_scan_filter: AutoScanFilter = field(default_factory=AutoScanFilter)
     auto_scan_prompt: str | None = None
+    # Base branch of the last worktree a client created in this project;
+    # agent-private, so every client and device preselects the same one.
+    last_worktree_base: str | None = None
 
 
 @dataclass
@@ -295,6 +298,20 @@ class ProjectsStore:
             self._save_unlocked()
             return _record_to_config(record)
 
+    def get_last_worktree_base(self, name: str) -> str | None:
+        with self._lock:
+            r = self._projects.get(name)
+            return r.last_worktree_base if r is not None else None
+
+    def set_last_worktree_base(self, name: str, base: str) -> None:
+        """Remember ``base`` for ``name``; an unknown project is a no-op."""
+        with self._lock:
+            r = self._projects.get(name)
+            if r is None or r.last_worktree_base == base:
+                return
+            r.last_worktree_base = base
+            self._save_unlocked()
+
     def delete(self, name: str) -> None:
         """Remove ``name`` and compact the remaining ``order`` values.
 
@@ -414,6 +431,7 @@ def _record_from_dict(data: object) -> ProjectRecord | None:
     default_flags = data.get("default_flags") or {}
     order = data.get("order")
     prompt = data.get("auto_scan_prompt")
+    last_base = data.get("last_worktree_base")
     return ProjectRecord(
         name=name,
         path=normalized_path,
@@ -423,6 +441,9 @@ def _record_from_dict(data: object) -> ProjectRecord | None:
         order=order if isinstance(order, int) else 0,
         auto_scan_filter=_filter_from_dict(data.get("auto_scan_filter")),
         auto_scan_prompt=prompt if isinstance(prompt, str) and prompt.strip() else None,
+        last_worktree_base=(
+            last_base if isinstance(last_base, str) and last_base else None
+        ),
     )
 
 
@@ -441,6 +462,8 @@ def _record_to_dict(r: ProjectRecord) -> dict[str, object]:
     if r.auto_scan_prompt is not None:
         d["auto_scan_prompt"] = r.auto_scan_prompt
     d["auto_scan_filter"] = _filter_to_dict(r.auto_scan_filter)
+    if r.last_worktree_base is not None:
+        d["last_worktree_base"] = r.last_worktree_base
     return d
 
 

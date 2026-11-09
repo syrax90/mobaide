@@ -119,6 +119,7 @@ from mobaide.agent.git.service import (
     create_branch,
     delete_git_items,
     list_git_items,
+    list_worktree_bases,
 )
 from mobaide.linear.client import LinearApiClient
 from mobaide.linear.rate_limiter import LinearRateLimiter
@@ -1195,6 +1196,7 @@ class RelayClient:
             antigravity_options=antigravity_options,
             worktree=bool(ctrl.get("worktree", False)),
             branch_name=ctrl.get("branch_name"),
+            base_branch=ctrl.get("base_branch"),
             kind=kind,
             kind_label=(
                 resolved_name
@@ -1577,6 +1579,7 @@ class RelayClient:
                 antigravity_options=antigravity_options,
                 worktree=parsed.worktree,
                 branch_name=parsed.branch_name,
+                base_branch=parsed.base_branch,
                 kind=kind,
                 kind_label=(
                     parsed.resolved_name if isinstance(kind, str) else None
@@ -1908,7 +1911,8 @@ class RelayClient:
         signal that the caller should fall through to the next handler.
         """
         match = re.match(
-            r"^/api/projects/([^/]+)/git/(items|items:delete|branches|checkout)$",
+            r"^/api/projects/([^/]+)/git/"
+            r"(items|items:delete|branches|checkout|worktree-bases)$",
             path,
         )
         if match is None:
@@ -1962,6 +1966,20 @@ class RelayClient:
                 "status": 200,
                 "body": GitItemsResponse(items=items).model_dump(),
             }
+
+        if route == "worktree-bases" and method == "GET":
+            try:
+                bases = await list_worktree_bases(
+                    project_root,
+                    manager,
+                    last_used=store.get_last_worktree_base(project.name),
+                )
+            except Exception as exc:
+                mapped = git_changes_http_error_for(exc)
+                if mapped is None:
+                    raise
+                return {"status": mapped[0], "body": mapped[1]}
+            return {"status": 200, "body": bases.model_dump()}
 
         post_routes = {
             "items:delete": (GitDeleteRequest, delete_git_items),

@@ -22,6 +22,7 @@ import os
 import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from mobaide.core.git_exec import CmdResult, run_git
@@ -66,6 +67,8 @@ from .models import (
     GitDeleteResultItem,
     GitItemRead,
     ItemKind,
+    WorktreeBaseRef,
+    WorktreeBasesResponse,
 )
 
 logger = get_logger(__name__)
@@ -293,6 +296,61 @@ async def list_git_items(
             )
         )
     return items
+
+
+def _tip_epoch(committed_at: str | None) -> float:
+    if not committed_at:
+        return 0.0
+    try:
+        return datetime.fromisoformat(committed_at).timestamp()
+    except ValueError:
+        return 0.0
+
+
+async def list_worktree_bases(
+    project_root: str,
+    manager: WorktreeManager,
+    *,
+    last_used: str | None,
+) -> WorktreeBasesResponse:
+    """Local and remote-tracking branches a new worktree can start from.
+
+    ``default`` comes first, then every other ref newest tip first. Reads
+    local refs only: creating the worktree fetches a remote base anyway.
+    """
+    tips, remote_refs = await _ref_tips(project_root)
+    remotes = await _remote_names(project_root)
+    refs: list[WorktreeBaseRef] = []
+    for refname, tip in tips.items():
+        if refname.startswith(_REFS_HEADS):
+            short = refname[len(_REFS_HEADS):]
+            kind = "local"
+        elif refname in remote_refs:
+            short = refname[len(_REFS_REMOTES):]
+            if _split_remote_ref(short, remotes) is None:
+                continue
+            kind = "remote"
+        else:
+            continue
+        refs.append(
+            WorktreeBaseRef(
+                ref=short,
+                kind=kind,
+                subject=tip.subject,
+                committed_at=tip.committed_at,
+            )
+        )
+    default = await manager.default_base(project_root)
+    known = {r.ref for r in refs}
+    if default not in known:
+        default = None
+    refs.sort(key=lambda r: _tip_epoch(r.committed_at), reverse=True)
+    refs.sort(key=lambda r: r.ref != default)
+    return WorktreeBasesResponse(
+        default=default,
+        last_used=last_used if last_used in known else None,
+        refs=refs,
+    )
 
 
 @dataclass

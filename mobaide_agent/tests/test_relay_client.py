@@ -3070,6 +3070,40 @@ class TestProxyGitItems:
         )
 
 
+class TestProxyWorktreeBases:
+    """``GET /api/projects/{name}/git/worktree-bases`` through the relay:
+    same body as the FastAPI router, with the store's last-used base."""
+
+    async def test_get_worktree_bases(self, client, mock_app_state, tmp_path):
+        from mobaide.agent.git.models import WorktreeBaseRef, WorktreeBasesResponse
+
+        (tmp_path / ".git").mkdir()
+        project = MagicMock()
+        project.name = "proj"
+        project.path = str(tmp_path)
+        mock_app_state.projects_store = MagicMock()
+        mock_app_state.projects_store.get = MagicMock(return_value=project)
+        mock_app_state.projects_store.get_last_worktree_base = MagicMock(
+            return_value="origin/dev",
+        )
+        mock_app_state.worktree_manager = MagicMock()
+        resp = WorktreeBasesResponse(
+            default="origin/main",
+            last_used="origin/dev",
+            refs=[WorktreeBaseRef(ref="origin/main", kind="remote")],
+        )
+        with patch(
+            "mobaide.relay.client.list_worktree_bases",
+            new=AsyncMock(return_value=resp),
+        ) as mock_list:
+            result = await client._dispatch_proxy(
+                "GET", "/api/projects/proj/git/worktree-bases", None, None, AsyncMock(),
+            )
+
+        assert result == {"status": 200, "body": resp.model_dump()}
+        assert mock_list.await_args.kwargs["last_used"] == "origin/dev"
+
+
 class TestProxyGitBranches:
     """Relay parity for the project-git routes added next to
     ``TestProxyGitItems``: the ``?remote`` flag reaches the service parsed,
@@ -4197,6 +4231,7 @@ class TestProxyVersionCapabilities:
                 "resolve": True,
                 "delete_remote": True,
                 "conflicts": True,
+                "worktree_base": True,
             },
             "voice": VOICE_CAPABILITIES,
             "fs": {"dirs": True, "windows_paths": sys.platform == "win32"},
@@ -4234,6 +4269,7 @@ class TestProxyVersionCapabilities:
                 "resolve": True,
                 "delete_remote": True,
                 "conflicts": True,
+                "worktree_base": True,
             },
             "voice": VOICE_CAPABILITIES,
             "fs": {"dirs": True, "windows_paths": sys.platform == "win32"},

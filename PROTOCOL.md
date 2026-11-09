@@ -123,6 +123,51 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-09: worktree base branch
+
+Additive delta within proto-v7 (2026-11-09, choose the branch a new session's worktree starts from — web, Android and iOS): **one additive REST route, one additive session-create field, one additive capability key, no version bump.** Both transports are byte-identical.
+
+#### Base-branch list route
+
+``GET /api/projects/{name}/git/worktree-bases`` → ``WorktreeBasesResponse``:
+
+```json
+{
+  "default": "origin/main",
+  "last_used": "origin/develop",
+  "refs": [
+    {"ref": "origin/main", "kind": "remote", "subject": "…", "committed_at": "2026-11-08T10:15:00+00:00"},
+    {"ref": "wip", "kind": "local", "subject": "…", "committed_at": "…"}
+  ]
+}
+```
+
+* ``refs`` lists every local branch (``kind: "local"``, the bare name) and every remote-tracking branch (``kind: "remote"``, ``<remote>/<name>``). ``<remote>/HEAD`` and refs under no configured remote are left out.
+* Order: ``default`` first, then the others by tip commit date, newest first.
+* ``default`` is the repository's default branch: ``origin/HEAD`` first, then ``origin/<MAIN_BRANCH>``, then the local ``<MAIN_BRANCH>`` (agent setting, default ``main``). ``null`` when none exists; the agent then branches from ``HEAD``.
+* ``last_used`` is the ``base_branch`` of the last worktree session created in this project, from any client. It is stored in the agent's ``projects.json`` (never in the public project row) and follows a rename. ``null`` when unset or when that ref no longer exists.
+* ``default`` and ``last_used`` are always ``null`` or a ``ref`` present in ``refs``.
+* The route reads local refs only and never fetches. Errors are the project-git ones: ``404`` unknown project, ``400`` not a git repository, then the session git vocabulary.
+
+Clients preselect ``last_used``, then ``default``, then nothing (the agent's own default).
+
+#### ``base_branch`` on session create
+
+``base_branch: str | null`` (default ``null``) joins ``branch_name`` in ``claude_options``, ``codex_options``, ``antigravity_options`` and the top-level Terminal-mode fields of ``POST /api/sessions`` and the relay ``create_session`` control message. It applies only when ``worktree`` is ``true`` on a git project:
+
+* A local branch name is used first (``refs/heads/<base>``). Otherwise, when ``<base>`` starts with a configured remote name, the agent fetches that remote (best effort) and uses ``refs/remotes/<base>``. Full refnames keep a same-named tag from winning.
+* An unknown base or one starting with ``-`` fails the create with the usual worktree ``400`` (``Could not create worktree on branch <b>: base branch '<base>' not found``).
+* ``null`` or blank keeps the old start point (fetch ``origin``, then ``default`` above, then ``HEAD``).
+* The base is ignored when the worktree or the branch already exists and is reused.
+* After a successful worktree resolution the agent records the base as the project's ``last_used``.
+* Older agents ignore the field and branch from their default.
+
+#### Worktree-base capability key
+
+``GET /api/version`` ``capabilities.git`` gains ``"worktree_base": true`` (both transports). Clients show the base-branch picker only behind it.
+
+Golden fixtures: new ``tests/protocol_fixtures/dto/agent/WorktreeBasesResponse.json``; the ``full`` cases of ``ClaudeOptionsModel``, ``CodexOptionsModel``, ``AntigravityOptionsModel`` and ``CreateSessionRequest`` gain ``base_branch``.
+
 ### Delta 2026-11-04: reorderable new-session lists
 
 Additive delta within proto-v7 (2026-11-04, drag-to-reorder in the new-session wizard): **one additive ``central_server`` REST resource, one additive user-event kind, no version bump.** The agent is untouched.

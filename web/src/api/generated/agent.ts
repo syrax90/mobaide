@@ -398,6 +398,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{name}/git/worktree-bases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Worktree Bases Endpoint
+         * @description Return the base branches a new session's worktree can start from.
+         */
+        get: operations["list_worktree_bases_endpoint_api_projects__name__git_worktree_bases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{name}/linear/labels": {
         parameters: {
             query?: never;
@@ -1093,6 +1113,8 @@ export interface components {
              * @default []
              */
             add_dirs: string[];
+            /** Base Branch */
+            base_branch?: string | null;
             /** Branch Name */
             branch_name?: string | null;
             /** Model */
@@ -1236,6 +1258,8 @@ export interface components {
         ClaudeOptionsModel: {
             /** Append System Prompt */
             append_system_prompt?: string | null;
+            /** Base Branch */
+            base_branch?: string | null;
             /** Branch Name */
             branch_name?: string | null;
             /**
@@ -1328,6 +1352,8 @@ export interface components {
              * @enum {string}
              */
             approval: "untrusted" | "on-request" | "never";
+            /** Base Branch */
+            base_branch?: string | null;
             /** Branch Name */
             branch_name?: string | null;
             /**
@@ -1359,6 +1385,8 @@ export interface components {
         /** CreateSessionRequest */
         CreateSessionRequest: {
             antigravity_options?: components["schemas"]["AntigravityOptionsModel"] | null;
+            /** Base Branch */
+            base_branch?: string | null;
             /** Branch Name */
             branch_name?: string | null;
             claude_options?: components["schemas"]["ClaudeOptionsModel"] | null;
@@ -2544,6 +2572,41 @@ export interface components {
             /** State */
             state: string;
         };
+        /**
+         * WorktreeBaseRef
+         * @description One branch a new worktree can start from. ``ref`` is what the client
+         *     sends back as ``base_branch``: a local branch name, or
+         *     ``<remote>/<name>`` for a remote-tracking branch.
+         */
+        WorktreeBaseRef: {
+            /** Committed At */
+            committed_at?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "local" | "remote";
+            /** Ref */
+            ref: string;
+            /** Subject */
+            subject?: string | null;
+        };
+        /**
+         * WorktreeBasesResponse
+         * @description ``GET /worktree-bases``: the base-branch picker of the New Session
+         *     screen. ``default`` is the repository's default branch (``origin/HEAD``
+         *     first) and ``last_used`` the base of the last worktree created in this
+         *     project; both are ``null`` or a ``ref`` present in ``refs``. Clients
+         *     preselect ``last_used``, then ``default``.
+         */
+        WorktreeBasesResponse: {
+            /** Default */
+            default: string | null;
+            /** Last Used */
+            last_used: string | null;
+            /** Refs */
+            refs: components["schemas"]["WorktreeBaseRef"][];
+        };
     };
     responses: never;
     parameters: never;
@@ -3155,6 +3218,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_worktree_bases_endpoint_api_projects__name__git_worktree_bases_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorktreeBasesResponse"];
                 };
             };
             /** @description Validation Error */

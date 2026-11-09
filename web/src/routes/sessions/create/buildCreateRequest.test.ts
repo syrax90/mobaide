@@ -385,3 +385,60 @@ describe('focus_mode', () => {
     expect(() => createSessionRequestSchema.parse(build('claude', state))).not.toThrow();
   });
 });
+
+describe('base_branch', () => {
+  const withBase = (mode: WizardMode, state: WizardState = POPULATED): CreateSessionRequest => {
+    const request = buildCreateRequest({ state, mode, project: gitProject, worktreeBase: 'origin/dev' });
+    if (request === null) throw new Error(`expected a request for mode ${mode}`);
+    return request;
+  };
+
+  it('rides each managed CLI’s own options block, never the top level', () => {
+    expect(withBase('claude').claude_options?.base_branch).toBe('origin/dev');
+    expect(withBase('codex').codex_options?.base_branch).toBe('origin/dev');
+    expect(withBase('antigravity').antigravity_options?.base_branch).toBe('origin/dev');
+    for (const mode of ['claude', 'codex', 'antigravity'] as const) {
+      expect('base_branch' in withBase(mode)).toBe(false);
+    }
+  });
+
+  it.each(['shell', CUSTOM] as const)('goes top level for %s', (mode) => {
+    expect(withBase(mode).base_branch).toBe('origin/dev');
+  });
+
+  it.each(REQUEST_MODES)('is sent as null without a worktree for %s', (mode) => {
+    const request = withBase(mode, { ...POPULATED, git: { worktree: false, branchName: 'wip' } });
+    const own = OWN_OPTIONS[mode];
+    const block = (own === null ? request : request[own]) as Record<string, unknown>;
+
+    expect(Object.hasOwn(block, 'base_branch')).toBe(true);
+    expect(block.base_branch).toBeNull();
+  });
+
+  it('is null for a project that is not a repo, and for an unresolved base', () => {
+    const nonGit = buildCreateRequest({
+      state: POPULATED,
+      mode: 'claude',
+      project: { ...gitProject, is_git: false },
+      worktreeBase: 'origin/dev',
+    });
+
+    expect(nonGit?.claude_options?.base_branch).toBeNull();
+    expect(build('claude').claude_options?.base_branch).toBeNull();
+  });
+
+  it('is null on an Auto Scan start', () => {
+    const scan = buildStartScanRequest({
+      state: POPULATED,
+      mode: 'auto_scan',
+      project: gitProject,
+      worktreeBase: 'origin/dev',
+    });
+
+    expect(scan?.claude_options?.base_branch).toBeNull();
+  });
+
+  it.each(REQUEST_MODES)('%s with a base survives the strict outbound schema', (mode) => {
+    expect(createSessionRequestSchema.parse(withBase(mode))).toBeDefined();
+  });
+});

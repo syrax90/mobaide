@@ -110,6 +110,7 @@ class ClaudeOptions:
     initial_prompt: str | None = None
     worktree: bool = False
     branch_name: str | None = None
+    base_branch: str | None = None
     identifier: str | None = None
     title: str | None = None
     # Curated model alias (opus / sonnet / haiku / fable) or None for the
@@ -391,6 +392,7 @@ class ClaudeLauncher:
             target,
             worktree=options.worktree,
             branch_name=options.branch_name,
+            base_branch=options.base_branch,
             worktree_mgr=self._worktree_mgr,
             fallback_prefix="claude-session",
         )

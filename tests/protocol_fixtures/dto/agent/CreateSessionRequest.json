@@ -13,7 +13,8 @@
         "cli": "claude",
         "claude_options": { "plan_mode": true, "no_memory": false, "skip_permissions": true, "worktree": false, "fast_mode": false, "ultracode": false, "debug": false, "focus_mode": false },
         "worktree": true,
-        "branch_name": "feature/x"
+        "branch_name": "feature/x",
+        "base_branch": "origin/main"
       }
     },
     {

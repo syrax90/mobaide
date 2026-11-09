@@ -31,6 +31,7 @@ import com.mobaide.app.data.network.dto.GitRebaseResponse
 import com.mobaide.app.data.network.dto.GitRepoInfo
 import com.mobaide.app.data.network.dto.GitStatusResponse
 import com.mobaide.app.data.network.dto.VersionInfoResponse
+import com.mobaide.app.data.network.dto.WorktreeBasesResponse
 import com.mobaide.app.data.network.dto.gitCapability
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -174,6 +175,9 @@ class GitRepository(
 
     suspend fun listGitItems(projectName: String): List<GitItem> =
         restApi.getGitItems(projectName).items
+
+    suspend fun worktreeBases(projectName: String): WorktreeBasesResponse =
+        restApi.getWorktreeBases(projectName)
 
     suspend fun deleteGitItems(
         projectName: String,

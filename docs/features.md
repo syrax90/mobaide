@@ -128,6 +128,18 @@ The third tile on the create-session screen opens a raw shell anchored to the se
 
 For stored git projects, tapping the tile first shows a "Terminal session" config page with a "Create worktree" toggle and an optional branch name, mirroring the Claude Standard config page. Non-git projects and custom paths skip the config page and start the shell immediately.
 
+## Worktree Base Branch
+
+When "Create worktree" is on for a git project, the config page shows a "Base branch" picker. The new worktree branch starts from the selected branch. This works for Claude, Codex, Antigravity and Terminal sessions.
+
+- **List.** The picker lists the local branches and the remote-tracking branches. It has a search field. The default branch is first, then the newest branches.
+- **Default.** The agent picks `origin/HEAD` first, then `origin/main`, then the local `main`.
+- **Memory.** The agent remembers the last base branch for each project. Every client and device preselects it the next time. If that branch is gone, the picker selects the default.
+- **Fresh start.** For a remote base, the agent fetches that remote before it creates the worktree.
+- **Older agents.** Clients hide the picker without `capabilities.git.worktree_base`.
+
+Wire details are in PROTOCOL.md, *Delta 2026-11-09: worktree base branch*.
+
 ## Custom Path Sessions
 
 A "Custom path…" entry in the project picker launches a one-off Claude or Terminal session in any folder on the agent machine, without adding it to `projects.json`. The agent validates the path (absolute, exists, is-directory) and returns a clean 400 on bad input.

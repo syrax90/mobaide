@@ -47,6 +47,7 @@ async def test_get_version(client) -> None:
             "resolve": True,
             "delete_remote": True,
             "conflicts": True,
+            "worktree_base": True,
         },
         "voice": {
             "dictation": True,

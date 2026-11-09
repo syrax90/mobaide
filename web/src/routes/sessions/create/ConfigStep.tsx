@@ -1,8 +1,10 @@
 import {
   cliModelDetails,
   cliModels,
+  gitCapability,
   type AgentVersionInfo,
 } from '../../../protocol/dto/agentVersion';
+import type { WorktreeBases } from '../../../api/gitRepository';
 import { customSessionTypeId } from '../../../protocol/wireSchema';
 import type { ProjectSummary } from '../../../api/projectRepository';
 import type { CustomAgentType } from '../../../api/customAgentTypeRepository';
@@ -11,7 +13,9 @@ import { AutoScanOptionsPanel } from './panels/AutoScanOptionsPanel';
 import { ClaudeAdvancedPanel } from './panels/ClaudeAdvancedPanel';
 import { ClaudeOptionsPanel } from './panels/ClaudeOptionsPanel';
 import { CodexOptionsPanel } from './panels/CodexOptionsPanel';
+import type { BaseBranchStatus } from './panels/BaseBranchPicker';
 import { WorktreeSection } from './panels/WorktreeSection';
+import { effectiveWorktreeBase } from './worktreeBase';
 import {
   addDirsError,
   isCustomMode,
@@ -21,6 +25,13 @@ import {
   type WizardState,
 } from './wizardState';
 
+/** The base-branch list query, as the wizard sees it. */
+export interface WorktreeBasesView {
+  status: BaseBranchStatus;
+  bases: WorktreeBases | undefined;
+  retry: () => void;
+}
+
 interface ConfigStepProps {
   mode: WizardMode;
   state: WizardState;
@@ -29,6 +40,8 @@ interface ConfigStepProps {
   project: ProjectSummary | null;
   capabilities: AgentVersionInfo | undefined;
   customTypes: readonly CustomAgentType[];
+  /** Absent until the wizard has a list query to show (tests, older callers). */
+  worktreeBases?: WorktreeBasesView;
   submitting: boolean;
   error: string | null;
   dispatch: (action: WizardAction) => void;
@@ -65,6 +78,7 @@ export function ConfigStep({
   project,
   capabilities,
   customTypes,
+  worktreeBases,
   submitting,
   error,
   dispatch,
@@ -74,6 +88,26 @@ export function ConfigStep({
   // A worktree needs a stored git project; a one-off path has no repo to branch.
   const showsGitOptions =
     selection.kind === 'stored' && project?.is_git === true && mode !== 'auto_scan';
+
+  // Behind the capability: an older agent ignores `base_branch` and has no list route.
+  const baseBranch =
+    showsGitOptions && project !== null && gitCapability(capabilities, 'worktree_base')
+      ? {
+          status: worktreeBases?.status ?? 'loading',
+          bases: worktreeBases?.bases,
+          value: effectiveWorktreeBase(
+            state.worktreeBasePick,
+            project.name,
+            worktreeBases?.status === 'ready' ? worktreeBases.bases : undefined,
+          ),
+          onChange: (ref: string | null) => {
+            dispatch({ type: 'setWorktreeBase', pick: { projectName: project.name, ref } });
+          },
+          onRetry: () => {
+            worktreeBases?.retry();
+          },
+        }
+      : null;
 
   // The server 422s a flag-shaped directory, so refuse the launch rather than
   // showing the inline error and sending it anyway.
@@ -122,7 +156,9 @@ export function ConfigStep({
         </p>
       )}
 
-      {showsGitOptions && <WorktreeSection git={state.git} dispatch={dispatch} />}
+      {showsGitOptions && (
+        <WorktreeSection git={state.git} dispatch={dispatch} baseBranch={baseBranch} />
+      )}
 
       {mode === 'claude' && (
         <ClaudeAdvancedPanel bucket={state.claude} bucketId="claude" dispatch={dispatch} />

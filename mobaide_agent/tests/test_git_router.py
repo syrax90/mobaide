@@ -953,6 +953,25 @@ class TestGitBranchEndpoints:
             assert item["subject"] == "initial"
             assert isinstance(item["committed_at"], str)
 
+    async def test_get_worktree_bases_lists_default_and_last_used(
+        self, client_git, auth_headers_g, app_with_git, tmp_path,
+    ):
+        clone = clone_repo(seed_remote(str(tmp_path)), str(tmp_path / "beta"))
+        store = app_with_git.state.projects_store
+        store.create(ProjectRecord(name="beta", path=clone))
+        store.set_last_worktree_base("beta", "main")
+
+        resp = await client_git.get(
+            "/api/projects/beta/git/worktree-bases", headers=auth_headers_g,
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["default"] == "origin/main"
+        assert body["last_used"] == "main"
+        assert [(r["ref"], r["kind"]) for r in body["refs"]][0] == ("origin/main", "remote")
+        assert {r["ref"] for r in body["refs"]} == {"origin/main", "main"}
+
     async def test_get_items_rejects_a_non_boolean_remote_flag(
         self, client_git, auth_headers_g,
     ):

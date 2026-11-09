@@ -100,6 +100,7 @@ class SessionConfig:
     # staying ``SessionKind.SHELL`` (Claude sessions use claude_options.worktree).
     worktree: bool = False
     branch_name: str | None = None
+    base_branch: str | None = None
     # Seconds after spawn to wait before flagging a session that produced
     # essentially no output (< STARTUP_STALL_MIN_BYTES) as stalled — almost
     # always a macOS file-access (TCC) modal blocking the child invisibly on the

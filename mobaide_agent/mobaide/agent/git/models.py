@@ -168,3 +168,26 @@ class GitBranchResponse(BaseModel):
     branch: str
     checked_out: bool
     created: bool
+
+
+class WorktreeBaseRef(BaseModel):
+    """One branch a new worktree can start from. ``ref`` is what the client
+    sends back as ``base_branch``: a local branch name, or
+    ``<remote>/<name>`` for a remote-tracking branch."""
+
+    ref: str
+    kind: Literal["local", "remote"]
+    subject: str | None = None
+    committed_at: str | None = None
+
+
+class WorktreeBasesResponse(BaseModel):
+    """``GET /worktree-bases``: the base-branch picker of the New Session
+    screen. ``default`` is the repository's default branch (``origin/HEAD``
+    first) and ``last_used`` the base of the last worktree created in this
+    project; both are ``null`` or a ``ref`` present in ``refs``. Clients
+    preselect ``last_used``, then ``default``."""
+
+    default: str | None
+    last_used: str | None
+    refs: list[WorktreeBaseRef]

@@ -40,6 +40,7 @@ export const claudeOptionsSchema = z.strictObject({
   initial_prompt: optionalWireString(),
   worktree: z.boolean().default(false),
   branch_name: optionalWireString(),
+  base_branch: optionalWireString(),
   identifier: optionalWireString(),
   title: optionalWireString(),
   model: optionalWireString(),
@@ -89,6 +90,7 @@ export const codexOptionsSchema = z.strictObject({
   initial_prompt: optionalWireString(),
   worktree: z.boolean().default(false),
   branch_name: optionalWireString(),
+  base_branch: optionalWireString(),
 });
 
 export const antigravityOptionsSchema = z
@@ -99,6 +101,7 @@ export const antigravityOptionsSchema = z
     add_dirs: z.array(z.string()).default([]),
     worktree: z.boolean().default(false),
     branch_name: optionalWireString(),
+  base_branch: optionalWireString(),
   })
   .refine((options) => !(options.skip_permissions && options.sandbox), {
     // Mirrors the server's `_reject_sandboxed_skip_permissions` 422
@@ -131,6 +134,7 @@ export const createSessionRequestSchema = z.strictObject({
   /** Terminal/custom worktree intent. Managed CLIs carry theirs inside their options block. */
   worktree: z.boolean().default(false),
   branch_name: optionalWireString(),
+  base_branch: optionalWireString(),
 });
 
 export type ClaudeOptionsWire = z.infer<typeof claudeOptionsSchema>;

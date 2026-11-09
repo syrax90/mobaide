@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubLocalStorage } from '../../../test/localStorageStub';
 import type { ProjectInfo } from '../../../api/projectRepository';
 import type { CreateSessionRequest } from '../../../api/sessionRepository';
+import type { WorktreeBases } from '../../../api/gitRepository';
 import type { SessionResponse } from '../../../protocol/dto/session';
 import type { LaunchPrefs } from '../../../stores/launchPrefsStore';
 
@@ -33,12 +34,14 @@ const api = vi.hoisted(
     projectWrites: { name: string; path: string }[];
     requests: CreateSessionRequest[];
     create: (request: CreateSessionRequest) => Promise<SessionResponse>;
+    worktreeBases: () => Promise<WorktreeBases>;
   } => ({
     projects: [],
     projectLists: 0,
     projectWrites: [],
     requests: [],
     create: () => Promise.reject(new Error('createSession is not stubbed')),
+    worktreeBases: () => Promise.reject(new Error('listWorktreeBases is not stubbed')),
   }),
 );
 
@@ -82,9 +85,14 @@ vi.mock('../../../api/agentCapabilities', async () => {
     server_version: '1.0.0',
     protocol_versions: [8],
     min_client_version: 1,
-    capabilities: { cli: { claude: { available: true } } },
+    capabilities: { cli: { claude: { available: true } }, git: { worktree_base: true } },
   });
   return { fetchAgentCapabilities: () => Promise.resolve(info) };
+});
+
+vi.mock('../../../api/gitRepository', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../api/gitRepository')>();
+  return { ...actual, listWorktreeBases: () => api.worktreeBases() };
 });
 
 vi.mock('../../../api/customAgentTypeRepository', async (importOriginal) => {
@@ -226,6 +234,7 @@ beforeEach(() => {
   api.projectWrites.length = 0;
   api.requests.length = 0;
   api.create = () => Promise.resolve(session('s-new'));
+  api.worktreeBases = () => Promise.reject(new Error('listWorktreeBases is not stubbed'));
   visited.length = 0;
   // setState writes back through the persist middleware, so reset the
   // in-memory singleton first and clear storage after.
@@ -545,6 +554,50 @@ describe('NewSession worktree options', () => {
     fireEvent.click(worktree);
 
     expect(screen.getByLabelText('Branch name (optional)')).toHaveValue('feature/my-change');
+  });
+
+  const BASES: WorktreeBases = {
+    default: 'origin/main',
+    last_used: 'origin/develop',
+    refs: [
+      { ref: 'origin/main', kind: 'remote', subject: null, committed_at: null },
+      { ref: 'origin/develop', kind: 'remote', subject: null, committed_at: null },
+      { ref: 'wip', kind: 'local', subject: null, committed_at: null },
+    ],
+  };
+  const baseTrigger = (): HTMLElement => screen.getByRole('button', { name: /^Base branch/ });
+
+  it('launches from the preselected base, then from a manual pick', async () => {
+    api.worktreeBases = () => Promise.resolve(BASES);
+    await renderWizard('?step=config&mode=claude&project=alpha');
+
+    fireEvent.click(screen.getByLabelText('Create worktree'));
+    await waitFor(() => {
+      expect(baseTrigger()).toHaveTextContent('origin/develop');
+    });
+    fireEvent.click(baseTrigger());
+    fireEvent.click(screen.getByRole('option', { name: /wip/ }));
+    expect(baseTrigger()).toHaveTextContent('wip');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create session' }));
+    await waitFor(() => {
+      expect(api.requests).toHaveLength(1);
+    });
+    expect(api.requests[0]?.claude_options).toMatchObject({ worktree: true, base_branch: 'wip' });
+  });
+
+  it('still launches, on the agent default, when the list fails', async () => {
+    api.worktreeBases = () => Promise.reject(new Error('boom'));
+    await renderWizard('?step=config&mode=claude&project=alpha');
+
+    fireEvent.click(screen.getByLabelText('Create worktree'));
+    expect(await screen.findByText('Couldn’t load branches')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create session' }));
+    await waitFor(() => {
+      expect(api.requests).toHaveLength(1);
+    });
+    expect(api.requests[0]?.claude_options).toMatchObject({ worktree: true, base_branch: null });
   });
 });
 
