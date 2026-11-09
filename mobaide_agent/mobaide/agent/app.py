@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from mobaide import __version__
 from mobaide.acp.agents import build_chat_agents, build_chat_capabilities
 from mobaide.acp.catalog import ChatCatalog
+from mobaide.acp.install import PROBE_POOL
 from mobaide.core import (
     AntigravityLauncher,
     ClaudeLauncher,
@@ -447,6 +448,11 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             warm_cli_model_caches(app.state.cli_launchers),
             name="cli-models-warmup",
         )
+        # The same for the chat agents' availability probes (`agy help acp`
+        # spawns the CLI): the first /api/version then finds the answer cached.
+        asyncio.get_running_loop().run_in_executor(
+            PROBE_POOL, build_chat_capabilities, app.state.chat_agents
+        )
         app.state.pairing_task = None
         if relay_cfg is not None and not pairing_pending:
             await _start_relay_in_process(app, relay_cfg)
@@ -802,6 +808,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         command_overrides={
             "claude": config.acp_claude_command,
             "codex": config.acp_codex_command,
+            "antigravity": config.acp_antigravity_command,
         },
         adapters_dir=state_prefix(test_mode=config.is_test_mode) / "acp-adapters",
     )

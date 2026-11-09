@@ -124,6 +124,11 @@ export function ResumeSessionDialog({
                           : row.title}
                       </span>
                       {scope === 'all' && <span className="resume-row-cwd">{row.cwd}</span>}
+                      {row.open_elsewhere === true && row.open_session_id === undefined && (
+                        <span className="resume-row-note">
+                          Open in another app on your PC. Close it there first.
+                        </span>
+                      )}
                     </span>
                     {row.open_session_id !== undefined && <span className="chat-badge">Open</span>}
                     {when !== null && <span className="resume-row-time">{when}</span>}

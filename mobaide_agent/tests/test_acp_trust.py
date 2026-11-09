@@ -1,7 +1,7 @@
 """Folder trust for chat sessions (``mobaide/acp/trust.py``): where the
-Claude Code and Codex CLIs keep their trust records, which folders count as
-trusted, and how ``grant`` writes the record without losing the rest of the
-file."""
+Claude Code, Codex and Antigravity CLIs keep their trust records, which
+folders count as trusted, and how ``grant`` writes the record without losing
+the rest of the file."""
 from __future__ import annotations
 
 import json
@@ -13,8 +13,10 @@ from pathlib import Path
 import pytest
 
 from mobaide.acp.trust import (
+    AntigravityFolderTrust,
     ClaudeFolderTrust,
     CodexFolderTrust,
+    antigravity_settings_path,
     claude_config_path,
     codex_config_path,
     too_broad_to_record,
@@ -755,3 +757,195 @@ class TestConcurrentGrants:
         assert self._grant_both([t.grant for t in trusts]) == [True, True]
 
         assert all(t.is_trusted() for t in trusts)
+
+    def test_antigravity_keeps_both_records(self, tmp_path, monkeypatch):
+        self._slow_writes(monkeypatch)
+        settings = tmp_path / "settings.json"
+        a, b = _project(tmp_path, "a"), _project(tmp_path, "b")
+        trusts = [AntigravityFolderTrust(str(f), settings_path=settings) for f in (a, b)]
+
+        assert self._grant_both([t.grant for t in trusts]) == [True, True]
+
+        assert all(t.is_trusted() for t in trusts)
+
+
+def _agy_settings(path: Path, data: object) -> None:
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def _agy_trust(cwd: Path | str, settings: Path) -> AntigravityFolderTrust:
+    return AntigravityFolderTrust(str(cwd), settings_path=settings)
+
+
+class TestAntigravitySettingsPath:
+    def test_defaults_to_the_cli_folder_in_home(self, home):
+        assert antigravity_settings_path() == home / ".gemini" / "antigravity-cli" / "settings.json"
+
+    def test_an_app_data_folder_holds_it(self, tmp_path):
+        assert antigravity_settings_path(tmp_path / "agy") == tmp_path / "agy" / "settings.json"
+
+
+class TestAntigravityIsTrusted:
+    def test_missing_settings_file_is_untrusted(self, tmp_path):
+        assert _agy_trust(_project(tmp_path), tmp_path / "settings.json").is_trusted() is False
+
+    def test_the_listed_folder(self, tmp_path):
+        project = _project(tmp_path)
+        settings = tmp_path / "settings.json"
+        _agy_settings(settings, {"trustedWorkspaces": [os.path.realpath(project)]})
+
+        assert _agy_trust(project, settings).is_trusted() is True
+
+    @pytest.mark.parametrize("listed", ["parent", "repository-root"])
+    def test_a_listed_parent_does_not_cover_its_children(self, tmp_path, listed):
+        """``agy`` matches the exact folder, unlike Claude Code."""
+        child = _project(tmp_path, "app", "src")
+        parent = tmp_path / "work" / "app"
+        if listed == "repository-root":
+            _repo(parent)
+        settings = tmp_path / "settings.json"
+        _agy_settings(settings, {"trustedWorkspaces": [os.path.realpath(parent)]})
+
+        assert _agy_trust(child, settings).is_trusted() is False
+
+    @skip_if_not_linux
+    def test_a_symlinked_folder_matches_its_real_path(self, tmp_path):
+        project = _project(tmp_path, "real")
+        link = tmp_path / "link"
+        link.symlink_to(project, target_is_directory=True)
+        settings = tmp_path / "settings.json"
+        _agy_settings(settings, {"trustedWorkspaces": [os.path.realpath(project)]})
+
+        assert _agy_trust(link, settings).is_trusted() is True
+
+    @skip_if_not_linux
+    def test_a_listed_symlink_matches_the_folder_it_points_to(self, tmp_path):
+        project = _project(tmp_path, "real")
+        link = tmp_path / "link"
+        link.symlink_to(project, target_is_directory=True)
+        settings = tmp_path / "settings.json"
+        _agy_settings(settings, {"trustedWorkspaces": [str(link)]})
+
+        assert _agy_trust(project, settings).is_trusted() is True
+
+    @pytest.mark.parametrize(
+        "data",
+        [
+            {"trustedWorkspaces": "FOLDER"},
+            {"trustedWorkspaces": {"FOLDER": True}},
+            {"trustedWorkspaces": [None, 1, ""]},
+            {"otherKey": ["FOLDER"]},
+            ["FOLDER"],
+        ],
+        ids=["string", "object", "no-strings", "other-key", "not-object"],
+    )
+    def test_anything_but_a_listed_folder_is_untrusted(self, tmp_path, data):
+        project = _project(tmp_path)
+        settings = tmp_path / "settings.json"
+        settings.write_text(
+            json.dumps(data).replace("FOLDER", os.path.realpath(project)), encoding="utf-8"
+        )
+
+        assert _agy_trust(project, settings).is_trusted() is False
+
+    def test_unreadable_settings_are_untrusted(self, tmp_path):
+        settings = tmp_path / "settings.json"
+        settings.write_text("{not json", encoding="utf-8")
+
+        assert _agy_trust(_project(tmp_path), settings).is_trusted() is False
+
+
+class TestAntigravityGrant:
+    def test_creates_a_private_settings_file_as_agy_writes_it(self, tmp_path):
+        project = _project(tmp_path)
+        settings = tmp_path / "agy" / "settings.json"
+        trust = _agy_trust(project, settings)
+
+        assert trust.grant() is True
+
+        expected = {"trustedWorkspaces": [os.path.realpath(project)]}
+        assert settings.read_text(encoding="utf-8") == json.dumps(expected, indent=2) + "\n"
+        assert trust.is_trusted() is True
+        if os.name != "nt":
+            assert stat.S_IMODE(settings.stat().st_mode) == 0o600
+
+    def test_keeps_the_other_settings_and_the_file_mode(self, tmp_path):
+        project = _project(tmp_path, "new")
+        settings = tmp_path / "settings.json"
+        _agy_settings(
+            settings,
+            {"theme": "dark", "trustedWorkspaces": ["/srv/old"], "model": "Gemini 3.8 Flash (High)"},
+        )
+        settings.chmod(0o640)
+
+        assert _agy_trust(project, settings).grant() is True
+
+        assert json.loads(settings.read_text(encoding="utf-8")) == {
+            "theme": "dark",
+            "trustedWorkspaces": ["/srv/old", os.path.realpath(project)],
+            "model": "Gemini 3.8 Flash (High)",
+        }
+        if os.name != "nt":
+            assert stat.S_IMODE(settings.stat().st_mode) == 0o640
+
+    def test_a_folder_already_listed_is_not_written_again(self, tmp_path):
+        project = _project(tmp_path)
+        settings = tmp_path / "settings.json"
+        _agy_settings(settings, {"trustedWorkspaces": [os.path.realpath(project)]})
+        # The atomic rewrite replaces the file: a new inode.
+        before = settings.stat().st_ino
+
+        assert _agy_trust(project, settings).grant() is True
+
+        assert settings.stat().st_ino == before
+        assert json.loads(settings.read_text(encoding="utf-8"))["trustedWorkspaces"] == [
+            os.path.realpath(project)
+        ]
+
+    @skip_if_not_linux
+    def test_a_symlinked_folder_is_recorded_by_its_real_path(self, tmp_path):
+        project = _project(tmp_path, "real")
+        link = tmp_path / "link"
+        link.symlink_to(project, target_is_directory=True)
+        settings = tmp_path / "settings.json"
+
+        assert _agy_trust(link, settings).grant() is True
+
+        assert json.loads(settings.read_text(encoding="utf-8")) == {
+            "trustedWorkspaces": [os.path.realpath(project)]
+        }
+
+    @pytest.mark.parametrize(
+        "content",
+        ["{not json", '["a list"]', '{"trustedWorkspaces": "/srv/x"}'],
+        ids=["unreadable", "not-object", "list-not-a-list"],
+    )
+    def test_a_file_it_cannot_read_back_whole_is_never_rewritten(self, tmp_path, content):
+        settings = tmp_path / "settings.json"
+        settings.write_text(content, encoding="utf-8")
+
+        with pytest.raises(ValueError):
+            _agy_trust(_project(tmp_path), settings).grant()
+
+        assert settings.read_text(encoding="utf-8") == content
+
+    @pytest.mark.parametrize("which", ["home", "above-home", "root"])
+    def test_a_folder_too_broad_to_record_writes_nothing(self, home, tmp_path, which):
+        folder = {"home": str(home), "above-home": str(tmp_path), "root": tmp_path.anchor}[which]
+        settings = tmp_path / "agy" / "settings.json"
+        trust = AntigravityFolderTrust(folder, settings_path=settings)
+
+        assert trust.grant() is False
+
+        assert not settings.parent.exists()
+        assert trust.prompt_text.endswith(f" {SESSION_ONLY}")
+
+    def test_a_project_prompt_has_no_session_note(self, home):
+        project = home / "proj"
+        project.mkdir()
+
+        trust = AntigravityFolderTrust(str(project), settings_path=home / "settings.json")
+
+        assert trust.prompt_title == "Trust this folder?"
+        assert "Antigravity" in trust.prompt_text
+        assert SESSION_ONLY not in trust.prompt_text

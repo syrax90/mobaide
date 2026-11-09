@@ -104,11 +104,31 @@ describe('applyLaunchPrefs', () => {
     const restore = (skipPermissions: boolean, sandbox: boolean) =>
       applyLaunchPrefs(INITIAL_WIZARD_STATE, {
         ...NEVER_LAUNCHED,
-        antigravity: { model: 'Gemini 3.1 Pro (Low)', skipPermissions, sandbox },
+        antigravity: { model: 'Gemini 3.1 Pro (Low)', skipPermissions, sandbox, terminalUi: false },
       }).antigravity;
 
     expect(restore(true, true)).toMatchObject({ skipPermissions: true, sandbox: false });
     expect(restore(false, true)).toMatchObject({ skipPermissions: false, sandbox: true });
+  });
+
+  it('restores the Antigravity Terminal UI choice and keeps the per-session folders', () => {
+    const base: WizardState = {
+      ...INITIAL_WIZARD_STATE,
+      antigravity: { ...INITIAL_WIZARD_STATE.antigravity, addDirsDraft: '/extra' },
+    };
+
+    const seeded = applyLaunchPrefs(base, {
+      ...NEVER_LAUNCHED,
+      antigravity: { model: null, skipPermissions: false, sandbox: false, terminalUi: true },
+    });
+
+    expect(seeded.antigravity).toEqual({
+      model: null,
+      skipPermissions: false,
+      sandbox: false,
+      addDirsDraft: '/extra',
+      terminalUi: true,
+    });
   });
 
   it('restores the Codex bucket including the null "agent default" effort', () => {
@@ -146,7 +166,7 @@ describe('applyLaunchPrefs', () => {
       claude: claudePrefs({ model: 'opus' }),
       autoScan: claudePrefs({ debug: true }),
       codex: null,
-      antigravity: { model: null, skipPermissions: false, sandbox: true },
+      antigravity: { model: null, skipPermissions: false, sandbox: true, terminalUi: false },
       lastProjectName: 'mobaide',
     });
 
@@ -167,6 +187,7 @@ describe('launchPrefsFromState', () => {
       skipPermissions: true,
       sandbox: false,
       addDirsDraft: '/extra',
+      terminalUi: false,
     },
   };
 
@@ -185,7 +206,12 @@ describe('launchPrefsFromState', () => {
     });
     expect(launchPrefsFromState(dialled, 'antigravity')).toEqual({
       kind: 'antigravity',
-      prefs: { model: 'Gemini 3.5 Flash (High)', skipPermissions: true, sandbox: false },
+      prefs: {
+        model: 'Gemini 3.5 Flash (High)',
+        skipPermissions: true,
+        sandbox: false,
+        terminalUi: false,
+      },
     });
   });
 
@@ -193,6 +219,18 @@ describe('launchPrefsFromState', () => {
     const terminal: WizardState = { ...dialled, codex: { ...dialled.codex, terminalUi: true } };
 
     expect(launchPrefsFromState(terminal, 'codex')?.prefs).toMatchObject({ terminalUi: true });
+  });
+
+  it('remembers the Antigravity Terminal UI choice in its own bucket only', () => {
+    const terminal: WizardState = {
+      ...dialled,
+      antigravity: { ...dialled.antigravity, terminalUi: true },
+    };
+
+    expect(launchPrefsFromState(terminal, 'antigravity')?.prefs).toMatchObject({
+      terminalUi: true,
+    });
+    expect(launchPrefsFromState(terminal, 'codex')?.prefs).toMatchObject({ terminalUi: false });
   });
 
   it('leaves the per-session fields out of the snapshot', () => {

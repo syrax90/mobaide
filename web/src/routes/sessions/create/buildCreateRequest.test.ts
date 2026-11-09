@@ -8,6 +8,7 @@ import {
   buildCreateRequest,
   buildResumeRequest,
   buildStartScanRequest,
+  terminalUiOf,
   type CreateSessionRequest,
 } from './buildCreateRequest';
 import { INITIAL_WIZARD_STATE, type WizardMode, type WizardState } from './wizardState';
@@ -74,6 +75,7 @@ const POPULATED: WizardState = {
     skipPermissions: true,
     sandbox: false,
     addDirsDraft: '/one, /two\n/three',
+    terminalUi: false,
   },
   git: { worktree: true, branchName: 'feature/x' },
   autoScanPromptSeededFor: gitProject.name,
@@ -414,6 +416,44 @@ describe('Codex — chat view', () => {
   });
 });
 
+describe('Antigravity — chat view', () => {
+  const AVAILABLE: ChatSupport = { kind: 'available', resume: true, live: false };
+
+  it.each<[string, boolean, ChatSupport | undefined, 'chat' | 'terminal']>([
+    ['chat available', false, AVAILABLE, 'chat'],
+    ['probe still out', false, undefined, 'chat'],
+    ['Terminal UI on', true, AVAILABLE, 'terminal'],
+    ['agy on this PC has no chat', false, { kind: 'unavailable' }, 'terminal'],
+    ['agent predates chat', false, { kind: 'outdated' }, 'terminal'],
+  ])('%s', (_name, terminalUi, chat, ui) => {
+    const request = buildCreateRequest({
+      state: { ...POPULATED, antigravity: { ...POPULATED.antigravity, terminalUi } },
+      mode: 'antigravity',
+      project: gitProject,
+      chat,
+    });
+
+    expect(request?.ui).toBe(ui);
+    expect(request?.antigravity_options).toMatchObject({ worktree: true, branch_name: 'feature/x' });
+    expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
+  });
+});
+
+describe('terminalUiOf', () => {
+  it('reads the toggle of the kind asked for, never another one', () => {
+    const state: WizardState = {
+      ...POPULATED,
+      claude: { ...POPULATED.claude, terminalUi: false },
+      codex: { ...POPULATED.codex, terminalUi: false },
+      antigravity: { ...POPULATED.antigravity, terminalUi: true },
+    };
+
+    expect(terminalUiOf(state, 'antigravity')).toBe(true);
+    expect(terminalUiOf(state, 'claude')).toBe(false);
+    expect(terminalUiOf(state, 'codex')).toBe(false);
+  });
+});
+
 describe('buildResumeRequest', () => {
   const stored: ChatStoredSession = {
     session_id: 'external-2222',
@@ -421,6 +461,7 @@ describe('buildResumeRequest', () => {
     title: 'Add retries to the sync job',
     updated_at: '2026-11-08T10:00:00Z',
     open_session_id: undefined,
+    open_elsewhere: undefined,
   };
 
   it('continues a Codex session with the Codex options and never a worktree', () => {
@@ -459,6 +500,33 @@ describe('buildResumeRequest', () => {
     expect(request.cli).toBe('claude');
     expect(request.claude_options).toMatchObject({ worktree: false });
     expect('codex_options' in request).toBe(false);
+  });
+
+  it('continues an Antigravity conversation with the Antigravity options and never a worktree', () => {
+    const request = buildResumeRequest(
+      { state: POPULATED, mode: 'antigravity', project: gitProject },
+      'antigravity',
+      stored,
+    );
+
+    expect(request).toMatchObject({
+      project_name: 'mobaide',
+      cli: 'antigravity',
+      ui: 'chat',
+      chat_resume_id: 'external-2222',
+      worktree: false,
+    });
+    expect(request.antigravity_options).toEqual({
+      model: 'Gemini 3.1 Pro (High)',
+      skip_permissions: true,
+      sandbox: false,
+      add_dirs: ['/one', '/two', '/three'],
+      worktree: false,
+      branch_name: undefined,
+    });
+    expect('claude_options' in request).toBe(false);
+    expect('codex_options' in request).toBe(false);
+    expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
   });
 
   it('sends the recorded folder as cwd when it is not the selected project', () => {

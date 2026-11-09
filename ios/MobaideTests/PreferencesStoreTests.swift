@@ -65,6 +65,17 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertEqual(older?.terminalUI, false)
     }
 
+    func testAntigravityTerminalUIRoundTripsAndAnOlderBlobReadsAsOff() {
+        store.setLastUsedAntigravityOptions(AntigravityLaunchPrefs(sandbox: true, terminalUI: true))
+        XCTAssertEqual(store.getLastUsedAntigravityOptions()?.terminalUI, true)
+
+        defaults.set(#"{"model":"Gemini 3.8 Flash (High)","sandbox":true}"#, forKey: PreferencesStore.keyLastUsedAntigravityOptions)
+        let older = store.getLastUsedAntigravityOptions()
+        XCTAssertEqual(older?.model, "Gemini 3.8 Flash (High)")
+        XCTAssertEqual(older?.sandbox, true)
+        XCTAssertEqual(older?.terminalUI, false)
+    }
+
     func testClaudeLaunchPrefsRoundTripSkipPermissionsAndNoMemory() {
         store.setLastUsedClaudeOptions(ClaudeLaunchPrefs(skipPermissions: true, noMemory: true))
         let saved = store.getLastUsedClaudeOptions()

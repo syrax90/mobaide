@@ -103,6 +103,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.selection.toggleable
 import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
@@ -318,6 +321,14 @@ fun CreateSessionScreen(
                             showWorktreeToggle = state.selection is ProjectSelection.Stored &&
                                 storedProject?.is_git == true,
                             viewModel = viewModel,
+                            onContinueSession = {
+                                chatResumeViewModel.open(
+                                    "antigravity",
+                                    state.selectedFolder,
+                                    (state.antigravityChat as? ChatSupport.Available)?.live == true,
+                                )
+                                showResume = true
+                            },
                         )
                         CreateSessionStep.AutoScanConfig -> AutoScanConfigSection(
                             state = state,
@@ -337,10 +348,15 @@ fun CreateSessionScreen(
     val resumeKind = when (state.step) {
         CreateSessionStep.StandardConfig -> "claude"
         CreateSessionStep.CodexConfig -> "codex"
+        CreateSessionStep.AntigravityConfig -> "antigravity"
         else -> null
     }
     if (showResume && resumeKind != null) {
-        val resumeChat = if (resumeKind == "codex") state.codexChat else state.claudeChat
+        val resumeChat = when (resumeKind) {
+            "codex" -> state.codexChat
+            "antigravity" -> state.antigravityChat
+            else -> state.claudeChat
+        }
         LaunchedEffect(resumeKind) {
             chatResumeViewModel.ensureOpen(
                 resumeKind,
@@ -1452,7 +1468,9 @@ private fun CodexConfigSection(
     var advancedExpanded by remember { mutableStateOf(false) }
     PixelTextButton(
         onClick = { advancedExpanded = !advancedExpanded },
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics { stateDescription = if (advancedExpanded) "Expanded" else "Collapsed" },
     ) {
         Icon(
             imageVector = if (advancedExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
@@ -1599,7 +1617,20 @@ private fun AntigravityConfigSection(
     state: CreateSessionUiState,
     showWorktreeToggle: Boolean,
     viewModel: CreateSessionViewModel,
+    onContinueSession: () -> Unit,
 ) {
+    if (state.antigravityResumeAvailable) {
+        WizardActionCard(
+            title = "Continue a session",
+            subtitle = "Open an Antigravity conversation started on your PC, for example with agy in a terminal.",
+            icon = Icons.Outlined.History,
+            selected = false,
+            onClick = onContinueSession,
+            contentDescription = "Continue a session",
+            testTag = "continue_chat_session",
+        )
+    }
+
     CliModelDropdown(
         models = state.antigravityModels?.takeIf { it.isNotEmpty() }
             ?: CreateSessionViewModel.ANTIGRAVITY_MODELS,
@@ -1640,7 +1671,7 @@ private fun AntigravityConfigSection(
         value = state.antigravityAddDirsDraft,
         onValueChange = viewModel::setAntigravityAddDirsDraft,
         label = { Text("Additional directories (one per line, optional)") },
-        supportingText = { Text("Each is added to the workspace via --add-dir.") },
+        supportingText = { Text("Each is added to the workspace.") },
         keyboardOptions = KeyboardOptions(
             capitalization = KeyboardCapitalization.None,
             autoCorrectEnabled = false,
@@ -1665,6 +1696,27 @@ private fun AntigravityConfigSection(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+    }
+
+    var advancedExpanded by remember { mutableStateOf(false) }
+    PixelTextButton(
+        onClick = { advancedExpanded = !advancedExpanded },
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics { stateDescription = if (advancedExpanded) "Expanded" else "Collapsed" },
+    ) {
+        Icon(
+            imageVector = if (advancedExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+            contentDescription = null,
+        )
+        Text("Advanced")
+    }
+    if (advancedExpanded) {
+        TerminalUiToggle(
+            checked = state.antigravityTerminalUi,
+            lockedHint = state.antigravityChatUnavailableHint,
+            onChange = viewModel::toggleAntigravityTerminalUi,
+        )
     }
 
     PixelButton(
@@ -1748,7 +1800,9 @@ private fun ClaudeAdvancedOptions(
     var advancedExpanded by remember { mutableStateOf(false) }
     PixelTextButton(
         onClick = { advancedExpanded = !advancedExpanded },
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics { stateDescription = if (advancedExpanded) "Expanded" else "Collapsed" },
     ) {
         Icon(
             imageVector = if (advancedExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
@@ -2017,8 +2071,18 @@ private fun ToggleRow(
     onChange: (Boolean) -> Unit,
     enabled: Boolean = true,
 ) {
+    // One toggleable row: TalkBack reads the label with the switch, and the
+    // label is a tap target too.
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(
+                value = checked,
+                enabled = enabled,
+                role = Role.Switch,
+                onValueChange = onChange,
+            )
+            .heightIn(min = 48.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -2029,7 +2093,7 @@ private fun ToggleRow(
         )
         Switch(
             checked = checked,
-            onCheckedChange = onChange,
+            onCheckedChange = null,
             enabled = enabled,
             colors = pixelSwitchColors(),
         )

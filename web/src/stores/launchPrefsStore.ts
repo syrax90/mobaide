@@ -71,6 +71,8 @@ export interface AntigravityLaunchPrefs {
   model: string | null;
   skipPermissions: boolean;
   sandbox: boolean;
+  /** Antigravity's "Terminal UI" toggle; a blob from before it existed reads as off. */
+  terminalUi: boolean;
 }
 
 /**
@@ -141,6 +143,7 @@ export const ANTIGRAVITY_PREFS_DEFAULTS: AntigravityLaunchPrefs = {
   model: null,
   skipPermissions: false,
   sandbox: false,
+  terminalUi: false,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -293,13 +296,19 @@ function sanitizeAntigravityPrefs(raw: unknown): AntigravityLaunchPrefs | null {
     isBoolean,
   );
   const sandbox = field(raw, 'sandbox', ANTIGRAVITY_PREFS_DEFAULTS.sandbox, isBoolean);
-  if (model === undefined || skipPermissions === undefined || sandbox === undefined) {
+  const terminalUi = field(raw, 'terminalUi', ANTIGRAVITY_PREFS_DEFAULTS.terminalUi, isBoolean);
+  if (
+    model === undefined ||
+    skipPermissions === undefined ||
+    sandbox === undefined ||
+    terminalUi === undefined
+  ) {
     return null;
   }
   // The interlock is re-applied where the bucket meets the wizard, not here:
   // storage should keep what was launched, and a stored pair is unreachable
   // anyway because the reducer excludes the two switches.
-  return { model, skipPermissions, sandbox };
+  return { model, skipPermissions, sandbox, terminalUi };
 }
 
 export const useLaunchPrefsStore = create<LaunchPrefsState>()(

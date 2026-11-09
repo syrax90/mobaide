@@ -6114,6 +6114,11 @@ body:has(dialog[open]) {
   font-size: 0.85rem;
 }
 
+.resume-row-note {
+  color: var(--warning);
+  font-size: 0.85rem;
+}
+
 /* endregion */
 
 /* region responsive — the system's only two breakpoints; do not add a third */

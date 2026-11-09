@@ -295,6 +295,11 @@
             "title": "Cwd",
             "type": "string"
           },
+          "open_elsewhere": {
+            "default": false,
+            "title": "Open Elsewhere",
+            "type": "boolean"
+          },
           "open_session_id": {
             "anyOf": [
               {

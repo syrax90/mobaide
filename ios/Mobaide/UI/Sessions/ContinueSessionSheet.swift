@@ -227,6 +227,11 @@ private struct ContinueSessionRow: View {
                         .lineLimit(1)
                         .truncationMode(.head)
                 }
+                if row.open_elsewhere == true, row.open_session_id == nil {
+                    Text("Open in another app on your PC. Close it there first.")
+                        .font(.caption)
+                        .foregroundStyle(colors.warning)
+                }
             }
             Spacer(minLength: 8)
             if row.open_session_id != nil {

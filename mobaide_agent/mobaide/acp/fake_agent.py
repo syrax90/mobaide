@@ -1,13 +1,14 @@
 """A scripted ACP agent for tests and for UI checks on a local stack.
 
-Run with ``python -m mobaide.acp.fake_agent [--flavor codex]``.
+Run with ``python -m mobaide.acp.fake_agent [--flavor codex|antigravity]``.
 ``MOBAIDE_ENV=test`` makes the chat sessions use it instead of a real agent,
 so every chat UI state can be reached without an account or network. The
 flavor picks the config options and names of the agent it stands in for. The
 prompt text picks the scenario:
 
 * ``tools`` — read, edit (with a diff) and execute tool calls (the Codex
-  flavor streams the command output as terminal ``_meta``);
+  flavor streams the command output as terminal ``_meta``; the Antigravity
+  flavor reports it as one "Command exited with code N" text);
 * ``permission`` — a command that waits for approval;
 * ``question`` — a form with single choice, multiple choice and text;
 * ``plan`` — a plan that progresses step by step;
@@ -56,6 +57,22 @@ CODEX_MODELS = [
 ]
 CODEX_EFFORTS = [{"value": v, "name": v.capitalize()} for v in ("low", "medium", "high", "xhigh")]
 
+AGY_MODES = [
+    {"value": "default", "name": "Default", "description": "Ask before edits and commands, per your permission settings."},
+    {"value": "accept-edits", "name": "Accept edits", "description": "Approve file edits in the workspace without asking."},
+    {"value": "plan", "name": "Plan", "description": "Plan carefully before executing a task."},
+]
+AGY_MODELS = [
+    {"value": "gemini-3.8-flash", "name": "Gemini 3.8 Flash"},
+    {"value": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6 (Thinking)"},
+]
+AGY_LEVELS = [{"value": v, "name": v.capitalize()} for v in ("low", "medium", "high")]
+# ``models.availableModels`` of ``session/new``: one entry per thinking level.
+AGY_AVAILABLE_MODELS = [
+    *({"modelId": f"gemini-3.8-flash-{lvl}", "name": f"Gemini 3.8 Flash ({lvl.capitalize()})"} for lvl in ("high", "medium", "low")),
+    {"modelId": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6 (Thinking)"},
+]
+
 MARKDOWN = """## Result
 
 Here is a **summary** of the change, with `inline code` and a [link](https://example.com).
@@ -89,6 +106,7 @@ class FakeAgent:
     def __init__(self, loop: asyncio.AbstractEventLoop, flavor: str = "claude") -> None:
         self.loop = loop
         self.codex = flavor == "codex"
+        self.agy = flavor == "antigravity"
         self.steers: dict[str, list[str]] = {}
         self.write_lock = threading.Lock()
         self.next_id = 1000
@@ -117,6 +135,16 @@ class FakeAgent:
 
     def config(self, sid: str) -> list[dict[str, Any]]:
         s = self.sessions[sid]
+        if self.agy:
+            options = [
+                {"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": s["model"], "options": AGY_MODELS},
+                {"id": "thought_level", "name": "Thinking Level", "category": "thought_level", "type": "select", "currentValue": s["thought_level"], "options": AGY_LEVELS},
+                {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": s["mode"], "options": AGY_MODES},
+            ]
+            # Like agy: a model without thinking levels drops the option.
+            if s["model"] != "gemini-3.8-flash":
+                options.pop(1)
+            return options
         if self.codex:
             return [
                 {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": s["mode"], "options": CODEX_MODES},
@@ -148,15 +176,35 @@ class FakeAgent:
                 {"mode": "agent", "collaboration_mode": "default", "model": "gpt-5.6-terra",
                  "reasoning_effort": "medium", "fast-mode": False}
             )
+        if self.agy:
+            self.sessions[sid].update({"model": "gemini-3.8-flash", "thought_level": "high"})
         return sid
 
+    def models_block(self, sid: str) -> dict[str, Any]:
+        """agy's ``models`` field of ``session/new`` and ``session/load``."""
+        if not self.agy:
+            return {}
+        s = self.sessions[sid]
+        current = s["model"] if s["model"] != "gemini-3.8-flash" else f"gemini-3.8-flash-{s['thought_level']}"
+        return {"models": {"availableModels": AGY_AVAILABLE_MODELS, "currentModelId": current}}
+
     def config_ids(self) -> tuple[str, ...]:
+        if self.agy:
+            return ("model", "thought_level", "mode")
         if self.codex:
             return ("mode", "collaboration_mode", "model", "reasoning_effort", "fast-mode")
         return ("mode", "model", "effort", "fast")
 
     def commands(self, sid: str) -> None:
-        if self.codex:
+        if self.agy:
+            available = [
+                {"name": "goal", "description": "Run until the specified goal is completely finished."},
+                {"name": "compact", "description": "Compact the conversation now (summarize history to free up the context window)."},
+                {"name": "plan", "description": "Plan carefully before executing a task."},
+                {"name": "browser", "description": "Invoke a browser agent for web tasks."},
+                {"name": "learn", "description": "Reflect on recent successes or corrections to capture reusable skills or rules."},
+            ]
+        elif self.codex:
             available = [
                 {"name": "plan", "description": "Turn plan mode on.", "input": None},
                 {"name": "review", "description": "Review uncommitted changes, or review with custom instructions.", "input": {"hint": "optional review instructions"}},
@@ -191,6 +239,17 @@ class FakeAgent:
 
     async def dispatch(self, method: str, params: dict[str, Any]) -> Any:
         if method == "initialize":
+            if self.agy:
+                return {
+                    "protocolVersion": 1,
+                    "agentCapabilities": {
+                        "loadSession": True,
+                        "promptCapabilities": {"image": True, "audio": False, "embeddedContext": True},
+                        "sessionCapabilities": {"resume": {}, "close": {}, "load": {}, "list": {}, "additionalDirectories": {}},
+                    },
+                    "agentInfo": {"name": "Antigravity ACP Server", "version": "1.5.3"},
+                    "authMethods": [],
+                }
             info = (
                 {"name": "fake-codex-acp", "title": "Codex", "version": "1.0.0"}
                 if self.codex
@@ -208,9 +267,21 @@ class FakeAgent:
                 "_meta": {"steering": {"supported": True}},
             }
         if method == "session/new":
-            sid = self.new_session(params.get("cwd") or os.getcwd())
+            # agy works in its own working directory, whatever ``cwd`` says.
+            sid = self.new_session(os.getcwd() if self.agy else params.get("cwd") or os.getcwd())
             self.loop.call_later(0.05, self.commands, sid)
-            return {"sessionId": sid, "configOptions": self.config(sid)}
+            return {"sessionId": sid, "configOptions": self.config(sid), **self.models_block(sid)}
+        if method == "session/list" and self.agy:
+            # Like agy: every folder's conversations, not newest first, and
+            # the ``cwd`` filter ignored.
+            here = os.getcwd()
+            return {
+                "sessions": [
+                    {"sessionId": "external-3333", "cwd": "/elsewhere/other-project", "title": "Write release notes", "updatedAt": "2026-11-08T09:00:00Z"},
+                    {"sessionId": "external-2222", "cwd": params.get("cwd") or here, "title": "Fix flaky upload test", "updatedAt": "2026-11-08T10:00:00Z"},
+                    {"sessionId": "external-1111", "cwd": params.get("cwd") or here, "title": "Refactor the login flow", "updatedAt": "2026-11-09T08:30:00Z"},
+                ]
+            }
         if method == "session/list":
             cwd = params.get("cwd") or os.getcwd()
             now = datetime.now(UTC).isoformat()
@@ -230,7 +301,7 @@ class FakeAgent:
             self.new_session(params.get("cwd") or os.getcwd(), sid=sid, title="Earlier session")
             await self.replay(sid)
             self.commands(sid)
-            return {"configOptions": self.config(sid)}
+            return {"configOptions": self.config(sid), **self.models_block(sid)}
         if method == "session/resume":
             sid = params["sessionId"]
             self.new_session(params.get("cwd") or os.getcwd(), sid=sid)
@@ -263,7 +334,7 @@ class FakeAgent:
         if method == "session/cancel":
             self.cancelled.add(str(params.get("sessionId")))
             return None
-        if method == "_session/steering":
+        if method == "_session/steering" and not self.agy:
             sid = params.get("sessionId")
             turn = self.turns.get(sid) if isinstance(sid, str) else None
             if turn is None or turn.done():
@@ -318,7 +389,9 @@ class FakeAgent:
             await asyncio.sleep(0.2)
             raise _RpcError(-32603, "The model request failed (fake error)")
         ok = True
-        if "tool" in lower:
+        if "tool" in lower and self.agy:
+            ok = await self.agy_tools(sid)
+        elif "tool" in lower:
             ok = await self.tools(sid)
         elif "permission" in lower:
             ok = await self.permission(sid)
@@ -341,6 +414,10 @@ class FakeAgent:
                     reply += f" (with {images} image{'s' if images > 1 else ''})"
                 ok = await self.stream(sid, reply)
         s["used"] += 2500
+        if self.agy:
+            # agy reports token counts in the prompt result only.
+            return {"stopReason": "end_turn" if ok else "cancelled",
+                    "usage": {"inputTokens": s["used"], "outputTokens": 120, "totalTokens": s["used"] + 120}}
         self.update(sid, {"sessionUpdate": "usage_update", "used": s["used"], "size": 200000, "cost": {"amount": round(s["used"] / 1e6, 4), "currency": "USD"}})
         return {"stopReason": "end_turn" if ok else "cancelled"}
 
@@ -398,6 +475,67 @@ class FakeAgent:
                               "content": [{"type": "content", "content": {"type": "text", "text": "```console\n....\n4 passed in 0.12s\n```"}}]})
         self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": search, "title": "Search for TODO", "kind": "search", "status": "failed",
                           "rawInput": {"pattern": "TODO"}, "rawOutput": "rg: permission denied: secrets/"})
+        return await self.stream(sid, "Done: I updated `main()` and the tests pass.")
+
+    async def agy_call(self, sid: str, tool: str, name: str, kind: str, title: str, args: dict[str, Any],
+                       *, locations: list[dict[str, Any]] | None = None, ask: bool = False,
+                       content: list[dict[str, Any]] | None = None, output: str | None = None,
+                       exit_code: int = 0) -> bool:
+        """One tool call the way agy reports it: ``tool_call`` in progress,
+        ``pending`` while it asks, then ``completed`` with its content."""
+        base = {"toolCallId": tool, "name": name, "args": args, "kind": kind, "title": title, "rawInput": args}
+        if locations:
+            base["locations"] = locations
+        self.update(sid, {"sessionUpdate": "tool_call", **base, "status": "in_progress"})
+        if ask:
+            self.update(sid, {"sessionUpdate": "tool_call_update", **base, "status": "pending"})
+            result = await self.call("session/request_permission", {
+                "sessionId": sid,
+                "toolCall": {"sessionUpdate": "tool_call", **base, "status": "pending", **({"content": content} if content else {})},
+                "options": [
+                    {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                    {"optionId": "deny", "name": "Deny", "kind": "reject_once"},
+                ],
+            })
+            outcome = (result or {}).get("outcome") or {}
+            if outcome.get("outcome") != "selected" or outcome.get("optionId") != "allow":
+                self.update(sid, {"sessionUpdate": "tool_call_update", **base, "status": "failed"})
+                return False
+            self.update(sid, {"sessionUpdate": "tool_call_update", **base, "status": "in_progress"})
+        await asyncio.sleep(0.3)
+        done: dict[str, Any] = {"sessionUpdate": "tool_call_update", **base, "status": "completed", "rawOutput": {}}
+        if output is not None:
+            body = f"Command exited with code {exit_code}.\n\n" + (
+                f"Command output:\n{output}" if output else "No output from the command."
+            )
+            done["content"] = [{"type": "content", "content": {"type": "text", "text": body}}]
+            done["rawOutput"] = {"output": body, "exit_code": exit_code}
+        elif content:
+            done["content"] = content
+        self.update(sid, done)
+        return True
+
+    async def agy_tools(self, sid: str) -> bool:
+        cwd = self.sessions[sid]["cwd"]
+        path = os.path.join(cwd, "app.py")
+        await self.stream(sid, "I'll look at the code first.")
+        await self.agy_call(sid, self.tool_id("read"), "read_file", "read", "File app.py", {"Path": path},
+                            locations=[{"path": path}])
+        diff = [{"type": "diff", "path": path, "oldText": "def main():\n    print('hi')\n",
+                 "newText": "def main() -> None:\n    print('hello, world')\n"}]
+        if not await self.agy_call(sid, self.tool_id("edit"), "edit_file", "edit", "File app.py",
+                                   {"Path": path, "ReplacementContent": "..."}, locations=[{"path": path}],
+                                   ask=True, content=diff):
+            return await self.stream(sid, "OK, I left the file as it was.")
+        if self.stopped(sid):
+            return False
+        if not await self.agy_call(sid, self.tool_id("exec"), "run_command", "execute", "pytest -q",
+                                   {"CommandLine": "pytest -q", "WaitMsBeforeAsync": 5000, "toolSummary": "Run the tests"},
+                                   ask=True, output="....\r\n4 passed in 0.12s\r\n"):
+            return await self.stream(sid, "OK, I did not run the tests.")
+        await self.agy_call(sid, self.tool_id("exec"), "run_command", "execute", "git diff --quiet",
+                            {"CommandLine": "git diff --quiet", "toolSummary": "Check for changes"},
+                            output="", exit_code=1)
         return await self.stream(sid, "Done: I updated `main()` and the tests pass.")
 
     async def permission(self, sid: str) -> bool:

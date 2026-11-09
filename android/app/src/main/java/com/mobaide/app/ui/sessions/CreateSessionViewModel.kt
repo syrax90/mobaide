@@ -212,6 +212,10 @@ data class CreateSessionUiState(
     val antigravitySkipPermissions: Boolean = false,
     val antigravitySandbox: Boolean = false,
     val antigravityAddDirsDraft: String = "",
+    // Antigravity: start the classic terminal instead of the chat view.
+    val antigravityTerminalUi: Boolean = false,
+    // capabilities.chat for Antigravity from the ModePick probe; null = not probed yet.
+    val antigravityChat: ChatSupport? = null,
     val initialPrompt: String = "",
     val worktree: Boolean = false,
     val branchName: String = "",
@@ -289,9 +293,13 @@ private fun usesChat(terminalUi: Boolean, chat: ChatSupport?): Boolean =
     !terminalUi && (chat == null || chat is ChatSupport.Available)
 
 /** Why a Terminal UI toggle is locked on, or null while the chat view is possible. */
-fun chatUnavailableHint(chat: ChatSupport?): String? = when (chat) {
+fun chatUnavailableHint(chat: ChatSupport?, kind: String = "claude"): String? = when (chat) {
     ChatSupport.AgentOutdated -> "Update Mobaide on your PC to use the chat view."
-    ChatSupport.Unavailable -> "The chat view needs Node.js on your PC."
+    ChatSupport.Unavailable -> if (kind == "antigravity") {
+        "The chat view needs a newer Antigravity CLI on your PC: run agy update there."
+    } else {
+        "The chat view needs Node.js on your PC."
+    }
     else -> null
 }
 
@@ -309,6 +317,15 @@ val CreateSessionUiState.codexChatUnavailableHint: String? get() = chatUnavailab
 
 val CreateSessionUiState.codexResumeAvailable: Boolean
     get() = codexUsesChat && (codexChat as? ChatSupport.Available)?.resume == true
+
+val CreateSessionUiState.antigravityUsesChat: Boolean
+    get() = usesChat(antigravityTerminalUi, antigravityChat)
+
+val CreateSessionUiState.antigravityChatUnavailableHint: String?
+    get() = chatUnavailableHint(antigravityChat, "antigravity")
+
+val CreateSessionUiState.antigravityResumeAvailable: Boolean
+    get() = antigravityUsesChat && (antigravityChat as? ChatSupport.Available)?.resume == true
 
 /** The folder "This folder" lists: the selected project's path, or the custom path. */
 val CreateSessionUiState.selectedFolder: String?
@@ -361,6 +378,7 @@ private fun CreateSessionUiState.toAntigravityLaunchPrefs() = AntigravityLaunchP
     model = antigravityModel,
     skipPermissions = antigravitySkipPermissions,
     sandbox = antigravitySandbox,
+    terminalUi = antigravityTerminalUi,
 )
 
 /**
@@ -494,6 +512,7 @@ class CreateSessionViewModel @Inject constructor(
                         antigravityModel = saved.model,
                         antigravitySkipPermissions = saved.skipPermissions,
                         antigravitySandbox = saved.sandbox && !saved.skipPermissions,
+                        antigravityTerminalUi = saved.terminalUi,
                     )
                 }
             }
@@ -856,6 +875,7 @@ class CreateSessionViewModel @Inject constructor(
                         claudeAvailable = version.cliAvailable("claude"),
                         claudeChat = version.chatSupport("claude"),
                         codexChat = version.chatSupport("codex"),
+                        antigravityChat = version.chatSupport("antigravity"),
                         codexAvailable = version.cliAvailable("codex"),
                         antigravityAvailable = version.cliAvailable("antigravity"),
                         codexModels = version.cliModels("codex"),
@@ -1054,6 +1074,8 @@ class CreateSessionViewModel @Inject constructor(
     fun toggleTerminalUi(v: Boolean) = _uiState.update { it.copy(claudeTerminalUi = v) }
 
     fun toggleCodexTerminalUi(v: Boolean) = _uiState.update { it.copy(codexTerminalUi = v) }
+
+    fun toggleAntigravityTerminalUi(v: Boolean) = _uiState.update { it.copy(antigravityTerminalUi = v) }
     fun setClaudeModel(v: String?) = _uiState.update {
         // Clamp the effort if the new model doesn't support the current level
         // (e.g. xhigh/max → high when switching to haiku, the only capped model).
@@ -1210,9 +1232,10 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     /**
-     * Continue a stored Claude Code or Codex session ([kind]) in a new chat
-     * session: the agent's current options without a worktree, in the selected
-     * project when its folder is the row's folder, otherwise in the row's folder.
+     * Continue a stored Claude Code, Codex or Antigravity session ([kind]) in a
+     * new chat session: the agent's current options without a worktree, in the
+     * selected project when its folder is the row's folder, otherwise in the
+     * row's folder.
      */
     fun resumeChatSession(kind: String, row: ChatStoredSession) {
         val state = _uiState.value
@@ -1228,6 +1251,11 @@ class CreateSessionViewModel @Inject constructor(
         )
         val request = if (kind == "codex") {
             base.copy(cli = "codex", codex_options = state.codexOptions(worktree = false, branchName = null))
+        } else if (kind == "antigravity") {
+            base.copy(
+                cli = "antigravity",
+                antigravity_options = state.antigravityOptions(worktree = false, branchName = null),
+            )
         } else {
             base.copy(
                 cli = "claude",
@@ -1260,6 +1288,16 @@ class CreateSessionViewModel @Inject constructor(
         worktree = worktree,
         branch_name = branchName,
     )
+
+    private fun CreateSessionUiState.antigravityOptions(worktree: Boolean, branchName: String?) =
+        AntigravityOptionsModel(
+            model = antigravityModel?.takeIf { it.isNotBlank() },
+            skip_permissions = antigravitySkipPermissions,
+            sandbox = antigravitySandbox,
+            add_dirs = parseAddDirs(antigravityAddDirsDraft),
+            worktree = worktree,
+            branch_name = branchName,
+        )
 
     private fun samePath(a: String, b: String): Boolean =
         a.trimEnd('/', '\\') == b.trimEnd('/', '\\')
@@ -1302,14 +1340,11 @@ class CreateSessionViewModel @Inject constructor(
     fun submitAntigravity() {
         val state = _uiState.value
         if (state.submitting) return
-        val antigravityOptions = AntigravityOptionsModel(
-            model = state.antigravityModel?.takeIf { it.isNotBlank() },
-            skip_permissions = state.antigravitySkipPermissions,
-            sandbox = state.antigravitySandbox,
-            add_dirs = parseAddDirs(state.antigravityAddDirsDraft),
+        val antigravityOptions = state.antigravityOptions(
             worktree = state.worktree,
-            branch_name = state.branchName.takeIf { it.isNotBlank() },
+            branchName = state.branchName.takeIf { it.isNotBlank() },
         )
+        val ui = if (state.antigravityUsesChat) SessionResponse.UI_CHAT else SessionResponse.UI_TERMINAL
         when (val sel = state.selection) {
             is ProjectSelection.Stored -> submitSession(
                 selection = sel,
@@ -1317,6 +1352,7 @@ class CreateSessionViewModel @Inject constructor(
                     project_name = sel.name,
                     cli = "antigravity",
                     antigravity_options = antigravityOptions,
+                    ui = ui,
                 ),
             )
             is ProjectSelection.CustomPath -> {
@@ -1328,6 +1364,7 @@ class CreateSessionViewModel @Inject constructor(
                         cwd = sel.path,
                         cli = "antigravity",
                         antigravity_options = antigravityOptions.copy(worktree = false, branch_name = null),
+                        ui = ui,
                     ),
                 )
             }

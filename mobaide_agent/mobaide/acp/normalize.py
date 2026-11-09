@@ -67,6 +67,8 @@ _SUBTITLE_KEYS = (
     "url",
     "description",
     "prompt",
+    # Antigravity's one-line summary; its title already names the command.
+    "toolSummary",
 )
 
 
@@ -335,6 +337,8 @@ def merge_tool_update(item: dict[str, Any], update: Mapping[str, Any]) -> None:
             item["locations"] = locs
     if "content" in update and update.get("content") is not None:
         item["content"] = tool_content_parts(update.get("content"))
+        if item["kind"] == "execute":
+            item["content"] = command_result_parts(item["content"])
     raw_output = update.get("rawOutput")
     if (
         item.get("status") == "failed"
@@ -704,6 +708,32 @@ def console_part(output: str, *, live: bool, exit_code: int | None) -> dict[str,
     if truncated:
         part["truncated"] = True
     return part
+
+
+# Antigravity reports a finished command as one text part.
+_COMMAND_RESULT = re.compile(
+    r"\ACommand exited with code (-?\d+)\.\n\n(?:Command output:\n(.*)|No output from the command\.\s*)\Z",
+    re.DOTALL,
+)
+
+
+def command_result_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Each ``Command exited with code N.\n\nCommand output:\n…`` text as
+    the ``console`` part other agents' command output gets (dropped when
+    the command printed nothing and succeeded)."""
+    out: list[dict[str, Any]] = []
+    for part in parts:
+        text = part.get("text") if part.get("type") == "text" else None
+        match = _COMMAND_RESULT.match(text) if isinstance(text, str) else None
+        if match is None:
+            out.append(part)
+            continue
+        rendered = console_part(match.group(2) or "", live=False, exit_code=int(match.group(1)))
+        if rendered is not None:
+            if part.get("truncated"):
+                rendered["truncated"] = True
+            out.append(rendered)
+    return out
 
 
 def terminal_meta(update: Mapping[str, Any]) -> tuple[str | None, bool, int | None, bool]:

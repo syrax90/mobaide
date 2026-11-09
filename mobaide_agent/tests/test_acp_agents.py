@@ -1,7 +1,8 @@
-"""Tests for the ACP launch specs: which command starts the Claude and Codex
-chat adapters (including the pinned install on first use), the
-create-session options as ACP config intents, the launch plan (Codex's shared
-app-server included) and the ``capabilities.chat`` map."""
+"""Tests for the ACP launch specs: which command starts the Claude, Codex and
+Antigravity chat agents (including the pinned install on first use and the
+``agy help acp`` probe with its cache), the create-session options as ACP config intents
+(Antigravity's model name split into model and thinking level), the launch
+plan (Codex's shared app-server included) and the ``capabilities.chat`` map."""
 from __future__ import annotations
 
 import json
@@ -9,24 +10,30 @@ import os
 import stat
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
 from mobaide.acp import agents, codex_bridge
 from mobaide.acp.agents import (
+    AntigravityChatSpec,
     ChatAgentUnavailableError,
     ClaudeChatSpec,
     CodexChatSpec,
     ConfigIntent,
+    antigravity_config_intents,
     build_chat_agents,
     build_chat_capabilities,
     claude_config_intents,
     codex_config_intents,
     codex_mode,
+    resolve_antigravity_config,
 )
 from mobaide.acp.install import INSTALLED_MARKER
-from mobaide.acp.trust import CodexFolderTrust
+from mobaide.acp.trust import AntigravityFolderTrust, CodexFolderTrust
+from mobaide.core.antigravity_launcher import AntigravityBinaryNotFoundError, AntigravityOptions
 from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError, ClaudeOptions
 from mobaide.core.cli_launcher import AdHocLaunch, LaunchSpec
 from mobaide.core.codex_launcher import CodexBinaryNotFoundError, CodexOptions
@@ -81,11 +88,30 @@ class FakeCodexLauncher:
         )
 
 
+class FakeAgyLauncher:
+    """The two ``AntigravityLauncher`` calls a chat spec makes."""
+
+    def __init__(self, binary: str | None = "/opt/agy/bin/agy") -> None:
+        self.binary = binary
+        self.built: list[tuple[object, AntigravityOptions]] = []
+
+    def resolve_binary(self) -> str:
+        if self.binary is None:
+            raise AntigravityBinaryNotFoundError(searched_paths=["PATH:agy"])
+        return self.binary
+
+    async def build(self, target, options, session_id=None) -> LaunchSpec:
+        self.built.append((target, options))
+        cwd = target.path if isinstance(target, ProjectConfig) else target.cwd
+        return LaunchSpec(argv=["agy"], cwd=cwd, env={"PATH": "/usr/bin", "LAUNCHER": "1"})
+
+
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     for name in (
         agents.CLAUDE_ACP_COMMAND_ENV,
         agents.CODEX_ACP_COMMAND_ENV,
+        agents.ANTIGRAVITY_ACP_COMMAND_ENV,
         agents.REAL_IN_TEST_ENV,
         "CLAUDE_CODE_EXECUTABLE",
         "CODEX_PATH",
@@ -391,18 +417,38 @@ class TestCapabilitiesAndRegistry:
             "live": {"resume": True, "live": True},
         }
 
-    def test_registry_has_a_spec_per_chat_capable_launcher(self):
-        assert build_chat_agents({"antigravity": object()}) == {}
+    def test_registry_has_a_spec_per_chat_capable_launcher(self, tmp_path):
+        assert build_chat_agents({"shell": object()}) == {}
 
         specs = build_chat_agents(
-            {"claude": FakeLauncher(), "codex": FakeCodexLauncher(), "antigravity": object()},
+            {
+                "claude": FakeLauncher(),
+                "codex": FakeCodexLauncher(),
+                "antigravity": FakeAgyLauncher(),
+                "shell": object(),
+            },
             test_mode=True,
-            command_overrides={"claude": "custom --acp", "codex": "codex-adapter --x"},
+            command_overrides={
+                "claude": "custom --acp",
+                "codex": "codex-adapter --x",
+                "antigravity": "agy-dev acp",
+            },
+            antigravity_app_data_dir=tmp_path / "agy",
         )
 
-        assert list(specs) == ["claude", "codex"]
+        assert list(specs) == ["claude", "codex", "antigravity"]
         assert specs["claude"].command() == ["custom", "--acp"]
         assert specs["codex"].command() == ["codex-adapter", "--x"]
+        assert specs["antigravity"].command() == ["agy-dev", "acp"]
+
+    def test_antigravity_capability_in_test_mode(self, tmp_path):
+        specs = build_chat_agents(
+            {"antigravity": FakeAgyLauncher()},
+            test_mode=True,
+            antigravity_app_data_dir=tmp_path / "agy",
+        )
+
+        assert build_chat_capabilities(specs) == {"antigravity": {"resume": True, "live": False}}
 
     def test_codex_capability_in_test_mode_is_not_live(self, bin_dir):
         specs = build_chat_agents({"codex": FakeCodexLauncher()}, test_mode=True)
@@ -641,3 +687,572 @@ class TestCodexPrepare:
         assert plan.cwd == os.path.expanduser("~")
         assert plan.env["CODEX_PATH"] == "/opt/codex/bin/codex"
         assert plan.initial_config == []
+
+
+@pytest.fixture
+def agy_bin(tmp_path) -> Path:
+    """A file where the launcher finds ``agy`` (never run: the probe is faked)."""
+    path = tmp_path / "agy-bin" / "agy"
+    path.parent.mkdir()
+    path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    return path
+
+
+def _acp_probe(monkeypatch, *answers: bool | None) -> list[str]:
+    """Stands in for ``agy help acp``: gives ``answers`` in turn (the last one
+    repeats; None is a probe that could not run) and returns the binaries it
+    was asked about."""
+    probed: list[str] = []
+
+    def supports(binary: str) -> bool | None:
+        probed.append(binary)
+        return answers[min(len(probed), len(answers)) - 1]
+
+    monkeypatch.setattr(agents, "_agy_supports_acp", supports)
+    return probed
+
+
+class _ArrivalLock:
+    """A lock that counts the threads that reached it, so a test can hold
+    the probe until every caller waits on the lock."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._arrivals = threading.Condition()
+        self.arrived = 0
+
+    def __enter__(self) -> None:
+        with self._arrivals:
+            self.arrived += 1
+            self._arrivals.notify_all()
+        self._lock.acquire()
+
+    def __exit__(self, *exc: object) -> None:
+        self._lock.release()
+
+    def wait_for_arrivals(self, count: int, timeout: float) -> bool:
+        with self._arrivals:
+            return self._arrivals.wait_for(lambda: self.arrived >= count, timeout)
+
+
+def _agy_spec(agy_bin: Path, tmp_path: Path, **kwargs) -> AntigravityChatSpec:
+    return AntigravityChatSpec(
+        FakeAgyLauncher(str(agy_bin)), app_data_dir=tmp_path / "agy-data", **kwargs
+    )
+
+
+class TestAntigravityCommand:
+    def test_override_argument_wins(self, agy_bin, tmp_path, monkeypatch):
+        monkeypatch.setenv(agents.ANTIGRAVITY_ACP_COMMAND_ENV, "from-env acp")
+        probed = _acp_probe(monkeypatch, True)
+        spec = _agy_spec(agy_bin, tmp_path, command_override="agy-dev acp --x", test_mode=True)
+
+        assert spec.command() == ["agy-dev", "acp", "--x"]
+        assert probed == []
+
+    def test_env_override_beats_test_mode(self, agy_bin, tmp_path, monkeypatch):
+        monkeypatch.setenv(agents.ANTIGRAVITY_ACP_COMMAND_ENV, "env-agy acp")
+        spec = _agy_spec(agy_bin, tmp_path, test_mode=True)
+
+        assert spec.command() == ["env-agy", "acp"]
+
+    def test_test_mode_runs_the_antigravity_fake_agent(self, agy_bin, tmp_path, monkeypatch):
+        probed = _acp_probe(monkeypatch, True)
+        spec = _agy_spec(agy_bin, tmp_path, test_mode=True)
+
+        assert spec.command() == agents.fake_agent_argv("antigravity")
+        assert spec.uses_fake_agent() is True
+        assert probed == []
+
+    def test_an_agy_with_the_acp_server_runs_agy_acp(self, agy_bin, tmp_path, monkeypatch):
+        probed = _acp_probe(monkeypatch, True)
+        spec = _agy_spec(agy_bin, tmp_path)
+
+        assert spec.command() == [str(agy_bin), "acp"]
+        assert spec.available() is True
+        assert spec.uses_fake_agent() is False
+        assert probed == [str(agy_bin)]
+
+    def test_an_agy_without_the_acp_server_is_unavailable(self, agy_bin, tmp_path, monkeypatch):
+        _acp_probe(monkeypatch, False)
+        spec = _agy_spec(agy_bin, tmp_path)
+
+        assert spec.command() is None
+        assert spec.available() is False
+
+    def test_no_agy_is_unavailable_without_a_probe(self, tmp_path, monkeypatch):
+        probed = _acp_probe(monkeypatch, True)
+        spec = AntigravityChatSpec(FakeAgyLauncher(binary=None), app_data_dir=tmp_path / "agy-data")
+
+        assert spec.available() is False
+        assert probed == []
+
+    def test_the_probe_answer_is_kept_while_the_binary_is_the_same(
+        self, agy_bin, tmp_path, monkeypatch
+    ):
+        now = [1000.0]
+        monkeypatch.setattr(agents.time, "monotonic", lambda: now[0])
+        probed = _acp_probe(monkeypatch, False, True)
+        spec = _agy_spec(agy_bin, tmp_path)
+        assert spec.available() is False
+
+        now[0] += 100 * agents.AVAILABILITY_TTL
+
+        assert spec.available() is False
+        assert len(probed) == 1
+
+    def test_a_probe_that_could_not_run_is_tried_again_after_the_ttl(
+        self, agy_bin, tmp_path, monkeypatch
+    ):
+        now = [1000.0]
+        monkeypatch.setattr(agents.time, "monotonic", lambda: now[0])
+        probed = _acp_probe(monkeypatch, None, True)
+        spec = _agy_spec(agy_bin, tmp_path)
+        assert spec.available() is False
+
+        now[0] += agents.AVAILABILITY_TTL - 1
+        assert spec.available() is False
+        assert len(probed) == 1
+
+        now[0] += 2
+        assert spec.available() is True
+        assert len(probed) == 2
+
+    def test_concurrent_checks_share_one_probe(self, agy_bin, tmp_path, monkeypatch):
+        callers = 4
+        spec = _agy_spec(agy_bin, tmp_path)
+        gate = _ArrivalLock()
+        spec._probe_lock = gate
+        probed: list[str] = []
+
+        def supports(binary: str) -> bool:
+            probed.append(binary)
+            # Answer only once every caller has missed the cache and waits.
+            assert gate.wait_for_arrivals(callers, timeout=10)
+            return True
+
+        monkeypatch.setattr(agents, "_agy_supports_acp", supports)
+
+        with ThreadPoolExecutor(callers) as pool:
+            answers = list(pool.map(lambda _: spec.available(), range(callers)))
+
+        assert answers == [True] * callers
+        assert probed == [str(agy_bin)]
+
+    def test_an_updated_agy_is_probed_again_at_once(self, agy_bin, tmp_path, monkeypatch):
+        now = [1000.0]
+        monkeypatch.setattr(agents.time, "monotonic", lambda: now[0])
+        probed = _acp_probe(monkeypatch, False, True)
+        spec = _agy_spec(agy_bin, tmp_path)
+        assert spec.available() is False
+
+        # ``agy update`` replaced the binary: a new mtime.
+        mtime = agy_bin.stat().st_mtime
+        os.utime(agy_bin, (mtime + 60, mtime + 60))
+
+        assert spec.available() is True
+        assert len(probed) == 2
+
+
+@skip_if_not_linux
+class TestAgyHelpAcpProbe:
+    """``agy help acp`` against stand-in scripts, never the real ``agy``."""
+
+    def _stub(self, tmp_path: Path, body: str) -> str:
+        path = tmp_path / "agy"
+        path.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+        path.chmod(0o755)
+        return str(path)
+
+    def test_a_build_with_the_acp_server(self, tmp_path):
+        agy = self._stub(tmp_path, 'if [ "$1" = help ] && [ "$2" = acp ]; then exit 0; fi\nexit 1\n')
+
+        assert agents._agy_supports_acp(agy) is True
+
+    def test_a_build_without_it(self, tmp_path):
+        agy = self._stub(tmp_path, 'echo "unknown help topic: $2" >&2\nexit 1\n')
+
+        assert agents._agy_supports_acp(agy) is False
+
+    def test_a_binary_that_cannot_run(self, tmp_path):
+        # Not an answer: the spec checks again later.
+        assert agents._agy_supports_acp(str(tmp_path / "missing-agy")) is None
+
+
+class TestAntigravityPrepare:
+    async def test_plan_runs_agy_acp_in_the_session_folder(self, agy_bin, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        project = tmp_path / "work" / "app"
+        project.mkdir(parents=True)
+        data = tmp_path / "agy-data"
+        data.mkdir()
+        (data / "settings.json").write_text(
+            json.dumps({"trustedWorkspaces": [os.path.realpath(project)]}), encoding="utf-8"
+        )
+        spec = AntigravityChatSpec(
+            FakeAgyLauncher(str(agy_bin)), command_override="agy acp", app_data_dir=data
+        )
+        elsewhere = tmp_path / "elsewhere"
+        options = AntigravityOptions(
+            model="Gemini 3.8 Flash (High)",
+            skip_permissions=True,
+            add_dirs=("../shared", str(elsewhere), "~/notes"),
+        )
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(project)), options)
+
+        assert plan.argv == ["agy", "acp", "--dangerously-skip-permissions"]
+        assert plan.cwd == str(project)
+        # ``agy acp`` works in its own working directory, whatever session/new says.
+        assert plan.process_cwd == str(project)
+        assert plan.env["LAUNCHER"] == "1"
+        assert plan.initial_config == [ConfigIntent("Gemini 3.8 Flash (High)", category="model")]
+        assert plan.additional_dirs == [
+            os.path.normpath(tmp_path / "work" / "shared"),
+            os.path.normpath(elsewhere),
+            os.path.normpath(home / "notes"),
+        ]
+        assert plan.config_resolver is resolve_antigravity_config
+        assert plan.presence is spec.presence
+        assert isinstance(plan.trust, AntigravityFolderTrust)
+        assert plan.trust.is_trusted() is True
+
+    async def test_sandbox_is_an_agy_flag_and_no_model_sends_no_config(self, agy_bin, tmp_path):
+        spec = _agy_spec(agy_bin, tmp_path, command_override="agy acp")
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), AntigravityOptions(sandbox=True))
+
+        assert plan.argv == ["agy", "acp", "--sandbox"]
+        assert plan.initial_config == []
+        assert plan.additional_dirs == []
+
+    async def test_flags_never_pile_up_on_the_probed_command(self, agy_bin, tmp_path, monkeypatch):
+        _acp_probe(monkeypatch, True)
+        spec = _agy_spec(agy_bin, tmp_path)
+        options = AntigravityOptions(skip_permissions=True)
+
+        await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), options)
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), options)
+
+        assert plan.argv == [str(agy_bin), "acp", "--dangerously-skip-permissions"]
+        assert spec.command() == [str(agy_bin), "acp"]
+
+    async def test_no_acp_server_fails_before_the_launcher_runs(self, agy_bin, tmp_path, monkeypatch):
+        _acp_probe(monkeypatch, False)
+        launcher = FakeAgyLauncher(str(agy_bin))
+        spec = AntigravityChatSpec(launcher, app_data_dir=tmp_path / "agy-data")
+
+        with pytest.raises(ChatAgentUnavailableError) as excinfo:
+            await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), AntigravityOptions())
+
+        assert excinfo.value.kind == "antigravity"
+        assert "agy update" in str(excinfo.value)
+        # The launcher would have made a worktree for a session that never starts.
+        assert launcher.built == []
+
+    async def test_fake_agent_has_no_trust_gate_and_no_presence_lock(self, agy_bin, tmp_path):
+        spec = _agy_spec(agy_bin, tmp_path, test_mode=True)
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), AntigravityOptions(sandbox=True))
+
+        assert plan.argv[-3:] == ["--flavor", "antigravity", "--sandbox"]
+        assert plan.trust is None
+        assert plan.presence is None
+
+    async def test_catalog_plan_runs_in_home(self, agy_bin, tmp_path):
+        spec = _agy_spec(agy_bin, tmp_path, command_override="agy acp")
+
+        plan = await spec.catalog_plan()
+
+        home = os.path.expanduser("~")
+        assert plan.argv == ["agy", "acp"]
+        assert (plan.cwd, plan.process_cwd) == (home, home)
+        assert plan.initial_config == []
+
+
+def _agy_setup(*, available_models: bool = True) -> dict:
+    """The ``session/new`` result of ``agy acp`` 1.5: ``model`` and
+    ``thought_level`` options, and one ``availableModels`` entry per model and
+    thinking level."""
+    result: dict = {
+        "sessionId": "conv-1",
+        "configOptions": [
+            {
+                "id": "model",
+                "name": "Model",
+                "category": "model",
+                "type": "select",
+                "currentValue": "gemini-3.8-flash",
+                "options": [
+                    {"value": "gemini-3.8-flash", "name": "Gemini 3.8 Flash"},
+                    {"value": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6 (Thinking)"},
+                ],
+            },
+            {
+                "id": "thought_level",
+                "name": "Thinking Level",
+                "category": "thought_level",
+                "type": "select",
+                "currentValue": "high",
+                "options": [
+                    {"value": "low", "name": "Low"},
+                    {"value": "medium", "name": "Medium"},
+                    {"value": "high", "name": "High"},
+                ],
+            },
+            {
+                "id": "mode",
+                "name": "Mode",
+                "category": "mode",
+                "type": "select",
+                "currentValue": "default",
+                "options": [{"value": "default", "name": "Default"}, {"value": "plan", "name": "Plan"}],
+            },
+        ],
+    }
+    if available_models:
+        result["models"] = {
+            "availableModels": [
+                {"modelId": "gemini-3.8-flash-high", "name": "Gemini 3.8 Flash (High)"},
+                {"modelId": "gemini-3.8-flash-low", "name": "Gemini 3.8 Flash (Low)"},
+                {"modelId": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6 (Thinking)"},
+            ],
+            "currentModelId": "gemini-3.8-flash-high",
+        }
+    return result
+
+
+def _model(value: str, required: bool = False) -> ConfigIntent:
+    return ConfigIntent(value, category="model", required=required)
+
+
+def _level(value: str) -> ConfigIntent:
+    return ConfigIntent(value, category="thought_level")
+
+
+def _padded_flash_high(length: int) -> str:
+    """``Gemini 3.8 Flash   …   (High)``, exactly ``length`` characters."""
+    name = "Gemini 3.8 Flash".ljust(length - len("(High)")) + "(High)"
+    assert len(name) == length
+    return name
+
+
+class TestAntigravityConfig:
+    def test_the_model_name_is_the_only_intent(self):
+        options = AntigravityOptions(model="Gemini 3.8 Flash (High)", skip_permissions=True)
+
+        assert antigravity_config_intents(options) == [_model("Gemini 3.8 Flash (High)")]
+        assert antigravity_config_intents(AntigravityOptions(sandbox=True)) == []
+
+    @pytest.mark.parametrize(
+        ("saved", "intents"),
+        [
+            ("gemini-3.8-flash-high\tGemini 3.8 Flash (High)", [_model("Gemini 3.8 Flash (High)")]),
+            ("orphan-id\t", []),
+        ],
+        ids=["id-and-name", "id-without-a-name"],
+    )
+    def test_a_saved_agy_models_line_sends_only_the_name(self, saved, intents):
+        """A choice saved from an older agent may hold a whole ``agy models``
+        line: the model id, a tab and the name."""
+        assert antigravity_config_intents(AntigravityOptions(model=saved)) == intents
+
+    @pytest.mark.parametrize(
+        ("wanted", "resolved"),
+        [
+            ("Gemini 3.8 Flash (High)", [_model("gemini-3.8-flash"), _level("high")]),
+            ("gemini 3.8 flash (low)", [_model("gemini-3.8-flash"), _level("low")]),
+            ("gemini-3.8-flash-low", [_model("gemini-3.8-flash"), _level("low")]),
+            ("Claude Sonnet 4.6 (Thinking)", [_model("claude-sonnet-4-6")]),
+            ("gemini-3.8-flash", [_model("gemini-3.8-flash")]),
+            ("Gemini 3.8 Flash", [_model("gemini-3.8-flash")]),
+            ("Gemini 9 Ultra (High)", [_model("Gemini 9 Ultra (High)")]),
+        ],
+        ids=[
+            "name-with-level",
+            "name-any-case",
+            "model-id-with-level",
+            "parentheses-in-a-model-name",
+            "option-value",
+            "option-name",
+            "unknown-stays",
+        ],
+    )
+    def test_a_model_name_becomes_the_session_options(self, wanted, resolved):
+        assert resolve_antigravity_config(_agy_setup(), [_model(wanted)]) == resolved
+
+    @pytest.mark.parametrize(
+        ("wanted", "resolved"),
+        [
+            ("Gemini 3.8 Flash (Medium)", [_model("gemini-3.8-flash"), _level("medium")]),
+            ("gemini 3.8 flash (medium)", [_model("gemini-3.8-flash"), _level("medium")]),
+            ("Claude Sonnet 4.6 (Thinking)", [_model("claude-sonnet-4-6")]),
+        ],
+        ids=["name-with-level", "name-any-case", "parentheses-in-a-model-name"],
+    )
+    def test_without_the_models_list_the_parentheses_name_the_level(self, wanted, resolved):
+        setup = _agy_setup(available_models=False)
+
+        assert resolve_antigravity_config(setup, [_model(wanted)]) == resolved
+
+    def test_required_stays_on_the_model(self):
+        resolved = resolve_antigravity_config(
+            _agy_setup(), [_model("Gemini 3.8 Flash (High)", required=True)]
+        )
+
+        assert resolved == [_model("gemini-3.8-flash", required=True), _level("high")]
+
+    def test_other_intents_pass_through_in_order(self):
+        intents = [
+            ConfigIntent("plan", category="mode", required=True),
+            # A Restart keeps the option values in use, by option id.
+            ConfigIntent("gemini-3.8-flash-high", option_id="model", category="model"),
+            ConfigIntent("low", option_id="thought_level"),
+            _model("Gemini 3.8 Flash (High)"),
+        ]
+
+        assert resolve_antigravity_config(_agy_setup(), intents) == [
+            *intents[:3],
+            _model("gemini-3.8-flash"),
+            _level("high"),
+        ]
+
+    @pytest.mark.parametrize(
+        "result",
+        [
+            {},
+            {"configOptions": "junk"},
+            {"configOptions": [{"category": "mode", "options": []}]},
+            # The session drops an option without a name: it cannot set it.
+            {
+                "configOptions": [
+                    {
+                        "id": "model",
+                        "category": "model",
+                        "type": "select",
+                        "currentValue": "gemini-3.8-flash",
+                        "options": [{"value": "gemini-3.8-flash", "name": "Gemini 3.8 Flash"}],
+                    }
+                ]
+            },
+        ],
+        ids=["nothing", "not-a-list", "no-model-option", "model-option-without-a-name"],
+    )
+    def test_a_session_without_a_model_option_keeps_the_intents(self, result):
+        intents = [_model("Gemini 3.8 Flash (High)")]
+
+        assert resolve_antigravity_config(result, intents) == intents
+
+    @pytest.mark.parametrize(
+        ("wanted", "resolved"),
+        [
+            ("Gemini 3.8 Flash (Low)", [_model("gemini-3.8-flash"), _level("low")]),
+            ("Claude Sonnet 4.6 (Thinking)", [_model("claude-sonnet-4-6")]),
+        ],
+        ids=["name-with-level", "parentheses-in-a-model-name"],
+    )
+    def test_grouped_model_values_are_matched(self, wanted, resolved):
+        setup = _agy_setup(available_models=False)
+        setup["configOptions"][0]["options"] = [
+            {"name": "Google", "options": [{"value": "gemini-3.8-flash", "name": "Gemini 3.8 Flash"}]},
+            {
+                "name": "Anthropic",
+                "options": [{"value": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6 (Thinking)"}],
+            },
+        ]
+
+        assert resolve_antigravity_config(setup, [_model(wanted)]) == resolved
+
+    def test_the_name_is_matched_in_the_model_option_the_session_sets(self):
+        """The session applies a model intent to the first model option, so
+        only that option's values can resolve the name."""
+        setup = _agy_setup(available_models=False)
+        setup["configOptions"].append(
+            {
+                "id": "subagent_model",
+                "name": "Subagent model",
+                "category": "model",
+                "type": "select",
+                "currentValue": "sub-flash",
+                "options": [
+                    {"value": "sub-flash", "name": "Gemini 3.8 Flash"},
+                    {"value": "sub-only", "name": "Subagent Only"},
+                ],
+            }
+        )
+
+        assert resolve_antigravity_config(setup, [_model("Gemini 3.8 Flash (High)")]) == [
+            _model("gemini-3.8-flash"),
+            _level("high"),
+        ]
+        assert resolve_antigravity_config(setup, [_model("Subagent Only")]) == [
+            _model("Subagent Only")
+        ]
+
+    def test_a_name_as_long_as_the_cap_is_still_matched(self):
+        wanted = _padded_flash_high(agents.MODEL_NAME_MAX)
+
+        assert resolve_antigravity_config(_agy_setup(), [_model(wanted)]) == [
+            _model("gemini-3.8-flash"),
+            _level("high"),
+        ]
+
+    def test_a_name_longer_than_the_cap_is_kept_as_sent(self):
+        wanted = _padded_flash_high(agents.MODEL_NAME_MAX + 1)
+
+        assert resolve_antigravity_config(_agy_setup(), [_model(wanted)]) == [_model(wanted)]
+
+    @pytest.mark.timeout(10)
+    @pytest.mark.parametrize(
+        "wanted",
+        ["a(" * 50_000 + "b)", "(" * 100_000 + ")"],
+        ids=["nested-parentheses", "open-parentheses"],
+    )
+    def test_a_huge_client_name_is_answered_at_once_and_unchanged(self, wanted):
+        assert resolve_antigravity_config(_agy_setup(), [_model(wanted)]) == [_model(wanted)]
+
+
+class TestSplitLevel:
+    @pytest.mark.parametrize(
+        ("name", "split"),
+        [
+            ("Gemini 3.8 Flash (High)", ("Gemini 3.8 Flash", "High")),
+            ("Gemini 3.8 Flash(Low)", ("Gemini 3.8 Flash", "Low")),
+            ("Gemini 3.8 Flash ( Medium )", ("Gemini 3.8 Flash", "Medium")),
+            ("Claude (Preview) 5 (High)", ("Claude (Preview) 5", "High")),
+            ("Gemini 3.8 Flash", None),
+            ("Gemini 3.8 Flash High)", None),
+            ("(High)", None),
+            ("  (High)", None),
+            ("Gemini ()", None),
+            ("Gemini (  )", None),
+            ("Gemini (a) b)", None),
+            (")", None),
+        ],
+        ids=[
+            "name-and-level",
+            "no-space-before-the-level",
+            "spaces-in-the-parentheses",
+            "parentheses-earlier-in-the-name",
+            "no-level",
+            "no-open-parenthesis",
+            "no-name",
+            "blank-name",
+            "empty-level",
+            "blank-level",
+            "close-parenthesis-in-the-level",
+            "only-a-close-parenthesis",
+        ],
+    )
+    def test_the_last_parentheses_name_the_level(self, name, split):
+        assert agents._split_level(name) == split
+
+    @pytest.mark.timeout(10)
+    def test_a_long_name_is_split_in_one_pass(self):
+        base = "a(" * 50_000 + "a"
+
+        assert agents._split_level(base + " (High)") == (base, "High")
+        assert agents._split_level("(" * 100_000 + ")") is None

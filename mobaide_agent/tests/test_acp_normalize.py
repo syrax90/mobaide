@@ -1,6 +1,7 @@
 """Pure-function tests for the ACP → chat wire conversions: text and diff
 caps, content parts, tool merges, config options, plans, usage, permission
-options, elicitation forms, terminal output and Codex thread status."""
+options, elicitation forms, terminal output, Antigravity's command results
+and Codex thread status."""
 from __future__ import annotations
 
 import pytest
@@ -52,6 +53,13 @@ class TestSubtitleFromInput:
     )
     def test_the_shell_wrapper_around_a_command_is_dropped(self, raw, subtitle):
         assert nz.subtitle_from_input(raw) == subtitle
+
+    def test_antigravity_tool_summary_when_nothing_more_specific(self):
+        # agy names the command in the title; its arguments use its own keys.
+        raw = {"CommandLine": "pytest -q", "WaitMsBeforeAsync": 5000, "toolSummary": "Run the tests"}
+
+        assert nz.subtitle_from_input(raw) == "Run the tests"
+        assert nz.subtitle_from_input({**raw, "path": "/p/a.py"}) == "/p/a.py"
 
 
 class TestUnwrapShell:
@@ -292,6 +300,27 @@ class TestMergeToolUpdate:
         nz.merge_tool_update(item, {"title": title})
 
         assert item["title"] == shown
+
+    def test_an_antigravity_command_result_becomes_console_output(self):
+        item = nz.new_tool_item("call-1")
+        body = "Command exited with code 0.\n\nCommand output:\n....\r\n4 passed in 0.12s\r\n"
+        nz.merge_tool_update(item, {"kind": "execute", "title": "pytest -q", "status": "in_progress"})
+        nz.merge_tool_update(
+            item,
+            {"status": "completed", "content": [{"type": "content", "content": {"type": "text", "text": body}}]},
+        )
+
+        assert item["content"] == [{"type": "text", "text": "```console\n....\n4 passed in 0.12s\n```"}]
+
+    def test_the_same_text_from_a_tool_that_is_not_a_command_stays_text(self):
+        item = nz.new_tool_item("call-1")
+        body = "Command exited with code 0.\n\nCommand output:\nok"
+        nz.merge_tool_update(
+            item,
+            {"kind": "read", "content": [{"type": "content", "content": {"type": "text", "text": body}}]},
+        )
+
+        assert item["content"] == [{"type": "text", "text": body}]
 
 
 class TestConfigOptions:
@@ -629,6 +658,51 @@ class TestConsolePart:
         part = nz.console_part("```py\nx\n```", live=False, exit_code=None)
 
         assert part["text"] == "````console\n```py\nx\n```\n````"
+
+
+def _agy_result(code: int, output: str | None) -> dict:
+    tail = "No output from the command." if output is None else f"Command output:\n{output}"
+    return {"type": "text", "text": f"Command exited with code {code}.\n\n{tail}"}
+
+
+class TestCommandResultParts:
+    @pytest.mark.parametrize(
+        ("part", "expected"),
+        [
+            (
+                _agy_result(0, "\x1b[32mok\x1b[0m\r\n10%\r100%\r\n"),
+                [{"type": "text", "text": "```console\nok\n100%\n```"}],
+            ),
+            (_agy_result(2, "boom\n"), [{"type": "text", "text": "```console\nboom\n```\nExit code 2"}]),
+            (_agy_result(-1, "killed"), [{"type": "text", "text": "```console\nkilled\n```\nExit code -1"}]),
+            (_agy_result(0, None), []),
+            (_agy_result(0, ""), []),
+            (_agy_result(1, None), [{"type": "text", "text": "Exit code 1"}]),
+        ],
+        ids=["output", "failed", "negative-code", "silent-success", "empty-output", "silent-failure"],
+    )
+    def test_a_command_result(self, part, expected):
+        assert nz.command_result_parts([part]) == expected
+
+    def test_a_shortened_result_stays_marked(self):
+        part = {**_agy_result(0, "head … tail"), "truncated": True}
+
+        assert nz.command_result_parts([part]) == [
+            {"type": "text", "text": "```console\nhead … tail\n```", "truncated": True}
+        ]
+
+    @pytest.mark.parametrize(
+        "part",
+        [
+            {"type": "text", "text": "Ran the tests: Command exited with code 0.\n\nCommand output:\nok"},
+            {"type": "text", "text": "Command exited with code 0."},
+            {"type": "diff", "path": "/a.py", "diff": "", "added": 0, "removed": 0},
+            {"type": "image", "mime_type": "image/png", "data": "x"},
+        ],
+        ids=["text-around-it", "no-output-section", "diff", "image"],
+    )
+    def test_other_parts_pass_through(self, part):
+        assert nz.command_result_parts([part]) == [part]
 
 
 class TestTerminalMeta:

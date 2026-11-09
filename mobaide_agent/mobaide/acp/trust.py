@@ -293,3 +293,87 @@ class CodexFolderTrust:
         mode = path.stat().st_mode & 0o777 if path.exists() else None
         atomic_write(path, updated, mode=mode)
         return True
+
+
+def antigravity_settings_path(app_data_dir: Path | None = None) -> Path:
+    """The ``settings.json`` of the Antigravity CLI (``agy``)."""
+    return (app_data_dir or Path.home() / ".gemini" / "antigravity-cli") / "settings.json"
+
+
+def _same_folder(a: str, b: str) -> bool:
+    if sys.platform == "win32":
+        return os.path.normcase(a) == os.path.normcase(b)
+    return a == b
+
+
+class AntigravityFolderTrust:
+    """Antigravity's own trust record: the ``trustedWorkspaces`` list in its
+    ``settings.json``. ``agy`` trusts exactly the listed folders (real path):
+    neither a listed parent nor the repository root covers a subfolder."""
+
+    prompt_title = "Trust this folder?"
+
+    def __init__(self, cwd: str, settings_path: Path | None = None) -> None:
+        self._cwd = cwd
+        self._settings_path = settings_path or antigravity_settings_path()
+
+    @property
+    def prompt_text(self) -> str:
+        text = (
+            "Antigravity will read, edit and run files in this folder, and use its "
+            "rules, skills and MCP servers. Only trust a folder whose files you know."
+        )
+        if too_broad_to_record(self._cwd):
+            text += " Trust for this folder lasts for this session only."
+        return text
+
+    def _load(self) -> dict[str, Any]:
+        try:
+            data = json.loads(self._settings_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def is_trusted(self) -> bool:
+        listed = self._load().get("trustedWorkspaces")
+        if not isinstance(listed, list):
+            return False
+        folder = os.path.realpath(self._cwd)
+        for entry in listed:
+            if isinstance(entry, str) and entry and (
+                _same_folder(entry, folder) or _same_folder(os.path.realpath(entry), folder)
+            ):
+                return True
+        return False
+
+    def grant(self) -> bool:
+        """Add the folder to ``trustedWorkspaces`` as ``agy`` does (atomic
+        rewrite). Returns False, and writes nothing, for a folder too broad to
+        record."""
+        if too_broad_to_record(self._cwd):
+            return False
+        with _config_lock(self._settings_path):
+            return self._grant_locked()
+
+    def _grant_locked(self) -> bool:
+        path = self._settings_path
+        data: dict[str, Any] = {}
+        if path.exists():
+            # Never rewrite a file this code cannot read back whole.
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                raise ValueError(f"{path} is not a JSON object")
+            data = loaded
+        listed = data.get("trustedWorkspaces")
+        if listed is None:
+            listed = []
+        if not isinstance(listed, list):
+            raise ValueError(f"{path}: trustedWorkspaces is not a list")
+        folder = os.path.realpath(self._cwd)
+        if any(isinstance(e, str) and _same_folder(e, folder) for e in listed):
+            return True
+        data["trustedWorkspaces"] = [*listed, folder]
+        # agy keeps the file private to the user.
+        mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
+        atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n", mode=mode)
+        return True

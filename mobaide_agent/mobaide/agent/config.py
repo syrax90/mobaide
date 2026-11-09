@@ -113,6 +113,10 @@ class AgentConfig(BaseSettings):
     acp_codex_command: str | None = Field(
         default=None, validation_alias="MOBAIDE_ACP_CODEX_COMMAND",
     )
+    # The same for Antigravity, whose ACP server is ``agy acp``.
+    acp_antigravity_command: str | None = Field(
+        default=None, validation_alias="MOBAIDE_ACP_ANTIGRAVITY_COMMAND",
+    )
 
     # The fake switch swaps the speech model for a tiny generated one and a
     # deterministic engine — the real install state machine and helper process

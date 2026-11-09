@@ -88,6 +88,8 @@ export interface AntigravityBucket {
   skipPermissions: boolean;
   sandbox: boolean;
   addDirsDraft: string;
+  /** The classic terminal instead of the chat view. */
+  terminalUi: boolean;
 }
 
 export interface GitBucket {
@@ -158,7 +160,13 @@ export const INITIAL_WIZARD_STATE: WizardState = {
     reasoningEffort: 'high',
     terminalUi: false,
   },
-  antigravity: { model: null, skipPermissions: false, sandbox: false, addDirsDraft: '' },
+  antigravity: {
+    model: null,
+    skipPermissions: false,
+    sandbox: false,
+    addDirsDraft: '',
+    terminalUi: false,
+  },
   git: { worktree: false, branchName: '' },
   autoScanPromptSeededFor: null,
 };
@@ -325,6 +333,7 @@ export type WizardAction =
   | { type: 'setAntigravitySkipPermissions'; value: boolean }
   | { type: 'setAntigravitySandbox'; value: boolean }
   | { type: 'setAntigravityAddDirs'; draft: string }
+  | { type: 'setAntigravityTerminalUi'; value: boolean }
   | { type: 'setWorktree'; value: boolean }
   | { type: 'setBranchName'; value: string }
   | { type: 'seedAutoScanPrompt'; projectName: string; prompt: string };
@@ -524,6 +533,9 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
 
     case 'setAntigravityAddDirs':
       return { ...state, antigravity: { ...state.antigravity, addDirsDraft: action.draft } };
+
+    case 'setAntigravityTerminalUi':
+      return { ...state, antigravity: { ...state.antigravity, terminalUi: action.value } };
 
     case 'setWorktree':
       return { ...state, git: { ...state.git, worktree: action.value } };

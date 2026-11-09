@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mobaide.acp.wire import CHAT_RESUME_ID_MAX, CHAT_RESUME_ID_PATTERN
-from mobaide.core.antigravity_launcher import AntigravityOptions
+from mobaide.core.antigravity_launcher import AntigravityOptions, agy_model_name
 from mobaide.core.claude_launcher import ClaudeOptions
 from mobaide.core.codex_launcher import CodexOptions
 from mobaide.core.models import SessionInfo, session_to_wire_dict
@@ -114,7 +114,8 @@ class AntigravityOptionsModel(BaseModel):
                 "skip_permissions and sandbox are mutually exclusive: "
                 "--dangerously-skip-permissions auto-approves sandbox escapes"
             )
-        if self.model is not None and self.model.startswith("-"):
+        # The name the launcher keeps from a saved ``agy models`` line.
+        if self.model is not None and agy_model_name(self.model).startswith("-"):
             raise ValueError("model must not look like a CLI flag (leading '-')")
         if any(d.startswith("-") for d in self.add_dirs):
             raise ValueError("add_dirs entries must not look like CLI flags (leading '-')")
@@ -210,6 +211,9 @@ class ChatStoredSession(BaseModel):
     updated_at: str | None = None
     # The open Mobaide chat session that already shows it, if any.
     open_session_id: str | None = None
+    # Another app on the PC has it open (Antigravity's presence lock): the
+    # two would overwrite each other's messages.
+    open_elsewhere: bool = False
 
 
 class ChatStoredSessionsResponse(BaseModel):

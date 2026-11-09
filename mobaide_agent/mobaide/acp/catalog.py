@@ -17,7 +17,7 @@ from typing import Any
 from mobaide import __version__
 
 from .agents import ChatAgentSpec, ChatAgentUnavailableError
-from .install import AdapterInstallError
+from .install import PROBE_POOL, AdapterInstallError
 from .rpc import ERR_METHOD_NOT_FOUND, AcpConnection, AcpProcessError, AcpRpcError
 
 logger = logging.getLogger(__name__)
@@ -78,7 +78,14 @@ class ChatCatalog:
                 raise ChatCatalogError(502, str(exc) or "The agent did not answer") from None
             finally:
                 self._arm_idle(kind)
-        return _normalize_page(result)
+        if not getattr(spec, "lists_all_folders", False):
+            return _normalize_page(result)
+        # The agent ignored ``cwd`` and listed every folder: filter and order
+        # here, off the event loop (one realpath per row).
+        presence = getattr(spec, "presence", None)
+        return await asyncio.get_running_loop().run_in_executor(
+            PROBE_POOL, _local_page, result, cwd, presence
+        )
 
     async def close(self) -> None:
         for kind in list(self._listers):
@@ -157,6 +164,35 @@ class ChatCatalog:
         await lister.conn.close(grace=1.0)
 
 
+def _local_page(result: Any, cwd: str | None, presence: Any) -> dict[str, Any]:
+    """A page of an agent that lists every folder at once: the rows of
+    ``cwd`` (compared as real paths), newest first, each marked when another
+    app on the PC has it open (``open_elsewhere``)."""
+    raw = result.get("sessions") if isinstance(result, dict) else None
+    rows = [entry for entry in raw if isinstance(entry, dict)] if isinstance(raw, list) else []
+    if cwd:
+        wanted = os.path.realpath(cwd)
+        real: dict[str, str] = {}
+
+        def same(row_cwd: Any) -> bool:
+            if not isinstance(row_cwd, str):
+                return False
+            if row_cwd not in real:
+                real[row_cwd] = os.path.realpath(row_cwd)
+            return row_cwd == cwd or real[row_cwd] == wanted
+
+        rows = [entry for entry in rows if same(entry.get("cwd"))]
+    rows.sort(
+        key=lambda entry: entry.get("updatedAt") if isinstance(entry.get("updatedAt"), str) else "",
+        reverse=True,
+    )
+    page = _normalize_page({**(result if isinstance(result, dict) else {}), "sessions": rows})
+    if presence is not None:
+        for row in page["sessions"]:
+            row["open_elsewhere"] = bool(presence.open_elsewhere(row["session_id"]))
+    return page
+
+
 def _normalize_page(result: Any) -> dict[str, Any]:
     sessions: list[dict[str, Any]] = []
     raw = result.get("sessions") if isinstance(result, dict) else None
@@ -177,6 +213,7 @@ def _normalize_page(result: Any) -> dict[str, Any]:
                     "title": " ".join(title.split())[:TITLE_MAX] if isinstance(title, str) else None,
                     "updated_at": updated if isinstance(updated, str) else None,
                     "open_session_id": None,
+                    "open_elsewhere": False,
                 }
             )
     next_cursor = result.get("nextCursor") if isinstance(result, dict) else None

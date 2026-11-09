@@ -24,6 +24,9 @@ struct ChatStoredSession: Codable, Equatable, Sendable, Identifiable {
     let updated_at: String?
     /// The Mobaide session that already shows this conversation.
     let open_session_id: String?
+    /// Another app on the PC has it open (Antigravity): sending from both can
+    /// overwrite messages.
+    var open_elsewhere: Bool? = nil
 
     var id: String { session_id }
 }

@@ -13,6 +13,7 @@ import hashlib
 import os
 import shlex
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -24,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from mobaide.agent._env_writer import atomic_write
 from mobaide.core.claude_launcher import CLAUDE_SESSION_PRESET_ENV
 from mobaide.core.cli_launcher import (
+    WINDOWS_NO_WINDOW,
     CliBinaryNotFoundError,
     LaunchTarget,
     posix_npm_fallbacks,
@@ -34,16 +36,21 @@ from mobaide.core.cli_launcher import (
 from mobaide.core.projects_config import ProjectConfig
 
 from . import codex_bridge
+from . import normalize as nz
 from .install import INSTALL_POOL, PROBE_POOL, AdapterInstaller, NpmAdapter
+from .presence import ConversationPresence, default_app_data_dir
 from .trust import (
+    AntigravityFolderTrust,
     ClaudeFolderTrust,
     CodexFolderTrust,
     WorkspaceTrust,
+    antigravity_settings_path,
     claude_config_path,
     codex_config_path,
 )
 
 if TYPE_CHECKING:
+    from mobaide.core.antigravity_launcher import AntigravityLauncher, AntigravityOptions
     from mobaide.core.claude_launcher import ClaudeLauncher, ClaudeOptions
     from mobaide.core.codex_launcher import CodexLauncher, CodexOptions
 
@@ -59,9 +66,15 @@ CLAUDE_ACP_PACKAGE = CLAUDE_ADAPTER.spec
 CLAUDE_ACP_BIN = CLAUDE_ADAPTER.bin_name
 CLAUDE_ACP_COMMAND_ENV = "MOBAIDE_ACP_CLAUDE_COMMAND"
 CODEX_ACP_COMMAND_ENV = "MOBAIDE_ACP_CODEX_COMMAND"
+ANTIGRAVITY_ACP_COMMAND_ENV = "MOBAIDE_ACP_ANTIGRAVITY_COMMAND"
 REAL_IN_TEST_ENV = "MOBAIDE_ACP_REAL"
 AVAILABILITY_TTL = 30.0
 NODE_HINT = "The chat view needs Node.js 22 or later on the PC."
+AGY_HINT = (
+    "The chat view needs an Antigravity CLI with ACP support. "
+    "Run `agy update` on the PC, then try again."
+)
+AGY_PROBE_TIMEOUT = 10.0
 
 
 class ChatAgentUnavailableError(RuntimeError):
@@ -106,6 +119,14 @@ class ChatLaunchPlan:
     # The agent session lives in a process other clients share (Codex's
     # shared app-server): closing the chat leaves it to them.
     shared_host: bool = False
+    # Folders the session may also work in (ACP ``additionalDirectories``).
+    additional_dirs: list[str] = field(default_factory=list)
+    # Turns launch choices into config values once the agent has listed its
+    # options (``session/new`` result): ``(result, intents) -> intents``.
+    config_resolver: Callable[[Mapping[str, Any], list[ConfigIntent]], list[ConfigIntent]] | None = None
+    # The agent's "conversation already open" marker, held while the chat
+    # has the conversation open (see :mod:`.presence`).
+    presence: ConversationPresence | None = None
 
 
 class ChatAgentSpec(Protocol):
@@ -114,6 +135,8 @@ class ChatAgentSpec(Protocol):
     supports_resume: bool
     # Sessions stay live with the agent's own apps on the PC.
     live_sessions: bool
+    # ``session/list`` ignores its ``cwd`` filter: the catalog filters.
+    lists_all_folders: bool
 
     def available(self) -> bool: ...
 
@@ -193,6 +216,7 @@ class _AdapterSpec:
     display_name = ""
     supports_resume = True
     live_sessions = False
+    lists_all_folders = False
     adapter: NpmAdapter
     command_env = ""
     fake_flavor: str | None = None
@@ -473,6 +497,160 @@ class CodexChatSpec(_AdapterSpec):
         return str(path)
 
 
+def _agy_supports_acp(agy: str) -> bool | None:
+    """``agy help acp`` exits 0 only on builds that have the ACP server.
+    None when the probe itself failed (try again later)."""
+    try:
+        done = subprocess.run(
+            shim_safe_argv(agy, "help", "acp"),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=AGY_PROBE_TIMEOUT,
+            creationflags=WINDOWS_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.returncode == 0
+
+
+class AntigravityChatSpec:
+    """Antigravity through the ACP server built into its CLI (``agy acp``),
+    so chat and terminal sessions share the CLI version, login, settings and
+    stored conversations.
+
+    ``agy acp`` works in its own working directory, not in the ``cwd`` of
+    ``session/new``, so every session runs in its own process started in the
+    session folder. Its ``session/list`` lists every folder's conversations.
+    """
+
+    kind = "antigravity"
+    display_name = "Antigravity"
+    supports_resume = True
+    live_sessions = False
+    lists_all_folders = True
+
+    def __init__(
+        self,
+        launcher: AntigravityLauncher,
+        *,
+        command_override: str | None = None,
+        test_mode: bool = False,
+        app_data_dir: Path | None = None,
+    ) -> None:
+        self._launcher = launcher
+        self._command_override = command_override
+        self._test_mode = test_mode
+        self._app_data_dir = app_data_dir or default_app_data_dir()
+        self.presence = ConversationPresence(self._app_data_dir)
+        # One probe at a time: concurrent callers wait for its answer.
+        self._probe_lock = threading.Lock()
+        # (checked at, binary path and mtime, argv or None, final). A final
+        # answer holds for that binary; a missing agy or a failed probe is
+        # checked again after AVAILABILITY_TTL.
+        self._cached: tuple[float, tuple[str, float] | None, list[str] | None, bool] | None = None
+
+    def _agy_identity(self) -> tuple[str, float] | None:
+        try:
+            agy = self._launcher.resolve_binary()
+            return agy, os.stat(agy).st_mtime
+        except (CliBinaryNotFoundError, OSError):
+            return None
+
+    def _resolve_command(self) -> list[str] | None:
+        override = (self._command_override or os.environ.get(ANTIGRAVITY_ACP_COMMAND_ENV, "")).strip()
+        if override:
+            return split_command(override)
+        if self._test_mode and not _real_agent_in_test_mode():
+            return fake_agent_argv("antigravity")
+        identity = self._agy_identity()
+        cached = self._fresh_cache(identity)
+        if cached is None:
+            with self._probe_lock:
+                cached = self._fresh_cache(identity)
+                if cached is None:
+                    cached = self._probe(identity)
+                    self._cached = cached
+        argv = cached[2]
+        return list(argv) if argv is not None else None
+
+    def _fresh_cache(
+        self, identity: tuple[str, float] | None
+    ) -> tuple[float, tuple[str, float] | None, list[str] | None, bool] | None:
+        cached = self._cached
+        # An updated binary (new mtime) is probed again at once.
+        if cached is None or cached[1] != identity:
+            return None
+        if cached[3] or time.monotonic() - cached[0] < AVAILABILITY_TTL:
+            return cached
+        return None
+
+    @staticmethod
+    def _probe(
+        identity: tuple[str, float] | None,
+    ) -> tuple[float, tuple[str, float] | None, list[str] | None, bool]:
+        now = time.monotonic()
+        if identity is None:
+            return (now, None, None, False)
+        supported = _agy_supports_acp(identity[0])
+        argv = shim_safe_argv(identity[0], "acp") if supported else None
+        return (now, identity, argv, supported is not None)
+
+    def command(self) -> list[str] | None:
+        return self._resolve_command()
+
+    def available(self) -> bool:
+        return self._resolve_command() is not None
+
+    def uses_fake_agent(self) -> bool:
+        return self.command() == fake_agent_argv("antigravity")
+
+    def _argv(self) -> list[str]:
+        argv = self._resolve_command()
+        if argv is None:
+            raise ChatAgentUnavailableError(self.kind, AGY_HINT)
+        return argv
+
+    async def catalog_plan(self) -> ChatLaunchPlan:
+        loop = asyncio.get_running_loop()
+        argv = await loop.run_in_executor(PROBE_POOL, self._argv)
+        home = os.path.expanduser("~")
+        return ChatLaunchPlan(argv=argv, env=dict(os.environ), cwd=home, process_cwd=home)
+
+    async def prepare(self, target: LaunchTarget, options: AntigravityOptions) -> ChatLaunchPlan:
+        loop = asyncio.get_running_loop()
+        # Before the launcher can create a worktree.
+        argv = await loop.run_in_executor(PROBE_POOL, self._argv)
+        fake = argv == fake_agent_argv("antigravity")
+        spec = await self._launcher.build(target, options, session_id=None)
+        if options.skip_permissions:
+            argv.append("--dangerously-skip-permissions")
+        if options.sandbox:
+            argv.append("--sandbox")
+        return ChatLaunchPlan(
+            argv=argv,
+            env=dict(spec.env),
+            cwd=spec.cwd,
+            initial_config=antigravity_config_intents(options),
+            created_files=list(spec.created_files),
+            process_cwd=spec.cwd,
+            trust=(
+                None
+                if fake
+                else AntigravityFolderTrust(
+                    spec.cwd, settings_path=antigravity_settings_path(self._app_data_dir)
+                )
+            ),
+            # ACP takes absolute paths; ``--add-dir`` read them from the cwd.
+            additional_dirs=[
+                os.path.normpath(os.path.join(spec.cwd, os.path.expanduser(d)))
+                for d in options.add_dirs
+            ],
+            config_resolver=resolve_antigravity_config,
+            presence=None if fake else self.presence,
+        )
+
+
 async def _known_argv(argv: list[str], ensure: Callable[[], list[str]] | None) -> list[str]:
     if ensure is None:
         return argv
@@ -523,12 +701,124 @@ def codex_config_intents(options: CodexOptions) -> list[ConfigIntent]:
     return intents
 
 
+def antigravity_config_intents(options: AntigravityOptions) -> list[ConfigIntent]:
+    """Map the Antigravity create-session options onto ACP config values.
+
+    The model is the name ``agy models`` prints (``Gemini 3.8 Flash (High)``);
+    :func:`resolve_antigravity_config` matches it to the session's options.
+    ``skip_permissions`` and ``sandbox`` are ``agy acp`` flags.
+    """
+    if not options.model:
+        return []
+    return [ConfigIntent(options.model, category="model")]
+
+
+# Longer than any model name; bounds the work on a client-sent value.
+MODEL_NAME_MAX = 200
+
+
+def _split_level(name: str) -> tuple[str, str] | None:
+    """``"Gemini 3.8 Flash (High)"`` → ``("Gemini 3.8 Flash", "High")``."""
+    if not name.endswith(")"):
+        return None
+    base, sep, level = name[:-1].rpartition("(")
+    base, level = base.rstrip(), level.strip()
+    if not sep or not base or not level or ")" in level:
+        return None
+    return base, level
+
+
+def _option_values(options: list[dict[str, Any]], category: str) -> list[tuple[str, str]]:
+    """``(value, name)`` pairs of the first select option of ``category``,
+    the one :meth:`ChatSession._match_config` applies an intent to."""
+    option = next(
+        (o for o in options if o.get("category") == category and o.get("type") == "select"), None
+    )
+    return [(v["value"], v["name"]) for v in option["options"]] if option else []
+
+
+def resolve_antigravity_config(
+    result: Mapping[str, Any], intents: list[ConfigIntent]
+) -> list[ConfigIntent]:
+    """Split a model name with its thinking level into the ``model`` and
+    ``thought_level`` options of an Antigravity session.
+
+    ``agy`` names ``Gemini 3.8 Flash (High)`` (id ``gemini-3.8-flash-high``)
+    one model, while its ACP options offer the model ``gemini-3.8-flash`` and
+    the thinking level ``high``. Other intents pass through unchanged.
+    """
+    options = nz.config_options(result.get("configOptions"))
+    models = _option_values(options, "model")
+    levels = _option_values(options, "thought_level")
+    if not models:
+        return intents
+    raw_models = result.get("models")
+    available = raw_models.get("availableModels") if isinstance(raw_models, Mapping) else None
+    out: list[ConfigIntent] = []
+    for intent in intents:
+        # An intent by option id (a Restart) already holds an option value.
+        if intent.category != "model" or intent.option_id is not None or not isinstance(intent.value, str):
+            out.append(intent)
+            continue
+        out.extend(_resolve_model(intent, models, levels, available))
+    return out
+
+
+def _resolve_model(
+    intent: ConfigIntent,
+    models: list[tuple[str, str]],
+    levels: list[tuple[str, str]],
+    available: Any,
+) -> list[ConfigIntent]:
+    wanted = str(intent.value).strip()
+    if len(wanted) > MODEL_NAME_MAX:
+        return [intent]
+    for value, name in models:
+        if wanted == value or wanted.casefold() == name.casefold():
+            return [ConfigIntent(value, category="model", required=intent.required)]
+    model_id: str | None = None
+    for entry in available if isinstance(available, list) else []:
+        if not isinstance(entry, Mapping) or not isinstance(entry.get("modelId"), str):
+            continue
+        name = entry.get("name")
+        if wanted in (entry["modelId"], name) or (
+            isinstance(name, str) and wanted.casefold() == name.casefold()
+        ):
+            model_id = entry["modelId"]
+            break
+    level_values = {value for value, _ in levels}
+    if model_id is not None:
+        for value, _ in models:
+            if model_id == value:
+                return [ConfigIntent(value, category="model", required=intent.required)]
+            level = model_id[len(value) + 1:] if model_id.startswith(value + "-") else None
+            if level in level_values:
+                return [
+                    ConfigIntent(value, category="model", required=intent.required),
+                    ConfigIntent(level, category="thought_level"),
+                ]
+    split = _split_level(wanted)
+    if split:
+        base, level_name = split[0].casefold(), split[1].casefold()
+        for value, name in models:
+            if name.casefold() != base:
+                continue
+            resolved = [ConfigIntent(value, category="model", required=intent.required)]
+            for level_value, level_label in levels:
+                if level_name in (level_value.casefold(), level_label.casefold()):
+                    resolved.append(ConfigIntent(level_value, category="thought_level"))
+                    break
+            return resolved
+    return [intent]
+
+
 def build_chat_agents(
     launchers: Mapping[str, Any],
     *,
     test_mode: bool = False,
     command_overrides: Mapping[str, str | None] | None = None,
     adapters_dir: Path | None = None,
+    antigravity_app_data_dir: Path | None = None,
 ) -> dict[str, ChatAgentSpec]:
     """The chat-capable agents of this host, keyed by session kind.
 
@@ -547,6 +837,14 @@ def build_chat_agents(
             command_override=overrides.get(kind),
             test_mode=test_mode,
             adapters_dir=adapters_dir,
+        )
+    agy_launcher = launchers.get("antigravity")
+    if agy_launcher is not None:
+        specs["antigravity"] = AntigravityChatSpec(
+            agy_launcher,
+            command_override=overrides.get("antigravity"),
+            test_mode=test_mode,
+            app_data_dir=antigravity_app_data_dir,
         )
     return specs
 

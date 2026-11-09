@@ -23,6 +23,7 @@ import {
   effectiveClaudeModel,
   isCustomMode,
   parseAddDirs,
+  type AntigravityBucket,
   type ClaudeBucket,
   type CodexBucket,
   type WizardMode,
@@ -33,6 +34,7 @@ export type CreateSessionRequest = components['schemas']['CreateSessionRequest']
 export type StartScanRequest = components['schemas']['StartScanRequest'];
 type ClaudeOptions = components['schemas']['ClaudeOptionsModel'];
 type CodexOptions = components['schemas']['CodexOptionsModel'];
+type AntigravityOptions = components['schemas']['AntigravityOptionsModel'];
 
 export interface BuildContext {
   state: WizardState;
@@ -59,10 +61,22 @@ export function claudeUsesChat(bucket: ClaudeBucket, chat: ChatSupport | undefin
 }
 
 /** The agent kinds whose sessions can open in the chat view. */
-export type ChatAgentKind = 'claude' | 'codex';
+export type ChatAgentKind = 'claude' | 'codex' | 'antigravity';
 
 export function chatAgentKind(mode: WizardMode | null): ChatAgentKind | null {
-  return mode === 'claude' || mode === 'codex' ? mode : null;
+  return mode === 'claude' || mode === 'codex' || mode === 'antigravity' ? mode : null;
+}
+
+/** The kind's "Terminal UI" toggle. */
+export function terminalUiOf(state: WizardState, kind: ChatAgentKind): boolean {
+  switch (kind) {
+    case 'claude':
+      return state.claude.terminalUi;
+    case 'codex':
+      return state.codex.terminalUi;
+    case 'antigravity':
+      return state.antigravity.terminalUi;
+  }
 }
 
 /** Blank-after-trim omits the key; otherwise the value goes untrimmed (a prompt's trailing newline is intentional). */
@@ -129,6 +143,20 @@ function codexOptions(
   };
 }
 
+function antigravityOptions(
+  bucket: AntigravityBucket,
+  extras: { worktree: boolean; branchName: string | undefined },
+): AntigravityOptions {
+  return {
+    model: bucket.model ?? undefined,
+    skip_permissions: bucket.skipPermissions,
+    sandbox: bucket.sandbox,
+    add_dirs: parseAddDirs(bucket.addDirsDraft),
+    worktree: extras.worktree,
+    branch_name: extras.branchName,
+  };
+}
+
 /** `null` for `auto_scan`, which starts a scan rather than creating a session. */
 export function buildCreateRequest(context: BuildContext): CreateSessionRequest | null {
   const { state, mode } = context;
@@ -175,15 +203,12 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
     return {
       ...base,
       cli: 'antigravity',
-      antigravity_options: {
-        model: state.antigravity.model ?? undefined,
-        skip_permissions: state.antigravity.skipPermissions,
-        sandbox: state.antigravity.sandbox,
-        add_dirs: parseAddDirs(state.antigravity.addDirsDraft),
+      antigravity_options: antigravityOptions(state.antigravity, {
         worktree: place.worktree,
-        branch_name: place.branchName,
-      },
+        branchName: place.branchName,
+      }),
       worktree: false,
+      ui: usesChatView(state.antigravity.terminalUi, context.chat) ? 'chat' : 'terminal',
     };
   }
 
@@ -201,10 +226,10 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
 }
 
 /**
- * Continue a Claude Code or Codex session stored on the PC in a new chat
- * session, with the agent's current options but never a worktree: the
- * conversation belongs to the folder it was recorded in. That folder is the
- * selected project when the paths match, else a plain `cwd`.
+ * Continue a session stored on the PC in a new chat session, with the agent's
+ * current options but never a worktree: the conversation belongs to the folder
+ * it was recorded in. That folder is the selected project when the paths
+ * match, else a plain `cwd`.
  */
 export function buildResumeRequest(
   { state, project }: BuildContext,
@@ -216,7 +241,12 @@ export function buildResumeRequest(
   const options =
     kind === 'codex'
       ? { cli: 'codex', codex_options: codexOptions(state.codex, noWorktree) }
-      : { cli: 'claude', claude_options: claudeOptions(state.claude, noWorktree) };
+      : kind === 'antigravity'
+        ? {
+            cli: 'antigravity',
+            antigravity_options: antigravityOptions(state.antigravity, noWorktree),
+          }
+        : { cli: 'claude', claude_options: claudeOptions(state.claude, noWorktree) };
   return {
     project_name: sameFolder ? project.name : undefined,
     cwd: sameFolder ? undefined : stored.cwd,

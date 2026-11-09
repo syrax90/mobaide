@@ -17,4 +17,7 @@ data class ChatStoredSession(
     val updated_at: String? = null,
     // The open Mobaide chat session that already shows this row.
     val open_session_id: String? = null,
+    // Another app on the PC has it open (Antigravity): sending from both can
+    // overwrite messages.
+    val open_elsewhere: Boolean = false,
 )

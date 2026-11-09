@@ -78,4 +78,6 @@ async def list_chat_sessions(
         open_session = manager.find_chat_session(kind, row["session_id"])
         if open_session is not None:
             row["open_session_id"] = open_session.session_id
+            # The lock another app sees is this session's own.
+            row["open_elsewhere"] = False
     return 200, page
