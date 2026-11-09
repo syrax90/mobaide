@@ -126,6 +126,9 @@ struct WorktreeBaseRef: Codable, Equatable, Sendable {
     let subject: String?
     let committed_at: String?
 
+    /// Unique per row: a local branch may share its name with a remote one.
+    var rowID: String { "\(kind):\(ref)" }
+
     init(ref: String, kind: String, subject: String? = nil, committed_at: String? = nil) {
         self.ref = ref
         self.kind = kind

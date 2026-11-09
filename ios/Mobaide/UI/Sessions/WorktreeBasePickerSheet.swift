@@ -44,7 +44,7 @@ struct WorktreeBasePickerSheet: View {
                         ref: nil
                     )
                 }
-                ForEach(refs, id: \.ref) { base in
+                ForEach(refs, id: \.rowID) { base in
                     row(
                         title: base.ref,
                         caption: WorktreeBaseDisplay.relativeTime(base.committed_at),

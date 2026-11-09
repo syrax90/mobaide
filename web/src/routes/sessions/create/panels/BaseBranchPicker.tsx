@@ -5,11 +5,11 @@ import {
   useState,
   type FocusEvent,
   type KeyboardEvent,
-} from 'react';
-import type { WorktreeBases } from '../../../../api/gitRepository';
-import { commitAge, filterWorktreeBases } from '../worktreeBase';
+} from "react";
+import type { WorktreeBases } from "../../../../api/gitRepository";
+import { commitAge, filterWorktreeBases } from "../worktreeBase";
 
-export type BaseBranchStatus = 'loading' | 'error' | 'ready';
+export type BaseBranchStatus = "loading" | "error" | "ready";
 
 export interface BaseBranchPickerProps {
   status: BaseBranchStatus;
@@ -24,6 +24,8 @@ export interface BaseBranchPickerProps {
 const MAX_ROWS = 200;
 
 interface Row {
+  /** Unique per row: a local branch may share its name with a remote one. */
+  key: string;
   ref: string | null;
   isDefault: boolean;
   isLocal: boolean;
@@ -38,7 +40,13 @@ interface Row {
  * it. Keys in the filter: ↓/↑ move, Enter picks, Escape closes back to the
  * button; leaving the picker with Tab or a click closes it too.
  */
-export function BaseBranchPicker({ status, bases, value, onChange, onRetry }: BaseBranchPickerProps) {
+export function BaseBranchPicker({
+  status,
+  bases,
+  value,
+  onChange,
+  onRetry,
+}: BaseBranchPickerProps) {
   const id = useId();
   const labelId = `${id}-label`;
   const triggerId = `${id}-trigger`;
@@ -48,29 +56,40 @@ export function BaseBranchPicker({ status, bases, value, onChange, onRetry }: Ba
   const triggerRef = useRef<HTMLButtonElement>(null);
   const filterRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
 
-  const ready = status === 'ready' && bases !== undefined;
+  const ready = status === "ready" && bases !== undefined;
   const isOpen = open && ready;
   const now = Date.now();
 
   const filtered = ready ? filterWorktreeBases(bases.refs, query) : [];
   const rows: Row[] = [
     // The agent-default row only while unfiltered: it matches no ref name.
-    ...(query.trim() === ''
-      ? [{ ref: null, isDefault: false, isLocal: false, age: '', subject: null }]
+    ...(query.trim() === ""
+      ? [
+          {
+            key: "default",
+            ref: null,
+            isDefault: false,
+            isLocal: false,
+            age: "",
+            subject: null,
+          },
+        ]
       : []),
     ...filtered.slice(0, MAX_ROWS).map((entry) => ({
+      key: `ref:${entry.kind}:${entry.ref}`,
       ref: entry.ref,
       isDefault: entry.ref === bases?.default,
-      isLocal: entry.kind === 'local',
+      isLocal: entry.kind === "local",
       age: commitAge(entry.committed_at, now),
       subject: entry.subject ?? null,
     })),
   ];
   const overflow = Math.max(0, filtered.length - MAX_ROWS);
-  const activeIndex = rows.length === 0 ? -1 : Math.min(active, rows.length - 1);
+  const activeIndex =
+    rows.length === 0 ? -1 : Math.min(active, rows.length - 1);
 
   useEffect(() => {
     if (isOpen) filterRef.current?.focus();
@@ -78,8 +97,11 @@ export function BaseBranchPicker({ status, bases, value, onChange, onRetry }: Ba
 
   const openPicker = (): void => {
     if (!ready) return;
-    setQuery('');
-    const current = value === null ? 0 : bases.refs.findIndex((entry) => entry.ref === value) + 1;
+    setQuery("");
+    const current =
+      value === null
+        ? 0
+        : bases.refs.findIndex((entry) => entry.ref === value) + 1;
     setActive(Math.max(0, current));
     setOpen(true);
   };
@@ -96,22 +118,22 @@ export function BaseBranchPicker({ status, bases, value, onChange, onRetry }: Ba
 
   const onFilterKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
     switch (event.key) {
-      case 'ArrowDown':
-      case 'ArrowUp': {
+      case "ArrowDown":
+      case "ArrowUp": {
         event.preventDefault();
         if (rows.length === 0) return;
-        const delta = event.key === 'ArrowDown' ? 1 : -1;
+        const delta = event.key === "ArrowDown" ? 1 : -1;
         setActive((activeIndex + delta + rows.length) % rows.length);
         return;
       }
-      case 'Enter': {
+      case "Enter": {
         // Never submits the wizard from inside the picker.
         event.preventDefault();
         const row = rows[activeIndex];
         if (row !== undefined) pick(row.ref);
         return;
       }
-      case 'Escape':
+      case "Escape":
         event.preventDefault();
         closeToTrigger();
         return;
@@ -128,7 +150,7 @@ export function BaseBranchPicker({ status, bases, value, onChange, onRetry }: Ba
   };
 
   const triggerText =
-    status === 'loading' ? 'Loading branches…' : (value ?? 'Default branch');
+    status === "loading" ? "Loading branches…" : (value ?? "Default branch");
 
   return (
     <div className="field base-branch" ref={containerRef} onBlur={onBlur}>
@@ -151,7 +173,7 @@ export function BaseBranchPicker({ status, bases, value, onChange, onRetry }: Ba
           else openPicker();
         }}
         onKeyDown={(event) => {
-          if (event.key === 'ArrowDown' && !isOpen) {
+          if (event.key === "ArrowDown" && !isOpen) {
             event.preventDefault();
             openPicker();
           }
@@ -170,7 +192,9 @@ export function BaseBranchPicker({ status, bases, value, onChange, onRetry }: Ba
             aria-autocomplete="list"
             aria-expanded="true"
             aria-controls={listId}
-            aria-activedescendant={activeIndex >= 0 ? `${listId}-${activeIndex}` : undefined}
+            aria-activedescendant={
+              activeIndex >= 0 ? `${listId}-${activeIndex}` : undefined
+            }
             autoComplete="off"
             autoCapitalize="off"
             autoCorrect="off"
@@ -183,10 +207,15 @@ export function BaseBranchPicker({ status, bases, value, onChange, onRetry }: Ba
             }}
             onKeyDown={onFilterKeyDown}
           />
-          <ul id={listId} role="listbox" aria-labelledby={labelId} className="path-suggestions base-branch-list">
+          <ul
+            id={listId}
+            role="listbox"
+            aria-labelledby={labelId}
+            className="path-suggestions base-branch-list"
+          >
             {rows.map((row, index) => (
               <li
-                key={row.ref ?? ''}
+                key={row.key}
                 id={`${listId}-${index}`}
                 role="option"
                 aria-selected={index === activeIndex}
@@ -201,22 +230,34 @@ export function BaseBranchPicker({ status, bases, value, onChange, onRetry }: Ba
                 }}
               >
                 <span className="base-branch-check" aria-hidden="true">
-                  {row.ref === value ? '✓' : ''}
+                  {row.ref === value ? "✓" : ""}
                 </span>
-                <span className="base-branch-name">{row.ref ?? 'Default branch'}</span>
-                {row.isDefault && <span className="project-badge base-branch-badge-default">default</span>}
+                <span className="base-branch-name">
+                  {row.ref ?? "Default branch"}
+                </span>
+                {row.isDefault && (
+                  <span className="project-badge base-branch-badge-default">
+                    default
+                  </span>
+                )}
                 {row.isLocal && <span className="project-badge">local</span>}
-                {row.age !== '' && <span className="base-branch-age">{row.age}</span>}
+                {row.age !== "" && (
+                  <span className="base-branch-age">{row.age}</span>
+                )}
               </li>
             ))}
           </ul>
-          {rows.length === 0 && <p className="path-suggestions-more">No branches match.</p>}
+          {rows.length === 0 && (
+            <p className="path-suggestions-more">No branches match.</p>
+          )}
           {overflow > 0 && (
-            <p className="path-suggestions-more">+{overflow} more — keep typing</p>
+            <p className="path-suggestions-more">
+              +{overflow} more — keep typing
+            </p>
           )}
         </div>
       )}
-      {status === 'error' ? (
+      {status === "error" ? (
         <div className="base-branch-error" id={hintId}>
           <p className="field-error">Couldn’t load branches</p>
           <button type="button" className="button" onClick={onRetry}>

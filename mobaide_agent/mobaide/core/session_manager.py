@@ -212,9 +212,9 @@ class SessionManager:
             self._remember_worktree_base(project.name, options.base_branch)
 
     def _remember_worktree_base(self, project_name: str, base: str | None) -> None:
-        base = (base or "").strip()
-        if not base or self._projects_store is None:
+        if self._projects_store is None:
             return
+        base = (base or "").strip() or None
         try:
             self._projects_store.set_last_worktree_base(project_name, base)
         except OSError:

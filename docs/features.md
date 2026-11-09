@@ -134,7 +134,7 @@ When "Create worktree" is on for a git project, the config page shows a "Base br
 
 - **List.** The picker lists the local branches and the remote-tracking branches. It has a search field. The default branch is first, then the newest branches.
 - **Default.** The agent picks `origin/HEAD` first, then `origin/main`, then the local `main`.
-- **Memory.** The agent remembers the last base branch for each project. Every client and device preselects it the next time. If that branch is gone, the picker selects the default.
+- **Memory.** The agent remembers the last base branch for each project. Every client and device preselects it the next time. A pick of "Default branch" clears it. If that branch is gone, the picker selects the default.
 - **Fresh start.** For a remote base, the agent fetches that remote before it creates the worktree.
 - **Older agents.** Clients hide the picker without `capabilities.git.worktree_base`.
 

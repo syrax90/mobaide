@@ -158,8 +158,8 @@ Clients preselect ``last_used``, then ``default``, then nothing (the agent's own
 * A local branch name is used first (``refs/heads/<base>``). Otherwise, when ``<base>`` starts with a configured remote name, the agent fetches that remote (best effort) and uses ``refs/remotes/<base>``. Full refnames keep a same-named tag from winning.
 * An unknown base or one starting with ``-`` fails the create with the usual worktree ``400`` (``Could not create worktree on branch <b>: base branch '<base>' not found``).
 * ``null`` or blank keeps the old start point (fetch ``origin``, then ``default`` above, then ``HEAD``).
-* The base is ignored when the worktree or the branch already exists and is reused.
-* After a successful worktree resolution the agent records the base as the project's ``last_used``.
+* The base is ignored when the worktree or the branch already exists and is reused. It is then not resolved, so a deleted base does not block reopening the branch.
+* After a successful worktree resolution the agent records the base as the project's ``last_used``. A ``null`` base (the "Default branch" row) clears it.
 * Older agents ignore the field and branch from their default.
 
 #### Worktree-base capability key

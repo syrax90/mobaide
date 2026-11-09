@@ -525,40 +525,49 @@ class WorktreeManager:
 
         await _run_git("config", "core.longpaths", "true", cwd=project_root)
 
-        if base_branch is None:
-            start_point = await self._resolve_start_point(project_root)
+        # An existing branch keeps its own history, so a chosen base is moot
+        # and must not block reopening it (the base may be deleted by now).
+        reuse_branch = base_branch is not None and await self._ref_resolves(
+            project_root, f"refs/heads/{branch_name}",
+        )
+        if reuse_branch:
+            first_err = ""
         else:
-            resolved = await self._resolve_base(project_root, base_branch)
-            if resolved is None:
-                raise WorktreeCreationError(
-                    branch=branch_name,
-                    path=wt_dir,
-                    stderr=f"base branch '{base_branch}' not found",
-                )
-            start_point = resolved
+            if base_branch is None:
+                start_point = await self._resolve_start_point(project_root)
+            else:
+                resolved = await self._resolve_base(project_root, base_branch)
+                if resolved is None:
+                    raise WorktreeCreationError(
+                        branch=branch_name,
+                        path=wt_dir,
+                        stderr=f"base branch '{base_branch}' not found",
+                    )
+                start_point = resolved
 
-        logger.info(
-            "Creating worktree at %s with branch %s from %s",
-            wt_dir,
-            branch_name,
-            start_point,
-        )
-        rc, _, stderr = await _run_git(
-            "worktree", "add", "--no-track", wt_dir, "-b", branch_name, start_point,
-            cwd=project_root,
-        )
-        if rc == 0:
-            logger.info("Worktree created successfully")
-            audit_event(
-                "audit.worktree.created",
-                target=wt_dir,
-                outcome="ok",
-                branch=branch_name,
+            logger.info(
+                "Creating worktree at %s with branch %s from %s",
+                wt_dir,
+                branch_name,
+                start_point,
             )
-            return WorktreeResult(path=wt_dir, is_new=True, branch=branch_name)
+            rc, _, stderr = await _run_git(
+                "worktree", "add", "--no-track", wt_dir, "-b", branch_name, start_point,
+                cwd=project_root,
+            )
+            if rc == 0:
+                logger.info("Worktree created successfully")
+                audit_event(
+                    "audit.worktree.created",
+                    target=wt_dir,
+                    outcome="ok",
+                    branch=branch_name,
+                )
+                return WorktreeResult(path=wt_dir, is_new=True, branch=branch_name)
 
-        first_err = stderr.strip()
-        logger.warning("Branch may already exist, retrying without -b: %s", first_err)
+            first_err = stderr.strip()
+            logger.warning("Branch may already exist, retrying without -b: %s", first_err)
+
         rc, _, stderr = await _run_git(
             "worktree", "add", "--", wt_dir, branch_name,
             cwd=project_root,

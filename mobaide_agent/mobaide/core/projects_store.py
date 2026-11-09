@@ -303,8 +303,9 @@ class ProjectsStore:
             r = self._projects.get(name)
             return r.last_worktree_base if r is not None else None
 
-    def set_last_worktree_base(self, name: str, base: str) -> None:
-        """Remember ``base`` for ``name``; an unknown project is a no-op."""
+    def set_last_worktree_base(self, name: str, base: str | None) -> None:
+        """Remember ``base`` for ``name`` (``None`` = the default branch);
+        an unknown project is a no-op."""
         with self._lock:
             r = self._projects.get(name)
             if r is None or r.last_worktree_base == base:

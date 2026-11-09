@@ -237,7 +237,7 @@ internal fun BaseBranchList(
             contentPadding = PaddingValues(bottom = 16.dp),
         ) {
             if (query.isBlank()) {
-                item(key = "default") {
+                item(key = "synthetic:default") {
                     BaseBranchRow(
                         title = DEFAULT_BRANCH_LABEL,
                         subtitle = "Let the agent choose",
@@ -249,7 +249,7 @@ internal fun BaseBranchList(
                     )
                 }
             }
-            items(filtered, key = { it.ref }) { ref ->
+            items(filtered, key = { "ref:${it.kind}:${it.ref}" }) { ref ->
                 BaseBranchRow(
                     title = ref.ref,
                     subtitle = relativeCommitTime(ref.committed_at, now),
@@ -261,7 +261,7 @@ internal fun BaseBranchList(
                 )
             }
             if (filtered.isEmpty()) {
-                item(key = "empty") {
+                item(key = "synthetic:empty") {
                     Text(
                         text = if (response.refs.isEmpty()) "No branches." else "No matches.",
                         style = MaterialTheme.typography.bodyMedium,

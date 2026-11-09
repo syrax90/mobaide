@@ -143,6 +143,16 @@ class TestCreateWorktreeWithBase:
             )
         assert "must not start with '-'" in err.value.stderr
 
+    async def test_existing_branch_ignores_a_deleted_base(self, clone):
+        run_git_sync(clone, "branch", "feat-7")
+
+        result = await _manager().create_worktree(
+            "s7", clone, branch_name="feat-7", base_branch="deleted-base",
+        )
+
+        assert result.is_new
+        assert _rev(result.path, "HEAD") == _rev(clone, "feat-7")
+
     async def test_no_base_uses_the_default(self, clone):
         run_git_sync(clone, "remote", "set-head", "origin", "develop")
 
@@ -234,3 +244,14 @@ class TestSessionManagerRemembersBase:
 
         assert create.await_args.kwargs["base_branch"] == "origin/dev"
         assert store.get_last_worktree_base("p") == "origin/dev"
+
+        config.base_branch = None
+        with patch(
+            "mobaide.linear.worktree.create_standard_worktree",
+            new=AsyncMock(return_value=WorktreeResult(
+                path=str(tmp_path), is_new=True, branch="b",
+            )),
+        ):
+            await manager._resolve_project_cwd(config)
+
+        assert store.get_last_worktree_base("p") is None
