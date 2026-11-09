@@ -19,6 +19,8 @@ from typing import Any, Protocol
 from mobaide.agent._env_writer import atomic_write
 from mobaide.core.codex_auth import codex_home
 
+from .presence import default_app_data_dir
+
 
 _config_locks: dict[str, threading.Lock] = {}
 _config_locks_guard = threading.Lock()
@@ -297,7 +299,7 @@ class CodexFolderTrust:
 
 def antigravity_settings_path(app_data_dir: Path | None = None) -> Path:
     """The ``settings.json`` of the Antigravity CLI (``agy``)."""
-    return (app_data_dir or Path.home() / ".gemini" / "antigravity-cli") / "settings.json"
+    return (app_data_dir or default_app_data_dir()) / "settings.json"
 
 
 def _same_folder(a: str, b: str) -> bool:

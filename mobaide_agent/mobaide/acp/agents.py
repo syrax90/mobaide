@@ -204,20 +204,16 @@ class _Resolution:
     install_with: tuple[str, str] | None = None
 
 
-class _AdapterSpec:
-    """An agent whose ACP adapter is an npm package (see :mod:`.install`).
-
-    The command is, in order: the operator override, the fake agent in test
-    mode, the adapter command on PATH, and the pinned install under
-    ``adapters_dir`` (installed on first use).
-    """
+class _ChatSpecBase:
+    """What every agent spec shares: the operator override
+    (``command_env``) and the fake agent in test mode come before the
+    agent's own lookup (:meth:`command`)."""
 
     kind = ""
     display_name = ""
     supports_resume = True
     live_sessions = False
     lists_all_folders = False
-    adapter: NpmAdapter
     command_env = ""
     fake_flavor: str | None = None
 
@@ -227,21 +223,55 @@ class _AdapterSpec:
         *,
         command_override: str | None = None,
         test_mode: bool = False,
-        adapters_dir: Path | None = None,
     ) -> None:
         self._launcher = launcher
         self._command_override = command_override
         self._test_mode = test_mode
+
+    def _fixed_command(self) -> list[str] | None:
+        """The override, else the fake agent in test mode; None when the
+        agent's own lookup decides."""
+        override = (self._command_override or os.environ.get(self.command_env, "")).strip()
+        if override:
+            return split_command(override)
+        if self._test_mode and not _real_agent_in_test_mode():
+            return fake_agent_argv(self.fake_flavor)
+        return None
+
+    def command(self) -> list[str] | None:
+        raise NotImplementedError
+
+    def uses_fake_agent(self) -> bool:
+        return self.command() == fake_agent_argv(self.fake_flavor)
+
+
+class _AdapterSpec(_ChatSpecBase):
+    """An agent whose ACP adapter is an npm package (see :mod:`.install`).
+
+    The command is, in order: the operator override, the fake agent in test
+    mode, the adapter command on PATH, and the pinned install under
+    ``adapters_dir`` (installed on first use).
+    """
+
+    adapter: NpmAdapter
+
+    def __init__(
+        self,
+        launcher: Any,
+        *,
+        command_override: str | None = None,
+        test_mode: bool = False,
+        adapters_dir: Path | None = None,
+    ) -> None:
+        super().__init__(launcher, command_override=command_override, test_mode=test_mode)
         self._installer = AdapterInstaller(self.adapter, adapters_dir) if adapters_dir else None
         self._lock = threading.Lock()
         self._cached: tuple[float, _Resolution] | None = None
 
     def _resolve_command(self) -> _Resolution:
-        override = (self._command_override or os.environ.get(self.command_env, "")).strip()
-        if override:
-            return _Resolution(split_command(override))
-        if self._test_mode and not _real_agent_in_test_mode():
-            return _Resolution(fake_agent_argv(self.fake_flavor))
+        fixed = self._fixed_command()
+        if fixed is not None:
+            return _Resolution(fixed)
         on_path = _which_with_fallbacks(self.adapter.bin_name)
         if on_path:
             return _Resolution(shim_safe_argv(on_path), os.path.dirname(on_path))
@@ -275,9 +305,6 @@ class _AdapterSpec:
     def available(self) -> bool:
         resolution = self._resolved()
         return resolution.argv is not None or resolution.install_with is not None
-
-    def uses_fake_agent(self) -> bool:
-        return self.command() == fake_agent_argv(self.fake_flavor)
 
     def _launch(self, env: Mapping[str, str]) -> tuple[list[str], Callable[[], list[str]] | None]:
         """``(argv, ensure_argv)``: a known command, or an installer to run."""
@@ -514,7 +541,7 @@ def _agy_supports_acp(agy: str) -> bool | None:
     return done.returncode == 0
 
 
-class AntigravityChatSpec:
+class AntigravityChatSpec(_ChatSpecBase):
     """Antigravity through the ACP server built into its CLI (``agy acp``),
     so chat and terminal sessions share the CLI version, login, settings and
     stored conversations.
@@ -526,9 +553,9 @@ class AntigravityChatSpec:
 
     kind = "antigravity"
     display_name = "Antigravity"
-    supports_resume = True
-    live_sessions = False
     lists_all_folders = True
+    command_env = ANTIGRAVITY_ACP_COMMAND_ENV
+    fake_flavor = "antigravity"
 
     def __init__(
         self,
@@ -538,9 +565,7 @@ class AntigravityChatSpec:
         test_mode: bool = False,
         app_data_dir: Path | None = None,
     ) -> None:
-        self._launcher = launcher
-        self._command_override = command_override
-        self._test_mode = test_mode
+        super().__init__(launcher, command_override=command_override, test_mode=test_mode)
         self._app_data_dir = app_data_dir or default_app_data_dir()
         self.presence = ConversationPresence(self._app_data_dir)
         # One probe at a time: concurrent callers wait for its answer.
@@ -558,11 +583,9 @@ class AntigravityChatSpec:
             return None
 
     def _resolve_command(self) -> list[str] | None:
-        override = (self._command_override or os.environ.get(ANTIGRAVITY_ACP_COMMAND_ENV, "")).strip()
-        if override:
-            return split_command(override)
-        if self._test_mode and not _real_agent_in_test_mode():
-            return fake_agent_argv("antigravity")
+        fixed = self._fixed_command()
+        if fixed is not None:
+            return fixed
         identity = self._agy_identity()
         cached = self._fresh_cache(identity)
         if cached is None:
@@ -602,9 +625,6 @@ class AntigravityChatSpec:
     def available(self) -> bool:
         return self._resolve_command() is not None
 
-    def uses_fake_agent(self) -> bool:
-        return self.command() == fake_agent_argv("antigravity")
-
     def _argv(self) -> list[str]:
         argv = self._resolve_command()
         if argv is None:
@@ -621,7 +641,7 @@ class AntigravityChatSpec:
         loop = asyncio.get_running_loop()
         # Before the launcher can create a worktree.
         argv = await loop.run_in_executor(PROBE_POOL, self._argv)
-        fake = argv == fake_agent_argv("antigravity")
+        fake = argv == fake_agent_argv(self.fake_flavor)
         spec = await self._launcher.build(target, options, session_id=None)
         if options.skip_permissions:
             argv.append("--dangerously-skip-permissions")
