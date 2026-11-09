@@ -996,8 +996,7 @@ final class CreateSessionModel {
         } catch let apiError as APIError where mode == .codex && apiError.errorBody.contains("codex_auth_required") {
             submitting = false
             showCodexLogin = true
-        } catch let apiError as APIError
-            where (mode == .standard || mode == .codex) && Self.chatUnavailableDetail(apiError.errorBody) != nil {
+        } catch let apiError as APIError where Self.chatUnavailableDetail(apiError.errorBody) != nil {
             submitting = false
             self.error = Self.chatUnavailableMessage(Self.chatUnavailableDetail(apiError.errorBody))
         } catch let apiError as APIError where Self.isAgentUpdateRequired(apiError.errorBody) {
@@ -1408,17 +1407,15 @@ final class CreateSessionModel {
             return
         }
         guard !submitting else { return }
+        // Pinned with the request: the options saved are the agent's that ran.
+        let launchMode = mode
         submitting = true
         error = nil
         do {
             let response = try await sessionRepository.createSession(continueRequest(for: stored))
             submitting = false
             preferencesStore.setLastUsedSessionId(response.session_id)
-            if mode == .codex {
-                preferencesStore.setLastUsedCodexOptions(codexLaunchPrefs())
-            } else {
-                preferencesStore.setLastUsedClaudeOptions(claudeLaunchPrefs())
-            }
+            if let launchMode { persistLaunchPrefs(mode: launchMode) }
             navBroadcaster.emit(response.session_id)
         } catch let apiError as APIError where mode == .codex && apiError.errorBody.contains("codex_auth_required") {
             submitting = false
@@ -1496,6 +1493,11 @@ final class CreateSessionModel {
             break
         }
         preferencesStore.setLastUsedSessionId(response.session_id)
+        persistLaunchPrefs(mode: mode)
+    }
+
+    /// Remembers the agent's launch options for its next session.
+    private func persistLaunchPrefs(mode: Mode) {
         switch mode {
         case .standard:
             preferencesStore.setLastUsedClaudeOptions(claudeLaunchPrefs())

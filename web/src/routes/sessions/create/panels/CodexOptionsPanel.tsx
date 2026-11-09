@@ -1,4 +1,3 @@
-import { CheckboxField } from '../../../../components/form/CheckboxField';
 import { SelectField } from '../../../../components/form/SelectField';
 import { CODEX_APPROVALS, CODEX_SANDBOXES } from '../../../../protocol/dto/sessionCreate';
 import type { ChatSupport, CliModelDetail } from '../../../../protocol/dto/agentVersion';
@@ -12,8 +11,8 @@ import {
   type CodexSandbox,
   type WizardAction,
 } from '../wizardState';
-import { terminalUiHint } from './ClaudeAdvancedPanel';
 import { modelOptions } from './ClaudeOptionsPanel';
+import { TerminalUiField } from './TerminalUiField';
 
 interface CodexOptionsPanelProps {
   bucket: CodexBucket;
@@ -50,7 +49,6 @@ export function CodexOptionsPanel({
   chat,
 }: CodexOptionsPanelProps) {
   const active = codexPreset(bucket);
-  const chatBlocked = chat?.kind === 'outdated' || chat?.kind === 'unavailable';
   const efforts = codexEffortsFor(modelDetails, bucket.model);
   // Same keep-selected repair as `modelOptions`: a restored or late-probe
   // effort outside the advertised set must stay renderable, or the controlled
@@ -114,11 +112,10 @@ export function CodexOptionsPanel({
       <details className="advanced advanced-stack">
         <summary>Advanced</summary>
         {chat !== undefined && (
-          <CheckboxField
-            label="Terminal UI"
-            checked={bucket.terminalUi || chatBlocked}
-            disabled={chatBlocked}
-            hint={terminalUiHint(chat, 'codex')}
+          <TerminalUiField
+            chat={chat}
+            agent="codex"
+            checked={bucket.terminalUi}
             onChange={(value) => {
               dispatch({ type: 'setCodexTerminalUi', value });
             }}

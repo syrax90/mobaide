@@ -428,6 +428,47 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(prefs.getLastUsedAntigravityOptions()?.terminalUI, true)
     }
 
+    func testAntigravityCreateWithoutChatOnThePCPointsToTerminalUI() async {
+        StubURLProtocol.reset()
+        let model = stubbedModel()
+        model.selection = .stored("a")
+        model.mode = .antigravity
+        StubURLProtocol.enqueue(
+            status: 503,
+            body: #"{"detail":{"detail":"The chat view needs an Antigravity CLI with ACP support.","chat_unavailable":true}}"#
+        )
+
+        await model.create()
+
+        XCTAssertEqual(
+            model.error,
+            "The chat view needs an Antigravity CLI with ACP support. Turn on Terminal UI under Advanced to use the classic terminal."
+        )
+        XCTAssertFalse(model.submitting)
+    }
+
+    func testAntigravityContinueRemembersTheAntigravityOptions() async throws {
+        StubURLProtocol.reset()
+        let prefs = isolatedPrefs()
+        let model = stubbedModel(prefs: prefs)
+        model.selection = .stored("a")
+        model.mode = .antigravity
+        model.setAntigravitySandbox(true)
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"session_id":"s-resumed","state":"starting","created_at":"t"}"#
+        )
+
+        await model.continueSession(ChatStoredSession(
+            session_id: "external-2222", cwd: "/srv/other", title: nil, updated_at: nil, open_session_id: nil
+        ))
+
+        XCTAssertNil(model.error)
+        XCTAssertEqual(try createBodies().last?["cli"] as? String, "antigravity")
+        XCTAssertEqual(prefs.getLastUsedAntigravityOptions()?.sandbox, true)
+        XCTAssertNil(prefs.getLastUsedClaudeOptions(), "an Antigravity continue is not a Claude launch")
+    }
+
     func testChatUnavailableReasonNamesWhatEachAgentNeeds() {
         XCTAssertEqual(
             CreateSessionModel.chatUnavailableReason(.unavailable),

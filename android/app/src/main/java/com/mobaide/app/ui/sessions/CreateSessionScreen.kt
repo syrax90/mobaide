@@ -136,6 +136,11 @@ fun CreateSessionScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val resumeState by chatResumeViewModel.uiState.collectAsStateWithLifecycle()
     var showResume by rememberSaveable { mutableStateOf(false) }
+    // "Continue a session" of one agent ([kind]): its stored conversations in this folder.
+    val openResume = { kind: String, chat: ChatSupport? ->
+        chatResumeViewModel.open(kind, state.selectedFolder, (chat as? ChatSupport.Available)?.live == true)
+        showResume = true
+    }
     val projectsState by projectsViewModel.uiState.collectAsStateWithLifecycle()
     val customPathSuggestions by viewModel.customPathSuggestionState.collectAsStateWithLifecycle()
     val projectPathSuggestions by projectsViewModel.pathSuggestionState.collectAsStateWithLifecycle()
@@ -293,42 +298,21 @@ fun CreateSessionScreen(
                             showWorktreeToggle = state.selection is ProjectSelection.Stored &&
                                 storedProject?.is_git == true,
                             viewModel = viewModel,
-                            onContinueSession = {
-                                chatResumeViewModel.open(
-                                    "claude",
-                                    state.selectedFolder,
-                                    (state.claudeChat as? ChatSupport.Available)?.live == true,
-                                )
-                                showResume = true
-                            },
+                            onContinueSession = { openResume("claude", state.claudeChat) },
                         )
                         CreateSessionStep.CodexConfig -> CodexConfigSection(
                             state = state,
                             showWorktreeToggle = state.selection is ProjectSelection.Stored &&
                                 storedProject?.is_git == true,
                             viewModel = viewModel,
-                            onContinueSession = {
-                                chatResumeViewModel.open(
-                                    "codex",
-                                    state.selectedFolder,
-                                    (state.codexChat as? ChatSupport.Available)?.live == true,
-                                )
-                                showResume = true
-                            },
+                            onContinueSession = { openResume("codex", state.codexChat) },
                         )
                         CreateSessionStep.AntigravityConfig -> AntigravityConfigSection(
                             state = state,
                             showWorktreeToggle = state.selection is ProjectSelection.Stored &&
                                 storedProject?.is_git == true,
                             viewModel = viewModel,
-                            onContinueSession = {
-                                chatResumeViewModel.open(
-                                    "antigravity",
-                                    state.selectedFolder,
-                                    (state.antigravityChat as? ChatSupport.Available)?.live == true,
-                                )
-                                showResume = true
-                            },
+                            onContinueSession = { openResume("antigravity", state.antigravityChat) },
                         )
                         CreateSessionStep.AutoScanConfig -> AutoScanConfigSection(
                             state = state,
@@ -1312,14 +1296,9 @@ private fun StandardConfigSection(
     onContinueSession: () -> Unit,
 ) {
     if (state.claudeResumeAvailable) {
-        WizardActionCard(
-            title = "Continue a session",
+        ContinueSessionCard(
             subtitle = "Open a Claude Code session started on your PC, for example in a terminal.",
-            icon = Icons.Outlined.History,
-            selected = false,
             onClick = onContinueSession,
-            contentDescription = "Continue a session",
-            testTag = "continue_chat_session",
         )
     }
     ClaudeOptionControls(
@@ -1383,6 +1362,39 @@ private fun StandardConfigSection(
     }
 }
 
+/** "Continue a session" for the agents whose sessions open in the chat view. */
+@Composable
+private fun ContinueSessionCard(subtitle: String, onClick: () -> Unit) {
+    WizardActionCard(
+        title = "Continue a session",
+        subtitle = subtitle,
+        icon = Icons.Outlined.History,
+        selected = false,
+        onClick = onClick,
+        contentDescription = "Continue a session",
+        testTag = "continue_chat_session",
+    )
+}
+
+/** An agent's collapsed-by-default "Advanced" options. */
+@Composable
+private fun AdvancedSection(content: @Composable () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    PixelTextButton(
+        onClick = { expanded = !expanded },
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" },
+    ) {
+        Icon(
+            imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+            contentDescription = null,
+        )
+        Text("Advanced")
+    }
+    if (expanded) content()
+}
+
 /** "Terminal UI" under Advanced: the classic terminal instead of the chat view. */
 @Composable
 private fun TerminalUiToggle(checked: Boolean, lockedHint: String?, onChange: (Boolean) -> Unit) {
@@ -1410,14 +1422,9 @@ private fun CodexConfigSection(
     val preset = state.codexPreset
 
     if (state.codexResumeAvailable) {
-        WizardActionCard(
-            title = "Continue a session",
+        ContinueSessionCard(
             subtitle = "Open a Codex session started on your PC, for example in a terminal.",
-            icon = Icons.Outlined.History,
-            selected = false,
             onClick = onContinueSession,
-            contentDescription = "Continue a session",
-            testTag = "continue_chat_session",
         )
     }
 
@@ -1465,20 +1472,7 @@ private fun CodexConfigSection(
         onSelect = viewModel::setCodexReasoningEffort,
     )
 
-    var advancedExpanded by remember { mutableStateOf(false) }
-    PixelTextButton(
-        onClick = { advancedExpanded = !advancedExpanded },
-        modifier = Modifier
-            .fillMaxWidth()
-            .semantics { stateDescription = if (advancedExpanded) "Expanded" else "Collapsed" },
-    ) {
-        Icon(
-            imageVector = if (advancedExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-            contentDescription = null,
-        )
-        Text("Advanced")
-    }
-    if (advancedExpanded) {
+    AdvancedSection {
         val fullAuto = state.codexFullAuto
         TerminalUiToggle(
             checked = state.codexTerminalUi,
@@ -1620,14 +1614,9 @@ private fun AntigravityConfigSection(
     onContinueSession: () -> Unit,
 ) {
     if (state.antigravityResumeAvailable) {
-        WizardActionCard(
-            title = "Continue a session",
+        ContinueSessionCard(
             subtitle = "Open an Antigravity conversation started on your PC, for example with agy in a terminal.",
-            icon = Icons.Outlined.History,
-            selected = false,
             onClick = onContinueSession,
-            contentDescription = "Continue a session",
-            testTag = "continue_chat_session",
         )
     }
 
@@ -1698,20 +1687,7 @@ private fun AntigravityConfigSection(
         }
     }
 
-    var advancedExpanded by remember { mutableStateOf(false) }
-    PixelTextButton(
-        onClick = { advancedExpanded = !advancedExpanded },
-        modifier = Modifier
-            .fillMaxWidth()
-            .semantics { stateDescription = if (advancedExpanded) "Expanded" else "Collapsed" },
-    ) {
-        Icon(
-            imageVector = if (advancedExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-            contentDescription = null,
-        )
-        Text("Advanced")
-    }
-    if (advancedExpanded) {
+    AdvancedSection {
         TerminalUiToggle(
             checked = state.antigravityTerminalUi,
             lockedHint = state.antigravityChatUnavailableHint,
@@ -1797,20 +1773,7 @@ private fun ClaudeAdvancedOptions(
     showDebug: Boolean = true,
     leadingContent: (@Composable () -> Unit)? = null,
 ) {
-    var advancedExpanded by remember { mutableStateOf(false) }
-    PixelTextButton(
-        onClick = { advancedExpanded = !advancedExpanded },
-        modifier = Modifier
-            .fillMaxWidth()
-            .semantics { stateDescription = if (advancedExpanded) "Expanded" else "Collapsed" },
-    ) {
-        Icon(
-            imageVector = if (advancedExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-            contentDescription = null,
-        )
-        Text("Advanced")
-    }
-    if (advancedExpanded) {
+    AdvancedSection {
         leadingContent?.invoke()
         ToggleRow("No memory", noMemory, onNoMemoryToggle)
         ToggleRow("Fast mode (Opus only)", fastMode, onFastModeToggle)

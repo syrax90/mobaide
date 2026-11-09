@@ -8,8 +8,8 @@ import {
   type AntigravityBucket,
   type WizardAction,
 } from '../wizardState';
-import { terminalUiHint } from './ClaudeAdvancedPanel';
 import { modelOptions } from './ClaudeOptionsPanel';
+import { TerminalUiField } from './TerminalUiField';
 
 interface AntigravityOptionsPanelProps {
   bucket: AntigravityBucket;
@@ -25,7 +25,6 @@ export function AntigravityOptionsPanel({
   dispatch,
   chat,
 }: AntigravityOptionsPanelProps) {
-  const chatBlocked = chat?.kind === 'outdated' || chat?.kind === 'unavailable';
   return (
     <div className="option-group">
       <SelectField
@@ -70,11 +69,10 @@ export function AntigravityOptionsPanel({
       {chat !== undefined && (
         <details className="advanced advanced-stack">
           <summary>Advanced</summary>
-          <CheckboxField
-            label="Terminal UI"
-            checked={bucket.terminalUi || chatBlocked}
-            disabled={chatBlocked}
-            hint={terminalUiHint(chat, 'antigravity')}
+          <TerminalUiField
+            chat={chat}
+            agent="antigravity"
+            checked={bucket.terminalUi}
             onChange={(value) => {
               dispatch({ type: 'setAntigravityTerminalUi', value });
             }}
