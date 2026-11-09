@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.20](https://github.com/syrax90/mobaide/compare/web-v0.1.19...web-v0.1.20) (2026-11-09)
+
+
+### Features
+
+* choose the base branch of a new session's worktree ([#845](https://github.com/syrax90/mobaide/issues/845)) ([ac39a0a](https://github.com/syrax90/mobaide/commit/ac39a0a38e4457945adb7e4a524a540e5abbf11a))
+* **web:** add a Sessions tab to the top bar ([#841](https://github.com/syrax90/mobaide/issues/841)) ([672d03b](https://github.com/syrax90/mobaide/commit/672d03b752f4a9c8d3b52451b7dca43a106e0a85))
+
 ## [0.1.19](https://github.com/syrax90/mobaide/compare/web-v0.1.18...web-v0.1.19) (2026-11-08)
 
 

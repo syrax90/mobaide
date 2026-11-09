@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.20](https://github.com/syrax90/mobaide/compare/ios-v1.0.19...ios-v1.0.20) (2026-11-09)
+
+
+### Features
+
+* choose the base branch of a new session's worktree ([#845](https://github.com/syrax90/mobaide/issues/845)) ([ac39a0a](https://github.com/syrax90/mobaide/commit/ac39a0a38e4457945adb7e4a524a540e5abbf11a))
+
 ## [1.0.19](https://github.com/syrax90/mobaide/compare/ios-v1.0.18...ios-v1.0.19) (2026-11-08)
 
 
