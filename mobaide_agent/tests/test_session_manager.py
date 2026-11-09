@@ -880,3 +880,72 @@ class TestLivenessExitReason:
             assert session._exit_reason == "clear"
         finally:
             await mgr.shutdown()
+
+
+class _FakeChatSession:
+    """Stands in for ``ChatSession``: registers without spawning an adapter."""
+
+    is_chat = True
+    created = 0
+
+    def __init__(self, config, plan, *, agent_title, load_session_id=None) -> None:
+        type(self).created += 1
+        self.session_id = config.session_id
+        self._kind = config.kind
+        self.acp_session_id = load_session_id
+
+    def to_info(self):
+        return MagicMock(kind=self._kind)
+
+    async def start(self) -> None:
+        return None
+
+    async def stop(self, force: bool = False) -> None:
+        return None
+
+
+class _SlowChatSpec:
+    """A chat agent whose ``prepare`` yields, as the real ones do."""
+
+    display_name = "Claude Code"
+
+    async def prepare(self, target, options):
+        from mobaide.acp.agents import ChatLaunchPlan
+
+        await asyncio.sleep(0.01)
+        return ChatLaunchPlan(argv=["fake-acp"], env={}, cwd=str(target.cwd))
+
+
+@pytest.mark.timeout(20)
+class TestChatResumeReuse:
+    async def test_concurrent_resumes_of_one_stored_session_share_one_session(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Both resumes pass the early lookup while ``prepare`` awaits; the
+        recheck under the lock hands the second the first one's session."""
+        import mobaide.acp.session as acp_session
+
+        _FakeChatSession.created = 0
+        monkeypatch.setattr(acp_session, "ChatSession", _FakeChatSession)
+        mgr = SessionManager(chat_agents={"claude": _SlowChatSpec()})
+
+        def config(session_id: str) -> SessionConfig:
+            return SessionConfig(
+                session_id=session_id,
+                command=[],
+                cwd=str(tmp_path),
+                ui="chat",
+                chat_resume_id="stored-1",
+            )
+
+        try:
+            first, second = await asyncio.gather(
+                mgr.create_session(config("chat-a")),
+                mgr.create_session(config("chat-b")),
+            )
+
+            assert first is second
+            assert _FakeChatSession.created == 1
+            assert len(mgr._sessions) == 1
+        finally:
+            await mgr.shutdown()

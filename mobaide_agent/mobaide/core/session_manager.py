@@ -215,6 +215,12 @@ class SessionManager:
         config.cwd = plan.cwd
         config.env = plan.env
         async with self._lock:
+            # Again under the lock: a concurrent resume of the same stored
+            # session may have registered while ``prepare`` awaited.
+            if config.chat_resume_id:
+                existing = self.find_chat_session(kind, config.chat_resume_id)
+                if existing is not None:
+                    return existing
             if len(self._sessions) >= self._max_sessions:
                 raise MaxSessionsError(
                     f"Maximum session limit ({self._max_sessions}) reached",

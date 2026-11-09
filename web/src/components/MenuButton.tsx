@@ -119,11 +119,15 @@ export function MenuButton({
   }, [open]);
 
   // The terminal bar scrolls horizontally without a light dismiss, which would
-  // leave a fixed-position menu drifting away from its trigger.
+  // leave a fixed-position menu drifting away from its trigger. A menu taller
+  // than its max height scrolls itself; that scroll keeps it open.
   useEffect(() => {
     if (!open) return;
-    const onScroll = (): void => {
-      menuRef.current?.hidePopover();
+    const onScroll = (event: Event): void => {
+      const menu = menuRef.current;
+      if (menu === null) return;
+      if (event.target instanceof Node && menu.contains(event.target)) return;
+      menu.hidePopover();
     };
     document.addEventListener('scroll', onScroll, { capture: true, passive: true });
     return () => {
