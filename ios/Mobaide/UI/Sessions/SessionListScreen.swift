@@ -37,11 +37,6 @@ private struct SessionListContent: View {
         content
             .navigationTitle("Sessions")
             .navigationBarTitleDisplayMode(.inline)
-            .safeAreaInset(edge: .top, spacing: 0) {
-                if model.showExternalSessionsNotice {
-                    ExternalSessionsNotice { model.dismissExternalSessionsNotice() }
-                }
-            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {

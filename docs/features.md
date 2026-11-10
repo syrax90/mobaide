@@ -8,7 +8,7 @@ For the short overview, see the [README](../README.md). The wire contract itself
 
 | Area | Features |
 |---|---|
-| Sessions | [Chat Sessions](#chat-sessions) · [Remote Terminal](#remote-terminal) · [Multi-Session](#multi-session) · [Managed CLI agents](#managed-cli-agents) · [Terminal Sessions](#terminal-sessions) · [Custom Path Sessions](#custom-path-sessions) · [Reorderable New-Session Lists](#reorderable-new-session-lists) · [External Sessions Notice](#external-sessions-notice) · [Auto Scan Mode](#auto-scan-mode) · [1-hour Prompt Cache](#1-hour-prompt-cache) |
+| Sessions | [Chat Sessions](#chat-sessions) · [Remote Terminal](#remote-terminal) · [Multi-Session](#multi-session) · [Managed CLI agents](#managed-cli-agents) · [Terminal Sessions](#terminal-sessions) · [Custom Path Sessions](#custom-path-sessions) · [Reorderable New-Session Lists](#reorderable-new-session-lists) · [Auto Scan Mode](#auto-scan-mode) · [1-hour Prompt Cache](#1-hour-prompt-cache) |
 | Terminal input and display | [Terminal Display Modes](#terminal-display-modes) · [Explicit Keyboard & Direct TUI Input](#explicit-keyboard--direct-tui-input) · [Prompt Templates](#prompt-templates) · [Reconnection](#reconnection) |
 | Git | [Git Management](#git-management) · [In-session Git Changes](#in-session-git-changes) |
 | Account and platform | [Secure Access](#secure-access) · [Cross-Platform](#cross-platform) · [Account Self-Deletion](#account-self-deletion) · [Device Management](#device-management) · [Session Notifications](#session-notifications) · [Help & Support](#help--support) |
@@ -205,18 +205,6 @@ In the new-session wizard, users can drag projects and agent modes into the orde
 | Web | Drag the ⠿ handle with a mouse, finger or pen. Or focus the handle and press ArrowUp / ArrowDown. |
 
 The wire details are in [PROTOCOL.md](../PROTOCOL.md).
-
-## External Sessions Notice
-
-A one-time, dismissible explainer sits above the sessions list on all three clients:
-
-> **Sessions started outside Mobaide won't appear here**
->
-> Mobaide lists only sessions its own agent started. To continue a Claude Code, Codex or Antigravity session from your PC, start a new session and choose Continue a session.
-
-The list itself never shows outside sessions: the agent's `SessionManager` owns every session it lists. Sessions started elsewhere can be continued in the chat view through [Continue a session](#terminal-ui-and-continuing-sessions). Codex sessions can also join the live shared app-server; Claude Code and Antigravity have no live attach to a running TUI.
-
-Dismissal is permanent and device-local (Android DataStore, iOS `UserDefaults`, web `localStorage`), and it survives app restart and sign-out.
 
 ## Auto Scan Mode
 

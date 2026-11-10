@@ -33,8 +33,6 @@ class PreferencesStore(private val context: Context) {
     private val keyTerminalDisplayMode = stringPreferencesKey("terminal_display_mode")
     private val keyThemeMode = stringPreferencesKey("theme_mode")
     private val keyTerminalStaticColumns = intPreferencesKey("terminal_static_columns")
-    private val keyExternalSessionsNoticeDismissed =
-        booleanPreferencesKey("external_sessions_notice_dismissed")
     private val keyVoiceCleanupNoticeSeen = booleanPreferencesKey("voice_cleanup_notice_seen")
     private val keyChatFocusView = booleanPreferencesKey("chat_focus_view")
 
@@ -93,9 +91,6 @@ class PreferencesStore(private val context: Context) {
                     runCatching { ThemeMode.valueOf(stored) }.getOrNull()
                 } ?: ThemeMode.Auto
             }
-
-    val externalSessionsNoticeDismissed: Flow<Boolean> =
-        context.dataStore.data.map { it[keyExternalSessionsNoticeDismissed] ?: false }
 
     /** Whether the user hid the session mic for this agent (undone in Settings → Voice input). */
     fun voiceMicHidden(agentKey: String): Flow<Boolean> =
@@ -216,12 +211,6 @@ class PreferencesStore(private val context: Context) {
     suspend fun setTerminalDisplayMode(mode: TerminalDisplayMode) {
         context.dataStore.edit { prefs ->
             prefs[keyTerminalDisplayMode] = mode.name
-        }
-    }
-
-    suspend fun setExternalSessionsNoticeDismissed() {
-        context.dataStore.edit { prefs ->
-            prefs[keyExternalSessionsNoticeDismissed] = true
         }
     }
 

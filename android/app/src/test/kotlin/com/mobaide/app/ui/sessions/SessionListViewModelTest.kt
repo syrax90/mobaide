@@ -84,7 +84,6 @@ class SessionListViewModelTest {
         val customTypesFlow: MutableStateFlow<List<CustomAgentTypeDto>>,
         val syncedFlow: MutableStateFlow<Boolean>,
         val endedNotices: MutableSharedFlow<String>,
-        val noticeDismissedFlow: MutableStateFlow<Boolean>,
     )
 
     /**
@@ -135,9 +134,6 @@ class SessionListViewModelTest {
         // Real flow rather than the relaxed mock's inert stand-in, so the
         // init collector attaches. Seeded "already dismissed" to keep the
         // one-time notice out of the tests that are about something else.
-        val noticeDismissedFlow = MutableStateFlow(true)
-        every { prefs.externalSessionsNoticeDismissed } returns noticeDismissedFlow
-        coEvery { prefs.setExternalSessionsNoticeDismissed() } just Runs
 
         val customTypesFlow = MutableStateFlow<List<CustomAgentTypeDto>>(emptyList())
         val customTypesRepo = mockk<CustomAgentTypesRepository>()
@@ -148,7 +144,6 @@ class SessionListViewModelTest {
             sessionRepo, autoScanRepo, prefs, bus, versionMonitor, updateRepo,
             sessionsFlow, scanListFlow, connectionFlow, outdatedFlow,
             customTypesRepo, customTypesFlow, syncedFlow, endedNotices,
-            noticeDismissedFlow,
         )
     }
 
@@ -740,52 +735,5 @@ class SessionListViewModelTest {
         advanceUntilIdle()
 
         assertEquals(emptyMap<String, String>(), vm.uiState.value.customTypeNames)
-    }
-
-    @Test
-    fun externalSessionsNotice_staysHiddenUntilTheStoreReportsNotDismissed() = runTest {
-        // The default is "hidden" precisely so an already-dismissed notice
-        // never flashes while the DataStore read is in flight: before the
-        // collector emits, the flag must be false even though the eventual
-        // answer here is "show".
-        val fx = newFixture()
-        fx.noticeDismissedFlow.value = false
-        val vm = fx.buildVm()
-
-        assertFalse(vm.uiState.value.showExternalSessionsNotice)
-
-        advanceUntilIdle()
-
-        assertTrue(vm.uiState.value.showExternalSessionsNotice)
-    }
-
-    @Test
-    fun externalSessionsNotice_hiddenWhenAlreadyDismissed() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        assertFalse(vm.uiState.value.showExternalSessionsNotice)
-    }
-
-    @Test
-    fun dismissExternalSessionsNotice_writesThrough_andTheStoreHidesTheNotice() = runTest {
-        val fx = newFixture()
-        fx.noticeDismissedFlow.value = false
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        assertTrue(vm.uiState.value.showExternalSessionsNotice)
-
-        vm.dismissExternalSessionsNotice()
-        advanceUntilIdle()
-
-        // The persisted flag is the single source of truth — the ViewModel
-        // does not flip its own state, it waits for the store's echo.
-        coVerify(exactly = 1) { fx.prefs.setExternalSessionsNoticeDismissed() }
-
-        fx.noticeDismissedFlow.value = true
-        advanceUntilIdle()
-
-        assertFalse(vm.uiState.value.showExternalSessionsNotice)
     }
 }

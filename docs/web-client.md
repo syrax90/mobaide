@@ -1121,8 +1121,7 @@ Paste encoding is the mobile encoder:
 The toggle outlives the tab: `terminalPrefsStore` persists it under
 `localStorage` key `mobaide-terminal`. The other persisted keys are
 `mobaide-theme`, `mobaide-agent`, `mobaide-sessions`, `mobaide-launch-prefs`,
-`mobaide-sessions-panel`, `mobaide-chat` (the chat Focus view toggle), `mobaide-external-sessions-notice` (the dismissible
-external-sessions notice above the sessions list), and the wizard's per-agent
+`mobaide-sessions-panel`, `mobaide-chat` (the chat Focus view toggle), and the wizard's per-agent
 `recent_custom_paths::<agentId>`, deliberately unprefixed for mobile parity —
 CLA-258's `clearAllRecentPaths()` keys off `recent_custom_paths::` itself.
 
