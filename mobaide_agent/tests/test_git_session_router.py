@@ -194,6 +194,7 @@ class TestAuthAndRouting:
             "resolve": True,
             "delete_remote": True,
             "conflicts": True,
+            "worktree_base": True,
         }
 
 

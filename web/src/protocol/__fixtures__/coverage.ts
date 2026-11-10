@@ -170,6 +170,7 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/agent/VoiceDictationResponse.json': OWNER.generated,
   'dto/agent/VoiceDictationResultResponse.json': OWNER.generated,
   'dto/agent/VoiceInstallRequest.json': OWNER.generated,
+  'dto/agent/WorktreeBasesResponse.json': OWNER.generated,
 
   'dto/central/AgentSummaryResponse.json': OWNER.generated,
   'dto/central/CancelAccountDeletionResponse.json': OWNER.generated,

@@ -1,6 +1,6 @@
 """HTTP endpoints for the in-app git management screen.
 
-Four endpoints, all nested under ``/api/projects/{name}/git`` and protected
+Five endpoints, all nested under ``/api/projects/{name}/git`` and protected
 by the same JWT auth dependency as the projects router:
 
 * ``GET /items`` — list local branches and worktrees as a unified array,
@@ -9,6 +9,8 @@ by the same JWT auth dependency as the projects router:
 * ``POST /branches`` — create a branch, optionally checking it out.
 * ``POST /checkout`` — check a local or remote-tracking branch out in the
   project root.
+* ``GET /worktree-bases`` — the branches a new session's worktree can start
+  from, with the default and the last-used one.
 
 The colon-suffixed RPC-style ``items:delete`` is used instead of
 ``DELETE /items`` because some proxies/clients drop request bodies on
@@ -33,6 +35,7 @@ from .models import (
     GitDeleteRequest,
     GitDeleteResponse,
     GitItemsResponse,
+    WorktreeBasesResponse,
 )
 from .service import (
     GitItemBusyError,
@@ -40,6 +43,7 @@ from .service import (
     create_branch,
     delete_git_items,
     list_git_items,
+    list_worktree_bases,
 )
 
 router = APIRouter(
@@ -235,6 +239,25 @@ async def checkout_endpoint(
     except GitItemBusyError as exc:
         _raise_busy(exc)
         raise
+    except Exception as exc:
+        _raise_mapped(exc)
+        raise
+
+
+@router.get("/worktree-bases", response_model=WorktreeBasesResponse)
+async def list_worktree_bases_endpoint(
+    name: str,
+    request: Request,
+) -> WorktreeBasesResponse:
+    """Return the base branches a new session's worktree can start from."""
+    project_name, project_root = _resolve_project(request, name)
+    manager = _worktree_manager(request)
+    try:
+        return await list_worktree_bases(
+            project_root,
+            manager,
+            last_used=_store(request).get_last_worktree_base(project_name),
+        )
     except Exception as exc:
         _raise_mapped(exc)
         raise

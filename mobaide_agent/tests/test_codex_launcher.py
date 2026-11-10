@@ -204,7 +204,7 @@ class _RecordingWorktreeMgr:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    async def create_worktree(self, slug, project_root, *, branch_name=None):
+    async def create_worktree(self, slug, project_root, *, branch_name=None, base_branch=None):
         from mobaide.linear.worktree import WorktreeResult
 
         self.calls.append({"slug": slug, "branch_name": branch_name})

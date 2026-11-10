@@ -138,6 +138,8 @@ data class CreateSessionRequest(
     val ui: String? = null,
     // Chat only: continue the agent's stored session with this id instead of a new one.
     val chat_resume_id: String? = null,
+    // The ref the new worktree starts from; null = the agent's default branch.
+    val base_branch: String? = null,
 )
 
 @Serializable

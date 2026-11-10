@@ -12,6 +12,17 @@
             "title": "Add Dirs",
             "type": "array"
           },
+          "base_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Branch"
+          },
           "branch_name": {
             "anyOf": [
               {
@@ -386,6 +397,17 @@
             ],
             "title": "Append System Prompt"
           },
+          "base_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Branch"
+          },
           "branch_name": {
             "anyOf": [
               {
@@ -552,6 +574,17 @@
             "title": "Approval",
             "type": "string"
           },
+          "base_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Branch"
+          },
           "branch_name": {
             "anyOf": [
               {
@@ -632,6 +665,17 @@
                 "type": "null"
               }
             ]
+          },
+          "base_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Branch"
           },
           "branch_name": {
             "anyOf": [
@@ -3460,6 +3504,92 @@
         ],
         "title": "VoiceStatusResponse",
         "type": "object"
+      },
+      "WorktreeBaseRef": {
+        "description": "One branch a new worktree can start from. ``ref`` is what the client\nsends back as ``base_branch``: a local branch name, or\n``<remote>/<name>`` for a remote-tracking branch.",
+        "properties": {
+          "committed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Committed At"
+          },
+          "kind": {
+            "enum": [
+              "local",
+              "remote"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject"
+          }
+        },
+        "required": [
+          "ref",
+          "kind"
+        ],
+        "title": "WorktreeBaseRef",
+        "type": "object"
+      },
+      "WorktreeBasesResponse": {
+        "description": "``GET /worktree-bases``: the base-branch picker of the New Session\nscreen. ``default`` is the repository's default branch (``origin/HEAD``\nfirst) and ``last_used`` the base of the last worktree created in this\nproject; both are ``null`` or a ``ref`` present in ``refs``. Clients\npreselect ``last_used``, then ``default``.",
+        "properties": {
+          "default": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default"
+          },
+          "last_used": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used"
+          },
+          "refs": {
+            "items": {
+              "$ref": "#/components/schemas/WorktreeBaseRef"
+            },
+            "title": "Refs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "default",
+          "last_used",
+          "refs"
+        ],
+        "title": "WorktreeBasesResponse",
+        "type": "object"
       }
     }
   },
@@ -4387,6 +4517,49 @@
           }
         },
         "summary": "Delete Git Items Endpoint",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/projects/{name}/git/worktree-bases": {
+      "get": {
+        "description": "Return the base branches a new session's worktree can start from.",
+        "operationId": "list_worktree_bases_endpoint_api_projects__name__git_worktree_bases_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorktreeBasesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Worktree Bases Endpoint",
         "tags": [
           "git"
         ]

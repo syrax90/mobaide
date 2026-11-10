@@ -7,6 +7,7 @@ struct ClaudeOptionsModel: Codable, Equatable, Sendable {
     let initial_prompt: String?
     let worktree: Bool
     let branch_name: String?
+    let base_branch: String?
     let identifier: String?
     let title: String?
     let model: String?
@@ -28,6 +29,7 @@ struct ClaudeOptionsModel: Codable, Equatable, Sendable {
         initial_prompt: String? = nil,
         worktree: Bool = false,
         branch_name: String? = nil,
+        base_branch: String? = nil,
         identifier: String? = nil,
         title: String? = nil,
         model: String? = nil,
@@ -44,6 +46,7 @@ struct ClaudeOptionsModel: Codable, Equatable, Sendable {
         self.initial_prompt = initial_prompt
         self.worktree = worktree
         self.branch_name = branch_name
+        self.base_branch = base_branch
         self.identifier = identifier
         self.title = title
         self.model = model
@@ -65,6 +68,7 @@ extension ClaudeOptionsModel {
         initial_prompt = try container.decodeIfPresent(String.self, forKey: .initial_prompt)
         worktree = try container.decodeIfPresent(Bool.self, forKey: .worktree) ?? false
         branch_name = try container.decodeIfPresent(String.self, forKey: .branch_name)
+        base_branch = try container.decodeIfPresent(String.self, forKey: .base_branch)
         identifier = try container.decodeIfPresent(String.self, forKey: .identifier)
         title = try container.decodeIfPresent(String.self, forKey: .title)
         model = try container.decodeIfPresent(String.self, forKey: .model)

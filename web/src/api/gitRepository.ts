@@ -16,6 +16,8 @@ export type GitDeleteItem = components['schemas']['GitDeleteItem'];
 export type GitDeleteResult = components['schemas']['GitDeleteResultItem'];
 export type GitBranchCreateRequest = components['schemas']['GitBranchCreateRequest'];
 export type GitBranchResult = components['schemas']['GitBranchResponse'];
+export type WorktreeBases = components['schemas']['WorktreeBasesResponse'];
+export type WorktreeBaseRef = components['schemas']['WorktreeBaseRef'];
 
 export const KIND_BRANCH_WITH_WORKTREE = 'branch_with_worktree';
 export const KIND_BRANCH_ONLY = 'branch_only';
@@ -197,6 +199,25 @@ export async function checkoutGitRef(
   );
   if (error !== undefined || data === undefined) {
     throw toBranchError(toApiError(response, error));
+  }
+  return data;
+}
+
+/**
+ * The New Session wizard's base-branch list: every local and remote-tracking
+ * branch, `default` first, then newest tip first. Local refs only — the agent
+ * never fetches for this read.
+ */
+export async function listWorktreeBases(
+  agentId: string,
+  projectName: string,
+): Promise<WorktreeBases> {
+  const { data, error, response } = await createAgentClient(agentId).GET(
+    '/api/projects/{name}/git/worktree-bases',
+    { params: { path: { name: projectName } } },
+  );
+  if (error !== undefined || data === undefined) {
+    throw toApiError(response, error);
   }
   return data;
 }

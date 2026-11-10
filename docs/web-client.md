@@ -362,7 +362,8 @@ nullable (`null` renders "Agent default"). Restore re-applies the Antigravity
 `sandbox && !skipPermissions` interlock (the server 422s the pair) and clamps a
 restored effort through `effectiveClaudeEffort`. Worktree/branch, `add_dirs` and
 the Auto Scan initial prompt are per-session and are not persisted on any
-client.
+client. The worktree base branch is not persisted either: the agent remembers
+the last one per project and returns it as `last_used`.
 
 **Not purged at sign-out**, matching mobile and unlike the recents below. What
 survives is a project name and `append_system_prompt`, free text the user typed,

@@ -73,6 +73,14 @@ final class CreateSessionModel {
         }
     }
 
+    /// The base-branch list for the selected stored project.
+    enum WorktreeBasesState: Equatable {
+        case idle
+        case loading
+        case loaded(WorktreeBasesResponse)
+        case failed
+    }
+
     enum ProjectSelection: Equatable {
         case none
         case stored(String)
@@ -101,7 +109,11 @@ final class CreateSessionModel {
     private(set) var submitting = false
     var error: String?
 
-    var selection: ProjectSelection = .none
+    var selection: ProjectSelection = .none {
+        didSet {
+            if Self.storedName(selection) != Self.storedName(oldValue) { resetWorktreeBases() }
+        }
+    }
     var customPathDraft = ""
     private(set) var customPathError: String?
     /// Ad-hoc launch directories previously used against this agent,
@@ -231,6 +243,17 @@ final class CreateSessionModel {
     // Shared git options
     var worktree = false
     var branchName = ""
+
+    /// `capabilities.git.worktree_base` from the mode-picker version probe.
+    private(set) var worktreeBaseSupported = false
+    private(set) var worktreeBases: WorktreeBasesState = .idle
+    /// The chosen start point; nil means the agent's default. Not persisted:
+    /// the agent keeps the project's last base (`last_used`) for every device.
+    private(set) var baseBranch: String?
+    /// Set once the user picks, so a later list load does not overwrite it.
+    private var baseBranchPicked = false
+    private var worktreeBasesLoadedFor: String?
+    private var worktreeBasesGeneration = 0
 
     // Codex login
     private(set) var showCodexLogin = false
@@ -613,6 +636,7 @@ final class CreateSessionModel {
 
     func refreshCliAvailability() async {
         guard let version = try? await agentAPI.getAgentVersion() else { return }
+        worktreeBaseSupported = version.gitCapability("worktree_base")
         claudeAvailable = version.cliAvailable("claude")
         chatCapability = version.chatCapability("claude")
         codexChatCapability = version.chatCapability("codex")
@@ -809,6 +833,72 @@ final class CreateSessionModel {
         pendingProjectOrder = nil
         projects.sort { $0.order < $1.order }
         error = "Reorder failed — reverted."
+    }
+
+    // MARK: - Worktree base branch
+
+    /// The Base branch row shows for a session-creating mode, a stored git
+    /// project with the worktree on, and an agent that supports it.
+    var showsBaseBranchPicker: Bool {
+        guard worktreeBaseSupported, showsGitOptions, worktree else { return false }
+        return mode != .autoScan
+    }
+
+    /// The `.task(id:)` key that loads the list: the project name while the
+    /// row is visible, else nil.
+    var worktreeBasesLoadKey: String? {
+        showsBaseBranchPicker ? Self.storedName(selection) : nil
+    }
+
+    /// Fetches the list once per project; `force` retries after a failure.
+    /// A reply for a project that is no longer selected is dropped.
+    func loadWorktreeBases(force: Bool = false) async {
+        guard showsBaseBranchPicker, let name = Self.storedName(selection) else { return }
+        if !force, worktreeBasesLoadedFor == name { return }
+        worktreeBasesLoadedFor = name
+        worktreeBasesGeneration += 1
+        let generation = worktreeBasesGeneration
+        worktreeBases = .loading
+        do {
+            let response = try await agentAPI.getWorktreeBases(projectName: name)
+            guard generation == worktreeBasesGeneration else { return }
+            worktreeBases = .loaded(response)
+            if !baseBranchPicked { baseBranch = response.preselected }
+        } catch {
+            guard generation == worktreeBasesGeneration else { return }
+            if Task.isCancelled {
+                // The row left the screen mid-load; load again when it returns.
+                worktreeBasesLoadedFor = nil
+                worktreeBases = .idle
+            } else {
+                worktreeBases = .failed
+            }
+        }
+    }
+
+    func pickBaseBranch(_ ref: String?) {
+        baseBranch = ref
+        baseBranchPicked = true
+    }
+
+    /// The base the request carries: only from a loaded list, so a failed
+    /// load creates from the agent's default.
+    var effectiveBaseBranch: String? {
+        guard showsBaseBranchPicker, case .loaded = worktreeBases else { return nil }
+        return baseBranch
+    }
+
+    private func resetWorktreeBases() {
+        worktreeBasesGeneration += 1
+        worktreeBasesLoadedFor = nil
+        worktreeBases = .idle
+        baseBranch = nil
+        baseBranchPicked = false
+    }
+
+    private static func storedName(_ selection: ProjectSelection) -> String? {
+        if case .stored(let name) = selection { return name }
+        return nil
     }
 
     // MARK: - Navigation between steps
@@ -1258,6 +1348,7 @@ final class CreateSessionModel {
         let effectiveWorktree = gitEligible ? worktree : false
         let effectiveBranch = (gitEligible && !branchName.trimmingCharacters(in: .whitespaces).isEmpty)
             ? branchName : nil
+        let effectiveBase = effectiveWorktree ? effectiveBaseBranch : nil
 
         switch mode {
         case .autoScan:
@@ -1266,7 +1357,7 @@ final class CreateSessionModel {
             return CreateSessionRequest(
                 cwd: cwd,
                 project_name: projectName,
-                claude_options: claudeOptions(worktree: effectiveWorktree, branchName: effectiveBranch),
+                claude_options: claudeOptions(worktree: effectiveWorktree, branchName: effectiveBranch, baseBranch: effectiveBase),
                 ui: claudeUsesChat ? "chat" : "terminal"
             )
         case .codex:
@@ -1274,7 +1365,7 @@ final class CreateSessionModel {
                 cwd: cwd,
                 project_name: projectName,
                 cli: "codex",
-                codex_options: codexOptions(worktree: effectiveWorktree, branchName: effectiveBranch),
+                codex_options: codexOptions(worktree: effectiveWorktree, branchName: effectiveBranch, baseBranch: effectiveBase),
                 ui: codexUsesChat ? "chat" : "terminal"
             )
         case .antigravity:
@@ -1282,7 +1373,7 @@ final class CreateSessionModel {
                 cwd: cwd,
                 project_name: projectName,
                 cli: "antigravity",
-                antigravity_options: antigravityOptions(worktree: effectiveWorktree, branchName: effectiveBranch),
+                antigravity_options: antigravityOptions(worktree: effectiveWorktree, branchName: effectiveBranch, baseBranch: effectiveBase),
                 ui: antigravityUsesChat ? "chat" : "terminal"
             )
         case .shell:
@@ -1290,7 +1381,8 @@ final class CreateSessionModel {
                 cwd: cwd,
                 project_name: projectName,
                 worktree: effectiveWorktree,
-                branch_name: effectiveBranch
+                branch_name: effectiveBranch,
+                base_branch: effectiveBase
             )
         case .custom(let id):
             // Plain-terminal semantics plus the `cli` discriminator. Only the
@@ -1301,17 +1393,19 @@ final class CreateSessionModel {
                 project_name: projectName,
                 cli: "custom_\(id)",
                 worktree: effectiveWorktree,
-                branch_name: effectiveBranch
+                branch_name: effectiveBranch,
+                base_branch: effectiveBase
             )
         }
     }
 
-    private func claudeOptions(worktree: Bool, branchName: String?) -> ClaudeOptionsModel {
+    private func claudeOptions(worktree: Bool, branchName: String?, baseBranch: String? = nil) -> ClaudeOptionsModel {
         ClaudeOptionsModel(
             no_memory: noMemory,
             skip_permissions: skipPermissions,
             worktree: worktree,
             branch_name: branchName,
+            base_branch: baseBranch,
             model: effectiveClaudeModel,
             effort: effectiveClaudeEffort,
             fast_mode: claudeFastMode,
@@ -1322,7 +1416,7 @@ final class CreateSessionModel {
         )
     }
 
-    private func codexOptions(worktree: Bool, branchName: String?) -> CodexOptionsModel {
+    private func codexOptions(worktree: Bool, branchName: String?, baseBranch: String? = nil) -> CodexOptionsModel {
         CodexOptionsModel(
             model: codexModel,
             sandbox: codexSandbox,
@@ -1330,18 +1424,20 @@ final class CreateSessionModel {
             reasoning_effort: codexReasoningEffort,
             full_auto: codexFullAuto,
             worktree: worktree,
-            branch_name: branchName
+            branch_name: branchName,
+            base_branch: baseBranch
         )
     }
 
-    private func antigravityOptions(worktree: Bool, branchName: String?) -> AntigravityOptionsModel {
+    private func antigravityOptions(worktree: Bool, branchName: String?, baseBranch: String? = nil) -> AntigravityOptionsModel {
         AntigravityOptionsModel(
             model: antigravityModel,
             skip_permissions: antigravitySkipPermissions,
             sandbox: antigravitySandbox,
             add_dirs: Self.parseAddDirs(antigravityAddDirs),
             worktree: worktree,
-            branch_name: branchName
+            branch_name: branchName,
+            base_branch: baseBranch
         )
     }
 

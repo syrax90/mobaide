@@ -9,6 +9,7 @@ struct AntigravityOptionsModel: Codable, Equatable, Sendable {
     let add_dirs: [String]
     let worktree: Bool
     let branch_name: String?
+    let base_branch: String?
 
     init(
         model: String? = nil,
@@ -16,7 +17,8 @@ struct AntigravityOptionsModel: Codable, Equatable, Sendable {
         sandbox: Bool = false,
         add_dirs: [String] = [],
         worktree: Bool = false,
-        branch_name: String? = nil
+        branch_name: String? = nil,
+        base_branch: String? = nil
     ) {
         self.model = model
         self.skip_permissions = skip_permissions
@@ -24,6 +26,7 @@ struct AntigravityOptionsModel: Codable, Equatable, Sendable {
         self.add_dirs = add_dirs
         self.worktree = worktree
         self.branch_name = branch_name
+        self.base_branch = base_branch
     }
 }
 
@@ -36,5 +39,6 @@ extension AntigravityOptionsModel {
         add_dirs = try container.decodeIfPresent([String].self, forKey: .add_dirs) ?? []
         worktree = try container.decodeIfPresent(Bool.self, forKey: .worktree) ?? false
         branch_name = try container.decodeIfPresent(String.self, forKey: .branch_name)
+        base_branch = try container.decodeIfPresent(String.self, forKey: .base_branch)
     }
 }

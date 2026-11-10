@@ -115,6 +115,49 @@ struct GitItemsResponse: Codable, Equatable, Sendable {
     let items: [GitItem]
 }
 
+/// One start point offered for a new worktree: a local branch (bare name) or a
+/// remote-tracking branch (`<remote>/<name>`), with its tip commit.
+struct WorktreeBaseRef: Codable, Equatable, Sendable {
+    static let kindLocal = "local"
+    static let kindRemote = "remote"
+
+    let ref: String
+    let kind: String
+    let subject: String?
+    let committed_at: String?
+
+    /// Unique per row: a local branch may share its name with a remote one.
+    var rowID: String { "\(kind):\(ref)" }
+
+    init(ref: String, kind: String, subject: String? = nil, committed_at: String? = nil) {
+        self.ref = ref
+        self.kind = kind
+        self.subject = subject
+        self.committed_at = committed_at
+    }
+
+    var isLocal: Bool { kind == Self.kindLocal }
+}
+
+/// `GET /api/projects/{name}/git/worktree-bases`. `default` comes first in
+/// `refs`, the rest newest first; `default` and `last_used` are nil or a `ref`
+/// present in `refs`.
+struct WorktreeBasesResponse: Codable, Equatable, Sendable {
+    let `default`: String?
+    let last_used: String?
+    let refs: [WorktreeBaseRef]
+
+    init(default: String? = nil, last_used: String? = nil, refs: [WorktreeBaseRef] = []) {
+        self.default = `default`
+        self.last_used = last_used
+        self.refs = refs
+    }
+
+    /// The ref the picker starts on: the project's last base, then the
+    /// repository default, then nil (the agent's own default).
+    var preselected: String? { last_used ?? self.default }
+}
+
 struct GitDeleteItem: Codable, Equatable, Sendable {
     let kind: String
     let branch: String?

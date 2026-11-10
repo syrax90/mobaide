@@ -43,6 +43,11 @@ export interface BuildContext {
   project: ProjectSummary | null;
   /** `capabilities.chat` for the mode's agent; absent reads as not known yet. */
   chat?: ChatSupport;
+  /**
+   * The resolved base branch (`effectiveWorktreeBase`), or `null`/absent for
+   * the agent's default. Sent only when a worktree is really requested.
+   */
+  worktreeBase?: string | null;
 }
 
 /**
@@ -91,26 +96,30 @@ interface Placement {
   gitEligible: boolean;
   worktree: boolean;
   branchName: string | undefined;
+  baseBranch: string | null;
 }
 
-function placement({ state, project }: BuildContext): Placement {
+function placement({ state, project, worktreeBase }: BuildContext): Placement {
   const selection = state.selection;
   const gitEligible = selection.kind === 'stored' && project?.is_git === true;
+  const worktree = gitEligible && state.git.worktree;
   return {
     projectName: selection.kind === 'stored' ? selection.name : undefined,
     cwd: selection.kind === 'customPath' ? selection.path : undefined,
     gitEligible,
-    worktree: gitEligible && state.git.worktree,
+    worktree,
     // Gated on git-eligibility alone, not on `worktree` — both mobile clients
     // send a branch name whenever the project could host one.
     branchName:
       gitEligible && state.git.branchName.trim() !== '' ? state.git.branchName : undefined,
+    // Unlike the branch name, only with a worktree: the base means nothing else.
+    baseBranch: worktree ? (worktreeBase ?? null) : null,
   };
 }
 
 function claudeOptions(
   bucket: ClaudeBucket,
-  extras: { worktree: boolean; branchName: string | undefined },
+  extras: { worktree: boolean; branchName: string | undefined; baseBranch: string | null },
 ): ClaudeOptions {
   return {
     plan_mode: bucket.planMode,
@@ -118,6 +127,7 @@ function claudeOptions(
     skip_permissions: bucket.skipPermissions,
     worktree: extras.worktree,
     branch_name: extras.branchName,
+    base_branch: extras.baseBranch,
     model: effectiveClaudeModel(bucket) ?? undefined,
     effort: effectiveClaudeEffort(bucket),
     fast_mode: bucket.fastMode,
@@ -130,7 +140,7 @@ function claudeOptions(
 
 function codexOptions(
   bucket: CodexBucket,
-  extras: { worktree: boolean; branchName: string | undefined },
+  extras: { worktree: boolean; branchName: string | undefined; baseBranch: string | null },
 ): CodexOptions {
   return {
     model: bucket.model ?? undefined,
@@ -140,12 +150,13 @@ function codexOptions(
     full_auto: bucket.fullAuto,
     worktree: extras.worktree,
     branch_name: extras.branchName,
+    base_branch: extras.baseBranch,
   };
 }
 
 function antigravityOptions(
   bucket: AntigravityBucket,
-  extras: { worktree: boolean; branchName: string | undefined },
+  extras: { worktree: boolean; branchName: string | undefined; baseBranch: string | null },
 ): AntigravityOptions {
   return {
     model: bucket.model ?? undefined,
@@ -154,6 +165,7 @@ function antigravityOptions(
     add_dirs: parseAddDirs(bucket.addDirsDraft),
     worktree: extras.worktree,
     branch_name: extras.branchName,
+    base_branch: extras.baseBranch,
   };
 }
 
@@ -178,6 +190,7 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
       claude_options: claudeOptions(state.claude, {
         worktree: place.worktree,
         branchName: place.branchName,
+        baseBranch: place.baseBranch,
       }),
       // Managed CLIs carry worktree intent inside their own options block; the
       // top-level flag is only read on the shell path.
@@ -193,6 +206,7 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
       codex_options: codexOptions(state.codex, {
         worktree: place.worktree,
         branchName: place.branchName,
+        baseBranch: place.baseBranch,
       }),
       worktree: false,
       ui: usesChatView(state.codex.terminalUi, context.chat) ? 'chat' : 'terminal',
@@ -206,6 +220,7 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
       antigravity_options: antigravityOptions(state.antigravity, {
         worktree: place.worktree,
         branchName: place.branchName,
+        baseBranch: place.baseBranch,
       }),
       worktree: false,
       ui: usesChatView(state.antigravity.terminalUi, context.chat) ? 'chat' : 'terminal',
@@ -222,6 +237,7 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
     cli: isCustomMode(mode) ? mode : undefined,
     worktree: place.worktree,
     branch_name: place.branchName,
+    base_branch: place.baseBranch,
   };
 }
 
@@ -237,7 +253,7 @@ export function buildResumeRequest(
   stored: ChatStoredSession,
 ): CreateSessionRequest {
   const sameFolder = project !== null && project.path === stored.cwd;
-  const noWorktree = { worktree: false, branchName: undefined };
+  const noWorktree = { worktree: false, branchName: undefined, baseBranch: null };
   const options =
     kind === 'codex'
       ? { cli: 'codex', codex_options: codexOptions(state.codex, noWorktree) }
@@ -271,6 +287,8 @@ export function buildStartScanRequest(context: BuildContext): StartScanRequest |
         // concurrent issues stay isolated. No branch name — it names them.
         worktree: true,
         branchName: undefined,
+        // The scanner picks its own start point; the wizard's picker never shows.
+        baseBranch: null,
       }),
       initial_prompt: blankToUndefined(state.autoScan.initialPrompt),
     },

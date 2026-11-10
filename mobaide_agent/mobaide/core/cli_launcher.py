@@ -158,6 +158,7 @@ async def resolve_standard_worktree_cwd(
     branch_name: str | None,
     worktree_mgr: WorktreeManager | None,
     fallback_prefix: str,
+    base_branch: str | None = None,
 ) -> str:
     """Worktree-aware cwd resolution shared by the managed CLI launchers.
 
@@ -196,7 +197,11 @@ async def resolve_standard_worktree_cwd(
     from mobaide.linear.worktree import create_standard_worktree
 
     result = await create_standard_worktree(
-        worktree_mgr, target.path, branch_name, fallback_prefix=fallback_prefix,
+        worktree_mgr,
+        target.path,
+        branch_name,
+        fallback_prefix=fallback_prefix,
+        base_branch=base_branch,
     )
     return check_cwd_exists(result.path)
 

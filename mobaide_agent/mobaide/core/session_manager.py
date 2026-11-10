@@ -211,6 +211,8 @@ class SessionManager:
                 raise ValueError("cwd is required for a session without a project")
             target = AdHocLaunch(cwd=config.cwd)
         plan = await spec.prepare(target, options)
+        if config.project_name is not None and options is not None and getattr(options, "worktree", False):
+            self._remember_worktree_base(config.project_name, options.base_branch)
         config.command = plan.argv
         config.cwd = plan.cwd
         config.env = plan.env
@@ -308,6 +310,17 @@ class SessionManager:
         config.command = spec.argv
         config.cwd = spec.cwd
         config.env = spec.env
+        if options.worktree:
+            self._remember_worktree_base(project.name, options.base_branch)
+
+    def _remember_worktree_base(self, project_name: str, base: str | None) -> None:
+        if self._projects_store is None:
+            return
+        base = (base or "").strip() or None
+        try:
+            self._projects_store.set_last_worktree_base(project_name, base)
+        except OSError:
+            logger.warning("session_manager.remember_worktree_base_failed", exc_info=True)
 
     async def _apply_adhoc_launch(self, config: SessionConfig) -> None:
         """Build an ad-hoc managed-CLI launch against ``config.cwd`` and overwrite command/cwd/env in place.
@@ -346,13 +359,17 @@ class SessionManager:
             raise KeyError(f"Project '{config.project_name}' not found")
         if config.worktree:
             config.cwd = await self._resolve_worktree_cwd(
-                project.path, config.branch_name,
+                project.path, config.branch_name, config.base_branch,
             )
+            self._remember_worktree_base(project.name, config.base_branch)
         else:
             config.cwd = project.path
 
     async def _resolve_worktree_cwd(
-        self, project_path: str, branch_name: str | None
+        self,
+        project_path: str,
+        branch_name: str | None,
+        base_branch: str | None = None,
     ) -> str:
         """Create a git worktree for a Terminal (SHELL) session and return its path.
 
@@ -380,6 +397,7 @@ class SessionManager:
             project_path,
             branch_name,
             fallback_prefix="terminal-session",
+            base_branch=base_branch,
         )
         return check_cwd_exists(result.path)
 

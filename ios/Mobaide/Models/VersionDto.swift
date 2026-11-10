@@ -121,6 +121,8 @@ struct GitCapabilities: Equatable, Sendable {
     var deleteRemote = false
     /// The conflict resolver's routes and `resolved_paths` on status.
     var conflicts = false
+    /// `GET …/git/worktree-bases` and `base_branch` on session create.
+    var worktreeBase = false
 
     /// The *Fetch / Pull / Push…* entry and the Sync button exist on any of the three.
     var hasSync: Bool { fetch || pull || push }
@@ -155,7 +157,8 @@ extension VersionInfoResponse {
             rebase: gitCapability("rebase"),
             resolve: gitCapability("resolve"),
             deleteRemote: gitCapability("delete_remote"),
-            conflicts: gitCapability("conflicts")
+            conflicts: gitCapability("conflicts"),
+            worktreeBase: gitCapability("worktree_base")
         )
     }
 }

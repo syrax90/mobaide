@@ -54,6 +54,7 @@ from mobaide.agent.git.models import (
     GitDeleteResultItem,
     GitItemRead,
     GitItemsResponse,
+    WorktreeBasesResponse,
 )
 
 # Resolved from this file, never the CWD: pytest is run from ``mobaide_agent/``
@@ -80,6 +81,7 @@ _MODELS = {
     "GitConflictResolveRequest": GitConflictResolveRequest,
     "GitConflictTakeRequest": GitConflictTakeRequest,
     "GitConflictRestoreRequest": GitConflictRestoreRequest,
+    "WorktreeBasesResponse": WorktreeBasesResponse,
 }
 _MATERIALISING_MODELS = {
     "GitItem": GitItemRead,

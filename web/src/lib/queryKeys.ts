@@ -52,6 +52,12 @@ export const queryKeys = {
     ['agent', agentId, 'git', projectName] as const,
   gitItemsRoot: (agentId: string) => ['agent', agentId, 'git'] as const,
   /**
+   * The New Session base-branch list. Nested under `gitItems` on purpose: the
+   * same `git.changed` and reconnect invalidations keep it current.
+   */
+  worktreeBases: (agentId: string, projectName: string) =>
+    ['agent', agentId, 'git', projectName, 'worktree-bases'] as const,
+  /**
    * Linear labels and states for one project's Auto Scan filter.
    *
    * Deliberately **not** nested under `projects`: query keys match by prefix, so

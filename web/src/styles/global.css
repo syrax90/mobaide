@@ -121,8 +121,8 @@ a {
   color: var(--accent);
 }
 
-/* The brand doubles as the Sessions link and is active on `/`; excluding it
-   keeps the underline meaning "current page" rather than decorating the mark. */
+/* The brand also links to Sessions and is active on `/`; excluding it keeps
+   the underline on the Sessions tab rather than decorating the mark. */
 .app-nav a[aria-current='page']:not(.app-brand) {
   color: var(--text);
   box-shadow: 0 2px 0 0 var(--brand);
@@ -2403,6 +2403,75 @@ body.sortable-dragging * {
   margin: 0;
   font-size: var(--pix-sm);
   color: var(--text-muted);
+}
+
+/* New Session base-branch picker: a select-like button over an in-flow
+   filter + listbox panel, styled from the path suggestions above. */
+.base-branch-trigger {
+  width: auto;
+  min-width: 12rem;
+  max-width: 100%;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.base-branch-trigger:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.base-branch-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.base-branch-list {
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.base-branch-option {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.base-branch-check {
+  flex: none;
+  width: 1ch;
+}
+
+.base-branch-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.base-branch-option .project-badge {
+  flex: none;
+  color: inherit;
+  background: transparent;
+}
+
+.base-branch-badge-default {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.base-branch-age {
+  flex: none;
+  opacity: 0.75;
+}
+
+.base-branch-error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 .option-group {

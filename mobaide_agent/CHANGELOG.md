@@ -1,5 +1,12 @@
 # mobaide_agent Changelog
 
+## [0.3.25](https://github.com/syrax90/mobaide/compare/agent-v0.3.24...agent-v0.3.25) (2026-11-09)
+
+
+### Features
+
+* choose the base branch of a new session's worktree ([#845](https://github.com/syrax90/mobaide/issues/845)) ([ac39a0a](https://github.com/syrax90/mobaide/commit/ac39a0a38e4457945adb7e4a524a540e5abbf11a))
+
 ## [0.3.24](https://github.com/syrax90/mobaide/compare/agent-v0.3.23...agent-v0.3.24) (2026-11-08)
 
 

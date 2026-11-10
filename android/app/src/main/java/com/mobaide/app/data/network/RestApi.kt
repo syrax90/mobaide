@@ -58,6 +58,7 @@ import com.mobaide.app.data.network.dto.VoiceDictationResponse
 import com.mobaide.app.data.network.dto.VoiceDictationResultResponse
 import com.mobaide.app.data.network.dto.VoiceInstallRequest
 import com.mobaide.app.data.network.dto.VoiceStatusResponse
+import com.mobaide.app.data.network.dto.WorktreeBasesResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -269,6 +270,12 @@ class RestApi(
             .addQueryParameter("remote", "true")
             .build()
         return execute(Request.Builder().url(url).get().build())
+    }
+
+    /** Cancellable: the new-session wizard drops a listing when the project changes. */
+    suspend fun getWorktreeBases(projectName: String): WorktreeBasesResponse {
+        val url = projectGitUrl(projectName, "worktree-bases").build()
+        return executeCancellable(Request.Builder().url(url).get().build())
     }
 
     suspend fun createGitBranch(

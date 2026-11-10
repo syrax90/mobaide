@@ -1315,20 +1315,7 @@ private fun StandardConfigSection(
     if (showWorktreeToggle) {
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
 
-        if (state.worktree) {
-            OutlinedTextField(
-                colors = PixelTextFieldDefaults.colors(),
-                value = state.branchName,
-                onValueChange = viewModel::setBranchName,
-                label = { Text("Branch name (optional)") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.None,
-                    autoCorrectEnabled = false,
-                ),
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
+        if (state.worktree) WorktreeBranchFields(state, viewModel)
     }
 
     ClaudeAdvancedOptions(
@@ -1527,20 +1514,7 @@ private fun CodexConfigSection(
     if (showWorktreeToggle) {
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
 
-        if (state.worktree) {
-            OutlinedTextField(
-                colors = PixelTextFieldDefaults.colors(),
-                value = state.branchName,
-                onValueChange = viewModel::setBranchName,
-                label = { Text("Branch name (optional)") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.None,
-                    autoCorrectEnabled = false,
-                ),
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
+        if (state.worktree) WorktreeBranchFields(state, viewModel)
     }
 
     PixelButton(
@@ -1671,20 +1645,7 @@ private fun AntigravityConfigSection(
     if (showWorktreeToggle) {
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
 
-        if (state.worktree) {
-            OutlinedTextField(
-                colors = PixelTextFieldDefaults.colors(),
-                value = state.branchName,
-                onValueChange = viewModel::setBranchName,
-                label = { Text("Branch name (optional)") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.None,
-                    autoCorrectEnabled = false,
-                ),
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
+        if (state.worktree) WorktreeBranchFields(state, viewModel)
     }
 
     AdvancedSection {
@@ -1932,6 +1893,46 @@ private fun CodexEffortDropdown(
     }
 }
 
+/**
+ * The worktree's new branch name and, behind `capabilities.git.worktree_base`,
+ * the branch it starts from.
+ */
+@Composable
+private fun WorktreeBranchFields(
+    state: CreateSessionUiState,
+    viewModel: CreateSessionViewModel,
+) {
+    var basePickerOpen by rememberSaveable { mutableStateOf(false) }
+    OutlinedTextField(
+        colors = PixelTextFieldDefaults.colors(),
+        value = state.branchName,
+        onValueChange = viewModel::setBranchName,
+        label = { Text("Branch name (optional)") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(
+            capitalization = KeyboardCapitalization.None,
+            autoCorrectEnabled = false,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    if (!state.showBaseBranchPicker) return
+    BaseBranchField(
+        load = state.baseBranches,
+        selected = state.baseBranch,
+        onOpen = { basePickerOpen = true },
+        onRetry = viewModel::retryBaseBranches,
+    )
+    val loaded = state.baseBranches as? BaseBranchesLoad.Loaded
+    if (basePickerOpen && loaded != null) {
+        BaseBranchSheet(
+            response = loaded.response,
+            selected = state.baseBranch,
+            onSelect = viewModel::selectBaseBranch,
+            onDismiss = { basePickerOpen = false },
+        )
+    }
+}
+
 @Composable
 private fun TerminalConfigSection(
     state: CreateSessionUiState,
@@ -1939,20 +1940,7 @@ private fun TerminalConfigSection(
 ) {
     ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
 
-    if (state.worktree) {
-        OutlinedTextField(
-            colors = PixelTextFieldDefaults.colors(),
-            value = state.branchName,
-            onValueChange = viewModel::setBranchName,
-            label = { Text("Branch name (optional)") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.None,
-                autoCorrectEnabled = false,
-            ),
-            modifier = Modifier.fillMaxWidth(),
-        )
-    }
+    if (state.worktree) WorktreeBranchFields(state, viewModel)
 
     PixelButton(
         style = PixelButtonStyle.Primary,

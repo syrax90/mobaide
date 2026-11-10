@@ -32,6 +32,7 @@ class ClaudeOptionsModel(BaseModel):
     initial_prompt: str | None = None
     worktree: bool = False
     branch_name: str | None = None
+    base_branch: str | None = None
     identifier: str | None = None
     title: str | None = None
     model: str | None = None
@@ -73,6 +74,7 @@ class CodexOptionsModel(BaseModel):
     initial_prompt: str | None = None
     worktree: bool = False
     branch_name: str | None = None
+    base_branch: str | None = None
 
     def to_options(self) -> CodexOptions:
         return CodexOptions(**self.model_dump())
@@ -106,6 +108,7 @@ class AntigravityOptionsModel(BaseModel):
     add_dirs: list[str] = []
     worktree: bool = False
     branch_name: str | None = None
+    base_branch: str | None = None
 
     @model_validator(mode="after")
     def _reject_sandboxed_skip_permissions(self) -> "AntigravityOptionsModel":
@@ -150,6 +153,7 @@ class CreateSessionRequest(BaseModel):
     # intent inside their own options block.
     worktree: bool = False
     branch_name: str | None = None
+    base_branch: str | None = None
     # Server-only fields for custom agent types (``cli="custom_<12hex>"``):
     # the relay strips any client-supplied values and injects the stored
     # command + display name after its registry lookup, so on the relay

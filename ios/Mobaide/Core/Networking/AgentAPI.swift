@@ -131,6 +131,11 @@ struct AgentAPI: Sendable {
         return try await execute(method: "GET", url: "\(try await base())/api/projects/\(name)/git/items?remote=true")
     }
 
+    func getWorktreeBases(projectName: String) async throws -> WorktreeBasesResponse {
+        let name = Self.encodePathSegment(projectName)
+        return try await execute(method: "GET", url: "\(try await base())/api/projects/\(name)/git/worktree-bases")
+    }
+
     func createGitBranch(projectName: String, request: GitBranchCreateRequest) async throws -> GitBranchResponse {
         let name = Self.encodePathSegment(projectName)
         return try await execute(method: "POST", url: "\(try await base())/api/projects/\(name)/git/branches", body: request)

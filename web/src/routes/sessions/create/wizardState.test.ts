@@ -128,6 +128,25 @@ describe('wizardReducer', () => {
     ).toEqual({ worktree: false, branchName: '' });
   });
 
+  it('keeps a base-branch pick for its project and drops it on a project change', () => {
+    const picked = reduce([
+      { type: 'selectStoredProject', project: project() },
+      { type: 'setWorktreeBase', pick: { projectName: project().name, ref: 'wip' } },
+    ]);
+    expect(picked.worktreeBasePick).toEqual({ projectName: project().name, ref: 'wip' });
+
+    expect(
+      reduce([{ type: 'selectStoredProject', project: project() }], picked).worktreeBasePick,
+    ).toEqual({ projectName: project().name, ref: 'wip' });
+    expect(
+      reduce([{ type: 'selectStoredProject', project: project({ name: 'other' }) }], picked)
+        .worktreeBasePick,
+    ).toBeNull();
+    expect(
+      reduce([{ type: 'setCustomPathDraft', draft: '/tmp' }], picked).worktreeBasePick,
+    ).toBeNull();
+  });
+
   it('keeps the raw draft but selects the trimmed path', () => {
     const state = reduce([{ type: 'setCustomPathDraft', draft: '  /a  ' }]);
 

@@ -133,6 +133,7 @@ struct CreateSessionRequest: Codable, Equatable, Sendable {
     let branch_name: String?
     let ui: String?
     let chat_resume_id: String?
+    let base_branch: String?
 
     init(
         command: [String]? = nil,
@@ -148,7 +149,8 @@ struct CreateSessionRequest: Codable, Equatable, Sendable {
         worktree: Bool = false,
         branch_name: String? = nil,
         ui: String? = nil,
-        chat_resume_id: String? = nil
+        chat_resume_id: String? = nil,
+        base_branch: String? = nil
     ) {
         self.command = command
         self.cwd = cwd
@@ -164,6 +166,7 @@ struct CreateSessionRequest: Codable, Equatable, Sendable {
         self.branch_name = branch_name
         self.ui = ui
         self.chat_resume_id = chat_resume_id
+        self.base_branch = base_branch
     }
 }
 
@@ -184,6 +187,7 @@ extension CreateSessionRequest {
         branch_name = try container.decodeIfPresent(String.self, forKey: .branch_name)
         ui = try container.decodeIfPresent(String.self, forKey: .ui)
         chat_resume_id = try container.decodeIfPresent(String.self, forKey: .chat_resume_id)
+        base_branch = try container.decodeIfPresent(String.self, forKey: .base_branch)
     }
 }
 

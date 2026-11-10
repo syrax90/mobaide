@@ -15,4 +15,6 @@ data class AntigravityOptionsModel(
     val add_dirs: List<String> = emptyList(),
     val worktree: Boolean = false,
     val branch_name: String? = null,
+    // The ref the new worktree starts from; null = the agent's default branch.
+    val base_branch: String? = null,
 )

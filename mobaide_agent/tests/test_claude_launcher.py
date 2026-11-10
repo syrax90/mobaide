@@ -368,7 +368,7 @@ class _FakeWorktreeMgr:
         self.calls: list[dict[str, object]] = []
 
     async def create_worktree(
-        self, slug, project_root, *, branch_name=None,
+        self, slug, project_root, *, branch_name=None, base_branch=None,
     ):
         from mobaide.linear.worktree import WorktreeResult
 
@@ -471,7 +471,7 @@ async def test_cwd_resolution_worktree_propagates_creation_error(tmp_path: Path)
     from mobaide.linear.worktree import WorktreeCreationError
 
     class _FailingMgr:
-        async def create_worktree(self, slug, project_root, *, branch_name=None):
+        async def create_worktree(self, slug, project_root, *, branch_name=None, base_branch=None):
             raise WorktreeCreationError(
                 branch=branch_name or slug, path="/x", stderr="boom"
             )
@@ -852,7 +852,7 @@ async def test_hooks_file_removed_when_worktree_creation_fails(
     from mobaide.linear.worktree import WorktreeCreationError
 
     class _FailingMgr:
-        async def create_worktree(self, slug, project_root, *, branch_name=None):
+        async def create_worktree(self, slug, project_root, *, branch_name=None, base_branch=None):
             raise WorktreeCreationError(
                 branch=branch_name or slug, path="/x", stderr="boom"
             )
