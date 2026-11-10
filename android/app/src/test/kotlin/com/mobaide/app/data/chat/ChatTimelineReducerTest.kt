@@ -150,6 +150,38 @@ class ChatTimelineReducerTest {
     }
 
     @Test
+    fun remove_dropsTheItemAndKeepsLaterEventsOfTheFrameOnTheRightItems() {
+        val reducer = loaded(1, listOf(agent("n:1", "Setting up"), agent("m:2", "a")))
+
+        val reduction = reducer.apply(
+            events(
+                ChatEvent.Upsert(2, agent("n:3", "brief")),
+                ChatEvent.Remove(3, "n:1"),
+                ChatEvent.Remove(4, "n:3"),
+                ChatEvent.Append(5, "m:2", "b"),
+                ChatEvent.Upsert(6, agent("m:4", "c")),
+                ChatEvent.Append(7, "m:4", "d"),
+            ),
+        )
+
+        assertTrue(reduction.changed)
+        assertNull(reduction.sync)
+        assertEquals(7L, reducer.timeline!!.seq)
+        assertEquals(listOf(agent("m:2", "ab"), agent("m:4", "cd")), reducer.timeline!!.items)
+    }
+
+    @Test
+    fun remove_ofAnUnknownItemOnlyAdvancesTheSeq() {
+        val reducer = loaded(1, listOf(agent("m:1", "a")))
+
+        val reduction = reducer.apply(events(ChatEvent.Remove(2, "missing")))
+
+        assertFalse(reduction.changed)
+        assertEquals(2L, reducer.timeline!!.seq)
+        assertEquals(listOf(agent("m:1", "a")), reducer.timeline!!.items)
+    }
+
+    @Test
     fun gap_appliesWhatCameBeforeAndAsksForTheRestOnce() {
         val reducer = loaded(1, listOf(agent("m:1", "a")))
 

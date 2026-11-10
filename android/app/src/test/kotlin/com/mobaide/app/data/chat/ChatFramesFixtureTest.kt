@@ -196,6 +196,25 @@ class ChatFramesFixtureTest {
     }
 
     @Test
+    fun removeEvents_dropTheItemIgnoreAnUnknownIdAndKeepLaterEventsOnTheRightItem() {
+        val reducer = loaded().apply { apply(batch()) }
+        val before = reducer.timeline!!.items.size
+
+        val reduction = reducer.apply(server("events_remove") as ChatFrame.Events)
+
+        assertNull(reduction.sync)
+        assertTrue(reduction.changed)
+        val timeline = reducer.timeline!!
+        assertEquals(48L, timeline.seq)
+        assertEquals(before - 1, timeline.items.size)
+        assertFalse(timeline.items.any { it.id == "n:5" })
+        assertEquals(
+            ChatItem.Agent("m:8", "Done: the tests pass. All green."),
+            timeline.items.single { it.id == "m:8" },
+        )
+    }
+
+    @Test
     fun syncRules_onTheGoldenFrames() {
         assertEquals(ChatSyncRequest.Resume(epoch, 41), loaded().onOpen())
 

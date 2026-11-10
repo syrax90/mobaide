@@ -1,5 +1,6 @@
 """Tests for the chat timeline: batching inside one frame, event sequence
-numbers, replay of missed events versus a snapshot, and the memory bounds.
+numbers, removed items, replay of missed events versus a snapshot, and the
+memory bounds.
 
 Async tests use a flush interval that never fires and call ``flush()``
 themselves, so nothing waits on the batching timer. Sync tests run with no
@@ -139,6 +140,83 @@ class TestBatching:
         assert tl.get("m:1")["text"] == "abcde"
         assert frames[1]["events"][0]["text"] == "de"
         assert len(frames) == 2
+
+
+class TestRemove:
+    async def test_a_sent_item_goes_away_with_one_remove_event(self):
+        tl, frames = _make(flush_interval=NEVER)
+        tl.upsert(_agent("n:1", "Setting up"))
+        tl.upsert(_agent("m:2", "hi"))
+        tl.flush()
+
+        tl.remove("n:1")
+        tl.flush()
+
+        assert frames[1]["events"] == [{"type": "remove", "id": "n:1", "seq": 3}]
+        assert tl.get("n:1") is None
+        snap = orjson.loads(tl.snapshot_frame())
+        assert [item["id"] for item in snap["items"]] == ["m:2"]
+
+    async def test_an_urgent_remove_is_sent_at_once(self):
+        tl, frames = _make(flush_interval=NEVER)
+        tl.upsert(_agent("n:1"), urgent=True)
+
+        tl.remove("n:1", urgent=True)
+
+        assert len(frames) == 2
+        assert frames[1]["events"] == [{"type": "remove", "id": "n:1", "seq": 2}]
+
+    async def test_a_remove_replaces_the_pending_appends_of_its_item(self):
+        tl, frames = _make(flush_interval=NEVER)
+        tl.upsert(_agent("m:1", "a"))
+        tl.flush()
+        tl.append_text("m:1", "b")
+
+        tl.remove("m:1")
+        tl.flush()
+
+        assert frames[1]["events"] == [{"type": "remove", "id": "m:1", "seq": 2}]
+
+    async def test_an_item_added_and_removed_in_one_batch_is_never_sent_as_an_item(self):
+        tl, frames = _make(flush_interval=NEVER)
+        tl.upsert(_agent("n:1", "Setting up"))
+
+        tl.remove("n:1")
+        tl.flush()
+
+        assert [e["type"] for e in frames[0]["events"]] == ["remove"]
+
+    def test_a_reconnecting_client_gets_the_remove_in_the_replay(self):
+        tl, _ = _make()
+        tl.upsert(_agent("n:1"))
+        tl.remove("n:1")
+
+        frame = orjson.loads(tl.replay_frame(1))
+
+        assert frame["events"] == [{"type": "remove", "id": "n:1", "seq": 2}]
+
+    def test_removing_an_unknown_item_sends_nothing(self):
+        tl, frames = _make()
+        tl.upsert(_agent("m:1"))
+        tl.remove("m:1")
+
+        tl.remove("m:1")
+        tl.remove("missing")
+
+        assert len(frames) == 2
+        assert tl.seq == 2
+
+    def test_a_removed_item_frees_its_share_of_the_memory_cap(self):
+        one_item = len(orjson.dumps(_agent("m:0", "x" * 100)))
+        tl, _ = _make(memory_max_bytes=one_item * 3 + 10)
+        for i in range(3):
+            tl.upsert(_agent(f"m:{i}", "x" * 100))
+
+        tl.remove("m:1")
+        tl.upsert(_agent("m:3", "x" * 100))
+
+        assert [item["id"] for item in tl.items()] == ["m:0", "m:2", "m:3"]
+        assert orjson.loads(tl.snapshot_frame())["truncated"] is False
 
 
 class TestReplayAndSnapshot:

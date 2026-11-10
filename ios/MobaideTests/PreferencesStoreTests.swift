@@ -364,6 +364,24 @@ final class PreferencesStoreTests: XCTestCase {
         )
     }
 
+    func testChatFocusViewIsOnUntilTurnedOffAndSurvivesRelaunch() {
+        XCTAssertTrue(store.isChatFocusView(), "an absent key must read as on")
+
+        store.setChatFocusView(false)
+
+        XCTAssertFalse(store.isChatFocusView())
+        XCTAssertFalse(PreferencesStore(defaults: defaults).isChatFocusView())
+        XCTAssertEqual(
+            defaults.object(forKey: "chat_focus_view") as? Bool,
+            false,
+            "the key stays byte-identical to Android's DataStore key"
+        )
+
+        store.setChatFocusView(true)
+
+        XCTAssertTrue(store.isChatFocusView())
+    }
+
     func testReviewPromptCountersCountUpAndARequestStampsTheTimeAndResetsTheGoodSessions() {
         store.incrementReviewLaunchCount()
         store.incrementReviewLaunchCount()

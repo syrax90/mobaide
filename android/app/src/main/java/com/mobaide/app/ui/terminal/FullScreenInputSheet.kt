@@ -41,6 +41,15 @@ fun FullScreenInputSheet(
     enabled: Boolean = true,
     micButton: (@Composable () -> Unit)? = null,
     dictationBar: (@Composable () -> Unit)? = null,
+    // The chat composer edits while it cannot send (a turn starting, images loading).
+    sendEnabled: Boolean = enabled,
+    placeholder: String = "Compose your prompt...",
+    sendLabel: String = "Send",
+    // Verbatim by default: terminal text goes straight to the PTY. A chat writes prose.
+    keyboardOptions: KeyboardOptions = KeyboardOptions(
+        capitalization = KeyboardCapitalization.None,
+        autoCorrectEnabled = false,
+    ),
 ) {
     val focusRequester = remember { FocusRequester() }
 
@@ -72,12 +81,12 @@ fun FullScreenInputSheet(
                     if (dictationBar == null) micButton?.invoke()
                     PixelIconButton(
                         imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Send",
+                        contentDescription = sendLabel,
                         onClick = {
                             val trimmed = text.text.trimEnd('\n', '\r')
                             if (trimmed.isNotEmpty()) onSend(trimmed)
                         },
-                        enabled = enabled && text.text.isNotEmpty() && dictationBar == null,
+                        enabled = sendEnabled && text.text.isNotEmpty() && dictationBar == null,
                     )
                 }
             }
@@ -93,16 +102,12 @@ fun FullScreenInputSheet(
                     .weight(1f)
                     .padding(horizontal = 16.dp, vertical = 8.dp)
                     .focusRequester(focusRequester),
-                placeholder = { Text("Compose your prompt...") },
+                placeholder = { Text(placeholder) },
                 enabled = enabled,
                 textStyle = MaterialTheme.typography.bodyMedium,
-                // Same verbatim-input rule as the inline composer this sheet
-                // expands. `imeAction` is left unset so the multi-line default
-                // (newline, not send) is preserved.
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.None,
-                    autoCorrectEnabled = false,
-                ),
+                // `imeAction` is left unset so the multi-line default (newline,
+                // not send) is preserved.
+                keyboardOptions = keyboardOptions,
             )
         }
     }

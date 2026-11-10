@@ -152,6 +152,25 @@ describe('chat frame golden fixtures', () => {
     expect(applyEvents(timeline, ack).timeline).toBe(timeline);
   });
 
+  it('removes an item, ignores an unknown id and keeps later events on the right item', () => {
+    const snapshot = decodeServer('snapshot_full') as SnapshotFrame;
+    const batch = decodeServer('events_batch') as EventsFrame;
+    const loaded = applyEvents(applySnapshot(INITIAL_CHAT_TIMELINE, snapshot).timeline, batch).timeline;
+
+    const { timeline, sync } = applyEvents(loaded, decodeServer('events_remove') as EventsFrame);
+
+    expect(sync).toBeUndefined();
+    expect(timeline.seq).toBe(48);
+    expect(timeline.items).toHaveLength(loaded.items.length - 1);
+    expect(timeline.items.some((item) => item.id === 'n:5')).toBe(false);
+    expect(timeline.positions.has('n:5')).toBe(false);
+    const streamed = timeline.items[timeline.positions.get('m:8') ?? -1];
+    expect(streamed?.type === 'agent' ? streamed.text : null).toBe('Done: the tests pass. All green.');
+    timeline.items.forEach((item, index) => {
+      expect(timeline.positions.get(item.id), item.id).toBe(index);
+    });
+  });
+
   it('follows the sync rules', () => {
     const snapshot = decodeServer('snapshot_full') as SnapshotFrame;
     const events = decodeServer('events_batch') as EventsFrame;

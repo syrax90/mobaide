@@ -105,7 +105,8 @@ Nothing measured yet. Fill this in per browser/OS as the sweep runs.
 
 `navigator.keyboard.lock()` is the only mechanism that delivers Ctrl+W, Ctrl+T,
 Ctrl+N and F11 to a web page at all. It is Chromium-only and requires
-JavaScript-initiated fullscreen. The terminal's **Immersive** button is
+JavaScript-initiated fullscreen. The terminal's full-screen icon button (aria-label "Full screen" / "Leave full
+screen") is
 feature-detected and simply absent in Firefox and Safari.
 
 Chrome announced a permission prompt for Keyboard Lock and Pointer Lock in 131

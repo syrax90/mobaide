@@ -213,6 +213,21 @@ final class ChatFrameFixtureTests: XCTestCase {
         XCTAssertEqual(timeline.items, items)
     }
 
+    func testRemoveEventsDropTheItemIgnoreAnUnknownIdAndKeepLaterEventsOnTheRightItem() throws {
+        var timeline = try loaded()
+        _ = timeline.apply(.events(try batch()))
+        let itemsBefore = timeline.items.count
+
+        let result = timeline.apply(try server("events_remove"))
+
+        XCTAssertNil(result.sync)
+        XCTAssertEqual(result.changes, [.items])
+        XCTAssertEqual(timeline.seq, 48)
+        XCTAssertEqual(timeline.items.count, itemsBefore - 1)
+        XCTAssertFalse(timeline.items.contains { $0.id == "n:5" })
+        XCTAssertEqual(timeline.items.first { $0.id == "m:8" }?.body, .agent(text: "Done: the tests pass. All green."))
+    }
+
     func testSyncRulesOnTheGoldenFrames() throws {
         let events = try batch()
         XCTAssertEqual(try loaded().syncRequest, .resume(epoch: epoch, afterSeq: 41))

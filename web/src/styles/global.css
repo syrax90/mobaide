@@ -4336,6 +4336,20 @@ body:has(dialog[open]) {
   gap: 0.5rem;
 }
 
+/* Where to undo "Insert directly": a callout, so it is not read past. */
+.voice-review-hint {
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-2));
+  box-shadow: inset 4px 0 0 0 var(--accent), inset 0 0 0 2px var(--rule);
+  color: var(--text);
+}
+
+.voice-review-hint strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .voice-panel {
   display: flex;
   flex-direction: column;
@@ -4561,6 +4575,14 @@ body:has(dialog[open]) {
   white-space: nowrap;
 }
 
+/* Inside the conversation every text is in the reading face, never the pixel one. */
+.chat-timeline .chat-badge {
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
 .chat-link-button {
   padding: 0.15rem 0.25rem;
   border: 0;
@@ -4778,6 +4800,7 @@ body:has(dialog[open]) {
 }
 
 .chat-thought-head,
+.chat-steps,
 .chat-divider,
 .chat-plan-head {
   display: flex;
@@ -4796,8 +4819,28 @@ body:has(dialog[open]) {
 }
 
 .chat-thought-head:hover,
+.chat-steps:hover,
 .chat-plan-head:hover {
   color: var(--text);
+}
+
+/* Focus view: a folded run of steps, and the steps it opens. */
+.chat-steps-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-steps-current {
+  color: var(--text);
+}
+
+.chat-row-nested {
+  margin-left: 0.5rem;
+  padding-left: 0.85rem;
+  box-shadow: inset 2px 0 0 0 var(--surface-2);
 }
 
 .chat-thought-live .chat-icon {
@@ -4890,10 +4933,8 @@ body:has(dialog[open]) {
 .chat-tool-waiting {
   flex: none;
   color: var(--accent);
-  font-family: var(--font-chrome);
-  font-size: var(--pix-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 0.8rem;
+  font-weight: 600;
 }
 
 .chat-tool-status {
@@ -5010,10 +5051,7 @@ body:has(dialog[open]) {
 
 .chat-tool-input summary {
   color: var(--text-muted);
-  font-family: var(--font-chrome);
-  font-size: var(--pix-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 0.8rem;
   cursor: pointer;
 }
 
@@ -5137,10 +5175,7 @@ body:has(dialog[open]) {
 /* A rule either side of the label. */
 .chat-divider {
   justify-content: center;
-  font-family: var(--font-chrome);
-  font-size: var(--pix-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 0.8rem;
 }
 
 .chat-divider::before,
@@ -5165,10 +5200,7 @@ body:has(dialog[open]) {
 .chat-turn-end {
   align-self: center;
   color: var(--text-muted);
-  font-family: var(--font-chrome);
-  font-size: var(--pix-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 0.8rem;
   text-align: center;
 }
 
@@ -5229,8 +5261,7 @@ body:has(dialog[open]) {
 }
 
 .md-h {
-  font-family: var(--font-chrome);
-  font-weight: 400;
+  font-weight: 600;
   line-height: 1.35;
   color: var(--accent);
 }
@@ -5278,10 +5309,8 @@ body:has(dialog[open]) {
 
 .md-code-lang {
   color: var(--text-muted);
-  font-family: var(--font-chrome);
-  font-size: var(--pix-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-family: var(--font-code);
+  font-size: 0.78rem;
 }
 
 .md-code-copy {
@@ -5290,10 +5319,8 @@ body:has(dialog[open]) {
   border-radius: 0;
   background: transparent;
   color: var(--accent);
-  font-family: var(--font-chrome);
-  font-size: var(--pix-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font: inherit;
+  font-size: 0.8rem;
   cursor: pointer;
 }
 
@@ -5590,16 +5617,12 @@ body:has(dialog[open]) {
   box-shadow: none;
 }
 
+/* Wraps rather than scrolls, so no chip is ever out of sight. */
 .chat-chips {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.4rem;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.chat-chips::-webkit-scrollbar {
-  display: none;
 }
 
 .chat-chip {
@@ -5607,7 +5630,7 @@ body:has(dialog[open]) {
   flex: none;
   align-items: center;
   gap: 0.35rem;
-  max-width: 16rem;
+  max-width: min(16rem, 100%);
   min-height: 30px;
   padding: 0.2rem 0.55rem;
   border: 0;

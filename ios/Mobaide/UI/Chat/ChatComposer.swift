@@ -2,13 +2,15 @@ import PhotosUI
 import SwiftUI
 
 /// The chat composer: slash-command suggestions, picked images, the message
-/// field, then attach / mic / templates and Send (Stop while a turn runs and
-/// the field is empty). Return inserts a newline; only the button sends.
+/// field, then a row of attach / templates / save as template and mic /
+/// expand / Send (Stop while a turn runs and the field is empty), as on
+/// Android. Return inserts a newline; only the button sends.
 struct ChatComposer: View {
     @Bindable var model: ChatSessionModel
     let voice: VoiceInputModel
     let onOpenTemplates: () -> Void
     let onSaveTemplate: () -> Void
+    let onExpand: () -> Void
 
     @Environment(\.mobaideColors) private var colors
     @FocusState private var focused: Bool
@@ -28,36 +30,43 @@ struct ChatComposer: View {
                 VoiceDictationBar(voice: voice)
                     .transition(.opacity)
             }
-            HStack(alignment: .bottom, spacing: 8) {
+            field
+            HStack(spacing: 4) {
                 if model.state.promptImages {
                     attachButton
                 }
-                field
+                Button(action: onOpenTemplates) {
+                    Image(systemName: "doc.text")
+                        .frame(minWidth: 40, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .disabled(model.sessionClosed)
+                .accessibilityLabel("Insert template")
+                .accessibilityIdentifier("chat-templates-button")
+                Button(action: onSaveTemplate) {
+                    Image(systemName: "square.and.arrow.down")
+                        .frame(minWidth: 40, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .disabled(model.composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityLabel("Save as template")
+                .accessibilityIdentifier("chat-save-template-button")
+                Spacer(minLength: 0)
                 if voice.micMode != .hidden {
                     VoiceMicButton(voice: voice)
-                        .frame(minWidth: 36, minHeight: 44)
+                        .frame(minWidth: 40, minHeight: 44)
                 }
-                Menu {
-                    Button {
-                        onOpenTemplates()
-                    } label: {
-                        Label("Insert template", systemImage: "doc.text")
-                    }
-                    Button {
-                        onSaveTemplate()
-                    } label: {
-                        Label("Save as template", systemImage: "square.and.arrow.down")
-                    }
-                    .disabled(model.composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                } label: {
-                    Image(systemName: "doc.text")
-                        .frame(minWidth: 36, minHeight: 44)
+                // Same slot as the terminal's: right before Send.
+                Button(action: onExpand) {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .frame(minWidth: 40, minHeight: 44)
                         .contentShape(Rectangle())
-                } primaryAction: {
-                    onOpenTemplates()
                 }
-                .accessibilityLabel("Templates")
+                .disabled(model.sessionClosed)
+                .accessibilityLabel("Expand editor")
+                .accessibilityIdentifier("chat-expand-composer-button")
                 sendButton
+                    .padding(.leading, 4)
             }
         }
         .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
@@ -242,6 +251,90 @@ struct ChatComposer: View {
             .buttonStyle(PixelButtonStyle(variant: .primary, size: .compact))
             .disabled(!model.canSend)
             .accessibilityLabel(model.isRunning ? "Queue message" : "Send")
+        }
+    }
+}
+
+/// The chat composer over the whole screen, for long messages (the terminal's
+/// `FullScreenInputSheet`). It edits the same draft as the inline field;
+/// Return inserts a newline and only Send sends.
+struct ChatFullScreenComposer: View {
+    @Bindable var model: ChatSessionModel
+    var voice: VoiceInputModel?
+    var onSent: () -> Void = {}
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.mobaideColors) private var colors
+    @FocusState private var editorFocused: Bool
+
+    var body: some View {
+        NavigationStack {
+            editor
+                .navigationTitle("Compose message")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        // Not "Cancel": collapsing keeps the draft.
+                        Button {
+                            dismiss()
+                        } label: {
+                            Image(systemName: "arrow.down.right.and.arrow.up.left")
+                        }
+                        .accessibilityLabel("Collapse editor")
+                    }
+                    ToolbarItemGroup(placement: .confirmationAction) {
+                        if let voice, voice.micMode == .ready {
+                            VoiceMicButton(voice: voice)
+                        }
+                        Button {
+                            model.send()
+                            onSent()
+                            dismiss()
+                        } label: {
+                            Image(systemName: "paperplane.fill")
+                        }
+                        .disabled(!model.canSend)
+                        .accessibilityLabel(model.isRunning ? "Queue message" : "Send")
+                    }
+                }
+                .safeAreaInset(edge: .bottom) {
+                    if let voice, voice.dictation != .idle, !voice.dictation.isResult {
+                        VoiceDictationBar(voice: voice)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                    }
+                }
+        }
+        .pixelSheet()
+        .task {
+            // The field must be mounted before `@FocusState` takes.
+            await Task.yield()
+            editorFocused = true
+        }
+    }
+
+    private var editor: some View {
+        ComposerTextField(
+            text: $model.composerText,
+            selection: $model.composerSelection,
+            cursorRequest: model.composerCursorRequest,
+            style: .editor,
+            focus: $editorFocused
+        )
+        .foregroundStyle(colors.text)
+        .scrollContentBackground(.hidden)
+        .disabled(model.sessionClosed)
+        .padding(.horizontal, 12)
+        .background(colors.bg)
+        .overlay(alignment: .topLeading) {
+            // `TextEditor` has no placeholder slot.
+            if model.composerText.isEmpty {
+                Text("Write your message…")
+                    .foregroundStyle(colors.gray)
+                    .padding(.horizontal, 17)
+                    .padding(.top, 8)
+                    .allowsHitTesting(false)
+            }
         }
     }
 }

@@ -17,6 +17,7 @@ sealed interface ChatEvent {
     /** [item] is null for an item type this build does not know: skipped, but its seq counts. */
     data class Upsert(override val seq: Long, val item: ChatItem?) : ChatEvent
     data class Append(override val seq: Long, val id: String, val text: String) : ChatEvent
+    data class Remove(override val seq: Long, val id: String) : ChatEvent
     data class StatePatch(override val seq: Long, val patch: JsonObject) : ChatEvent
     data class Unknown(override val seq: Long) : ChatEvent
 }
@@ -176,6 +177,7 @@ object ChatProtocol {
                 val id = obj.str("id")
                 if (id == null) ChatEvent.Unknown(seq) else ChatEvent.Append(seq, id, obj.str("text").orEmpty())
             }
+            "remove" -> obj.str("id")?.let { ChatEvent.Remove(seq, it) } ?: ChatEvent.Unknown(seq)
             "state" -> ChatEvent.StatePatch(seq, obj.obj("patch") ?: JsonObject(emptyMap()))
             else -> ChatEvent.Unknown(seq)
         }

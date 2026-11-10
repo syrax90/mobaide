@@ -19,6 +19,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -87,6 +88,7 @@ class ChatViewModelQueueTest {
             chatCache = chatCache,
             imageEncoder = mockk(relaxed = true),
             reviewPromptCoordinator = mockk(relaxed = true),
+            preferencesStore = mockk { every { chatFocusView } returns flowOf(true) },
         )
 
     private suspend fun emitFrame(json: String) {

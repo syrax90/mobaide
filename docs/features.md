@@ -21,7 +21,7 @@ Claude Code, Codex and Antigravity sessions open in a **chat view** by default: 
 - **Agent-agnostic.** The chat UI renders only ACP concepts (messages, tool kinds, config options, slash commands). Another ACP agent needs only a launch spec in `mobaide_agent/mobaide/acp/agents.py`.
 - **Requirements on the PC.** For Claude Code and Codex: Node.js 22+, or an adapter command on PATH. For Antigravity: an `agy` that supports `agy acp` (the agent checks `agy help acp`). Otherwise the wizard shows why and creates a terminal session. `MOBAIDE_ACP_CLAUDE_COMMAND`, `MOBAIDE_ACP_CODEX_COMMAND` and `MOBAIDE_ACP_ANTIGRAVITY_COMMAND` in the agent's env file override the launch commands.
 - **Antigravity probe.** A yes or no answer is kept until the `agy` binary changes. A missing `agy` or a failed probe is checked again after 30 s. The agent warms the probe at start.
-- **Adapter install.** The agent installs each adapter once, at a pinned version, into `<state prefix>/acp-adapters/`. It uses `npm install --ignore-scripts --omit=optional --before=<release date>` and runs the adapter with `node`, not `npx`. The first chat shows "Setting up the ... chat on your PC". Uninstalling the agent removes `acp-adapters`.
+- **Adapter install.** The agent installs each adapter once, at a pinned version, into `<state prefix>/acp-adapters/`. It uses `npm install --ignore-scripts --omit=optional --before=<release date>` and runs the adapter with `node`, not `npx`. The first chat shows "Setting up the ... chat on your PC" until the install ends, then the notice goes away. Uninstalling the agent removes `acp-adapters`.
 - **Codex modes.** Read-only maps to the read-only mode. Auto (workspace-write) maps to Workspace access, and a person approves anything outside it. Full access maps to full access only with `full_auto`, or `danger-full-access` with approval `never`. The mode is required: if the agent cannot apply it, the session does not start.
 - **Folder trust.** Before a chat session opens a folder Claude Code has not trusted, the chat asks **Trust this folder?**. Trust is recorded in `~/.claude.json`, like the CLI. For Codex, the chat reads and writes `[projects."<dir>"] trust_level` in `$CODEX_HOME/config.toml`, with the same lookup order as Codex, including linked worktrees. For the home folder, a folder above it, or a root, trust lasts for this session only. Parent folders count only up to the enclosing git repo root. Declining ends the start; Restart offers the choice again. `agy acp` skips the CLI's trust prompt, so for Antigravity the chat asks too. Trust is recorded as `trustedWorkspaces` in `~/.gemini/antigravity-cli/settings.json`, for the exact folder only.
 
@@ -29,10 +29,11 @@ Claude Code, Codex and Antigravity sessions open in a **chat view** by default: 
 
 | Area | Behaviour |
 |---|---|
-| Timeline | Markdown answers, collapsible thinking, one compact card per tool call (icon by kind, status, `+N −M` for edits; tap for the diff, output and input). |
+| Timeline | Markdown answers, collapsible thinking, one compact card per tool call (icon by kind, status, `+N −M` for edits; tap for the diff, output and input). Conversation text uses the system font, not the pixel font. |
+| Focus view | On by default; toggle it in the chat's ⋯ menu (one setting per device or browser, for every chat). It shows your messages, the agent's final answer of each turn, approvals and questions, notices and errors. The thinking, tool calls and in-between messages of a run fold into one "N steps" row that shows the current step while the agent works; tap it to open the steps in place. |
 | Approvals | Permission prompts and multiple-choice questions appear as a card above the composer, with the agent's own options. The first answer from any device wins. |
-| Composer | Slash-command suggestions, image attachments (when the agent accepts images), voice input, prompt templates. Messages sent while the agent works are queued. You can remove one, or tap **Send now** to steer the agent with it. |
-| Controls | Stop, and chips for the mode, model, effort and other agent options. Context usage and cost in the top bar. Plan progress above the composer. |
+| Composer | Slash-command suggestions, image attachments (when the agent accepts images), voice input, prompt templates (inserted at the cursor), save as template, and a full-screen editor on Android and iOS. Messages sent while the agent works are queued. You can remove one, or tap **Send now** to steer the agent with it. |
+| Controls | Stop, and chips for the mode (shield), model (chip) and effort (brain) and other agent options; the chips wrap onto a second line instead of scrolling. Context usage and cost in the top bar, and a full-screen button on the web. Plan progress above the composer. |
 | Command output | Command output shows as a console block, with a live tail while the command runs. |
 | Sync | Every open device shows the same state; a reconnect fetches only what it missed. |
 
@@ -40,7 +41,7 @@ The terminal's control-key bar and custom keyboard shortcut buttons are not part
 
 ### Terminal UI and continuing sessions
 
-- **Terminal UI.** The Claude Code, Codex and Antigravity pages of the new-session wizard have a **Terminal UI** toggle under Advanced, off by default and remembered. On, the session runs in the classic terminal (needed for TUI-only features such as Rewind). Focus view and Debug logging apply only to terminal sessions.
+- **Terminal UI.** The Claude Code, Codex and Antigravity pages of the new-session wizard have a **Terminal UI** toggle under Advanced, off by default and remembered. On, the session runs in the classic terminal (needed for TUI-only features such as Rewind). The wizard's Focus view and Debug logging apply only to terminal sessions; a chat session has its own Focus view in its ⋯ menu.
 - **Continue a session.** The same pages offer **Continue a session**: a list of the Claude Code, Codex or Antigravity sessions stored on the PC, for this folder or all folders, including sessions started outside Mobaide (for example by running `claude` in a terminal). Picking one opens it in the chat view with its history.
 - **Live Codex sessions.** When the Codex shared app-server runs (the daemon that `codex` in a terminal starts), chat sessions join it through `mobaide/acp/codex_bridge.py`. A session open in a terminal and on the phone stay in sync both ways. This works on macOS and Linux, not on Windows, and not for projects with a conda env. A message typed in another app shows as **Message sent from another app on your PC**, followed by its answer. The adapter does not forward the text of that message. Closing the chat cancels only its own turn.
 - **Antigravity sessions.** Each chat runs its own `agy acp` process in the session folder. Continue uses `session/list` and `session/load`, with history. It is not live: `agy` has no shared local server, so there is no sync with a terminal. There is no **Send now**, because `agy` has no steering.
@@ -284,7 +285,7 @@ All three clients open these from a session's ⋯ → Git menu. Everything lives
 
 Save frequently used inputs as named templates, with optional favorites.
 
-- An in-terminal picker bottom-sheet (recents / favorites / all sections, with search) inserts a template into the input bar.
+- An in-terminal picker bottom-sheet (recents / favorites / all sections, with search) inserts a template into the input bar. On Android and iOS, chat and terminal composers insert it at the cursor (replacing a selection, keeping the rest of the draft). iOS 17 inserts at the end.
 - A save-as-template dialog captures the current input.
 - Templates are stored server-side per user and sync across sessions via `template.created/updated/deleted` push events on the user-events WebSocket.
 

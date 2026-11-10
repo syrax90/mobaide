@@ -8,6 +8,7 @@ import type {
   ToolStatus,
   UserItem,
 } from '../../chat/chatWire';
+import { stepsLabel } from '../../chat/focusView';
 import { safeHref } from '../../chat/markdown';
 import { writeClipboardText } from '../../lib/clipboard';
 import { useToastStore } from '../../stores/toastStore';
@@ -18,6 +19,7 @@ import {
   CrossIcon,
   BulbIcon,
   SlashedCircleIcon,
+  StepsIcon,
   ToolKindIcon,
 } from './ChatIcons';
 import { DiffView } from './DiffView';
@@ -312,6 +314,51 @@ function CompactionDivider({ item }: { item: CompactionItem }) {
     </div>
   );
 }
+
+interface StepsRowProps {
+  id: string;
+  count: number;
+  live: boolean;
+  current: string | null;
+  open: boolean;
+  onToggle: (id: string) => void;
+}
+
+/** Focus view: one folded run of thinking and tool calls; opens in place. */
+export const StepsRow = memo(function StepsRow({
+  id,
+  count,
+  live,
+  current,
+  open,
+  onToggle,
+}: StepsRowProps) {
+  const label = stepsLabel(count);
+  return (
+    <button
+      type="button"
+      className={`chat-steps${live ? ' chat-steps-live' : ''}`}
+      aria-expanded={open}
+      onClick={() => {
+        onToggle(id);
+      }}
+    >
+      {live ? <span className="chat-spinner" aria-hidden="true" /> : <StepsIcon />}
+      <span className="chat-steps-text">
+        {live && current !== null ? (
+          <>
+            <span className="chat-steps-current">{current}</span> · {label}
+          </>
+        ) : (
+          label
+        )}
+      </span>
+      <span className={`chat-chevron${open ? ' chat-chevron-open' : ''}`}>
+        <ChevronIcon />
+      </span>
+    </button>
+  );
+});
 
 export interface ChatItemViewProps {
   item: ChatItem;

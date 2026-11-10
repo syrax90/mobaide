@@ -18,6 +18,7 @@ import com.mobaide.app.data.chat.ChatStatus
 import com.mobaide.app.data.chat.ChatSyncRequest
 import com.mobaide.app.data.chat.ChatTimeline
 import com.mobaide.app.data.chat.ChatTimelineReducer
+import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.TerminalProtocol
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WsEvent
@@ -34,6 +35,7 @@ import com.mobaide.app.data.review.ReviewPromptCoordinator
 import com.mobaide.app.notifications.AppForegroundTracker
 import com.mobaide.app.notifications.AttentionNotifier
 import com.mobaide.app.notifications.ForegroundSessionTracker
+import com.mobaide.app.ui.common.insertAtCursor
 import com.mobaide.app.ui.sessions.sessionKindLabel
 import com.mobaide.app.ui.voice.withTranscript
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -98,6 +100,7 @@ class ChatViewModel @Inject constructor(
     private val chatCache: ChatSessionCache,
     private val imageEncoder: ChatImageEncoder,
     private val reviewPromptCoordinator: ReviewPromptCoordinator,
+    private val preferencesStore: PreferencesStore,
 ) : ViewModel() {
 
     val sessionId: String = savedStateHandle["sessionId"]
@@ -187,6 +190,10 @@ class ChatViewModel @Inject constructor(
                     .getOrDefault(GitCapabilities.NONE),
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), GitCapabilities.NONE)
+
+    /** Focus view: the timeline folds thinking and tool calls (one setting for every chat). */
+    val focusView: StateFlow<Boolean> =
+        preferencesStore.chatFocusView.stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     val templates: StateFlow<List<TemplateDto>> = templatesRepository.observeTemplates()
 
@@ -637,9 +644,14 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    /** The template body goes in at the cursor (replacing a selection); the rest of the draft stays. */
     fun applyTemplate(template: TemplateDto) {
-        _composer.value = TextFieldValue(text = template.body, selection = TextRange(0, template.body.length))
+        _composer.value = _composer.value.insertAtCursor(template.body)
         viewModelScope.launch { runCatching { templatesRepository.touchTemplate(template.template_id) } }
+    }
+
+    fun setFocusView(on: Boolean) {
+        viewModelScope.launch { preferencesStore.setChatFocusView(on) }
     }
 
     fun toggleTemplateFavorite(template: TemplateDto) {

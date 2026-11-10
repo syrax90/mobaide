@@ -227,7 +227,7 @@ Chat sessions use the same `/ws/session/{id}` and `CH_SESSION_IO` channel. Two f
 | Frame `t` | Fields | Client action |
 |-----------|--------|---------------|
 | `snapshot` | `epoch`, `seq`, `truncated`, `state`, `items` | Replace everything. |
-| `events` | `epoch`, `seq`, `events[]` with own `seq` | Apply in order: `item` (upsert by `id`), `append` (add `text` to an item), `state` (shallow-merge `patch`). On a gap or another epoch, send `sync`. |
+| `events` | `epoch`, `seq`, `events[]` with own `seq` | Apply in order: `item` (upsert by `id`), `append` (add `text` to an item), `remove` (drop the item with that `id`; an unknown `id` is a no-op), `state` (shallow-merge `patch`). Skip an unknown event type but count its `seq`. On a gap or another epoch, send `sync`. |
 | `result` | `id`, `ok`, `data?`, `error?` | Resolve the command with that `id`; ignore others. |
 
 * State keys: `status`, `error`, `agent`, `title`, `cwd`, `acp_session_id`, `config`, `commands`, `usage`, `plan`, `requests`, `queue`, `prompt_caps`, `turn_started_at`, `cancelling`.

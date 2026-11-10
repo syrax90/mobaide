@@ -668,19 +668,10 @@ final class ChatSessionModel {
     }
 
     private func insertAtCursor(_ text: String, spaced: Bool) {
-        let length = composerText.count
-        let selection = composerSelection ?? length..<length
-        let lower = min(max(selection.lowerBound, 0), length)
-        let upper = min(max(selection.upperBound, lower), length)
-        let before = String(composerText.prefix(lower))
-        let after = String(composerText.dropFirst(upper))
-        let lead = spaced ? (before.last.map { $0.isWhitespace ? "" : " " } ?? "") : ""
-        let trail = spaced ? (after.first.map { $0.isWhitespace ? "" : " " } ?? "") : ""
-        let inserted = lead + text + trail
-        composerText = before + inserted + after
+        let result = ComposerInsertion.insert(text, into: composerText, selection: composerSelection, spaced: spaced)
+        composerText = result.text
         if #available(iOS 18.0, *) {
-            let cursor = before.count + inserted.count
-            composerSelection = cursor..<cursor
+            composerSelection = result.cursor..<result.cursor
             composerCursorRequest += 1
         }
     }

@@ -90,11 +90,9 @@ import com.mobaide.app.ui.chat.markdown.CodeFontFamily
 import com.mobaide.app.ui.chat.markdown.Markdown
 import com.mobaide.app.ui.chat.markdown.MarkdownText
 import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
-import com.mobaide.app.ui.common.pixel.PixelChip
 import com.mobaide.app.ui.common.pixel.PixelTextButton
 import com.mobaide.app.ui.common.pixel.pixelFrame
 import com.mobaide.app.ui.theme.MobaideTheme
-import com.mobaide.app.ui.theme.chromeCaps
 import com.mobaide.app.ui.theme.pixel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -182,8 +180,9 @@ fun ChatToolCard(
                 }
                 if (waitingForApproval) {
                     Text(
-                        text = "Waiting for approval".chromeCaps(),
-                        style = MaterialTheme.typography.labelSmall,
+                        text = "Waiting for approval",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.primary,
                     )
                 }
@@ -234,12 +233,12 @@ fun DiffCounts(added: Int, removed: Int, modifier: Modifier = Modifier) {
     Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
             text = "+$added",
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.bodySmall.copy(fontFamily = CodeFontFamily),
             color = MaterialTheme.pixel.ok,
         )
         Text(
             text = "−$removed",
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.bodySmall.copy(fontFamily = CodeFontFamily),
             color = MaterialTheme.pixel.danger,
         )
     }
@@ -456,8 +455,8 @@ private fun InputDisclosure(input: String) {
                 modifier = Modifier.size(18.dp),
             )
             Text(
-                text = "Input".chromeCaps(),
-                style = MaterialTheme.typography.labelMedium,
+                text = "Input",
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -501,7 +500,18 @@ fun ChatDiffView(part: ChatContentPart.Diff, modifier: Modifier = Modifier) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
-            if (part.newFile) PixelChip("New file", tone = pixel.ok)
+            if (part.newFile) {
+                Text(
+                    text = "New file",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = pixel.ok,
+                    modifier = Modifier
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                        .pixelFrame(pixel.ok)
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
             DiffCounts(part.added, part.removed)
         }
         if (lines.isEmpty()) {
@@ -515,7 +525,9 @@ fun ChatDiffView(part: ChatContentPart.Diff, modifier: Modifier = Modifier) {
         }
         DiffLines(shown)
         if (shown.size < lines.size) {
-            PixelTextButton(onClick = { showAll = true }) { Text("Show all ${lines.size} lines") }
+            PixelTextButton(onClick = { showAll = true }) {
+                Text("Show all ${lines.size} lines", style = MaterialTheme.typography.bodySmall)
+            }
         }
         if (part.truncated) {
             Text(

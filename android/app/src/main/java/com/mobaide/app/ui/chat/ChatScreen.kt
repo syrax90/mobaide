@@ -21,9 +21,12 @@ import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.outlined.CenterFocusStrong
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.RestartAlt
@@ -56,7 +59,9 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -86,6 +91,7 @@ import com.mobaide.app.ui.sessions.panel.StopSessionDialog
 import com.mobaide.app.ui.sessions.panel.edgeSwipeToOpen
 import com.mobaide.app.ui.sessions.sessionKindLabel
 import com.mobaide.app.ui.sessions.sessionTitle
+import com.mobaide.app.ui.terminal.FullScreenInputSheet
 import com.mobaide.app.ui.terminal.SaveTemplateDialog
 import com.mobaide.app.ui.terminal.TemplatesPickerSheet
 import com.mobaide.app.ui.terminal.TerminalOverflowMenu
@@ -127,6 +133,7 @@ fun ChatScreen(
     val git by viewModel.git.collectAsStateWithLifecycle()
     val templates by viewModel.templates.collectAsStateWithLifecycle()
     val templatesLoading by viewModel.templatesLoading.collectAsStateWithLifecycle()
+    val focusView by viewModel.focusView.collectAsStateWithLifecycle()
     val panelState by panelViewModel.uiState.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -140,6 +147,7 @@ fun ChatScreen(
     var showTemplates by remember { mutableStateOf(false) }
     var showSaveTemplate by remember { mutableStateOf(false) }
     var showInfo by remember { mutableStateOf(false) }
+    var showFullScreenInput by remember { mutableStateOf(false) }
     var stopTarget by remember { mutableStateOf<SessionResponse?>(null) }
     var closeSelf by remember { mutableStateOf(false) }
 
@@ -305,6 +313,20 @@ fun ChatScreen(
                                     )
                                 }
                                 DropdownMenuItem(
+                                    text = { Text("Focus view") },
+                                    leadingIcon = { Icon(Icons.Outlined.CenterFocusStrong, contentDescription = null) },
+                                    trailingIcon = {
+                                        if (focusView) Icon(Icons.Default.Check, contentDescription = null)
+                                    },
+                                    modifier = Modifier.semantics {
+                                        stateDescription = if (focusView) "On" else "Off"
+                                    },
+                                    onClick = {
+                                        closeMenu()
+                                        viewModel.setFocusView(!focusView)
+                                    },
+                                )
+                                DropdownMenuItem(
                                     text = { Text("Session info") },
                                     leadingIcon = { Icon(Icons.Outlined.Info, contentDescription = null) },
                                     onClick = {
@@ -353,7 +375,12 @@ fun ChatScreen(
                             cwd = ui.state.cwd ?: header.cwd,
                             hasCommands = ui.state.commands.isNotEmpty(),
                         )
-                        else -> ChatTimeline(ui = ui, listState = listState, onRestart = viewModel::restart)
+                        else -> ChatTimeline(
+                            ui = ui,
+                            listState = listState,
+                            onRestart = viewModel::restart,
+                            focusView = focusView,
+                        )
                     }
                     JumpToLatestFab(
                         visible = ui.items.isNotEmpty() && !atBottom,
@@ -382,6 +409,7 @@ fun ChatScreen(
                         showTemplates = true
                     },
                     onSaveTemplate = { showSaveTemplate = true },
+                    onExpand = { showFullScreenInput = true },
                     onSend = {
                         viewModel.sendPrompt()
                         stickToBottom = true
@@ -450,6 +478,28 @@ fun ChatScreen(
         )
     }
 
+    if (showFullScreenInput) {
+        FullScreenInputSheet(
+            text = composer,
+            onTextChange = viewModel::updateComposer,
+            onSend = {
+                viewModel.sendPrompt()
+                showFullScreenInput = false
+                stickToBottom = true
+                scope.launch { listState.scrollToItem(0) }
+            },
+            onDismiss = { showFullScreenInput = false },
+            enabled = !ui.sessionClosed,
+            micButton = voice.micButton,
+            dictationBar = voice.dictationBar,
+            // The sheet shows no thumbnails, so it also wants text: images alone go from the dock.
+            sendEnabled = ui.canSend(composer.text),
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+            placeholder = "Write your message…",
+            sendLabel = if (ui.running) "Queue message" else "Send",
+        )
+    }
+
     if (showInfo) {
         ChatSessionInfoDialog(
             agent = ui.state.agent,
@@ -495,6 +545,7 @@ private fun ChatDockArea(
     onAttach: () -> Unit,
     onOpenTemplates: () -> Unit,
     onSaveTemplate: () -> Unit,
+    onExpand: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onRemoveImage: (Long) -> Unit,
@@ -592,6 +643,7 @@ private fun ChatDockArea(
                 onStop = onStop,
                 micButton = micButton,
                 dictationBar = dictationBar,
+                onExpand = onExpand,
             )
         }
     }

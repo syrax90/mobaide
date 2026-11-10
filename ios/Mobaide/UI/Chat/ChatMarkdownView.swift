@@ -191,7 +191,7 @@ struct MarkdownCodeBlock: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Text(language ?? "code")
-                    .chromeText()
+                    .font(.caption.monospaced())
                     .foregroundStyle(colors.textMuted)
                 Spacer(minLength: 8)
                 Button {
@@ -201,7 +201,7 @@ struct MarkdownCodeBlock: View {
                 } label: {
                     Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
                         .labelStyle(.titleAndIcon)
-                        .chromeText()
+                        .font(.caption)
                         .foregroundStyle(colors.accent)
                         .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
@@ -340,7 +340,12 @@ struct ChatDiffView: View {
             }
             Spacer(minLength: 4)
             if diff.newFile {
-                PixelChip("New file", .status(.accent))
+                Text("New file")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(colors.accent)
+                    .padding(EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6))
+                    .background(colors.surface)
+                    .pixelRing(colors.ring(.accent))
             }
             ChatDiffStat(added: diff.added, removed: diff.removed)
         }
@@ -378,7 +383,7 @@ struct ChatDiffView: View {
                 expanded = true
             } label: {
                 Text("Show all \(min(all.count, Self.maxLines)) lines")
-                    .chromeText()
+                    .font(.caption)
                     .foregroundStyle(colors.accent)
                     .frame(maxWidth: .infinity, minHeight: 44)
                     .contentShape(Rectangle())

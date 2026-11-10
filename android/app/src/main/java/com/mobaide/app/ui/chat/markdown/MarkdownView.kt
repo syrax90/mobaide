@@ -56,7 +56,6 @@ import com.mobaide.app.ui.chat.openExternalLink
 import com.mobaide.app.ui.common.pixel.PixelCheckbox
 import com.mobaide.app.ui.common.pixel.pixelFrame
 import com.mobaide.app.ui.theme.MobaideTheme
-import com.mobaide.app.ui.theme.chromeCaps
 import com.mobaide.app.ui.theme.pixel
 
 val CodeFontFamily: FontFamily = FontFamily.Monospace
@@ -249,8 +248,8 @@ fun CodeBlock(language: String?, code: String, modifier: Modifier = Modifier) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = (language ?: "code").chromeCaps(),
-                style = MaterialTheme.typography.labelSmall,
+                text = language ?: "code",
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = CodeFontFamily),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )

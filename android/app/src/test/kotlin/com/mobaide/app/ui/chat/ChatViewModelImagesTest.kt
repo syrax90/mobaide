@@ -26,6 +26,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -111,6 +112,7 @@ class ChatViewModelImagesTest {
             chatCache = chatCache,
             imageEncoder = imageEncoder,
             reviewPromptCoordinator = mockk(relaxed = true),
+            preferencesStore = mockk { every { chatFocusView } returns flowOf(true) },
         )
 
     private suspend fun openReady(): ChatViewModel {

@@ -188,6 +188,19 @@
       }
     },
     { "name": "events_empty_ack", "frame": { "t": "events", "epoch": "9f3a1c2b7d4e", "seq": 45, "events": [] } },
+    {
+      "name": "events_remove",
+      "frame": {
+        "t": "events",
+        "epoch": "9f3a1c2b7d4e",
+        "seq": 48,
+        "events": [
+          { "type": "remove", "seq": 46, "id": "n:5" },
+          { "type": "remove", "seq": 47, "id": "n:404" },
+          { "type": "append", "seq": 48, "id": "m:8", "text": " All green." }
+        ]
+      }
+    },
     { "name": "result_ok", "frame": { "t": "result", "id": "c-3", "ok": true, "data": { "queued": true, "queue_id": "q:14" } } },
     { "name": "result_error", "frame": { "t": "result", "id": "c-8", "ok": false, "error": "This request was already answered" } }
   ]

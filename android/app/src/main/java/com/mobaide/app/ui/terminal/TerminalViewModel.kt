@@ -28,6 +28,7 @@ import com.mobaide.app.data.review.HealthyTimeMeter
 import com.mobaide.app.data.review.ReviewPromptCoordinator
 import com.mobaide.app.notifications.AppForegroundTracker
 import com.mobaide.app.notifications.ForegroundSessionTracker
+import com.mobaide.app.ui.common.insertAtCursor
 import com.mobaide.app.ui.sessions.sessionHeaderLabel
 import com.mobaide.app.ui.voice.withTranscript
 import com.termux.terminal.TerminalSession
@@ -938,14 +939,11 @@ class TerminalViewModel @Inject constructor(
         }
     }
 
-    /** Load a template body into the input bar with the inserted text fully
-     *  selected, so the user can either send as-is or immediately overtype.
+    /** Put a template body into the input bar at the cursor (replacing a
+     *  selection), keeping the rest of the draft, with the cursor after it.
      *  Touches `last_used_at` fire-and-forget so a 5xx never blocks the UX. */
     fun applyTemplate(template: TemplateDto) {
-        _inputText.value = TextFieldValue(
-            text = template.body,
-            selection = TextRange(0, template.body.length),
-        )
+        _inputText.value = _inputText.value.insertAtCursor(template.body)
         revealComposer()
         viewModelScope.launch {
             try {

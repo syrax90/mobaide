@@ -1,5 +1,7 @@
 package com.mobaide.app.ui.terminal
 
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.SavedStateHandle
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_DEFAULT
@@ -21,6 +23,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -161,6 +164,28 @@ class TerminalViewModelComposerVisibilityTest {
             vm.composerVisible.value,
         )
         assertTrue(vm.requestInputFocus.value)
+    }
+
+    @Test
+    fun applyTemplate_goesInAtTheCursor_andKeepsTheDraft() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+        vm.updateInputText(TextFieldValue("run  now", TextRange(4)))
+
+        vm.applyTemplate(
+            TemplateDto(
+                template_id = "t1",
+                name = "tests",
+                body = "the tests",
+                is_favorite = false,
+                created_at = "2026-01-01T00:00:00Z",
+                updated_at = "2026-01-01T00:00:00Z",
+                version = 1,
+            ),
+        )
+        runCurrent()
+
+        assertEquals(TextFieldValue("run the tests now", TextRange(13)), vm.inputText.value)
     }
 
     @Test

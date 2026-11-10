@@ -277,24 +277,29 @@ class ChatSession:
         ensure = self._plan.ensure_argv
         if ensure is not None:
             self._timeline.patch_state(status="starting", error=None, urgent=True)
+            notice_id = self._next_id("n")
             self._timeline.upsert(
                 {
-                    "id": self._next_id("n"),
+                    "id": notice_id,
                     "type": "notice",
                     "severity": "info",
                     "title": f"Setting up the {self._agent_title} chat on your PC",
-                    "text": "This happens once and can take a minute.",
+                    "text": "This happens once and can take a few minutes.",
                 }
             )
             try:
                 argv = await asyncio.get_running_loop().run_in_executor(INSTALL_POOL, ensure)
             except AdapterInstallError as exc:
+                self._timeline.remove(notice_id)
                 self._fail_start(str(exc))
                 return False
             except Exception as exc:
                 logger.exception("chat.adapter_install_failed session=%s", self.session_id)
+                self._timeline.remove(notice_id)
                 self._fail_start(f"Could not set up the chat: {exc}")
                 return False
+            # The setup is done: the notice must not stay above the conversation.
+            self._timeline.remove(notice_id, urgent=True)
             self._plan.argv[:] = argv
             self._plan.ensure_argv = None
         try:
