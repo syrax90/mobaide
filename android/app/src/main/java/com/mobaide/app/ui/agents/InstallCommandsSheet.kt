@@ -5,6 +5,7 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -129,14 +130,18 @@ internal fun InstallCommandCard(osLabel: String, command: String) {
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            SelectionContainer(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = command,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontFamily = ChromeFontFamily,
-                    maxLines = 1,
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                )
+            // The weight sits on a Box: SelectionContainer does not pass it on
+            // to the Row, so a long command hid the copy button.
+            Box(modifier = Modifier.weight(1f)) {
+                SelectionContainer {
+                    Text(
+                        text = command,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontFamily = ChromeFontFamily,
+                        maxLines = 1,
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    )
+                }
             }
             IconButton(onClick = {
                 // Android 13+ shows a system clipboard chip; stacking an

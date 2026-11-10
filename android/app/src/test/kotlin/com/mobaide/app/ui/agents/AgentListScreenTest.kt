@@ -6,17 +6,24 @@ import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.Surface
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertWidthIsAtLeast
+import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 /**
  * UI smoke tests for the agent-list screen entry points. Composes the
@@ -74,5 +81,29 @@ class AgentListScreenTest {
             "Install commands are public — EXTRA_IS_SENSITIVE must not be set",
             flaggedSensitive,
         )
+    }
+
+    @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun installCommandCard_longCommand_keepsCopyButtonFullSizeOnScreen() {
+        // The one-liner is wider than the 360dp screen in the monospace font;
+        // it must scroll inside its own slot, not squeeze the copy button out.
+        // NATIVE graphics: LEGACY measures text too narrow to overflow the row.
+        composeRule.setContent {
+            Surface {
+                InstallCommandCard(
+                    osLabel = "Linux / macOS",
+                    command = INSTALL_COMMAND_LINUX_MACOS,
+                )
+            }
+        }
+
+        val rootRight = composeRule.onRoot().getBoundsInRoot().right
+        val right = composeRule.onNodeWithContentDescription("Copy Linux / macOS install command")
+            .assertIsDisplayed()
+            .assertWidthIsAtLeast(40.dp)
+            .getUnclippedBoundsInRoot()
+            .right
+        assertTrue("Copy button ends at $right, past the screen edge $rootRight", right <= rootRight)
     }
 }
