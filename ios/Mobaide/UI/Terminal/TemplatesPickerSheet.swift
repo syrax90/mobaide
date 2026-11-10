@@ -61,7 +61,18 @@ enum TemplateGrouping {
 /// Tapping a row inserts its body into the composer and touches it server-side
 /// so recents reorder (Android `TemplatesPickerSheet` + `applyTemplate`).
 struct TemplatesPickerSheet: View {
-    let model: TerminalSessionModel
+    let loadTemplates: () async -> [TemplateDto]
+    let onPick: (TemplateDto) -> Void
+
+    init(model: TerminalSessionModel) {
+        loadTemplates = { await model.loadTemplates() }
+        onPick = { model.applyTemplate($0) }
+    }
+
+    init(loadTemplates: @escaping () async -> [TemplateDto], onPick: @escaping (TemplateDto) -> Void) {
+        self.loadTemplates = loadTemplates
+        self.onPick = onPick
+    }
 
     @State private var templates: [TemplateDto] = []
     @State private var isLoading = true
@@ -116,7 +127,7 @@ struct TemplatesPickerSheet: View {
         }
         .pixelSheet()
         .task {
-            templates = await model.loadTemplates()
+            templates = await loadTemplates()
             isLoading = false
         }
     }
@@ -127,7 +138,7 @@ struct TemplatesPickerSheet: View {
             Section(header: PixelSectionHeader(title)) {
                 ForEach(items, id: \.template_id) { template in
                     Button {
-                        model.applyTemplate(template)
+                        onPick(template)
                         dismiss()
                     } label: {
                         VStack(alignment: .leading, spacing: 3) {

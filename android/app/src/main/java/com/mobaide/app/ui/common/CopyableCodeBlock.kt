@@ -6,6 +6,7 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -69,18 +70,23 @@ fun CopyableCodeBlock(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            SelectionContainer(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = code,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontFamily = ChromeFontFamily,
-                    maxLines = if (singleLine) 1 else Int.MAX_VALUE,
-                    modifier = if (singleLine) {
-                        Modifier.horizontalScroll(rememberScrollState())
-                    } else {
-                        Modifier
-                    },
-                )
+            // The weight sits on a Box: SelectionContainer does not pass it on to
+            // the Row, so a long value took the whole row and pushed the copy
+            // button to zero width.
+            Box(modifier = Modifier.weight(1f)) {
+                SelectionContainer {
+                    Text(
+                        text = code,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontFamily = ChromeFontFamily,
+                        maxLines = if (singleLine) 1 else Int.MAX_VALUE,
+                        modifier = if (singleLine) {
+                            Modifier.horizontalScroll(rememberScrollState())
+                        } else {
+                            Modifier
+                        },
+                    )
+                }
             }
             IconButton(onClick = {
                 context.copyToClipboard(label = label, text = code, isSensitive = isSensitive)

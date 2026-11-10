@@ -1,34 +1,148 @@
 import SwiftUI
 import UIKit
 
-/// Terminal screen (Android `TerminalScreen`), the real body for the
-/// `sessionDetail` route. The session model is pulled from the app-scoped
-/// `TerminalSessionStore` so the emulator/connection survive this view being
+/// The `sessionDetail` route: a chat session opens the chat screen, any other
+/// session the terminal screen (Android `TerminalScreen`). Both pull their
+/// model from an app-scoped store, so the connection survives this view being
 /// recreated.
 struct SessionDetailScreen: View {
     let sessionId: String
     @Environment(\.appContainer) private var container
     @Environment(Router.self) private var router
     /// Outlives the in-place route swap (this view's identity is reused), so
-    /// the next terminal can open with the drawer already up.
+    /// the next session can open with the drawer already up.
     @State private var handOff: StopHandOff?
+    /// The UI a session resolved to when its row was not loaded yet (a
+    /// cold-start deep link). Keyed by id because this view's identity is
+    /// reused across the drawer's in-place route swaps.
+    @State private var resolvedUI: (sessionId: String, isChat: Bool)?
 
     var body: some View {
         if let container {
-            TerminalScreenContent(
-                container: container,
-                sessionId: sessionId,
-                stoppedSessionId: handOff?.nextId == sessionId ? handOff?.stoppedId : nil,
-                onSwitchAfterStop: { next, stopped in
-                    handOff = StopHandOff(stoppedId: stopped, nextId: next)
-                    router.replaceLast(with: .sessionDetail(sessionId: next))
+            Group {
+                switch sessionUI(container) {
+                case .some(true):
+                    ChatScreen(
+                        container: container,
+                        sessionId: sessionId,
+                        stoppedSessionId: stoppedSessionId,
+                        onSwitchAfterStop: switchAfterStop
+                    )
+                case .some(false):
+                    TerminalScreenContent(
+                        container: container,
+                        sessionId: sessionId,
+                        stoppedSessionId: stoppedSessionId,
+                        onSwitchAfterStop: switchAfterStop
+                    )
+                case .none:
+                    SessionUIResolver(container: container, sessionId: sessionId) { isChat in
+                        resolvedUI = (sessionId, isChat)
+                    }
                 }
-            )
+            }
             // The sessions drawer swaps the route in place; the content's
             // `@State` model is seeded in `init`, so a reused identity would
             // keep rendering the previous session.
             .id(sessionId)
         }
+    }
+
+    private var stoppedSessionId: String? {
+        handOff?.nextId == sessionId ? handOff?.stoppedId : nil
+    }
+
+    private func switchAfterStop(_ next: String, _ stopped: String) {
+        handOff = StopHandOff(stoppedId: stopped, nextId: next)
+        router.replaceLast(with: .sessionDetail(sessionId: next))
+    }
+
+    /// Chat or terminal by the session's `ui`; nil while that is unknown.
+    private func sessionUI(_ container: AppContainer) -> Bool? {
+        if let resolvedUI, resolvedUI.sessionId == sessionId { return resolvedUI.isChat }
+        if let row = container.sessionRepository.currentSessions.first(where: { $0.session_id == sessionId }) {
+            return row.isChat
+        }
+        if container.chatSessionStore.hasModel(sessionId) { return true }
+        if container.terminalSessionStore.hasModel(sessionId) { return false }
+        return nil
+    }
+}
+
+/// Holds a session whose row is not known yet until its `ui` is: the live list
+/// or a one-shot read, whichever answers first. A session missing from a read
+/// list, or from the agent's synced list, opens the terminal screen, which
+/// already handles a session that is gone. Like Android and web there is no
+/// timeout: a guess would stick, and a chat session would open in the
+/// terminal screen.
+private struct SessionUIResolver: View {
+    let container: AppContainer
+    let sessionId: String
+    let onResolved: (Bool) -> Void
+
+    private enum Answer: Sendable {
+        case found(isChat: Bool)
+        case missing
+    }
+
+    var body: some View {
+        LoadingIndicator()
+            .pixelScreenBackground()
+            .navigationBarTitleDisplayMode(.inline)
+            .task {
+                let isChat = await resolve()
+                if !Task.isCancelled { onResolved(isChat) }
+            }
+    }
+
+    private func resolve() async -> Bool {
+        let (answers, sink) = AsyncStream.makeStream(of: Answer.self)
+        let sessions = container.sessionRepository.sessions()
+        let agentAPI = container.agentAPI
+        let sessionId = sessionId
+        let live = Task { @MainActor in
+            for await list in sessions {
+                if let row = list.first(where: { $0.session_id == sessionId }) {
+                    sink.yield(.found(isChat: row.isChat))
+                    return
+                }
+            }
+        }
+        let read = Task {
+            guard let list = try? await agentAPI.listSessions() else { return }
+            if let row = list.first(where: { $0.session_id == sessionId }) {
+                sink.yield(.found(isChat: row.isChat))
+            } else {
+                sink.yield(.missing)
+            }
+        }
+        let repository = container.sessionRepository
+        let syncedStates = repository.sessionsSyncedStates()
+        // Ends the wait when the read fails: the agent's own list is synced
+        // and has no such session.
+        let synced = Task { @MainActor in
+            for await isSynced in syncedStates where isSynced {
+                if let row = repository.currentSessions.first(where: { $0.session_id == sessionId }) {
+                    sink.yield(.found(isChat: row.isChat))
+                } else {
+                    sink.yield(.missing)
+                }
+                return
+            }
+        }
+        defer {
+            live.cancel()
+            read.cancel()
+            synced.cancel()
+            sink.finish()
+        }
+        for await answer in answers {
+            switch answer {
+            case .found(let isChat): return isChat
+            case .missing: return false
+            }
+        }
+        return false
     }
 }
 
@@ -318,41 +432,12 @@ private struct TerminalScreenContent: View {
                 // session.
                 if sessionRow?.cwd != nil {
                     Menu {
-                        Section("Git") {
-                            Button {
-                                router.navigate(to: .sessionGitChanges(sessionId: sessionId))
-                            } label: {
-                                Label("Changes…", systemImage: "arrow.triangle.branch")
-                            }
-                            if gitCapabilities.commit {
-                                Button {
-                                    router.navigate(to: .sessionGitChanges(sessionId: sessionId, commit: true))
-                                } label: {
-                                    Label("Commit…", systemImage: "checkmark.circle")
-                                }
-                            }
-                            if gitCapabilities.hasSync {
-                                Button {
-                                    router.navigate(to: .sessionGitChanges(sessionId: sessionId, sync: true))
-                                } label: {
-                                    Label("Fetch / Pull / Push…", systemImage: "arrow.triangle.2.circlepath")
-                                }
-                            }
-                            if gitCapabilities.branches, let projectName = sessionRow?.project_name {
-                                Button {
-                                    router.navigate(to: .gitManagement(projectName: projectName))
-                                } label: {
-                                    Label("Branches…", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
-                                }
-                            }
-                            if gitCapabilities.rebase {
-                                Button {
-                                    router.navigate(to: .sessionGitChanges(sessionId: sessionId, rebase: true))
-                                } label: {
-                                    Label("Rebase…", systemImage: "arrow.triangle.merge")
-                                }
-                            }
-                        }
+                        SessionGitMenuItems(
+                            sessionId: sessionId,
+                            projectName: sessionRow?.project_name,
+                            capabilities: gitCapabilities,
+                            navigate: { router.navigate(to: $0) }
+                        )
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }

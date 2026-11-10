@@ -8,10 +8,47 @@ For the short overview, see the [README](../README.md). The wire contract itself
 
 | Area | Features |
 |---|---|
-| Sessions | [Remote Terminal](#remote-terminal) · [Multi-Session](#multi-session) · [Managed CLI agents](#managed-cli-agents) · [Terminal Sessions](#terminal-sessions) · [Custom Path Sessions](#custom-path-sessions) · [Reorderable New-Session Lists](#reorderable-new-session-lists) · [External Sessions Notice](#external-sessions-notice) · [Auto Scan Mode](#auto-scan-mode) · [1-hour Prompt Cache](#1-hour-prompt-cache) |
+| Sessions | [Chat Sessions](#chat-sessions) · [Remote Terminal](#remote-terminal) · [Multi-Session](#multi-session) · [Managed CLI agents](#managed-cli-agents) · [Terminal Sessions](#terminal-sessions) · [Custom Path Sessions](#custom-path-sessions) · [Reorderable New-Session Lists](#reorderable-new-session-lists) · [External Sessions Notice](#external-sessions-notice) · [Auto Scan Mode](#auto-scan-mode) · [1-hour Prompt Cache](#1-hour-prompt-cache) |
 | Terminal input and display | [Terminal Display Modes](#terminal-display-modes) · [Explicit Keyboard & Direct TUI Input](#explicit-keyboard--direct-tui-input) · [Prompt Templates](#prompt-templates) · [Reconnection](#reconnection) |
 | Git | [Git Management](#git-management) · [In-session Git Changes](#in-session-git-changes) |
 | Account and platform | [Secure Access](#secure-access) · [Cross-Platform](#cross-platform) · [Account Self-Deletion](#account-self-deletion) · [Device Management](#device-management) · [Session Notifications](#session-notifications) · [Help & Support](#help--support) |
+
+## Chat Sessions
+
+Claude Code, Codex and Antigravity sessions open in a **chat view** by default: messages, tool calls, diffs, plans, permission prompts and questions are native UI on Android, iOS and the web, instead of a terminal.
+
+- **How it works.** The agent runs the coding agent over the [Agent Client Protocol](https://agentclientprotocol.com) (ACP) and streams a structured timeline. Claude Code uses the ACP adapter `@agentclientprotocol/claude-agent-acp`, which drives the PC's own `claude` binary. Codex uses `@agentclientprotocol/codex-acp`, which drives the PC's own `codex app-server` (`CODEX_PATH`). Antigravity uses the ACP server built into its CLI, `agy acp`: no adapter and no Node.js. Login, settings and CLI version are the same as in a terminal session.
+- **Agent-agnostic.** The chat UI renders only ACP concepts (messages, tool kinds, config options, slash commands). Another ACP agent needs only a launch spec in `mobaide_agent/mobaide/acp/agents.py`.
+- **Requirements on the PC.** For Claude Code and Codex: Node.js 22+, or an adapter command on PATH. For Antigravity: an `agy` that supports `agy acp` (the agent checks `agy help acp`). Otherwise the wizard shows why and creates a terminal session. `MOBAIDE_ACP_CLAUDE_COMMAND`, `MOBAIDE_ACP_CODEX_COMMAND` and `MOBAIDE_ACP_ANTIGRAVITY_COMMAND` in the agent's env file override the launch commands.
+- **Antigravity probe.** A yes or no answer is kept until the `agy` binary changes. A missing `agy` or a failed probe is checked again after 30 s. The agent warms the probe at start.
+- **Adapter install.** The agent installs each adapter once, at a pinned version, into `<state prefix>/acp-adapters/`. It uses `npm install --ignore-scripts --omit=optional --before=<release date>` and runs the adapter with `node`, not `npx`. The first chat shows "Setting up the ... chat on your PC" until the install ends, then the notice goes away. Uninstalling the agent removes `acp-adapters`.
+- **Codex modes.** Read-only maps to the read-only mode. Auto (workspace-write) maps to Workspace access, and a person approves anything outside it. Full access maps to full access only with `full_auto`, or `danger-full-access` with approval `never`. The mode is required: if the agent cannot apply it, the session does not start.
+- **Folder trust.** Before a chat session opens a folder Claude Code has not trusted, the chat asks **Trust this folder?**. Trust is recorded in `~/.claude.json`, like the CLI. For Codex, the chat reads and writes `[projects."<dir>"] trust_level` in `$CODEX_HOME/config.toml`, with the same lookup order as Codex, including linked worktrees. For the home folder, a folder above it, or a root, trust lasts for this session only. Parent folders count only up to the enclosing git repo root. Declining ends the start; Restart offers the choice again. `agy acp` skips the CLI's trust prompt, so for Antigravity the chat asks too. Trust is recorded as `trustedWorkspaces` in `~/.gemini/antigravity-cli/settings.json`, for the exact folder only.
+
+### What the chat view offers
+
+| Area | Behaviour |
+|---|---|
+| Timeline | Markdown answers, collapsible thinking, one compact card per tool call (icon by kind, status, `+N −M` for edits; tap for the diff, output and input). Conversation text uses the system font, not the pixel font. |
+| Focus view | On by default; toggle it in the chat's ⋯ menu (one setting per device or browser, for every chat). It shows your messages, the agent's final answer of each turn, approvals and questions, notices and errors. The thinking, tool calls and in-between messages of a run fold into one "N steps" row that shows the current step while the agent works; tap it to open the steps in place. |
+| Approvals | Permission prompts and multiple-choice questions appear as a card above the composer, with the agent's own options. The first answer from any device wins. |
+| Composer | Slash-command suggestions, image attachments (when the agent accepts images), voice input, prompt templates (inserted at the cursor), save as template, and a full-screen editor on Android and iOS. Messages sent while the agent works are queued. You can remove one, or tap **Send now** to steer the agent with it. |
+| Controls | Stop, and chips for the mode (shield), model (chip) and effort (brain) and other agent options; the chips wrap onto a second line instead of scrolling. Context usage and cost in the top bar, and a full-screen button on the web. Plan progress above the composer. |
+| Command output | Command output shows as a console block, with a live tail while the command runs. |
+| Sync | Every open device shows the same state; a reconnect fetches only what it missed. |
+
+The terminal's control-key bar and custom keyboard shortcut buttons are not part of the chat view: they send raw terminal bytes. Templates and slash commands work in the chat view. Stop and the mode chip replace Esc / Ctrl+C and Shift+Tab.
+
+### Terminal UI and continuing sessions
+
+- **Terminal UI.** The Claude Code, Codex and Antigravity pages of the new-session wizard have a **Terminal UI** toggle under Advanced, off by default and remembered. On, the session runs in the classic terminal (needed for TUI-only features such as Rewind). The wizard's Focus view and Debug logging apply only to terminal sessions; a chat session has its own Focus view in its ⋯ menu.
+- **Continue a session.** The same pages offer **Continue a session**: a list of the Claude Code, Codex or Antigravity sessions stored on the PC, for this folder or all folders, including sessions started outside Mobaide (for example by running `claude` in a terminal). Picking one opens it in the chat view with its history.
+- **Live Codex sessions.** When the Codex shared app-server runs (the daemon that `codex` in a terminal starts), chat sessions join it through `mobaide/acp/codex_bridge.py`. A session open in a terminal and on the phone stay in sync both ways. This works on macOS and Linux, not on Windows, and not for projects with a conda env. A message typed in another app shows as **Message sent from another app on your PC**, followed by its answer. The adapter does not forward the text of that message. Closing the chat cancels only its own turn.
+- **Antigravity sessions.** Each chat runs its own `agy acp` process in the session folder. Continue uses `session/list` and `session/load`, with history. It is not live: `agy` has no shared local server, so there is no sync with a terminal. There is no **Send now**, because `agy` has no steering.
+- **Antigravity conversation lock.** The chat holds the lock file that `agy` uses (`~/.gemini/antigravity-cli/presence/<id>.lock`). An `agy` terminal then warns "Conversation already open". When another app holds the lock, the Continue list shows "Open in another app on your PC. Close it there first.", and the chat shows a warning notice. Two processes that write one conversation overwrite each other. After the other app closes the conversation, the next message first reopens it, so the chat shows what was sent there ("Loaded the latest messages"), and then goes out.
+- **Claude Code sessions.** There is no live attach. Close the session in the other terminal first: two writers on one session interleave.
+
+The wire details are in [PROTOCOL.md](../PROTOCOL.md).
 
 ## Remote Terminal
 
@@ -175,9 +212,9 @@ A one-time, dismissible explainer sits above the sessions list on all three clie
 
 > **Sessions started outside Mobaide won't appear here**
 >
-> Mobaide can only open sessions its own agent started. To control a session from here, start it from Mobaide instead of launching it yourself on the agent machine.
+> Mobaide lists only sessions its own agent started. To continue a Claude Code, Codex or Antigravity session from your PC, start a new session and choose Continue a session.
 
-It names no specific CLI because the limit applies to every session kind: Claude, Codex, Antigravity, custom agent types, and plain terminal sessions alike. The agent's `SessionManager` spawns every PTY itself and has no attach or `--resume` path.
+The list itself never shows outside sessions: the agent's `SessionManager` owns every session it lists. Sessions started elsewhere can be continued in the chat view through [Continue a session](#terminal-ui-and-continuing-sessions). Codex sessions can also join the live shared app-server; Claude Code and Antigravity have no live attach to a running TUI.
 
 Dismissal is permanent and device-local (Android DataStore, iOS `UserDefaults`, web `localStorage`), and it survives app restart and sign-out.
 
@@ -260,7 +297,7 @@ All three clients open these from a session's ⋯ → Git menu. Everything lives
 
 Save frequently used inputs as named templates, with optional favorites.
 
-- An in-terminal picker bottom-sheet (recents / favorites / all sections, with search) inserts a template into the input bar.
+- An in-terminal picker bottom-sheet (recents / favorites / all sections, with search) inserts a template into the input bar. On Android and iOS, chat and terminal composers insert it at the cursor (replacing a selection, keeping the rest of the draft). iOS 17 inserts at the end.
 - A save-as-template dialog captures the current input.
 - Templates are stored server-side per user and sync across sessions via `template.created/updated/deleted` push events on the user-events WebSocket.
 

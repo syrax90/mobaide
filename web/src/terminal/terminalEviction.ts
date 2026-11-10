@@ -16,13 +16,20 @@
 export type TerminalEvictor = (agentId: string, sessionIds: readonly string[]) => void;
 
 let evictor: TerminalEvictor | null = null;
+/** The chat store's evictor, registered the same way when the chat chunk loads. */
+let chatEvictor: TerminalEvictor | null = null;
 
 export function setTerminalEvictor(next: TerminalEvictor | null): void {
   evictor = next;
 }
 
-/** Dispose any live terminal for these sessions. No-op before the terminal chunk loads. */
+export function setChatEvictor(next: TerminalEvictor | null): void {
+  chatEvictor = next;
+}
+
+/** Dispose any live terminal or chat model for these sessions. No-op before their chunks load. */
 export function evictTerminals(agentId: string, sessionIds: readonly string[]): void {
-  if (evictor === null || sessionIds.length === 0) return;
-  evictor(agentId, sessionIds);
+  if (sessionIds.length === 0) return;
+  evictor?.(agentId, sessionIds);
+  chatEvictor?.(agentId, sessionIds);
 }

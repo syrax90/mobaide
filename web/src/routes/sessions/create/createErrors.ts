@@ -12,6 +12,7 @@ export type CreateFailureKind =
   | 'codexAuthRequired'
   | 'agentUpdateRequired'
   | 'customTypeDeleted'
+  | 'chatUnavailable'
   | 'generic';
 
 export interface CreateFailure {
@@ -89,6 +90,14 @@ export function classifyCreateError(
     return {
       kind: 'agentUpdateRequired',
       message: 'Update your agent to launch custom agent types',
+    };
+  }
+
+  if (hasErrorMarker(body, 'chat_unavailable')) {
+    const detail = errorDetailString(body) ?? 'The chat view is not available on this PC.';
+    return {
+      kind: 'chatUnavailable',
+      message: `${detail} Turn on Terminal UI under Advanced to use the classic terminal.`,
     };
   }
 

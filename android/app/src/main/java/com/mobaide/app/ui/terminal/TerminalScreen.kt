@@ -71,9 +71,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
@@ -86,15 +83,8 @@ import androidx.compose.ui.platform.LocalView
 import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.mobaide.app.data.voice.DictationState
-import com.mobaide.app.data.voice.VoiceMicMode
-import com.mobaide.app.ui.voice.VoiceDictationBar
-import com.mobaide.app.ui.voice.VoiceEvent
-import com.mobaide.app.ui.voice.VoiceMicButton
-import com.mobaide.app.ui.voice.VoiceSetupSheet
 import com.mobaide.app.ui.voice.VoiceViewModel
-import com.mobaide.app.ui.voice.findActivity
-import com.mobaide.app.ui.voice.rememberMicPermissionRequest
+import com.mobaide.app.ui.voice.rememberVoiceComposerSlots
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -158,7 +148,6 @@ fun TerminalScreen(
     val composerVisible by viewModel.composerVisible.collectAsStateWithLifecycle()
     val shortcutRecents by viewModel.shortcutRecents.collectAsStateWithLifecycle()
     val savedShortcuts by viewModel.savedShortcutsForKind.collectAsStateWithLifecycle()
-    val voiceState by voiceViewModel.uiState.collectAsStateWithLifecycle()
     var showFullScreenInput by remember { mutableStateOf(false) }
     var showTemplatesPicker by remember { mutableStateOf(false) }
     var showShortcutPicker by remember { mutableStateOf(false) }
@@ -189,89 +178,16 @@ fun TerminalScreen(
         viewModel.sessionEnded.collect { onSessionEnded() }
     }
 
-    LaunchedEffect(voiceViewModel) {
-        voiceViewModel.events.collect { event ->
-            when (event) {
-                is VoiceEvent.InsertTranscript -> {
-                    viewModel.insertTranscript(event.text)
-                    // Launched, not awaited: a suspended showSnackbar would
-                    // hold back the next transcript.
-                    event.notice?.let { notice -> drawerScope.launch { snackbarHostState.showSnackbar(notice) } }
-                }
-            }
-        }
-    }
-    // Transcript cleanup is offered by session kind.
-    LaunchedEffect(voiceViewModel, sessionKind) { voiceViewModel.setSessionKind(sessionKind) }
-
-    // A tick when recording starts and when it stops.
-    val voiceHaptics = LocalHapticFeedback.current
-    val recording = voiceState.dictation is DictationState.Recording
-    var wasRecording by remember { mutableStateOf(false) }
-    LaunchedEffect(recording) {
-        if (recording != wasRecording) {
-            voiceHaptics.performHapticFeedback(HapticFeedbackType.LongPress)
-            wasRecording = recording
-        }
-    }
-    // The screen would time out and lock mid-dictation.
-    val voiceView = LocalView.current
-    val dictating = when (voiceState.dictation) {
-        DictationState.Starting,
-        is DictationState.Recording,
-        is DictationState.Transcribing,
-        is DictationState.Cleaning,
-        -> true
-        else -> false
-    }
-    DisposableEffect(voiceView, dictating) {
-        voiceView.keepScreenOn = dictating
-        onDispose { voiceView.keepScreenOn = false }
-    }
-    // Leaving the terminal (back, or another screen pushed over it) cancels a
-    // dictation, so the microphone never stays open behind another screen; a
-    // configuration change recreates this composition and must not.
-    val voiceActivity = LocalContext.current.findActivity()
-    DisposableEffect(voiceViewModel) {
-        onDispose {
-            if (voiceActivity?.isChangingConfigurations != true) voiceViewModel.cancelDictation()
-        }
-    }
-    val requestMic = rememberMicPermissionRequest(
-        onGranted = voiceViewModel::startDictation,
-        onDenied = voiceViewModel::onMicPermissionDenied,
+    val voice = rememberVoiceComposerSlots(
+        voiceViewModel,
+        sessionKind = sessionKind,
+        onTranscript = viewModel::insertTranscript,
+        // Launched, not awaited: a suspended showSnackbar would hold back the
+        // next transcript.
+        onNotice = { notice -> drawerScope.launch { snackbarHostState.showSnackbar(notice) } },
     )
-    val micButton: (@Composable () -> Unit)? =
-        if (voiceState.micMode == VoiceMicMode.Hidden) {
-            null
-        } else {
-            {
-                VoiceMicButton(
-                    mode = voiceState.micMode,
-                    status = voiceState.status,
-                    onClick = {
-                        if (voiceState.micMode == VoiceMicMode.Ready) requestMic() else voiceViewModel.showSetup()
-                    },
-                )
-            }
-        }
-    val dictationBar: (@Composable () -> Unit)? =
-        when (voiceState.dictation) {
-            DictationState.Idle, is DictationState.Result -> null
-            else -> {
-                {
-                    VoiceDictationBar(
-                        state = voiceState.dictation,
-                        agentName = voiceState.agentName,
-                        onStop = voiceViewModel::stopDictation,
-                        onCancel = voiceViewModel::cancelDictation,
-                        onRetry = voiceViewModel::retryDictation,
-                        onDismiss = voiceViewModel::dismissDictation,
-                        onRecordAgain = requestMic,
-                    )
-                }
-            }
-        }
+    val micButton = voice.micButton
+    val dictationBar = voice.dictationBar
 
     LaunchedEffect(panelViewModel) {
         panelViewModel.events.collect { event ->
@@ -594,18 +510,6 @@ fun TerminalScreen(
             enabled = isConnected && sessionState == "running",
             micButton = micButton,
             dictationBar = dictationBar,
-        )
-    }
-
-    if (voiceState.setupVisible) {
-        VoiceSetupSheet(
-            state = voiceState,
-            onDismiss = voiceViewModel::hideSetup,
-            onEnable = voiceViewModel::install,
-            onCancelInstall = voiceViewModel::cancelInstall,
-            onRetry = voiceViewModel::install,
-            onHideMic = { voiceViewModel.setMicHidden(true) },
-            onCleanUpChange = voiceViewModel::setCleanUp,
         )
     }
 

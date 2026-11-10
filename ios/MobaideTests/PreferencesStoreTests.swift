@@ -55,6 +55,27 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertNil(store.getLastUsedClaudeOptions())
     }
 
+    func testCodexTerminalUIRoundTripsAndAnOlderBlobReadsAsOff() {
+        store.setLastUsedCodexOptions(CodexLaunchPrefs(terminalUI: true))
+        XCTAssertEqual(store.getLastUsedCodexOptions()?.terminalUI, true)
+
+        defaults.set(#"{"sandbox":"read-only","fullAuto":true}"#, forKey: PreferencesStore.keyLastUsedCodexOptions)
+        let older = store.getLastUsedCodexOptions()
+        XCTAssertEqual(older?.sandbox, "read-only")
+        XCTAssertEqual(older?.terminalUI, false)
+    }
+
+    func testAntigravityTerminalUIRoundTripsAndAnOlderBlobReadsAsOff() {
+        store.setLastUsedAntigravityOptions(AntigravityLaunchPrefs(sandbox: true, terminalUI: true))
+        XCTAssertEqual(store.getLastUsedAntigravityOptions()?.terminalUI, true)
+
+        defaults.set(#"{"model":"Gemini 3.8 Flash (High)","sandbox":true}"#, forKey: PreferencesStore.keyLastUsedAntigravityOptions)
+        let older = store.getLastUsedAntigravityOptions()
+        XCTAssertEqual(older?.model, "Gemini 3.8 Flash (High)")
+        XCTAssertEqual(older?.sandbox, true)
+        XCTAssertEqual(older?.terminalUI, false)
+    }
+
     func testClaudeLaunchPrefsRoundTripSkipPermissionsAndNoMemory() {
         store.setLastUsedClaudeOptions(ClaudeLaunchPrefs(skipPermissions: true, noMemory: true))
         let saved = store.getLastUsedClaudeOptions()
@@ -341,6 +362,24 @@ final class PreferencesStoreTests: XCTestCase {
             PreferencesStore(defaults: defaults).isExternalSessionsNoticeDismissed(),
             "a relaunch is a fresh store over the same defaults — the dismissal is permanent"
         )
+    }
+
+    func testChatFocusViewIsOnUntilTurnedOffAndSurvivesRelaunch() {
+        XCTAssertTrue(store.isChatFocusView(), "an absent key must read as on")
+
+        store.setChatFocusView(false)
+
+        XCTAssertFalse(store.isChatFocusView())
+        XCTAssertFalse(PreferencesStore(defaults: defaults).isChatFocusView())
+        XCTAssertEqual(
+            defaults.object(forKey: "chat_focus_view") as? Bool,
+            false,
+            "the key stays byte-identical to Android's DataStore key"
+        )
+
+        store.setChatFocusView(true)
+
+        XCTAssertTrue(store.isChatFocusView())
     }
 
     func testReviewPromptCountersCountUpAndARequestStampsTheTimeAndResetsTheGoodSessions() {

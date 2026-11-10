@@ -16,12 +16,16 @@
  */
 import type { components } from '../../../api/generated/agent';
 import type { ProjectSummary } from '../../../api/projectRepository';
+import type { ChatSupport } from '../../../protocol/dto/agentVersion';
+import type { ChatStoredSession } from '../../../protocol/dto/chatSessions';
 import {
   effectiveClaudeEffort,
   effectiveClaudeModel,
   isCustomMode,
   parseAddDirs,
+  type AntigravityBucket,
   type ClaudeBucket,
+  type CodexBucket,
   type WizardMode,
   type WizardState,
 } from './wizardState';
@@ -29,17 +33,55 @@ import {
 export type CreateSessionRequest = components['schemas']['CreateSessionRequest'];
 export type StartScanRequest = components['schemas']['StartScanRequest'];
 type ClaudeOptions = components['schemas']['ClaudeOptionsModel'];
+type CodexOptions = components['schemas']['CodexOptionsModel'];
+type AntigravityOptions = components['schemas']['AntigravityOptionsModel'];
 
 export interface BuildContext {
   state: WizardState;
   mode: WizardMode;
   /** The stored project the selection names, once resolved. The only source of `is_git`. */
   project: ProjectSummary | null;
+  /** `capabilities.chat` for the mode's agent; absent reads as not known yet. */
+  chat?: ChatSupport;
   /**
    * The resolved base branch (`effectiveWorktreeBase`), or `null`/absent for
    * the agent's default. Sent only when a worktree is really requested.
    */
   worktreeBase?: string | null;
+}
+
+/**
+ * Whether a launch starts in the chat view: the Terminal UI toggle is off and
+ * the PC is not known to lack chat support for the agent. While the probe is
+ * still out the server decides; a known "unavailable" never sends `chat`.
+ */
+export function usesChatView(terminalUi: boolean, chat: ChatSupport | undefined): boolean {
+  if (terminalUi) return false;
+  const kind = chat?.kind ?? 'unknown';
+  return kind === 'available' || kind === 'unknown';
+}
+
+export function claudeUsesChat(bucket: ClaudeBucket, chat: ChatSupport | undefined): boolean {
+  return usesChatView(bucket.terminalUi, chat);
+}
+
+/** The agent kinds whose sessions can open in the chat view. */
+export type ChatAgentKind = 'claude' | 'codex' | 'antigravity';
+
+export function chatAgentKind(mode: WizardMode | null): ChatAgentKind | null {
+  return mode === 'claude' || mode === 'codex' || mode === 'antigravity' ? mode : null;
+}
+
+/** The kind's "Terminal UI" toggle. */
+export function terminalUiOf(state: WizardState, kind: ChatAgentKind): boolean {
+  switch (kind) {
+    case 'claude':
+      return state.claude.terminalUi;
+    case 'codex':
+      return state.codex.terminalUi;
+    case 'antigravity':
+      return state.antigravity.terminalUi;
+  }
 }
 
 /** Blank-after-trim omits the key; otherwise the value goes untrimmed (a prompt's trailing newline is intentional). */
@@ -96,6 +138,37 @@ function claudeOptions(
   };
 }
 
+function codexOptions(
+  bucket: CodexBucket,
+  extras: { worktree: boolean; branchName: string | undefined; baseBranch: string | null },
+): CodexOptions {
+  return {
+    model: bucket.model ?? undefined,
+    sandbox: bucket.sandbox,
+    approval: bucket.approval,
+    reasoning_effort: bucket.reasoningEffort,
+    full_auto: bucket.fullAuto,
+    worktree: extras.worktree,
+    branch_name: extras.branchName,
+    base_branch: extras.baseBranch,
+  };
+}
+
+function antigravityOptions(
+  bucket: AntigravityBucket,
+  extras: { worktree: boolean; branchName: string | undefined; baseBranch: string | null },
+): AntigravityOptions {
+  return {
+    model: bucket.model ?? undefined,
+    skip_permissions: bucket.skipPermissions,
+    sandbox: bucket.sandbox,
+    add_dirs: parseAddDirs(bucket.addDirsDraft),
+    worktree: extras.worktree,
+    branch_name: extras.branchName,
+    base_branch: extras.baseBranch,
+  };
+}
+
 /** `null` for `auto_scan`, which starts a scan rather than creating a session. */
 export function buildCreateRequest(context: BuildContext): CreateSessionRequest | null {
   const { state, mode } = context;
@@ -122,6 +195,7 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
       // Managed CLIs carry worktree intent inside their own options block; the
       // top-level flag is only read on the shell path.
       worktree: false,
+      ui: claudeUsesChat(state.claude, context.chat) ? 'chat' : 'terminal',
     };
   }
 
@@ -129,17 +203,13 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
     return {
       ...base,
       cli: 'codex',
-      codex_options: {
-        model: state.codex.model ?? undefined,
-        sandbox: state.codex.sandbox,
-        approval: state.codex.approval,
-        reasoning_effort: state.codex.reasoningEffort,
-        full_auto: state.codex.fullAuto,
+      codex_options: codexOptions(state.codex, {
         worktree: place.worktree,
-        branch_name: place.branchName,
-        base_branch: place.baseBranch,
-      },
+        branchName: place.branchName,
+        baseBranch: place.baseBranch,
+      }),
       worktree: false,
+      ui: usesChatView(state.codex.terminalUi, context.chat) ? 'chat' : 'terminal',
     };
   }
 
@@ -147,16 +217,13 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
     return {
       ...base,
       cli: 'antigravity',
-      antigravity_options: {
-        model: state.antigravity.model ?? undefined,
-        skip_permissions: state.antigravity.skipPermissions,
-        sandbox: state.antigravity.sandbox,
-        add_dirs: parseAddDirs(state.antigravity.addDirsDraft),
+      antigravity_options: antigravityOptions(state.antigravity, {
         worktree: place.worktree,
-        branch_name: place.branchName,
-        base_branch: place.baseBranch,
-      },
+        branchName: place.branchName,
+        baseBranch: place.baseBranch,
+      }),
       worktree: false,
+      ui: usesChatView(state.antigravity.terminalUi, context.chat) ? 'chat' : 'terminal',
     };
   }
 
@@ -171,6 +238,40 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
     worktree: place.worktree,
     branch_name: place.branchName,
     base_branch: place.baseBranch,
+  };
+}
+
+/**
+ * Continue a session stored on the PC in a new chat session, with the agent's
+ * current options but never a worktree: the conversation belongs to the folder
+ * it was recorded in. That folder is the selected project when the paths
+ * match, else a plain `cwd`.
+ */
+export function buildResumeRequest(
+  { state, project }: BuildContext,
+  kind: ChatAgentKind,
+  stored: ChatStoredSession,
+): CreateSessionRequest {
+  const sameFolder = project !== null && project.path === stored.cwd;
+  const noWorktree = { worktree: false, branchName: undefined, baseBranch: null };
+  const options =
+    kind === 'codex'
+      ? { cli: 'codex', codex_options: codexOptions(state.codex, noWorktree) }
+      : kind === 'antigravity'
+        ? {
+            cli: 'antigravity',
+            antigravity_options: antigravityOptions(state.antigravity, noWorktree),
+          }
+        : { cli: 'claude', claude_options: claudeOptions(state.claude, noWorktree) };
+  return {
+    project_name: sameFolder ? project.name : undefined,
+    cwd: sameFolder ? undefined : stored.cwd,
+    rows: 24,
+    cols: 80,
+    ...options,
+    worktree: false,
+    ui: 'chat',
+    chat_resume_id: stored.session_id,
   };
 }
 

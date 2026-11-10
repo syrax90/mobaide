@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from mobaide.core.antigravity_launcher import AntigravityOptions
+from mobaide.acp.wire import CHAT_RESUME_ID_MAX, CHAT_RESUME_ID_PATTERN
+from mobaide.core.antigravity_launcher import AntigravityOptions, agy_model_name
 from mobaide.core.claude_launcher import ClaudeOptions
 from mobaide.core.codex_launcher import CodexOptions
 from mobaide.core.models import SessionInfo, session_to_wire_dict
@@ -116,7 +117,8 @@ class AntigravityOptionsModel(BaseModel):
                 "skip_permissions and sandbox are mutually exclusive: "
                 "--dangerously-skip-permissions auto-approves sandbox escapes"
             )
-        if self.model is not None and self.model.startswith("-"):
+        # The name the launcher keeps from a saved ``agy models`` line.
+        if self.model is not None and agy_model_name(self.model).startswith("-"):
             raise ValueError("model must not look like a CLI flag (leading '-')")
         if any(d.startswith("-") for d in self.add_dirs):
             raise ValueError("add_dirs entries must not look like CLI flags (leading '-')")
@@ -159,6 +161,14 @@ class CreateSessionRequest(BaseModel):
     # REST router never reads them (custom kinds are rejected there).
     resolved_command: str | None = None
     resolved_name: str | None = None
+    # ``"chat"`` starts the session in the structured chat UI (the agent
+    # runs over ACP); ``"terminal"`` or absent keeps the PTY session.
+    ui: Literal["terminal", "chat"] | None = None
+    # Chat only: the agent's stored session to continue (an id from
+    # ``GET /api/chat/{kind}/sessions``) instead of starting a new one.
+    chat_resume_id: str | None = Field(
+        default=None, max_length=CHAT_RESUME_ID_MAX, pattern=CHAT_RESUME_ID_PATTERN
+    )
 
 
 class SessionResponse(BaseModel):
@@ -183,6 +193,7 @@ class SessionResponse(BaseModel):
     kind_label: str | None = None
     attention: str | None = None
     exit_reason: str | None = None
+    ui: str = "terminal"
 
     @classmethod
     def from_info(cls, info: SessionInfo) -> SessionResponse:
@@ -193,3 +204,22 @@ class ScrollbackResponse(BaseModel):
     session_id: str
     lines: list[str]
     total: int
+
+
+class ChatStoredSession(BaseModel):
+    """One session the agent stored on the host (``session/list``)."""
+
+    session_id: str
+    cwd: str
+    title: str | None = None
+    updated_at: str | None = None
+    # The open Mobaide chat session that already shows it, if any.
+    open_session_id: str | None = None
+    # Another app on the PC has it open (Antigravity's presence lock): the
+    # two would overwrite each other's messages.
+    open_elsewhere: bool = False
+
+
+class ChatStoredSessionsResponse(BaseModel):
+    sessions: list[ChatStoredSession]
+    next_cursor: str | None = None

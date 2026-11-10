@@ -13,9 +13,9 @@ interface ExternalSessionsNoticeProps {
 
 /**
  * Mirror of Android/iOS `ExternalSessionsNotice`: one-time explainer above the
- * sessions list. The agent spawns every session itself and has no attach path,
- * so a process the user started by hand on the agent machine can never show up
- * here.
+ * sessions list. The list shows only sessions the agent spawned itself; a
+ * Claude Code, Codex or Antigravity session started by hand on the PC is reached through
+ * the create wizard's "Continue a session" instead.
  *
  * A labelled landmark rather than a live region: `GraceBanner`'s
  * `aria-live="polite"` is right for a banner that appears mid-session, but this
@@ -34,8 +34,9 @@ export function ExternalSessionsNotice({ onDismiss }: ExternalSessionsNoticeProp
         Sessions started outside Mobaide won&apos;t appear here
       </h2>
       <p className="notice-banner-body">
-        Mobaide can only open sessions its own agent started. To control a session from
-        here, start it from Mobaide instead of launching it yourself on the agent machine.
+        Mobaide lists only sessions its own agent started. To continue a Claude Code, Codex or
+        Antigravity session from your PC, start a new session of that agent and choose Continue a
+        session.
       </p>
       <button
         type="button"

@@ -633,6 +633,7 @@ class TestHandleRequestEventsSnapshot:
         sess_info.kind_label = None
         sess_info.attention = None
         sess_info.exit_reason = None
+        sess_info.ui = "terminal"
         mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
 
         ws = AsyncMock()
@@ -661,6 +662,7 @@ class TestHandleRequestEventsSnapshot:
                     "kind_label": None,
                     "attention": None,
                     "exit_reason": None,
+                    "ui": "terminal",
                 },
             ],
         }
@@ -741,6 +743,7 @@ class TestHandleRequestEventsSnapshot:
         sess_info.kind_label = None
         sess_info.attention = None
         sess_info.exit_reason = None
+        sess_info.ui = "terminal"
         mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
 
         ws = AsyncMock()
@@ -772,6 +775,7 @@ class TestHandleRequestEventsSnapshot:
                 "kind_label": None,
                 "attention": None,
                 "exit_reason": None,
+                "ui": "terminal",
             },
         ]
 
@@ -3544,7 +3548,7 @@ class TestProxySessionsWireShape:
         expected_keys = {
             "session_id", "state", "created_at", "pid",
             "command", "cwd", "title", "project_name", "kind",
-            "kind_label", "attention", "exit_reason",
+            "kind_label", "attention", "exit_reason", "ui",
         }
         assert set(a.keys()) == expected_keys
         assert set(b.keys()) == expected_keys
@@ -3604,7 +3608,7 @@ class TestProxySessionsWireShape:
         assert set(body.keys()) == {
             "session_id", "state", "created_at", "pid",
             "command", "cwd", "title", "project_name", "kind",
-            "kind_label", "attention", "exit_reason",
+            "kind_label", "attention", "exit_reason", "ui",
         }
         # The two new fields are present (even when title is None at create).
         assert body["title"] is None
@@ -3886,6 +3890,66 @@ class TestHandleCreateSessionCodex:
         ]
 
 
+class TestHandleCreateSessionChat:
+    """The control-channel ``create_session`` checks ``ui`` and
+    ``chat_resume_id`` like the proxied ``POST /api/sessions`` does, before
+    anything is spawned: ``chat_resume_id`` names a stored session that the
+    agent opens with ``session/load``."""
+
+    @pytest.mark.parametrize(
+        ("fields", "error"),
+        [
+            ({"cli": "claude", "chat_resume_id": "abc"}, "chat_resume_id needs ui=chat"),
+            ({"cli": "codex", "ui": "chat"}, "The chat view is not available for codex sessions"),
+            ({"cli": "claude", "ui": "chat", "chat_resume_id": "../../etc/passwd"}, "Invalid chat_resume_id"),
+            ({"cli": "claude", "ui": "chat", "chat_resume_id": "-x " * 3}, "Invalid chat_resume_id"),
+            ({"cli": "claude", "ui": "chat", "chat_resume_id": "a" * 201}, "Invalid chat_resume_id"),
+        ],
+        ids=["resume-needs-chat", "no-chat-agent", "path", "spaces", "too-long"],
+    )
+    async def test_invalid_chat_fields_are_refused(
+        self, client, mock_session_manager, fields, error,
+    ):
+        mock_session_manager.chat_agents = {"claude": object()}
+        mock_session_manager.create_session = AsyncMock()
+        ws = AsyncMock()
+        ctrl = {"type": "create_session", "session_id": "chat-sess", **fields}
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp == {"type": "session_create_failed", "session_id": "chat-sess", "error": error}
+        mock_session_manager.create_session.assert_not_called()
+
+    async def test_chat_fields_reach_the_session_config(self, client, mock_session_manager):
+        captured = []
+
+        async def _capture(config):
+            captured.append(config)
+            s = MagicMock()
+            s.session_id = "chat-sess"
+            s.pid = 7
+            return s
+
+        mock_session_manager.chat_agents = {"claude": object()}
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "chat-sess",
+            "cli": "claude",
+            "ui": "chat",
+            "chat_resume_id": "0b4e7c2a-11f0:main.v2",
+        }
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        assert [(c.ui, c.chat_resume_id) for c in captured] == [("chat", "0b4e7c2a-11f0:main.v2")]
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_created"
+
+
 class TestHandleProxyRequestCodex:
     """``POST /api/sessions`` proxied through the central relay
     (``proxy_request`` control frame) must thread Codex the same way the direct
@@ -3924,6 +3988,7 @@ class TestHandleProxyRequestCodex:
             info.kind_label = None
             info.attention = None
             info.exit_reason = None
+            info.ui = "terminal"
             s.to_info = MagicMock(return_value=info)
             return s
 
@@ -4235,6 +4300,7 @@ class TestProxyVersionCapabilities:
             },
             "voice": VOICE_CAPABILITIES,
             "fs": {"dirs": True, "windows_paths": sys.platform == "win32"},
+            "chat": {},
         }
 
     async def test_missing_cli_launchers_attr_degrades_to_empty_cli(
@@ -4273,6 +4339,7 @@ class TestProxyVersionCapabilities:
             },
             "voice": VOICE_CAPABILITIES,
             "fs": {"dirs": True, "windows_paths": sys.platform == "win32"},
+            "chat": {},
         }
 
     async def test_version_body_keeps_core_fields(self, client, mock_app_state):
@@ -4491,6 +4558,7 @@ class TestHandleProxyRequestAntigravity:
             info.kind_label = None
             info.attention = None
             info.exit_reason = None
+            info.ui = "terminal"
             s.to_info = MagicMock(return_value=info)
             return s
 

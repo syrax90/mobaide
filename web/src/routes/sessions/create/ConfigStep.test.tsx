@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, describe, expect, it } from 'vitest';
 import type { WorktreeBases } from '../../../api/gitRepository';
 import type { ProjectSummary } from '../../../api/projectRepository';
-import type { AgentVersionInfo } from '../../../protocol/dto/agentVersion';
+import { agentVersionSchema, type AgentVersionInfo } from '../../../protocol/dto/agentVersion';
 import { ConfigStep, type WorktreeBasesView } from './ConfigStep';
 import {
   INITIAL_WIZARD_STATE,
@@ -26,7 +26,12 @@ const STATE: WizardState = {
   selection: { kind: 'stored', name: gitProject.name },
 };
 
-function renderStep(mode: WizardMode, state: WizardState = STATE): WizardAction[] {
+function renderStep(
+  mode: WizardMode,
+  state: WizardState = STATE,
+  capabilities?: AgentVersionInfo,
+  onContinueSession?: () => void,
+): WizardAction[] {
   const actions: WizardAction[] = [];
   render(
     <ConfigStep
@@ -34,7 +39,8 @@ function renderStep(mode: WizardMode, state: WizardState = STATE): WizardAction[
       state={state}
       selection={state.selection}
       project={gitProject}
-      capabilities={undefined}
+      capabilities={capabilities}
+      onContinueSession={onContinueSession}
       customTypes={[]}
       submitting={false}
       error={null}
@@ -64,10 +70,13 @@ afterEach(() => {
   cleanup();
 });
 
+/** Focus view and Debug logging exist only for a session that opens in the terminal. */
+const TERMINAL_STATE: WizardState = { ...STATE, claude: { ...STATE.claude, terminalUi: true } };
+
 describe('ConfigStep — Claude Code layout', () => {
   it('puts Focus view above Skip permissions and Advanced after the worktree section', () => {
     // The branch field only appears once a worktree is requested.
-    renderStep('claude', { ...STATE, git: { worktree: true, branchName: '' } });
+    renderStep('claude', { ...TERMINAL_STATE, git: { worktree: true, branchName: '' } });
 
     expectInOrder(
       screen.getByLabelText('Focus view'),
@@ -78,15 +87,15 @@ describe('ConfigStep — Claude Code layout', () => {
     );
   });
 
-  it('opens with focus view on and Advanced collapsed, No memory its first item', () => {
-    renderStep('claude');
+  it('opens with focus view on and Advanced collapsed, Terminal UI its first item', () => {
+    renderStep('claude', TERMINAL_STATE);
 
     expect(screen.getByLabelText('Focus view')).toBeChecked();
     const details = advancedSummary().closest('details');
     expect(details).not.toBeNull();
     expect(details).not.toHaveAttribute('open');
     const first = details?.querySelector('input');
-    expect(first).toBe(screen.getByLabelText('No memory'));
+    expect(first).toBe(screen.getByLabelText('Terminal UI'));
   });
 
   it('offers no Plan mode control for a Claude Code launch', () => {
@@ -96,7 +105,7 @@ describe('ConfigStep — Claude Code layout', () => {
   });
 
   it('writes the Focus view toggle to the Claude bucket', () => {
-    const actions = renderStep('claude');
+    const actions = renderStep('claude', TERMINAL_STATE);
 
     fireEvent.click(screen.getByLabelText('Focus view'));
 
@@ -138,6 +147,118 @@ describe('ConfigStep — Auto Scan layout', () => {
       flag: 'focusMode',
       value: true,
     });
+  });
+});
+
+function versionWithChat(chat: Record<string, unknown>): AgentVersionInfo {
+  return agentVersionSchema.parse({
+    name: 'mobaide_agent',
+    server_version: '0.3.23',
+    protocol_versions: [6, 7],
+    min_client_version: 6,
+    capabilities: { chat },
+  });
+}
+
+describe('ConfigStep — Codex chat view', () => {
+  const CODEX_RESUMES = versionWithChat({ codex: { resume: true, live: true } });
+
+  it('puts Terminal UI first in the Codex Advanced, off by default', () => {
+    const actions = renderStep('codex');
+
+    const details = advancedSummary().closest('details');
+    expect(details).not.toHaveAttribute('open');
+    const toggle = screen.getByLabelText('Terminal UI');
+    expect(details?.querySelector('input')).toBe(toggle);
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toBeEnabled();
+
+    fireEvent.click(toggle);
+
+    expect(actions).toContainEqual({ type: 'setCodexTerminalUi', value: true });
+  });
+
+  it('holds Terminal UI on where the PC has no Codex chat', () => {
+    renderStep('codex', STATE, versionWithChat({ claude: { resume: true } }));
+
+    const toggle = screen.getByLabelText('Terminal UI');
+    expect(toggle).toBeChecked();
+    expect(toggle).toBeDisabled();
+    expect(screen.getByText('The chat view needs Node.js on your PC.')).toBeInTheDocument();
+  });
+
+  it('offers to continue a Codex session where the PC can resume one', () => {
+    renderStep('codex', STATE, CODEX_RESUMES, () => undefined);
+
+    expect(
+      screen.getByText('Open a Codex session started on your PC, for example in a terminal.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue a session…' })).toBeEnabled();
+  });
+
+  it('offers no Continue entry for a Codex launch in the terminal', () => {
+    renderStep(
+      'codex',
+      { ...STATE, codex: { ...STATE.codex, terminalUi: true } },
+      CODEX_RESUMES,
+      () => undefined,
+    );
+
+    expect(screen.queryByText('Continue a session…')).not.toBeInTheDocument();
+  });
+});
+
+describe('ConfigStep — Antigravity chat view', () => {
+  const AGY_RESUMES = versionWithChat({ antigravity: { resume: true, live: false } });
+
+  it('keeps Terminal UI in a collapsed Advanced, off by default', () => {
+    const actions = renderStep('antigravity');
+
+    const details = advancedSummary().closest('details');
+    expect(details).not.toHaveAttribute('open');
+    const toggle = screen.getByLabelText('Terminal UI');
+    expect(details?.contains(toggle)).toBe(true);
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toBeEnabled();
+
+    fireEvent.click(toggle);
+
+    expect(actions).toContainEqual({ type: 'setAntigravityTerminalUi', value: true });
+  });
+
+  it('holds Terminal UI on where the PC has no Antigravity chat, and says how to get it', () => {
+    renderStep('antigravity', STATE, versionWithChat({ claude: { resume: true } }));
+
+    const toggle = screen.getByLabelText('Terminal UI');
+    expect(toggle).toBeChecked();
+    expect(toggle).toBeDisabled();
+    expect(
+      screen.getByText(
+        'The chat view needs a newer Antigravity CLI on your PC: run agy update there.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('offers to continue an Antigravity conversation where the PC can resume one', () => {
+    renderStep('antigravity', STATE, AGY_RESUMES, () => undefined);
+
+    expect(
+      screen.getByText(
+        'Open an Antigravity conversation started on your PC, for example with agy in a terminal.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue a session…' })).toBeEnabled();
+  });
+
+  it('offers no Continue entry for an Antigravity launch in the terminal', () => {
+    renderStep(
+      'antigravity',
+      { ...STATE, antigravity: { ...STATE.antigravity, terminalUi: true } },
+      AGY_RESUMES,
+      () => undefined,
+    );
+
+    expect(screen.queryByText('Continue a session…')).not.toBeInTheDocument();
   });
 });
 

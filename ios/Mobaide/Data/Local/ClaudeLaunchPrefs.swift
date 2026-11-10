@@ -3,7 +3,8 @@ import Foundation
 /// Mirror of Android `ClaudeLaunchPrefs` — last-used Claude launch options,
 /// persisted as a JSON blob in `PreferencesStore`. Backs two independent
 /// per-kind buckets — Claude Code and Auto Scan — so each mode remembers its
-/// own choices; `planMode` is meaningful only in the Auto Scan bucket.
+/// own choices; `planMode` is meaningful only in the Auto Scan bucket and
+/// `terminalUI` only in the Claude Code one.
 struct ClaudeLaunchPrefs: Codable, Equatable, Sendable {
     let model: String?
     let effort: String
@@ -15,6 +16,7 @@ struct ClaudeLaunchPrefs: Codable, Equatable, Sendable {
     let planMode: Bool
     let debug: Bool
     let focusMode: Bool
+    let terminalUI: Bool
 
     init(
         model: String? = nil,
@@ -26,7 +28,8 @@ struct ClaudeLaunchPrefs: Codable, Equatable, Sendable {
         noMemory: Bool = false,
         planMode: Bool = false,
         debug: Bool = false,
-        focusMode: Bool = true
+        focusMode: Bool = true,
+        terminalUI: Bool = false
     ) {
         self.model = model
         self.effort = effort
@@ -38,6 +41,7 @@ struct ClaudeLaunchPrefs: Codable, Equatable, Sendable {
         self.planMode = planMode
         self.debug = debug
         self.focusMode = focusMode
+        self.terminalUI = terminalUI
     }
 }
 
@@ -55,5 +59,6 @@ extension ClaudeLaunchPrefs {
         debug = try container.decodeIfPresent(Bool.self, forKey: .debug) ?? false
         // Defaults ON so a blob saved before the toggle existed restores focus view.
         focusMode = try container.decodeIfPresent(Bool.self, forKey: .focusMode) ?? true
+        terminalUI = try container.decodeIfPresent(Bool.self, forKey: .terminalUI) ?? false
     }
 }

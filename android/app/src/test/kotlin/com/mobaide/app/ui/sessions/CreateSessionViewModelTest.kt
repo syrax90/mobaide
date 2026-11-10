@@ -8,6 +8,8 @@ import com.mobaide.app.data.local.CodexLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.RestApi
+import com.mobaide.app.data.network.dto.ChatStoredSession
+import com.mobaide.app.data.network.dto.ChatSupport
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CliModelDetail
 import com.mobaide.app.data.network.dto.CodexLoginResponse
@@ -37,6 +39,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -3955,6 +3958,374 @@ class CreateSessionViewModelTest {
         coVerify(exactly = 1) { fx.sessionRepo.createSession(any()) }
     }
 
+    private fun chatVersion(
+        chat: String,
+        cli: String = """{"codex":{"available":true}}""",
+    ): VersionInfoResponse = VersionInfoResponse(
+        name = "mobaide_agent",
+        server_version = "0.3.23",
+        protocol_versions = listOf(7),
+        min_client_version = 6,
+        capabilities = Json.parseToJsonElement(
+            """{"cli":$cli,"chat":$chat}""",
+        ).jsonObject,
+    )
+
+    private fun TestScope.codexSubmit(
+        fx: Fixture,
+        setUp: (CreateSessionViewModel) -> Unit = {},
+    ): Pair<CreateSessionRequest, CodexLaunchPrefs> {
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-codex-chat", "starting", "2026-11-08T00:00:00Z")
+        val prefsSlot = slot<CodexLaunchPrefs>()
+        coEvery { fx.prefs.setLastUsedCodexOptions(capture(prefsSlot)) } just Runs
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCodexMode()
+        setUp(vm)
+        vm.submitCodex()
+        advanceUntilIdle()
+        return requestSlot.captured to prefsSlot.captured
+    }
+
+    @Test
+    fun submitCodex_byDefault_opensTheChatView() = runTest {
+        val (request, saved) = codexSubmit(newFixture())
+
+        assertEquals(SessionResponse.UI_CHAT, request.ui)
+        assertFalse(saved.terminalUi)
+    }
+
+    @Test
+    fun submitCodex_withTerminalUi_opensTheTerminal_andRemembersTheChoice() = runTest {
+        val (request, saved) = codexSubmit(newFixture()) { it.toggleCodexTerminalUi(true) }
+
+        assertEquals(SessionResponse.UI_TERMINAL, request.ui)
+        assertTrue(saved.terminalUi)
+    }
+
+    @Test
+    fun submitCodex_whereThePcHasNoCodexChat_opensTheTerminal() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns chatVersion("""{"claude":{"resume":true}}""")
+
+        val (request, _) = codexSubmit(fx) { vm ->
+            vm.refreshCliAvailability()
+            advanceUntilIdle()
+            assertEquals("The chat view needs Node.js on your PC.", vm.uiState.value.codexChatUnavailableHint)
+            assertFalse(vm.uiState.value.codexResumeAvailable)
+        }
+
+        assertEquals(SessionResponse.UI_TERMINAL, request.ui)
+    }
+
+    @Test
+    fun codexResume_isOffered_onlyForTheChatView() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            chatVersion("""{"codex":{"resume":true,"live":true}}""")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.codexResumeAvailable)
+        assertNull(vm.uiState.value.codexChatUnavailableHint)
+
+        vm.toggleCodexTerminalUi(true)
+
+        assertFalse(vm.uiState.value.codexResumeAvailable)
+    }
+
+    @Test
+    fun init_restoresTheCodexTerminalUiChoice() = runTest {
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedCodexOptions() } returns CodexLaunchPrefs(terminalUi = true)
+
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.codexTerminalUi)
+    }
+
+    @Test
+    fun resumeChatSession_codex_sendsTheCodexOptionsWithoutAWorktree() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-resumed", "starting", "2026-11-08T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCodexMode()
+        vm.selectCodexPreset(CodexAutonomyPreset.ReadOnly)
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+        vm.resumeChatSession("codex", ChatStoredSession(session_id = "external-2222", cwd = "/p/alpha/"))
+        advanceUntilIdle()
+
+        val request = requestSlot.captured
+        assertEquals("codex", request.cli)
+        assertEquals("alpha", request.project_name)
+        assertNull(request.cwd)
+        assertEquals(SessionResponse.UI_CHAT, request.ui)
+        assertEquals("external-2222", request.chat_resume_id)
+        assertNull(request.claude_options)
+        val options = request.codex_options
+        assertNotNull(options)
+        assertEquals("read-only", options!!.sandbox)
+        assertFalse(options.worktree)
+        assertNull(options.branch_name)
+    }
+
+    @Test
+    fun resumeChatSession_codex_inAnotherFolder_sendsThatFolder() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-resumed", "starting", "2026-11-08T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCodexMode()
+        vm.resumeChatSession("codex", ChatStoredSession(session_id = "external-1111", cwd = "/srv/other"))
+        advanceUntilIdle()
+
+        assertNull(requestSlot.captured.project_name)
+        assertEquals("/srv/other", requestSlot.captured.cwd)
+        assertEquals("codex", requestSlot.captured.cli)
+    }
+
+    /** A Codex resume whose create needs a Codex sign-in first; returns every create sent. */
+    private fun TestScope.codexResumeNeedingSignIn(fx: Fixture, vm: CreateSessionViewModel): List<CreateSessionRequest> {
+        val requests = mutableListOf<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requests)) } throws
+            ApiException(409, """{"detail":{"codex_auth_required":true}}""") andThen
+            SessionResponse("sess-resumed", "starting", "2026-11-08T00:00:00Z")
+        coEvery { fx.sessionRepo.codexLogin("sk-user-key") } returns CodexLoginResponse(authenticated = true)
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCodexMode()
+        vm.resumeChatSession("codex", ChatStoredSession(session_id = "external-2222", cwd = "/srv/other"))
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.codexLoginVisible)
+        return requests
+    }
+
+    @Test
+    fun submitCodexLogin_afterACodexResumeNeededIt_resendsThatSameResume() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requests = codexResumeNeedingSignIn(fx, vm)
+
+        vm.setCodexApiKeyDraft("sk-user-key")
+        vm.submitCodexLogin()
+        advanceUntilIdle()
+
+        assertEquals(2, requests.size)
+        assertEquals(requests[0], requests[1])
+        assertEquals("external-2222", requests[1].chat_resume_id)
+        assertEquals("/srv/other", requests[1].cwd)
+        assertFalse(vm.uiState.value.codexLoginVisible)
+    }
+
+    @Test
+    fun dismissCodexLogin_forgetsThePendingResume_soALaterLoginStartsANewSession() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requests = codexResumeNeedingSignIn(fx, vm)
+
+        vm.dismissCodexLogin()
+        vm.setCodexApiKeyDraft("sk-user-key")
+        vm.submitCodexLogin()
+        advanceUntilIdle()
+
+        assertEquals(2, requests.size)
+        assertNull(requests[1].chat_resume_id)
+        assertEquals("alpha", requests[1].project_name)
+        assertEquals("codex", requests[1].cli)
+    }
+
+    // Antigravity chat view
+
+    private val agyCli = """{"antigravity":{"available":true}}"""
+
+    private fun TestScope.antigravitySubmit(
+        fx: Fixture,
+        setUp: (CreateSessionViewModel) -> Unit = {},
+    ): Pair<CreateSessionRequest, AntigravityLaunchPrefs> {
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-agy-chat", "starting", "2026-11-09T00:00:00Z")
+        val prefsSlot = slot<AntigravityLaunchPrefs>()
+        coEvery { fx.prefs.setLastUsedAntigravityOptions(capture(prefsSlot)) } just Runs
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectAntigravityMode()
+        setUp(vm)
+        vm.submitAntigravity()
+        advanceUntilIdle()
+        return requestSlot.captured to prefsSlot.captured
+    }
+
+    @Test
+    fun submitAntigravity_byDefault_opensTheChatView() = runTest {
+        val (request, saved) = antigravitySubmit(newFixture())
+
+        assertEquals("antigravity", request.cli)
+        assertEquals(SessionResponse.UI_CHAT, request.ui)
+        assertFalse(saved.terminalUi)
+    }
+
+    @Test
+    fun submitAntigravity_withTerminalUi_opensTheTerminal_andRemembersTheChoice() = runTest {
+        val (request, saved) = antigravitySubmit(newFixture()) { it.toggleAntigravityTerminalUi(true) }
+
+        assertEquals(SessionResponse.UI_TERMINAL, request.ui)
+        assertTrue(saved.terminalUi)
+    }
+
+    @Test
+    fun submitAntigravity_whereThePcHasNoAntigravityChat_opensTheTerminal_andPointsToAgyUpdate() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            chatVersion("""{"claude":{"resume":true}}""", cli = agyCli)
+
+        val (request, _) = antigravitySubmit(fx) { vm ->
+            vm.refreshCliAvailability()
+            advanceUntilIdle()
+            assertEquals(
+                "The chat view needs a newer Antigravity CLI on your PC: run agy update there.",
+                vm.uiState.value.antigravityChatUnavailableHint,
+            )
+            assertFalse(vm.uiState.value.antigravityResumeAvailable)
+        }
+
+        assertEquals(SessionResponse.UI_TERMINAL, request.ui)
+    }
+
+    @Test
+    fun submitAntigravity_customPath_alsoOpensTheChatView() = runTest {
+        val fx = newFixture(agentId = "agent-1")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-agy-adhoc-chat", "starting", "2026-11-09T00:00:00Z")
+
+        vm.selectCustomPath()
+        advanceUntilIdle()
+        vm.setCustomPathDraft(hostAbsolutePath)
+        vm.confirmProject()
+        vm.selectAntigravityMode()
+        vm.submitAntigravity()
+        advanceUntilIdle()
+
+        assertEquals(hostAbsolutePath, requestSlot.captured.cwd)
+        assertEquals(SessionResponse.UI_CHAT, requestSlot.captured.ui)
+    }
+
+    @Test
+    fun antigravityResume_isOffered_onlyForTheChatView() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            chatVersion("""{"antigravity":{"resume":true,"live":false}}""", cli = agyCli)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.antigravityResumeAvailable)
+        assertNull(vm.uiState.value.antigravityChatUnavailableHint)
+        // Another agent's Terminal UI toggle must not hide the entry.
+        vm.toggleCodexTerminalUi(true)
+        assertTrue(vm.uiState.value.antigravityResumeAvailable)
+
+        vm.toggleAntigravityTerminalUi(true)
+
+        assertFalse(vm.uiState.value.antigravityResumeAvailable)
+    }
+
+    @Test
+    fun init_restoresTheAntigravityTerminalUiChoice() = runTest {
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedAntigravityOptions() } returns AntigravityLaunchPrefs(terminalUi = true)
+
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.antigravityTerminalUi)
+        assertFalse(vm.uiState.value.codexTerminalUi)
+    }
+
+    @Test
+    fun resumeChatSession_antigravity_sendsTheAntigravityOptionsWithoutAWorktree() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-agy-resumed", "starting", "2026-11-09T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectAntigravityMode()
+        vm.setAntigravityModel("Gemini 3.8 Flash (High)")
+        vm.setAntigravitySandbox(true)
+        vm.setAntigravityAddDirsDraft("/a, /b")
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+        vm.resumeChatSession("antigravity", ChatStoredSession(session_id = "external-2222", cwd = "/p/alpha"))
+        advanceUntilIdle()
+
+        val request = requestSlot.captured
+        assertEquals("antigravity", request.cli)
+        assertEquals("alpha", request.project_name)
+        assertNull(request.cwd)
+        assertEquals(SessionResponse.UI_CHAT, request.ui)
+        assertEquals("external-2222", request.chat_resume_id)
+        assertNull(request.claude_options)
+        assertNull(request.codex_options)
+        val options = request.antigravity_options
+        assertNotNull(options)
+        assertEquals("Gemini 3.8 Flash (High)", options!!.model)
+        assertTrue(options.sandbox)
+        assertFalse(options.skip_permissions)
+        assertEquals(listOf("/a", "/b"), options.add_dirs)
+        assertFalse(options.worktree)
+        assertNull(options.branch_name)
+    }
+
+    @Test
+    fun chatUnavailableHint_namesWhatEachAgentNeeds() {
+        assertEquals("The chat view needs Node.js on your PC.", chatUnavailableHint(ChatSupport.Unavailable))
+        assertEquals(
+            "The chat view needs a newer Antigravity CLI on your PC: run agy update there.",
+            chatUnavailableHint(ChatSupport.Unavailable, "antigravity"),
+        )
+        assertEquals(
+            "Update Mobaide on your PC to use the chat view.",
+            chatUnavailableHint(ChatSupport.AgentOutdated, "antigravity"),
+        )
+        assertNull(chatUnavailableHint(null, "antigravity"))
+    }
+
     // ---- Worktree base branch ----------------------------------------------
 
     private fun worktreeBaseVersion(enabled: Boolean = true) = VersionInfoResponse(
@@ -3974,7 +4345,7 @@ class CreateSessionViewModelTest {
     )
 
     /** alpha (git) selected, ModePick probe run, worktree on. */
-    private suspend fun kotlinx.coroutines.test.TestScope.worktreeVm(
+    private suspend fun TestScope.worktreeVm(
         fx: Fixture,
         capability: Boolean = true,
     ): CreateSessionViewModel {

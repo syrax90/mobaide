@@ -23,7 +23,11 @@ private struct CreateSessionContent: View {
     @State private var projectSheet: ProjectFormMode?
     @State private var pathSuggestions: PathSuggestionsModel
     @State private var claudeAdvancedExpanded = false
+    @State private var codexAdvancedExpanded = false
+    @State private var antigravityAdvancedExpanded = false
     @State private var autoScanAdvancedExpanded = false
+    @State private var showContinueSession = false
+    @State private var pendingContinue: ChatStoredSession?
     @State private var baseBranchPickerShown = false
     /// Reorder mode for the project and mode lists: rows show the native drag
     /// handles and a tap no longer picks (the Projects screen's Edit pattern).
@@ -110,6 +114,22 @@ private struct CreateSessionContent: View {
         .sheet(item: $model.typeEditorTarget) { target in
             CustomAgentTypeEditorSheet(model: model, target: target.type)
         }
+        // The pick runs after the sheet is gone, so the push it may cause
+        // never races the dismissal.
+        .sheet(isPresented: $showContinueSession, onDismiss: {
+            guard let stored = pendingContinue else { return }
+            pendingContinue = nil
+            Task { await model.continueSession(stored) }
+        }) {
+            ContinueSessionSheet(
+                agentAPI: container.agentAPI,
+                kind: model.continueKind,
+                live: model.continueIsLive,
+                folder: model.continueFolder
+            ) { stored in
+                pendingContinue = stored
+            }
+        }
         .alert(
             "Delete agent type?",
             isPresented: typeDeletePresented,
@@ -184,7 +204,9 @@ private struct CreateSessionContent: View {
     }
 
     private var codexLoginPresented: Binding<Bool> {
-        Binding(get: { model.showCodexLogin }, set: { if !$0 { model.cancelCodexLogin() } })
+        // Hiding only: the alert also closes after "Log in", before its Task
+        // reads the key and the pending resume. Cancel clears them itself.
+        Binding(get: { model.showCodexLogin }, set: { if !$0 { model.hideCodexLogin() } })
     }
 
     private var typeDeletePresented: Binding<Bool> {
@@ -404,6 +426,12 @@ private struct CreateSessionContent: View {
             if model.mode == .standard {
                 claudeAdvancedSection
             }
+            if model.mode == .codex {
+                codexAdvancedSection
+            }
+            if model.mode == .antigravity {
+                antigravityAdvancedSection
+            }
             Section {
                 Button {
                     Task { await model.create() }
@@ -451,6 +479,8 @@ private struct CreateSessionContent: View {
 
         claudeAdvancedOptions(
             isExpanded: $autoScanAdvancedExpanded,
+            terminalUI: nil,
+            showsDebug: true,
             noMemory: $model.autoScanNoMemory,
             fastMode: $model.autoScanClaudeFastMode,
             ultracode: $model.autoScanClaudeUltracode,
@@ -496,9 +526,60 @@ private struct CreateSessionContent: View {
                 fastMode: model.claudeFastMode,
                 ultracode: model.claudeUltracode
             )
-            focusViewToggle($model.focusMode)
+            // Focus view only shapes Claude Code's terminal TUI.
+            if !model.claudeUsesChat {
+                focusViewToggle($model.focusMode)
+            }
             Toggle("Skip permissions", isOn: $model.skipPermissions)
         }
+        continueSessionSection(agentName: "Claude Code")
+    }
+
+    /// "Continue a session" for the agents whose sessions open in the chat view.
+    @ViewBuilder
+    private func continueSessionSection(
+        agentName: String,
+        hint: String? = nil
+    ) -> some View {
+        if model.canContinueSession {
+            Section {
+                Button {
+                    showContinueSession = true
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .foregroundStyle(colors.accent)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Continue a session")
+                                .foregroundStyle(colors.text)
+                            Text(hint ?? "Open a \(agentName) session started on your PC, for example in a terminal.")
+                                .font(.caption)
+                                .foregroundStyle(colors.textMuted)
+                        }
+                        Spacer()
+                        if model.submitting {
+                            PixelLoadingBlock(width: 7, height: 13)
+                        } else {
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(colors.gray)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .disabled(model.submitting)
+            }
+        }
+    }
+
+    /// "Terminal UI" under Advanced: the classic terminal instead of the chat view.
+    @ViewBuilder
+    private func terminalUIToggle(_ isOn: Binding<Bool>, unavailableReason: String?) -> some View {
+        Toggle("Terminal UI", isOn: isOn)
+            .disabled(unavailableReason != nil)
+        Text(unavailableReason ?? "Use the classic terminal instead of the chat view.")
+            .font(.footnote)
+            .foregroundStyle(unavailableReason != nil ? colors.warning : colors.textMuted)
     }
 
     /// Rendered after the Worktree section, so the main options stay on top.
@@ -507,6 +588,11 @@ private struct CreateSessionContent: View {
         @Bindable var model = model
         claudeAdvancedOptions(
             isExpanded: $claudeAdvancedExpanded,
+            terminalUI: Binding(
+                get: { model.terminalUI || model.chatUnavailable },
+                set: { model.terminalUI = $0 }
+            ),
+            showsDebug: !model.claudeUsesChat,
             noMemory: $model.noMemory,
             fastMode: $model.claudeFastMode,
             ultracode: $model.claudeUltracode,
@@ -547,10 +633,14 @@ private struct CreateSessionContent: View {
     }
 
     /// Collapsed-by-default "Advanced" section shared by the Claude Code and
-    /// Auto Scan steps (Android: `ClaudeAdvancedOptions`).
+    /// Auto Scan steps (Android: `ClaudeAdvancedOptions`). `terminalUI` is the
+    /// Claude Code step's chat / terminal choice; Auto Scan always runs in the
+    /// terminal and passes nil.
     @ViewBuilder
     private func claudeAdvancedOptions(
         isExpanded: Binding<Bool>,
+        terminalUI: Binding<Bool>?,
+        showsDebug: Bool,
         noMemory: Binding<Bool>,
         fastMode: Binding<Bool>,
         ultracode: Binding<Bool>,
@@ -559,13 +649,18 @@ private struct CreateSessionContent: View {
     ) -> some View {
         Section {
             DisclosureGroup("Advanced", isExpanded: isExpanded) {
+                if let terminalUI {
+                    terminalUIToggle(terminalUI, unavailableReason: model.chatUnavailableReason)
+                }
                 Toggle("No memory", isOn: noMemory)
                 Toggle("Fast mode (Opus only)", isOn: fastMode)
                 Toggle("Ultracode", isOn: ultracode)
-                Toggle("Debug logging", isOn: debug)
-                Text("Claude Code prints verbose diagnostics into the terminal.")
-                    .font(.footnote)
-                    .foregroundStyle(colors.textMuted)
+                if showsDebug {
+                    Toggle("Debug logging", isOn: debug)
+                    Text("Claude Code prints verbose diagnostics into the terminal.")
+                        .font(.footnote)
+                        .foregroundStyle(colors.textMuted)
+                }
                 TextField("Append system prompt", text: appendSystemPrompt, axis: .vertical)
                     .lineLimit(1...4)
                     .autocorrectionDisabled()
@@ -578,10 +673,20 @@ private struct CreateSessionContent: View {
     @ViewBuilder
     private var codexConfig: some View {
         @Bindable var model = model
-        Section(header: PixelSectionHeader("Autonomy")) {
-            Button("Read only") { applyCodexPreset(sandbox: "read-only", approval: "on-request", fullAuto: false) }
-            Button("Auto") { applyCodexPreset(sandbox: "workspace-write", approval: "on-request", fullAuto: false) }
-            Button("Full access") { applyCodexPreset(sandbox: "danger-full-access", approval: "never", fullAuto: true) }
+        // Sandbox and approval live under Advanced, so the preset rows show
+        // which one the current pair matches (none for a hand-picked pair).
+        Section {
+            ForEach(CodexAutonomyPreset.allCases, id: \.self) { preset in
+                selectableRow(preset.title, subtitle: preset.subtitle, selected: model.codexPreset == preset) {
+                    model.applyCodexPreset(preset)
+                }
+            }
+        } header: {
+            PixelSectionHeader("Autonomy")
+        } footer: {
+            if model.codexPreset == nil {
+                PixelSectionFooter("Custom sandbox/approval set in Advanced.")
+            }
         }
         Section(header: PixelSectionHeader("Codex")) {
             // Routed through setCodexModel (not a bare binding) so a stranded
@@ -606,14 +711,37 @@ private struct CreateSessionContent: View {
             Picker("Reasoning effort", selection: $model.codexReasoningEffort) {
                 ForEach(effortOptions, id: \.self) { Text($0).tag($0) }
             }
-            Picker("Sandbox", selection: $model.codexSandbox) {
-                ForEach(CreateSessionModel.codexSandboxes, id: \.self) { Text($0).tag($0) }
+        }
+        continueSessionSection(agentName: "Codex")
+    }
+
+    /// Collapsed like the Claude Code one; rendered after the Worktree section.
+    @ViewBuilder
+    private var codexAdvancedSection: some View {
+        @Bindable var model = model
+        Section {
+            DisclosureGroup("Advanced", isExpanded: $codexAdvancedExpanded) {
+                terminalUIToggle(
+                    Binding(
+                        get: { model.codexTerminalUI || model.codexChatUnavailable },
+                        set: { model.codexTerminalUI = $0 }
+                    ),
+                    unavailableReason: model.codexChatUnavailableReason
+                )
+                Picker("Sandbox", selection: $model.codexSandbox) {
+                    ForEach(CreateSessionModel.codexSandboxes, id: \.self) { Text($0).tag($0) }
+                }
+                .disabled(model.codexFullAuto)
+                Picker("Approval", selection: $model.codexApproval) {
+                    ForEach(CreateSessionModel.codexApprovals, id: \.self) { Text($0).tag($0) }
+                }
+                .disabled(model.codexFullAuto)
+                if model.codexFullAuto {
+                    Text("Sandbox and approval are ignored in Full-access (--yolo).")
+                        .font(.footnote)
+                        .foregroundStyle(colors.textMuted)
+                }
             }
-            .disabled(model.codexFullAuto)
-            Picker("Approval", selection: $model.codexApproval) {
-                ForEach(CreateSessionModel.codexApprovals, id: \.self) { Text($0).tag($0) }
-            }
-            .disabled(model.codexFullAuto)
         }
     }
 
@@ -638,6 +766,26 @@ private struct CreateSessionContent: View {
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .pixelField()
+        }
+        continueSessionSection(
+            agentName: "Antigravity",
+            hint: "Open an Antigravity conversation started on your PC, for example with agy in a terminal."
+        )
+    }
+
+    /// Collapsed like the Codex one; rendered after the Worktree section.
+    @ViewBuilder
+    private var antigravityAdvancedSection: some View {
+        Section {
+            DisclosureGroup("Advanced", isExpanded: $antigravityAdvancedExpanded) {
+                terminalUIToggle(
+                    Binding(
+                        get: { model.antigravityTerminalUI || model.antigravityChatUnavailable },
+                        set: { model.antigravityTerminalUI = $0 }
+                    ),
+                    unavailableReason: model.antigravityChatUnavailableReason
+                )
+            }
         }
     }
 
@@ -728,12 +876,6 @@ private struct CreateSessionContent: View {
 
     // MARK: - Helpers
 
-    private func applyCodexPreset(sandbox: String, approval: String, fullAuto: Bool) {
-        model.codexSandbox = sandbox
-        model.codexApproval = approval
-        model.codexFullAuto = fullAuto
-    }
-
     private func selectableRow(
         _ title: String,
         subtitle: String? = nil,
@@ -754,6 +896,7 @@ private struct CreateSessionContent: View {
                 PixelRadio(isSelected: selected)
             }
         }
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     /// Tap fills the field; swipe forgets the path. Head truncation keeps the

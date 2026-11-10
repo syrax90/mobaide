@@ -810,6 +810,10 @@ its WebGL addon outweigh the rest of the SPA, so they load on first attach
 rather than on the sign-in screen. It is reached from the sessions list at
 `/`, or from the sessions panel below.
 
+The same route renders the chat view instead of xterm for sessions whose
+`ui` is `chat` (`routes/chat/SessionRoute.tsx` picks by `ui`); see *Chat
+Sessions* in `features.md`.
+
 ### Route and sessions panel
 
 **Sessions panel.** A `☰` "Sessions" button in `.terminal-bar` opens a panel
@@ -1117,7 +1121,7 @@ Paste encoding is the mobile encoder:
 The toggle outlives the tab: `terminalPrefsStore` persists it under
 `localStorage` key `mobaide-terminal`. The other persisted keys are
 `mobaide-theme`, `mobaide-agent`, `mobaide-sessions`, `mobaide-launch-prefs`,
-`mobaide-sessions-panel`, `mobaide-external-sessions-notice` (the dismissible
+`mobaide-sessions-panel`, `mobaide-chat` (the chat Focus view toggle), `mobaide-external-sessions-notice` (the dismissible
 external-sessions notice above the sessions list), and the wizard's per-agent
 `recent_custom_paths::<agentId>`, deliberately unprefixed for mobile parity —
 CLA-258's `clearAllRecentPaths()` keys off `recent_custom_paths::` itself.
@@ -1328,7 +1332,9 @@ results matrix are in docs/web-keyboard-reserved-keys.md; running it is CLA-251.
 
 **Immersive mode** is fullscreen plus `navigator.keyboard.lock()` — the only way
 Ctrl+W, Ctrl+T, Ctrl+N and F11 ever reach a web page. Chromium-only and
-feature-detected. The permission prompt Chrome announced for 131 was never
+feature-detected. It is the terminal's full-screen icon button. The chat header
+has a plain-Fullscreen-API button without Keyboard Lock, hidden where
+unsupported (for example iPhone Safari). The permission prompt Chrome announced for 131 was never
 launched, so there is none to design around.
 
 Tier-1 PWA widening is wired but conservative: a minimal `manifest.webmanifest`

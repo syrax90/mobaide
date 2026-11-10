@@ -110,6 +110,8 @@ An explicit `--port` is remembered; bare re-runs reuse it.
 
 `MOBAIDE_ENV=test` on the **agent** selects the fake echo PTY backend — no real shells, no real CLIs — which suits the automated harness but not manual testing. The script therefore runs the agent in production mode by default. If you *want* the dependency-free echo mode (e.g. to verify the infrastructure on a machine with no CLIs), use `--fake-pty`, and `--fake-pty --smoke` to also drive one echo session end-to-end.
 
+Chat sessions follow the same switch. In production mode they run the real ACP adapters (Node.js on the PC and a signed-in `claude` or `codex`; for Antigravity, a signed-in `agy` that supports `agy acp`). `MOBAIDE_ACP_CODEX_COMMAND` and `MOBAIDE_ACP_ANTIGRAVITY_COMMAND` override the Codex adapter and the `agy acp` command. With `--fake-pty` they run the scripted fake ACP agent (`mobaide_agent/mobaide/acp/fake_agent.py`), so every chat state is reachable without an account: the message text picks the scenario — `tools`, `permission`, `question`, `plan`, `markdown`, `slow` (also use it to try Send now), `external` (a message from another app), `fail`, `crash`, anything else echoes. Codex sessions use `--flavor codex` of the fake agent, and Antigravity sessions use `--flavor antigravity`. Continue a session lists two fake stored sessions.
+
 This is safe on a machine with a production agent install: the auto-updater is fail-closed (no trust key in the throwaway prefix), and the explicit child environment + throwaway `MOBAIDE_AGENT_PREFIX` keep the test agent away from any real install's `.env`, stores, and state.
 
 ## What the script writes into your checkout

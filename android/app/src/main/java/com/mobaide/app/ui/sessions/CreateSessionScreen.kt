@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.outlined.History
 import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import com.mobaide.app.ui.common.pixel.PixelButton
 import com.mobaide.app.ui.common.pixel.PixelButtonStyle
@@ -102,11 +103,16 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.selection.toggleable
 import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mobaide.app.data.network.dto.ChatSupport
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.ui.common.pathBrowseHint
 import com.mobaide.app.ui.common.DragHandleIcon
@@ -125,8 +131,16 @@ fun CreateSessionScreen(
     onBack: () -> Unit,
     onSessionCreated: (String) -> Unit,
     onAutoScanStarted: (String) -> Unit,
+    chatResumeViewModel: ChatResumeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val resumeState by chatResumeViewModel.uiState.collectAsStateWithLifecycle()
+    var showResume by rememberSaveable { mutableStateOf(false) }
+    // "Continue a session" of one agent ([kind]): its stored conversations in this folder.
+    val openResume = { kind: String, chat: ChatSupport? ->
+        chatResumeViewModel.open(kind, state.selectedFolder, (chat as? ChatSupport.Available)?.live == true)
+        showResume = true
+    }
     val projectsState by projectsViewModel.uiState.collectAsStateWithLifecycle()
     val customPathSuggestions by viewModel.customPathSuggestionState.collectAsStateWithLifecycle()
     val projectPathSuggestions by projectsViewModel.pathSuggestionState.collectAsStateWithLifecycle()
@@ -284,18 +298,21 @@ fun CreateSessionScreen(
                             showWorktreeToggle = state.selection is ProjectSelection.Stored &&
                                 storedProject?.is_git == true,
                             viewModel = viewModel,
+                            onContinueSession = { openResume("claude", state.claudeChat) },
                         )
                         CreateSessionStep.CodexConfig -> CodexConfigSection(
                             state = state,
                             showWorktreeToggle = state.selection is ProjectSelection.Stored &&
                                 storedProject?.is_git == true,
                             viewModel = viewModel,
+                            onContinueSession = { openResume("codex", state.codexChat) },
                         )
                         CreateSessionStep.AntigravityConfig -> AntigravityConfigSection(
                             state = state,
                             showWorktreeToggle = state.selection is ProjectSelection.Stored &&
                                 storedProject?.is_git == true,
                             viewModel = viewModel,
+                            onContinueSession = { openResume("antigravity", state.antigravityChat) },
                         )
                         CreateSessionStep.AutoScanConfig -> AutoScanConfigSection(
                             state = state,
@@ -310,6 +327,39 @@ fun CreateSessionScreen(
                 }
             }
         }
+    }
+
+    val resumeKind = when (state.step) {
+        CreateSessionStep.StandardConfig -> "claude"
+        CreateSessionStep.CodexConfig -> "codex"
+        CreateSessionStep.AntigravityConfig -> "antigravity"
+        else -> null
+    }
+    if (showResume && resumeKind != null) {
+        val resumeChat = when (resumeKind) {
+            "codex" -> state.codexChat
+            "antigravity" -> state.antigravityChat
+            else -> state.claudeChat
+        }
+        LaunchedEffect(resumeKind) {
+            chatResumeViewModel.ensureOpen(
+                resumeKind,
+                state.selectedFolder,
+                (resumeChat as? ChatSupport.Available)?.live == true,
+            )
+        }
+        ChatResumeSheet(
+            state = resumeState,
+            onSetAllFolders = chatResumeViewModel::setAllFolders,
+            onRetry = chatResumeViewModel::retry,
+            onLoadMore = chatResumeViewModel::loadMore,
+            onPick = { row ->
+                showResume = false
+                val openId = row.open_session_id
+                if (openId != null) onSessionCreated(openId) else viewModel.resumeChatSession(resumeKind, row)
+            },
+            onDismiss = { showResume = false },
+        )
     }
 
     val form = projectsState.form
@@ -1243,7 +1293,14 @@ private fun StandardConfigSection(
     state: CreateSessionUiState,
     showWorktreeToggle: Boolean,
     viewModel: CreateSessionViewModel,
+    onContinueSession: () -> Unit,
 ) {
+    if (state.claudeResumeAvailable) {
+        ContinueSessionCard(
+            subtitle = "Open a Claude Code session started on your PC, for example in a terminal.",
+            onClick = onContinueSession,
+        )
+    }
     ClaudeOptionControls(
         model = state.claudeModel,
         effort = state.claudeEffort,
@@ -1252,7 +1309,7 @@ private fun StandardConfigSection(
         onModelSelect = viewModel::setClaudeModel,
         onEffortSelect = viewModel::setClaudeEffort,
     )
-    FocusViewToggle(state.focusMode, viewModel::toggleFocusMode)
+    if (!state.claudeUsesChat) FocusViewToggle(state.focusMode, viewModel::toggleFocusMode)
     ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
 
     if (showWorktreeToggle) {
@@ -1272,6 +1329,14 @@ private fun StandardConfigSection(
         onUltracodeToggle = viewModel::toggleClaudeUltracode,
         onDebugToggle = viewModel::toggleClaudeDebug,
         onAppendSystemPromptChange = viewModel::setClaudeAppendSystemPrompt,
+        showDebug = !state.claudeUsesChat,
+        leadingContent = {
+            TerminalUiToggle(
+                checked = state.claudeTerminalUi,
+                lockedHint = state.claudeChatUnavailableHint,
+                onChange = viewModel::toggleTerminalUi,
+            )
+        },
     )
 
     PixelButton(
@@ -1284,14 +1349,71 @@ private fun StandardConfigSection(
     }
 }
 
+/** "Continue a session" for the agents whose sessions open in the chat view. */
+@Composable
+private fun ContinueSessionCard(subtitle: String, onClick: () -> Unit) {
+    WizardActionCard(
+        title = "Continue a session",
+        subtitle = subtitle,
+        icon = Icons.Outlined.History,
+        selected = false,
+        onClick = onClick,
+        contentDescription = "Continue a session",
+        testTag = "continue_chat_session",
+    )
+}
+
+/** An agent's collapsed-by-default "Advanced" options. */
+@Composable
+private fun AdvancedSection(content: @Composable () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    PixelTextButton(
+        onClick = { expanded = !expanded },
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" },
+    ) {
+        Icon(
+            imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+            contentDescription = null,
+        )
+        Text("Advanced")
+    }
+    if (expanded) content()
+}
+
+/** "Terminal UI" under Advanced: the classic terminal instead of the chat view. */
+@Composable
+private fun TerminalUiToggle(checked: Boolean, lockedHint: String?, onChange: (Boolean) -> Unit) {
+    ToggleRow(
+        label = "Terminal UI",
+        checked = checked || lockedHint != null,
+        onChange = onChange,
+        enabled = lockedHint == null,
+    )
+    Text(
+        text = lockedHint ?: "Use the classic terminal instead of the chat view.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CodexConfigSection(
     state: CreateSessionUiState,
     showWorktreeToggle: Boolean,
     viewModel: CreateSessionViewModel,
+    onContinueSession: () -> Unit,
 ) {
     val preset = state.codexPreset
+
+    if (state.codexResumeAvailable) {
+        ContinueSessionCard(
+            subtitle = "Open a Codex session started on your PC, for example in a terminal.",
+            onClick = onContinueSession,
+        )
+    }
 
     Text("Autonomy", style = MaterialTheme.typography.labelLarge)
     val presets = listOf(
@@ -1337,19 +1459,13 @@ private fun CodexConfigSection(
         onSelect = viewModel::setCodexReasoningEffort,
     )
 
-    var advancedExpanded by remember { mutableStateOf(false) }
-    PixelTextButton(
-        onClick = { advancedExpanded = !advancedExpanded },
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Icon(
-            imageVector = if (advancedExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-            contentDescription = null,
-        )
-        Text("Advanced")
-    }
-    if (advancedExpanded) {
+    AdvancedSection {
         val fullAuto = state.codexFullAuto
+        TerminalUiToggle(
+            checked = state.codexTerminalUi,
+            lockedHint = state.codexChatUnavailableHint,
+            onChange = viewModel::toggleCodexTerminalUi,
+        )
         Text("Sandbox (-s)", style = MaterialTheme.typography.labelLarge)
         val sandboxes = listOf(
             "read-only" to "Read-only",
@@ -1469,7 +1585,15 @@ private fun AntigravityConfigSection(
     state: CreateSessionUiState,
     showWorktreeToggle: Boolean,
     viewModel: CreateSessionViewModel,
+    onContinueSession: () -> Unit,
 ) {
+    if (state.antigravityResumeAvailable) {
+        ContinueSessionCard(
+            subtitle = "Open an Antigravity conversation started on your PC, for example with agy in a terminal.",
+            onClick = onContinueSession,
+        )
+    }
+
     CliModelDropdown(
         models = state.antigravityModels?.takeIf { it.isNotEmpty() }
             ?: CreateSessionViewModel.ANTIGRAVITY_MODELS,
@@ -1510,7 +1634,7 @@ private fun AntigravityConfigSection(
         value = state.antigravityAddDirsDraft,
         onValueChange = viewModel::setAntigravityAddDirsDraft,
         label = { Text("Additional directories (one per line, optional)") },
-        supportingText = { Text("Each is added to the workspace via --add-dir.") },
+        supportingText = { Text("Each is added to the workspace.") },
         keyboardOptions = KeyboardOptions(
             capitalization = KeyboardCapitalization.None,
             autoCorrectEnabled = false,
@@ -1522,6 +1646,14 @@ private fun AntigravityConfigSection(
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
 
         if (state.worktree) WorktreeBranchFields(state, viewModel)
+    }
+
+    AdvancedSection {
+        TerminalUiToggle(
+            checked = state.antigravityTerminalUi,
+            lockedHint = state.antigravityChatUnavailableHint,
+            onChange = viewModel::toggleAntigravityTerminalUi,
+        )
     }
 
     PixelButton(
@@ -1599,28 +1731,22 @@ private fun ClaudeAdvancedOptions(
     onUltracodeToggle: (Boolean) -> Unit,
     onDebugToggle: (Boolean) -> Unit,
     onAppendSystemPromptChange: (String) -> Unit,
+    showDebug: Boolean = true,
+    leadingContent: (@Composable () -> Unit)? = null,
 ) {
-    var advancedExpanded by remember { mutableStateOf(false) }
-    PixelTextButton(
-        onClick = { advancedExpanded = !advancedExpanded },
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Icon(
-            imageVector = if (advancedExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-            contentDescription = null,
-        )
-        Text("Advanced")
-    }
-    if (advancedExpanded) {
+    AdvancedSection {
+        leadingContent?.invoke()
         ToggleRow("No memory", noMemory, onNoMemoryToggle)
         ToggleRow("Fast mode (Opus only)", fastMode, onFastModeToggle)
         ToggleRow("ultracode", ultracode, onUltracodeToggle)
-        ToggleRow("Debug logging", debug, onDebugToggle)
-        Text(
-            text = "Claude Code prints verbose diagnostics into the terminal.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        if (showDebug) {
+            ToggleRow("Debug logging", debug, onDebugToggle)
+            Text(
+                text = "Claude Code prints verbose diagnostics into the terminal.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         OutlinedTextField(
             colors = PixelTextFieldDefaults.colors(),
             value = appendSystemPrompt,
@@ -1896,8 +2022,18 @@ private fun ToggleRow(
     onChange: (Boolean) -> Unit,
     enabled: Boolean = true,
 ) {
+    // One toggleable row: TalkBack reads the label with the switch, and the
+    // label is a tap target too.
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(
+                value = checked,
+                enabled = enabled,
+                role = Role.Switch,
+                onValueChange = onChange,
+            )
+            .heightIn(min = 48.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -1908,7 +2044,7 @@ private fun ToggleRow(
         )
         Switch(
             checked = checked,
-            onCheckedChange = onChange,
+            onCheckedChange = null,
             enabled = enabled,
             colors = pixelSwitchColors(),
         )

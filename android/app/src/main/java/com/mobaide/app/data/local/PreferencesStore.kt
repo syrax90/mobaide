@@ -36,6 +36,7 @@ class PreferencesStore(private val context: Context) {
     private val keyExternalSessionsNoticeDismissed =
         booleanPreferencesKey("external_sessions_notice_dismissed")
     private val keyVoiceCleanupNoticeSeen = booleanPreferencesKey("voice_cleanup_notice_seen")
+    private val keyChatFocusView = booleanPreferencesKey("chat_focus_view")
 
     // Device-local, not account-scoped (device backups carry them): no sign-out
     // sweep touches them, since the store's quota follows the device's store
@@ -113,6 +114,19 @@ class PreferencesStore(private val context: Context) {
 
     suspend fun setVoiceCleanupNoticeSeen() {
         context.dataStore.edit { prefs -> prefs[keyVoiceCleanupNoticeSeen] = true }
+    }
+
+    /**
+     * Chat focus view: answers and questions only, thinking and tool calls
+     * folded into one row per run. On by default; one setting for every chat.
+     */
+    val chatFocusView: Flow<Boolean> =
+        context.dataStore.data
+            .catch { e -> if (e is IOException) emit(emptyPreferences()) else throw e }
+            .map { it[keyChatFocusView] ?: true }
+
+    suspend fun setChatFocusView(on: Boolean) {
+        context.dataStore.edit { prefs -> prefs[keyChatFocusView] = on }
     }
 
     val terminalStaticColumns: Flow<Int> =

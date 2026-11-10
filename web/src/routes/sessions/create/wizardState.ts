@@ -70,6 +70,8 @@ export interface ClaudeBucket {
   noMemory: boolean;
   planMode: boolean;
   initialPrompt: string;
+  /** Claude Code only: the classic terminal instead of the chat view. */
+  terminalUi: boolean;
 }
 
 export interface CodexBucket {
@@ -78,6 +80,8 @@ export interface CodexBucket {
   approval: CodexApproval;
   fullAuto: boolean;
   reasoningEffort: CodexReasoningEffort | null;
+  /** The classic terminal instead of the chat view. */
+  terminalUi: boolean;
 }
 
 export interface AntigravityBucket {
@@ -85,6 +89,8 @@ export interface AntigravityBucket {
   skipPermissions: boolean;
   sandbox: boolean;
   addDirsDraft: string;
+  /** The classic terminal instead of the chat view. */
+  terminalUi: boolean;
 }
 
 export interface GitBucket {
@@ -136,6 +142,7 @@ const CLAUDE_DEFAULTS: ClaudeBucket = {
   noMemory: false,
   planMode: false,
   initialPrompt: '',
+  terminalUi: false,
 };
 
 export const INITIAL_WIZARD_STATE: WizardState = {
@@ -157,8 +164,15 @@ export const INITIAL_WIZARD_STATE: WizardState = {
     approval: 'on-request',
     fullAuto: false,
     reasoningEffort: 'high',
+    terminalUi: false,
   },
-  antigravity: { model: null, skipPermissions: false, sandbox: false, addDirsDraft: '' },
+  antigravity: {
+    model: null,
+    skipPermissions: false,
+    sandbox: false,
+    addDirsDraft: '',
+    terminalUi: false,
+  },
   git: { worktree: false, branchName: '' },
   worktreeBasePick: null,
   autoScanPromptSeededFor: null,
@@ -305,7 +319,8 @@ export type WizardAction =
         | 'focusMode'
         | 'skipPermissions'
         | 'noMemory'
-        | 'planMode';
+        | 'planMode'
+        | 'terminalUi';
       value: boolean;
     }
   | {
@@ -320,10 +335,12 @@ export type WizardAction =
   | { type: 'setCodexReasoningEffort'; effort: CodexReasoningEffort | null }
   | { type: 'setCodexSandbox'; sandbox: CodexSandbox }
   | { type: 'setCodexApproval'; approval: CodexApproval }
+  | { type: 'setCodexTerminalUi'; value: boolean }
   | { type: 'setAntigravityModel'; model: string | null }
   | { type: 'setAntigravitySkipPermissions'; value: boolean }
   | { type: 'setAntigravitySandbox'; value: boolean }
   | { type: 'setAntigravityAddDirs'; draft: string }
+  | { type: 'setAntigravityTerminalUi'; value: boolean }
   | { type: 'setWorktree'; value: boolean }
   | { type: 'setBranchName'; value: string }
   | { type: 'setWorktreeBase'; pick: WorktreeBasePick }
@@ -499,6 +516,9 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
     case 'setCodexApproval':
       return { ...state, codex: { ...state.codex, approval: action.approval } };
 
+    case 'setCodexTerminalUi':
+      return { ...state, codex: { ...state.codex, terminalUi: action.value } };
+
     case 'setAntigravityModel':
       return { ...state, antigravity: { ...state.antigravity, model: action.model } };
 
@@ -526,6 +546,9 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
 
     case 'setAntigravityAddDirs':
       return { ...state, antigravity: { ...state.antigravity, addDirsDraft: action.draft } };
+
+    case 'setAntigravityTerminalUi':
+      return { ...state, antigravity: { ...state.antigravity, terminalUi: action.value } };
 
     case 'setWorktree':
       return { ...state, git: { ...state.git, worktree: action.value } };

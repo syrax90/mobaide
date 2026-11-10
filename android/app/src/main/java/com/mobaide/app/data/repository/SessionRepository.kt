@@ -5,6 +5,7 @@ import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.network.RestApi
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WebSocketManager
+import com.mobaide.app.data.network.dto.ChatStoredSessionsResponse
 import com.mobaide.app.data.network.dto.CodexLoginResponse
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.ScrollbackResponse
@@ -77,6 +78,10 @@ class SessionRepository(
         }
 
     suspend fun listSessions(): List<SessionResponse> = restApi.listSessions()
+
+    /** Sessions the agent [kind] stored on the PC (a stateless read, like [listSessions]). */
+    suspend fun listChatSessions(kind: String, cwd: String?, cursor: String?): ChatStoredSessionsResponse =
+        restApi.listChatSessions(kind, cwd, cursor)
 
     /** One-shot Codex sign-in; the successful retry reconciles the session list
      *  via the existing `SessionsChanged` subscription above. */

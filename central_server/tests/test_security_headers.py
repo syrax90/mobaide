@@ -666,6 +666,21 @@ class TestCaddySpaHeadersMirrorTheProviderConcessions:
         assert SPA_APPLE_JS_SCRIPT_URL in script_src.split()
 
     @pytest.mark.parametrize("filename", PROD_CADDYFILES)
+    def test_the_spa_img_src_allows_only_page_made_images(self, filename) -> None:
+        """The chat view draws agent images from ``data:`` URLs and attachment
+        previews from ``blob:`` URLs; ``'self'`` alone blocks both. Nothing
+        broader belongs here: a ``*`` or ``https:`` would let any markup the
+        agent echoes load a tracking pixel from anywhere."""
+        snippet = _app_mobaide_snippet(filename)
+        policy = _caddy_header_value(snippet, "Content-Security-Policy")
+        img_src = next(
+            directive.strip()
+            for directive in policy.split(";")
+            if directive.strip().startswith("img-src ")
+        )
+        assert set(img_src.split()[1:]) == {"'self'", "data:", "blob:"}
+
+    @pytest.mark.parametrize("filename", PROD_CADDYFILES)
     def test_the_spa_opener_policy_matches_the_middlewares(self, filename) -> None:
         """Same popup, same failure mode: ``same-origin`` here would sever the
         opener the SPA's own sign-in popup posts its credential back through."""

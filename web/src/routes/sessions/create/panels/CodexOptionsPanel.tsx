@@ -1,6 +1,6 @@
 import { SelectField } from '../../../../components/form/SelectField';
 import { CODEX_APPROVALS, CODEX_SANDBOXES } from '../../../../protocol/dto/sessionCreate';
-import type { CliModelDetail } from '../../../../protocol/dto/agentVersion';
+import type { ChatSupport, CliModelDetail } from '../../../../protocol/dto/agentVersion';
 import {
   CODEX_MODELS,
   codexEffortsFor,
@@ -12,12 +12,15 @@ import {
   type WizardAction,
 } from '../wizardState';
 import { modelOptions } from './ClaudeOptionsPanel';
+import { TerminalUiField } from './TerminalUiField';
 
 interface CodexOptionsPanelProps {
   bucket: CodexBucket;
   models: readonly string[] | null;
   modelDetails: readonly CliModelDetail[] | null;
   dispatch: (action: WizardAction) => void;
+  /** Shows the Terminal UI toggle, gated on this PC's chat support for Codex. */
+  chat?: ChatSupport;
 }
 
 const PRESETS: readonly { preset: CodexPreset; label: string; description: string }[] = [
@@ -43,6 +46,7 @@ export function CodexOptionsPanel({
   models,
   modelDetails,
   dispatch,
+  chat,
 }: CodexOptionsPanelProps) {
   const active = codexPreset(bucket);
   const efforts = codexEffortsFor(modelDetails, bucket.model);
@@ -105,8 +109,18 @@ export function CodexOptionsPanel({
         }}
       />
 
-      <details className="advanced">
+      <details className="advanced advanced-stack">
         <summary>Advanced</summary>
+        {chat !== undefined && (
+          <TerminalUiField
+            chat={chat}
+            agent="codex"
+            checked={bucket.terminalUi}
+            onChange={(value) => {
+              dispatch({ type: 'setCodexTerminalUi', value });
+            }}
+          />
+        )}
         <SelectField
           label="Sandbox"
           value={bucket.sandbox}

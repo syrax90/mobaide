@@ -15,4 +15,5 @@ data class AntigravityLaunchPrefs(
     val model: String? = null,
     val skipPermissions: Boolean = false,
     val sandbox: Boolean = false,
+    val terminalUi: Boolean = false,
 )

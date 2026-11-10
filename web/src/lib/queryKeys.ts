@@ -122,6 +122,9 @@ export const queryKeys = {
    * `gcTime: 0` — a second observer would stretch that entry's lifetime.
    */
   agentFsDirs: (agentId: string) => ['agent', agentId, 'capabilities', 'fs-dirs'] as const,
+  /** "Continue a session": one chat agent's stored sessions, in one folder or all (`null`). */
+  chatStoredSessions: (agentId: string, kind: string, cwd: string | null) =>
+    ['agent', agentId, 'chat-stored', kind, cwd] as const,
 };
 
 /**

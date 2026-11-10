@@ -58,6 +58,10 @@ async def test_get_version(client) -> None:
             "cleanup_kinds": ["claude", "codex", "antigravity"],
         },
         "fs": {"dirs": True, "windows_paths": sys.platform == "win32"},
+        "chat": {
+            "claude": {"resume": True, "live": False},
+            "codex": {"resume": True, "live": sys.platform != "win32"},
+        },
     }
     # The signed manifest body now travels inline over the relay WebSocket
     # — it is not exposed via this REST surface.

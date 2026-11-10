@@ -267,3 +267,30 @@ export function gitCapabilities(info: AgentVersionInfo | undefined): GitCapabili
     conflicts: gitCapability(info, 'conflicts'),
   };
 }
+
+/**
+ * Whether an agent kind can start in the chat UI on this PC (`capabilities.chat`).
+ *
+ * `unknown` is a probe that has not answered (or failed): callers let the
+ * server decide then, but never send `chat` once they know it is unavailable.
+ * `outdated` is an agent with no chat support at all; `unavailable` is one
+ * that knows chat but cannot run this kind (no Node.js on the PC).
+ */
+export type ChatSupport =
+  | { kind: 'unknown' }
+  | { kind: 'available'; resume: boolean; live: boolean }
+  | { kind: 'outdated' }
+  | { kind: 'unavailable' };
+
+export function chatSupport(info: AgentVersionInfo | undefined, agentKind: string): ChatSupport {
+  if (info === undefined) return { kind: 'unknown' };
+  const chat = info.capabilities.chat;
+  if (typeof chat !== 'object' || chat === null || Array.isArray(chat)) {
+    return { kind: 'outdated' };
+  }
+  if (!Object.hasOwn(chat, agentKind)) return { kind: 'unavailable' };
+  const entry = (chat as Record<string, unknown>)[agentKind];
+  const flag = (key: 'resume' | 'live') =>
+    typeof entry === 'object' && entry !== null && (entry as Record<string, unknown>)[key] === true;
+  return { kind: 'available', resume: flag('resume'), live: flag('live') };
+}

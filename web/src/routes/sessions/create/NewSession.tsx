@@ -3,10 +3,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { fetchAgentCapabilities } from '../../../api/agentCapabilities';
 import {
+  chatSupport,
   cliModelDetails,
   cliModelsPending,
   gitCapability,
 } from '../../../protocol/dto/agentVersion';
+import type { ChatStoredSession } from '../../../protocol/dto/chatSessions';
 import { startAutoScan } from '../../../api/autoscanRepository';
 import { codexLogin } from '../../../api/codexAuthRepository';
 import { listWorktreeBases } from '../../../api/gitRepository';
@@ -61,9 +63,12 @@ import { ProjectStep } from './ProjectStep';
 import { effectiveWorktreeBase } from './worktreeBase';
 import {
   buildCreateRequest,
+  buildResumeRequest,
   buildStartScanRequest,
+  chatAgentKind,
   type StartScanRequest,
 } from './buildCreateRequest';
+import { ResumeSessionDialog } from './ResumeSessionDialog';
 import {
   classifyAutoScanError,
   classifyCreateError,
@@ -169,6 +174,8 @@ export function NewSession() {
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [typeDialogError, setTypeDialogError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+  const [resumeOpen, setResumeOpen] = useState(false);
+  const [resumeError, setResumeError] = useState<string | null>(null);
   // The request that hit `codex_auth_required`, re-sent verbatim once the key
   // lands. Captured rather than rebuilt so the retry cannot pick up edits.
   const pendingRequest = useRef<CreateSessionRequest | null>(null);
@@ -603,9 +610,17 @@ export function NewSession() {
     onError: (cause, request) => {
       const failure = classifyCreateError(cause, request);
       if (failure.kind === 'codexAuthRequired') {
+        // A Codex resume, too: the sign-in re-sends that same request.
         pendingRequest.current = request;
+        setResumeOpen(false);
         setCodexLoginError(null);
         setShowCodexLogin(true);
+        return;
+      }
+      // A resume failure belongs to the picker, which is still open over the
+      // config step and would hide a message written there.
+      if (request.chat_resume_id !== undefined && request.chat_resume_id !== null) {
+        setResumeError(failure.message);
         return;
       }
       if (failure.kind === 'customTypeDeleted') {
@@ -709,6 +724,7 @@ export function NewSession() {
       state: { ...state, selection: location.selection },
       mode: location.mode,
       project,
+      chat: chatSupport(capabilities.data, chatAgentKind(location.mode) ?? 'claude'),
       worktreeBase,
     };
     const request =
@@ -730,6 +746,43 @@ export function NewSession() {
       create.mutate(request as CreateSessionRequest);
     }
   };
+
+  const resume = (stored: ChatStoredSession) => {
+    setResumeError(null);
+    const open = stored.open_session_id;
+    if (open !== undefined) {
+      setResumeOpen(false);
+      try {
+        setLastUsedSession(resolvedAgentId, open);
+      } catch {
+        // Storage refused; auto-resume simply will not return here.
+      }
+      void navigate(terminalPath(resolvedAgentId, open));
+      return;
+    }
+    const kind = chatAgentKind(location.mode);
+    if (location.mode === null || kind === null) return;
+    const context = {
+      state: { ...state, selection: location.selection },
+      mode: location.mode,
+      project,
+    };
+    pendingPrefs.current = launchPrefsFromState(state, kind);
+    create.mutate(buildResumeRequest(context, kind, stored));
+  };
+  const resumeKind = chatAgentKind(location.mode);
+  const resumeChat = chatSupport(capabilities.data, resumeKind ?? 'claude');
+
+  const resumeFolder =
+    location.selection.kind === 'stored'
+      ? (project?.path ?? null)
+      : location.selection.kind === 'customPath'
+        ? location.selection.path
+        : null;
+  const resuming =
+    create.isPending && typeof create.variables.chat_resume_id === 'string'
+      ? create.variables.chat_resume_id
+      : null;
 
   if (agentId === undefined) {
     return (
@@ -875,8 +928,27 @@ export function NewSession() {
           onBack={() => {
             go({ step: 'mode', mode: null });
           }}
+          onContinueSession={() => {
+            setResumeError(null);
+            setResumeOpen(true);
+          }}
         />
       ) : null}
+
+      {resumeOpen && resumeKind !== null && (
+        <ResumeSessionDialog
+          agentId={resolvedAgentId}
+          kind={resumeKind}
+          live={resumeChat.kind === 'available' && resumeChat.live}
+          folder={resumeFolder}
+          opening={resuming}
+          error={resumeError}
+          onPick={resume}
+          onClose={() => {
+            setResumeOpen(false);
+          }}
+        />
+      )}
 
       {/* Outside the steps, so a re-render of the rows cannot drop the region. */}
       <p className="visually-hidden" role="status" aria-live="polite">

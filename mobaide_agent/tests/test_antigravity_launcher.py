@@ -50,6 +50,17 @@ async def test_argv_model_display_name_is_single_element(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_argv_model_saved_as_an_agy_models_line_passes_only_the_name(tmp_path: Path):
+    """A choice saved from an older agent may hold a whole ``agy models``
+    line (model id, tab, display name), which ``--model`` rejects."""
+    spec = await AntigravityLauncher().build(
+        _make_project(str(tmp_path)),
+        AntigravityOptions(model="gemini-3.8-flash-high\tGemini 3.8 Flash (High)"),
+    )
+    assert spec.argv == ["agy", "--model", "Gemini 3.8 Flash (High)"]
+
+
+@pytest.mark.asyncio
 async def test_argv_skip_permissions_flag_added_when_true(tmp_path: Path):
     spec = await AntigravityLauncher().build(
         _make_project(str(tmp_path)), AntigravityOptions(skip_permissions=True),
@@ -406,6 +417,15 @@ def test_options_reject_flag_shaped_model_and_add_dirs():
         )
 
 
+def test_options_reject_a_flag_shaped_name_after_a_tab():
+    """``--model`` takes the part after the tab of a saved ``agy models``
+    line, so that part must not look like a CLI flag either."""
+    with pytest.raises(ValueError, match="CLI flag"):
+        AntigravityOptions(
+            model="gemini-3.8-flash\t--dangerously-skip-permissions", sandbox=True
+        )
+
+
 def test_options_accept_ordinary_model_and_dirs():
     opts = AntigravityOptions(
         model="Gemini 3.1 Pro (Low)", add_dirs=("/srv/x", "C:/y")
@@ -439,6 +459,41 @@ async def test_list_models_parses_output_and_memoizes(monkeypatch):
     assert second == ["A", "B", "C"]
     assert launcher.cached_models == ("A", "B", "C")
     assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_list_models_takes_the_display_name_of_an_id_and_name_line(monkeypatch):
+    """agy 1.5 prints ``<model id><TAB><display name>``; ``--model`` takes
+    the display name, so the id must not reach the wizard. A name-only line
+    (older builds) is kept, and a line without a name is dropped."""
+    output = (
+        "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n"
+        "claude-sonnet-4-6\t Claude Sonnet 4.6 (Thinking) \n"
+        "Gemini 3.1 Pro (Low)\n"
+        "orphan-id\t\n"
+    )
+    monkeypatch.setattr(antigravity_launcher, "_run_agy_models", lambda _binary: output)
+    launcher = AntigravityLauncher()
+
+    models = await launcher.list_models()
+
+    assert models == [
+        "Gemini 3.8 Flash (High)",
+        "Claude Sonnet 4.6 (Thinking)",
+        "Gemini 3.1 Pro (Low)",
+    ]
+    assert launcher.cached_models == tuple(models)
+
+
+@pytest.mark.asyncio
+async def test_list_models_with_only_ids_and_no_names_returns_none(monkeypatch):
+    monkeypatch.setattr(
+        antigravity_launcher, "_run_agy_models", lambda _binary: "a-id\t\nb-id\t  \n"
+    )
+    launcher = AntigravityLauncher()
+
+    assert await launcher.list_models() is None
+    assert launcher.cached_models is None
 
 
 @pytest.mark.asyncio

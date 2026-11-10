@@ -1134,6 +1134,9 @@ to satisfy every arm that reads it.
   defaults or coerces enums.
 - `frames/terminal_frames.json` — binary frame samples as hex strings (`encode`
   and `decode` case lists).
+- `frames/chat_frames.json` — chat `'a'` frame JSON samples (ACP sessions); decoded by
+  `ChatFrameFixtureTests.swift`, Android `ChatFramesFixtureTest.kt` and web
+  `chatFrames.test.ts`.
 - `frames/autoscan_frames.json` — `ws/autoscan` channel JSON frames: `cases[]` of
   `{name, wire, expect}` covering `snapshot` / `caught_up` / `event` (all six
   `ScanProgressPayload` kinds) plus malformed-drop cases, asserted against the

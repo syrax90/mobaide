@@ -119,6 +119,12 @@ def _run_agy_models(binary: str) -> str | None:
     return completed.stdout.decode(errors="replace") if completed.stdout else ""
 
 
+def agy_model_name(line: str) -> str:
+    """The name ``--model`` takes from one ``agy models`` line: newer builds
+    print the model id, a tab and the display name; older ones the name alone."""
+    return line.split("\t", 1)[-1].strip()
+
+
 @dataclass(frozen=True)
 class AntigravityOptions:
     """Antigravity CLI launch options.
@@ -153,6 +159,10 @@ class AntigravityOptions:
                 "skip_permissions and sandbox are mutually exclusive: "
                 "--dangerously-skip-permissions auto-approves sandbox escapes"
             )
+        if self.model is not None:
+            # A choice saved from an older agent may hold a whole ``agy
+            # models`` line (id, tab, name): keep the name, checked below.
+            object.__setattr__(self, "model", agy_model_name(self.model) or None)
         if self.model is not None and self.model.startswith("-"):
             raise ValueError("model must not look like a CLI flag (leading '-')")
         if any(d.startswith("-") for d in self.add_dirs):
@@ -212,7 +222,8 @@ class AntigravityLauncher:
             return None
         if output is None:
             return None
-        models = [line.strip() for line in output.splitlines() if line.strip()]
+        models = [agy_model_name(line) for line in output.splitlines() if line.strip()]
+        models = [name for name in models if name]
         if not models:
             return None
         self._cached_models = tuple(models)

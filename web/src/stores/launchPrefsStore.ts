@@ -44,6 +44,8 @@ export interface ClaudeLaunchPrefs {
   planMode: boolean;
   debug: boolean;
   focusMode: boolean;
+  /** Claude Code's "Terminal UI" toggle; a blob from before it existed reads as off. */
+  terminalUi: boolean;
 }
 
 /** Android `CodexLaunchPrefs`, iOS `CodexLaunchPrefs`. */
@@ -60,6 +62,8 @@ export interface CodexLaunchPrefs {
    * wire or a device boundary, so the wider type costs no interop.
    */
   reasoningEffort: CodexReasoningEffort | null;
+  /** Codex's "Terminal UI" toggle; a blob from before it existed reads as off. */
+  terminalUi: boolean;
 }
 
 /** Android `AntigravityLaunchPrefs`, iOS `AntigravityLaunchPrefs`. */
@@ -67,6 +71,8 @@ export interface AntigravityLaunchPrefs {
   model: string | null;
   skipPermissions: boolean;
   sandbox: boolean;
+  /** Antigravity's "Terminal UI" toggle; a blob from before it existed reads as off. */
+  terminalUi: boolean;
 }
 
 /**
@@ -121,6 +127,7 @@ export const CLAUDE_PREFS_DEFAULTS: ClaudeLaunchPrefs = {
   debug: false,
   // On for both buckets, so a blob saved before the toggle existed restores focus view.
   focusMode: true,
+  terminalUi: false,
 };
 
 export const CODEX_PREFS_DEFAULTS: CodexLaunchPrefs = {
@@ -129,12 +136,14 @@ export const CODEX_PREFS_DEFAULTS: CodexLaunchPrefs = {
   approval: 'on-request',
   fullAuto: false,
   reasoningEffort: 'high',
+  terminalUi: false,
 };
 
 export const ANTIGRAVITY_PREFS_DEFAULTS: AntigravityLaunchPrefs = {
   model: null,
   skipPermissions: false,
   sandbox: false,
+  terminalUi: false,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -220,6 +229,7 @@ function sanitizeClaudePrefs(raw: unknown): ClaudeLaunchPrefs | null {
   const planMode = field(raw, 'planMode', CLAUDE_PREFS_DEFAULTS.planMode, isBoolean);
   const debug = field(raw, 'debug', CLAUDE_PREFS_DEFAULTS.debug, isBoolean);
   const focusMode = field(raw, 'focusMode', CLAUDE_PREFS_DEFAULTS.focusMode, isBoolean);
+  const terminalUi = field(raw, 'terminalUi', CLAUDE_PREFS_DEFAULTS.terminalUi, isBoolean);
   if (
     model === undefined ||
     effort === undefined ||
@@ -230,7 +240,8 @@ function sanitizeClaudePrefs(raw: unknown): ClaudeLaunchPrefs | null {
     noMemory === undefined ||
     planMode === undefined ||
     debug === undefined ||
-    focusMode === undefined
+    focusMode === undefined ||
+    terminalUi === undefined
   ) {
     return null;
   }
@@ -245,6 +256,7 @@ function sanitizeClaudePrefs(raw: unknown): ClaudeLaunchPrefs | null {
     planMode,
     debug,
     focusMode,
+    terminalUi,
   };
 }
 
@@ -260,16 +272,18 @@ function sanitizeCodexPrefs(raw: unknown): CodexLaunchPrefs | null {
     CODEX_PREFS_DEFAULTS.reasoningEffort,
     isCodexReasoningEffort,
   );
+  const terminalUi = field(raw, 'terminalUi', CODEX_PREFS_DEFAULTS.terminalUi, isBoolean);
   if (
     model === undefined ||
     sandbox === undefined ||
     approval === undefined ||
     fullAuto === undefined ||
-    reasoningEffort === undefined
+    reasoningEffort === undefined ||
+    terminalUi === undefined
   ) {
     return null;
   }
-  return { model, sandbox, approval, fullAuto, reasoningEffort };
+  return { model, sandbox, approval, fullAuto, reasoningEffort, terminalUi };
 }
 
 function sanitizeAntigravityPrefs(raw: unknown): AntigravityLaunchPrefs | null {
@@ -282,13 +296,19 @@ function sanitizeAntigravityPrefs(raw: unknown): AntigravityLaunchPrefs | null {
     isBoolean,
   );
   const sandbox = field(raw, 'sandbox', ANTIGRAVITY_PREFS_DEFAULTS.sandbox, isBoolean);
-  if (model === undefined || skipPermissions === undefined || sandbox === undefined) {
+  const terminalUi = field(raw, 'terminalUi', ANTIGRAVITY_PREFS_DEFAULTS.terminalUi, isBoolean);
+  if (
+    model === undefined ||
+    skipPermissions === undefined ||
+    sandbox === undefined ||
+    terminalUi === undefined
+  ) {
     return null;
   }
   // The interlock is re-applied where the bucket meets the wizard, not here:
   // storage should keep what was launched, and a stored pair is unreachable
   // anyway because the reducer excludes the two switches.
-  return { model, skipPermissions, sandbox };
+  return { model, skipPermissions, sandbox, terminalUi };
 }
 
 export const useLaunchPrefsStore = create<LaunchPrefsState>()(

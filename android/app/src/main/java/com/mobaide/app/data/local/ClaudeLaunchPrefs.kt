@@ -23,4 +23,6 @@ data class ClaudeLaunchPrefs(
     val debug: Boolean = false,
     // Defaults ON so a blob saved before the toggle existed restores focus view.
     val focusMode: Boolean = true,
+    // Claude Code only: the classic terminal instead of the chat view. Older blobs decode to off.
+    val terminalUi: Boolean = false,
 )
