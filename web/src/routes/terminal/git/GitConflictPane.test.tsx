@@ -397,9 +397,9 @@ describe('GitConflictPane apply and draft', () => {
     expect(onDone).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(api.readCount).toBe(2);
+      expect(onDirtyChange).toHaveBeenLastCalledWith(false);
     });
     expect(editor().value).toBe(draft);
-    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
 
     type('a\nmerged\nz\n');
     await waitFor(() => {
@@ -427,7 +427,9 @@ describe('GitConflictPane apply and draft', () => {
     expect(await screen.findByText('Applying will overwrite the other change.')).toBeInTheDocument();
     expect(editor().value).toBe(draft);
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+    await waitFor(() => {
+      expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+    });
 
     type('a\nmerged\nz\n');
     await waitFor(() => {
@@ -492,11 +494,13 @@ describe('GitConflictPane when the file moved on', () => {
 
     fireEvent.click(within(strip).getByRole('button', { name: 'Reload file' }));
 
+    // The editor text lands at commit; `onDirtyChange` fires from a passive
+    // effect that React may flush a task later, so wait for both.
     await waitFor(() => {
       expect(editor().value).toBe('theirs now\n');
+      expect(onDirtyChange).toHaveBeenLastCalledWith(false);
     });
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
     expect(screen.queryByText('Applying will overwrite the other change.')).toBeNull();
   });
 
@@ -704,11 +708,11 @@ describe('GitConflictPane start over', () => {
 
     await waitFor(() => {
       expect(editor().value).toBe(rebuilt);
+      expect(onDirtyChange).toHaveBeenLastCalledWith(false);
     });
     expect(api.writes).toEqual([
       { kind: 'restore', request: { path: 'src/login.py', style, token: 't1' } },
     ]);
-    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
     expect(onDone).not.toHaveBeenCalled();
   });
 

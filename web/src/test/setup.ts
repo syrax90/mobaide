@@ -96,4 +96,51 @@ if (typeof HTMLDialogElement !== 'undefined') {
     Element.prototype.releasePointerCapture = () => undefined;
     Element.prototype.hasPointerCapture = () => false;
   }
+
+  // jsdom has no BroadcastChannel, so the suites fell through to Node's, whose
+  // delivery rides a libuv async handle. A test that posts as a peer tab and
+  // then waits one `setTimeout(0)` races that handle against the timers phase,
+  // and on a loaded CI runner the timer can win: the tab under test has not
+  // seen the message yet when the assertions run. This in-process stand-in
+  // keeps the browser contract the code relies on — async delivery, a
+  // structured clone, every other open channel of the same name but never the
+  // sender, nothing after close — and delivers on a microtask, which always
+  // lands before the test's timer.
+  const channels = new Set<InProcessBroadcastChannel>();
+  class InProcessBroadcastChannel extends EventTarget {
+    readonly name: string;
+    onmessage: ((this: BroadcastChannel, event: MessageEvent) => unknown) | null = null;
+    onmessageerror: ((this: BroadcastChannel, event: MessageEvent) => unknown) | null = null;
+    private closed = false;
+
+    constructor(name: string) {
+      super();
+      this.name = String(name);
+      channels.add(this);
+    }
+
+    postMessage(message: unknown): void {
+      if (this.closed) throw new DOMException('BroadcastChannel is closed', 'InvalidStateError');
+      const targets = [...channels].filter((ch) => ch !== this && ch.name === this.name);
+      for (const target of targets) {
+        const data: unknown = structuredClone(message);
+        queueMicrotask(() => {
+          target.deliver(data);
+        });
+      }
+    }
+
+    close(): void {
+      this.closed = true;
+      channels.delete(this);
+    }
+
+    private deliver(data: unknown): void {
+      if (this.closed) return;
+      const event = new MessageEvent('message', { data });
+      this.onmessage?.call(this, event);
+      this.dispatchEvent(event);
+    }
+  }
+  globalThis.BroadcastChannel = InProcessBroadcastChannel;
 }
