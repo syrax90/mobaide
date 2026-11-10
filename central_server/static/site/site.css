@@ -415,7 +415,22 @@ h1 {
   font-size: 0.875rem;
 }
 
-/* ---------- hero terminal ---------- */
+/* ---------- hero web-app capture ---------- */
+
+/* A <figure>, so reset its UA margin; keep room for the .browser offset
+   shadow on the right and bottom. */
+.hero-shot {
+  margin: 0 var(--px) var(--px) 0;
+}
+
+/* A wide desktop capture needs more of the row than the old terminal mock.
+   Same specificity as `.hero`, so the single-column rule under 900px still
+   wins by coming later. */
+.hero-wide {
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+}
+
+/* ---------- hero terminal (the /voice-input mock) ---------- */
 
 .term {
   background: var(--surface);
