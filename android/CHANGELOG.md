@@ -1,5 +1,12 @@
 # Android Changelog
 
+## [3.7.1](https://github.com/syrax90/mobaide/compare/android-v3.7.0...android-v3.7.1) (2026-11-10)
+
+
+### Features
+
+* **android,ios,web:** remove the external-sessions notice ([#855](https://github.com/syrax90/mobaide/issues/855)) ([d947831](https://github.com/syrax90/mobaide/commit/d94783134bfec76bb5ee32ffd0c7a7418d4d8911))
+
 ## [3.7.0](https://github.com/syrax90/mobaide/compare/android-v3.6.18...android-v3.7.0) (2026-11-10)
 
 

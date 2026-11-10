@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/syrax90/mobaide/compare/ios-v1.1.0...ios-v1.1.1) (2026-11-10)
+
+
+### Features
+
+* **android,ios,web:** remove the external-sessions notice ([#855](https://github.com/syrax90/mobaide/issues/855)) ([d947831](https://github.com/syrax90/mobaide/commit/d94783134bfec76bb5ee32ffd0c7a7418d4d8911))
+
 ## [1.1.0](https://github.com/syrax90/mobaide/compare/ios-v1.0.20...ios-v1.1.0) (2026-11-10)
 
 
