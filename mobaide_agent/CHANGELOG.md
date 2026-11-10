@@ -1,5 +1,12 @@
 # mobaide_agent Changelog
 
+## [0.3.26](https://github.com/syrax90/mobaide/compare/agent-v0.3.25...agent-v0.3.26) (2026-11-10)
+
+
+### Features
+
+* **agent,web,android,ios:** ACP chat sessions for Claude Code and Antigravity ([#849](https://github.com/syrax90/mobaide/issues/849)) ([535ada1](https://github.com/syrax90/mobaide/commit/535ada1555cd5e187122a27acb9038327b46d98a))
+
 ## [0.3.25](https://github.com/syrax90/mobaide/compare/agent-v0.3.24...agent-v0.3.25) (2026-11-09)
 
 

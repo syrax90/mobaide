@@ -1,5 +1,17 @@
 # central_server Changelog
 
+## [0.2.24](https://github.com/syrax90/mobaide/compare/server-v0.2.23...server-v0.2.24) (2026-11-10)
+
+
+### Features
+
+* **agent,web,android,ios:** ACP chat sessions for Claude Code and Antigravity ([#849](https://github.com/syrax90/mobaide/issues/849)) ([535ada1](https://github.com/syrax90/mobaide/commit/535ada1555cd5e187122a27acb9038327b46d98a))
+
+
+### Documentation
+
+* show the ACP chat UI on the website and README ([#852](https://github.com/syrax90/mobaide/issues/852)) ([a2293e2](https://github.com/syrax90/mobaide/commit/a2293e2cc143a614eaa5b7f596c71f95765debad))
+
 ## [0.2.23](https://github.com/syrax90/mobaide/compare/server-v0.2.22...server-v0.2.23) (2026-11-08)
 
 
