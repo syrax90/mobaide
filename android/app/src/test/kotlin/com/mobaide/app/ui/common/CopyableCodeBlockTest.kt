@@ -6,9 +6,14 @@ import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.Surface
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertWidthIsAtLeast
+import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -18,6 +23,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 /**
  * UI tests for [CopyableCodeBlock]. The component renders [label] + monospace
@@ -118,5 +124,54 @@ class CopyableCodeBlockTest {
             "A token-bearing payload must set EXTRA_IS_SENSITIVE on API 33+",
             flaggedSensitive,
         )
+    }
+
+    /** Far wider than the 360dp screen in the monospace value font. The width
+     *  tests run in NATIVE graphics mode: LEGACY measures text too narrow to
+     *  overflow the row. */
+    private val longPath =
+        "/Users/developer/Documents/Projects/mobile-workspace/services/backend-api/src"
+
+    /** A value wider than the row must not squeeze the copy button out of it. */
+    private fun assertCopyButtonKeepsItsSize(label: String) {
+        val rootRight = composeRule.onRoot().getBoundsInRoot().right
+        val button = composeRule.onNodeWithContentDescription("Copy $label")
+            .assertIsDisplayed()
+            .assertWidthIsAtLeast(40.dp)
+        val right = button.getUnclippedBoundsInRoot().right
+        assertTrue("Copy $label ends at $right, past the screen edge $rootRight", right <= rootRight)
+    }
+
+    @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun longSingleLineValue_keepsCopyButtonFullSize_andCopiesTheWholeValue() {
+        composeRule.setContent {
+            Surface { CopyableCodeBlock(label = "Folder", code = longPath) }
+        }
+
+        assertCopyButtonKeepsItsSize("Folder")
+
+        val clipboard = composeRule.activity
+            .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.clearPrimaryClip()
+        composeRule.onNodeWithContentDescription("Copy Folder").performClick()
+
+        assertEquals(longPath, clipboard.primaryClip!!.getItemAt(0).text.toString())
+    }
+
+    @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun longWrappingValue_keepsCopyButtonFullSize() {
+        composeRule.setContent {
+            Surface {
+                CopyableCodeBlock(
+                    label = ".env",
+                    code = "RELAY_AGENT_ID=$longPath\nRELAY_AGENT_TOKEN=$longPath",
+                    singleLine = false,
+                )
+            }
+        }
+
+        assertCopyButtonKeepsItsSize(".env")
     }
 }
