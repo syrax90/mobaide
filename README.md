@@ -28,7 +28,7 @@
 
 <table align="center">
   <tr>
-    <td align="center"><img src="central_server/static/site/img/shot-android-terminal.webp" width="165" alt="A running session with a command field and control-key bar."></td>
+    <td align="center"><img src="central_server/static/site/img/shot-android-chat.webp" width="165" alt="An Antigravity CLI chat: a Markdown answer with a table, mode, model and effort chips, and the command field."></td>
     <td align="center"><img src="central_server/static/site/img/shot-android-sessions.webp" width="165" alt="An Auto Scan and three running Claude Code and Codex sessions."></td>
     <td align="center"><img src="central_server/static/site/img/shot-android-modes.webp" width="165" alt="The mode picker: Claude Code, Codex, Antigravity, Auto Scan, Terminal and a custom agent."></td>
     <td align="center"><img src="central_server/static/site/img/shot-android-git-diff.webp" width="165" alt="A file diff with line numbers and a Changes / Full file switch."></td>
@@ -44,7 +44,7 @@
 ## Features
 
 - **A chat view built for the phone.** Claude Code, Codex and Antigravity sessions open as a native chat: Markdown answers, one card per tool call with its diff, approval buttons, questions, plan progress, mode and model chips. It runs over the [Agent Client Protocol](https://agentclientprotocol.com), and it can continue a Claude Code, Codex or Antigravity session you started in a terminal on your computer. Codex chats stay in sync with a session open in a terminal.
-- **A real terminal, not a log tail.** Full two-way PTY, so TUIs behave: arrow keys, Ctrl-C, plan mode, approval prompts. A rolling buffer of recent output replays after a dropped connection. Claude Code and Codex sessions offer it under Advanced as Terminal UI.
+- **A real terminal, not a log tail.** Full two-way PTY, so TUIs behave: arrow keys, Ctrl-C, plan mode, approval prompts. A rolling buffer of recent output replays after a dropped connection. Claude Code, Codex and Antigravity sessions offer it under Advanced as Terminal UI; raw shells and custom agents always use it.
 - **Your agents, your options.** Launch Claude Code, Codex CLI or Antigravity CLI with their own model, effort, sandbox and approval settings. Open a raw shell, or define an agent from any command your shell can run.
 - **Several sessions at once.** Keep a Claude Code run, a Codex review and a shell side by side, each with its own state.
 - **[Voice input](#voice-input).** Dictate prompts instead of thumb-typing them. Your own computer does the transcription, in 25 languages. Opt-in, and the audio is never stored.
@@ -98,7 +98,7 @@ irm https://get.mobaide.com/install.ps1 | iex
 
 **2. Get a client and pair.** Install the [Android](https://play.google.com/store/apps/details?id=com.mobaide.app) (8.0+) or [iPhone](https://apps.apple.com/app/id6797191741) (iOS 17+) app, then scan the QR code the agent prints. In a browser, open the pairing link the agent prints and sign in at [app.mobaide.com](https://app.mobaide.com).
 
-**3. Start a session.** Pick a project, pick what to run, and drive it from the terminal view.
+**3. Start a session.** Pick a project, pick what to run, and drive it from the chat view, or from the terminal view for shells and custom agents.
 
 ## How it works
 

@@ -71,7 +71,7 @@ white.
 | `central_server/static/site/portal.css` | Additions `site.css` lacks (the landing page has no forms): inputs, labels, radios, alerts, tables, choice fieldsets, legal-doc layout. Loaded **after** `site.css`. Declares no tokens and no `@font-face`. |
 | `central_server/templates/portal_base.html` | Shell for the static pages — loads both sheets, carries the shared chrome markup, and loads **no script at all**. |
 | `central_server/static/style.css` | **Admin dashboard only.** Light sheet (`--primary: #0d6efd`, `--radius: 6px`), not part of this design system. |
-| `central_server/static/site/site.js` | Reveal-on-scroll, hero typewriter, copy buttons, the Android/iOS screenshot switch, and the cookie-consent banner with its post-consent Google Ads gtag.js loader. The two marketing pages only — `portal_base.html` does not load it. |
+| `central_server/static/site/site.js` | Reveal-on-scroll, the `/voice-input` hero typewriter, copy buttons, the Android/iOS screenshot switch, and the cookie-consent banner with its post-consent Google Ads gtag.js loader. The two marketing pages only — `portal_base.html` does not load it. |
 | `central_server/static/site/img/`, `fonts/` | Assets — see *Regenerating assets*. |
 | `README.md` (repo root) | Embeds `og.png`, both store badges, five `shot-android-*.webp` and `shot-web-voice.webp` by relative path. Rename or remove one of those images and the README breaks. Its voice input numbers and section links mirror `/voice-input`, so change them together. |
 
@@ -404,7 +404,7 @@ both are asserted in `test_marketing.py` and `test_portal.py`.
   light background (lifted from the app icon).
 - All motion is gated on `prefers-reduced-motion: reduce`.
 - Animation start-states are gated on a `js` class that `site.js` sets from
-  `<head>`, and the hero transcript's hidden state self-releases on every exit
+  `<head>`, and the `/voice-input` hero transcript's hidden state self-releases on every exit
   path (finished, reduced-motion, no `IntersectionObserver`, or a 2.5s
   watchdog). **Never add a hidden-by-default state that only a successful
   animation can undo.**
@@ -507,8 +507,8 @@ answer and the shared footer; the sitemap lists it.
 - **The hero is a drawn mock** (`.voice-demo`, `.dict-*` in `site.css`, inside one
   `role="img"`) showing what no single capture can: recording, then the transcript
   waiting in the command field. Its recording bar copies the apps' (cancel, elapsed
-  time, level meter, stop), so keep the two in step. The transcript reuses the
-  landing page's typewriter (`[data-typewriter]`, one per page) and its watchdogs;
+  time, level meter, stop), so keep the two in step. The transcript uses the
+  `site.js` typewriter (`[data-typewriter]`, one per page) and its watchdogs;
   the level meter and recording dot stop under `prefers-reduced-motion`.
 - **Three captures, two frames.** `#screens` shows `shot-android-voice.webp` and
   `shot-ios-voice.webp` in the `.device` phone frame, then `shot-web-voice.webp` in
@@ -516,6 +516,10 @@ answer and the shared footer; the sitemap lists it.
   proportion with the phones). All three are bare captures.
 
 ## Screenshots and the platform switch
+
+The landing hero is a capture too: `shot-web-chat.webp`, the web app's chat view,
+in the same `.browser` frame as the `/voice-input` web capture. It is above the
+fold, so it is not `loading="lazy"`.
 
 `#screens` carries **two panels of nine captures each**, Android and iOS, behind an
 `aria` tab pair. The phone body around every capture is drawn by `.device` in CSS, so
@@ -624,6 +628,10 @@ a one-off script, not committed; recreate it when assets need to change:
    - Resize to 420px wide, WebP quality 72, name the output
      `shot-<android|ios>-<slug>.webp`, and record each file's encoded height (the
      template declares it).
+   - The in-session capture is `inside-session-acp.png` (the chat view), shipped as
+     `shot-<android|ios>-chat.webp`. The landing hero is the web app's
+     `web-app/Screenshots/inside-session-acp.png`, shipped as `shot-web-chat.webp`
+     at 1400px wide, quality 80, inside the same `.browser` frame as the voice page.
    - The `/voice-input` captures are the `voice-recognition.*` files in those two
      trees, plus the web app's `web-app/Screenshots/voice-recognition.png`, shipped
      as `shot-web-voice.webp` at 1600px wide, quality 80 so its small terminal text
@@ -631,7 +639,8 @@ a one-off script, not committed; recreate it when assets need to change:
 4. Icons: `favicon.ico` multi-size 16/32/48; `apple-touch-icon.png` at 180px
    quantized to 64 colours.
 5. OG card: 1200×630 **PNG or JPEG** (several scrapers reject WebP), composed
-   from the wordmark on a light plate plus the terminal screenshot.
+   from the wordmark on a light plate plus the Android chat screenshot
+   (`inside-session-acp.png`) in a 10px `#625B71` frame, 430px inner height.
 6. Font: `DepartureMono-Regular.woff2` from the
    [Departure Mono](https://github.com/rektdeckard/departure-mono) release,
    shipped whole at 22.5 KB with its OFL licence alongside (no subsetting step).

@@ -19,7 +19,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mobaide — run Claude Code, Codex CLI and Antigravity CLI from your phone</title>
-<meta name="description" content="Mobaide turns your phone into a real terminal for AI coding agents running on your own computer. Free, and no public IP, port forwarding, VPN or SSH.">
+<meta name="description" content="Mobaide puts the AI coding agents on your own computer in your phone, as a native chat or a real terminal. Free, and no public IP, port forwarding, VPN or SSH.">
 <link rel="canonical" href="{{ site_origin }}/">
 <meta name="theme-color" content="#121212">
 
@@ -27,7 +27,7 @@
 <meta property="og:site_name" content="Mobaide">
 <meta property="og:url" content="{{ site_origin }}/">
 <meta property="og:title" content="Mobaide — run AI coding agents on your computer, from your phone">
-<meta property="og:description" content="A real terminal for Claude Code, Codex CLI, Antigravity CLI and your own agents, running on your own machine. Free, and nothing to open on your network.">
+<meta property="og:description" content="A native chat for Claude Code, Codex CLI and Antigravity CLI, and a real terminal for your own agents, all running on your own machine. Free, and nothing to open on your network.">
 <meta property="og:image" content="{{ site_origin }}/static/site/img/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -36,7 +36,7 @@
 
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Mobaide — run AI coding agents on your computer, from your phone">
-<meta name="twitter:description" content="A real terminal for Claude Code, Codex CLI, Antigravity CLI and your own agents, running on your own machine. Free, and nothing to open on your network.">
+<meta name="twitter:description" content="A native chat for Claude Code, Codex CLI and Antigravity CLI, and a real terminal for your own agents, all running on your own machine. Free, and nothing to open on your network.">
 <meta name="twitter:image" content="{{ site_origin }}/static/site/img/og.png">
 
 <link rel="icon" href="/static/site/img/favicon.ico" sizes="16x16 32x32 48x48">
@@ -61,7 +61,7 @@
   "url": "{{ site_origin }}/",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "Android, iOS",
-  "description": "Mobaide turns your phone into a real terminal for AI coding agents — Claude Code, Codex CLI, Antigravity CLI, custom agent types and raw shells — running on your own Windows, macOS or Linux computer. No public IP, port forwarding, VPN or SSH.",
+  "description": "Mobaide puts AI coding agents running on your own Windows, macOS or Linux computer in your phone: a native chat for Claude Code, Codex CLI and Antigravity CLI, and a real terminal for custom agent types and raw shells. No public IP, port forwarding, VPN or SSH.",
   "image": "{{ site_origin }}/static/site/img/og.png",
   "downloadUrl": [
     "https://play.google.com/store/apps/details?id=com.mobaide.app",
@@ -105,11 +105,12 @@
 
 <main id="main">
 
-  <section class="hero">
+  <section class="hero hero-wide">
     <div class="hero-copy">
       <h1>Run AI coding agents on your computer, from your phone.</h1>
       <p class="lede">
-        Mobaide puts a real terminal in your pocket. Start, watch and steer
+        Mobaide puts your coding agents in your pocket, in a chat built for
+        the phone. Start, watch and steer
         <strong>Claude Code</strong>, <strong>Codex CLI</strong>,
         <strong>Antigravity CLI</strong> or agents you define yourself on your own
         Windows, macOS or Linux machine — with nothing to open on your network.
@@ -142,26 +143,15 @@
       </p>
     </div>
 
-    <div class="hero-term">
-      <div class="term px-frame" data-typewriter aria-label="Example Mobaide session">
-        <div class="term-bar"><span class="term-dot"></span>mobaide — macbook-pro</div>
-        {# Lines are kept to ~42 characters so the transcript needs no
-           horizontal scroll even at a 320px viewport. #}
-        <pre class="term-body"><code><span class="t-line"><span class="t-ink"><span class="c-dim">$</span> mobaide status</span></span>
-<span class="t-line"><span class="t-ink">agent  <span class="c-ok">online</span>  macbook-pro  proto 7</span></span>
-<span class="t-line"><span class="t-ink"> </span></span>
-<span class="t-line"><span class="t-ink"><span class="c-dim">#</span> from the app: Claude Code + worktree</span></span>
-<span class="t-line"><span class="t-ink"><span class="c-accent">▸</span> a4f1c2  claude  ~/dev/api-server</span></span>
-<span class="t-line"><span class="t-ink">  worktree mobaide_worktree/retry-fix</span></span>
-<span class="t-line"><span class="t-ink"> </span></span>
-<span class="t-line"><span class="t-ink">Reading src/http/retry.py …</span></span>
-<span class="t-line"><span class="t-ink">The retry helper swallows the timeout</span></span>
-<span class="t-line"><span class="t-ink">instead of re-raising, so the caller</span></span>
-<span class="t-line"><span class="t-ink">sees a null response. Fixing.</span></span>
-<span class="t-line"><span class="t-ink"> </span></span>
-<span class="t-line"><span class="t-ink"><span class="c-ok">✓</span> 48 tests passed</span></span></code></pre>
+    {# Above the fold, so no loading="lazy": it is the page's largest paint. #}
+    <figure class="hero-shot">
+      <div class="browser">
+        <div class="browser-bar" aria-hidden="true"><span class="browser-dot"></span><span class="browser-dot"></span><span class="browser-dot"></span><span class="browser-url">app.mobaide.com</span></div>
+        <img src="/static/site/img/shot-web-chat.webp?v={{ asset_version }}" width="1400" height="742"
+             decoding="async" fetchpriority="high"
+             alt="The Mobaide web app in an Antigravity CLI chat session: the session list on the left, a Markdown answer with headings and a table, and mode, model and effort chips over the message field.">
       </div>
-    </div>
+    </figure>
   </section>
 
   <section class="strip" aria-label="At a glance">
@@ -231,8 +221,9 @@
         <h3>Start an agent</h3>
         <p>
           Pick a project, pick what to run — Claude Code, Codex CLI, Antigravity
-          CLI, a raw shell, or one of your own agent types — and drive it from
-          the terminal view.
+          CLI, a raw shell, or one of your own agent types. Claude Code, Codex
+          and Antigravity open as a chat; shells and your own types open in a
+          terminal.
         </p>
       </li>
     </ol>
@@ -241,6 +232,30 @@
   <section id="features" class="section" data-reveal>
     <h2 class="h-pixel">What you get</h2>
     <div class="grid">
+
+      <article class="card card-feature notch">
+        <div class="card-head">
+          <span class="card-ico">
+            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M2 3h20v13H2zM4 5v9h16V5z"/><rect x="5" y="16" width="4" height="2"/><rect x="5" y="18" width="2" height="2"/><rect x="7" y="7" width="10" height="2"/><rect x="7" y="10" width="6" height="2"/></svg>
+          </span>
+          <span class="chip chip-brand chip-sm">New</span>
+        </div>
+        <h3>A chat built for the phone</h3>
+        {# Facts from docs/features.md "Chat Sessions". The chat is the default
+           for the three built-ins only; custom types and Terminal stay a PTY,
+           and the built-ins keep a Terminal UI toggle under Advanced. #}
+        <p>
+          Claude Code, Codex CLI and Antigravity CLI sessions open as a native
+          chat: Markdown answers, one card per tool call with its diff, approval
+          buttons, questions and plan progress. Continue a session you started
+          in a terminal on your computer.
+        </p>
+        <p>
+          Need the CLI's own interface? Turn on <strong>Terminal UI</strong> for
+          a full two-way terminal. Raw shells and your own agent types always
+          get one.
+        </p>
+      </article>
 
       {# The short mention; /voice-input carries the full story. Same accuracy
          rules: opt-in per computer, transcribed on the user's own machine,
@@ -359,24 +374,6 @@
       <article class="card notch">
         <div class="card-head">
           <span class="card-ico">
-            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M1 3h22v18H1zM3 5v14h18V5z"/><rect x="5" y="8" width="2" height="2"/><rect x="7" y="10" width="2" height="2"/><rect x="5" y="12" width="2" height="2"/><rect x="11" y="13" width="6" height="2"/></svg>
-          </span>
-        </div>
-        <h3>A real PTY, not a log tail</h3>
-        <p>
-          {# Deliberately no line count: reconnect replays from a byte ring
-             (RING_MAX_BYTES = 4 MiB, core/session.py), not from the 10,000-entry
-             scrollback deque — that one holds arbitrary read chunks and feeds
-             the REST /scrollback endpoint instead. #}
-          Full two-way terminal I/O, so TUIs behave: arrow keys, Ctrl-C, plan
-          mode, approval prompts. Every session keeps a rolling buffer of recent
-          output, so a dropped connection replays instead of losing it.
-        </p>
-      </article>
-
-      <article class="card notch">
-        <div class="card-head">
-          <span class="card-ico">
             <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><rect x="2" y="3" width="4" height="4"/><rect x="8" y="4" width="14" height="2"/><rect x="2" y="10" width="4" height="4"/><rect x="8" y="11" width="14" height="2"/><rect x="2" y="17" width="4" height="4"/><rect x="8" y="18" width="14" height="2"/></svg>
           </span>
         </div>
@@ -424,11 +421,11 @@
         <div class="shots">
           <figure class="shot">
             <div class="device">
-              <img src="/static/site/img/shot-android-terminal.webp?v={{ asset_version }}" width="420" height="835"
+              <img src="/static/site/img/shot-android-chat.webp?v={{ asset_version }}" width="420" height="890"
                    loading="lazy" decoding="async"
-                   alt="A running Antigravity session in Mobaide for Android, with a command field and control-key bar.">
+                   alt="An Antigravity CLI chat in Mobaide for Android: a Markdown answer with a table, mode, model and effort chips, and the command field.">
             </div>
-            <figcaption>A live coding session, driven from the phone.</figcaption>
+            <figcaption>A live coding session, as a chat built for the phone.</figcaption>
           </figure>
           <figure class="shot">
             <div class="device">
@@ -503,11 +500,11 @@
         <div class="shots">
           <figure class="shot">
             <div class="device">
-              <img src="/static/site/img/shot-ios-terminal.webp?v={{ asset_version }}" width="420" height="859"
+              <img src="/static/site/img/shot-ios-chat.webp?v={{ asset_version }}" width="420" height="855"
                    loading="lazy" decoding="async"
-                   alt="A running Antigravity session in Mobaide for iOS, with a message field and control-key bar.">
+                   alt="An Antigravity CLI chat in Mobaide for iOS: a Markdown answer with a table, mode, model and effort chips, and the message field.">
             </div>
-            <figcaption>A live coding session, driven from the phone.</figcaption>
+            <figcaption>A live coding session, as a chat built for the phone.</figcaption>
           </figure>
           <figure class="shot">
             <div class="device">
@@ -617,8 +614,8 @@
       <details>
         <summary>What leaves my machine?</summary>
         <p>
-          Session traffic is <strong>relayed, not stored</strong>: your keystrokes,
-          the terminal output and any
+          Session traffic is <strong>relayed, not stored</strong>: your messages
+          and keystrokes, the agent's replies and terminal output, and any
           <a href="/voice-input">voice dictation</a> audio pass through the
           relay's in-memory routing and are then discarded — never appended to
           its database, log files or backups. Server-side logs record
