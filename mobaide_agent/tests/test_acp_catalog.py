@@ -246,6 +246,37 @@ class TestChatCatalog:
 
         assert spec.plans == 2
 
+    async def test_a_long_first_use_setup_answers_before_the_relay_gives_up(
+        self, make_catalog, monkeypatch
+    ):
+        monkeypatch.setattr(catalog_mod, "SETUP_WAIT", 0.05)
+        installed = asyncio.Event()
+        spec = _mini()
+        plan = spec.catalog_plan
+
+        async def slow_install() -> ChatLaunchPlan:
+            await installed.wait()
+            return await plan()
+
+        spec.catalog_plan = slow_install  # type: ignore[method-assign]
+        catalog = make_catalog(spec)
+
+        with pytest.raises(ChatCatalogError) as excinfo:
+            await catalog.list_sessions("claude", cwd=None, cursor=None)
+        assert (excinfo.value.status, excinfo.value.detail) == (
+            503,
+            "Setting up Stub Agent chat for first use. Try again in a minute.",
+        )
+
+        # The setup went on; the retry joins it instead of starting another.
+        retry = asyncio.ensure_future(catalog.list_sessions("claude", cwd=None, cursor=None))
+        await asyncio.sleep(0)
+        installed.set()
+        page = await retry
+
+        assert page["next_cursor"] == "page-2"
+        assert spec.plans == 1
+
     async def test_agent_that_cannot_start(self, make_catalog, tmp_path):
         catalog = make_catalog(StubSpec([str(tmp_path / "no-such-agent")]))
 

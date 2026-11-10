@@ -11,6 +11,7 @@ import {
   type KeyboardEvent,
   type Ref,
 } from 'react';
+import { useStore } from 'zustand';
 import type { ChatSessionModel } from '../../chat/chatModel';
 import {
   MAX_CHAT_IMAGES,
@@ -18,7 +19,6 @@ import {
   imageFilesFrom,
   prepareChatImage,
   totalBase64,
-  type PreparedImage,
 } from '../../chat/chatImages';
 import type { ChatCommandInfo } from '../../chat/chatWire';
 import { useUnloadGuard } from '../../keyboard/useUnloadGuard';
@@ -89,8 +89,10 @@ export function Composer({
   handleRef,
 }: ComposerProps) {
   const [text, setTextState] = useState(() => model.draft);
-  const [images, setImages] = useState<PreparedImage[]>(() => model.draftImages);
-  const [preparing, setPreparing] = useState(0);
+  // In the model, not here: a preparation that ends after the user switched
+  // sessions and came back must reach the composer now on screen.
+  const images = useStore(model.store, (view) => view.draftImages);
+  const preparing = useStore(model.store, (view) => view.preparingImages);
   const [active, setActive] = useState(0);
   const [dismissedFor, setDismissedFor] = useState<string | null>(null);
   const [hint, setHint] = useState<{ text: string; hint: string } | null>(null);
@@ -98,20 +100,8 @@ export function Composer({
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const caretRef = useRef<number | null>(null);
-  // Written together with `images`, so a check made before the next render
-  // already counts what was just attached.
-  const imagesRef = useRef(images);
   const listId = useId();
   const hintId = useId();
-
-  const commitImages = useCallback(
-    (next: PreparedImage[]) => {
-      imagesRef.current = next;
-      setImages(next);
-      model.draftImages = next;
-    },
-    [model],
-  );
 
   const setText = useCallback(
     (next: string) => {
@@ -163,7 +153,8 @@ export function Composer({
         useToastStore.getState().show('This agent does not accept images.', 'error');
         return;
       }
-      const room = MAX_CHAT_IMAGES - imagesRef.current.length - preparing;
+      // From the model, not the render: it already counts what was just attached.
+      const room = MAX_CHAT_IMAGES - model.draftImages.length - model.state().preparingImages;
       if (room <= 0) {
         useToastStore.getState().show(`Attach at most ${String(MAX_CHAT_IMAGES)} images.`, 'error');
         return;
@@ -172,7 +163,7 @@ export function Composer({
         useToastStore.getState().show(`Attach at most ${String(MAX_CHAT_IMAGES)} images.`, 'error');
       }
       const batch = picked.slice(0, room);
-      setPreparing((count) => count + batch.length);
+      model.notePreparingImages(batch.length);
       // One at a time: each decode holds a full-size bitmap, and a few phone
       // photos at once can take the tab past its memory limit.
       void (async () => {
@@ -180,25 +171,19 @@ export function Composer({
         for (const file of batch) {
           try {
             const image = await prepareChatImage(file);
-            const current = imagesRef.current;
-            if (totalBase64(current) + image.data.length > MAX_TOTAL_BASE64) {
-              URL.revokeObjectURL(image.previewUrl);
-              tooLarge = true;
-            } else {
-              commitImages([...current, image]);
-            }
+            if (!model.attachDraftImage(image)) tooLarge = true;
           } catch (error: unknown) {
             useToastStore
               .getState()
               .show(error instanceof Error ? error.message : 'Could not add the image.', 'error');
           } finally {
-            setPreparing((count) => count - 1);
+            model.notePreparingImages(-1);
           }
         }
         if (tooLarge) useToastStore.getState().show(IMAGES_TOO_LARGE, 'error');
       })();
     },
-    [acceptsImages, preparing, commitImages],
+    [acceptsImages, model],
   );
 
   useImperativeHandle(
@@ -225,7 +210,7 @@ export function Composer({
     const body = text;
     const attached = images;
     setText('');
-    commitImages([]);
+    model.draftImages = [];
     setHint(null);
     void model
       .prompt(
@@ -240,8 +225,6 @@ export function Composer({
         // Through the model: the user may have left the session meanwhile.
         model.restoreDraft(body, attached);
         setTextState(model.draft);
-        imagesRef.current = model.draftImages;
-        setImages(model.draftImages);
         useToastStore
           .getState()
           .show(
@@ -396,7 +379,7 @@ export function Composer({
                 aria-label={`Remove ${image.name === '' ? `image ${String(index + 1)}` : image.name}`}
                 onClick={() => {
                   URL.revokeObjectURL(image.previewUrl);
-                  commitImages(imagesRef.current.filter((entry) => entry !== image));
+                  model.draftImages = model.draftImages.filter((entry) => entry !== image);
                   fieldRef.current?.focus();
                 }}
               >

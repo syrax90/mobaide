@@ -199,7 +199,7 @@ A session can now run in the structured **chat UI**. The agent then starts an [A
 
 * It lists every session the agent stored on the host, also those started outside Mobaide (for example `claude` in a terminal). This is how a client continues them; there is no live attach to a running TUI.
 * `open_session_id` names the open Mobaide chat session that already shows the row.
-* Errors carry `{"detail"}`: `400` bad `cwd` or cursor, `404` no chat agent of that kind, `409` the agent cannot list, `502` the agent failed, `503` it cannot run here.
+* Errors carry `{"detail"}`: `400` bad `cwd` or cursor, `404` no chat agent of that kind, `409` the agent cannot list, `502` the agent failed, `503` it cannot run here, or its adapter is still installing for first use (the install goes on; retry in a minute).
 * On the relay it runs aside from the tunnel reader, like the voice routes: its first call starts the agent process.
 
 #### Chat frames on the session socket

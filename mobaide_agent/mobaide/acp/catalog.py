@@ -16,7 +16,7 @@ from typing import Any
 
 from mobaide import __version__
 
-from .agents import ChatAgentSpec, ChatAgentUnavailableError
+from .agents import ChatAgentSpec, ChatAgentUnavailableError, ChatLaunchPlan
 from .install import PROBE_POOL, AdapterInstallError
 from .rpc import ERR_METHOD_NOT_FOUND, AcpConnection, AcpProcessError, AcpRpcError
 
@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 IDLE_SECONDS = 60.0
 INIT_TIMEOUT = 120.0
 LIST_TIMEOUT = 30.0
+# How long a request waits for a first-use adapter install. The relay gives
+# up on a request after 30 s, so a longer install keeps running in the
+# background and the request asks the user to try again.
+SETUP_WAIT = 15.0
 PAGE_MAX = 200
 TITLE_MAX = 200
 
@@ -48,6 +52,7 @@ class ChatCatalog:
         self._specs = specs
         self._listers: dict[str, _Lister] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._setups: dict[str, asyncio.Future[ChatLaunchPlan]] = {}
 
     async def list_sessions(
         self, kind: str, *, cwd: str | None, cursor: str | None
@@ -88,6 +93,9 @@ class ChatCatalog:
         )
 
     async def close(self) -> None:
+        for setup in self._setups.values():
+            setup.cancel()
+        self._setups.clear()
         for kind in list(self._listers):
             await self._drop(kind)
 
@@ -103,7 +111,12 @@ class ChatCatalog:
             self._listers.pop(kind, None)
             await existing.conn.close(grace=0.5)
         try:
-            plan = await spec.catalog_plan()  # type: ignore[attr-defined]
+            plan = await self._plan(kind, spec)
+        except TimeoutError:
+            raise ChatCatalogError(
+                503,
+                f"Setting up {spec.display_name} chat for first use. Try again in a minute.",
+            ) from None
         except ChatAgentUnavailableError as exc:
             raise ChatCatalogError(503, str(exc)) from None
         except AdapterInstallError as exc:
@@ -143,6 +156,23 @@ class ChatCatalog:
         lister = _Lister(conn, can_list and bool(caps.get("loadSession")))  # type: ignore[union-attr]
         self._listers[kind] = lister
         return lister
+
+    async def _plan(self, kind: str, spec: ChatAgentSpec) -> ChatLaunchPlan:
+        """The launch plan, waiting at most :data:`SETUP_WAIT` seconds. On a
+        timeout the setup goes on, and the next request joins it."""
+        setup = self._setups.get(kind)
+        if setup is None:
+            setup = asyncio.ensure_future(spec.catalog_plan())  # type: ignore[attr-defined]
+            self._setups[kind] = setup
+
+            def done(future: asyncio.Future[ChatLaunchPlan]) -> None:
+                if self._setups.get(kind) is future:
+                    del self._setups[kind]
+                if not future.cancelled():
+                    future.exception()  # retrieved: nobody may await a late failure
+
+            setup.add_done_callback(done)
+        return await asyncio.wait_for(asyncio.shield(setup), SETUP_WAIT)
 
     def _arm_idle(self, kind: str) -> None:
         lister = self._listers.get(kind)

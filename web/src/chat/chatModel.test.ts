@@ -277,4 +277,29 @@ describe('ChatSessionModel draft', () => {
     expect(revoked).toEqual(['blob:a', 'blob:b']);
     expect(model.draftImages).toEqual([]);
   });
+
+  it('publishes images that finish preparing to whichever composer is on screen', async () => {
+    const { model } = await harness();
+    model.notePreparingImages(2);
+    // The composer that started the work is gone; a new one reads the store.
+    expect(model.state().preparingImages).toBe(2);
+
+    expect(model.attachDraftImage(image('a'))).toBe(true);
+    model.notePreparingImages(-1);
+    expect(model.attachDraftImage(image('big', MAX_TOTAL_BASE64))).toBe(false);
+    model.notePreparingImages(-1);
+
+    expect(model.state().draftImages.map((entry) => entry.name)).toEqual(['a']);
+    expect(model.state().preparingImages).toBe(0);
+    expect(revoked).toEqual(['blob:big']);
+  });
+
+  it('revokes an image that finishes preparing after the model is disposed', async () => {
+    const { model } = await harness();
+    model.dispose();
+
+    expect(model.attachDraftImage(image('late'))).toBe(true);
+    expect(revoked).toEqual(['blob:late']);
+    expect(model.draftImages).toEqual([]);
+  });
 });

@@ -16,7 +16,7 @@ import { onResume } from '../realtime/resumeOnFocus';
 import { onTabVisibility, tabHidden } from '../realtime/tabVisibility';
 import { realScheduler, type ChannelSend, type Scheduler } from '../realtime/webSocketChannel';
 import { mountedTerminal, onMountedTerminal } from '../terminal/watchedTerminal';
-import { MAX_CHAT_IMAGES, MAX_TOTAL_BASE64, type PreparedImage } from './chatImages';
+import { MAX_CHAT_IMAGES, MAX_TOTAL_BASE64, totalBase64, type PreparedImage } from './chatImages';
 import {
   INITIAL_CHAT_TIMELINE,
   applyEvents,
@@ -68,6 +68,10 @@ export interface ChatViewState {
   timeline: ChatTimeline;
   /** Config values set here and not yet confirmed by the agent's state. */
   overrides: Readonly<Record<string, string | boolean>>;
+  /** The images attached to the draft; kept here so a remounted composer sees late ones. */
+  draftImages: readonly PreparedImage[];
+  /** Images still being prepared for the draft. */
+  preparingImages: number;
 }
 
 export type ChatResult =
@@ -91,6 +95,8 @@ function initialView(): ChatViewState {
     restarting: false,
     timeline: INITIAL_CHAT_TIMELINE,
     overrides: {},
+    draftImages: [],
+    preparingImages: 0,
   };
 }
 
@@ -112,8 +118,6 @@ export class ChatSessionModel {
   readonly store: UseBoundStore<StoreApi<ChatViewState>>;
   /** The composer's unsent text, kept across remounts of the screen. */
   draft = '';
-  /** The images attached to the draft; the model revokes their previews when disposed. */
-  draftImages: PreparedImage[] = [];
 
   private readonly channel: ChatSessionChannel;
   private readonly scheduler: Scheduler;
@@ -193,6 +197,39 @@ export class ChatSessionModel {
 
   state(): ChatViewState {
     return this.store.getState();
+  }
+
+  /** The images attached to the draft; the model revokes their previews when disposed. */
+  get draftImages(): readonly PreparedImage[] {
+    return this.store.getState().draftImages;
+  }
+
+  set draftImages(next: readonly PreparedImage[]) {
+    this.patch({ draftImages: next });
+  }
+
+  /** Count images that start (`delta` > 0) or finish (`delta` < 0) preparing. */
+  notePreparingImages(delta: number): void {
+    this.patch({ preparingImages: Math.max(0, this.store.getState().preparingImages + delta) });
+  }
+
+  /**
+   * Attach an image whose preparation finished, even if the composer that
+   * started it is gone. False when it would take the draft past the size of
+   * one prompt; its preview is then revoked, as it is once the model is disposed.
+   */
+  attachDraftImage(image: PreparedImage): boolean {
+    const current = this.draftImages;
+    if (totalBase64(current) + image.data.length > MAX_TOTAL_BASE64) {
+      URL.revokeObjectURL(image.previewUrl);
+      return false;
+    }
+    if (this.disposed) {
+      URL.revokeObjectURL(image.previewUrl);
+      return true;
+    }
+    this.draftImages = [...current, image];
+    return true;
   }
 
   /** Whether the session is known to be over, so the model can go once off screen. */
@@ -283,7 +320,8 @@ export class ChatSessionModel {
     this.cancelSettle?.();
     for (const dispose of this.disposers.splice(0)) dispose();
     this.resolvePending(CONNECTION_LOST);
-    for (const image of this.draftImages.splice(0)) URL.revokeObjectURL(image.previewUrl);
+    for (const image of this.draftImages) URL.revokeObjectURL(image.previewUrl);
+    this.draftImages = [];
     this.channel.dispose();
     this.onDispose?.();
   }
