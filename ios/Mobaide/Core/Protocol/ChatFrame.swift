@@ -85,12 +85,14 @@ enum ChatEvent: Sendable, Decodable {
     /// `item` is nil for an item type this client does not know.
     case item(seq: Int, item: ChatItem?)
     case append(seq: Int, id: String, text: String)
+    case remove(seq: Int, id: String)
     case state(seq: Int, patch: ChatStatePatch)
     case other(seq: Int)
 
     var seq: Int {
         switch self {
-        case .item(let seq, _), .append(let seq, _, _), .state(let seq, _), .other(let seq): return seq
+        case .item(let seq, _), .append(let seq, _, _), .remove(let seq, _), .state(let seq, _), .other(let seq):
+            return seq
         }
     }
 
@@ -106,6 +108,12 @@ enum ChatEvent: Sendable, Decodable {
                 return
             }
             self = .append(seq: seq, id: id, text: c.string("text") ?? "")
+        case "remove":
+            if let id = c.string("id") {
+                self = .remove(seq: seq, id: id)
+            } else {
+                self = .other(seq: seq)
+            }
         case "state":
             if let patch = c.value(ChatStatePatch.self, "patch") {
                 self = .state(seq: seq, patch: patch)

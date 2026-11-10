@@ -19,6 +19,7 @@ import { useTerminalPrefsStore } from '../../stores/terminalPrefsStore';
 import { useToastStore } from '../../stores/toastStore';
 import type { TerminalSessionModel } from '../../terminal/sessionModel';
 import { stripControls } from '../../terminal/terminalPaste';
+import { CollapseIcon, ExpandIcon } from '../chat/ChatIcons';
 import { TemplateEditorDialog } from '../templates/TemplateEditorDialog';
 import { useSaveTemplate } from '../templates/useSaveTemplate';
 import { ConnectionOverlay, overlayMessage } from './ConnectionOverlay';
@@ -277,16 +278,21 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
           {immersive.supported && (
             <button
               type="button"
-              className="button"
+              className="button button-icon"
               aria-pressed={immersive.active}
+              aria-label={immersive.active ? 'Leave full screen' : 'Full screen'}
               // Chromium-only; the permission prompt Chrome announced for 131 was
               // never shipped (see `keyboard/useKeyboardLock.ts`). It is the only
               // way Ctrl+W, Ctrl+T and F11 ever reach the terminal, so it is
               // opt-in per session rather than a persisted preference.
-              title="Capture every key, including the ones the browser normally takes"
+              title={
+                immersive.active
+                  ? 'Leave full screen (hold Esc)'
+                  : 'Full screen: every key goes to the terminal, even the ones the browser takes'
+              }
               onClick={immersive.active ? immersive.exit : immersive.enter}
             >
-              {immersive.active ? 'Leave immersive' : 'Immersive'}
+              {immersive.active ? <CollapseIcon /> : <ExpandIcon />}
             </button>
           )}
           {git.group !== null && (

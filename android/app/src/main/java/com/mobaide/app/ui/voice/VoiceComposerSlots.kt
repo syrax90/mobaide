@@ -12,10 +12,10 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.data.network.dto.SessionKind
+import com.mobaide.app.ui.common.insertAtCursor
 import com.mobaide.app.data.voice.DictationState
 import com.mobaide.app.data.voice.VoiceMicMode
 
@@ -141,15 +141,5 @@ fun rememberVoiceComposerSlots(
 fun TextFieldValue.withTranscript(transcript: String): TextFieldValue? {
     val clean = transcript.trim()
     if (clean.isEmpty()) return null
-    val start = selection.min.coerceIn(0, text.length)
-    val end = selection.max.coerceIn(start, text.length)
-    val before = text.substring(0, start)
-    val after = text.substring(end)
-    val lead = if (before.isNotEmpty() && !before.last().isWhitespace()) " " else ""
-    val trail = if (after.isNotEmpty() && !after.first().isWhitespace()) " " else ""
-    val inserted = lead + clean + trail
-    return TextFieldValue(
-        text = before + inserted + after,
-        selection = TextRange(before.length + inserted.length),
-    )
+    return insertAtCursor(clean, spaced = true)
 }

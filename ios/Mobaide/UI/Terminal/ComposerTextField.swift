@@ -68,6 +68,31 @@ struct ComposerTextField: View {
     }
 }
 
+/// Text put into a composer draft at its selection (Android `insertAtCursor`).
+enum ComposerInsertion {
+    /// `inserted` replaces `selection` (nil: the end of `text`). With `spaced`,
+    /// a space goes on either side where it would otherwise run into a word
+    /// (dictated text); without it the text goes in as is (a template body).
+    /// `cursor` is the offset right after the inserted text.
+    static func insert(
+        _ inserted: String,
+        into text: String,
+        selection: Range<Int>?,
+        spaced: Bool
+    ) -> (text: String, cursor: Int) {
+        let length = text.count
+        let range = selection ?? length..<length
+        let lower = min(max(range.lowerBound, 0), length)
+        let upper = min(max(range.upperBound, lower), length)
+        let before = String(text.prefix(lower))
+        let after = String(text.dropFirst(upper))
+        let lead = spaced ? (before.last.map { $0.isWhitespace ? "" : " " } ?? "") : ""
+        let trail = spaced ? (after.first.map { $0.isWhitespace ? "" : " " } ?? "") : ""
+        let piece = lead + inserted + trail
+        return (before + piece + after, before.count + piece.count)
+    }
+}
+
 @available(iOS 18.0, *)
 private struct SelectionTrackingComposer: View {
     @Binding var text: String

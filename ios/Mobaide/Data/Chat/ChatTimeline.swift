@@ -109,6 +109,12 @@ struct ChatTimeline: Sendable {
             guard let position = index[id], !text.isEmpty else { return [] }
             items[position].appendText(text)
             return .items
+        case .remove(_, let id):
+            guard let position = index[id] else { return [] }
+            items.remove(at: position)
+            // Rare (a setup notice going away): rebuilding the index is fine.
+            reindex()
+            return .items
         case .state(_, let patch):
             state.apply(patch)
             return .state
@@ -130,6 +136,10 @@ struct ChatTimeline: Sendable {
         guard items.count > maxItems else { return }
         items.removeFirst(items.count - maxItems)
         truncated = true
+        reindex()
+    }
+
+    private mutating func reindex() {
         index = Dictionary(uniqueKeysWithValues: items.enumerated().map { ($1.id, $0) })
     }
 }

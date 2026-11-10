@@ -5,7 +5,8 @@ Every change is recorded as an event with a sequence number inside an
 for ``flush_interval`` seconds and sent as one ``events`` frame, so a token
 stream costs one frame per batch instead of one per token. Inside a batch an
 item is sent once: as a full ``item`` upsert when it was created or changed,
-or as one ``append`` when only text was added to it.
+or as one ``append`` when only text was added to it, or as one ``remove``
+when it was dropped.
 """
 from __future__ import annotations
 
@@ -118,6 +119,15 @@ class ChatTimeline:
         self._appends.pop(item_id, None)
         self._schedule(urgent)
 
+    def remove(self, item_id: str, *, urgent: bool = False) -> None:
+        """Drop an item from the timeline (sent as a ``remove`` event)."""
+        if self._items.pop(item_id, None) is None:
+            return
+        self._total_bytes -= self._sizes.pop(item_id, 0)
+        self._touched[item_id] = "remove"
+        self._appends.pop(item_id, None)
+        self._schedule(urgent)
+
     def append_text(self, item_id: str, text: str) -> None:
         item = self._items.get(item_id)
         if item is None or not text:
@@ -196,6 +206,9 @@ class ChatTimeline:
             return
         encoded: list[bytes] = []
         for item_id, how in self._touched.items():
+            if how == "remove":
+                encoded.append(self._record({"type": "remove", "id": item_id}))
+                continue
             item = self._items.get(item_id)
             if item is None:
                 continue

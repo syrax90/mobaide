@@ -65,6 +65,9 @@ data class ChatUiState(
     val canRestart: Boolean
         get() = live && !sessionClosed && !restarting && state.status == ChatStatus.ERROR
 
+    /** Whether a draft of [text] (plus the picked images) can go out now. */
+    fun canSend(text: String): Boolean = canAct && !imagesLoading && (text.isNotBlank() || images.isNotEmpty())
+
     /** The item still receiving text: the last one, while a turn runs. */
     val streamingItemId: String?
         get() = if (running) items.lastOrNull()?.takeIf { it is ChatItem.Agent || it is ChatItem.Thought }?.id else null

@@ -9,7 +9,7 @@ import type {
 } from '../../chat/chatWire';
 import { MenuButton, type MenuGroup } from '../../components/MenuButton';
 import { isPrimaryPress } from '../../lib/pointer';
-import { ChevronIcon, GearIcon, ShieldIcon } from './ChatIcons';
+import { BrainIcon, ChevronIcon, ChipIcon, GearIcon, ShieldIcon } from './ChatIcons';
 import { toastFailure } from './DockPanels';
 
 const CHIP_CATEGORIES = ['mode', 'model', 'thought_level'] as const;
@@ -135,6 +135,8 @@ export const ConfigChips = memo(function ConfigChips({
             })}
           >
             {option.category === 'mode' && <ShieldIcon />}
+            {option.category === 'model' && <ChipIcon />}
+            {option.category === 'thought_level' && <BrainIcon />}
             <span className="chat-chip-text">{shown}</span>
             <ChevronIcon />
           </MenuButton>

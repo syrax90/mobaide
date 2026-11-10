@@ -157,6 +157,15 @@ export function applyEvents(timeline: ChatTimeline, frame: EventsFrame): ChatRed
         items[at] = { ...target, text: target.text + event.text };
         break;
       }
+      case 'remove': {
+        const at = (positions ?? timeline.positions).get(event.id);
+        if (at === undefined) break;
+        items ??= [...timeline.items];
+        items.splice(at, 1);
+        // Rare (a setup notice going away): reindexing everything is fine.
+        positions = indexItems(items);
+        break;
+      }
       case 'state':
         state = { ...state, ...event.patch };
         break;

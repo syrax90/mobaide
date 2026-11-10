@@ -18,6 +18,8 @@ struct ChatScreen: View {
     @State private var showSaveTemplate = false
     @State private var templateName = ""
     @State private var showSessionInfo = false
+    @State private var showFullScreenComposer = false
+    @State private var focusView: Bool
     @State private var showSettings = false
     @State private var pickingConfig: ChatConfigOption?
     @State private var screenHeight: CGFloat = 0
@@ -54,6 +56,7 @@ struct ChatScreen: View {
             connectedAgentId: container.tokenStore.getAgentId()
         ))
         _drawerOpen = State(initialValue: stoppedSessionId != nil)
+        _focusView = State(initialValue: container.preferencesStore.isChatFocusView())
     }
 
     // MARK: - Labels
@@ -82,7 +85,11 @@ struct ChatScreen: View {
     var body: some View {
         ZStack(alignment: .top) {
             VStack(spacing: 0) {
-                ChatTimelineView(model: model, agentLabel: model.state.agent?.displayName ?? kindLabel)
+                ChatTimelineView(
+                    model: model,
+                    agentLabel: model.state.agent?.displayName ?? kindLabel,
+                    focusView: focusView
+                )
                     .overlay(alignment: .leading) { edgePanStrip }
                 dock
             }
@@ -123,6 +130,11 @@ struct ChatScreen: View {
         }
         .sheet(isPresented: Bindable(voice).setupVisible, onDismiss: { voice.hideSetup() }) {
             VoiceSetupSheet(voice: voice)
+        }
+        .sheet(isPresented: $showFullScreenComposer) {
+            ChatFullScreenComposer(model: model, voice: voice) {
+                hideKeyboard()
+            }
         }
         .sheet(isPresented: $showSessionInfo) {
             ChatSessionInfoSheet(
@@ -247,6 +259,12 @@ struct ChatScreen: View {
                     )
                 }
                 Section {
+                    Toggle(isOn: focusViewBinding) {
+                        Label("Focus view", systemImage: "scope")
+                    }
+                    .accessibilityHint("Shows answers and questions only; the steps fold into one line")
+                }
+                Section {
                     if model.phase == .error, !model.sessionClosed {
                         Button {
                             model.restart()
@@ -301,7 +319,8 @@ struct ChatScreen: View {
                 onSaveTemplate: {
                     templateName = ""
                     showSaveTemplate = true
-                }
+                },
+                onExpand: { showFullScreenComposer = true }
             )
         }
         .background(colors.surface)
@@ -334,20 +353,19 @@ struct ChatScreen: View {
         let chips = ChatConfigCategory.chipOptions(model.state.config)
         let hasOthers = !ChatConfigCategory.otherOptions(model.state.config).isEmpty
         if !chips.isEmpty || hasOthers {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(chips) { option in
-                        chip(option)
-                    }
-                    if hasOthers {
-                        ChatConfigChip(icon: "gearshape", text: "", tone: .muted, accessibilityLabel: "More settings") {
-                            showSettings = true
-                        }
+            // Wraps onto a second line rather than scrolling, so no chip is out of sight.
+            ChipFlowLayout(horizontalSpacing: 8, verticalSpacing: 0) {
+                ForEach(chips) { option in
+                    chip(option)
+                }
+                if hasOthers {
+                    ChatConfigChip(icon: "gearshape", text: "", tone: .muted, accessibilityLabel: "More settings") {
+                        showSettings = true
                     }
                 }
-                .padding(.horizontal, 12)
             }
-            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
             .disabled(!model.canAct)
         }
     }
@@ -405,6 +423,16 @@ struct ChatScreen: View {
 
     private func hideKeyboard() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
+    private var focusViewBinding: Binding<Bool> {
+        Binding(
+            get: { focusView },
+            set: { on in
+                focusView = on
+                container.preferencesStore.setChatFocusView(on)
+            }
+        )
     }
 
     private var stopPresented: Binding<Bool> {

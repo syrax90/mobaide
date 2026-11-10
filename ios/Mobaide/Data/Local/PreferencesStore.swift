@@ -16,6 +16,7 @@ struct PreferencesStore: @unchecked Sendable {
     static let keyTerminalStaticColumns = "terminal_static_columns"
     static let keyExternalSessionsNoticeDismissed = "external_sessions_notice_dismissed"
     static let keyVoiceCleanupNoticeSeen = "voice_cleanup_notice_seen"
+    static let keyChatFocusView = "chat_focus_view"
     // Device-local, not account-scoped (device backups carry them): no sign-out
     // sweep touches them, since the store's quota follows the device's store
     // account, not the Mobaide one.
@@ -181,6 +182,16 @@ struct PreferencesStore: @unchecked Sendable {
 
     func setVoiceCleanupNoticeSeen() {
         defaults.set(true, forKey: Self.keyVoiceCleanupNoticeSeen)
+    }
+
+    /// Chat focus view: answers and questions only, thinking and tool calls
+    /// folded into one row per run. On when never set; one setting for every chat.
+    func isChatFocusView() -> Bool {
+        defaults.object(forKey: Self.keyChatFocusView) as? Bool ?? true
+    }
+
+    func setChatFocusView(_ on: Bool) {
+        defaults.set(on, forKey: Self.keyChatFocusView)
     }
 
     func getCachedLinearLabels(projectName: String) -> [LinearLabelDto] {

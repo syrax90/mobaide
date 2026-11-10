@@ -355,6 +355,7 @@ export function normalizeState(raw: unknown): ChatState {
 export type ChatEvent =
   | { type: 'item'; seq: number; item: ChatItem | null }
   | { type: 'append'; seq: number; id: string; text: string }
+  | { type: 'remove'; seq: number; id: string }
   | { type: 'state'; seq: number; patch: Partial<ChatState> }
   | { type: 'skip'; seq: number };
 
@@ -398,6 +399,8 @@ function parseEvent(raw: unknown): ChatEvent | null {
       return typeof raw.id === 'string' && typeof raw.text === 'string'
         ? { type: 'append', seq, id: raw.id, text: raw.text }
         : { type: 'skip', seq };
+    case 'remove':
+      return typeof raw.id === 'string' ? { type: 'remove', seq, id: raw.id } : { type: 'skip', seq };
     case 'state':
       return { type: 'state', seq, patch: normalizeStatePatch(raw.patch) };
     default:

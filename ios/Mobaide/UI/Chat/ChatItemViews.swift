@@ -46,6 +46,52 @@ struct ChatItemRow: View, Equatable {
     }
 }
 
+/// Focus view: one folded run of thinking and tool calls; opens in place.
+struct ChatStepsRow: View {
+    let count: Int
+    let live: Bool
+    let current: String?
+    let open: Bool
+    let onToggle: () -> Void
+
+    @Environment(\.mobaideColors) private var colors
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 8) {
+                Group {
+                    if live {
+                        PixelLoadingBlock(width: 7, height: 12)
+                    } else {
+                        Image(systemName: "list.bullet")
+                            .foregroundStyle(colors.textMuted)
+                    }
+                }
+                .frame(width: 20)
+                label
+                    .font(.subheadline)
+                    .lineLimit(1)
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(colors.gray)
+                    .rotationEffect(.degrees(open ? 90 : 0))
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(open ? "Hide the steps" : "Show the steps")
+        .accessibilityIdentifier("chat-steps-row")
+    }
+
+    private var label: Text {
+        let steps = Text(ChatFocusView.stepsLabel(count)).foregroundStyle(colors.textMuted)
+        guard live, let current else { return steps }
+        return Text("\(Text(current).foregroundStyle(colors.text))\(Text(" · ").foregroundStyle(colors.textMuted))\(steps)")
+    }
+}
+
 private struct ChatTurnEndRow: View {
     let text: String
 
@@ -273,7 +319,7 @@ struct ChatToolRow: View {
                 }
                 if waitingForApproval {
                     Text("Waiting for approval")
-                        .chromeText()
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(colors.accent)
                 }
             }
@@ -309,7 +355,7 @@ struct ChatToolRow: View {
                             .font(.caption2.weight(.semibold))
                             .rotationEffect(.degrees(inputShown ? 90 : 0))
                         Text("Input")
-                            .chromeText()
+                            .font(.caption)
                     }
                     .foregroundStyle(colors.textMuted)
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -589,7 +635,7 @@ struct ChatCompactionRow: View {
                 HStack(spacing: 8) {
                     Rectangle().fill(colors.surface2).frame(height: PixelMetrics.ring)
                     Text(status == "failed" ? "Compaction failed" : "Context compacted")
-                        .chromeText()
+                        .font(.caption)
                         .foregroundStyle(status == "failed" ? colors.danger : colors.textMuted)
                         .fixedSize()
                     if status == "in_progress" {

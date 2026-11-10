@@ -10,6 +10,7 @@ private let chatBottomId = "chat-bottom"
 struct ChatTimelineView: View {
     let model: ChatSessionModel
     let agentLabel: String
+    var focusView = false
 
     @Environment(\.mobaideColors) private var colors
     @State private var following = true
@@ -34,18 +35,34 @@ struct ChatTimelineView: View {
                 let lastErrorId = model.items.last { if case .error = $0.body { return true } else { return false } }?.id
                 let waiting = model.waitingToolIds
                 let canRestart = model.phase == .error && model.isLive && !model.restarting
-                ForEach(model.items) { item in
-                    ChatItemRow(
-                        item: item,
-                        streaming: item.id == lastId && model.isRunning,
-                        expanded: model.expandedItems.contains(item.id),
-                        waitingForApproval: waiting.contains(item.id),
-                        canRestart: canRestart && item.id == lastErrorId,
-                        onToggle: { model.toggleExpanded(item.id) },
-                        onRestart: { model.restart() }
-                    )
-                    .equatable()
-                    .chatTimelineRow()
+                let rows = ChatFocusView.rows(
+                    model.items,
+                    focus: focusView,
+                    running: model.isRunning,
+                    waitingToolIds: waiting,
+                    open: model.expandedItems
+                )
+                ForEach(rows) { row in
+                    switch row {
+                    case .steps(let id, let count, let live, let current, let open):
+                        ChatStepsRow(count: count, live: live, current: current, open: open) {
+                            model.toggleExpanded(id)
+                        }
+                        .chatTimelineRow()
+                    case .item(let item, let nested):
+                        ChatItemRow(
+                            item: item,
+                            streaming: item.id == lastId && model.isRunning,
+                            expanded: model.expandedItems.contains(item.id),
+                            waitingForApproval: waiting.contains(item.id),
+                            canRestart: canRestart && item.id == lastErrorId,
+                            onToggle: { model.toggleExpanded(item.id) },
+                            onRestart: { model.restart() }
+                        )
+                        .equatable()
+                        .chatNestedStep(nested, rule: colors.surface2)
+                        .chatTimelineRow()
+                    }
                 }
                 Color.clear
                     .frame(height: 1)
@@ -210,6 +227,19 @@ struct ChatTimelineView: View {
 /// Plain bookkeeping read only from callbacks, so updating it never
 /// invalidates the view.
 private extension View {
+    /// A step under its open steps row: indented behind a rule.
+    @ViewBuilder
+    func chatNestedStep(_ nested: Bool, rule: Color) -> some View {
+        if nested {
+            padding(.leading, 14)
+                .overlay(alignment: .leading) {
+                    Rectangle().fill(rule).frame(width: PixelMetrics.ring)
+                }
+        } else {
+            self
+        }
+    }
+
     /// A timeline row inside the `List`: no separator, no cell background.
     func chatTimelineRow(insets: EdgeInsets = EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16)) -> some View {
         listRowInsets(insets)

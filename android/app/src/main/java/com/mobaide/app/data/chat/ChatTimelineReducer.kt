@@ -125,6 +125,7 @@ class ChatTimelineReducer(
                         itemsTouched = true
                     }
                 }
+                is ChatEvent.Remove -> if (remove(event.id)) itemsTouched = true
                 is ChatEvent.StatePatch -> {
                     rawState = JsonObject(rawState + event.patch)
                     stateTouched = true
@@ -186,12 +187,24 @@ class ChatTimelineReducer(
         }
     }
 
+    /** Rare (a setup notice going away), so the index is simply rebuilt. */
+    private fun remove(id: String): Boolean {
+        val at = index[id] ?: return false
+        items.removeAt(at)
+        reindex()
+        return true
+    }
+
+    private fun reindex() {
+        index.clear()
+        items.forEachIndexed { i, item -> index[item.id] = i }
+    }
+
     private fun enforceCap() {
         val excess = items.size - maxItems
         if (excess <= 0) return
         items.subList(0, excess).clear()
-        index.clear()
-        items.forEachIndexed { i, item -> index[item.id] = i }
+        reindex()
         truncated = true
     }
 

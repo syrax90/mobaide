@@ -9,7 +9,9 @@ import {
 } from 'react';
 import { useStore } from 'zustand';
 import type { ChatSessionModel } from '../../chat/chatModel';
-import { ChatItemView } from './ChatItems';
+import { timelineRows } from '../../chat/focusView';
+import { useChatPrefsStore } from '../../stores/chatPrefsStore';
+import { ChatItemView, StepsRow } from './ChatItems';
 import { MiddleEllipsis } from './MiddleEllipsis';
 
 /** Within this many pixels of the end counts as "at the bottom". */
@@ -45,14 +47,30 @@ export function ChatTimelineView({ model, kindLabel, onRestart, children }: Chat
   const interacting = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [unseen, setUnseen] = useState(false);
   const [farFromEnd, setFarFromEnd] = useState(false);
+  const focus = useChatPrefsStore((prefs) => prefs.focusView);
+  const [openSteps, setOpenSteps] = useState<ReadonlySet<string>>(() => new Set());
 
   const waitingTools = useMemo(() => {
     const ids = new Set<string>();
     for (const request of requests) {
-      if (request.kind === 'permission' && request.tool_call_id !== null) ids.add(request.tool_call_id);
+      // Any kind, as on Android and iOS: a question asked from a tool keeps that tool in view.
+      if (request.tool_call_id !== null) ids.add(request.tool_call_id);
     }
     return ids;
   }, [requests]);
+
+  const running = status === 'running';
+  const rows = useMemo(
+    () => timelineRows(items, { focus, running, waitingTools, open: openSteps }),
+    [items, focus, running, waitingTools, openSteps],
+  );
+  const toggleSteps = useCallback((id: string) => {
+    setOpenSteps((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  }, []);
 
   const scrollToEnd = useCallback(() => {
     const scroller = scrollRef.current;
@@ -117,14 +135,14 @@ export function ChatTimelineView({ model, kindLabel, onRestart, children }: Chat
     }, 400);
   }, []);
 
-  const running = status === 'running';
   const agentTitle = agent?.title !== undefined && agent.title !== '' ? agent.title : kindLabel;
   const starting = status === 'starting' || status === 'loading';
-  const lastIndex = items.length - 1;
-  let lastError = -1;
-  for (let index = lastIndex; index >= 0 && status === 'error'; index -= 1) {
-    if (items[index]?.type === 'error') {
-      lastError = index;
+  const lastId = items[items.length - 1]?.id;
+  let lastErrorId: string | undefined;
+  for (let index = items.length - 1; index >= 0 && status === 'error'; index -= 1) {
+    const candidate = items[index];
+    if (candidate?.type === 'error') {
+      lastErrorId = candidate.id;
       break;
     }
   }
@@ -156,18 +174,38 @@ export function ChatTimelineView({ model, kindLabel, onRestart, children }: Chat
     body = (
       <>
         {truncated && <p className="chat-truncated">Earlier messages are not shown.</p>}
-        {items.map((item, index) => (
-          <div key={item.id} className={`chat-row chat-row-${item.type}`}>
-            <ChatItemView
-              item={item}
-              streaming={running && index === lastIndex}
-              waiting={item.type === 'tool' && waitingTools.has(item.id)}
-              canRestart={index === lastError}
-              restarting={index === lastError && restarting}
-              onRestart={onRestart}
-            />
-          </div>
-        ))}
+        {rows.map((row) => {
+          if (row.kind === 'steps') {
+            return (
+              <div key={row.id} className="chat-row chat-row-steps">
+                <StepsRow
+                  id={row.id}
+                  count={row.count}
+                  live={row.live}
+                  current={row.current}
+                  open={row.open}
+                  onToggle={toggleSteps}
+                />
+              </div>
+            );
+          }
+          const { item } = row;
+          return (
+            <div
+              key={item.id}
+              className={`chat-row chat-row-${item.type}${row.nested ? ' chat-row-nested' : ''}`}
+            >
+              <ChatItemView
+                item={item}
+                streaming={running && item.id === lastId}
+                waiting={item.type === 'tool' && waitingTools.has(item.id)}
+                canRestart={item.id === lastErrorId}
+                restarting={item.id === lastErrorId && restarting}
+                onRestart={onRestart}
+              />
+            </div>
+          );
+        })}
       </>
     );
   }

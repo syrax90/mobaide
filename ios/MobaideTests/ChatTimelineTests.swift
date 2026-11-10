@@ -115,6 +115,38 @@ final class ChatTimelineTests: XCTestCase {
         XCTAssertEqual(timeline.items, before)
     }
 
+    func testRemoveDropsTheItemAndKeepsLaterEventsOfTheFrameOnTheRightItems() throws {
+        var timeline = try loaded(seq: 1, items: "[\(agent("n:1", "Setting up")), \(agent("m:2", "a"))]")
+
+        let result = timeline.apply(try events("""
+            [{"type":"item","seq":2,"item":\(agent("n:3", "brief"))},
+             {"type":"remove","seq":3,"id":"n:1"},
+             {"type":"remove","seq":4,"id":"n:3"},
+             \(append(5, "m:2", "b")),
+             {"type":"item","seq":6,"item":\(agent("m:4", "c"))},
+             \(append(7, "m:4", "d"))]
+            """, seq: 7))
+
+        XCTAssertNil(result.sync)
+        XCTAssertEqual(result.changes, [.items])
+        XCTAssertEqual(timeline.seq, 7)
+        XCTAssertEqual(timeline.items.map(\.id), ["m:2", "m:4"])
+        XCTAssertEqual(text(timeline, "m:2"), "ab")
+        XCTAssertEqual(text(timeline, "m:4"), "cd")
+    }
+
+    func testRemoveOfAnUnknownItemOnlyAdvancesTheSeq() throws {
+        var timeline = try loaded(seq: 1, items: "[\(agent("m:1", "a"))]")
+        let before = timeline.items
+
+        let result = timeline.apply(try events(#"[{"type":"remove","seq":2,"id":"missing"}, {"type":"remove","seq":3}]"#, seq: 3))
+
+        XCTAssertNil(result.sync)
+        XCTAssertEqual(result.changes, [])
+        XCTAssertEqual(timeline.seq, 3)
+        XCTAssertEqual(timeline.items, before)
+    }
+
     func testGapAppliesWhatCameBeforeAndResumesFromThere() throws {
         var timeline = try loaded(seq: 1, items: "[\(agent("m:1", "a"))]")
 

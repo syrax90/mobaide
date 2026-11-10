@@ -6,9 +6,12 @@ import type { ChatSessionModel } from '../../chat/chatModel';
 import { chatStatusLine, type StatusLine } from '../../chat/chatFormat';
 import { imageFilesFrom } from '../../chat/chatImages';
 import { MenuButton, type MenuGroup } from '../../components/MenuButton';
+import { useFullscreen } from '../../lib/useFullscreen';
 import { isChatSession, type SessionResponse } from '../../protocol/dto/session';
 import { chatChannelName } from '../../realtime/channels';
+import { useChatPrefsStore } from '../../stores/chatPrefsStore';
 import { useLastSessionStore } from '../../stores/lastSessionStore';
+import { useToastStore } from '../../stores/toastStore';
 import { clearMountedTerminal, setMountedTerminal } from '../../terminal/watchedTerminal';
 import { sessionDialogLabel, sessionKindLabel } from '../sessions/sessionDisplay';
 import { StopSessionDialog } from '../sessions/StopSessionDialog';
@@ -19,6 +22,7 @@ import { useSessionGone } from '../terminal/useSessionGone';
 import { useSessionHeaderLabel } from '../terminal/useSessionHeaderLabel';
 import { useSessionRow } from '../terminal/useSessionRow';
 import { useSessionsPanelHost } from '../terminal/useSessionsPanelHost';
+import { CollapseIcon, ExpandIcon } from './ChatIcons';
 import { ChatTimelineView } from './ChatTimelineView';
 import { Composer, type ComposerHandle } from './Composer';
 import { ConfigChips, UsageIndicator } from './ConfigChips';
@@ -165,6 +169,13 @@ function ChatView({ model, session, headerLabel }: ChatViewProps) {
   const [stopOpen, setStopOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const restarting = useStore(model.store, (view) => view.restarting);
+  const focusView = useChatPrefsStore((prefs) => prefs.focusView);
+  const setFocusView = useChatPrefsStore((prefs) => prefs.setFocusView);
+  const fullscreen = useFullscreen();
+
+  useEffect(() => {
+    if (fullscreen.error !== null) useToastStore.getState().show(fullscreen.error, 'error');
+  }, [fullscreen.error]);
 
   const clearLastUsedSession = useLastSessionStore((store) => store.clearLastUsedSession);
   const lastUsed = useLastSessionStore((store) => store.lastUsedSessionIds[model.agentId]);
@@ -191,6 +202,23 @@ function ChatView({ model, session, headerLabel }: ChatViewProps) {
     if (handOff?.overlayOpen === true) return;
     if (window.matchMedia('(pointer: fine)').matches) composerRef.current?.focus();
   }, [handOff]);
+
+  const viewGroup: MenuGroup = {
+    id: 'view',
+    label: 'View',
+    items: [
+      {
+        id: 'focus',
+        label: 'Focus view',
+        description: 'Answers and questions only; the steps fold into one line',
+        checked: focusView,
+        toggle: true,
+        onSelect: () => {
+          setFocusView(!focusView);
+        },
+      },
+    ],
+  };
 
   const sessionGroup: MenuGroup = {
     id: 'session',
@@ -275,11 +303,25 @@ function ChatView({ model, session, headerLabel }: ChatViewProps) {
           <HeaderStatus model={model} title={title} />
           <span className="terminal-bar-spacer" />
           <UsageIndicator usage={state.usage} />
+          {fullscreen.supported && (
+            <button
+              type="button"
+              className="button button-icon"
+              aria-label={fullscreen.active ? 'Leave full screen' : 'Full screen'}
+              title={fullscreen.active ? 'Leave full screen' : 'Full screen'}
+              aria-pressed={fullscreen.active}
+              onClick={fullscreen.active ? fullscreen.exit : fullscreen.enter}
+            >
+              {fullscreen.active ? <CollapseIcon /> : <ExpandIcon />}
+            </button>
+          )}
           <MenuButton
             label="More options"
             className="button button-icon"
             triggerRef={moreRef}
-            groups={git.group === null ? [sessionGroup] : [git.group, sessionGroup]}
+            groups={
+              git.group === null ? [viewGroup, sessionGroup] : [git.group, viewGroup, sessionGroup]
+            }
           >
             ⋯
           </MenuButton>

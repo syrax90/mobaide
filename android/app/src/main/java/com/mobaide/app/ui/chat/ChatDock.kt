@@ -10,6 +10,8 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -32,13 +34,14 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.IndeterminateCheckBox
-import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Icon
@@ -102,6 +105,8 @@ import com.mobaide.app.ui.theme.pixel
 
 const val CHAT_COMPOSER_FIELD_TAG = "chat_composer_field"
 const val CHAT_SEND_BUTTON_TAG = "chat_send_button"
+const val CHAT_CONFIG_CHIPS_TAG = "chat_config_chips"
+const val CHAT_EXPAND_COMPOSER_TAG = "chat_expand_composer"
 
 @Composable
 fun ChatPlanBar(plan: List<ChatPlanEntry>, modifier: Modifier = Modifier) {
@@ -264,6 +269,11 @@ fun modeTone(value: String?): Color {
     }
 }
 
+/**
+ * The mode, model and effort chips, then the other settings. They wrap onto a
+ * second line rather than scroll, so no chip is ever out of sight.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ChatConfigChips(
     config: List<ChatConfigOption>,
@@ -275,18 +285,18 @@ fun ChatConfigChips(
     val chips = remember(config) { primaryConfigChips(config) }
     val hasOthers = config.size > chips.size
     if (chips.isEmpty() && !hasOthers) return
-    Row(
+    FlowRow(
         modifier = modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
+            .testTag(CHAT_CONFIG_CHIPS_TAG),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
         chips.forEach { option ->
             val (icon, tone) = when (option.category) {
                 ChatConfigOption.CATEGORY_MODE -> Icons.Outlined.Shield to modeTone(option.selectValue)
+                // A chip for the model, a brain for the effort: the same symbols as iOS and the web.
                 ChatConfigOption.CATEGORY_MODEL -> Icons.Outlined.Memory to MaterialTheme.colorScheme.onSurfaceVariant
-                else -> Icons.Outlined.Lightbulb to MaterialTheme.colorScheme.onSurfaceVariant
+                else -> Icons.Outlined.Psychology to MaterialTheme.colorScheme.onSurfaceVariant
             }
             ConfigChip(
                 icon = icon,
@@ -436,6 +446,7 @@ fun ChatComposer(
     micButton: (@Composable () -> Unit)?,
     dictationBar: (@Composable () -> Unit)?,
     modifier: Modifier = Modifier,
+    onExpand: (() -> Unit)? = null,
 ) {
     val hasContent = value.text.isNotBlank() || images.isNotEmpty()
     val showStop = running && !hasContent
@@ -495,6 +506,17 @@ fun ChatComposer(
                 )
                 Spacer(modifier = Modifier.weight(1f))
                 micButton?.invoke()
+                if (onExpand != null) {
+                    // Same slot as the terminal's: right before Send.
+                    PixelIconButton(
+                        imageVector = Icons.Default.OpenInFull,
+                        contentDescription = "Expand editor",
+                        onClick = onExpand,
+                        enabled = inputEnabled,
+                        compact = true,
+                        modifier = Modifier.testTag(CHAT_EXPAND_COMPOSER_TAG),
+                    )
+                }
                 SendButton(
                     stop = showStop,
                     queue = running && hasContent,

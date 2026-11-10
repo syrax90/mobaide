@@ -138,6 +138,32 @@ describe('applyEvents', () => {
     expect(timeline.items).toEqual(start.items);
   });
 
+  it('removes by id and keeps the later events of the frame on the right items', () => {
+    const start = loaded(1, [agent('n:1', 'Setting up'), agent('m:2', 'a')]);
+
+    const { timeline, sync } = applyEvents(
+      start,
+      events([
+        { type: 'item', seq: 2, item: agent('n:3', 'brief') },
+        { type: 'remove', seq: 3, id: 'n:1' },
+        { type: 'remove', seq: 4, id: 'n:3' },
+        { type: 'append', seq: 5, id: 'm:2', text: 'b' },
+        { type: 'item', seq: 6, item: agent('m:4', 'c') },
+        { type: 'remove', seq: 7, id: 'missing' },
+      ]),
+    );
+
+    expect(sync).toBeUndefined();
+    expect(timeline.seq).toBe(7);
+    expect(timeline.items.map((item) => item.id)).toEqual(['m:2', 'm:4']);
+    expect([...timeline.positions]).toEqual([
+      ['m:2', 0],
+      ['m:4', 1],
+    ]);
+    expect(textOf(timeline, 'm:2')).toBe('ab');
+    expect(start.items.map((item) => item.id)).toEqual(['n:1', 'm:2']);
+  });
+
   it('applies what came before a gap and asks for the rest once', () => {
     const start = loaded(1, [agent('m:1', 'a')]);
 

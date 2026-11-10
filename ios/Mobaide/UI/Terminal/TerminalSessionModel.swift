@@ -713,28 +713,25 @@ final class TerminalSessionModel {
     func insertTranscript(_ transcript: String) {
         let clean = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
-        let length = inputText.count
-        let selection = composerSelection ?? length..<length
-        let lower = min(max(selection.lowerBound, 0), length)
-        let upper = min(max(selection.upperBound, lower), length)
-        let before = String(inputText.prefix(lower))
-        let after = String(inputText.dropFirst(upper))
-        let lead = before.last.map { $0.isWhitespace ? "" : " " } ?? ""
-        let trail = after.first.map { $0.isWhitespace ? "" : " " } ?? ""
-        let inserted = lead + clean + trail
-        inputText = before + inserted + after
+        insertAtCursor(clean, spaced: true)
+    }
+
+    private func insertAtCursor(_ text: String, spaced: Bool) {
+        let result = ComposerInsertion.insert(text, into: inputText, selection: composerSelection, spaced: spaced)
+        inputText = result.text
         // iOS 17's field never reports its selection, so remembering one there
-        // would aim the next transcript at a stale offset instead of the end.
+        // would aim the next insert at a stale offset instead of the end.
         if #available(iOS 18.0, *) {
-            let cursor = before.count + inserted.count
-            composerSelection = cursor..<cursor
+            composerSelection = result.cursor..<result.cursor
             composerCursorRequest += 1
         }
         revealComposer()
     }
 
+    /// The template body goes in at the cursor (replacing a selection); the
+    /// rest of the draft stays.
     func applyTemplate(_ template: TemplateDto) {
-        setInput(template.body, requestFocus: true)
+        insertAtCursor(template.body, spaced: false)
         Task { [centralAPI, userTokenProvider] in
             guard let token = await userTokenProvider.userToken() else { return }
             _ = try? await centralAPI.touchTemplate(userToken: token, templateId: template.template_id)

@@ -31,6 +31,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -48,18 +49,27 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.mobaide.app.data.chat.ChatAttachment
@@ -73,10 +83,10 @@ import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import com.mobaide.app.ui.common.pixel.PixelFab
 import com.mobaide.app.ui.common.pixel.pixelFrame
 import com.mobaide.app.ui.theme.MobaideTheme
-import com.mobaide.app.ui.theme.chromeCaps
 import com.mobaide.app.ui.theme.pixel
 
 const val CHAT_TIMELINE_TAG = "chat_timeline"
+const val CHAT_STEPS_ROW_TAG = "chat_steps_row"
 
 /**
  * The conversation, newest at the bottom. Laid out reversed so the list stays
@@ -89,11 +99,17 @@ fun ChatTimeline(
     listState: LazyListState,
     onRestart: () -> Unit,
     modifier: Modifier = Modifier,
+    focusView: Boolean = false,
 ) {
     val items = ui.items
-    val reversed = remember(items) { items.asReversed() }
     val streamingId = ui.streamingItemId
     val waitingTools = ui.waitingToolIds
+    val running = ui.running
+    var openSteps by rememberSaveable(stateSaver = OpenStepsSaver) { mutableStateOf(emptySet<String>()) }
+    val rows = remember(items, focusView, running, waitingTools, openSteps) {
+        chatTimelineRows(items, focusView, running, waitingTools, openSteps)
+    }
+    val reversed = remember(rows) { rows.asReversed() }
     val canRestart = ui.state.status == ChatStatus.ERROR && ui.live && !ui.sessionClosed
     val restartEnabled = ui.canRestart
     LazyColumn(
@@ -105,23 +121,35 @@ fun ChatTimeline(
     ) {
         items(
             items = reversed,
-            key = { it.id },
-            contentType = { it::class },
-        ) { item ->
-            when (item) {
-                is ChatItem.User -> UserBubble(item)
-                is ChatItem.Agent -> AgentMessage(item, streaming = item.id == streamingId)
-                is ChatItem.Thought -> ThoughtRow(item, streaming = item.id == streamingId)
-                is ChatItem.Tool -> ChatToolCard(item, waitingForApproval = item.id in waitingTools)
-                is ChatItem.Notice -> NoticeBanner(item)
-                is ChatItem.Compaction -> CompactionDivider(item)
-                is ChatItem.TurnEnd -> TurnEndLabel(item)
-                is ChatItem.Error -> ErrorCard(
-                    item,
-                    canRestart = canRestart,
-                    restartEnabled = restartEnabled,
-                    onRestart = onRestart,
+            key = { it.key },
+            contentType = { row -> if (row is ChatTimelineRow.Item) row.item::class else ChatTimelineRow.Steps::class },
+        ) { row ->
+            when (row) {
+                is ChatTimelineRow.Steps -> StepsRow(
+                    row = row,
+                    onToggle = {
+                        openSteps = if (row.key in openSteps) openSteps - row.key else openSteps + row.key
+                    },
                 )
+                is ChatTimelineRow.Item -> Box(
+                    modifier = if (row.nested) Modifier.nestedStep(MaterialTheme.colorScheme.outlineVariant) else Modifier,
+                ) {
+                    when (val item = row.item) {
+                        is ChatItem.User -> UserBubble(item)
+                        is ChatItem.Agent -> AgentMessage(item, streaming = item.id == streamingId)
+                        is ChatItem.Thought -> ThoughtRow(item, streaming = item.id == streamingId)
+                        is ChatItem.Tool -> ChatToolCard(item, waitingForApproval = item.id in waitingTools)
+                        is ChatItem.Notice -> NoticeBanner(item)
+                        is ChatItem.Compaction -> CompactionDivider(item)
+                        is ChatItem.TurnEnd -> TurnEndLabel(item)
+                        is ChatItem.Error -> ErrorCard(
+                            item,
+                            canRestart = canRestart,
+                            restartEnabled = restartEnabled,
+                            onRestart = onRestart,
+                        )
+                    }
+                }
             }
         }
         if (ui.truncated) {
@@ -135,6 +163,68 @@ fun ChatTimeline(
                 )
             }
         }
+    }
+}
+
+private val OpenStepsSaver = Saver<Set<String>, ArrayList<String>>(
+    save = { ArrayList(it) },
+    restore = { it.toSet() },
+)
+
+/** A step shown under its open steps row: indented behind a rule. */
+private fun Modifier.nestedStep(rule: Color): Modifier =
+    drawBehind { drawRect(rule, size = Size(2.dp.toPx(), size.height)) }
+        .padding(start = 14.dp)
+
+/** Focus view: one folded run of thinking and tool calls; opens in place. */
+@Composable
+private fun StepsRow(row: ChatTimelineRow.Steps, onToggle: () -> Unit) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val strong = MaterialTheme.colorScheme.onSurface
+    val text = buildAnnotatedString {
+        if (row.live && row.current != null) {
+            withStyle(SpanStyle(color = strong)) { append(row.current) }
+            append(" · ")
+        }
+        append(stepsLabel(row.count))
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(CHAT_STEPS_ROW_TAG)
+            .clickable(role = Role.Button, onClickLabel = if (row.open) "Hide steps" else "Show steps", onClick = onToggle)
+            .semantics { stateDescription = if (row.open) "Expanded" else "Collapsed" }
+            .heightIn(min = 48.dp)
+            .padding(end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(modifier = Modifier.size(18.dp), contentAlignment = Alignment.Center) {
+            if (row.live) {
+                PixelBlinkCursor(height = 14.dp)
+            } else {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.List,
+                    contentDescription = null,
+                    tint = muted,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = muted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        Icon(
+            imageVector = if (row.open) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+            contentDescription = null,
+            tint = muted,
+            modifier = Modifier.size(18.dp),
+        )
     }
 }
 
@@ -320,8 +410,8 @@ private fun CompactionDivider(item: ChatItem.Compaction) {
                     "failed" -> "Compaction failed"
                     "cancelled" -> "Compaction cancelled"
                     else -> "Context compacted"
-                }.chromeCaps(),
-                style = MaterialTheme.typography.labelSmall,
+                },
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 8.dp),
             )
@@ -505,6 +595,30 @@ private fun ChatTimelinePreview() {
             ),
             listState = androidx.compose.foundation.lazy.rememberLazyListState(),
             onRestart = {},
+        )
+    }
+}
+
+@Preview(name = "Focus view light", showBackground = true)
+@Preview(name = "Focus view dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun ChatTimelineFocusPreview() {
+    MobaideTheme {
+        ChatTimeline(
+            ui = ChatUiState(
+                loaded = true,
+                live = true,
+                items = listOf(
+                    ChatItem.User("u1", "Fix the login bug", emptyList()),
+                    ChatItem.Thought("t1", "The null check looks wrong."),
+                    ChatItem.Agent("m1", "I'll look at `login.py` first."),
+                    ChatItem.Tool("k1", "Read login.py", "read", "completed", null, emptyList(), emptyList(), null),
+                    ChatItem.Agent("m2", "Fixed: the session token is now checked before use."),
+                ),
+            ),
+            listState = androidx.compose.foundation.lazy.rememberLazyListState(),
+            onRestart = {},
+            focusView = true,
         )
     }
 }

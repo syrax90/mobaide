@@ -400,8 +400,9 @@ export function DictationDialog({
             Insert dictated text directly from now on, without this review
           </label>
           {skipReview && (
-            <p className="page-note">
-              You can turn the review back on in {agentName}&rsquo;s Voice input settings.
+            <p className="voice-review-hint" role="status">
+              You can turn the review back on in{' '}
+              <strong>{agentName}&rsquo;s Voice input settings</strong>.
             </p>
           )}
         </>

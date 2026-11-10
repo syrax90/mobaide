@@ -20,6 +20,7 @@ import functools
 import itertools
 import os
 import sys
+import threading
 from collections.abc import Awaitable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -484,6 +485,8 @@ class TimelineMirror:
             elif ev["type"] == "append":
                 item = self.items[ev["id"]]
                 item["text"] = (item.get("text") or "") + ev["text"]
+            elif ev["type"] == "remove":
+                self.items.pop(ev["id"], None)
             elif ev["type"] == "state":
                 self.state.update(ev["patch"])
             self.seq = ev["seq"]
@@ -495,7 +498,10 @@ async def open_chat(tmp_path):
     sessions: list[ChatSession] = []
 
     async def open_(
-        load_session_id: str | None = None, argv: list[str] | None = None, **plan_fields: Any
+        load_session_id: str | None = None,
+        argv: list[str] | None = None,
+        settle: bool = True,
+        **plan_fields: Any,
     ) -> TimelineMirror:
         config = SessionConfig(
             session_id=f"chat-{len(sessions) + 1}",
@@ -512,9 +518,10 @@ async def open_chat(tmp_path):
         sessions.append(session)
         await session.start()
         mirror = TimelineMirror(session)
-        await mirror.until(
-            lambda: mirror.status in ("ready", "error") or bool(mirror.state.get("requests"))
-        )
+        if settle:
+            await mirror.until(
+                lambda: mirror.status in ("ready", "error") or bool(mirror.state.get("requests"))
+            )
         return mirror
 
     yield open_
@@ -1205,6 +1212,8 @@ def _notices(m: TimelineMirror) -> list[str]:
 
 
 class TestAdapterInstall:
+    SETUP = "Setting up the Claude Code chat on your PC"
+
     async def test_the_adapter_is_installed_before_the_first_start(self, open_chat):
         installs: list[int] = []
 
@@ -1216,8 +1225,44 @@ class TestAdapterInstall:
 
         assert m.status == "ready"
         assert installs == [1]
-        assert "Setting up the Claude Code chat on your PC" in _notices(m)
+        assert self.SETUP not in _notices(m)
         assert m.session.pid is not None
+
+    async def test_the_setup_notice_shows_while_installing_and_goes_away_after(self, open_chat):
+        release = threading.Event()
+
+        def ensure() -> list[str]:
+            release.wait(20)
+            return fake_agent_argv()
+
+        m = await open_chat(ensure_argv=ensure, settle=False)
+        try:
+            await m.until(lambda: self.SETUP in _notices(m))
+            assert m.status == "starting"
+        finally:
+            release.set()
+
+        await m.until(lambda: m.status == "ready")
+
+        assert self.SETUP not in _notices(m)
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            AdapterInstallError("Could not download @agentclientprotocol/codex-acp@2.5.0: E404"),
+            RuntimeError("the adapter folder is locked"),
+        ],
+        ids=["install-error", "unexpected-error"],
+    )
+    async def test_a_failed_install_drops_the_setup_notice(self, open_chat, failure):
+        def ensure() -> list[str]:
+            raise failure
+
+        m = await open_chat(ensure_argv=ensure)
+
+        assert m.status == "error"
+        assert self.SETUP not in _notices(m)
+        assert len(m.texts("error")) == 1
 
     async def test_a_failed_install_shows_the_error_and_restart_tries_again(self, open_chat):
         outcomes: list[Any] = [
