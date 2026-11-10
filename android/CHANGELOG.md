@@ -1,5 +1,17 @@
 # Android Changelog
 
+## [3.7.0](https://github.com/syrax90/mobaide/compare/android-v3.6.18...android-v3.7.0) (2026-11-10)
+
+
+### Features
+
+* **agent,web,android,ios:** ACP chat sessions for Claude Code and Antigravity ([#849](https://github.com/syrax90/mobaide/issues/849)) ([535ada1](https://github.com/syrax90/mobaide/commit/535ada1555cd5e187122a27acb9038327b46d98a))
+
+
+### Miscellaneous Chores
+
+* **android:** cut the next Android release as 3.7.0 ([#853](https://github.com/syrax90/mobaide/issues/853)) ([e8d9e16](https://github.com/syrax90/mobaide/commit/e8d9e16aad246e6c28a92b119a5084740c0ce7db))
+
 ## [3.6.18](https://github.com/syrax90/mobaide/compare/android-v3.6.17...android-v3.6.18) (2026-11-09)
 
 

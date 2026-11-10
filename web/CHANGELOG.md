@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.21](https://github.com/syrax90/mobaide/compare/web-v0.1.20...web-v0.1.21) (2026-11-10)
+
+
+### Features
+
+* **agent,web,android,ios:** ACP chat sessions for Claude Code and Antigravity ([#849](https://github.com/syrax90/mobaide/issues/849)) ([535ada1](https://github.com/syrax90/mobaide/commit/535ada1555cd5e187122a27acb9038327b46d98a))
+
 ## [0.1.20](https://github.com/syrax90/mobaide/compare/web-v0.1.19...web-v0.1.20) (2026-11-09)
 
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0](https://github.com/syrax90/mobaide/compare/ios-v1.0.20...ios-v1.1.0) (2026-11-10)
+
+
+### Features
+
+* **agent,web,android,ios:** ACP chat sessions for Claude Code and Antigravity ([#849](https://github.com/syrax90/mobaide/issues/849)) ([535ada1](https://github.com/syrax90/mobaide/commit/535ada1555cd5e187122a27acb9038327b46d98a))
+
+
+### Miscellaneous Chores
+
+* **ios:** cut the next iOS release as 1.1.0 ([#854](https://github.com/syrax90/mobaide/issues/854)) ([8a45b6d](https://github.com/syrax90/mobaide/commit/8a45b6d00898e2a8daa1b94917ecceaabec8b4c6))
+
 ## [1.0.20](https://github.com/syrax90/mobaide/compare/ios-v1.0.19...ios-v1.0.20) (2026-11-09)
 
 
