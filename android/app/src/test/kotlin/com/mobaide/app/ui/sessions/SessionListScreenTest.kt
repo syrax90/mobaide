@@ -76,7 +76,6 @@ class SessionListScreenTest {
 
         val prefs = mockk<PreferencesStore>(relaxed = true)
         coEvery { prefs.getLastUsedSessionId() } returns null
-        every { prefs.externalSessionsNoticeDismissed } returns MutableStateFlow(true)
 
         val bus = mockk<AgentEventBus>(relaxed = true)
         every { bus.connection } returns MutableStateFlow(AgentEventBus.ConnState.Connected)

@@ -345,25 +345,6 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertEqual(store.getTerminalStaticColumns(), 240, "read path clamps a raw out-of-range stored value")
     }
 
-    func testExternalSessionsNoticeDefaultsToNotDismissedAndSurvivesRelaunch() {
-        XCTAssertFalse(
-            store.isExternalSessionsNoticeDismissed(),
-            "an absent key must read as not-dismissed, so a fresh install sees the notice"
-        )
-
-        store.setExternalSessionsNoticeDismissed()
-
-        XCTAssertTrue(store.isExternalSessionsNoticeDismissed())
-        XCTAssertTrue(
-            defaults.bool(forKey: "external_sessions_notice_dismissed"),
-            "the key stays byte-identical to Android's DataStore key"
-        )
-        XCTAssertTrue(
-            PreferencesStore(defaults: defaults).isExternalSessionsNoticeDismissed(),
-            "a relaunch is a fresh store over the same defaults — the dismissal is permanent"
-        )
-    }
-
     func testChatFocusViewIsOnUntilTurnedOffAndSurvivesRelaunch() {
         XCTAssertTrue(store.isChatFocusView(), "an absent key must read as on")
 

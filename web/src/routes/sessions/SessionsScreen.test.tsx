@@ -41,9 +41,6 @@ stubLocalStorage();
 
 const { sessionResponseSchema } = await import('../../protocol/dto/session');
 const { useLastSessionStore } = await import('../../stores/lastSessionStore');
-const { useExternalSessionsNoticeStore } = await import(
-  '../../stores/externalSessionsNoticeStore'
-);
 const { useSelectedAgentStore } = await import('../../stores/selectedAgentStore');
 const { stopAllRealtime } = await import('../../realtime');
 const { resetAutoResumeAttempts } = await import('./autoResume');
@@ -109,7 +106,6 @@ afterEach(() => {
   resetAutoResumeAttempts();
   useLastSessionStore.setState({ lastUsedSessionIds: {} });
   useSelectedAgentStore.setState({ selectedAgentId: null });
-  useExternalSessionsNoticeStore.setState({ dismissed: false });
   resetSessionsSynced();
   client.clear();
   localStorage.clear();
@@ -204,26 +200,6 @@ describe('SessionsScreen', () => {
     expect(screen.getByRole('link', { name: 'Set up an agent' })).toHaveAttribute(
       'href',
       '/agents',
-    );
-  });
-
-  it('keeps the external-sessions notice above the agent branches and parks focus on dismiss', async () => {
-    // The notice is about the product rather than an agent, so it has to
-    // survive the branch an account with no agents lands on — that placement
-    // is the reason it is not inside `SessionList`.
-    api.agents = [];
-
-    renderScreen();
-
-    expect(await screen.findByText(/No agents yet/)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Got it' }));
-
-    expect(screen.queryByRole('button', { name: 'Got it' })).toBeNull();
-    // The click unmounted the element holding focus. Without `tabIndex={-1}`
-    // the heading is not focusable and focus would silently fall to <body>.
-    expect(document.activeElement).toBe(
-      screen.getByRole('heading', { level: 1, name: 'Sessions' }),
     );
   });
 });

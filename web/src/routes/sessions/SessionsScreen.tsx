@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { listAgents } from '../../api/agentRepository';
@@ -6,7 +6,6 @@ import { ErrorState } from '../../components/ErrorState';
 import { queryKeys, wsBackedQueryOptions } from '../../lib/queryKeys';
 import { useSelectedAgentStore } from '../../stores/selectedAgentStore';
 import { AgentPicker } from './AgentPicker';
-import { ExternalSessionsNotice } from './ExternalSessionsNotice';
 import { SessionList } from './SessionList';
 import { resolveSelectedAgent } from './selectAgent';
 
@@ -33,14 +32,10 @@ export function SessionsScreen() {
 
   const selected = agents.data?.find((agent) => agent.agentId === resolved);
 
-  const headingRef = useRef<HTMLHeadingElement>(null);
-
   return (
     <section className="page">
       <header className="page-header">
-        <h1 ref={headingRef} tabIndex={-1}>
-          Sessions
-        </h1>
+        <h1>Sessions</h1>
         {agents.data !== undefined && resolved !== null && (
           <AgentPicker
             agents={agents.data}
@@ -49,11 +44,6 @@ export function SessionsScreen() {
           />
         )}
       </header>
-
-      {/* Above the agent branches, not inside `SessionList`: the notice is
-          about the product, so it must show with no agents and with an offline
-          one, and `SessionList` remounts on every agent change. */}
-      <ExternalSessionsNotice onDismiss={() => headingRef.current?.focus()} />
 
       {agents.isPending ? (
         <p className="page-note state-loading">Loading agents…</p>
