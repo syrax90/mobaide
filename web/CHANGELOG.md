@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.22](https://github.com/syrax90/mobaide/compare/web-v0.1.21...web-v0.1.22) (2026-11-10)
+
+
+### Features
+
+* **android,ios,web:** remove the external-sessions notice ([#855](https://github.com/syrax90/mobaide/issues/855)) ([d947831](https://github.com/syrax90/mobaide/commit/d94783134bfec76bb5ee32ffd0c7a7418d4d8911))
+
 ## [0.1.21](https://github.com/syrax90/mobaide/compare/web-v0.1.20...web-v0.1.21) (2026-11-10)
 
 
