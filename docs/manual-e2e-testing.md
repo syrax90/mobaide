@@ -27,7 +27,7 @@ The whole loop is one command, from any directory, in the main checkout or any w
 python <checkout>/tests/e2e/manual_stack.py up --all
 ```
 
-`--all` = `--install-app --web --emulator --android-url emulator`, plus the iOS simulator on macOS. When the stack is READY:
+`--all` = `--install-app --web --emulator`, plus the iOS simulator on macOS. Android gets the emulator URL `http://10.0.2.2:<port>`, except when `--host` binds one specific interface: then that address is used, because 10.0.2.2 reaches only the host's loopback and wildcard listeners. When the stack is READY:
 
 - **Android:** the emulator `Mobaide-E2E` is booted (visible), and the debug app is installed, launched and signed in.
 - **iOS (macOS):** a simulator is booted and shown in Simulator.app, and the debug app is installed, launched and signed in. An already booted simulator is reused; `--simulator NAME_OR_UDID` picks one.
@@ -54,7 +54,7 @@ All checkouts share one state dir, so one stack runs at a time:
 
 ### Automatic sign-in
 
-The apps that the script launches sign in by themselves with the banner account. They receive it at launch: iOS as the `-MobaideDevLoginEmail`/`-MobaideDevLoginPassword` launch arguments, Android as two `am start` extras (`DevLoginHandoff`). Only **debug** builds read them (`#if DEBUG`, `BuildConfig.DEBUG`), and only once per app process, so a manual sign-out stays signed out. An app that is already signed in ignores them.
+The apps that the script launches sign in by themselves with the banner account. They receive it at launch: iOS as the `-MobaideDevLoginEmail`/`-MobaideDevLoginPassword` launch arguments, Android as two `am start` extras (`DevLoginHandoff`). Only **debug** builds read them (`#if DEBUG`, `BuildConfig.DEBUG`), only once per app process, and never after a manual sign-out in that process. So a manual sign-out stays signed out, also in an app that started signed in. The web form follows the same rule per page load. An app that is already signed in ignores them.
 
 On a real phone, or for an app you launched yourself, **log in** with the credentials from the banner (email `dev@test.local`, password `Qwe>1234` — both fixed, easy dev-testing defaults; override with `--email`/`--password`), pick the `manual-e2e-agent`, and start testing.
 

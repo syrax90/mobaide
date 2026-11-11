@@ -637,7 +637,7 @@ def test_android_launch_command_survives_the_device_shell():
 def test_dev_login_keys_match_the_apps():
     """The script and the two DEBUG readers must agree on the key names."""
     root = Path(ms.__file__).resolve().parents[2]
-    kotlin = (root / "android/app/src/main/java/com/mobaide/app/ui/login/"
+    kotlin = (root / "android/app/src/main/java/com/mobaide/app/data/auth/"
               "DevLoginHandoff.kt").read_text(encoding="utf-8")
     swift = (root / "ios/Mobaide/UI/Onboarding/LoginScreen.swift").read_text(encoding="utf-8")
     assert f'"{ms.ANDROID_DEV_LOGIN_EMAIL_EXTRA}"' in kotlin
@@ -700,14 +700,51 @@ def test_all_preset_turns_every_client_on():
     ms.apply_all_preset(args)
     assert args.install_app and args.web
     assert args.emulator == ms.DEFAULT_AVD
-    assert args.android_url == "emulator"
     assert args.simulator is None  # an open simulator is reused, not replaced
 
-    args = ms.build_parser().parse_args(
-        ["up", "--all", "--android-url", "reverse", "--emulator", "Pixel_9"])
+    args = ms.build_parser().parse_args(["up", "--all", "--emulator", "Pixel_9"])
     ms.apply_all_preset(args)
-    assert (args.android_url, args.emulator) == ("reverse", "Pixel_9")
+    assert args.emulator == "Pixel_9"
 
     args = ms.build_parser().parse_args(["up"])
     ms.apply_all_preset(args)
     assert not args.install_app and not args.web and args.emulator is None
+
+
+def test_all_preset_bakes_the_emulator_alias_only_where_it_reaches_the_server():
+    """10.0.2.2 is the host's loopback seen from the emulator: right for a
+    wildcard or loopback bind, wrong for a server bound to one LAN address
+    (given now or remembered in state -- resolved after load_or_create_state)."""
+    def url(*argv):
+        args = ms.build_parser().parse_args(["up", "--all", *argv])
+        ms.apply_all_preset(args)
+        args.port = 9000
+        args.host = args.host or ms.DEFAULT_HOST  # what load_or_create_state does
+        return ms.resolve_android_url(args, "192.168.1.7")
+
+    assert url() == "http://10.0.2.2:9000"
+    assert url("--host", "127.0.0.1") == "http://10.0.2.2:9000"
+    assert url("--host", "192.168.1.50") == "http://192.168.1.50:9000"
+    assert url("--android-url", "reverse") == "http://127.0.0.1:9000"
+
+
+def test_deleted_checkout_leaves_no_restore_value_for_the_next_one(monkeypatch, tmp_path):
+    """Checkout A had a staging URL and was deleted before its revert. B has no
+    Local.xcconfig at all: reverting B must remove the generated override,
+    not write A's staging URL into B."""
+    staging = "https://staging.example.com"
+    a, b = tmp_path / "a", tmp_path / "b"
+    state = ms.default_state()
+    _point_client_files_at(monkeypatch, a)
+    ms.LOCAL_XCCONFIG_PATH.parent.mkdir(parents=True)
+    ms.LOCAL_XCCONFIG_PATH.write_text(
+        f"CENTRAL_SERVER_URL = {ms._xcconfig_escape(staging)}\n", encoding="utf-8")
+    ms.sync_ios_files(state, LOOPBACK_URL, lambda: None)
+    import shutil
+    shutil.rmtree(a)
+
+    _point_client_files_at(monkeypatch, b)
+    b.mkdir()
+    ms.sync_ios_files(state, LOOPBACK_URL, lambda: None)
+    ms.revert_ios_files(state, lambda: None)
+    assert not ms.LOCAL_XCCONFIG_PATH.exists()

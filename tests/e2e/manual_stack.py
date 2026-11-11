@@ -1198,6 +1198,13 @@ class _ManagedUrlFile:
                 log(f"{self.label}: CENTRAL_SERVER_URL restored to {previous}")
             else:
                 log(f"{self.label}: CENTRAL_SERVER_URL line removed")
+        self.forget_ownership(state)
+
+    def forget_ownership(self, state: dict) -> None:
+        """Drop the restore bookkeeping. All three keys go together: a stale
+        ``previous_line`` left behind would be written into the NEXT file this
+        script takes over (sync keeps it when that file has no URL line)."""
+        own = self.own_state(state)
         own["managed_url"] = None
         own["previous_central_server_url"] = None
         own["previous_line"] = None
@@ -1225,6 +1232,10 @@ IOS_URL_FILE = _ManagedUrlFile(
 def resolve_android_url(args: argparse.Namespace, lan_ip: str) -> str:
     mode = args.android_url
     if mode == "auto":
+        if getattr(args, "all", False) and args.host in ("0.0.0.0", "::", "", None):
+            # --all always boots the emulator, and on a wildcard bind its
+            # host alias stays valid when the Wi-Fi (and so the LAN IP) changes.
+            return f"http://10.0.2.2:{args.port}"
         if args.host in ("127.0.0.1", "localhost"):
             # Loopback bind: the LAN IP is unreachable; 10.0.2.2 maps to the
             # host's loopback from an emulator, which is the usual reason to
@@ -1317,7 +1328,7 @@ def revert_android_files(state: dict, save) -> None:
         else:
             log(f"android: checkout {_client_checkout(state, 'android')} is gone; "
                 "nothing to revert")
-            ANDROID_URL_FILE.own_state(state)["managed_url"] = None
+            ANDROID_URL_FILE.forget_ownership(state)
     save()
 
 
@@ -1377,7 +1388,7 @@ def revert_ios_files(state: dict, save) -> None:
         else:
             log(f"ios: checkout {_client_checkout(state, 'ios')} is gone; "
                 "nothing to revert")
-            IOS_URL_FILE.own_state(state)["managed_url"] = None
+            IOS_URL_FILE.forget_ownership(state)
     save()
 
 
@@ -2832,8 +2843,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_ios_args(up)
     up.add_argument("--all", action="store_true",
                     help="everything for hands-on testing: --install-app --web "
-                         "--emulator, an iOS simulator on macOS, and the "
-                         "emulator URL (10.0.2.2) for Android")
+                         "--emulator and an iOS simulator on macOS; Android "
+                         "bakes the emulator URL (10.0.2.2) unless --host binds "
+                         "one specific interface")
     up.add_argument("--host", default=None,
                     help=f"server bind address (default: last used, then {DEFAULT_HOST}; "
                          "use 127.0.0.1 for an emulator-only, no-firewall-prompt run)")
@@ -2944,8 +2956,6 @@ def apply_all_preset(args: argparse.Namespace) -> None:
     args.install_app = True
     args.web = True
     args.emulator = args.emulator or DEFAULT_AVD
-    if args.android_url == "auto":
-        args.android_url = "emulator"
 
 
 def main(argv: list[str] | None = None) -> int:

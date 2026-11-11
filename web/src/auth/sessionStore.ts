@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { AuthState, IncompatibleServerInfo, InvalidationReason } from './authState';
 import { clearAgentTokens } from './agentTokens';
 import { clearAllRecentPaths } from '../stores/recentPaths';
+import { discardDevAutoLogin } from '../routes/auth/devLogin';
 import {
   adoptSession,
   broadcastReasonCorrection,
@@ -147,6 +148,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     // must revoke like any other sign-out. Dropping the marker locally is what
     // makes it stick when the POST cannot reach the server at all.
     if (reason === 'manual' || reason === 'deletionScheduled') {
+      discardDevAutoLogin();
       clearSignedInMarker();
       postLogout();
     }

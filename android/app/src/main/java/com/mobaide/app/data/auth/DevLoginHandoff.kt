@@ -1,4 +1,4 @@
-package com.mobaide.app.ui.login
+package com.mobaide.app.data.auth
 
 import android.content.Intent
 import com.mobaide.app.BuildConfig
@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.asStateFlow
  * two extras to sign in to its throwaway stack (iOS reads the same pair from
  * launch arguments). Held in memory until the login screen consumes it, so it
  * works whether that screen exists before or after the launch intent arrives.
+ * A manual sign-out discards it, so signing out stays signed out even when the
+ * app started signed in and the login screen first appears only then.
  */
 object DevLoginHandoff {
     const val EXTRA_EMAIL = "com.mobaide.app.extra.DEV_LOGIN_EMAIL"
@@ -28,6 +30,10 @@ object DevLoginHandoff {
         intent.removeExtra(EXTRA_EMAIL)
         intent.removeExtra(EXTRA_PASSWORD)
         if (email != null && password != null) _pending.value = Credentials(email, password)
+    }
+
+    fun discard() {
+        _pending.value = null
     }
 
     /** Hands the credentials to exactly one caller. */

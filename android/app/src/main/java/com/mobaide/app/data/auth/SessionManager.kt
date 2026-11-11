@@ -289,6 +289,7 @@ class SessionManager @Inject constructor(
     @Synchronized
     fun invalidateUserSession(reason: InvalidationReason) {
         if (_authState.value is AuthState.Unauthenticated) return
+        if (reason is InvalidationReason.Manual) DevLoginHandoff.discard()
         userIdentityStore.clearUserSession()
         // Off the critical section: this method is @Synchronized and the
         // DataStore write suspends. This runs on the forced-logout path too,

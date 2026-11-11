@@ -27,13 +27,18 @@ export function devLoginDefaults(): LoginDefaults {
 let autoLoginTaken = false;
 
 /**
- * True exactly once per page load when dev credentials are present, so the
- * login screen signs in by itself on arrival but a later sign-out (a
- * client-side navigation back to /login) stays signed out. Module state also
- * absorbs React StrictMode's double-run of mount effects.
+ * True exactly once per page load when dev credentials are present, and never
+ * after a manual sign-out (discardDevAutoLogin, called by the session store):
+ * a tab that restored a session reaches /login for the first time only when
+ * the user signs out. Module state also absorbs React StrictMode's double-run
+ * of mount effects.
  */
 export function takeDevAutoLogin(): boolean {
   if (autoLoginTaken || devLoginDefaults().email === '') return false;
   autoLoginTaken = true;
   return true;
+}
+
+export function discardDevAutoLogin(): void {
+  autoLoginTaken = true;
 }

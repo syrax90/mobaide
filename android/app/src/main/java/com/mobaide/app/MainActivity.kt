@@ -22,6 +22,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.mobaide.app.data.analytics.AgentPairedConversion
+import com.mobaide.app.data.auth.DevLoginHandoff
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.events.UserEventBus
@@ -33,7 +34,6 @@ import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.VersionGateRepository
 import com.mobaide.app.data.review.ReviewPromptCoordinator
 import com.mobaide.app.notifications.SessionEventService
-import com.mobaide.app.ui.login.DevLoginHandoff
 import com.mobaide.app.ui.navigation.AppNavigation
 import com.mobaide.app.ui.review.InAppReviewManager
 import com.mobaide.app.ui.theme.MobaideTheme

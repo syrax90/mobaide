@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { devLoginDefaults, takeDevAutoLogin } from './devLogin';
+import { discardDevAutoLogin, devLoginDefaults, takeDevAutoLogin } from './devLogin';
 
 describe('the manual-stack login pre-fill', () => {
   it('yields empty fields when no dev credentials were injected', () => {
@@ -11,6 +11,11 @@ describe('the manual-stack login pre-fill', () => {
   });
 
   it('never auto-submits without dev credentials', () => {
+    expect(takeDevAutoLogin()).toBe(false);
+  });
+
+  it('stays off after a manual sign-out', () => {
+    discardDevAutoLogin();
     expect(takeDevAutoLogin()).toBe(false);
   });
 });
