@@ -9,6 +9,7 @@ from mobaide.core.antigravity_launcher import AntigravityOptions
 from mobaide.core.claude_launcher import AdHocLaunch, ClaudeOptions, LaunchSpec
 from mobaide.core.codex_launcher import CodexOptions
 from mobaide.core.models import SessionConfig, SessionKind, SessionState
+from mobaide.core.pty_backend import FakePtyBackend
 from mobaide.core.session_manager import MaxSessionsError, SessionManager
 from mobaide.linear.worktree import WorktreeResult
 from tests.conftest import IS_WINDOWS, default_shell
@@ -888,11 +889,14 @@ class _FakeChatSession:
     is_chat = True
     created = 0
 
-    def __init__(self, config, plan, *, agent_title, load_session_id=None) -> None:
+    def __init__(
+        self, config, plan, *, agent_title, load_session_id=None, attention_dedupe=None,
+    ) -> None:
         type(self).created += 1
         self.session_id = config.session_id
         self._kind = config.kind
         self.acp_session_id = load_session_id
+        self.attention_dedupe = attention_dedupe
 
     def to_info(self):
         return MagicMock(kind=self._kind)
@@ -947,5 +951,37 @@ class TestChatResumeReuse:
             assert first is second
             assert _FakeChatSession.created == 1
             assert len(mgr._sessions) == 1
+        finally:
+            await mgr.shutdown()
+
+
+@pytest.mark.timeout(20)
+class TestSharedTurnDedupe:
+    async def test_terminal_and_chat_sessions_share_one_dedupe(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A chat and a terminal showing one live Codex thread can only pair
+        their alerts through the same instance."""
+        import mobaide.acp.session as acp_session
+
+        monkeypatch.setattr(acp_session, "ChatSession", _FakeChatSession)
+        mgr = SessionManager(
+            chat_agents={"claude": _SlowChatSpec()}, backend_factory=FakePtyBackend
+        )
+        try:
+            terminal = await mgr.create_session(
+                SessionConfig(
+                    session_id="term",
+                    command=["does-not-run"],
+                    cwd=str(tmp_path),
+                    kind=SessionKind.SHELL,
+                )
+            )
+            chat = await mgr.create_session(
+                SessionConfig(session_id="chat", command=[], cwd=str(tmp_path), ui="chat")
+            )
+
+            assert terminal._attention_dedupe is not None
+            assert chat.attention_dedupe is terminal._attention_dedupe
         finally:
             await mgr.shutdown()

@@ -38,6 +38,11 @@ class TestAttentionContent:
                 "Your move",
                 "My project finished its turn — tap to continue",
             ),
+            (
+                "turn_failed",
+                "Turn failed",
+                "My project hit an error — tap to see what happened",
+            ),
         ],
     )
     def test_reason_strings_match_client_notifiers(
@@ -63,6 +68,31 @@ class TestAttentionContent:
     @pytest.mark.parametrize("reason", [None, "", "something_new"])
     def test_unknown_or_absent_reason_returns_none(self, reason):
         assert attention_content(reason, "t", "p", None) is None
+
+    @pytest.mark.parametrize(
+        "kind,expected",
+        [
+            # An agent too old to send ``kind`` only alerted for Claude.
+            (None, "Claude session"),
+            ("", "Claude session"),
+            ("claude", "Claude session"),
+            ("codex", "Codex session"),
+            ("antigravity", "Antigravity session"),
+            ("auto_scan", "Auto Scan session"),
+            ("shell", "Terminal session"),
+            # A custom type's user-chosen name never goes to Apple.
+            ("custom_0123456789ab", "Agent session"),
+        ],
+    )
+    def test_fallback_label_names_the_session_kind(self, kind, expected):
+        _, body = attention_content("turn_finished", None, " ", None, kind=kind)
+        assert body == f"{expected} finished its turn — tap to continue"
+
+    def test_title_and_project_still_win_over_the_kind(self):
+        _, body = attention_content("turn_failed", "Fix", "proj", None, kind="codex")
+        assert body.startswith("Fix ")
+        _, body = attention_content("turn_failed", None, "proj", None, kind="codex")
+        assert body.startswith("proj ")
 
 
 @dataclass
@@ -190,6 +220,38 @@ class TestPushDispatcher:
         )
 
         assert len(await db.list_push_targets(user_id)) == 1
+
+    @pytest.mark.parametrize(
+        "kind,kind_label,label",
+        [
+            ("codex", None, "Codex session"),
+            # The relay still carries the custom type's name for the clients;
+            # the push text never does.
+            ("custom_0123456789ab", "My Linter", "Agent session"),
+        ],
+        ids=["built-in", "custom"],
+    )
+    async def test_push_names_an_untitled_session_by_its_kind(
+        self, db, user_id, kind, kind_label, label
+    ):
+        await _register_device(db, user_id, "dev-1", token="tok-1")
+        sender = FakeSender()
+        dispatcher = PushDispatcher(db, sender)
+
+        await dispatcher._send_attention(
+            user_id,
+            _attention_payload(
+                reason="turn_failed",
+                title=None,
+                kind=kind,
+                kind_label=kind_label,
+            ),
+            frozenset(),
+        )
+
+        assert [(s["title"], s["body"]) for s in sender.sent] == [
+            ("Turn failed", f"{label} hit an error — tap to see what happened"),
+        ]
 
     async def test_unknown_reason_sends_nothing(self, db, user_id):
         await _register_device(db, user_id, "dev-1", token="tok-1")

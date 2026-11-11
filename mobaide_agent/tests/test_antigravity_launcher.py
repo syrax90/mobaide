@@ -151,6 +151,30 @@ async def test_env_adds_no_claude_specific_vars(tmp_path: Path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_env_turns_on_agy_status_reports(tmp_path: Path, monkeypatch):
+    """Terminal sessions get attention from agy's OSC 7501 reports, which agy
+    sends only when asked to or when the terminal answers its probe."""
+    monkeypatch.delenv("AGY_CLI_OSC7501", raising=False)
+    monkeypatch.delenv("AGY_CLI_OSC7501_MESSAGES", raising=False)
+    spec = await AntigravityLauncher().build(
+        _make_project(str(tmp_path)), AntigravityOptions(),
+    )
+    assert spec.env["AGY_CLI_OSC7501"] == "on"
+    assert spec.env["AGY_CLI_OSC7501_MESSAGES"] == "brief"
+
+
+@pytest.mark.asyncio
+async def test_env_keeps_the_users_own_status_report_settings(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGY_CLI_OSC7501", "off")
+    monkeypatch.setenv("AGY_CLI_OSC7501_MESSAGES", "full")
+    spec = await AntigravityLauncher().build(
+        AdHocLaunch(cwd=str(tmp_path)), AntigravityOptions(),
+    )
+    assert spec.env["AGY_CLI_OSC7501"] == "off"
+    assert spec.env["AGY_CLI_OSC7501_MESSAGES"] == "full"
+
+
+@pytest.mark.asyncio
 async def test_env_prepends_binary_dir_to_path(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         antigravity_launcher, "_resolve_agy_binary",

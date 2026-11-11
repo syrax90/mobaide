@@ -40,7 +40,8 @@ from mobaide.acp.agents import (
 from mobaide.acp.install import AdapterInstallError
 from mobaide.acp.presence import ConversationPresence
 from mobaide.acp.session import ChatSession
-from mobaide.core.models import SessionConfig, SessionState
+from mobaide.core.attention_dedupe import SharedTurnDedupe, real_cwd
+from mobaide.core.models import SessionConfig, SessionKind, SessionState
 
 pytestmark = pytest.mark.timeout(60)
 
@@ -501,6 +502,8 @@ async def open_chat(tmp_path):
         load_session_id: str | None = None,
         argv: list[str] | None = None,
         settle: bool = True,
+        kind: SessionKind = SessionKind.CLAUDE,
+        attention_dedupe: SharedTurnDedupe | None = None,
         **plan_fields: Any,
     ) -> TimelineMirror:
         config = SessionConfig(
@@ -508,12 +511,17 @@ async def open_chat(tmp_path):
             command=[],
             cwd=str(tmp_path),
             ui="chat",
+            kind=kind,
         )
         plan = ChatLaunchPlan(
             argv=argv or fake_agent_argv(), env=dict(os.environ), cwd=str(tmp_path), **plan_fields
         )
         session = ChatSession(
-            config, plan, agent_title="Claude Code", load_session_id=load_session_id
+            config,
+            plan,
+            agent_title="Claude Code",
+            load_session_id=load_session_id,
+            attention_dedupe=attention_dedupe,
         )
         sessions.append(session)
         await session.start()
@@ -927,6 +935,156 @@ class TestQueueAndCancel:
         await m.until(lambda: m.status == "ready")
         await m.command("prompt", text="hello")
         await m.until(_turn_done(m, "echo hello"))
+
+
+# A prompt streams "Working" and is answered only by ``session/cancel`` — with
+# an error, as an agent that reports its interrupted request as failed does.
+FAIL_ON_CANCEL_AGENT = r"""
+import json, sys
+pending = None
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method == "session/cancel":
+        if pending is not None:
+            send({"id": pending, "error": {"code": -32603, "message": "Request interrupted"}})
+            pending = None
+        continue
+    if method is None or "id" not in msg:
+        continue
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentCapabilities": {}}
+    elif method == "session/new":
+        result = {"sessionId": "failing"}
+    elif method == "session/prompt":
+        send({"method": "session/update", "params": {"sessionId": "failing", "update": {
+            "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Working"}}}})
+        pending = msg["id"]
+        continue
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+
+
+class TestTurnAttention:
+    """A turn the agent answers with an error needs the user as much as a
+    finished one; a turn a terminal on the same live Codex thread already
+    announced must not alert a second time."""
+
+    async def test_a_failed_turn_alerts_turn_failed(self, open_chat):
+        m = await open_chat()
+
+        await m.command("prompt", text="please fail")
+        await m.until(lambda: "turn_failed" in m.attention)
+
+        assert "turn_finished" not in m.attention
+        assert m.session.to_info().attention == "turn_failed"
+
+    async def test_an_error_answering_the_users_stop_does_not_alert(self, open_chat):
+        m = await open_chat(argv=[sys.executable, "-c", FAIL_ON_CANCEL_AGENT])
+        await m.command("prompt", text="go")
+        await m.until(lambda: "Working" in m.texts("agent"))
+
+        assert (await m.command("cancel"))["data"] == {"cancelled": True}
+        await m.until(lambda: m.status == "ready" and bool(m.of_type("error")))
+
+        assert m.session.to_info().attention is None
+        assert "turn_failed" not in m.attention
+
+    async def test_a_failure_with_a_message_waiting_alerts_only_for_the_last_turn(
+        self, open_chat
+    ):
+        m = await open_chat()
+        await m.command("prompt", text="please fail")
+        queued = await m.command("prompt", text="next")
+        assert queued["data"]["queued"] is True
+
+        await m.until(_turn_done(m, "You said: next"))
+        await m.until(lambda: "turn_finished" in m.attention)
+
+        assert m.texts("error") == ["The model request failed (fake error)"]
+        assert "turn_failed" not in m.attention
+
+    async def test_a_turn_the_terminal_already_announced_stays_quiet(self, open_chat, tmp_path):
+        dedupe = SharedTurnDedupe()
+        assert dedupe.admit(
+            session_id="term-1", ui="terminal", app="codex",
+            cwd=real_cwd(str(tmp_path)), reason="turn_finished",
+        )
+        m = await open_chat(kind=SessionKind.CODEX, attention_dedupe=dedupe, shared_host=True)
+
+        await m.command("prompt", text="hello")
+        await m.until(_turn_done(m, "You said: hello"))
+
+        assert m.session.to_info().attention is None
+        assert "turn_finished" not in m.attention
+
+    async def test_a_failed_turn_the_terminal_announced_as_done_stays_quiet(
+        self, open_chat, tmp_path
+    ):
+        # The TUI may report the turn the chat saw fail as plain ``done``.
+        dedupe = SharedTurnDedupe()
+        assert dedupe.admit(
+            session_id="term-1", ui="terminal", app="codex",
+            cwd=real_cwd(str(tmp_path)), reason="turn_finished",
+        )
+        m = await open_chat(kind=SessionKind.CODEX, attention_dedupe=dedupe, shared_host=True)
+
+        await m.command("prompt", text="please fail")
+        await m.until(lambda: m.status == "ready" and bool(m.of_type("error")))
+
+        assert m.session.to_info().attention is None
+        assert "turn_failed" not in m.attention
+
+    async def test_a_chat_on_a_private_app_server_is_never_quieted(self, open_chat, tmp_path):
+        # It shares its thread with no one, whatever a terminal in the folder did.
+        dedupe = SharedTurnDedupe()
+        assert dedupe.admit(
+            session_id="term-1", ui="terminal", app="codex",
+            cwd=real_cwd(str(tmp_path)), reason="turn_finished",
+        )
+        m = await open_chat(kind=SessionKind.CODEX, attention_dedupe=dedupe, shared_host=False)
+
+        await m.command("prompt", text="hello")
+        await m.until(lambda: "turn_finished" in m.attention)
+
+        assert m.session.to_info().attention == "turn_finished"
+
+    async def test_a_chat_on_a_private_app_server_leaves_no_claim(self, open_chat, tmp_path):
+        # Otherwise its alert would mute a terminal in the folder on another thread.
+        dedupe = SharedTurnDedupe()
+        m = await open_chat(kind=SessionKind.CODEX, attention_dedupe=dedupe, shared_host=False)
+
+        await m.command("prompt", text="hello")
+        await m.until(lambda: "turn_finished" in m.attention)
+
+        assert dedupe.admit(
+            session_id="term-1", ui="terminal", app="codex",
+            cwd=real_cwd(str(tmp_path)), reason="turn_finished",
+        )
+
+    async def test_a_claude_chat_next_to_a_codex_terminal_still_alerts(
+        self, open_chat, tmp_path
+    ):
+        # Only Codex threads are shared; the app is the chat's own kind.
+        dedupe = SharedTurnDedupe()
+        dedupe.admit(
+            session_id="term-1", ui="terminal", app="codex",
+            cwd=real_cwd(str(tmp_path)), reason="turn_finished",
+        )
+        m = await open_chat(attention_dedupe=dedupe, shared_host=True)
+
+        await m.command("prompt", text="hello")
+        await m.until(lambda: "turn_finished" in m.attention)
+
+        assert m.session.to_info().attention == "turn_finished"
 
 
 class TestRequests:

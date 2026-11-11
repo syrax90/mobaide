@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { attentionContent, attentionLabel, FALLBACK_LABEL } from './attentionContent';
 
 describe('attentionContent', () => {
-  // Literal expectations on purpose. These four pairs are the cross-client
+  // Literal expectations on purpose. These five pairs are the cross-client
   // contract an iPhone receives over APNs while this tab shows its own copy of
   // the same alert; deriving them from a helper here would let both sides drift
   // together and still pass.
@@ -26,6 +26,13 @@ describe('attentionContent', () => {
     expect(attentionContent({ reason: 'turn_finished' })).toEqual({
       title: 'Your move',
       body: 'Claude session finished its turn — tap to continue',
+    });
+  });
+
+  it('renders the turn-failed alert', () => {
+    expect(attentionContent({ reason: 'turn_failed', title: 'api refactor' })).toEqual({
+      title: 'Turn failed',
+      body: 'api refactor hit an error — tap to see what happened',
     });
   });
 
@@ -70,6 +77,29 @@ describe('attentionLabel', () => {
   it('treats a blank field as absent, matching every other client', () => {
     expect(attentionLabel({ title: '   ', project_name: 'b' })).toBe('b');
     expect(attentionLabel({ title: '', project_name: '  ' })).toBe(FALLBACK_LABEL);
+  });
+
+  it.each([
+    // An agent too old to send `kind` only alerted for Claude sessions.
+    [{}, 'Claude session'],
+    [{ kind: '' }, 'Claude session'],
+    [{ kind: 'claude' }, 'Claude session'],
+    [{ kind: 'codex' }, 'Codex session'],
+    [{ kind: 'antigravity' }, 'Antigravity session'],
+    [{ kind: 'auto_scan' }, 'Auto Scan session'],
+    [{ kind: 'shell' }, 'Terminal session'],
+    [{ kind: 'custom_0123456789ab', kind_label: 'My Linter' }, 'My Linter session'],
+    [{ kind: 'custom_0123456789ab', kind_label: '  ' }, 'Agent session'],
+    [{ kind: 'custom_0123456789ab' }, 'Agent session'],
+    // A kind named like an Object.prototype member is still just unknown.
+    [{ kind: 'toString' }, 'Agent session'],
+  ])('names an untitled session after its kind: %j', (source, expected) => {
+    expect(attentionLabel({ ...source, title: ' ', project_name: '' })).toBe(expected);
+  });
+
+  it('still prefers the title and the project over the kind', () => {
+    expect(attentionLabel({ title: 'a', project_name: 'b', kind: 'codex' })).toBe('a');
+    expect(attentionLabel({ project_name: 'b', kind: 'codex' })).toBe('b');
   });
 
   it('does not trim a label it accepts', () => {

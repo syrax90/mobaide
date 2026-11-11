@@ -16,6 +16,7 @@ except Exception:  # pragma: no cover - logging package optional during isolated
     def audit_event(*args, **kwargs): pass
 
 from .antigravity_launcher import AntigravityLauncher, AntigravityOptions
+from .attention_dedupe import SharedTurnDedupe
 from .claude_launcher import (
     AdHocLaunch,
     ClaudeLauncher,
@@ -87,6 +88,9 @@ class SessionManager:
         self._backend_factory = backend_factory
         # Agents that can run a session in the chat UI (over ACP), by kind.
         self._chat_agents: Mapping[str, ChatAgentSpec] = chat_agents or {}
+        # Shared by every session so a chat and a terminal showing one live
+        # Codex thread raise one alert per event, not two.
+        self._attention_dedupe = SharedTurnDedupe()
 
     @property
     def chat_agents(self) -> Mapping[str, ChatAgentSpec]:
@@ -154,7 +158,11 @@ class SessionManager:
                 raise ValueError(
                     f"Session with id '{config.session_id}' already exists",
                 )
-            session = TerminalSession(config, backend=self._backend_factory())
+            session = TerminalSession(
+                config,
+                backend=self._backend_factory(),
+                attention_dedupe=self._attention_dedupe,
+            )
             await session.start()
             self._sessions[config.session_id] = session
             logger.info(
@@ -236,6 +244,7 @@ class SessionManager:
                 plan,
                 agent_title=spec.display_name,
                 load_session_id=config.chat_resume_id,
+                attention_dedupe=self._attention_dedupe,
             )
             await session.start()
             self._sessions[config.session_id] = session

@@ -2,10 +2,12 @@
 
 Sibling of :mod:`codex_launcher`, sharing the CLI-agnostic primitives in
 :mod:`cli_launcher`. Antigravity is the thinnest managed CLI: no attention
-hooks, no project files, and no pre-spawn auth probe — ``agy`` authenticates
-via Google Sign-In / the system keyring with no env-var or config-file marker
-to detect, so binary presence is the only availability signal and an
-unauthenticated ``agy`` simply renders its login prompt inside the PTY. It
+hooks (its terminal sessions get attention from agy's OSC 7501 status reports,
+see :mod:`program_status`), no project files, and no pre-spawn auth probe —
+``agy`` authenticates via Google Sign-In / the system keyring with no env-var
+or config-file marker to detect, so binary presence is the only availability
+signal and an unauthenticated ``agy`` simply renders its login prompt inside
+the PTY. It
 supports git worktrees on stored projects, resolved the same way Codex does
 (``create_standard_worktree``). Flags are verified against ``agy --help``
 (https://antigravity.google/docs/cli/reference): only the curated interactive
@@ -279,6 +281,12 @@ class AntigravityLauncher:
         env = os.environ.copy()
         env.setdefault("TERM", "xterm-256color")
         env["PYTHONIOENCODING"] = "utf-8"
+        # Session attention comes from agy's OSC 7501 status reports
+        # (``core.program_status``). Forcing them on spares agy's support probe;
+        # ``brief`` leaves out the answer and command text the agent never reads.
+        # A user's own setting wins.
+        env.setdefault("AGY_CLI_OSC7501", "on")
+        env.setdefault("AGY_CLI_OSC7501_MESSAGES", "brief")
 
         if isinstance(target, ProjectConfig) and target.conda_env:
             conda_bin = conda_env_bin(target.conda_env)

@@ -2058,7 +2058,8 @@ input[type='radio']:checked {
   letter-spacing: 0.08em;
 }
 
-.session-attention-permission {
+.session-attention-permission,
+.session-attention-failed {
   color: var(--warning);
   box-shadow: inset 0 0 0 2px var(--warning);
 }

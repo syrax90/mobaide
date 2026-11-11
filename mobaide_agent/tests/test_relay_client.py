@@ -1884,6 +1884,7 @@ def _attention_session_wire(**overrides) -> dict:
         "title": "Fix the bug",
         "project_name": "proj",
         "kind": "claude",
+        "kind_label": None,
         "attention": "awaiting_permission",
         "exit_reason": None,
     }
@@ -1936,6 +1937,7 @@ class TestForwardEvents:
                 "reason": "awaiting_permission",
                 "title": "Fix the bug",
                 "project_name": "proj",
+                "kind": "claude",
             },
         }
 
@@ -1976,6 +1978,30 @@ class TestAttentionUserEvent:
                 "reason": "ended",
                 "project_name": "proj",
                 "exit_reason": "exit code 0",
+                "kind": "claude",
+            },
+        }
+
+    def test_carries_a_custom_kind_and_its_label(self):
+        # A push for a session with neither a title nor a project is named
+        # after its kind ("My Linter session"), so the label must travel too.
+        session = _attention_session_wire(
+            attention="turn_failed",
+            title=None,
+            project_name=None,
+            kind="custom_0123456789ab",
+            kind_label="My Linter",
+        )
+        ctrl = _attention_user_event({"session": session})
+
+        assert ctrl == {
+            "type": "user_event",
+            "kind": "session.attention",
+            "payload": {
+                "session_id": "s1",
+                "reason": "turn_failed",
+                "kind": "custom_0123456789ab",
+                "kind_label": "My Linter",
             },
         }
 

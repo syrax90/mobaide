@@ -10,12 +10,14 @@ from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+from .attention_dedupe import SHARED_THREAD_APPS, SharedTurnDedupe, real_cwd
 from .attention_gate import AttentionGate, HookKind
 from .da_responder import DaResponder
 from .macos_access import full_disk_access
-from .models import SessionConfig, SessionEvent, SessionInfo, SessionState
+from .models import SessionConfig, SessionEvent, SessionInfo, SessionKind, SessionState
 from .osc_color_responder import OscColorResponder
 from .osc_parser import OscTitleExtractor
+from .program_status import ProgramStatusGate, ProgramStatusResponder, ProgramStatusTap
 from .pty_backend import PtyBackend, create_pty_backend
 
 logger = logging.getLogger(__name__)
@@ -132,11 +134,23 @@ GRACEFUL_TERM_SECONDS = 2.0
 # child's shutdown latency near-instant.
 CHILD_EXIT_POLL_SECONDS = 0.05
 
+# Sessions whose attention comes from Claude Code hooks (``AttentionGate``).
+# Every other terminal session listens to OSC 7501 program-status reports
+# instead; never both, so one event can never alert twice.
+HOOK_DRIVEN_KINDS = frozenset({SessionKind.CLAUDE.value, SessionKind.AUTO_SCAN.value})
+
+# DEC 1004 focus-in / focus-out reports a client emulator writes on its own.
+_FOCUS_REPORTS = frozenset({b"\x1b[I", b"\x1b[O"})
+
 # Upper bound on joining each background task (reader, title, stall) during
 # teardown. The reader may be parked in an uncancellable os.read() inside the
 # thread pool; we cancel and wait at most this long, then abandon it rather
 # than letting teardown block forever.
 TASK_JOIN_TIMEOUT_SECONDS = 2.0
+
+
+def _kind_value(kind: SessionKind | str) -> str:
+    return kind.value if isinstance(kind, SessionKind) else kind
 
 
 class TerminalSession:
@@ -147,9 +161,11 @@ class TerminalSession:
         self,
         config: SessionConfig,
         backend: PtyBackend | None = None,
+        attention_dedupe: SharedTurnDedupe | None = None,
     ) -> None:
         self._config = config
         self._backend = backend or create_pty_backend()
+        self._attention_dedupe = attention_dedupe
         self._state = SessionState.STARTING
         self._scrollback: collections.deque[bytes] = collections.deque(
             maxlen=config.scrollback_size,
@@ -177,8 +193,9 @@ class TerminalSession:
         self._pending_title: str | None = None
         self._title_event = asyncio.Event()
         self._title_task: asyncio.Task[None] | None = None
-        # Hook-driven attention state (set by the agent's /internal/hook
-        # endpoint from Claude Code hooks). Mirrored onto the wire DTO via
+        # Attention state, set from Claude Code hooks (the agent's
+        # /internal/hook endpoint) or, for every other session, from OSC 7501
+        # program-status reports. Mirrored onto the wire DTO via
         # ``to_info`` so a reconnecting client resyncs the "awaiting you"
         # badge even if it missed the one-shot ``session.attention`` event.
         self._attention: str | None = None
@@ -192,6 +209,28 @@ class TerminalSession:
             is_running=lambda: self._state == SessionState.RUNNING,
             current_attention=lambda: self._attention,
             quiet_seconds=config.attention_quiet_seconds,
+        )
+        # The hookless sessions' source: OSC 7501 reports from the CLI. The
+        # responder answers the support query so CLIs that ask first report.
+        self._status_tap: ProgramStatusTap | None = None
+        self._status_responder: ProgramStatusResponder | None = None
+        self._status_gate: ProgramStatusGate | None = None
+        if _kind_value(config.kind) not in HOOK_DRIVEN_KINDS:
+            self._status_tap = ProgramStatusTap()
+            self._status_responder = ProgramStatusResponder()
+            self._status_gate = ProgramStatusGate(
+                on_alert=self._raise_program_attention,
+                on_clear_permission=self.clear_attention,
+                is_running=lambda: self._state == SessionState.RUNNING,
+                current_attention=lambda: self._attention,
+                quiet_seconds=config.attention_quiet_seconds,
+            )
+        self._real_cwd: str | None = None
+        # A Codex TUI started with ``-c`` overrides (Mobaide's managed launch
+        # sets the reasoning effort that way) runs its own app server, so no
+        # chat can join its thread and there is nothing to pair it with.
+        self._may_share_thread = not (
+            _kind_value(config.kind) == SessionKind.CODEX.value and "-c" in config.command
         )
         # Startup-stall watchdog state (see STARTUP_STALL_SECONDS). The reader
         # loop tallies output bytes; the watchdog raises an
@@ -274,9 +313,15 @@ class TerminalSession:
                 # normal terminal response. (CPR/DSR is handled ring-only in
                 # ``_append_ring`` because the agent has no cursor position to
                 # report.)
+                # The OSC 7501 query goes first: a CLI sends it right before
+                # DA1 and treats a DA1 reply that arrives first as "unsupported".
+                replies = b""
+                if self._status_responder is not None:
+                    data = self._status_responder.process(data)
+                    replies = self._status_responder.pending_replies()
                 data = self._da.process(data)
                 data = self._osc_color.process(data)
-                replies = self._da.pending_replies() + self._osc_color.pending_replies()
+                replies += self._da.pending_replies() + self._osc_color.pending_replies()
                 if replies:
                     fut = loop.run_in_executor(
                         None, self._backend.write, replies,
@@ -288,6 +333,9 @@ class TerminalSession:
                 if new_title is not None and new_title != self._pending_title:
                     self._pending_title = new_title
                     self._title_event.set()
+                if self._status_tap is not None and self._status_gate is not None:
+                    for report in self._status_tap.feed(data):
+                        self._status_gate.handle(report)
                 self._scrollback.append(data)
                 self._append_ring(data)
                 self._startup_output_bytes += len(data)
@@ -472,15 +520,49 @@ class TerminalSession:
         ``UserPromptSubmit`` alone; the reader loop's ``awaiting_os_permission``
         auto-clear is not one either, since resumed output is not the user
         acting.
+
+        Hookless sessions get the same treatment for their program-status
+        window: a keystroke cancels a pending "turn finished".
         """
         self._attention_gate.cancel()
+        if self._status_gate is not None:
+            self._status_gate.cancel()
+
+    def _raise_program_attention(self, reason: str) -> None:
+        """Raise an attention from an OSC 7501 report, unless the same turn
+        already alerted from a chat session on a shared thread."""
+        app = (
+            self._status_gate.last_app if self._status_gate else None
+        ) or _kind_value(self._config.kind)
+        if (
+            self._attention_dedupe is not None
+            and self._may_share_thread
+            and app in SHARED_THREAD_APPS
+        ):
+            if self._real_cwd is None:
+                self._real_cwd = real_cwd(self._config.cwd)
+            if not self._attention_dedupe.admit(
+                session_id=self.session_id,
+                ui="terminal",
+                app=app,
+                cwd=self._real_cwd,
+                reason=reason,
+            ):
+                logger.info(
+                    "Session %s: %s already alerted by a chat on the same thread",
+                    self.session_id,
+                    reason,
+                )
+                return
+        self.set_attention(reason)
 
     def set_attention(self, attention: str, exit_reason: str | None = None) -> None:
         """Record an attention trigger and emit an attention event.
 
         ``attention`` is one of ``awaiting_permission`` | ``turn_finished`` |
-        ``ended`` (Claude Code hooks, via the agent's ``/internal/hook``
-        endpoint) or ``awaiting_os_permission`` (the startup-stall watchdog).
+        ``turn_failed`` | ``ended`` (Claude Code hooks via the agent's
+        ``/internal/hook`` endpoint, or OSC 7501 reports for hookless sessions)
+        or ``awaiting_os_permission`` (the startup-stall watchdog).
         ``exit_reason`` is supplied only for ``ended``. Always called on the
         event loop, so the ``put_nowait`` enqueue is safe.
 
@@ -548,7 +630,13 @@ class TerminalSession:
         # permission prompt". Also suppress the startup-stall watchdog: a user
         # who is typing is plainly not staring at a frozen screen.
         self._user_input_seen = True
-        self.cancel_attention_window()
+        if data in _FOCUS_REPORTS:
+            # The client emulator's focus report (a tab switch, a dismissed
+            # keyboard), not the user acting on the prompt: an alert still
+            # waiting out its spacing gap must survive it.
+            self._attention_gate.cancel()
+        else:
+            self.cancel_attention_window()
         self.clear_attention()
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._backend.write, data)
@@ -609,7 +697,7 @@ class TerminalSession:
         self._state = SessionState.STOPPING
         logger.info("Stopping session %s (force=%s)", self.session_id, force)
 
-        self._attention_gate.cancel()
+        self.cancel_attention_window()
 
         loop = asyncio.get_running_loop()
         await self._terminate_child(loop, force)

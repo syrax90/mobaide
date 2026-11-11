@@ -1,8 +1,9 @@
 """Launcher for the OpenAI Codex CLI (``codex``).
 
 Sibling of :mod:`claude_launcher`, sharing the CLI-agnostic primitives in
-:mod:`cli_launcher`. Codex is thinner than Claude: no attention hooks (Codex has
-no ``--settings`` equivalent) and no Linear-MCP / ``.mcp.json`` project files. It
+:mod:`cli_launcher`. Codex is thinner than Claude: no attention hooks (its
+terminal sessions get attention from the OSC 7501 status reports the TUI writes,
+see :mod:`program_status`) and no Linear-MCP / ``.mcp.json`` project files. It
 does support git worktrees on stored projects, resolved the same way Claude's
 Standard mode does (``create_standard_worktree``). Flags are verified against
 ``developers.openai.com/codex/cli/reference``.
