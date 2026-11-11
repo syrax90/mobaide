@@ -313,16 +313,24 @@ The central server exposes `GET /api/devices` and `DELETE /api/devices/{device_i
 
 ## Session Notifications
 
-The apps raise a notification whenever a Claude session needs attention. Tapping it opens the relevant session.
+The apps raise a notification whenever an agent session needs attention. This covers chat sessions and every terminal session kind. Tapping it opens the relevant session.
 
 | Reason | When |
 |---|---|
 | `awaiting_permission` | A permission prompt is waiting |
 | `awaiting_os_permission` | An OS file-access prompt is blocking on the Mac: "Action needed on your Mac" |
-| `turn_finished` | Claude stopped |
+| `turn_finished` | The agent finished its turn |
+| `turn_failed` | The turn ended in an error: "Turn failed", chip "Failed" |
 | `ended` | The session ended |
 
-- **Source.** Claude Code hooks post to the agent's local `POST /internal/hook` endpoint. `awaiting_os_permission` comes from the agent's own startup-stall watchdog.
+- **Source.** One source per session, so nothing alerts twice.
+  - Claude and Auto Scan terminal sessions: Claude Code hooks post to the agent's local `POST /internal/hook` endpoint.
+  - Chat sessions: the agent raises the reason from the turn result. An RPC error on your own prompt gives `turn_failed`.
+  - Codex, Antigravity, Terminal and custom terminal sessions: the CLI writes OSC 7501 program-status reports. The agent maps them to reasons after a 1.5 s quiet window, and one session alerts at most every 5 s.
+  - `awaiting_os_permission` comes from the agent's own startup-stall watchdog.
+- **Notification label.** With no title and no project, the label names the session kind, for example "Codex session". APNs pushes show "Agent session" for custom kinds.
+- **Known limits.** Claude terminal sessions do not raise `turn_failed`. OSC 7501 on Windows ConPTY is unverified. Older clients show nothing for `turn_failed`.
+- **Shared Codex thread.** A Codex chat and a Codex terminal session in the same folder can see the same turn. They alert once within 6 s.
 - **One alert per stop.** An attention gate on the agent holds back `Stop` while background tasks are still running, so you get one alert rather than one per subagent.
 - **Android.** A foreground service holds the events socket. No FCM or external push service is required.
 - **iOS.** The central server sends APNs pushes to every registered device that has no live events WebSocket of its own (see [docs/ios-client.md](ios-client.md)).

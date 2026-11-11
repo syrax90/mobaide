@@ -202,6 +202,24 @@ class TestHandleUserEvent:
         assert "title" not in payload
         assert "exit_reason" not in payload
 
+    def test_kind_and_kind_label_are_relayed(self, routing):
+        # Clients name an untitled custom session after ``kind_label``; the
+        # push copy reads only ``kind``, but the relay still forwards both.
+        client = _make_user_client()
+        routing.register_user_client(OWNER, client)
+        dispatcher = _make_dispatcher()
+        ctrl = _ctrl()
+        ctrl["payload"].update(kind="custom_0123456789ab", kind_label="My Linter")
+
+        _handle_user_event(_make_ws(dispatcher), AGENT_ID, ctrl, routing)
+
+        payload = json.loads(client.send_queue.get_nowait())["payload"]
+        assert payload["kind"] == "custom_0123456789ab"
+        assert payload["kind_label"] == "My Linter"
+        pushed = dispatcher.schedule_attention.call_args[0][1]
+        assert pushed["kind"] == "custom_0123456789ab"
+        assert pushed["kind_label"] == "My Linter"
+
     def test_unknown_agent_connection_is_dropped(self):
         routing = RoutingTable()  # agent never registered → no owner
         dispatcher = _make_dispatcher()

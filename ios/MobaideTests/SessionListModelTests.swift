@@ -191,6 +191,8 @@ final class SessionListModelTests: XCTestCase {
     func testAttentionMapping() {
         XCTAssertEqual(SessionDisplay.attention("awaiting_permission")?.text, "Needs permission")
         XCTAssertEqual(SessionDisplay.attention("turn_finished")?.text, "Ready")
+        XCTAssertEqual(SessionDisplay.attention("turn_failed")?.text, "Failed")
+        XCTAssertEqual(SessionDisplay.attention("turn_failed")?.tone, .warning)
         XCTAssertEqual(SessionDisplay.attention("ended")?.text, "Ended")
         XCTAssertNil(SessionDisplay.attention(nil))
         XCTAssertNil(SessionDisplay.attention("something_else"))

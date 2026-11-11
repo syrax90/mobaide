@@ -154,6 +154,7 @@ const CHIPS: [string, { text: string; tone: string }][] = [
   ['awaiting_permission', { text: 'Needs permission', tone: 'permission' }],
   ['awaiting_os_permission', { text: 'Needs permission', tone: 'permission' }],
   ['turn_finished', { text: 'Ready', tone: 'ready' }],
+  ['turn_failed', { text: 'Failed', tone: 'failed' }],
   ['ended', { text: 'Ended', tone: 'ended' }],
 ];
 

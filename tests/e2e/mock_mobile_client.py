@@ -281,6 +281,37 @@ class MockMobileClient:
 
             return await asyncio.wait_for(_loop(), timeout=timeout)
 
+    def user_events_url(self) -> str:
+        """The logged-in owner's user-scoped event socket (``/ws/user-events``)."""
+        return f"{self.ws_base}/ws/user-events?token={self.access_token}"
+
+    @staticmethod
+    async def attention_until(
+        ws, session_id: str, *, timeout: float = 15.0
+    ) -> list[dict]:
+        """Read ``session.attention`` payloads off a user-events socket up to
+        and including the first one for ``session_id``; return them all.
+
+        Other event types are skipped. The payloads for other sessions are
+        returned too, so a test can assert that a session stayed quiet.
+        """
+        seen: list[dict] = []
+
+        async def _loop() -> list[dict]:
+            while True:
+                msg = await ws.recv()
+                if isinstance(msg, (bytes, bytearray)):
+                    msg = msg.decode("utf-8")
+                envelope = json.loads(msg)
+                if envelope.get("type") != "session.attention":
+                    continue
+                payload = envelope.get("payload") or {}
+                seen.append(payload)
+                if payload.get("session_id") == session_id:
+                    return seen
+
+        return await asyncio.wait_for(_loop(), timeout=timeout)
+
     @staticmethod
     async def _await_replay_end(ws, timeout: float) -> None:
         async def _loop() -> None:

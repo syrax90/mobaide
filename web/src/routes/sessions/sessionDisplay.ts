@@ -99,12 +99,12 @@ export function sessionStateTone(state: string): SessionStateTone {
 
 export interface AttentionChip {
   text: string;
-  tone: 'permission' | 'ready' | 'ended';
+  tone: 'permission' | 'ready' | 'failed' | 'ended';
 }
 
 /**
- * The attention pill, iOS `SessionListModel.attention`. Android decodes the same
- * field but renders nothing, so this is the behaviour web follows.
+ * The attention pill, iOS `SessionDisplay.attention` and Android
+ * `sessionAttention`.
  *
  * An unrecognised reason renders no chip rather than the raw token — a newer
  * agent inventing one should be invisible, not garbled.
@@ -116,6 +116,8 @@ export function attentionChip(attention: string | undefined): AttentionChip | nu
       return { text: 'Needs permission', tone: 'permission' };
     case 'turn_finished':
       return { text: 'Ready', tone: 'ready' };
+    case 'turn_failed':
+      return { text: 'Failed', tone: 'failed' };
     case 'ended':
       return { text: 'Ended', tone: 'ended' };
     default:

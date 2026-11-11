@@ -123,6 +123,22 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-10: agent status notifications
+
+Additive delta within proto-v7 (2026-11-10): **one attention reason, two optional payload fields. No version bump (`PROTOCOL_VERSION` is unchanged).**
+
+* New attention reason `turn_failed`. It appears on the session dict `attention`, the agent-bus `session.attention` event and the user-event `reason`. Older clients post nothing for an unknown reason.
+* Chat sessions raise `turn_failed` when the agent answers the user's own prompt with an RPC error. They do not raise it when the user pressed Stop, when the process died (that stays `ended`), or when a queued prompt starts next.
+* The slim `session.attention` user-event payload gains optional `kind` and `kind_label`. No `kind` (older agent) reads as a Claude session.
+* Terminal sessions of kind `codex`, `antigravity`, `shell` and `custom_*` have no Claude Code hooks. They raise attention from OSC 7501 program-status reports (Program Status Protocol rev 0.4, `ESC]7501;state=...[:kind=...][:app=...]`).
+* For these sessions the agent answers the support query `ESC]7501;?` and strips it from the replayed stream. For `agy` sessions it sets `AGY_CLI_OSC7501=on` and `AGY_CLI_OSC7501_MESSAGES=brief` unless the user set them.
+* Mapping: `blocked` (permission or question) gives `awaiting_permission` at once. `blocked` (auth) is ignored. `done` gives `turn_finished` and `error` gives `turn_failed`, both after a 1.5 s quiet window.
+* `working`, `idle`, `clear` and any client keystroke (except DEC 1004 focus reports) cancel a pending alert. `working`, `idle` and `clear` also drop a standing `awaiting_permission`.
+* Only a change of state alerts. One session's alerts are at least 5 s apart.
+* `claude` and `auto_scan` terminal sessions are unchanged: hooks only. The agent never parses OSC 7501 for them, so nothing alerts twice. They do not raise `turn_failed`.
+* Shared-thread dedupe: a Codex chat and a Codex terminal session in the same real folder, on Codex's shared app-server, alert once for the same event within 6 s. Chats on a private app server and managed Codex terminal sessions are excluded.
+* Windows ConPTY passthrough of OSC 7501 is unverified.
+
 ### Delta 2026-11-09: Antigravity chat sessions
 
 Additive delta within proto-v7 (2026-11-09): **one capability entry, one row field, one create-field mapping. No version bump; `central_server` is untouched.**
@@ -278,7 +294,7 @@ Chat sessions use the same `/ws/session/{id}` and `CH_SESSION_IO` channel. Two f
 * State keys: `status`, `error`, `agent`, `title`, `cwd`, `acp_session_id`, `config`, `commands`, `usage`, `plan`, `requests`, `queue`, `prompt_caps`, `turn_started_at`, `cancelling`.
 * Item types: `user`, `agent`, `thought`, `tool`, `notice`, `compaction`, `turn_end`, `error`. Tool content parts: `text`, `diff` (a unified diff the agent computes), `image`, `link`, `resource`, `terminal`.
 * Bounds: text parts 32 KB, message texts 256 KB, diffs 48 KB / 1 200 lines, a snapshot ~2 MB (`truncated` marks dropped older items).
-* Attention works as for terminal sessions: a pending request raises `awaiting_permission`, a finished turn `turn_finished`, an agent exit `ended` (`exit_reason: process_exited`).
+* Attention works as for terminal sessions: a pending request raises `awaiting_permission`, a finished turn `turn_finished`, an agent exit `ended` (`exit_reason: process_exited`). An RPC error on the user's own prompt raises `turn_failed` (not after Stop, not on process death, not when a queued prompt starts next).
 
 #### ACP use
 
@@ -1197,7 +1213,7 @@ Existing kinds (all server-originated): ``agent.status_changed`` ``{"agent_id", 
 
 #### Session attention user event
 
-New user-event kind ``session.attention`` — payload ``{"session_id", "reason", "title"?, "project_name"?, "exit_reason"?, "agent_id"}`` (slim, not the full session wire dict; ``reason`` is the proto-v4 attention enum). ``agent_id`` is **stamped by the server** from the authenticated agent tunnel — an agent-supplied value is never trusted.
+New user-event kind ``session.attention`` — payload ``{"session_id", "reason", "title"?, "project_name"?, "exit_reason"?, "kind"?, "kind_label"?, "agent_id"}`` (slim, not the full session wire dict; ``reason`` is the attention enum; ``kind`` and ``kind_label`` are optional, see Delta 2026-11-10). ``agent_id`` is **stamped by the server** from the authenticated agent tunnel — an agent-supplied value is never trusted.
 
 #### Agent to server user_event message
 
@@ -1328,7 +1344,7 @@ Wire shape (delta from proto-v3), all on ``CH_EVENTS`` (forwarded verbatim by ``
 
 #### Session attention event
 
-New event type ``session.attention`` — payload ``{"session": <session dict>}``. Emitted when a Claude Code hook reports the session needs the user. The ``attention`` field is one of:
+New event type ``session.attention`` — payload ``{"session": <session dict>}``. Emitted when a Claude Code hook reports the session needs the user. Chat sessions and hookless terminal sessions raise it too (Delta 2026-11-10). The ``attention`` field is one of:
 
 | Value | Meaning |
 |-------|---------|
@@ -1336,12 +1352,13 @@ New event type ``session.attention`` — payload ``{"session": <session dict>}``
 | ``awaiting_os_permission`` | The agent's macOS startup-stall watchdog: a spawned child producing no output is most likely blocked on an invisible host-desktop TCC file-access modal — additive within proto-v4, no version bump. |
 | ``turn_finished`` | Your move — see the attention-gate delta below. |
 | ``ended`` | SessionEnd. |
+| ``turn_failed`` | The turn ended in an error (added 2026-11-10). |
 
 It is a one-shot notification trigger; clients that miss it (the in-process ``EventBus`` drops on a full queue) still recover from the snapshot field below. Older clients ignore the unknown type (forward-compatible).
 
 #### Session wire dict attention fields
 
-The single-session wire dict (``session_to_wire_dict`` — used by ``sessions.changed``, ``session.updated``, the ``/ws/sessions`` snapshot and the ``/sessions`` REST list) gains two nullable fields: ``attention`` (``awaiting_permission`` | ``awaiting_os_permission`` | ``turn_finished`` | ``ended`` | ``null``) and ``exit_reason`` (human-readable end cause from the Claude Code ``SessionEnd`` ``reason``, or ``process_exited`` on an unexpected death).
+The single-session wire dict (``session_to_wire_dict`` — used by ``sessions.changed``, ``session.updated``, the ``/ws/sessions`` snapshot and the ``/sessions`` REST list) gains two nullable fields: ``attention`` (``awaiting_permission`` | ``awaiting_os_permission`` | ``turn_finished`` | ``turn_failed`` | ``ended`` | ``null``) and ``exit_reason`` (human-readable end cause from the Claude Code ``SessionEnd`` ``reason``, or ``process_exited`` on an unexpected death).
 
 These let a reconnecting/foregrounding client resync the "awaiting you" state after a missed one-shot event.
 

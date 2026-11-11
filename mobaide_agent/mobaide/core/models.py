@@ -110,10 +110,9 @@ class SessionConfig:
     # ``TerminalSession.start`` pick the platform default (enabled on macOS,
     # disabled elsewhere); ``0`` disables it; tests set an explicit value.
     startup_stall_seconds: float | None = None
-    # Trailing-edge debounce applied to Claude Code's ``Stop`` hook before it
-    # becomes a "your move" attention (see ``core.attention_gate``). ``None``
-    # takes ``ATTENTION_QUIET_SECONDS``; ``0`` alerts without waiting; tests set
-    # an explicit value to avoid sleeping.
+    # Debounce before a finished turn (``Stop`` hook or OSC 7501 ``done``/``error``)
+    # becomes an attention. ``None`` takes each gate's default; ``0`` alerts
+    # without waiting.
     attention_quiet_seconds: float | None = None
     # ``"chat"`` runs the agent over ACP (``mobaide.acp``) and renders the
     # structured chat UI; ``"terminal"`` is the classic PTY session.
@@ -140,13 +139,12 @@ class SessionInfo:
     # built-in kinds. See ``SessionConfig.kind_label``.
     kind_label: str | None = None
     # Attention state: ``awaiting_permission`` | ``awaiting_os_permission`` |
-    # ``turn_finished`` | ``ended`` | ``None``. ``awaiting_os_permission`` is the
-    # agent's own startup-stall heuristic (a child producing no output is most
-    # likely blocked on an invisible macOS TCC file-access modal); the others
-    # are Claude Code hook-driven. Stamped on the wire DTO so a client that
-    # missed the one-shot ``session.attention`` event still resyncs from any
-    # full-state snapshot. ``exit_reason`` carries the human-readable end
-    # cause (Claude Code ``SessionEnd`` reason, or ``process_exited`` on crash).
+    # ``turn_finished`` | ``turn_failed`` | ``ended`` | ``None``.
+    # ``awaiting_os_permission`` is the agent's own startup-stall heuristic (a
+    # child silent because of an invisible macOS TCC modal); the rest come from
+    # hooks, OSC 7501 reports or the chat. Stamped on the wire DTO so a client
+    # that missed the one-shot ``session.attention`` still resyncs.
+    # ``exit_reason`` is the end cause (``SessionEnd`` reason or ``process_exited``).
     attention: str | None = None
     exit_reason: str | None = None
     # ``"terminal"`` (PTY) or ``"chat"`` (ACP); clients pick the screen by it.
@@ -162,9 +160,9 @@ class SessionEvent:
     data: bytes | None = None
     timestamp: float = field(default_factory=time.time)
     # For ``attention`` events: the trigger reason (``awaiting_permission`` |
-    # ``awaiting_os_permission`` | ``turn_finished`` | ``ended``). ``None`` marks
-    # a *clear* (user responded), which refreshes the snapshot but is not a
-    # notification trigger.
+    # ``awaiting_os_permission`` | ``turn_finished`` | ``turn_failed`` |
+    # ``ended``). ``None`` marks a *clear* (user responded), which refreshes the
+    # snapshot but is not a notification trigger.
     attention: str | None = None
 
 

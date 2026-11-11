@@ -13,10 +13,10 @@
  *
  * It listens on the **user-events** channel rather than the agent bus. The
  * payload there is the slim `{session_id, reason, title?, project_name?,
- * exit_reason?, agent_id}` and the channel is account-wide, so a browser — the
- * first client that routinely holds several agents — is alerted about all of
- * them, not just the one whose sessions list is open. Consuming both channels
- * would double-post.
+ * exit_reason?, kind?, kind_label?, agent_id}` and the channel is
+ * account-wide, so a browser — the first client that routinely holds several
+ * agents — is alerted about all of them, not just the one whose sessions list
+ * is open. Consuming both channels would double-post.
  *
  * Web sends no `device_id` on that socket and registers no push token, so it can
  * never appear in `RoutingTable.get_user_device_ids()` and an open tab never
