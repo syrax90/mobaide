@@ -146,7 +146,7 @@ android {
         // Play uploads keep ascending.
         // A minor or major bump needs a `Release-As:` commit footer; see
         // docs/versioning-and-updates.md ("Cutting an Android minor or major").
-        val appVersionName = "3.7.1" // x-release-please-version
+        val appVersionName = "3.7.2" // x-release-please-version
         val appVersionParts = appVersionName.split(".").map { it.toInt() }
         versionCode = appVersionParts[0] * 10000 + appVersionParts[1] * 100 + appVersionParts[2]
         versionName = appVersionName
