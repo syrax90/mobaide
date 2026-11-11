@@ -14,6 +14,7 @@ fun SessionAttentionChip(attention: SessionAttention, modifier: Modifier = Modif
         AttentionTone.Warning -> MaterialTheme.pixel.warning
         AttentionTone.Ok -> MaterialTheme.pixel.ok
         AttentionTone.Muted -> MaterialTheme.pixel.textMuted
+        AttentionTone.Working -> MaterialTheme.pixel.accent
     }
     PixelChip(text = attention.text, tone = tone, modifier = modifier)
 }

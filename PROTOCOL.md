@@ -123,6 +123,23 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-11: session activity
+
+Additive delta within proto-v7 (2026-11-11): **one nullable field on the session wire dict. No version bump; `central_server` is untouched.**
+
+The session wire dict (`sessions.changed`, `session.updated`, the `/ws/sessions` snapshot, `GET /sessions`) gains `activity`: `working` while the agent is mid-turn, `idle` between turns, `null` when unknown. A change publishes `session.updated` and never `session.attention`, so it never raises a notification.
+
+| Session | Source |
+|---------|--------|
+| Claude Code and Auto Scan terminal | The attention gate's hooks. `UserPromptSubmit` → `working`. A `Stop` that leaves work in flight (in-flight `background_tasks`, `session_crons`) → stays `working`. Otherwise `idle` when the gate's quiet window ends, even when the alert is muted or deduped. `idle_prompt` and `SessionEnd` → `idle`. `null` until the first hook. |
+| Chat (`ui: "chat"`), every kind | The timeline `status`: `running` → `working`, `ready` → `idle`, otherwise `null`. A turn another app on a shared host runs counts too. |
+| Codex, Antigravity, Terminal and custom terminal (PTY) sessions | Always `null`. Their OSC 7501 reports (Delta 2026-11-10) raise alerts but do not set `activity` yet. |
+
+* Only a `running` session reports a value. Clients show a "Working" chip and an animated status square for `working`. A pending `awaiting_permission` or `awaiting_os_permission` outranks it, because the turn waits for the user.
+* Gate change in the same delta: an `idle_prompt` raised while the last `Stop` still saw background work is *provisional*. It alerts once but does not consume the turn's `prompt_id` dedupe key, so the `Stop` that really ends the turn can alert again. Older CLIs raise `idle_prompt` while background agents run, which used to mute the real end-of-turn alert.
+* A client keystroke no longer cancels a pending quiet window. It mutes the window's alert, and the window still turns the activity `idle`.
+* `stop_hook_active` no longer suppresses a `Stop`. It marks the stop after a continuation that another `Stop` hook forced, and Claude Code advises hooks to let that stop through, so for a well-behaved hook it is the real end of the turn. Before, a session with a blocking `Stop` hook lost that end-of-turn alert when the forced continuation ended within the quiet window. A longer continuation (a `/goal` loop, for example) still alerts once, early.
+
 ### Delta 2026-11-10: agent status notifications
 
 Additive delta within proto-v7 (2026-11-10): **one attention reason, two optional payload fields. No version bump (`PROTOCOL_VERSION` is unchanged).**

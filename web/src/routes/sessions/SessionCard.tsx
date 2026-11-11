@@ -1,11 +1,7 @@
 import { Link } from 'react-router';
 import type { SessionResponse } from '../../protocol/dto/session';
-import {
-  attentionChip,
-  canStopSession,
-  sessionStateTone,
-  sessionTitle,
-} from './sessionDisplay';
+import { SessionStatusChip, SessionStatusIndicator } from './SessionStatus';
+import { canStopSession, sessionTitle } from './sessionDisplay';
 import { terminalPath } from './terminalPath';
 
 interface SessionCardProps {
@@ -23,9 +19,6 @@ export function SessionCard({
   onOpen,
   onStop,
 }: SessionCardProps) {
-  const chip = attentionChip(session.attention);
-  const tone = sessionStateTone(session.state);
-
   return (
     <li className="device-card session-card">
       {/*
@@ -39,7 +32,7 @@ export function SessionCard({
           onOpen(session.session_id);
         }}
       >
-        <span className={`session-dot session-dot-${tone}`} aria-hidden="true" />
+        <SessionStatusIndicator session={session} />
         <span className="session-text">
           <span className="session-title">{sessionTitle(session, kindLabel)}</span>
           <span className="session-kind">{kindLabel}</span>
@@ -47,9 +40,7 @@ export function SessionCard({
         </span>
       </Link>
 
-      {chip !== null && (
-        <span className={`session-attention session-attention-${chip.tone}`}>{chip.text}</span>
-      )}
+      <SessionStatusChip session={session} />
 
       {canStopSession(session.state) && (
         <button

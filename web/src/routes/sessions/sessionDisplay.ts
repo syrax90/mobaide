@@ -99,7 +99,7 @@ export function sessionStateTone(state: string): SessionStateTone {
 
 export interface AttentionChip {
   text: string;
-  tone: 'permission' | 'ready' | 'failed' | 'ended';
+  tone: 'permission' | 'ready' | 'failed' | 'ended' | 'working';
 }
 
 /**
@@ -123,6 +123,39 @@ export function attentionChip(attention: string | undefined): AttentionChip | nu
     default:
       return null;
   }
+}
+
+function needsPermission(attention: string | undefined): boolean {
+  return attention === 'awaiting_permission' || attention === 'awaiting_os_permission';
+}
+
+/**
+ * Whether the agent is mid-turn, so the row shows the spinner and the
+ * "Working" chip. `activity` is absent where the agent cannot see it (a Codex,
+ * Antigravity or Terminal PTY session, or an older agent): those rows keep the
+ * plain status square. A pending permission prompt wins — the turn is blocked
+ * on the user, not working.
+ */
+export function isSessionWorking(
+  session: Pick<SessionResponse, 'state' | 'activity' | 'attention'>,
+): boolean {
+  return (
+    session.state === 'running' &&
+    session.activity === 'working' &&
+    !needsPermission(session.attention)
+  );
+}
+
+/**
+ * The row's chip: "Working" while the agent is mid-turn, otherwise the
+ * attention pill. Working outranks a standing "Ready" — that alert was for an
+ * earlier turn, and it shows again when this one ends.
+ */
+export function sessionStatusChip(
+  session: Pick<SessionResponse, 'state' | 'activity' | 'attention'>,
+): AttentionChip | null {
+  if (isSessionWorking(session)) return { text: 'Working', tone: 'working' };
+  return attentionChip(session.attention);
 }
 
 export function canStopSession(state: string): boolean {

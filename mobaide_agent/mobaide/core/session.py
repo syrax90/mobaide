@@ -200,12 +200,17 @@ class TerminalSession:
         # badge even if it missed the one-shot ``session.attention`` event.
         self._attention: str | None = None
         self._exit_reason: str | None = None
+        # ``working`` / ``idle`` as Claude Code's hooks report it; ``None`` until
+        # the first hook, and for good on a session without hooks (Codex,
+        # Antigravity, Terminal), whose activity the agent cannot see.
+        self._activity: str | None = None
         # Decides which Claude Code hooks actually become an alert. ``Stop``
         # fires once per model turn — including every re-invocation a completing
         # background task causes — so it is debounced and deduped here rather
         # than raised straight as attention.
         self._attention_gate = AttentionGate(
             on_alert=self.set_attention,
+            on_activity=self.set_activity,
             is_running=lambda: self._state == SessionState.RUNNING,
             current_attention=lambda: self._attention,
             quiet_seconds=config.attention_quiet_seconds,
@@ -508,8 +513,8 @@ class TerminalSession:
         if kind is HookKind.PROMPT_SUBMIT:
             self.clear_attention()
 
-    def cancel_attention_window(self) -> None:
-        """Drop a pending debounce without forgetting the turn.
+    def mute_attention_window(self) -> None:
+        """Mute a pending debounce without forgetting the turn.
 
         What a keystroke warrants: the user is plainly present, so a queued
         "your move" should not fire — but client input is not proof of a *new*
@@ -519,14 +524,34 @@ class TerminalSession:
         background work is still draining. The turn boundary is
         ``UserPromptSubmit`` alone; the reader loop's ``awaiting_os_permission``
         auto-clear is not one either, since resumed output is not the user
-        acting.
+        acting. The window still runs out, so the session's activity turns
+        ``idle`` on time even while the user scrolls.
 
         Hookless sessions get the same treatment for their program-status
         window: a keystroke cancels a pending "turn finished".
         """
+        self._attention_gate.mute()
+        if self._status_gate is not None:
+            self._status_gate.cancel()
+
+    def cancel_attention_window(self) -> None:
+        """Drop every pending alert window outright: the session is stopping."""
         self._attention_gate.cancel()
         if self._status_gate is not None:
             self._status_gate.cancel()
+
+    def set_activity(self, activity: str) -> None:
+        """Record ``working`` / ``idle`` and refresh the clients' session row.
+
+        Only a change emits: the gate reports every transition its hooks imply,
+        and ``Stop`` alone can fire several times per turn.
+        """
+        if activity == self._activity:
+            return
+        self._activity = activity
+        self._enqueue_drop_oldest(
+            SessionEvent("activity", self._config.session_id, None, time.time()),
+        )
 
     def _raise_program_attention(self, reason: str) -> None:
         """Raise an attention from an OSC 7501 report, unless the same turn
@@ -634,9 +659,9 @@ class TerminalSession:
             # The client emulator's focus report (a tab switch, a dismissed
             # keyboard), not the user acting on the prompt: an alert still
             # waiting out its spacing gap must survive it.
-            self._attention_gate.cancel()
+            self._attention_gate.mute()
         else:
-            self.cancel_attention_window()
+            self.mute_attention_window()
         self.clear_attention()
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._backend.write, data)
@@ -787,4 +812,5 @@ class TerminalSession:
             kind_label=self._config.kind_label,
             attention=self._attention,
             exit_reason=self._exit_reason,
+            activity=self._activity if self._state == SessionState.RUNNING else None,
         )

@@ -198,6 +198,48 @@ final class SessionListModelTests: XCTestCase {
         XCTAssertNil(SessionDisplay.attention("something_else"))
     }
 
+    func testIsWorkingOnlyForARunningSessionTheAgentReportsMidTurn() {
+        XCTAssertTrue(SessionDisplay.isWorking(makeSessionResponse(activity: "working")))
+        XCTAssertFalse(SessionDisplay.isWorking(makeSessionResponse(activity: "idle")))
+        XCTAssertFalse(
+            SessionDisplay.isWorking(makeSessionResponse()),
+            "Codex, Antigravity and Terminal sessions report no activity and keep the plain square"
+        )
+        for state in ["starting", "stopping", "stopped", "crashed"] {
+            XCTAssertFalse(
+                SessionDisplay.isWorking(makeSessionResponse(state: state, activity: "working")),
+                "a \(state) session never spins, whatever its last activity"
+            )
+        }
+    }
+
+    func testIsWorkingYieldsToAPendingPermissionPrompt() {
+        for attention in ["awaiting_permission", "awaiting_os_permission"] {
+            XCTAssertFalse(
+                SessionDisplay.isWorking(makeSessionResponse(attention: attention, activity: "working")),
+                attention
+            )
+        }
+    }
+
+    func testStatusChipShowsWorkingOverAStandingReadyFromAnEarlierTurn() {
+        let chip = SessionDisplay.statusChip(makeSessionResponse(attention: "turn_finished", activity: "working"))
+        XCTAssertEqual(chip?.text, "Working")
+        XCTAssertEqual(chip?.tone, .accent)
+    }
+
+    func testStatusChipFallsBackToTheAttentionChipOnceTheTurnIsNotWorking() {
+        XCTAssertEqual(
+            SessionDisplay.statusChip(makeSessionResponse(attention: "turn_finished", activity: "idle"))?.text,
+            "Ready"
+        )
+        XCTAssertEqual(
+            SessionDisplay.statusChip(makeSessionResponse(attention: "awaiting_permission", activity: "working"))?.text,
+            "Needs permission"
+        )
+        XCTAssertNil(SessionDisplay.statusChip(makeSessionResponse(activity: "idle")))
+    }
+
     func testCanStop() {
         XCTAssertTrue(SessionDisplay.canStop("running"))
         XCTAssertTrue(SessionDisplay.canStop("starting"))

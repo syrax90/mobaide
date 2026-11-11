@@ -56,7 +56,7 @@ fun PixelColors.sessionStateColor(state: String): Color = when (state) {
     else -> statusStopped
 }
 
-enum class AttentionTone { Warning, Ok, Muted }
+enum class AttentionTone { Warning, Ok, Muted, Working }
 
 data class SessionAttention(val text: String, val tone: AttentionTone)
 
@@ -68,3 +68,28 @@ fun sessionAttention(value: String?): SessionAttention? = when (value) {
     "ended" -> SessionAttention("Ended", AttentionTone.Muted)
     else -> null
 }
+
+/**
+ * Whether the agent is mid-turn, so the row shows the spinner and the
+ * "Working" chip. `activity` is null where the agent cannot see it (a Codex,
+ * Antigravity or Terminal PTY session, or an older agent): those rows keep the
+ * plain status square. A pending permission prompt wins — the turn is blocked
+ * on the user, not working.
+ */
+fun isSessionWorking(session: SessionResponse): Boolean =
+    session.state == "running" &&
+        session.activity == "working" &&
+        session.attention != "awaiting_permission" &&
+        session.attention != "awaiting_os_permission"
+
+/**
+ * The row's chip: "Working" while the agent is mid-turn, otherwise the
+ * attention chip. Working outranks a standing "Ready" — that alert was for an
+ * earlier turn, and it shows again when this one ends.
+ */
+fun sessionStatusChip(session: SessionResponse): SessionAttention? =
+    if (isSessionWorking(session)) {
+        SessionAttention("Working", AttentionTone.Working)
+    } else {
+        sessionAttention(session.attention)
+    }

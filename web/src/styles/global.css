@@ -2017,6 +2017,59 @@ input[type='radio']:checked {
   background: var(--danger);
 }
 
+/*
+ * The agent is mid-turn: the status square split into four 4px cells, one lit
+ * and walking clockwise with a fading trail. Grid order is TL, TR, BL, BR, so
+ * the negative delays put the cells in phase TL → TR → BR → BL. Each keyframe
+ * names its opacity, the 100% one included, so a cell's own base opacity only
+ * shows when animation is off: then the global reduced-motion rule leaves a
+ * still checkerboard, still unlike the plain square.
+ */
+.session-spinner {
+  display: grid;
+  grid-template-columns: repeat(2, 4px);
+  grid-template-rows: repeat(2, 4px);
+  flex: none;
+}
+
+.session-spinner > span {
+  background: var(--accent);
+  opacity: 0.25;
+  animation: session-spinner-step 0.8s steps(1, end) infinite;
+}
+
+.session-spinner > span:nth-child(1),
+.session-spinner > span:nth-child(4) {
+  opacity: 1;
+}
+
+.session-spinner > span:nth-child(2) {
+  animation-delay: -0.6s;
+}
+
+.session-spinner > span:nth-child(3) {
+  animation-delay: -0.2s;
+}
+
+.session-spinner > span:nth-child(4) {
+  animation-delay: -0.4s;
+}
+
+@keyframes session-spinner-step {
+  0% {
+    opacity: 1;
+  }
+
+  25% {
+    opacity: 0.55;
+  }
+
+  50%,
+  100% {
+    opacity: 0.25;
+  }
+}
+
 /* `min-width: 0` is what lets the ellipsis rules below actually clip. */
 .session-text {
   display: flex;
@@ -2072,6 +2125,11 @@ input[type='radio']:checked {
 .session-attention-ended {
   color: var(--gray);
   box-shadow: inset 0 0 0 2px var(--rule);
+}
+
+.session-attention-working {
+  color: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--brand-2);
 }
 
 .session-stop {

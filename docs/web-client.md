@@ -296,9 +296,12 @@ Two web-specific changes go beyond the port:
 
 Android and iOS follow in CLA-229 / CLA-230.
 
-**Cards** follow iOS: state dot, title, kind label, cwd, and the attention
-chip (`awaiting_permission` → "Needs permission", `turn_finished` → "Ready",
-`turn_failed` → "Failed", `ended` → "Ended"). Unknown kinds fall back to
+**Cards** follow iOS and Android: state dot, title, kind label, cwd, and the
+attention chip (`awaiting_permission` → "Needs permission", `turn_finished` →
+"Ready", `turn_failed` → "Failed", `ended` → "Ended"). A running session whose
+`activity` is `working` (and with no pending permission prompt) shows an
+animated 2×2 accent square instead of the state dot and a "Working" chip,
+which outranks "Ready". The sessions panel rows do the same. Unknown kinds fall back to
 `kind_label`, then the live custom-type registry, then "Custom" — never the
 raw wire token. Stopping uses iOS's Stop / Force Stop / Cancel confirmation.
 
@@ -817,8 +820,8 @@ Sessions* in `features.md`.
 ### Route and sessions panel
 
 **Sessions panel.** A `☰` "Sessions" button in `.terminal-bar` opens a panel
-listing the connected agent's sessions (state dot, title, kind · project,
-attention chip; the current row highlighted), a "New session" shortcut and the
+listing the connected agent's sessions (state dot or working square, title,
+kind · project, attention or "Working" chip; the current row highlighted), a "New session" shortcut and the
 account's other agents (online → select it and go to `/`; offline rows
 disabled).
 

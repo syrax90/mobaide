@@ -14,7 +14,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _STATE_EVENTS = frozenset({"started", "stopped", "error"})
-_TITLE_EVENT = "title"
+# Events that change one field of the session row and only refresh it.
+_ROW_EVENTS = frozenset({"title", "activity"})
 _ATTENTION_EVENT = "attention"
 
 
@@ -54,7 +55,7 @@ class SessionEventFanout:
                         q.put_nowait(event)
                     except asyncio.QueueFull:
                         pass  # drop for slow consumers
-                if event.event_type == _TITLE_EVENT and self._get_sessions:
+                if event.event_type in _ROW_EVENTS and self._get_sessions:
                     if self._event_bus is not None:
                         sessions_now = self._get_sessions()
                         changed = next(

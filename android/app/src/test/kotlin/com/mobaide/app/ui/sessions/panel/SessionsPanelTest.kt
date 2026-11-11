@@ -7,6 +7,8 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -15,6 +17,8 @@ import androidx.compose.ui.test.performClick
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
+import com.mobaide.app.ui.sessions.SESSION_STATUS_SQUARE_TAG
+import com.mobaide.app.ui.sessions.SESSION_WORKING_INDICATOR_TAG
 import com.mobaide.app.ui.theme.MobaideTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -43,6 +47,7 @@ class SessionsPanelTest {
         kind: SessionKind = SessionKind.Claude,
         attention: String? = null,
         state: String = "running",
+        activity: String? = null,
     ): SessionResponse = SessionResponse(
         session_id = id,
         state = state,
@@ -51,6 +56,7 @@ class SessionsPanelTest {
         project_name = project,
         kind = kind,
         attention = attention,
+        activity = activity,
     )
 
     private fun agent(id: String, name: String, online: Boolean): AgentSummaryResponse =
@@ -111,6 +117,36 @@ class SessionsPanelTest {
         // No OSC title yet: the composite is the headline and the detail line
         // repeats the kind, the way the list screen's card does.
         composeRule.onNodeWithTag(sessionsPanelRowTag("s2")).assert(hasText("Codex · api"))
+    }
+
+    @Test
+    fun aWorkingRow_swapsItsStatusSquareForTheWorkingSquare_andReadyForWorking() {
+        setPanel(
+            SessionsPanelUiState(
+                sessions = listOf(
+                    session("s1", title = "busy", attention = "turn_finished", activity = "working"),
+                    session("s2", title = "between turns", attention = "turn_finished", activity = "idle"),
+                ),
+                synced = true,
+                agents = listOf(agent("a1", "desktop", online = true)),
+                connectedAgentId = "a1",
+            ),
+        )
+
+        fun inRow(id: String, tag: String) = composeRule.onNode(
+            hasTestTag(tag) and hasAnyAncestor(hasTestTag(sessionsPanelRowTag(id))),
+            useUnmergedTree = true,
+        )
+
+        inRow("s1", SESSION_WORKING_INDICATOR_TAG).assertExists()
+        inRow("s1", SESSION_STATUS_SQUARE_TAG).assertDoesNotExist()
+        composeRule.onNodeWithTag(sessionsPanelRowTag("s1"))
+            .assert(hasText("Working", ignoreCase = true))
+            .assert(!hasText("Ready", ignoreCase = true))
+
+        inRow("s2", SESSION_STATUS_SQUARE_TAG).assertExists()
+        inRow("s2", SESSION_WORKING_INDICATOR_TAG).assertDoesNotExist()
+        composeRule.onNodeWithTag(sessionsPanelRowTag("s2")).assert(hasText("Ready", ignoreCase = true))
     }
 
     @Test

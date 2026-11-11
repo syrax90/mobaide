@@ -350,6 +350,31 @@ class TestMemoryBoundAndReset:
         assert frames == []
 
 
+class TestStatusCallback:
+    """``on_status`` is how a chat session's row learns a turn started or
+    ended, so it must fire on every status change and on nothing else."""
+
+    def test_each_status_change_is_reported(self):
+        statuses: list = []
+        tl, _ = _make(on_status=statuses.append)
+
+        tl.patch_state(status="running")
+        tl.patch_state(status="ready")
+        tl.patch_state(status="error", urgent=True)
+
+        assert statuses == ["running", "ready", "error"]
+
+    def test_an_unchanged_status_or_another_key_is_not_reported(self):
+        statuses: list = []
+        tl, _ = _make(on_status=statuses.append)
+
+        tl.patch_state(status="running")
+        tl.patch_state(status="running")
+        tl.patch_state(title="Fix login", cancelling=True)
+
+        assert statuses == ["running"]
+
+
 def _ids(items: list[dict]) -> list[str]:
     return [item["id"] for item in items]
 

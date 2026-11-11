@@ -390,6 +390,55 @@ class TestSessionEventFanoutPump:
         finally:
             await _stop_and_await(fanout)
 
+    async def test_activity_event_publishes_session_updated_only(self):
+        """An ``activity`` event refreshes the row like ``title`` does. It must
+        never publish ``session.attention``: that is the notification trigger,
+        and a turn starting or ending is not something to notify about.
+        """
+        session = _fake_session("s1")
+        broadcaster = MagicMock()
+        broadcaster.notify_serialized = AsyncMock()
+        event_bus = MagicMock()
+        event_bus.publish = MagicMock()
+
+        info = SessionInfo(
+            session_id="s1",
+            state=SessionState.RUNNING,
+            created_at=datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+            pid=4242,
+            command=["claude"],
+            cwd="/work",
+            activity="working",
+        )
+
+        def get_sessions():
+            return [info]
+
+        fanout = SessionEventFanout(
+            session,
+            broadcaster=broadcaster,
+            get_sessions=get_sessions,
+            event_bus=event_bus,
+        )
+        try:
+            sub = fanout.subscribe()
+            fanout.start()
+
+            await session.event_queue.put(
+                SessionEvent(event_type="activity", session_id="s1", data=None),
+            )
+            received = await _drain_one(sub)
+            assert received.event_type == "activity"
+
+            await asyncio.sleep(0)
+            broadcaster.notify_serialized.assert_not_called()
+
+            published = event_bus.publish.call_args_list
+            assert [c.args[0] for c in published] == ["session.updated"]
+            assert published[0].args[1]["session"]["activity"] == "working"
+        finally:
+            await _stop_and_await(fanout)
+
     async def test_attention_set_publishes_attention_and_updated(self):
         """A ``attention`` event with a reason set must publish BOTH
         ``session.attention`` (the one-shot notify trigger) and

@@ -90,10 +90,14 @@ class _Session:
         self.running = True
         self.attention: str | None = None
         self.calls: list[tuple[str, str | None]] = []
+        self.activity: list[str] = []
 
     def on_alert(self, attention: str, exit_reason: str | None = None) -> None:
         self.attention = attention
         self.calls.append((attention, exit_reason))
+
+    def on_activity(self, activity: str) -> None:
+        self.activity.append(activity)
 
     def user_responded(self) -> None:
         """Mirror ``clear_attention``: the badge drops, the turn is untouched."""
@@ -128,6 +132,7 @@ def _gate(session: _Session, quiet_seconds: float | None = None) -> AttentionGat
         on_alert=session.on_alert,
         is_running=lambda: session.running,
         current_attention=lambda: session.attention,
+        on_activity=session.on_activity,
         quiet_seconds=quiet_seconds,
     )
 
@@ -194,12 +199,6 @@ class TestStopClassification:
         assert scheduler.elapse() == 0
         assert session.calls == []
 
-    async def test_stop_hook_active_never_alerts(self, session, scheduler) -> None:
-        gate = _gate(session)
-        gate.handle(HookKind.STOP, {"stop_hook_active": True})
-        assert scheduler.elapse() == 0
-        assert session.calls == []
-
     async def test_suppressed_stop_drops_an_armed_window(
         self, session, scheduler,
     ) -> None:
@@ -239,8 +238,11 @@ class TestTurnDedupe:
 
         gate.handle(HookKind.STOP, {"prompt_id": "p1"})
 
-        assert scheduler.elapse() == 0
+        # The window still arms and elapses — that is what turns the activity
+        # ``idle`` — but the turn's dedupe key withholds the alert.
+        assert scheduler.elapse() == 1
         assert session.reasons == ["turn_finished"]
+        assert session.activity[-1] == "idle"
 
     async def test_the_next_prompt_alerts_again(self, session, scheduler) -> None:
         # The dedupe is keyed on the turn, not latched: a genuinely new prompt
@@ -424,8 +426,269 @@ class TestTurnReset:
         gate.cancel()
         gate.handle(HookKind.STOP, {"prompt_id": "p1"})
 
-        assert scheduler.elapse() == 0
+        assert scheduler.elapse() == 1
         assert session.reasons == ["turn_finished"]
+
+
+class TestActivity:
+    """``on_activity`` drives the clients' "agent is working" indicator, so it
+    must follow every turn boundary whether or not an alert fires: a row stuck
+    on ``working`` is the bug this signal exists to fix."""
+
+    async def test_prompt_submit_reports_working(self, session, scheduler) -> None:
+        gate = _gate(session)
+        gate.handle(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1"})
+        assert session.activity == ["working"]
+
+    async def test_clean_stop_turns_idle_only_when_the_window_elapses(
+        self, session, scheduler,
+    ) -> None:
+        # A clean ``Stop`` can still be followed by a background agent's
+        # re-invocation, so idle waits for the same quiet window as the alert.
+        gate = _gate(session)
+        gate.handle(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1"})
+        gate.handle(HookKind.STOP, {"prompt_id": "p1"})
+        assert session.activity == ["working"]
+
+        scheduler.elapse()
+
+        assert session.activity == ["working", "idle"]
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"prompt_id": "p1", "background_tasks": [{"status": "running"}]},
+            {"prompt_id": "p1", "session_crons": [{"id": "c1"}]},
+        ],
+    )
+    async def test_stop_with_work_in_flight_stays_working(
+        self, session, scheduler, payload,
+    ) -> None:
+        gate = _gate(session)
+        gate.handle(HookKind.STOP, payload)
+
+        assert scheduler.elapse() == 0
+        assert session.activity == ["working"]
+
+    async def test_a_withheld_alert_still_turns_idle(self, session, scheduler) -> None:
+        # The badge from the previous turn is still up, so this turn's alert is
+        # withheld — the indicator must stop anyway.
+        gate = _gate(session)
+        gate.handle(HookKind.STOP, {"prompt_id": "p1"})
+        scheduler.elapse()
+        gate.handle(HookKind.PROMPT_SUBMIT, {"prompt_id": "p2"})
+        session.attention = "turn_finished"
+        gate.handle(HookKind.STOP, {"prompt_id": "p2"})
+
+        scheduler.elapse()
+
+        assert session.reasons == ["turn_finished"]
+        assert session.activity == ["idle", "working", "idle"]
+
+    async def test_idle_hook_reports_idle(self, session, scheduler) -> None:
+        gate = _gate(session)
+        gate.handle(
+            HookKind.STOP,
+            {"prompt_id": "p1", "background_tasks": [{"status": "running"}]},
+        )
+        gate.handle(HookKind.IDLE, {"prompt_id": "p1"})
+        assert session.activity == ["working", "idle"]
+
+    async def test_end_reports_idle(self, session, scheduler) -> None:
+        # ``/clear`` fires ``SessionEnd`` and leaves the PTY at an idle prompt.
+        gate = _gate(session)
+        gate.handle(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1"})
+        gate.handle(HookKind.END, {"reason": "clear"})
+        assert session.activity == ["working", "idle"]
+
+    async def test_permission_leaves_the_activity_alone(
+        self, session, scheduler,
+    ) -> None:
+        # The turn resumes once the user answers; the clients rank the
+        # permission chip above "Working" on their own.
+        gate = _gate(session)
+        gate.handle(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1"})
+        gate.handle(HookKind.PERMISSION, {})
+        assert session.activity == ["working"]
+
+
+class TestMute:
+    """A keystroke mutes the pending window instead of dropping it: the user is
+    at the terminal, so no "your move" — but the turn still ends, and the
+    activity must not stay ``working`` because the user typed or scrolled."""
+
+    async def test_muted_window_turns_idle_without_alerting(
+        self, session, scheduler,
+    ) -> None:
+        gate = _gate(session)
+        gate.handle(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1"})
+        gate.handle(HookKind.STOP, {"prompt_id": "p1"})
+
+        gate.mute()
+
+        assert scheduler.elapse() == 1
+        assert session.calls == []
+        assert session.activity == ["working", "idle"]
+
+    async def test_mute_without_a_pending_window_does_not_mute_the_next_one(
+        self, session, scheduler,
+    ) -> None:
+        # A keystroke while Claude is still mid-turn says nothing about the
+        # ``Stop`` that comes later.
+        gate = _gate(session)
+        gate.mute()
+
+        gate.handle(HookKind.STOP, {"prompt_id": "p1"})
+
+        assert scheduler.elapse() == 1
+        assert session.reasons == ["turn_finished"]
+
+    async def test_a_muted_window_does_not_consume_the_turn(
+        self, session, scheduler,
+    ) -> None:
+        # Muting is per window, like the cancel it replaced: a background agent
+        # re-waking the session and stopping again still earns the alert.
+        gate = _gate(session)
+        gate.handle(HookKind.STOP, {"prompt_id": "p1"})
+        gate.mute()
+        scheduler.elapse()
+
+        gate.handle(HookKind.STOP, {"prompt_id": "p1"})
+        scheduler.elapse()
+
+        assert session.reasons == ["turn_finished"]
+
+
+class TestProvisionalIdle:
+    """An ``idle_prompt`` while the last ``Stop`` still saw background work is
+    provisional: it alerts, but leaves the turn's dedupe key free so the
+    ``Stop`` that really ends the turn can still show "Ready"."""
+
+    @staticmethod
+    def _stop_with_background(gate: AttentionGate, prompt_id: str = "p1") -> None:
+        gate.handle(
+            HookKind.STOP,
+            {"prompt_id": prompt_id, "background_tasks": [{"status": "running"}]},
+        )
+
+    async def test_the_final_stop_alerts_after_a_provisional_idle(
+        self, session, scheduler,
+    ) -> None:
+        # The reported bug: subagents still running, ``idle_prompt`` alerts
+        # early, the user looks, and the real end of the turn stayed silent.
+        gate = _gate(session)
+        self._stop_with_background(gate)
+        gate.handle(HookKind.IDLE, {"prompt_id": "p1"})
+        session.user_responded()
+
+        gate.handle(HookKind.STOP, {"prompt_id": "p1"})
+        scheduler.elapse()
+
+        assert session.reasons == ["turn_finished", "turn_finished"]
+
+    async def test_provisional_idle_alerts_once_per_turn(
+        self, session, scheduler,
+    ) -> None:
+        # A long-lived background shell keeps every ``Stop`` "in flight", so
+        # each idle stretch would otherwise become a fresh alert.
+        gate = _gate(session)
+        self._stop_with_background(gate)
+        gate.handle(HookKind.IDLE, {"prompt_id": "p1"})
+        session.user_responded()
+
+        self._stop_with_background(gate)
+        gate.handle(HookKind.IDLE, {"prompt_id": "p1"})
+
+        assert session.reasons == ["turn_finished"]
+
+    async def test_the_final_stop_is_withheld_while_the_badge_is_still_up(
+        self, session, scheduler,
+    ) -> None:
+        gate = _gate(session)
+        self._stop_with_background(gate)
+        gate.handle(HookKind.IDLE, {"prompt_id": "p1"})
+
+        gate.handle(HookKind.STOP, {"prompt_id": "p1"})
+        scheduler.elapse()
+
+        assert session.reasons == ["turn_finished"]
+
+    async def test_idle_after_a_clean_stop_is_final(self, session, scheduler) -> None:
+        # The background work finished before this ``Stop``, so the idle alert
+        # is the turn's real end and a later ``Stop`` must not repeat it.
+        gate = _gate(session)
+        self._stop_with_background(gate)
+        gate.handle(HookKind.STOP, {"prompt_id": "p1"})
+        gate.handle(HookKind.IDLE, {"prompt_id": "p1"})
+        session.user_responded()
+
+        gate.handle(HookKind.STOP, {"prompt_id": "p1"})
+        scheduler.elapse()
+
+        assert session.reasons == ["turn_finished"]
+
+    async def test_prompt_submit_forgets_the_background_work(
+        self, session, scheduler,
+    ) -> None:
+        gate = _gate(session)
+        self._stop_with_background(gate)
+        gate.handle(HookKind.PROMPT_SUBMIT, {"prompt_id": "p2"})
+        gate.handle(HookKind.IDLE, {"prompt_id": "p2"})
+        session.user_responded()
+
+        gate.handle(HookKind.STOP, {"prompt_id": "p2"})
+        scheduler.elapse()
+
+        assert session.reasons == ["turn_finished"]
+
+
+class TestStopHookContinuation:
+    """``stop_hook_active`` marks the ``Stop`` after a continuation a blocking
+    ``Stop`` hook (or ``/goal``) forced. The CLI tells such hooks to let it
+    through, so it is normally the turn's real end and must not mute "Ready"."""
+
+    async def test_continuation_stop_alerts_after_the_quiet_window(
+        self, session, scheduler,
+    ) -> None:
+        gate = _gate(session)
+        gate.handle(HookKind.STOP, {"prompt_id": "p1", "stop_hook_active": True})
+
+        assert session.calls == []
+        assert scheduler.elapse() == 1
+        assert session.reasons == ["turn_finished"]
+        assert session.activity == ["idle"]
+
+    async def test_blocking_hook_chain_alerts_once_and_ends_idle(
+        self, session, scheduler,
+    ) -> None:
+        # The hook blocks the first ``Stop``; Claude continues and stops again
+        # with ``stop_hook_active``. That second stop re-arms the one window.
+        gate = _gate(session)
+        gate.handle(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1"})
+        gate.handle(HookKind.STOP, {"prompt_id": "p1", "stop_hook_active": False})
+        gate.handle(HookKind.STOP, {"prompt_id": "p1", "stop_hook_active": True})
+
+        assert len(scheduler.pending) == 1
+        assert scheduler.elapse() == 1
+        assert session.reasons == ["turn_finished"]
+        assert session.activity == ["working", "idle"]
+
+    async def test_background_work_still_keeps_a_continuation_stop_working(
+        self, session, scheduler,
+    ) -> None:
+        gate = _gate(session)
+        gate.handle(
+            HookKind.STOP,
+            {
+                "prompt_id": "p1",
+                "stop_hook_active": True,
+                "background_tasks": [{"status": "running"}],
+            },
+        )
+
+        assert scheduler.elapse() == 0
+        assert session.calls == []
+        assert session.activity == ["working"]
 
 
 class TestLiveness:

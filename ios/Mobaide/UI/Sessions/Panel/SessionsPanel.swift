@@ -192,7 +192,7 @@ private struct SessionsPanelRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            PixelStatusSquare(tone: SessionDisplay.stateTone(session.state))
+            SessionStatusIndicator(session: session)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
                     .font(.body.weight(.semibold))
@@ -204,7 +204,7 @@ private struct SessionsPanelRow: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 4)
-            if let attention = SessionDisplay.attention(session.attention) {
+            if let attention = SessionDisplay.statusChip(session) {
                 PixelChip(attention.text, .status(attention.tone))
                     .fixedSize()
             }

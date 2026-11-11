@@ -48,9 +48,9 @@ import com.mobaide.app.ui.common.pixel.PixelIconButton
 import com.mobaide.app.ui.common.pixel.PixelStatusDot
 import com.mobaide.app.ui.common.pixel.pixelFrame
 import com.mobaide.app.ui.sessions.SessionAttentionChip
-import com.mobaide.app.ui.sessions.sessionAttention
+import com.mobaide.app.ui.sessions.SessionStatusIndicator
 import com.mobaide.app.ui.sessions.sessionKindLabel
-import com.mobaide.app.ui.sessions.sessionStateColor
+import com.mobaide.app.ui.sessions.sessionStatusChip
 import com.mobaide.app.ui.sessions.sessionTitle
 import com.mobaide.app.ui.theme.ChromeFontFamily
 import com.mobaide.app.ui.theme.MobaideTheme
@@ -270,7 +270,6 @@ private fun SessionRow(
     onStop: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val stateColor = MaterialTheme.pixel.sessionStateColor(session.state)
     val selectionSpec = tween<Color>(SESSIONS_PANEL_SELECTION_MS)
     val ring by animateColorAsState(
         targetValue = if (selected) MaterialTheme.pixel.brand2 else MaterialTheme.pixel.surface2,
@@ -301,7 +300,7 @@ private fun SessionRow(
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        PixelStatusDot(color = stateColor)
+        SessionStatusIndicator(session)
         Spacer(modifier = Modifier.width(10.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -320,9 +319,9 @@ private fun SessionRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        sessionAttention(session.attention)?.let { attention ->
+        sessionStatusChip(session)?.let { chip ->
             Spacer(modifier = Modifier.width(8.dp))
-            SessionAttentionChip(attention)
+            SessionAttentionChip(chip)
         }
         if (session.state == "running" || session.state == "starting") {
             Spacer(modifier = Modifier.width(8.dp))
@@ -391,6 +390,10 @@ private val previewState = SessionsPanelUiState(
             session_id = "abc12345", state = "running", created_at = "", cwd = "/home/me/app",
             title = "fix: login", project_name = "app", kind = SessionKind.Claude,
             attention = "awaiting_permission",
+        ),
+        SessionResponse(
+            session_id = "fed09876", state = "running", created_at = "", project_name = "web",
+            kind = SessionKind.Claude, activity = "working",
         ),
         SessionResponse(
             session_id = "def67890", state = "running", created_at = "", project_name = "api",

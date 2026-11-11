@@ -634,6 +634,7 @@ class TestHandleRequestEventsSnapshot:
         sess_info.attention = None
         sess_info.exit_reason = None
         sess_info.ui = "terminal"
+        sess_info.activity = None
         mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
 
         ws = AsyncMock()
@@ -663,6 +664,7 @@ class TestHandleRequestEventsSnapshot:
                     "attention": None,
                     "exit_reason": None,
                     "ui": "terminal",
+                    "activity": None,
                 },
             ],
         }
@@ -744,6 +746,7 @@ class TestHandleRequestEventsSnapshot:
         sess_info.attention = None
         sess_info.exit_reason = None
         sess_info.ui = "terminal"
+        sess_info.activity = None
         mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
 
         ws = AsyncMock()
@@ -776,6 +779,7 @@ class TestHandleRequestEventsSnapshot:
                 "attention": None,
                 "exit_reason": None,
                 "ui": "terminal",
+                "activity": None,
             },
         ]
 
@@ -3574,7 +3578,7 @@ class TestProxySessionsWireShape:
         expected_keys = {
             "session_id", "state", "created_at", "pid",
             "command", "cwd", "title", "project_name", "kind",
-            "kind_label", "attention", "exit_reason", "ui",
+            "kind_label", "attention", "exit_reason", "ui", "activity",
         }
         assert set(a.keys()) == expected_keys
         assert set(b.keys()) == expected_keys
@@ -3634,7 +3638,7 @@ class TestProxySessionsWireShape:
         assert set(body.keys()) == {
             "session_id", "state", "created_at", "pid",
             "command", "cwd", "title", "project_name", "kind",
-            "kind_label", "attention", "exit_reason", "ui",
+            "kind_label", "attention", "exit_reason", "ui", "activity",
         }
         # The two new fields are present (even when title is None at create).
         assert body["title"] is None
@@ -4015,6 +4019,7 @@ class TestHandleProxyRequestCodex:
             info.attention = None
             info.exit_reason = None
             info.ui = "terminal"
+            info.activity = None
             s.to_info = MagicMock(return_value=info)
             return s
 
@@ -4585,6 +4590,7 @@ class TestHandleProxyRequestAntigravity:
             info.attention = None
             info.exit_reason = None
             info.ui = "terminal"
+            info.activity = None
             s.to_info = MagicMock(return_value=info)
             return s
 
