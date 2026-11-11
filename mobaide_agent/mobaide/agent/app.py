@@ -779,7 +779,8 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     )
     # Codex CLI launcher — shares the WorktreeManager so stored-project sessions
     # can create a git worktree (same as Claude's Standard mode); no attention
-    # hooks (Codex has no ``--settings`` equivalent). Binary resolves lazily.
+    # hooks — its sessions raise attention from OSC 7501 status reports
+    # (``core.program_status``). Binary resolves lazily.
     app.state.codex_launcher = CodexLauncher(
         codex_bin_override=config.codex_bin,
         worktree_mgr=worktree_mgr,

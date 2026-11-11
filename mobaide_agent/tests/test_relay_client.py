@@ -634,6 +634,7 @@ class TestHandleRequestEventsSnapshot:
         sess_info.attention = None
         sess_info.exit_reason = None
         sess_info.ui = "terminal"
+        sess_info.activity = None
         mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
 
         ws = AsyncMock()
@@ -663,6 +664,7 @@ class TestHandleRequestEventsSnapshot:
                     "attention": None,
                     "exit_reason": None,
                     "ui": "terminal",
+                    "activity": None,
                 },
             ],
         }
@@ -744,6 +746,7 @@ class TestHandleRequestEventsSnapshot:
         sess_info.attention = None
         sess_info.exit_reason = None
         sess_info.ui = "terminal"
+        sess_info.activity = None
         mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
 
         ws = AsyncMock()
@@ -776,6 +779,7 @@ class TestHandleRequestEventsSnapshot:
                 "attention": None,
                 "exit_reason": None,
                 "ui": "terminal",
+                "activity": None,
             },
         ]
 
@@ -1884,6 +1888,7 @@ def _attention_session_wire(**overrides) -> dict:
         "title": "Fix the bug",
         "project_name": "proj",
         "kind": "claude",
+        "kind_label": None,
         "attention": "awaiting_permission",
         "exit_reason": None,
     }
@@ -1936,6 +1941,7 @@ class TestForwardEvents:
                 "reason": "awaiting_permission",
                 "title": "Fix the bug",
                 "project_name": "proj",
+                "kind": "claude",
             },
         }
 
@@ -1976,6 +1982,30 @@ class TestAttentionUserEvent:
                 "reason": "ended",
                 "project_name": "proj",
                 "exit_reason": "exit code 0",
+                "kind": "claude",
+            },
+        }
+
+    def test_carries_a_custom_kind_and_its_label(self):
+        # A push for a session with neither a title nor a project is named
+        # after its kind ("My Linter session"), so the label must travel too.
+        session = _attention_session_wire(
+            attention="turn_failed",
+            title=None,
+            project_name=None,
+            kind="custom_0123456789ab",
+            kind_label="My Linter",
+        )
+        ctrl = _attention_user_event({"session": session})
+
+        assert ctrl == {
+            "type": "user_event",
+            "kind": "session.attention",
+            "payload": {
+                "session_id": "s1",
+                "reason": "turn_failed",
+                "kind": "custom_0123456789ab",
+                "kind_label": "My Linter",
             },
         }
 
@@ -3989,6 +4019,7 @@ class TestHandleProxyRequestCodex:
             info.attention = None
             info.exit_reason = None
             info.ui = "terminal"
+            info.activity = None
             s.to_info = MagicMock(return_value=info)
             return s
 
@@ -4559,6 +4590,7 @@ class TestHandleProxyRequestAntigravity:
             info.attention = None
             info.exit_reason = None
             info.ui = "terminal"
+            info.activity = None
             s.to_info = MagicMock(return_value=info)
             return s
 

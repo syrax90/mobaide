@@ -232,6 +232,45 @@ def test_chat_session_over_the_relay(e2e_stack, spawn_agent, tmp_path):
     }
 
 
+async def _fail_a_turn(client, url: str, session_id: str) -> dict:
+    async with websockets.connect(client.user_events_url(), open_timeout=15) as events:
+        async with websockets.connect(url, open_timeout=15, max_size=8 * 1024 * 1024) as ws:
+            chat = ChatSocket(ws)
+            await chat.attach()
+            await chat.send("sync")
+            await chat.until(lambda: chat.snapshots > 0 and chat.status == "ready")
+
+            sent = await chat.command("prompt", text="please fail")
+            assert sent["ok"] is True
+            return (await client.attention_until(events, session_id))[-1]
+
+
+def test_failed_chat_turn_alerts_the_owner(e2e_stack, spawn_agent, tmp_path):
+    client = e2e_stack.client
+    agent = spawn_agent("e2e-chat-fail-agent", extra_env=_CHAT_AGENT_ENV)
+    agent_id = agent.agent_id
+    _wait_until(
+        lambda: any(a["agent_id"] == agent_id and a["online"] for a in client.list_agents())
+    )
+    token = client.mint_mobile_token(agent_id)
+    chat_body = {
+        "cli": "claude",
+        "ui": "chat",
+        "cwd": str(tmp_path),
+        "claude_options": {"skip_permissions": False},
+    }
+    created = client.proxy_request(agent_id, token, "POST", "api/sessions", chat_body)
+    assert created.status_code == 201, created.text
+    session_id = created.json()["session_id"]
+
+    url = f"{client.ws_base}/relay/ws/session/{agent_id}/{session_id}?token={token}"
+    alert = asyncio.run(_fail_a_turn(client, url, session_id))
+
+    assert alert["reason"] == "turn_failed"
+    assert alert["kind"] == "claude"
+    assert alert["agent_id"] == agent_id
+
+
 def test_chat_is_refused_for_a_kind_without_a_chat_agent(e2e_stack):
     client = e2e_stack.client
     token = client.mint_mobile_token(e2e_stack.agent_id)

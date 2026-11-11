@@ -4,14 +4,15 @@ import asyncio
 import sys
 import threading
 from collections.abc import Callable
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock, call, patch
 
 import pytest
 
+from mobaide.core.attention_dedupe import SharedTurnDedupe, real_cwd
 from mobaide.core.attention_gate import HookKind
 from mobaide.core.da_responder import DA1_REPLY
-from mobaide.core.models import SessionConfig, SessionEvent, SessionState
+from mobaide.core.models import SessionConfig, SessionEvent, SessionKind, SessionState
 from mobaide.core.pty_backend import PtyBackend
 from mobaide.core.session import (
     EXECUTE_CLEAR_DELAY_SECONDS,
@@ -993,6 +994,27 @@ class TestClaudeHookAttention:
         assert info.attention is None
         assert _drain_event_types(session) == ["activity"]
 
+    @pytest.mark.parametrize("report", [b"\x1b[I", b"\x1b[O"], ids=["focus-in", "focus-out"])
+    async def test_a_focus_report_mutes_a_pending_quiet_window(self, report) -> None:
+        # Only program-status alerts survive a client's focus report; the Stop
+        # window keeps the keystroke contract: muted, yet still running out
+        # into ``idle``.
+        backend = _ScriptedPtyBackend([])
+        session = _running_hook_session(60.0, backend)
+        session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1"})
+        window = session._attention_gate._timer
+        assert window is not None
+
+        await session.write(report)
+
+        assert not window.cancelled()
+        assert session._attention_gate._timer is window
+        window.cancel()
+        session._attention_gate._fire()
+        assert session.to_info().activity == "idle"
+        assert _drain_attention_events(session) == []
+        assert backend._writes == [report]
+
     async def test_prompt_submit_reopens_the_turn(self) -> None:
         # ``UserPromptSubmit`` is the one unambiguous new-turn signal. The same
         # ``prompt_id`` alerting twice is what proves the dedupe key was
@@ -1085,6 +1107,438 @@ class TestClaudeHookAttention:
 
         assert window.cancelled()
         assert _drain_attention_events(session) == []
+
+
+_BLOCKED_REPORT = b"\x1b]7501;state=blocked:kind=permission:app=codex\x07"
+_DONE_REPORT = b"\x1b]7501;state=done:app=codex\x1b\\"
+_ERROR_REPORT = b"\x1b]7501;state=error\x07"
+_WORKING_REPORT = b"\x1b]7501;state=working:app=codex\x07"
+_CLEAR_REPORT = b"\x1b]7501;state=clear:app=codex\x07"
+_STATUS_QUERY = b"\x1b]7501;?\x1b\\"
+_STATUS_REPLY = (
+    b"\x1b]7501;?:states=idle,working,done,blocked,error:kinds=permission,question,auth\x1b\\"
+)
+_CUSTOM_KIND = "custom_0123456789ab"
+# Mobaide's managed Codex launch sets the reasoning effort with ``-c``.
+_MANAGED_CODEX = ["codex", "-c", "model_reasoning_effort=high"]
+
+
+class _MutingDedupe:
+    """A shared-turn dedupe that mutes every alert it is asked about and
+    remembers each question."""
+
+    def __init__(self) -> None:
+        self.asked: list[dict[str, Any]] = []
+
+    def admit(self, **claim: Any) -> bool:
+        self.asked.append(claim)
+        return False
+
+
+def _status_config(
+    kind: SessionKind | str,
+    *,
+    attention_quiet_seconds: float = 0.0,
+    cwd: str | None = None,
+    command: list[str] | None = None,
+) -> SessionConfig:
+    return SessionConfig(
+        session_id="status-session",
+        command=command or ["does-not-run"],
+        cwd=cwd,
+        rows=24,
+        cols=80,
+        scrollback_size=100,
+        kind=kind,
+        startup_stall_seconds=0.0,
+        attention_quiet_seconds=attention_quiet_seconds,
+    )
+
+
+async def _read_script(
+    session: TerminalSession, backend: _ScriptedPtyBackend,
+) -> list[str | None]:
+    """Run the reader over ``backend``'s whole script, as a child that wrote
+    it and exited, and return the attention values raised, in order."""
+    backend.close()
+    session._state = SessionState.RUNNING
+    await session._reader_loop()
+    return [e.attention for e in _drain_attention_events(session)]
+
+
+async def _next_output(
+    session: TerminalSession, timeout: float = 2.0,
+) -> tuple[list[str | None], SessionEvent]:
+    """The next ``output`` event and the attention values queued ahead of it.
+
+    The reader hands a read's reports to the gate before it enqueues that
+    read's output, so whatever one read raised is queued in front of it.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    attention: list[str | None] = []
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise AssertionError("no output event within the timeout")
+        event = await asyncio.wait_for(session.event_queue.get(), timeout=remaining)
+        if event.event_type == "attention":
+            attention.append(event.attention)
+        elif event.event_type == "output":
+            return attention, event
+
+
+# Short enough to wait out, long enough that a client write lands inside it.
+_TEST_ALERT_SPACING_SECONDS = 0.5
+
+
+def _deferred_prompt_session(backend: _ScriptedPtyBackend) -> TerminalSession:
+    """A Codex session whose alerts are ``_TEST_ALERT_SPACING_SECONDS`` apart.
+
+    Fed ``blocked``, ``working``, ``blocked`` in one read, the first prompt
+    alerts and is answered, and the second arrives inside the gap, so it waits
+    on the gate's timer instead of alerting.
+    """
+    with patch(
+        "mobaide.core.program_status.PROGRAM_STATUS_MIN_ALERT_SPACING_SECONDS",
+        _TEST_ALERT_SPACING_SECONDS,
+    ):
+        return TerminalSession(
+            _status_config(SessionKind.CODEX), backend=cast(PtyBackend, backend),
+        )
+
+
+@pytest.mark.timeout(15)
+class TestProgramStatusAttention:
+    """Every session without Claude Code hooks raises attention from the OSC
+    7501 reports its CLI writes; Claude and Auto Scan sessions keep the hooks
+    as their only source, so one event can never alert twice. The gate's own
+    rules are covered in ``test_program_status.py``.
+    """
+
+    @pytest.mark.parametrize(
+        "kind",
+        [SessionKind.SHELL, SessionKind.CODEX, SessionKind.ANTIGRAVITY, _CUSTOM_KIND],
+        ids=["shell", "codex", "antigravity", "custom"],
+    )
+    async def test_hookless_sessions_alert_from_a_blocked_report(self, kind) -> None:
+        backend = _ScriptedPtyBackend([b"Allow? " + _BLOCKED_REPORT])
+        session = TerminalSession(_status_config(kind), backend=cast(PtyBackend, backend))
+
+        assert await _read_script(session, backend) == ["awaiting_permission"]
+        assert session.to_info().attention == "awaiting_permission"
+
+    @pytest.mark.parametrize(
+        ("report", "reason"),
+        [(_DONE_REPORT, "turn_finished"), (_ERROR_REPORT, "turn_failed")],
+    )
+    async def test_turn_end_reports_alert(self, report, reason) -> None:
+        backend = _ScriptedPtyBackend([report])
+        session = TerminalSession(
+            _status_config(SessionKind.SHELL), backend=cast(PtyBackend, backend),
+        )
+
+        assert await _read_script(session, backend) == [reason]
+
+    @pytest.mark.parametrize(
+        "kind", [SessionKind.CLAUDE, SessionKind.AUTO_SCAN], ids=["claude", "auto_scan"],
+    )
+    async def test_hook_driven_sessions_ignore_reports(self, kind) -> None:
+        # Claude Code reports through OSC 7501 too once a terminal answers its
+        # query; listening here as well would alert every turn twice.
+        backend = _ScriptedPtyBackend([_BLOCKED_REPORT + _DONE_REPORT + _ERROR_REPORT])
+        session = TerminalSession(_status_config(kind), backend=cast(PtyBackend, backend))
+
+        assert await _read_script(session, backend) == []
+        assert session.to_info().attention is None
+
+    async def test_the_support_query_is_answered_before_the_da_reply(self) -> None:
+        # agy sends the query right before DA1 and reads a DA1 reply that
+        # arrives first as "unsupported".
+        backend = _ScriptedPtyBackend([b"a" + _STATUS_QUERY + b"\x1b[c" + b"b"])
+        session = TerminalSession(
+            _status_config(SessionKind.ANTIGRAVITY), backend=cast(PtyBackend, backend),
+        )
+        await session.start()
+        try:
+            _, event = await _next_output(session)
+            assert event.data == b"ab"
+
+            await _wait_for_writes(backend, 1)
+            assert b"".join(backend._writes) == _STATUS_REPLY + DA1_REPLY
+            # A replayed query would make a client emulator answer it again.
+            assert session.get_ring() == b"ab"
+        finally:
+            await session.stop()
+
+    async def test_a_claude_session_leaves_the_support_query_unanswered(self) -> None:
+        # Unanswered, Claude Code never starts reporting at all.
+        backend = _ScriptedPtyBackend([b"a" + _STATUS_QUERY + b"\x1b[c" + b"b"])
+        session = TerminalSession(
+            _status_config(SessionKind.CLAUDE), backend=cast(PtyBackend, backend),
+        )
+        await session.start()
+        try:
+            _, event = await _next_output(session)
+            assert event.data == b"a" + _STATUS_QUERY + b"b"
+
+            await _wait_for_writes(backend, 1)
+            assert b"".join(backend._writes) == DA1_REPLY
+        finally:
+            await session.stop()
+
+    @pytest.mark.parametrize("cut", range(1, len(_DONE_REPORT)))
+    async def test_a_report_split_across_reads_alerts_once(self, cut) -> None:
+        # The query responder holds a fragment that might become a query
+        # before the tap sees the stream; the two carries must not lose or
+        # double a report between them.
+        backend = _ScriptedPtyBackend([_DONE_REPORT[:cut], _DONE_REPORT[cut:]])
+        session = TerminalSession(
+            _status_config(SessionKind.CODEX), backend=cast(PtyBackend, backend),
+        )
+
+        assert await _read_script(session, backend) == ["turn_finished"]
+
+    @pytest.mark.parametrize(
+        "report", [_WORKING_REPORT, _CLEAR_REPORT], ids=["answered", "program-exited"],
+    )
+    async def test_a_report_that_ends_the_prompt_drops_the_permission_badge(
+        self, report,
+    ) -> None:
+        # The prompt was answered on the PC, or the program exited with it
+        # still open: the phone's badge must go too.
+        backend = _ScriptedPtyBackend([_BLOCKED_REPORT, report])
+        session = TerminalSession(
+            _status_config(SessionKind.CODEX), backend=cast(PtyBackend, backend),
+        )
+
+        assert await _read_script(session, backend) == ["awaiting_permission", None]
+        assert session.to_info().attention is None
+
+    async def test_a_replayed_log_of_prompt_flips_alerts_once(self) -> None:
+        # ``cat`` of a recorded session replays every report in one burst.
+        backend = _ScriptedPtyBackend([(_BLOCKED_REPORT + _WORKING_REPORT) * 1000])
+        session = TerminalSession(
+            _status_config(SessionKind.CODEX), backend=cast(PtyBackend, backend),
+        )
+
+        assert await _read_script(session, backend) == ["awaiting_permission", None]
+        assert session._status_gate._timer is None
+
+    async def test_client_input_cancels_a_pending_done_window(self) -> None:
+        backend = _ScriptedPtyBackend([_DONE_REPORT])
+        session = TerminalSession(
+            _status_config(SessionKind.CODEX, attention_quiet_seconds=60.0),
+            backend=cast(PtyBackend, backend),
+        )
+        await session.start()
+        try:
+            assert (await _next_output(session))[0] == []
+            window = session._status_gate._timer
+            assert window is not None
+
+            await session.write(b"\x1b[A")
+
+            assert window.cancelled()
+            assert _drain_attention_events(session) == []
+        finally:
+            await session.stop()
+
+    @pytest.mark.parametrize("report", [b"\x1b[I", b"\x1b[O"], ids=["focus-in", "focus-out"])
+    async def test_a_focus_report_keeps_a_prompt_waiting_out_the_gap(self, report) -> None:
+        # A client emulator writes one on a tab switch or a dismissed keyboard.
+        # The CLI does not repeat an identical ``blocked``, so a dropped wait
+        # would leave the prompt unannounced everywhere.
+        backend = _ScriptedPtyBackend([_BLOCKED_REPORT + _WORKING_REPORT + _BLOCKED_REPORT])
+        session = _deferred_prompt_session(backend)
+        await session.start()
+        try:
+            assert (await _next_output(session))[0] == ["awaiting_permission", None]
+            deferred = session._status_gate._timer
+            assert deferred is not None
+
+            await session.write(report)
+
+            assert not deferred.cancelled()
+            assert session._status_gate._timer is deferred
+            event = await asyncio.wait_for(
+                session.event_queue.get(), timeout=_TEST_ALERT_SPACING_SECONDS + 2.0,
+            )
+            assert event.event_type == "attention"
+            assert event.attention == "awaiting_permission"
+            assert backend._writes == [report]
+        finally:
+            await session.stop(force=True)
+
+    @pytest.mark.parametrize(
+        "data", [b"x", b"\x1b[Ox"], ids=["keystroke", "focus-report-with-a-keystroke"],
+    )
+    async def test_client_input_drops_a_prompt_waiting_out_the_gap(self, data) -> None:
+        backend = _ScriptedPtyBackend([_BLOCKED_REPORT + _WORKING_REPORT + _BLOCKED_REPORT])
+        session = _deferred_prompt_session(backend)
+        await session.start()
+        try:
+            assert (await _next_output(session))[0] == ["awaiting_permission", None]
+            deferred = session._status_gate._timer
+            assert deferred is not None
+
+            await session.write(data)
+
+            assert deferred.cancelled()
+            assert session._status_gate._timer is None
+            assert _drain_attention_events(session) == []
+            assert backend._writes == [data]
+        finally:
+            await session.stop(force=True)
+
+    async def test_stop_cancels_a_pending_done_window(self) -> None:
+        backend = _ScriptedPtyBackend([_DONE_REPORT])
+        session = TerminalSession(
+            _status_config(SessionKind.CODEX, attention_quiet_seconds=60.0),
+            backend=cast(PtyBackend, backend),
+        )
+        await session.start()
+        await _next_output(session)
+        window = session._status_gate._timer
+        assert window is not None
+
+        await session.stop(force=True)
+
+        assert window.cancelled()
+        assert _drain_attention_events(session) == []
+
+    @pytest.mark.parametrize(
+        ("kind", "report"),
+        [
+            (SessionKind.SHELL, _DONE_REPORT),
+            (SessionKind.CODEX, b"\x1b]7501;state=done\x07"),
+        ],
+        ids=["app-from-the-report", "app-from-the-kind"],
+    )
+    async def test_a_turn_a_chat_already_announced_stays_quiet(
+        self, tmp_path, kind, report,
+    ) -> None:
+        # A Codex chat live-attached to this TUI's thread alerted the same
+        # turn a moment ago.
+        dedupe = SharedTurnDedupe()
+        assert dedupe.admit(
+            session_id="chat-1", ui="chat", app="codex",
+            cwd=real_cwd(str(tmp_path)), reason="turn_finished",
+        )
+        backend = _ScriptedPtyBackend([report])
+        session = TerminalSession(
+            _status_config(kind, cwd=str(tmp_path)),
+            backend=cast(PtyBackend, backend),
+            attention_dedupe=dedupe,
+        )
+
+        assert await _read_script(session, backend) == []
+        assert session.to_info().attention is None
+
+    async def test_a_chat_in_another_folder_does_not_quiet_it(self, tmp_path) -> None:
+        other = tmp_path / "other"
+        other.mkdir()
+        dedupe = SharedTurnDedupe()
+        dedupe.admit(
+            session_id="chat-1", ui="chat", app="codex",
+            cwd=real_cwd(str(other)), reason="turn_finished",
+        )
+        backend = _ScriptedPtyBackend([_DONE_REPORT])
+        session = TerminalSession(
+            _status_config(SessionKind.CODEX, cwd=str(tmp_path)),
+            backend=cast(PtyBackend, backend),
+            attention_dedupe=dedupe,
+        )
+
+        assert await _read_script(session, backend) == ["turn_finished"]
+
+    async def test_a_codex_tui_on_its_own_app_server_is_never_quieted(self, tmp_path) -> None:
+        # ``-c`` overrides give the TUI a private app server: the chat that
+        # alerted in this folder cannot be on its thread.
+        dedupe = SharedTurnDedupe()
+        assert dedupe.admit(
+            session_id="chat-1", ui="chat", app="codex",
+            cwd=real_cwd(str(tmp_path)), reason="turn_finished",
+        )
+        backend = _ScriptedPtyBackend([_DONE_REPORT])
+        session = TerminalSession(
+            _status_config(SessionKind.CODEX, cwd=str(tmp_path), command=_MANAGED_CODEX),
+            backend=cast(PtyBackend, backend),
+            attention_dedupe=dedupe,
+        )
+
+        assert await _read_script(session, backend) == ["turn_finished"]
+
+    async def test_a_codex_tui_on_its_own_app_server_leaves_no_claim(self, tmp_path) -> None:
+        # Otherwise its alert would mute a chat in the folder on another thread.
+        dedupe = SharedTurnDedupe()
+        backend = _ScriptedPtyBackend([_DONE_REPORT])
+        session = TerminalSession(
+            _status_config(SessionKind.CODEX, cwd=str(tmp_path), command=_MANAGED_CODEX),
+            backend=cast(PtyBackend, backend),
+            attention_dedupe=dedupe,
+        )
+
+        assert await _read_script(session, backend) == ["turn_finished"]
+        assert dedupe.admit(
+            session_id="chat-1", ui="chat", app="codex",
+            cwd=real_cwd(str(tmp_path)), reason="turn_finished",
+        )
+
+    @pytest.mark.parametrize(
+        "kind", [SessionKind.SHELL, _CUSTOM_KIND], ids=["shell", "custom"],
+    )
+    async def test_a_dash_c_outside_a_managed_codex_launch_still_pairs(
+        self, tmp_path, kind,
+    ) -> None:
+        # ``sh -c codex`` can run the TUI on the shared daemon.
+        dedupe = SharedTurnDedupe()
+        assert dedupe.admit(
+            session_id="chat-1", ui="chat", app="codex",
+            cwd=real_cwd(str(tmp_path)), reason="turn_finished",
+        )
+        backend = _ScriptedPtyBackend([_DONE_REPORT])
+        session = TerminalSession(
+            _status_config(kind, cwd=str(tmp_path), command=["/bin/sh", "-c", "codex"]),
+            backend=cast(PtyBackend, backend),
+            attention_dedupe=dedupe,
+        )
+
+        assert await _read_script(session, backend) == []
+
+    @pytest.mark.parametrize(
+        ("kind", "report"),
+        [
+            (SessionKind.ANTIGRAVITY, b"\x1b]7501;state=done\x07"),
+            (SessionKind.SHELL, b"\x1b]7501;state=done:app=antigravity\x07"),
+            (SessionKind.SHELL, b"\x1b]7501;state=done\x07"),
+            (_CUSTOM_KIND, b"\x1b]7501;state=done\x07"),
+        ],
+        ids=["antigravity", "agy-in-a-shell", "shell", "custom"],
+    )
+    async def test_a_cli_without_shared_threads_never_consults_the_dedupe(
+        self, tmp_path, kind, report,
+    ) -> None:
+        # Only Codex threads can be shared; every other session alerts on its
+        # own and must not resolve its folder on the event loop for nothing.
+        dedupe = _MutingDedupe()
+        resolved: list[str | None] = []
+
+        def recording_real_cwd(cwd: str | None) -> str | None:
+            resolved.append(cwd)
+            return cwd
+
+        backend = _ScriptedPtyBackend([report])
+        session = TerminalSession(
+            _status_config(kind, cwd=str(tmp_path)),
+            backend=cast(PtyBackend, backend),
+            attention_dedupe=cast(SharedTurnDedupe, dedupe),
+        )
+
+        with patch("mobaide.core.session.real_cwd", recording_real_cwd):
+            assert await _read_script(session, backend) == ["turn_finished"]
+        assert dedupe.asked == []
+        assert resolved == []
 
 
 @pytest.mark.timeout(15)

@@ -92,12 +92,13 @@ data class SessionResponse(
     // so lists keep a meaningful label without a live registry lookup.
     val kind_label: String? = null,
     // Attention state (proto-v4): "awaiting_permission" |
-    // "awaiting_os_permission" | "turn_finished" | "ended" | null.
+    // "awaiting_os_permission" | "turn_finished" | "turn_failed" | "ended" | null.
     // "awaiting_os_permission" is the agent's startup-stall heuristic (the
     // session is most likely blocked on a macOS file-access prompt on the
-    // host); the rest are Claude Code hook-driven. Stamped on every session
-    // snapshot so a reconnecting client recovers the "awaiting you" state after
-    // a missed one-shot session.attention event. exit_reason is the
+    // host); the rest come from Claude Code hooks, CLI status reports or the
+    // chat session. Stamped on every session snapshot so a reconnecting
+    // client recovers the "awaiting you" state after a missed one-shot
+    // session.attention event. exit_reason is the
     // human-readable end cause, set when a session ends.
     val attention: String? = null,
     val exit_reason: String? = null,

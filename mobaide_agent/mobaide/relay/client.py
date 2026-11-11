@@ -390,7 +390,7 @@ def _attention_user_event(payload: object) -> dict[str, object] | None:
     if not isinstance(reason, str) or not reason:
         return None
     slim: dict[str, object] = {"session_id": session_id, "reason": reason}
-    for key in ("title", "project_name", "exit_reason"):
+    for key in ("title", "project_name", "exit_reason", "kind", "kind_label"):
         value = session.get(key)
         if value is not None:
             slim[key] = value

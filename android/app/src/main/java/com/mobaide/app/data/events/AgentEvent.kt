@@ -62,7 +62,7 @@ sealed class AgentEvent {
 
     /** One-shot trigger (proto-v4): the session needs the user. The reason is
      *  in [SessionResponse.attention] (awaiting_permission | awaiting_os_permission
-     *  | turn_finished | ended); ended also carries [SessionResponse.exit_reason].
+     *  | turn_finished | turn_failed | ended); ended also carries [SessionResponse.exit_reason].
      *  The foreground service turns this into a system notification. State is also
      *  mirrored on [SessionUpdated]/snapshots for clients that miss it. */
     data class SessionAttention(val session: SessionResponse) : AgentEvent()

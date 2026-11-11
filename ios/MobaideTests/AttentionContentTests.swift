@@ -31,6 +31,46 @@ final class AttentionContentTests: XCTestCase {
         XCTAssertEqual(content?.body, "Bug fix finished its turn — tap to continue")
     }
 
+    func testTurnFailed() {
+        let content = AttentionContent.content(for: makeSessionResponse(attention: "turn_failed", title: "Bug fix"))
+        XCTAssertEqual(content?.title, "Turn failed")
+        XCTAssertEqual(content?.body, "Bug fix hit an error — tap to see what happened")
+    }
+
+    func testUntitledSessionIsNamedAfterItsKind() {
+        let cases: [(SessionKind, String?, String)] = [
+            (.claude, nil, "Claude session"),
+            (.codex, nil, "Codex session"),
+            (.antigravity, nil, "Antigravity session"),
+            (.autoScan, nil, "Auto Scan session"),
+            (.shell, nil, "Terminal session"),
+            (.custom("custom_0123456789ab"), "My Linter", "My Linter session"),
+            (.custom("custom_0123456789ab"), "  ", "Agent session"),
+            (.custom("custom_0123456789ab"), nil, "Agent session"),
+        ]
+        for (kind, kindLabel, expected) in cases {
+            let session = makeSessionResponse(
+                attention: "turn_finished", title: " ", projectName: "", kind: kind, kindLabel: kindLabel
+            )
+            XCTAssertEqual(
+                AttentionContent.content(for: session)?.body,
+                "\(expected) finished its turn — tap to continue",
+                "kind \(kind.wireName)"
+            )
+        }
+    }
+
+    func testTitleAndProjectStillWinOverTheKind() {
+        XCTAssertEqual(
+            AttentionContent.label(for: makeSessionResponse(title: "My Title", projectName: "proj", kind: .codex)),
+            "My Title"
+        )
+        XCTAssertEqual(
+            AttentionContent.label(for: makeSessionResponse(title: nil, projectName: "proj", kind: .codex)),
+            "proj"
+        )
+    }
+
     func testEndedWithReason() {
         let content = AttentionContent.content(for: makeSessionResponse(attention: "ended", title: "Bug fix", exitReason: "completed"))
         XCTAssertEqual(content?.title, "Session ended (completed)")

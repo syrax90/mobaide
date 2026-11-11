@@ -298,10 +298,10 @@ Android and iOS follow in CLA-229 / CLA-230.
 
 **Cards** follow iOS and Android: state dot, title, kind label, cwd, and the
 attention chip (`awaiting_permission` → "Needs permission", `turn_finished` →
-"Ready", `ended` → "Ended"). A running session whose `activity` is `working`
-(and with no pending permission prompt) shows an animated 2×2 accent square
-instead of the state dot and a "Working" chip, which outranks "Ready". The
-sessions panel rows do the same. Unknown kinds fall back to
+"Ready", `turn_failed` → "Failed", `ended` → "Ended"). A running session whose
+`activity` is `working` (and with no pending permission prompt) shows an
+animated 2×2 accent square instead of the state dot and a "Working" chip,
+which outranks "Ready". The sessions panel rows do the same. Unknown kinds fall back to
 `kind_label`, then the live custom-type registry, then "Custom" — never the
 raw wire token. Stopping uses iOS's Stop / Force Stop / Cancel confirmation.
 
@@ -1410,7 +1410,7 @@ a closed tab shows nothing, because there is no background delivery to reconcile
 against.
 
 It listens on the **user-events** channel, not the agent bus. That payload is
-the slim `{session_id, reason, title?, project_name?, exit_reason?, agent_id}`
+the slim `{session_id, reason, title?, project_name?, exit_reason?, kind?, kind_label?, agent_id}`
 and the channel is account-wide, so a browser — the first client that
 routinely holds several agents — is alerted about all of them rather than
 only the one whose list is open. Consuming both channels would double-post.
@@ -1424,6 +1424,11 @@ re-raising an alert from a latched field.
 
 `notifications/attentionContent.ts` is a byte-for-byte port of the same map iOS,
 Android and `central_server/push/content.py` carry, em dashes included.
+One exception: push text never names a custom agent type. Custom kinds read
+"Agent session" in APNs pushes, because the privacy policy lists only the CLI
+title and project name as alert content. Local notifications use the custom name.
+With no title and no project, the label names the kind ("Codex session",
+"Terminal session"); no `kind` reads "Claude session".
 
 Delivery follows the rule both mobile clients share — never alert about the
 session already on screen — with the split a browser makes possible: a hidden
@@ -1797,7 +1802,8 @@ viewport; a phone has neither:
 
 WEB-07's two divergences are **not** exempt and are tracked accordingly:
 recording the last-used session on open as well as on create is a behaviour
-change mobile has to follow (CLA-229 / CLA-230).
+change mobile has to follow (CLA-229 / CLA-230), and the session-card
+attention chip is iOS parity that Android already renders, so it is no longer a divergence.
 
 WEB-10's divergences are platform-convention exempt too: no reconcile and no
 seen-store (a browser has no background delivery to reconcile against); alerting

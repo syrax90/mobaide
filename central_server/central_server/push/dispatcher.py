@@ -95,6 +95,7 @@ class PushDispatcher:
             payload.get("title"),
             payload.get("project_name"),
             payload.get("exit_reason"),
+            payload.get("kind"),
         )
         if content is None:
             return

@@ -23,7 +23,14 @@ from typing import Any
 import orjson
 
 from mobaide import __version__
-from mobaide.core.models import SessionConfig, SessionEvent, SessionInfo, SessionState
+from mobaide.core.attention_dedupe import SharedTurnDedupe, real_cwd
+from mobaide.core.models import (
+    SessionConfig,
+    SessionEvent,
+    SessionInfo,
+    SessionKind,
+    SessionState,
+)
 
 from . import normalize as nz
 from .agents import ChatLaunchPlan, ConfigIntent
@@ -127,9 +134,12 @@ class ChatSession:
         *,
         agent_title: str,
         load_session_id: str | None = None,
+        attention_dedupe: SharedTurnDedupe | None = None,
     ) -> None:
         self._config = config
         self._plan = plan
+        self._attention_dedupe = attention_dedupe
+        self._real_cwd: str | None = None
         self._agent_title = agent_title
         self._load_session_id = load_session_id
         self._state = SessionState.STARTING
@@ -898,6 +908,9 @@ class ChatSession:
         tl = self._timeline
         stop_reason: str | None = None
         reload = False
+        # The agent answered the prompt with an error (rate limit, auth,
+        # overload): the user has to act, the same as after a finished turn.
+        failed = False
         try:
             conn = self._require_conn()
             if self._presence_hold is None and self._plan.presence is not None:
@@ -926,6 +939,7 @@ class ChatSession:
         except ChatCommandError as exc:
             tl.upsert({"id": self._next_id("err"), "type": "error", "text": str(exc)})
         except AcpRpcError as exc:
+            failed = True
             tl.upsert(
                 {"id": self._next_id("err"), "type": "error", "text": self._describe_rpc_error(exc)}
             )
@@ -966,13 +980,19 @@ class ChatSession:
             tl.patch_state(status="ready", turn_started_at=None, cancelling=False)
             self._start_next_prompt()
             return
+        # An error answering the user's own Stop is not news to them.
+        cancelling = bool(tl.state.get("cancelling"))
         tl.patch_state(
             status="ready" if alive else "error",
             turn_started_at=None,
             cancelling=False,
             urgent=True,
         )
-        if alive and stop_reason not in (None, "cancelled") and not self._stopping:
+        if not alive or self._stopping:
+            return
+        if failed and not cancelling:
+            self._set_attention("turn_failed")
+        elif stop_reason not in (None, "cancelled"):
             self._set_attention("turn_finished")
 
     async def _reload_conversation(self) -> None:
@@ -1727,11 +1747,37 @@ class ChatSession:
         changed = attention != self._attention or (
             exit_reason is not None and exit_reason != self._exit_reason
         )
+        if changed and not self._admit_attention(attention):
+            return
         self._attention = attention
         if exit_reason is not None:
             self._exit_reason = exit_reason
         if changed:
             self._put_event(SessionEvent("attention", self.session_id, attention=attention))
+
+    def _admit_attention(self, attention: str) -> bool:
+        """``False`` when a terminal session showing the same live thread
+        already alerted this event (see ``core.attention_dedupe``). A chat on a
+        private app server shares its thread with no one."""
+        if self._attention_dedupe is None or not self._plan.shared_host:
+            return True
+        if self._real_cwd is None:
+            self._real_cwd = real_cwd(self._plan.cwd)
+        kind = self._config.kind
+        admitted = self._attention_dedupe.admit(
+            session_id=self.session_id,
+            ui="chat",
+            app=kind.value if isinstance(kind, SessionKind) else kind,
+            cwd=self._real_cwd,
+            reason=attention,
+        )
+        if not admitted:
+            logger.info(
+                "chat.attention_shared session=%s reason=%s: already alerted by the terminal",
+                self.session_id,
+                attention,
+            )
+        return admitted
 
     def _clear_attention(self) -> None:
         if self._attention is None:

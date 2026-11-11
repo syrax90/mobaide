@@ -210,6 +210,8 @@ enum SessionDisplay {
             return ("Needs permission", .warning)
         case "turn_finished":
             return ("Ready", .ok)
+        case "turn_failed":
+            return ("Failed", .warning)
         case "ended":
             return ("Ended", .muted)
         default:

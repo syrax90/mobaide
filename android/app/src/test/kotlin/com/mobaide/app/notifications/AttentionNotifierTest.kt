@@ -5,6 +5,7 @@ import android.app.Application
 import android.app.Notification
 import android.app.NotificationManager
 import androidx.test.core.app.ApplicationProvider
+import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -40,12 +41,16 @@ class AttentionNotifierTest {
         title: String? = null,
         projectName: String? = null,
         exitReason: String? = null,
+        kind: SessionKind = SessionKind.Claude,
+        kindLabel: String? = null,
     ) = SessionResponse(
         session_id = "s1",
         state = "running",
         created_at = "2026-04-11T10:00:00Z",
         title = title,
         project_name = projectName,
+        kind = kind,
+        kind_label = kindLabel,
         attention = attention,
         exit_reason = exitReason,
     )
@@ -98,6 +103,61 @@ class AttentionNotifierTest {
 
         val body = lastNotification().extras.getString(Notification.EXTRA_TEXT).orEmpty()
         assertTrue(body.startsWith("Claude session is paused"))
+    }
+
+    @Test
+    fun expandedNotification_showsTheWholeBody() {
+        notifier.notify(session(attention = "awaiting_os_permission", title = "deploy"))
+
+        assertEquals(
+            "deploy is paused — your Mac is asking to allow file access. Approve it on the Mac to continue.",
+            lastNotification().extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString(),
+        )
+    }
+
+    @Test
+    fun turnFailed_usesErrorCopy() {
+        notifier.notify(session(attention = "turn_failed", title = "deploy"))
+
+        val n = lastNotification()
+        assertEquals("Turn failed", n.extras.getString(Notification.EXTRA_TITLE))
+        assertEquals(
+            "deploy hit an error — tap to see what happened",
+            n.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
+    @Test
+    fun untitledSession_isNamedAfterItsKind() {
+        val custom = SessionKind.Custom("custom_0123456789ab")
+        val cases = listOf(
+            session(attention = "turn_finished", kind = SessionKind.Claude) to "Claude session",
+            session(attention = "turn_finished", kind = SessionKind.Codex) to "Codex session",
+            session(attention = "turn_finished", kind = SessionKind.Antigravity) to "Antigravity session",
+            session(attention = "turn_finished", kind = SessionKind.AutoScan) to "Auto Scan session",
+            session(attention = "turn_finished", kind = SessionKind.Shell) to "Terminal session",
+            session(attention = "turn_finished", kind = custom, kindLabel = "My Linter") to "My Linter session",
+            session(attention = "turn_finished", kind = custom, kindLabel = "  ") to "Agent session",
+            session(attention = "turn_finished", kind = custom) to "Agent session",
+        )
+        for ((untitled, label) in cases) {
+            notifier.notify(untitled)
+            assertEquals(
+                label,
+                "$label finished its turn — tap to continue",
+                lastNotification().extras.getString(Notification.EXTRA_TEXT),
+            )
+        }
+    }
+
+    @Test
+    fun titleAndProject_stillWinOverTheKind() {
+        notifier.notify(
+            session(attention = "turn_failed", projectName = "mobaide", kind = SessionKind.Codex),
+        )
+
+        val body = lastNotification().extras.getString(Notification.EXTRA_TEXT).orEmpty()
+        assertTrue(body.startsWith("mobaide hit an error"))
     }
 
     @Test

@@ -148,6 +148,7 @@ class SessionDisplayTest {
             sessionAttention("awaiting_os_permission"),
         )
         assertEquals(SessionAttention("Ready", AttentionTone.Ok), sessionAttention("turn_finished"))
+        assertEquals(SessionAttention("Failed", AttentionTone.Warning), sessionAttention("turn_failed"))
         assertEquals(SessionAttention("Ended", AttentionTone.Muted), sessionAttention("ended"))
     }
 

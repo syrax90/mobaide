@@ -64,6 +64,7 @@ data class SessionAttention(val text: String, val tone: AttentionTone)
 fun sessionAttention(value: String?): SessionAttention? = when (value) {
     "awaiting_permission", "awaiting_os_permission" -> SessionAttention("Needs permission", AttentionTone.Warning)
     "turn_finished" -> SessionAttention("Ready", AttentionTone.Ok)
+    "turn_failed" -> SessionAttention("Failed", AttentionTone.Warning)
     "ended" -> SessionAttention("Ended", AttentionTone.Muted)
     else -> null
 }

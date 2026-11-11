@@ -11,6 +11,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.mobaide.app.MainActivity
 import com.mobaide.app.R
+import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -47,6 +48,9 @@ class AttentionNotifier @Inject constructor(
             .setSmallIcon(R.drawable.ic_stat_notification)
             .setContentTitle(content.first)
             .setContentText(content.second)
+            // Collapsed, Android shows one line of body; the expanded form
+            // keeps the end of a long one ("Approve it on the Mac …").
+            .setStyle(NotificationCompat.BigTextStyle().bigText(content.second))
             .setAutoCancel(true)
             .setContentIntent(pending)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -67,12 +71,13 @@ class AttentionNotifier @Inject constructor(
     private fun contentFor(session: SessionResponse): Pair<String, String>? {
         val label = session.title?.takeIf { it.isNotBlank() }
             ?: session.project_name?.takeIf { it.isNotBlank() }
-            ?: "Claude session"
+            ?: fallbackLabel(session)
         return when (session.attention) {
             "awaiting_permission" -> "Permission needed" to "$label is waiting for your approval"
             "awaiting_os_permission" -> "Action needed on your Mac" to
                 "$label is paused — your Mac is asking to allow file access. Approve it on the Mac to continue."
             "turn_finished" -> "Your move" to "$label finished its turn — tap to continue"
+            "turn_failed" -> "Turn failed" to "$label hit an error — tap to see what happened"
             "ended" -> {
                 val reason = session.exit_reason
                     ?.takeIf { it.isNotBlank() }
@@ -82,6 +87,18 @@ class AttentionNotifier @Inject constructor(
             }
             else -> null
         }
+    }
+
+    /** The label for a session with neither a title nor a project. */
+    private fun fallbackLabel(session: SessionResponse): String = when (session.kind) {
+        SessionKind.Claude -> "Claude session"
+        SessionKind.Codex -> "Codex session"
+        SessionKind.Antigravity -> "Antigravity session"
+        SessionKind.AutoScan -> "Auto Scan session"
+        SessionKind.Shell -> "Terminal session"
+        is SessionKind.Custom -> session.kind_label?.takeIf { it.isNotBlank() }
+            ?.let { "$it session" }
+            ?: "Agent session"
     }
 
     private fun hasPermission(): Boolean {

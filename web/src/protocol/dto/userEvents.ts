@@ -56,6 +56,8 @@ export const sessionAttentionSchema = z.looseObject({
   title: optionalWireString(),
   project_name: optionalWireString(),
   exit_reason: optionalWireString(),
+  kind: optionalWireString(),
+  kind_label: optionalWireString(),
   agent_id: optionalWireString(),
 });
 

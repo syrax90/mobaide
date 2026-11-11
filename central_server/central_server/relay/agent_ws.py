@@ -429,7 +429,7 @@ async def _handle_control_json(
 _AGENT_USER_EVENT_KINDS = frozenset({"session.attention"})
 
 # Optional attention payload fields relayed verbatim when present.
-_ATTENTION_OPTIONAL_FIELDS = ("title", "project_name", "exit_reason")
+_ATTENTION_OPTIONAL_FIELDS = ("title", "project_name", "exit_reason", "kind", "kind_label")
 
 
 def _handle_user_event(websocket, agent_id, ctrl, routing) -> None:
