@@ -27,8 +27,44 @@ RECENT_EVENTS_MAX_BYTES = 4 * 1024 * 1024
 BATCH_FLUSH_BYTES = 512 * 1024
 REPLAY_SLACK_BYTES = 64 * 1024
 FLUSH_INTERVAL = 0.06
+STEP_ITEM_TYPES = frozenset({"tool", "thought"})
+LIVE_TOOL_STATUSES = frozenset({"pending", "in_progress"})
 
 FrameSink = Callable[[bytes], None]
+
+
+def _is_step(item: dict[str, Any]) -> bool:
+    return item.get("type") in STEP_ITEM_TYPES
+
+
+def trim_plan(items: list[dict[str, Any]], sizes: list[int], budget: int) -> tuple[list[bool], bool]:
+    """Which items to keep so their sizes fit ``budget``.
+
+    Finished steps go first, oldest first, then items from the front; the newest
+    item and running tools stay (a dropped tool's next update would re-add it).
+    Returns the keep mask and whether anything but a step was dropped.
+    """
+    keep = [True] * len(sizes)
+    total = sum(sizes)
+    if total <= budget:
+        return keep, False
+    last = len(sizes) - 1
+    for i in range(last):
+        if total <= budget:
+            break
+        if _is_step(items[i]) and items[i].get("status") not in LIVE_TOOL_STATUSES:
+            keep[i] = False
+            total -= sizes[i]
+    dropped_messages = False
+    for i in range(last):
+        if total <= budget:
+            break
+        if keep[i]:
+            keep[i] = False
+            total -= sizes[i]
+            if not _is_step(items[i]):
+                dropped_messages = True
+    return keep, dropped_messages
 
 
 def default_state() -> dict[str, Any]:
@@ -159,17 +195,19 @@ class ChatTimeline:
 
     def snapshot_frame(self) -> bytes:
         self.flush()
-        items: list[bytes] = []
-        size = 0
-        truncated = self._dropped_old
-        for item in reversed(list(self._items.values())):
-            encoded = orjson.dumps(item)
-            if items and size + len(encoded) > self._snapshot_max:
-                truncated = True
-                break
-            items.append(encoded)
-            size += len(encoded)
-        items.reverse()
+        held = list(self._items.values())
+        # Plan on the cached sizes (they undercount appended non-ASCII text),
+        # then re-check the encoded kept items against the real budget.
+        keep, dropped_messages = trim_plan(
+            held, [self._sizes.get(item["id"], 0) for item in held], self._snapshot_max
+        )
+        held = [item for item, kept in zip(held, keep) if kept]
+        items = [orjson.dumps(item) for item in held]
+        if sum(map(len, items)) > self._snapshot_max:
+            keep, dropped_more = trim_plan(held, [len(e) for e in items], self._snapshot_max)
+            items = [e for e, kept in zip(items, keep) if kept]
+            dropped_messages = dropped_messages or dropped_more
+        truncated = self._dropped_old or dropped_messages
         head = orjson.dumps(
             {
                 "t": "snapshot",
@@ -261,10 +299,21 @@ class ChatTimeline:
         self._sizes[item_id] = size
 
     def _evict_memory(self) -> None:
-        while self._total_bytes > self._memory_max and len(self._items) > 1:
-            oldest = next(iter(self._items))
-            self._items.pop(oldest)
-            self._total_bytes -= self._sizes.pop(oldest, 0)
+        if self._total_bytes <= self._memory_max:
+            return
+        ids = list(self._items)
+        # Trimming to a low-water mark spreads each full pass over the next
+        # quarter of the budget instead of repeating it on every flush.
+        keep, dropped_messages = trim_plan(
+            [self._items[item_id] for item_id in ids],
+            [self._sizes.get(item_id, 0) for item_id in ids],
+            self._memory_max * 3 // 4,
+        )
+        for item_id, kept in zip(ids, keep):
+            if not kept:
+                self._items.pop(item_id)
+                self._total_bytes -= self._sizes.pop(item_id, 0)
+        if dropped_messages:
             self._dropped_old = True
 
     def _schedule(self, urgent: bool) -> None:

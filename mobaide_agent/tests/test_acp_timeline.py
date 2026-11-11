@@ -1,6 +1,6 @@
 """Tests for the chat timeline: batching inside one frame, event sequence
 numbers, removed items, replay of missed events versus a snapshot, and the
-memory bounds.
+memory bounds, which drop old steps (tool calls, thoughts) before messages.
 
 Async tests use a flush interval that never fires and call ``flush()``
 themselves, so nothing waits on the batching timer. Sync tests run with no
@@ -11,7 +11,7 @@ from __future__ import annotations
 import orjson
 
 from mobaide.acp import timeline as timeline_module
-from mobaide.acp.timeline import ChatTimeline
+from mobaide.acp.timeline import ChatTimeline, trim_plan
 
 NEVER = 3600.0
 
@@ -24,6 +24,22 @@ def _make(**kwargs) -> tuple[ChatTimeline, list[dict]]:
 
 def _agent(item_id: str, text: str = "") -> dict:
     return {"id": item_id, "type": "agent", "text": text}
+
+
+def _user(item_id: str, text: str = "") -> dict:
+    return {"id": item_id, "type": "user", "text": text}
+
+
+def _tool(item_id: str, output: str = "", status: str = "completed") -> dict:
+    return {"id": item_id, "type": "tool", "status": status, "output": output}
+
+
+def _thought(item_id: str, text: str = "") -> dict:
+    return {"id": item_id, "type": "thought", "text": text}
+
+
+def _size(item: dict) -> int:
+    return len(orjson.dumps(item))
 
 
 class TestBatching:
@@ -292,15 +308,25 @@ class TestReplayAndSnapshot:
 
 
 class TestMemoryBoundAndReset:
-    def test_oldest_items_are_dropped_over_the_memory_cap(self):
+    def test_memory_cap_evicts_the_oldest_items_down_to_the_low_water_mark(self):
         one_item = len(orjson.dumps(_agent("m:0", "x" * 100)))
-        tl, _ = _make(memory_max_bytes=one_item * 3 + 10)
-        for i in range(6):
+        tl, _ = _make(memory_max_bytes=one_item * 4 + 10)
+        for i in range(5):
             tl.upsert(_agent(f"m:{i}", "x" * 100))
 
-        assert [item["id"] for item in tl.items()] == ["m:3", "m:4", "m:5"]
+        assert [item["id"] for item in tl.items()] == ["m:2", "m:3", "m:4"]
         snap = orjson.loads(tl.snapshot_frame())
         assert snap["truncated"] is True
+
+    def test_a_small_growth_after_an_eviction_does_not_evict_again(self):
+        one_item = len(orjson.dumps(_agent("m:0", "x" * 100)))
+        tl, _ = _make(memory_max_bytes=one_item * 4 + 10)
+        for i in range(5):
+            tl.upsert(_agent(f"m:{i}", "x" * 100))
+
+        tl.upsert(_agent("m:5", "x" * 100))
+
+        assert [item["id"] for item in tl.items()] == ["m:2", "m:3", "m:4", "m:5"]
 
     def test_reset_starts_a_new_empty_epoch_and_keeps_state(self):
         tl, _ = _make()
@@ -323,3 +349,156 @@ class TestMemoryBoundAndReset:
         tl.touch("missing")
         assert frames == []
 
+
+def _ids(items: list[dict]) -> list[str]:
+    return [item["id"] for item in items]
+
+
+class TestTrimPlan:
+    def test_within_the_budget_everything_stays(self):
+        items = [_tool("t:0"), _user("u:1"), _agent("m:2")]
+
+        assert trim_plan(items, [10, 10, 10], 30) == ([True, True, True], False)
+
+    def test_finished_steps_go_first_oldest_first_and_only_as_many_as_needed(self):
+        items = [_user("u:0"), _tool("t:1"), _thought("h:2"), _tool("t:3"), _agent("m:4")]
+
+        keep, dropped_messages = trim_plan(items, [10] * 5, 30)
+
+        assert keep == [True, False, False, True, True]
+        assert dropped_messages is False
+
+    def test_finished_steps_after_the_latest_user_message_go_before_older_messages(self):
+        items = [_user("u:0"), _agent("m:1"), _user("u:2"), _tool("t:3"), _thought("h:4"), _agent("m:5")]
+
+        keep, dropped_messages = trim_plan(items, [10] * 6, 40)
+
+        assert keep == [True, True, True, False, False, True]
+        assert dropped_messages is False
+
+    def test_running_tools_stay_while_older_messages_go(self):
+        items = [
+            _user("u:0"),
+            _agent("m:1"),
+            _tool("t:2", status="in_progress"),
+            _tool("t:3", status="pending"),
+            _agent("m:4"),
+        ]
+
+        keep, dropped_messages = trim_plan(items, [10] * 5, 30)
+
+        assert keep == [False, False, True, True, True]
+        assert dropped_messages is True
+
+    def test_once_finished_steps_are_gone_the_front_goes_next(self):
+        items = [_tool("t:0", status="pending"), _user("u:1"), _thought("h:2"), _agent("m:3")]
+
+        keep, dropped_messages = trim_plan(items, [10] * 4, 10)
+
+        assert keep == [False, False, False, True]
+        assert dropped_messages is True
+
+    def test_a_running_step_dropped_from_the_front_is_not_a_dropped_message(self):
+        items = [_tool("t:0", status="in_progress"), _thought("h:1"), _agent("m:2")]
+
+        keep, dropped_messages = trim_plan(items, [10] * 3, 10)
+
+        assert keep == [False, False, True]
+        assert dropped_messages is False
+
+    def test_the_newest_item_stays_even_when_it_is_a_finished_step_over_the_budget(self):
+        keep, dropped_messages = trim_plan([_agent("m:0"), _tool("t:1")], [10, 100], 50)
+
+        assert keep == [False, True]
+        assert dropped_messages is True
+
+
+class TestStepsGoBeforeMessages:
+    def test_snapshot_drops_finished_steps_after_the_latest_user_message_first(self):
+        held = [
+            _user("u:0", "hi"),
+            _agent("m:1", "ok"),
+            _user("u:2", "go"),
+            _tool("t:3", "x" * 100),
+            _thought("h:4", "x" * 100),
+            _agent("m:5", "done"),
+        ]
+        messages = [held[0], held[1], held[2], held[5]]
+        tl, _ = _make(snapshot_max_bytes=sum(map(_size, messages)) + 5)
+        for item in held:
+            tl.upsert(item)
+
+        snap = orjson.loads(tl.snapshot_frame())
+
+        assert _ids(snap["items"]) == ["u:0", "m:1", "u:2", "m:5"]
+        assert snap["truncated"] is False
+        assert _ids(tl.items()) == ["u:0", "m:1", "u:2", "t:3", "h:4", "m:5"]
+
+    def test_snapshot_keeps_a_running_tool_and_drops_older_messages(self):
+        held = [
+            _user("u:0", "x" * 100),
+            _agent("m:1", "x" * 100),
+            _user("u:2", "go"),
+            _tool("t:3", status="in_progress"),
+            _agent("m:4", "ok"),
+        ]
+        tl, _ = _make(snapshot_max_bytes=sum(map(_size, held[2:])) + 5)
+        for item in held:
+            tl.upsert(item)
+
+        snap = orjson.loads(tl.snapshot_frame())
+
+        assert _ids(snap["items"]) == ["u:2", "t:3", "m:4"]
+        assert snap["truncated"] is True
+
+    def test_snapshot_retrims_on_encoded_sizes_when_appended_text_is_wider(self):
+        rest = [_thought("h:1", "x" * 80), _user("u:2", "go"), _agent("m:3", "ok")]
+        # The cached size counts each appended "ж" as one byte; it encodes as two,
+        # so the cached total fits this budget and the encoded one does not.
+        budget = _size(_agent("m:0", "ж" * 60)) + sum(map(_size, rest)) - 60
+        tl, _ = _make(snapshot_max_bytes=budget)
+        tl.upsert(_agent("m:0"))
+        tl.append_text("m:0", "ж" * 60)
+        for item in rest:
+            tl.upsert(item)
+
+        snap = orjson.loads(tl.snapshot_frame())
+
+        assert _ids(snap["items"]) == ["m:0", "u:2", "m:3"]
+        assert snap["items"][0]["text"] == "ж" * 60
+        assert sum(map(_size, snap["items"])) <= budget
+        assert snap["truncated"] is False
+
+    def test_snapshot_retrim_that_drops_a_message_is_truncated(self):
+        rest = [_user("u:1", "go"), _agent("m:2", "ok")]
+        budget = _size(_agent("m:0", "ж" * 60)) + sum(map(_size, rest)) - 60
+        tl, _ = _make(snapshot_max_bytes=budget)
+        tl.upsert(_agent("m:0"))
+        tl.append_text("m:0", "ж" * 60)
+        for item in rest:
+            tl.upsert(item)
+
+        snap = orjson.loads(tl.snapshot_frame())
+
+        assert _ids(snap["items"]) == ["u:1", "m:2"]
+        assert snap["truncated"] is True
+
+    async def test_memory_cap_drops_finished_steps_and_keeps_every_message(self):
+        held = [
+            _user("u:0", "hi"),
+            _tool("t:1", "x" * 150),
+            _thought("h:2", "x" * 150),
+            _user("u:3", "go"),
+            _tool("t:4", "x" * 150),
+            _agent("m:5", "x" * 600),
+        ]
+        messages = sum(_size(item) for item in held if item["type"] in ("user", "agent"))
+        # The low-water mark (3/4 of the cap) lands just above the messages.
+        tl, _ = _make(flush_interval=NEVER, memory_max_bytes=(messages + 10) * 4 // 3 + 3)
+        for item in held:
+            tl.upsert(item)
+
+        tl.flush()
+
+        assert _ids(tl.items()) == ["u:0", "u:3", "m:5"]
+        assert orjson.loads(tl.snapshot_frame())["truncated"] is False

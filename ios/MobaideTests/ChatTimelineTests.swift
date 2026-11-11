@@ -3,7 +3,8 @@ import XCTest
 
 /// The chat timeline reducer, fed decoded `a` frames: snapshot / events
 /// application and the sync rules (duplicates, gaps, a missing tail, another
-/// epoch) plus the client item cap.
+/// epoch) plus the client item cap, which drops old steps (tool calls,
+/// thoughts) before messages.
 final class ChatTimelineTests: XCTestCase {
     private func frame(_ json: String) throws -> ChatServerFrame {
         try XCTUnwrap(ChatServerFrame.decode(Data(json.utf8)), json)
@@ -19,6 +20,18 @@ final class ChatTimelineTests: XCTestCase {
 
     private func agent(_ id: String, _ text: String = "") -> String {
         #"{"id":"\#(id)","type":"agent","text":"\#(text)"}"#
+    }
+
+    private func user(_ id: String, _ text: String = "") -> String {
+        #"{"id":"\#(id)","type":"user","text":"\#(text)"}"#
+    }
+
+    private func thought(_ id: String, _ text: String = "") -> String {
+        #"{"id":"\#(id)","type":"thought","text":"\#(text)"}"#
+    }
+
+    private func tool(_ id: String, _ status: String = "pending") -> String {
+        #"{"id":"\#(id)","type":"tool","title":"Run tests","kind":"execute","status":"\#(status)"}"#
     }
 
     private func append(_ seq: Int, _ id: String, _ text: String) -> String {
@@ -199,6 +212,65 @@ final class ChatTimelineTests: XCTestCase {
         XCTAssertEqual(timeline.items.map(\.id), ["m:2", "m:3", "m:4"])
         XCTAssertEqual(text(timeline, "m:3"), "3!")
         XCTAssertEqual(text(timeline, "m:4"), "4?")
+        XCTAssertTrue(timeline.truncated)
+    }
+
+    func testCapDropsFinishedStepsAfterTheLatestUserMessageBeforeOlderMessages() throws {
+        var timeline = try loaded(
+            seq: 1,
+            items: "[\(user("u:0")), \(agent("m:1")), \(user("u:2")), \(tool("call-3", "completed")), \(thought("h:4")), \(agent("m:5"))]",
+            maxItems: 4
+        )
+
+        _ = timeline.apply(try events("[\(append(2, "m:5", "!"))]", seq: 2))
+
+        XCTAssertEqual(timeline.items.map(\.id), ["u:0", "m:1", "u:2", "m:5"])
+        XCTAssertEqual(text(timeline, "m:5"), "!")
+        XCTAssertFalse(timeline.truncated)
+    }
+
+    func testCapKeepsARunningToolInPlaceWhileOlderMessagesGo() throws {
+        var timeline = try loaded(
+            seq: 1,
+            items: "[\(user("u:0")), \(agent("m:1")), \(tool("call-2", "in_progress"))]",
+            maxItems: 3
+        )
+
+        _ = timeline.apply(try events(#"[{"type":"item","seq":2,"item":\#(agent("m:3", "a"))}]"#, seq: 2))
+        _ = timeline.apply(try events(#"[{"type":"item","seq":3,"item":\#(tool("call-2", "completed"))}]"#, seq: 3))
+
+        XCTAssertEqual(timeline.items.map(\.id), ["m:1", "call-2", "m:3"])
+        guard case .tool(let call) = timeline.items[1].body else { return XCTFail("call-2 is not a tool") }
+        XCTAssertEqual(call.status, "completed")
+        XCTAssertTrue(timeline.truncated)
+    }
+
+    func testCapDropsFromTheFrontOnceTheFinishedStepsAreGone() throws {
+        let timeline = try loaded(
+            seq: 1,
+            items: "[\(tool("call-0", "pending")), \(user("u:1")), \(thought("h:2")), \(agent("m:3"))]",
+            maxItems: 1
+        )
+
+        XCTAssertEqual(timeline.items.map(\.id), ["m:3"])
+        XCTAssertTrue(timeline.truncated)
+    }
+
+    func testCapDroppingOnlyStepsFromTheFrontLeavesTruncatedOff() throws {
+        let timeline = try loaded(
+            seq: 1,
+            items: "[\(tool("call-0", "in_progress")), \(thought("h:1")), \(agent("m:2"))]",
+            maxItems: 1
+        )
+
+        XCTAssertEqual(timeline.items.map(\.id), ["m:2"])
+        XCTAssertFalse(timeline.truncated)
+    }
+
+    func testCapKeepsTheNewestItemEvenWhenItIsAFinishedStep() throws {
+        let timeline = try loaded(seq: 1, items: "[\(agent("m:0")), \(thought("h:1"))]", maxItems: 1)
+
+        XCTAssertEqual(timeline.items.map(\.id), ["h:1"])
         XCTAssertTrue(timeline.truncated)
     }
 }

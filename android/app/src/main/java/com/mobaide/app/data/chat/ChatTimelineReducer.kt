@@ -200,13 +200,41 @@ class ChatTimelineReducer(
         items.forEachIndexed { i, item -> index[item.id] = i }
     }
 
+    /**
+     * Finished steps go first, oldest first, then items from the front; the newest
+     * item and running tools stay (a dropped tool's next update would re-add it).
+     * [truncated] marks only dropped messages.
+     */
     private fun enforceCap() {
-        val excess = items.size - maxItems
+        var excess = items.size - maxItems
         if (excess <= 0) return
-        items.subList(0, excess).clear()
+        val last = items.lastIndex
+        val drop = BooleanArray(items.size)
+        for (i in 0 until last) {
+            if (excess == 0) break
+            if (items[i].isFinishedStep) {
+                drop[i] = true
+                excess -= 1
+            }
+        }
+        for (i in 0 until last) {
+            if (excess == 0) break
+            if (drop[i]) continue
+            drop[i] = true
+            excess -= 1
+            if (!items[i].isStep) truncated = true
+        }
+        val kept = items.filterIndexed { i, _ -> !drop[i] }
+        items.clear()
+        items.addAll(kept)
         reindex()
-        truncated = true
     }
+
+    private val ChatItem.isStep: Boolean get() = this is ChatItem.Tool || this is ChatItem.Thought
+
+    private val ChatItem.isFinishedStep: Boolean
+        get() = this is ChatItem.Thought ||
+            (this is ChatItem.Tool && status != ToolStatus.PENDING && status != ToolStatus.IN_PROGRESS)
 
     companion object {
         const val MAX_ITEMS = 1500

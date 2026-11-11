@@ -5,6 +5,7 @@ import {
   applyEvents,
   applySnapshot,
   chatOpened,
+  trimChatItems,
   type ChatTimeline,
 } from './chatTimeline';
 import {
@@ -20,6 +21,14 @@ const EPOCH = 'e1';
 
 function agent(id: string, text = ''): ChatItem {
   return { id, type: 'agent', text };
+}
+
+function user(id: string, text = ''): ChatItem {
+  return { id, type: 'user', text, attachments: [] };
+}
+
+function thought(id: string, text = ''): ChatItem {
+  return { id, type: 'thought', text };
 }
 
 function tool(id: string, status: ToolItem['status'] = 'pending'): ToolItem {
@@ -73,6 +82,23 @@ describe('applySnapshot', () => {
     const { timeline } = applySnapshot(held, snapshot(5, [agent('m:1', 'hi')]));
 
     expect(timeline).toBe(held);
+  });
+
+  it('drops finished steps over the client cap without a truncated notice', () => {
+    const many = [
+      user('u:0'),
+      tool('call-1', 'completed'),
+      thought('h:2'),
+      ...Array.from({ length: MAX_CHAT_ITEMS - 1 }, (_, index) => agent(`m:${index}`)),
+    ];
+
+    const { timeline } = applySnapshot(INITIAL_CHAT_TIMELINE, snapshot(1, many));
+
+    expect(timeline.items).toHaveLength(MAX_CHAT_ITEMS);
+    expect(timeline.items[0]?.id).toBe('u:0');
+    expect(timeline.positions.get('m:0')).toBe(1);
+    expect(timeline.positions.has('call-1')).toBe(false);
+    expect(timeline.truncated).toBe(false);
   });
 
   it('keeps only the newest items over the client cap', () => {
@@ -199,6 +225,38 @@ describe('applyEvents', () => {
     expect(replayed.timeline.syncPending).toBe(false);
   });
 
+  it('drops a finished tool, not a running one, for a new item', () => {
+    const full = loaded(1, [
+      agent('m:a'),
+      tool('call-run', 'in_progress'),
+      tool('call-done', 'completed'),
+      ...Array.from({ length: MAX_CHAT_ITEMS - 3 }, (_, index) => agent(`m:${index}`)),
+    ]);
+
+    const { timeline } = applyEvents(full, events([{ type: 'item', seq: 2, item: agent('m:new', 'x') }]));
+
+    expect(timeline.items).toHaveLength(MAX_CHAT_ITEMS);
+    expect(timeline.positions.get('m:a')).toBe(0);
+    expect(timeline.positions.get('call-run')).toBe(1);
+    expect(timeline.positions.has('call-done')).toBe(false);
+    expect(timeline.positions.get('m:new')).toBe(MAX_CHAT_ITEMS - 1);
+    expect(timeline.truncated).toBe(false);
+  });
+
+  it('drops an older message, not a running tool, when no finished step is left', () => {
+    const full = loaded(1, [
+      agent('m:a'),
+      tool('call-run', 'pending'),
+      ...Array.from({ length: MAX_CHAT_ITEMS - 2 }, (_, index) => agent(`m:${index}`)),
+    ]);
+
+    const { timeline } = applyEvents(full, events([{ type: 'item', seq: 2, item: agent('m:new', 'x') }]));
+
+    expect(timeline.positions.has('m:a')).toBe(false);
+    expect(timeline.positions.get('call-run')).toBe(0);
+    expect(timeline.truncated).toBe(true);
+  });
+
   it('drops the oldest items over the client cap', () => {
     const full = loaded(
       1,
@@ -212,6 +270,70 @@ describe('applyEvents', () => {
     expect(timeline.positions.get('m:new')).toBe(MAX_CHAT_ITEMS - 1);
     expect(timeline.positions.has('m:0')).toBe(false);
     expect(timeline.truncated).toBe(true);
+  });
+});
+
+describe('trimChatItems', () => {
+  const ids = (items: readonly ChatItem[]): string[] => items.map((item) => item.id);
+
+  it('returns the same list when it fits', () => {
+    const items = [tool('call-0'), user('u:1')];
+
+    expect(trimChatItems(items, 2)).toEqual({ items, capped: false, droppedMessages: false });
+  });
+
+  it('drops finished steps first, oldest first, and only as many as needed', () => {
+    const items = [user('u:0'), tool('call-1', 'completed'), thought('h:2'), tool('call-3', 'failed'), agent('m:4')];
+
+    const trimmed = trimChatItems(items, 3);
+
+    expect(ids(trimmed.items)).toEqual(['u:0', 'call-3', 'm:4']);
+    expect(trimmed.capped).toBe(true);
+    expect(trimmed.droppedMessages).toBe(false);
+  });
+
+  it('drops finished steps after the latest user message before older messages', () => {
+    const items = [user('u:0'), agent('m:1'), user('u:2'), tool('call-3', 'completed'), thought('h:4'), agent('m:5')];
+
+    const trimmed = trimChatItems(items, 4);
+
+    expect(ids(trimmed.items)).toEqual(['u:0', 'm:1', 'u:2', 'm:5']);
+    expect(trimmed.droppedMessages).toBe(false);
+  });
+
+  it('keeps running tools while older messages go', () => {
+    const items = [user('u:0'), agent('m:1'), tool('call-2', 'in_progress'), tool('call-3', 'pending'), agent('m:4')];
+
+    const trimmed = trimChatItems(items, 3);
+
+    expect(ids(trimmed.items)).toEqual(['call-2', 'call-3', 'm:4']);
+    expect(trimmed.droppedMessages).toBe(true);
+  });
+
+  it('drops from the front, any type, once the finished steps are gone', () => {
+    const items = [tool('call-0', 'pending'), user('u:1'), thought('h:2'), agent('m:3')];
+
+    const trimmed = trimChatItems(items, 1);
+
+    expect(ids(trimmed.items)).toEqual(['m:3']);
+    expect(trimmed.droppedMessages).toBe(true);
+  });
+
+  it('does not count a running step dropped from the front as a dropped message', () => {
+    const items = [tool('call-0', 'in_progress'), thought('h:1'), agent('m:2')];
+
+    const trimmed = trimChatItems(items, 1);
+
+    expect(ids(trimmed.items)).toEqual(['m:2']);
+    expect(trimmed.capped).toBe(true);
+    expect(trimmed.droppedMessages).toBe(false);
+  });
+
+  it('keeps the newest item even when it is a finished step', () => {
+    const trimmed = trimChatItems([agent('m:0'), thought('h:1')], 1);
+
+    expect(ids(trimmed.items)).toEqual(['h:1']);
+    expect(trimmed.droppedMessages).toBe(true);
   });
 });
 
