@@ -432,7 +432,7 @@ struct ChatSettingsSheet: View {
     }
 }
 
-/// Context-window use as a small bar; tap for the numbers.
+/// Context-window use as a small bar and a percent; tap for the numbers.
 struct ChatUsageIndicator: View {
     let usage: ChatUsage
 
@@ -440,6 +440,8 @@ struct ChatUsageIndicator: View {
     @State private var showingDetails = false
 
     private var fraction: Double { usage.fraction ?? 0 }
+
+    private var percent: Int { Int((fraction * 100).rounded()) }
 
     private var tone: PixelTone {
         if fraction >= 0.95 { return .danger }
@@ -451,23 +453,32 @@ struct ChatUsageIndicator: View {
         Button {
             showingDetails = true
         } label: {
-            ZStack(alignment: .leading) {
-                Rectangle().fill(colors.surface2)
-                Rectangle()
-                    .fill(colors.color(tone))
-                    .frame(width: 26 * fraction)
+            HStack(spacing: 4) {
+                ZStack(alignment: .leading) {
+                    Rectangle().fill(colors.surface2)
+                    Rectangle()
+                        .fill(colors.color(tone))
+                        .frame(width: 26 * fraction)
+                }
+                .frame(width: 26, height: 8)
+                .pixelRing(colors.gray, width: 1)
+                Text("\(percent)%")
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(colors.text)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .dynamicTypeSize(...DynamicTypeSize.xxLarge)
             }
-            .frame(width: 26, height: 8)
-            .pixelRing(colors.gray, width: 1)
-            .frame(width: 36, height: 44)
+            .padding(.horizontal, 4)
+            .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Context used")
-        .accessibilityValue("\(Int((fraction * 100).rounded())) percent")
+        .accessibilityValue("\(percent) percent")
         .popover(isPresented: $showingDetails) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("\(Self.tokens(usage.used)) of \(Self.tokens(usage.size)) tokens (\(Int((fraction * 100).rounded())) %)")
+                Text("\(Self.tokens(usage.used)) of \(Self.tokens(usage.size)) tokens (\(percent) %)")
                     .font(.footnote)
                     .foregroundStyle(colors.text)
                 if let amount = usage.costAmount {
