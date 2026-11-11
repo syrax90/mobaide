@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.24](https://github.com/syrax90/mobaide/compare/web-v0.1.23...web-v0.1.24) (2026-11-11)
+
+
+### Features
+
+* **agent,android,ios,web:** sign in to Claude Code, Codex and Antigravity from the chat ([#866](https://github.com/syrax90/mobaide/issues/866)) ([8d5dec9](https://github.com/syrax90/mobaide/commit/8d5dec93dfc6f48245d0daf93328195ec360152f))
+
 ## [0.1.23](https://github.com/syrax90/mobaide/compare/web-v0.1.22...web-v0.1.23) (2026-11-11)
 
 
