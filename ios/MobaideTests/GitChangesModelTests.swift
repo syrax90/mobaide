@@ -271,7 +271,7 @@ final class GitChangesModelTests: XCTestCase {
         StubURLProtocol.enqueue(status: 200, body: try fixtureBody("detached_head"))
         connection.emit(.text(#"{"type":"git.changed","payload":{"project_name":"unrelated"}}"#))
 
-        await waitUntil { StubURLProtocol.requests.count == 1 }
+        await waitUntil { self.readyStatus(model) != nil }
         XCTAssertEqual(requestURLs, [statusURL])
         XCTAssertEqual(readyStatus(model)?.session_id, "s2")
     }
