@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -18,17 +19,22 @@ import pytest
 
 from mobaide.acp import agents, codex_bridge
 from mobaide.acp.agents import (
+    CODEX_USER_CODE_PATTERN,
     AntigravityChatSpec,
     ChatAgentUnavailableError,
     ClaudeChatSpec,
     CodexChatSpec,
     ConfigIntent,
     antigravity_config_intents,
+    antigravity_sign_in_methods,
     build_chat_agents,
     build_chat_capabilities,
     claude_config_intents,
+    claude_sign_in_methods,
     codex_config_intents,
     codex_mode,
+    codex_sign_in_methods,
+    fake_login_argv,
     resolve_antigravity_config,
 )
 from mobaide.acp.install import INSTALLED_MARKER
@@ -36,6 +42,7 @@ from mobaide.acp.trust import AntigravityFolderTrust, CodexFolderTrust
 from mobaide.core.antigravity_launcher import AntigravityBinaryNotFoundError, AntigravityOptions
 from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError, ClaudeOptions
 from mobaide.core.cli_launcher import AdHocLaunch, LaunchSpec
+from mobaide.core import codex_auth
 from mobaide.core.codex_launcher import CodexBinaryNotFoundError, CodexOptions
 from mobaide.core.projects_config import ProjectConfig
 from tests.conftest import skip_if_not_linux
@@ -75,13 +82,15 @@ class FakeCodexLauncher:
     ) -> None:
         self.binary = binary
         self.env = env or {}
+        self.require_auth: list[bool] = []
 
     def resolve_binary(self) -> str:
         if self.binary is None:
             raise CodexBinaryNotFoundError(["/nowhere/codex"])
         return self.binary
 
-    async def build(self, target, options, session_id=None) -> LaunchSpec:
+    async def build(self, target, options, session_id=None, *, require_auth=True) -> LaunchSpec:
+        self.require_auth.append(require_auth)
         cwd = target.path if isinstance(target, ProjectConfig) else target.cwd
         return LaunchSpec(
             argv=["codex"], cwd=cwd, env={"PATH": "/usr/bin", "LAUNCHER": "1", **self.env}
@@ -290,6 +299,24 @@ class TestPrepare:
         plan = await spec.prepare(AdHocLaunch(cwd="/work"), ClaudeOptions())
 
         assert "CLAUDE_CODE_EXECUTABLE" not in plan.env
+
+    async def test_plan_signs_in_with_the_host_claude(self, bin_dir):
+        spec = ClaudeChatSpec(FakeLauncher(), command_override="adapter")
+
+        plan = await spec.prepare(AdHocLaunch(cwd="/work"), ClaudeOptions())
+
+        assert [(m.id, m.argv) for m in plan.sign_in] == [
+            ("claude_ai", ["/opt/claude/bin/claude", "auth", "login", "--claudeai"]),
+            ("console", ["/opt/claude/bin/claude", "auth", "login", "--console"]),
+        ]
+        assert plan.sign_in[0].env is not None and plan.sign_in[0].env["LAUNCHER"] == "1"
+
+    async def test_without_claude_there_is_no_sign_in(self, bin_dir):
+        spec = ClaudeChatSpec(FakeLauncher(binary=None), command_override="adapter")
+
+        plan = await spec.prepare(AdHocLaunch(cwd="/work"), ClaudeOptions())
+
+        assert plan.sign_in == []
 
     async def test_host_claude_executable_is_not_overridden(self, bin_dir, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_EXECUTABLE", "/custom/claude")
@@ -576,6 +603,16 @@ class TestCodexPrepare:
         assert isinstance(plan.trust, CodexFolderTrust)
         assert plan.trust.is_trusted() is True
 
+    async def test_a_chat_is_built_without_the_sign_in_check(self, bin_dir, tmp_path):
+        launcher = FakeCodexLauncher()
+        spec = CodexChatSpec(launcher, command_override="adapter")
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), CodexOptions())
+
+        assert launcher.require_auth == [False]
+        assert [m.id for m in plan.sign_in] == ["chatgpt", "api_key"]
+        assert plan.sign_in[0].argv == ["/opt/codex/bin/codex", "login", "--device-auth"]
+
     async def test_missing_codex_binary_leaves_the_adapter_default(self, bin_dir, tmp_path, monkeypatch):
         _socket_answers(monkeypatch)
         spec = CodexChatSpec(
@@ -672,6 +709,7 @@ class TestCodexPrepare:
         assert os.path.basename(plan.argv[1]) == "fake_agent.py"
         assert plan.trust is None
         assert spec.live_sessions is False
+        assert plan.sign_in[0].argv == [*fake_login_argv("codex"), "--device"]
 
     def test_a_real_adapter_keeps_sessions_live_on_posix(self, bin_dir):
         spec = CodexChatSpec(FakeCodexLauncher(), command_override="adapter")
@@ -961,6 +999,17 @@ class TestAntigravityPrepare:
         assert plan.argv[-3:] == ["--flavor", "antigravity", "--sandbox"]
         assert plan.trust is None
         assert plan.presence is None
+        assert [m.argv for m in plan.sign_in] == [fake_login_argv("antigravity")]
+
+    async def test_plan_signs_in_with_the_agy_it_found(self, agy_bin, tmp_path):
+        spec = _agy_spec(agy_bin, tmp_path, command_override="agy acp")
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), AntigravityOptions())
+
+        assert [(m.id, m.argv) for m in plan.sign_in] == [
+            ("google", [str(agy_bin), "acp", "--login"])
+        ]
+        assert plan.sign_in[0].reads_code is True
 
     async def test_catalog_plan_runs_in_home(self, agy_bin, tmp_path):
         spec = _agy_spec(agy_bin, tmp_path, command_override="agy acp")
@@ -1256,3 +1305,91 @@ class TestSplitLevel:
 
         assert agents._split_level(base + " (High)") == (base, "High")
         assert agents._split_level("(" * 100_000 + ")") is None
+
+
+class TestSignInMethods:
+    def test_claude_logs_in_from_home_and_reads_the_pasted_code(self):
+        methods = claude_sign_in_methods("/opt/claude/bin/claude", {"PATH": "/usr/bin"})
+
+        assert [m.id for m in methods] == ["claude_ai", "console"]
+        for method in methods:
+            assert method.cwd == os.path.expanduser("~")
+            assert method.env == {"PATH": "/usr/bin"}
+            assert method.reads_code is True
+            assert method.user_code_pattern is None
+            assert method.submit_secret is None
+
+    def test_the_fake_claude_login_is_the_fake_agent(self):
+        methods = claude_sign_in_methods(None, {}, fake=True)
+
+        assert [m.argv for m in methods] == [fake_login_argv(), fake_login_argv()]
+
+    @pytest.mark.parametrize(
+        "build", [claude_sign_in_methods, codex_sign_in_methods, antigravity_sign_in_methods]
+    )
+    def test_no_binary_means_no_sign_in(self, build):
+        assert build(None, {"PATH": "/usr/bin"}) == []
+
+    def test_codex_shows_a_one_time_code_and_takes_an_api_key(self):
+        device, key = codex_sign_in_methods("/opt/codex/bin/codex", {"CODEX_HOME": "/c"})
+
+        assert device.argv == ["/opt/codex/bin/codex", "login", "--device-auth"]
+        assert device.user_code_pattern == CODEX_USER_CODE_PATTERN
+        assert device.reads_code is False
+        assert key.argv is None
+        assert key.submit_secret is not None
+        assert key.input_label == "OpenAI API key"
+
+    @pytest.mark.parametrize(
+        ("text", "code"),
+        [
+            ("Enter this one-time code\n   ABCD-12345\n", "ABCD-12345"),
+            ("code: X1Y2-Z3W4\n", "X1Y2-Z3W4"),
+            ("https://auth.openai.com/codex/device\n", None),
+            ("abcd-12345\n", None),
+        ],
+    )
+    def test_the_codex_one_time_code_pattern(self, text, code):
+        match = re.search(CODEX_USER_CODE_PATTERN, text)
+
+        assert (match.group(0) if match else None) == code
+
+    async def test_the_codex_api_key_goes_to_codex_login_on_stdin(self, monkeypatch):
+        runs: list[tuple[list[str], bytes, dict[str, str]]] = []
+
+        def run(argv, *, input, env, **_kw):
+            runs.append((argv, input, env))
+            return subprocess.CompletedProcess(argv, 0, b"Successfully logged in", b"")
+
+        monkeypatch.setattr(codex_auth.subprocess, "run", run)
+        _, key = codex_sign_in_methods("/opt/codex/bin/codex", {"CODEX_HOME": "/c"})
+        assert key.submit_secret is not None
+
+        ok, _detail = await key.submit_secret("sk-test")
+
+        assert ok is True
+        assert runs == [
+            (["/opt/codex/bin/codex", "login", "--with-api-key"], b"sk-test\n", {"CODEX_HOME": "/c"})
+        ]
+
+    async def test_the_fake_codex_key_login_refuses_bad_and_ends_the_signed_out_state(
+        self, tmp_path, monkeypatch
+    ):
+        marker = tmp_path / "signed-out"
+        marker.write_text("", encoding="utf-8")
+        monkeypatch.setenv(agents.FAKE_SIGNED_OUT_ENV, str(marker))
+        _, key = codex_sign_in_methods(None, {}, fake=True)
+        assert key.submit_secret is not None
+
+        assert (await key.submit_secret("bad"))[0] is False
+        assert marker.exists()
+        assert await key.submit_secret("sk-test") == (True, "")
+        assert not marker.exists()
+
+    def test_antigravity_logs_in_through_agy_acp(self):
+        (method,) = antigravity_sign_in_methods("/opt/agy/bin/agy", {"PATH": "/usr/bin"})
+
+        assert method.id == "google"
+        assert method.argv == ["/opt/agy/bin/agy", "acp", "--login"]
+        assert method.reads_code is True
+        assert method.input_label == "Code or address from the sign-in page"

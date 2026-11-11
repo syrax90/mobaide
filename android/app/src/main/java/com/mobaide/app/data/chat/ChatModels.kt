@@ -114,12 +114,41 @@ sealed interface ChatRequest {
         val fields: List<ChatFormField>,
     ) : ChatRequest
 
+    /**
+     * Sign-in to the coding agent on the PC. [stage] `choose` offers [methods];
+     * `waiting` runs one: open [url], enter [userCode] there, or paste the code
+     * the page shows into [input].
+     */
+    data class SignIn(
+        override val id: String,
+        override val toolCallId: String?,
+        override val title: String,
+        val text: String,
+        val stage: String,
+        val methods: List<ChatSignInMethod>,
+        val url: String?,
+        val userCode: String?,
+        val input: ChatSignInInput?,
+        val busy: Boolean,
+        val error: String?,
+    ) : ChatRequest {
+        val waiting: Boolean get() = stage == STAGE_WAITING
+
+        companion object {
+            const val STAGE_WAITING = "waiting"
+        }
+    }
+
     data class Other(
         override val id: String,
         override val toolCallId: String?,
         override val title: String,
     ) : ChatRequest
 }
+
+data class ChatSignInMethod(val id: String, val name: String, val description: String)
+
+data class ChatSignInInput(val label: String, val secret: Boolean)
 
 @Immutable
 sealed interface ChatContentPart {
@@ -333,6 +362,28 @@ internal object ChatJson {
                 toolCallId = toolCallId,
                 title = title,
                 fields = obj.objects("fields").mapNotNull(::formField),
+            )
+            "sign_in" -> ChatRequest.SignIn(
+                id = id,
+                toolCallId = toolCallId,
+                title = title,
+                text = obj.str("text").orEmpty(),
+                stage = obj.str("stage") ?: "choose",
+                methods = obj.objects("methods").mapNotNull { method ->
+                    val methodId = method.str("id") ?: return@mapNotNull null
+                    ChatSignInMethod(
+                        id = methodId,
+                        name = method.str("name") ?: methodId,
+                        description = method.str("description").orEmpty(),
+                    )
+                },
+                url = obj.str("url")?.takeIf { it.startsWith("https://") },
+                userCode = obj.str("user_code"),
+                input = obj.obj("input")?.let { input ->
+                    ChatSignInInput(label = input.str("label").orEmpty(), secret = input.bool("secret") == true)
+                },
+                busy = obj.bool("busy") == true,
+                error = obj.str("error"),
             )
             else -> ChatRequest.Other(id = id, toolCallId = toolCallId, title = title)
         }

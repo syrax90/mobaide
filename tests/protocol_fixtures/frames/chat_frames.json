@@ -19,7 +19,10 @@
     { "name": "respond_form_decline", "command": { "id": "c-10", "op": "respond", "request_id": "r:12", "action": "decline" } },
     { "name": "dequeue", "command": { "id": "c-11", "op": "dequeue", "queue_id": "q:14" } },
     { "name": "restart", "command": { "id": "c-12", "op": "restart" } },
-    { "name": "steer", "command": { "id": "c-13", "op": "steer", "queue_id": "q:14" } }
+    { "name": "steer", "command": { "id": "c-13", "op": "steer", "queue_id": "q:14" } },
+    { "name": "sign_in_start", "command": { "id": "c-14", "op": "sign_in", "action": "start", "method": "claude_ai" } },
+    { "name": "sign_in_submit", "command": { "id": "c-15", "op": "sign_in", "action": "submit", "value": "ab12-cd34" } },
+    { "name": "sign_in_cancel", "command": { "id": "c-16", "op": "sign_in", "action": "cancel" } }
   ],
   "server": [
     {
@@ -198,6 +201,66 @@
           { "type": "remove", "seq": 46, "id": "n:5" },
           { "type": "remove", "seq": 47, "id": "n:404" },
           { "type": "append", "seq": 48, "id": "m:8", "text": " All green." }
+        ]
+      }
+    },
+    {
+      "name": "events_sign_in",
+      "frame": {
+        "t": "events",
+        "epoch": "9f3a1c2b7d4e",
+        "seq": 50,
+        "events": [
+          {
+            "type": "state",
+            "seq": 49,
+            "patch": {
+              "requests": [
+                {
+                  "id": "sign-in",
+                  "kind": "sign_in",
+                  "tool_call_id": null,
+                  "title": "Sign in to Claude Code",
+                  "text": "Claude Code is not signed in on your PC. Sign in here to continue.",
+                  "stage": "choose",
+                  "methods": [
+                    { "id": "claude_ai", "name": "Claude subscription", "description": "Pro, Max, Team or Enterprise plan" },
+                    { "id": "console", "name": "Anthropic Console", "description": "API usage billing" }
+                  ],
+                  "url": null,
+                  "user_code": null,
+                  "input": null,
+                  "busy": false,
+                  "error": null
+                }
+              ]
+            }
+          },
+          {
+            "type": "state",
+            "seq": 50,
+            "patch": {
+              "requests": [
+                {
+                  "id": "sign-in",
+                  "kind": "sign_in",
+                  "tool_call_id": null,
+                  "title": "Sign in to Codex",
+                  "text": "Open the sign-in page, sign in to ChatGPT and enter the code below. The chat continues when you are done.",
+                  "stage": "waiting",
+                  "methods": [
+                    { "id": "chatgpt", "name": "ChatGPT account", "description": "Plus, Pro, Business or Enterprise plan" },
+                    { "id": "api_key", "name": "OpenAI API key", "description": "API usage billing" }
+                  ],
+                  "url": "https://auth.openai.com/codex/device",
+                  "user_code": "CIQN-Y66ME",
+                  "input": { "label": "Code from the sign-in page", "secret": false },
+                  "busy": true,
+                  "error": "That code did not work. Try again."
+                }
+              ]
+            }
+          }
         ]
       }
     },

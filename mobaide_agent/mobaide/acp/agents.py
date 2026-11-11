@@ -9,6 +9,7 @@ one more spec in :func:`build_chat_agents`.
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import os
 import shlex
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from mobaide.agent._env_writer import atomic_write
+from mobaide.core.codex_auth import codex_login_with_api_key
 from mobaide.core.claude_launcher import CLAUDE_SESSION_PRESET_ENV
 from mobaide.core.cli_launcher import (
     WINDOWS_NO_WINDOW,
@@ -39,6 +41,7 @@ from . import codex_bridge
 from . import normalize as nz
 from .install import INSTALL_POOL, PROBE_POOL, AdapterInstaller, NpmAdapter
 from .presence import ConversationPresence, default_app_data_dir
+from .signin import SignInMethod
 from .trust import (
     AntigravityFolderTrust,
     ClaudeFolderTrust,
@@ -75,6 +78,10 @@ AGY_HINT = (
     "Run `agy update` on the PC, then try again."
 )
 AGY_PROBE_TIMEOUT = 10.0
+# Test mode: while this file exists the fake agent is signed out, and its
+# fake login removes it.
+FAKE_SIGNED_OUT_ENV = "MOBAIDE_FAKE_ACP_SIGNED_OUT"
+CODEX_USER_CODE_PATTERN = r"\b[A-Z0-9]{4}-[A-Z0-9]{4,6}\b"
 
 
 class ChatAgentUnavailableError(RuntimeError):
@@ -127,6 +134,8 @@ class ChatLaunchPlan:
     # The agent's "conversation already open" marker, held while the chat
     # has the conversation open (see :mod:`.presence`).
     presence: ConversationPresence | None = None
+    # How the chat can sign the agent in on this PC (see :mod:`.signin`).
+    sign_in: list[SignInMethod] = field(default_factory=list)
 
 
 class ChatAgentSpec(Protocol):
@@ -169,6 +178,131 @@ def fake_agent_argv(flavor: str | None = None) -> list[str]:
     if flavor:
         argv += ["--flavor", flavor]
     return argv
+
+
+def fake_login_argv(flavor: str | None = None) -> list[str]:
+    argv = [sys.executable, os.path.join(os.path.dirname(__file__), "fake_agent.py"), "login"]
+    if flavor:
+        argv += ["--flavor", flavor]
+    return argv
+
+
+async def _fake_key_login(value: str) -> tuple[bool, str]:
+    if value == "bad":
+        return False, "Incorrect API key provided (fake agent)."
+    marker = os.environ.get(FAKE_SIGNED_OUT_ENV)
+    if marker:
+        try:
+            os.remove(marker)
+        except FileNotFoundError:
+            pass
+    return True, ""
+
+
+CLAUDE_SIGN_IN_TEXT = (
+    "Open the sign-in page and sign in. Then copy the code that the page shows "
+    "and paste it here."
+)
+CODEX_SIGN_IN_TEXT = (
+    "Open the sign-in page, sign in to ChatGPT and enter the code below. "
+    "The chat continues when you are done."
+)
+CODEX_KEY_TEXT = "Paste an OpenAI API key. Codex keeps it on your PC."
+AGY_SIGN_IN_TEXT = (
+    "Open the sign-in page and sign in with Google. Then paste the code that the "
+    "page shows, or the full address of the page you land on."
+)
+
+
+def claude_sign_in_methods(
+    claude_bin: str | None, env: Mapping[str, str], *, fake: bool = False
+) -> list[SignInMethod]:
+    """``claude auth login``: it prints the sign-in page and reads the code
+    that page shows (or finishes alone when the browser on the PC is used)."""
+    if claude_bin is None and not fake:
+        return []
+    home = os.path.expanduser("~")
+    methods = []
+    for method_id, name, description, flag in (
+        ("claude_ai", "Claude subscription", "Pro, Max, Team or Enterprise plan", "--claudeai"),
+        ("console", "Anthropic Console", "API usage billing", "--console"),
+    ):
+        argv = fake_login_argv() if fake else shim_safe_argv(claude_bin or "", "auth", "login", flag)
+        methods.append(
+            SignInMethod(
+                method_id,
+                name,
+                description,
+                CLAUDE_SIGN_IN_TEXT,
+                argv=argv,
+                env=dict(env),
+                cwd=home,
+                reads_code=True,
+            )
+        )
+    return methods
+
+
+def codex_sign_in_methods(
+    codex_bin: str | None, env: Mapping[str, str], *, fake: bool = False
+) -> list[SignInMethod]:
+    """ChatGPT through ``codex login --device-auth`` (a one-time code to
+    enter on the sign-in page), or an API key through ``codex login
+    --with-api-key``."""
+    if codex_bin is None and not fake:
+        return []
+    login_env = dict(env)
+    if fake:
+        device_argv = [*fake_login_argv("codex"), "--device"]
+        submit_key = _fake_key_login
+    else:
+        device_argv = shim_safe_argv(codex_bin or "", "login", "--device-auth")
+        submit_key = functools.partial(
+            codex_login_with_api_key, codex_bin=codex_bin or "", env=login_env
+        )
+    return [
+        SignInMethod(
+            "chatgpt",
+            "ChatGPT account",
+            "Plus, Pro, Business or Enterprise plan",
+            CODEX_SIGN_IN_TEXT,
+            argv=device_argv,
+            env=login_env,
+            cwd=os.path.expanduser("~"),
+            user_code_pattern=CODEX_USER_CODE_PATTERN,
+        ),
+        SignInMethod(
+            "api_key",
+            "OpenAI API key",
+            "API usage billing",
+            CODEX_KEY_TEXT,
+            input_label="OpenAI API key",
+            submit_secret=submit_key,
+        ),
+    ]
+
+
+def antigravity_sign_in_methods(
+    agy: str | None, env: Mapping[str, str], *, fake: bool = False
+) -> list[SignInMethod]:
+    """``agy acp --login``, the terminal login ``agy acp`` itself offers:
+    it prints the Google sign-in page and reads the code that page shows."""
+    if agy is None and not fake:
+        return []
+    argv = fake_login_argv("antigravity") if fake else shim_safe_argv(agy or "", "acp", "--login")
+    return [
+        SignInMethod(
+            "google",
+            "Google account",
+            "Sign in with Google",
+            AGY_SIGN_IN_TEXT,
+            argv=argv,
+            env=dict(env),
+            cwd=os.path.expanduser("~"),
+            reads_code=True,
+            input_label="Code or address from the sign-in page",
+        )
+    ]
 
 
 def _which_with_fallbacks(name: str) -> str | None:
@@ -362,10 +496,7 @@ class ClaudeChatSpec(_AdapterSpec):
 
     def _adapter_env(self, base: Mapping[str, str]) -> dict[str, str]:
         env = dict(base)
-        try:
-            claude_bin = self._launcher.resolve_binary()
-        except CliBinaryNotFoundError:
-            claude_bin = None
+        claude_bin = self._claude_bin()
         if claude_bin and "CLAUDE_CODE_EXECUTABLE" not in os.environ:
             env["CLAUDE_CODE_EXECUTABLE"] = claude_bin
             prepend_path_dir(env, os.path.dirname(claude_bin))
@@ -399,7 +530,16 @@ class ClaudeChatSpec(_AdapterSpec):
                 else ClaudeFolderTrust(spec.cwd, config_path=claude_config_path(env))
             ),
             ensure_argv=ensure,
+            sign_in=claude_sign_in_methods(
+                self._claude_bin(), spec.env, fake=self.uses_fake_agent()
+            ),
         )
+
+    def _claude_bin(self) -> str | None:
+        try:
+            return self._launcher.resolve_binary()
+        except CliBinaryNotFoundError:
+            return None
 
 
 class CodexChatSpec(_AdapterSpec):
@@ -459,7 +599,8 @@ class CodexChatSpec(_AdapterSpec):
 
     async def prepare(self, target: LaunchTarget, options: CodexOptions) -> ChatLaunchPlan:
         self._launch(os.environ)
-        spec = await self._launcher.build(target, options, session_id=None)
+        # No sign-in check: a chat that is not signed in offers the sign-in.
+        spec = await self._launcher.build(target, options, session_id=None, require_auth=False)
         codex_bin = self._codex_bin()
         env = self._adapter_env(spec.env, codex_bin)
         shared = False
@@ -483,6 +624,7 @@ class CodexChatSpec(_AdapterSpec):
             trust=None if fake else CodexFolderTrust(spec.cwd, config_path=codex_config_path(env)),
             ensure_argv=ensure,
             shared_host=shared and not fake,
+            sign_in=codex_sign_in_methods(codex_bin, spec.env, fake=fake),
         )
 
     def _shared_codex_path(
@@ -668,7 +810,14 @@ class AntigravityChatSpec(_ChatSpecBase):
             ],
             config_resolver=resolve_antigravity_config,
             presence=None if fake else self.presence,
+            sign_in=antigravity_sign_in_methods(
+                None if fake else self._agy_identity_path(), spec.env, fake=fake
+            ),
         )
+
+    def _agy_identity_path(self) -> str | None:
+        identity = self._agy_identity()
+        return identity[0] if identity else None
 
 
 async def _known_argv(argv: list[str], ensure: Callable[[], list[str]] | None) -> list[str]:

@@ -582,6 +582,32 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    fun startSignIn(request: ChatRequest.SignIn, methodId: String) =
+        sendSignIn(request, signInStartKey(methodId)) { id -> ChatProtocol.signInStart(id, methodId) }
+
+    fun submitSignIn(request: ChatRequest.SignIn, value: String) {
+        val trimmed = value.trim()
+        if (trimmed.isEmpty() || request.busy) return
+        sendSignIn(request, SIGN_IN_SUBMIT) { id -> ChatProtocol.signInSubmit(id, trimmed) }
+    }
+
+    fun cancelSignIn(request: ChatRequest.SignIn) =
+        sendSignIn(request, SIGN_IN_CANCEL) { id -> ChatProtocol.signInCancel(id) }
+
+    private fun sendSignIn(request: ChatRequest.SignIn, action: String, build: (String) -> JsonObject) {
+        val ui = _ui.value
+        if (!ui.live || ui.sessionClosed || request.id in ui.answering) return
+        val id = nextCommandId()
+        if (!send(build(id))) {
+            _messages.trySend("Not connected. Try again.")
+            return
+        }
+        pending[id] = PendingCommand.Respond(request.id)
+        _ui.update {
+            it.copy(answering = it.answering + (request.id to action), requestErrors = it.requestErrors - request.id)
+        }
+    }
+
     fun addImages(uris: List<Uri>) {
         if (_ui.value.imagesLoading) return
         val room = ChatImageEncoder.MAX_IMAGES - _ui.value.images.size
@@ -775,6 +801,11 @@ class ChatViewModel @Inject constructor(
         const val FORM_ACCEPT = "accept"
         const val FORM_DECLINE = "decline"
         const val FORM_CANCEL = "cancel"
+        const val SIGN_IN_SUBMIT = "submit"
+        const val SIGN_IN_CANCEL = "cancel"
+
+        /** The [ChatUiState.answering] value while a sign-in method starts. */
+        fun signInStartKey(methodId: String): String = "start:$methodId"
         private const val ALREADY_ANSWERED = "This request was already answered"
         private const val ALREADY_SENT = "This message was already sent"
         private const val PROMPT_TEXT_MAX = 100_000

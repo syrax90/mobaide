@@ -57,6 +57,9 @@ final class ChatFrameFixtureTests: XCTestCase {
             "dequeue": { .dequeue(id: $0, queueId: "q:14") },
             "restart": { .restart(id: $0) },
             "steer": { .steer(id: $0, queueId: "q:14") },
+            "sign_in_start": { .signInStart(id: $0, method: "claude_ai") },
+            "sign_in_submit": { .signInSubmit(id: $0, value: "ab12-cd34") },
+            "sign_in_cancel": { .signInCancel(id: $0) },
         ]
     }
 
@@ -103,6 +106,7 @@ final class ChatFrameFixtureTests: XCTestCase {
         switch request {
         case .permission: return "permission"
         case .form: return "form"
+        case .signIn: return "sign_in"
         case .other: return "other"
         }
     }
@@ -249,6 +253,48 @@ final class ChatFrameFixtureTests: XCTestCase {
         let other = otherEpoch.apply(.events(ChatEventsFrame(epoch: "other", seq: events.seq, events: events.events)))
         XCTAssertEqual(other.sync, .fresh)
         XCTAssertEqual(otherEpoch.items, before)
+    }
+
+    func testSignInEventsDecodeBothStages() throws {
+        var timeline = try loaded()
+        _ = timeline.apply(.events(try batch()))
+        _ = timeline.apply(try server("events_remove"))
+        guard case .events(let frame) = try server("events_sign_in") else {
+            return XCTFail("events_sign_in is not an events frame")
+        }
+
+        let first = timeline.apply(.events(ChatEventsFrame(epoch: frame.epoch, seq: 49, events: Array(frame.events.prefix(1)))))
+
+        XCTAssertNil(first.sync)
+        XCTAssertEqual(timeline.state.requests.map(requestKind), ["sign_in"])
+        guard case .signIn(let choose) = timeline.state.requests.first else { return XCTFail("not a sign-in") }
+        XCTAssertEqual(choose.id, "sign-in")
+        XCTAssertEqual(choose.title, "Sign in to Claude Code")
+        XCTAssertEqual(choose.stage, "choose")
+        XCTAssertFalse(choose.waiting)
+        XCTAssertEqual(choose.methods, [
+            .init(id: "claude_ai", name: "Claude subscription", description: "Pro, Max, Team or Enterprise plan"),
+            .init(id: "console", name: "Anthropic Console", description: "API usage billing"),
+        ])
+        XCTAssertNil(choose.url)
+        XCTAssertNil(choose.userCode)
+        XCTAssertNil(choose.input)
+        XCTAssertFalse(choose.busy)
+        XCTAssertNil(choose.error)
+
+        let second = timeline.apply(.events(frame))
+
+        XCTAssertNil(second.sync)
+        XCTAssertEqual(timeline.seq, 50)
+        guard case .signIn(let waiting) = timeline.state.requests.first else { return XCTFail("not a sign-in") }
+        XCTAssertEqual(waiting.title, "Sign in to Codex")
+        XCTAssertTrue(waiting.waiting)
+        XCTAssertEqual(waiting.methods.map(\.id), ["chatgpt", "api_key"])
+        XCTAssertEqual(waiting.url, URL(string: "https://auth.openai.com/codex/device"))
+        XCTAssertEqual(waiting.userCode, "CIQN-Y66ME")
+        XCTAssertEqual(waiting.input, .init(label: "Code from the sign-in page", secret: false))
+        XCTAssertTrue(waiting.busy)
+        XCTAssertEqual(waiting.error, "That code did not work. Try again.")
     }
 
     func testResultsDecode() throws {

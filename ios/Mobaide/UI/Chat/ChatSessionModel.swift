@@ -121,6 +121,7 @@ final class ChatSessionModel {
         case prompt(text: String, images: [ChatComposerImage])
         case setConfig(configId: String)
         case respond(requestId: String)
+        case signIn(requestId: String)
         case dequeue(queueId: String)
         case steer(queueId: String)
         case cancel
@@ -463,6 +464,12 @@ final class ChatSessionModel {
             if !result.ok {
                 message = ToastMessage(text: result.error ?? "The agent did not restart", tone: .danger)
             }
+        case .signIn(let requestId):
+            // The request stays across its stages, so the spinner ends with the result.
+            answering[requestId] = nil
+            if !result.ok {
+                formErrors[requestId] = result.error ?? "The sign-in did not respond"
+            }
         }
     }
 
@@ -505,7 +512,7 @@ final class ChatSessionModel {
             message = ToastMessage(text: promptNotice, tone: .danger)
         case .setConfig(let configId):
             configOverrides[configId] = nil
-        case .respond(let requestId):
+        case .respond(let requestId), .signIn(let requestId):
             answering[requestId] = nil
         case .dequeue(let queueId), .steer(let queueId):
             dequeuing.remove(queueId)
@@ -631,6 +638,31 @@ final class ChatSessionModel {
             pending: .respond(requestId: request.id)
         )
     }
+
+    func startSignIn(_ request: ChatPendingRequest.SignIn, method: ChatPendingRequest.SignIn.Method) {
+        sendSignIn(request, key: Self.signInStartKey(method.id), .signInStart(id: nextCommandId(), method: method.id))
+    }
+
+    func submitSignIn(_ request: ChatPendingRequest.SignIn, value: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !request.busy else { return }
+        sendSignIn(request, key: Self.signInSubmitKey, .signInSubmit(id: nextCommandId(), value: trimmed))
+    }
+
+    func cancelSignIn(_ request: ChatPendingRequest.SignIn) {
+        sendSignIn(request, key: Self.signInCancelKey, .signInCancel(id: nextCommandId()))
+    }
+
+    private func sendSignIn(_ request: ChatPendingRequest.SignIn, key: String, _ command: ChatCommand) {
+        guard isLive, answering[request.id] == nil else { return }
+        answering[request.id] = key
+        formErrors[request.id] = nil
+        enqueue(command, pending: .signIn(requestId: request.id))
+    }
+
+    static func signInStartKey(_ methodId: String) -> String { "start:\(methodId)" }
+    static let signInSubmitKey = "submit"
+    static let signInCancelKey = "cancel"
 
     func dequeue(_ queued: ChatQueuedMessage) {
         guard isLive, !dequeuing.contains(queued.id) else { return }

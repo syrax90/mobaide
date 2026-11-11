@@ -20,6 +20,13 @@ prompt text picks the scenario:
 * ``fail`` — the turn fails with an error;
 * ``crash`` — the process exits;
 * anything else — a short echo with a thought.
+
+While the file named by ``MOBAIDE_FAKE_ACP_SIGNED_OUT`` exists the agent is
+signed out: the Claude flavor pushes ``_auth/status_update`` and fails each
+prompt, the others fail ``session/new``. ``fake_agent.py login [--flavor F]
+[--device]`` is its login command: it prints a sign-in page and reads a code
+(any code but ``bad``), or with ``--device`` shows a one-time code and
+finishes alone; on success it removes that file.
 """
 from __future__ import annotations
 
@@ -28,6 +35,7 @@ import json
 import os
 import sys
 import threading
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -66,6 +74,15 @@ AGY_MODELS = [
     {"value": "gemini-3.8-flash", "name": "Gemini 3.8 Flash"},
     {"value": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6 (Thinking)"},
 ]
+SIGNED_OUT_ENV = "MOBAIDE_FAKE_ACP_SIGNED_OUT"
+AUTH_REQUIRED = -32000
+
+
+def signed_out() -> bool:
+    marker = os.environ.get(SIGNED_OUT_ENV)
+    return bool(marker) and os.path.exists(marker)
+
+
 AGY_LEVELS = [{"value": v, "name": v.capitalize()} for v in ("low", "medium", "high")]
 # ``models.availableModels`` of ``session/new``: one entry per thinking level.
 AGY_AVAILABLE_MODELS = [
@@ -238,6 +255,14 @@ class FakeAgent:
             self.send({"jsonrpc": "2.0", "id": msg_id, "result": result})
 
     async def dispatch(self, method: str, params: dict[str, Any]) -> Any:
+        if method == "initialize" and signed_out() and not self.codex and not self.agy:
+            # claude-agent-acp reports a missing login right after initialize.
+            self.loop.call_later(0.05, lambda: self.send({
+                "jsonrpc": "2.0", "method": "_auth/status_update",
+                "params": {"authStatus": {"kind": "none", "label": "Not logged in"}},
+            }))
+        if method in ("session/new", "session/load") and signed_out() and (self.codex or self.agy):
+            raise _RpcError(AUTH_REQUIRED, "Authentication required")
         if method == "initialize":
             if self.agy:
                 return {
@@ -388,6 +413,9 @@ class FakeAgent:
         if "fail" in lower:
             await asyncio.sleep(0.2)
             raise _RpcError(-32603, "The model request failed (fake error)")
+        if signed_out():
+            await asyncio.sleep(0.2)
+            raise _RpcError(AUTH_REQUIRED, "Authentication required")
         ok = True
         if "tool" in lower and self.agy:
             ok = await self.agy_tools(sid)
@@ -614,10 +642,49 @@ class _RpcError(Exception):
         self.message = message
 
 
+def fake_login(flavor: str, device: bool) -> int:
+    """A login command shaped like the real ones: a sign-in page, then a
+    pasted code (or, with ``device``, a one-time code to enter there)."""
+    url = f"https://example.com/{flavor}/sign-in?state=fake"
+    if device:
+        print("Follow these steps to sign in:\n")
+        print(f"1. Open this link in your browser and sign in\n   {url}\n")
+        print("2. Enter this one-time code (expires in 15 minutes)\n   FAKE-12345\n", flush=True)
+        time.sleep(3)
+    else:
+        # The real Claude login prints its address as an OSC 8 hyperlink.
+        print(f"If the browser didn't open, visit: \x1b]8;;{url}\x07{url}\x1b]8;;\x07", flush=True)
+        while True:
+            sys.stdout.write("Paste code here if prompted > ")
+            sys.stdout.flush()
+            line = sys.stdin.readline()
+            if not line:
+                return 1
+            code = line.strip()
+            if code == "bad":
+                print("Invalid code. Check the code and try again.", flush=True)
+                continue
+            if code == "fail":
+                print("Login failed: the sign-in server refused the code.", flush=True)
+                return 1
+            if code:
+                break
+    marker = os.environ.get(SIGNED_OUT_ENV)
+    if marker:
+        try:
+            os.remove(marker)
+        except FileNotFoundError:
+            pass
+    print("Login successful.", flush=True)
+    return 0
+
+
 def main() -> None:
     flavor = "claude"
     if "--flavor" in sys.argv[1:-1]:
         flavor = sys.argv[sys.argv.index("--flavor") + 1]
+    if sys.argv[1:2] == ["login"]:
+        sys.exit(fake_login(flavor, "--device" in sys.argv[2:]))
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     agent = FakeAgent(loop, flavor)

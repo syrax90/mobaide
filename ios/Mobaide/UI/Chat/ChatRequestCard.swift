@@ -22,6 +22,10 @@ struct ChatRequestCard: View {
             case .form(let form):
                 ChatFormBody(model: model, request: form, bodyCap: bodyCap)
                     .id(form.id)
+            case .signIn(let signIn):
+                // A new stage starts with an empty field.
+                ChatSignInBody(model: model, request: signIn, bodyCap: bodyCap)
+                    .id("\(signIn.id):\(signIn.stage)")
             case .other(_, _, let title):
                 Text(title)
                     .font(.body.weight(.semibold))
@@ -57,6 +61,7 @@ struct ChatRequestCard: View {
         switch request {
         case .permission(let permission): return ChatToolStyle.icon(permission.toolKind)
         case .form: return "questionmark.bubble"
+        case .signIn: return "person.badge.key"
         case .other: return "hand.raised"
         }
     }
@@ -65,6 +70,7 @@ struct ChatRequestCard: View {
         switch request {
         case .permission: return "Permission needed"
         case .form: return "Question"
+        case .signIn: return "Sign-in needed"
         case .other: return "Waiting for you"
         }
     }
@@ -395,5 +401,172 @@ private struct ChatFormBody: View {
                 .disabled(!model.isLive || answering != nil)
             }
         }
+    }
+}
+
+/// Sign-in to the coding agent on the PC: pick a method, then open the
+/// sign-in page, enter the one-time code shown here on it, or paste the code
+/// it shows.
+private struct ChatSignInBody: View {
+    let model: ChatSessionModel
+    let request: ChatPendingRequest.SignIn
+    let bodyCap: CGFloat
+
+    @Environment(\.mobaideColors) private var colors
+    @Environment(\.openURL) private var openURL
+    @State private var value = ""
+    @State private var revealed = false
+    @FocusState private var fieldFocused: Bool
+
+    private var answering: String? { model.answering[request.id] }
+    private var input: ChatPendingRequest.SignIn.Input? { request.waiting ? request.input : nil }
+    private var canSubmit: Bool {
+        model.isLive && answering == nil && !request.busy
+            && !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ChatCappedScroll(maxHeight: bodyCap, fadeColor: colors.bg2) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(request.title)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(colors.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !request.text.isEmpty {
+                        Text(request.text)
+                            .foregroundStyle(colors.text)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !request.waiting, request.methods.count > 1 {
+                        ForEach(request.methods, id: \.id) { method in
+                            methodLine(method)
+                        }
+                    }
+                    if request.waiting, let url = request.url {
+                        Button {
+                            openURL(url)
+                        } label: {
+                            Label("Open sign-in page", systemImage: "arrow.up.right.square")
+                        }
+                        .buttonStyle(.pixelPrimaryBlock)
+                        .disabled(!model.isLive)
+                    }
+                    if request.waiting, let code = request.userCode {
+                        CopyableCodeBlock(label: "One-time code", code: code)
+                    }
+                    if let input {
+                        field(input)
+                    }
+                    if request.waiting, request.busy, input == nil {
+                        HStack(spacing: 8) {
+                            PixelLoadingBlock(width: 7, height: 13)
+                            Text(request.url == nil ? "Starting the sign-in…" : "Waiting for you to finish on the sign-in page…")
+                                .font(.footnote)
+                                .foregroundStyle(colors.textMuted)
+                        }
+                    }
+                    if let error = model.formErrors[request.id] ?? request.error, !error.isEmpty {
+                        Text(error)
+                            .font(.footnote)
+                            .foregroundStyle(colors.danger)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            buttons
+        }
+    }
+
+    private func methodLine(_ method: ChatPendingRequest.SignIn.Method) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(method.name)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(colors.text)
+            if !method.description.isEmpty {
+                Text(method.description)
+                    .font(.footnote)
+                    .foregroundStyle(colors.textMuted)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private func field(_ input: ChatPendingRequest.SignIn.Input) -> some View {
+        let label = input.label.isEmpty ? "Code" : input.label
+        let enabled = model.isLive && answering == nil && !request.busy
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(colors.text)
+            if input.secret {
+                SecretTextField(text: $value, label: label, revealed: $revealed, enabled: enabled, isFocused: fieldFocused)
+                    .focused($fieldFocused)
+                    .onSubmit(submit)
+            } else {
+                TextField(label, text: $value)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.done)
+                    .focused($fieldFocused)
+                    .onSubmit(submit)
+                    .pixelField(isFocused: fieldFocused)
+                    .disabled(!enabled)
+                    .accessibilityLabel(label)
+            }
+        }
+    }
+
+    private func submit() {
+        guard canSubmit else { return }
+        UISelectionFeedbackGenerator().selectionChanged()
+        model.submitSignIn(request, value: value)
+    }
+
+    private var buttons: some View {
+        VStack(spacing: 10) {
+            if !request.waiting {
+                ForEach(Array(request.methods.enumerated()), id: \.element.id) { index, method in
+                    methodButton(method, primary: index == 0)
+                }
+            }
+            if input != nil {
+                let sending = request.busy || answering == ChatSessionModel.signInSubmitKey
+                Button(action: submit) {
+                    HStack(spacing: 8) {
+                        if sending { PixelLoadingBlock(width: 7, height: 13) }
+                        Text("Submit")
+                    }
+                }
+                .buttonStyle(.pixelPrimaryBlock)
+                .disabled(!canSubmit && !sending)
+                .allowsHitTesting(canSubmit)
+            }
+            Button(request.waiting ? "Cancel" : "Not now") {
+                model.cancelSignIn(request)
+            }
+            .font(MobaideTypography.bodyLarge)
+            .foregroundStyle(colors.accent)
+            .frame(minWidth: 88, minHeight: 44)
+            .disabled(!model.isLive || answering != nil)
+        }
+    }
+
+    private func methodButton(_ method: ChatPendingRequest.SignIn.Method, primary: Bool) -> some View {
+        let key = ChatSessionModel.signInStartKey(method.id)
+        return Button {
+            UISelectionFeedbackGenerator().selectionChanged()
+            model.startSignIn(request, method: method)
+        } label: {
+            HStack(spacing: 8) {
+                if answering == key { PixelLoadingBlock(width: 7, height: 13) }
+                Text(request.methods.count == 1 ? "Sign in" : method.name)
+            }
+        }
+        .buttonStyle(primary ? .pixelPrimaryBlock : .pixelBlock)
+        .disabled(!model.isLive || (answering != nil && answering != key))
+        .allowsHitTesting(answering == nil)
     }
 }

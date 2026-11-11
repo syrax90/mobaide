@@ -461,8 +461,51 @@ enum ChatPendingRequest: Equatable, Sendable, Decodable, Identifiable {
         let fields: [ChatFormField]
     }
 
+    /// Sign-in to the coding agent on the PC. `choose` offers `methods`;
+    /// `waiting` runs one: open `url`, enter `userCode` there, or paste the
+    /// code the page shows into the `input` field.
+    struct SignIn: Equatable, Sendable {
+        struct Method: Equatable, Sendable, Decodable {
+            let id: String
+            let name: String
+            let description: String
+
+            init(id: String, name: String, description: String) {
+                self.id = id
+                self.name = name
+                self.description = description
+            }
+
+            init(from decoder: any Decoder) throws {
+                let c = try decoder.container(keyedBy: ChatKey.self)
+                guard let id = c.string("id") else { throw ChatSkipError() }
+                self.init(id: id, name: c.string("name") ?? id, description: c.string("description") ?? "")
+            }
+        }
+
+        struct Input: Equatable, Sendable {
+            let label: String
+            let secret: Bool
+        }
+
+        let id: String
+        let toolCallId: String?
+        let title: String
+        let text: String
+        let stage: String
+        let methods: [Method]
+        let url: URL?
+        let userCode: String?
+        let input: Input?
+        let busy: Bool
+        let error: String?
+
+        var waiting: Bool { stage == "waiting" }
+    }
+
     case permission(Permission)
     case form(Form)
+    case signIn(SignIn)
     case other(id: String, toolCallId: String?, title: String)
 
     init(from decoder: any Decoder) throws {
@@ -483,15 +526,41 @@ enum ChatPendingRequest: Equatable, Sendable, Decodable, Identifiable {
             ))
         case "form":
             self = .form(Form(id: id, toolCallId: toolCallId, title: title, fields: c.list(ChatFormField.self, "fields")))
+        case "sign_in":
+            self = .signIn(Self.signIn(c, id: id, toolCallId: toolCallId, title: title))
         default:
             self = .other(id: id, toolCallId: toolCallId, title: title)
         }
+    }
+
+    private static func signIn(
+        _ c: KeyedDecodingContainer<ChatKey>, id: String, toolCallId: String?, title: String
+    ) -> SignIn {
+        var input: SignIn.Input?
+        if let field = try? c.nestedContainer(keyedBy: ChatKey.self, forKey: "input") {
+            input = SignIn.Input(label: field.string("label") ?? "", secret: field.bool("secret") ?? false)
+        }
+        let url = c.string("url").flatMap { $0.hasPrefix("https://") ? URL(string: $0) : nil }
+        return SignIn(
+            id: id,
+            toolCallId: toolCallId,
+            title: title,
+            text: c.string("text") ?? "",
+            stage: c.string("stage") ?? "choose",
+            methods: c.list(SignIn.Method.self, "methods"),
+            url: url,
+            userCode: c.string("user_code"),
+            input: input,
+            busy: c.bool("busy") ?? false,
+            error: c.string("error")
+        )
     }
 
     var id: String {
         switch self {
         case .permission(let request): return request.id
         case .form(let request): return request.id
+        case .signIn(let request): return request.id
         case .other(let id, _, _): return id
         }
     }
@@ -500,6 +569,7 @@ enum ChatPendingRequest: Equatable, Sendable, Decodable, Identifiable {
         switch self {
         case .permission(let request): return request.toolCallId
         case .form(let request): return request.toolCallId
+        case .signIn(let request): return request.toolCallId
         case .other(_, let toolCallId, _): return toolCallId
         }
     }

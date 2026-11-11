@@ -43,6 +43,7 @@ from .rpc import (
     AcpProcessError,
     AcpRpcError,
 )
+from .signin import SignInError, SignInFlow
 from .timeline import ChatTimeline
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,9 @@ CANCEL_GRACE = 15.0
 SHARED_CANCEL_WAIT = 3.0
 STEER_TIMEOUT = 30.0
 STEER_METHOD = "_session/steering"
+# claude-agent-acp pushes the login it found; ``kind: "none"`` = signed out.
+AUTH_STATUS_METHOD = "_auth/status_update"
+LOGIN_COMMAND = "login"
 # Command output of a running tool is re-rendered at most this often.
 CONSOLE_RENDER_INTERVAL = 0.3
 CONSOLE_TOOLS_MAX = 64
@@ -199,6 +203,21 @@ class ChatSession:
         self._presence_stale = False
         # A reload after that app closed it: say why once the chat is back.
         self._reload_notice = False
+        self._sign_in = SignInFlow(
+            plan.sign_in,
+            agent_title,
+            request_id="sign-in",
+            on_change=self._publish_requests,
+            on_signed_in=self._on_signed_in,
+        )
+        self._signed_in_notice = False
+        # The last start failed for a missing login.
+        self._start_auth_failed = False
+        # Messages the agent refused for a missing login: sent again once signed in.
+        self._auth_retry: list[_QueuedPrompt] = []
+        # A turn has finished, so the agent has stored the conversation.
+        self._has_turns = False
+        self._timeline.state["commands"] = self._with_login([])
 
     @property
     def state(self) -> SessionState:
@@ -339,6 +358,7 @@ class ChatSession:
         for task in (self._bootstrap_task, self._turn_task, *self._command_tasks):
             if task is not None and not task.done():
                 task.cancel()
+        self._sign_in.close()
         self._resolve_all_requests_cancelled()
         conn = self._conn
         if conn is not None:
@@ -405,7 +425,7 @@ class ChatSession:
         if op == "sync":
             self._emit_frame(self.sync_frame(cmd.get("epoch"), cmd.get("after_seq")))
             return
-        if op in ("set_config", "restart", "steer"):
+        if op in ("set_config", "restart", "steer", "sign_in"):
             # These wait on the agent; running them aside keeps a later
             # cancel or prompt from queueing behind them.
             task = asyncio.create_task(self._run_command(op, cmd, cmd_id))
@@ -441,6 +461,8 @@ class ChatSession:
             return await self._cmd_restart()
         if op == "steer":
             return await self._cmd_steer(cmd)
+        if op == "sign_in":
+            return await self._cmd_sign_in(cmd)
         raise ChatCommandError(f"Unknown command: {op}")
 
     async def _spawn(self) -> None:
@@ -556,6 +578,10 @@ class ChatSession:
             self._pending_config = []
             self._ready.set()
             tl.patch_state(status="ready", urgent=True)
+            if self._start_auth_failed:
+                # The start that needed the sign-in works now (signed in on the PC).
+                self._start_auth_failed = False
+                self._sign_in.withdraw()
             if self._reload_notice:
                 self._reload_notice = False
                 tl.upsert(
@@ -570,6 +596,9 @@ class ChatSession:
                         ),
                     }
                 )
+            if self._signed_in_notice:
+                self._signed_in_notice = False
+                self._show_signed_in()
             busy_before, self._busy_before_ready = self._busy_before_ready, False
             if busy_before:
                 self._on_agent_busy(True)
@@ -584,6 +613,9 @@ class ChatSession:
             raise
         except AcpRpcError as exc:
             self._fail_start(self._describe_rpc_error(exc, during_setup=True))
+            if exc.code == ERR_AUTH_REQUIRED:
+                self._start_auth_failed = True
+                self._sign_in.offer()
         except (AcpProcessError, TimeoutError, OSError) as exc:
             self._fail_start(str(exc) or "The agent did not respond")
 
@@ -681,12 +713,15 @@ class ChatSession:
     def _fail_start(self, message: str) -> None:
         logger.warning("chat.start_failed session=%s: %s", self.session_id, message)
         self._reload_notice = False
+        self._signed_in_notice = False
         if self._timeline.state.get("status") == "error":
             return
         self._timeline.upsert({"id": self._next_id("err"), "type": "error", "text": message})
         self._timeline.patch_state(status="error", error=message, urgent=True)
 
     def _describe_rpc_error(self, exc: AcpRpcError, *, during_setup: bool = False) -> str:
+        if exc.code == ERR_AUTH_REQUIRED and self._sign_in.available:
+            return f"{self._agent_title} is not signed in on your PC. Sign in to continue."
         if exc.code == ERR_AUTH_REQUIRED:
             return (
                 f"{self._agent_title} is not signed in on the PC. Sign in there "
@@ -799,6 +834,8 @@ class ChatSession:
             raise ChatCommandError("The message is empty")
         if len(text) > PROMPT_TEXT_MAX:
             raise ChatCommandError("The message is too long")
+        if not images and text.lower() == f"/{LOGIN_COMMAND}" and self._sign_in.available:
+            return self._cmd_login()
         status = self._timeline.state.get("status")
         if status in ("error", "stopped"):
             raise ChatCommandError("The agent is not running. Use Restart to start it again.")
@@ -911,6 +948,7 @@ class ChatSession:
         # The agent answered the prompt with an error (rate limit, auth,
         # overload): the user has to act, the same as after a finished turn.
         failed = False
+        auth_failed = False
         try:
             conn = self._require_conn()
             if self._presence_hold is None and self._plan.presence is not None:
@@ -943,6 +981,11 @@ class ChatSession:
             tl.upsert(
                 {"id": self._next_id("err"), "type": "error", "text": self._describe_rpc_error(exc)}
             )
+            if exc.code == ERR_AUTH_REQUIRED and self._sign_in.available:
+                auth_failed = True
+                self._auth_retry.append(_QueuedPrompt(self._next_id("q"), text, images))
+                del self._auth_retry[:-QUEUE_MAX]
+                self._sign_in.offer()
         except AcpProcessError as exc:
             if tl.state.get("status") != "error":
                 tl.upsert({"id": self._next_id("err"), "type": "error", "text": str(exc)})
@@ -964,6 +1007,13 @@ class ChatSession:
             self._command_tasks.add(task)
             task.add_done_callback(self._command_tasks.discard)
             return
+        if stop_reason is not None:
+            self._has_turns = True
+        if stop_reason is not None and not auth_failed:
+            self._sign_in.withdraw()
+        if not auth_failed:
+            # The agent took a message again: the refused ones are stale.
+            self._auth_retry.clear()
         if stop_reason == "cancelled":
             self._mark_running_tools("cancelled")
         if stop_reason and stop_reason != "end_turn":
@@ -1260,7 +1310,9 @@ class ChatSession:
             self._close_streaming_items()
             self._drop_consoles()
             self._timeline.patch_state(plan=[])
-        self._timeline.patch_state(status="starting", error=None, requests=[], urgent=True)
+        self._timeline.patch_state(
+            status="starting", error=None, requests=self._public_requests(), urgent=True
+        )
         # A reload brings in what another app sent; a new session has no such past.
         self._presence_stale = False
         self._external_turn = False
@@ -1275,7 +1327,108 @@ class ChatSession:
             name=f"chat-bootstrap-{self.session_id}",
         )
 
+    async def _cmd_sign_in(self, cmd: dict[str, Any]) -> dict[str, Any]:
+        if self._stopping:
+            raise ChatCommandError("The session is closing")
+        action = cmd.get("action")
+        try:
+            if action == "start":
+                await self._sign_in.start(cmd.get("method"))
+            elif action == "submit":
+                await self._sign_in.submit(cmd.get("value"))
+            elif action == "cancel":
+                self._sign_in.cancel()
+            else:
+                raise ChatCommandError("Unknown action")
+        except SignInError as exc:
+            raise ChatCommandError(str(exc)) from None
+        return {}
+
+    def _cmd_login(self) -> dict[str, Any]:
+        """``/login``: the agents' own command needs their terminal app, so
+        the chat runs its sign-in instead."""
+        if self._stopping:
+            raise ChatCommandError("The session is closing")
+        if self._own_turn_running() or self._external_turn:
+            raise ChatCommandError("Wait for the current turn to end, or stop it, then sign in.")
+        self._run_aside(self._sign_in.open())
+        return {"queued": False, "queue_id": None}
+
+    def _with_login(self, commands: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not self._sign_in.available:
+            return commands
+        own = [c for c in commands if c.get("name") != LOGIN_COMMAND]
+        return [
+            *own,
+            {
+                "name": LOGIN_COMMAND,
+                "description": f"Sign in to {self._agent_title} on your PC",
+                "hint": None,
+            },
+        ]
+
+    def _on_signed_in(self) -> None:
+        self._run_aside(self._resume_after_sign_in())
+
+    async def _resume_after_sign_in(self) -> None:
+        """Start the agent again so it reads the new login, then send the
+        messages it refused."""
+        if self._stopping:
+            return
+        if self._restarting or self._own_turn_running() or self._external_turn:
+            # The next start of the agent reads the new login anyway.
+            self._show_signed_in()
+            return
+        # Shown once the agent is back: a reload replays the conversation first.
+        self._signed_in_notice = True
+        self._restarting = True
+        try:
+            bootstrap = self._bootstrap_task
+            if bootstrap is not None and not bootstrap.done():
+                bootstrap.cancel()
+                await asyncio.gather(bootstrap, return_exceptions=True)
+            if self._load_session_id is None and not self._has_turns:
+                # The agent stored nothing yet: start a new session instead
+                # of opening an empty one.
+                self._acp_session_id = None
+            retry, self._auth_retry = self._auth_retry, []
+            # Within the queue's own limit.
+            retry = retry[len(retry) - max(0, QUEUE_MAX - len(self._queue)):]
+            if retry:
+                self._queue[:0] = retry
+                self._publish_queue()
+            await self._restart()
+        except Exception:
+            logger.exception("chat.sign_in_restart_failed session=%s", self.session_id)
+            self._fail_start("Could not start the agent again. Use Restart to try again.")
+        finally:
+            self._restarting = False
+
+    def _show_signed_in(self) -> None:
+        self._timeline.upsert(
+            {
+                "id": self._next_id("n"),
+                "type": "notice",
+                "severity": "info",
+                "title": f"Signed in to {self._agent_title}",
+                "text": "",
+            }
+        )
+
+    def _run_aside(self, coro: Any) -> None:
+        task = asyncio.create_task(coro)
+        self._command_tasks.add(task)
+        task.add_done_callback(self._command_tasks.discard)
+
     def _on_notification(self, method: str, params: Any) -> None:
+        if method == AUTH_STATUS_METHOD and isinstance(params, dict):
+            status = params.get("authStatus")
+            kind = status.get("kind") if isinstance(status, dict) else None
+            if kind == "none":
+                self._sign_in.offer()
+            elif isinstance(kind, str):
+                self._sign_in.withdraw()
+            return
         if method != "session/update" or not isinstance(params, dict):
             return
         sid = params.get("sessionId")
@@ -1303,7 +1456,7 @@ class ChatSession:
         elif kind == "plan":
             tl.patch_state(plan=nz.plan_entries(update.get("entries")))
         elif kind == "available_commands_update":
-            tl.patch_state(commands=nz.commands(update.get("availableCommands")))
+            tl.patch_state(commands=self._with_login(nz.commands(update.get("availableCommands"))))
         elif kind == "current_mode_update":
             mode = update.get("currentModeId")
             if isinstance(mode, str):
@@ -1669,10 +1822,14 @@ class ChatSession:
         finally:
             self._drop_request(key)
 
+    def _public_requests(self) -> list[dict[str, Any]]:
+        requests = [p.public for p in self._requests.values()]
+        if self._sign_in.public is not None:
+            requests.append(self._sign_in.public)
+        return requests
+
     def _publish_requests(self) -> None:
-        self._timeline.patch_state(
-            requests=[p.public for p in self._requests.values()], urgent=True
-        )
+        self._timeline.patch_state(requests=self._public_requests(), urgent=True)
 
     def _drop_request(self, key: str) -> None:
         if self._requests.pop(key, None) is None:

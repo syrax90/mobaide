@@ -413,6 +413,19 @@ async def test_build_auth_guard_runs_before_worktree_creation(
 
 
 @pytest.mark.asyncio
+async def test_build_without_require_auth_skips_the_guard(
+    tmp_path: Path, _unauthenticated_codex_env,
+):
+    """A chat session builds with ``require_auth=False``: it offers the sign-in
+    itself, so an unauthenticated host still gets a launch spec."""
+    spec = await CodexLauncher().build(
+        _make_project(str(tmp_path)), CodexOptions(), require_auth=False
+    )
+    assert spec.cwd == str(tmp_path)
+    assert spec.argv[0] == "codex"
+
+
+@pytest.mark.asyncio
 async def test_build_succeeds_when_env_api_key_present(
     tmp_path: Path, monkeypatch,
 ):

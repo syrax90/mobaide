@@ -35,6 +35,7 @@ Claude Code, Codex and Antigravity sessions open in a **chat view** by default: 
 | Composer | Slash-command suggestions, image attachments (when the agent accepts images), voice input, prompt templates (inserted at the cursor), save as template, and a full-screen editor on Android and iOS. Messages sent while the agent works are queued. You can remove one, or tap **Send now** to steer the agent with it. |
 | Controls | Stop, and chips for the mode (shield), model (chip) and effort (brain) and other agent options; the chips wrap onto a second line instead of scrolling. Context usage and cost in the top bar, and a full-screen button on the web. Plan progress above the composer. |
 | Command output | Command output shows as a console block, with a live tail while the command runs. |
+| Sign-in | A **Sign-in needed** card appears when the agent is signed out, or when you send `/login` (also in the slash-command suggestions). Pick a method. The PC agent runs the coding agent's own login command in a hidden terminal. Claude Code: Claude account or Console, then paste the code the page shows. Codex: open the page and enter the one-time code in the card, or use an OpenAI API key. Antigravity: Google sign-in, then paste the code or the address of the page you land on. On success the agent restarts and sends the refused messages again. A failed login, or one that takes over 20 min, returns to the method choice with the reason. |
 | Sync | Every open device shows the same state; a reconnect fetches only what it missed. |
 
 The terminal's control-key bar and custom keyboard shortcut buttons are not part of the chat view: they send raw terminal bytes. Templates and slash commands work in the chat view. Stop and the mode chip replace Esc / Ctrl+C and Shift+Tab.
@@ -108,9 +109,9 @@ The wire details are in [PROTOCOL.md](../PROTOCOL.md).
 
 ### Codex and Antigravity sign-in
 
-**Codex.** When Codex is installed but not signed in, the agent detects this before spawning. It returns a `codex_auth_required` marker (HTTP 401) instead of hanging on Codex's interactive login. The app then prompts for an OpenAI API key and posts it to `POST /api/codex/login`, before retrying the create. That route runs `codex login --with-api-key`, with the key fed on stdin and never persisted by the agent.
+**Codex (terminal sessions).** When Codex is installed but not signed in, the agent detects this before spawning. It returns a `codex_auth_required` marker (HTTP 401) instead of hanging on Codex's interactive login. A Codex chat session does not return this marker: it shows the in-chat **Sign-in needed** card instead. For a terminal session, the app then prompts for an OpenAI API key and posts it to `POST /api/codex/login`, before retrying the create. That route runs `codex login --with-api-key`, with the key fed on stdin and never persisted by the agent.
 
-**Antigravity.** There is no auth probe. An unauthenticated `agy` shows its Google Sign-In prompt in the PTY, so the operator pre-authenticates `agy` on the host before launching a session. There is no API-key env var and no in-app Antigravity login route.
+**Antigravity (terminal sessions).** There is no auth probe. An unauthenticated `agy` shows its Google Sign-In prompt in the PTY, so the operator pre-authenticates `agy` on the host before launching a session. There is no API-key env var and no in-app Antigravity login route for terminal sessions. Chat sessions sign in from the chat card.
 
 ### On-screen control-key bar
 

@@ -5605,6 +5605,50 @@ body:has(dialog[open]) {
   font-size: 0.85rem;
 }
 
+/* Sign-in card: the address may be long, the method list is short. */
+.chat-signin-text {
+  overflow-wrap: anywhere;
+}
+
+.chat-signin-methods {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.chat-signin-methods strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.button.chat-signin-open {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 14px;
+  text-decoration: none;
+}
+
+.chat-request-body > .field {
+  margin-bottom: 0;
+}
+
+.chat-signin-status {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--text-muted);
+}
+
+.chat-signin-error {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .chat-form-fields {
   display: flex;
   flex-direction: column;

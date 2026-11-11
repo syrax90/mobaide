@@ -123,6 +123,27 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-11: sign-in from the chat
+
+Additive delta within proto-v7 (2026-11-11): **one chat request kind, one chat command. No version bump; `central_server` is untouched.**
+
+A chat session can now sign its coding agent in on the PC. ACP agents report a missing or expired login as `authRequired` (`-32000`), and their own sign-in methods open a browser on the PC or expect a terminal. So the PC agent runs the agent's own login command in a hidden PTY and shows what the user needs in the chat.
+
+| Agent | Methods (`id`) | Login command |
+|-------|----------------|---------------|
+| Claude Code | `claude_ai`, `console` | `claude auth login --claudeai` / `--console`: prints the sign-in page, then reads the code that the page shows. With the browser on the PC it finishes alone. |
+| Codex | `chatgpt`, `api_key` | `codex login --device-auth`: prints the page and a one-time code to enter there. `api_key`: the value goes to `codex login --with-api-key` on stdin. |
+| Antigravity | `google` | `agy acp --login`: prints the Google sign-in page, then reads the code (or the address of the page the user lands on). |
+
+* When it is offered: `session/new`, `session/load` or a prompt fails with `authRequired`, or claude-agent-acp pushes `_auth/status_update` with `authStatus.kind: "none"`. A user message `/login` (no images) also opens it, unless a turn runs. The state `commands` list gains a `login` entry.
+* The request in `requests`: `{"id": "sign-in", "kind": "sign_in", "tool_call_id": null, "title", "text", "stage", "methods": [{id, name, description}], "url", "user_code", "input", "busy", "error"}`.
+  * `stage: "choose"`: the client offers one button per method (or one **Sign in** button for a single method). `error` says why the last try failed.
+  * `stage: "waiting"`: `url` (always `https://`) is the sign-in page, `user_code` the code to enter there, and `input` (`{label, secret}`) asks for a value; `secret: true` means a password field. `busy` means the agent is waiting for the login to finish.
+* Command `sign_in` with `action`: `start` + `method`, `submit` + `value` (≤ 4 096 characters), or `cancel`. The result answers the command; the request itself carries the progress.
+* The login's exit code decides: `0` removes the request, starts the agent again (a new session when the agent stored nothing yet, else a reload) and sends the messages the agent refused. Any other code returns to `choose` with the last lines of its output in `error`. A login still running after 20 minutes is stopped.
+* A Codex chat create no longer answers `409 codex_auth_required`: the chat opens and offers the sign-in. Terminal Codex sessions keep the `409`.
+* Older clients show the request as an unknown kind ("Waiting for an answer").
+
 ### Delta 2026-11-11: session activity
 
 Additive delta within proto-v7 (2026-11-11): **one nullable field on the session wire dict. No version bump; `central_server` is untouched.**
@@ -234,7 +255,7 @@ Codex sessions open in the chat view too (`ui: "chat"` with `cli: "codex"`), thr
 | `'c'` command `steer` | `queue_id`. Sends a queued message into the running turn now (`_session/steering` with `idleBehavior: "promptRequired"`). `data: {steered: true}` when the turn took it (the message leaves the queue and shows as a `user` item); `{steered: false}` when no turn could take it (it stays first in the queue and runs next). A `dequeue` of a message being steered fails. |
 | State key `steering` | `true` when the agent can take a message during a turn (`initialize._meta.steering.supported`). Clients offer **Send now** on queued messages only then. |
 
-* Codex options map onto the session: `full_auto`, or sandbox `danger-full-access` with `approval: never` → mode `agent-full-access`; sandbox `read-only` → `read-only`; anything else → `workspace-write`, where a person (not Codex's reviewer model) approves each step outside the sandbox (the chat's mode chip offers Auto review). The mode is required: when the agent cannot apply it, the session does not start (error with Restart) instead of running in the agent's default mode. `model` → `model`, `reasoning_effort` → `reasoning_effort`, `initial_prompt` → the first prompt. A Codex sign-in that is missing answers `409 codex_auth_required`, as for terminal sessions.
+* Codex options map onto the session: `full_auto`, or sandbox `danger-full-access` with `approval: never` → mode `agent-full-access`; sandbox `read-only` → `read-only`; anything else → `workspace-write`, where a person (not Codex's reviewer model) approves each step outside the sandbox (the chat's mode chip offers Auto review). The mode is required: when the agent cannot apply it, the session does not start (error with Restart) instead of running in the agent's default mode. `model` → `model`, `reasoning_effort` → `reasoning_effort`, `initial_prompt` → the first prompt. A Codex sign-in that is missing answered `409 codex_auth_required`, as for terminal sessions, until the 2026-11-11 delta "sign-in from the chat".
 * Codex's trust record is `[projects."<folder>"] trust_level` in `$CODEX_HOME/config.toml` (default `~/.codex`). Like Codex, the agent looks up the folder (real path, then as given), then its git repository root, then the main checkout of a linked worktree; the first key found decides, and no other parent folder counts. `trust` appends a `trust_level = "trusted"` table for the main checkout (or the repository root, or the folder), and records nothing for the home folder, a folder above it, a root, or a folder the file already lists (that trust lasts for the session).
 
 #### Live Codex sessions
@@ -301,6 +322,7 @@ Chat sessions use the same `/ws/session/{id}` and `CH_SESSION_IO` channel. Two f
 | `respond` | `request_id`, `option_id` or `action` + `values` | Answers a permission or a form question; the first answer wins. |
 | `dequeue` | `queue_id` | Removes a queued message. |
 | `restart` | — | After a failure: respawns the agent and reloads the conversation (new epoch). |
+| `sign_in` | `action` (`start` + `method`, `submit` + `value`, `cancel`) | Drives the `sign_in` request (Delta 2026-11-11 "sign-in from the chat"). |
 
 | Frame `t` | Fields | Client action |
 |-----------|--------|---------------|
