@@ -23,7 +23,7 @@ import {
   type SnapshotFrame,
 } from './chatWire';
 
-/** Client memory cap; the oldest items go first. */
+/** Client memory cap; old steps go first, then the oldest items. */
 export const MAX_CHAT_ITEMS = 1500;
 
 export interface ChatTimeline {
@@ -31,7 +31,7 @@ export interface ChatTimeline {
   loaded: boolean;
   epoch: string | null;
   seq: number;
-  /** Older items were dropped, by the agent or by the client cap. */
+  /** Older messages were dropped, by the agent or by the client cap. */
   truncated: boolean;
   items: readonly ChatItem[];
   /** Item id → index in `items`. */
@@ -66,9 +66,41 @@ function indexItems(items: readonly ChatItem[]): Map<string, number> {
   return positions;
 }
 
-function capItems(items: ChatItem[]): { items: ChatItem[]; capped: boolean } {
-  if (items.length <= MAX_CHAT_ITEMS) return { items, capped: false };
-  return { items: items.slice(items.length - MAX_CHAT_ITEMS), capped: true };
+const isStep = (item: ChatItem): boolean => item.type === 'tool' || item.type === 'thought';
+
+const isFinishedStep = (item: ChatItem): boolean =>
+  item.type === 'thought' ||
+  (item.type === 'tool' && item.status !== 'pending' && item.status !== 'in_progress');
+
+/**
+ * Trims `items` to `max`: finished steps go first, oldest first, then items
+ * from the front; the newest item and running tools stay (a dropped tool's
+ * next update would re-add it). `droppedMessages` = a non-step was dropped.
+ */
+export function trimChatItems(
+  items: ChatItem[],
+  max: number,
+): { items: ChatItem[]; capped: boolean; droppedMessages: boolean } {
+  let excess = items.length - max;
+  if (excess <= 0) return { items, capped: false, droppedMessages: false };
+  const last = items.length - 1;
+  const drop = new Set<number>();
+  for (let i = 0; i < last && excess > 0; i += 1) {
+    const item = items[i];
+    if (item !== undefined && isFinishedStep(item)) {
+      drop.add(i);
+      excess -= 1;
+    }
+  }
+  let droppedMessages = false;
+  for (let i = 0; i < last && excess > 0; i += 1) {
+    const item = items[i];
+    if (item === undefined || drop.has(i)) continue;
+    drop.add(i);
+    excess -= 1;
+    if (!isStep(item)) droppedMessages = true;
+  }
+  return { items: items.filter((_, i) => !drop.has(i)), capped: drop.size > 0, droppedMessages };
 }
 
 export function resumeOf(timeline: ChatTimeline): SyncRequest {
@@ -91,13 +123,13 @@ export function applySnapshot(timeline: ChatTimeline, frame: SnapshotFrame): Cha
   if (timeline.loaded && timeline.epoch === frame.epoch && timeline.seq === frame.seq) {
     return { timeline: timeline.syncPending ? { ...timeline, syncPending: false } : timeline };
   }
-  const { items, capped } = capItems(frame.items);
+  const { items, droppedMessages } = trimChatItems(frame.items, MAX_CHAT_ITEMS);
   return {
     timeline: {
       loaded: true,
       epoch: frame.epoch,
       seq: frame.seq,
-      truncated: frame.truncated || capped,
+      truncated: frame.truncated || droppedMessages,
       items,
       positions: indexItems(items),
       state: frame.state,
@@ -176,12 +208,12 @@ export function applyEvents(timeline: ChatTimeline, frame: EventsFrame): ChatRed
 
   let next: ChatTimeline = { ...timeline, seq, state };
   if (items !== null) {
-    const capped = capItems(items);
+    const capped = trimChatItems(items, MAX_CHAT_ITEMS);
     next = {
       ...next,
       items: capped.items,
       positions: capped.capped ? indexItems(capped.items) : (positions ?? timeline.positions),
-      truncated: timeline.truncated || capped.capped,
+      truncated: timeline.truncated || capped.droppedMessages,
     };
   }
   if (gap) return requestSync(next, resumeOf(next));

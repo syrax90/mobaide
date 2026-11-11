@@ -37,7 +37,7 @@ struct ChatTimeline: Sendable {
     private(set) var hasSnapshot = false
     private(set) var state = ChatState()
     private(set) var items: [ChatItem] = []
-    /// Older items exist that this copy does not hold.
+    /// Older messages exist that this copy does not hold.
     private(set) var truncated = false
     private var index: [String: Int] = [:]
 
@@ -132,14 +132,45 @@ struct ChatTimeline: Sendable {
         }
     }
 
+    /// Finished steps go first, oldest first, then items from the front; the newest
+    /// item and running tools stay (a dropped tool's next update would re-add it).
+    /// `truncated` marks only dropped messages.
     private mutating func enforceCap() {
-        guard items.count > maxItems else { return }
-        items.removeFirst(items.count - maxItems)
-        truncated = true
+        var excess = items.count - maxItems
+        guard excess > 0 else { return }
+        let last = items.count - 1
+        var drop = [Bool](repeating: false, count: items.count)
+        for i in 0..<last where excess > 0 && items[i].isFinishedStep {
+            drop[i] = true
+            excess -= 1
+        }
+        for i in 0..<last where excess > 0 && !drop[i] {
+            drop[i] = true
+            excess -= 1
+            if !items[i].isStep { truncated = true }
+        }
+        items = items.indices.filter { !drop[$0] }.map { items[$0] }
         reindex()
     }
 
     private mutating func reindex() {
         index = Dictionary(uniqueKeysWithValues: items.enumerated().map { ($1.id, $0) })
+    }
+}
+
+private extension ChatItem {
+    var isStep: Bool {
+        switch body {
+        case .tool, .thought: true
+        default: false
+        }
+    }
+
+    var isFinishedStep: Bool {
+        switch body {
+        case .thought: true
+        case .tool(let call): call.status != "pending" && call.status != "in_progress"
+        default: false
+        }
     }
 }

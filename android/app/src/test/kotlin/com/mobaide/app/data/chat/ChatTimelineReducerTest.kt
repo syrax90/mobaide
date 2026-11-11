@@ -11,13 +11,18 @@ import org.junit.Test
 /**
  * Unit tests for [ChatTimelineReducer] — snapshot / events application and the
  * sync rules: duplicates by seq, one sync in flight, a resend when its answer is
- * lost, another epoch, and the client item cap.
+ * lost, another epoch, and the client item cap, which drops old steps (tool
+ * calls, thoughts) before messages.
  */
 class ChatTimelineReducerTest {
 
     private val epoch = "e1"
 
     private fun agent(id: String, text: String = "") = ChatItem.Agent(id, text)
+
+    private fun user(id: String, text: String = "") = ChatItem.User(id, text, emptyList())
+
+    private fun thought(id: String, text: String = "") = ChatItem.Thought(id, text)
 
     private fun tool(id: String, status: String = "pending") = ChatItem.Tool(
         id = id,
@@ -249,6 +254,66 @@ class ChatTimelineReducerTest {
         assertEquals(listOf("m:2", "m:3", "m:4"), timeline.items.map { it.id })
         assertEquals("3!", reducer.textOf("m:3"))
         assertEquals("4?", reducer.textOf("m:4"))
+        assertTrue(timeline.truncated)
+    }
+
+    @Test
+    fun cap_dropsFinishedStepsAfterTheLatestUserMessageBeforeOlderMessages() {
+        val reducer = loaded(
+            1,
+            listOf(user("u:0"), agent("m:1"), user("u:2"), tool("call-3", "completed"), thought("h:4"), agent("m:5")),
+            maxItems = 4,
+        )
+
+        reducer.apply(events(ChatEvent.Append(2, "m:5", "!")))
+
+        val timeline = reducer.timeline!!
+        assertEquals(listOf("u:0", "m:1", "u:2", "m:5"), timeline.items.map { it.id })
+        assertEquals("!", reducer.textOf("m:5"))
+        assertFalse(timeline.truncated)
+    }
+
+    @Test
+    fun cap_keepsARunningToolInPlaceWhileOlderMessagesGo() {
+        val reducer = loaded(1, listOf(user("u:0"), agent("m:1"), tool("call-2", "in_progress")), maxItems = 3)
+
+        reducer.apply(events(ChatEvent.Upsert(2, agent("m:3", "a"))))
+        reducer.apply(events(ChatEvent.Upsert(3, tool("call-2", "completed"))))
+
+        val timeline = reducer.timeline!!
+        assertEquals(listOf("m:1", "call-2", "m:3"), timeline.items.map { it.id })
+        assertEquals("completed", (timeline.items[1] as ChatItem.Tool).status)
+        assertTrue(timeline.truncated)
+    }
+
+    @Test
+    fun cap_dropsFromTheFrontOnceTheFinishedStepsAreGone() {
+        val reducer = loaded(
+            1,
+            listOf(tool("call-0", "pending"), user("u:1"), thought("h:2"), agent("m:3")),
+            maxItems = 1,
+        )
+
+        val timeline = reducer.timeline!!
+        assertEquals(listOf("m:3"), timeline.items.map { it.id })
+        assertTrue(timeline.truncated)
+    }
+
+    @Test
+    fun cap_droppingOnlyStepsFromTheFrontLeavesTruncatedOff() {
+        val reducer = loaded(1, listOf(tool("call-0", "in_progress"), thought("h:1"), agent("m:2")), maxItems = 1)
+
+        val timeline = reducer.timeline!!
+        assertEquals(listOf("m:2"), timeline.items.map { it.id })
+        assertFalse(timeline.truncated)
+    }
+
+    @Test
+    fun cap_keepsTheNewestItemEvenWhenItIsAFinishedStep() {
+        val reducer = loaded(1, listOf(agent("m:0"), thought("h:1")), maxItems = 1)
+
+        val timeline = reducer.timeline!!
+        assertEquals(listOf("h:1"), timeline.items.map { it.id })
         assertTrue(timeline.truncated)
     }
 }
