@@ -1593,8 +1593,8 @@ Web carries no analytics SDK, so nothing here logs anything.
 ## CI — `.github/workflows/web-ci.yml`
 
 Runs on every PR and push to main (no paths filter — schema drift is caused
-by `central_server/`/`mobaide_agent/` edits, not just `web/` ones). Single
-job, in this order:
+by `central_server/`/`mobaide_agent/` edits, not just `web/` ones). Two
+parallel jobs. `web-ci` runs, in this order:
 
 1. Python 3.12 + editable installs.
 2. **Schema drift gate** (regenerate JSON, fail on `git status --porcelain`
@@ -1605,8 +1605,10 @@ job, in this order:
 6. Lint.
 7. Vitest.
 8. Build.
-9. Playwright (`playwright install --with-deps chromium` + `npm run
-   test:e2e`).
+
+`web-e2e` runs Playwright: `npm ci`, a cached `playwright install --only-shell
+chromium` (no `--with-deps`: the runner image already has the libraries, and the
+apt step depended on Ubuntu's mirrors), then `npm run test:e2e`.
 
 The Playwright specs stub `/api/**` with `page.route`, so CI needs no relay.
 

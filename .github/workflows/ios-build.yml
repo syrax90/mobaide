@@ -52,23 +52,52 @@ jobs:
           sudo xcode-select -s "$xcode"
           xcodebuild -version
 
-      # macos-26 images pre-create only current-generation simulator devices
-      # (iPhone 17…) while the iPhone 16 device type still exists in the SDK;
-      # macos-15 images already have the device. Create it only when missing
-      # so the acceptance command below runs verbatim on either image.
-      - name: Ensure iPhone 16 simulator exists
+      # A fresh runner's first simulator boot takes ~4 minutes (plus ~1.5 for
+      # CoreSimulator to start), so prepare and boot the device in the
+      # background while the build runs. macos-26 images pre-create only
+      # current-generation devices (iPhone 17…) while the iPhone 16 device type
+      # still exists in the SDK; macos-15 images already have the device, so
+      # create it only when missing. The newest runtime's device is listed last.
+      - name: Boot the iPhone 16 simulator in the background
         run: |
-          xcrun simctl list devices available | grep -q "iPhone 16 (" \
-            || xcrun simctl create 'iPhone 16' com.apple.CoreSimulator.SimDeviceType.iPhone-16
+          cat > "$RUNNER_TEMP/prepare-sim.sh" <<'EOF'
+          set -euo pipefail
+          udid="$(xcrun simctl list devices available | sed -nE 's/^ +iPhone 16 \(([0-9A-F-]{36})\).*/\1/p' | tail -1)"
+          if [ -z "$udid" ]; then
+            udid="$(xcrun simctl create 'iPhone 16' com.apple.CoreSimulator.SimDeviceType.iPhone-16)"
+          fi
+          xcrun simctl bootstatus "$udid" -b
+          echo "$udid" > "$RUNNER_TEMP/sim-udid"
+          EOF
+          nohup bash "$RUNNER_TEMP/prepare-sim.sh" > "$RUNNER_TEMP/prepare-sim.log" 2>&1 &
 
-      - name: Build and run unit tests
+      # -onlyUsePackageVersionsFromResolvedFile: SPM deps (GoogleSignIn-iOS)
+      # resolve over the network on the runner; pin them to the committed
+      # Package.resolved so version drift fails loudly instead of silently
+      # floating. The generic destination needs no device, and ARCHS=arm64
+      # keeps it from also building x86_64; the runner is Apple silicon.
+      - name: Build for testing
         run: |
           set -o pipefail
-          # -onlyUsePackageVersionsFromResolvedFile: SPM deps (GoogleSignIn-iOS)
-          # resolve over the network on the runner; pin them to the committed
-          # Package.resolved so version drift fails loudly instead of silently
-          # floating.
-          xcodebuild -project ios/Mobaide.xcodeproj -scheme Mobaide \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+          xcodebuild build-for-testing -project ios/Mobaide.xcodeproj -scheme Mobaide \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
             -onlyUsePackageVersionsFromResolvedFile \
-            CODE_SIGNING_ALLOWED=NO test
+            ARCHS=arm64 COMPILER_INDEX_STORE_ENABLE=NO CODE_SIGNING_ALLOWED=NO
+
+      - name: Run unit tests
+        run: |
+          set -o pipefail
+          # Wait for the background boot; stop early if the script died.
+          for _ in $(seq 1 120); do
+            [ -s "$RUNNER_TEMP/sim-udid" ] && break
+            pgrep -f prepare-sim.sh >/dev/null || break
+            sleep 5
+          done
+          if [ ! -s "$RUNNER_TEMP/sim-udid" ]; then
+            echo "::error::The simulator did not boot"; cat "$RUNNER_TEMP/prepare-sim.log"; exit 1
+          fi
+          xcodebuild test-without-building -project ios/Mobaide.xcodeproj -scheme Mobaide \
+            -destination "id=$(cat "$RUNNER_TEMP/sim-udid")" \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=NO

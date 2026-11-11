@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -24,6 +26,32 @@ TEST_ADMIN_EMAIL = "admin@test.local"
 TEST_ADMIN_PASSWORD = "testpass123"
 TEST_VIEWER_EMAIL = "viewer@test.local"
 TEST_VIEWER_PASSWORD = "viewerpass123"
+
+
+@pytest.fixture(autouse=True)
+def _one_testclient_portal(monkeypatch):
+    """Run every ``TestClient`` of a test on one event loop that outlives its sockets.
+
+    By default each ``client.websocket_connect`` gets its own short-lived loop. A
+    disconnect handler's DB write then answers on a loop that is already closed,
+    which kills the shared aiosqlite worker thread and hangs every later query.
+    """
+    from anyio.from_thread import start_blocking_portal
+    from starlette.testclient import TestClient
+
+    with start_blocking_portal() as portal:
+        original = TestClient._portal_factory
+
+        @contextlib.contextmanager
+        def shared_portal(self):
+            if self.portal is not None:
+                with original(self) as own:
+                    yield own
+            else:
+                yield portal
+
+        monkeypatch.setattr(TestClient, "_portal_factory", shared_portal)
+        yield
 
 
 @pytest.fixture
