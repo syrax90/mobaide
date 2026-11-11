@@ -2,6 +2,8 @@ package com.mobaide.app.ui.login
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mobaide.app.BuildConfig
+import com.mobaide.app.data.auth.DevLoginHandoff
 import com.mobaide.app.data.auth.GoogleAuthResult
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.network.ApiException
@@ -18,6 +20,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -68,6 +71,18 @@ class LoginViewModel @Inject constructor(
                                 "Sign up to start again or contact support.",
                         )
                     is SessionManager.InvalidationReason.Manual -> Unit
+                }
+            }
+        }
+        if (BuildConfig.DEBUG) {
+            viewModelScope.launch {
+                DevLoginHandoff.pending.filterNotNull().collect { credentials ->
+                    if (DevLoginHandoff.take(credentials)) {
+                        _uiState.update {
+                            it.copy(email = credentials.email, password = credentials.password, error = null)
+                        }
+                        loginWithPassword()
+                    }
                 }
             }
         }

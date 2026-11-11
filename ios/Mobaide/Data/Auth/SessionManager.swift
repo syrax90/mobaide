@@ -213,6 +213,9 @@ actor SessionManager {
     /// already `unauthenticated` (no re-emit).
     func invalidateUserSession(_ reason: InvalidationReason) {
         if state == .unauthenticated { return }
+        #if DEBUG
+        if case .manual = reason { DevLoginAllowance.discard() }
+        #endif
         userIdentityStore.clearUserSession()
         clearAccountScopedStores()
         setState(.unauthenticated)

@@ -12,21 +12,18 @@ Full reference: `docs/manual-e2e-testing.md`; the automated pytest harness (`tes
 `python -m pytest tests/e2e/ -v`) is described in `docs/e2e-harness.md`.
 
 ```bash
-# 1. boot the devices (AVD `Mobaide-E2E`, simulator `iPhone 16`; adb/emulator are not on PATH here)
-"$ANDROID_HOME/emulator/emulator" -avd Mobaide-E2E &      # skip if `adb devices` already lists one
-xcrun simctl boot 'iPhone 16'; xcrun simctl bootstatus 'iPhone 16' -b
+# 1. one command, from any directory (main checkout or a worktree -- the stack runs THAT checkout's code).
+#    Boots + shows the Android emulator and the iOS simulator, installs, launches and signs in both
+#    debug apps, and opens the web client signed in. Run it detached; `status` exit 0 = READY.
+~/venvs/main/bin/python tests/e2e/manual_stack.py up --all &
 
-# 2. deploy the local stack (loopback; emulator reaches it via 10.0.2.2, simulator via 127.0.0.1)
-~/venvs/main/bin/python tests/e2e/manual_stack.py up --host 127.0.0.1 --android-url emulator &
-echo $! > stack.pid      # run detached; wait until `manual_stack.py status` exits 0 (READY)
-
-# 3. build + install the debug apps against that stack
+# 2. after app changes: rebuild + reinstall + relaunch (signed in) against the running stack
 ~/venvs/main/bin/python tests/e2e/manual_stack.py android --install-app
 ~/venvs/main/bin/python tests/e2e/manual_stack.py ios --install-app
 
-# 4. exercise the UI on the emulator/simulator (adb / `xcrun simctl` / `axe`), then stop the stack —
-#    this restores android/local.properties and ios/Config/Local.xcconfig
-kill -TERM "$(cat stack.pid)"
+# 3. exercise the UI (adb / `xcrun simctl` / `axe`), then stop -- this restores
+#    android/local.properties and ios/Config/Local.xcconfig
+~/venvs/main/bin/python tests/e2e/manual_stack.py stop
 ```
 
 On **Windows** there is no iOS simulator; validate Android + web only. One command boots the

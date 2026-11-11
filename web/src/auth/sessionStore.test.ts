@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubWebStorage } from '../test/localStorageStub';
 import type { UserSession } from './sessionTransport';
 
+const { discardDevAutoLogin } = vi.hoisted(() => ({ discardDevAutoLogin: vi.fn() }));
+vi.mock('../routes/auth/devLogin', () => ({ discardDevAutoLogin }));
+
 // Before importing anything that captures either global.
 stubWebStorage('sessionStorage');
 stubWebStorage('localStorage');
@@ -29,6 +32,7 @@ function storedSession(): UserSession | null {
 }
 
 beforeEach(() => {
+  discardDevAutoLogin.mockClear();
   resetSessionTransport();
   resetSessionBootstrap();
   sessionStorage.clear();
@@ -319,5 +323,37 @@ describe('bootstrapSession', () => {
     const state = useSessionStore.getState();
     expect(state.authState).toEqual({ kind: 'unauthenticated' });
     expect(state.session).toBeNull();
+  });
+});
+
+describe('the manual-stack dev sign-in', () => {
+  async function peerLogout(reason: string) {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
+    await bootstrapSession();
+    const peer = new BroadcastChannel('mobaide-session');
+    peer.postMessage({ type: 'logout', reason, userId: session().userId });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    peer.close();
+  }
+
+  it('is discarded by a manual sign-out in this tab', () => {
+    useSessionStore.getState().markUserLoggedIn(session());
+    useSessionStore.getState().invalidateUserSession('manual');
+    expect(discardDevAutoLogin).toHaveBeenCalled();
+  });
+
+  it('is discarded by a manual sign-out in a peer tab', async () => {
+    // Without it this tab mounts /login for the first time and signs itself
+    // straight back in, undoing the sign-out next door.
+    await peerLogout('manual');
+    expect(useSessionStore.getState().session).toBeNull();
+    expect(discardDevAutoLogin).toHaveBeenCalled();
+  });
+
+  it('survives a peer tab that only lost its token', async () => {
+    await peerLogout('tokenRejected');
+    expect(discardDevAutoLogin).not.toHaveBeenCalled();
   });
 });
