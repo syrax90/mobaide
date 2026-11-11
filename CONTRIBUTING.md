@@ -53,7 +53,7 @@ It prints the test account to sign in with. [manual-e2e-testing.md](docs/manual-
 
 ## Run the tests
 
-CI runs only some of the suites. Before you open a pull request, run the suites for the parts you changed.
+CI runs every suite below on each pull request (iOS only when `ios/` or `tests/protocol_fixtures/` changes). Run the suites for the parts you changed before you open a pull request, because CI is slower.
 
 | Part | Command |
 |---|---|

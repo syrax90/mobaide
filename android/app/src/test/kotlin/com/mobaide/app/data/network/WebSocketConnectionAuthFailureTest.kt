@@ -254,26 +254,6 @@ class WebSocketConnectionAuthFailureTest {
     }
 
     @Test
-    fun onAuthFailure_isOptional_agentScopedChannelSurvivesClose4001() {
-        // Default `onAuthFailure = null` — agent-scoped channels rely on
-        // their URL provider's pre-connect refresh instead. A 4001 here
-        // must NOT crash and must NOT throw; it just stops reconnecting.
-        val (client, deferredListener, _) = clientCapturingListener()
-        val sm = sessionManager()
-        val conn = WebSocketConnection(
-            client = client,
-            sessionManager = sm,
-            urlProvider = { "wss://example.com/ws/events?token=x" },
-            // No onAuthFailure — defaults to null.
-        )
-
-        conn.connect()
-        val listener = awaitListener(deferredListener)
-        // Must not throw NPE etc.
-        listener.onClosed(mockk<WebSocket>(relaxed = true), 4001, "bye")
-    }
-
-    @Test
     fun onAuthFailure_isOptional_agentScopedChannelSurvivesClose4010_andSuppressesReconnect() {
         // Same null-callback guard as the 4001 case: an agent-scoped
         // channel that happens to receive a 4010 (because the central

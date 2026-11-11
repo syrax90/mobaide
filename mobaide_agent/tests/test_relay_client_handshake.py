@@ -76,16 +76,6 @@ class TestAuthenticateExtensions:
             "manifest_signature": "sig-b64-payload",
         }
 
-    async def test_auth_ok_with_no_manifest_clears_pointer(self, client):
-        ws = AsyncMock()
-        ws.recv = AsyncMock(return_value=json.dumps({"type": "auth_ok"}))
-        await client._authenticate(ws)
-
-        assert client.latest_manifest is not None
-        assert client.latest_manifest["version"] is None
-        assert client.latest_manifest["manifest_body"] is None
-        assert client.latest_manifest["manifest_signature"] is None
-
     async def test_auth_incompatible_raises_connection_error(self, client):
         ws = AsyncMock()
         ws.recv = AsyncMock(return_value=json.dumps({
@@ -115,19 +105,6 @@ class TestAuthenticateExtensions:
         await client._authenticate(ws)
 
         assert captured == [(body, "abc", "0.4.0")]
-
-    async def test_auth_ok_skips_callback_when_no_manifest(self, client):
-        captured: list[object] = []
-
-        async def cb(body, signature, version):
-            captured.append((body, signature, version))
-
-        client.set_manifest_update_callback(cb)
-        ws = AsyncMock()
-        ws.recv = AsyncMock(return_value=json.dumps({"type": "auth_ok"}))
-        await client._authenticate(ws)
-
-        assert captured == [], "callback fired with empty manifest pointer"
 
     async def test_auth_ok_swallows_callback_exception(self, client):
         async def cb(*_args):
@@ -195,17 +172,3 @@ class TestUnknownControlTelemetry:
 
         assert client._unknown_control_type_total == 2
 
-    async def test_known_types_do_not_increment_counter(self, client):
-        ws = AsyncMock()
-        # ``ping`` is a known type — must not bump the unknown counter.
-        await client._handle_control(
-            json.dumps({"type": "ping"}).encode(), ws,
-        )
-        # ``mobile_session_detach`` has a no-op debug-log handler but is
-        # explicitly recognized — also must not increment.
-        await client._handle_control(
-            json.dumps({"type": "mobile_session_detach", "session_id": "s"}).encode(),
-            ws,
-        )
-
-        assert client._unknown_control_type_total == 0

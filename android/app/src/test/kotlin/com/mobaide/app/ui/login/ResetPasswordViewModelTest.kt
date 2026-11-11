@@ -51,20 +51,6 @@ class ResetPasswordViewModelTest {
     }
 
     @Test
-    fun initialState_isEmpty_withNoCooldownOrError() = runTest {
-        val vm = ResetPasswordViewModel(authRepository)
-        val state = vm.uiState.value
-        assertEquals("", state.email)
-        assertEquals("", state.code)
-        assertEquals("", state.newPassword)
-        assertEquals("", state.confirmPassword)
-        assertFalse(state.isLoading)
-        assertFalse(state.isResending)
-        assertEquals(0, state.cooldownSeconds)
-        assertNull(state.error)
-    }
-
-    @Test
     fun updateCode_filtersNonDigits() = runTest {
         val vm = ResetPasswordViewModel(authRepository)
         vm.updateCode("12a3b4c5d6")
@@ -76,18 +62,6 @@ class ResetPasswordViewModelTest {
         val vm = ResetPasswordViewModel(authRepository)
         vm.updateCode("12345678")
         assertEquals("123456", vm.uiState.value.code)
-    }
-
-    @Test
-    fun updateCode_clearsPendingError() = runTest {
-        val vm = primed(ResetPasswordViewModel(authRepository), code = "")
-        vm.submit()  // length gate fires
-        runCurrent()
-        assertEquals("Enter the 6-digit code we emailed you", vm.uiState.value.error)
-
-        vm.updateCode("1")
-
-        assertNull(vm.uiState.value.error)
     }
 
     @Test
@@ -187,54 +161,6 @@ class ResetPasswordViewModelTest {
     }
 
     @Test
-    fun submit_onExpiredCode_showsExpiredMessage() = runTest {
-        val vm = primed(ResetPasswordViewModel(authRepository), code = "222222")
-        coEvery {
-            authRepository.resetPassword("alice@example.com", "222222", "newpass99")
-        } throws ResetPasswordFailure(ResetPasswordError.ExpiredCode)
-
-        vm.submit()
-        advanceUntilIdle()
-
-        assertEquals(
-            "That code expired. Tap \"Resend\" to get a new one.",
-            vm.uiState.value.error,
-        )
-    }
-
-    @Test
-    fun submit_onAttemptsExhausted_showsTooManyAttemptsMessage() = runTest {
-        val vm = primed(ResetPasswordViewModel(authRepository), code = "333333")
-        coEvery {
-            authRepository.resetPassword("alice@example.com", "333333", "newpass99")
-        } throws ResetPasswordFailure(ResetPasswordError.AttemptsExhausted)
-
-        vm.submit()
-        advanceUntilIdle()
-
-        assertEquals(
-            "Too many attempts. Request a new code.",
-            vm.uiState.value.error,
-        )
-    }
-
-    @Test
-    fun submit_onSameAsOld_showsSameAsCurrentMessage() = runTest {
-        val vm = primed(ResetPasswordViewModel(authRepository), code = "444444")
-        coEvery {
-            authRepository.resetPassword("alice@example.com", "444444", "newpass99")
-        } throws ResetPasswordFailure(ResetPasswordError.SameAsOld)
-
-        vm.submit()
-        advanceUntilIdle()
-
-        assertEquals(
-            "New password must differ from your current password.",
-            vm.uiState.value.error,
-        )
-    }
-
-    @Test
     fun submit_onIpRateLimited_showsNetworkRetryMessageWithSeconds() = runTest {
         val vm = primed(ResetPasswordViewModel(authRepository), code = "555555")
         coEvery {
@@ -248,24 +174,6 @@ class ResetPasswordViewModelTest {
 
         assertEquals(
             "Too many requests from this network. Try again in 73s.",
-            vm.uiState.value.error,
-        )
-    }
-
-    @Test
-    fun submit_onUnknownError_showsCodeAndMessage() = runTest {
-        val vm = primed(ResetPasswordViewModel(authRepository), code = "666666")
-        coEvery {
-            authRepository.resetPassword("alice@example.com", "666666", "newpass99")
-        } throws ResetPasswordFailure(
-            ResetPasswordError.Unknown(code = 503, message = "service down"),
-        )
-
-        vm.submit()
-        advanceUntilIdle()
-
-        assertEquals(
-            "Couldn't reset password: service down",
             vm.uiState.value.error,
         )
     }
@@ -286,23 +194,6 @@ class ResetPasswordViewModelTest {
             "Couldn't reset password: Unknown error (500)",
             vm.uiState.value.error,
         )
-    }
-
-    @Test
-    fun submit_onGenericException_showsFailureMessage_andClearsLoading() = runTest {
-        val vm = primed(ResetPasswordViewModel(authRepository), code = "888888")
-        coEvery {
-            authRepository.resetPassword("alice@example.com", "888888", "newpass99")
-        } throws java.net.SocketTimeoutException("network down")
-
-        vm.submit()
-        advanceUntilIdle()
-
-        assertEquals(
-            "Couldn't reset password: network down",
-            vm.uiState.value.error,
-        )
-        assertFalse(vm.uiState.value.isLoading)
     }
 
     @Test

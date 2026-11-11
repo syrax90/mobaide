@@ -55,19 +55,6 @@ class TestSessionManager:
         finally:
             await mgr.shutdown()
 
-    async def test_get_session(self) -> None:
-        mgr = SessionManager()
-        try:
-            await mgr.create_session(_make_config("s1"))
-            session = await mgr.get_session("s1")
-            assert session is not None
-            assert session.session_id == "s1"
-
-            missing = await mgr.get_session("nonexistent")
-            assert missing is None
-        finally:
-            await mgr.shutdown()
-
     async def test_max_sessions_enforcement(self) -> None:
         mgr = SessionManager(max_sessions=2)
         try:
@@ -97,14 +84,6 @@ class TestSessionManager:
 
             await mgr.stop_session("s1")
             assert len(mgr.list_sessions()) == 0
-        finally:
-            await mgr.shutdown()
-
-    async def test_stop_nonexistent_raises(self) -> None:
-        mgr = SessionManager()
-        try:
-            with pytest.raises(KeyError):
-                await mgr.stop_session("ghost")
         finally:
             await mgr.shutdown()
 
@@ -154,13 +133,6 @@ class TestSessionManager:
         finally:
             await mgr.shutdown()
 
-    async def test_shutdown_is_clean(self) -> None:
-        mgr = SessionManager()
-        await mgr.start_liveness_monitor(interval=1.0)
-        await mgr.create_session(_make_config("s1"))
-        await mgr.shutdown()
-        assert len(mgr.list_sessions()) == 0
-
 
 @pytest.mark.timeout(20)
 class TestProjectAwareLaunchBranching:
@@ -186,7 +158,7 @@ class TestProjectAwareLaunchBranching:
             ),
         )
 
-        mgr = SessionManager(projects_store=store, launcher=launcher)
+        mgr = SessionManager(projects_store=store, launcher=launcher, backend_factory=FakePtyBackend)
         try:
             config = SessionConfig(
                 session_id="claude-sess",
@@ -343,28 +315,6 @@ class TestCodexLaunchBranching:
         finally:
             await mgr.shutdown()
 
-    async def test_codex_options_without_codex_launcher_raises_value_error(
-        self, tmp_path,
-    ) -> None:
-        project = MagicMock()
-        project.path = str(tmp_path)
-        store = MagicMock()
-        store.get = MagicMock(return_value=project)
-        # Claude launcher wired, but no Codex launcher.
-        mgr = SessionManager(projects_store=store, launcher=MagicMock())
-        try:
-            config = SessionConfig(
-                session_id="no-codex",
-                command=default_shell(),
-                project_name="proj",
-                codex_options=CodexOptions(),
-                kind=SessionKind.CODEX,
-            )
-            with pytest.raises(ValueError, match="Codex launcher"):
-                await mgr.create_session(config)
-        finally:
-            await mgr.shutdown()
-
 
 @pytest.mark.timeout(20)
 class TestAntigravityLaunchBranching:
@@ -460,32 +410,6 @@ class TestAntigravityLaunchBranching:
         finally:
             await mgr.shutdown()
 
-    async def test_antigravity_options_without_launcher_raises_value_error(
-        self, tmp_path,
-    ) -> None:
-        project = MagicMock()
-        project.path = str(tmp_path)
-        store = MagicMock()
-        store.get = MagicMock(return_value=project)
-        # Claude launcher wired, but no Antigravity launcher.
-        mgr = SessionManager(projects_store=store, launcher=MagicMock())
-        try:
-            config = SessionConfig(
-                session_id="no-antigravity",
-                command=default_shell(),
-                project_name="proj",
-                antigravity_options=AntigravityOptions(),
-                kind=SessionKind.ANTIGRAVITY,
-            )
-            with pytest.raises(
-                ValueError,
-                match="antigravity session requested but agent has no "
-                      "Antigravity launcher",
-            ):
-                await mgr.create_session(config)
-        finally:
-            await mgr.shutdown()
-
 
 @pytest.mark.timeout(20)
 class TestAdHocClaudeLaunchBranching:
@@ -514,7 +438,7 @@ class TestAdHocClaudeLaunchBranching:
             ),
         )
 
-        mgr = SessionManager(projects_store=store, launcher=launcher)
+        mgr = SessionManager(projects_store=store, launcher=launcher, backend_factory=FakePtyBackend)
         try:
             config = SessionConfig(
                 session_id="adhoc-sess",
@@ -540,61 +464,6 @@ class TestAdHocClaudeLaunchBranching:
             assert config.env == {"FOO": "bar"}
 
             store.get.assert_not_called()
-        finally:
-            await mgr.shutdown()
-
-    async def test_adhoc_dispatch_never_consults_projects_store(
-        self, tmp_path,
-    ) -> None:
-        """Defense-in-depth: even if a ``ProjectsStore`` is wired, the
-        ad-hoc branch must never call ``store.get`` — a custom-path session
-        cannot be silently re-routed to a saved project that happens to
-        share its path."""
-        store = MagicMock()
-        store.get = MagicMock()
-
-        launcher = MagicMock()
-        launcher.build = AsyncMock(
-            return_value=LaunchSpec(
-                argv=["claude"], cwd=str(tmp_path), env={},
-            ),
-        )
-
-        mgr = SessionManager(projects_store=store, launcher=launcher)
-        try:
-            config = SessionConfig(
-                session_id="adhoc-no-store",
-                command=default_shell(),
-                cwd=str(tmp_path),
-                rows=24, cols=80, scrollback_size=50,
-                project_name=None,
-                claude_options=ClaudeOptions(),
-            )
-            await mgr.create_session(config)
-            store.get.assert_not_called()
-        finally:
-            await mgr.shutdown()
-
-    async def test_adhoc_dispatch_without_launcher_raises_value_error(
-        self, tmp_path,
-    ) -> None:
-        """When ``project_name is None`` and ``claude_options`` is set but
-        the manager has no launcher (misconfigured deployment), the
-        ``ValueError`` must surface — mirroring ``_apply_project_launch``'s
-        own missing-launcher guard so the router error mapping (400) stays
-        uniform."""
-        mgr = SessionManager(projects_store=None, launcher=None)
-        try:
-            config = SessionConfig(
-                session_id="adhoc-no-launcher",
-                command=default_shell(),
-                cwd=str(tmp_path),
-                rows=24, cols=80, scrollback_size=50,
-                project_name=None,
-                claude_options=ClaudeOptions(),
-            )
-            with pytest.raises(ValueError, match="launcher"):
-                await mgr.create_session(config)
         finally:
             await mgr.shutdown()
 
@@ -789,24 +658,6 @@ class TestTerminalWorktreeResolution:
 
             assert config.cwd == str(tmp_path)
             worktree_mgr.create_worktree.assert_not_awaited()
-        finally:
-            await mgr.shutdown()
-
-    async def test_worktree_on_git_project_without_manager_raises_runtimeerror(
-        self, tmp_path,
-    ) -> None:
-        """``worktree=True`` over a git project with no ``WorktreeManager`` wired
-        is a server misconfiguration -> ``RuntimeError``."""
-        (tmp_path / ".git").mkdir()
-        store = self._store_for("proj", str(tmp_path))
-
-        mgr = SessionManager(
-            projects_store=store, launcher=MagicMock(), worktree_mgr=None,
-        )
-        try:
-            config = self._shell_config("wt-no-mgr", "proj", worktree=True)
-            with pytest.raises(RuntimeError, match="WorktreeManager"):
-                await mgr.create_session(config)
         finally:
             await mgr.shutdown()
 

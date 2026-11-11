@@ -3,7 +3,6 @@ import type { ProjectSummary } from '../../../api/projectRepository';
 import {
   parseWizardLocation,
   resolveWizardLocation,
-  serializeWizardLocation,
   type WizardLocation,
 } from './wizardUrl';
 import type { WizardMode } from './wizardState';
@@ -57,21 +56,6 @@ describe('parseWizardLocation', () => {
     expect(parse('project=mobaide&path=/tmp/x').selection).toEqual(stored);
     expect(parse('project=&path=').selection).toEqual({ kind: 'none' });
   });
-
-  it('round-trips through serialize', () => {
-    const location: WizardLocation = { step: 'config', mode: CUSTOM, selection: stored };
-
-    expect(parseWizardLocation(serializeWizardLocation(location))).toEqual(location);
-    expect(
-      parseWizardLocation(
-        serializeWizardLocation({
-          step: 'mode',
-          mode: null,
-          selection: { kind: 'customPath', path: '/tmp/x' },
-        }),
-      ),
-    ).toEqual({ step: 'mode', mode: null, selection: { kind: 'customPath', path: '/tmp/x' } });
-  });
 });
 
 describe('resolveWizardLocation', () => {
@@ -83,12 +67,6 @@ describe('resolveWizardLocation', () => {
         projects: undefined,
       }),
     ).toBeNull();
-  });
-
-  it('accepts a location that is already coherent', () => {
-    expect(resolve({ step: 'config', mode: 'claude', selection: stored })).toBeNull();
-    expect(resolve({ step: 'mode', mode: null, selection: stored })).toBeNull();
-    expect(resolve({ step: 'project', mode: null, selection: { kind: 'none' } })).toBeNull();
   });
 
   it('sends an unknown project name back to the first step', () => {

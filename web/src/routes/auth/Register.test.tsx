@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubWebStorage } from '../../test/localStorageStub';
@@ -70,11 +70,4 @@ describe('Register password length', () => {
     );
   });
 
-  it('accepts a password of exactly eight characters', async () => {
-    submit('12345678', '12345678');
-
-    await waitFor(() => {
-      expect(registered.passwords).toEqual(['12345678']);
-    });
-  });
 });

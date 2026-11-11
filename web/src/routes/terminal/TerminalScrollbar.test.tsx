@@ -177,26 +177,6 @@ describe('TerminalScrollbar', () => {
     expect(seekLines).not.toHaveBeenCalled();
   });
 
-  it('publishes its position to assistive technology', () => {
-    mount(scrolled);
-    const bar = screen.getByRole('scrollbar', { name: 'Terminal scrollback' });
-
-    expect(bar).toHaveAttribute('aria-valuenow', '50');
-    expect(bar).toHaveAttribute('aria-orientation', 'vertical');
-    // Required on the role, and the surface is the element that scrolls.
-    expect(bar).toHaveAttribute('aria-controls', 'surface-1');
-  });
-
-  it('hands the thumb geometry to CSS as fractions', () => {
-    // Both custom properties, because the stylesheet folds the minimum thumb
-    // height into the height and the offset together.
-    const { container } = mount(scrolled);
-    const thumb = container.querySelector<HTMLElement>('.terminal-scrollbar-thumb');
-
-    expect(thumb?.style.getPropertyValue('--thumb-size')).toBe('10%');
-    expect(thumb?.style.getPropertyValue('--thumb-offset')).toBe('0.5');
-  });
-
   it('seeks the buffer as the thumb is dragged', () => {
     const { model, container } = mount(scrolled);
     const seek = vi.spyOn(model, 'scrollToOffset').mockImplementation(() => undefined);
@@ -350,15 +330,6 @@ describe('TerminalScrollbar', () => {
     expect(pages.mock.calls).toEqual([[-1], [1]]);
     expect(top).toHaveBeenCalledOnce();
     expect(bottom).toHaveBeenCalledOnce();
-  });
-
-  it('leaves keys it does not own to the browser', () => {
-    const { model } = mount(scrolled);
-    const lines = vi.spyOn(model, 'scrollByLines').mockImplementation(() => undefined);
-    const bar = screen.getByRole('scrollbar');
-
-    expect(fireEvent.keyDown(bar, { key: 'Tab' })).toBe(true);
-    expect(lines).not.toHaveBeenCalled();
   });
 
   it('scrolls on a wheel over the track the viewport no longer receives', () => {

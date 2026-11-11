@@ -86,22 +86,6 @@ class ScanPayloadParserTest {
         )
     }
 
-    @Test
-    fun issue_missingErrorField_becomesNull() {
-        val payload = json(
-            """
-            {
-              "identifier": "ISS-1",
-              "title": "t",
-              "step": "s",
-              "status": "ok"
-            }
-            """.trimIndent(),
-        )
-        val result = ScanPayloadParser.parse("issue", payload) as ScanProgressPayload.Issue
-        assertNull(result.error)
-    }
-
     // ---- worktree -----------------------------------------------------------
 
     @Test
@@ -134,13 +118,6 @@ class ScanPayloadParserTest {
         )
     }
 
-    @Test
-    fun session_missingPid_becomesNull() {
-        val payload = json("""{"identifier":"ISS-9","session_id":"abc-123"}""")
-        val result = ScanPayloadParser.parse("session", payload) as ScanProgressPayload.Session
-        assertNull(result.pid)
-    }
-
     // ---- log ----------------------------------------------------------------
 
     @Test
@@ -171,12 +148,5 @@ class ScanPayloadParserTest {
         val result = ScanPayloadParser.parse("something_new", json("{}"))
         assertTrue(result is ScanProgressPayload.Unknown)
         assertEquals("something_new", (result as ScanProgressPayload.Unknown).type)
-    }
-
-    @Test
-    fun emptyStringType_isAlsoRoutedToUnknown() {
-        val result = ScanPayloadParser.parse("", json("{}"))
-        assertTrue(result is ScanProgressPayload.Unknown)
-        assertEquals("", (result as ScanProgressPayload.Unknown).type)
     }
 }

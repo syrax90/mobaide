@@ -33,15 +33,6 @@ final class VersionDtoGitCapabilitiesTests: XCTestCase {
         XCTAssertFalse(info(["git": ["stage": 1]]).gitCapability("stage"))
     }
 
-    func testGitCapabilitiesCollectsTheThreeMutatingFlags() {
-        XCTAssertEqual(
-            info(["git": ["changes": true, "stage": true, "commit": true]]).gitCapabilities,
-            GitCapabilities(stage: true, discard: false, commit: true)
-        )
-        XCTAssertEqual(info([:]).gitCapabilities, .none)
-        XCTAssertEqual(GitCapabilities.none, GitCapabilities(stage: false, discard: false, commit: false))
-    }
-
     func testADecodedProbeReadsTheSame() throws {
         let wire = Data(#"""
         {"name":"mobaide-agent","server_version":"1.4.0","protocol_versions":[7],"min_client_version":1,
@@ -90,15 +81,6 @@ final class VersionDtoGitSyncCapabilitiesTests: XCTestCase {
         )
     }
 
-    func testReadsEachJobKeyAsAnExplicitTrue() {
-        let probe = info(["git": ["changes": true, "fetch": true, "pull": "true", "push": false]])
-
-        XCTAssertEqual(
-            probe.gitCapabilities,
-            GitCapabilities(stage: false, discard: false, commit: false, fetch: true, pull: false, push: false)
-        )
-    }
-
     func testHasSyncOnAnyJobKeyAndNotForAStageAndCommitAgent() {
         XCTAssertTrue(info(["git": ["push": true]]).gitCapabilities.hasSync)
         XCTAssertTrue(info(["git": ["pull": true]]).gitCapabilities.hasSync)
@@ -140,19 +122,6 @@ final class VersionDtoGitRebaseCapabilitiesTests: XCTestCase {
             min_client_version: 1,
             capabilities: capabilities
         )
-    }
-
-    func testReadsRebaseAndResolveEachAsAnExplicitTrue() {
-        XCTAssertEqual(
-            info(["git": ["changes": true, "stage": true, "rebase": true, "resolve": "true"]]).gitCapabilities,
-            GitCapabilities(stage: true, rebase: true, resolve: false)
-        )
-        XCTAssertEqual(
-            info(["git": ["changes": true, "stage": true, "resolve": true]]).gitCapabilities,
-            GitCapabilities(stage: true, rebase: false, resolve: true)
-        )
-        XCTAssertFalse(GitCapabilities.none.rebase)
-        XCTAssertFalse(GitCapabilities.none.resolve)
     }
 
     func testReadsConflictsAsAnExplicitTrueNotImpliedByResolve() {

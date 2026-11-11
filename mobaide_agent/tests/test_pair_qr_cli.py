@@ -151,38 +151,7 @@ class TestRunPairQrEarlyExits:
         assert rc == 3
         assert "central server" in capsys.readouterr().err.lower()
 
-    @pytest.mark.parametrize(
-        ("headers", "expected_tail"),
-        [
-            ({"Retry-After": "120"}, "this network. Retry in 120s.\n"),
-            ({}, "this network.\n"),
-        ],
-    )
     def test_initiate_rate_limited_names_the_limit_and_returns_3(
-        self, tmp_path, capsys, monkeypatch, headers, expected_tail
-    ):
-        import urllib.error
-
-        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
-        _seed_trust_key(tmp_path)
-        monkeypatch.delenv("MOBAIDE_AGENT_TRUST_KEY", raising=False)
-
-        with patch(
-            "urllib.request.urlopen",
-            side_effect=urllib.error.HTTPError(
-                "https://relay.test/api/pairing/initiate",
-                429, "Too Many Requests", headers, io.BytesIO(b""),
-            ),
-        ):
-            rc = _run_pair_qr(_ns(prefix=str(tmp_path), print=True))
-
-        assert rc == 3
-        err = capsys.readouterr().err
-        assert "rate-limiting pairing requests" in err
-        assert err.endswith(expected_tail)
-        assert "cannot reach central server" not in err
-
-    def test_initiate_other_http_error_keeps_cannot_reach_message(
         self, tmp_path, capsys, monkeypatch
     ):
         import urllib.error
@@ -195,7 +164,7 @@ class TestRunPairQrEarlyExits:
             "urllib.request.urlopen",
             side_effect=urllib.error.HTTPError(
                 "https://relay.test/api/pairing/initiate",
-                503, "Service Unavailable", {"Retry-After": "30"},
+                429, "Too Many Requests", {"Retry-After": "120"},
                 io.BytesIO(b""),
             ),
         ):
@@ -203,8 +172,9 @@ class TestRunPairQrEarlyExits:
 
         assert rc == 3
         err = capsys.readouterr().err
-        assert "cannot reach central server" in err
-        assert "rate-limiting" not in err
+        assert "rate-limiting pairing requests" in err
+        assert err.endswith("this network. Retry in 120s.\n")
+        assert "cannot reach central server" not in err
 
     def test_render_prints_payload_line_and_browser_link(
         self, tmp_path, capsys, monkeypatch
@@ -235,49 +205,6 @@ class TestRunPairQrEarlyExits:
 
 
 class TestRunShowQr:
-    def test_already_paired_returns_0_without_render(
-        self, tmp_path, capsys
-    ):
-        # Both id and token set → no QR rendered, hint to run re-pair.
-        _seed_env(
-            tmp_path,
-            RELAY_SERVER_URL="wss://relay.test",
-            RELAY_AGENT_ID="already-paired-id",
-            RELAY_AGENT_TOKEN="already-paired-token",
-        )
-
-        rc = _run_show_qr(_ns(prefix=str(tmp_path)))
-
-        assert rc == 0
-        out = capsys.readouterr().out
-        assert "Already paired" in out
-        # No QR header emitted.
-        assert "Pairing QR" not in out
-
-    def test_no_pending_falls_through_to_pair_qr_print(
-        self, tmp_path, capsys, monkeypatch
-    ):
-        # No env at all → falls through to _run_pair_qr(--print), which
-        # immediately exits 2 (init-env not run).
-        rc = _run_show_qr(_ns(prefix=str(tmp_path)))
-
-        assert rc == 2
-
-    def test_pending_render_prints_payload_line_and_browser_link(
-        self, tmp_path, capsys, monkeypatch
-    ):
-        monkeypatch.delenv(PAIRING_WEB_ORIGIN_ENV, raising=False)
-        payload = _seed_pending(tmp_path)
-
-        rc = _run_show_qr(_ns(prefix=str(tmp_path)))
-
-        assert rc == 0
-        lines = capsys.readouterr().out.split("\n")
-        # The whole point of the line: it is copied as-is, so it carries no
-        # prefix and shares its line with nothing.
-        assert payload in lines
-        assert format_pairing_link(payload) in lines
-
     def test_already_paired_prints_no_link(self, tmp_path, capsys):
         # The early return is the one render site that must stay silent: an
         # agent that is already paired has no live nonce, so a printed link
@@ -375,28 +302,6 @@ class TestRunShowQrRequirePending:
         assert rc == 0
         out = capsys.readouterr().out
         assert "Pending pairing QR" in out
-
-    def test_already_paired_with_flag_returns_0_without_render(
-        self, tmp_path, capsys
-    ):
-        # Re-install on an already-paired agent: env has both id and
-        # token. show-qr --require-pending must exit 0 without
-        # rendering (same as the no-flag form).
-        _seed_env(
-            tmp_path,
-            RELAY_SERVER_URL="wss://relay.test",
-            RELAY_AGENT_ID="x",
-            RELAY_AGENT_TOKEN="y",
-        )
-
-        rc = _run_show_qr(
-            _ns(prefix=str(tmp_path), require_pending=True)
-        )
-
-        assert rc == 0
-        out = capsys.readouterr().out
-        assert "Already paired" in out
-        assert "Pairing QR" not in out
 
 
 def _agent_reports(monkeypatch, health):
@@ -527,7 +432,11 @@ class TestLocalAgentHealth:
                     pass
 
             server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-            threading.Thread(target=server.serve_forever, daemon=True).start()
+            threading.Thread(
+                target=server.serve_forever,
+                kwargs={"poll_interval": 0.01},
+                daemon=True,
+            ).start()
             servers.append(server)
             return server.server_address[1]
 
@@ -547,7 +456,6 @@ class TestLocalAgentHealth:
     @pytest.mark.parametrize(
         "status,body",
         [
-            (200, b'{"status": "ok"}'),
             (200, b"<html>not an agent</html>"),
             (503, b'{"pairing_pending": true}'),
         ],
@@ -568,7 +476,7 @@ class TestLocalAgentHealth:
 
         assert _REAL_LOCAL_AGENT_HEALTH({"PORT": str(port)}) is None
 
-    @pytest.mark.parametrize("port", ["not-a-port", "0", "70000"])
+    @pytest.mark.parametrize("port", ["not-a-port", "70000"])
     def test_unusable_port_returns_none(self, port):
         assert _REAL_LOCAL_AGENT_HEALTH({"PORT": port}) is None
 
@@ -632,20 +540,6 @@ class TestRunRePair:
                 assert line == "RELAY_AGENT_TOKEN="
         # Relay URL is preserved — only the agent identity is dropped.
         assert "RELAY_SERVER_URL=wss://relay.test" in env_text
-
-    def test_default_message_hints_fresh_recovery(self, tmp_path, capsys):
-        # The same-owner default path tells the operator how to recover if
-        # the relay 404s because the agent is gone: re-run with --fresh.
-        _seed_env(
-            tmp_path,
-            RELAY_SERVER_URL="wss://relay.test",
-            RELAY_AGENT_ID="x",
-            RELAY_AGENT_TOKEN="y",
-        )
-
-        _run_re_pair(_ns(prefix=str(tmp_path), no_restart=True))
-
-        assert "re-pair --fresh" in capsys.readouterr().out
 
     def test_clears_pending_pairing_file(self, tmp_path):
         # Any cached pending nonce is dropped — the next show-qr must

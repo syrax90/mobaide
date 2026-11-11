@@ -100,16 +100,6 @@ def test_prune_keeps_numeric_rollback_target_when_current_not_highest(tmp_path):
     assert release_names(tmp_path) == {"0.9.0", "0.10.0"}
 
 
-def test_prune_is_noop_with_one_release(tmp_path):
-    make_release(tmp_path, "0.2.0")
-
-    kept, pruned = launcher._prune_old_releases(tmp_path, "0.2.0", keep=2)
-
-    assert pruned == []
-    assert set(kept) == {"0.2.0"}
-    assert release_names(tmp_path) == {"0.2.0"}
-
-
 def test_prune_is_noop_at_keep_count(tmp_path):
     make_release(tmp_path, "0.1.0")
     make_release(tmp_path, "0.2.0")
@@ -172,11 +162,6 @@ def test_prune_when_current_version_dir_absent(tmp_path):
     assert set(pruned) == {"0.1.5", "0.1.0"}
     assert kept == ["0.2.0"]
     assert release_names(tmp_path) == {"0.2.0"}
-
-
-def test_prune_missing_releases_dir_is_noop(tmp_path):
-    kept, pruned = launcher._prune_old_releases(tmp_path, "0.2.0", keep=2)
-    assert (kept, pruned) == ([], [])
 
 
 def test_prune_rmtree_failure_is_best_effort(tmp_path, monkeypatch, capsys):

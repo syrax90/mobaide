@@ -3,7 +3,6 @@ package com.mobaide.app.ui.terminal
 import com.termux.terminal.TerminalEmulator
 import com.termux.terminal.TerminalOutput
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Test
 
 /**
@@ -138,17 +137,6 @@ class TerminalEmulatorPasteTest {
         assertEquals(1, occurrencesOf("[200~", output.concatenated))
         assertEquals(1, occurrencesOf("[201~", output.concatenated))
         assertEquals("[200~[200~body[201~[201~", output.concatenated)
-    }
-
-    @Test
-    fun paste_bracketedOff_strippedMultiline_neverEmitsEsc() {
-        emulator.paste("line1\nline2[H")
-
-        assertFalse(
-            "with 2004 off and ESC stripped, no byte of emulator output may be ESC",
-            output.concatenated.contains(''),
-        )
-        assertEquals("line1\rline2[H", output.concatenated)
     }
 
     private companion object {

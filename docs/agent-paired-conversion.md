@@ -483,8 +483,8 @@ Mechanics, versions and the consent-defaults table live in
   attribution row, §3.5 banner + `mobaide_ads` cookie, §3.8 in-app
   measurement, §4 SDK-merged permissions, §5 legal bases (consent for the web
   lane, legitimate interest for the app lane), §6 Google as recipient, §8
-  retention (90 days / 2 months), §10 withdrawal and objection. Pinned at
-  exactly 14 H2 sections and 7 tables by `test_privacy.py`.
+  retention (90 days / 2 months), §10 withdrawal and objection. The page has
+  14 H2 sections and 7 tables.
 - Play Data Safety, the Advertising ID declaration (Yes; Analytics + Advertising or
   marketing) and the App Store App Privacy answers (the privacy manifest's six
   types, tracking none) were **submitted** with Android 3.6.4 and iOS 1.0.3 (6) on

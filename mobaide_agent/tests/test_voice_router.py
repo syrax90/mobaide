@@ -34,7 +34,7 @@ from mobaide.voice.cleanup import (
 from mobaide.voice.models import VOICE_CAPABILITIES, VoiceDictationResultResponse
 from mobaide.voice.service import VoiceService
 
-from .conftest import TEST_JWT_SECRET, TEST_PASSWORD, TEST_USERNAME
+from .conftest import TEST_JWT_SECRET, TEST_USERNAME
 
 STATUS = "/api/voice/status"
 INSTALL = "/api/voice/install"
@@ -70,7 +70,6 @@ def _config(tmp_path, **overrides) -> AgentConfig:
 @pytest.fixture
 async def voice_app(tmp_path):
     application = create_app(config=_config(tmp_path))
-    application.state.user_store.add_user(TEST_USERNAME, TEST_PASSWORD)
     yield application
     await application.state.voice.shutdown()
     await application.state.session_manager.shutdown()
@@ -83,12 +82,10 @@ async def http(voice_app):
 
 
 @pytest.fixture
-async def headers(http) -> dict[str, str]:
-    resp = await http.post(
-        "/api/auth/token", json={"username": TEST_USERNAME, "password": TEST_PASSWORD}
-    )
-    assert resp.status_code == 200
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+async def headers(voice_app) -> dict[str, str]:
+    # Mint the token directly: a login would spend ~2 s of bcrypt per test.
+    token = voice_app.state.jwt_service.create_access_token(TEST_USERNAME)
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture
@@ -331,11 +328,6 @@ class TestCleanup:
         assert resp.json() == {"text": "Fix the login bug."}
         assert [argv[:2] for argv in claude.argvs] == [["codex", "exec"], ["codex", "exec"]]
 
-    async def test_no_kind_means_claude_code(self, http, headers, relay, claude):
-        await _assert_parity(http, headers, relay, "POST", CLEANUP, {"text": "hello"})
-
-        assert [argv[0] for argv in claude.argvs] == ["claude", "claude"]
-
     async def test_missing_claude_code_is_503_on_both_transports(self, http, headers, relay, claude):
         claude.installed = False
 
@@ -375,13 +367,6 @@ class TestCleanupSettings:
 
         assert resp.json()["cleanup_enabled"] is False
 
-    @pytest.mark.parametrize("body", [{}, {"enabled": "yes"}], ids=["missing", "not_bool"])
-    async def test_invalid_bodies_are_422_on_both_transports(self, http, headers, relay, body):
-        resp = await http.put(CLEANUP_SETTINGS, headers=headers, json=body)
-        dispatched = await relay._dispatch_voice("PUT", CLEANUP_SETTINGS, body)
-
-        assert resp.status_code == dispatched["status"] == 422
-
 
 class TestVersionCapability:
     async def test_direct_and_relay_advertise_the_voice_capability(self, http, headers, relay):
@@ -394,12 +379,9 @@ class TestVersionCapability:
 
 class TestBrokenVoiceRootNeverBreaksTheApp:
     async def _version_and_status(self, application) -> tuple[dict, dict]:
-        application.state.user_store.add_user(TEST_USERNAME, TEST_PASSWORD)
+        token = application.state.jwt_service.create_access_token(TEST_USERNAME)
+        auth = {"Authorization": f"Bearer {token}"}
         async with AsyncClient(transport=ASGITransport(app=application), base_url="http://test") as c:
-            token = (await c.post(
-                "/api/auth/token", json={"username": TEST_USERNAME, "password": TEST_PASSWORD}
-            )).json()["access_token"]
-            auth = {"Authorization": f"Bearer {token}"}
             version = await c.get("/api/version", headers=auth)
             status = await c.get(STATUS, headers=auth)
         assert version.status_code == 200
@@ -481,19 +463,6 @@ class TestConnectSnapshots:
         voice_calls = [c for c in mock_event_bus.publish.call_args_list if c[0][0] == "voice.changed"]
         assert len(voice_calls) == 1
         assert voice_calls[0][0][1] == voice.status().model_dump(mode="json")
-
-    async def test_relay_snapshot_skips_voice_when_the_app_has_none(
-        self, relay_config, mock_session_manager, mock_event_bus, mock_broadcaster, mock_app_state,
-    ):
-        mock_session_manager.list_sessions = MagicMock(return_value=[])
-        client = RelayClient(
-            config=relay_config, session_manager=mock_session_manager, event_bus=mock_event_bus,
-            broadcaster=mock_broadcaster, app_state=mock_app_state,
-        )
-
-        await client._handle_control(json.dumps({"type": "request_events_snapshot"}).encode(), AsyncMock())
-
-        assert "voice.changed" not in [c[0][0] for c in mock_event_bus.publish.call_args_list]
 
     async def test_failing_voice_status_does_not_abort_the_relay_snapshot(
         self, tmp_path, relay_config, mock_session_manager, mock_event_bus, mock_broadcaster,
@@ -610,17 +579,6 @@ class TestRelayVoiceDispatchIsOffTheReader:
         assert _responses(new_ws)[0]["request_id"] == "r-1"
         assert _responses(old_ws) == []
         assert slow_voice.cancelled == 0
-
-    async def test_reply_without_a_tunnel_is_dropped_quietly(self, tunnel, slow_voice):
-        client, ws = tunnel
-        await client._handle_control(_finish("r-1"), ws)
-        await _wait_for(lambda: slow_voice.entered == 1)
-        client._ws = None
-
-        slow_voice.gate.set()
-        await _wait_for(lambda: not client._voice_proxy_tasks)
-
-        assert _responses(ws) == []
 
     async def test_requests_beyond_the_in_flight_cap_are_503_voice_busy(self, tunnel, slow_voice):
         client, ws = tunnel

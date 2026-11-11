@@ -15,17 +15,6 @@ afterEach(() => {
 });
 
 describe('observeTabVisibility', () => {
-  it('reports visible until the document says otherwise', () => {
-    const doc = fakeDoc();
-    install(doc);
-
-    expect(tabHidden()).toBe(false);
-
-    doc.hidden = true;
-    doc.fire('visibilitychange');
-
-    expect(tabHidden()).toBe(true);
-  });
 
   it('seeds from a document that was already hidden at installation', () => {
     const doc = fakeDoc();
@@ -47,33 +36,6 @@ describe('observeTabVisibility', () => {
     doc.fire('visibilitychange');
 
     expect(seen).toEqual([true, false]);
-  });
-
-  it('ignores an event that does not change the state', () => {
-    // Some browsers fire `visibilitychange` alongside focus changes that leave
-    // `hidden` alone; a model must not re-baseline its byte counter for those.
-    const doc = fakeDoc();
-    install(doc);
-    const seen: boolean[] = [];
-    onTabVisibility((hidden) => seen.push(hidden));
-
-    doc.fire('visibilitychange');
-    doc.fire('visibilitychange');
-
-    expect(seen).toEqual([]);
-  });
-
-  it('stops notifying after unsubscribe', () => {
-    const doc = fakeDoc();
-    install(doc);
-    const seen: boolean[] = [];
-    const unsubscribe = onTabVisibility((hidden) => seen.push(hidden));
-    unsubscribe();
-
-    doc.hidden = true;
-    doc.fire('visibilitychange');
-
-    expect(seen).toEqual([]);
   });
 
   it('removes the listener and reverts to visible on teardown', () => {

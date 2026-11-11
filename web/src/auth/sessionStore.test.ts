@@ -199,12 +199,12 @@ describe('sessionStore recent custom paths', () => {
 
     const peer = new BroadcastChannel('mobaide-session');
     peer.postMessage({ type: 'logout', reason: 'manual', userId: session().userId });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
+    // Node delivers BroadcastChannel messages through a MessagePort, which a
+    // single setTimeout(0) does not outlast under load: wait for the effect.
+    await vi.waitFor(() => {
+      expect(useSessionStore.getState().session).toBeNull();
     });
     peer.close();
-
-    expect(useSessionStore.getState().session).toBeNull();
     expect(localStorage.getItem(BUCKET)).toBeNull();
     expect(localStorage.getItem(OTHER_BUCKET)).toBeNull();
   });
@@ -224,12 +224,10 @@ describe('sessionStore recent custom paths', () => {
       reason: 'tokenRejected',
       userId: session().userId,
     });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
+    await vi.waitFor(() => {
+      expect(useSessionStore.getState().session).toBeNull();
     });
     peer.close();
-
-    expect(useSessionStore.getState().session).toBeNull();
     expect(localStorage.getItem(BUCKET)).not.toBeNull();
   });
 
@@ -243,12 +241,10 @@ describe('sessionStore recent custom paths', () => {
 
     const peer = new BroadcastChannel('mobaide-session');
     peer.postMessage({ type: 'logout', reason: 'manual' });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
+    await vi.waitFor(() => {
+      expect(useSessionStore.getState().session).toBeNull();
     });
     peer.close();
-
-    expect(useSessionStore.getState().session).toBeNull();
   });
 
   it('drops them when the account was removed under a takeover', () => {

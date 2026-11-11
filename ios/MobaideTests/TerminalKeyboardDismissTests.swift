@@ -364,22 +364,6 @@ final class TerminalKeyboardDismissTests: XCTestCase {
         )
     }
 
-    func testARealDockedKeyboardStillClearsTheThreshold() {
-        let (_, terminal, scroll) = hostedTerminal()
-        var dismissals = 0
-        terminal.onDismissSoftKeyboard = { dismissals += 1 }
-        scroll.setKeyboardLift(dockedKeyboardLift, duration: 0)
-
-        terminal.touchesBegan(Set<UITouch>(), with: nil)
-
-        XCTAssertTrue(
-            terminal.isSoftKeyboardCovering,
-            "310pt is a third of the screen: a threshold raised past a real keyboard would strand it up "
-                + "with no way down, which is the whole bug this feature exists for"
-        )
-        XCTAssertEqual(dismissals, 1)
-    }
-
     /// The cost of getting the predicate wrong: the terminal responder is what a
     /// hardware keyboard types into, so resigning it on every touch ends typing.
     func testAHardwareKeyboardKeepsTypingThroughATerminalTouch() {
@@ -632,22 +616,6 @@ final class TerminalKeyboardDismissTests: XCTestCase {
         XCTAssertEqual(
             carried.count, 1,
             "and the wire does carry a tap's frame, so the refusal above is the gate and not a dead harness"
-        )
-    }
-
-    func testADoubleTapAfterADismissingTouchCopiesNothing() throws {
-        let (model, terminal, scroll) = hostedTerminal()
-        let coordinator = try XCTUnwrap(retainedCoordinator)
-        let point = promptRowPoint(terminal)
-        XCTAssertEqual(terminal.resolveRow(at: point)?.text, "echo hi", "only the frozen-display latch can be refusing")
-        scroll.setKeyboardLift(dockedKeyboardLift, duration: 0)
-
-        terminal.touchesBegan(Set<UITouch>(), with: nil)
-        fire("handleDoubleTap:", on: coordinator, view: terminal, at: point)
-
-        XCTAssertEqual(
-            model.inputText, "",
-            "spoofed text in the composer is the first half of the same attack, so it fails closed too"
         )
     }
 

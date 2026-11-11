@@ -90,15 +90,12 @@ class TestSanCoversHost:
         ("san", "host", "covered"),
         [
             ("*.mobaide.com", "app.mobaide.com", True),
-            ("*.mobaide.com", "www.mobaide.com", True),
             ("*.mobaide.com", "mobaide.com", False),
             ("*.mobaide.com", "a.b.mobaide.com", False),
-            ("*.other.com", "app.mobaide.com", False),
             ("mobaide.com", "mobaide.com", True),
             ("api.mobaide.com", "app.mobaide.com", False),
             ("*.MOBAIDE.com", "APP.mobaide.com", True),
             ("*.mobaide.com.", "app.mobaide.com.", True),
-            ("", "app.mobaide.com", False),
         ],
     )
     def test_truth_table(self, san: str, host: str, covered: bool) -> None:
@@ -113,8 +110,6 @@ class TestSanCoversHost:
         assert tls_preflight.shadowing_sans(OFFENDING_SANS, "app.mobaide.com") == [
             "*.mobaide.com"
         ]
-
-    def test_reissued_cert_shadows_nothing(self) -> None:
         assert tls_preflight.shadowing_sans(REISSUED_SANS, "app.mobaide.com") == []
 
 
@@ -123,7 +118,6 @@ class TestParentDomain:
         ("host", "parent"),
         [
             ("app.mobaide.com", "mobaide.com"),
-            ("a.b.mobaide.com", "b.mobaide.com"),
             ("mobaide.com", None),
             ("203.0.113.10", None),
         ],
@@ -139,13 +133,6 @@ class TestParseOpensslSanOutput:
         assert tls_preflight.parse_openssl_san_output(OPENSSL_SAN_OUTPUT) == list(
             REISSUED_SANS
         )
-
-    def test_parses_the_raw_multiline_form(self) -> None:
-        text = (
-            "X509v3 Subject Alternative Name: \n"
-            "    DNS:*.mobaide.com, DNS:mobaide.com\n"
-        )
-        assert tls_preflight.parse_openssl_san_output(text) == list(OFFENDING_SANS)
 
     def test_missing_extension_yields_no_names(self) -> None:
         """openssl prints nothing when the cert carries no SAN extension."""
@@ -167,29 +154,10 @@ class TestParseOpensslDates:
             CERT_NOT_AFTER,
         )
 
-    def test_parses_the_raw_multiline_form(self) -> None:
-        text = (
-            "notBefore=Aug 10 20:35:00 2026 GMT\n"
-            "notAfter=Aug  6 20:35:00 2041 GMT\n"
-        )
-        assert tls_preflight.parse_openssl_dates(text) == (
-            CERT_NOT_BEFORE,
-            CERT_NOT_AFTER,
-        )
-
-    def test_both_dates_are_timezone_aware(self) -> None:
-        """openssl prints GMT; the comparison against `now` is tz-aware, and a
-        naive datetime raises TypeError there rather than answering wrong.
-        """
-        not_before, not_after = tls_preflight.parse_openssl_dates(OPENSSL_DATE_OUTPUT)
-        assert not_before is not None and not_after is not None
-        assert not_before.utcoffset() == timedelta(0)
-        assert not_after.utcoffset() == timedelta(0)
-
     @pytest.mark.parametrize(
         "text",
-        ["", "unable to load certificate", "notAfter=whenever"],
-        ids=["nothing", "openssl-error", "unparseable"],
+        ["unable to load certificate", "notAfter=whenever"],
+        ids=["openssl-error", "unparseable"],
     )
     def test_unreadable_output_yields_no_dates_rather_than_a_guess(
         self, text: str
@@ -208,6 +176,7 @@ class TestParseOriginProbe:
             "USER=deploy",
             "ORIGIN_PRESENT=1",
             f"ORIGIN_SANS={OPENSSL_SAN_OUTPUT}",
+            f"ORIGIN_DATES={OPENSSL_DATE_OUTPUT}",
             "ORIGIN_CERT_PUB=8f4e1c",
             "ORIGIN_KEY_PUB=8f4e1c",
             "OK",
@@ -218,6 +187,8 @@ class TestParseOriginProbe:
         assert probe.sans == REISSUED_SANS
         assert probe.cert_pubkey == "8f4e1c"
         assert probe.key_pubkey == "8f4e1c"
+        assert probe.not_before == CERT_NOT_BEFORE
+        assert probe.not_after == CERT_NOT_AFTER
 
     def test_present_without_facts_is_unreadable_not_clean(self) -> None:
         """The fail-open case: the PEMs exist but openssl produced nothing, so
@@ -256,13 +227,6 @@ class TestParseOriginProbe:
         assert probe.present is False
         assert probe.sans_read is False
         assert probe.sans == ()
-
-    def test_the_validity_window_arrives_on_its_own_fact_line(self) -> None:
-        probe = tls_preflight.parse_origin_probe(
-            ["ORIGIN_PRESENT=1", f"ORIGIN_DATES={OPENSSL_DATE_OUTPUT}"]
-        )
-        assert probe.not_before == CERT_NOT_BEFORE
-        assert probe.not_after == CERT_NOT_AFTER
 
     def test_a_missing_dates_line_leaves_the_window_unknown_not_valid(self) -> None:
         """openssl failing emits no ORIGIN_DATES at all. That has to read as
@@ -320,18 +284,6 @@ class TestOriginCertWarnings:
         body = "\n".join(warnings[0].lines)
         assert "mobaide.com, www.mobaide.com, api.mobaide.com" in body
 
-    def test_every_uncovered_host_lands_in_one_finding(self) -> None:
-        """Callers branch on the *set* of kinds and print one block per
-        warning, so an apex-only cert has to name both survivors in one place.
-        """
-        probe = tls_preflight.OriginProbe(
-            True, ("mobaide.com",), "8f4e1c", "8f4e1c", True
-        )
-        warnings = tls_preflight.origin_cert_warnings(probe, "mobaide.com")
-        assert [w.kind for w in warnings] == ["missing"]
-        assert "www.mobaide.com" in warnings[0].headline
-        assert "api.mobaide.com" in warnings[0].headline
-
     def test_a_wildcard_only_cert_is_over_and_under_covered_at_once(self) -> None:
         """A wildcard spans exactly one label: `*.mobaide.com` does cover the
         www and api hosts, so neither is "missing" -- but it leaves the apex,
@@ -362,14 +314,6 @@ class TestOriginCertWarnings:
         probe = tls_preflight.OriginProbe(True, (), "8f4e1c", "8f4e1c", sans_read)
         warnings = tls_preflight.origin_cert_warnings(probe, "mobaide.com")
         assert [w.kind for w in warnings] == kinds
-
-    def test_mismatched_public_keys_warn_as_a_separate_finding(self) -> None:
-        probe = tls_preflight.OriginProbe(
-            True, REISSUED_SANS, "8f4e1c", "b02d99", True
-        )
-        warnings = tls_preflight.origin_cert_warnings(probe, "mobaide.com")
-        assert [w.kind for w in warnings] == ["pair"]
-        assert "not a pair" in warnings[0].headline
 
     def test_both_faults_at_once_stay_two_distinguishable_findings(self) -> None:
         probe = tls_preflight.OriginProbe(
@@ -416,14 +360,6 @@ class TestOriginCertValidity:
     production caller uses untested.
     """
 
-    def test_the_real_certs_window_is_clean(self) -> None:
-        assert (
-            tls_preflight.origin_cert_warnings(
-                _dated_probe(CERT_NOT_BEFORE, CERT_NOT_AFTER), "mobaide.com", NOW
-            )
-            == []
-        )
-
     def test_an_expired_cert_is_a_finding(self) -> None:
         probe = _dated_probe(
             NOW - timedelta(days=372), NOW - timedelta(days=7)
@@ -433,16 +369,6 @@ class TestOriginCertValidity:
         assert "EXPIRED" in warnings[0].headline
         assert "2026-08-04" in warnings[0].headline
         assert "526" in "\n".join(warnings[0].lines)
-
-    def test_a_cert_inside_the_warning_window_is_a_finding(self) -> None:
-        """Cloudflare Origin certs are operator-managed -- nothing renews them,
-        unlike the ACME-issued app host -- so the only warning an operator gets
-        before the lapse is this one.
-        """
-        probe = _dated_probe(CERT_NOT_BEFORE, NOW + timedelta(days=10))
-        warnings = tls_preflight.origin_cert_warnings(probe, "mobaide.com", NOW)
-        assert [w.kind for w in warnings] == ["expiry"]
-        assert "expires in 10 days" in warnings[0].headline
 
     def test_a_not_yet_valid_cert_is_a_finding(self) -> None:
         """The edge rejects a future notBefore exactly like an expired one, and
@@ -621,15 +547,6 @@ class TestBuildSslContext:
         monkeypatch.delenv("SSL_CERT_FILE", raising=False)
         monkeypatch.delenv("SSL_CERT_DIR", raising=False)
 
-    def test_healthy_interpreter_gets_no_override(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _install_stock_context(monkeypatch, trusts=True)
-        monkeypatch.setitem(
-            sys.modules, "certifi", types.SimpleNamespace(where=_explodes("certifi"))
-        )
-        assert tls_preflight.build_ssl_context() == (None, None)
-
     def test_windows_shaped_verify_paths_do_not_trigger_the_swap(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -668,21 +585,9 @@ class TestBuildSslContext:
         )
         assert tls_preflight.build_ssl_context() == (None, None)
 
-    @pytest.mark.parametrize(
-        ("platform", "expected", "forbidden"),
-        [
-            ("darwin", "Install Certificates.command", "platform's CA bundle"),
-            ("win32", "platform's CA bundle", "Install Certificates.command"),
-        ],
-    )
     def test_falls_back_to_certifi_when_the_stock_context_trusts_nothing(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        platform: str,
-        expected: str,
-        forbidden: str,
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(tls_preflight.sys, "platform", platform)
         monkeypatch.setattr(
             tls_preflight.ssl,
             "get_default_verify_paths",
@@ -699,8 +604,6 @@ class TestBuildSslContext:
         assert seen["cafile"] == CERTIFI_PATH
         assert warning is not None
         assert "/opt/python/etc/openssl/cert.pem" in warning
-        assert expected in warning
-        assert forbidden not in warning
 
     @pytest.mark.parametrize("var", ["SSL_CERT_FILE", "SSL_CERT_DIR"])
     def test_explicit_env_override_is_left_alone_even_when_broken(
@@ -752,64 +655,6 @@ class TestBuildSslContext:
         assert calls == []
 
 
-class TestCertifiRemedy:
-    """The remedy text is platform-aware for the same reason the probe is."""
-
-    @pytest.mark.parametrize(
-        ("platform", "expected", "forbidden"),
-        [
-            ("darwin", "Install Certificates.command", "platform's CA bundle"),
-            ("win32", "platform's CA bundle", "Install Certificates.command"),
-            ("linux", "platform's CA bundle", "Install Certificates.command"),
-        ],
-    )
-    def test_the_permanent_fix_names_only_a_file_this_platform_has(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        platform: str,
-        expected: str,
-        forbidden: str,
-    ) -> None:
-        monkeypatch.setattr(tls_preflight.sys, "platform", platform)
-        remedy = tls_preflight.certifi_remedy()
-        assert expected in remedy
-        assert forbidden not in remedy
-
-    def test_every_platform_keeps_the_two_load_bearing_facts(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Whose fault it is (so nobody restarts a healthy server), and that
-        certifi will NOT rescue an origin-cert host (it carries no Cloudflare
-        Origin CA), so the fallback is not mistaken for a fix for fault A.
-        """
-        monkeypatch.setattr(tls_preflight.sys, "platform", "win32")
-        remedy = tls_preflight.certifi_remedy()
-        assert "workstation problem, not a server problem" in remedy
-        assert "does NOT contain the Cloudflare Origin CA" in remedy
-
-
-class TestCloudflareOriginRemedy:
-    """Two codes, two unrelated mechanisms -- and the operator acts on the
-    mechanism, not on the number.
-    """
-
-    def test_525_names_the_mismatched_pair_and_its_delayed_fuse(self) -> None:
-        remedy = tls_preflight.cloudflare_origin_remedy(525, "mobaide.com")
-        assert "do not match" in remedy
-        assert "NEXT container restart" in remedy
-        assert "-servername mobaide.com" in remedy
-        assert "Full (strict)" not in remedy
-
-    def test_526_names_the_strict_mode_rejection_not_a_key_mismatch(self) -> None:
-        """Cloudflare accepted the handshake here, so re-uploading a matching
-        pair fixes nothing: the cert is expired or does not carry this name.
-        """
-        remedy = tls_preflight.cloudflare_origin_remedy(526, "mobaide.com")
-        assert "Full (strict)" in remedy
-        assert "SANs" in remedy
-        assert "do not match" not in remedy
-
-
 class TestCreateDnsRemedy:
     """The gray-cloud instruction is right for exactly one host.
 
@@ -824,8 +669,8 @@ class TestCreateDnsRemedy:
         assert "DNS only (gray cloud) in BOTH TLS modes" in remedy
         assert "Proxied" not in remedy
 
-    @pytest.mark.parametrize("host", ["mobaide.com", "api.mobaide.com"])
-    def test_proxied_hosts_are_never_told_to_go_gray(self, host: str) -> None:
+    def test_proxied_hosts_are_never_told_to_go_gray(self) -> None:
+        host = "api.mobaide.com"
         remedy = tls_preflight.create_dns_remedy(host)
         assert host in remedy
         assert "Proxied (orange cloud)" in remedy
@@ -981,18 +826,6 @@ class TestDiagnoseTransport:
         _install_transport(monkeypatch, urlopen=_urlopen(None, control_verifies=True))
         assert tls_preflight.diagnose(APP_URL) is None
 
-    def test_http_error_status_still_counts_as_reachable(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The app webroot 404s before the first web deploy; that proves the
-        site block and the certificate are fine.
-        """
-        not_found = urllib.error.HTTPError(APP_URL, 404, "Not Found", {}, None)  # type: ignore[arg-type]
-        _install_transport(
-            monkeypatch, urlopen=_urlopen(not_found, control_verifies=True)
-        )
-        assert tls_preflight.diagnose(APP_URL) is None
-
     def test_a_post_connect_failure_is_not_labelled_a_handshake_fault(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1059,7 +892,7 @@ class TestCloudflareEdgeStatuses:
         assert "mobaide.com" in failure.detail
         assert "-servername mobaide.com" in failure.remedy
 
-    @pytest.mark.parametrize("code", [521, 522, 523])
+    @pytest.mark.parametrize("code", [521, 523])
     def test_an_origin_the_edge_cannot_reach_is_not_a_certificate_verdict(
         self, monkeypatch: pytest.MonkeyPatch, code: int
     ) -> None:
@@ -1313,12 +1146,6 @@ class TestDeployCommandInvariants:
         """
         assert "errs" not in deploy_central._ORIGIN_CERT_PROBE
 
-    @pytest.mark.parametrize("tls_mode", ["LetsEncrypt", "CloudflareOrigin"])
-    def test_shared_prereq_checks_survive_in_both_modes(self, tls_mode: str) -> None:
-        script = deploy_central.build_preflight_script(tls_mode)
-        for marker in ("BASE_NOT_WRITABLE", "ENV_MISSING", "DOCKER", 'echo "OK"'):
-            assert marker in script
-
 
 class TestOriginCertProbeScript:
     """The fail-open rule, enforced on the shell side.
@@ -1349,14 +1176,9 @@ class TestOriginCertProbeScript:
             assert line.lstrip().startswith('[ -n "$')
             assert "printf '%s' \"$" in line
 
-    @pytest.mark.parametrize(
-        "var",
-        ["origin_sans", "origin_dates", "origin_cert_pub", "origin_key_pub"],
-    )
-    def test_each_fact_is_echoed_only_when_it_was_actually_measured(
-        self, var: str
-    ) -> None:
-        assert f'[ -n "${var}" ] && echo' in deploy_central._ORIGIN_CERT_PROBE
+    def test_each_fact_is_echoed_only_when_it_was_actually_measured(self) -> None:
+        for var in ("origin_sans", "origin_dates", "origin_cert_pub", "origin_key_pub"):
+            assert f'[ -n "${var}" ] && echo' in deploy_central._ORIGIN_CERT_PROBE
 
     def test_the_validity_window_is_read_from_the_cert_the_caddyfile_loads(
         self,

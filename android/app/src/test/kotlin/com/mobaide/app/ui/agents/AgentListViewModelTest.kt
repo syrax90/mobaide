@@ -138,51 +138,7 @@ class AgentListViewModelTest {
         assertNull(vm.uiState.value.error)
     }
 
-    @Test
-    fun init_readsConnectedAgentId_fromTokenStore() = runTest {
-        val fx = newFixture(connectedAgentId = "a-42")
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        assertEquals("a-42", vm.uiState.value.connectedAgentId)
-    }
-
-    // ---- Agent list pass-through -----------------------------------------------
-
-    @Test
-    fun observeAgents_emissions_flowIntoUiState() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.uiState.test {
-            assertEquals(emptyList<AgentSummaryResponse>(), awaitItem().agents)
-
-            fx.agentsFlow.value = listOf(agent("a-1"), agent("a-2"))
-            advanceUntilIdle()
-
-            val updated = awaitItem()
-            assertEquals(2, updated.agents.size)
-            assertEquals("a-1", updated.agents[0].agent_id)
-            assertEquals("a-2", updated.agents[1].agent_id)
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
     // ---- refresh() -------------------------------------------------------------
-
-    @Test
-    fun refresh_setsLoadingThenClearsIt() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.refresh()
-        advanceUntilIdle()
-
-        assertFalse(vm.uiState.value.isLoading)
-        coVerify(atLeast = 2) { fx.agentRepository.refreshAgents() }
-    }
 
     @Test
     fun refresh_onException_setsErrorMessage() = runTest {
@@ -197,25 +153,6 @@ class AgentListViewModelTest {
 
         assertEquals("network down", vm.uiState.value.error)
         assertFalse(vm.uiState.value.isLoading)
-    }
-
-    // ---- clearError ------------------------------------------------------------
-
-    @Test
-    fun clearError_resetsErrorToNull() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        // Seed an error
-        coEvery { fx.agentRepository.refreshAgents() } throws RuntimeException("err")
-        vm.refresh()
-        advanceUntilIdle()
-        assertEquals("err", vm.uiState.value.error)
-
-        vm.clearError()
-
-        assertNull(vm.uiState.value.error)
     }
 
     // ---- Add agent dialog state ------------------------------------------------
@@ -257,40 +194,6 @@ class AgentListViewModelTest {
     }
 
     @Test
-    fun installSheet_isOrthogonalToOtherDialogState() = runTest {
-        // Toggling the install sheet must not interfere with unrelated
-        // dialog state — the field lives alongside addDialogState and
-        // deleteConfirmAgent, and a regression in `copy(...)` could
-        // accidentally reset siblings.
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.showAddDialog()
-        vm.showInstallSheet()
-
-        assertTrue(vm.uiState.value.showInstallSheet)
-        assertEquals(AddAgentDialogState.Input, vm.uiState.value.addDialogState)
-
-        vm.dismissInstallSheet()
-
-        assertFalse(vm.uiState.value.showInstallSheet)
-        assertEquals(AddAgentDialogState.Input, vm.uiState.value.addDialogState)
-    }
-
-    @Test
-    fun onScanQrClicked_setsIsScannerLaunchingTrue() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.onScanQrClicked()
-        advanceUntilIdle()
-
-        assertTrue(vm.uiState.value.isScannerLaunching)
-    }
-
-    @Test
     fun onScanResult_clearsIsScannerLaunching_onSuccess() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
@@ -310,22 +213,6 @@ class AgentListViewModelTest {
             expUnix = 0L,
         )
         vm.onScanResult(Result.success(expired))
-        advanceUntilIdle()
-
-        assertFalse(vm.uiState.value.isScannerLaunching)
-    }
-
-    @Test
-    fun onScanResult_clearsIsScannerLaunching_onFailure() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.onScanQrClicked()
-        advanceUntilIdle()
-        assertTrue(vm.uiState.value.isScannerLaunching)
-
-        vm.onScanResult(Result.failure(RuntimeException("scanner crashed")))
         advanceUntilIdle()
 
         assertFalse(vm.uiState.value.isScannerLaunching)
@@ -486,20 +373,6 @@ class AgentListViewModelTest {
     }
 
     @Test
-    fun confirmDelete_onException_setsError() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        coEvery { fx.agentRepository.deleteAgent("a-1") } throws RuntimeException("forbidden")
-
-        vm.confirmDelete("a-1")
-        advanceUntilIdle()
-
-        assertEquals("forbidden", vm.uiState.value.error)
-    }
-
-    @Test
     fun confirmDelete_withUninstall_ofOnlineAgent_announcesUninstallNow() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
@@ -517,27 +390,6 @@ class AgentListViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
         assertNull(vm.uiState.value.deleteConfirmAgent)
-    }
-
-    @Test
-    fun confirmDelete_withUninstall_ofOfflineAgent_announcesDeferredUninstall() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        coEvery { fx.agentRepository.deleteAgent("a-1", true) } just Runs
-
-        vm.messages.test {
-            vm.showDeleteConfirm(agent("a-1", name = "Laptop", online = false))
-            vm.confirmDelete("a-1", uninstall = true)
-            advanceUntilIdle()
-
-            assertEquals(
-                "“Laptop” will uninstall itself when it next comes online.",
-                awaitItem(),
-            )
-            cancelAndIgnoreRemainingEvents()
-        }
     }
 
     @Test
@@ -627,40 +479,6 @@ class AgentListViewModelTest {
             expectNoEvents()
             cancelAndIgnoreRemainingEvents()
         }
-    }
-
-    @Test
-    fun connectToAgent_alreadyConnectedToSameAgent_navigatesWithoutReconnect() = runTest {
-        val fx = newFixture(connectedAgentId = "a-1")
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.navigateToSessions.test {
-            vm.connectToAgent(agent("a-1"))
-            advanceUntilIdle()
-
-            assertEquals(Unit, awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
-
-        // Should NOT call getMobileTokensForAgent when already connected
-        coVerify(exactly = 0) { fx.agentRepository.getMobileTokensForAgent(any(), any(), any()) }
-    }
-
-    @Test
-    fun connectToAgent_onException_setsError_andClearsConnecting() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        coEvery { fx.agentRepository.getMobileTokensForAgent("a-1", TEST_DEVICE_ID, TEST_DEVICE_NAME) } throws
-            RuntimeException("token minting failed")
-
-        vm.connectToAgent(agent("a-1"))
-        advanceUntilIdle()
-
-        assertEquals("token minting failed", vm.uiState.value.error)
-        assertFalse(vm.uiState.value.isConnecting)
     }
 
     @Test

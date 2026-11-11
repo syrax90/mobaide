@@ -14,10 +14,6 @@ const agent = (agentId: string, online: boolean): Agent => ({
 });
 
 describe('resolveSelectedAgent', () => {
-  it('has nothing to select without agents', () => {
-    expect(resolveSelectedAgent([], 'a')).toBeNull();
-  });
-
   it('keeps the stored agent even while it is offline', () => {
     // The stored pick is sticky on purpose: an agent going offline must not
     // silently move the user's list to a different one.

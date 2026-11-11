@@ -72,34 +72,10 @@ class AgentVersionMonitorTest {
     }
 
     @Test
-    fun probe_matchingVersions_keepsOutdatedNull_andReturnsTrue() = runTest {
-        val (monitor, restApi, _) = newMonitor()
-        coEvery { restApi.getAgentVersion() } returns
-            versionInfo(serverVersion = "0.2.0", latestAgent = "0.2.0")
-
-        val applied = monitor.probe()
-
-        assertTrue(applied)
-        assertNull(monitor.outdated.value)
-    }
-
-    @Test
     fun probe_nullLatestAgentVersion_keepsOutdatedNull() = runTest {
         val (monitor, restApi, _) = newMonitor()
         coEvery { restApi.getAgentVersion() } returns
             versionInfo(serverVersion = "0.1.0", latestAgent = null)
-
-        val applied = monitor.probe()
-
-        assertTrue(applied)
-        assertNull(monitor.outdated.value)
-    }
-
-    @Test
-    fun probe_blankLatestAgentVersion_keepsOutdatedNull() = runTest {
-        val (monitor, restApi, _) = newMonitor()
-        coEvery { restApi.getAgentVersion() } returns
-            versionInfo(serverVersion = "0.1.0", latestAgent = "")
 
         val applied = monitor.probe()
 
@@ -158,21 +134,5 @@ class AgentVersionMonitorTest {
             firstSnapshot,
             monitor.outdated.value,
         )
-    }
-
-    @Test
-    fun reset_clearsOutdated() = runTest {
-        val (monitor, restApi, _) = newMonitor()
-        coEvery { restApi.getAgentVersion() } returns
-            versionInfo(serverVersion = "0.1.0", latestAgent = "0.2.0")
-        monitor.probe()
-        assertEquals(
-            AgentVersionMonitor.Outdated(currentVersion = "0.1.0", latestVersion = "0.2.0"),
-            monitor.outdated.value,
-        )
-
-        monitor.reset()
-
-        assertNull(monitor.outdated.value)
     }
 }

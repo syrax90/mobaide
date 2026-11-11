@@ -14,7 +14,6 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Test
 
 /**
@@ -61,23 +60,6 @@ class CustomAgentTypesRepositoryTest {
             centralApi = centralApi,
             userIdentityStore = userIdentityStore,
         )
-    }
-
-    @Test
-    fun observeTypes_initialState_isEmptyList() = runTest {
-        val (repo) = newFixture()
-        assertTrue(repo.observeTypes().value.isEmpty())
-    }
-
-    @Test
-    fun refreshTypes_throwsIllegalStateException_whenUserNotLoggedIn() = runTest {
-        val (repo) = newFixture(userToken = null)
-        try {
-            repo.refreshTypes()
-            fail("expected IllegalStateException")
-        } catch (e: IllegalStateException) {
-            assertEquals("User not logged in", e.message)
-        }
     }
 
     @Test
@@ -176,16 +158,6 @@ class CustomAgentTypesRepositoryTest {
         assertEquals(listOf("t-2"), repo.observeTypes().value.map { it.id })
     }
 
-    @Test
-    fun clear_emptiesCache() = runTest {
-        val (repo) = newFixture()
-        repo.applyUpserted(type("t-1"))
-
-        repo.clear()
-
-        assertEquals(emptyList<CustomAgentTypeDto>(), repo.observeTypes().value)
-    }
-
     // ---- Account-generation owner guard -------------------------------------
 
     @Test
@@ -199,21 +171,6 @@ class CustomAgentTypesRepositoryTest {
 
         repo.refreshTypes()
 
-        assertTrue(repo.observeTypes().value.isEmpty())
-    }
-
-    @Test
-    fun createType_userChangedMidFlight_returnsPayload_withoutCacheWrite() = runTest {
-        // The server response still goes back to the caller either way — only
-        // the cache write is discarded.
-        val (repo, api, identity) = newFixture()
-        every { identity.getUserId() } returnsMany listOf("user-1", "user-2")
-        val created = type("t-stale")
-        coEvery { api.createCustomAgentType(any(), any(), any()) } returns created
-
-        val returned = repo.createType("Aider", "aider")
-
-        assertSame(created, returned)
         assertTrue(repo.observeTypes().value.isEmpty())
     }
 }

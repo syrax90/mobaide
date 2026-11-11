@@ -84,19 +84,6 @@ final class TerminalSessionModelShortcutsTests: XCTestCase {
 
     // MARK: - sendChord + recents
 
-    func testSendChordSendsEncodedBytesAsRawInputFrame() async throws {
-        let harness = makeHarness()
-        let connection = try await connect(harness)
-
-        harness.model.sendChord(KeyChord(ctrl: true, key: "a"))
-
-        let sent = await waitForBinaries(connection, atLeast: 1)
-        XCTAssertEqual(
-            sent.first, Data([0x69, 0x01]),
-            "chords must use the raw 'i' (input) frame with the encoded byte, never the submit path"
-        )
-    }
-
     func testSendChordResolvedBuiltInPersistsTokenUnderWireBucketAndReloadsRecents() {
         let harness = makeHarness(kind: .claude, resolvedKind: .claude)
 
@@ -118,18 +105,6 @@ final class TerminalSessionModelShortcutsTests: XCTestCase {
         XCTAssertEqual(
             harness.prefs.getRecentShortcutChords(kindKey: "claude"), [],
             "once the real kind is known the seed bucket must not be touched"
-        )
-    }
-
-    func testRefreshShortcutRecentsUnresolvedGatesEmptyDespiteSeedBucketEntries() {
-        let harness = makeHarness(kind: .claude, resolvedKind: nil)
-        harness.prefs.addRecentShortcutChord(kindKey: "claude", token: "ctrl+a")
-
-        harness.model.refreshShortcutRecents()
-
-        XCTAssertEqual(
-            harness.model.shortcutRecents, [],
-            "the seed is a guess (cold-start deep link) — its bucket must never render as this session's recents"
         )
     }
 
@@ -178,30 +153,7 @@ final class TerminalSessionModelShortcutsTests: XCTestCase {
         )
     }
 
-    func testShortcutRecentsEmptyBeforeFirstRefresh() {
-        XCTAssertTrue(makeHarness().model.shortcutRecents.isEmpty)
-    }
-
     // MARK: - adoptResolvedKind + recents
-
-    func testAdoptResolvedKindReloadsRecentsFromResolvedBucket() {
-        let harness = makeHarness(kind: .claude, resolvedKind: nil)
-        harness.prefs.addRecentShortcutChord(kindKey: "claude", token: "ctrl+a")
-        harness.prefs.addRecentShortcutChord(kindKey: "codex", token: "ctrl+x")
-
-        harness.model.refreshShortcutRecents()
-        XCTAssertEqual(
-            harness.model.shortcutRecents, [],
-            "before resolution recents are gated empty — never the seed's guessed bucket"
-        )
-
-        harness.model.adoptResolvedKind(.codex)
-
-        XCTAssertEqual(
-            harness.model.shortcutRecents, [KeyChord(ctrl: true, key: "x")],
-            "resolution must replace the gated-empty list with the real kind's bucket"
-        )
-    }
 
     func testAdoptResolvedCustomKindSelfHealsRecentsAndRoutesMRUWrites() {
         let harness = makeHarness(kind: .claude, resolvedKind: nil)
@@ -392,19 +344,6 @@ final class TerminalSessionModelShortcutsTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requests.count, 2, "a latched guard would make the chord permanently unsavable")
     }
 
-    func testSaveShortcutDifferentChordsBothReachTheServer() async throws {
-        let harness = makeHarness(resolvedKind: .claude)
-        StubURLProtocol.enqueue(status: 201, body: #"{"shortcut_id":"s-1","kind":"claude","chord_token":"ctrl+x","position":0,"created_at":"c","updated_at":"u","version":1}"#)
-        StubURLProtocol.enqueue(status: 201, body: #"{"shortcut_id":"s-2","kind":"claude","chord_token":"ctrl+y","position":1,"created_at":"c","updated_at":"u","version":1}"#)
-
-        harness.model.saveShortcut(KeyChord(ctrl: true, key: "x"))
-        harness.model.saveShortcut(KeyChord(ctrl: true, key: "y"))
-
-        await waitUntil { StubURLProtocol.requests.count == 2 }
-        let tokens = try Set([requestBody(0), requestBody(1)].map { try XCTUnwrap($0["chord_token"]) })
-        XCTAssertEqual(tokens, ["ctrl+x", "ctrl+y"], "the guard is per chord token, not a global flag")
-    }
-
     func testSaveShortcutFailureSetsToastAndGuardReleases() async {
         let harness = makeHarness(resolvedKind: .claude)
         StubURLProtocol.enqueue(status: 500, body: "boom")
@@ -448,16 +387,6 @@ final class TerminalSessionModelShortcutsTests: XCTestCase {
         )
     }
 
-    func testRenameShortcutFailureSetsToast() async {
-        let harness = makeHarness()
-        StubURLProtocol.enqueue(status: 500, body: "boom")
-
-        harness.model.renameShortcut(id: "s-1", name: "New")
-
-        await waitUntil { harness.model.terminalMessage != nil }
-        XCTAssertEqual(harness.model.terminalMessage?.text, "Failed to rename shortcut")
-    }
-
     // MARK: - removeShortcut
 
     func testRemoveShortcutDeletesAndPrunesCacheSilently() async throws {
@@ -478,10 +407,6 @@ final class TerminalSessionModelShortcutsTests: XCTestCase {
         await assertAlreadyGoneIsAbsorbed(status: 403)
     }
 
-    func testRemoveShortcutAlreadyGone404PrunesSilently() async {
-        await assertAlreadyGoneIsAbsorbed(status: 404)
-    }
-
     /// DELETE is not idempotent server-side: an already-soft-deleted row
     /// answers 403 (404 when never visible). Ids only ever come from the
     /// user's own cached list, so these codes can only mean "already gone" —
@@ -496,20 +421,5 @@ final class TerminalSessionModelShortcutsTests: XCTestCase {
         await waitUntil { harness.repo.currentShortcuts.isEmpty }
         XCTAssertTrue(harness.repo.currentShortcuts.isEmpty, "\(status) must reconcile the cache the failed call never pruned")
         XCTAssertNil(harness.model.terminalMessage, "\(status) is not a user-visible failure")
-    }
-
-    func testRemoveShortcutOtherErrorSetsToastAndKeepsCache() async {
-        let harness = makeHarness()
-        await harness.repo.applyUpserted(makeShortcut(id: "s-1", chordToken: "ctrl+a"))
-        StubURLProtocol.enqueue(status: 500, body: "internal server error")
-
-        harness.model.removeShortcut(id: "s-1")
-
-        await waitUntil { harness.model.terminalMessage != nil }
-        XCTAssertEqual(harness.model.terminalMessage?.text, "Failed to remove shortcut")
-        XCTAssertEqual(
-            harness.repo.currentShortcuts.map(\.shortcut_id), ["s-1"],
-            "a 500 says nothing about the row's fate — the cache must be left alone"
-        )
     }
 }

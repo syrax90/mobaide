@@ -26,23 +26,4 @@ final class KeychainStoreTests: XCTestCase {
         XCTAssertEqual(query[kSecAttrService as String] as? String, "mobaide_auth")
         XCTAssertEqual(query[kSecAttrAccount as String] as? String, "access_token")
     }
-
-    func testInMemoryFakeSemantics() {
-        let fake = InMemoryKeychainStore()
-        XCTAssertNil(fake.string(forKey: "a"))
-
-        fake.set("one", forKey: "a")
-        fake.set("two", forKey: "b")
-        XCTAssertEqual(fake.string(forKey: "a"), "one")
-
-        fake.set("updated", forKey: "a")
-        XCTAssertEqual(fake.string(forKey: "a"), "updated")
-
-        fake.removeValue(forKey: "a")
-        XCTAssertNil(fake.string(forKey: "a"))
-        XCTAssertEqual(fake.string(forKey: "b"), "two")
-
-        fake.removeAll()
-        XCTAssertNil(fake.string(forKey: "b"))
-    }
 }

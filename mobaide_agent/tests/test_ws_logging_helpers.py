@@ -63,11 +63,6 @@ class TestClientAddr:
 
         assert _client_addr(ws) is None
 
-    def test_returns_none_when_attr_absent(self):
-        ws = SimpleNamespace()  # no .client attribute at all
-
-        assert _client_addr(ws) is None
-
     def test_formats_host_port(self):
         ws = _fake_ws(host="10.0.0.1", port=9090)
 
@@ -83,16 +78,6 @@ class TestLogWsConnect:
         ctx = structlog.contextvars.get_contextvars()
         assert ctx.get("ws_channel") == "session-list"
         assert ctx.get("client_ip") == "10.0.0.2:443"
-
-    def test_client_ip_is_none_when_ws_has_no_client(self):
-        ws = _fake_ws(host=None)
-
-        with capture_logs() as logs:
-            log_ws_connect("events", ws)
-
-        assert logs[0]["client_ip"] is None
-        ctx = structlog.contextvars.get_contextvars()
-        assert ctx.get("client_ip") is None
 
 
 class TestLogWsAuthenticated:

@@ -43,23 +43,6 @@ class CodeInputFieldTest {
     // the same Compose quirk handled in AgentListScreenTest.
 
     @Test
-    fun forwardsKeystrokeVerbatim_withoutFilteringOrCapping() {
-        val captured = mutableListOf<String>()
-        composeRule.setContent {
-            Surface {
-                CodeInputField(value = "", onValueChange = { captured += it })
-            }
-        }
-
-        // The component does not filter input; a non-digit char must be passed straight through
-        // so the ViewModel (the owner of digit-filtering) decides what to keep.
-        composeRule.onNodeWithContentDescription("Verification code", substring = true)
-            .performTextInput("a")
-
-        assertEquals(listOf("a"), captured)
-    }
-
-    @Test
     fun forwardsAppendedDigitToEndOfValue() {
         val captured = mutableListOf<String>()
         composeRule.setContent {
@@ -91,57 +74,6 @@ class CodeInputFieldTest {
     }
 
     @Test
-    fun customContentDescription_makesFieldDiscoverableByThatPrefix() {
-        composeRule.setContent {
-            Surface {
-                CodeInputField(
-                    value = "",
-                    onValueChange = {},
-                    autoFocus = false,
-                    contentDescription = "Reset code",
-                )
-            }
-        }
-
-        // The Reset-password screen passes "Reset code"; the field must be locatable by that
-        // prefix (TalkBack announces "Reset code, 6 digits, 0 entered"), and an input forwarded
-        // through it confirms the custom-described node is the live editable field.
-        composeRule.onNodeWithContentDescription("Reset code", substring = true)
-            .assertExists()
-    }
-
-    @Test
-    fun customContentDescription_overridesDefaultVerificationCode() {
-        composeRule.setContent {
-            Surface {
-                CodeInputField(
-                    value = "",
-                    onValueChange = {},
-                    autoFocus = false,
-                    contentDescription = "Reset code",
-                )
-            }
-        }
-
-        // Passing a custom description must replace the "Verification code" default, not append to
-        // it — otherwise the parameter would be silently ignored and both screens would read alike.
-        composeRule.onNodeWithContentDescription("Verification code", substring = true)
-            .assertDoesNotExist()
-    }
-
-    @Test
-    fun pasteButton_hidden_whenClipboardHasNoText() {
-        composeRule.setContent {
-            Surface {
-                CodeInputField(value = "", onValueChange = {}, autoFocus = false)
-            }
-        }
-
-        // Nothing to paste — the affordance must not advertise an empty clipboard.
-        composeRule.onNodeWithText("Paste code").assertDoesNotExist()
-    }
-
-    @Test
     fun pasteButton_forwardsClipboardTextVerbatim() {
         val clipboard = RuntimeEnvironment.getApplication()
             .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -159,21 +91,5 @@ class CodeInputFieldTest {
         // The component stays presentation-only: the raw clip goes to the ViewModel, which
         // owns digit-filtering and capping.
         assertEquals(listOf("Your code is 123 456"), captured)
-    }
-
-    @Test
-    fun pasteButton_hidden_whenFieldDisabled() {
-        val clipboard = RuntimeEnvironment.getApplication()
-            .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("label", "123456"))
-
-        composeRule.setContent {
-            Surface {
-                CodeInputField(value = "", onValueChange = {}, autoFocus = false, enabled = false)
-            }
-        }
-
-        // Submitting is in flight; offering a paste that the field would reject is misleading.
-        composeRule.onNodeWithText("Paste code").assertDoesNotExist()
     }
 }

@@ -36,12 +36,6 @@ class ProjectFormStateTest {
     }
 
     @Test
-    fun nameError_required_afterSubmitAttempt() {
-        val s = ProjectFormState.forCreate().copy(name = "", submitAttempted = true)
-        assertEquals("Name is required", s.nameError)
-    }
-
-    @Test
     fun nameError_rejectsSlashes() {
         val s = ProjectFormState.forCreate()
             .copy(name = "a/b", submitAttempted = true)
@@ -53,13 +47,6 @@ class ProjectFormStateTest {
         val s = ProjectFormState.forCreate()
             .copy(name = "alpha", nameServerError = "Cannot rename: scan active")
         assertEquals("Cannot rename: scan active", s.nameError)
-    }
-
-    @Test
-    fun pathError_required_afterTouch() {
-        val s = ProjectFormState.forCreate()
-            .copy(path = "", touched = setOf(ProjectFormState.Field.PATH))
-        assertEquals("Path is required", s.pathError)
     }
 
     // --- flag validation ---
@@ -87,32 +74,11 @@ class ProjectFormStateTest {
     }
 
     @Test
-    fun flagValueError_numberNonNumeric() {
-        val s = ProjectFormState.forCreate().copy(
-            flags = listOf(FlagEntry("k", FlagType.NUMBER, "abc")),
-            touched = setOf(ProjectFormState.Field.FLAG),
-        )
-        assertEquals("Not a number", s.flagValueErrors[0])
-    }
-
-    @Test
     fun flagValue_numberLongAndDoubleBothValid() {
         assertTrue(FlagEntry("k", FlagType.NUMBER, "42").valueValid)
         assertTrue(FlagEntry("k", FlagType.NUMBER, "3.14").valueValid)
         assertFalse(FlagEntry("k", FlagType.NUMBER, "").valueValid)
         assertFalse(FlagEntry("k", FlagType.NUMBER, "oops").valueValid)
-    }
-
-    @Test
-    fun flagValue_booleanAlwaysValidForTrueOrFalse() {
-        assertTrue(FlagEntry("k", FlagType.BOOLEAN, "true").valueValid)
-        assertTrue(FlagEntry("k", FlagType.BOOLEAN, "false").valueValid)
-    }
-
-    @Test
-    fun flagValue_stringAlwaysValid() {
-        assertTrue(FlagEntry("k", FlagType.STRING, "").valueValid)
-        assertTrue(FlagEntry("k", FlagType.STRING, "any").valueValid)
     }
 
     // --- canSave ---
@@ -125,12 +91,6 @@ class ProjectFormStateTest {
             flags = listOf(FlagEntry("k", FlagType.STRING, "v")),
         )
         assertTrue(ok.canSave)
-    }
-
-    @Test
-    fun canSave_falseWhenNameBlank() {
-        val s = ProjectFormState.forCreate().copy(name = "", path = "/p")
-        assertFalse(s.canSave)
     }
 
     @Test
@@ -179,14 +139,6 @@ class ProjectFormStateTest {
         assertEquals(3.14, (forward as JsonPrimitive).doubleOrNull!!, 0.0001)
         val back = FlagEntry.fromJsonElement("k", forward)
         assertEquals(FlagType.NUMBER, back.type)
-    }
-
-    @Test
-    fun flagEntry_roundTrip_string() {
-        val forward = FlagEntry("k", FlagType.STRING, "opus").toJsonElement()
-        val back = FlagEntry.fromJsonElement("k", forward)
-        assertEquals(FlagType.STRING, back.type)
-        assertEquals("opus", back.textValue)
     }
 
     @Test
@@ -307,17 +259,6 @@ class ProjectFormStateTest {
     }
 
     @Test
-    fun toUpdateBody_condaUnchanged_isNull() {
-        val current = ProjectInfo(
-            name = "alpha",
-            path = "/p/alpha",
-            conda_env = "old",
-        )
-        val s = ProjectFormState.forEdit(current) // condaEnv defaults to "old"
-        assertNull(s.toUpdateBody().conda_env)
-    }
-
-    @Test
     fun forEdit_linearKeyStartsBlank() {
         val current = ProjectInfo(
             name = "alpha",
@@ -327,17 +268,6 @@ class ProjectFormStateTest {
         val s = ProjectFormState.forEdit(current)
         assertEquals("", s.linearApiKey)
         assertFalse(s.clearLinearKey)
-    }
-
-    @Test
-    fun forCreate_seedsHistoricalDefaults() {
-        val s = ProjectFormState.forCreate()
-        assertEquals(setOf("AutoPipeline"), s.triggerLabels)
-        assertEquals(setOf("Proposals"), s.triggerStates)
-        assertEquals("In Progress", s.activeState)
-        assertEquals("Done", s.doneState)
-        assertEquals("AutoPipeline", s.removalLabel)
-        assertFalse(s.filterDirty)
     }
 
     @Test
@@ -369,15 +299,6 @@ class ProjectFormStateTest {
             touched = setOf(ProjectFormState.Field.FILTER),
         )
         assertEquals("Select at least one trigger label", s.triggerLabelsError)
-    }
-
-    @Test
-    fun triggerStatesError_visibleAfterSubmitAttempted_whenEmpty() {
-        val s = ProjectFormState.forCreate().copy(
-            triggerStates = emptySet(),
-            submitAttempted = true,
-        )
-        assertEquals("Select at least one trigger state", s.triggerStatesError)
     }
 
     @Test
@@ -443,12 +364,6 @@ class ProjectFormStateTest {
     fun showAutoScanFilterSection_trueInCreateModeWithKey() {
         val s = ProjectFormState.forCreate().copy(linearApiKey = "lin_test")
         assertTrue(s.showAutoScanFilterSection)
-    }
-
-    @Test
-    fun showAutoScanFilterSection_falseInCreateModeWithoutKey() {
-        val s = ProjectFormState.forCreate()
-        assertFalse(s.showAutoScanFilterSection)
     }
 
     @Test

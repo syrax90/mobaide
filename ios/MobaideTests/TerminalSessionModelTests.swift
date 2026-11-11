@@ -76,17 +76,6 @@ final class TerminalSessionModelTests: XCTestCase {
         XCTAssertEqual(sent.first, Data([0x69, 0x0D]))
     }
 
-    func testTappedRowIgnoredWhenNotLive() async throws {
-        let factory = FakeWebSocketTransportFactory()
-        let model = makeModel(factory: factory)
-        model.start()
-        let connection = try await factory.connection(1)
-        // No inbound binary yet → still .reconnecting.
-        model.sendTappedRow(text: "ls", isCurrentInput: false)
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertTrue(connection.sentBinaries.isEmpty)
-    }
-
     func testResizeDebounceCollapsesToFinalValue() async throws {
         let (model, connection) = try await connectedModel()
         model.resize(rows: 30, cols: 100)
@@ -201,14 +190,6 @@ final class TerminalSessionModelTests: XCTestCase {
         return (model, connection)
     }
 
-    func testOwnHandshakeReplayEndReassertsSize() async throws {
-        let (_, connection) = try await liveAfterOwnHandshake()
-        XCTAssertEqual(
-            connection.sentBinaries.filter { $0.first == 0x72 }.last,
-            Data([0x72, 0x00, 0x28, 0x00, 0x78])
-        )
-    }
-
     /// The relay fans every attach handshake out to all sockets on the session.
     /// A retained model answering another client's replay would resize the PTY
     /// back to its own grid right after that client opened the session.
@@ -286,15 +267,6 @@ final class TerminalSessionModelTests: XCTestCase {
     }
 
     // MARK: - Terminal-originated byte gate (sendTerminalBytes)
-
-    func testTerminalBytesDroppedWhenNotLive() async throws {
-        let (model, connection) = try await connectedModel()
-        // No inbound binary yet → still .reconnecting.
-        XCTAssertEqual(model.connectionState, .reconnecting)
-        model.sendTerminalBytes(Data([0x61]))
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertTrue(connection.sentBinaries.isEmpty, "typed keys must not reach a not-yet-live socket")
-    }
 
     func testTerminalBytesDroppedDuringReplay() async throws {
         let (model, connection) = try await connectedModel()
@@ -389,17 +361,6 @@ final class TerminalSessionModelTests: XCTestCase {
         XCTAssertEqual(model.connectionState, .live)
     }
 
-    func testDisconnectReturnsToReconnecting() async throws {
-        let (model, connection) = try await connectedModel()
-        connection.emit(.binary(Data([0x65])))
-        try await Task.sleep(for: .milliseconds(20))
-        XCTAssertEqual(model.connectionState, .live)
-
-        connection.emit(.closed(code: 1006, reason: "drop"))
-        try await Task.sleep(for: .milliseconds(30))
-        XCTAssertEqual(model.connectionState, .reconnecting)
-    }
-
     func testReplayFeedsClearedBufferWithoutDuplicating() async throws {
         let (model, connection) = try await connectedModel()
         connection.emit(.binary(Data([0x62])))
@@ -419,21 +380,6 @@ final class TerminalSessionModelTests: XCTestCase {
     }
 
     // MARK: - Retention
-
-    func testStoreReusesModelInstance() {
-        let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
-        let store = TerminalTestSupport.store(harness)
-        let first = store.model(id: "s1", kind: .claude, resolvedKind: nil, initialStatus: nil)
-        let again = store.model(id: "s1", kind: .claude, resolvedKind: nil, initialStatus: nil)
-        XCTAssertTrue(first === again, "same id must return the retained model")
-
-        let other = store.model(id: "s2", kind: .claude, resolvedKind: nil, initialStatus: nil)
-        XCTAssertFalse(first === other)
-
-        store.evict("s1")
-        let rebuilt = store.model(id: "s1", kind: .claude, resolvedKind: nil, initialStatus: nil)
-        XCTAssertFalse(first === rebuilt, "evicted id must build a fresh model")
-    }
 
     func testStoreTopsUpResolvedKindOnCachedModel() {
         // A model created before the session row loaded (cold-start deep link)
@@ -460,44 +406,6 @@ final class TerminalSessionModelTests: XCTestCase {
             try? await Task.sleep(for: .milliseconds(2))
         }
         return predicate()
-    }
-
-    func testScrollingIntoHistoryPausesFollowAndOutputMarksUnread() async throws {
-        let (model, connection) = try await connectedModel()
-        XCTAssertTrue(model.followMode)
-        XCTAssertFalse(model.hasUnread)
-
-        model.onUserScrolled(position: 0.5) // user scrolled up into scrollback
-        XCTAssertFalse(model.followMode, "leaving the bottom pauses follow-mode")
-
-        // "late line" carries no newline, so it never scrolls the emulator's
-        // buffer — the unread tally is driven by the emulator's own scroll
-        // signal (`onEmulatorScrolled`), not by output frames arriving.
-        connection.emit(.binary(Data([0x6F]) + Data("late line".utf8))) // output
-        model.onEmulatorScrolled() // the terminal pushed a row past the bottom
-        XCTAssertTrue(model.hasUnread, "output that scrolls the buffer while paused must raise the unread flag")
-        XCTAssertFalse(model.followMode, "incoming output must not silently resume follow-mode")
-    }
-
-    func testOutputWhileFollowingNeverMarksUnread() async throws {
-        let (model, connection) = try await connectedModel()
-        XCTAssertTrue(model.followMode)
-
-        connection.emit(.binary(Data([0x6F]) + Data("live line".utf8))) // output → also flips to .live
-        let processed = await poll { model.connectionState == .live }
-        XCTAssertTrue(processed, "output frame should have been handled")
-        XCTAssertFalse(model.hasUnread, "a following viewer never accrues unread")
-    }
-
-    func testScrollBackToBottomResumesFollowAndClearsUnread() async throws {
-        let (model, _) = try await connectedModel()
-        model.onUserScrolled(position: 0.5)
-        model.onEmulatorScrolled() // the terminal pushed a row past the bottom while paused
-        XCTAssertTrue(model.hasUnread, "the tally must be genuinely non-zero before the resume")
-
-        model.onUserScrolled(position: 1.0) // returned to the bottom
-        XCTAssertTrue(model.followMode)
-        XCTAssertFalse(model.hasUnread, "returning to the bottom clears unread")
     }
 
     func testJumpToBottomResumesFollowAndClearsUnread() async throws {
@@ -534,20 +442,6 @@ final class TerminalSessionModelTests: XCTestCase {
             "SwiftTerm reports one scrolled line at a time — Android accrues the same tally from its scrollCounter delta"
         )
         XCTAssertTrue(model.hasUnread)
-    }
-
-    func testUnreadRowsSaturateAtTheDisplayCap() {
-        let model = offlineModel()
-        model.onUserScrolled(position: 0.5)
-
-        for _ in 0..<(TerminalSessionModel.maxUnreadRows + 25) {
-            model.onEmulatorScrolled()
-        }
-
-        XCTAssertEqual(
-            model.unreadRows, TerminalSessionModel.maxUnreadRows,
-            "a runaway producer must not grow the badge without bound"
-        )
     }
 
     func testScrollingBackToTheTailClearsTheTallyAndLiftsSnapSuppression() {

@@ -27,20 +27,4 @@ class GitPathLabelsTest {
         assertEquals("mobaide_worktree", gitPathDirectory(path))
     }
 
-    @Test
-    fun aTopLevelFolder_isNamedWithItsSlash_andHasNoDirectory() {
-        assertEquals("vendor/", gitPathFileName("vendor/"))
-        assertNull(gitPathDirectory("vendor/"))
-    }
-
-    @Test
-    fun theStatusEntry_labelsItsRowWithTheSameSplit() {
-        val entry = GitStatusEntry(
-            group = GitStatusEntry.GROUP_UNTRACKED, path = "mobaide_worktree/claude-session-56a3f247/",
-            code = "?", index_status = "?", worktree_status = "?",
-        )
-
-        assertEquals("claude-session-56a3f247/", entry.fileName)
-        assertEquals("mobaide_worktree", entry.directory)
-    }
 }

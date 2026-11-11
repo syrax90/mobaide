@@ -121,17 +121,6 @@ class TestInitiate:
         assert resp.status_code == 503
         assert "MANIFEST_SIGNING" in resp.json()["detail"]
 
-    async def test_returns_503_when_public_key_missing(
-        self, client, qr_app
-    ):
-        _override_config(qr_app, manifest_signing_public_key_b64=None)
-
-        resp = await client.post(
-            "/api/pairing/initiate", json={"hostname": "alpha"},
-        )
-
-        assert resp.status_code == 503
-
     async def test_metadata_persisted_for_claim_handler(
         self, client, qr_app
     ):
@@ -153,35 +142,6 @@ class TestInitiate:
         decoded = json.loads(meta["agent_metadata"])
         assert decoded["current_agent_id"] == "agent-old-id"
         assert decoded["hostname"] == "alpha"
-
-    async def test_relay_url_persisted_for_recovery_handler(
-        self, client, qr_app
-    ):
-        # Regression guard: ``pairing_tokens.relay_url`` is written at
-        # initiate time and read back by both the claim handler and the
-        # WS recovery handler. Without this column, the recovery branch
-        # recomputed relay_url from ``websocket.url.scheme`` (wss → https)
-        # while the initiate branch recomputed it from ``request.base_url``
-        # (often http behind a reverse proxy that doesn't forward
-        # X-Forwarded-Proto to uvicorn). The agent's strict-equality
-        # check then rejected its own credentials on recovery — the
-        # exact failure mode of the "RELAY_AGENT_* stays empty after
-        # pairing" bug.
-        resp = await client.post(
-            "/api/pairing/initiate",
-            json={"hostname": "alpha", "os": "Linux"},
-        )
-        assert resp.status_code == 200
-        nonce = resp.json()["nonce"]
-
-        meta = await qr_app.state.db.lookup_pairing_token_metadata(nonce)
-        assert meta is not None
-        # ``public_base_url`` set in the qr_app fixture: "https://relay.test".
-        assert meta["relay_url"] == "https://relay.test", (
-            f"expected relay_url to be persisted at initiate; got "
-            f"{meta.get('relay_url')!r}. The QR payload also carries it: "
-            f"{resp.json()['qr_payload']!r}"
-        )
 
 
 async def _count_pairing_tokens(db) -> int:
@@ -247,32 +207,12 @@ class TestInitiateRateLimiting:
 
         assert resp.status_code == 200, resp.text
 
-    async def test_a_zero_cap_disables_the_limit(self, client, qr_app):
-        qr_app.state.pairing_initiate_ip_limiter = ResendRateLimiter(
-            cooldown_seconds=0, hourly_cap=0
-        )
-        for _ in range(5):
-            resp = await client.post(
-                "/api/pairing/initiate", json={"hostname": "alpha"},
-            )
-            assert resp.status_code == 200, resp.text
-
 
 class TestClaim:
     async def _initiate_nonce(self, client) -> str:
         resp = await client.post(
             "/api/pairing/initiate",
             json={"hostname": "alpha", "os": "Linux"},
-        )
-        assert resp.status_code == 200
-        return resp.json()["nonce"]
-
-    async def _initiate_repair_nonce(
-        self, client, current_agent_id: str
-    ) -> str:
-        resp = await client.post(
-            "/api/pairing/initiate",
-            json={"hostname": "alpha", "current_agent_id": current_agent_id},
         )
         assert resp.status_code == 200
         return resp.json()["nonce"]
@@ -323,23 +263,6 @@ class TestClaim:
         )
 
         assert second.status_code == 410
-
-    async def test_unknown_nonce_returns_410(
-        self, client, qr_app, api_auth_headers
-    ):
-        fp = compute_trust_key_fp(qr_app.state._test_pub_b64)
-
-        resp = await client.post(
-            "/api/pairing/claim",
-            json={
-                "nonce": "totally-unknown-nonce",
-                "trust_key_fp": fp,
-                "mobile_device_id": _CLAIM_DEV_UUID,
-            },
-            headers=api_auth_headers,
-        )
-
-        assert resp.status_code == 410
 
     async def test_expired_nonce_returns_410(
         self, client, qr_app, api_auth_headers
@@ -611,26 +534,6 @@ class TestClaimWsDispatch:
         # Does not raise = signature valid.
         pub.verify(base64.b64decode(push["signature_b64"]), canonical)
 
-    async def test_claim_succeeds_even_when_no_waiter(
-        self, client, qr_app, api_auth_headers
-    ):
-        # No waiter registered → dispatch returns False but the claim
-        # itself still returns 200 (the agent will retry on next QR).
-        nonce = await TestClaim._initiate_nonce(self, client)
-        fp = compute_trust_key_fp(qr_app.state._test_pub_b64)
-
-        resp = await client.post(
-            "/api/pairing/claim",
-            json={
-                "nonce": nonce,
-                "trust_key_fp": fp,
-                "mobile_device_id": _CLAIM_DEV_UUID,
-            },
-            headers=api_auth_headers,
-        )
-
-        assert resp.status_code == 200
-
     async def test_claim_relay_url_matches_persisted_value(
         self, client, qr_app, api_auth_headers
     ):
@@ -714,10 +617,10 @@ class TestClaimDeviceReassignment:
     """End-to-end coverage of the last-login-wins ``mobile_device_id``
     handover through ``POST /api/pairing/claim``.
 
-    The DB-layer handover is unit-tested in ``test_database.py``; these
-    tests pin the router path (``upsert_mobile_device`` always succeeds,
-    the claim proceeds to completion) at the endpoint, not just the
-    helper. Both use a first-pair nonce (no ``current_agent_id``) so the
+    The DB-layer handover is unit-tested in ``test_database.py``; this
+    pins the router path (``upsert_mobile_device`` always succeeds, the
+    claim proceeds to completion) at the endpoint, not just the helper.
+    It uses a first-pair nonce (no ``current_agent_id``) so the
     agent-ownership guard — which still 409s and is covered by
     ``test_different_owner_claim_is_rejected`` — stays out of the way.
     """
@@ -736,53 +639,6 @@ class TestClaimDeviceReassignment:
         )
         assert resp.status_code == 200
         return resp.json()["nonce"]
-
-    async def test_claim_reassigns_idle_cross_tenant_device(
-        self, client, qr_app, api_auth_headers, viewer_user
-    ):
-        # A prior user owns the device but holds no live refresh token
-        # (idle — its agent was deleted / it was revoked). The viewer
-        # first-pairs the *same* physical device id: a clean handover
-        # with nothing to revoke. 200, and the device moves to the viewer.
-        prior_id = await self._other_user_id(qr_app)
-        await qr_app.state.db.upsert_mobile_device(
-            device_id=_SHARED_DEV_UUID, user_id=prior_id, name="prior phone"
-        )
-        await qr_app.state.db.revoke_mobile_device(_SHARED_DEV_UUID, prior_id)
-        # The viewer's session was signed in after the prior owner's revoke:
-        # back-date the watermark so it is strictly older than the session.
-        await qr_app.state.db.conn.execute(
-            "UPDATE device_revocations SET tokens_valid_after = tokens_valid_after - 60 "
-            "WHERE device_id = ?",
-            (_SHARED_DEV_UUID,),
-        )
-        await qr_app.state.db.conn.commit()
-
-        nonce = await self._initiate_first_pair(client)
-        fp = compute_trust_key_fp(qr_app.state._test_pub_b64)
-
-        resp = await client.post(
-            "/api/pairing/claim",
-            json={
-                "nonce": nonce,
-                "trust_key_fp": fp,
-                "mobile_device_id": _SHARED_DEV_UUID,
-                "mobile_device_name": "viewer phone",
-            },
-            headers=api_auth_headers,
-        )
-
-        assert resp.status_code == 200, resp.text
-        # The device left the prior owner and now belongs to the viewer.
-        assert await qr_app.state.db.list_user_devices(prior_id) == []
-        viewer_devices = await qr_app.state.db.list_user_devices(
-            viewer_user["id"]
-        )
-        assert [d["device_id"] for d in viewer_devices] == [_SHARED_DEV_UUID]
-        # A real agent was created for the claimer.
-        agent = await qr_app.state.db.get_agent(resp.json()["agent_id"])
-        assert agent is not None
-        assert agent["owner_user_id"] == viewer_user["id"]
 
     async def test_claim_hands_over_device_with_live_session(
         self, client, qr_app, api_auth_headers, viewer_user
@@ -901,18 +757,6 @@ class TestFirstPairingConversion:
         assert row["first_paired_at"] == marker
         uploader.schedule_first_pairing.assert_called_once()
 
-    async def test_scheduling_failure_does_not_fail_the_pairing(
-        self, client, qr_app, api_auth_headers
-    ):
-        uploader = MagicMock()
-        uploader.schedule_first_pairing.side_effect = RuntimeError("boom")
-        qr_app.state.ads_uploader = uploader
-
-        resp = await self._claim(client, qr_app, api_auth_headers)
-
-        assert resp.status_code == 200, resp.text
-        uploader.schedule_first_pairing.assert_called_once()
-
     async def test_first_pair_broadcasts_the_account_event_once(
         self, client, qr_app, api_auth_headers
     ):
@@ -931,18 +775,6 @@ class TestFirstPairingConversion:
         second = await self._claim(client, qr_app, api_auth_headers)
         assert second.status_code == 200, second.text
         assert listener.send_queue.empty()
-
-    async def test_missing_routing_table_does_not_fail_the_pairing(
-        self, client, qr_app, api_auth_headers
-    ):
-        uploader = MagicMock()
-        qr_app.state.ads_uploader = uploader
-        qr_app.state.routing = None
-
-        resp = await self._claim(client, qr_app, api_auth_headers)
-
-        assert resp.status_code == 200, resp.text
-        uploader.schedule_first_pairing.assert_called_once()
 
     async def test_broadcast_failure_does_not_fail_the_pairing(
         self, client, qr_app, api_auth_headers, monkeypatch

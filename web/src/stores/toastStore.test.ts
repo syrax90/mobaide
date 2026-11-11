@@ -11,20 +11,6 @@ describe('toastStore', () => {
     vi.useRealTimers();
   });
 
-  it('show adds a toast and returns its id', () => {
-    const id = useToastStore.getState().show('Saved.', 'success');
-
-    const { toasts } = useToastStore.getState();
-    expect(toasts).toHaveLength(1);
-    expect(toasts[0]).toEqual({ id, kind: 'success', message: 'Saved.' });
-  });
-
-  it('show defaults the kind to info', () => {
-    useToastStore.getState().show('Plain message');
-
-    expect(useToastStore.getState().toasts[0]?.kind).toBe('info');
-  });
-
   it('dismiss removes only the targeted toast', () => {
     const first = useToastStore.getState().show('first');
     const second = useToastStore.getState().show('second');

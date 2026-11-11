@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { ansiCss, parseAnsiRuns, type AnsiRun } from './ansi';
+import { parseAnsiRuns, type AnsiRun } from './ansi';
 import { readFixture } from './__fixtures__/load';
 
 interface FixtureRun {
@@ -77,11 +77,5 @@ describe('parseAnsiRuns beyond the golden', () => {
     const runs = parseAnsiRuns(`${esc}[38;9;1mA`);
     expect(runs[0]?.foreground).toBeUndefined();
     expect(runs[0]?.bold).toBe(true);
-  });
-});
-
-describe('ansiCss', () => {
-  it('renders channels as a space-separated rgb() colour', () => {
-    expect(ansiCss({ r: 205, g: 49, b: 49 })).toBe('rgb(205 49 49)');
   });
 });

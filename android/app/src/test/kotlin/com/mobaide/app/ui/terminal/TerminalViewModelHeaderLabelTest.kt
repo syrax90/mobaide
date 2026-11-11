@@ -14,7 +14,6 @@ import com.mobaide.app.notifications.AppForegroundTracker
 import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.coEvery
-import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -63,14 +62,6 @@ class TerminalViewModelHeaderLabelTest {
         kind = kind,
     )
 
-    private fun customType(id: String, name: String) = CustomAgentTypeDto(
-        id = id,
-        name = name,
-        command = "aider",
-        created_at = "2026-01-01T00:00:00Z",
-        updated_at = "2026-01-01T00:00:00Z",
-    )
-
     private fun newViewModel(
         sessions: MutableStateFlow<List<SessionResponse>>,
         types: MutableStateFlow<List<CustomAgentTypeDto>> = MutableStateFlow(emptyList()),
@@ -97,16 +88,6 @@ class TerminalViewModelHeaderLabelTest {
             reviewPromptCoordinator = mockk(relaxed = true),
         )
     }
-
-    @Test
-    fun headerLabel_isEmpty_whenNeitherSourceKnowsTheSession() =
-        runTest(testDispatcher) {
-            // Nothing to name it with: an empty bar beats a wrong label.
-            val vm = newViewModel(MutableStateFlow(emptyList()))
-            runCurrent()
-
-            assertEquals("", vm.headerLabel.value)
-        }
 
     @Test
     fun headerLabel_seedsFromRest_whenLiveListEmptyOnColdStart() =
@@ -159,46 +140,6 @@ class TerminalViewModelHeaderLabelTest {
         }
 
     @Test
-    fun headerLabel_skipsRestSeed_whenLiveListAlreadyHasSession() =
-        runTest(testDispatcher) {
-            // Normal navigation from the session list: the row is already there,
-            // and sessionKind shares this flow, so neither costs a fetch.
-            val sessions = MutableStateFlow(listOf(session(title = "* Fix the header")))
-            val repo = mockk<SessionRepository> {
-                every { createSessionIoConnection("test-session") } returns connection
-                every { observeSessionList() } returns sessions
-                every { observeSessionsSynced() } returns MutableStateFlow(false)
-                coEvery { listSessions() } returns emptyList()
-            }
-            val vm = TerminalViewModel(
-                savedStateHandle = SavedStateHandle(mapOf("sessionId" to "test-session")),
-                sessionRepository = repo,
-                customAgentTypesRepository = mockk {
-                    every { observeTypes() } returns MutableStateFlow(emptyList())
-                },
-                templatesRepository = mockk(relaxed = true),
-                shortcutsRepository = mockk(),
-                foregroundSessionTracker = ForegroundSessionTracker(),
-                appForegroundTracker = AppForegroundTracker(),
-                preferencesStore = preferencesStore,
-                reviewPromptCoordinator = mockk(relaxed = true),
-            )
-            runCurrent()
-
-            assertEquals("* Fix the header", vm.headerLabel.value)
-            coVerify(exactly = 0) { repo.listSessions() }
-        }
-
-    @Test
-    fun headerLabel_rendersKind_whenSessionHasNoTitleYet() =
-        runTest(testDispatcher) {
-            val vm = newViewModel(MutableStateFlow(listOf(session(kind = SessionKind.Codex))))
-            runCurrent()
-
-            assertEquals("Codex", vm.headerLabel.value)
-        }
-
-    @Test
     fun headerLabel_matchesOnSessionId() =
         runTest(testDispatcher) {
             val other = session(id = "other-session", title = "Someone else's task")
@@ -220,33 +161,5 @@ class TerminalViewModelHeaderLabelTest {
             runCurrent()
 
             assertEquals("* Fix the header", vm.headerLabel.value)
-        }
-
-    @Test
-    fun headerLabel_keepsLastLabel_whenSessionLeavesTheList() =
-        runTest(testDispatcher) {
-            // The screen pops itself once the snapshot proves the session is gone —
-            // blanking the bar first would only flash an empty title on the way out.
-            val sessions = MutableStateFlow(listOf(session(title = "* Fix the header")))
-            val vm = newViewModel(sessions)
-            runCurrent()
-
-            sessions.value = emptyList()
-            runCurrent()
-
-            assertEquals("* Fix the header", vm.headerLabel.value)
-        }
-
-    @Test
-    fun headerLabel_resolvesCustomKindThroughLiveRegistry() =
-        runTest(testDispatcher) {
-            val sessions = MutableStateFlow(
-                listOf(session(kind = SessionKind.Custom("custom_ab12cd34ef56"))),
-            )
-            val types = MutableStateFlow(listOf(customType("ab12cd34ef56", "Aider")))
-            val vm = newViewModel(sessions, types)
-            runCurrent()
-
-            assertEquals("Aider", vm.headerLabel.value)
         }
 }

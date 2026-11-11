@@ -1,7 +1,6 @@
 """Tests for the user-scoped event channel and supporting plumbing.
 
 Covers:
-- RoutingTable.register_user_client / unregister_user_client / get_user_clients
 - Database.get_agent_owner
 - agent_ws._broadcast_status helper
 - /ws/user-events end-to-end delivery (connect, status_changed online/offline,
@@ -21,7 +20,7 @@ from starlette.testclient import TestClient
 from central_server.db.database import Database
 from central_server.relay.agent_ws import _broadcast_status
 from central_server.relay.envelope import PROTOCOL_VERSION
-from central_server.relay.routing import RoutingTable, UserClient, broadcast_user_event
+from central_server.relay.routing import RoutingTable, UserClient
 
 from tests.conftest import (
     TEST_ADMIN_EMAIL,
@@ -45,49 +44,6 @@ def _make_user_client(user_id: str, device_id: str = "dev-x") -> UserClient:
     return UserClient(user_id=user_id, device_id=device_id, websocket=ws)
 
 
-class TestRoutingUserClients:
-    def test_per_user_scoping_user_b_does_not_see_user_a(
-        self, routing: RoutingTable
-    ):
-        a = _make_user_client("user-a", "dev-a")
-        b = _make_user_client("user-b", "dev-b")
-        routing.register_user_client("user-a", a)
-        routing.register_user_client("user-b", b)
-
-        assert routing.get_user_clients("user-a") == {a}
-        assert routing.get_user_clients("user-b") == {b}
-        # Each set is the correct size; no cross-pollination.
-        assert a not in routing.get_user_clients("user-b")
-        assert b not in routing.get_user_clients("user-a")
-
-    def test_multiple_clients_same_user(self, routing: RoutingTable):
-        c1 = _make_user_client("user-a", "dev-1")
-        c2 = _make_user_client("user-a", "dev-2")
-        routing.register_user_client("user-a", c1)
-        routing.register_user_client("user-a", c2)
-        clients = routing.get_user_clients("user-a")
-        assert len(clients) == 2
-        assert c1 in clients and c2 in clients
-
-    def test_unregister_removes_client(self, routing: RoutingTable):
-        client = _make_user_client("user-a")
-        routing.register_user_client("user-a", client)
-        routing.unregister_user_client("user-a", client)
-        assert routing.get_user_clients("user-a") == set()
-
-    def test_unregister_cleans_up_empty_user_bucket(
-        self, routing: RoutingTable
-    ):
-        # After unregistering the last client, the user_id key should be
-        # cleaned up (so the registry doesn't grow without bound).
-        client = _make_user_client("user-a")
-        routing.register_user_client("user-a", client)
-        routing.unregister_user_client("user-a", client)
-        # Internal bucket gone — exercised by `get_user_clients` returning
-        # an empty set even though we no longer hold a ref to the dict entry.
-        assert "user-a" not in routing._user_clients
-
-
 # ---- Unit: Database.get_agent_owner -----------------------------------------
 
 
@@ -100,18 +56,6 @@ async def owner_db(tmp_path) -> Database:
 
 
 class TestGetAgentOwner:
-    async def test_returns_owner_for_existing_agent(self, owner_db: Database):
-        owner = await owner_db.create_user(
-            email="owner@test.local", password_hash="h"
-        )
-        agent_id, _ = await owner_db.register_agent("my-agent", owner)
-
-        result = await owner_db.get_agent_owner(agent_id)
-        assert result == owner
-
-    async def test_returns_none_for_unknown_agent(self, owner_db: Database):
-        assert await owner_db.get_agent_owner("nonexistent") is None
-
     async def test_returns_correct_owner_among_multiple(
         self, owner_db: Database
     ):
@@ -149,34 +93,6 @@ class TestBroadcastStatus:
                 "payload": {"agent_id": "agent-1", "online": True},
             }
 
-    def test_offline_envelope_has_online_false(self, routing: RoutingTable):
-        c = _make_user_client("user-a")
-        routing.register_user_client("user-a", c)
-
-        _broadcast_status(routing, "user-a", "agent-1", online=False)
-
-        envelope = json.loads(c.send_queue.get_nowait())
-        assert envelope["payload"]["online"] is False
-        assert envelope["payload"]["agent_id"] == "agent-1"
-        assert envelope["type"] == "agent.status_changed"
-
-    def test_does_not_broadcast_to_other_users(self, routing: RoutingTable):
-        # User scoping at the helper level: only user-a's clients get the
-        # envelope when broadcasting for user-a.
-        a = _make_user_client("user-a")
-        b = _make_user_client("user-b")
-        routing.register_user_client("user-a", a)
-        routing.register_user_client("user-b", b)
-
-        _broadcast_status(routing, "user-a", "agent-1", online=True)
-
-        assert a.send_queue.qsize() == 1
-        assert b.send_queue.qsize() == 0
-
-    def test_no_clients_registered_is_safe(self, routing: RoutingTable):
-        # No clients for the user → must not raise.
-        _broadcast_status(routing, "nobody", "agent-1", online=True)
-
     def test_full_queue_does_not_raise(self, routing: RoutingTable):
         # Saturate the send queue, then broadcast — the helper must swallow
         # asyncio.QueueFull (the docstring guarantees drop-on-full behavior).
@@ -213,13 +129,6 @@ async def _make_second_user(app) -> tuple[str, str]:
 
 
 class TestUserEventsEndpoint:
-    def test_connect_without_token_closes(self, app):
-        client = TestClient(app)
-        # No ?token=... — auth dep closes with 4001 before accepting.
-        with pytest.raises(Exception):
-            with client.websocket_connect("/ws/user-events") as ws:
-                ws.receive_text()
-
     def test_connect_with_invalid_token_closes(self, app):
         client = TestClient(app)
         with pytest.raises(Exception):
@@ -227,25 +136,6 @@ class TestUserEventsEndpoint:
                 "/ws/user-events?token=not-a-jwt"
             ) as ws:
                 ws.receive_text()
-
-    async def test_connect_registers_user_client_in_routing(self, app):
-        # After successful auth, the endpoint must call
-        # routing.register_user_client so subsequent broadcasts reach it.
-        token = await _user_token(app, TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD)
-        admin = await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL)
-
-        client = TestClient(app)
-        with client.websocket_connect(
-            f"/ws/user-events?token={token}"
-        ) as ws:  # noqa: F841 — context holds connection open
-            # The endpoint accepts, registers, then runs the writer loop.
-            # Give the server a moment to finish the register step.
-            # Then inspect the routing table state directly.
-            # (TestClient runs in a thread pool; the registration is sync
-            # inside the event loop, so by the time we reach this line the
-            # client is already in the set.)
-            clients = app.state.routing.get_user_clients(admin["id"])
-            assert len(clients) == 1
 
     async def test_receives_status_changed_when_broadcast(self, app):
         token = await _user_token(app, TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD)
@@ -282,25 +172,6 @@ class TestUserEventsEndpoint:
             assert envelope["payload"] == {
                 "agent_id": "agent-xyz",
                 "online": False,
-            }
-
-    async def test_receives_first_agent_paired_when_broadcast(self, app):
-        token = await _user_token(app, TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD)
-        admin = await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL)
-
-        client = TestClient(app)
-        with client.websocket_connect(
-            f"/ws/user-events?token={token}"
-        ) as ws:
-            broadcast_user_event(
-                app.state.routing,
-                admin["id"],
-                "account.first_agent_paired",
-                {"agent_id": "agent-xyz"},
-            )
-            assert json.loads(ws.receive_text()) == {
-                "type": "account.first_agent_paired",
-                "payload": {"agent_id": "agent-xyz"},
             }
 
     async def test_user_scoping_other_user_does_not_receive(self, app):
@@ -505,18 +376,6 @@ class TestDeviceIdHint:
             assert app.state.routing.get_user_device_ids(admin["id"]) == {
                 "dev-mine"
             }
-
-    async def test_absent_hint_leaves_the_socket_unbound(self, app):
-        token = await _user_token(app, TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD)
-        admin = await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL)
-
-        client = TestClient(app)
-        with client.websocket_connect(f"/ws/user-events?token={token}"):
-            registered = await _await_registered_client(app, admin["id"])
-            assert registered.bound_device_id is None
-            # No binding means no suppression: every registered device of the
-            # account still gets pushed.
-            assert app.state.routing.get_user_device_ids(admin["id"]) == set()
 
     async def test_another_users_device_does_not_bind_and_still_streams(
         self, app

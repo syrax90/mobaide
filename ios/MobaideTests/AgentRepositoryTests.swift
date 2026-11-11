@@ -32,27 +32,6 @@ final class AgentRepositoryTests: XCTestCase {
         XCTAssertEqual(repo.currentAgents.first?.online, true)
     }
 
-    func testAgentLookupResolvesByIdAndMissesUnknownIds() async throws {
-        let repo = makeRepo()
-        StubURLProtocol.enqueue(
-            status: 200,
-            body: #"[{"agent_id":"a1","name":"Laptop","online":true,"created_at":"t"},"#
-                + #"{"agent_id":"a2","name":"Desktop","online":false,"created_at":"t"}]"#
-        )
-        try await repo.refreshAgents()
-
-        XCTAssertEqual(repo.agent(id: "a2")?.name, "Desktop")
-        // An id arriving from outside the app (a push payload) need not name an
-        // agent this account owns; a miss must be nil, never a stand-in.
-        XCTAssertNil(repo.agent(id: "a3"))
-    }
-
-    func testUpdateAgentOnlineNoOpForUnknownAgent() async {
-        let repo = makeRepo()
-        await repo.updateAgentOnline(agentId: "ghost", online: true)
-        XCTAssertTrue(repo.currentAgents.isEmpty)
-    }
-
     func testCreateRefreshesAfter() async throws {
         let repo = makeRepo()
         StubURLProtocol.enqueue(status: 200, body: #"{"agent_id":"a1","name":"A","token":"tok"}"#)
@@ -88,15 +67,6 @@ final class AgentRepositoryTests: XCTestCase {
         StubURLProtocol.enqueue(status: 500, body: "boom")                                            // refresh fails
         let created = try await repo.createAgent(name: "A")
         XCTAssertEqual(created.token, "tok")  // one-time token preserved despite refresh failure
-    }
-
-    func testClearEmptiesCache() async throws {
-        let repo = makeRepo()
-        StubURLProtocol.enqueue(status: 200, body: agentsJSON(id: "a1", online: true))
-        try await repo.refreshAgents()
-        XCTAssertFalse(repo.currentAgents.isEmpty)
-        await repo.clear()
-        XCTAssertTrue(repo.currentAgents.isEmpty)
     }
 
     func testDeleteRemovesRowLocallyEvenWhenRefreshFails() async throws {

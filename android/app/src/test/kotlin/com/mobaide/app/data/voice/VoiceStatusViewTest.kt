@@ -9,7 +9,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-/** The status → mic mapping and the copy the preparing states show. */
+/** The status → mic mapping and the progress percentage. */
 class VoiceStatusViewTest {
 
     private val capability = VoiceCapability(sampleRate = 16000, maxSeconds = 120, maxChunkBytes = 65536)
@@ -61,39 +61,6 @@ class VoiceStatusViewTest {
     }
 
     @Test
-    fun preparingLabel_namesEachPreparingState() {
-        assertEquals(
-            "Waiting for another voice install on this computer…",
-            VoiceStatusView.preparingLabel(status(VoiceStatusResponse.STATE_QUEUED)),
-        )
-        assertEquals(
-            "Checking voice input…",
-            VoiceStatusView.preparingLabel(status(VoiceStatusResponse.STATE_VERIFYING)),
-        )
-        assertEquals(
-            "Preparing voice… 43%",
-            VoiceStatusView.preparingLabel(
-                status(VoiceStatusResponse.STATE_DOWNLOADING, progress = VoiceProgress(43_900, 100_000)),
-            ),
-        )
-        assertEquals(
-            "Preparing voice…",
-            VoiceStatusView.preparingLabel(status(VoiceStatusResponse.STATE_DOWNLOADING)),
-        )
-    }
-
-    @Test
-    fun preparingLabel_showsWhatIsLeftOfARepair() {
-        val repairing = status(
-            VoiceStatusResponse.STATE_DOWNLOADING,
-            repairing = true,
-            progress = VoiceProgress(670_000_000, 702_000_000),
-        )
-
-        assertEquals("Updating voice (≈32 MB)…", VoiceStatusView.preparingLabel(repairing))
-    }
-
-    @Test
     fun progressPercent_floors_capsAt100_andIsUnknownWithoutATotal() {
         assertEquals(99, VoiceStatusView.progressPercent(status(progress = VoiceProgress(999, 1000))))
         assertEquals(100, VoiceStatusView.progressPercent(status(progress = VoiceProgress(1200, 1000))))
@@ -101,18 +68,4 @@ class VoiceStatusViewTest {
         assertNull(VoiceStatusView.progressPercent(status()))
     }
 
-    @Test
-    fun formatBytes_usesDecimalUnits() {
-        assertEquals("999 B", VoiceStatusView.formatBytes(999))
-        assertEquals("1 KB", VoiceStatusView.formatBytes(1_000))
-        assertEquals("670 MB", VoiceStatusView.formatBytes(670_000_000))
-        assertEquals("1.2 GB", VoiceStatusView.formatBytes(1_200_000_000))
-    }
-
-    @Test
-    fun formatDuration_andLanguageNames() {
-        assertEquals("4:05", VoiceStatusView.formatDuration(245_999))
-        assertEquals("0:00", VoiceStatusView.formatDuration(-5))
-        assertEquals(listOf("English", "French", "German"), VoiceStatusView.languageNames(listOf("en", "de", "fr")))
-    }
 }

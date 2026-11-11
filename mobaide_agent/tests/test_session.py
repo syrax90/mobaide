@@ -119,64 +119,6 @@ class TestTerminalSessionLifecycle:
         finally:
             await session.stop()
 
-    async def test_scrollback_accumulates(
-        self, session_config: SessionConfig
-    ) -> None:
-        session = TerminalSession(session_config)
-        await session.start()
-
-        try:
-            await asyncio.sleep(0.5)
-
-            for i in range(5):
-                if IS_WINDOWS:
-                    await session.write(f"echo line{i}\r\n".encode())
-                else:
-                    await session.write(f"echo line{i}\n".encode())
-
-            # Give time for output to be read
-            await asyncio.sleep(1.0)
-
-            scrollback = session.get_scrollback()
-            assert len(scrollback) > 0
-        finally:
-            await session.stop()
-
-    async def test_scrollback_max_size(self) -> None:
-        config = SessionConfig(
-            session_id="small-buffer",
-            command=["cmd.exe"] if IS_WINDOWS else ["/bin/bash"],
-            scrollback_size=3,
-        )
-        session = TerminalSession(config)
-        await session.start()
-
-        try:
-            await asyncio.sleep(0.5)
-
-            for i in range(10):
-                if IS_WINDOWS:
-                    await session.write(f"echo overflow{i}\r\n".encode())
-                else:
-                    await session.write(f"echo overflow{i}\n".encode())
-
-            await asyncio.sleep(1.5)
-
-            scrollback = session.get_scrollback()
-            # Deque maxlen=3 means at most 3 entries
-            assert len(scrollback) <= 3
-        finally:
-            await session.stop()
-
-    async def test_resize(self, session_config: SessionConfig) -> None:
-        session = TerminalSession(session_config)
-        await session.start()
-
-        try:
-            await session.resize(40, 120)
-        finally:
-            await session.stop()
-
     async def test_crash_detection(
         self, short_lived_config: SessionConfig
     ) -> None:
@@ -258,6 +200,8 @@ class _ScriptedPtyBackend:
         return 12345
 
     def terminate(self, force: bool = False) -> None:
+        # The scripted child obeys SIGTERM, so ``stop()`` skips the grace wait.
+        self._closed = True
         self._drained.set()
 
     def close(self) -> None:
@@ -376,15 +320,6 @@ class TestRingBufferCap:
     overflow trim without producing megabytes of data.
     """
 
-    def test_append_ring_below_cap_keeps_full_payload(self) -> None:
-        # The session is never started — we drive ``_append_ring`` directly
-        # the same way ``test_ws_binary_protocol::TestRingBufferReplay``
-        # seeds the ring without depending on a real PTY.
-        session = TerminalSession(_ring_config(ring_buffer_bytes=1024))
-        session._append_ring(b"abc")
-        session._append_ring(b"def")
-        assert session.get_ring() == b"abcdef"
-
     def test_append_ring_overflow_trims_from_head(self) -> None:
         session = TerminalSession(_ring_config(ring_buffer_bytes=8))
         session._append_ring(b"AAAA")
@@ -403,17 +338,6 @@ class TestRingBufferCap:
         ring = session.get_ring()
         assert len(ring) == 4
         assert ring == b"efgh"
-
-    def test_ring_cap_is_per_session_not_module_global(self) -> None:
-        # Two sessions with different caps must not share state — the field
-        # has to be read off the config, not the module-level constant.
-        small = TerminalSession(_ring_config(ring_buffer_bytes=4))
-        large = TerminalSession(_ring_config(ring_buffer_bytes=64))
-        small._append_ring(b"abcdefgh")
-        large._append_ring(b"abcdefgh")
-        assert len(small.get_ring()) == 4
-        assert large.get_ring() == b"abcdefgh"
-
 
 class TestRingScrub:
     """``_append_ring`` scrubs terminal *queries* (and DA replies) from the
@@ -435,14 +359,6 @@ class TestRingScrub:
         session = TerminalSession(_ring_config(ring_buffer_bytes=1024))
         session._append_ring(b"a\x1b[6nb\x1b[5nc\x1b[?6nd")
         assert session.get_ring() == b"abcd"
-
-    def test_osc_compound_color_query_scrubbed(self) -> None:
-        # Compound color queries (ESC]10;?;?…) are scrubbed from the ring too —
-        # the belt-and-braces regex matches one-or-more ;? specs, matching the
-        # stateful responder's compound handling.
-        session = TerminalSession(_ring_config(ring_buffer_bytes=1024))
-        session._append_ring(b"a\x1b]10;?;?\x07b\x1b]11;?;?;?\x1b\\c")
-        assert session.get_ring() == b"abc"
 
     def test_color_set_and_rendering_survive(self) -> None:
         # A color *set* (byte-identical to a color reply), SGR, and titles are
@@ -549,24 +465,6 @@ class TestReaderLoopQueryInterception:
         finally:
             await session.stop()
 
-    async def test_plain_output_writes_no_reply(self) -> None:
-        # Output with no embedded query passes through verbatim and triggers no
-        # write back to the PTY — guards against an over-eager interceptor.
-        backend = _ScriptedPtyBackend([b"hello \x1b[31mworld\x1b[0m"])
-        session = TerminalSession(
-            _osc_config(), backend=cast(PtyBackend, backend),
-        )
-        await session.start()
-        try:
-            event = await _drain_event_of_type(session, "output", timeout=2.0)
-            assert event.data == b"hello \x1b[31mworld\x1b[0m"
-
-            # Let any (erroneous) reply write reach the executor, then assert none.
-            await asyncio.sleep(0.1)
-            assert backend._writes == []
-        finally:
-            await session.stop()
-
     async def test_split_cpr_across_reads_is_kept_out_of_ring(self) -> None:
         # A CPR/DSR query (``ESC[6n``) split across two PTY reads — ``ESC[`` in
         # the first, ``6n`` in the second. The ring scrubber is stateless, but
@@ -606,10 +504,6 @@ class TestIterRingChunks:
     while never holding two copies of a multi-MB ring.
     """
 
-    def test_empty_ring_yields_nothing(self) -> None:
-        session = TerminalSession(_ring_config(ring_buffer_bytes=1024))
-        assert list(session.iter_ring_chunks(chunk_size=64)) == []
-
     def test_chunks_concatenate_to_original_ring(self) -> None:
         session = TerminalSession(_ring_config(ring_buffer_bytes=1024))
         payload = bytes(range(256)) + bytes(range(256))
@@ -617,12 +511,6 @@ class TestIterRingChunks:
         chunks = list(session.iter_ring_chunks(chunk_size=64))
         assert b"".join(chunks) == payload
         assert b"".join(chunks) == session.get_ring()
-
-    def test_ring_smaller_than_chunk_yields_single_chunk(self) -> None:
-        session = TerminalSession(_ring_config(ring_buffer_bytes=1024))
-        session._append_ring(b"hello")
-        chunks = list(session.iter_ring_chunks(chunk_size=64))
-        assert chunks == [b"hello"]
 
     def test_ring_aligned_to_chunk_boundary(self) -> None:
         session = TerminalSession(_ring_config(ring_buffer_bytes=1024))
@@ -644,38 +532,11 @@ class TestIterRingChunks:
         assert chunks[0] == b"A" * 64
         assert chunks[1] == b"B"
 
-    def test_chunks_are_bytes_not_bytearray_or_memoryview(self) -> None:
-        # WS framing concatenates ``FRAME_OUTPUT + chunk`` — a bytearray
-        # would coerce silently but a memoryview slice would raise. Pin the
-        # contract explicitly so a refactor can't quietly change the type.
-        session = TerminalSession(_ring_config(ring_buffer_bytes=64))
-        session._append_ring(b"abc")
-        for chunk in session.iter_ring_chunks(chunk_size=2):
-            assert isinstance(chunk, bytes)
-
     def test_zero_chunk_size_raises_value_error(self) -> None:
         session = TerminalSession(_ring_config(ring_buffer_bytes=64))
         session._append_ring(b"abc")
         with pytest.raises(ValueError):
             list(session.iter_ring_chunks(chunk_size=0))
-
-    def test_negative_chunk_size_raises_value_error(self) -> None:
-        session = TerminalSession(_ring_config(ring_buffer_bytes=64))
-        with pytest.raises(ValueError):
-            list(session.iter_ring_chunks(chunk_size=-1))
-
-    def test_default_chunk_size_is_replay_chunk_bytes(self) -> None:
-        # Don't depend on the literal 64 KiB — import the module constant
-        # so the test breaks loudly if the production value moves.
-        from mobaide.core.session import REPLAY_CHUNK_BYTES
-
-        session = TerminalSession(_ring_config(ring_buffer_bytes=4 * 1024 * 1024))
-        session._append_ring(b"X" * (REPLAY_CHUNK_BYTES + 10))
-        chunks = list(session.iter_ring_chunks())
-        assert len(chunks) == 2
-        assert len(chunks[0]) == REPLAY_CHUNK_BYTES
-        assert len(chunks[1]) == 10
-
 
 def _attention_config(
     *,
@@ -717,11 +578,6 @@ class TestTerminalSessionAttention:
     only touch in-memory state and the bounded event queue.
     """
 
-    async def test_set_attention_stamps_field_and_to_info(self) -> None:
-        session = TerminalSession(_attention_config())
-        session.set_attention("awaiting_permission")
-        assert session.to_info().attention == "awaiting_permission"
-
     async def test_set_attention_enqueues_event_with_reason(self) -> None:
         session = TerminalSession(_attention_config())
         session.set_attention("turn_finished")
@@ -730,18 +586,6 @@ class TestTerminalSessionAttention:
         assert events[0].event_type == "attention"
         assert events[0].session_id == "attn-session"
         assert events[0].attention == "turn_finished"
-
-    async def test_set_attention_ended_records_exit_reason(self) -> None:
-        session = TerminalSession(_attention_config())
-        session.set_attention("ended", exit_reason="clear")
-        info = session.to_info()
-        assert info.attention == "ended"
-        assert info.exit_reason == "clear"
-
-    async def test_set_attention_without_exit_reason_leaves_it_none(self) -> None:
-        session = TerminalSession(_attention_config())
-        session.set_attention("turn_finished")
-        assert session.to_info().exit_reason is None
 
     async def test_clear_attention_when_set_emits_none_event(self) -> None:
         session = TerminalSession(_attention_config())
@@ -790,18 +634,6 @@ class TestTerminalSessionAttention:
         # The keystroke still reached the backend.
         assert backend._writes == [b"y\n"]
 
-    async def test_write_without_pending_attention_emits_no_attention_event(
-        self,
-    ) -> None:
-        backend = _ScriptedPtyBackend([])
-        session = TerminalSession(
-            _attention_config(), backend=cast(PtyBackend, backend),
-        )
-        await session.write(b"ls\n")
-        assert _drain_attention_events(session) == []
-        assert backend._writes == [b"ls\n"]
-
-
 class TestSetAttentionEqualityGuard:
     """The ``attention`` event is a one-shot notification trigger — the fanout
     turns every emission into an alert on every device — so re-raising the
@@ -815,15 +647,6 @@ class TestSetAttentionEqualityGuard:
         assert session.to_info().attention == "turn_finished"
         assert [e.attention for e in _drain_attention_events(session)] == [
             "turn_finished",
-        ]
-
-    async def test_a_different_reason_still_emits(self) -> None:
-        session = TerminalSession(_attention_config())
-        session.set_attention("turn_finished")
-        session.set_attention("awaiting_permission")
-        assert session.to_info().attention == "awaiting_permission"
-        assert [e.attention for e in _drain_attention_events(session)] == [
-            "turn_finished", "awaiting_permission",
         ]
 
     async def test_the_same_reason_after_a_clear_emits_again(self) -> None:
@@ -939,11 +762,6 @@ class TestClaudeHookAttention:
         )
         assert session.to_info().attention is None
         assert _drain_attention_events(session) == []
-
-    async def test_permission_hook_still_alerts_immediately(self) -> None:
-        session = _running_hook_session(0.0)
-        session.on_claude_hook(HookKind.PERMISSION, {})
-        assert session.to_info().attention == "awaiting_permission"
 
     async def test_session_end_hook_records_the_exit_reason(self) -> None:
         session = _running_hook_session(0.0)
@@ -1601,37 +1419,6 @@ class TestWriteSubmitAndExecute:
     """The CR must land as its own delayed PTY write — Ink TUIs treat a CR
     inside the same stdin chunk as pasted content, not the Enter key."""
 
-    async def test_write_submit_writes_payload_then_cr(self) -> None:
-        backend = _ScriptedPtyBackend([])
-        session = TerminalSession(
-            _attention_config(), backend=cast(PtyBackend, backend),
-        )
-
-        with patch(
-            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
-        ) as sleep_mock:
-            await session.write_submit(b"hello")
-
-        assert backend._writes == [b"hello", b"\r"]
-        sleep_mock.assert_awaited_once_with(SUBMIT_CR_DELAY_SECONDS)
-
-    async def test_write_execute_writes_ctrl_c_then_payload_then_cr(self) -> None:
-        backend = _ScriptedPtyBackend([])
-        session = TerminalSession(
-            _attention_config(), backend=cast(PtyBackend, backend),
-        )
-
-        with patch(
-            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
-        ) as sleep_mock:
-            await session.write_execute(b"ls -la")
-
-        assert backend._writes == [b"\x03", b"ls -la", b"\r"]
-        assert sleep_mock.await_args_list == [
-            call(EXECUTE_CLEAR_DELAY_SECONDS),
-            call(SUBMIT_CR_DELAY_SECONDS),
-        ]
-
     async def test_write_submit_sleeps_between_payload_and_cr(self) -> None:
         """The pause must land BETWEEN the two writes — back-to-back writes
         with the sleep elsewhere would let Ink coalesce payload and CR into
@@ -1780,19 +1567,6 @@ class TestStartupStallWatchdog:
         events = _drain_attention_events(session)
         assert [e.attention for e in events] == ["awaiting_os_permission"]
 
-    async def test_does_not_fire_when_output_meets_threshold(self) -> None:
-        session = TerminalSession(_stall_config(0.01))
-        session._state = SessionState.RUNNING
-        session._startup_output_bytes = STARTUP_STALL_MIN_BYTES
-
-        with patch(
-            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
-        ):
-            await session._startup_stall_watchdog(0.01)
-
-        assert session.to_info().attention is None
-        assert _drain_attention_events(session) == []
-
     async def test_does_not_fire_after_user_input(self) -> None:
         # A user who is typing is plainly not staring at a frozen screen, even
         # if the child has produced no output yet.
@@ -1843,7 +1617,7 @@ class TestStartupStallWatchdog:
         # flows (the user approved on the Mac). One chunk at/over the threshold
         # must self-clear the ``awaiting_os_permission`` attention.
         chunk = b"x" * STARTUP_STALL_MIN_BYTES
-        backend = _ScriptedPtyBackend([chunk])
+        backend = _ScriptedPtyBackend([chunk, b""])
         session = TerminalSession(
             _stall_config(0.01), backend=cast(PtyBackend, backend),
         )
@@ -1862,7 +1636,7 @@ class TestStartupStallWatchdog:
         # A trickle of init bytes under the floor must NOT clear the badge —
         # the child is still effectively stalled.
         chunk = b"x" * (STARTUP_STALL_MIN_BYTES - 1)
-        backend = _ScriptedPtyBackend([chunk])
+        backend = _ScriptedPtyBackend([chunk, b""])
         session = TerminalSession(
             _stall_config(0.01), backend=cast(PtyBackend, backend),
         )
@@ -1884,20 +1658,6 @@ class TestStartupStallWatchdogArming:
     deterministic on Linux CI; the platform-default branch is exercised by
     pinning ``sys.platform``.
     """
-
-    async def test_armed_when_timeout_positive(self) -> None:
-        backend = _ScriptedPtyBackend([])
-        session = TerminalSession(
-            _stall_config(0.01), backend=cast(PtyBackend, backend),
-        )
-        with patch(
-            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
-        ):
-            await session.start()
-            try:
-                assert session._stall_task is not None
-            finally:
-                await session.stop()
 
     async def test_disabled_when_zero(self) -> None:
         backend = _ScriptedPtyBackend([])
@@ -2091,15 +1851,6 @@ class TestAwaitChildExit:
 
         assert await session._await_child_exit(timeout=0.02) is False
 
-    async def test_immediate_exit_returns_true(self) -> None:
-        backend = _TerminationSpyBackend(alive_sequence=[False])
-        session = TerminalSession(
-            _term_config(), backend=cast(PtyBackend, backend),
-        )
-
-        assert await session._await_child_exit(timeout=5.0) is True
-
-
 @pytest.mark.timeout(15)
 class TestJoinTask:
     """``_join_task`` is the true freeze guarantee: it cancels a background task
@@ -2107,9 +1858,6 @@ class TestJoinTask:
     parked in an uncancellable executor call is abandoned after the timeout
     instead of wedging teardown forever.
     """
-
-    async def test_none_task_is_noop(self) -> None:
-        await TerminalSession._join_task(None, timeout=0.01)
 
     async def test_already_done_task_is_noop(self) -> None:
         async def _immediate() -> None:

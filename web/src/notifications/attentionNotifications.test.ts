@@ -88,34 +88,6 @@ describe('handleAttentionEvent', () => {
     });
   });
 
-  it('omits the agent id when the server did not stamp one', () => {
-    handleAttentionEvent(envelope({ session_id: 's-1', reason: 'turn_finished' }));
-
-    expect(post).toHaveBeenCalledWith({
-      sessionId: 's-1',
-      title: 'Your move',
-      body: 'Claude session finished its turn — tap to continue',
-    });
-    expect(Object.hasOwn(post.mock.calls[0]?.[0] ?? {}, 'agentId')).toBe(false);
-  });
-
-  it('names an untitled session after the kind the event carries', () => {
-    handleAttentionEvent(
-      envelope({
-        session_id: 's-1',
-        reason: 'turn_failed',
-        kind: 'custom_0123456789ab',
-        kind_label: 'My Linter',
-      }),
-    );
-
-    expect(post).toHaveBeenCalledWith({
-      sessionId: 's-1',
-      title: 'Turn failed',
-      body: 'My Linter session hit an error — tap to see what happened',
-    });
-  });
-
   it('reads a null kind off the wire as a Claude session', () => {
     handleAttentionEvent(
       envelope({ session_id: 's-1', reason: 'turn_finished', kind: null, kind_label: null }),

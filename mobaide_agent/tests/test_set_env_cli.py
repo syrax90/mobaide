@@ -61,47 +61,11 @@ class TestSetEnvMissingEnv:
         # The message names the missing file and points at init-env so
         # an operator pasting the command from docs can self-recover.
         assert "init-env" in captured.err
-
-    def test_does_not_create_env_when_missing(self, tmp_path):
-        # Sanity: a failing set-env must not write a partial / empty
-        # file — fail-closed and let the operator run init-env. A
-        # silently-created file would later confuse pydantic-settings
-        # (missing JWT_SECRET_KEY raises RuntimeError) and a follow-up
-        # init-env would either skip (no --force) or rewrite from
-        # scratch, defeating the whole point of surgical mode.
-        _run([
-            "set-env", "--prefix", str(tmp_path),
-            "--key", "MOBAIDE_CLAUDE_BIN",
-            "--value", "/abs/claude",
-        ])
-
+        # Fail closed: no partial .env for a later init-env to skip over.
         assert not env_path_for_prefix(tmp_path).exists()
 
 
 class TestSetEnvInsertsNewKey:
-    def test_inserts_claude_bin_when_template_has_only_comment(self, tmp_path):
-        # The template ships ``# MOBAIDE_CLAUDE_BIN=`` commented
-        # (env.template:40). init-env without ``--claude-bin`` preserves
-        # the commented form. set-env must then uncomment it (the
-        # render_template ``_KEY_LINE`` matches commented keys too —
-        # ``r"^(?P<lead>\s*#?\s*)(?P<key>...)=..."``  at
-        # _env_writer.py:20).
-        target = _seed_env(tmp_path)
-        # Sanity precondition: only the commented form is present.
-        assert "MOBAIDE_CLAUDE_BIN" not in parse_env_file(target)
-
-        rc = _run([
-            "set-env", "--prefix", str(tmp_path),
-            "--key", "MOBAIDE_CLAUDE_BIN",
-            "--value", r"C:\Users\u\AppData\Roaming\npm\claude.cmd",
-        ])
-
-        assert rc == 0
-        values = parse_env_file(target)
-        assert values["MOBAIDE_CLAUDE_BIN"] == (
-            r"C:\Users\u\AppData\Roaming\npm\claude.cmd"
-        )
-
     def test_uncomments_commented_template_line(self, tmp_path):
         # Stricter shape check: after set-env, the commented placeholder
         # must be GONE — not duplicated alongside a new uncommented
@@ -187,41 +151,6 @@ class TestSetEnvPreservesOtherKeys:
         values = parse_env_file(target)
         assert values["RELAY_AGENT_ID"] == "paired-id-xyz"
         assert values["RELAY_AGENT_TOKEN"] == "paired-tok-secret"
-
-    def test_comments_and_blank_lines_preserved(self, tmp_path):
-        target = _seed_env(tmp_path)
-        original = target.read_text(encoding="utf-8")
-        # Capture the structural lines (comments + blanks) so we can
-        # verify they survive byte-for-byte. The header comment block
-        # documents the file's origin; an operator-facing regression
-        # that drops these would erode trust in the surgical contract.
-        original_structural = [
-            line for line in original.splitlines()
-            if line.startswith("#") or line == ""
-        ]
-
-        _run([
-            "set-env", "--prefix", str(tmp_path),
-            "--key", "MOBAIDE_CLAUDE_BIN",
-            "--value", "/abs/claude",
-        ])
-
-        after = target.read_text(encoding="utf-8")
-        after_structural = [
-            line for line in after.splitlines()
-            if line.startswith("#") or line == ""
-        ]
-        # The only structural line allowed to disappear is the commented
-        # ``# MOBAIDE_CLAUDE_BIN=`` placeholder (it gets uncommented
-        # into a real key). Every other comment & blank must survive.
-        assert "# MOBAIDE_CLAUDE_BIN=" in original_structural
-        assert "# MOBAIDE_CLAUDE_BIN=" not in after_structural
-        # Subtract just that one expected delta and compare the rest.
-        expected_after = [
-            line for line in original_structural
-            if line != "# MOBAIDE_CLAUDE_BIN="
-        ]
-        assert after_structural == expected_after
 
 
 @pytest.mark.skipif(

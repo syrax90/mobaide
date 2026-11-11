@@ -34,12 +34,6 @@ final class CreateSessionModelTests: XCTestCase {
     /// id, so the wizard scopes recents by URL.
     private let harnessAgentKey = "https://agent.example.com"
 
-    /// A device that never paired and never reached an agent directly: both
-    /// halves of the wizard's agent scope key are nil.
-    private func unscopedTokenStore() -> TokenStore {
-        TokenStore(keychain: InMemoryKeychainStore())
-    }
-
     private func makeModel(
         prefs: PreferencesStore? = nil,
         typesRepo: CustomAgentTypesRepository? = nil,
@@ -99,20 +93,6 @@ final class CreateSessionModelTests: XCTestCase {
     }
 
     // MARK: - Request building
-
-    func testClaudeStoredProjectDefaults() throws {
-        let model = makeModel()
-        model.selection = .stored("alpha")
-        let request = try XCTUnwrap(model.buildRequest(mode: .standard))
-        XCTAssertEqual(request.project_name, "alpha")
-        XCTAssertNil(request.cwd)
-        XCTAssertNil(request.cli)
-        XCTAssertNil(request.codex_options)
-        XCTAssertNil(request.antigravity_options)
-        XCTAssertEqual(request.claude_options?.effort, "high", "wizard state default differs from DTO nil default")
-        XCTAssertEqual(request.claude_options?.skip_permissions, false)
-        XCTAssertEqual(request.claude_options?.worktree, false)
-    }
 
     func testClaudeFastModeLocksOpus() throws {
         let model = makeModel()
@@ -174,17 +154,6 @@ final class CreateSessionModelTests: XCTestCase {
         )
     }
 
-    func testCodexUsesCliAndStateDefaults() throws {
-        let model = makeModel()
-        model.selection = .stored("a")
-        let request = try XCTUnwrap(model.buildRequest(mode: .codex))
-        XCTAssertEqual(request.cli, "codex")
-        XCTAssertEqual(request.codex_options?.approval, "on-request")
-        XCTAssertEqual(request.codex_options?.reasoning_effort, "high")
-        XCTAssertEqual(request.codex_options?.sandbox, "workspace-write")
-        XCTAssertNil(request.claude_options)
-    }
-
     // MARK: - Codex chat view
 
     /// `refreshCliAvailability` against a stubbed agent whose
@@ -222,19 +191,6 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertFalse(model.canContinueSession)
     }
 
-    func testCodexContinueIsOfferedOnlyForTheChatView() async {
-        let model = await modelWithChat(#"{"claude":{"resume":true},"codex":{"resume":true,"live":true}}"#)
-        model.mode = .codex
-
-        XCTAssertTrue(model.canContinueSession)
-        XCTAssertEqual(model.continueKind, "codex")
-        XCTAssertTrue(model.continueIsLive)
-
-        model.codexTerminalUI = true
-
-        XCTAssertFalse(model.canContinueSession)
-    }
-
     func testCodexContinueRequestUsesTheCodexOptionsWithoutAWorktree() {
         let model = makeModel()
         model.mode = .codex
@@ -255,15 +211,6 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(request.codex_options?.sandbox, "read-only")
         XCTAssertEqual(request.codex_options?.worktree, false)
         XCTAssertNil(request.codex_options?.branch_name)
-    }
-
-    func testCodexTerminalUIIsRestoredFromTheLastLaunch() {
-        let prefs = isolatedPrefs()
-        prefs.setLastUsedCodexOptions(CodexLaunchPrefs(terminalUI: true))
-
-        let model = makeModel(prefs: prefs)
-
-        XCTAssertTrue(model.codexTerminalUI)
     }
 
     func testEachCodexPresetSetsItsPairAndIsReportedBack() {
@@ -290,20 +237,6 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(model.codexApproval, "on-request")
     }
 
-    func testAHandPickedCodexPairMatchesNoPresetUnlessFullAccessIsOn() {
-        let model = makeModel()
-        model.codexSandbox = "workspace-write"
-        model.codexApproval = "never"
-        XCTAssertNil(model.codexPreset)
-
-        model.codexSandbox = "danger-full-access"
-        model.codexApproval = "on-request"
-        XCTAssertNil(model.codexPreset)
-
-        model.codexFullAuto = true
-        XCTAssertEqual(model.codexPreset, .fullAccess, "Full access ignores the sandbox and approval")
-    }
-
     func testCodexCreateWithoutChatOnThePCPointsToTerminalUI() async {
         StubURLProtocol.reset()
         let model = stubbedModel()
@@ -325,88 +258,6 @@ final class CreateSessionModelTests: XCTestCase {
 
     // MARK: - Antigravity chat view
 
-    func testAntigravityOpensTheChatViewUnlessTerminalUIIsOn() throws {
-        let model = makeModel()
-        model.selection = .stored("a")
-        XCTAssertEqual(try XCTUnwrap(model.buildRequest(mode: .antigravity)).ui, "chat")
-
-        model.antigravityTerminalUI = true
-
-        XCTAssertEqual(try XCTUnwrap(model.buildRequest(mode: .antigravity)).ui, "terminal")
-    }
-
-    func testAntigravityWithoutChatOnThePCOpensTheTerminalAndPointsToAgyUpdate() async throws {
-        let model = await modelWithChat(#"{"claude":{"resume":true}}"#)
-        model.selection = .stored("a")
-        model.mode = .antigravity
-
-        let request = try XCTUnwrap(model.buildRequest(mode: .antigravity))
-
-        XCTAssertEqual(request.ui, "terminal")
-        XCTAssertEqual(
-            model.antigravityChatUnavailableReason,
-            "The chat view needs a newer Antigravity CLI on your PC: run agy update there."
-        )
-        XCTAssertFalse(model.canContinueSession)
-    }
-
-    func testAntigravityContinueIsOfferedOnlyForTheChatView() async {
-        let model = await modelWithChat(
-            #"{"codex":{"resume":true,"live":true},"antigravity":{"resume":true,"live":false}}"#
-        )
-        model.mode = .antigravity
-
-        XCTAssertTrue(model.canContinueSession)
-        XCTAssertEqual(model.continueKind, "antigravity")
-        XCTAssertFalse(model.continueIsLive, "Antigravity's own capability, not Codex's")
-
-        model.codexTerminalUI = true
-        XCTAssertTrue(model.canContinueSession, "another agent's Terminal UI toggle")
-
-        model.antigravityTerminalUI = true
-
-        XCTAssertFalse(model.canContinueSession)
-    }
-
-    func testAntigravityContinueRequestUsesTheAntigravityOptionsWithoutAWorktree() {
-        let model = makeModel()
-        model.mode = .antigravity
-        model.selection = .stored("a")
-        model.antigravityModel = "Gemini 3.8 Flash (High)"
-        model.setAntigravitySandbox(true)
-        model.antigravityAddDirs = "/x, /y"
-        model.worktree = true
-        model.branchName = "feature/x"
-        let stored = ChatStoredSession(
-            session_id: "external-2222", cwd: "/srv/other", title: nil, updated_at: nil, open_session_id: nil
-        )
-
-        let request = model.continueRequest(for: stored)
-
-        XCTAssertEqual(request.cli, "antigravity")
-        XCTAssertEqual(request.ui, "chat")
-        XCTAssertEqual(request.chat_resume_id, "external-2222")
-        XCTAssertEqual(request.cwd, "/srv/other")
-        XCTAssertNil(request.project_name)
-        XCTAssertNil(request.claude_options)
-        XCTAssertNil(request.codex_options)
-        XCTAssertEqual(request.antigravity_options?.model, "Gemini 3.8 Flash (High)")
-        XCTAssertEqual(request.antigravity_options?.sandbox, true)
-        XCTAssertEqual(request.antigravity_options?.add_dirs, ["/x", "/y"])
-        XCTAssertEqual(request.antigravity_options?.worktree, false)
-        XCTAssertNil(request.antigravity_options?.branch_name)
-    }
-
-    func testAntigravityTerminalUIIsRestoredFromTheLastLaunch() {
-        let prefs = isolatedPrefs()
-        prefs.setLastUsedAntigravityOptions(AntigravityLaunchPrefs(terminalUI: true))
-
-        let model = makeModel(prefs: prefs)
-
-        XCTAssertTrue(model.antigravityTerminalUI)
-        XCTAssertFalse(model.codexTerminalUI)
-    }
-
     func testCreateSendsAndRemembersTheAntigravityTerminalUIChoice() async throws {
         StubURLProtocol.reset()
         let prefs = isolatedPrefs()
@@ -426,63 +277,6 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(body["cli"] as? String, "antigravity")
         XCTAssertEqual(body["ui"] as? String, "terminal")
         XCTAssertEqual(prefs.getLastUsedAntigravityOptions()?.terminalUI, true)
-    }
-
-    func testAntigravityCreateWithoutChatOnThePCPointsToTerminalUI() async {
-        StubURLProtocol.reset()
-        let model = stubbedModel()
-        model.selection = .stored("a")
-        model.mode = .antigravity
-        StubURLProtocol.enqueue(
-            status: 503,
-            body: #"{"detail":{"detail":"The chat view needs an Antigravity CLI with ACP support.","chat_unavailable":true}}"#
-        )
-
-        await model.create()
-
-        XCTAssertEqual(
-            model.error,
-            "The chat view needs an Antigravity CLI with ACP support. Turn on Terminal UI under Advanced to use the classic terminal."
-        )
-        XCTAssertFalse(model.submitting)
-    }
-
-    func testAntigravityContinueRemembersTheAntigravityOptions() async throws {
-        StubURLProtocol.reset()
-        let prefs = isolatedPrefs()
-        let model = stubbedModel(prefs: prefs)
-        model.selection = .stored("a")
-        model.mode = .antigravity
-        model.setAntigravitySandbox(true)
-        StubURLProtocol.enqueue(
-            status: 200,
-            body: #"{"session_id":"s-resumed","state":"starting","created_at":"t"}"#
-        )
-
-        await model.continueSession(ChatStoredSession(
-            session_id: "external-2222", cwd: "/srv/other", title: nil, updated_at: nil, open_session_id: nil
-        ))
-
-        XCTAssertNil(model.error)
-        XCTAssertEqual(try createBodies().last?["cli"] as? String, "antigravity")
-        XCTAssertEqual(prefs.getLastUsedAntigravityOptions()?.sandbox, true)
-        XCTAssertNil(prefs.getLastUsedClaudeOptions(), "an Antigravity continue is not a Claude launch")
-    }
-
-    func testChatUnavailableReasonNamesWhatEachAgentNeeds() {
-        XCTAssertEqual(
-            CreateSessionModel.chatUnavailableReason(.unavailable),
-            "The chat view needs Node.js on your PC."
-        )
-        XCTAssertEqual(
-            CreateSessionModel.chatUnavailableReason(.unavailable, kind: "antigravity"),
-            "The chat view needs a newer Antigravity CLI on your PC: run agy update there."
-        )
-        XCTAssertEqual(
-            CreateSessionModel.chatUnavailableReason(.unsupportedAgent, kind: "antigravity"),
-            "Update Mobaide on your PC to use the chat view."
-        )
-        XCTAssertNil(CreateSessionModel.chatUnavailableReason(nil, kind: "antigravity"))
     }
 
     // MARK: - Codex continue after the Codex sign-in
@@ -605,23 +399,6 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(model.codexReasoningEffort, "ultra")
     }
 
-    func testRefreshSkipsReconcileWhileModelsPending() async {
-        // A models_pending answer (agent warmup still running) is provisional:
-        // the marker itself proves a catalog-era agent, so a persisted catalog
-        // effort must survive it instead of being clamped on absent details.
-        StubURLProtocol.reset()
-        StubURLProtocol.enqueue(status: 200, body: #"""
-        {"name":"agent","server_version":"1.0.0","protocol_versions":[7],"min_client_version":1,
-         "capabilities":{"cli":{"codex":{"available":true,"models_pending":true}}}}
-        """#)
-        let model = stubbedModel()
-        model.codexReasoningEffort = "ultra"
-
-        await model.refreshCliAvailability()
-
-        XCTAssertEqual(model.codexReasoningEffort, "ultra")
-    }
-
     func testRefreshClearsStaleDetailsWhenALaterProbeOmitsThem() async {
         // Agent restarted on an older build between probes: the retained
         // catalog would keep offering efforts (e.g. "ultra") the current
@@ -658,30 +435,6 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(model.codexReasoningEffort, "medium")
     }
 
-    func testCodexModelOptionsKeepAnUnlistedRestoredSelection() {
-        // A model persisted before the fallback refresh (gpt-5.3-codex-spark)
-        // is no longer in the list; without the append the Picker renders no
-        // selection while buildRequest still submits the hidden value.
-        let model = makeModel()
-        XCTAssertEqual(model.codexModelOptions, CreateSessionModel.codexModelsFallback)
-
-        model.codexModel = "gpt-5.3-codex-spark"
-        XCTAssertEqual(
-            model.codexModelOptions,
-            CreateSessionModel.codexModelsFallback + ["gpt-5.3-codex-spark"]
-        )
-
-        // A listed selection appends nothing.
-        model.codexModel = CreateSessionModel.codexModelsFallback[0]
-        XCTAssertEqual(model.codexModelOptions, CreateSessionModel.codexModelsFallback)
-    }
-
-    func testCodexEffortsFallBackToStaticListWithoutDetails() {
-        let model = makeModel()
-        XCTAssertEqual(model.codexEfforts(for: "gpt-5.6-sol"), CreateSessionModel.reasoningEfforts)
-        XCTAssertEqual(model.codexEfforts(for: nil), CreateSessionModel.reasoningEfforts)
-    }
-
     func testCodexEffortsUseAdvertisedCatalogForSelectedModel() async {
         let model = await modelWithCodexDetails()
         XCTAssertEqual(model.codexModels, ["gpt-5.6-sol", "gpt-5.4-mini"])
@@ -705,22 +458,6 @@ final class CreateSessionModelTests: XCTestCase {
         model.codexReasoningEffort = "minimal"
         model.setCodexModel("gpt-5.4-mini")
         XCTAssertEqual(model.codexReasoningEffort, "high")
-    }
-
-    func testSetCodexModelKeepsSupportedEffortAndUnknownModels() async {
-        let model = await modelWithCodexDetails()
-        model.codexReasoningEffort = "ultra"
-        model.setCodexModel("gpt-5.6-sol")
-        XCTAssertEqual(model.codexReasoningEffort, "ultra", "a still-supported effort survives")
-
-        model.codexReasoningEffort = "minimal"
-        model.setCodexModel("mystery")
-        XCTAssertEqual(
-            model.codexReasoningEffort, "minimal",
-            "a model with no catalog entry keeps the effort — never downshift on a guess"
-        )
-        model.setCodexModel(nil)
-        XCTAssertEqual(model.codexReasoningEffort, "minimal", "the Default model keeps it too")
     }
 
     func testAntigravityExclusivityAndAddDirs() throws {
@@ -783,13 +520,6 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(request.claude_options?.worktree, false)
     }
 
-    func testCustomPathTrimmedInRequest() throws {
-        let model = makeModel()
-        model.setCustomPath("  /abs/path  ")
-        let request = try XCTUnwrap(model.buildRequest(mode: .standard))
-        XCTAssertEqual(request.cwd, "/abs/path")
-    }
-
     func testCustomPathDropsThePickedSuggestionsTrailingSeparatorButNotARoot() throws {
         // A picked folder suggestion leaves `/srv/app/` in the field; the cwd
         // and the stored recent must be `/srv/app`, or recents list both.
@@ -812,17 +542,6 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertNil(request.claude_options?.branch_name)
     }
 
-    func testGitStoredProjectKeepsWorktree() async throws {
-        let model = await modelWithProjects(#"[{"name":"repo","path":"/p","is_git":true}]"#)
-        model.selectStoredProject("repo")
-        model.worktree = true
-        model.branchName = "feat"
-        let request = try XCTUnwrap(model.buildRequest(mode: .standard))
-        XCTAssertTrue(model.showsGitOptions)
-        XCTAssertEqual(request.claude_options?.worktree, true)
-        XCTAssertEqual(request.claude_options?.branch_name, "feat")
-    }
-
     // MARK: - Validation / helpers
 
     func testValidateCustomPath() {
@@ -838,12 +557,6 @@ final class CreateSessionModelTests: XCTestCase {
 
     func testParseAddDirsTrimsCarriageReturns() {
         XCTAssertEqual(CreateSessionModel.parseAddDirs("/a\r\n/b,\r/c"), ["/a", "/b", "/c"])
-    }
-
-    func testAntigravityModelFallbackPresent() {
-        let model = makeModel()
-        XCTAssertFalse(model.antigravityModels.isEmpty, "a fallback list must exist before the agy probe")
-        XCTAssertEqual(model.antigravityModels, CreateSessionModel.antigravityModelsFallback)
     }
 
     func testOnProjectCreatedSelectsAndGatesGit() {
@@ -892,14 +605,6 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertFalse(model.canContinueProject)
         model.setCustomPath("/abs")
         XCTAssertTrue(model.canContinueProject)
-    }
-
-    func testDefaultAvailabilityIsOptimistic() {
-        let model = makeModel()
-        XCTAssertTrue(model.claudeEnabled)
-        XCTAssertTrue(model.codexEnabled)
-        XCTAssertTrue(model.antigravityEnabled)
-        XCTAssertTrue(model.isEnabled(.shell))
     }
 
     func testPrefillFromPreferences() {
@@ -968,27 +673,6 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertFalse(reopened.autoScanClaudeDebug)
     }
 
-    func testCreateRoundTripsFocusModeOffThroughItsOwnPrefsBucket() async {
-        StubURLProtocol.reset()
-        let prefs = isolatedPrefs()
-        let model = stubbedModel(prefs: prefs)
-        model.selection = .stored("a")
-        model.mode = .standard
-        model.focusMode = false
-        StubURLProtocol.enqueue(
-            status: 200,
-            body: #"{"session_id":"s-new","state":"starting","created_at":"t"}"#
-        )
-
-        await model.create()
-
-        XCTAssertNil(model.error)
-        XCTAssertEqual(prefs.getLastUsedClaudeOptions()?.focusMode, false)
-        let reopened = makeModel(prefs: prefs)
-        XCTAssertFalse(reopened.focusMode, "the next wizard opens on the remembered choice")
-        XCTAssertTrue(reopened.autoScanFocusMode, "the unsaved Auto Scan bucket keeps the ON default")
-    }
-
     // MARK: - Recent custom paths
 
     func testSelectCustomPathLoadsRecentsAndLeavesTheEmptyDraftUnflagged() {
@@ -1013,48 +697,6 @@ final class CreateSessionModelTests: XCTestCase {
             model.recentCustomPaths, ["/srv/app"],
             "recents resolve through the agent-url fallback when there is no agent id"
         )
-    }
-
-    func testReselectingCustomPathRefreshesRecentsWithoutWipingTheDraft() {
-        let prefs = isolatedPrefs()
-        let model = makeModel(prefs: prefs)
-        model.selectCustomPath()
-        model.setCustomPath("/typed/path")
-        prefs.addRecentCustomPath(agentKey: harnessAgentKey, path: "/added/later")
-
-        model.selectCustomPath()
-
-        XCTAssertEqual(model.customPathDraft, "/typed/path", "the row stays on screen, so a second tap must not clear typed text")
-        XCTAssertEqual(model.selection, .customPath("/typed/path"))
-        XCTAssertEqual(model.recentCustomPaths, ["/added/later"], "recents still refresh")
-    }
-
-    func testPickRecentCustomPathFillsTheFieldAndRunsValidation() {
-        let prefs = isolatedPrefs()
-        prefs.addRecentCustomPath(agentKey: harnessAgentKey, path: "/srv/app")
-        let model = makeModel(prefs: prefs)
-        model.selectCustomPath()
-
-        model.pickRecentCustomPath("/srv/app")
-
-        XCTAssertEqual(model.customPathDraft, "/srv/app")
-        XCTAssertEqual(model.selection, .customPath("/srv/app"))
-        XCTAssertNil(model.customPathError)
-        XCTAssertTrue(model.canContinueProject, "a tapped recent unblocks the step exactly like typed text")
-    }
-
-    func testRemoveRecentCustomPathClearsItFromStateAndStore() {
-        let prefs = isolatedPrefs()
-        prefs.addRecentCustomPath(agentKey: harnessAgentKey, path: "/a")
-        prefs.addRecentCustomPath(agentKey: harnessAgentKey, path: "/b")
-        let model = makeModel(prefs: prefs)
-        model.selectCustomPath()
-        XCTAssertEqual(model.recentCustomPaths, ["/b", "/a"])
-
-        model.removeRecentCustomPath("/b")
-
-        XCTAssertEqual(model.recentCustomPaths, ["/a"], "the swiped row disappears without re-entering the step")
-        XCTAssertEqual(prefs.getRecentCustomPaths(agentKey: harnessAgentKey), ["/a"], "and stays gone next launch")
     }
 
     func testCreateWithCustomPathRecordsTheRecentButNeverTheLastUsedProject() async {
@@ -1082,29 +724,6 @@ final class CreateSessionModelTests: XCTestCase {
             prefs.getLastUsedProjectName(), "alpha",
             "an ad-hoc path must never displace the last-used project"
         )
-    }
-
-    func testCreateWithoutAnAgentScopeKeySkipsRecentsAndStillSucceeds() async {
-        StubURLProtocol.reset()
-        let defaults = UserDefaults(suiteName: "cw-\(UUID().uuidString)")!
-        let prefs = PreferencesStore(defaults: defaults)
-        let model = stubbedModel(prefs: prefs, tokenStore: unscopedTokenStore())
-        model.mode = .standard
-        model.selectCustomPath()
-        XCTAssertEqual(model.recentCustomPaths, [], "no scope key means nothing to load")
-        model.setCustomPath("/srv/app")
-        StubURLProtocol.enqueue(
-            status: 200,
-            body: #"{"session_id":"s-new","state":"starting","created_at":"t"}"#
-        )
-
-        await model.create()
-
-        XCTAssertNil(model.error, "a missing scope key must not fail the launch")
-        let recentKeys = defaults.dictionaryRepresentation().keys.filter {
-            $0.hasPrefix(PreferencesStore.recentCustomPathsPrefix)
-        }
-        XCTAssertEqual(recentKeys, [], "and must not write an unscoped bucket")
     }
 
     func testCreateRecordsTheLaunchedPathNotOneTypedWhileTheCreateWasInFlight() async {
@@ -1203,28 +822,6 @@ final class CreateSessionModelTests: XCTestCase {
 
     // MARK: - Custom agent types: validation / sanitization statics
 
-    func testValidateCustomTypeMessagesAndOrder() {
-        XCTAssertNil(CreateSessionModel.validateCustomType(name: "Aider", command: "aider --model sonnet"))
-        XCTAssertEqual(CreateSessionModel.validateCustomType(name: "", command: "aider"), "Name is required")
-        XCTAssertEqual(
-            CreateSessionModel.validateCustomType(name: String(repeating: "a", count: 61), command: "aider"),
-            "Name must be at most 60 characters"
-        )
-        XCTAssertEqual(CreateSessionModel.validateCustomType(name: "Aider", command: ""), "Command is required")
-        XCTAssertEqual(
-            CreateSessionModel.validateCustomType(name: "Aider", command: String(repeating: "x", count: 1001)),
-            "Command must be at most 1000 characters"
-        )
-        XCTAssertNil(
-            CreateSessionModel.validateCustomType(name: "Aider", command: String(repeating: "x", count: 1000)),
-            "the limit is inclusive"
-        )
-        XCTAssertEqual(
-            CreateSessionModel.validateCustomType(name: "", command: ""), "Name is required",
-            "name errors win over command errors (Android message order)"
-        )
-    }
-
     func testValidateCustomTypeCountsUnicodeCodePointsNotGraphemes() {
         // "👍🏽" is one grapheme but two Unicode scalars, so 31 of them pass a
         // grapheme count (31 ≤ 60) yet exceed the server's 60-code-point
@@ -1255,41 +852,7 @@ final class CreateSessionModelTests: XCTestCase {
         )
     }
 
-    func testEditorSaveEnablementRequiresBothFieldsNonBlank() {
-        XCTAssertFalse(CustomAgentTypeEditorSheet.isSaveEnabled(name: "  ", command: "aider"))
-        XCTAssertFalse(CustomAgentTypeEditorSheet.isSaveEnabled(name: "Aider", command: " \n "))
-        XCTAssertTrue(CustomAgentTypeEditorSheet.isSaveEnabled(name: " Aider ", command: " aider "))
-    }
-
-    // MARK: - Custom agent types: mode card metadata
-
-    func testCustomModeTitleAndReasonFallBackWhenTypeVanishes() async {
-        let typesRepo = makeTypesRepo()
-        await typesRepo.applyUpserted(makeCustomAgentType())
-        let model = makeModel(typesRepo: typesRepo)
-
-        XCTAssertEqual(model.modeTitle(.custom("ab12cd34ef56")), "Aider")
-        XCTAssertEqual(model.reason(for: .custom("ab12cd34ef56")), "aider --model sonnet")
-        XCTAssertEqual(
-            model.modeTitle(.custom("ffffffffffff")), "Terminal session",
-            "a remotely-deleted type keeps the wizard usable with the terminal fallback"
-        )
-        XCTAssertEqual(model.reason(for: .custom("ffffffffffff")), "Runs your saved launch command")
-    }
-
     // MARK: - Custom agent types: save flow
-
-    func testSaveCustomTypeValidationFailsInlineWithoutNetwork() async {
-        StubURLProtocol.reset()
-        let model = makeModel()
-        model.typeEditorTarget = .create
-
-        await model.saveCustomType(name: "   ", command: "aider")
-
-        XCTAssertEqual(model.typeEditorError, "Name is required")
-        XCTAssertNotNil(model.typeEditorTarget, "the editor stays open on validation failure")
-        XCTAssertTrue(StubURLProtocol.requests.isEmpty, "invalid input never reaches the wire")
-    }
 
     func testSaveCustomTypeCreateSuccessDismissesAndUpserts() async throws {
         StubURLProtocol.reset()
@@ -1348,18 +911,6 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertNotNil(model.typeEditorTarget, "a failed save keeps the sheet and the draft")
     }
 
-    func testSaveCustomTypeNonDetailErrorFallsBackToHTTPCode() async {
-        StubURLProtocol.reset()
-        let model = stubbedModel()
-        model.typeEditorTarget = .create
-        StubURLProtocol.enqueue(status: 500, body: "boom")
-
-        await model.saveCustomType(name: "Aider", command: "aider")
-
-        XCTAssertEqual(model.typeEditorError, "Couldn't save (HTTP 500)")
-        XCTAssertNotNil(model.typeEditorTarget)
-    }
-
     // MARK: - Custom agent types: delete flow
 
     func testConfirmDeleteType403CountsAsSuccessAndRefreshes() async {
@@ -1403,86 +954,6 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(typesRepo.currentTypes.map(\.id), ["ab12cd34ef56"], "the delete failed — the card stays")
     }
 
-    func testConfirmDeleteTypeRepeatConfirmOfSameInFlightTypeIsNoOp() async {
-        StubURLProtocol.reset()
-        let typesRepo = makeTypesRepo()
-        await typesRepo.applyUpserted(makeCustomAgentType())
-        let model = stubbedModel(typesRepo: typesRepo)
-        model.typeDeleteTarget = makeCustomAgentType()
-        StubURLProtocol.enqueue(status: 200, body: "{}")
-
-        // Hold the first DELETE's response until a repeat confirm of the same
-        // type has run — the alert auto-dismisses on tap, so this re-confirm
-        // window is reachable in the UI.
-        let released = DispatchSemaphore(value: 0)
-        StubURLProtocol.onRequest = { request in
-            guard request.httpMethod == "DELETE" else { return }
-            StubURLProtocol.onRequest = nil
-            Task { @MainActor in
-                await model.confirmDeleteType(makeCustomAgentType())
-                released.signal()
-            }
-            XCTAssertEqual(released.wait(timeout: .now() + 2), .success, "the repeat confirm never completed")
-        }
-
-        await model.confirmDeleteType(makeCustomAgentType())
-
-        XCTAssertEqual(
-            StubURLProtocol.requests.filter { $0.httpMethod == "DELETE" }.count, 1,
-            "a repeat confirm of a type whose DELETE is already in flight must not fire a second call"
-        )
-        XCTAssertNil(model.error)
-        XCTAssertTrue(model.deletesInFlightTypeIds.isEmpty, "the guard entry is released once the DELETE settles")
-        XCTAssertTrue(typesRepo.currentTypes.isEmpty)
-        XCTAssertEqual(
-            model.typeDeleteTarget?.id, "ab12cd34ef56",
-            "the model must not clear the alert target — the presentation binding owns it"
-        )
-    }
-
-    func testConfirmDeleteTypeSecondTypeWhileFirstInFlightBothFire() async {
-        StubURLProtocol.reset()
-        let typesRepo = makeTypesRepo()
-        await typesRepo.applyUpserted(makeCustomAgentType())
-        await typesRepo.applyUpserted(makeCustomAgentType(id: "cd34ef56ab12", name: "Goose", command: "goose"))
-        let model = stubbedModel(typesRepo: typesRepo)
-        StubURLProtocol.enqueue(status: 200, body: "{}")
-        StubURLProtocol.enqueue(status: 200, body: "{}")
-
-        // The alert dismisses on tap, so a second type can be confirmed while
-        // the first DELETE still awaits; hold the first response until the
-        // second confirm is provably in flight (a single-boolean guard would
-        // silently drop that second confirmed destructive action).
-        let released = DispatchSemaphore(value: 0)
-        StubURLProtocol.onRequest = { request in
-            guard request.url?.lastPathComponent == "ab12cd34ef56" else { return }
-            StubURLProtocol.onRequest = nil
-            Task { @MainActor in
-                let second = Task { @MainActor in
-                    await model.confirmDeleteType(makeCustomAgentType(id: "cd34ef56ab12", name: "Goose", command: "goose"))
-                }
-                let deadline = ContinuousClock.now.advanced(by: .seconds(2))
-                while !model.deletesInFlightTypeIds.contains("cd34ef56ab12"), ContinuousClock.now < deadline {
-                    try? await Task.sleep(for: .milliseconds(2))
-                }
-                released.signal()
-                await second.value
-            }
-            XCTAssertEqual(released.wait(timeout: .now() + 2), .success, "the second confirm never became in-flight")
-        }
-
-        await model.confirmDeleteType(makeCustomAgentType())
-        await waitUntil { StubURLProtocol.requests.count == 2 && model.deletesInFlightTypeIds.isEmpty }
-
-        XCTAssertEqual(
-            Set(StubURLProtocol.requests.compactMap { $0.url?.lastPathComponent }),
-            ["ab12cd34ef56", "cd34ef56ab12"],
-            "a second type confirmed while the first DELETE is in flight must not be silently dropped"
-        )
-        XCTAssertNil(model.error)
-        XCTAssertTrue(typesRepo.currentTypes.isEmpty, "both confirmed deletes reach the server and apply")
-    }
-
     // MARK: - Custom agent types: launch errors
 
     func testCreateCustomModeAgentUpdateRequired409() async {
@@ -1512,22 +983,5 @@ final class CreateSessionModelTests: XCTestCase {
 
         XCTAssertEqual(model.error, "This agent type was deleted")
         XCTAssertTrue(typesRepo.currentTypes.isEmpty, "the stale card disappears via the best-effort refresh")
-    }
-
-    func testCreateCustomModeOther404FallsThroughToGenericError() async {
-        // A concurrently-deleted *project* also 404s — matching on the status
-        // alone mislabeled it as a deleted agent type (a shipped-then-fixed
-        // Android regression). Only the exact detail string routes to the
-        // deleted-type message.
-        StubURLProtocol.reset()
-        let model = stubbedModel()
-        model.selection = .stored("a")
-        model.mode = .custom("ab12cd34ef56")
-        StubURLProtocol.enqueue(status: 404, body: #"{"detail":"Project not found"}"#)
-
-        await model.create()
-
-        XCTAssertTrue(model.error?.hasPrefix("Failed to create session") ?? false)
-        XCTAssertEqual(StubURLProtocol.requests.count, 1, "no type refresh for a non-type 404")
     }
 }

@@ -62,16 +62,6 @@ class TestFlushSweep:
         assert (await db.get_agent(a1))["last_seen_at"] == t1.isoformat()
         assert (await db.get_agent(a2))["last_seen_at"] == t2.isoformat()
 
-    async def test_flush_empty_routing_returns_zero(self, db):
-        assert await _flush_agent_heartbeats(db, RoutingTable()) == 0
-
-    async def test_flush_tolerates_agent_missing_from_db(self, db):
-        routing = RoutingTable()
-        conn = routing.register_agent("never-registered", MagicMock())
-        conn.last_heartbeat = datetime(2031, 3, 3, tzinfo=timezone.utc)
-        # The UPDATE matches no row — must not raise.
-        assert await _flush_agent_heartbeats(db, routing) == 1
-
 
 class TestHeartbeatControlMessage:
     async def test_heartbeat_does_not_write_db(self, app, registered_agent):

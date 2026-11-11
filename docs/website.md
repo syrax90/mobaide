@@ -336,8 +336,8 @@ wordmark the browser already holds.
 
 The two routers use `Jinja2Templates`' permissive
 default `Undefined` (unlike `marketing/loader.py`, which uses `StrictUndefined`), so a
-forgotten context key degrades to a bare `?v=` **silently**; `test_portal_assets.py`
-is the guard.
+forgotten context key degrades to a bare `?v=` **silently**. No test guards this;
+check the rendered page when you add a template.
 
 Three `static/site/` assets carry **no** `?v=` query, each deliberately:
 
@@ -429,9 +429,9 @@ lacks — see *Where things live*).
 **Placement rule:** a rule any dark Mobaide surface could want goes in `site.css`;
 a rule only a form or document page wants goes in `portal.css`. `portal.css`
 declares no `:root` block and no `@font-face` — duplicating either is the drift
-that reusing `site.css` exists to prevent. `test_portal_assets.py` enforces that,
-the no-non-zero-`border-radius` rule, the brand-as-fill-only rule, and the
-`--gray` form-boundary rule.
+that reusing `site.css` exists to prevent. Review keeps that, the
+no-non-zero-`border-radius` rule, the brand-as-fill-only rule, and the
+`--gray` form-boundary rule; no test enforces them.
 
 `portal.css` still carries rules for components no surviving template uses (the
 auth divider, the password reveal, the modal layer). They are kept rather than

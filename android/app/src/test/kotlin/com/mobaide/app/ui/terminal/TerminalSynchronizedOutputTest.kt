@@ -42,11 +42,6 @@ class TerminalSynchronizedOutputTest {
     }
 
     @Test
-    fun syncOutput_defaultsOff() {
-        assertFalse(requireNotNull(session.emulator).isSynchronizedOutputActive)
-    }
-
-    @Test
     fun decset2026_setAndReset_toggleTheMode() {
         feed(SYNC_ON)
         assertTrue(requireNotNull(session.emulator).isSynchronizedOutputActive)

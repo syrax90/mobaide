@@ -15,13 +15,6 @@ class TextInsertionTest {
     private fun draft(text: String, selection: TextRange) = TextFieldValue(text, selection)
 
     @Test
-    fun intoAnEmptyDraft_theTextIsTheDraftWithTheCursorAfterIt() {
-        val result = TextFieldValue("").insertAtCursor("git status")
-
-        assertEquals(TextFieldValue("git status", TextRange(10)), result)
-    }
-
-    @Test
     fun atTheCursor_keepsTheTextOnBothSides() {
         val result = draft("please  now", TextRange(7)).insertAtCursor("fix it")
 

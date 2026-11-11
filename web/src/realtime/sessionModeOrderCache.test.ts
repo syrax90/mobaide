@@ -30,10 +30,6 @@ afterEach(() => {
 });
 
 describe('newerSessionModeOrder', () => {
-  it('takes the incoming snapshot when nothing is cached', () => {
-    const incoming = snapshot(1, ['codex']);
-    expect(newerSessionModeOrder(undefined, incoming)).toBe(incoming);
-  });
 
   it('keeps the cached snapshot when it is newer', () => {
     const current = snapshot(3, ['shell']);

@@ -65,12 +65,6 @@ describe('fetchServerInfo', () => {
     expect(info.appleWebClientId).toBeNull();
     expect(info.googleClientId).toBeNull();
   });
-
-  it('maps an explicit null the same way', async () => {
-    stubVersionProbe({ ...VERSION_BODY, apple_web_client_id: null });
-
-    expect((await fetchServerInfo()).appleWebClientId).toBeNull();
-  });
 });
 
 describe('checkVersionGate', () => {

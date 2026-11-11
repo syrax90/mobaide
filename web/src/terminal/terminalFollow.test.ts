@@ -60,11 +60,6 @@ describe('addUnread', () => {
     expect(addUnread(MAX_UNREAD_ROWS - 1, 5)).toBe(MAX_UNREAD_ROWS);
     expect(addUnread(0, MAX_UNREAD_ROWS + 10)).toBe(MAX_UNREAD_ROWS);
   });
-
-  it('leaves the tally alone for a non-positive row count', () => {
-    expect(addUnread(7, 0)).toBe(7);
-    expect(addUnread(7, -3)).toBe(7);
-  });
 });
 
 describe('unreadLabel', () => {

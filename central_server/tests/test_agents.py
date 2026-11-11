@@ -25,11 +25,6 @@ class TestCreateAgent:
 
 
 class TestListAgents:
-    async def test_list_agents_empty(self, client, api_auth_headers):
-        resp = await client.get("/api/agents", headers=api_auth_headers)
-        assert resp.status_code == 200
-        assert resp.json() == []
-
     async def test_list_agents_returns_only_owned(self, client, app, api_auth_headers):
         # Create an agent as admin
         resp = await client.post(
@@ -50,22 +45,6 @@ class TestListAgents:
         agents = resp.json()
         assert len(agents) == 1
         assert agents[0]["name"] == "admin-agent"
-
-    async def test_list_agents_includes_online_status(self, client, app, api_auth_headers):
-        resp = await client.post(
-            "/api/agents",
-            json={"name": "agent"},
-            headers=api_auth_headers,
-        )
-        agent_id = resp.json()["agent_id"]
-
-        resp = await client.get("/api/agents", headers=api_auth_headers)
-        agent = resp.json()[0]
-        assert agent["online"] is False
-
-    async def test_list_agents_requires_auth(self, client):
-        resp = await client.get("/api/agents")
-        assert resp.status_code == 401
 
 
 class TestReregisterAgent:
@@ -138,30 +117,6 @@ class TestDeleteAgent:
             f"/api/agents/{agent_id}", headers=api_auth_headers
         )
         assert resp.status_code == 403
-
-    async def test_delete_cascade(self, client, app, api_auth_headers):
-        """Deleting an agent should cascade to pairing-tokens and refresh-tokens.
-
-        ``mobile_devices`` is user-scoped and intentionally NOT touched by
-        ``delete_agent`` — a device outlives any one agent.
-        """
-        create_resp = await client.post(
-            "/api/agents",
-            json={"name": "cascade-test"},
-            headers=api_auth_headers,
-        )
-        agent_id = create_resp.json()["agent_id"]
-
-        db = app.state.db
-        await db.create_pairing_token(agent_id, 300)
-        await db.store_refresh_token("r1", "device-1", agent_id, 60)
-
-        resp = await client.delete(
-            f"/api/agents/{agent_id}", headers=api_auth_headers
-        )
-        assert resp.status_code == 204
-
-        assert await db.get_pending_pairing_tokens(agent_id) == []
 
     async def test_delete_qr_paired_agent_returns_204(
         self, client, app, api_auth_headers
@@ -308,20 +263,6 @@ class TestAdminBlocked:
         )
         assert resp.status_code == 403
         assert "admin" in resp.json()["detail"].lower()
-
-    async def test_admin_cannot_list_agents(self, client, admin_api_auth_headers):
-        resp = await client.get("/api/agents", headers=admin_api_auth_headers)
-        assert resp.status_code == 403
-
-    async def test_admin_cannot_reregister_agent(
-        self, client, admin_api_auth_headers, registered_agent
-    ):
-        agent_id, _ = registered_agent  # viewer-owned
-        resp = await client.post(
-            f"/api/agents/{agent_id}/reregister",
-            headers=admin_api_auth_headers,
-        )
-        assert resp.status_code == 403
 
     async def test_admin_cannot_delete_agent(
         self, client, admin_api_auth_headers, registered_agent

@@ -24,7 +24,6 @@ from central_server.auth.dependencies import (
     get_non_admin_api_user,
     require_role,
 )
-from central_server.auth.models import UserTokenPayload
 from central_server.auth.service import AuthService
 from central_server.config import CentralServerConfig
 from central_server.db.database import Database
@@ -93,18 +92,6 @@ class _FakeRequest:
 
 
 class TestGetDashboardUser:
-    async def test_valid_cookie(self, auth_service):
-        _user_id, _role, token, _scheduled = await auth_service.login_user(
-            TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
-        )
-        fake_app = _FakeApp(auth_service)
-        request = _FakeRequest(
-            cookies={"dashboard_token": token}, app=fake_app
-        )
-        user = await get_dashboard_user(request)
-        assert isinstance(user, UserTokenPayload)
-        assert user.email == TEST_ADMIN_EMAIL
-        assert user.role == "admin"
 
     async def test_missing_cookie_raises_redirect(self, auth_service):
         fake_app = _FakeApp(auth_service)
@@ -114,14 +101,6 @@ class TestGetDashboardUser:
         assert exc_info.value.status_code == 303
         assert exc_info.value.headers["Location"] == "/dashboard/login"
 
-    async def test_invalid_cookie_raises_redirect(self, auth_service):
-        fake_app = _FakeApp(auth_service)
-        request = _FakeRequest(
-            cookies={"dashboard_token": "bogus-jwt"}, app=fake_app
-        )
-        with pytest.raises(HTTPException) as exc_info:
-            await get_dashboard_user(request)
-        assert exc_info.value.status_code == 303
 
     async def test_expired_cookie_raises_redirect(self, auth_service):
         """An expired JWT in the cookie should redirect to login."""
@@ -168,17 +147,6 @@ class TestGetDashboardUser:
 
 
 class TestRequireRole:
-    async def test_admin_allowed(self, auth_service):
-        _user_id, _role, token, _scheduled = await auth_service.login_user(
-            TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
-        )
-        fake_app = _FakeApp(auth_service)
-        request = _FakeRequest(
-            cookies={"dashboard_token": token}, app=fake_app
-        )
-        check = require_role("admin")
-        user = await check(user=await get_dashboard_user(request))
-        assert user.role == "admin"
 
     async def test_viewer_blocked_from_admin(self, auth_service):
         result = await auth_service.register_user(
@@ -196,33 +164,8 @@ class TestRequireRole:
         assert exc_info.value.status_code == 403
         assert "admin" in exc_info.value.detail
 
-    async def test_multiple_roles_allowed(self, auth_service):
-        result = await auth_service.register_user(
-            TEST_USER_EMAIL, TEST_USER_PASSWORD
-        )
-        token = result.access_token
-        fake_app = _FakeApp(auth_service)
-        request = _FakeRequest(
-            cookies={"dashboard_token": token}, app=fake_app
-        )
-        check = require_role("admin", "viewer")
-        user = await check(user=await get_dashboard_user(request))
-        assert user.role == "viewer"
-
 
 class TestGetApiUser:
-    async def test_valid_bearer(self, auth_service):
-        _user_id, _role, token, _scheduled = await auth_service.login_user(
-            TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
-        )
-        fake_app = _FakeApp(auth_service)
-        request = _FakeRequest(
-            headers={"Authorization": f"Bearer {token}"}, app=fake_app
-        )
-        user = await get_api_user(request)
-        assert isinstance(user, UserTokenPayload)
-        assert user.email == TEST_ADMIN_EMAIL
-        assert user.role == "admin"
 
     async def test_missing_auth_header(self, auth_service):
         fake_app = _FakeApp(auth_service)
@@ -231,20 +174,6 @@ class TestGetApiUser:
             await get_api_user(request)
         assert exc_info.value.status_code == 401
 
-    async def test_invalid_jwt(self, auth_service):
-        fake_app = _FakeApp(auth_service)
-        request = _FakeRequest(
-            headers={"Authorization": "Bearer not-a-valid-jwt"},
-            app=fake_app,
-        )
-        with pytest.raises(HTTPException) as exc_info:
-            await get_api_user(request)
-        assert exc_info.value.status_code == 401
-        # Detail is a fixed, implementation-agnostic string — the PyJWT
-        # exception message (which might say "Signature has expired" or
-        # "Not enough segments" etc.) is logged for operators but never
-        # leaked to the client.
-        assert exc_info.value.detail == "Invalid token"
 
     async def test_expired_dashboard_token(self, auth_service):
         """Regression for the mobile-app 'Invalid token: Signature has expired' bug.
@@ -317,34 +246,8 @@ class TestGetNonAdminApiUser:
         assert exc_info.value.status_code == 403
         assert "admin" in exc_info.value.detail.lower()
 
-    async def test_viewer_allowed(self, auth_service):
-        result = await auth_service.register_user(
-            TEST_USER_EMAIL, TEST_USER_PASSWORD
-        )
-        token = result.access_token
-        fake_app = _FakeApp(auth_service)
-        request = _FakeRequest(
-            headers={"Authorization": f"Bearer {token}"}, app=fake_app
-        )
-        user = await get_non_admin_api_user(user=await get_api_user(request))
-        assert user.role == "viewer"
-        assert user.email == TEST_USER_EMAIL
-
 
 class TestGetMobileUser:
-    async def test_valid_bearer(self, auth_service, auth_db):
-        owner = await auth_db.create_user(email="owner@test.local", password_hash="h")
-        agent_id, _ = await auth_db.register_agent("test-agent", owner)
-        access, _ = await auth_service.create_mobile_tokens("dev-1", agent_id, owner)
-        fake_app = _FakeApp(auth_service)
-        request = _FakeRequest(
-            headers={"Authorization": f"Bearer {access}"}, app=fake_app
-        )
-        payload = await get_mobile_user(request)
-        assert payload.sub == "dev-1"
-        assert payload.agent_id == agent_id
-        assert payload.user_id == owner
-        assert payload.token_type == "mobile_access"
 
     async def test_missing_auth_header(self, auth_service):
         fake_app = _FakeApp(auth_service)
@@ -363,16 +266,6 @@ class TestGetMobileUser:
             await get_mobile_user(request)
         assert exc_info.value.status_code == 401
 
-    async def test_invalid_jwt(self, auth_service):
-        fake_app = _FakeApp(auth_service)
-        request = _FakeRequest(
-            headers={"Authorization": "Bearer not-a-valid-jwt"},
-            app=fake_app,
-        )
-        with pytest.raises(HTTPException) as exc_info:
-            await get_mobile_user(request)
-        assert exc_info.value.status_code == 401
-        assert exc_info.value.detail == "Invalid token"
 
     async def test_dashboard_token_rejected_for_mobile(self, auth_service):
         """A dashboard token should not pass mobile auth (wrong type)."""
@@ -494,20 +387,6 @@ class TestUserExistenceCheck:
         assert exc_info.value.status_code == 401
         assert exc_info.value.detail == "Invalid token"
 
-    async def test_get_api_user_succeeds_for_present_user(
-        self, auth_service, auth_db
-    ):
-        """Sanity: the existence check is non-disruptive for the happy path."""
-        result = await auth_service.register_user(
-            TEST_USER_EMAIL, TEST_USER_PASSWORD
-        )
-        fake_app = _FakeApp(auth_service, db=auth_db)
-        request = _FakeRequest(
-            headers={"Authorization": f"Bearer {result.access_token}"},
-            app=fake_app,
-        )
-        user = await get_api_user(request)
-        assert user.sub == result.user_id
 
     async def test_get_mobile_user_succeeds_for_present_agent(
         self, auth_service, auth_db

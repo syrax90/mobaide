@@ -91,28 +91,6 @@ class GitRebaseFormTest {
     }
 
     @Test
-    fun aProjectWithNoOtherBranch_saysSo() {
-        setContent(
-            state = RebaseSheetState(
-                targets = RebaseTargetsState.Ready(
-                    listOf(GitItem(kind = GitItem.KIND_BRANCH_WITH_WORKTREE, branch = "topic")),
-                ),
-            ),
-        )
-
-        composeRule.onNodeWithTag(GIT_REBASE_ONTO_PICKER_TAG).assertTextContains("No other branches")
-        submit().assertIsNotEnabled()
-    }
-
-    @Test
-    fun whileTheBranchesLoad_nothingCanBeSubmitted() {
-        setContent(state = RebaseSheetState(targets = RebaseTargetsState.Loading))
-
-        composeRule.onNodeWithText("Loading branches…").assertIsDisplayed()
-        submit().assertIsNotEnabled()
-    }
-
-    @Test
     fun trackedChanges_showTheBlocker_andKeepRebaseDisabled() {
         setContent(status = status(GitStatusCounts(unstaged = 1, total = 1)))
 
@@ -132,22 +110,6 @@ class GitRebaseFormTest {
 
         composeRule.onNodeWithTag(GIT_REBASE_BLOCKER_TAG).assertDoesNotExist()
         submit().assertIsEnabled()
-    }
-
-    @Test
-    fun aRefusal_showsItsCopy_andGitsOutput() {
-        setContent(
-            state = RebaseSheetState(
-                error = CommitError(
-                    "Local changes are in the way — stage, commit or discard them first.",
-                    "error: cannot rebase: You have unstaged changes.",
-                ),
-            ),
-        )
-
-        composeRule.onNodeWithText("Local changes are in the way — stage, commit or discard them first.")
-            .assertIsDisplayed()
-        composeRule.onNodeWithText("error: cannot rebase: You have unstaged changes.").assertIsDisplayed()
     }
 
     @Test

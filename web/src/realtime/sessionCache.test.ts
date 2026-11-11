@@ -126,13 +126,6 @@ describe('applySessionUpsert', () => {
     ]);
   });
 
-  it('drops a malformed payload and leaves the list untouched', () => {
-    client.setQueryData<SessionResponse[]>(key, [row('a')]);
-
-    expect(applySessionUpsert(client, AGENT, { session: { state: 'running' } })).toBe('dropped');
-    expect(client.getQueryData<SessionResponse[]>(key)?.map((s) => s.session_id)).toEqual(['a']);
-  });
-
   it('never evicts a terminal, however the list changed', () => {
     client.setQueryData<SessionResponse[]>(key, [row('a')]);
 

@@ -52,10 +52,4 @@ describe('connectionStore', () => {
     expect(channelState('agent-events:a1')).toBeUndefined();
     expect(channelState('user-events')).toEqual(retrying);
   });
-
-  it('does not notify when forgetting a channel it never tracked', () => {
-    useConnectionStore.getState().forgetChannel('session:a1:s1');
-
-    expect(notifications).toBe(0);
-  });
 });

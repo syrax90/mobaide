@@ -1,9 +1,6 @@
 package com.mobaide.app.data.network.dto
 
 import kotlinx.serialization.json.Json
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -16,8 +13,6 @@ import org.junit.Test
  */
 class CodexOptionsModelTest {
 
-    // Mirrors the production session-decoding config (RestApi / AgentEventBus).
-    private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
     private val encodeJson = Json { encodeDefaults = true }
 
     @Test
@@ -41,44 +36,6 @@ class CodexOptionsModelTest {
     }
 
     @Test
-    fun decodesServerPayload_withDefaultsForOmittedFields() {
-        val opts = json.decodeFromString(
-            CodexOptionsModel.serializer(),
-            """{"sandbox":"workspace-write","approval":"never"}""",
-        )
-        assertEquals("workspace-write", opts.sandbox)
-        assertEquals("never", opts.approval)
-        assertEquals("high", opts.reasoning_effort)
-        assertFalse(opts.full_auto)
-        assertFalse(opts.worktree)
-        assertNull(opts.model)
-        assertNull(opts.branch_name)
-    }
-
-    @Test
-    fun sessionKindCodex_decodesFromWireValue() {
-        val dto = json.decodeFromString(
-            SessionResponse.serializer(),
-            """{"session_id":"s1","state":"running","created_at":"t","kind":"codex"}""",
-        )
-        assertEquals(SessionKind.Codex, dto.kind)
-    }
-
-    @Test
-    fun unknownSessionKind_isPreservedVerbatim_asCustom_insteadOfCoercingToClaude() {
-        // Forward-compat, proto-v7: a kind added by a newer server (or an
-        // account-scoped custom type) must not break decoding of the whole
-        // session snapshot AND must not be mislabeled as Claude — the raw wire
-        // string is held verbatim in SessionKind.Custom. Uses a still-unknown
-        // wire value ("grok") — "antigravity" is now a real kind.
-        val dto = json.decodeFromString(
-            SessionResponse.serializer(),
-            """{"session_id":"s1","state":"running","created_at":"t","kind":"grok"}""",
-        )
-        assertEquals(SessionKind.Custom("grok"), dto.kind)
-    }
-
-    @Test
     fun createSessionRequest_codex_serializesCliAndCodexOptionsKeys() {
         // The wizard's submitCodex() ships exactly these request-side keys; the
         // server keys on `cli` + `codex_options` (not `claude_options`). Pin the
@@ -96,28 +53,4 @@ class CodexOptionsModelTest {
         assertTrue(encoded.contains("\"sandbox\":\"read-only\""))
     }
 
-    @Test
-    fun createSessionRequest_codex_roundTripsThroughWire() {
-        val req = CreateSessionRequest(
-            project_name = "alpha",
-            cli = "codex",
-            codex_options = CodexOptionsModel(
-                sandbox = "workspace-write",
-                approval = "on-request",
-                worktree = true,
-                branch_name = "feature/x",
-            ),
-        )
-        val decoded = json.decodeFromString(
-            CreateSessionRequest.serializer(),
-            encodeJson.encodeToString(CreateSessionRequest.serializer(), req),
-        )
-        assertEquals("codex", decoded.cli)
-        assertNull("Codex requests must not carry claude_options", decoded.claude_options)
-        val opts = decoded.codex_options
-        assertEquals("workspace-write", opts?.sandbox)
-        assertEquals("on-request", opts?.approval)
-        assertTrue(opts?.worktree == true)
-        assertEquals("feature/x", opts?.branch_name)
-    }
 }

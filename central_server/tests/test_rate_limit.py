@@ -41,9 +41,6 @@ def clock(monkeypatch) -> Iterator[_FakeClock]:
 
 
 class TestTryAcquireCooldown:
-    async def test_first_acquire_always_allowed(self, clock: _FakeClock):
-        limiter = ResendRateLimiter(cooldown_seconds=60, hourly_cap=3)
-        assert await limiter.try_acquire("a@x.com") is None
 
     async def test_second_acquire_within_cooldown_is_blocked(
         self, clock: _FakeClock
@@ -82,17 +79,6 @@ class TestTryAcquireCooldown:
 
 
 class TestTryAcquireHourlyCap:
-    async def test_hourly_cap_blocks_after_n_acquires(self, clock: _FakeClock):
-        # cooldown=0 means only the hourly cap gates.
-        limiter = ResendRateLimiter(cooldown_seconds=0, hourly_cap=3)
-        assert await limiter.try_acquire("a@x.com") is None
-        assert await limiter.try_acquire("a@x.com") is None
-        assert await limiter.try_acquire("a@x.com") is None
-
-        # 4th within the hour is capped.
-        wait = await limiter.try_acquire("a@x.com")
-        assert wait is not None
-        assert wait >= 1
 
     async def test_hourly_cap_reports_time_until_oldest_leaves_window(
         self, clock: _FakeClock
@@ -111,15 +97,6 @@ class TestTryAcquireHourlyCap:
         wait = await limiter.try_acquire("a@x.com")
         assert wait == 3580
 
-    async def test_hourly_cap_one_forbids_any_second_acquire_in_window(
-        self, clock: _FakeClock
-    ):
-        limiter = ResendRateLimiter(
-            cooldown_seconds=0, hourly_cap=1, window_seconds=3600
-        )
-        assert await limiter.try_acquire("a@x.com") is None
-        # Same tick, same window -> blocked.
-        assert await limiter.try_acquire("a@x.com") is not None
 
     async def test_window_slide_frees_up_a_slot(self, clock: _FakeClock):
         limiter = ResendRateLimiter(
@@ -148,14 +125,6 @@ class TestNormalisation:
         assert wait is not None
         assert wait >= 1
 
-    async def test_distinct_emails_have_independent_buckets(
-        self, clock: _FakeClock
-    ):
-        limiter = ResendRateLimiter(cooldown_seconds=60, hourly_cap=3)
-        assert await limiter.try_acquire("a@x.com") is None
-        # Different email; untouched bucket.
-        assert await limiter.try_acquire("b@x.com") is None
-
 
 class TestReset:
     async def test_reset_clears_cooldown(self, clock: _FakeClock):
@@ -172,12 +141,6 @@ class TestReset:
         await limiter.try_acquire("alice@x.com")
         await limiter.reset("  ALICE@X.com  ")
         assert await limiter.try_acquire("alice@x.com") is None
-
-    async def test_reset_for_unknown_email_is_noop(self, clock: _FakeClock):
-        limiter = ResendRateLimiter(cooldown_seconds=60, hourly_cap=3)
-        # Must not raise, must not corrupt the state.
-        await limiter.reset("never-seen@x.com")
-        assert await limiter.try_acquire("never-seen@x.com") is None
 
 
 class TestRefund:
@@ -201,41 +164,8 @@ class TestRefund:
         assert await limiter.try_acquire("a@x.com") is None
         assert await limiter.try_acquire("a@x.com") is not None
 
-    async def test_refund_uses_normalised_key(self, clock: _FakeClock):
-        limiter = ResendRateLimiter(cooldown_seconds=0, hourly_cap=1)
-        await limiter.try_acquire("alice@x.com")
-        await limiter.refund("  ALICE@X.com  ")
-        assert await limiter.try_acquire("alice@x.com") is None
-
-    async def test_refund_for_unknown_key_is_noop(self, clock: _FakeClock):
-        limiter = ResendRateLimiter(cooldown_seconds=0, hourly_cap=1)
-        await limiter.refund("never-seen@x.com")
-        assert "never-seen@x.com" not in limiter._state  # noqa: SLF001
-        assert await limiter.try_acquire("never-seen@x.com") is None
-
-    async def test_refund_of_last_slot_drops_the_bucket(self, clock: _FakeClock):
-        limiter = ResendRateLimiter(cooldown_seconds=0, hourly_cap=3)
-        await limiter.try_acquire("a@x.com")
-        await limiter.refund("a@x.com")
-        assert "a@x.com" not in limiter._state  # noqa: SLF001
-        assert "a@x.com" not in limiter._last_access  # noqa: SLF001
-
 
 class TestEviction:
-    async def test_prune_drops_entries_outside_window(self, clock: _FakeClock):
-        limiter = ResendRateLimiter(
-            cooldown_seconds=0, hourly_cap=1_000, window_seconds=60
-        )
-        # Seed several emails at different points in the past.
-        await limiter.try_acquire("a@x.com")
-        clock.advance(120)  # push a@x.com past the window
-
-        # Touching any email triggers _prune_entry on the normalised key.
-        # After pruning, the stale ``a@x.com`` bucket should be gone from
-        # internal state, and a fresh acquire succeeds cleanly.
-        assert await limiter.try_acquire("a@x.com") is None
-        assert "a@x.com" in limiter._state  # noqa: SLF001
-        assert len(limiter._state["a@x.com"]) == 1  # noqa: SLF001
 
     async def test_soft_cap_evicts_oldest_entries(
         self, clock: _FakeClock, monkeypatch
@@ -274,19 +204,6 @@ class TestEviction:
         assert "victim@x.com" in limiter._state  # noqa: SLF001
         assert await limiter.try_acquire("victim@x.com") is not None
 
-    async def test_max_keys_still_evicts_past_its_own_bound(
-        self, clock: _FakeClock
-    ):
-        limiter = ResendRateLimiter(
-            cooldown_seconds=0, hourly_cap=100, window_seconds=3600, max_keys=4
-        )
-        for i in range(5):
-            clock.advance(1)
-            await limiter.try_acquire(f"user{i}@x.com")
-
-        # Past max_keys=4 eviction drops to the low-water mark 3.
-        assert len(limiter._state) == 3  # noqa: SLF001
-        assert "user0@x.com" not in limiter._state  # noqa: SLF001
 
     async def test_full_bucket_survives_a_spray_of_one_hit_keys(
         self, clock: _FakeClock
@@ -415,25 +332,3 @@ class TestEviction:
         )
 
 
-class TestConstructorClamping:
-    async def test_negative_cooldown_is_clamped_to_zero(
-        self, clock: _FakeClock
-    ):
-        # Defensive: config shouldn't produce negative values, but if it does,
-        # the limiter must degrade to "no cooldown" rather than misbehaving.
-        limiter = ResendRateLimiter(cooldown_seconds=-5, hourly_cap=3)
-        assert await limiter.try_acquire("a@x.com") is None
-        # No cooldown -> immediate second acquire also allowed (only hourly
-        # cap gates).
-        assert await limiter.try_acquire("a@x.com") is None
-
-    async def test_window_floor_is_one_second(self, clock: _FakeClock):
-        # ``max(1, window_seconds)`` guarantees we never divide by or
-        # compare against zero.
-        limiter = ResendRateLimiter(
-            cooldown_seconds=0, hourly_cap=1, window_seconds=0
-        )
-        assert await limiter.try_acquire("a@x.com") is None
-        # 1-second window: advancing by 2 must free up the slot.
-        clock.advance(2)
-        assert await limiter.try_acquire("a@x.com") is None

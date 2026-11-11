@@ -101,15 +101,6 @@ class DictationUploaderTest {
     }
 
     @Test
-    fun trimsTheTranscript() = uploaderTest {
-        api.text = "  spaced out \n"
-
-        uploadClosed(3)
-
-        assertEquals(listOf("done spaced out"), listener.events)
-    }
-
-    @Test
     fun retriesALostRequestWithBackoffAndJitter_andReportsLagging() = uploaderTest {
         clock.randomValue = 1.0
         repeat(5) { api.audioReplies += Reply.Fail(networkError()) }
@@ -188,18 +179,6 @@ class DictationUploaderTest {
             api.log,
         )
         assertEquals(listOf("done hello world"), listener.events)
-    }
-
-    @Test
-    fun resendsFromTheExpectedSeqWhenFinishReportsAGap() = uploaderTest {
-        api.finishReplies += Reply.Fail(refusal(409, VoiceCodes.SEQ_GAP, expectedSeq = 1))
-
-        uploadClosed(8)
-
-        assertEquals(
-            listOf("create", "audio d1#0", "audio d1#1", "finish d1@1", "audio d1#1", "finish d1@1"),
-            api.log,
-        )
     }
 
     @Test

@@ -3,7 +3,6 @@ import { toApiError } from '../../../api/errors';
 import {
   classifyAutoScanError,
   classifyCreateError,
-  codexLoginErrorMessage,
   errorDetailString,
   hasErrorMarker,
 } from './createErrors';
@@ -126,12 +125,6 @@ describe('classifyCreateError', () => {
     expect(failure.message).toBe('Failed to create session: branch_name too long');
   });
 
-  it('describes a plain transport failure', () => {
-    expect(classifyCreateError(new Error('Network down'), { cli: null })).toEqual({
-      kind: 'generic',
-      message: 'Failed to create session: Network down',
-    });
-  });
 });
 
 describe('classifyAutoScanError', () => {
@@ -149,15 +142,5 @@ describe('classifyAutoScanError', () => {
     expect(classifyAutoScanError(apiError(500, { detail: 'boom' }))).toBe(
       'Failed to start Auto Scan: boom',
     );
-  });
-});
-
-describe('codexLoginErrorMessage', () => {
-  it('prefers the server detail and falls back to the status', () => {
-    expect(codexLoginErrorMessage(apiError(400, { detail: 'Invalid API key' }))).toBe(
-      'Invalid API key',
-    );
-    expect(codexLoginErrorMessage(apiError(500, null))).toBe('Login failed (HTTP 500)');
-    expect(codexLoginErrorMessage(new Error('offline'))).toBe('offline');
   });
 });

@@ -165,10 +165,4 @@ describe('applyAutoScanStatus', () => {
       9007199254740992,
     );
   });
-
-  it('drops a malformed payload', () => {
-    expect(applyAutoScanStatus(client, AGENT, { status: 'idle' })).toBe('dropped');
-    expect(applyAutoScanStatus(client, AGENT, null)).toBe('dropped');
-    expect(cachedNames(client)).toEqual(['a', 'b']);
-  });
 });

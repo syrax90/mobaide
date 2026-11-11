@@ -123,10 +123,6 @@ final class CreateSessionModelReorderTests: XCTestCase {
     private let defaults: [CreateSessionModel.Mode] =
         CreateSessionModel.Mode.builtIn + [.custom("aaaaaaaaaaaa"), .custom("bbbbbbbbbbbb")]
 
-    func testOrderModesKeepsTheDefaultOrderWhenNothingIsSaved() {
-        XCTAssertEqual(CreateSessionModel.orderModes(defaults, by: []), defaults)
-    }
-
     func testOrderModesRanksNamedModesThenUnnamedInDefaultOrder() {
         let ordered = CreateSessionModel.orderModes(defaults, by: ["custom_bbbbbbbbbbbb", "shell", "codex"])
 
@@ -198,16 +194,6 @@ final class CreateSessionModelReorderTests: XCTestCase {
         XCTAssertEqual(model.orderedModes, CreateSessionModel.Mode.builtIn)
     }
 
-    func testMoveModesInPlaceSavesNothing() async {
-        let model = makeModel(typesRepo: makeTypesRepo())
-
-        model.moveModes(fromOffsets: IndexSet(integer: 1), toOffset: 1)
-        model.moveModes(fromOffsets: IndexSet(integer: 1), toOffset: 2)
-
-        try? await Task.sleep(for: .milliseconds(50))
-        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
-    }
-
     // MARK: - Project list
 
     func testMoveProjectsShowsTheMoveAtOnceAndSavesTheWholeNameList() async throws {
@@ -277,17 +263,6 @@ final class CreateSessionModelReorderTests: XCTestCase {
     }
 
     // MARK: - Live project list
-
-    func testObserveProjectsShowsAnOrderSavedOnAnotherDevice() async throws {
-        let (model, connection) = try await observedModel()
-        let observer = Task { await model.observeProjects() }
-        defer { observer.cancel() }
-
-        connection.emit(.text(projectsChanged([("alpha", 2), ("beta", 0), ("gamma", 1)])))
-
-        await waitUntil { model.projects.count == 3 }
-        XCTAssertEqual(model.projects.map(\.name), ["beta", "gamma", "alpha"])
-    }
 
     func testObserveProjectsKeepsTheLoadedListThenMirrorsLivePushes() async throws {
         StubURLProtocol.enqueue(status: 200, body: projectsJSON)

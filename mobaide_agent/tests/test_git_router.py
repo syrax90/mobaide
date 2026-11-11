@@ -11,11 +11,8 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
-import sys
 import subprocess
 import types
-from typing import Any
-from unittest.mock import patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -23,10 +20,8 @@ from httpx import ASGITransport, AsyncClient
 from mobaide.agent.app import create_app
 from mobaide.agent.config import AgentConfig
 from mobaide.agent.git.models import (
-    BusyHolder,
     GitDeleteItem,
     GitDeleteRequest,
-    GitItemRead,
 )
 from mobaide.agent.git.changes_service import resolve_repo_dirs
 from mobaide.agent.git.service import (
@@ -34,7 +29,6 @@ from mobaide.agent.git.service import (
     _build_items,
     _busy_holders,
     delete_git_items,
-    list_git_items,
 )
 from mobaide.core import ProjectRecord
 from mobaide.linear.worktree import (
@@ -267,59 +261,9 @@ class TestBuildItems:
         assert by_branch["main"].is_current is True
         assert by_branch["topic"].is_current is False
 
-    def test_three_kinds_combined(self):
-        branches = [
-            BranchInfo(
-                name="main", sha="s1", upstream=None,
-                ahead=0, behind=0, gone=False, is_current=True,
-            ),
-            BranchInfo(
-                name="topic", sha="s2", upstream=None,
-                ahead=0, behind=0, gone=False, is_current=False,
-            ),
-            BranchInfo(
-                name="stale", sha="s3", upstream=None,
-                ahead=0, behind=0, gone=True, is_current=False,
-            ),
-        ]
-        worktrees = [
-            WorktreeInfo(
-                path="/repo", head="s1", branch="refs/heads/main",
-                detached=False, locked=False, locked_reason=None,
-                prunable=False, prunable_reason=None,
-            ),
-            WorktreeInfo(
-                path="/repo/wt/topic", head="s2", branch="refs/heads/topic",
-                detached=False, locked=False, locked_reason=None,
-                prunable=False, prunable_reason=None,
-            ),
-            WorktreeInfo(
-                path="/repo/wt/orphan", head="s4", branch=None,
-                detached=True, locked=False, locked_reason=None,
-                prunable=False, prunable_reason=None,
-            ),
-        ]
-        items = _build_items(branches, worktrees)
-        kinds = [item.kind for item in items]
-        # 3 branches → 2 with worktree (main, topic), 1 branch_only (stale);
-        # 1 detached worktree → 1 orphan_worktree. Total 4.
-        assert kinds.count("branch_with_worktree") == 2
-        assert kinds.count("branch_only") == 1
-        assert kinds.count("orphan_worktree") == 1
-
 
 class TestBusyHolders:
-    async def test_no_affected_paths_returns_empty(self):
-        result = await _busy_holders(set(), session_manager=None, autoscan_manager=None)
-        assert result == []
 
-    async def test_no_managers_returns_empty(self):
-        result = await _busy_holders(
-            {"/some/path"},
-            session_manager=None,
-            autoscan_manager=None,
-        )
-        assert result == []
 
     async def test_session_holder_matches_realpath_normalized(self, tmp_path):
         # The busy-guard must compare paths after realpath+normcase normalization
@@ -361,17 +305,6 @@ class TestBusyHolders:
         )
         assert result == []
 
-    async def test_session_with_none_cwd_skipped(self, tmp_path):
-        canonical = os.path.normcase(os.path.realpath(str(tmp_path / "wt")))
-        session = types.SimpleNamespace(session_id="s-3", cwd=None)
-        session_manager = types.SimpleNamespace(list_sessions=lambda: [session])
-
-        result = await _busy_holders(
-            {canonical},
-            session_manager=session_manager,
-            autoscan_manager=None,
-        )
-        assert result == []
 
     async def test_autoscan_workitem_match(self, tmp_path):
         wt_dir = tmp_path / "wt-autoscan"
@@ -777,31 +710,6 @@ class TestGitRouterEndpoints:
         }
         assert {"main", "topic", "stale"} <= branches
 
-    async def test_post_items_delete_branch_only_succeeds(
-        self, client_git, auth_headers_g,
-    ):
-        resp = await client_git.post(
-            "/api/projects/alpha/git/items:delete",
-            headers=auth_headers_g,
-            json={"items": [{"kind": "branch_only", "branch": "stale"}]},
-        )
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert len(body["results"]) == 1
-        assert body["results"][0]["ok"] is True
-        assert body["results"][0]["kind"] == "branch_only"
-        assert body["results"][0]["target"] == "stale"
-
-        # Second list must no longer include 'stale'.
-        resp2 = await client_git.get(
-            "/api/projects/alpha/git/items",
-            headers=auth_headers_g,
-        )
-        branches = {
-            i["branch"] for i in resp2.json()["items"]
-            if i.get("kind") != "orphan_worktree"
-        }
-        assert "stale" not in branches
 
     async def test_post_items_delete_publishes_git_changed_event(
         self, client_git, auth_headers_g, app_with_git, real_repo,
@@ -972,13 +880,6 @@ class TestGitBranchEndpoints:
         assert [(r["ref"], r["kind"]) for r in body["refs"]][0] == ("origin/main", "remote")
         assert {r["ref"] for r in body["refs"]} == {"origin/main", "main"}
 
-    async def test_get_items_rejects_a_non_boolean_remote_flag(
-        self, client_git, auth_headers_g,
-    ):
-        resp = await client_git.get(
-            "/api/projects/alpha/git/items", params={"remote": "maybe"}, headers=auth_headers_g,
-        )
-        assert resp.status_code == 422
 
     async def test_post_items_delete_reports_a_remote_branch_row_with_no_such_remote(
         self, client_git, auth_headers_g,

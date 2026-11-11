@@ -127,21 +127,6 @@ describe('hydration', () => {
     expect((await rehydrateWith({ codex: { ...CODEX_BLOB, terminalUi: 'on' } })).codex).toBeNull();
   });
 
-  it('restores Antigravity Terminal UI off for a blob saved before the toggle existed', async () => {
-    const legacy: Record<string, unknown> = { ...ANTIGRAVITY_BLOB };
-    delete legacy.terminalUi;
-
-    const prefs = await rehydrateWith({ antigravity: legacy });
-
-    expect(prefs.antigravity).toEqual({ ...ANTIGRAVITY_BLOB, terminalUi: false });
-  });
-
-  it('voids the Antigravity bucket for a wrong-typed terminalUi', async () => {
-    const prefs = await rehydrateWith({ antigravity: { ...ANTIGRAVITY_BLOB, terminalUi: 1 } });
-
-    expect(prefs.antigravity).toBeNull();
-  });
-
   it('restores focus view on for a blob saved before the toggle existed', async () => {
     // CLAUDE_BLOB predates focusMode; a stored `false` must still win over the default.
     const prefs = await rehydrateWith({

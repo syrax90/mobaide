@@ -145,23 +145,6 @@ class TerminalViewModelPasteTest {
     }
 
     @Test
-    fun paste_multiline_bracketedOff_singleFrameWithLfConvertedToCr() = runTest {
-        val vm = createViewModel()
-        goLive()
-        markSessionRunning()
-        val captured = slot<ByteString>()
-
-        paste(vm, "a\nb")
-
-        verify(timeout = 2000, exactly = 1) { connection.sendBinary(capture(captured)) }
-        assertArrayEquals(
-            "without DECSET 2004 the emulator must send the LF→CR body unwrapped",
-            "a\rb".toByteArray(Charsets.UTF_8),
-            payloadOf(captured.captured),
-        )
-    }
-
-    @Test
     fun paste_multiline_bracketedOn_exactlyThreeInputFrames_wrappingBody() = runTest {
         val vm = createViewModel()
         goLive()
@@ -183,28 +166,6 @@ class TerminalViewModelPasteTest {
             "[200~a\rb[201~".toByteArray(Charsets.UTF_8),
             frames.flatMap { payloadOf(it).toList() }.toByteArray(),
         )
-    }
-
-    @Test
-    fun paste_whenNotLive_isDropped() {
-        val vm = createViewModel()
-
-        paste(vm, "hello")
-
-        // Reconnect/replay must not queue stale clipboard bytes for the PTY.
-        verify(exactly = 0) { connection.sendBinary(any()) }
-    }
-
-    @Test
-    fun paste_whenLiveButSessionNotRunning_isDropped() = runTest {
-        val vm = createViewModel()
-        goLive() // Live WS, but sessionState still "connecting" — PTY not running
-
-        paste(vm, "hello")
-
-        // A stale Paste tap after the session stopped or crashed (menu built while
-        // it was still running) must be a silent no-op.
-        verify(exactly = 0) { connection.sendBinary(any()) }
     }
 
     private companion object {

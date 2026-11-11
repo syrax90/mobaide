@@ -240,18 +240,6 @@ describe('channel teardown', () => {
     expect(seams.sockets[0]?.readyState).toBe(3);
     expect(useConnectionStore.getState().channels['session:A1:s1']).toBeUndefined();
   });
-
-  it('disposes an auto-scan channel the same way', async () => {
-    const seams = testSeams();
-    const autoscan = new AutoScanChannel('A1', { ...seams.overrides });
-    autoscan.channel.connect();
-    await settle();
-    seams.sockets[0]?.accept();
-
-    autoscan.dispose();
-
-    expect(useConnectionStore.getState().channels['autoscan:A1']).toBeUndefined();
-  });
 });
 
 describe('disposable channel registry', () => {

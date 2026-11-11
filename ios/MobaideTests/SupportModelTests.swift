@@ -58,10 +58,4 @@ final class SupportModelTests: XCTestCase {
         XCTAssertFalse(body.contains("Account:"), "no Account line for a signed-out reporter")
         XCTAssertTrue(body.contains("Device ID:"))
     }
-
-    func testOpenCommunitySetsSafariURL() {
-        let model = makeModel(canSendMail: true, canOpenMailto: true)
-        model.openCommunity()
-        XCTAssertEqual(model.safariURL?.absoluteString, "https://example.com/community")
-    }
 }

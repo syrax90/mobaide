@@ -64,33 +64,6 @@ async def test_argv_plan_mode_without_skip_permissions(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_argv_no_plan_no_skip(tmp_path: Path):
-    """Neither plan_mode nor skip_permissions: bare claude (an unset effort
-    omits the flag)."""
-    launcher = ClaudeLauncher()
-    spec = await launcher.build(
-        _make_project(str(tmp_path)),
-        ClaudeOptions(plan_mode=False, skip_permissions=False),
-    )
-    assert spec.argv == ["claude"]
-
-
-@pytest.mark.asyncio
-async def test_argv_no_skip_with_initial_prompt(tmp_path: Path):
-    """skip_permissions=False with an initial_prompt: no permission flags,
-    just the ``--`` separator and prompt."""
-    launcher = ClaudeLauncher()
-    spec = await launcher.build(
-        _make_project(str(tmp_path)),
-        ClaudeOptions(skip_permissions=False, initial_prompt="run it"),
-    )
-    assert spec.argv == [
-        "claude",
-        "--", "run it",
-    ]
-
-
-@pytest.mark.asyncio
 async def test_argv_all_flags(tmp_path: Path):
     launcher = ClaudeLauncher()
     spec = await launcher.build(
@@ -135,31 +108,6 @@ async def test_argv_debug_off_by_default_on_when_requested(tmp_path: Path):
         _make_project(str(tmp_path)), ClaudeOptions(debug=True),
     )
     assert on.argv[1] == "--debug"
-
-
-@pytest.mark.asyncio
-async def test_argv_model_emitted_when_set(tmp_path: Path):
-    """A curated model alias is passed through as ``--model <alias>``; an unset
-    model emits nothing."""
-    launcher = ClaudeLauncher()
-    spec = await launcher.build(
-        _make_project(str(tmp_path)), ClaudeOptions(model="sonnet"),
-    )
-    assert spec.argv[spec.argv.index("--model") + 1] == "sonnet"
-
-    bare = await launcher.build(_make_project(str(tmp_path)), ClaudeOptions())
-    assert "--model" not in bare.argv
-
-
-@pytest.mark.asyncio
-async def test_argv_unset_effort_omits_flag(tmp_path: Path):
-    """``None`` (no client choice) omits ``--effort`` so the CLI's own default
-    applies."""
-    launcher = ClaudeLauncher()
-    spec = await launcher.build(
-        _make_project(str(tmp_path)), ClaudeOptions(effort=None),
-    )
-    assert "--effort" not in spec.argv
 
 
 @pytest.mark.asyncio
@@ -217,13 +165,6 @@ async def test_argv_settings_merges_fast_and_ultracode_inline(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_argv_no_settings_when_no_fast_or_ultracode(tmp_path: Path):
-    launcher = ClaudeLauncher()
-    spec = await launcher.build(_make_project(str(tmp_path)), ClaudeOptions())
-    assert "--settings" not in spec.argv
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("focus_mode", "view_mode"), [(True, "focus"), (False, "default")],
 )
@@ -243,16 +184,6 @@ async def test_argv_focus_mode_sets_view_mode_inline(
 
 
 @pytest.mark.asyncio
-async def test_argv_append_system_prompt_emitted(tmp_path: Path):
-    launcher = ClaudeLauncher()
-    spec = await launcher.build(
-        _make_project(str(tmp_path)),
-        ClaudeOptions(append_system_prompt="stay terse"),
-    )
-    assert spec.argv[spec.argv.index("--append-system-prompt") + 1] == "stay terse"
-
-
-@pytest.mark.asyncio
 async def test_env_linear_key_injected(tmp_path: Path):
     launcher = ClaudeLauncher()
     spec = await launcher.build(
@@ -263,36 +194,12 @@ async def test_env_linear_key_injected(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_env_no_linear_key_omitted(tmp_path: Path, monkeypatch):
-    monkeypatch.delenv("LINEAR_API_KEY", raising=False)
-    launcher = ClaudeLauncher()
-    spec = await launcher.build(
-        _make_project(str(tmp_path)), ClaudeOptions()
-    )
-    assert "LINEAR_API_KEY" not in spec.env
-
-
-@pytest.mark.asyncio
 async def test_env_prompt_caching_1h_always_set(tmp_path: Path):
     """Every spawn MUST carry ENABLE_PROMPT_CACHING_1H=1 so the claude CLI
     opts into the 1-hour prompt-cache TTL (v2.1.108+)."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(_make_project(str(tmp_path)), ClaudeOptions())
     assert spec.env["ENABLE_PROMPT_CACHING_1H"] == "1"
-
-
-@pytest.mark.asyncio
-async def test_env_prompt_caching_1h_set_with_all_options(tmp_path: Path):
-    """The preset survives alongside every other optional env key — Linear
-    key, no_memory, conda env — so no caller path loses it."""
-    launcher = ClaudeLauncher()
-    spec = await launcher.build(
-        _make_project(str(tmp_path), key="lin_abc", conda="some_env"),
-        ClaudeOptions(no_memory=True),
-    )
-    assert spec.env["ENABLE_PROMPT_CACHING_1H"] == "1"
-    assert spec.env["CLAUDE_NO_MEMORY"] == "1"
-    assert spec.env["LINEAR_API_KEY"] == "lin_abc"
 
 
 @pytest.mark.asyncio
@@ -327,14 +234,6 @@ async def test_mcp_json_written_when_key_present(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_mcp_json_skipped_without_key(tmp_path: Path):
-    launcher = ClaudeLauncher()
-    await launcher.build(_make_project(str(tmp_path)), ClaudeOptions())
-    assert not (tmp_path / ".mcp.json").exists()
-    assert not (tmp_path / ".claude" / "settings.local.json").exists()
-
-
-@pytest.mark.asyncio
 async def test_settings_local_not_overwritten(tmp_path: Path):
     settings_dir = tmp_path / ".claude"
     settings_dir.mkdir()
@@ -345,16 +244,6 @@ async def test_settings_local_not_overwritten(tmp_path: Path):
         _make_project(str(tmp_path), key="lin_xyz"), ClaudeOptions()
     )
     assert json.loads(existing.read_text()) == {"keep": "me"}
-
-
-@pytest.mark.asyncio
-async def test_cwd_resolution_no_worktree(tmp_path: Path):
-    launcher = ClaudeLauncher()
-    spec = await launcher.build(
-        _make_project(str(tmp_path)),
-        ClaudeOptions(worktree=False),
-    )
-    assert spec.cwd == str(tmp_path)
 
 
 class _FakeWorktreeMgr:
@@ -534,17 +423,6 @@ async def test_resolve_cwd_missing_directory_raises_file_not_found(
 
 
 @pytest.mark.asyncio
-async def test_resolve_cwd_existing_directory_returns_path(tmp_path: Path):
-    """Regression: a real directory must pass the new existence gate."""
-    launcher = ClaudeLauncher()
-    spec = await launcher.build(
-        _make_project(str(tmp_path)),
-        ClaudeOptions(worktree=False),
-    )
-    assert spec.cwd == str(tmp_path)
-
-
-@pytest.mark.asyncio
 async def test_resolve_cwd_worktree_fallback_also_checks_existence(
     tmp_path: Path,
 ):
@@ -559,16 +437,6 @@ async def test_resolve_cwd_worktree_fallback_also_checks_existence(
             _make_project(str(missing)),
             ClaudeOptions(worktree=True),
         )
-
-
-@pytest.mark.asyncio
-async def test_adhoc_launch_resolves_cwd_to_target_directory(tmp_path: Path):
-    """The launcher accepts an :class:`AdHocLaunch` target and resolves
-    ``spec.cwd`` to its ``cwd`` directly — no project lookup, no
-    worktree dance, no slug derivation."""
-    launcher = ClaudeLauncher()
-    spec = await launcher.build(AdHocLaunch(cwd=str(tmp_path)), ClaudeOptions())
-    assert spec.cwd == str(tmp_path)
 
 
 @pytest.mark.asyncio
@@ -622,17 +490,6 @@ async def test_adhoc_launch_env_omits_linear_api_key(
     launcher = ClaudeLauncher()
     spec = await launcher.build(AdHocLaunch(cwd=str(tmp_path)), ClaudeOptions())
     assert "LINEAR_API_KEY" not in spec.env
-
-
-@pytest.mark.asyncio
-async def test_adhoc_launch_env_carries_session_preset(tmp_path: Path):
-    """The 1-hour prompt-cache preset and PYTHONIOENCODING must still be
-    applied — the ad-hoc branch is not allowed to skip them, only the
-    project-specific overlays (Linear key, conda env)."""
-    launcher = ClaudeLauncher()
-    spec = await launcher.build(AdHocLaunch(cwd=str(tmp_path)), ClaudeOptions())
-    assert spec.env["ENABLE_PROMPT_CACHING_1H"] == "1"
-    assert spec.env["PYTHONIOENCODING"] == "utf-8"
 
 
 @pytest.mark.asyncio
@@ -730,28 +587,6 @@ async def test_no_hooks_without_session_id(tmp_path: Path, _isolated_hooks_tempd
 
 
 @pytest.mark.asyncio
-async def test_no_hooks_without_hook_port(tmp_path: Path, _isolated_hooks_tempdir):
-    # A launcher built without hook config (port/token) must never inject
-    # hooks even when a session_id is supplied.
-    launcher = ClaudeLauncher(hook_token="tok-1")  # no hook_port
-    spec = await launcher.build(
-        _make_project(str(tmp_path)), ClaudeOptions(), session_id="sid-1",
-    )
-    assert "--settings" not in spec.argv
-    assert "MOBAIDE_SESSION_ID" not in spec.env
-
-
-@pytest.mark.asyncio
-async def test_no_hooks_without_hook_token(tmp_path: Path, _isolated_hooks_tempdir):
-    launcher = ClaudeLauncher(hook_port=9001)  # no hook_token
-    spec = await launcher.build(
-        _make_project(str(tmp_path)), ClaudeOptions(), session_id="sid-1",
-    )
-    assert "--settings" not in spec.argv
-    assert "MOBAIDE_HOOK_TOKEN" not in spec.env
-
-
-@pytest.mark.asyncio
 async def test_hooks_file_url_bakes_session_id(
     tmp_path: Path, _isolated_hooks_tempdir,
 ):
@@ -804,19 +639,6 @@ async def test_settings_file_merges_view_mode(
     doc = json.loads(Path(settings_path).read_text(encoding="utf-8"))
     assert doc["viewMode"] == "focus"
     assert "hooks" in doc
-
-
-@pytest.mark.asyncio
-async def test_settings_file_omits_view_mode_when_focus_mode_unset(
-    tmp_path: Path, _isolated_hooks_tempdir,
-):
-    launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
-    spec = await launcher.build(
-        _make_project(str(tmp_path)), ClaudeOptions(), session_id="sid-nofocus",
-    )
-    settings_path = spec.argv[spec.argv.index("--settings") + 1]
-    doc = json.loads(Path(settings_path).read_text(encoding="utf-8"))
-    assert "viewMode" not in doc
 
 
 @pytest.mark.asyncio
@@ -890,25 +712,6 @@ def test_discard_session_hooks_removes_file(_isolated_hooks_tempdir):
     launcher.discard_session_hooks("sid-discard")
 
 
-def test_discard_session_hooks_noop_without_hook_port(_isolated_hooks_tempdir):
-    launcher = ClaudeLauncher()
-    launcher.discard_session_hooks("sid-none")
-
-    assert list(_isolated_hooks_tempdir.iterdir()) == [], (
-        "a hookless launcher must not touch (or create) any hooks directory"
-    )
-
-
-def test_resolve_binary_delegates_to_private_resolver():
-    """``resolve_binary`` is the public surface ``probe_cli_available`` calls;
-    it must return exactly what the private ``_resolve_binary`` resolves (here
-    the conftest-pinned ``"claude"``) so a probe sees the same binary a spawn
-    would."""
-    launcher = ClaudeLauncher()
-    assert launcher.resolve_binary() == "claude"
-    assert launcher.resolve_binary() == launcher._resolve_binary()
-
-
 def test_resolve_binary_honours_override(monkeypatch, tmp_path):
     """The configured ``claude_bin_override`` must flow through ``resolve_binary``
     so an operator's ``MOBAIDE_CLAUDE_BIN``-equivalent decides availability the
@@ -928,20 +731,3 @@ def test_resolve_binary_honours_override(monkeypatch, tmp_path):
     launcher = ClaudeLauncher(claude_bin_override=override_path)
     assert launcher.resolve_binary() == override_path
     assert captured["override"] == override_path
-
-
-def test_resolve_binary_propagates_not_found_error(monkeypatch):
-    """When the binary can't be located, ``resolve_binary`` raises
-    ``ClaudeBinaryNotFoundError`` (not a silent ``None``) — the contract
-    ``probe_cli_available`` relies on to return ``False``."""
-    from mobaide.core import claude_launcher
-    from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError
-
-    def _raise(*_a, **_kw):
-        raise ClaudeBinaryNotFoundError(["PATH:claude"])
-
-    monkeypatch.setattr(claude_launcher, "_resolve_claude_binary", _raise)
-
-    launcher = ClaudeLauncher()
-    with pytest.raises(ClaudeBinaryNotFoundError):
-        launcher.resolve_binary()

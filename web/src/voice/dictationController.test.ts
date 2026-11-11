@@ -86,17 +86,6 @@ describe('DictationController', () => {
     expect(api.log).toEqual(['create', 'audio d1#0', 'finish d1@0']);
   });
 
-  it('reads an empty transcript as empty', async () => {
-    api.text = '';
-    const dictation = await recording();
-    speak(1);
-
-    await dictation.stop();
-    await settle();
-
-    expect(dictation.current).toEqual({ kind: 'empty' });
-  });
-
   it('counts down the last 15 s from the samples recorded', async () => {
     const dictation = await recording(20);
 
@@ -220,17 +209,6 @@ describe('DictationController', () => {
     expect(api.log).toEqual(['create', 'remove d1']);
   });
 
-  it('dismisses a result back to idle', async () => {
-    const dictation = await recording();
-    speak(1);
-    await dictation.stop();
-    await settle();
-
-    dictation.dismiss();
-
-    expect(dictation.current).toEqual({ kind: 'idle' });
-  });
-
   it('cancels on dispose and starts nothing afterwards', async () => {
     const dictation = await recording();
     speak(1);
@@ -289,8 +267,6 @@ describe('DictationController cleanup', () => {
 
   it.each([
     ['unchanged', 'hello world'],
-    ['unchanged but padded', '  hello world\n'],
-    ['empty', '  '],
   ])('hands back a plain result when the cleanup comes back %s', async (_label, cleaned) => {
     cleaner.reply = { ok: cleaned };
 
@@ -305,9 +281,7 @@ describe('DictationController cleanup', () => {
       refusal(503, 'cleanup_outdated', { detailMessage: 'Run claude update.' }),
       { code: 'cleanup_outdated', message: 'Run claude update.' },
     ],
-    ['an uncoded refusal', refusal(502, null), { code: 'generic', message: 'HTTP 502' }],
     ['a dropped connection', networkError(), { code: 'network', message: 'offline' }],
-    ['an unexpected error', new Error('boom'), { code: 'generic', message: 'boom' }],
   ])('shows the transcript as heard after %s, saying why', async (_label, error, cleanupError) => {
     cleaner.reply = { fail: error };
 

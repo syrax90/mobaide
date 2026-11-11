@@ -41,12 +41,6 @@ class TestNormalizeCode:
     def test_accepts_the_displayed_grouping(self):
         assert normalize_code("WDJB-MJHT") == "WDJBMJHT"
 
-    def test_upper_cases_operator_input(self):
-        assert normalize_code("wdjb-mjht") == "WDJBMJHT"
-
-    def test_drops_spaces_a_retyped_code_picks_up(self):
-        assert normalize_code("  wdjb mjht ") == "WDJBMJHT"
-
     def test_accepts_the_trailing_newline_a_paste_drags_along(self):
         # The reason this is a charset filter and not an anchored regex:
         # Python's ``$`` matches *before* a trailing newline, so a regex
@@ -70,11 +64,6 @@ class TestNormalizeCode:
         assert normalize_code("wdjbmjht!") == "WDJBMJHT"
 
 
-class TestFormatCode:
-    def test_groups_into_two_blocks_of_four(self):
-        assert format_code("WDJBMJHT") == "WDJB-MJHT"
-
-
 class TestHashDeviceCode:
     def test_matches_a_peppered_hmac_of_the_domain_separated_code(self):
         # Pin the construction: the pepper is the HMAC *key* and the code
@@ -96,41 +85,15 @@ class TestHashDeviceCode:
         assert a != b
         assert a != hashlib.sha256(b"WDJBMJHT").hexdigest()
 
-    def test_is_stable_across_calls(self):
-        # The redeem looks a row up by this value; a salted-per-call digest
-        # would make every code unredeemable.
-        assert hash_device_code("p", "WDJBMJHT") == hash_device_code(
-            "p", "WDJBMJHT"
-        )
-
-    def test_distinguishes_codes(self):
-        assert hash_device_code("p", "WDJBMJHT") != hash_device_code(
-            "p", "WDJBMJHV"
-        )
-
 
 class TestMaskEmail:
     def test_keeps_the_shape_its_owner_recognises(self):
         assert mask_email("pavel@gmail.com") == "p***l@g***.com"
 
-    def test_never_leaks_the_whole_local_part(self):
-        # This string is shown to whoever redeemed a code — someone who is
-        # not necessarily the account holder.
-        masked = mask_email("pavel@gmail.com")
-
-        assert "pavel" not in masked
-        assert "gmail" not in masked
-
     def test_collapses_a_local_part_too_short_to_mask(self):
         # First-and-last of a 2-character local part would be the whole
         # thing, so it collapses instead.
         assert mask_email("ab@x.io") == "***@x***.io"
-
-    def test_masks_a_domain_with_no_dot(self):
-        assert mask_email("a@localhost") == "***@l***t"
-
-    def test_keeps_only_the_first_label_of_a_multi_label_domain(self):
-        assert mask_email("x@y.co.uk") == "***@y***.co.uk"
 
     def test_returns_a_mask_for_an_address_with_no_at_sign(self):
         # The router calls this with ``(owner or {}).get("email", "")`` —

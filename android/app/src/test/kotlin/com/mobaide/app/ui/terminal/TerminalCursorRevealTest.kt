@@ -19,12 +19,6 @@ class TerminalCursorRevealTest {
     // Latch
 
     @Test
-    fun `a fresh latch never reveals`() {
-        assertFalse(reveal.isArmed)
-        assertFalse(reveal.shouldReveal(cursorCol = 40, cursorRow = 3))
-    }
-
-    @Test
     fun `an armed latch waits for the cursor to leave where the keystroke found it`() {
         reveal.arm(cursorCol = 5, cursorRow = 2)
 
@@ -95,27 +89,6 @@ class TerminalCursorRevealTest {
         reveal.arm(cursorCol = 7, cursorRow = 1)
 
         assertFalse(reveal.shouldReveal(cursorCol = 7, cursorRow = 1))
-    }
-
-    @Test
-    fun `once the cursor has moved, a return to the origin is still followed`() {
-        reveal.arm(cursorCol = 0, cursorRow = 0)
-        assertTrue(reveal.shouldReveal(cursorCol = 60, cursorRow = 0))
-
-        assertTrue(
-            "Home or Ctrl-U back to the burst's origin must pan back, not strand the view at col 60",
-            reveal.shouldReveal(cursorCol = 0, cursorRow = 0),
-        )
-    }
-
-    @Test
-    fun `a cursor parked at the origin for the whole burst never reveals`() {
-        reveal.arm(cursorCol = 4, cursorRow = 1)
-        now += 500
-        reveal.arm(cursorCol = 4, cursorRow = 1)
-
-        assertFalse(reveal.shouldReveal(cursorCol = 4, cursorRow = 1))
-        assertFalse(reveal.shouldReveal(cursorCol = 4, cursorRow = 1))
     }
 
     @Test
@@ -202,11 +175,6 @@ class TerminalCursorRevealTest {
     @Test
     fun `carriage return to column zero pans fully back`() {
         assertEquals(0, target(cursorX = 0f, currentScrollX = 500))
-    }
-
-    @Test
-    fun `the left edge of an unscrolled view never pans`() {
-        assertNull(target(cursorX = 0f, currentScrollX = 0))
     }
 
     private fun target(

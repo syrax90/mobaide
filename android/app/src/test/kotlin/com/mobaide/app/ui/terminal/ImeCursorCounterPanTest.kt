@@ -125,36 +125,12 @@ class ImeCursorCounterPanTest {
         composeRule.onNodeWithTag(tag).fetchSemanticsNode().positionInRoot.y
 
     @Test
-    fun imeHidden_midAnchor_contentIsNotCounterShifted() {
-        setCounterPannedContent(ime = WindowInsets(bottom = 0)) { ANCHOR_MID_PX }
-
-        assertEquals(
-            "With the IME hidden the counter-shift must clamp to the zero pan — a mid-screen cursor must not drag the resting terminal downward",
-            topInRootPx(HOST_TAG),
-            topInRootPx(PANNED_TAG),
-            0f,
-        )
-    }
-
-    @Test
     fun imeShorterThanSystemBars_contentIsNotCounterShifted() {
         setCounterPannedContent(ime = WindowInsets(bottom = NAV_BAR_PX / 2)) { ANCHOR_MID_PX }
 
         assertEquals(
             "When the IME inset is smaller than the system bars (dismiss-animation tail) the pan must coerce to zero before it reaches coerceIn — an unclamped negative pan would feed coerceIn an empty range",
             topInRootPx(HOST_TAG),
-            topInRootPx(PANNED_TAG),
-            0f,
-        )
-    }
-
-    @Test
-    fun defaultMaxAnchor_stacked_keepsFullUpwardPan() {
-        setStackedContent(ime = WindowInsets(bottom = IME_PX)) { Int.MAX_VALUE }
-
-        assertEquals(
-            "Before any cursor report (Int.MAX_VALUE sentinel) the counter-shift must be zero, preserving the plain full ime − systemBars pan",
-            topInRootPx(HOST_TAG) - PAN_PX,
             topInRootPx(PANNED_TAG),
             0f,
         )

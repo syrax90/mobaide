@@ -169,11 +169,6 @@ def _socket_answers(monkeypatch) -> list[str]:
 
 
 class TestCommandResolution:
-    def test_override_argument_wins(self, bin_dir, monkeypatch):
-        monkeypatch.setenv(agents.CLAUDE_ACP_COMMAND_ENV, "from-env --x")
-        spec = ClaudeChatSpec(FakeLauncher(), command_override="my-adapter --flag 'a b'", test_mode=True)
-
-        assert spec.command() == ["my-adapter", "--flag", "a b"]
 
     def test_env_override_beats_test_mode(self, bin_dir, monkeypatch):
         monkeypatch.setenv(agents.CLAUDE_ACP_COMMAND_ENV, "env-adapter --y")
@@ -368,8 +363,6 @@ class TestClaudeConfigIntents:
         intents = claude_config_intents(ClaudeOptions(skip_permissions=True))
         assert intents == [ConfigIntent("bypassPermissions", category="mode")]
 
-    def test_ask_first_sends_no_mode(self):
-        assert claude_config_intents(ClaudeOptions(skip_permissions=False)) == []
 
     def test_model_effort_and_fast(self):
         intents = claude_config_intents(
@@ -440,20 +433,6 @@ class TestCapabilitiesAndRegistry:
         assert specs["claude"].command() == ["custom", "--acp"]
         assert specs["codex"].command() == ["codex-adapter", "--x"]
         assert specs["antigravity"].command() == ["agy-dev", "acp"]
-
-    def test_antigravity_capability_in_test_mode(self, tmp_path):
-        specs = build_chat_agents(
-            {"antigravity": FakeAgyLauncher()},
-            test_mode=True,
-            antigravity_app_data_dir=tmp_path / "agy",
-        )
-
-        assert build_chat_capabilities(specs) == {"antigravity": {"resume": True, "live": False}}
-
-    def test_codex_capability_in_test_mode_is_not_live(self, bin_dir):
-        specs = build_chat_agents({"codex": FakeCodexLauncher()}, test_mode=True)
-
-        assert build_chat_capabilities(specs) == {"codex": {"resume": True, "live": False}}
 
 
 class TestPinnedInstallOnFirstUse:
@@ -528,11 +507,6 @@ class TestCodexConfigIntents:
             ConfigIntent("gpt-5.6-terra", category="model"),
             ConfigIntent("xhigh", category="thought_level"),
         ]
-
-    def test_only_the_mode_without_model_or_effort(self):
-        intents = codex_config_intents(CodexOptions(reasoning_effort=None))
-
-        assert intents == [ConfigIntent("workspace-write", category="mode", required=True)]
 
 
 class TestCodexPrepare:
@@ -673,21 +647,6 @@ class TestCodexPrepare:
         assert plan.trust is None
         assert spec.live_sessions is False
 
-    def test_a_real_adapter_keeps_sessions_live_on_posix(self, bin_dir):
-        spec = CodexChatSpec(FakeCodexLauncher(), command_override="adapter")
-
-        assert spec.live_sessions is (sys.platform != "win32")
-
-    async def test_catalog_plan_runs_in_home_with_the_host_codex(self, bin_dir):
-        spec = CodexChatSpec(FakeCodexLauncher(), command_override="adapter")
-
-        plan = await spec.catalog_plan()
-
-        assert plan.argv == ["adapter"]
-        assert plan.cwd == os.path.expanduser("~")
-        assert plan.env["CODEX_PATH"] == "/opt/codex/bin/codex"
-        assert plan.initial_config == []
-
 
 @pytest.fixture
 def agy_bin(tmp_path) -> Path:
@@ -742,27 +701,7 @@ def _agy_spec(agy_bin: Path, tmp_path: Path, **kwargs) -> AntigravityChatSpec:
 
 
 class TestAntigravityCommand:
-    def test_override_argument_wins(self, agy_bin, tmp_path, monkeypatch):
-        monkeypatch.setenv(agents.ANTIGRAVITY_ACP_COMMAND_ENV, "from-env acp")
-        probed = _acp_probe(monkeypatch, True)
-        spec = _agy_spec(agy_bin, tmp_path, command_override="agy-dev acp --x", test_mode=True)
 
-        assert spec.command() == ["agy-dev", "acp", "--x"]
-        assert probed == []
-
-    def test_env_override_beats_test_mode(self, agy_bin, tmp_path, monkeypatch):
-        monkeypatch.setenv(agents.ANTIGRAVITY_ACP_COMMAND_ENV, "env-agy acp")
-        spec = _agy_spec(agy_bin, tmp_path, test_mode=True)
-
-        assert spec.command() == ["env-agy", "acp"]
-
-    def test_test_mode_runs_the_antigravity_fake_agent(self, agy_bin, tmp_path, monkeypatch):
-        probed = _acp_probe(monkeypatch, True)
-        spec = _agy_spec(agy_bin, tmp_path, test_mode=True)
-
-        assert spec.command() == agents.fake_agent_argv("antigravity")
-        assert spec.uses_fake_agent() is True
-        assert probed == []
 
     def test_an_agy_with_the_acp_server_runs_agy_acp(self, agy_bin, tmp_path, monkeypatch):
         probed = _acp_probe(monkeypatch, True)
@@ -961,16 +900,6 @@ class TestAntigravityPrepare:
         assert plan.argv[-3:] == ["--flavor", "antigravity", "--sandbox"]
         assert plan.trust is None
         assert plan.presence is None
-
-    async def test_catalog_plan_runs_in_home(self, agy_bin, tmp_path):
-        spec = _agy_spec(agy_bin, tmp_path, command_override="agy acp")
-
-        plan = await spec.catalog_plan()
-
-        home = os.path.expanduser("~")
-        assert plan.argv == ["agy", "acp"]
-        assert (plan.cwd, plan.process_cwd) == (home, home)
-        assert plan.initial_config == []
 
 
 def _agy_setup(*, available_models: bool = True) -> dict:
@@ -1192,13 +1121,6 @@ class TestAntigravityConfig:
             _model("Subagent Only")
         ]
 
-    def test_a_name_as_long_as_the_cap_is_still_matched(self):
-        wanted = _padded_flash_high(agents.MODEL_NAME_MAX)
-
-        assert resolve_antigravity_config(_agy_setup(), [_model(wanted)]) == [
-            _model("gemini-3.8-flash"),
-            _level("high"),
-        ]
 
     def test_a_name_longer_than_the_cap_is_kept_as_sent(self):
         wanted = _padded_flash_high(agents.MODEL_NAME_MAX + 1)

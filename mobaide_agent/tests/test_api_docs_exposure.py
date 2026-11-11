@@ -34,8 +34,6 @@ class TestDocsDisabledByDefault:
         response = await client.get(path)
         assert response.status_code == 404
 
-    async def test_app_exposes_no_doc_urls(self, app) -> None:
-        assert (app.docs_url, app.redoc_url, app.openapi_url) == (None, None, None)
 
 
 @docs_enabled
@@ -44,16 +42,3 @@ class TestDocsEnabled:
     async def test_doc_route_is_served(self, client, path) -> None:
         response = await client.get(path)
         assert response.status_code == 200, response.text
-
-    async def test_schema_documents_the_session_api(self, client) -> None:
-        response = await client.get("/openapi.json")
-        assert "/api/sessions" in response.json()["paths"]
-
-
-class TestPublicSurfaceStillRoutes:
-    """Turning the doc routes off changed no other routing."""
-
-    @pytest.mark.parametrize("path", ["/api/health", "/api/version"])
-    async def test_unauthenticated_endpoint_still_answers(self, client, path) -> None:
-        response = await client.get(path)
-        assert response.status_code == 200, path

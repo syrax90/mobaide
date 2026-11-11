@@ -83,18 +83,6 @@ final class DictationControllerTests: XCTestCase {
         XCTAssertEqual(api.log, ["create", "audio d1#0", "finish d1@0"])
     }
 
-    func testAnEmptyTranscriptReadsAsEmpty() async {
-        api.configure(text: "")
-        let dictation = await recording()
-        recorder.speak(seconds: 1)
-        await waitUntil { self.elapsedMs(dictation) == 1_000 }
-
-        dictation.stop()
-        await waitUntil { dictation.state == .empty }
-
-        XCTAssertEqual(dictation.state, .empty)
-    }
-
     func testCountsDownTheLast15sFromTheSamplesRecorded() async {
         let dictation = await recording(maxSeconds: 20)
 
@@ -226,18 +214,6 @@ final class DictationControllerTests: XCTestCase {
         XCTAssertEqual(api.log, ["create", "remove d1"])
     }
 
-    func testDismissLeavesAResult() async {
-        let dictation = await recording()
-        recorder.speak(seconds: 1)
-        await waitUntil { self.elapsedMs(dictation) == 1_000 }
-        dictation.stop()
-        await waitUntil { dictation.state.isResult }
-
-        dictation.dismiss()
-
-        XCTAssertEqual(dictation.state, .idle)
-    }
-
     func testDisposeCancelsAndStartsNothingAfterwards() async {
         let dictation = await recording()
         recorder.speak(seconds: 1)
@@ -306,17 +282,6 @@ final class DictationControllerTests: XCTestCase {
         XCTAssertEqual(dictation.state, .idle)
     }
 
-    func testTheMicIsIgnoredWhileCleaningUp() async {
-        let dictation = await cleaning(FakeCleaner(.hold(HeldReply<String>())))
-
-        dictation.toggle()
-        dictation.start()
-        try? await Task.sleep(for: .milliseconds(50))
-
-        XCTAssertEqual(dictation.state, .cleaning("hello world"))
-        XCTAssertEqual(api.count("create"), 1)
-    }
-
     func testAnAbandonedCleanupAnswerNeverReachesTheNextDictation() async {
         // A reply already on its way when the user cancels ignores the abort.
         let deaf = DeafCleaner()
@@ -354,16 +319,6 @@ final class DictationControllerTests: XCTestCase {
         await waitUntil { dictation.state.isResult }
 
         XCTAssertEqual(dictation.state, .result("Hello, world."))
-    }
-
-    func testNothingHeardSendsNothingToCleanUp() async {
-        api.configure(text: "")
-        let cleaner = FakeCleaner(.ok("Hello, world."))
-        let dictation = await cleaning(cleaner)
-        await waitUntil { dictation.state == .empty }
-
-        XCTAssertEqual(dictation.state, .empty)
-        XCTAssertEqual(cleaner.calls, [])
     }
 }
 

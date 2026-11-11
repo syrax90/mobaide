@@ -22,6 +22,7 @@ permissions:
 jobs:
   web-ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -81,12 +82,39 @@ jobs:
         working-directory: web
         run: npm run build
 
-      # Real user flows exist from WEB-03 onward, so Playwright joins the gate.
-      # The specs stub /api/** with page.route — CI has no relay to talk to,
-      # and the point is the client's own routing, guards and forms.
+  # Real user flows exist from WEB-03 onward, so Playwright joins the gate.
+  # The specs stub /api/** with page.route — CI has no relay to talk to,
+  # and the point is the client's own routing, guards and forms. A separate
+  # job so it runs in parallel with the gates above.
+  web-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22"
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Cache the Playwright browser
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}
+
+      # Headless shell only, and no --with-deps: the runner image already has
+      # the libraries Chromium needs (it ships Google Chrome), and the apt step
+      # only added fonts while depending on Ubuntu's mirrors, which made this
+      # step take 10 minutes and fail when they were unreachable.
       - name: Install Playwright browser
         working-directory: web
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --only-shell chromium
 
       - name: End-to-end tests
         working-directory: web

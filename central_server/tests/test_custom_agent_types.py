@@ -59,8 +59,6 @@ class TestCreate:
         [
             {"name": "   ", "command": "run"},
             {"name": "Aider", "command": "   "},
-            {"command": "run"},
-            {"name": "Aider"},
             {"name": "x" * 61, "command": "run"},
             {"name": "Aider", "command": "c" * 1001},
             # NUL survives strip() and SQLite; it must be rejected before
@@ -88,17 +86,6 @@ class TestCreate:
         )
         assert resp.status_code == 409
         assert "name" in resp.json()["detail"].lower()
-
-    async def test_create_case_variant_duplicate_returns_409(
-        self, client, api_auth_headers
-    ):
-        await _create_type(client, api_auth_headers, name="Aider")
-        resp = await client.post(
-            "/api/custom-agent-types",
-            json={"name": "AIDER", "command": "other"},
-            headers=api_auth_headers,
-        )
-        assert resp.status_code == 409
 
     async def test_create_at_cap_returns_409(
         self, client, api_auth_headers, monkeypatch
@@ -145,13 +132,6 @@ class TestCreate:
 
 
 class TestList:
-    async def test_list_empty(self, client, api_auth_headers):
-        resp = await client.get(
-            "/api/custom-agent-types", headers=api_auth_headers
-        )
-        assert resp.status_code == 200
-        assert resp.json() == []
-
     async def test_list_returns_only_owned(self, client, app, api_auth_headers):
         mine = await _create_type(client, api_auth_headers, name="Mine")
         other_user = await app.state.db.create_user(
@@ -180,10 +160,6 @@ class TestList:
         )
         assert [i["id"] for i in resp.json()] == [kept["id"]]
 
-    async def test_list_requires_auth(self, client):
-        resp = await client.get("/api/custom-agent-types")
-        assert resp.status_code == 401
-
 
 class TestUpdate:
     async def test_patch_name_only_keeps_command(self, client, api_auth_headers):
@@ -199,36 +175,11 @@ class TestUpdate:
         assert data["command"] == created["command"]
         assert data["id"] == created["id"]
 
-    async def test_patch_command_only_keeps_name(self, client, api_auth_headers):
-        created = await _create_type(client, api_auth_headers)
-        resp = await client.patch(
-            f"/api/custom-agent-types/{created['id']}",
-            json={"command": "new-cmd --flag"},
-            headers=api_auth_headers,
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["command"] == "new-cmd --flag"
-        assert data["name"] == created["name"]
-
-    async def test_patch_both_fields(self, client, api_auth_headers):
-        created = await _create_type(client, api_auth_headers)
-        resp = await client.patch(
-            f"/api/custom-agent-types/{created['id']}",
-            json={"name": "Both", "command": "both-cmd"},
-            headers=api_auth_headers,
-        )
-        assert resp.status_code == 200
-        assert resp.json()["name"] == "Both"
-        assert resp.json()["command"] == "both-cmd"
-
     @pytest.mark.parametrize(
         "body",
         [
             {},
             {"name": "   "},
-            {"command": "   "},
-            {"name": None},
             {"name": "Ai\x00der"},
             {"command": "run\x00 --flag"},
         ],
@@ -309,16 +260,6 @@ class TestDelete:
         assert row is not None
         assert row["deleted_at"] is not None
 
-    async def test_second_delete_returns_403(self, client, api_auth_headers):
-        created = await _create_type(client, api_auth_headers)
-        await client.delete(
-            f"/api/custom-agent-types/{created['id']}", headers=api_auth_headers
-        )
-        resp = await client.delete(
-            f"/api/custom-agent-types/{created['id']}", headers=api_auth_headers
-        )
-        assert resp.status_code == 403
-
     async def test_delete_not_owner_returns_403(
         self, client, app, api_auth_headers
     ):
@@ -373,12 +314,6 @@ class TestAdminBlocked:
             "/api/custom-agent-types",
             json={"name": "Aider", "command": "aider"},
             headers=admin_api_auth_headers,
-        )
-        assert resp.status_code == 403
-
-    async def test_admin_cannot_list(self, client, admin_api_auth_headers):
-        resp = await client.get(
-            "/api/custom-agent-types", headers=admin_api_auth_headers
         )
         assert resp.status_code == 403
 

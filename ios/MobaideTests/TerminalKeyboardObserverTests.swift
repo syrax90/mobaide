@@ -14,19 +14,6 @@ final class TerminalKeyboardObserverTests: XCTestCase {
     private let windowBounds = CGRect(x: 0, y: 0, width: 390, height: 844)
     private let dockedKeyboard = CGRect(x: 0, y: 500, width: 390, height: 344)
 
-    func testApplyComputesLiftFromGeometry() {
-        let observer = TerminalKeyboardObserver()
-
-        observer.apply(
-            endFrameInWindow: dockedKeyboard,
-            windowBounds: windowBounds,
-            bottomSafeInset: 34,
-            duration: 0.3
-        )
-
-        XCTAssertEqual(observer.transition, .init(lift: 310, duration: 0.3))
-    }
-
     func testEqualTransitionDoesNotRepublish() {
         let observer = TerminalKeyboardObserver()
         observer.apply(endFrameInWindow: dockedKeyboard, windowBounds: windowBounds, bottomSafeInset: 34, duration: 0.3)

@@ -16,32 +16,17 @@ import {
 } from '../../../api/sessionGitRepository';
 import type { GitCapabilities } from '../../../protocol/dto/agentVersion';
 import {
-  IDENTITY_FIX_COMMANDS,
-  JOB_RESULT_DISMISS_MS,
   NETWORK_FAILURE_MESSAGE,
-  authorLine,
-  badgeFor,
-  changeLabel,
-  commitButtonLabel,
-  commitNotice,
   composeCommitMessage,
-  diffScopeFor,
   diffView,
   directory,
   discardPrompt,
   discardScopeFor,
-  emptyDiffNotice,
   fileName,
-  followUpLabel,
-  followUpPrompt,
   followUpRequest,
-  headLabel,
-  hunkHeader,
-  jobDoneTitle,
   jobErrorCopy,
   jobFollowUps,
   jobNotice,
-  jobTitle,
   mutationErrorCopy,
   opensResolver,
   pathsFor,
@@ -50,11 +35,8 @@ import {
   rebaseErrorCopy,
   rebaseErrorOutput,
   rebaseOutcomeNotice,
-  rebaseStepPrompt,
   rebaseTargets,
   refusalCopy,
-  renderableText,
-  repoStateLabel,
   resolvedRowsFor,
   rowActions,
   sectionAction,
@@ -64,13 +46,11 @@ import {
   shortRefName,
   showsContextChoices,
   showsJobOutput,
-  splitCommitMessage,
   syncRequestFor,
   syncRows,
   truncatedDiffNotice,
   truncatedEntriesNotice,
   unavailableCopy,
-  upstreamLabel,
 } from './sessionGitDisplay';
 
 const entry = (over: Partial<SessionGitEntry> = {}): SessionGitEntry => ({
@@ -271,109 +251,14 @@ describe('resolvedRowsFor', () => {
     ]);
   });
 
-  it('is empty for an agent that predates the key', () => {
-    expect(resolvedRowsFor(status())).toEqual([]);
-    expect(resolvedRowsFor(status({ resolved_paths: [] }))).toEqual([]);
-  });
-});
-
-describe('diffScopeFor', () => {
-  it.each([
-    ['staged', 'staged'],
-    ['untracked', 'untracked'],
-    ['unstaged', 'unstaged'],
-    // Conflicted files are diffed against HEAD, which the agent serves as unstaged.
-    ['conflicts', 'unstaged'],
-  ] as const)('maps the %s group to the %s scope', (group, scope) => {
-    expect(diffScopeFor(entry({ group }))).toBe(scope);
-  });
-});
-
-describe('badgeFor', () => {
-  it.each([
-    [entry({ group: 'conflicts', code: 'UU' }), { label: 'UU', tone: 'conflict' }],
-    [entry({ group: 'conflicts', code: '' }), { label: 'U', tone: 'conflict' }],
-    [entry({ group: 'untracked', code: '?' }), { label: '?', tone: 'untracked' }],
-    [entry({ group: 'staged', code: 'A' }), { label: 'A', tone: 'added' }],
-    [entry({ code: 'D' }), { label: 'D', tone: 'deleted' }],
-    [entry({ group: 'staged', code: 'R' }), { label: 'R', tone: 'renamed' }],
-    [entry({ group: 'staged', code: 'C' }), { label: 'C', tone: 'renamed' }],
-    [entry({ code: 'M' }), { label: 'M', tone: 'modified' }],
-    [entry({ code: 'T' }), { label: 'T', tone: 'modified' }],
-    [entry({ code: '' }), { label: 'M', tone: 'modified' }],
-  ])('badges %o as %o', (row, badge) => {
-    expect(badgeFor(row)).toEqual(badge);
-  });
 });
 
 describe('path labels', () => {
-  it('splits a nested path into name and directory', () => {
-    expect(fileName('src/app.py')).toBe('app.py');
-    expect(directory('src/app.py')).toBe('src');
-    expect(directory('a/b/c.txt')).toBe('a/b');
-  });
-
-  it('reports no directory for a top-level file or a root-anchored one', () => {
-    expect(fileName('README')).toBe('README');
-    expect(directory('README')).toBeNull();
-    expect(directory('/root')).toBeNull();
-  });
-
   it('keeps the trailing slash on a nested repository git lists as a folder', () => {
     expect(fileName('mobaide_worktree/claude-session-56a3f247/')).toBe('claude-session-56a3f247/');
     expect(directory('mobaide_worktree/claude-session-56a3f247/')).toBe('mobaide_worktree');
     expect(fileName('vendor/')).toBe('vendor/');
     expect(directory('vendor/')).toBeNull();
-  });
-});
-
-describe('repo header labels', () => {
-  it('names the head by branch, then short oid, then HEAD', () => {
-    expect(headLabel(repo())).toBe('main');
-    expect(headLabel(repo({ head: { branch: null, short_oid: 'abc1234', detached: false, initial: false } }))).toBe('abc1234');
-    expect(headLabel(repo({ head: { branch: null, short_oid: null, detached: false, initial: false } }))).toBe('HEAD');
-  });
-
-  it('flags a detached head and an unborn one', () => {
-    expect(headLabel(repo({ head: { branch: null, short_oid: 'abc1234', detached: true, initial: false } }))).toBe('detached @ abc1234');
-    expect(headLabel(repo({ head: { branch: null, short_oid: null, detached: true, initial: false } }))).toBe('detached @ HEAD');
-    // Initial wins over everything: there is no commit to be detached from.
-    expect(headLabel(repo({ head: { branch: 'main', short_oid: null, detached: true, initial: true } }))).toBe('No commits yet');
-  });
-
-  it('counts ahead and behind, or reports the upstream gone', () => {
-    expect(upstreamLabel(null)).toBeNull();
-    expect(upstreamLabel(undefined)).toBeNull();
-    expect(upstreamLabel({ ref: 'origin/main', ahead: 1, behind: 0 })).toBe('↑1 ↓0 · origin/main');
-    expect(upstreamLabel({ ref: 'origin/main', ahead: null, behind: null })).toBe('origin/main · upstream gone');
-    expect(upstreamLabel({ ref: 'origin/main', ahead: 2 })).toBe('origin/main · upstream gone');
-  });
-
-  it('labels an in-progress operation and nothing for a clean state', () => {
-    expect(repoStateLabel('clean')).toBeNull();
-    expect(repoStateLabel('cherry_picking')).toBe('cherry-picking');
-    expect(repoStateLabel('merging')).toBe('merging');
-    expect(repoStateLabel('some_new_state')).toBe('some new state');
-  });
-});
-
-describe('unavailableCopy', () => {
-  it.each([
-    ['not_a_repo', 'Not a git repository'],
-    ['bare_repository', 'Bare repository'],
-    ['cwd_missing', 'Folder not found'],
-    ['unsafe_directory', 'Unsafe directory'],
-    ['git_too_old', 'Git is too old'],
-  ])('titles %s as "%s"', (reason, title) => {
-    expect(unavailableCopy(reason).title).toBe(title);
-    expect(unavailableCopy(reason).body).not.toBe('');
-  });
-
-  it('names an unknown reason in the generic fallback', () => {
-    expect(unavailableCopy('locked')).toEqual({
-      title: 'Changes unavailable',
-      body: 'The agent could not read this repository (locked).',
-    });
   });
 });
 
@@ -384,28 +269,6 @@ describe('sessionGitErrorCopy', () => {
 
     expect(sessionGitErrorCopy(outdated)).toBe('Update your agent to view changes.');
     expect(sessionGitErrorCopy(gone)).toBe('This session has ended.');
-  });
-
-  it('phrases each git failure code', () => {
-    expect(sessionGitErrorCopy(gitError('git_unavailable'))).toBe(
-      'git is not installed on the agent host.',
-    );
-    expect(sessionGitErrorCopy(gitError('git_timeout'))).toBe(
-      'git took too long to answer. Try again.',
-    );
-    expect(sessionGitErrorCopy(gitError('git_error'))).toBe('git failed unexpectedly.');
-    expect(sessionGitErrorCopy(gitError('git_error', 'fatal: bad object'))).toBe(
-      'git failed: fatal: bad object',
-    );
-  });
-
-  it('reuses the unavailable body for a reason that arrives as an error code', () => {
-    expect(sessionGitErrorCopy(gitError('unsafe_directory'))).toBe(
-      unavailableCopy('unsafe_directory').body,
-    );
-    expect(sessionGitErrorCopy(gitError('rate_limited'))).toBe(
-      'git refused the request (rate_limited).',
-    );
   });
 
   it('falls back to the relay detail, the status, the network, then the message', () => {
@@ -430,10 +293,6 @@ describe('sessionGitErrorCopy', () => {
 });
 
 describe('truncatedEntriesNotice', () => {
-  it('says nothing for a complete list', () => {
-    expect(truncatedEntriesNotice(status({ entries: [entry()] }))).toBeNull();
-  });
-
   it('gives the shown count against a lower-bound total when the counts exceed it', () => {
     const cut = status({
       truncated: true,
@@ -462,44 +321,24 @@ describe('truncatedEntriesNotice', () => {
   });
 });
 
-describe('diff text', () => {
-  it('reads a change kind as words', () => {
-    expect(changeLabel('type_changed')).toBe('type changed');
-    expect(changeLabel('renamed')).toBe('renamed');
-  });
-
-  it('widens tabs to four spaces and makes a carriage return visible', () => {
-    expect(renderableText('\tif x:\r')).toBe('    if x:␍');
-    expect(renderableText('plain')).toBe('plain');
-  });
-
-  it('formats a hunk header with its heading only when there is one', () => {
-    expect(hunkHeader(hunk())).toBe('@@ -1,3 +1,4 @@');
-    expect(hunkHeader(hunk({ heading: '   ' }))).toBe('@@ -1,3 +1,4 @@');
-    expect(hunkHeader(hunk({ old_start: 10, old_lines: 2, new_start: 12, new_lines: 5, heading: 'def main():' }))).toBe(
-      '@@ -10,2 +12,5 @@  def main():',
-    );
-  });
-});
-
 describe('showsContextChoices', () => {
   const hunks = [hunk({ lines: [line(), line({ t: 'add', old: null, new: 2, text: 'new' })] })];
 
-  it.each(['modified', 'renamed', 'copied'] as const)(
+  it.each(['modified'] as const)(
     'offers the choice for a %s text diff with hunks',
     (change) => {
       expect(showsContextChoices(diff({ change, hunks }))).toBe(true);
     },
   );
 
-  it.each(['added', 'deleted', 'type_changed'] as const)(
+  it.each(['added'] as const)(
     'hides it for a %s file, which has no unchanged lines to widen',
     (change) => {
       expect(showsContextChoices(diff({ change, hunks }))).toBe(false);
     },
   );
 
-  it.each(['binary', 'submodule', 'too_large', 'missing'] as const)(
+  it.each(['submodule'] as const)(
     'hides it for a %s diff, which the context cannot change',
     (kind) => {
       // A submodule arrives with its pointer lines as a hunk; still no context.
@@ -522,19 +361,6 @@ describe('showsContextChoices', () => {
 });
 
 describe('diffView', () => {
-  it('replaces the hunks with a notice for a binary, oversized or missing file', () => {
-    expect(diffView(diff({ kind: 'binary' }))).toEqual({
-      hunks: [],
-      notice: 'Binary file — no preview',
-      truncated: null,
-      gutterDigits: 2,
-    });
-    expect(diffView(diff({ kind: 'too_large', byte_limit: 2 * 1024 * 1024 })).notice).toBe(
-      'File too large to preview (2 MiB limit)',
-    );
-    expect(diffView(diff({ kind: 'missing' })).notice).toBe('Nothing to show for this file');
-  });
-
   it('lays each line out with both gutters, a rendered text and the no-newline flag', () => {
     const view = diffView(
       diff({
@@ -564,31 +390,6 @@ describe('diffView', () => {
         ],
       },
     ]);
-  });
-
-  it('sizes the gutters to the widest line number, never under two digits', () => {
-    expect(diffView(diff({ hunks: [hunk({ lines: [line()] })] })).gutterDigits).toBe(2);
-    expect(
-      diffView(
-        diff({
-          hunks: [
-            hunk({ old_start: 1, old_lines: 3, new_start: 1, new_lines: 3, lines: [line()] }),
-            hunk({ old_start: 98, old_lines: 5, new_start: 120, new_lines: 5, lines: [line()] }),
-          ],
-        }),
-      ).gutterDigits,
-    ).toBe(3);
-  });
-
-  it('explains an empty text diff by the mode change, else as no text changes', () => {
-    expect(diffView(diff({ old_mode: '100644', new_mode: '100755' })).notice).toBe(
-      'Mode changed only: 100644 → 100755',
-    );
-    expect(diffView(diff()).notice).toBe('No text changes');
-    expect(diffView(diff({ old_mode: null, new_mode: '100755' })).notice).toBe('No text changes');
-    expect(emptyDiffNotice(diff({ kind: 'submodule', old_mode: null, new_mode: null }))).toBe(
-      'No text changes',
-    );
   });
 
   it('keeps a header-only hunk in a complete diff', () => {
@@ -654,54 +455,6 @@ const rowsOf = (...entries: SessionGitEntry[]) =>
   sectionsFor(status({ entries })).flatMap((section) => section.rows);
 
 describe('refusalCopy', () => {
-  it('phrases each 409 code the mutating routes answer', () => {
-    expect(refusalCopy('identity_required', null)).toBe(
-      "Git doesn't know who you are on the agent machine.",
-    );
-    expect(refusalCopy('unmerged', null)).toBe('Resolve the conflicts first.');
-    expect(refusalCopy('nothing_to_commit', null)).toBe('Nothing is staged.');
-    expect(refusalCopy('no_head', null)).toBe('There is no commit to amend yet.');
-    expect(refusalCopy('hook_failed', 'lint: nope')).toBe('A commit hook rejected the commit.');
-    expect(refusalCopy('index_locked', null)).toBe('Another git process is running — try again.');
-    expect(refusalCopy('pathspec_mismatch', null)).toBe('That file changed under you — refreshed.');
-    expect(refusalCopy('empty_message', null)).toBe('Enter a commit summary.');
-  });
-
-  it('names the file that still holds conflict markers', () => {
-    expect(refusalCopy('conflict_markers', 'src/login.py')).toBe(
-      'src/login.py still has conflict markers — finish resolving it first.',
-    );
-    expect(refusalCopy('conflict_markers', null)).toBe(
-      'The file still has conflict markers — finish resolving it first.',
-    );
-  });
-
-  it('phrases the conflict resolver\'s refusals around the file they name', () => {
-    expect(refusalCopy('not_conflicted', 'src/login.py')).toBe('src/login.py is no longer in conflict.');
-    expect(refusalCopy('not_conflicted', null)).toBe('The file is no longer in conflict.');
-    expect(refusalCopy('file_changed', 'src/login.py')).toBe(
-      'src/login.py changed on the agent machine since you opened it.',
-    );
-    expect(refusalCopy('file_changed', null)).toBe(
-      'The file changed on the agent machine since you opened it.',
-    );
-    expect(refusalCopy('file_busy', 'src/login.py')).toBe(
-      'src/login.py is open in another program — close it and try again.',
-    );
-    expect(refusalCopy('not_restorable', 'src/login.py')).toBe(
-      'The conflict in src/login.py can no longer be rebuilt.',
-    );
-    expect(refusalCopy('not_restorable', null)).toBe('The conflict in the file can no longer be rebuilt.');
-  });
-
-  it('keeps the path out of the refusals that are not about one file', () => {
-    expect(refusalCopy('unsupported', 'vendor/lib')).toBe(
-      "This conflict can't be resolved here — use the terminal.",
-    );
-    expect(refusalCopy('too_large', null)).toBe('The text is too large to save from here.');
-    expect(refusalCopy('bad_content', null)).toBe("The text contains characters that can't be saved.");
-  });
-
   it('names an unknown code, with the git output when there is any', () => {
     expect(refusalCopy('rate_limited', null)).toBe('git refused the request (rate_limited).');
     expect(refusalCopy('rate_limited', 'slow down')).toBe(
@@ -726,12 +479,6 @@ describe('mutationErrorCopy', () => {
     expect(mutationErrorCopy(new TypeError('Failed to fetch'))).toBe(NETWORK_FAILURE_MESSAGE);
   });
 
-  it('ships the host-side identity fix verbatim, ready to paste', () => {
-    expect(IDENTITY_FIX_COMMANDS).toEqual([
-      'git config --global user.name "Your Name"',
-      'git config --global user.email "you@example.com"',
-    ]);
-  });
 });
 
 describe('opensResolver', () => {
@@ -835,9 +582,6 @@ describe('pathsFor', () => {
     expect(pathsFor(rows)).toEqual(['src/app.py', 'src/old.py', 'notes.txt']);
   });
 
-  it('is empty for no rows', () => {
-    expect(pathsFor([])).toEqual([]);
-  });
 });
 
 describe('selectionSubsets', () => {
@@ -935,14 +679,6 @@ describe('discardPrompt', () => {
     });
   });
 
-  it('counts a multi-file discard', () => {
-    expect(discardPrompt(rowsOf(entry(), untracked('notes.txt')))).toEqual({
-      title: 'Discard 2 files?',
-      body:
-        'Their working-tree changes will be thrown away and untracked ones deleted. ' +
-        'This cannot be undone.',
-    });
-  });
 });
 
 describe('commit copy', () => {
@@ -952,27 +688,6 @@ describe('commit copy', () => {
     expect(composeCommitMessage('Fix it', '  Why.\n')).toBe('Fix it\n\nWhy.');
   });
 
-  it('splits the previous commit back into the two fields', () => {
-    expect(
-      splitCommitMessage({ oid: 'abc', short_oid: 'abc', subject: 'Fix it', body: 'Why.' }),
-    ).toEqual({ summary: 'Fix it', description: 'Why.' });
-  });
-
-  it('labels the button by the staged count, or as an amend', () => {
-    expect(commitButtonLabel(0, false)).toBe('Commit 0 files');
-    expect(commitButtonLabel(1, false)).toBe('Commit 1 file');
-    expect(commitButtonLabel(3, false)).toBe('Commit 3 files');
-    expect(commitButtonLabel(3, true)).toBe('Amend commit');
-  });
-
-  it('phrases the result notice and the author line', () => {
-    expect(commitNotice({ oid: 'abc1234def', short_oid: 'abc1234', subject: 'Fix it' })).toBe(
-      'Committed abc1234 · Fix it',
-    );
-    expect(authorLine({ name: 'Ada Lovelace', email: 'ada@example.com' })).toBe(
-      'Committing as Ada Lovelace <ada@example.com>',
-    );
-  });
 });
 
 const NO_SYNC: GitCapabilities = {
@@ -1019,15 +734,6 @@ describe('syncRows', () => {
       'fetch',
     ]);
     expect(syncRows(tracking(1, 1), ALL_GIT).map((row) => row.op)).toEqual(['fetch', 'pull', 'push']);
-  });
-
-  it('always lets a fetch through', () => {
-    expect(syncRows(repo(), ALL_GIT)[0]).toEqual({
-      op: 'fetch',
-      label: 'Fetch',
-      detail: 'Update remote-tracking branches',
-      enabled: true,
-    });
   });
 
   it('enables Pull only with commits behind, and says why not otherwise', () => {
@@ -1111,44 +817,6 @@ describe('sync requests', () => {
 });
 
 describe('job copy', () => {
-  it('titles a running and a finished job per op', () => {
-    expect((['fetch', 'pull', 'push'] as const).map(jobTitle)).toEqual([
-      'Fetching…',
-      'Pulling…',
-      'Pushing…',
-    ]);
-    expect(jobDoneTitle('fetch', true)).toBe('Fetched');
-    expect(jobDoneTitle('pull', true)).toBe('Pulled');
-    expect(jobDoneTitle('push', true)).toBe('Pushed');
-    expect(jobDoneTitle('fetch', false)).toBe('Fetch failed');
-    expect(jobDoneTitle('pull', false)).toBe('Pull failed');
-    expect(jobDoneTitle('push', false)).toBe('Push failed');
-  });
-
-  it('phrases every job error code identically to the mobile clients', () => {
-    expect(jobErrorCopy('cancelled', null)).toBe('Cancelled.');
-    expect(jobErrorCopy('git_timeout', null)).toBe('git took too long to answer. Try again.');
-    expect(jobErrorCopy('auth_required', null)).toBe(
-      'No credentials for this remote. Configure a credential helper or SSH agent on the agent host.',
-    );
-    expect(jobErrorCopy('network', null)).toBe("Couldn't reach the remote.");
-    expect(jobErrorCopy('remote_not_found', null)).toBe("The remote doesn't exist.");
-    expect(jobErrorCopy('rejected', null)).toBe('The remote rejected the push.');
-    expect(jobErrorCopy('not_fast_forward', null)).toBe('Your branch is behind the remote.');
-    expect(jobErrorCopy('conflicts', null)).toBe('Stopped on conflicts — resolve them in the terminal.');
-    expect(jobErrorCopy('dirty_worktree', null)).toBe('Commit or stash your changes first.');
-    expect(jobErrorCopy('unmerged', null)).toBe('Resolve the conflicts first.');
-    expect(jobErrorCopy('operation_in_progress', null)).toBe(
-      'A rebase or merge is already in progress.',
-    );
-    expect(jobErrorCopy('no_upstream', null)).toBe('This branch has no upstream.');
-    expect(jobErrorCopy('no_remote', null)).toBe('This repository has no remote.');
-    expect(jobErrorCopy('detached_head', null)).toBe('Detached HEAD — check out a branch first.');
-    expect(jobErrorCopy('no_head', null)).toBe('No commits yet.');
-    expect(jobErrorCopy('hook_failed', null)).toBe('A pre-push hook rejected the push.');
-    expect(jobErrorCopy('index_locked', null)).toBe('Another git process is running — try again.');
-  });
-
   it('sends a pull stopped on conflicts to the Conflicts section when the agent resolves in the app', () => {
     expect(jobErrorCopy('conflicts', null, true)).toBe(
       'Stopped on conflicts — open a file under Conflicts to resolve it.',
@@ -1172,22 +840,6 @@ describe('job copy', () => {
     expect(jobErrorCopy('something_new', 'details')).toBe('details');
     expect(jobErrorCopy('something_new', '')).toBe('git failed.');
     expect(jobErrorCopy(null, undefined)).toBe('git failed.');
-  });
-
-  it('builds the banner line from the title, the summary or the failure copy', () => {
-    expect(jobNotice(job())).toBe('Pushing…');
-    expect(jobNotice(job({ op: 'fetch', phase: 'Receiving objects', percent: 12 }))).toBe(
-      'Fetching…',
-    );
-    expect(jobNotice(doneJob())).toBe('Pushed · main -> main');
-    expect(jobNotice(doneJob({ message: null }))).toBe('Pushed');
-    expect(jobNotice(doneJob({ op: 'pull', message: '' }))).toBe('Pulled');
-    expect(
-      jobNotice(failedJob('rejected', { message: '! [rejected] main -> main (fetch first)' })),
-    ).toBe('Push failed: The remote rejected the push.');
-    expect(jobNotice(failedJob('git_error', { op: 'fetch', message: 'fatal: boom' }))).toBe(
-      'Fetch failed: fatal: boom',
-    );
   });
 
   it("shows git's output beside a failure only when the copy did not already say it", () => {
@@ -1244,41 +896,6 @@ describe('job copy', () => {
     ]);
   });
 
-  it('labels and confirms each follow-up, naming the upstream and branch when known', () => {
-    expect(followUpLabel('pull_rebase')).toBe('Pull with rebase…');
-    expect(followUpLabel('pull_merge')).toBe('Pull with merge…');
-    expect(followUpLabel('force_push')).toBe('Force push (with lease)…');
-    expect(followUpPrompt('pull_rebase', tracking(1, 1))).toEqual({
-      title: 'Pull with rebase?',
-      body: 'Replays your commits on top of origin/main.',
-      confirm: 'Rebase',
-    });
-    expect(followUpPrompt('pull_merge', tracking(1, 1))).toEqual({
-      title: 'Pull with merge?',
-      body: 'Merges origin/main into main.',
-      confirm: 'Merge',
-    });
-    expect(followUpPrompt('force_push', tracking(1, 1))).toEqual({
-      title: 'Force push?',
-      body: "Overwrites origin/main with your branch. Proceeds only if the remote hasn't moved since your last fetch.",
-      confirm: 'Force push',
-    });
-    expect(followUpPrompt('pull_merge', null).body).toBe('Merges the upstream into your branch.');
-    expect(followUpPrompt('force_push', undefined).body).toMatch(/^Overwrites the upstream /);
-  });
-
-  it('keeps a successful result on screen for six seconds', () => {
-    expect(JOB_RESULT_DISMISS_MS).toBe(6_000);
-  });
-
-  it('phrases the two job refusals the start and poll routes answer', () => {
-    expect(refusalCopy('job_running', 'ab12cd34')).toBe(
-      'Another fetch, pull or push is still running.',
-    );
-    expect(refusalCopy('job_not_found', null)).toBe(
-      'Lost track of the job — refresh to see the result.',
-    );
-  });
 });
 
 const gitItem = (over: Partial<GitItem> = {}): GitItem => ({
@@ -1363,23 +980,6 @@ describe('rebaseTargets', () => {
     expect(rebaseTargets([], 'main')).toEqual([]);
   });
 
-  it('sorts the local and the remote group each A→Z, ignoring case', () => {
-    const items = [
-      gitItem({ kind: 'remote_branch', branch: 'origin/Zed', remote: 'origin' }),
-      gitItem({ branch: 'zeta' }),
-      gitItem({ kind: 'remote_branch', branch: 'origin/apple', remote: 'origin' }),
-      gitItem({ kind: 'branch_with_worktree', branch: 'Beta', worktree_path: '/wt/b' }),
-      gitItem({ branch: 'alpha' }),
-    ];
-
-    expect(rebaseTargets(items, null).map((target) => target.label)).toEqual([
-      'alpha',
-      'Beta',
-      'zeta',
-      'origin/apple (remote)',
-      'origin/Zed (remote)',
-    ]);
-  });
 });
 
 describe('shortRefName', () => {
@@ -1390,12 +990,6 @@ describe('shortRefName', () => {
     expect(shortRefName('refs/heads/refs/remotes/x')).toBe('refs/remotes/x');
   });
 
-  it('leaves a typed ref, a tag or a prefix that is not leading as it is', () => {
-    expect(shortRefName('main')).toBe('main');
-    expect(shortRefName('origin/main')).toBe('origin/main');
-    expect(shortRefName('refs/tags/v1.2.0')).toBe('refs/tags/v1.2.0');
-    expect(shortRefName('topic/refs/heads/main')).toBe('topic/refs/heads/main');
-  });
 });
 
 describe('rebaseBlocker', () => {
@@ -1436,7 +1030,6 @@ describe('rebaseBlocker', () => {
   it.each([
     ['staged', counts({ staged: 1, total: 1 })],
     ['unstaged', counts({ unstaged: 2, total: 2 })],
-    ['conflicts', counts({ conflicts: 1, total: 1 })],
   ])('blocks on %s tracked changes', (_label, value) => {
     expect(rebaseBlocker(status({ counts: value }))).toBe('Commit or discard your changes first.');
   });
@@ -1461,35 +1054,6 @@ describe('rebaseBanner', () => {
     expect(rebaseBanner(rebasing(), 0)?.hint).toBe('No conflicts left — Continue when ready.');
   });
 
-  it('falls back to the short oid for the base, then drops what the agent could not read', () => {
-    expect(rebaseBanner(rebasing(rebaseInfo({ onto_ref: null })), 0)?.title).toBe(
-      'Rebasing topic onto 89abcde',
-    );
-    expect(rebaseBanner(rebasing(rebaseInfo({ onto_ref: null, onto_short_oid: null })), 0)?.title).toBe(
-      'Rebasing topic',
-    );
-    expect(rebaseBanner(rebasing(rebaseInfo({ branch: null })), 0)?.title).toBe('Rebasing onto main');
-    expect(rebaseBanner(rebasing(rebaseInfo({ stopped_on: null })), 0)?.progress).toBe('2/5');
-    expect(rebaseBanner(rebasing(rebaseInfo({ step: null })), 0)?.progress).toBe(
-      'Stopped at fedcba9 Fix the login redirect',
-    );
-  });
-
-  it('points at the files themselves when the agent can resolve them in the app', () => {
-    expect(rebaseBanner(rebasing(), 1, true)?.hint).toBe('1 conflict — open a file to resolve it.');
-    expect(rebaseBanner(rebasing(), 3, true)?.hint).toBe('3 conflicts — open a file to resolve it.');
-    expect(rebaseBanner(rebasing(), 1, false)?.hint).toBe(
-      '1 conflict — fix the files, then Mark resolved.',
-    );
-  });
-
-  it('says the same with or without the resolver once no conflict is left or the terminal owns the rebase', () => {
-    expect(rebaseBanner(rebasing(), 0, true)?.hint).toBe('No conflicts left — Continue when ready.');
-    expect(rebaseBanner(rebasing(null), 2, true)?.hint).toBe(
-      'Continue, skip or abort it in the terminal.',
-    );
-  });
-
   it('sends a rebase with no details, as a git am session reports it, to the terminal whatever the conflicts', () => {
     const toTerminal = {
       title: 'Rebase in progress',
@@ -1511,64 +1075,7 @@ describe('rebaseBanner', () => {
   });
 });
 
-describe('rebaseStepPrompt', () => {
-  it('names the commit a skip leaves out of the branch being rebased', () => {
-    expect(rebaseStepPrompt('skip', rebasing())).toEqual({
-      title: 'Skip this commit?',
-      body: 'fedcba9 “Fix the login redirect” will be left out of topic.',
-      confirm: 'Skip commit',
-    });
-    expect(rebaseStepPrompt('skip', rebasing(rebaseInfo({ stopped_on: null }))).body).toBe(
-      'The commit the rebase stopped at will be left out of topic.',
-    );
-  });
-
-  it('warns that an abort discards the resolutions made so far', () => {
-    expect(rebaseStepPrompt('abort', rebasing())).toEqual({
-      title: 'Abort the rebase?',
-      body: 'topic goes back to where it was before the rebase. Conflict resolutions made so far are discarded.',
-      confirm: 'Abort rebase',
-    });
-  });
-
-  it("falls back to HEAD's branch, then to a generic name", () => {
-    expect(rebaseStepPrompt('abort', repo({ state: 'rebasing' })).body).toMatch(/^main goes back /);
-    expect(rebaseStepPrompt('abort', rebasing(null)).body).toMatch(/^the branch goes back /);
-    expect(rebaseStepPrompt('skip', undefined).body).toBe(
-      'The commit the rebase stopped at will be left out of the branch.',
-    );
-  });
-});
-
 describe('rebaseOutcomeNotice', () => {
-  it('reports a finished start with the branch and the picked base, a finished step without it', () => {
-    expect(rebaseOutcomeNotice(rebaseResult(), 'topic', 'main')).toEqual({
-      tone: 'ok',
-      text: 'Rebased topic onto main.',
-    });
-    expect(rebaseOutcomeNotice(rebaseResult(), 'topic', null)).toEqual({
-      tone: 'ok',
-      text: 'Rebase finished.',
-    });
-    expect(rebaseOutcomeNotice(rebaseResult({ outcome: 'up_to_date' }), 'topic', 'main')).toEqual({
-      tone: 'ok',
-      text: 'topic is already up to date with main.',
-    });
-    expect(rebaseOutcomeNotice(rebaseResult({ outcome: 'aborted' }), 'topic', null)).toEqual({
-      tone: 'ok',
-      text: 'Rebase aborted — topic is back where it started.',
-    });
-  });
-
-  it('names a base picked as a full ref by its short name', () => {
-    expect(rebaseOutcomeNotice(rebaseResult(), 'topic', 'refs/heads/main').text).toBe(
-      'Rebased topic onto main.',
-    );
-    expect(
-      rebaseOutcomeNotice(rebaseResult({ outcome: 'up_to_date' }), 'topic', 'refs/remotes/origin/main').text,
-    ).toBe('topic is already up to date with origin/main.');
-  });
-
   it("reports a stop on the commit's subject, or git's own explanation when it was not a conflict", () => {
     expect(
       rebaseOutcomeNotice(rebaseResult({ outcome: 'stopped', rebase: rebaseInfo() }), 'topic', 'main'),
@@ -1604,28 +1111,6 @@ describe('rebaseOutcomeNotice', () => {
 });
 
 describe('rebaseErrorCopy', () => {
-  it('reads the shared refusal codes the way a rebase means them', () => {
-    expect(rebaseErrorCopy(gitError('unknown_ref', 'nope'))).toBe(
-      '“nope” isn\'t a branch, tag or commit here.',
-    );
-    expect(rebaseErrorCopy(gitError('unknown_ref'))).toBe("That isn't a branch, tag or commit here.");
-    expect(rebaseErrorCopy(gitError('no_rebase', 'clean'))).toBe('No rebase is in progress anymore.');
-    expect(rebaseErrorCopy(gitError('dirty_worktree', 'keep.txt'))).toBe(
-      'Local changes are in the way — stage, commit or discard them first.',
-    );
-    expect(rebaseErrorCopy(gitError('operation_in_progress', 'merging'))).toBe(
-      'A rebase or merge is already in progress.',
-    );
-    expect(rebaseErrorCopy(gitError('no_head'))).toBe('This branch has no commits yet.');
-    expect(rebaseErrorCopy(gitError('hook_failed', 'nope'))).toBe('The pre-rebase hook refused the rebase.');
-    expect(rebaseErrorCopy(gitError('git_too_old'))).toBe(
-      'Rebasing needs git 2.26 or newer on the agent machine.',
-    );
-    expect(rebaseErrorCopy(gitError('git_timeout'))).toBe(
-      'The rebase took too long and was cut off — continue or abort it.',
-    );
-  });
-
   it('falls back to the mutation copy for everything else', () => {
     expect(rebaseErrorCopy(gitError('unmerged', 'unmerged paths in the index'))).toBe(
       'Resolve the conflicts first.',

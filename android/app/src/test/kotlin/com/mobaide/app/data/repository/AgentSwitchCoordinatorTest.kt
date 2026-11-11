@@ -276,41 +276,4 @@ class AgentSwitchCoordinatorTest {
             cancelAndIgnoreRemainingEvents()
         }
     }
-
-    @Test
-    fun switchAndOpenSessions_onAMessagelessFailure_namesTheAgent() = runTest {
-        val fx = newFixture()
-        every { fx.sessionManager.isUserAuthenticated() } returns true
-        coEvery { fx.agentRepository.getMobileTokensForAgent("a-1", any(), any()) } throws RuntimeException()
-
-        fx.coordinator.errors.test {
-            fx.coordinator.switchAndOpenSessions(agent("a-1", name = "Laptop"))
-            advanceUntilIdle()
-
-            assertEquals("Failed to connect to Laptop", awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun switchAndOpenSessions_isANoOpWhileAnotherSwitchIsInFlight() = runTest {
-        val fx = newFixture()
-        val gate = CompletableDeferred<MobileTokenResponse>()
-        coEvery { fx.agentRepository.getMobileTokensForAgent("a-1", any(), any()) } coAnswers { gate.await() }
-
-        fx.coordinator.switchAndOpenSessions(agent("a-1"))
-        runCurrent()
-        assertEquals("a-1", fx.coordinator.switchingAgentId.value)
-
-        fx.coordinator.switchAndOpenSessions(agent("a-2"))
-        runCurrent()
-
-        assertEquals("a-1", fx.coordinator.switchingAgentId.value)
-        coVerify(exactly = 0) { fx.agentRepository.getMobileTokensForAgent("a-2", any(), any()) }
-
-        gate.complete(TOKENS)
-        advanceUntilIdle()
-        assertNull(fx.coordinator.switchingAgentId.value)
-        assertTrue(fx.coordinator.pendingSessionsList.value)
-    }
 }

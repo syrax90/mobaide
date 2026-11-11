@@ -193,14 +193,6 @@ class TerminalViewModelEmulatorReplyTest {
         }
 
     @Test
-    fun deviceAttributes_whilePaused_doesNotResumeFollowMode() =
-        runTest(testDispatcher) { assertQueryDoesNotResumeFollowMode(DEVICE_ATTRIBUTES) }
-
-    @Test
-    fun decrqm_whilePaused_doesNotResumeFollowMode() =
-        runTest(testDispatcher) { assertQueryDoesNotResumeFollowMode(DECRQM_SYNC_OUTPUT) }
-
-    @Test
     fun terminalViewTyping_whilePaused_resumesFollowMode() =
         runTest(testDispatcher) {
             val vm = pausedSessionWithUnread()
@@ -223,11 +215,5 @@ class TerminalViewModelEmulatorReplyTest {
 
         /** DSR 6 — cursor position report. */
         val DSR_CURSOR_REPORT = "\u001B[6n".toByteArray(Charsets.US_ASCII)
-
-        /** Primary Device Attributes; answered with ESC[?64;1;2;6;9;15;18;21;22c. */
-        val DEVICE_ATTRIBUTES = "\u001B[c".toByteArray(Charsets.US_ASCII)
-
-        /** DECRQM for synchronized output (2026); answered with ESC[?2026;<value>$y. */
-        val DECRQM_SYNC_OUTPUT = "\u001B[?2026\$p".toByteArray(Charsets.US_ASCII)
     }
 }

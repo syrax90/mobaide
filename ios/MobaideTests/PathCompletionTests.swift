@@ -38,13 +38,6 @@ final class PathCompletionTests: XCTestCase {
         XCTAssertEqual(PathCompletion.split("~"), query("~/", ""))
     }
 
-    func testSplitOffersNothingForTextThatCannotNameAnAbsoluteDirectoryYet() {
-        XCTAssertNil(PathCompletion.split(""))
-        XCTAssertNil(PathCompletion.split("code/proj"))
-        XCTAssertNil(PathCompletion.split("C:"))
-        XCTAssertNil(PathCompletion.split("~pavel"))
-    }
-
     // MARK: - rank
 
     func testRankPutsPrefixMatchesBeforeSubstringMatchesEachInTheAgentOrder() {

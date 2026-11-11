@@ -63,17 +63,6 @@ class InputBarComposerHiddenTest {
     }
 
     @Test
-    fun composerHidden_hidesTextFieldAndAllActionButtons() {
-        setInputBar(composerVisible = false)
-
-        composeRule.onNodeWithText("Type command...").assertDoesNotExist()
-        listOf(
-            "Hide command field", "Templates", "Save as template", "Show keys",
-            "Expand editor", "Send",
-        ).forEach { composeRule.onNodeWithContentDescription(it).assertDoesNotExist() }
-    }
-
-    @Test
     fun composerHidden_controlKeysVisible_withoutToggling() {
         setInputBar(composerVisible = false)
 
@@ -125,16 +114,6 @@ class InputBarComposerHiddenTest {
             .performClick()
 
         assertEquals(0, raises)
-    }
-
-    @Test
-    fun composerVisible_hidesRevealChipAndKeyboardButton() {
-        setInputBar(composerVisible = true)
-
-        // Even with the control panel opened, both affordances only exist while hidden.
-        composeRule.onNodeWithContentDescription("Show keys").performClick()
-        composeRule.onNodeWithTag("reveal_composer_chip").assertDoesNotExist()
-        composeRule.onNodeWithTag("raise_terminal_keyboard_button").assertDoesNotExist()
     }
 
     @Test

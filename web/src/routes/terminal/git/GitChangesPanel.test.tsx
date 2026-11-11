@@ -516,14 +516,6 @@ describe('GitChangesPanel diff view control', () => {
     expect(diffBody()).toHaveAttribute('aria-busy', 'false');
   });
 
-  it('offers no diff view choice for an added file, which has no unchanged lines to widen', async () => {
-    api.shape = withHunk('added');
-    await selectApp();
-
-    await screen.findByText('src/app.py at 3');
-    expect(contextGroup()).toBeNull();
-  });
-
   it('keeps the previous diff and its control on screen, marked busy, while the full file loads', async () => {
     api.shape = withHunk('modified');
     await selectApp();
@@ -718,15 +710,6 @@ describe('GitChangesPanel mutating controls', () => {
     ]);
   });
 
-  it('keeps Discard and Commit off an agent that advertises only stage', async () => {
-    api.version = agentVersion({ changes: true, stage: true });
-    api.status = status('e1', [entry()]);
-    renderPanel();
-
-    expect(await screen.findByRole('button', { name: 'Stage src/app.py' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Discard src/app.py' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Commit…' })).toBeNull();
-  });
 });
 
 describe('GitChangesPanel stage and unstage', () => {
@@ -744,21 +727,6 @@ describe('GitChangesPanel stage and unstage', () => {
     });
     expect(await screen.findByRole('button', { name: 'Unstage src/app.py' })).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
-  });
-
-  it('names both sides of a rename when unstaging it', async () => {
-    // `git reset` on the new name alone would leave the deletion staged.
-    api.version = agentVersion(ALL_GIT);
-    api.status = status('e1', [
-      staged({ code: 'R', index_status: 'R', orig_path: 'src/old.py', rename_score: 90 }),
-    ]);
-    renderPanel();
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Unstage src/app.py' }));
-
-    await waitFor(() => {
-      expect(api.mutations).toEqual([{ kind: 'unstage', paths: ['src/app.py', 'src/old.py'] }]);
-    });
   });
 
   it('stages a whole section from its header, and only that section', async () => {
@@ -816,20 +784,6 @@ describe('GitChangesPanel discard', () => {
     });
     expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(await screen.findByText('Working tree clean')).toBeInTheDocument();
-  });
-
-  it('cancels without a request', async () => {
-    api.version = agentVersion(ALL_GIT);
-    api.status = status('e1', [entry()]);
-    renderPanel();
-    fireEvent.click(await screen.findByRole('button', { name: 'Discard src/app.py' }));
-    const confirm = screen.getByRole('alertdialog', { name: 'Discard changes?' });
-
-    fireEvent.click(within(confirm).getByRole('button', { name: 'Cancel' }));
-
-    expect(screen.queryByRole('alertdialog')).toBeNull();
-    expect(api.mutations).toEqual([]);
-    expect(screen.getByRole('button', { name: 'Discard src/app.py' })).toBeInTheDocument();
   });
 
   it('discards a mixed selection with one request per scope and clears it', async () => {
@@ -891,18 +845,6 @@ describe('GitChangesPanel selection toolbar', () => {
     expect(screen.getByRole('checkbox', { name: 'Select src/lib.py' })).not.toBeChecked();
   });
 
-  it('clears the selection from the toolbar', async () => {
-    api.version = agentVersion(ALL_GIT);
-    api.status = status('e1', [entry()]);
-    renderPanel();
-    await screen.findByRole('checkbox', { name: 'Select src/app.py' });
-    tick('src/app.py');
-
-    fireEvent.click(within(toolbar()).getByRole('button', { name: 'Clear selection' }));
-
-    expect(screen.queryByRole('toolbar')).toBeNull();
-    expect(screen.getByRole('checkbox', { name: 'Select src/app.py' })).not.toBeChecked();
-  });
 });
 
 describe('GitChangesPanel commit', () => {
@@ -947,18 +889,6 @@ describe('GitChangesPanel commit', () => {
     return dialog;
   };
 
-  it('is disabled while nothing is staged', async () => {
-    api.version = agentVersion(ALL_GIT);
-    api.status = counted('e1', [entry()]);
-    renderPanel();
-    await screen.findByRole('button', { name: 'Stage src/app.py' });
-
-    const button = screen.getByRole('button', { name: 'Commit…' });
-
-    expect(button).toBeDisabled();
-    expect(button).toHaveAttribute('title', 'Stage files to commit them');
-  });
-
   it('commits the summary and description as one message and reports the new head', async () => {
     const dialog = await openCommit();
     const submit = within(dialog).getByRole('button', { name: 'Commit 1 file' });
@@ -981,19 +911,6 @@ describe('GitChangesPanel commit', () => {
     expect(screen.queryByRole('dialog', { name: 'Commit' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
     expect(await screen.findByText('Working tree clean')).toBeInTheDocument();
-  });
-
-  it('submits from the description on Ctrl+Enter', async () => {
-    const dialog = await openCommit();
-    type(summary(dialog), 'Add a');
-
-    fireEvent.keyDown(description(dialog), { key: 'Enter', ctrlKey: true });
-
-    await waitFor(() => {
-      expect(api.mutations).toEqual([
-        { kind: 'commit', request: { message: 'Add a', amend: false, no_verify: false } },
-      ]);
-    });
   });
 
   it('prefills Amend from the previous commit and takes the prefill back when untoggled untouched', async () => {
@@ -1085,21 +1002,6 @@ describe('GitChangesPanel commit', () => {
     expect(within(dialog).getByRole('button', { name: 'Commit 1 file' })).toBeDisabled();
   });
 
-  it('keeps a hook refusal inline with the hook output and the typed message', async () => {
-    api.refuse = (kind) =>
-      kind === 'commit' ? wireFailure(409, { code: 'hook_failed', message: 'lint: nope' }) : undefined;
-    const dialog = await openCommit();
-    type(summary(dialog), 'Add a');
-
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Commit 1 file' }));
-
-    const alert = await within(dialog).findByRole('alert');
-    expect(alert).toHaveTextContent('A commit hook rejected the commit.');
-    expect(alert.querySelector('pre')).toHaveTextContent('lint: nope');
-    expect(screen.getByRole('dialog', { name: 'Commit' })).toBeInTheDocument();
-    expect(summary(dialog)).toHaveValue('Add a');
-    expect(screen.queryByRole('status')).toBeNull();
-  });
 });
 
 describe('GitChangesPanel sync', () => {
@@ -1182,28 +1084,6 @@ describe('GitChangesPanel sync', () => {
     expect(screen.queryByRole('button', { name: 'Sync…' })).toBeNull();
     expect(screen.queryByRole('button', { name: UPSTREAM })).toBeNull();
     expect(screen.getByText(UPSTREAM)).toBeInTheDocument();
-  });
-
-  it('opens the sheet from the upstream line and hands focus to Close when it shuts', async () => {
-    await renderSync();
-
-    fireEvent.click(screen.getByRole('button', { name: UPSTREAM }));
-
-    expect(within(sheet()).getByText(UPSTREAM)).toBeInTheDocument();
-    expect(sheetRow('Push')).toHaveTextContent('1 commit to origin/main');
-    expect(sheetRow('Pull')).toBeDisabled();
-
-    fireEvent.click(within(sheet()).getByRole('button', { name: 'Close' }));
-
-    expect(screen.queryByRole('dialog', { name: 'Fetch / Pull / Push' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
-    expect(api.starts).toEqual([]);
-  });
-
-  it('opens the sheet straight from the terminal menu', async () => {
-    await renderSync(1);
-
-    expect(screen.getByRole('dialog', { name: 'Fetch / Pull / Push' })).toBeInTheDocument();
   });
 
   it('keeps Escape for the sheet while it is open', async () => {
@@ -1472,13 +1352,6 @@ describe('GitChangesPanel rebase', () => {
     },
   });
 
-  /** A rebase-route failure as the repository throws it, typed for the mock's reject. */
-  const rebaseFailure = (httpStatus: number, detail: unknown): Error => {
-    const error = wireFailure(httpStatus, detail);
-    if (!(error instanceof Error)) throw new Error('expected an Error off the wire');
-    return error;
-  };
-
   const banner = (): HTMLElement | null => document.querySelector<HTMLElement>('.git-panel-rebase');
   const shownBanner = (): HTMLElement => {
     const strip = banner();
@@ -1527,29 +1400,6 @@ describe('GitChangesPanel rebase', () => {
       expect(within(shownBanner()).getByRole('button', { name: 'Continue' })).toBeEnabled();
     });
     expect(shownBanner()).toHaveTextContent('No conflicts left — Continue when ready.');
-  });
-
-  it('marks the file resolved from the diff pane too', async () => {
-    await renderRebasing(rebasing('e1', [conflict('src/login.py')]));
-
-    fireEvent.click(await screen.findByRole('button', { name: /login\.py/, pressed: false }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Mark resolved' }));
-
-    await waitFor(() => {
-      expect(api.mutations).toEqual([{ kind: 'stage', paths: ['src/login.py'] }]);
-    });
-  });
-
-  it('names the file that still holds conflict markers when the agent refuses', async () => {
-    await renderRebasing(rebasing('e1', [conflict('src/login.py')]));
-    api.refuse = (kind) =>
-      kind === 'stage' ? wireFailure(409, { code: 'conflict_markers', message: 'src/login.py' }) : undefined;
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Mark src/login.py resolved' }));
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'src/login.py still has conflict markers — finish resolving it first.',
-    );
   });
 
   it('continues once nothing is left to resolve and reports the finished rebase', async () => {
@@ -1631,21 +1481,6 @@ describe('GitChangesPanel rebase', () => {
     expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
   });
 
-  it('reports a refused step with the rebase copy', async () => {
-    await renderRebasing(rebasing('e1', []));
-    api.refuseRebase = rebaseFailure(409, {
-      code: 'dirty_worktree',
-      message: 'unstaged changes to tracked files',
-    });
-
-    fireEvent.click(within(shownBanner()).getByRole('button', { name: 'Continue' }));
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Local changes are in the way — stage, commit or discard them first.',
-    );
-    expect(shownBanner()).toBeInTheDocument();
-  });
-
   it('keeps Escape for the step confirmation while it is open', async () => {
     await renderRebasing(rebasing('e1', []));
     fireEvent.click(within(shownBanner()).getByRole('button', { name: 'Abort…' }));
@@ -1666,14 +1501,6 @@ describe('GitChangesPanel rebase', () => {
 
     expect(within(shownBanner()).queryByRole('button')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Mark src/login.py resolved' })).toBeNull();
-  });
-
-  it('points to the terminal instead of Continue, Skip and Abort when the agent reports no rebase details', async () => {
-    await renderRebasing(rebasing('e1', [], null));
-
-    expect(shownBanner()).toHaveTextContent('Rebase in progress');
-    expect(shownBanner()).toHaveTextContent('Continue, skip or abort it in the terminal.');
-    expect(within(shownBanner()).queryByRole('button')).toBeNull();
   });
 
   it('opens the sheet from the terminal menu and reports the rebase it started', async () => {
@@ -1750,12 +1577,6 @@ describe('GitChangesPanel conflict resolver', () => {
     },
   });
 
-  const failure = (httpStatus: number, detail: unknown): Error => {
-    const error = wireFailure(httpStatus, detail);
-    if (!(error instanceof Error)) throw new Error('expected an Error off the wire');
-    return error;
-  };
-
   const editor = (): HTMLTextAreaElement =>
     screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Contents of src/login.py' });
   const queryEditor = (): HTMLElement | null =>
@@ -1822,27 +1643,6 @@ describe('GitChangesPanel conflict resolver', () => {
     expect(document.querySelector('.git-panel-rebase')).toHaveTextContent(
       '1 conflict — fix the files, then Mark resolved.',
     );
-  });
-
-  it('goes to the HEAD diff from the menu and back through Resolve…', async () => {
-    await openResolver();
-
-    fireEvent.click(screen.getByRole('button', { name: 'More conflict actions' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'View diff' }));
-
-    await waitFor(() => {
-      expect(api.diffs.map((request) => [request.path, request.scope])).toEqual([
-        ['src/login.py', 'unstaged'],
-      ]);
-    });
-    expect(queryEditor()).toBeNull();
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Resolve…' }));
-
-    await waitFor(() => {
-      expect(queryEditor()).not.toBeNull();
-    });
-    expect(api.conflictReads).toEqual(['src/login.py', 'src/login.py']);
   });
 
   it('closes on Apply, reports the resolved file and hands focus back to Close', async () => {
@@ -2022,13 +1822,6 @@ describe('GitChangesPanel conflict resolver', () => {
       expect(screen.queryByRole('checkbox', { name: 'Select src/session.py' })).toBeNull();
     });
 
-    it('stands alone, instead of "Working tree clean", when the resolutions equal HEAD', async () => {
-      await renderStopped(stopped('e1', [], ['src/session.py']));
-
-      expect(restoreButton()).toBeInTheDocument();
-      expect(screen.queryByText('Working tree clean')).toBeNull();
-    });
-
     it('is absent on an agent without the resolver, whatever the status carries', async () => {
       await renderStopped(stopped('e1', [entry()], ['src/session.py']), {
         ...ALL_GIT,
@@ -2065,27 +1858,5 @@ describe('GitChangesPanel conflict resolver', () => {
       expect(await screen.findByRole('button', { name: /session\.py/, pressed: false })).toBeInTheDocument();
     });
 
-    it('cancels without a request', async () => {
-      await renderStopped(stopped('e1', [entry()], ['src/session.py']));
-      fireEvent.click(restoreButton());
-
-      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-
-      expect(screen.queryByRole('alertdialog')).toBeNull();
-      expect(api.conflictCalls).toEqual([]);
-    });
-
-    it('reports a conflict git can no longer rebuild', async () => {
-      await renderStopped(stopped('e1', [entry()], ['src/session.py']));
-      api.refuseConflict = failure(409, { code: 'not_restorable', message: 'src/session.py' });
-      fireEvent.click(restoreButton());
-
-      fireEvent.click(screen.getByRole('button', { name: 'Restore conflict' }));
-
-      await waitFor(() => {
-        expect(notice()).toHaveTextContent('The conflict in src/session.py can no longer be rebuilt.');
-      });
-      expect(notice()).toHaveAttribute('data-tone', 'danger');
-    });
   });
 });

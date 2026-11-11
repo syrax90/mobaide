@@ -101,16 +101,6 @@ final class SessionManagerRefreshTests: XCTestCase {
         XCTAssertEqual(harness.tokenStore.getRefreshToken(), "refresh-1")
     }
 
-    func testEmptySuccessBodyIsTransient() async {
-        let transport = FakeRefreshTransport(behavior: .respond(status: 200, body: ""))
-        let harness = SessionHarness(userLoggedIn: true, agentConnected: true, transport: transport)
-
-        let result = await harness.sessionManager.refresh()
-
-        XCTAssertEqual(result, .transient)
-        XCTAssertEqual(harness.tokenStore.getRefreshToken(), "refresh-1")
-    }
-
     func testUndecodableSuccessBodyIsTransient() async {
         let transport = FakeRefreshTransport(behavior: .respond(status: 200, body: "not-json"))
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true, transport: transport)

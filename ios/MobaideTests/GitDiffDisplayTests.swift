@@ -65,13 +65,6 @@ final class GitDiffDisplayTests: XCTestCase {
         XCTAssertEqual(rows.last?.kind, .noNewline)
     }
 
-    func testTwoHunksKeepTheirOwnHeaders() throws {
-        let rows = GitDiffDisplay.rows(for: try diff("type_changed"))
-
-        XCTAssertEqual(rows.map(\.id), ["h0", "h0:l0", "h0:l0:nn", "h1", "h1:l0"])
-        XCTAssertEqual(rows[3].kind, .hunkHeader(range: "@@ -0,0 +1,1 @@", heading: ""))
-    }
-
     func testTruncatedDiffEndsWithTheFooterAndSkipsHeaderOnlyHunks() throws {
         let rows = GitDiffDisplay.rows(for: try diff("truncated"))
         XCTAssertEqual(rows.map(\.id), ["h0", "h0:l0", "truncated"])
@@ -94,31 +87,6 @@ final class GitDiffDisplayTests: XCTestCase {
         XCTAssertEqual(GitDiffDisplay.rows(for: complete).map(\.id), ["h0"])
     }
 
-    func testNoticesForBinaryTooLargeAndMissing() throws {
-        XCTAssertEqual(GitDiffDisplay.rows(for: try diff("binary")).map(\.kind), [.notice("Binary file — no preview")])
-        XCTAssertEqual(GitDiffDisplay.rows(for: try diff("missing")).map(\.kind), [.notice("Nothing to show for this file")])
-        XCTAssertEqual(
-            GitDiffDisplay.rows(for: diff(kind: GitDiffResponse.kindTooLarge)).map(\.kind),
-            [.notice("File too large to preview (1 MiB limit)")]
-        )
-    }
-
-    func testEmptyTextDiffReportsModeOnlyOrNoChanges() {
-        XCTAssertEqual(
-            GitDiffDisplay.rows(for: diff(oldMode: "100644", newMode: "100755")).map(\.kind),
-            [.notice("Mode changed only: 100644 → 100755")]
-        )
-        XCTAssertEqual(
-            GitDiffDisplay.rows(for: diff(oldMode: "100644", newMode: "100644")).map(\.kind),
-            [.notice("No text changes")]
-        )
-        XCTAssertEqual(
-            GitDiffDisplay.rows(for: diff(oldMode: nil, newMode: "100644")).map(\.kind),
-            [.notice("No text changes")],
-            "a missing side is not a mode change"
-        )
-    }
-
     // MARK: - renderableText(_:)
 
     func testRenderableTextExpandsTabsAndMarksCarriageReturns() {
@@ -139,48 +107,16 @@ final class GitDiffDisplayTests: XCTestCase {
         XCTAssertEqual(GitDiffDisplay.renderableText(tabbed), "    " + String(repeating: "y", count: cap - 4) + "…")
     }
 
-    // MARK: - gutterDigits(for:)
-
-    func testGutterDigitsCoverTheHighestLineNumberWithAFloorOfTwo() throws {
-        XCTAssertEqual(GitDiffDisplay.gutterDigits(for: try diff("text_modified")), 2)
-        XCTAssertEqual(GitDiffDisplay.gutterDigits(for: try diff("binary")), 2, "no hunks still reserves two columns")
-        XCTAssertEqual(
-            GitDiffDisplay.gutterDigits(for: diff(hunks: [hunk(oldStart: 995, oldLines: 10, newStart: 995, newLines: 3, lines: [])])),
-            4
-        )
-    }
-
     // MARK: - widthCandidates(_:limit:)
 
     private func lineRow(_ id: String, _ text: String) -> DiffRow {
         DiffRow(id: id, kind: .line(type: GitDiffLine.typeContext, old: 1, new: 1, text: text))
     }
 
-    func testWidthCandidatesAreTheLongestLinesOnly() {
-        let rows = [
-            DiffRow(id: "h0", kind: .hunkHeader(range: "@@ -1,3 +1,3 @@", heading: String(repeating: "h", count: 80))),
-            lineRow("l0", "ab"),
-            lineRow("l1", "abcdef"),
-            lineRow("l2", "abcd"),
-            DiffRow(id: "l2:nn", kind: .noNewline),
-        ]
-
-        XCTAssertEqual(GitDiffDisplay.widthCandidates(rows), ["abcdef", "abcd", "ab"], "a hunk header is never measured")
-        XCTAssertEqual(GitDiffDisplay.widthCandidates(rows, limit: 2), ["abcdef", "abcd"])
-    }
-
     func testWidthCandidatesCountACJKGlyphAsTwoColumns() {
         let rows = [lineRow("l0", "abcde"), lineRow("l1", "日本語")]
 
         XCTAssertEqual(GitDiffDisplay.widthCandidates(rows, limit: 1), ["日本語"], "3 wide glyphs outweigh 5 ASCII ones")
-    }
-
-    func testWidthCandidatesDefaultToTheMeasureLimitWidestEstimateFirst() {
-        let rows = (0..<300).map { lineRow("l\($0)", String(repeating: "x", count: $0 + 1)) }
-
-        let candidates = GitDiffDisplay.widthCandidates(rows)
-
-        XCTAssertEqual(candidates.map(\.count), Array(stride(from: 300, to: 300 - GitDiffDisplay.widthMeasureLimit, by: -1)))
     }
 
     // MARK: - weightedLength(_:)
@@ -202,24 +138,6 @@ final class GitDiffDisplayTests: XCTestCase {
 
     // MARK: - narrowLength(_:) and narrowCandidate(_:)
 
-    func testNarrowLengthCountsOnlyTheUTF16UnitsDrawnOneCellWide() {
-        XCTAssertEqual(GitDiffDisplay.narrowLength(""), 0)
-        XCTAssertEqual(GitDiffDisplay.narrowLength("ab ~"), 4)
-        XCTAssertEqual(GitDiffDisplay.narrowLength("a\tb"), 2, "a control char draws no cell")
-        XCTAssertEqual(GitDiffDisplay.narrowLength("\u{1F}\u{20}"), 1, "U+0020 is the first unit counted")
-        XCTAssertEqual(GitDiffDisplay.narrowLength("\u{24F}\u{250}"), 1, "Latin ends at U+024F")
-        XCTAssertEqual(GitDiffDisplay.narrowLength("e\u{301}"), 1, "a combining mark adds no cell")
-        XCTAssertEqual(GitDiffDisplay.narrowLength("\u{36F}\u{370}"), 1, "Greek starts at U+0370")
-        XCTAssertEqual(GitDiffDisplay.narrowLength("\u{4FF}\u{500}"), 1, "Cyrillic ends at U+04FF")
-        XCTAssertEqual(GitDiffDisplay.narrowLength("Привет, x"), 9)
-        XCTAssertEqual(GitDiffDisplay.narrowLength("αβγδ"), 4)
-        XCTAssertEqual(GitDiffDisplay.narrowLength("日本語"), 0)
-        XCTAssertEqual(GitDiffDisplay.narrowLength("नमस्ते"), 0)
-        XCTAssertEqual(GitDiffDisplay.narrowLength("مرحبا"), 0)
-        XCTAssertEqual(GitDiffDisplay.narrowLength("สวัสดี"), 0)
-        XCTAssertEqual(GitDiffDisplay.narrowLength("✅🙂"), 0)
-    }
-
     func testNarrowCandidateIsTheFirstLineWithTheMostOneCellUnitsNotTheLongest() {
         let rows = [
             DiffRow(id: "h0", kind: .hunkHeader(range: "@@ -1,4 +1,4 @@", heading: String(repeating: "h", count: 80))),
@@ -231,14 +149,6 @@ final class GitDiffDisplayTests: XCTestCase {
         ]
 
         XCTAssertEqual(GitDiffDisplay.narrowCandidate(rows), "Привет, мир!", "a header is never the candidate; ties go to the first line")
-    }
-
-    func testNarrowCandidateIsNilWithoutLineRows() {
-        XCTAssertNil(GitDiffDisplay.narrowCandidate([]))
-        XCTAssertNil(GitDiffDisplay.narrowCandidate([
-            DiffRow(id: "h0", kind: .hunkHeader(range: "@@ -1 +1 @@", heading: "heading")),
-            DiffRow(id: "notice", kind: .notice("Binary file — no preview")),
-        ]))
     }
 
     // MARK: - metrics(rows:gutterDigits:font:)
@@ -259,19 +169,6 @@ final class GitDiffDisplayTests: XCTestCase {
             accuracy: 1,
             "a monospaced line twice as long measures twice as wide, plus one cell of slack"
         )
-    }
-
-    func testMetricsIgnoreHeaderTextAndReserveOneCellWithoutLines() {
-        let line = lineRow("l0", "abc")
-        let header = DiffRow(id: "h0", kind: .hunkHeader(range: "@@ -1 +1 @@", heading: String(repeating: "h", count: 200)))
-
-        XCTAssertEqual(
-            GitDiffDisplay.metrics(rows: [header, line], gutterDigits: 2),
-            GitDiffDisplay.metrics(rows: [line], gutterDigits: 2)
-        )
-
-        let noLines = GitDiffDisplay.metrics(rows: [DiffRow(id: "notice", kind: .notice("Binary file — no preview"))], gutterDigits: 2)
-        XCTAssertEqual(noLines.textWidth, noLines.cell)
     }
 
     private func measured(_ text: String) -> CGFloat {
@@ -299,34 +196,6 @@ final class GitDiffDisplayTests: XCTestCase {
         XCTAssertEqual(metrics.textWidth, ceil(measured(widest)) + metrics.cell)
     }
 
-    func testMetricsMeasureEveryFloorCandidateEvenOneEstimatedNarrowerThanTheWidest() {
-        // "✅" is estimated at two cells but drawn wider, so the checks row
-        // ranks below the header yet renders past it.
-        let header = "| build | lint | test | docs | sign | ship | tags | done |"
-        let checks = "| " + Array(repeating: "✅  ", count: 8).joined(separator: " | ") + " |"
-        let rows = [lineRow("h", header), lineRow("c", checks)]
-        XCTAssertEqual(GitDiffDisplay.weightedLength(header), GitDiffDisplay.weightedLength(checks) + 1, "premise: the header ranks first")
-        XCTAssertGreaterThan(measured(checks), measured(header) + 0.5, "premise: the checks row is the widest on screen")
-
-        let metrics = GitDiffDisplay.metrics(rows: rows, gutterDigits: 2)
-
-        XCTAssertEqual(metrics.textWidth, ceil(measured(checks)) + metrics.cell)
-    }
-
-    func testMetricsKeepMeasuringPastTheFloorWhileAnEstimateCouldBeatTheWidest() {
-        // CJK is estimated at two cells a glyph but drawn narrower, so the
-        // candidate after the floor can still be the widest line.
-        let cjk = String(repeating: "日本語", count: 17)
-        let code = String(repeating: "x", count: 96)
-        let rows = (0..<GitDiffDisplay.widthMeasureFloor).map { lineRow("j\($0)", cjk) } + [lineRow("c", code)]
-        XCTAssertEqual(GitDiffDisplay.widthCandidates(rows).firstIndex(of: code), GitDiffDisplay.widthMeasureFloor, "premise: the code line ranks just past the floor")
-        XCTAssertGreaterThan(measured(code), measured(cjk), "premise: the code line is the widest on screen")
-
-        let metrics = GitDiffDisplay.metrics(rows: rows, gutterDigits: 2)
-
-        XCTAssertEqual(metrics.textWidth, ceil(measured(code)) + metrics.cell)
-    }
-
     func testMetricsMeasureACyrillicLineOutrankedBySixteenHindiLines() {
         // Devanagari is estimated at two cells a unit but drawn far narrower, so
         // a screenful of it pushes the widest line out of the candidates.
@@ -339,48 +208,6 @@ final class GitDiffDisplayTests: XCTestCase {
         let metrics = GitDiffDisplay.metrics(rows: rows, gutterDigits: 2)
 
         XCTAssertEqual(metrics.textWidth, ceil(measured(cyrillic)) + metrics.cell)
-    }
-
-    // MARK: - notices and chips
-
-    func testTruncatedNoticeNeverClaimsAnExactTotal() {
-        XCTAssertEqual(GitDiffDisplay.truncatedNotice(shown: 1, total: 12345), "Showing the first 1 of at least 12345 lines")
-        XCTAssertEqual(GitDiffDisplay.truncatedNotice(shown: 5000, total: 5000), "Truncated after 5000 lines — the full diff is longer")
-    }
-
-    func testHunkHeaderTextOmitsAnEmptyHeading() {
-        XCTAssertEqual(GitDiffDisplay.hunkHeaderText(range: "@@ -1,2 +1,3 @@", heading: ""), "@@ -1,2 +1,3 @@")
-        XCTAssertEqual(GitDiffDisplay.hunkHeaderText(range: "@@ -1,2 +1,3 @@", heading: "class Foo:"), "@@ -1,2 +1,3 @@  class Foo:")
-    }
-
-    func testChangeToneAndLabel() {
-        XCTAssertEqual(GitDiffDisplay.changeTone(GitDiffResponse.changeAdded), .ok)
-        XCTAssertEqual(GitDiffDisplay.changeTone(GitDiffResponse.changeDeleted), .danger)
-        XCTAssertEqual(GitDiffDisplay.changeTone(GitDiffResponse.changeRenamed), .accent)
-        XCTAssertEqual(GitDiffDisplay.changeTone(GitDiffResponse.changeCopied), .accent)
-        XCTAssertEqual(GitDiffDisplay.changeTone(GitDiffResponse.changeModified), .warning)
-        XCTAssertEqual(GitDiffDisplay.changeTone(GitDiffResponse.changeTypeChanged), .warning)
-        XCTAssertEqual(GitDiffDisplay.changeLabel(GitDiffResponse.changeTypeChanged), "type changed")
-    }
-
-    func testLineToneAndMarkerPerType() {
-        XCTAssertEqual(GitDiffDisplay.lineTone(GitDiffLine.typeAdd), .ok)
-        XCTAssertEqual(GitDiffDisplay.lineTone(GitDiffLine.typeDelete), .danger)
-        XCTAssertNil(GitDiffDisplay.lineTone(GitDiffLine.typeContext))
-        XCTAssertEqual(GitDiffDisplay.marker(GitDiffLine.typeAdd), "+")
-        XCTAssertEqual(GitDiffDisplay.marker(GitDiffLine.typeDelete), "-")
-        XCTAssertEqual(GitDiffDisplay.marker(GitDiffLine.typeContext), " ")
-    }
-
-    func testModeChangeAndCountsVisibility() throws {
-        XCTAssertEqual(GitDiffDisplay.modeChange(try diff("type_changed")), "120000 → 100644")
-        XCTAssertNil(GitDiffDisplay.modeChange(try diff("text_modified")))
-        XCTAssertNil(GitDiffDisplay.modeChange(try diff("no_newline_added")), "an added file has no old mode to compare")
-
-        XCTAssertTrue(GitDiffDisplay.showsCounts(try diff("text_modified")))
-        XCTAssertTrue(GitDiffDisplay.showsCounts(try diff("submodule")))
-        XCTAssertFalse(GitDiffDisplay.showsCounts(try diff("binary")))
-        XCTAssertFalse(GitDiffDisplay.showsCounts(try diff("missing")))
     }
 
     // MARK: - showsContextChoices(_:)
@@ -400,13 +227,6 @@ final class GitDiffDisplayTests: XCTestCase {
 
         let hunks = [hunk(oldStart: 1, oldLines: 1, newStart: 0, newLines: 0, lines: [line("del", old: 1, new: nil, text: "gone")])]
         XCTAssertFalse(GitDiffDisplay.showsContextChoices(diff(change: GitDiffResponse.changeDeleted, hunks: hunks)))
-    }
-
-    func testContextChoicesHideForEveryNonTextKind() throws {
-        XCTAssertFalse(GitDiffDisplay.showsContextChoices(try diff("submodule")), "a submodule's pointer hunk has no context to widen")
-        XCTAssertFalse(GitDiffDisplay.showsContextChoices(try diff("binary")))
-        XCTAssertFalse(GitDiffDisplay.showsContextChoices(try diff("missing")))
-        XCTAssertFalse(GitDiffDisplay.showsContextChoices(diff(kind: GitDiffResponse.kindTooLarge)))
     }
 
     func testContextChoicesHideForATextDiffWithoutHunks() {

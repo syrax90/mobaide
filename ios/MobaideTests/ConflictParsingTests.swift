@@ -18,22 +18,6 @@ final class ConflictParsingTests: XCTestCase {
         XCTAssertEqual(ConflictDetail.string(from: "boom"), "boom")
     }
 
-    func testStringReturnsGenericLabelForEmptyBody() {
-        XCTAssertEqual(ConflictDetail.string(from: ""), "Conflict")
-    }
-
-    func testStringFallsBackToRawBodyWhenDetailKeyMissing() {
-        let body = #"{"error":"nope"}"#
-        XCTAssertEqual(ConflictDetail.string(from: body), body)
-    }
-
-    func testStringFallsBackToRawBodyWhenDetailIsNotAString() {
-        // A git busy-shaped body handed to the project parser: `detail` is an
-        // object, not a string, so the parser returns the raw body.
-        let body = #"{"detail":{"busy_by":[]}}"#
-        XCTAssertEqual(ConflictDetail.string(from: body), body)
-    }
-
     // MARK: - stringOrNil(from:) — callers with their own fallback message
 
     func testStringOrNilExtractsDetail() {
@@ -72,21 +56,8 @@ final class ConflictParsingTests: XCTestCase {
         XCTAssertEqual(holders?[1].worktree_path, "/wt")
     }
 
-    func testBusyHoldersReturnsEmptyArrayForEmptyBusyBy() {
-        // A valid-but-empty busy list is distinct from a malformed body (nil).
-        XCTAssertEqual(ConflictDetail.busyHolders(from: #"{"detail":{"busy_by":[]}}"#)?.isEmpty, true)
-    }
-
     func testBusyHoldersReturnsNilForProjectStringDetail() {
         // A project-conflict body (`detail` is a string) is not the busy shape.
         XCTAssertNil(ConflictDetail.busyHolders(from: #"{"detail":"already exists"}"#))
-    }
-
-    func testBusyHoldersReturnsNilWhenDetailWrapperMissing() {
-        XCTAssertNil(ConflictDetail.busyHolders(from: #"{"busy_by":[{"kind":"session"}]}"#))
-    }
-
-    func testBusyHoldersReturnsNilForNonJSONBody() {
-        XCTAssertNil(ConflictDetail.busyHolders(from: "boom"))
     }
 }

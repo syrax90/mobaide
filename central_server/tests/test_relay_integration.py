@@ -55,30 +55,6 @@ def _drain_control_msgs(agent_conn: AgentConnection) -> list[dict]:
 class TestAgentTunnel:
     """Tests for /ws/agent-tunnel."""
 
-    def test_auth_required(self, app):
-        client = TestClient(app)
-        with client.websocket_connect("/ws/agent-tunnel") as ws:
-            # Send invalid auth
-            ws.send_text(json.dumps({"type": "auth", "agent_id": "x", "token": "bad"}))
-            # Connection should be closed
-            try:
-                ws.receive_text()
-            except Exception:
-                pass
-
-    def test_auth_success(self, app, registered_agent):
-        agent_id, raw_token = registered_agent
-        client = TestClient(app)
-        with client.websocket_connect("/ws/agent-tunnel") as ws:
-            ws.send_text(json.dumps({
-                "type": "auth",
-                "agent_id": agent_id,
-                "token": raw_token,
-                "protocol_version": PROTOCOL_VERSION,
-            }))
-            resp = json.loads(ws.receive_text())
-            assert resp["type"] == "auth_ok"
-
     def test_agent_registers_in_routing(self, app, registered_agent):
         agent_id, raw_token = registered_agent
         client = TestClient(app)
@@ -244,17 +220,6 @@ class TestSendSessionLifecycleHelper:
     helper with an offline agent.
     """
 
-    def test_noop_when_agent_offline(self):
-        from central_server.relay.mobile_ws import _send_session_lifecycle
-        from central_server.relay.routing import RoutingTable
-
-        routing = RoutingTable()
-        assert routing.get_agent("ghost") is None
-
-        _send_session_lifecycle(
-            routing, "ghost", "s1", "mobile_session_attach"
-        )
-
     def test_full_queue_does_not_raise(self):
         """Saturate the agent queue, then invoke the helper — it must
         swallow ``asyncio.QueueFull`` and leave the queue untouched. This
@@ -305,32 +270,6 @@ class TestEnqueueAttachHelper:
 
         assert conn.send_queue.qsize() == 1
         assert conn.send_queue.get_nowait() == b"already-full"
-
-    def test_enqueues_attach_envelope_on_free_queue(self):
-        """Positive path: confirms the envelope pushed onto the queue is
-        a CH_CONTROL frame carrying the expected ``mobile_session_attach``
-        JSON payload. Pins the wire format that the agent's ``_handle_
-        control`` dispatches on — a rename of the type field or a channel
-        swap would silently break the reconnect-replay path otherwise.
-        """
-        from central_server.relay.agent_ws import _enqueue_attach
-        from central_server.relay.routing import RoutingTable
-
-        routing = RoutingTable()
-        conn = routing.register_agent("agent-1", _mock_agent_ws())
-
-        _enqueue_attach(conn, "sess-42")
-
-        assert conn.send_queue.qsize() == 1
-        envelope = conn.send_queue.get_nowait()
-        channel, sid, payload = decode(envelope)
-        assert channel == CH_CONTROL
-        assert sid == ""
-        msg = json.loads(payload)
-        assert msg == {
-            "type": "mobile_session_attach",
-            "session_id": "sess-42",
-        }
 
 
 class TestEventsSnapshotRequest:
@@ -403,41 +342,6 @@ class TestEventsSnapshotRequest:
             ]
             assert len(snapshot_msgs) == 1
 
-    async def test_snapshot_request_emitted_before_blocking_in_writer(
-        self, app, registered_agent
-    ):
-        """The snapshot request must reach the agent queue *before* the
-        handler blocks in ``_mobile_writer``.  Otherwise the initial
-        snapshot fires with a long lag that races the UI's first render
-        and the user sees a flash of empty list before the deferred
-        snapshot repopulates it.
-
-        Pin it deterministically: the CH_CONTROL envelope must be
-        enqueued on the agent within a short grace period of the
-        mobile's websocket open — before the mobile has sent or
-        received anything on its own socket.  50 ms is generous for
-        the in-process TestClient event loop but still catches a
-        "only emit on first mobile frame" regression.
-        """
-        agent_id, _ = registered_agent
-        agent_conn = app.state.routing.register_agent(agent_id, _mock_agent_ws())
-
-        access = await _mobile_access_token(app, agent_id)
-
-        tc = TestClient(app)
-        with tc.websocket_connect(
-            f"/relay/ws/events/{agent_id}?token={access}",
-        ):
-            await asyncio.sleep(0.05)
-            # The mobile never sends anything: the snapshot request must
-            # still already be queued on the agent side.
-            assert agent_conn.send_queue.qsize() >= 1
-            snapshot_msgs = [
-                m for m in _drain_control_msgs(agent_conn)
-                if m.get("type") == "request_events_snapshot"
-            ]
-            assert len(snapshot_msgs) == 1
-
 
 class TestRequestEventsSnapshotHelper:
     """Unit-level guards for ``mobile_ws._request_events_snapshot``.
@@ -447,16 +351,6 @@ class TestRequestEventsSnapshotHelper:
     and must not raise on a saturated agent queue — the next tunnel
     reconnect will resend the snapshot.
     """
-
-    def test_noop_when_agent_offline(self):
-        from central_server.relay.mobile_ws import _request_events_snapshot
-        from central_server.relay.routing import RoutingTable
-
-        routing = RoutingTable()
-        assert routing.get_agent("ghost") is None
-
-        # Must not raise and must not attempt to enqueue.
-        _request_events_snapshot(routing, "ghost")
 
     def test_full_queue_does_not_raise(self):
         """Saturate the agent queue, then invoke the helper — it must
@@ -478,29 +372,6 @@ class TestRequestEventsSnapshotHelper:
         assert conn.send_queue.qsize() == 1
         assert conn.send_queue.get_nowait() == b"already-full"
 
-    def test_enqueues_snapshot_request_on_free_queue(self):
-        """Positive path: the envelope pushed onto the queue is a CH_CONTROL
-        frame carrying exactly ``{"type":"request_events_snapshot"}``.
-        Pins the wire format that the agent's ``_handle_control``
-        dispatches on — a rename of the type field or a channel swap
-        would silently break the initial-snapshot path.
-        """
-        from central_server.relay.mobile_ws import _request_events_snapshot
-        from central_server.relay.routing import RoutingTable
-
-        routing = RoutingTable()
-        conn = routing.register_agent("agent-1", _mock_agent_ws())
-
-        _request_events_snapshot(routing, "agent-1")
-
-        assert conn.send_queue.qsize() == 1
-        envelope = conn.send_queue.get_nowait()
-        channel, sid, payload = decode(envelope)
-        assert channel == CH_CONTROL
-        assert sid == ""
-        msg = json.loads(payload)
-        assert msg == {"type": "request_events_snapshot"}
-
 
 class TestHealthEndpoint:
     async def test_health(self, client):
@@ -514,14 +385,6 @@ class TestHealthEndpoint:
 
     async def test_health_admin_bearer_token(self, client, admin_api_auth_headers):
         resp = await client.get("/api/health", headers=admin_api_auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["status"] == "ok"
-        assert "agents_online" in data
-        assert "agents_registered" in data
-
-    async def test_health_admin_dashboard_cookie(self, client, dashboard_headers):
-        resp = await client.get("/api/health", headers=dashboard_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"

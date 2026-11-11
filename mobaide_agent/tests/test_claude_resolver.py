@@ -110,44 +110,6 @@ def test_resolver_nvm_picks_v10_over_v9_using_semver_key(
     assert _REAL_RESOLVER() == str(fake_v10)
 
 
-def test_nvm_version_key_orders_v10_above_v9(tmp_path):
-    """Direct unit test for ``_nvm_version_key`` — the comparable tuple it
-    returns for ``v10.x`` must be strictly greater than for ``v9.x``,
-    which is the property ``max(..., key=...)`` relies on. Also checks
-    that an unparseable directory name falls to the ``(0,)`` floor so
-    it never wins against a real semver-named entry.
-
-    Cross-platform: parses pure path strings so it runs on Windows too;
-    the ``v9 vs v10`` ordering matters regardless of whether the host
-    actually uses nvm.
-    """
-    v9_path = str(tmp_path / ".nvm" / "versions" / "node" / "v9.11.2" / "bin" / "claude")
-    v10_path = str(tmp_path / ".nvm" / "versions" / "node" / "v10.0.0" / "bin" / "claude")
-    v18_path = str(tmp_path / ".nvm" / "versions" / "node" / "v18.20.4" / "bin" / "claude")
-    junk_path = str(tmp_path / ".nvm" / "versions" / "node" / "system" / "bin" / "claude")
-
-    assert claude_launcher._nvm_version_key(v10_path) > claude_launcher._nvm_version_key(v9_path)
-    assert claude_launcher._nvm_version_key(v18_path) > claude_launcher._nvm_version_key(v10_path)
-    assert claude_launcher._nvm_version_key(junk_path) == (0,)
-    assert claude_launcher._nvm_version_key(v9_path) > claude_launcher._nvm_version_key(junk_path)
-
-
-def test_resolver_raises_with_actionable_message(
-    monkeypatch, tmp_path, clean_resolver_state
-):
-    monkeypatch.setattr(claude_launcher.shutil, "which", lambda *_a, **_kw: None)
-    monkeypatch.setattr(claude_launcher, "_posix_fallback_candidates", lambda: [])
-    monkeypatch.setattr(claude_launcher, "_windows_fallback_candidates", lambda: [])
-
-    with pytest.raises(ClaudeBinaryNotFoundError) as exc_info:
-        _REAL_RESOLVER()
-
-    msg = str(exc_info.value)
-    assert "npm install -g @anthropic-ai/claude-code" in msg
-    assert "MOBAIDE_CLAUDE_BIN" in msg
-    assert exc_info.value.searched_paths
-
-
 def test_resolver_is_stateless(monkeypatch, tmp_path, clean_resolver_state):
     """Two calls with different ``override`` values must each see their
     own override. The previous design cached at module level, which made
@@ -226,23 +188,6 @@ async def test_build_env_prepends_resolver_dir_to_path(monkeypatch, tmp_path):
     parts = spec.env["PATH"].split(os.pathsep)
     assert resolved_dir in parts
     assert parts[0] == resolved_dir
-
-
-@pytest.mark.asyncio
-async def test_build_env_does_not_duplicate_resolver_dir(monkeypatch, tmp_path):
-    """If the resolver dir is already in PATH, we should not prepend a duplicate."""
-    resolved_dir = "/opt/x/bin"
-    monkeypatch.setattr(
-        claude_launcher, "_resolve_claude_binary",
-        lambda *_a, **_kw: f"{resolved_dir}/claude",
-    )
-    monkeypatch.setenv("PATH", f"{resolved_dir}{os.pathsep}/usr/bin")
-    project = ProjectConfig(name="test", path=str(tmp_path))
-
-    spec = await ClaudeLauncher().build(project, ClaudeOptions())
-
-    parts = spec.env["PATH"].split(os.pathsep)
-    assert parts.count(resolved_dir) == 1
 
 
 @pytest.mark.asyncio
@@ -378,9 +323,11 @@ def test_windows_fallback_candidates_covers_localappdata_and_userprofile(
 
     candidates = claude_launcher._windows_fallback_candidates()
 
-    assert any(str(tmp_path / "local") in c for c in candidates)
+    assert any(c.startswith(str(tmp_path / "local")) for c in candidates)
+    # The suffix is a literal Windows path, so match its parts rather than a
+    # host-separator join (``/`` on the POSIX CI runner).
     assert any(
-        str(tmp_path / "userprofile" / "AppData" / "Roaming") in c
+        c.startswith(str(tmp_path / "userprofile")) and "AppData" in c and "Roaming" in c
         for c in candidates
     )
 

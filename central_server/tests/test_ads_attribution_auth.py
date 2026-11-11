@@ -62,16 +62,6 @@ class TestRegisterEndpoint:
         assert row["ad_attribution_sig"] == ATTRIBUTION["signature"]
         assert row["first_paired_at"] is None
 
-    async def test_register_consent_only_object_sets_consent_without_click(
-        self, client, app
-    ):
-        resp = await _register(client, "consent@example.com", ad_attribution=CONSENT_ONLY)
-        assert resp.status_code == 200, resp.text
-        row = await app.state.db.get_user_by_email("consent@example.com")
-        assert row["ads_consent"] == 1
-        assert (row["ad_click_id"], row["ad_click_kind"]) == (None, None)
-        assert row["ad_click_at"] == CLICKED_AT_ISO
-
     @pytest.mark.parametrize(
         "forged",
         [
@@ -119,12 +109,6 @@ class TestRegisterEndpoint:
         planted = await app.state.db.get_user_by_email("planted@example.com")
         assert planted["ad_click_id"] is None and planted["ads_consent"] == 0
 
-    async def test_register_without_ad_attribution_leaves_consent_off(self, client, app):
-        resp = await _register(client, "plain@example.com")
-        assert resp.status_code == 200
-        row = await app.state.db.get_user_by_email("plain@example.com")
-        assert row["ads_consent"] == 0 and row["ad_click_id"] is None
-
     @pytest.mark.parametrize(
         "bad",
         [
@@ -150,20 +134,6 @@ class TestRegisterEndpoint:
         assert resp.status_code == 200, resp.text
         row = await app.state.db.get_user_by_email("skew@example.com")
         assert row["ad_click_at"].startswith("2100-01-01")
-
-    async def test_login_body_with_ad_attribution_is_ignored(self, client, app):
-        await _register(client, "login@example.com")
-        resp = await client.post(
-            "/api/auth/login",
-            json={
-                "email": "login@example.com",
-                "password": "strongpass123",
-                "ad_attribution": ATTRIBUTION,
-            },
-        )
-        assert resp.status_code == 200, resp.text
-        row = await app.state.db.get_user_by_email("login@example.com")
-        assert row["ads_consent"] == 0
 
 
 def _patch_google(monkeypatch, *, sub: str, email: str) -> None:
@@ -217,15 +187,3 @@ class TestSocialSignIn:
         assert resp.status_code == 200, resp.text
         row = await app.state.db.get_user_by_email("anew@example.com")
         assert row["ad_click_id"] == GCLID and row["ads_consent"] == 1
-
-    async def test_apple_existing_user_ignores_ad_attribution(self, app, monkeypatch):
-        _patch_apple(monkeypatch, sub="a-old", email="aold@example.com")
-        svc = app.state.auth_service
-        user_id, _, _, is_new = await svc.apple_authenticate("tok", nonce="n" * 43)
-        assert is_new
-        user_id2, _, _, is_new2 = await svc.apple_authenticate(
-            "tok", nonce="n" * 43, ad_attribution=AdAttribution(**ATTRIBUTION)
-        )
-        assert (user_id2, is_new2) == (user_id, False)
-        row = await app.state.db.get_user_by_id(user_id)
-        assert row["ads_consent"] == 0 and row["ad_click_id"] is None

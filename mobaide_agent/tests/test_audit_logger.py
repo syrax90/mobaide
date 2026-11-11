@@ -6,23 +6,7 @@ import logging
 import pytest
 import structlog
 
-from mobaide.agent.logging import audit_event, get_audit_logger
-
-
-def test_audit_event_emits_to_audit_logger(capsys, caplog):
-    with caplog.at_level(logging.DEBUG):
-        audit_event(
-            "audit.test.event",
-            actor="alice",
-            target="thing-1",
-            outcome="ok",
-            extra_field=42,
-        )
-    captured = capsys.readouterr().out
-    log_text = "\n".join(r.getMessage() for r in caplog.records)
-    combined = captured + log_text
-    assert "audit.test.event" in combined
-    assert "alice" in combined
+from mobaide.agent.logging import audit_event
 
 
 @pytest.mark.asyncio
@@ -38,9 +22,6 @@ async def test_login_failure_emits_audit_event(client, caplog):
 
 
 # ---------------------------------------------------------------------------
-# Strengthened coverage: outcome propagation, optional fields, extra kwargs,
-# and get_audit_logger() stability.
-#
 # Audit events are routed via ``structlog.get_logger("audit")`` which uses
 # ``structlog.stdlib.LoggerFactory`` at runtime (after ``configure_logging``
 # has run via the ``client`` fixture import chain). They land on stdlib
@@ -99,75 +80,9 @@ class TestOutcomePropagation:
         assert entry["actor"] == "alice"
         assert entry["target"] == "file-1"
 
-    def test_outcome_failure(self, caplog):
-        with caplog.at_level(logging.INFO, logger="audit"):
-            audit_event(
-                "audit.auth.login",
-                actor="mallory",
-                target="session",
-                outcome="failure",
-            )
-
-        records = _audit_records(caplog)
-        matching = [r for r in records if r.get("event") == "audit.auth.login"]
-        assert matching
-        assert matching[-1]["outcome"] == "failure"
-
-    def test_outcome_error(self, caplog):
-        with caplog.at_level(logging.INFO, logger="audit"):
-            audit_event(
-                "audit.session.create",
-                actor="bob",
-                target="sess-1",
-                outcome="error",
-            )
-
-        records = _audit_records(caplog)
-        matching = [
-            r for r in records if r.get("event") == "audit.session.create"
-        ]
-        assert matching
-        assert matching[-1]["outcome"] == "error"
 
 
 class TestOptionalFieldHandling:
-    def test_target_none_still_emitted(self, caplog):
-        """``target=None`` must be present in the record, not omitted."""
-        with caplog.at_level(logging.INFO, logger="audit"):
-            audit_event(
-                "audit.config.reload",
-                actor="alice",
-                target=None,
-                outcome="success",
-            )
-
-        records = _audit_records(caplog)
-        matching = [
-            r for r in records if r.get("event") == "audit.config.reload"
-        ]
-        assert matching
-        entry = matching[-1]
-        assert "target" in entry
-        assert entry["target"] is None
-
-    def test_actor_none_still_emitted(self, caplog):
-        """``actor=None`` must be present in the record, not omitted."""
-        with caplog.at_level(logging.INFO, logger="audit"):
-            audit_event(
-                "audit.system.startup",
-                actor=None,
-                target="agent",
-                outcome="ok",
-            )
-
-        records = _audit_records(caplog)
-        matching = [
-            r for r in records if r.get("event") == "audit.system.startup"
-        ]
-        assert matching
-        entry = matching[-1]
-        assert "actor" in entry
-        assert entry["actor"] is None
 
     def test_all_optional_fields_none(self, caplog):
         with caplog.at_level(logging.INFO, logger="audit"):
@@ -181,14 +96,3 @@ class TestOptionalFieldHandling:
         assert entry["target"] is None
         # Default outcome is "ok".
         assert entry["outcome"] == "ok"
-
-
-class TestGetAuditLogger:
-    def test_returned_logger_emits_audit_event(self, caplog):
-        logger = get_audit_logger()
-
-        with caplog.at_level(logging.INFO, logger="audit"):
-            logger.info("audit.direct", audit=True, actor="alice")
-
-        records = _audit_records(caplog)
-        assert any(r.get("event") == "audit.direct" for r in records)

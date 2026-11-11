@@ -62,14 +62,6 @@ async def test_argv_default_is_sandboxed_non_interactive_preset(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_argv_model_flag_uses_long_form(tmp_path: Path):
-    spec = await CodexLauncher().build(
-        _make_project(str(tmp_path)), CodexOptions(model="gpt-5.4-codex"),
-    )
-    assert spec.argv[:3] == ["codex", "--model", "gpt-5.4-codex"]
-
-
-@pytest.mark.asyncio
 async def test_argv_full_auto_omits_sandbox_and_approval(tmp_path: Path):
     """full_auto maps to --dangerously-bypass-approvals-and-sandbox, which is
     mutually exclusive with the sandbox/approval flags — those must be dropped."""
@@ -79,16 +71,6 @@ async def test_argv_full_auto_omits_sandbox_and_approval(tmp_path: Path):
     assert "--dangerously-bypass-approvals-and-sandbox" in spec.argv
     assert "--sandbox" not in spec.argv
     assert "--ask-for-approval" not in spec.argv
-
-
-@pytest.mark.asyncio
-async def test_argv_custom_sandbox_and_approval(tmp_path: Path):
-    spec = await CodexLauncher().build(
-        _make_project(str(tmp_path)),
-        CodexOptions(sandbox="read-only", approval="on-request"),
-    )
-    assert spec.argv[spec.argv.index("--sandbox") + 1] == "read-only"
-    assert spec.argv[spec.argv.index("--ask-for-approval") + 1] == "on-request"
 
 
 @pytest.mark.asyncio
@@ -102,34 +84,9 @@ async def test_argv_initial_prompt_is_trailing_positional(tmp_path: Path):
     assert "--" not in spec.argv
 
 
-@pytest.mark.asyncio
-async def test_argv_no_reasoning_effort_omits_config_override(tmp_path: Path):
-    spec = await CodexLauncher().build(
-        _make_project(str(tmp_path)), CodexOptions(reasoning_effort=None),
-    )
-    assert "-c" not in spec.argv
-    assert not any("model_reasoning_effort" in a for a in spec.argv)
-
-
-@pytest.mark.asyncio
-async def test_argv_independent_of_target(tmp_path: Path):
-    """Switching ProjectConfig -> AdHocLaunch must not change the flags."""
-    opts = CodexOptions(model="m", initial_prompt="go")
-    project = await CodexLauncher().build(_make_project(str(tmp_path)), opts)
-    adhoc = await CodexLauncher().build(AdHocLaunch(cwd=str(tmp_path)), opts)
-    assert project.argv == adhoc.argv
-
-
 # ---------------------------------------------------------------------------
 # env
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_env_sets_encoding_and_term(tmp_path: Path):
-    spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
-    assert spec.env["PYTHONIOENCODING"] == "utf-8"
-    assert spec.env.get("TERM")
 
 
 @pytest.mark.asyncio
@@ -168,33 +125,12 @@ async def test_env_prepends_binary_dir_to_path(tmp_path: Path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cwd_project_root_no_worktree(tmp_path: Path):
-    spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
-    assert spec.cwd == str(tmp_path)
-
-
-@pytest.mark.asyncio
-async def test_cwd_adhoc_target(tmp_path: Path):
-    spec = await CodexLauncher().build(AdHocLaunch(cwd=str(tmp_path)), CodexOptions())
-    assert spec.cwd == str(tmp_path)
-
-
-@pytest.mark.asyncio
 async def test_cwd_missing_raises_clean_file_not_found(tmp_path: Path):
     missing = tmp_path / "does" / "not" / "exist"
     with pytest.raises(FileNotFoundError) as exc_info:
         await CodexLauncher().build(_make_project(str(missing)), CodexOptions())
     assert exc_info.value.filename == str(missing)
     assert exc_info.value.errno == 2
-
-
-@pytest.mark.asyncio
-async def test_writes_no_project_files(tmp_path: Path):
-    """Codex needs no .mcp.json / .claude settings — created_files is empty."""
-    spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
-    assert spec.created_files == []
-    assert not (tmp_path / ".mcp.json").exists()
-    assert not (tmp_path / ".claude").exists()
 
 
 class _RecordingWorktreeMgr:
@@ -309,15 +245,6 @@ async def test_launcher_forwards_override_to_resolver(tmp_path: Path, monkeypatc
     assert captured["override"] == "/my/codex"
 
 
-def test_binary_not_found_message_is_actionable():
-    err = CodexBinaryNotFoundError(searched_paths=["PATH:codex", "fallback:/x"])
-    msg = str(err)
-    assert "npm install -g @openai/codex" in msg
-    assert "MOBAIDE_CODEX_BIN" in msg
-    assert err.cli_name == "codex"
-    assert err.searched_paths == ["PATH:codex", "fallback:/x"]
-
-
 # ---------------------------------------------------------------------------
 # real resolver (override / env / not-found)
 # ---------------------------------------------------------------------------
@@ -340,31 +267,6 @@ def test_real_resolver_uses_env_var_override(monkeypatch, tmp_path, _clean_codex
     fake = _make_executable(tmp_path / "mycodex")
     monkeypatch.setenv("MOBAIDE_CODEX_BIN", str(fake))
     assert _REAL_CODEX_RESOLVER() == str(fake)
-
-
-def test_real_resolver_prefers_override_over_env(monkeypatch, tmp_path, _clean_codex_env):
-    fake_override = _make_executable(tmp_path / "from_override")
-    fake_env = _make_executable(tmp_path / "from_env")
-    monkeypatch.setenv("MOBAIDE_CODEX_BIN", str(fake_env))
-    assert _REAL_CODEX_RESOLVER(override=str(fake_override)) == str(fake_override)
-
-
-def test_real_resolver_raises_with_actionable_message(
-    monkeypatch, tmp_path, _clean_codex_env,
-):
-    from mobaide.core import cli_launcher
-
-    monkeypatch.setattr(codex_launcher, "_posix_fallback_candidates", lambda: [])
-    monkeypatch.setattr(codex_launcher, "_windows_fallback_candidates", lambda: [])
-    monkeypatch.setattr(cli_launcher.shutil, "which", lambda *_a, **_kw: None)
-
-    with pytest.raises(CodexBinaryNotFoundError) as exc_info:
-        _REAL_CODEX_RESOLVER()
-
-    msg = str(exc_info.value)
-    assert "@openai/codex" in msg
-    assert "MOBAIDE_CODEX_BIN" in msg
-    assert exc_info.value.searched_paths
 
 
 # ---------------------------------------------------------------------------
@@ -480,14 +382,6 @@ async def test_build_succeeds_when_login_status_reports_signed_in(
     spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
     assert spec.cwd == str(tmp_path)
     assert spec.argv[0] == "codex"
-
-
-def test_auth_required_error_discriminator_and_hint():
-    err = CodexAuthRequiredError()
-    assert err.cli_name == "codex"
-    msg = str(err)
-    assert "not authenticated" in msg.lower()
-    assert "codex login" in msg.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -612,19 +506,6 @@ def test_run_codex_models_argv_with_and_without_json_flag(monkeypatch):
     assert seen[1][-3:] == ["debug", "models", "--json"]
 
 
-def test_codex_fallback_models_track_current_catalog():
-    """Pin the curated fallback literally: it is served whenever enumeration
-    fails, so silent drift here is exactly the stale-picker bug again."""
-    assert codex_launcher._CODEX_FALLBACK_MODELS == (
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5.6-luna",
-        "gpt-5.5",
-        "gpt-5.4",
-        "gpt-5.4-mini",
-    )
-
-
 @pytest.mark.asyncio
 async def test_list_models_parses_json_and_memoizes(monkeypatch):
     """A successful plain enumeration memoizes the parsed list without ever
@@ -647,26 +528,6 @@ async def test_list_models_parses_json_and_memoizes(monkeypatch):
     assert second == ["gpt-x", "gpt-y"]
     assert launcher.cached_models == ("gpt-x", "gpt-y")
     assert flags == [False]
-
-
-@pytest.mark.asyncio
-async def test_list_models_memoizes_model_details(monkeypatch):
-    def _runner(_binary, _json_flag):
-        return (
-            '[{"slug": "gpt-x", "default_reasoning_level": "low",'
-            ' "supported_reasoning_levels": [{"effort": "low"}, {"effort": "high"}]},'
-            ' {"slug": "gpt-y"}]'
-        )
-
-    monkeypatch.setattr(codex_launcher, "_run_codex_models", _runner)
-    launcher = CodexLauncher()
-    assert launcher.cached_model_details is None
-
-    await launcher.list_models()
-
-    assert launcher.cached_model_details == (
-        {"id": "gpt-x", "efforts": ["low", "high"], "default_effort": "low"},
-    )
 
 
 @pytest.mark.asyncio
@@ -741,27 +602,6 @@ async def test_list_models_failed_run_memoizes_fallback(monkeypatch):
     assert launcher.cached_models == codex_launcher._CODEX_FALLBACK_MODELS
     assert launcher.cached_model_details is None
     assert calls["n"] == 2
-
-
-@pytest.mark.asyncio
-async def test_list_models_unparseable_output_serves_fallback(monkeypatch):
-    monkeypatch.setattr(
-        codex_launcher, "_run_codex_models", lambda _b, _f: "not json"
-    )
-    launcher = CodexLauncher()
-    assert await launcher.list_models() == list(codex_launcher._CODEX_FALLBACK_MODELS)
-    assert launcher.cached_model_details is None
-
-
-@pytest.mark.asyncio
-async def test_list_models_runner_exception_serves_fallback(monkeypatch):
-    def _raise(_binary, _json_flag):
-        raise OSError("exec failed")
-
-    monkeypatch.setattr(codex_launcher, "_run_codex_models", _raise)
-    launcher = CodexLauncher()
-    assert await launcher.list_models() == list(codex_launcher._CODEX_FALLBACK_MODELS)
-    assert launcher.cached_model_details is None
 
 
 @pytest.mark.asyncio

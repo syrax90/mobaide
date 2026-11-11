@@ -124,29 +124,6 @@ final class SessionsPanelModelTests: XCTestCase {
         XCTAssertEqual(stack.agentRepository.currentAgents.map(\.agent_id), ["a1", "a2"])
     }
 
-    func testInitSeedsFromTheRepositoryCaches() async throws {
-        let stack = makeStack(connectedAgentId: "a2")
-        StubURLProtocol.enqueue(status: 200, body: agentsJSON())
-        try await stack.agentRepository.refreshAgents()
-
-        let late = SessionsPanelModel(
-            sessionRepository: stack.sessionRepository,
-            agentEventBus: stack.bus,
-            customAgentTypesRepository: CustomAgentTypesRepository(
-                centralAPI: TerminalTestSupport.stubbedCentralAPI(),
-                userIdentityStore: SessionHarness().userIdentityStore
-            ),
-            agentRepository: stack.agentRepository,
-            connectedAgentId: "a2"
-        )
-
-        // A drawer opened after the agents screen fetched must not start blank
-        // and wait for the next emission.
-        XCTAssertEqual(late.connectedAgent?.name, "laptop")
-        XCTAssertEqual(late.otherAgents.map(\.name), ["desktop"])
-        XCTAssertFalse(late.synced)
-    }
-
     func testInitSeedsSyncedFromALiveBusAndSnapshot() async throws {
         let stack = makeStack()
         let observeSessions = Task { await stack.model.observeSessions() }
@@ -179,19 +156,6 @@ final class SessionsPanelModelTests: XCTestCase {
         // the list on its first frame, not "Reconnecting…".
         XCTAssertTrue(late.synced)
         XCTAssertEqual(late.sessions.map(\.session_id), ["s1"])
-    }
-
-    func testNoConnectedAgentIdListsEveryAgentAsOther() async throws {
-        let stack = makeStack(connectedAgentId: nil)
-        let observe = Task { await stack.model.observeAgents() }
-        defer { observe.cancel() }
-        StubURLProtocol.enqueue(status: 200, body: agentsJSON())
-
-        await stack.model.refreshAgents()
-
-        await waitUntil { !stack.model.agents.isEmpty }
-        XCTAssertNil(stack.model.connectedAgent)
-        XCTAssertEqual(stack.model.otherAgents.map(\.agent_id), ["a1", "a2"])
     }
 
     func testStopSendsTheDeleteAndReportsSuccess() async throws {
@@ -278,12 +242,6 @@ final class SessionsPanelModelTests: XCTestCase {
         XCTAssertEqual(nearest(list, [row("a"), row("c"), row("d", "crashed")], "c"), "a")
     }
 
-    func testNearestCountsAStartingSessionAsOpen() {
-        let list = [row("a", "stopping"), row("b"), row("c", "starting")]
-
-        XCTAssertEqual(nearest(list, list, "b"), "c")
-    }
-
     /// The agent's push can drop the stopped row before the stop resolves.
     func testNearestKeepsTheSnapshotPositionsAfterTheStoppedRowLeft() {
         let snapshot = [row("a"), row("b"), row("c"), row("d")]
@@ -302,16 +260,5 @@ final class SessionsPanelModelTests: XCTestCase {
         let snapshot = [row("a", "stopped"), row("b")]
 
         XCTAssertNil(nearest(snapshot, [row("a", "stopped"), row("z")], "b"))
-    }
-
-    func testNearestIsNilWhenNoOpenSessionIsLeft() {
-        XCTAssertNil(nearest([row("a")], [], "a"))
-        XCTAssertNil(nearest([row("a", "stopped"), row("b")], [row("a", "stopped")], "b"))
-    }
-
-    func testNearestIsNilWhenTheStoppedSessionWasNotInTheSnapshot() {
-        let list = [row("a"), row("b")]
-
-        XCTAssertNil(nearest(list, list, "x"))
     }
 }

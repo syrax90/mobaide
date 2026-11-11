@@ -55,17 +55,6 @@ class SessionEventServiceTest {
         )
     }
 
-    @Test
-    fun background_differentSessionId_notifies() {
-        assertTrue(
-            SessionEventService.shouldNotify(
-                appForeground = false,
-                visibleSessionId = "s2",
-                eventSessionId = "s1",
-            ),
-        )
-    }
-
     // ---- Null visible-session handling --------------------------------------
 
     @Test
@@ -75,17 +64,6 @@ class SessionEventServiceTest {
         assertTrue(
             SessionEventService.shouldNotify(
                 appForeground = true,
-                visibleSessionId = null,
-                eventSessionId = "s1",
-            ),
-        )
-    }
-
-    @Test
-    fun background_noVisibleSession_notifies() {
-        assertTrue(
-            SessionEventService.shouldNotify(
-                appForeground = false,
                 visibleSessionId = null,
                 eventSessionId = "s1",
             ),

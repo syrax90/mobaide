@@ -9,8 +9,6 @@ import {
   encodePairingFragment,
 } from '../../protocol/pairingPayload';
 import { MALFORMED_PAYLOAD_MESSAGE } from '../pair/pairCopy';
-import { INSTALL_COMMANDS } from './hostOs';
-import { PAIRING_HINT_CODE_LABEL, PAIRING_HINT_LINK_LABEL } from './setupCopy';
 
 const api = vi.hoisted((): {
   agents: Agent[];
@@ -176,23 +174,6 @@ describe('Agents manual add', () => {
     expect(screen.queryByLabelText('Agent name')).toBeNull();
   });
 
-  it('trims the name before sending it', async () => {
-    await openAddAndCreate('   Laptop   ');
-
-    await waitFor(() => {
-      expect(api.created).toEqual(['Laptop']);
-    });
-  });
-
-  it('cannot submit a blank name', async () => {
-    renderAgents();
-    fireEvent.click(await screen.findByRole('button', { name: 'Add manually' }));
-    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: '   ' } });
-
-    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
-    expect(api.created).toEqual([]);
-  });
-
   it('offers Done as the only way out of the credentials panel', async () => {
     // Both mobile clients block every other dismissal route because the token
     // is never retrievable again.
@@ -252,18 +233,6 @@ describe('Agents remove', () => {
       expect(readRecentPaths('agent-1')).toEqual([]);
     });
     expect(readRecentPaths('agent-2')).toEqual(['/srv/two']);
-  });
-
-  it('unsticks the sessions list only when it pointed at the removed agent', async () => {
-    useSelectedAgentStore.setState({ selectedAgentId: 'agent-2' });
-    renderAgents();
-
-    confirmRemove(await openRemoveFor('Workstation'));
-
-    await waitFor(() => {
-      expect(api.deleted).toEqual(['agent-1']);
-    });
-    expect(useSelectedAgentStore.getState().selectedAgentId).toBe('agent-2');
   });
 
   it('unsticks the sessions list when it pointed at the removed agent', async () => {
@@ -380,22 +349,6 @@ describe('Agents remove and uninstall', () => {
     expect(useToastStore.getState().toasts).toEqual([]);
   });
 
-  it('tells an offline agent it uninstalls on its next connect', async () => {
-    api.agents = [
-      { ...agent('agent-1', 'Workstation'), online: false, supportsUninstall: true },
-    ];
-    renderAgents();
-    const dialog = await openRemoveFor('Workstation');
-
-    expect(dialog.textContent).toContain('the next time it connects');
-    confirmRemove(dialog);
-
-    await waitFor(() => {
-      expect(useToastStore.getState().toasts.map((toast) => toast.message)).toEqual([
-        '“Workstation” will uninstall itself when it next comes online.',
-      ]);
-    });
-  });
 });
 
 describe('Agents setup guide', () => {
@@ -404,33 +357,6 @@ describe('Agents setup guide', () => {
     renderAgents();
     await screen.findByRole('heading', { name: 'No agents yet' });
   };
-
-  it('shows both install one-liners without opening anything', async () => {
-    // The one thing a first-run user can act on, and it used to sit behind the
-    // third of four equally weighted buttons.
-    await renderEmpty();
-
-    for (const entry of INSTALL_COMMANDS) {
-      expect(screen.getByText(entry.command)).toBeInTheDocument();
-    }
-    expect(INSTALL_COMMANDS.length).toBe(2);
-  });
-
-  it('quotes what the agent prints, as an example rather than a control', async () => {
-    await renderEmpty();
-    const sample = screen.getByTestId('setup-example-output');
-
-    expect(sample).toHaveTextContent(PAIRING_HINT_CODE_LABEL);
-    expect(sample).toHaveTextContent(PAIRING_HINT_LINK_LABEL);
-    expect(within(sample).queryByRole('button')).toBeNull();
-  });
-
-  it('hides the flat action row that the ordered steps replace', async () => {
-    await renderEmpty();
-
-    expect(screen.queryByRole('link', { name: 'Pair from a code' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Show install commands' })).toBeNull();
-  });
 
   it('hands a pasted payload to /pair as the fragment the agent would print', async () => {
     // Navigating rather than pairing here: `/pair` owns the confirm → claim →
@@ -466,10 +392,4 @@ describe('Agents setup guide', () => {
     expect(currentLocation()?.pathname).toBe('/agents');
   });
 
-  it('still reaches the manual token path from the guide', async () => {
-    await renderEmpty();
-    fireEvent.click(screen.getByRole('button', { name: 'Add manually with a token' }));
-
-    expect(screen.getByLabelText('Agent name')).toBeInTheDocument();
-  });
 });

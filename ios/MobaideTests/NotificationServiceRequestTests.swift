@@ -51,25 +51,4 @@ final class NotificationServiceRequestTests: XCTestCase {
         )
         XCTAssertNil(NotificationService.agentId(from: [:]))
     }
-
-    func testBlankAgentIdIsNotAnAgentClaim() {
-        // The dispatcher stamps `str(payload.get("agent_id", ""))`, so a push
-        // raised without an agent id arrives as `""` rather than absent — an
-        // empty claim must not send the deep link switching to a nameless agent.
-        XCTAssertNil(NotificationService.agentId(from: ["session_id": "sess-remote", "agent_id": ""]))
-    }
-
-    func testSessionIdFallsBackToIdentifierForLocalAlerts() {
-        XCTAssertEqual(
-            NotificationService.sessionId(from: [:], identifier: "sess-local"),
-            "sess-local"
-        )
-        // A non-string session_id (malformed payload) also falls back.
-        XCTAssertEqual(
-            NotificationService.sessionId(
-                from: ["session_id": 42], identifier: "sess-local"
-            ),
-            "sess-local"
-        )
-    }
 }

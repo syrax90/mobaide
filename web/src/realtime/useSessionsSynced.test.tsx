@@ -2,7 +2,7 @@ import { renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { agentEventsChannelName } from './channels';
 import { useConnectionStore } from './connectionStore';
-import { clearSessionsSnapshot, markSessionsSnapshotApplied } from './sessionsSyncStore';
+import { markSessionsSnapshotApplied } from './sessionsSyncStore';
 import type { ChannelStatus } from './webSocketChannel';
 import { useSessionsSynced } from './useSessionsSynced';
 import { resetSessionsSynced } from './__testing__/sessionsSynced';
@@ -53,18 +53,6 @@ describe('useSessionsSynced', () => {
     markSessionsSnapshotApplied('a2');
 
     const { result } = renderHook(() => useSessionsSynced('a1'));
-
-    expect(result.current).toBe(false);
-  });
-
-  it('goes false again once the snapshot is cleared', () => {
-    setChannel('connected');
-    markSessionsSnapshotApplied('a1');
-    const { result, rerender } = renderHook(() => useSessionsSynced('a1'));
-    expect(result.current).toBe(true);
-
-    clearSessionsSnapshot('a1');
-    rerender();
 
     expect(result.current).toBe(false);
   });

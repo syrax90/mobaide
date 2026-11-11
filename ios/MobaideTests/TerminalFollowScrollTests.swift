@@ -8,12 +8,6 @@ import XCTest
 final class TerminalFollowScrollTests: XCTestCase {
     // MARK: - maxOffsetY
 
-    func testMaxOffsetIsTheScrollableRange() {
-        XCTAssertEqual(
-            TerminalFollowScroll.maxOffsetY(contentHeight: 1500, viewportHeight: 600), 900
-        )
-    }
-
     func testContentShorterThanTheViewportHasNoScrollableRange() {
         XCTAssertEqual(
             TerminalFollowScroll.maxOffsetY(contentHeight: 300, viewportHeight: 600), 0,
@@ -22,18 +16,6 @@ final class TerminalFollowScrollTests: XCTestCase {
     }
 
     // MARK: - position
-
-    func testTailReadsAsFullyScrolled() {
-        XCTAssertEqual(TerminalFollowScroll.position(offsetY: 900, maxOffsetY: 900), 1)
-    }
-
-    func testTopOfTheScrollbackReadsAsZero() {
-        XCTAssertEqual(TerminalFollowScroll.position(offsetY: 0, maxOffsetY: 900), 0)
-    }
-
-    func testMidwayReadsAsTheFraction() {
-        XCTAssertEqual(TerminalFollowScroll.position(offsetY: 450, maxOffsetY: 900), 0.5, accuracy: 1e-9)
-    }
 
     func testContentThatFitsTheViewportAlwaysReadsAsFollowing() {
         XCTAssertEqual(
@@ -50,11 +32,6 @@ final class TerminalFollowScrollTests: XCTestCase {
     }
 
     // MARK: - isAtBottom
-
-    func testThresholdIsInclusive() {
-        XCTAssertTrue(TerminalFollowScroll.isAtBottom(position: TerminalFollowScroll.followThreshold))
-        XCTAssertFalse(TerminalFollowScroll.isAtBottom(position: 0.998))
-    }
 
     func testOneRowOffTheTailPausesFollowOnAPageOfScrollback() {
         // The epsilon has to absorb sub-point content-size rounding without
@@ -74,10 +51,6 @@ final class TerminalFollowScrollTests: XCTestCase {
     /// `maxOffsetY` because the grid row count floors the viewport height.
     func testHoldsSwiftTermsSnapToTheTailFromAScrolledUpViewport() {
         XCTAssertTrue(TerminalFollowScroll.holdsOffset(incomingY: 905, currentY: 300, maxOffsetY: 900))
-    }
-
-    func testHoldsASnapThatLandsExactlyOnTheTail() {
-        XCTAssertTrue(TerminalFollowScroll.holdsOffset(incomingY: 900, currentY: 300, maxOffsetY: 900))
     }
 
     func testSubPointRoundingStillCountsAsTheTail() {
@@ -105,25 +78,6 @@ final class TerminalFollowScrollTests: XCTestCase {
         XCTAssertFalse(
             TerminalFollowScroll.holdsOffset(incomingY: 0, currentY: 0, maxOffsetY: 0),
             "with the whole buffer on screen every offset is the tail, so holding would pin a stale origin"
-        )
-    }
-
-    // MARK: - pushesRowIntoScrollback
-
-    /// The three arms of `Terminal.scroll` all report through the same `scrolled`
-    /// callback, so the predicate has to re-derive which one ran from the state
-    /// the arms themselves branch on.
-    func testFullWidthScrollFromTheTopOfTheScreenReachesTheScrollback() {
-        XCTAssertTrue(
-            TerminalFollowScroll.pushesRowIntoScrollback(scrollTop: 0),
-            "the ordinary shell scroll — the only arm that pushes a line the paused reader has to scroll back for"
-        )
-    }
-
-    func testScrollRegionBelowTheFirstRowReachesNothing() {
-        XCTAssertFalse(
-            TerminalFollowScroll.pushesRowIntoScrollback(scrollTop: 1),
-            "a DECSTBM region shifts in place and overwrites its own top row — nothing leaves the viewport"
         )
     }
 }

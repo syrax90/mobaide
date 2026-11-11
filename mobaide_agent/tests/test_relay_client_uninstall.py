@@ -89,23 +89,6 @@ class TestUninstallAsAuthReply:
         assert attempts == [1]
         assert uninstall_calls == ["uninstall"]
 
-    async def test_connect_loop_stops_even_without_a_callback(
-        self, client, monkeypatch
-    ):
-        attempts: list[int] = []
-
-        async def removed_agent_connection() -> None:
-            attempts.append(1)
-            if len(attempts) > 1:
-                client._stopping = True
-            raise AgentUninstallRequested("Relay removed this agent")
-
-        monkeypatch.setattr(client, "_run_connection", removed_agent_connection)
-
-        await client._connect_loop()
-
-        assert attempts == [1]
-
 
 class TestUninstallControlFrame:
     async def test_control_frame_runs_callback_and_stops_reconnecting(

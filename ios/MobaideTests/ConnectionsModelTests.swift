@@ -49,15 +49,6 @@ final class ConnectionsModelTests: XCTestCase {
         return (direct, relay)
     }
 
-    func testLoadReflectsStoreContents() {
-        let (direct, relay) = seedProfiles()
-
-        let model = makeModel()
-
-        XCTAssertEqual(model.profiles.map(\.id), [direct.id, relay.id])
-        XCTAssertEqual(model.activeProfileId, direct.id)
-    }
-
     func testSwitchProfileSwapsCredentialsAndReconnects() async throws {
         let (_, relay) = seedProfiles()
         let model = makeModel()

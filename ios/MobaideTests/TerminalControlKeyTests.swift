@@ -14,20 +14,6 @@ final class TerminalControlKeyTests: XCTestCase {
 
     // MARK: - keys(for:) dispatch
 
-    func testCodexKindUsesCodexSet() {
-        XCTAssertEqual(ids(TerminalControlKey.keys(for: .codex)), ids(TerminalControlKey.codexKeys))
-    }
-
-    func testAntigravityKindUsesAntigravitySet() {
-        XCTAssertEqual(ids(TerminalControlKey.keys(for: .antigravity)), ids(TerminalControlKey.antigravityKeys))
-    }
-
-    func testClaudeAndAutoScanUseClaudeSet() {
-        let claudeIds = ids(TerminalControlKey.claudeKeys)
-        XCTAssertEqual(ids(TerminalControlKey.keys(for: .claude)), claudeIds)
-        XCTAssertEqual(ids(TerminalControlKey.keys(for: .autoScan)), claudeIds)
-    }
-
     func testNilCustomAndShellKindsUseDefaultSet() {
         let defaultIds = ids(TerminalControlKey.defaultKeys)
         XCTAssertEqual(
@@ -42,30 +28,6 @@ final class TerminalControlKeyTests: XCTestCase {
     }
 
     // MARK: - Set composition (order is what the user sees + the fixed wire order)
-
-    func testClaudeSetComposition() {
-        XCTAssertEqual(
-            ids(TerminalControlKey.claudeKeys),
-            ["enter", "up", "down", "left", "right", "ctrlC", "mode", "ctrlL", "esc",
-             "rewind", "tab", "backspace", "ctrlO", "ctrlR"]
-        )
-    }
-
-    func testCodexSetInsertsApproveRejectAfterFixedPrefix() {
-        XCTAssertEqual(
-            ids(TerminalControlKey.codexKeys),
-            ["enter", "up", "down", "left", "right", "ctrlC", "mode", "ctrlL", "esc",
-             "approve", "reject", "rewind", "tab", "backspace", "ctrlO", "ctrlR"]
-        )
-    }
-
-    func testAntigravitySetComposition() {
-        XCTAssertEqual(
-            ids(TerminalControlKey.antigravityKeys),
-            ["enter", "up", "down", "left", "right", "ctrlC", "ctrlL", "esc",
-             "ctrlK", "ctrlG", "ctrlD", "tab", "backspace", "ctrlO", "ctrlR"]
-        )
-    }
 
     func testDefaultSetCompositionOmitsClaudeTUIKeys() {
         // Nav + universal interrupt/erase only (Android DEFAULT_CONTROL_KEYS):

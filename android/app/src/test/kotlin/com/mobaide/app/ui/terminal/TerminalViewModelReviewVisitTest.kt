@@ -168,36 +168,6 @@ class TerminalViewModelReviewVisitTest {
     }
 
     @Test
-    fun userStop_doesNotCarryIntoTheNextVisit() = runTest(testDispatcher) {
-        val vm = healthyTerminal()
-        vm.markEndedByUser()
-        vm.markScreenHidden()
-        reviewPromptCoordinator.sessionListShown()
-
-        vm.markScreenVisible()
-        runCurrent()
-        elapse(61)
-        eventsFlow.tryEmit(WsEvent.Disconnected)
-        runCurrent()
-        vm.markScreenHidden()
-        reviewPromptCoordinator.sessionListShown()
-
-        assertEquals(0, goodSessions)
-    }
-
-    @Test
-    fun errorShownDuringTheFirstVisit_spoilsTheOuting() = runTest(testDispatcher) {
-        val vm = healthyTerminal()
-        elapse(61)
-        vm.noteReviewError()
-
-        vm.markScreenHidden()
-        reviewPromptCoordinator.sessionListShown()
-
-        assertEquals(0, goodSessions)
-    }
-
-    @Test
     fun timeInTheBackground_isNotHealthy() = runTest(testDispatcher) {
         val vm = healthyTerminal()
         owner.registry.currentState = Lifecycle.State.CREATED

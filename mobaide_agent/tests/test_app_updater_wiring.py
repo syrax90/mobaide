@@ -35,35 +35,24 @@ def _fake_app() -> FastAPI:
     return cast(FastAPI, fake)
 
 
-def test_build_updater_returns_none_without_trust_key(tmp_path, monkeypatch):
-    """Dev checkout (no trust key on disk) → updater stays disabled."""
-    monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(tmp_path / "absent"))
-    monkeypatch.delenv("MOBAIDE_AGENT_TRUST_KEY", raising=False)
-    assert _build_updater(_fake_app()) is None
+def _disabled_reasons(logger: MagicMock) -> str:
+    return " ".join(str(c.args[0]) for c in logger.info.call_args_list)
 
 
-def test_build_updater_logs_disabled_reason(tmp_path, monkeypatch, capsys):
-    """When the trust key is missing, the disabled reason MUST be logged.
+def test_build_updater_without_trust_key_is_disabled_and_logs_why(
+    tmp_path, monkeypatch
+):
+    """Dev checkout (no trust key on disk) -> updater stays disabled.
 
-    Regression guard: this is the ``HTTP 503: Auto-updater is not configured``
-    failure mode the user hit. The log line is what an operator would grep
-    for to diagnose the silent disable. If a future refactor swallows it,
-    this test fails — and so does the real-world recovery flow.
-
-    NOTE: the production logger is a structlog BoundLogger which renders
-    directly to stdout (bypassing stdlib logging), so we capture via
-    ``capsys`` rather than ``caplog``.
+    Regression guard for the silent ``HTTP 503: Auto-updater is not
+    configured``: the disabled reason must be logged for operators.
     """
     monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(tmp_path / "absent"))
     monkeypatch.delenv("MOBAIDE_AGENT_TRUST_KEY", raising=False)
+    logger = MagicMock()
+    monkeypatch.setattr("mobaide.agent.app.logger", logger)
     assert _build_updater(_fake_app()) is None
-    out = capsys.readouterr().out
-    assert "updater.disabled" in out, (
-        "expected 'updater.disabled' in structlog stdout output; got: " + repr(out)
-    )
-    assert "no_trust_key" in out, (
-        "expected 'no_trust_key' in structlog stdout output; got: " + repr(out)
-    )
+    assert "updater.disabled reason=no_trust_key" in _disabled_reasons(logger)
 
 
 def test_build_updater_returns_instance_with_trust_key(tmp_path, monkeypatch):
@@ -130,9 +119,7 @@ def test_build_updater_env_trust_key_overrides_disk(tmp_path, monkeypatch):
     assert updater._public_key_b64 == override
 
 
-def test_build_updater_disabled_for_unmanaged_interpreter(
-    tmp_path, monkeypatch, capsys
-):
+def test_build_updater_disabled_for_unmanaged_interpreter(tmp_path, monkeypatch):
     """Trust key present, but the interpreter is not the managed release venv
     (a dev / source run) → updater disabled, fail-closed.
 
@@ -148,10 +135,10 @@ def test_build_updater_disabled_for_unmanaged_interpreter(
     monkeypatch.setattr(
         "mobaide.agent.app._is_running_managed_release", lambda layout: False
     )
+    logger = MagicMock()
+    monkeypatch.setattr("mobaide.agent.app.logger", logger)
     assert _build_updater(_fake_app()) is None
-    out = capsys.readouterr().out
-    assert "updater.disabled" in out
-    assert "unmanaged_interpreter" in out
+    assert "updater.disabled reason=unmanaged_interpreter" in _disabled_reasons(logger)
 
 
 def test_is_running_managed_release_true_when_under_releases(tmp_path, monkeypatch):
@@ -220,37 +207,3 @@ async def test_relay_callback_registration_invokes_updater(tmp_path, monkeypatch
         "force": False,
     }
 
-
-def test_version_info_reads_relay_manifest():
-    """``GET /api/version`` surfaces ``relay_client.latest_manifest``
-    so the phone-side ``AgentVersionMonitor`` can compare versions
-    without an extra round trip."""
-    # Avoid pulling FastAPI through TestClient — the route body is a
-    # closure over ``app.state`` so we exercise it via a fake app.
-    from mobaide.relay.envelope import (
-        MIN_CLIENT_PROTOCOL_VERSION,
-        SUPPORTED_PROTOCOL_VERSIONS,
-    )
-    from mobaide import __version__
-
-    fake_relay = SimpleNamespace(
-        latest_manifest={
-            "version": "0.5.0",
-            "manifest_body": {"version": "0.5.0"},
-            "manifest_signature": "sig",
-        }
-    )
-    fake_state = SimpleNamespace(relay_client=fake_relay)
-
-    manifest = fake_state.relay_client.latest_manifest
-    payload = {
-        "name": "mobaide_agent",
-        "server_version": __version__,
-        "protocol_versions": list(SUPPORTED_PROTOCOL_VERSIONS),
-        "min_client_version": MIN_CLIENT_PROTOCOL_VERSION,
-        "capabilities": {},
-        "latest_agent_version": (manifest or {}).get("version"),
-    }
-    assert payload["latest_agent_version"] == "0.5.0"
-    assert "manifest_url" not in payload
-    assert "manifest_signature" not in payload

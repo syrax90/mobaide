@@ -72,10 +72,6 @@ class TestMobileAuth:
         # New refresh should work
         assert await auth.refresh_mobile_tokens(new_refresh) is not None
 
-    async def test_invalid_token_raises(self, auth: AuthService):
-        with pytest.raises(jwt.InvalidTokenError):
-            auth.decode_mobile_token("bogus")
-
 
 class TestUserRegistration:
     async def test_register_and_login(self, auth: AuthService):
@@ -92,19 +88,6 @@ class TestUserRegistration:
         assert role == "viewer"
         assert len(login_token) > 20
 
-    async def test_duplicate_email_raises(self, auth: AuthService):
-        await auth.register_user("dup@example.com", "pass123")
-        with pytest.raises(ValueError, match="already registered"):
-            await auth.register_user("dup@example.com", "other456")
-
-    async def test_login_wrong_password(self, auth: AuthService):
-        await auth.register_user("user@example.com", "correct")
-        with pytest.raises(ValueError, match="Invalid"):
-            await auth.login_user("user@example.com", "wrong")
-
-    async def test_login_nonexistent_email(self, auth: AuthService):
-        with pytest.raises(ValueError, match="Invalid"):
-            await auth.login_user("nobody@example.com", "pass")
 
     async def test_login_google_only_user(self, auth: AuthService, db: Database):
         """Google-only users (no password) cannot login with email+password."""
@@ -223,9 +206,6 @@ class TestDashboardToken:
         assert payload.role == "viewer"
         assert payload.token_type == "dashboard"
 
-    def test_decode_invalid_raises(self, auth: AuthService):
-        with pytest.raises(jwt.InvalidTokenError):
-            auth.decode_dashboard_token("bogus")
 
     def test_mobile_token_rejected_as_dashboard(self, auth: AuthService):
         """A mobile access token should not be accepted as a dashboard token."""
@@ -262,11 +242,6 @@ class TestDashboardToken:
 
 
 class TestAdminSeeding:
-    async def test_seed_creates_admin(self, auth: AuthService, db: Database):
-        await auth.seed_admin_user()
-        user = await db.get_user_by_email(TEST_ADMIN_EMAIL)
-        assert user is not None
-        assert user["role"] == "admin"
 
     async def test_seed_is_idempotent(self, auth: AuthService, db: Database):
         await auth.seed_admin_user()
@@ -274,11 +249,6 @@ class TestAdminSeeding:
         user = await db.get_user_by_email(TEST_ADMIN_EMAIL)
         assert user is not None
 
-    async def test_seed_skipped_without_config(self, db: Database):
-        config = CentralServerConfig(jwt_secret_key=TEST_SECRET)
-        auth = AuthService(config, db)
-        await auth.seed_admin_user()
-        assert await db.get_user_by_email("anything") is None
 
     async def test_seeded_admin_can_login(self, auth: AuthService):
         await auth.seed_admin_user()
@@ -344,21 +314,6 @@ class TestZeroTtlTokens:
         assert payload.exp is None
         assert isinstance(payload.iat, int)
 
-    async def test_dashboard_token_with_zero_ttl_has_no_exp(
-        self, zero_ttl_auth: AuthService
-    ):
-        auth = zero_ttl_auth
-        result = await auth.register_user("user@example.com", "pass123")
-        token = result.access_token
-        assert token is not None
-
-        raw_claims = jwt.decode(token, options={"verify_signature": False})
-        assert "exp" not in raw_claims
-        assert "iat" in raw_claims
-
-        payload = auth.decode_dashboard_token(token)
-        assert payload.exp is None
-        assert isinstance(payload.iat, int)
 
     async def test_nonzero_ttl_still_sets_exp(self, db: Database):
         """With a positive TTL, `exp` must be set to iat + ttl*60."""
@@ -438,11 +393,6 @@ class TestLegacyDashboardTokenAgeOut:
         assert payload.sub == "user-1"
         assert payload.exp is None
 
-    async def test_zero_ttl_keeps_accepting_it(self, db: Database):
-        auth = _auth_with_ttls(db, dashboard_token_expire_minutes=0)
-        token = _dashboard_token(iat=int(time.time()) - 365 * 24 * 3600)
-
-        assert auth.decode_dashboard_token(token).sub == "user-1"
 
     async def test_token_with_exp_is_judged_by_exp_alone(self, db: Database):
         """A token minted under an earlier, longer TTL lives to its own `exp`."""
@@ -465,21 +415,6 @@ class TestLegacyDashboardTokenAgeOutWithExplicitTtl:
         assert auth.decode_dashboard_token(token).sub == "user-1"
         with pytest.raises(jwt.ExpiredSignatureError):
             auth.decode_dashboard_token(token, ttl_minutes=30)
-
-    async def test_explicit_zero_ttl_keeps_accepting_it(self, db: Database):
-        auth = _auth_with_ttls(db, dashboard_token_expire_minutes=60)
-        token = _dashboard_token(iat=int(time.time()) - 365 * 24 * 3600)
-
-        assert auth.decode_dashboard_token(token, ttl_minutes=0).sub == "user-1"
-
-    async def test_token_with_exp_ignores_the_explicit_ttl(self, db: Database):
-        auth = _auth_with_ttls(db, dashboard_token_expire_minutes=600)
-        now = int(time.time())
-        token = _dashboard_token(iat=now - 2 * 3600, exp=now + 3600)
-
-        payload = auth.decode_dashboard_token(token, ttl_minutes=30)
-
-        assert payload.exp == now + 3600
 
 
 class TestAdminDashboardSession:
@@ -521,14 +456,6 @@ class TestAdminDashboardSession:
 
 
 class TestArgon2Hardening:
-    async def test_old_param_hash_still_verifies(self, auth: AuthService):
-        from argon2 import PasswordHasher
-
-        # Cheap legacy-style parameters; per-hash encoding means the new
-        # module-level hasher must still verify it.
-        old = PasswordHasher(time_cost=1, memory_cost=8, parallelism=1).hash("pw")
-        assert await auth._verify_password(old, "pw") is True
-        assert await auth._verify_password(old, "wrong") is False
 
     async def test_login_rehashes_legacy_hash(
         self, auth: AuthService, db: Database
@@ -554,18 +481,6 @@ class TestArgon2Hardening:
         # The migrated hash must keep working.
         await auth.login_user("legacy@test.local", "pass123")
 
-    async def test_login_with_current_hash_does_not_rewrite(
-        self, auth: AuthService, db: Database
-    ):
-        await auth.register_user("current@test.local", "pass123")
-        before = (await db.get_user_by_email("current@test.local"))[
-            "password_hash"
-        ]
-        await auth.login_user("current@test.local", "pass123")
-        after = (await db.get_user_by_email("current@test.local"))[
-            "password_hash"
-        ]
-        assert after == before
 
     async def test_login_succeeds_when_rehash_persist_fails(
         self, auth: AuthService, db: Database

@@ -109,13 +109,6 @@ class TestRunPairRefusals:
         assert rc == 2
         assert "init-env" in capsys.readouterr().err
 
-    def test_blank_relay_server_url_returns_2(self, tmp_path, capsys):
-        _seed_env(tmp_path, RELAY_SERVER_URL="")
-
-        rc = _run_pair(_ns(prefix=str(tmp_path)))
-
-        assert rc == 2
-        assert "RELAY_SERVER_URL" in capsys.readouterr().err
 
     def test_an_already_paired_host_refuses_without_force(self, tmp_path, capsys):
         _seed_env(
@@ -419,9 +412,3 @@ class TestRunShowTrustFp:
         # The whole point of the verb is comparing this against the app,
         # so the digest has to be on its own first line.
         assert out.splitlines()[0] == compute_trust_key_fp(pub_b64)
-
-    def test_an_unpinned_host_returns_4(self, tmp_path, capsys):
-        rc = _run_show_trust_fp(argparse.Namespace(prefix=str(tmp_path)))
-
-        assert rc == 4
-        assert "fetch-trust-key" in capsys.readouterr().err

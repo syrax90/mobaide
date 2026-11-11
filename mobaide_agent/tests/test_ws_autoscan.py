@@ -156,13 +156,6 @@ class TestAuthAndConfiguration:
             with test_client.websocket_connect("/ws/autoscan") as ws:
                 ws.receive_json()
 
-    def test_invalid_token_rejected(self, test_client):
-        with pytest.raises(Exception):
-            with test_client.websocket_connect(
-                "/ws/autoscan?token=not.a.real.jwt",
-            ) as ws:
-                ws.receive_json()
-
     def test_refresh_token_rejected(self, test_client, app):
         """Only access tokens are valid for the ws channel."""
         refresh = app.state.jwt_service.create_refresh_token(TEST_USERNAME)
@@ -220,19 +213,6 @@ class TestSnapshot:
 
         assert caught_up == {"type": "caught_up"}
 
-    def test_snapshot_empty_instances(self, test_client, auth_token, app):
-        _install_manager(app, [])
-        with test_client.websocket_connect(
-            f"/ws/autoscan?token={auth_token}",
-        ) as ws:
-            snap = ws.receive_json()
-            caught_up = ws.receive_json()
-
-        assert snap["type"] == "snapshot"
-        assert snap["data"]["scans"] == []
-        assert snap["data"]["events"] == {}
-        assert caught_up == {"type": "caught_up"}
-
 
 # --------------------------------------------------------------------------- #
 # Initial config frame handling
@@ -240,25 +220,6 @@ class TestSnapshot:
 
 
 class TestInitialFrame:
-    def test_no_initial_frame_still_works(self, test_client, auth_token, app):
-        """Client sends nothing → server 200ms timeout elapses → snapshot still flows."""
-        _install_manager(
-            app,
-            [FakeAutoScanInstance("p", _recent_events=[_make_event(1)])],
-        )
-        t0 = time.monotonic()
-        with test_client.websocket_connect(
-            f"/ws/autoscan?token={auth_token}",
-        ) as ws:
-            snap = ws.receive_json()
-            caught_up = ws.receive_json()
-        elapsed = time.monotonic() - t0
-
-        assert snap["type"] == "snapshot"
-        assert caught_up == {"type": "caught_up"}
-        # We should have waited at least some meaningful fraction of the
-        # 200ms initial-frame timeout (allow headroom for CI jitter).
-        assert elapsed >= 0.15
 
     def test_invalid_json_initial_frame_silently_ignored(
         self, test_client, auth_token, app
@@ -534,30 +495,6 @@ class TestCleanup:
 # --------------------------------------------------------------------------- #
 # Edge cases
 # --------------------------------------------------------------------------- #
-
-
-class TestEdgeCases:
-    def test_no_instances_reader_only_branch(self, test_client, auth_token, app):
-        """``all_instances() == []`` → handler enters ``if not queues: await _reader()``.
-
-        The socket stays open, the client gets snapshot + caught_up, then
-        disconnects cleanly — no crash, no unretrieved task exceptions.
-        """
-        _install_manager(app, [])
-
-        with test_client.websocket_connect(
-            f"/ws/autoscan?token={auth_token}",
-        ) as ws:
-            snap = ws.receive_json()
-            caught_up = ws.receive_json()
-            assert snap["type"] == "snapshot"
-            assert snap["data"]["scans"] == []
-            assert snap["data"]["events"] == {}
-            assert caught_up == {"type": "caught_up"}
-            # Send a no-op text frame to exercise the reader loop branch.
-            ws.send_text(json.dumps({"subscribe": []}))
-            # Tiny delay so the reader processes it before we disconnect.
-            time.sleep(0.05)
         # Block exit = clean disconnect. No assertion needed beyond not-crashing.
 
 

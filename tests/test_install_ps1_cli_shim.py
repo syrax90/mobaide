@@ -8,7 +8,6 @@ the test deletes; the real ``HKCU\\Environment`` is never opened.
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -18,11 +17,12 @@ from pathlib import Path
 import pytest
 
 from test_install_ps1 import (
-    _DEPLOY_INSTALL_PS1,
     _PS,
     _function_body_text,
     _ps_quote,
+    _run_ps_file,
     _strip_powershell_comments,
+    _values,
 )
 
 
@@ -36,42 +36,6 @@ _WINDOWS_ONLY = pytest.mark.skipif(
 )
 
 _INSTALL_URL = "https://get.example.test/install.ps1"
-
-
-def _run_ps_file(
-    tmp_path: Path, functions: tuple[str, ...], body: str
-) -> subprocess.CompletedProcess[str]:
-    """Define ``functions`` from ``install.ps1`` and run ``body`` after them.
-
-    The script goes through a UTF-8-with-BOM file so Windows PowerShell 5.1
-    neither re-quotes it on the command line nor reads it as ANSI.
-    """
-    assert _PS is not None
-    names = ", ".join(f"'{_ps_quote(n)}'" for n in functions)
-    script = (
-        "$ErrorActionPreference = 'Stop'\n"
-        "$tokens = $null; $errors = $null\n"
-        "$ast = [System.Management.Automation.Language.Parser]::ParseFile("
-        f"'{_ps_quote(str(_DEPLOY_INSTALL_PS1))}', [ref]$tokens, [ref]$errors)\n"
-        f"foreach ($name in @({names})) {{\n"
-        "    $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)\n"
-        "    . ([ScriptBlock]::Create($fn.Extent.Text))\n"
-        "}\n"
-        + body
-    )
-    path = tmp_path / "harness.ps1"
-    path.write_text(script, encoding="utf-8-sig")
-    return subprocess.run(
-        [_PS, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-         "-File", str(path)],
-        capture_output=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-
-
-def _values(stdout: str) -> dict[str, str]:
-    return dict(re.findall(r"^([A-Z]+)=(.*?)\s*$", stdout, re.M))
 
 
 def _install_cli_shim(

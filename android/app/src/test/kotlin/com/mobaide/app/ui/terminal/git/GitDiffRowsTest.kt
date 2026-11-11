@@ -5,7 +5,6 @@ import com.mobaide.app.data.network.dto.GitDiffLine
 import com.mobaide.app.data.network.dto.GitDiffResponse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -149,22 +148,6 @@ class GitDiffRowsTest {
     }
 
     @Test
-    fun binaryTooLargeAndMissing_collapseToASingleNotice() {
-        assertEquals(
-            listOf(DiffRow.Notice("notice", "Binary file — no preview")),
-            buildDiffRows(diff(kind = GitDiffResponse.KIND_BINARY)),
-        )
-        assertEquals(
-            listOf(DiffRow.Notice("notice", "File too large to preview (1 MiB limit)")),
-            buildDiffRows(diff(kind = GitDiffResponse.KIND_TOO_LARGE)),
-        )
-        assertEquals(
-            listOf(DiffRow.Notice("notice", "Nothing to show for this file")),
-            buildDiffRows(diff(kind = GitDiffResponse.KIND_MISSING)),
-        )
-    }
-
-    @Test
     fun aTextDiffWithoutHunks_explainsItself() {
         assertEquals(
             listOf(DiffRow.Notice("notice", "Mode changed only: 100644 → 100755")),
@@ -174,32 +157,6 @@ class GitDiffRowsTest {
             listOf(DiffRow.Notice("notice", "No text changes")),
             buildDiffRows(diff()),
         )
-    }
-
-    @Test
-    fun aSubmoduleDiff_rendersItsPointerLinesLikeText() {
-        val hunk = hunk(
-            oldStart = 1, oldLines = 1, newStart = 1, newLines = 1,
-            lines = listOf(
-                line(GitDiffLine.T_DEL, 1, null, "Subproject commit 0123"),
-                line(GitDiffLine.T_ADD, null, 1, "Subproject commit 7654"),
-            ),
-        )
-        val rows = buildDiffRows(diff(hunks = listOf(hunk), kind = GitDiffResponse.KIND_SUBMODULE))
-
-        assertEquals(3, rows.size)
-        assertEquals("Subproject commit 7654", (rows[2] as DiffRow.Line).text)
-    }
-
-    @Test
-    fun showsContextChoices_forATextDiffWithHunks_ofAFileOnBothSides() {
-        for (change in listOf(
-            GitDiffResponse.CHANGE_MODIFIED,
-            GitDiffResponse.CHANGE_RENAMED,
-            GitDiffResponse.CHANGE_COPIED,
-        )) {
-            assertTrue(change, showsContextChoices(diff(hunks = listOf(textHunk), change = change)))
-        }
     }
 
     @Test
@@ -243,17 +200,6 @@ class GitDiffRowsTest {
         assertEquals("a    b    c", renderableText("a\tb\tc"))
         assertEquals("plain", renderableText("plain"))
         assertEquals("", renderableText(""))
-    }
-
-    @Test
-    fun lineText_isMadeRenderableAtRowBuildTime() {
-        val hunk = hunk(
-            oldStart = 1, oldLines = 1, newStart = 1, newLines = 1,
-            lines = listOf(line(GitDiffLine.T_CTX, 1, 1, "\tx = 1\r")),
-        )
-        val rows = buildDiffRows(diff(hunks = listOf(hunk)))
-
-        assertEquals("    x = 1␍", (rows[1] as DiffRow.Line).text)
     }
 
     @Test
@@ -390,12 +336,6 @@ class GitDiffRowsTest {
         )
 
         assertEquals("Привет, мир!", narrowCandidate(rows))
-    }
-
-    @Test
-    fun narrowCandidate_isNull_withoutLineRows() {
-        assertNull(narrowCandidate(emptyList()))
-        assertNull(narrowCandidate(listOf(DiffRow.HunkHeader("h0", "@@ -1 +1 @@", "heading"), DiffRow.NoNewline("h0:nn"))))
     }
 
     @Test

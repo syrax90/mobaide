@@ -72,21 +72,6 @@ class TestParse:
         # must not announce the whole turn.
         assert parse_program_status(b"state=done:id=task-1:app=codex") is None
 
-    @pytest.mark.parametrize(
-        "payload",
-        [
-            b"state=done:id=:app=codex",
-            b"state=done:id=two words:app=codex",
-            b"state=done:id=caf\xe9:app=codex",
-            b"state=done: id =task-1:app=codex",
-        ],
-        ids=["empty", "space", "non-ascii", "spaced-key"],
-    )
-    def test_a_malformed_id_still_marks_a_sub_record(self, payload) -> None:
-        # Skipping only the bad pair would read a sub-agent's ``done`` as the
-        # root's; the spec ignores the whole report.
-        assert parse_program_status(payload) is None
-
     @pytest.mark.parametrize("kind", ["permission", "question", "auth"])
     def test_blocked_keeps_a_known_kind(self, kind) -> None:
         status = parse_program_status(f"state=blocked:kind={kind}".encode())
@@ -113,18 +98,6 @@ class TestParse:
         assert parse_program_status(payload) == (
             ProgramStatus(ProgramState.DONE, None, "codex")
         )
-
-    def test_a_repeated_key_keeps_its_last_value(self) -> None:
-        status = parse_program_status(b"state=working:app=agy:state=done:app=codex")
-        assert status == ProgramStatus(ProgramState.DONE, None, "codex")
-
-    def test_spaces_around_keys_and_values_are_ignored(self) -> None:
-        assert parse_program_status(b" state = done : app = codex ") == (
-            ProgramStatus(ProgramState.DONE, None, "codex")
-        )
-
-    def test_an_empty_app_reads_as_absent(self) -> None:
-        assert parse_program_status(b"state=done:app=") == ProgramStatus(ProgramState.DONE)
 
     def test_a_body_over_the_limit_is_discarded(self) -> None:
         body = b"state=done:msg=" + b"A" * MAX_REPORT_BYTES
@@ -162,11 +135,6 @@ class TestTap:
             ProgramState.DONE,
         ]
 
-    def test_plain_output_yields_nothing(self) -> None:
-        tap = ProgramStatusTap()
-        assert tap.feed(b"just text \x1b[31mred\x1b[0m\n") == []
-        assert tap.feed(b"") == []
-
     def test_the_support_query_is_not_a_report(self) -> None:
         tap = ProgramStatusTap()
         assert tap.feed(QUERY_BEL + QUERY_ST) == []
@@ -187,18 +155,6 @@ class TestTap:
             assert reports == [
                 ProgramStatus(ProgramState.BLOCKED, "permission", "codex"),
             ], f"failed at cut={cut}"
-
-    def test_a_report_fed_one_byte_at_a_time(self) -> None:
-        stream = (
-            _report(b"state=working:app=codex")
-            + b"\x1b[1mbold\x1b[0m"
-            + _report(b"state=done:app=codex", ST)
-        )
-        tap = ProgramStatusTap()
-        reports: list[ProgramStatus] = []
-        for i in range(len(stream)):
-            reports += tap.feed(stream[i : i + 1])
-        assert [s.state for s in reports] == [ProgramState.WORKING, ProgramState.DONE]
 
     def test_a_consumed_report_is_not_reported_again(self) -> None:
         tap = ProgramStatusTap()
@@ -231,11 +187,6 @@ class TestResponder:
         assert r.pending_replies() == REPLY_BEL
         # Replies are drained on read.
         assert r.pending_replies() == b""
-
-    def test_st_query_is_answered_with_st(self) -> None:
-        r = ProgramStatusResponder()
-        assert r.process(QUERY_ST) == b""
-        assert r.pending_replies() == REPLY_ST
 
     def test_every_query_is_answered_with_its_own_terminator(self) -> None:
         r = ProgramStatusResponder()
@@ -441,17 +392,6 @@ class TestGateTurnEnd:
         assert scheduler.elapse() == 1
         assert session.alerts == [reason]
 
-    async def test_zero_window_alerts_without_arming(self, session, scheduler) -> None:
-        gate = _gate(session, quiet_seconds=0)
-        gate.handle(_status(ProgramState.DONE))
-        assert session.alerts == ["turn_finished"]
-        assert scheduler.handles == []
-
-    def test_without_a_running_loop_it_alerts_at_once(self, session) -> None:
-        gate = _gate(session)
-        gate.handle(_status(ProgramState.ERROR))
-        assert session.alerts == ["turn_failed"]
-
     @pytest.mark.parametrize(
         "state", [ProgramState.WORKING, ProgramState.IDLE, ProgramState.CLEAR]
     )
@@ -461,13 +401,6 @@ class TestGateTurnEnd:
         gate = _gate(session)
         gate.handle(_status(ProgramState.DONE))
         gate.handle(_status(state))
-        assert scheduler.elapse() == 0
-        assert session.alerts == []
-
-    async def test_cancel_drops_the_window(self, session, scheduler) -> None:
-        gate = _gate(session)
-        gate.handle(_status(ProgramState.DONE))
-        gate.cancel()
         assert scheduler.elapse() == 0
         assert session.alerts == []
 

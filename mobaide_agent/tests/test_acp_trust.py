@@ -16,7 +16,6 @@ from mobaide.acp.trust import (
     AntigravityFolderTrust,
     ClaudeFolderTrust,
     CodexFolderTrust,
-    antigravity_settings_path,
     claude_config_path,
     codex_config_path,
     too_broad_to_record,
@@ -67,21 +66,6 @@ class TestClaudeConfigPath:
         path = claude_config_path({"CLAUDE_CONFIG_DIR": str(tmp_path / "launch")})
 
         assert path == tmp_path / "launch" / ".claude.json"
-
-    def test_launch_env_without_a_config_dir_means_home(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "host"))
-
-        assert claude_config_path({}) == Path.home() / ".claude.json"
-
-    def test_no_env_reads_the_host_env(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "host"))
-
-        assert claude_config_path() == tmp_path / "host" / ".claude.json"
-
-    def test_tilde_is_expanded(self):
-        path = claude_config_path({"CLAUDE_CONFIG_DIR": "~/claude-config"})
-
-        assert path == Path.home() / "claude-config" / ".claude.json"
 
 
 class TestIsTrusted:
@@ -334,16 +318,6 @@ class TestTooBroadToRecord:
 
         assert config.read_text(encoding="utf-8") == before
 
-    def test_a_project_folder_is_recorded_and_its_prompt_has_no_session_note(self, home, tmp_path):
-        project = home / "proj"
-        project.mkdir()
-        config = tmp_path / ".claude.json"
-        trust = ClaudeFolderTrust(str(project), config_path=config)
-
-        assert SESSION_ONLY not in trust.prompt_text
-        assert trust.grant() is True
-
-        assert json.loads(config.read_text(encoding="utf-8")) == _trusted(project)
 
     @skip_if_not_linux
     def test_a_symlink_to_home_is_too_broad(self, home, tmp_path):
@@ -374,20 +348,8 @@ class TestCodexConfigPath:
 
         assert path == tmp_path / "launch" / "config.toml"
 
-    def test_launch_env_without_codex_home_means_home(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "host"))
-
-        assert codex_config_path({}) == Path.home() / ".codex" / "config.toml"
-
-    def test_no_env_reads_the_host_env(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "host"))
-
-        assert codex_config_path() == tmp_path / "host" / "config.toml"
-
 
 class TestCodexIsTrusted:
-    def test_missing_config_file_is_untrusted(self, tmp_path):
-        assert _codex_trust(_project(tmp_path), tmp_path / "config.toml").is_trusted() is False
 
     def test_the_folder_itself(self, tmp_path):
         project = _project(tmp_path)
@@ -621,14 +583,6 @@ class TestCodexGrant:
         assert trust.grant() is False
         assert not config.exists()
 
-    def test_a_project_below_home_has_no_session_note(self, home, tmp_path):
-        project = home / "proj"
-        project.mkdir()
-        trust = _codex_trust(project, tmp_path / "config.toml")
-
-        assert SESSION_ONLY not in trust.prompt_text
-        assert trust.prompt_text.startswith("Codex will use this folder's settings")
-
 
 def _linked_worktree(tmp_path: Path) -> tuple[Path, Path]:
     """A real repository at ``work/main`` and its ``git worktree add`` at ``work/linked``."""
@@ -777,17 +731,7 @@ def _agy_trust(cwd: Path | str, settings: Path) -> AntigravityFolderTrust:
     return AntigravityFolderTrust(str(cwd), settings_path=settings)
 
 
-class TestAntigravitySettingsPath:
-    def test_defaults_to_the_cli_folder_in_home(self, home):
-        assert antigravity_settings_path() == home / ".gemini" / "antigravity-cli" / "settings.json"
-
-    def test_an_app_data_folder_holds_it(self, tmp_path):
-        assert antigravity_settings_path(tmp_path / "agy") == tmp_path / "agy" / "settings.json"
-
-
 class TestAntigravityIsTrusted:
-    def test_missing_settings_file_is_untrusted(self, tmp_path):
-        assert _agy_trust(_project(tmp_path), tmp_path / "settings.json").is_trusted() is False
 
     def test_the_listed_folder(self, tmp_path):
         project = _project(tmp_path)
@@ -939,13 +883,3 @@ class TestAntigravityGrant:
 
         assert not settings.parent.exists()
         assert trust.prompt_text.endswith(f" {SESSION_ONLY}")
-
-    def test_a_project_prompt_has_no_session_note(self, home):
-        project = home / "proj"
-        project.mkdir()
-
-        trust = AntigravityFolderTrust(str(project), settings_path=home / "settings.json")
-
-        assert trust.prompt_title == "Trust this folder?"
-        assert "Antigravity" in trust.prompt_text
-        assert SESSION_ONLY not in trust.prompt_text

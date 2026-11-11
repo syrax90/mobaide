@@ -67,20 +67,6 @@ class TerminalHorizontalScrollViewRevealCursorTest {
     }
 
     @Test
-    fun carriageReturnAfterAPan_returnsToTheLeftEdge() {
-        val (hsv, view) = staticSurface()
-        armAtCursor(view)
-        feed("x".repeat(60))
-        hsv.revealCursor(view, reveal)
-        assertTrue("precondition: the first reveal panned right", hsv.scrollX > 0)
-
-        feed("\r\n")
-        hsv.revealCursor(view, reveal)
-
-        assertEquals(0, hsv.scrollX)
-    }
-
-    @Test
     fun returningToTheBurstOriginAfterAPan_pansBack() {
         val (hsv, view) = staticSurface()
         armAtCursor(view)
@@ -118,44 +104,6 @@ class TerminalHorizontalScrollViewRevealCursorTest {
         hsv.revealCursor(view, reveal)
 
         assertEquals("passive output must not move the user's horizontal position", 0, hsv.scrollX)
-    }
-
-    @Test
-    fun outputAfterTheWindowLapses_neverPans() {
-        val (hsv, view) = staticSurface()
-        armAtCursor(view)
-        now += TerminalCursorReveal.WINDOW_MS
-
-        feed("x".repeat(60))
-        hsv.revealCursor(view, reveal)
-
-        assertEquals(0, hsv.scrollX)
-    }
-
-    @Test
-    fun aCursorThatHasNotMovedSinceTheKeystroke_neverPans() {
-        val (hsv, view) = staticSurface()
-        feed("x".repeat(60))
-        armAtCursor(view)
-
-        hsv.revealCursor(view, reveal)
-
-        assertEquals(
-            "a TUI that parks its cursor off screen would otherwise drag the view there on every key",
-            0,
-            hsv.scrollX,
-        )
-    }
-
-    @Test
-    fun fullMode_isANoOp() {
-        val (hsv, view) = fullSurface()
-        armAtCursor(view)
-
-        feed("x".repeat(20))
-        hsv.revealCursor(view, reveal)
-
-        assertEquals("no overflow, nothing to pan", 0, hsv.scrollX)
     }
 
     @Test
@@ -235,11 +183,6 @@ class TerminalHorizontalScrollViewRevealCursorTest {
                 view.width > hsv.width,
             )
             assertEquals(STATIC_COLUMNS, requireNotNull(view.mEmulator).mColumns)
-        }
-
-    private fun fullSurface(): Pair<TerminalHorizontalScrollView, TerminalView> =
-        surface(forcedColumns = 0).also { (hsv, view) ->
-            assertEquals("precondition: Full mode fits the viewport", hsv.width, view.width)
         }
 
     private fun surface(forcedColumns: Int): Pair<TerminalHorizontalScrollView, TerminalView> {

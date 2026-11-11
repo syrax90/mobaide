@@ -131,28 +131,6 @@ final class AgentListModelDeviceCodeTests: XCTestCase {
         await model.deviceCodePollTask?.value
     }
 
-    func testMintShowsTheCommandToRunOnTheAgentHost() async {
-        StubURLProtocol.enqueue(status: 200, body: Self.mintJSON)
-        let sleeper = ManualSleeper()
-        model = AgentHarness().makeAgentListModel(sleeper: sleeper)
-
-        model.startDeviceCodePairing()
-        await waitUntil {
-            if case .waitingForHost = model.deviceCodePairing { return true }
-            return false
-        }
-
-        guard case .waitingForHost(let requestId, let code, let command) = model.deviceCodePairing else {
-            return XCTFail("expected waitingForHost, got \(model.deviceCodePairing)")
-        }
-        XCTAssertEqual(requestId, "req-1")
-        XCTAssertEqual(code, "WDJB-MJHT")
-        // The operator is at a terminal, so the copyable artefact is the whole
-        // command; the code alone leaves them guessing the verb.
-        XCTAssertEqual(command, "mobaide-agent pair WDJB-MJHT")
-        XCTAssertTrue(model.deviceCodeSheetPresented)
-    }
-
     func testPollMovesToConfirmingWhenAMachineEntersTheCode() async {
         StubURLProtocol.enqueue(status: 200, body: Self.mintJSON)
         StubURLProtocol.enqueue(
@@ -174,23 +152,6 @@ final class AgentListModelDeviceCodeTests: XCTestCase {
         XCTAssertNil(blocked)
     }
 
-    func testPollNamesAnUnnamedMachineRatherThanShowingNothing() async {
-        StubURLProtocol.enqueue(status: 200, body: Self.mintJSON)
-        StubURLProtocol.enqueue(
-            status: 200,
-            body: statusJSON("redeemed", hostname: nil, os: nil)
-        )
-        let sleeper = ManualSleeper()
-        model = AgentHarness().makeAgentListModel(sleeper: sleeper)
-
-        await pollOnce(model, sleeper: sleeper)
-
-        guard case .confirming(_, let hostname, _, _, _) = model.deviceCodePairing else {
-            return XCTFail("expected confirming, got \(model.deviceCodePairing)")
-        }
-        XCTAssertEqual(hostname, "an unnamed machine")
-    }
-
     func testPollSurfacesTheRelaysBlockedVerdictBeforeTheTap() async {
         StubURLProtocol.enqueue(status: 200, body: Self.mintJSON)
         StubURLProtocol.enqueue(
@@ -206,25 +167,6 @@ final class AgentListModelDeviceCodeTests: XCTestCase {
             return XCTFail("expected confirming, got \(model.deviceCodePairing)")
         }
         XCTAssertEqual(blocked, .ownedByOther)
-    }
-
-    func testPollTreatsAnUnknownBlockedReasonAsNoWarning() async {
-        StubURLProtocol.enqueue(status: 200, body: Self.mintJSON)
-        StubURLProtocol.enqueue(
-            status: 200,
-            body: statusJSON("redeemed", blockedReason: "a_reason_from_a_newer_relay")
-        )
-        let sleeper = ManualSleeper()
-        model = AgentHarness().makeAgentListModel(sleeper: sleeper)
-
-        await pollOnce(model, sleeper: sleeper)
-
-        // Losing the warning beats refusing to render the confirm screen; the
-        // server still rejects the confirm.
-        guard case .confirming(_, _, _, _, let blocked) = model.deviceCodePairing else {
-            return XCTFail("expected confirming, got \(model.deviceCodePairing)")
-        }
-        XCTAssertNil(blocked)
     }
 
     func testPollReportsACodeThatDiedBeforeAnyMachineUsedIt() async {

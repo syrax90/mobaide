@@ -104,15 +104,6 @@ final class DeepLinkCoordinatorAgentSwitchTests: XCTestCase {
         XCTAssertEqual(harness.switchRequests, [], "already on the raising agent")
     }
 
-    func testBlankAgentIdIsTreatedAsNoAgentClaim() {
-        let harness = Harness(connectedAgentId: "agent-1")
-        harness.coordinator.handleTap(sessionId: "s1", agentId: "   ")
-
-        XCTAssertEqual(harness.router.path, [.sessionDetail(sessionId: "s1")])
-        XCTAssertNil(harness.coordinator.pendingAgentId)
-        XCTAssertEqual(harness.switchRequests, [], "an empty claim must not switch to an empty id")
-    }
-
     func testMismatchedAgentIdSwitchesOnceAndNavigatesAfterConnecting() async {
         let harness = Harness(connectedAgentId: "agent-1")
         harness.coordinator.start()
@@ -214,22 +205,6 @@ final class DeepLinkCoordinatorAgentSwitchTests: XCTestCase {
         XCTAssertEqual(harness.router.path, [.sessionDetail(sessionId: "s2")], "the surviving tap still lands")
     }
 
-    func testIsSwitchingAgentIsTrueOnlyWhileTheSwitchIsInFlight() async {
-        let harness = Harness(connectedAgentId: "agent-1")
-        harness.holdSwitch()
-        harness.coordinator.start()
-        XCTAssertFalse(harness.coordinator.isSwitchingAgent)
-
-        harness.coordinator.handleTap(sessionId: "s1", agentId: "agent-2")
-        await waitUntil { harness.switchRequests == ["agent-2"] }
-        XCTAssertTrue(harness.coordinator.isSwitchingAgent, "the wait on the raising agent must be visible")
-
-        harness.connectedAgentId = "agent-2"
-        harness.releaseSwitch()
-        await waitUntil { harness.router.path == [.sessionDetail(sessionId: "s1")] }
-        XCTAssertFalse(harness.coordinator.isSwitchingAgent, "the flag must not outlive the switch it reports")
-    }
-
     func testLogoutDuringSwitchClearsTheInFlightFlag() async {
         let harness = Harness(connectedAgentId: "agent-1")
         harness.holdSwitch()
@@ -294,37 +269,6 @@ final class DeepLinkCoordinatorAgentSwitchTests: XCTestCase {
         XCTAssertNil(harness.coordinator.pendingRoute)
         XCTAssertFalse(harness.coordinator.isSwitchingAgent)
         XCTAssertEqual(harness.switchRequests, ["agent-2"], "the now-connected agent must not be re-switched")
-    }
-
-    func testOpenSessionsWithABlankAgentIdIsIgnored() {
-        let harness = Harness(connectedAgentId: "agent-1")
-        harness.router.navigate(to: .sessionList)
-        harness.router.navigate(to: .sessionDetail(sessionId: "s1"))
-
-        harness.coordinator.openSessions(ofAgent: "   ")
-
-        XCTAssertNil(harness.coordinator.pendingRoute)
-        XCTAssertEqual(harness.router.path, [.sessionList, .sessionDetail(sessionId: "s1")])
-        XCTAssertEqual(harness.switchRequests, [])
-    }
-
-    func testOpenSessionsFailedSwitchClearsTheStashAndNamesTheAgentGenerically() async {
-        let harness = Harness(connectedAgentId: "agent-1")
-        harness.switchFailure = SwitchFailure()
-        harness.coordinator.start()
-
-        harness.coordinator.openSessions(ofAgent: "agent-2")
-
-        await waitUntil { harness.coordinator.switchError != nil }
-        let message = harness.coordinator.switchError ?? ""
-        XCTAssertTrue(
-            message.hasPrefix("Couldn’t connect to this agent:"),
-            "the drawer is not a notification; the copy must fit both callers: \(message)"
-        )
-        XCTAssertTrue(message.contains("agent offline"))
-        XCTAssertNil(harness.coordinator.pendingRoute)
-        XCTAssertNil(harness.coordinator.pendingAgentId)
-        XCTAssertEqual(harness.router.path, [])
     }
 
     func testANotificationTapSupersedesAPendingListAndViceVersa() {

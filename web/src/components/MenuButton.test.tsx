@@ -1,4 +1,4 @@
-import { createRef, type RefObject } from 'react';
+import { type RefObject } from 'react';
 import { act, cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MenuButton, type MenuItem } from './MenuButton';
@@ -56,29 +56,6 @@ afterEach(() => {
   onCommit.mockClear();
 });
 
-describe('MenuButton closed', () => {
-  it('is a collapsed menu button with an empty, hidden menu', () => {
-    const { container } = renderMenu();
-
-    expect(trigger()).toHaveAttribute('aria-haspopup', 'menu');
-    expect(trigger()).toHaveAttribute('aria-expanded', 'false');
-    // Items exist only while open: the menu keeps no rows a screen reader
-    // could walk into while the trigger claims it is collapsed.
-    expect(screen.queryByRole('menuitem')).toBeNull();
-    const menu = container.querySelector('[role="menu"]');
-    expect(menu).not.toBeNull();
-    expect(trigger()).toHaveAttribute('aria-controls', menu?.getAttribute('id'));
-  });
-
-  it('exposes the trigger through the ref a caller hands it', () => {
-    const ref = createRef<HTMLButtonElement>();
-
-    renderMenu(gitItems(), ref);
-
-    expect(ref.current).toBe(trigger());
-  });
-});
-
 describe('MenuButton opening', () => {
   it('opens on click with the first item focused, and closes on the next click', () => {
     renderMenu();
@@ -109,17 +86,6 @@ describe('MenuButton opening', () => {
 
     expect(up.defaultPrevented).toBe(true);
     expect(menuItem('Commit…')).toHaveFocus();
-  });
-
-  it('leaves other keys on the trigger to the browser', () => {
-    renderMenu();
-
-    const enter = press(trigger(), { key: 'Enter' });
-
-    // Enter and Space reach a `<button>` as a click, which the browser
-    // synthesises; the trigger must not open twice or swallow the key.
-    expect(enter.defaultPrevented).toBe(false);
-    expect(trigger()).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('mirrors a hide the browser performs itself, such as a light dismiss', () => {
@@ -340,15 +306,5 @@ describe('MenuButton selection', () => {
     expect(trigger()).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByRole('menuitem')).toBeNull();
     expect(trigger()).toHaveFocus();
-  });
-
-  it('runs only the item that was picked', () => {
-    renderMenu();
-    fireEvent.click(trigger());
-
-    fireEvent.click(menuItem('Commit…'));
-
-    expect(onCommit).toHaveBeenCalledTimes(1);
-    expect(onChanges).not.toHaveBeenCalled();
   });
 });

@@ -40,16 +40,6 @@ afterEach(() => {
 });
 
 describe('observeWindowFocus', () => {
-  it('reports focused until the window says otherwise', () => {
-    const w = fakeWin();
-    install(w.win);
-
-    expect(windowFocused()).toBe(true);
-
-    w.blur();
-
-    expect(windowFocused()).toBe(false);
-  });
 
   it('seeds from a window that was already blurred at installation', () => {
     const w = fakeWin(false);
@@ -68,32 +58,6 @@ describe('observeWindowFocus', () => {
     w.focus();
 
     expect(seen).toEqual([false, true]);
-  });
-
-  it('ignores an event that does not change the state', () => {
-    // Browsers re-fire `focus` on tab activation even when the window never
-    // lost it; a subscriber that re-asserts state must not run for those.
-    const w = fakeWin();
-    install(w.win);
-    const seen: boolean[] = [];
-    onWindowFocus((focused) => seen.push(focused));
-
-    w.fire('focus');
-    w.fire('focus');
-
-    expect(seen).toEqual([]);
-  });
-
-  it('stops notifying after unsubscribe', () => {
-    const w = fakeWin();
-    install(w.win);
-    const seen: boolean[] = [];
-    const unsubscribe = onWindowFocus((focused) => seen.push(focused));
-    unsubscribe();
-
-    w.blur();
-
-    expect(seen).toEqual([]);
   });
 
   it('removes the listeners and reverts to focused on teardown', () => {

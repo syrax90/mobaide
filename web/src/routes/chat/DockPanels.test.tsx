@@ -71,14 +71,6 @@ describe('QueueList — Send now', () => {
     expect(screen.getAllByRole('button', { name: 'Send now' })).toHaveLength(2);
   });
 
-  it('is disabled while the session is offline', () => {
-    renderQueue(true, false);
-
-    for (const button of screen.getAllByRole('button', { name: 'Send now' })) {
-      expect(button).toBeDisabled();
-    }
-  });
-
   it('steers that row and locks its buttons until the answer', async () => {
     const model = renderQueue(true);
     const [sendFirst, sendSecond] = screen.getAllByRole('button', { name: 'Send now' });

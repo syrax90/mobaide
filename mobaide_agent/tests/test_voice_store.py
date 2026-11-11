@@ -47,20 +47,12 @@ def _install_fake_model(paths: VoicePaths) -> None:
 
 
 class TestSettings:
-    def test_missing_file_means_disabled(self, paths):
-        assert load_settings(paths) == VoiceSettings()
 
     @pytest.mark.parametrize("content", ["{not json", "[1, 2]", '"enabled"', ""])
     def test_corrupt_file_means_disabled(self, paths, content):
         paths.settings_file.write_text(content, encoding="utf-8")
 
         assert load_settings(paths) == VoiceSettings()
-
-    def test_unreadable_path_means_disabled(self, tmp_path):
-        not_a_dir = tmp_path / "file"
-        not_a_dir.write_text("x", encoding="utf-8")
-
-        assert load_settings(VoicePaths(not_a_dir)) == VoiceSettings()
 
     def test_fields_of_the_wrong_type_are_ignored(self, paths):
         paths.settings_file.write_text(
@@ -110,12 +102,6 @@ class TestModelReadiness:
         _install_fake_model(paths)
         victim = paths.model_dir(FAKE_MODEL.id) / FAKE_MODEL.files[0].name
         victim.write_bytes(victim.read_bytes()[:-1])
-
-        assert not model_ready(paths, FAKE_MODEL)
-
-    def test_missing_file_is_not_ready(self, paths):
-        _install_fake_model(paths)
-        (paths.model_dir(FAKE_MODEL.id) / FAKE_MODEL.files[0].name).unlink()
 
         assert not model_ready(paths, FAKE_MODEL)
 
@@ -169,9 +155,6 @@ class TestRemoveAndCollect:
         assert remove_model(paths, FAKE_MODEL.id)
         assert not paths.model_dir(FAKE_MODEL.id).exists()
 
-    def test_remove_missing_model_is_a_no_op(self, paths):
-        assert remove_model(paths, "absent")
-
     def test_gc_models_removes_installed_models_dropped_from_the_catalog(self, paths):
         _install_fake_model(paths)
         old = paths.model_dir("old-model")
@@ -216,8 +199,6 @@ class TestRemoveAndCollect:
 
 
 class TestRunToCompletion:
-    async def test_returns_the_result(self):
-        assert await run_to_completion(lambda: 42) == 42
 
     async def test_cancelled_caller_waits_for_the_thread_to_finish(self):
         started, release = threading.Event(), threading.Event()

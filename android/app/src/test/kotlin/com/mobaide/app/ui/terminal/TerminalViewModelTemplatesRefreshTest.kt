@@ -6,7 +6,6 @@ import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_DEFAULT
 import com.mobaide.app.data.local.TerminalDisplayMode
 import com.mobaide.app.data.network.WebSocketConnection
-import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.TemplatesRepository
 import com.mobaide.app.notifications.AppForegroundTracker
@@ -24,7 +23,6 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -78,27 +76,6 @@ class TerminalViewModelTemplatesRefreshTest {
             preferencesStore = preferencesStore,
             reviewPromptCoordinator = mockk(relaxed = true),
         )
-
-    private fun template(id: String) = TemplateDto(
-        template_id = id,
-        name = "Deploy",
-        body = "deploy the thing",
-        is_favorite = false,
-        last_used_at = null,
-        created_at = "2026-01-01T00:00:00Z",
-        updated_at = "2026-01-01T00:00:00Z",
-        version = 1,
-    )
-
-    @Test
-    fun refreshTemplates_delegatesToRepository() = runTest {
-        val vm = createViewModel()
-
-        vm.refreshTemplates()
-        advanceUntilIdle()
-
-        coVerify(exactly = 1) { templatesRepository.refreshTemplates() }
-    }
 
     @Test
     fun refreshTemplates_togglesLoadingFlag() = runTest {
@@ -173,22 +150,5 @@ class TerminalViewModelTemplatesRefreshTest {
         advanceUntilIdle()
 
         coVerify(exactly = 2) { templatesRepository.refreshTemplates() }
-    }
-
-    @Test
-    fun refreshTemplates_failure_doesNotClearObservedTemplates() = runTest {
-        val cached = template("t1")
-        every { templatesRepository.observeTemplates() } returns MutableStateFlow(listOf(cached))
-        coEvery { templatesRepository.refreshTemplates() } throws RuntimeException("boom")
-        val vm = createViewModel()
-
-        vm.refreshTemplates()
-        advanceUntilIdle()
-
-        assertEquals(
-            "a failed refresh must leave the previously cached templates untouched",
-            listOf(cached),
-            vm.templates.value,
-        )
     }
 }

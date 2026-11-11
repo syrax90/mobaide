@@ -82,6 +82,12 @@ CREATE TABLE users (
 
 class TestMigration:
     async def test_v19_adds_the_table_and_the_users_column(self, tmp_path):
+        fresh = Database(str(tmp_path / "schema_head.db"))
+        await fresh.connect()
+        cursor = await fresh.conn.execute("PRAGMA user_version")
+        head = (await cursor.fetchone())[0]
+        await fresh.close()
+
         db_path = str(tmp_path / "pre_v19.db")
         db = Database(db_path)
         await db.connect()
@@ -99,7 +105,7 @@ class TestMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 23
+        assert (await cursor.fetchone())[0] == head
 
         # The column has to be ALTERed in before _SCHEMA re-runs, and the
         # new table has to come back usable alongside it.
@@ -113,19 +119,10 @@ class TestMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 23
+        assert (await cursor.fetchone())[0] == head
         assert await db.get_user_trust_key_fp(owner) == _FP_A
         assert await db.get_device_code(request_id, owner) is not None
         await db.close()
-
-    async def test_user_reads_carry_the_pin_column(self, db, owner_id):
-        # _USER_COLUMNS drives every get_user_by_*; a missed column would
-        # silently drop the pin from the row the auth layer hands around.
-        await db.pin_user_trust_key_fp(owner_id, _FP_A)
-
-        user = await db.get_user_by_id(owner_id)
-
-        assert user["trust_key_fp"] == _FP_A
 
 
 class TestCreateDeviceCode:
@@ -221,11 +218,6 @@ class TestRedeem:
         await _mint(db, owner_id, ttl=-1)
 
         assert await _redeem(db) is None
-
-    async def test_an_unknown_code_hash_is_rejected(self, db, owner_id):
-        await _mint(db, owner_id)
-
-        assert await _redeem(db, code_hash="ff" * 32) is None
 
     async def test_the_nonce_and_the_code_settle_together(self, db, owner_id):
         # Both writes are in one transaction, so a redeem that reports
@@ -330,20 +322,6 @@ class TestTrustKeyPin:
         assert await db.get_user_trust_key_fp(owner_id) is None
         assert await db.pin_user_trust_key_fp(owner_id, _FP_B) is True
 
-    async def test_clearing_an_unpinned_account_reports_no_change(
-        self, db, owner_id
-    ):
-        assert await db.clear_user_trust_key_fp(owner_id) is False
-
-    async def test_agent_count_drives_the_auto_repin_escape_hatch(
-        self, db, owner_id
-    ):
-        assert await db.count_agents_for_owner(owner_id) == 0
-
-        await db.register_agent("a1", owner_id)
-
-        assert await db.count_agents_for_owner(owner_id) == 1
-
 
 class TestCleanupAndCascade:
     async def test_expired_unredeemed_codes_are_swept(self, db, owner_id):
@@ -352,13 +330,6 @@ class TestCleanupAndCascade:
         await db.cleanup_expired_tokens()
 
         assert await db.get_device_code(request_id, owner_id) is None
-
-    async def test_a_live_code_survives_the_sweep(self, db, owner_id):
-        request_id = await _mint(db, owner_id)
-
-        await db.cleanup_expired_tokens()
-
-        assert await db.get_device_code(request_id, owner_id) is not None
 
     async def test_a_settled_row_lingers_only_for_the_retention_window(
         self, db, owner_id

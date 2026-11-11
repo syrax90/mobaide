@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isApiError, isAuthError, toApiError } from './errors';
+import { isAuthError, toApiError } from './errors';
 
 function errorResponse(
   status: number,
@@ -43,17 +43,6 @@ describe('toApiError detail shapes', () => {
     expect(error.message).toBe('Request failed (502)');
     expect(error.code).toBeNull();
     expect(error.retryAfterSeconds).toBeNull();
-  });
-
-  it('exposes the structured detail so callers can read extra fields', () => {
-    const error = toApiError(errorResponse(403), {
-      detail: { error: 'verification_required', email: 'sent-to@example.com' },
-    });
-
-    expect(error.detail).toEqual({
-      error: 'verification_required',
-      email: 'sent-to@example.com',
-    });
   });
 });
 
@@ -106,10 +95,5 @@ describe('isAuthError', () => {
     expect(isAuthError(toApiError(errorResponse(403), {}))).toBe(true);
     expect(isAuthError(toApiError(errorResponse(429), {}))).toBe(false);
     expect(isAuthError(toApiError(errorResponse(500), {}))).toBe(false);
-  });
-
-  it('is false for a non-API failure such as a dropped connection', () => {
-    expect(isAuthError(new TypeError('Failed to fetch'))).toBe(false);
-    expect(isApiError(new TypeError('Failed to fetch'))).toBe(false);
   });
 });

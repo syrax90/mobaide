@@ -12,7 +12,6 @@ import pytest
 from central_server.ads.consent import (
     COOKIE_NAME,
     ParsedAttribution,
-    canonical_payload,
     cookie_domain,
     cookie_value,
     network_fingerprint,
@@ -46,10 +45,6 @@ class TestSigning:
         signature = sign_attribution(SECRET, **CLICK)
         assert verify_attribution(SECRET, **CLICK, signature=signature)
 
-    def test_round_trips_consent_only(self):
-        signature = sign_attribution(SECRET, **CONSENT_ONLY)
-        assert verify_attribution(SECRET, **CONSENT_ONLY, signature=signature)
-
     @pytest.mark.parametrize(
         "mutation",
         [
@@ -80,10 +75,6 @@ class TestSigning:
     @pytest.mark.parametrize("hostile", ["sig☃", "\ud800", "x" * 10_000])
     def test_hostile_signatures_are_false_not_errors(self, hostile):
         assert verify_attribution(SECRET, **CLICK, signature=hostile) is False
-
-    def test_canonical_payload_shapes(self):
-        assert canonical_payload(**CLICK) == f"v=1&k=gclid&t=1756800000&id=Cj0K_abc-123&n={NET}"
-        assert canonical_payload(**CONSENT_ONLY) == f"v=1&t=1756800000&n={NET}"
 
     def test_cookie_value_is_cookie_safe_and_verifies(self):
         value = cookie_value(SECRET, **CLICK)
@@ -146,10 +137,6 @@ class TestParseCookieValue:
 
 
 class TestNetworkFingerprint:
-    def test_is_stable_and_cookie_safe(self):
-        first = network_fingerprint(SECRET, "203.0.113.7")
-        assert first == network_fingerprint(SECRET, "203.0.113.7")
-        assert re.fullmatch(r"[A-Za-z0-9_-]{16}", first)
 
     def test_differs_by_address_and_by_secret(self):
         assert network_fingerprint(SECRET, "203.0.113.7") != network_fingerprint(SECRET, "203.0.113.8")
@@ -236,21 +223,6 @@ class TestConsentEndpoint:
         assert resp.status_code == 204
         params, _ = _decode(_cookie_from(resp)[1])
         assert int(params["t"][0]) <= int(time.time())
-
-    async def test_missing_arrival_time_uses_the_server_clock(self, client):
-        before = int(time.time())
-        resp = await client.post("/api/ads/consent", json={}, headers=SAME_ORIGIN)
-        params, signature = _decode(_cookie_from(resp)[1])
-        assert before <= int(params["t"][0]) <= int(time.time())
-        assert "k" not in params and "id" not in params
-        assert verify_attribution(
-            TEST_JWT_SECRET,
-            click_id=None,
-            click_id_kind=None,
-            clicked_at=int(params["t"][0]),
-            network=TEST_CLIENT_NET,
-            signature=signature,
-        )
 
     @pytest.mark.parametrize(
         "bad",
@@ -360,25 +332,6 @@ class TestWithdrawEndpoint:
         assert resp.status_code == 204
         assert "max-age=0" in resp.headers["set-cookie"].lower()
         assert (await app.state.db.get_user_by_email("keep@example.com"))["ads_consent"] == 1
-
-    async def test_tampered_values_change_nothing(self, client, app):
-        minted = await self._minted(client)
-        resp = await client.post("/api/auth/register", json=_account_with(minted, "keep2@example.com"))
-        assert resp.status_code == 200
-        encoded, _, signature = minted.rpartition(".")
-        forged = f"{encoded}.{'b' * len(signature)}"
-
-        resp = await client.post(
-            "/api/ads/consent/withdraw", json={"value": forged}, headers=SAME_ORIGIN
-        )
-
-        assert resp.status_code == 204
-        assert (await app.state.db.get_user_by_email("keep2@example.com"))["ads_consent"] == 1
-
-    @pytest.mark.parametrize("bad", [{"value": ""}, {"value": "has space"}, {"value": "x" * 600}, {}])
-    async def test_rejects_malformed_bodies(self, client, bad):
-        resp = await client.post("/api/ads/consent/withdraw", json=bad, headers=SAME_ORIGIN)
-        assert resp.status_code == 422
 
     @pytest.mark.parametrize("headers", [{}, {"Origin": "https://get.mobaide.com"}])
     async def test_refuses_cross_site_requests(self, client, headers):

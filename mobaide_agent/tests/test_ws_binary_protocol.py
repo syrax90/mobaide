@@ -9,36 +9,12 @@ from __future__ import annotations
 
 import json
 import struct
-import threading
 import time
 
 import pytest
 from starlette.testclient import TestClient
 
 from tests.conftest import TEST_USERNAME, drain_text_preamble
-
-
-def _recv_bytes_with_timeout(ws, timeout: float) -> bytes | None:
-    """Receive a binary frame from the TestClient WS or None on timeout.
-
-    The starlette TestClient WS uses a blocking sync receive with no
-    timeout parameter, so we run it in a worker thread and join with a
-    deadline.
-    """
-    result: list[bytes] = []
-
-    def _worker() -> None:
-        try:
-            result.append(ws.receive_bytes())
-        except Exception:
-            pass
-
-    t = threading.Thread(target=_worker, daemon=True)
-    t.start()
-    t.join(timeout)
-    if not result:
-        return None
-    return result[0]
 
 
 @pytest.fixture
@@ -49,6 +25,13 @@ def test_client(app):
 @pytest.fixture
 def auth_token(app) -> str:
     return app.state.jwt_service.create_access_token(TEST_USERNAME)
+
+
+def _wait_for_writes(captured: list[bytes], count: int, timeout: float = 5.0) -> None:
+    """Poll until ``count`` PTY writes landed; the server adds delays between them."""
+    deadline = time.monotonic() + timeout
+    while len(captured) < count and time.monotonic() < deadline:
+        time.sleep(0.02)
 
 
 def _create_session(test_client: TestClient, auth_token: str) -> str:
@@ -287,8 +270,7 @@ class TestInputFrame:
                 _drain_through_replay_end(ws)
                 payload = b"\x03echo hi\r"  # Ctrl-C then a CR-terminated line
                 ws.send_bytes(b"i" + payload)
-                # Give the server reader a moment to dispatch.
-                time.sleep(0.5)
+                _wait_for_writes(captured, 1)
         finally:
             session._backend.write = original_write  # type: ignore[method-assign]
 
@@ -325,7 +307,7 @@ class TestExecuteFrame:
                 _drain_through_replay_end(ws)
                 payload = b"/stats"
                 ws.send_bytes(b"x" + payload)
-                time.sleep(1.0)
+                _wait_for_writes(captured, 3)
         finally:
             session._backend.write = original_write  # type: ignore[method-assign]
 
@@ -399,7 +381,7 @@ class TestSubmitFrame:
                 _drain_through_replay_end(ws)
                 payload = b"\x01\x0bhello world"
                 ws.send_bytes(b"m" + payload)
-                time.sleep(1.0)
+                _wait_for_writes(captured, 2)
         finally:
             session._backend.write = original_write  # type: ignore[method-assign]
 

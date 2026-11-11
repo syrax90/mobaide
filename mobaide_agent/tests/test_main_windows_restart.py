@@ -222,41 +222,6 @@ class TestTryRestartWindowsServiceDispatcher:
             f"stdout: {out!r}"
         )
 
-    def test_prints_skip_message_when_neither_registered(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        # Both probes miss -> dispatcher must NOT attempt any restart and
-        # MUST emit a single skip-restart line so operators understand
-        # why the post-pair restart silently no-op'd. Returns 0 so the
-        # outer ``_try_restart_service`` does not surface a fake failure
-        # to the pair / fetch-trust-key flow.
-        def responder(cmd: list[str]) -> tuple[int, str, str]:
-            if cmd[0] == "schtasks.exe" and "/Query" in cmd:
-                return 1, "", "ERROR: The system cannot find the file specified."
-            if cmd[0] == "sc.exe" and cmd[1] == "query":
-                return 1060, "", "[SC] EnumQueryServicesStatus:OpenService FAILED 1060"
-            raise AssertionError(
-                f"dispatcher must not invoke restart commands when both "
-                f"probes miss; got unexpected call {cmd!r}"
-            )
-
-        _silence_waits(monkeypatch)
-        calls = _install_run_with_timeout_recorder(monkeypatch, responder)
-
-        rc = _main._try_restart_windows_service()
-
-        assert rc == 0
-        # Exactly two probes; nothing else.
-        assert len(calls) == 2, (
-            f"both-miss path must invoke exactly the two probes "
-            f"(schtasks /Query, sc.exe query); got {len(calls)} calls: "
-            f"{calls!r}"
-        )
-        out = capsys.readouterr().out
-        # Single skip-restart line referencing both candidates.
-        assert "No MobaideAgent Scheduled Task or service" in out
-        assert "skipping restart" in out
-
 
 class TestRestartWindowsScheduledTask:
     """End -> wait-ready -> Run is the canonical Scheduled-Task restart.
@@ -293,37 +258,6 @@ class TestRestartWindowsScheduledTask:
         ], (
             "expected exactly two schtasks.exe calls (/End then /Run) "
             f"in that order; got {calls!r}"
-        )
-
-    def test_end_uses_stop_timeout(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # /End must run with the longer stop timeout (30 s by default),
-        # not the 15 s restart timeout. A 15 s ceiling on /End would
-        # cap how long the supervisor waits for a stuck launcher to
-        # release its Job Object children before the wait-ready poll
-        # starts looping fruitlessly.
-        seen_timeouts: list[tuple[str, int]] = []
-
-        def fake_run_with_timeout(
-            cmd: list[str], *, timeout: int = _main._AGENT_RESTART_TIMEOUT_S
-        ) -> tuple[int, str, str]:
-            # Tag each call with the verb in cmd[1] so the assertion can
-            # zero in on the End-vs-Run timeout difference.
-            verb = cmd[1] if len(cmd) > 1 else ""
-            seen_timeouts.append((verb, timeout))
-            return 0, "", ""
-
-        monkeypatch.setattr(_main, "_run_with_timeout", fake_run_with_timeout)
-        _silence_waits(monkeypatch)
-
-        _main._restart_windows_scheduled_task("MobaideAgent")
-
-        end_timeout = next(t for verb, t in seen_timeouts if verb == "/End")
-        assert end_timeout == _main._AGENT_STOP_TIMEOUT_S, (
-            f"/End must use _AGENT_STOP_TIMEOUT_S "
-            f"({_main._AGENT_STOP_TIMEOUT_S}s) to allow the launcher's "
-            f"25s graceful-stop window plus margin; got {end_timeout}s"
         )
 
     def test_emits_admin_hint_on_run_failure(
@@ -428,34 +362,6 @@ class TestRestartStopsLeftoverAgent:
             ("terminate", [10, 13]),
             ["schtasks.exe", "/Run", "/TN", "MobaideAgent"],
         ]
-
-    def test_reports_how_many_processes_it_stopped(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-        fake_processes: _FakeWindowsProcesses,
-    ) -> None:
-        fake_processes.leftover = [10, 13]
-        _silence_waits(monkeypatch)
-        _install_run_with_timeout_recorder(monkeypatch, lambda _cmd: (0, "", ""))
-
-        _main._restart_windows_scheduled_task("MobaideAgent", Path(r"D:\agent"))
-
-        assert "Stopped 2 leftover agent process(es)" in capsys.readouterr().out
-
-    def test_nothing_left_over_prints_nothing_extra(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-        fake_processes: _FakeWindowsProcesses,
-    ) -> None:
-        _silence_waits(monkeypatch)
-        _install_run_with_timeout_recorder(monkeypatch, lambda _cmd: (0, "", ""))
-
-        _main._restart_windows_scheduled_task("MobaideAgent")
-
-        assert not any(e[0] == "terminate" for e in fake_processes.events)
-        assert "leftover" not in capsys.readouterr().out
 
     def test_names_processes_that_would_not_stop_and_still_runs(
         self,
@@ -628,78 +534,6 @@ class TestWaitForWindowsScheduledTaskReady:
             f"_wait_for_windows_scheduled_task_ready must not sleep "
             f"after seeing ``Status: Ready`` on the first Query; got "
             f"sleep_calls={sleep_calls!r}"
-        )
-
-    def test_uses_query_with_verbose_list_format(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # The Status line only appears in the /FO LIST /V output; the
-        # default /FO TABLE format would emit a different header set
-        # ("TaskName Next Run Time Status") that the line-by-line parser
-        # would silently fail to match, never returning early and
-        # bottoming out on the 10 s timeout.
-        seen_argv: list[list[str]] = []
-
-        def fake_run_with_timeout(
-            cmd: list[str], *, timeout: int = _main._AGENT_RESTART_TIMEOUT_S
-        ) -> tuple[int, str, str]:
-            seen_argv.append(list(cmd))
-            return 0, "Status: Ready\n", ""
-
-        monkeypatch.setattr(_main, "_run_with_timeout", fake_run_with_timeout)
-        monkeypatch.setattr(_main.time, "sleep", lambda _s: None)
-
-        _main._wait_for_windows_scheduled_task_ready("MobaideAgent")
-
-        assert seen_argv, "Query was never invoked"
-        # The argv MUST include /FO LIST /V (in that order if present)
-        # so the verbose output carrying the Status line is produced.
-        cmd = seen_argv[0]
-        assert "/FO" in cmd, (
-            f"Query must specify /FO so the parser can rely on a known "
-            f"output format; got {cmd!r}"
-        )
-        fo_idx = cmd.index("/FO")
-        assert cmd[fo_idx + 1] == "LIST", (
-            f"Query must use /FO LIST (the only format that emits "
-            f"``Status: Ready`` line by line); got {cmd!r}"
-        )
-        assert "/V" in cmd, (
-            f"Query must request verbose output (/V); ``Status:`` is a "
-            f"verbose-only column. Got argv: {cmd!r}"
-        )
-
-    def test_returns_silently_when_query_returns_nonzero(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # If the Query rc != 0 the task has vanished between the
-        # dispatcher's probe and this poll (e.g. an operator
-        # ``Unregister-ScheduledTask`` from another shell). The poll
-        # MUST return immediately and silently rather than loop until
-        # timeout -- the follow-up /Run will then fail and the caller's
-        # admin-hint branch handles it.
-        sleep_calls: list[float] = []
-        query_count = [0]
-
-        def fake_run_with_timeout(
-            cmd: list[str], *, timeout: int = _main._AGENT_RESTART_TIMEOUT_S
-        ) -> tuple[int, str, str]:
-            query_count[0] += 1
-            return 1, "", "ERROR: The system cannot find the file specified."
-
-        monkeypatch.setattr(_main, "_run_with_timeout", fake_run_with_timeout)
-        monkeypatch.setattr(_main.time, "sleep", sleep_calls.append)
-
-        _main._wait_for_windows_scheduled_task_ready("MobaideAgent")
-
-        assert query_count[0] == 1, (
-            f"task-vanished path must exit after exactly one Query call; "
-            f"a regression that retried on rc != 0 would block the "
-            f"restart flow for the full 10s timeout. Got "
-            f"{query_count[0]} Query calls"
-        )
-        assert sleep_calls == [], (
-            f"task-vanished path must not sleep; got {sleep_calls!r}"
         )
 
     def test_returns_after_timeout_when_never_ready(

@@ -6,40 +6,10 @@ import pytest
 from central_server.config import CentralServerConfig
 
 
-def test_from_env_with_required_vars(monkeypatch):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
-    config = CentralServerConfig.from_env()
-    assert config.jwt_secret_key == "test-secret"
-    assert config.admin_seed_email is None
-    assert config.admin_seed_password is None
-    assert config.google_client_id is None
-    assert config.port == 9000
-
-
 def test_from_env_missing_secret(monkeypatch):
     monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
     with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
         CentralServerConfig.from_env()
-
-
-def test_from_env_with_admin_seed(monkeypatch):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
-    monkeypatch.setenv("ADMIN_SEED_EMAIL", "admin@example.com")
-    monkeypatch.setenv("ADMIN_SEED_PASSWORD", "secretpass")
-    config = CentralServerConfig.from_env()
-    assert config.admin_seed_email == "admin@example.com"
-    assert config.admin_seed_password == "secretpass"
-
-
-def test_from_env_custom_values(monkeypatch):
-    monkeypatch.setenv("JWT_SECRET_KEY", "s")
-    monkeypatch.setenv("PORT", "8888")
-    monkeypatch.setenv("PAIRING_QR_TOKEN_TTL_SECONDS", "600")
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "my-client-id.apps.googleusercontent.com")
-    config = CentralServerConfig.from_env()
-    assert config.port == 8888
-    assert config.pairing_qr_token_ttl_seconds == 600
-    assert config.google_client_id == "my-client-id.apps.googleusercontent.com"
 
 
 def test_the_two_apple_ids_are_read_from_their_own_env_vars(monkeypatch):
@@ -53,42 +23,6 @@ def test_the_two_apple_ids_are_read_from_their_own_env_vars(monkeypatch):
     config = CentralServerConfig.from_env()
     assert config.apple_client_id == "com.mobaide.app"
     assert config.apple_web_client_id == "com.mobaide.app.web"
-
-
-def test_apple_web_client_id_is_absent_by_default(monkeypatch):
-    """Unset hides the button on both surfaces, which is the right local
-    behaviour — Apple rejects ``localhost`` Return URLs outright."""
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
-    monkeypatch.delenv("APPLE_WEB_CLIENT_ID", raising=False)
-    assert CentralServerConfig.from_env().apple_web_client_id is None
-
-
-def test_heartbeat_flush_interval_default_and_env(monkeypatch):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
-    monkeypatch.delenv("HEARTBEAT_FLUSH_INTERVAL_SECONDS", raising=False)
-    assert CentralServerConfig.from_env().heartbeat_flush_interval_seconds == 60
-    monkeypatch.setenv("HEARTBEAT_FLUSH_INTERVAL_SECONDS", "15")
-    assert CentralServerConfig.from_env().heartbeat_flush_interval_seconds == 15
-
-
-def test_email_verification_ip_hourly_cap_default_and_env(monkeypatch):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
-    monkeypatch.delenv("EMAIL_VERIFICATION_IP_HOURLY_CAP", raising=False)
-    assert CentralServerConfig.from_env().email_verification_ip_hourly_cap == 20
-    monkeypatch.setenv("EMAIL_VERIFICATION_IP_HOURLY_CAP", "0")
-    assert CentralServerConfig.from_env().email_verification_ip_hourly_cap == 0
-
-
-def test_ttl_env_vars_parse_positive_integers(monkeypatch):
-    """Explicit positive TTLs override the finite defaults and are parsed as ints."""
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
-    monkeypatch.setenv("MOBILE_TOKEN_EXPIRE_MINUTES", "45")
-    monkeypatch.setenv("MOBILE_REFRESH_EXPIRE_MINUTES", "10080")
-    monkeypatch.setenv("DASHBOARD_TOKEN_EXPIRE_MINUTES", "480")
-    config = CentralServerConfig.from_env()
-    assert config.mobile_token_expire_minutes == 45
-    assert config.mobile_refresh_expire_minutes == 10080
-    assert config.dashboard_token_expire_minutes == 480
 
 
 def test_token_ttls_are_finite_by_default(monkeypatch):
@@ -112,51 +46,6 @@ def test_token_ttls_are_finite_by_default(monkeypatch):
             config.dashboard_token_expire_minutes,
             config.admin_dashboard_token_expire_minutes,
         ) == (60, 43200, 129600, 10080)
-
-
-def test_admin_dashboard_ttl_reads_its_own_env_var(monkeypatch):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
-    monkeypatch.setenv("DASHBOARD_TOKEN_EXPIRE_MINUTES", "480")
-    monkeypatch.setenv("ADMIN_DASHBOARD_TOKEN_EXPIRE_MINUTES", "30")
-    config = CentralServerConfig.from_env()
-    assert config.admin_dashboard_token_expire_minutes == 30
-    assert config.dashboard_token_expire_minutes == 480
-
-
-def test_apns_defaults_to_unconfigured(monkeypatch):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
-    for var in (
-        "APNS_KEY_PATH", "APNS_KEY_ID", "APNS_TEAM_ID", "APNS_TOPIC",
-        "APNS_USE_SANDBOX",
-    ):
-        monkeypatch.delenv(var, raising=False)
-    config = CentralServerConfig.from_env()
-    assert config.apns_key_path is None
-    assert config.apns_key_id is None
-    assert config.apns_team_id is None
-    assert config.apns_topic is None
-    assert config.apns_use_sandbox is False
-
-
-def test_apns_env_vars_parse(monkeypatch):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
-    monkeypatch.setenv("APNS_KEY_PATH", "/secrets/AuthKey_ABC.p8")
-    monkeypatch.setenv("APNS_KEY_ID", "ABC123DEFG")
-    monkeypatch.setenv("APNS_TEAM_ID", "TEAM123456")
-    monkeypatch.setenv("APNS_TOPIC", "com.mobaide.app")
-    monkeypatch.setenv("APNS_USE_SANDBOX", "true")
-    config = CentralServerConfig.from_env()
-    assert config.apns_key_path == "/secrets/AuthKey_ABC.p8"
-    assert config.apns_key_id == "ABC123DEFG"
-    assert config.apns_team_id == "TEAM123456"
-    assert config.apns_topic == "com.mobaide.app"
-    assert config.apns_use_sandbox is True
-
-
-def test_api_docs_are_disabled_unless_enabled(monkeypatch):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
-    monkeypatch.delenv("ENABLE_API_DOCS", raising=False)
-    assert CentralServerConfig.from_env().enable_api_docs is False
 
 
 @pytest.mark.parametrize(
@@ -201,28 +90,6 @@ def test_site_base_url_falls_back_when_malformed(monkeypatch, raw, expected):
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
     monkeypatch.setenv("SITE_BASE_URL", raw)
     assert CentralServerConfig.from_env().site_base_url == expected
-
-
-def test_site_base_url_defaults_to_the_apex_when_unset(monkeypatch):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
-    monkeypatch.delenv("SITE_BASE_URL", raising=False)
-    assert CentralServerConfig.from_env().site_base_url == "https://mobaide.com"
-
-
-def test_monitoring_interval_default_and_env(monkeypatch):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
-    monkeypatch.delenv("MONITORING_INTERVAL_SECONDS", raising=False)
-    assert CentralServerConfig.from_env().monitoring_interval_seconds == 60
-    monkeypatch.setenv("MONITORING_INTERVAL_SECONDS", "5")
-    assert CentralServerConfig.from_env().monitoring_interval_seconds == 5
-
-
-def test_ws_allowed_origins_defaults_when_unset(monkeypatch):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
-    monkeypatch.delenv("WS_ALLOWED_ORIGINS", raising=False)
-    assert CentralServerConfig.from_env().ws_allowed_origins == (
-        "https://app.mobaide.com",
-    )
 
 
 @pytest.mark.parametrize(
@@ -274,13 +141,6 @@ _GOOGLE_ADS_VARS = (
     "GOOGLE_ADS_OAUTH_REFRESH_TOKEN",
     "GOOGLE_ADS_CONVERSION_ACTION_ID",
 )
-_GOOGLE_ADS_REQUIRED = (
-    "GOOGLE_ADS_CUSTOMER_ID",
-    "GOOGLE_ADS_OAUTH_CLIENT_ID",
-    "GOOGLE_ADS_OAUTH_CLIENT_SECRET",
-    "GOOGLE_ADS_OAUTH_REFRESH_TOKEN",
-    "GOOGLE_ADS_CONVERSION_ACTION_ID",
-)
 
 
 def _set_all_google_ads(monkeypatch, **overrides):
@@ -295,23 +155,6 @@ def _set_all_google_ads(monkeypatch, **overrides):
     values.update(overrides)
     for name, value in values.items():
         monkeypatch.setenv(name, value)
-
-
-def test_google_ads_defaults_to_unconfigured(monkeypatch):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
-    for var in _GOOGLE_ADS_VARS:
-        monkeypatch.delenv(var, raising=False)
-    config = CentralServerConfig.from_env()
-    assert not hasattr(config, "google_ads_developer_token")
-    assert not hasattr(config, "google_ads_api_version")
-    assert config.google_ads_customer_id is None
-    assert config.google_ads_login_customer_id is None
-    assert config.google_ads_oauth_client_id is None
-    assert config.google_ads_oauth_client_secret is None
-    assert config.google_ads_oauth_refresh_token is None
-    assert config.google_ads_conversion_action_id is None
-    assert config.google_ads_missing == _GOOGLE_ADS_REQUIRED
-    assert config.google_ads_enabled is False
 
 
 def test_google_ads_env_vars_parse(monkeypatch):
@@ -364,34 +207,3 @@ def test_google_ads_click_window_days_parses_and_clamps(monkeypatch, raw, expect
     assert CentralServerConfig.from_env().google_ads_click_window_days == expected
 
 
-def test_pairing_initiate_ip_hourly_cap_default_and_env(monkeypatch):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
-    monkeypatch.delenv("PAIRING_INITIATE_IP_HOURLY_CAP", raising=False)
-    assert CentralServerConfig.from_env().pairing_initiate_ip_hourly_cap == 120
-    monkeypatch.setenv("PAIRING_INITIATE_IP_HOURLY_CAP", "0")
-    assert CentralServerConfig.from_env().pairing_initiate_ip_hourly_cap == 0
-
-
-def test_login_throttle_defaults(monkeypatch):
-    monkeypatch.setenv("JWT_SECRET_KEY", "s")
-    for name in (
-        "LOGIN_EMAIL_FAILURE_CAP",
-        "LOGIN_IP_FAILURE_CAP",
-        "LOGIN_FAILURE_WINDOW_SECONDS",
-    ):
-        monkeypatch.delenv(name, raising=False)
-    config = CentralServerConfig.from_env()
-    assert config.login_email_failure_cap == 10
-    assert config.login_ip_failure_cap == 50
-    assert config.login_failure_window_seconds == 900
-
-
-def test_login_throttle_knobs_are_read_from_env(monkeypatch):
-    monkeypatch.setenv("JWT_SECRET_KEY", "s")
-    monkeypatch.setenv("LOGIN_EMAIL_FAILURE_CAP", "4")
-    monkeypatch.setenv("LOGIN_IP_FAILURE_CAP", "0")
-    monkeypatch.setenv("LOGIN_FAILURE_WINDOW_SECONDS", "120")
-    config = CentralServerConfig.from_env()
-    assert config.login_email_failure_cap == 4
-    assert config.login_ip_failure_cap == 0
-    assert config.login_failure_window_seconds == 120

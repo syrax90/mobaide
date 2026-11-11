@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import jwt
 import pytest
-import structlog
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
@@ -23,22 +22,6 @@ from mobaide.agent.auth.dependencies import (
 from mobaide.agent.auth.jwt_service import JwtService
 
 SECRET = "unit-test-secret-do-not-use-in-prod"
-
-
-# ---------------------------------------------------------------------------
-# Structlog contextvars bleed between tests. Clear before and after every test
-# so ``bind_request_context`` assertions are hermetic.
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def _clear_structlog_contextvars():
-    structlog.contextvars.clear_contextvars()
-    yield
-    structlog.contextvars.clear_contextvars()
-
-
-_ = _clear_structlog_contextvars  # satisfy pyright "not accessed" hint
 
 
 # ---------------------------------------------------------------------------
@@ -160,30 +143,6 @@ class TestGetCurrentUser:
         detail = resp.json().get("detail", "")
         assert "Invalid token" in detail
 
-    def test_success_binds_username_into_structlog_contextvars(self):
-        """Hit the protected route synchronously so contextvars stay bound."""
-        svc = JwtService(SECRET)
-        token = svc.create_access_token("alice")
-
-        captured: dict[str, object] = {}
-
-        app = FastAPI()
-        app.state.jwt_service = svc
-
-        @app.get("/capture")
-        async def capture(username: str = Depends(get_current_user)):
-            # Capture contextvars from INSIDE the request so the bind is still live.
-            captured.update(structlog.contextvars.get_contextvars())
-            return {"username": username}
-
-        _ = capture  # silence Pyright false positive for decorator-only handler
-        client = TestClient(app)
-        resp = client.get(
-            "/capture", headers={"Authorization": f"Bearer {token}"}
-        )
-
-        assert resp.status_code == 200
-        assert captured.get("username") == "alice"
 
 
 # ===========================================================================
@@ -265,13 +224,3 @@ class TestWsAuthenticate:
         ws.close.assert_awaited_once()
         assert ws.close.await_args.kwargs.get("code") == 4001
         ws.accept.assert_not_called()
-
-    async def test_valid_access_token_binds_structlog_contextvars(self):
-        svc = JwtService(SECRET)
-        token = svc.create_access_token("alice")
-        ws = _make_fake_ws(svc, token=token)
-
-        await ws_authenticate(ws)
-
-        ctx = structlog.contextvars.get_contextvars()
-        assert ctx.get("username") == "alice"

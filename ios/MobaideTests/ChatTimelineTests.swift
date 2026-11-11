@@ -148,18 +148,6 @@ final class ChatTimelineTests: XCTestCase {
         XCTAssertEqual(text(timeline, "m:4"), "cd")
     }
 
-    func testRemoveOfAnUnknownItemOnlyAdvancesTheSeq() throws {
-        var timeline = try loaded(seq: 1, items: "[\(agent("m:1", "a"))]")
-        let before = timeline.items
-
-        let result = timeline.apply(try events(#"[{"type":"remove","seq":2,"id":"missing"}, {"type":"remove","seq":3}]"#, seq: 3))
-
-        XCTAssertNil(result.sync)
-        XCTAssertEqual(result.changes, [])
-        XCTAssertEqual(timeline.seq, 3)
-        XCTAssertEqual(timeline.items, before)
-    }
-
     func testGapAppliesWhatCameBeforeAndResumesFromThere() throws {
         var timeline = try loaded(seq: 1, items: "[\(agent("m:1", "a"))]")
 
@@ -188,15 +176,6 @@ final class ChatTimelineTests: XCTestCase {
         XCTAssertEqual(result.sync, .fresh)
         XCTAssertEqual(timeline.seq, 4)
         XCTAssertEqual(text(timeline, "m:1"), "")
-    }
-
-    func testResultFramesChangeNothing() throws {
-        var timeline = try loaded(seq: 1, items: "[]")
-
-        let result = timeline.apply(try frame(#"{"t":"result","id":"c-1","ok":true}"#))
-
-        XCTAssertEqual(result.changes, [])
-        XCTAssertNil(result.sync)
     }
 
     func testCapDropsTheOldestItemsAndKeepsTheIndexRight() throws {

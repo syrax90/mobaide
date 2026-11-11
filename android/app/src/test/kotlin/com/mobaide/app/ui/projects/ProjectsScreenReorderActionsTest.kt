@@ -86,15 +86,6 @@ class ProjectsScreenReorderActionsTest {
             .map { it.label }
 
     @Test
-    fun eachCard_offersOnlyTheMovesThatExist() {
-        setScreen(listOf("alpha", "beta", "gamma"))
-
-        assertEquals(listOf("Move down"), moveLabels("alpha"))
-        assertEquals(listOf("Move up", "Move down"), moveLabels("beta"))
-        assertEquals(listOf("Move up"), moveLabels("gamma"))
-    }
-
-    @Test
     fun moveDown_savesTheWholeNewOrder_andTheListFollows() {
         setScreen(listOf("alpha", "beta", "gamma"))
 

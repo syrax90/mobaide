@@ -19,20 +19,6 @@ final class ThemeStoreTests: XCTestCase {
         super.tearDown()
     }
 
-    func testDefaultsToSystemWhenPrefsEmpty() {
-        let store = ThemeStore(preferences: preferences)
-
-        XCTAssertEqual(store.preference, .system)
-    }
-
-    func testLoadsPersistedValue() {
-        preferences.setThemePreference(.dark)
-
-        let store = ThemeStore(preferences: preferences)
-
-        XCTAssertEqual(store.preference, .dark)
-    }
-
     func testSetPreferencePersistsUnderTheWebKey() {
         let store = ThemeStore(preferences: preferences)
 

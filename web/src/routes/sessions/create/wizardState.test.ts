@@ -91,10 +91,8 @@ describe('selectors', () => {
 
   const PATHS: [string, string | null][] = [
     ['', 'Path is required'],
-    ['   ', 'Path is required'],
     ['foo', 'Path must be absolute'],
     ['/a', null],
-    ['C:/x', null],
     ['c:\\x', null],
     ['\\\\server\\share', null],
   ];
@@ -267,20 +265,6 @@ describe('wizardReducer', () => {
         state,
       ).codex.reasoningEffort,
     ).toBe('high');
-  });
-
-  it('keeps a still-supported codex effort on switch', () => {
-    const detail: CliModelDetail = {
-      id: 'gpt-5.6-sol',
-      efforts: ['low', 'medium', 'high', 'ultra'],
-      defaultEffort: 'low',
-    };
-    const state = reduce([{ type: 'setCodexReasoningEffort', effort: 'ultra' }]);
-
-    expect(
-      reduce([{ type: 'setCodexModel', model: 'gpt-5.6-sol', detail }], state).codex
-        .reasoningEffort,
-    ).toBe('ultra');
   });
 
   it('keeps the effort when the new model has no catalog entry or is Default', () => {

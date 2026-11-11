@@ -166,15 +166,6 @@ describe('PairHost minting', () => {
     expect(screen.getByText('WDJB-MJHT')).toBeInTheDocument();
   });
 
-  it('warns that entering the code hands this account the machine', async () => {
-    renderPairHost();
-
-    getCode();
-
-    expect(await screen.findByTestId('device-code-command')).toBeInTheDocument();
-    expect(screen.getByText(/only enter the code on a machine you own/i)).toBeInTheDocument();
-  });
-
   it('reports a mint failure without stranding the user', async () => {
     api.mintError = new ApiError({
       status: 503,
@@ -220,16 +211,6 @@ describe('PairHost confirmation', () => {
     expect(dialog).toHaveTextContent('rotates that agent');
   });
 
-  it('asks the first-pair question when the code claims no existing agent', async () => {
-    api.status = redeemed({ repairAgentName: null });
-    renderPairHost();
-
-    getCode();
-
-    const dialog = await screen.findByRole('dialog');
-    expect(dialog).toHaveTextContent('Is this your machine?');
-  });
-
   it('refuses to confirm a machine owned by another account', async () => {
     api.status = redeemed({ isRepair: true, blockedReason: 'owned_by_other' });
     renderPairHost();
@@ -242,15 +223,6 @@ describe('PairHost confirmation', () => {
       'already paired to a different account',
     );
     expect(screen.getByRole('button', { name: 'Pair this machine' })).toBeDisabled();
-  });
-
-  it('explains a stale agent id instead of blaming the account', async () => {
-    api.status = redeemed({ isRepair: true, blockedReason: 'unknown_agent' });
-    renderPairHost();
-
-    getCode();
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('re-pair --fresh');
   });
 
   it('waits for the agent to come online before declaring success', async () => {

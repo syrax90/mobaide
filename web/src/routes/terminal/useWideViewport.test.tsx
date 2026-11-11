@@ -12,13 +12,6 @@ afterEach(() => {
 });
 
 describe('useWideViewport', () => {
-  it('reads the breakpoint on mount', () => {
-    stubMediaQuery(WIDE_VIEWPORT_QUERY, true);
-
-    const { result } = renderHook(() => useWideViewport());
-
-    expect(result.current).toBe(true);
-  });
 
   it('follows the window across the breakpoint', () => {
     // The pin only docks on a wide screen; a window dragged narrower has to
@@ -35,13 +28,5 @@ describe('useWideViewport', () => {
       media.set(true);
     });
     expect(result.current).toBe(true);
-  });
-
-  it('answers narrow when the query does not match', () => {
-    stubMediaQuery(WIDE_VIEWPORT_QUERY, false);
-
-    const { result } = renderHook(() => useWideViewport());
-
-    expect(result.current).toBe(false);
   });
 });

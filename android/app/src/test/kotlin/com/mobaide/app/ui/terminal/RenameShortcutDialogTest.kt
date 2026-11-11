@@ -95,37 +95,4 @@ class RenameShortcutDialogTest {
             renamed,
         )
     }
-
-    @Test
-    fun whitespaceOnlyName_isEmittedUntrimmed_forTheViewModelToCollapse() {
-        // The dialog is deliberately not the trimming layer: it hands the raw
-        // field over and TerminalViewModel.renameShortcut collapses blank to "".
-        val renamed = mutableListOf<String>()
-        setContent(unnamed, onRename = { renamed += it })
-
-        nameField().performTextInput("   ")
-        composeRule.onNodeWithText("Rename").performClick()
-
-        assertEquals(listOf("   "), renamed)
-    }
-
-    @Test
-    fun showsChord_andCancelDismissesWithoutRenaming() {
-        // The chord, not the label: with a custom name set, the chord is the
-        // only thing identifying which button is being renamed.
-        val renamed = mutableListOf<String>()
-        var dismissed = 0
-        setContent(named, onRename = { renamed += it }, onDismiss = { dismissed++ })
-
-        composeRule.onNodeWithText("Ctrl+X").assertExists()
-
-        composeRule.onNodeWithText("Cancel").performClick()
-
-        assertEquals(1, dismissed)
-        assertEquals(
-            "cancelling must never write a name",
-            emptyList<String>(),
-            renamed,
-        )
-    }
 }

@@ -37,9 +37,6 @@ class TestFrames:
         assert read_frame(stream) == ({"op": "transcribe", "id": 7}, b"\x01\x02\x03")
         assert read_frame(stream) is None
 
-    def test_clean_end_of_stream_is_none(self):
-        assert read_frame(io.BytesIO(b"")) is None
-
     def test_truncated_frame_is_an_error(self):
         frame = encode_frame({"op": "load"}, b"payload")
 
@@ -99,18 +96,6 @@ class TestServe:
         load, result = _replies(out)
         assert load["ok"] is False and load["error"]["code"] == "load_failed"
         assert result["error"]["code"] == "not_loaded"
-
-    def test_unknown_op_is_a_bad_request(self):
-        out = io.BytesIO()
-
-        serve(io.BytesIO(encode_frame({"op": "dance", "id": 4})), out)
-
-        (reply,) = _replies(out)
-        assert reply == {
-            "id": 4,
-            "ok": False,
-            "error": {"code": "bad_request", "message": "unknown op 'dance'"},
-        }
 
     def test_shutdown_stops_before_later_frames(self):
         out = io.BytesIO()

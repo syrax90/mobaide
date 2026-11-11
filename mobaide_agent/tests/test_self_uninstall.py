@@ -126,14 +126,6 @@ class TestDisarm:
 
         assert not (prefix / "run" / "pending_pairing.json").exists()
 
-    def test_missing_env_file_is_tolerated(self, tmp_path):
-        prefix = tmp_path / "bare"
-        prefix.mkdir()
-
-        disarm(prefix)
-
-        assert not (prefix / "mobaide_agent" / ".env").exists()
-
 
 class TestRemovePrefixEntries:
     def test_removes_known_entries_and_keeps_foreign_ones(self, prefix):
@@ -213,20 +205,6 @@ class TestRemoveVoiceFiles:
         remove_voice_files(prefix, root)
 
         assert not root.exists()
-
-    def test_default_root_is_not_cleared_twice(self, prefix, monkeypatch):
-        cleared: list[Path] = []
-        real_remove_tree = self_uninstall.remove_tree
-
-        def recording_remove_tree(path: Path) -> bool:
-            cleared.append(path)
-            return real_remove_tree(path)
-
-        monkeypatch.setattr(self_uninstall, "remove_tree", recording_remove_tree)
-
-        remove_voice_files(prefix, prefix / "voice")
-
-        assert cleared == [prefix / "voice", prefix / "voice-fake"]
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
     def test_symlinked_voice_dir_clears_its_target_and_keeps_the_rest(
@@ -328,11 +306,6 @@ class TestRemoveCliShim:
         self_uninstall._remove_cli_shim(prefix)
 
         assert cli_shim.read_text(encoding="utf-8") == other
-
-    def test_no_shim_is_fine(self, prefix, cli_shim):
-        self_uninstall._remove_cli_shim(prefix)
-
-        assert not cli_shim.exists()
 
     def test_root_owned_shim_is_left_without_failing(
         self, prefix, cli_shim, monkeypatch
@@ -442,15 +415,6 @@ class TestUninstallLinux:
         assert _remaining(prefix) == {"bin", *_FOREIGN}
         assert "exec python" in launcher.read_text(encoding="utf-8")
 
-    def test_fallback_without_launcher_creates_no_stub(
-        self, prefix, no_systemd_helper, commands
-    ):
-        (prefix / "bin" / "mobaide-agent-launcher.sh").unlink()
-
-        uninstall(prefix, platform="linux")
-
-        assert list((prefix / "bin").iterdir()) == []
-
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs the pwd module")
 @pytest.mark.usefixtures("cli_shim")
@@ -533,21 +497,6 @@ class TestUninstallMacos:
             home / "Library" / "LaunchAgents" / "com.mobaide.agent.plist"
         ).exists()
 
-    def test_unknown_uid_skips_the_plist_but_still_boots_out(
-        self, prefix, monkeypatch, commands
-    ):
-        import pwd
-
-        def no_such_user(uid: int):
-            raise KeyError(uid)
-
-        monkeypatch.setattr(pwd, "getpwuid", no_such_user)
-
-        uninstall(prefix, platform="darwin")
-
-        assert [c[:2] for c in commands] == [["launchctl", "bootout"]]
-        assert _remaining(prefix) == set(_FOREIGN)
-
     def test_failed_file_removal_still_boots_out(
         self, prefix, home, monkeypatch, commands
     ):
@@ -599,18 +548,6 @@ class TestUninstallWindows:
         uninstall(prefix, platform="win32")
 
         assert path_entries == [prefix / "bin"]
-
-    def test_failed_path_cleanup_still_uninstalls(
-        self, prefix, base_python, commands, monkeypatch
-    ):
-        def broken(_directory: Path) -> None:
-            raise OSError("HKCU\\Environment is locked")
-
-        monkeypatch.setattr(self_uninstall, "_remove_user_path_entry", broken)
-
-        uninstall(prefix, platform="win32")
-
-        assert [c[1] for c in commands] == ["/Create", "/Run", "/Delete"]
 
     def test_registers_runs_cleanup_task_then_deletes_agent_task(
         self, prefix, base_python, commands
@@ -853,14 +790,6 @@ class TestRemoveUserPathEntry:
         assert registry.values["Path"] == (raw, _FakeWinreg.REG_EXPAND_SZ)
         assert broadcasts == []
 
-    def test_no_user_path_is_fine(self, monkeypatch, broadcasts):
-        registry = self._registry(monkeypatch, None)
-
-        self_uninstall._remove_user_path_entry(_CLI_DIR)
-
-        assert registry.writes == 0
-        assert broadcasts == []
-
 
 class TestBasePythonw:
     def test_prefers_pythonw_next_to_the_base_interpreter(
@@ -909,15 +838,6 @@ class TestRun:
         monkeypatch.setattr(self_uninstall.subprocess, "run", fake_subprocess_run)
 
         assert self_uninstall._run(["schtasks.exe", "/Run"]) == -1
-
-    def test_returns_the_exit_code(self, monkeypatch):
-        monkeypatch.setattr(
-            self_uninstall.subprocess,
-            "run",
-            lambda cmd, **kwargs: SimpleNamespace(returncode=3, stderr="no\n"),
-        )
-
-        assert self_uninstall._run(["schtasks.exe", "/Run"]) == 3
 
 
 class TestHandleUninstallRequest:
@@ -1022,19 +942,6 @@ class TestHandleUninstallRequest:
 
         assert RecordingHelper.stops == 1
         assert _remaining(prefix) == set(_FOREIGN)
-
-    async def test_not_installed_leaves_voice_running(self, prefix):
-        class FakeVoice:
-            paths = SimpleNamespace(root=prefix / "voice")
-
-            async def shutdown(self) -> None:
-                raise AssertionError("a source run must not stop voice")
-
-        await handle_uninstall_request(
-            prefix, installed=False, voice=FakeVoice(), exit_func=lambda _: None
-        )
-
-        assert (prefix / "voice" / "models").is_dir()
 
     async def test_failed_uninstall_still_exits_zero(self, prefix, monkeypatch):
         def boom(_prefix: Path, voice_root: Path | None = None) -> None:

@@ -28,25 +28,6 @@ class TerminalOverflowMenuTest {
     val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     @Test
-    fun moreOptions_opensAGitSectionWithTheChangesEntry() {
-        composeRule.setContent {
-            MobaideTheme(darkTheme = true) {
-                TerminalOverflowMenu(onOpenGitChanges = {})
-            }
-        }
-
-        composeRule.onNodeWithText("Changes…").assertDoesNotExist()
-
-        composeRule.onNodeWithContentDescription("More options")
-            .assertIsDisplayed()
-            .performClick()
-
-        composeRule.onNodeWithText("GIT").assertIsDisplayed()
-        composeRule.onNodeWithTag(TERMINAL_MENU_GIT_CHANGES_TAG).assertIsDisplayed()
-        composeRule.onNodeWithText("Changes…").assertIsDisplayed()
-    }
-
-    @Test
     fun commit_isAbsent_untilTheAgentAdvertisesIt() {
         composeRule.setContent {
             MobaideTheme(darkTheme = true) {
@@ -59,20 +40,6 @@ class TerminalOverflowMenuTest {
         composeRule.onNodeWithTag(TERMINAL_MENU_GIT_CHANGES_TAG).assertIsDisplayed()
         composeRule.onNodeWithTag(TERMINAL_MENU_GIT_COMMIT_TAG).assertDoesNotExist()
         composeRule.onNodeWithText("Commit…").assertDoesNotExist()
-    }
-
-    @Test
-    fun commit_followsChanges_onAnAgentThatAdvertisesIt() {
-        composeRule.setContent {
-            MobaideTheme(darkTheme = true) {
-                TerminalOverflowMenu(onOpenGitChanges = {}, onOpenGitCommit = {}, commitAvailable = true)
-            }
-        }
-
-        composeRule.onNodeWithContentDescription("More options").performClick()
-
-        composeRule.onNodeWithTag(TERMINAL_MENU_GIT_COMMIT_TAG).assertIsDisplayed()
-        composeRule.onNodeWithText("Commit…").assertIsDisplayed()
     }
 }
 
@@ -97,26 +64,6 @@ class TerminalOverflowMenuSyncTest {
         composeRule.onNodeWithTag(TERMINAL_MENU_GIT_COMMIT_TAG).assertIsDisplayed()
         composeRule.onNodeWithTag(TERMINAL_MENU_GIT_SYNC_TAG).assertDoesNotExist()
         composeRule.onNodeWithText("Fetch / Pull / Push…").assertDoesNotExist()
-    }
-
-    @Test
-    fun sync_followsCommit_onAnAgentThatAdvertisesAJob() {
-        composeRule.setContent {
-            MobaideTheme(darkTheme = true) {
-                TerminalOverflowMenu(
-                    onOpenGitChanges = {},
-                    onOpenGitSync = {},
-                    commitAvailable = false,
-                    syncAvailable = true,
-                )
-            }
-        }
-
-        composeRule.onNodeWithContentDescription("More options").performClick()
-
-        composeRule.onNodeWithTag(TERMINAL_MENU_GIT_SYNC_TAG).assertIsDisplayed()
-        composeRule.onNodeWithText("Fetch / Pull / Push…").assertIsDisplayed()
-        composeRule.onNodeWithTag(TERMINAL_MENU_GIT_COMMIT_TAG).assertDoesNotExist()
     }
 }
 

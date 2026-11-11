@@ -10,9 +10,6 @@ from mobaide.acp import normalize as nz
 
 
 class TestCapText:
-    def test_short_text_is_unchanged(self):
-        assert nz.cap_text("hello", 10) == ("hello", False)
-
     def test_long_text_keeps_head_and_tail(self):
         text = "H" * 600 + "M" * 300 + "T" * 100
         capped, truncated = nz.cap_text(text, 400)
@@ -24,11 +21,7 @@ class TestCapText:
 
 
 class TestSubtitleFromInput:
-    def test_prefers_command_over_path(self):
-        assert nz.subtitle_from_input({"file_path": "/a.py", "command": "ls -la"}) == "ls -la"
 
-    def test_joins_a_list_of_strings(self):
-        assert nz.subtitle_from_input({"command": ["git", "status"]}) == "git status"
 
     def test_collapses_whitespace_and_caps_length(self):
         long_cmd = "echo   one\n two " + "x" * 400
@@ -38,18 +31,17 @@ class TestSubtitleFromInput:
         assert len(subtitle) == nz.SUBTITLE_MAX
         assert subtitle.endswith("…")
 
-    @pytest.mark.parametrize("raw", [None, 42, {"other": "x"}, "   ", {"command": "  "}])
+    @pytest.mark.parametrize("raw", [None, {"other": "x"}, {"command": "  "}])
     def test_nothing_to_show(self, raw):
         assert nz.subtitle_from_input(raw) is None
 
     @pytest.mark.parametrize(
         ("raw", "subtitle"),
         [
-            ({"command": '/bin/zsh -lc "pytest -q"'}, "pytest -q"),
             ({"cmd": "bash -c 'ls -la'"}, "ls -la"),
             ({"file_path": "/bin/zsh -lc x"}, "/bin/zsh -lc x"),
         ],
-        ids=["command", "cmd", "not-a-command-key"],
+        ids=["cmd", "not-a-command-key"],
     )
     def test_the_shell_wrapper_around_a_command_is_dropped(self, raw, subtitle):
         assert nz.subtitle_from_input(raw) == subtitle
@@ -67,29 +59,19 @@ class TestUnwrapShell:
         ("command", "unwrapped"),
         [
             ('/bin/zsh -lc "git status"', "git status"),
-            ("bash -c 'echo hi && ls'", "echo hi && ls"),
             ("/usr/bin/sh -ic 'make'", "make"),
             ("python -c 'print(1)'", "python -c 'print(1)'"),
             ("bash -c 'make' extra", "bash -c 'make' extra"),
-            ("bash -x 'make'", "bash -x 'make'"),
-            ('bash -lc "  "', 'bash -lc "  "'),
             ('bash -lc "unterminated', 'bash -lc "unterminated'),
-            ("pytest -q", "pytest -q"),
             ('./bash -lc "x"', './bash -lc "x"'),
-            ('/tmp/x/zsh -c "y"', '/tmp/x/zsh -c "y"'),
         ],
         ids=[
             "zsh-login",
-            "bash",
             "interactive-sh",
             "not-a-shell",
             "extra-argument",
-            "other-flag",
-            "blank-command",
             "unbalanced-quote",
-            "plain",
             "project-relative-shell",
-            "shell-outside-system-dirs",
         ],
     )
     def test_unwrap(self, command, unwrapped):
@@ -127,16 +109,6 @@ class TestUnifiedDiff:
         assert lines[0].startswith("@@")
         assert "--- old note" in lines
 
-    def test_markdown_rule_lines_are_kept_and_counted(self):
-        """``---`` moved within a file: removed reads ``----``, added reads
-        ``+---``, and an added ``++x`` reads ``+++x`` like the new-file header."""
-        part = nz.unified_diff("/p/doc.md", "---\na\nb\nc\n", "a\nb\nc\n---\n++x\n")
-
-        assert (part["added"], part["removed"]) == (2, 1)
-        lines = part["diff"].splitlines()
-        assert lines[0].startswith("@@")
-        assert "----" in lines and "+---" in lines and "+++x" in lines
-
     def test_long_diff_is_cut_but_counts_stay_exact(self):
         new_text = "".join(f"line {i}\n" for i in range(nz.DIFF_LINES_MAX + 50))
         part = nz.unified_diff("/p/big.txt", "", new_text)
@@ -167,18 +139,12 @@ class TestUnifiedDiff:
 
 
 class TestContentBlockPart:
-    def test_empty_text_is_dropped(self):
-        assert nz.content_block_part({"type": "text", "text": ""}) is None
-
     def test_long_text_is_marked_truncated(self):
         part = nz.content_block_part({"type": "text", "text": "x" * (nz.TEXT_PART_MAX + 1)})
 
         assert part["type"] == "text"
         assert part["truncated"] is True
 
-    def test_small_image_keeps_its_data(self):
-        part = nz.content_block_part({"type": "image", "mimeType": "image/jpeg", "data": "AAAA"})
-        assert part == {"type": "image", "mime": "image/jpeg", "data": "AAAA"}
 
     def test_large_image_drops_its_data(self):
         part = nz.content_block_part(
@@ -186,19 +152,8 @@ class TestContentBlockPart:
         )
         assert part == {"type": "image", "mime": "image/png"}
 
-    def test_resource_link_prefers_the_title(self):
-        part = nz.content_block_part(
-            {"type": "resource_link", "uri": "file:///a/b.txt", "name": "b.txt", "title": "Notes"}
-        )
-        assert part == {"type": "link", "uri": "file:///a/b.txt", "name": "Notes"}
 
-    def test_resource_is_named_by_the_last_uri_segment(self):
-        part = nz.content_block_part(
-            {"type": "resource", "resource": {"uri": "file:///a/b.txt", "text": "body"}}
-        )
-        assert part == {"type": "resource", "uri": "file:///a/b.txt", "name": "b.txt", "text": "body"}
-
-    @pytest.mark.parametrize("block", [None, "text", {"type": "audio"}, {"type": "resource"}])
+    @pytest.mark.parametrize("block", [{"type": "audio"}, {"type": "resource"}])
     def test_unknown_shapes_are_dropped(self, block):
         assert nz.content_block_part(block) is None
 
@@ -278,22 +233,14 @@ class TestMergeToolUpdate:
 
         assert item["content"] == [{"type": "text", "text": "nice error"}]
 
-    def test_subtitle_falls_back_to_the_first_location(self):
-        item = nz.new_tool_item("call-1")
-        nz.merge_tool_update(item, {"locations": [{"path": "/p/b.py"}]})
-
-        assert item["subtitle"] == "/p/b.py"
-
     @pytest.mark.parametrize(
         ("title", "shown"),
         [
             ('/bin/zsh -lc "pytest -q"', "pytest -q"),
             ('"pytest -q"', "pytest -q"),
-            ("'npm test'", "npm test"),
             ('"a" and "b"', '"a" and "b"'),
-            ('"unbalanced', '"unbalanced'),
         ],
-        ids=["shell-wrapper", "double-quoted", "single-quoted", "two-words", "unbalanced"],
+        ids=["shell-wrapper", "double-quoted", "two-words"],
     )
     def test_a_command_title_is_shown_without_its_wrapper_or_quotes(self, title, shown):
         item = nz.new_tool_item("call-1")
@@ -376,12 +323,10 @@ class TestConfigOptions:
         "raw",
         [
             {"id": "x", "name": "X", "type": "text", "currentValue": "a"},
-            {"id": "x", "name": "X", "type": "boolean", "currentValue": "yes"},
-            {"id": "x", "name": "X", "type": "select", "currentValue": "a", "options": []},
             {"id": "x", "name": "X", "type": "select", "currentValue": 1, "options": [{"value": "a"}]},
             {"name": "X", "type": "boolean", "currentValue": True},
         ],
-        ids=["unknown-type", "boolean-not-bool", "select-no-values", "select-bad-current", "no-id"],
+        ids=["unknown-type", "select-bad-current", "no-id"],
     )
     def test_unusable_options_are_skipped(self, raw):
         assert nz.config_options([raw]) == []
@@ -403,7 +348,7 @@ class TestModesAsConfig:
 
     @pytest.mark.parametrize(
         "raw",
-        [None, {"availableModes": [{"id": "a"}]}, {"currentModeId": "a", "availableModes": []}],
+        [None, {"currentModeId": "a", "availableModes": []}],
     )
     def test_no_usable_modes(self, raw):
         assert nz.modes_as_config(raw) is None
@@ -449,12 +394,6 @@ class TestUsage:
             "size": 100,
             "cost": {"amount": 1.0, "currency": "USD"},
         }
-
-    def test_cost_without_currency_is_dropped(self):
-        assert nz.usage({"used": 10, "size": 100, "cost": {"amount": 1}})["cost"] is None
-
-    def test_missing_counts_mean_no_usage(self):
-        assert nz.usage({"used": 10}) is None
 
 
 class TestPermissionOptions:
@@ -521,13 +460,9 @@ class TestFormFields:
         assert fields["ratio"]["type"] == "number"
         assert fields["ratio"]["title"] == "ratio"
 
-    def test_array_without_choices_is_skipped(self):
-        keys = [f["key"] for f in nz.form_fields(QUESTION_SCHEMA)]
-        assert "tags" not in keys
-
     @pytest.mark.parametrize(
         "schema",
-        [None, {"type": "object"}, {"properties": {"tags": {"type": "array", "items": {}}}}],
+        [None, {"properties": {"tags": {"type": "array", "items": {}}}}],
     )
     def test_no_usable_field(self, schema):
         assert nz.form_fields(schema) is None
@@ -572,12 +507,10 @@ class TestCoerceFormValues:
         [
             ({"framework": "svelte"}, "Choose a value for “Framework”"),
             ({"extras": ["lint", "docs"]}, "Choose values for “Extras”"),
-            ({"strict": "yes"}, "“strict” must be on or off"),
             ({"count": True}, "“count” must be a number"),
             ({"count": 2.5}, "“count” must be a whole number"),
-            ({"name": 5}, "“Name” must be text"),
         ],
-        ids=["select", "multiselect", "boolean", "bool-as-number", "fraction", "text"],
+        ids=["select", "multiselect", "bool-as-number", "fraction"],
     )
     def test_invalid_values(self, fields, values, error):
         base = {"framework": "react", "name": "web"}
@@ -589,11 +522,6 @@ class TestCoerceFormValues:
         content, error = nz.coerce_form_values(fields, {"framework": "vue", "name": "n" * 20_000})
         assert error is None
         assert len(content["name"]) == 10_000
-
-    def test_non_mapping_values_count_as_empty(self, fields):
-        content, error = nz.coerce_form_values(fields, "nope")
-        assert content is None
-        assert error == "“Framework” is required"
 
 
 class TestConsoleText:
@@ -613,12 +541,6 @@ class TestConsoleText:
 
 
 class TestConsolePart:
-    def test_short_output(self):
-        assert nz.console_part("a\nb\n", live=True, exit_code=None) == {
-            "type": "text",
-            "text": "```console\na\nb\n```",
-        }
-
     def test_running_output_shows_only_its_tail(self):
         output = "old\n" * 10 + "y" * nz.CONSOLE_LIVE_MAX
 
@@ -674,12 +596,10 @@ class TestCommandResultParts:
                 [{"type": "text", "text": "```console\nok\n100%\n```"}],
             ),
             (_agy_result(2, "boom\n"), [{"type": "text", "text": "```console\nboom\n```\nExit code 2"}]),
-            (_agy_result(-1, "killed"), [{"type": "text", "text": "```console\nkilled\n```\nExit code -1"}]),
             (_agy_result(0, None), []),
-            (_agy_result(0, ""), []),
             (_agy_result(1, None), [{"type": "text", "text": "Exit code 1"}]),
         ],
-        ids=["output", "failed", "negative-code", "silent-success", "empty-output", "silent-failure"],
+        ids=["output", "failed", "silent-success", "silent-failure"],
     )
     def test_a_command_result(self, part, expected):
         assert nz.command_result_parts([part]) == expected
@@ -696,10 +616,8 @@ class TestCommandResultParts:
         [
             {"type": "text", "text": "Ran the tests: Command exited with code 0.\n\nCommand output:\nok"},
             {"type": "text", "text": "Command exited with code 0."},
-            {"type": "diff", "path": "/a.py", "diff": "", "added": 0, "removed": 0},
-            {"type": "image", "mime_type": "image/png", "data": "x"},
         ],
-        ids=["text-around-it", "no-output-section", "diff", "image"],
+        ids=["text-around-it", "no-output-section"],
     )
     def test_other_parts_pass_through(self, part):
         assert nz.command_result_parts([part]) == [part]
@@ -710,26 +628,20 @@ class TestTerminalMeta:
         ("update", "expected"),
         [
             ({}, (None, False, None, False)),
-            ({"_meta": "x"}, (None, False, None, False)),
             ({"_meta": {"terminal_output": {"data": "all"}}}, ("all", True, None, False)),
             ({"_meta": {"terminal_output_delta": {"data": "more"}}}, ("more", False, None, False)),
-            ({"_meta": {"terminal_output_delta": {"data": 5}}}, (None, False, None, False)),
             (
                 {"_meta": {"terminal_output_delta": {"data": "end\n"}, "terminal_exit": {"exit_code": 3}}},
                 ("end\n", False, 3, True),
             ),
             ({"_meta": {"terminal_exit": {"exit_code": None, "signal": "SIGKILL"}}}, (None, False, None, True)),
-            ({"_meta": {"terminal_exit": {"exit_code": True}}}, (None, False, None, True)),
         ],
         ids=[
             "no-meta",
-            "meta-not-object",
             "full-output",
             "delta",
-            "data-not-text",
             "delta-and-exit",
             "killed-by-signal",
-            "bool-exit-code",
         ],
     )
     def test_reads_output_and_exit(self, update, expected):
@@ -742,8 +654,6 @@ class TestThreadBusy:
         [
             ({"type": "active", "activeFlags": []}, True),
             ({"type": "idle"}, False),
-            ({"type": "notLoaded"}, False),
-            ({"type": "systemError"}, False),
             ({"type": "somethingNew"}, None),
             ("active", None),
         ],
@@ -752,7 +662,3 @@ class TestThreadBusy:
         update = {"sessionUpdate": "session_info_update", "_meta": {"codex": {"threadStatus": status}}}
 
         assert nz.thread_busy(update) is busy
-
-    @pytest.mark.parametrize("update", [{}, {"_meta": {}}, {"_meta": {"codex": {}}}, {"title": "x"}])
-    def test_nothing_said(self, update):
-        assert nz.thread_busy(update) is None

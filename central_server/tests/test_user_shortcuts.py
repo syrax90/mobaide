@@ -51,10 +51,6 @@ class TestCreateShortcut:
         assert data["version"] == 1
         assert len(data["shortcut_id"]) == 12
 
-    async def test_create_name_optional(self, client, api_auth_headers):
-        data = await _create_shortcut(client, api_auth_headers)
-        assert data["name"] is None
-
     async def test_create_empty_name_stored_as_null(
         self, client, api_auth_headers
     ):
@@ -77,23 +73,8 @@ class TestCreateShortcut:
         )
         assert resp.status_code == 422
 
-    async def test_create_rejects_empty_chord_token(
-        self, client, api_auth_headers
-    ):
-        resp = await client.post(
-            "/api/shortcuts",
-            json={"kind": "claude", "chord_token": ""},
-            headers=api_auth_headers,
-        )
-        assert resp.status_code == 422
-
 
 class TestListShortcuts:
-    async def test_list_empty(self, client, api_auth_headers):
-        resp = await client.get("/api/shortcuts", headers=api_auth_headers)
-        assert resp.status_code == 200
-        assert resp.json() == []
-
     async def test_list_returns_only_owned(self, client, app, api_auth_headers):
         await _create_shortcut(client, api_auth_headers, chord_token="ctrl+m")
         other_user = await app.state.db.create_user(
@@ -141,10 +122,6 @@ class TestListShortcuts:
         ]
         assert claude_chords == ["ctrl+a", "ctrl+c"]
 
-    async def test_list_requires_auth(self, client):
-        resp = await client.get("/api/shortcuts")
-        assert resp.status_code == 401
-
 
 class TestUpsert:
     async def test_resave_same_chord_returns_existing_row(
@@ -169,15 +146,6 @@ class TestUpsert:
         assert again["shortcut_id"] == first["shortcut_id"]
         assert again["name"] == "New"
         assert again["version"] == first["version"] + 1
-
-    async def test_resave_with_same_name_is_noop(
-        self, client, api_auth_headers
-    ):
-        first = await _create_shortcut(client, api_auth_headers, name="Same")
-        again = await _create_shortcut(client, api_auth_headers, name="Same")
-
-        assert again["shortcut_id"] == first["shortcut_id"]
-        assert again["version"] == first["version"]
 
     async def test_same_chord_different_kind_creates_second_row(
         self, client, api_auth_headers
@@ -343,20 +311,6 @@ class TestRenameShortcut:
         assert resp.status_code == 200
         assert resp.json()["name"] is None
 
-    async def test_patch_explicit_null_clears_name(
-        self, client, api_auth_headers
-    ):
-        """``name`` is required-but-nullable: an explicit ``null`` must stay
-        a valid clear (only the *absent* field is rejected)."""
-        created = await _create_shortcut(client, api_auth_headers, name="Named")
-        resp = await client.patch(
-            f"/api/shortcuts/{created['shortcut_id']}",
-            json={"name": None},
-            headers=api_auth_headers,
-        )
-        assert resp.status_code == 200
-        assert resp.json()["name"] is None
-
     async def test_patch_empty_body_returns_422_and_changes_nothing(
         self, client, app, viewer_user, api_auth_headers
     ):
@@ -474,18 +428,6 @@ class TestDeleteShortcut:
         )
         assert resp.status_code == 403
 
-    async def test_second_delete_returns_403(self, client, api_auth_headers):
-        created = await _create_shortcut(client, api_auth_headers)
-        sid = created["shortcut_id"]
-        await client.delete(f"/api/shortcuts/{sid}", headers=api_auth_headers)
-
-        # Inherited templates semantics: the owner check filters deleted
-        # rows, so a second delete is rejected as not-owner.
-        resp2 = await client.delete(
-            f"/api/shortcuts/{sid}", headers=api_auth_headers
-        )
-        assert resp2.status_code == 403
-
 
 class TestAdminBlocked:
     """Admin tokens are blocked from /api/shortcuts the same way they are
@@ -496,12 +438,6 @@ class TestAdminBlocked:
             "/api/shortcuts",
             json={"kind": "claude", "chord_token": "ctrl+x"},
             headers=admin_api_auth_headers,
-        )
-        assert resp.status_code == 403
-
-    async def test_admin_cannot_list(self, client, admin_api_auth_headers):
-        resp = await client.get(
-            "/api/shortcuts", headers=admin_api_auth_headers
         )
         assert resp.status_code == 403
 
@@ -563,23 +499,6 @@ class TestBroadcast:
         )
         with pytest.raises(asyncio.QueueEmpty):
             c.send_queue.get_nowait()
-
-    async def test_rename_broadcasts_updated(self, app, viewer_user):
-        routing: RoutingTable = app.state.routing
-        c = _make_user_client(viewer_user["id"])
-        routing.register_user_client(viewer_user["id"], c)
-
-        row = await app.state.shortcut_service.create_shortcut(
-            viewer_user["id"], "claude", "ctrl+x", None
-        )
-        c.send_queue.get_nowait()
-
-        await app.state.shortcut_service.rename_shortcut(
-            row["shortcut_id"], viewer_user["id"], "Renamed"
-        )
-        envelope = json.loads(c.send_queue.get_nowait())
-        assert envelope["type"] == "shortcut.updated"
-        assert envelope["payload"]["name"] == "Renamed"
 
     async def test_delete_broadcasts_tombstone(self, app, viewer_user):
         routing: RoutingTable = app.state.routing

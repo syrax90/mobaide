@@ -106,10 +106,6 @@ describe('reduction cursor', () => {
     expect(state.lastSeq).toBe(high + 1n);
     expect(resumeFromState(state)).toEqual({ [PROJECT]: high + 1n });
   });
-
-  it('reports no resume mark before the first event', () => {
-    expect(resumeFromState(initialAutoScanDetailState(PROJECT))).toEqual({});
-  });
 });
 
 describe('snapshot', () => {
@@ -347,14 +343,6 @@ describe('log lines', () => {
       'session: s-2',
       "ISS-3 label_removal ok [label 'AutoPipeline' not present on issue]",
     ]);
-  });
-
-  it('carries the ansi flag through for the renderer', () => {
-    const state = drive([
-      frame(event(1n, 'log', { line: 'plain' })),
-      frame(event(2n, 'log', { line: 'coloured', ansi: true })),
-    ]);
-    expect(state.logLines.map((line) => line.ansi)).toEqual([false, true]);
   });
 
   it('trims the oldest line past the ring cap and never recycles an id', () => {

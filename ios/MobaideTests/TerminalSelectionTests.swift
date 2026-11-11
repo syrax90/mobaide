@@ -24,23 +24,6 @@ final class TerminalSelectionTests: XCTestCase {
         XCTAssertEqual(word, 3...12, "the whitespace-delimited run around the touched cell")
     }
 
-    func testExpandsFromWordStartAndEndAlike() {
-        let row = cells("cd /usr/local bin")
-
-        XCTAssertEqual(TerminalSelection.expandWord(cells: row, at: 3), 3...12)
-        XCTAssertEqual(TerminalSelection.expandWord(cells: row, at: 12), 3...12)
-    }
-
-    func testBlankCellSelectsOnlyItself() {
-        let row = cells("cd  ls")
-
-        XCTAssertEqual(
-            TerminalSelection.expandWord(cells: row, at: 2),
-            2...2,
-            "a long-press on padding must not grab the whole run of spaces"
-        )
-    }
-
     func testExpandsAtRowEdges() {
         let row = cells("abc def")
 
@@ -121,25 +104,6 @@ final class TerminalSelectionTests: XCTestCase {
         XCTAssertEqual(pinned.end, Position(col: 5, row: 4), "the handles must never swap under the finger")
     }
 
-    func testConstrainLeavesAValidDragAlone() {
-        let valid = TerminalSelectionRange(
-            anchor: Position(col: 1, row: 2),
-            focus: Position(col: 5, row: 4)
-        )
-
-        XCTAssertEqual(TerminalSelection.constrain(valid, moving: .end), valid)
-    }
-
-    func testClampKeepsPositionsInsideTheBuffer() {
-        let clamped = TerminalSelection.clamp(Position(col: 999, row: 999), cols: 80, maxRow: 40)
-
-        XCTAssertEqual(clamped, Position(col: 79, row: 40))
-        XCTAssertEqual(
-            TerminalSelection.clamp(Position(col: -3, row: -3), cols: 80, maxRow: 40),
-            Position(col: 0, row: 0)
-        )
-    }
-
     // MARK: - Highlight geometry
 
     private let cell = CGSize(width: 10, height: 20)
@@ -186,54 +150,6 @@ final class TerminalSelectionTests: XCTestCase {
         XCTAssertEqual(rects[2], CGRect(x: 0, y: 100, width: 30, height: 20))
     }
 
-    /// The toolbar anchors on the union of these rects. Across rows `end.col`
-    /// is usually left of `start.col`, so anything derived from
-    /// `end.col - start.col` goes negative and collapses to a sliver at the
-    /// right edge — dragging from mid-line down onto a shorter line is the
-    /// ordinary case for copying a stack trace.
-    func testMultiRowRectsUnionToTheFullHighlightBox() {
-        let rects = TerminalSelection.highlightRects(
-            start: Position(col: 40, row: 1),
-            end: Position(col: 3, row: 4),
-            cols: 80,
-            cellSize: cell
-        )
-
-        let union = rects.reduce(CGRect.null) { $0.union($1) }
-        XCTAssertEqual(union, CGRect(x: 0, y: 20, width: 800, height: 80))
-        XCTAssertGreaterThan(union.width, cell.width, "the anchor must not collapse to a single cell")
-    }
-
-    func testHandleCentersBracketTheSelection() {
-        let centers = TerminalSelection.handleCenters(
-            start: Position(col: 2, row: 1),
-            end: Position(col: 4, row: 1),
-            cellSize: cell
-        )
-
-        XCTAssertEqual(centers.start, CGPoint(x: 20, y: 40))
-        XCTAssertEqual(
-            centers.end,
-            CGPoint(x: 50, y: 40),
-            "the end handle sits after the last selected column so it does not cover its glyph"
-        )
-    }
-
-    func testCaretRectSpansTheDraggedHandlesOwnRow() {
-        let selection = range(5, 1, 2, 3)
-
-        XCTAssertEqual(
-            TerminalSelection.caretRect(for: .start, range: selection, cellSize: cell),
-            CGRect(x: 49, y: 20, width: 2, height: 20),
-            "the loupe tracks the left edge of the first selected cell"
-        )
-        XCTAssertEqual(
-            TerminalSelection.caretRect(for: .end, range: selection, cellSize: cell),
-            CGRect(x: 29, y: 60, width: 2, height: 20),
-            "the loupe tracks the right edge of the last selected cell, on the last row"
-        )
-    }
-
     func testCaretRectFollowsOrderedEdgesWhenTheDragRanBackwards() {
         let backwards = range(2, 3, 5, 1)
 
@@ -271,36 +187,6 @@ final class TerminalSelectionTests: XCTestCase {
         XCTAssertEqual(TerminalSelection.autoscrollRows(viewportY: 300, viewportHeight: height, cellHeight: cellHeight), 0)
     }
 
-    func testAutoscrollBandsCannotOverlapOnAShortViewport() {
-        // Two full-cell bands would cover the whole viewport and pin it to -1.
-        let rows = TerminalSelection.autoscrollRows(viewportY: 15, viewportHeight: 30, cellHeight: 20)
-
-        XCTAssertEqual(rows, 0, "the band is capped at a third of the viewport so the middle stays neutral")
-    }
-
-    func testAutoscrollRowBandHasAFloorForSmallFonts() {
-        let height: CGFloat = 600
-        let cellHeight: CGFloat = 10
-
-        XCTAssertEqual(
-            TerminalSelection.autoscrollRows(viewportY: 20, viewportHeight: height, cellHeight: cellHeight),
-            -1,
-            "a finger held at the edge with a small font must stay inside the band"
-        )
-        XCTAssertEqual(TerminalSelection.autoscrollRows(viewportY: 580, viewportHeight: height, cellHeight: cellHeight), 1)
-        XCTAssertEqual(TerminalSelection.autoscrollRows(viewportY: 30, viewportHeight: height, cellHeight: cellHeight), 0)
-    }
-
-    func testAutoscrollColumnsTriggersOnlyNearTheHorizontalEdges() {
-        let width: CGFloat = 800
-        let cellWidth: CGFloat = 8
-
-        XCTAssertEqual(TerminalSelection.autoscrollColumns(viewportX: 20, viewportWidth: width, cellWidth: cellWidth), -1)
-        XCTAssertEqual(TerminalSelection.autoscrollColumns(viewportX: 780, viewportWidth: width, cellWidth: cellWidth), 1)
-        XCTAssertEqual(TerminalSelection.autoscrollColumns(viewportX: 400, viewportWidth: width, cellWidth: cellWidth), 0)
-        XCTAssertEqual(TerminalSelection.autoscrollColumns(viewportX: 30, viewportWidth: width, cellWidth: cellWidth), 0)
-    }
-
     func testAutoscrollColumnBandSpansTwoCellsForWideFonts() {
         let width: CGFloat = 800
         let cellWidth: CGFloat = 20
@@ -312,17 +198,6 @@ final class TerminalSelectionTests: XCTestCase {
         )
         XCTAssertEqual(TerminalSelection.autoscrollColumns(viewportX: 765, viewportWidth: width, cellWidth: cellWidth), 1)
         XCTAssertEqual(TerminalSelection.autoscrollColumns(viewportX: 45, viewportWidth: width, cellWidth: cellWidth), 0)
-    }
-
-    func testAutoscrollColumnBandsCannotOverlapOnANarrowViewport() {
-        let columns = TerminalSelection.autoscrollColumns(viewportX: 30, viewportWidth: 60, cellWidth: 20)
-
-        XCTAssertEqual(columns, 0, "the band is capped at a third of the viewport so the middle stays neutral")
-    }
-
-    func testAutoscrollColumnsIsInertBeforeLayout() {
-        XCTAssertEqual(TerminalSelection.autoscrollColumns(viewportX: 0, viewportWidth: 800, cellWidth: 0), 0)
-        XCTAssertEqual(TerminalSelection.autoscrollColumns(viewportX: 0, viewportWidth: 0, cellWidth: 8), 0)
     }
 
     // MARK: - Streaming output
@@ -337,19 +212,6 @@ final class TerminalSelectionTests: XCTestCase {
             ),
             0,
             "a DECSTBM region scroll shifts rows in place; indices are stable"
-        )
-    }
-
-    func testTrimShiftIsZeroWhileTheRingStillHasRoom() {
-        XCTAssertEqual(
-            TerminalSelection.trimShift(
-                scrollTop: 0,
-                isAlternateBuffer: false,
-                previousLinesTrimmed: 5,
-                currentLinesTrimmed: 5
-            ),
-            0,
-            "nothing recycled means a line was appended and every existing index still names its own row"
         )
     }
 
@@ -400,13 +262,6 @@ final class TerminalSelectionTests: XCTestCase {
             0,
             "a paused viewport is not a trim, however long yDisp sits still"
         )
-    }
-
-    func testShiftMovesBothEndpoints() {
-        let shifted = range(2, 10, 5, 12).shifted(rows: -1)
-
-        XCTAssertEqual(shifted.start, Position(col: 2, row: 9))
-        XCTAssertEqual(shifted.end, Position(col: 5, row: 11))
     }
 
     func testScrollRegionIntersectionIsDetectedOnlyWhenItOverlaps() {

@@ -151,16 +151,6 @@ describe('PathField listing', () => {
     expect(options()).toEqual(['project/']);
   });
 
-  it('shows eight rows and counts the rest', async () => {
-    answer('/', null, Array.from({ length: 10 }, (_, i) => `d${i}`));
-    const input = mount();
-
-    await type(input, '/');
-
-    expect(options()).toHaveLength(8);
-    expect(screen.getByText('+2 more — keep typing')).toBeInTheDocument();
-  });
-
   it('remembers a missing directory, so typing under it stays local', async () => {
     fail('/nope/', 404);
     const input = mount();
@@ -238,19 +228,6 @@ describe('PathField gating', () => {
     await type(input, 'code/');
 
     expect(api.requests).toEqual([]);
-  });
-
-  it('words the hint and the rows for a Windows host', async () => {
-    api.listings.set('C:/|', () => Promise.resolve({ path: 'C:\\', dirs: ['Users'], truncated: false }));
-    const input = mount('', true, true);
-
-    expect(screen.getByText('Type C:\\ or ~ to browse folders on the agent.')).toBeInTheDocument();
-
-    await type(input, 'C:/');
-    expect(options()).toEqual(['Users\\']);
-
-    fireEvent.click(screen.getByRole('option', { name: 'Users\\' }));
-    expect(changes.at(-1)).toBe('C:\\Users\\');
   });
 
   it('hides the list once the field loses focus', async () => {

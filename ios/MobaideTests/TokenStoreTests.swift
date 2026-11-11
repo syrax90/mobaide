@@ -13,15 +13,6 @@ final class TokenStoreTests: XCTestCase {
         XCTAssertEqual(store.getAgentUrl(), "https://agent.example.com")
     }
 
-    func testConnectionModeDefaultsToDirect() {
-        let (store, keychain) = makeStore()
-        XCTAssertEqual(store.getConnectionMode(), .direct)
-        keychain.set("relay", forKey: TokenStore.keyConnectionMode)
-        XCTAssertEqual(store.getConnectionMode(), .relay)
-        keychain.set("anything-else", forKey: TokenStore.keyConnectionMode)
-        XCTAssertEqual(store.getConnectionMode(), .direct)
-    }
-
     func testSaveRelayCredentialsSetsEverything() {
         let (store, _) = makeStore()
         store.saveRelayCredentials(

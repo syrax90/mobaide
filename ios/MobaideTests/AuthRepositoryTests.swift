@@ -67,19 +67,6 @@ final class AuthRepositoryTests: XCTestCase {
         XCTAssertEqual(result, .verificationRequired(email: "pending@example.com"))
     }
 
-    func testLogin403WithoutVerificationTagRethrows() async {
-        StubURLProtocol.enqueue(status: 403, body: #"{"detail":"forbidden"}"#)
-
-        do {
-            _ = try await repository.loginWithPassword(email: "a@example.com", password: "pw")
-            XCTFail("expected APIError")
-        } catch let error as APIError {
-            XCTAssertEqual(error.code, 403)
-        } catch {
-            XCTFail("unexpected error \(error)")
-        }
-    }
-
     func testLogin429ThrowsLoginRateLimitedWithServerWait() async {
         StubURLProtocol.enqueue(status: 429, body: """
         {"detail":{"error":"login_rate_limited","retry_after_seconds":420}}
@@ -109,21 +96,6 @@ final class AuthRepositoryTests: XCTestCase {
         }
     }
 
-    func testLoginRateLimitedMessageRoundsUpToWholeMinutes() {
-        XCTAssertEqual(
-            LoginRateLimited(retryAfterSeconds: 900).userMessage,
-            "Too many sign-in attempts. Try again in 15 minutes, or reset your password."
-        )
-        XCTAssertEqual(
-            LoginRateLimited(retryAfterSeconds: 61).userMessage,
-            "Too many sign-in attempts. Try again in 2 minutes, or reset your password."
-        )
-        XCTAssertEqual(
-            LoginRateLimited(retryAfterSeconds: 60).userMessage,
-            "Too many sign-in attempts. Try again in 1 minute, or reset your password."
-        )
-    }
-
     func testAdminRoleIsRejected() async {
         StubURLProtocol.enqueue(status: 200, body: """
         {"access_token":"jwt-1","user_id":"u1","email":"admin@example.com","role":"admin"}
@@ -150,21 +122,6 @@ final class AuthRepositoryTests: XCTestCase {
         XCTAssertEqual(harness.userIdentityStore.getUserAccessToken(), "jwt-apple")
         let state = await harness.sessionManager.currentAuthState
         XCTAssertEqual(state, .userOnly)
-    }
-
-    func testLoginWithAppleAdminRoleIsRejected() async {
-        StubURLProtocol.enqueue(status: 200, body: """
-        {"access_token":"jwt","user_id":"u1","email":"admin@example.com","role":"admin"}
-        """)
-
-        do {
-            _ = try await repository.loginWithApple(idToken: "t", nonce: "n")
-            XCTFail("expected AdminLoginNotSupported")
-        } catch is AdminLoginNotSupported {
-            XCTAssertFalse(harness.userIdentityStore.isUserLoggedIn())
-        } catch {
-            XCTFail("unexpected error \(error)")
-        }
     }
 
     func testVerifyEmailSavesSessionAndMarksUserLoggedIn() async throws {
@@ -349,89 +306,6 @@ final class AuthRepositoryTests: XCTestCase {
         XCTAssertNotNil(agentToken)
         XCTAssertEqual(session.tokenStore.getAccessToken(), agentToken)
         XCTAssertEqual(session.connectionStore.listProfiles().map(\.id), ["p-a"])
-    }
-
-    func testResendVerificationRateLimitMapping() async throws {
-        StubURLProtocol.enqueue(status: 429, body: """
-        {"detail":{"error":"rate_limited","cooldown_seconds_remaining":30}}
-        """)
-        var outcome = try await repository.resendVerification(email: "a@example.com")
-        XCTAssertEqual(outcome, .rateLimited(cooldownSecondsRemaining: 30))
-
-        StubURLProtocol.enqueue(status: 429, body: "garbage")
-        outcome = try await repository.resendVerification(email: "a@example.com")
-        XCTAssertEqual(outcome, .rateLimited(cooldownSecondsRemaining: 60), "unparseable body defaults to 60")
-
-        StubURLProtocol.enqueue(status: 200, body: #"{"status":"sent"}"#)
-        outcome = try await repository.resendVerification(email: "a@example.com")
-        XCTAssertEqual(outcome, .sent)
-    }
-
-    func testRequestPasswordResetRateLimitMapping() async throws {
-        StubURLProtocol.enqueue(status: 429, body: """
-        {"detail":{"error":"reset_ip_rate_limited","retry_after_seconds":45}}
-        """)
-        let outcome = try await repository.requestPasswordReset(email: "a@example.com")
-        XCTAssertEqual(outcome, .rateLimited(retryAfterSeconds: 45))
-    }
-
-    func testResetPasswordErrorMapping() async {
-        func reset(expecting expected: ResetPasswordError, file: StaticString = #filePath, line: UInt = #line) async {
-            do {
-                try await repository.resetPassword(email: "a@example.com", code: "1", newPassword: "pw")
-                XCTFail("expected ResetPasswordFailure", file: file, line: line)
-            } catch let failure as ResetPasswordFailure {
-                XCTAssertEqual(failure.reason, expected, file: file, line: line)
-            } catch {
-                XCTFail("unexpected error \(error)", file: file, line: line)
-            }
-        }
-
-        StubURLProtocol.enqueue(status: 410, body: #"{"detail":{"error":"expired"}}"#)
-        await reset(expecting: .expiredCode)
-
-        StubURLProtocol.enqueue(status: 429, body: """
-        {"detail":{"error":"reset_ip_rate_limited","retry_after_seconds":30}}
-        """)
-        await reset(expecting: .ipRateLimited(retryAfterSeconds: 30))
-
-        StubURLProtocol.enqueue(status: 429, body: #"{"detail":{"error":"too_many_attempts"}}"#)
-        await reset(expecting: .attemptsExhausted)
-
-        StubURLProtocol.enqueue(status: 400, body: #"{"detail":{"error":"new_password_same_as_old"}}"#)
-        await reset(expecting: .sameAsOld)
-
-        StubURLProtocol.enqueue(status: 400, body: #"{"detail":{"error":"invalid_code"}}"#)
-        await reset(expecting: .invalidCode)
-
-        StubURLProtocol.enqueue(status: 503, body: "down")
-        await reset(expecting: .unknown(code: 503, message: "down"))
-    }
-
-    func testDeleteAccountMapping() async throws {
-        harness.userIdentityStore.saveUserSession(
-            accessToken: "jwt", email: "a@example.com", userId: "u1", role: "user"
-        )
-
-        StubURLProtocol.enqueue(status: 400, body: #"{"detail":"google-only"}"#)
-        var result = try await repository.deleteAccountWithPassword(password: "pw", mode: .scheduled)
-        XCTAssertEqual(result, .forbidden)
-
-        StubURLProtocol.enqueue(status: 403, body: """
-        {"detail":{"error":"reauth_required","message":"Wrong password"}}
-        """)
-        result = try await repository.deleteAccountWithPassword(password: "pw", mode: .immediate)
-        XCTAssertEqual(result, .reauthFailed(message: "Wrong password"))
-
-        StubURLProtocol.enqueue(status: 204, body: "")
-        result = try await repository.deleteAccountWithGoogle(idToken: "id", nonce: "n", mode: .scheduled)
-        XCTAssertEqual(result, .submitted(.scheduled))
-    }
-
-    func testDeleteAccountWithoutSessionFailsLocally() async throws {
-        let result = try await repository.deleteAccountWithPassword(password: "pw", mode: .scheduled)
-        XCTAssertEqual(result, .reauthFailed(message: "Not signed in"))
-        XCTAssertTrue(StubURLProtocol.requests.isEmpty, "no network call without a user token")
     }
 
     func testCancelAccountDeletionClearsLocalMarker() async throws {

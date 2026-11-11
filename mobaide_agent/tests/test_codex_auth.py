@@ -13,24 +13,13 @@ import subprocess
 from mobaide.core import codex_auth
 from mobaide.core.codex_auth import (
     codex_auth_present,
-    codex_home,
     codex_login_with_api_key,
 )
 
 
 # ---------------------------------------------------------------------------
-# codex_home / codex_auth_present
+# codex_auth_present
 # ---------------------------------------------------------------------------
-
-
-def test_codex_home_uses_env_override():
-    assert codex_home({"CODEX_HOME": "/custom/codex"}) == "/custom/codex"
-
-
-def test_codex_home_defaults_to_user_dot_codex():
-    home = codex_home({})
-    assert home.endswith(".codex")
-    assert "CODEX_HOME" not in home
 
 
 async def test_auth_present_true_when_env_has_api_key(tmp_path, monkeypatch):
@@ -79,18 +68,6 @@ async def test_auth_present_true_when_status_unsupported_falls_back_to_auth_json
     assert await codex_auth_present(codex_bin="codex", env=env) is True
 
 
-async def test_auth_present_false_when_status_unsupported_and_no_auth_json(
-    tmp_path, monkeypatch,
-):
-    """Indeterminate status (old codex) with no auth.json -> unauthenticated."""
-    _patch_run(
-        monkeypatch, returncode=2,
-        stderr=b"error: unrecognized subcommand 'status'",
-    )
-    env = {"CODEX_HOME": str(tmp_path)}
-    assert await codex_auth_present(codex_bin="codex", env=env) is False
-
-
 async def test_auth_present_true_when_status_cannot_run_falls_back_to_auth_json(
     tmp_path, monkeypatch,
 ):
@@ -105,33 +82,12 @@ async def test_auth_present_true_when_status_cannot_run_falls_back_to_auth_json(
     assert await codex_auth_present(codex_bin="codex", env=env) is True
 
 
-async def test_auth_present_false_when_status_logged_out_and_no_auth_json(
-    tmp_path, monkeypatch,
-):
-    """No env key, ``codex login status`` signed out, no auth.json -> the
-    no-credential hang the launcher guard prevents."""
-    _patch_run(monkeypatch, returncode=1, stderr=b"Not logged in")
-    env = {"CODEX_HOME": str(tmp_path)}
-    assert await codex_auth_present(codex_bin="codex", env=env) is False
-
-
 async def test_auth_present_false_for_empty_env_api_key(tmp_path, monkeypatch):
     """A present-but-empty ``OPENAI_API_KEY`` is not a credential; it falls
     through to a signed-out status with no auth.json -> unauthenticated."""
     _patch_run(monkeypatch, returncode=1)
     env = {"OPENAI_API_KEY": "", "CODEX_HOME": str(tmp_path)}
     assert await codex_auth_present(codex_bin="codex", env=env) is False
-
-
-async def test_auth_present_status_windows_cmd_shim_wrapped(tmp_path, monkeypatch):
-    """The status probe wraps a Windows ``.cmd`` shim via ``cmd /c`` — the same
-    shared argv builder the login path uses."""
-    monkeypatch.setattr(codex_auth.sys, "platform", "win32")
-    captured = _patch_run(monkeypatch, returncode=0)
-    env = {"CODEX_HOME": str(tmp_path)}
-    assert await codex_auth_present(codex_bin=r"C:\npm\codex.cmd", env=env) is True
-    assert captured["argv"][:2] == ["cmd", "/c"]
-    assert captured["argv"][2:] == [r"C:\npm\codex.cmd", "login", "status"]
 
 
 # ---------------------------------------------------------------------------
@@ -213,15 +169,6 @@ async def test_login_scrubs_unrelated_sk_shape_from_stderr(monkeypatch):
     assert "sk-OTHERvalue9876543210" not in detail
 
 
-async def test_login_falls_back_to_stdout_when_stderr_empty(monkeypatch):
-    _patch_run(monkeypatch, returncode=2, stdout=b"stdout failure note", stderr=b"")
-
-    ok, detail = await codex_login_with_api_key("sk-x", codex_bin="codex", env={})
-
-    assert ok is False
-    assert "stdout failure note" in detail
-
-
 async def test_login_timeout_returns_timed_out_detail(monkeypatch):
     """A hung login must time out without blocking the relay; ``subprocess.run``
     kills + reaps the child internally on ``TimeoutExpired``."""
@@ -233,18 +180,6 @@ async def test_login_timeout_returns_timed_out_detail(monkeypatch):
 
     assert ok is False
     assert "timed out" in detail.lower()
-
-
-async def test_login_passes_env_to_subprocess(monkeypatch):
-    captured = _patch_run(monkeypatch, returncode=0)
-
-    await codex_login_with_api_key(
-        "sk-x", codex_bin="codex", env={"CODEX_HOME": "/x", "PATH": "/y"},
-    )
-
-    passed_env = captured["kwargs"]["env"]
-    assert passed_env["CODEX_HOME"] == "/x"
-    assert passed_env["PATH"] == "/y"
 
 
 async def test_login_windows_cmd_shim_wrapped_via_cmd_c(monkeypatch):

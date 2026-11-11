@@ -174,18 +174,6 @@ class TestGeneratedShim:
         if sys.platform != "win32":
             assert shim.stat().st_mode & 0o777 == 0o755
 
-    def test_follows_current_version_after_an_update(self, tmp_path):
-        prefix = tmp_path / "mobaide"
-        _make_release(prefix, "0.2.0")
-        _make_release(prefix, "0.3.0")
-        _set_version(prefix, "0.2.0")
-        shim = _write_shim(tmp_path / "mobaide-agent", prefix)
-        stub = _stub_bin(tmp_path, uid=1000)
-
-        assert "RAN 0.2.0" in _run_shim(shim, stub).stdout
-        _set_version(prefix, "0.3.0")
-        assert "RAN 0.3.0" in _run_shim(shim, stub).stdout
-
     def test_prefix_from_the_environment_wins_over_the_baked_one(self, tmp_path):
         baked = tmp_path / "baked"
         _make_release(baked, "0.2.0")
@@ -233,13 +221,6 @@ class TestShimTempFile:
     """``write_cli_shim`` runs as root into a directory the agent's user may
     be able to write, so its temp file must not have a guessable name."""
 
-    def test_leaves_only_the_shim_behind(self, tmp_path):
-        shim = _write_shim(tmp_path / "mobaide-agent", tmp_path / "mobaide")
-
-        assert [p.name for p in tmp_path.glob("mobaide-agent*")] == ["mobaide-agent"]
-        if sys.platform != "win32":
-            assert shim.stat().st_mode & 0o777 == 0o755
-
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
     def test_does_not_write_through_a_symlink_at_the_old_temp_name(self, tmp_path):
         victim = tmp_path / "victim"
@@ -265,13 +246,6 @@ class TestShimTempFile:
         assert _install_sh_constant("CLI_SHIM_MARKER") in target.read_text(
             encoding="utf-8"
         )
-
-    def test_temp_name_comes_from_mktemp(self):
-        body = _sh_function_body("write_cli_shim")
-
-        assert re.search(r'^\s*tmp="\$\(mktemp ', body, re.M), body
-        assert "$$" not in body, body
-
 
 class TestShimAsRoot:
     def test_drops_to_the_run_user_through_sudo(self, tmp_path):

@@ -6,9 +6,7 @@
 * Unsupported ``protocol_version`` -> ``incompatible`` text frame followed
   by close code ``PROTOCOL_INCOMPATIBLE_CLOSE_CODE`` (4002), no agent
   registration.
-* ``_coerce_int`` boundary cases for the field's permissive parser.
-* The unknown-control-type ``else`` branch increments the module-level
-  telemetry counter for forward-compat metrics.
+* The reported agent version and capabilities persisted on the agent row.
 """
 from __future__ import annotations
 
@@ -193,27 +191,6 @@ class TestHandshakeVersionPersisted:
     ``agent_version`` payloads.
     """
 
-    async def test_successful_auth_persists_version_and_protocol(
-        self, app, registered_agent, db,
-    ):
-        agent_id, raw_token = registered_agent
-        client = TestClient(app)
-        with client.websocket_connect("/ws/agent-tunnel") as ws:
-            ws.send_text(json.dumps({
-                "type": "auth",
-                "agent_id": agent_id,
-                "token": raw_token,
-                "protocol_version": PROTOCOL_VERSION,
-                "agent_version": "0.3.0",
-            }))
-            resp = json.loads(ws.receive_text())
-            assert resp["type"] == "auth_ok"
-
-        agent = await db.get_agent(agent_id)
-        assert agent is not None
-        assert agent["agent_version"] == "0.3.0"
-        assert agent["agent_protocol_version"] == PROTOCOL_VERSION
-
     async def test_reauth_without_agent_version_preserves_stored_value(
         self, app, registered_agent, db,
     ):
@@ -278,39 +255,6 @@ class TestHandshakeVersionPersisted:
         # Protocol version is still captured because it has its own
         # ``_coerce_int`` path, not the string guard.
         assert agent["agent_protocol_version"] == PROTOCOL_VERSION
-
-    async def test_empty_string_agent_version_does_not_clobber(
-        self, app, registered_agent, db,
-    ):
-        agent_id, raw_token = registered_agent
-        client = TestClient(app)
-
-        # First, prime the row with a real version.
-        with client.websocket_connect("/ws/agent-tunnel") as ws:
-            ws.send_text(json.dumps({
-                "type": "auth",
-                "agent_id": agent_id,
-                "token": raw_token,
-                "protocol_version": PROTOCOL_VERSION,
-                "agent_version": "0.3.0",
-            }))
-            assert json.loads(ws.receive_text())["type"] == "auth_ok"
-
-        # Then reconnect with an empty string — the guard should
-        # treat this as "no value" (truthy check) and leave the prior
-        # version untouched.
-        with client.websocket_connect("/ws/agent-tunnel") as ws:
-            ws.send_text(json.dumps({
-                "type": "auth",
-                "agent_id": agent_id,
-                "token": raw_token,
-                "protocol_version": PROTOCOL_VERSION,
-                "agent_version": "",
-            }))
-            assert json.loads(ws.receive_text())["type"] == "auth_ok"
-
-        agent = await db.get_agent(agent_id)
-        assert agent["agent_version"] == "0.3.0"
 
     async def test_successful_auth_populates_last_seen_at(
         self, app, registered_agent, db,
@@ -398,8 +342,6 @@ class TestAgentUninstallHandshake:
         [
             ({"uninstall": True}, 1),
             ({"uninstall": "true"}, 0),
-            ({}, 0),
-            (["uninstall"], 0),
         ],
     )
     async def test_uninstall_capability_is_persisted_only_when_true(

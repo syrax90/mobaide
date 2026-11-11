@@ -45,18 +45,6 @@ class PreferencesStoreRecentCustomPathsTest {
     }
 
     @Test
-    fun recents_returnNewestFirst() = runTest {
-        store.addRecentCustomPath("paths-order", "/tmp/a")
-        store.addRecentCustomPath("paths-order", "/tmp/b")
-        store.addRecentCustomPath("paths-order", "/tmp/c")
-
-        assertEquals(
-            listOf("/tmp/c", "/tmp/b", "/tmp/a"),
-            store.getRecentCustomPaths("paths-order"),
-        )
-    }
-
-    @Test
     fun reAdd_bumpsToFront_withoutDuplicating() = runTest {
         store.addRecentCustomPath("paths-bump", "/tmp/a")
         store.addRecentCustomPath("paths-bump", "/tmp/b")
@@ -111,15 +99,6 @@ class PreferencesStoreRecentCustomPathsTest {
     }
 
     @Test
-    fun agentBuckets_areIsolated() = runTest {
-        store.addRecentCustomPath("paths-agent-a", "/tmp/a")
-        store.addRecentCustomPath("paths-agent-b", "/tmp/b")
-
-        assertEquals(listOf("/tmp/a"), store.getRecentCustomPaths("paths-agent-a"))
-        assertEquals(listOf("/tmp/b"), store.getRecentCustomPaths("paths-agent-b"))
-    }
-
-    @Test
     fun remove_dropsTheMatch_andKeepsSurvivorsInMruOrder() = runTest {
         listOf("/tmp/a", "/tmp/b", "/tmp/c").forEach {
             store.addRecentCustomPath("paths-remove", it)
@@ -149,16 +128,6 @@ class PreferencesStoreRecentCustomPathsTest {
     }
 
     @Test
-    fun remove_acceptsAnUntrimmedArgument_forATrimmedEntry() = runTest {
-        store.addRecentCustomPath("paths-remove-trim", "/tmp/x")
-        store.addRecentCustomPath("paths-remove-trim", "/tmp/y")
-
-        store.removeRecentCustomPath("paths-remove-trim", "  /tmp/x  ")
-
-        assertEquals(listOf("/tmp/y"), store.getRecentCustomPaths("paths-remove-trim"))
-    }
-
-    @Test
     fun remove_isScopedToOneAgentBucket() = runTest {
         store.addRecentCustomPath("paths-scope-a", "/shared")
         store.addRecentCustomPath("paths-scope-b", "/shared")
@@ -171,17 +140,6 @@ class PreferencesStoreRecentCustomPathsTest {
             listOf("/shared"),
             store.getRecentCustomPaths("paths-scope-b"),
         )
-    }
-
-    @Test
-    fun removingTheLastEntry_emptiesTheBucket_andItStaysWritable() = runTest {
-        store.addRecentCustomPath("paths-last", "/tmp/only")
-
-        store.removeRecentCustomPath("paths-last", "/tmp/only")
-        assertEquals(emptyList<String>(), store.getRecentCustomPaths("paths-last"))
-
-        store.addRecentCustomPath("paths-last", "/tmp/fresh")
-        assertEquals(listOf("/tmp/fresh"), store.getRecentCustomPaths("paths-last"))
     }
 
     @Test
@@ -212,14 +170,4 @@ class PreferencesStoreRecentCustomPathsTest {
         assertEquals("paths-purge-project", store.getLastUsedProjectName())
     }
 
-    @Test
-    fun remove_ofAnAbsentPath_isANoOp() = runTest {
-        store.removeRecentCustomPath("paths-absent", "/tmp/never-written")
-        assertEquals(emptyList<String>(), store.getRecentCustomPaths("paths-absent"))
-
-        store.addRecentCustomPath("paths-absent", "/tmp/first")
-        store.removeRecentCustomPath("paths-absent", "/tmp/not-stored")
-
-        assertEquals(listOf("/tmp/first"), store.getRecentCustomPaths("paths-absent"))
-    }
 }

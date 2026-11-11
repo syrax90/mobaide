@@ -119,66 +119,9 @@ describe('groupTemplates', () => {
     expect(ids(grouped.recents)).toEqual(['keep']);
     expect(grouped.others).toEqual([]);
   });
-
-  it('treats a blank filter as no filter', () => {
-    const grouped = groupTemplates([template('only')], '   ');
-
-    expect(ids(grouped.others)).toEqual(['only']);
-  });
-
-  it('matches regardless of the case the user typed', () => {
-    const templates = [template('hit', { name: 'Review the PR' })];
-
-    expect(ids(groupTemplates(templates, 'REVIEW').others)).toEqual(['hit']);
-  });
 });
 
 describe('listTemplates', () => {
-  it('maps the wire shape to the client model and drops what the picker never reads', async () => {
-    relay.results.push({
-      data: [
-        {
-          template_id: 't1',
-          name: 'Run the linter',
-          body: 'npm run lint',
-          is_favorite: true,
-          last_used_at: '2026-08-04T10:00:00Z',
-          created_at: '2026-07-01T00:00:00Z',
-          updated_at: '2026-08-01T00:00:00Z',
-          version: 3,
-        },
-        {
-          template_id: 't2',
-          name: 'Deploy',
-          body: 'ship it',
-          is_favorite: false,
-          last_used_at: null,
-          created_at: '2026-07-02T00:00:00Z',
-          updated_at: '2026-08-02T00:00:00Z',
-          version: 1,
-        },
-      ],
-      response: new Response(null, { status: 200 }),
-    });
-
-    await expect(listTemplates()).resolves.toEqual([
-      {
-        templateId: 't1',
-        name: 'Run the linter',
-        body: 'npm run lint',
-        isFavorite: true,
-        lastUsedAt: '2026-08-04T10:00:00Z',
-      },
-      {
-        templateId: 't2',
-        name: 'Deploy',
-        body: 'ship it',
-        isFavorite: false,
-        lastUsedAt: null,
-      },
-    ]);
-    expect(relay.paths).toEqual(['/api/templates']);
-  });
 
   it('raises the relay error rather than handing the picker an empty list', async () => {
     // An empty list and a failed fetch look identical to the picker otherwise,

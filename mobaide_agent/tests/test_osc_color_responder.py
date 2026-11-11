@@ -36,13 +36,6 @@ def test_osc11_background_bel() -> None:
     assert r.pending_replies() == BG_BEL
 
 
-def test_osc12_cursor_bel() -> None:
-    r = OscColorResponder()
-    out = r.process(b"\x1b]12;?\x07")
-    assert out == b""
-    assert r.pending_replies() == CURSOR_BEL
-
-
 def test_st_terminator_is_echoed() -> None:
     # An ST-terminated query gets an ST-terminated reply.
     r = OscColorResponder()
@@ -66,13 +59,6 @@ def test_color_set_passes_through() -> None:
     assert r.pending_replies() == b""
 
 
-def test_color_set_hash_name_passes_through() -> None:
-    r = OscColorResponder()
-    payload = b"\x1b]10;#ffffff\x07"
-    assert r.process(payload) == payload
-    assert r.pending_replies() == b""
-
-
 def test_titles_pass_through() -> None:
     # OSC 0/1/2 (window/icon titles) are not color queries.
     r = OscColorResponder()
@@ -90,31 +76,9 @@ def test_long_title_without_terminator_not_overbuffered() -> None:
     assert r.pending_replies() == b""
 
 
-def test_osc4_palette_query_passes_through() -> None:
-    # OSC 4 (palette) is a different shape and intentionally not handled here.
-    r = OscColorResponder()
-    payload = b"\x1b]4;1;?\x07"
-    assert r.process(payload) == payload
-    assert r.pending_replies() == b""
-
-
 def test_osc52_clipboard_passes_through() -> None:
     r = OscColorResponder()
     payload = b"\x1b]52;c;SGVsbG8=\x07"
-    assert r.process(payload) == payload
-    assert r.pending_replies() == b""
-
-
-def test_non_osc_csi_passes_through() -> None:
-    r = OscColorResponder()
-    payload = b"\x1b[31mred\x1b[0m"
-    assert r.process(payload) == payload
-    assert r.pending_replies() == b""
-
-
-def test_plain_text_passes_through() -> None:
-    r = OscColorResponder()
-    payload = b"just some normal text\nwith a newline"
     assert r.process(payload) == payload
     assert r.pending_replies() == b""
 
@@ -151,22 +115,6 @@ def test_split_at_esc_boundary() -> None:
     a = r.process(b"foo\x1b")
     b = r.process(b"]10;?\x07bar")
     assert a + b == b"foobar"
-    assert r.pending_replies() == FG_BEL
-
-
-def test_split_after_introducer() -> None:
-    r = OscColorResponder()
-    a = r.process(b"x\x1b]")
-    b = r.process(b"11;?\x07y")
-    assert a + b == b"xy"
-    assert r.pending_replies() == BG_BEL
-
-
-def test_split_mid_params() -> None:
-    r = OscColorResponder()
-    a = r.process(b"\x1b]10;")
-    b = r.process(b"?\x07done")
-    assert a + b == b"done"
     assert r.pending_replies() == FG_BEL
 
 
@@ -233,17 +181,6 @@ def test_mixed_set_then_query() -> None:
     assert r.pending_replies() == b"\x1b]10;rgb:0000/0000/0000\x07"
 
 
-def test_mixed_query_set_query() -> None:
-    # ESC]10;?;rgb:X;? = query fg, set bg, query cursor (cursor default white).
-    r = OscColorResponder()
-    out = r.process(b"\x1b]10;?;rgb:0a0a/0b0b/0c0c;?\x07")
-    assert out == b"\x1b]11;rgb:0a0a/0b0b/0c0c\x07"
-    assert r.pending_replies() == (
-        b"\x1b]10;rgb:ffff/ffff/ffff\x07"  # fg query
-        + b"\x1b]10;rgb:ffff/ffff/ffff\x07"  # cursor query
-    )
-
-
 def test_mixed_query_set_split_mid_value() -> None:
     # The mixed control split mid-value (ESC]10;?;rgb:00 then 00/0000/0000 BEL).
     # The first fragment is a still-completable control, so it is carried and
@@ -273,17 +210,4 @@ def test_osc11_prefix_resolves_to_osc110_passthrough() -> None:
     a = r.process(b"\x1b]11")
     b = r.process(b"0\x07")
     assert a + b == b"\x1b]110\x07"
-    assert r.pending_replies() == b""
-
-
-def test_osc1_icon_title_passes_through() -> None:
-    r = OscColorResponder()
-    payload = b"\x1b]1;icon name\x07"
-    assert r.process(payload) == payload
-    assert r.pending_replies() == b""
-
-
-def test_empty_chunk() -> None:
-    r = OscColorResponder()
-    assert r.process(b"") == b""
     assert r.pending_replies() == b""

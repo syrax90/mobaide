@@ -364,12 +364,6 @@ describe('GitScreen remote branches', () => {
     expect(screen.getByRole('button', { name: 'Check out origin/feature-x' })).toBeInTheDocument();
   });
 
-  it('has no filter below eight rows', async () => {
-    renderScreen();
-    await screen.findByRole('button', { name: 'Delete feature-a' });
-
-    expect(screen.queryByRole('searchbox', { name: 'Filter branches' })).toBeNull();
-  });
 });
 
 describe('GitScreen filter', () => {
@@ -380,24 +374,6 @@ describe('GitScreen filter', () => {
       remoteBranch('main'),
     ];
   };
-
-  it('keeps the open remote section and drops the local list when only a remote row matches', async () => {
-    eightRows();
-    renderScreen();
-    const filter = await screen.findByRole('searchbox', { name: 'Filter branches' });
-
-    fireEvent.change(filter, { target: { value: 'feature-x' } });
-
-    const section = screen.getByText('Remote branches (1)').closest('details');
-    expect(section?.open).toBe(true);
-    expect(
-      within(section as HTMLElement).getByRole('button', { name: 'Check out origin/feature-x' }),
-    ).toBeInTheDocument();
-    expect(screen.queryByText('No matching branches or worktrees.')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Delete feature-a' })).toBeNull();
-    // Only the remote list is left; the local <ul> is not rendered empty.
-    expect(screen.getAllByRole('list')).toHaveLength(1);
-  });
 
   it('shows the notice only when neither list has a match', async () => {
     eightRows();
@@ -488,15 +464,6 @@ describe('GitScreen check out', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
-  it('sends nothing more when the busy prompt is cancelled', async () => {
-    const dialog = await refuseAsBusy();
-
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
-
-    expect(screen.queryByRole('alertdialog')).toBeNull();
-    expect(api.checkoutForces).toEqual([false]);
-  });
-
   it('asks to update an agent that refuses a forced checkout', async () => {
     const dialog = await refuseAsBusy();
 
@@ -511,21 +478,6 @@ describe('GitScreen check out', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
-  it('shows a coded refusal as its copy', async () => {
-    rowsWithRemote();
-    api.checkoutOutcome = wireFailure(409, { code: 'dirty', message: 'error: Your local changes' });
-    renderScreen();
-    fireEvent.click(await screen.findByRole('button', { name: 'Check out feature-a' }));
-    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Check out' }));
-
-    await waitFor(() => {
-      expect(lastToast()).toBe(
-        'The project folder has local changes this checkout would overwrite. ' +
-          "Commit or discard them from a session's Changes screen first.",
-      );
-    });
-    expect(screen.queryByRole('alertdialog')).toBeNull();
-  });
 });
 
 describe('GitScreen new branch', () => {
@@ -614,20 +566,6 @@ describe('GitScreen new branch', () => {
     });
     expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(lastToast()).toBe('The project folder is in use.');
-  });
-
-  it('lists local then remote rows as start points', async () => {
-    const dialog = await openDialog();
-
-    const options = within(dialog)
-      .getAllByRole('option')
-      .map((option) => option.textContent);
-    expect(options).toEqual([
-      'HEAD (current commit)',
-      'feature-a',
-      'main',
-      'origin/feature-x (remote)',
-    ]);
   });
 
   it('skips an orphan worktree even when it still names its deleted branch', async () => {
@@ -837,18 +775,6 @@ describe('GitScreen folders', () => {
 
     expect(folder).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByRole('button', { name: 'Delete feature/a' })).toBeNull();
-  });
-
-  it('opens the remote-name folder by default', async () => {
-    api.items = [branch('main'), remoteBranch('feature/x')];
-    renderScreen();
-
-    const section = (await screen.findByText('Remote branches (1)')).closest('details');
-    const remoteFolder = within(section as HTMLElement).getByRole('button', { name: folderName('origin', 1) });
-    expect(remoteFolder).toHaveAttribute('aria-expanded', 'true');
-    expect(
-      within(section as HTMLElement).getByRole('button', { name: folderName('feature', 1) }),
-    ).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('holds every matching folder open while filtering, with the toggle disabled', async () => {

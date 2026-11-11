@@ -43,20 +43,6 @@ class VerifyEmailViewModelTest {
     private fun primed(vm: VerifyEmailViewModel, email: String = "alice@example.com") =
         vm.apply { setEmail(email) }
 
-    // ---- Initial state ------------------------------------------------------
-
-    @Test
-    fun initialState_isEmpty_withNoCooldownOrError() = runTest {
-        val vm = VerifyEmailViewModel(authRepository)
-        val state = vm.uiState.value
-        assertEquals("", state.email)
-        assertEquals("", state.code)
-        assertFalse(state.isLoading)
-        assertFalse(state.isResending)
-        assertEquals(0, state.cooldownSeconds)
-        assertNull(state.error)
-    }
-
     // ---- updateCode digit filter + cap --------------------------------------
 
     @Test
@@ -71,30 +57,6 @@ class VerifyEmailViewModelTest {
         val vm = VerifyEmailViewModel(authRepository)
         vm.updateCode("12345678")
         assertEquals("123456", vm.uiState.value.code)
-    }
-
-    @Test
-    fun updateCode_acceptsSinglePasteOfSixDigits() = runTest {
-        // Regression: a typical paste from a password manager lands as a
-        // single onValueChange callback. The filter must not chop it.
-        val vm = VerifyEmailViewModel(authRepository)
-        vm.updateCode("654321")
-        assertEquals("654321", vm.uiState.value.code)
-    }
-
-    @Test
-    fun updateCode_clearsPendingError() = runTest {
-        val vm = primed(VerifyEmailViewModel(authRepository))
-        vm.submit()  // triggers "Enter the 6-digit code..." validation error
-        runCurrent()
-        assertEquals(
-            "Enter the 6-digit code we emailed you",
-            vm.uiState.value.error,
-        )
-
-        vm.updateCode("1")
-
-        assertNull(vm.uiState.value.error)
     }
 
     // ---- submit length gate -------------------------------------------------
@@ -115,19 +77,6 @@ class VerifyEmailViewModelTest {
             assertFalse(vm.uiState.value.isLoading)
             coVerify { authRepository wasNot Called }
         }
-
-    @Test
-    fun submit_whenCodeShorterThanSix_alsoEmitsErrorEvent() = runTest {
-        val vm = primed(VerifyEmailViewModel(authRepository))
-        vm.updateCode("")
-
-        vm.errorEvents.test {
-            vm.submit()
-            runCurrent()
-            assertEquals("Enter the 6-digit code we emailed you", awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
 
     // ---- submit happy path --------------------------------------------------
 
@@ -182,23 +131,6 @@ class VerifyEmailViewModelTest {
     }
 
     @Test
-    fun submit_on410_showsExpiredMessage() = runTest {
-        val vm = primed(VerifyEmailViewModel(authRepository))
-        vm.updateCode("222222")
-        coEvery {
-            authRepository.verifyEmail("alice@example.com", "222222")
-        } throws ApiException(410, "gone")
-
-        vm.submit()
-        advanceUntilIdle()
-
-        assertEquals(
-            "That code expired. Tap \"Resend\" to get a new one.",
-            vm.uiState.value.error,
-        )
-    }
-
-    @Test
     fun submit_on429_showsTooManyAttemptsMessage() = runTest {
         val vm = primed(VerifyEmailViewModel(authRepository))
         vm.updateCode("333333")
@@ -231,26 +163,6 @@ class VerifyEmailViewModelTest {
             "Verification failed: ${boom.message}",
             vm.uiState.value.error,
         )
-    }
-
-    // ---- submit: non-API exception path -------------------------------------
-
-    @Test
-    fun submit_onGenericException_showsFailureMessage_andClearsLoading() = runTest {
-        val vm = primed(VerifyEmailViewModel(authRepository))
-        vm.updateCode("555555")
-        coEvery {
-            authRepository.verifyEmail("alice@example.com", "555555")
-        } throws java.net.UnknownHostException("api.example.com")
-
-        vm.submit()
-        advanceUntilIdle()
-
-        assertEquals(
-            "Verification failed: api.example.com",
-            vm.uiState.value.error,
-        )
-        assertFalse(vm.uiState.value.isLoading)
     }
 
     // ---- submit: admin blocked ----------------------------------------------

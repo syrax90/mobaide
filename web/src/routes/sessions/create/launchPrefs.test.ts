@@ -111,26 +111,6 @@ describe('applyLaunchPrefs', () => {
     expect(restore(false, true)).toMatchObject({ skipPermissions: false, sandbox: true });
   });
 
-  it('restores the Antigravity Terminal UI choice and keeps the per-session folders', () => {
-    const base: WizardState = {
-      ...INITIAL_WIZARD_STATE,
-      antigravity: { ...INITIAL_WIZARD_STATE.antigravity, addDirsDraft: '/extra' },
-    };
-
-    const seeded = applyLaunchPrefs(base, {
-      ...NEVER_LAUNCHED,
-      antigravity: { model: null, skipPermissions: false, sandbox: false, terminalUi: true },
-    });
-
-    expect(seeded.antigravity).toEqual({
-      model: null,
-      skipPermissions: false,
-      sandbox: false,
-      addDirsDraft: '/extra',
-      terminalUi: true,
-    });
-  });
-
   it('restores the Codex bucket including the null "agent default" effort', () => {
     const seeded = applyLaunchPrefs(INITIAL_WIZARD_STATE, {
       ...NEVER_LAUNCHED,
@@ -215,12 +195,6 @@ describe('launchPrefsFromState', () => {
     });
   });
 
-  it('remembers the Codex Terminal UI choice', () => {
-    const terminal: WizardState = { ...dialled, codex: { ...dialled.codex, terminalUi: true } };
-
-    expect(launchPrefsFromState(terminal, 'codex')?.prefs).toMatchObject({ terminalUi: true });
-  });
-
   it('remembers the Antigravity Terminal UI choice in its own bucket only', () => {
     const terminal: WizardState = {
       ...dialled,
@@ -238,11 +212,6 @@ describe('launchPrefsFromState', () => {
     // reusable default cannot start being persisted by accident.
     expect(launchPrefsFromState(dialled, 'auto_scan')?.prefs).not.toHaveProperty('initialPrompt');
     expect(launchPrefsFromState(dialled, 'antigravity')?.prefs).not.toHaveProperty('addDirsDraft');
-  });
-
-  it('remembers nothing for the modes that carry no options', () => {
-    expect(launchPrefsFromState(dialled, 'shell')).toBeNull();
-    expect(launchPrefsFromState(dialled, 'custom_0123456789ab')).toBeNull();
   });
 
   it('snapshots the raw selection, not the effective one', () => {

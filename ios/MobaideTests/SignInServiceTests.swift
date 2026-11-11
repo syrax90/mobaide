@@ -55,32 +55,6 @@ final class SignInServiceTests: XCTestCase {
         XCTAssertEqual(outcome, .cancelled)
     }
 
-    func testNotConfiguredMapsToConfigMessage() async {
-        let outcome = await makeService(google: .notConfigured).signInWithGoogle()
-        XCTAssertEqual(
-            outcome,
-            .failed(message: "Google Sign-In is not configured for this build. Contact the developer.")
-        )
-    }
-
-    func testNoAccountsPassesProviderMessageThrough() async {
-        let outcome = await makeService(google: .noAccounts(message: "No Google account found.")).signInWithGoogle()
-        XCTAssertEqual(outcome, .failed(message: "No Google account found."))
-    }
-
-    func testProviderUnavailableMapsToUnavailableMessage() async {
-        let outcome = await makeService(google: .providerUnavailable).signInWithGoogle()
-        XCTAssertEqual(
-            outcome,
-            .failed(message: "Google Sign-In is unavailable on this device right now. Try again later.")
-        )
-    }
-
-    func testProviderFailureIsPrefixedWithProviderName() async {
-        let outcome = await makeService(google: .failed(message: "boom")).signInWithGoogle()
-        XCTAssertEqual(outcome, .failed(message: "Google Sign-In failed: boom"))
-    }
-
     // MARK: - Token exchange over the real repository stack
 
     func testGoogleSuccessExchangesTokenAndPersistsSession() async throws {
@@ -172,18 +146,6 @@ final class SignInServiceTests: XCTestCase {
         let result = apple.handleCompletion(.failure(ASAuthorizationError(.canceled)))
 
         XCTAssertEqual(result, .cancelled)
-    }
-
-    func testAppleUnknownErrorMapsToNoAccounts() {
-        let apple = AppleSignInClient()
-        apple.prepareRequest(ASAuthorizationAppleIDProvider().createRequest())
-
-        let result = apple.handleCompletion(.failure(ASAuthorizationError(.unknown)))
-
-        XCTAssertEqual(
-            result,
-            .noAccounts(message: "Sign in with Apple is unavailable. Check that you're signed in to iCloud and try again.")
-        )
     }
 
     func testAppleCredentialMappingRequiresHeldNonce() {

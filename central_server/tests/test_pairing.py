@@ -3,18 +3,6 @@ from __future__ import annotations
 
 import uuid
 
-import pytest
-
-from central_server.db.database import Database
-
-
-@pytest.fixture
-async def db(tmp_path) -> Database:
-    database = Database(str(tmp_path / "pairing_test.db"))
-    await database.connect()
-    yield database
-    await database.close()
-
 
 class TestPairingEndpoints:
     """Integration tests for the pairing REST API."""

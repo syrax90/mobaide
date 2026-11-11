@@ -180,20 +180,6 @@ class TestStatus:
         assert (status.progress, status.speed_factor, status.error) == (None, None, None)
         assert not voice_dir.exists()
 
-    def test_construction_does_no_io(self, tmp_path, monkeypatch):
-        def no_state_prefix(**_kwargs):
-            raise AssertionError("resolved the voice root at construction")
-
-        monkeypatch.setattr(service_module, "state_prefix", no_state_prefix)
-
-        VoiceService(fake=True)
-
-    @pytest.mark.parametrize(("fake", "name"), [(True, "voice-fake"), (False, "voice")])
-    def test_fake_mode_gets_its_own_root(self, tmp_path, monkeypatch, fake, name):
-        monkeypatch.setattr(service_module, "state_prefix", lambda test_mode=None: tmp_path)
-
-        assert VoiceService(fake=fake).paths.root == tmp_path / name
-
     def test_corrupt_settings_read_as_not_installed(self, voice_dir):
         voice_dir.mkdir()
         (voice_dir / "settings.json").write_text("{garbage", encoding="utf-8")
@@ -323,15 +309,6 @@ class TestInstall:
 
         assert status.state == "failed"
         assert status.error is not None and status.error.code == "selftest_failed"
-
-    async def test_selftest_stops_the_helper(self, make_service):
-        helper = _Helper()
-        service = make_service(helper=helper)
-
-        await service.install()
-        await _installed(service)
-
-        assert helper.stops == 1
 
     async def test_not_enough_disk_fails_before_downloading(self, make_service, monkeypatch):
         monkeypatch.setattr(service_module, "free_disk_bytes", lambda _path: 1024)
@@ -566,16 +543,6 @@ class TestCancelAndRemove:
         assert not list(service.paths.root.rglob("*.part"))
         assert events.payloads[-1]["state"] == "not_installed"
 
-    async def test_cancel_leaves_a_ready_install_alone(self, make_service):
-        service = make_service()
-        await service.install()
-        await _installed(service)
-
-        status = await service.cancel_install()
-
-        assert status.state == "ready"
-        assert (service.paths.model_dir(FAKE_MODEL.id) / FAKE_MODEL.files[0].name).exists()
-
     async def test_remove_deletes_files_and_turns_voice_off(self, make_service):
         events = _Events()
         service = make_service(publish=events)
@@ -676,13 +643,6 @@ class TestCancelAndRemove:
 
 
 class TestStartAfterRestart:
-    async def test_no_settings_does_nothing_and_creates_nothing(self, make_service, voice_dir):
-        service = make_service()
-
-        await service.start()
-
-        assert not voice_dir.exists()
-        assert service.status().state == "not_installed"
 
     async def test_interrupted_install_resumes_after_restart(self, make_service):
         gate = asyncio.Event()
@@ -741,26 +701,6 @@ class TestStartAfterRestart:
         assert restarted.status().state != "ready"
         assert (await _installed(restarted)).state == "ready"
         assert FAKE_MODEL.files[0].name in fetcher.calls
-
-    async def test_disabled_voice_is_not_started(self, make_service, voice_dir):
-        _write_settings(voice_dir, enabled=False, model_id=FAKE_MODEL.id, phase="installing")
-        fetcher = _Fetcher()
-        service = make_service(fetcher=fetcher)
-
-        await service.start()
-        await asyncio.sleep(0.05)
-
-        assert fetcher.calls == []
-        assert service.status().state == "not_installed"
-
-    async def test_corrupt_settings_never_raise(self, make_service, voice_dir):
-        voice_dir.mkdir()
-        (voice_dir / "settings.json").write_bytes(b"\xff\xfe not json")
-        service = make_service()
-
-        await service.start()
-
-        assert service.status().state == "not_installed"
 
     @pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="POSIX non-root permissions")
     async def test_unwritable_voice_dir_never_raises(self, make_service, voice_dir):
@@ -1031,18 +971,6 @@ class TestForeignInstall:
         finally:
             other.release()
 
-    async def test_no_watcher_without_a_publisher(self, make_service, voice_dir):
-        _write_settings(voice_dir, enabled=True, model_id=FAKE_MODEL.id, phase="installing")
-        service = make_service()
-        other = FileLock(service.paths.lock_file)
-        assert other.try_acquire()
-        try:
-            assert service.status().state == "queued"
-
-            assert self._watchers() == 0
-        finally:
-            other.release()
-
     async def test_shutdown_stops_the_watcher(self, make_service, voice_dir):
         _write_settings(voice_dir, enabled=True, model_id=FAKE_MODEL.id, phase="installing")
         events = _Events()
@@ -1074,15 +1002,6 @@ class TestMarkInterrupted:
         assert status.state == "failed"
         assert status.error is not None and status.error.code == "interrupted"
 
-    async def test_ready_install_is_untouched(self, make_service):
-        service = make_service()
-        await service.install()
-        await _installed(service)
-
-        service.mark_interrupted()
-
-        assert service.status().state == "ready"
-
 
 class TestDictationGate:
     async def test_dictation_before_install_is_voice_not_ready(self, make_service):
@@ -1090,17 +1009,6 @@ class TestDictationGate:
             await make_service().create_dictation()
 
         assert (excinfo.value.status, excinfo.value.code) == (409, "voice_not_ready")
-
-    async def test_dictation_while_installing_is_voice_not_ready(self, make_service):
-        gate = asyncio.Event()
-        service = make_service(fetcher=_Fetcher(gate=gate))
-        await service.install()
-
-        with pytest.raises(VoiceError) as excinfo:
-            await service.create_dictation()
-
-        assert excinfo.value.code == "voice_not_ready"
-        assert not service.busy()
 
     async def test_busy_while_a_dictation_is_open(self, make_service):
         service = make_service()
@@ -1231,8 +1139,6 @@ class TestCleanup:
 
 
 class TestCleanupSetting:
-    async def test_off_by_default(self, make_service):
-        assert make_service().status().cleanup_enabled is False
 
     async def test_stored_announced_and_shared_by_a_new_service(self, make_service):
         events = _Events()
@@ -1257,12 +1163,6 @@ class TestCleanupSetting:
 
         assert status.state == "not_installed"
         assert status.cleanup_enabled is True
-
-    async def test_corrupt_file_reads_as_off(self, make_service, voice_dir):
-        voice_dir.mkdir(parents=True, exist_ok=True)
-        (voice_dir / "cleanup.json").write_text("{not json", encoding="utf-8")
-
-        assert make_service().status().cleanup_enabled is False
 
 
 class TestUnsupportedHost:

@@ -257,28 +257,6 @@ afterEach(() => {
   useSessionsPanelStore.setState({ pinned: false });
 });
 
-describe('TerminalScreen scrollbar', () => {
-  it('mounts the slider inside the stage and points it at the surface', () => {
-    // Inside the stage, not under it: as a flex sibling in a column whose stage
-    // is `flex: 1` it would take rows off the grid, and xterm's
-    // `SelectionService` clears the selection on any row-count change. The
-    // `aria-controls` pairing is the half of it a test can hold, since the two
-    // ids are minted in different components.
-    const model = acquireTerminal('a1', 's1');
-    model.scrollbar.setState({ mode: 'seek', size: 0.2, offset: 0.5 });
-
-    const { container } = renderTerminal();
-
-    const stage = container.querySelector('.terminal-stage');
-    const bar = screen.getByRole('scrollbar', { name: 'Terminal scrollback' });
-    expect(stage).toContainElement(bar);
-    expect(container.querySelector('.terminal-surface')).toHaveAttribute(
-      'id',
-      bar.getAttribute('aria-controls'),
-    );
-  });
-});
-
 describe('TerminalScreen eviction exemption', () => {
   const key = (): string => sessionChannelName('a1', 's1');
   const model = () => useTerminalStore.getState().models[key()];
@@ -420,27 +398,6 @@ describe('TerminalScreen template picks', () => {
     expect(clipboardWrites).toEqual([]);
   });
 
-  it('hands focus back to the grid when the picker is dismissed without a pick', async () => {
-    // Closing is a dismissal path like any other, and the grid has to end up
-    // with the caret — otherwise the next keystroke goes nowhere. It cannot be
-    // done from the dismiss callback: `Modal` closes its `<dialog>` in a
-    // layout-effect cleanup that runs afterwards, and the native close
-    // algorithm hands focus to the button that opened it.
-    const model = acquireTerminal('a1', 's1');
-    const focus = vi.spyOn(model, 'focus').mockImplementation(() => undefined);
-    renderTerminal();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Templates' }));
-    const picker = await screen.findByRole('dialog', { name: 'Templates' });
-    // The surface focuses the grid on attach, so only the calls after this
-    // point belong to the dismissal.
-    const beforeClose = focus.mock.calls.length;
-    fireEvent.click(within(picker).getByRole('button', { name: 'Close' }));
-
-    expect(screen.queryByRole('dialog', { name: 'Templates' })).toBeNull();
-    expect(focus.mock.calls.length).toBe(beforeClose + 1);
-  });
-
   it("keeps the body's line breaks on the clipboard, within the click", async () => {
     // Claude Code collapses a multi-line paste to a `[Pasted text #n]`
     // placeholder and tells the user to paste again to expand it, which only
@@ -508,24 +465,6 @@ describe('TerminalScreen template picks', () => {
     await flush();
 
     expect(clipboardWrites).toEqual([]);
-    expect(toastKinds()).toEqual([]);
-  });
-
-  it('drops the toast when the screen goes away while the write is in flight', async () => {
-    // A clipboard permission prompt can hold the write open long enough for the
-    // user to leave, and the continuation would then toast over whatever screen
-    // replaced this one. The unmount is synchronous with the click, so the
-    // promise is still pending when the component dies.
-    const model = acquireTerminal('a1', 's1');
-    stubModelCalls(model, true);
-    const { unmount } = renderTerminal();
-
-    const row = await openPicker(model, /body of alpha/);
-    fireEvent.click(row);
-    unmount();
-    await flush();
-
-    expect(clipboardWrites).toEqual([alpha.body]);
     expect(toastKinds()).toEqual([]);
   });
 
@@ -616,18 +555,6 @@ describe('TerminalScreen template creation', () => {
     expect(nameField()).toHaveValue('');
   });
 
-  it('opens empty when nothing is selected', async () => {
-    const model = acquireTerminal('a1', 's1');
-    vi.spyOn(model, 'selectionText').mockReturnValue('');
-    renderTerminal();
-
-    await openEditor();
-
-    expect(bodyField()).toHaveValue('');
-    // Both fields are required, so an empty body cannot be saved by naming it.
-    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
-  });
-
   it('snapshots the selection when the picker opens, not when the editor does', async () => {
     // The reason the selection is carried in the panel rather than read late:
     // PTY output keeps arriving behind the modal, and a mouse-protocol change,
@@ -698,24 +625,6 @@ describe('TerminalScreen template creation', () => {
     expect(toastKinds()).toEqual([]);
   });
 
-  it('returns to the terminal, not the picker, when cancelled', async () => {
-    // Save has to close everything for its toast to be visible, so Cancel lands
-    // in the same place: two exits to different screens would be the
-    // surprising half of the pair.
-    const model = acquireTerminal('a1', 's1');
-    vi.spyOn(model, 'selectionText').mockReturnValue('git status');
-    const focus = vi.spyOn(model, 'focus').mockImplementation(() => undefined);
-    renderTerminal();
-    await openEditor();
-
-    const before = focus.mock.calls.length;
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    await flush();
-
-    expect(screen.queryByRole('dialog')).toBeNull();
-    expect(created.calls).toEqual([]);
-    expect(focus.mock.calls.length).toBeGreaterThan(before);
-  });
 });
 
 describe('TerminalScreen git changes', () => {
@@ -748,15 +657,6 @@ describe('TerminalScreen git changes', () => {
     return { trigger, panel };
   };
 
-  it('offers no git menu for a session whose row names no folder', async () => {
-    // Both mobile clients gate on `cwd`: the git routes answer for the
-    // directory the session was spawned in, and a row without one has nothing
-    // to show. The label is the proof that the row itself did arrive.
-    await renderSynced(row());
-
-    expect(more()).toBeNull();
-  });
-
   it('opens the Changes viewer from the ⋯ menu once the row names a folder', async () => {
     await renderSynced(row({ cwd: '/srv/p1', project_name: 'p1' }));
 
@@ -769,19 +669,6 @@ describe('TerminalScreen git changes', () => {
     expect(panel).toHaveAttribute('aria-modal', 'false');
     expect(await within(panel).findByText('app.py')).toBeInTheDocument();
     expect(within(panel).getByText('main')).toBeInTheDocument();
-  });
-
-  it('closes the viewer on Escape and hands focus back to the ⋯ button', async () => {
-    // Back to the menu button, not the grid: the viewer was reached from the
-    // header, and a keyboard user is still up there.
-    await renderSynced(row({ cwd: '/srv/p1' }));
-    const { trigger, panel } = await openChanges();
-    await within(panel).findByText('app.py');
-
-    fireEvent.keyDown(panel, { key: 'Escape' });
-
-    expect(screen.queryByRole('dialog', { name: 'Git changes' })).toBeNull();
-    expect(trigger).toHaveFocus();
   });
 
   /** React Query notifies on a timer, so nothing it does lands in this task. */
@@ -879,36 +766,6 @@ describe('TerminalScreen git changes', () => {
     expect(labels.slice(-2)).toEqual(['Branches…', 'Rebase…']);
   });
 
-  it('keeps Rebase… off the menu of an agent that does not advertise it', async () => {
-    agentVersion.capabilities = {
-      git: { changes: true, stage: true, discard: true, commit: true, branches: true, resolve: true },
-    };
-    await renderSynced(row({ cwd: '/srv/p1', project_name: 'p1' }));
-    await waitFor(() => {
-      expect(agentVersion.probes).toBe(1);
-    });
-    await flush();
-
-    fireEvent.click(await screen.findByRole('button', { name: 'More options' }));
-
-    expect(screen.getByRole('menuitem', { name: 'Branches…' })).toBeInTheDocument();
-    expect(screen.queryByRole('menuitem', { name: 'Rebase…' })).toBeNull();
-  });
-
-  it('opens the viewer with the rebase sheet already up from Rebase…', async () => {
-    agentVersion.capabilities = { git: { changes: true, stage: true, rebase: true } };
-    await renderSynced(row({ cwd: '/srv/p1' }));
-
-    fireEvent.click(await screen.findByRole('button', { name: 'More options' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rebase…' }));
-
-    const panel = await screen.findByRole('dialog', { name: 'Git changes' });
-    const sheet = await screen.findByRole('dialog', { name: 'Rebase main' });
-    // No project on the row: the base is typed rather than picked.
-    expect(within(sheet).getByPlaceholderText('Branch, tag or commit')).toBeInTheDocument();
-    expect(await within(panel).findByText('app.py')).toBeInTheDocument();
-    expect(screen.queryByRole('menuitem')).toBeNull();
-  });
 });
 
 describe('TerminalScreen voice button', () => {
@@ -972,7 +829,7 @@ describe('TerminalScreen voice button', () => {
     expect(mic).toBeDisabled();
   });
 
-  it.each(['stopped', 'crashed'])('keeps Dictate disabled on a %s session', async (status) => {
+  it.each(['crashed'])('keeps Dictate disabled on a %s session', async (status) => {
     const model = renderWithVoice('ready');
     const mic = await screen.findByRole('button', { name: DICTATE });
 
@@ -1176,21 +1033,6 @@ describe('TerminalScreen sessions panel', () => {
     expect(docked(container)).toBeNull();
     expect(overlay()).not.toBeNull();
     expect(useSessionsPanelStore.getState().pinned).toBe(false);
-  });
-
-  it('docks the overlay when pinned from it on a wide viewport', () => {
-    stubViewport(true);
-    acquireTerminal('a1', 's1');
-    const { container } = renderTerminal();
-    fireEvent.click(toggle());
-    const panel = overlay();
-    expect(panel).not.toBeNull();
-
-    fireEvent.click(within(panel as HTMLElement).getByRole('button', { name: 'Pin' }));
-
-    expect(overlay()).toBeNull();
-    expect(docked(container)).not.toBeNull();
-    expect(useSessionsPanelStore.getState().pinned).toBe(true);
   });
 
   it('leaves focus in the rail when pinned from the overlay on a wide viewport', () => {

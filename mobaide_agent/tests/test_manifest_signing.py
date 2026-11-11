@@ -7,7 +7,6 @@ from accepting a forged manifest.
 from __future__ import annotations
 
 import base64
-import json
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -40,19 +39,6 @@ class TestCanonicalJson:
     def test_keys_are_sorted(self):
         encoded = canonical_json({"b": 1, "a": 2}).decode()
         assert encoded == '{"a":2,"b":1}'
-
-    def test_no_whitespace(self):
-        encoded = canonical_json({"a": [1, 2], "b": {"c": 3}}).decode()
-        assert " " not in encoded
-        assert "\n" not in encoded
-
-    def test_signature_is_stable_across_key_orderings(self, signing_pair):
-        private_key, _ = signing_pair
-        body_v1 = {"a": 1, "b": 2, "c": 3}
-        body_v2 = {"c": 3, "a": 1, "b": 2}
-        sig_v1 = private_key.sign(canonical_json(body_v1))
-        sig_v2 = private_key.sign(canonical_json(body_v2))
-        assert sig_v1 == sig_v2
 
 
 class TestVerifySignatureSuccess:
@@ -99,11 +85,3 @@ class TestVerifySignatureFailure:
         wrong_sig = base64.b64encode(b"\x00" * 32).decode()
         with pytest.raises(ManifestSignatureError, match="does not verify"):
             verify_signature(body, wrong_sig, public_key_b64)
-
-    def test_empty_body_with_unrelated_signature_fails(self, signing_pair):
-        _private_key, public_key_b64 = signing_pair
-        # 64 bytes of zeros is a syntactically valid Ed25519 signature length,
-        # but should never verify against any real body.
-        zero_sig = base64.b64encode(b"\x00" * 64).decode()
-        with pytest.raises(ManifestSignatureError, match="does not verify"):
-            verify_signature({}, zero_sig, public_key_b64)

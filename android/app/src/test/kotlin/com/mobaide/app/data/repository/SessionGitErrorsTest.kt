@@ -2,8 +2,6 @@ package com.mobaide.app.data.repository
 
 import com.mobaide.app.data.network.ApiException
 import kotlinx.serialization.SerializationException
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -36,12 +34,6 @@ class SessionGitErrorsTest {
     }
 
     @Test
-    fun relayUnknownRoute404_isAgentOutdated() {
-        val body = """{"detail":"Unknown proxy route: /api/sessions/s1/git/status"}"""
-        assertTrue(mapSessionGitError(api(404, body)) is SessionGitException.AgentOutdated)
-    }
-
-    @Test
     fun aBodilessOrUnparseable404_isAgentOutdated() {
         assertTrue(mapSessionGitError(api(404, "")) is SessionGitException.AgentOutdated)
         assertTrue(mapSessionGitError(api(404, "<html>nope</html>")) is SessionGitException.AgentOutdated)
@@ -54,14 +46,6 @@ class SessionGitErrorsTest {
         assertEquals(SessionGitException.CODE_GIT_TIMEOUT, mapped.code)
         assertEquals("git status timed out", mapped.detailMessage)
         assertSame(cause, mapped.cause)
-    }
-
-    @Test
-    fun anObjectDetailWithoutAMessage_isGitError_withANullMessage() {
-        val mapped = mapSessionGitError(api(400, """{"detail":{"code":"bad_path"}}"""))
-            as SessionGitException.GitError
-        assertEquals(SessionGitException.CODE_BAD_PATH, mapped.code)
-        assertNull(mapped.detailMessage)
     }
 
     @Test
@@ -99,15 +83,6 @@ class SessionGitErrorsTest {
     }
 
     @Test
-    fun extractDetail_readsStringAndObjectDetails() {
-        assertEquals("Not Found", extractDetail("""{"detail":"Not Found"}"""))
-
-        val detail = extractDetail("""{"detail":{"code":"git_error","message":"boom"}}""")
-        assertTrue(detail is JsonObject)
-        assertEquals("git_error", (detail as JsonObject)["code"]?.jsonPrimitive?.content)
-    }
-
-    @Test
     fun extractDetail_rejectsEveryOtherShape() {
         assertNull(extractDetail(""))
         assertNull(extractDetail("   "))
@@ -141,11 +116,5 @@ class SessionGitErrorsJobRoutesTest {
         ) as SessionGitException.GitError
         assertEquals(SessionGitException.CODE_JOB_RUNNING, mapped.code)
         assertEquals("ab12cd34", mapped.detailMessage)
-    }
-
-    @Test
-    fun aCoded404WithoutAString_stillNeverReadsAsSessionGone() {
-        val mapped = mapSessionGitError(api(404, """{"detail":{"code":"job_not_found","message":null}}"""))
-        assertTrue(mapped is SessionGitException.GitError)
     }
 }

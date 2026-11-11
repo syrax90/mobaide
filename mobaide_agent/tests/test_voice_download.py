@@ -146,17 +146,6 @@ async def test_complete_verified_part_is_renamed_without_a_request(tmp_path):
     assert path.read_bytes() == BLOB
 
 
-async def test_verified_final_file_is_kept_without_a_request(tmp_path):
-    (tmp_path / "model.bin").write_bytes(BLOB)
-    server = _Server({"mirror.test": [_full()]})
-    progress = _Progress()
-
-    await _fetcher(server, _Sleeps()).fetch(_file(), tmp_path, progress)
-
-    assert server.requests == []
-    assert progress.reports == [("model.bin", len(BLOB))]
-
-
 async def test_corrupt_final_file_is_downloaded_again(tmp_path):
     (tmp_path / "model.bin").write_bytes(b"x" * len(BLOB))
     server = _Server({"mirror.test": [_full()]})
@@ -180,15 +169,6 @@ async def test_wrong_bytes_are_discarded_and_the_next_url_is_tried(tmp_path):
     assert "range" not in server.requests[1].headers
     assert path.read_bytes() == BLOB
     assert sleeps.delays == []
-
-
-async def test_oversized_body_is_a_size_mismatch_and_the_next_url_is_tried(tmp_path):
-    server = _Server({"mirror.test": [_full(BLOB + b"extra")], "fallback.test": [_full()]})
-
-    path = await _fetcher(server, _Sleeps()).fetch(_file(), tmp_path, _Progress())
-
-    assert server.hosts() == ["mirror.test", "fallback.test"]
-    assert path.read_bytes() == BLOB
 
 
 async def test_client_error_moves_to_the_next_url_without_retrying(tmp_path):

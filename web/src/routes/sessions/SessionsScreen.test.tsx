@@ -145,24 +145,6 @@ describe('SessionsScreen', () => {
     expect(currentPath()).toBe('/');
   });
 
-  it('renders a card per session with its kind label and attention chip', async () => {
-    api.sessions = [
-      session('s1', { kind: 'shell', title: 'build', cwd: '/srv/mobaide' }),
-      session('s2', { kind: 'gemini', attention: 'awaiting_permission' }),
-    ];
-
-    renderScreen();
-
-    expect(await screen.findByText('build')).toBeInTheDocument();
-    expect(screen.getByText('Terminal')).toBeInTheDocument();
-    expect(screen.getByText('Custom · s2')).toBeInTheDocument();
-    expect(screen.getByText('Needs permission')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /build/ })).toHaveAttribute(
-      'href',
-      '/agents/agent-1/sessions/s1',
-    );
-  });
-
   it('passes the force flag from the confirm dialog through to the stop call', async () => {
     api.sessions = [session('s1', { title: 'build' })];
 

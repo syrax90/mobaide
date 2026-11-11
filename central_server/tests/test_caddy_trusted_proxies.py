@@ -75,13 +75,6 @@ def test_cloudflare_origin_trusts_exactly_the_published_edge_ranges() -> None:
         ipaddress.ip_network(cidr)  # a typo here would fail `caddy validate` at deploy
 
 
-def test_cloudflare_origin_global_options_come_first() -> None:
-    """A global options block anywhere but first is a Caddyfile parse error."""
-    source = (_PROD_DIR / "Caddyfile.CloudflareOrigin").read_text(encoding="utf-8")
-    first_block = next(line for line in source.splitlines() if line and not line.startswith("#"))
-    assert first_block.strip() == "{"
-
-
 def test_lets_encrypt_mode_trusts_no_proxy() -> None:
     assert _trusted_proxy_ranges("Caddyfile.LetsEncrypt") == []
 

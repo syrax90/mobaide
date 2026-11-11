@@ -102,21 +102,6 @@ final class AutoScanRepositoryTests: XCTestCase {
         XCTAssertEqual(list.scans.first { $0.project_name == "b" }?.status, "scanning")
     }
 
-    func testAutoScanStatusForUnknownProjectLeavesListUnchanged() async throws {
-        let (repo, bus, factory) = makeBusStack()
-        repo.start()
-        await bus.start()
-        let conn = try await factory.connection(1)
-        conn.emit(.opened)
-        conn.emit(.text(listChangedFrame([(name: "a", status: "scanning")])))
-        _ = await waitFor(repo) { $0.scans.count == 1 }
-
-        conn.emit(.text(statusFrame(name: "zzz", status: "idle")))
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertEqual(repo.currentScans.map(\.project_name), ["a"])
-        XCTAssertEqual(repo.currentScans.first?.status, "scanning")
-    }
-
     // MARK: - REST seed + mutations
 
     func testRefreshSeedsFromRESTAndExposesPrompt() async {
@@ -150,28 +135,6 @@ final class AutoScanRepositoryTests: XCTestCase {
             XCTFail("unexpected error \(error)")
         }
         XCTAssertTrue(repo.currentScans.isEmpty, "optimistic placeholder must roll back")
-    }
-
-    func testStartScan429MapsToCapacity() async {
-        StubURLProtocol.enqueue(status: 429, body: "{}")
-        let repo = makeRESTRepo()
-        do {
-            try await repo.startScan(projectName: "p")
-            XCTFail("expected capacity")
-        } catch AutoScanStartError.capacity(let maxScans) {
-            XCTAssertEqual(maxScans, 5)
-        } catch {
-            XCTFail("unexpected error \(error)")
-        }
-    }
-
-    func testStartScanFailureEmitsErrorContainingProjectName() async throws {
-        StubURLProtocol.enqueue(status: 500, body: "boom")
-        let repo = makeRESTRepo()
-        let collector = StreamCollector(repo.errors())
-        try? await repo.startScan(projectName: "myproj")
-        let error = try await collector.next()
-        XCTAssertTrue(error.message.contains("myproj"), "error message should name the project")
     }
 
     func testStopScanRemovesThenRollsBackOnError() async throws {

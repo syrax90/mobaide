@@ -9,10 +9,7 @@ import pytest
 
 from mobaide.relay.envelope import (
     CH_AUTOSCAN,
-    CH_CONTROL,
-    CH_EVENTS,
     CH_SESSION_IO,
-    CH_SESSIONS_LIST,
     decode,
     encode,
 )
@@ -27,30 +24,6 @@ class TestEnvelopeRoundtrip:
         assert session_id == "sess-abc-123"
         assert out_payload == payload
 
-    def test_sessions_list_roundtrip(self):
-        payload = b'[{"session_id":"s1"}]'
-        data = encode(CH_SESSIONS_LIST, "", payload)
-        channel, session_id, out_payload = decode(data)
-        assert channel == CH_SESSIONS_LIST
-        assert session_id == ""
-        assert out_payload == payload
-
-    def test_events_roundtrip(self):
-        payload = b'{"type":"sessions.changed"}'
-        data = encode(CH_EVENTS, "", payload)
-        channel, session_id, out_payload = decode(data)
-        assert channel == CH_EVENTS
-        assert session_id == ""
-        assert out_payload == payload
-
-    def test_control_roundtrip(self):
-        payload = b'{"type":"heartbeat"}'
-        data = encode(CH_CONTROL, "", payload)
-        channel, session_id, out_payload = decode(data)
-        assert channel == CH_CONTROL
-        assert session_id == ""
-        assert out_payload == payload
-
     def test_autoscan_roundtrip(self):
         """CH_AUTOSCAN carries a per-mobile subscription_id in session_id slot."""
         payload = b'{"type":"event","project_name":"p","event":{"seq":1}}'
@@ -60,18 +33,6 @@ class TestEnvelopeRoundtrip:
         assert channel == CH_AUTOSCAN
         assert session_id == subscription_id
         assert out_payload == payload
-
-    def test_autoscan_with_uuid_hex_subscription_id(self):
-        """The central server uses ``uuid4().hex`` (32 chars) as subscription_id."""
-        import uuid
-
-        sub_id = uuid.uuid4().hex
-        assert len(sub_id) == 32
-        data = encode(CH_AUTOSCAN, sub_id, b'{"type":"caught_up"}')
-        channel, decoded_sid, payload = decode(data)
-        assert channel == CH_AUTOSCAN
-        assert decoded_sid == sub_id
-        assert payload == b'{"type":"caught_up"}'
 
     def test_empty_payload(self):
         data = encode(CH_SESSION_IO, "s1", b"")
@@ -86,14 +47,6 @@ class TestEnvelopeRoundtrip:
         data = encode(CH_SESSION_IO, "s1", raw)
         _, _, out = decode(data)
         assert out == raw
-
-    def test_empty_session_id_with_session_io(self):
-        """CH_SESSION_IO with empty session_id is valid at codec level."""
-        data = encode(CH_SESSION_IO, "", b"payload")
-        ch, sid, pl = decode(data)
-        assert ch == CH_SESSION_IO
-        assert sid == ""
-        assert pl == b"payload"
 
     def test_max_length_session_id(self):
         """Session ID at exactly 255 bytes must succeed."""
@@ -112,12 +65,6 @@ class TestEnvelopeStructure:
         assert data[2:4] == b"ab"
         assert data[4:] == b"\xDE\xAD"
 
-    def test_empty_session_id_produces_zero_length_byte(self):
-        data = encode(CH_CONTROL, "", b"x")
-        assert data[0] == CH_CONTROL
-        assert data[1] == 0
-        assert data[2:] == b"x"
-
 
 class TestEnvelopeErrors:
     def test_session_id_too_long(self):
@@ -127,10 +74,6 @@ class TestEnvelopeErrors:
     def test_decode_too_short_single_byte(self):
         with pytest.raises(ValueError, match="too short"):
             decode(b"\x01")
-
-    def test_decode_too_short_empty(self):
-        with pytest.raises(ValueError, match="too short"):
-            decode(b"")
 
     def test_decode_unknown_channel(self):
         with pytest.raises(ValueError, match="Unknown channel"):

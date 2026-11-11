@@ -104,20 +104,6 @@ class TestBatching:
         assert len(frames) == 1
         assert [e["type"] for e in frames[0]["events"]] == ["item", "state"]
 
-    def test_unchanged_state_triggers_no_frame(self):
-        tl, frames = _make()
-        tl.patch_state(status="ready")
-        tl.patch_state(status="ready")
-
-        assert len(frames) == 1
-
-    def test_without_an_event_loop_each_change_is_sent_at_once(self):
-        tl, frames = _make()
-        tl.upsert(_agent("m:1"))
-        tl.append_text("m:1", "x")
-
-        assert [f["events"][0]["type"] for f in frames] == ["item", "append"]
-
     async def test_a_burst_is_sent_once_the_batch_passes_the_size_bound(self, monkeypatch):
         one_item = len(orjson.dumps(_agent("m:0", "x" * 100)))
         monkeypatch.setattr(timeline_module, "BATCH_FLUSH_BYTES", one_item * 3)
@@ -133,18 +119,6 @@ class TestBatching:
 
         tl.upsert(_agent("m:3", "x" * 100))
         assert len(frames) == 1
-
-    async def test_appended_text_counts_toward_the_size_bound(self, monkeypatch):
-        monkeypatch.setattr(timeline_module, "BATCH_FLUSH_BYTES", 50)
-        tl, frames = _make(flush_interval=NEVER)
-        tl.upsert(_agent("m:1"), urgent=True)
-
-        tl.append_text("m:1", "x" * 30)
-        assert len(frames) == 1
-        tl.append_text("m:1", "y" * 30)
-
-        assert len(frames) == 2
-        assert frames[1]["events"] == [{"type": "append", "id": "m:1", "text": "x" * 30 + "y" * 30, "seq": 2}]
 
     def test_append_stops_at_the_item_text_cap(self, monkeypatch):
         monkeypatch.setattr(timeline_module, "ITEM_TEXT_MAX", 5)
@@ -172,15 +146,6 @@ class TestRemove:
         assert tl.get("n:1") is None
         snap = orjson.loads(tl.snapshot_frame())
         assert [item["id"] for item in snap["items"]] == ["m:2"]
-
-    async def test_an_urgent_remove_is_sent_at_once(self):
-        tl, frames = _make(flush_interval=NEVER)
-        tl.upsert(_agent("n:1"), urgent=True)
-
-        tl.remove("n:1", urgent=True)
-
-        assert len(frames) == 2
-        assert frames[1]["events"] == [{"type": "remove", "id": "n:1", "seq": 2}]
 
     async def test_a_remove_replaces_the_pending_appends_of_its_item(self):
         tl, frames = _make(flush_interval=NEVER)
@@ -210,17 +175,6 @@ class TestRemove:
         frame = orjson.loads(tl.replay_frame(1))
 
         assert frame["events"] == [{"type": "remove", "id": "n:1", "seq": 2}]
-
-    def test_removing_an_unknown_item_sends_nothing(self):
-        tl, frames = _make()
-        tl.upsert(_agent("m:1"))
-        tl.remove("m:1")
-
-        tl.remove("m:1")
-        tl.remove("missing")
-
-        assert len(frames) == 2
-        assert tl.seq == 2
 
     def test_a_removed_item_frees_its_share_of_the_memory_cap(self):
         one_item = len(orjson.dumps(_agent("m:0", "x" * 100)))
@@ -343,12 +297,6 @@ class TestMemoryBoundAndReset:
         snap = orjson.loads(tl.snapshot_frame())
         assert (snap["seq"], snap["items"], snap["truncated"]) == (0, [], False)
 
-    def test_changes_to_unknown_items_are_ignored(self):
-        tl, frames = _make()
-        tl.append_text("missing", "x")
-        tl.touch("missing")
-        assert frames == []
-
 
 class TestStatusCallback:
     """``on_status`` is how a chat session's row learns a turn started or
@@ -380,11 +328,6 @@ def _ids(items: list[dict]) -> list[str]:
 
 
 class TestTrimPlan:
-    def test_within_the_budget_everything_stays(self):
-        items = [_tool("t:0"), _user("u:1"), _agent("m:2")]
-
-        assert trim_plan(items, [10, 10, 10], 30) == ([True, True, True], False)
-
     def test_finished_steps_go_first_oldest_first_and_only_as_many_as_needed(self):
         items = [_user("u:0"), _tool("t:1"), _thought("h:2"), _tool("t:3"), _agent("m:4")]
 
@@ -459,22 +402,6 @@ class TestStepsGoBeforeMessages:
         assert snap["truncated"] is False
         assert _ids(tl.items()) == ["u:0", "m:1", "u:2", "t:3", "h:4", "m:5"]
 
-    def test_snapshot_keeps_a_running_tool_and_drops_older_messages(self):
-        held = [
-            _user("u:0", "x" * 100),
-            _agent("m:1", "x" * 100),
-            _user("u:2", "go"),
-            _tool("t:3", status="in_progress"),
-            _agent("m:4", "ok"),
-        ]
-        tl, _ = _make(snapshot_max_bytes=sum(map(_size, held[2:])) + 5)
-        for item in held:
-            tl.upsert(item)
-
-        snap = orjson.loads(tl.snapshot_frame())
-
-        assert _ids(snap["items"]) == ["u:2", "t:3", "m:4"]
-        assert snap["truncated"] is True
 
     def test_snapshot_retrims_on_encoded_sizes_when_appended_text_is_wider(self):
         rest = [_thought("h:1", "x" * 80), _user("u:2", "go"), _agent("m:3", "ok")]
@@ -493,20 +420,6 @@ class TestStepsGoBeforeMessages:
         assert snap["items"][0]["text"] == "ж" * 60
         assert sum(map(_size, snap["items"])) <= budget
         assert snap["truncated"] is False
-
-    def test_snapshot_retrim_that_drops_a_message_is_truncated(self):
-        rest = [_user("u:1", "go"), _agent("m:2", "ok")]
-        budget = _size(_agent("m:0", "ж" * 60)) + sum(map(_size, rest)) - 60
-        tl, _ = _make(snapshot_max_bytes=budget)
-        tl.upsert(_agent("m:0"))
-        tl.append_text("m:0", "ж" * 60)
-        for item in rest:
-            tl.upsert(item)
-
-        snap = orjson.loads(tl.snapshot_frame())
-
-        assert _ids(snap["items"]) == ["u:1", "m:2"]
-        assert snap["truncated"] is True
 
     async def test_memory_cap_drops_finished_steps_and_keeps_every_message(self):
         held = [

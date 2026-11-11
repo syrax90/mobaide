@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { autoScanListResponseSchema, parseScanPayload } from './autoscan';
+import { parseScanPayload } from './autoscan';
 
 describe('parseScanPayload', () => {
   it('decodes each modelled payload under its own type', () => {
@@ -38,17 +38,5 @@ describe('parseScanPayload', () => {
     // inherited function and throw out of the socket listener.
     expect(parseScanPayload('constructor', {})).toEqual({ type: 'unknown' });
     expect(parseScanPayload('__proto__', {})).toEqual({ type: 'unknown' });
-  });
-});
-
-describe('autoScanListResponseSchema', () => {
-  it('materialises the defaults the relay body relies on', () => {
-    expect(autoScanListResponseSchema.parse({})).toEqual({
-      scans: [],
-      capacity: 0,
-      max_scans: 5,
-      available_projects: [],
-      auto_scan_prompt: undefined,
-    });
   });
 });

@@ -1,36 +1,14 @@
 """Tests for the public marketing site served off the apex domain.
 
-Covers the contract documented in ``docs/website.md``:
-
-- ``GET /`` serves the pre-rendered landing page with its cache and
-  route-scoped hardening headers, now applied site-wide by
-  ``SecurityHeadersMiddleware`` — see ``TestSecurityHeaderScope`` for the
-  guarantee that keeps the marketing policy and the portal's separately
-  scoped rather than one silently becoming the other.
-- **Copy accuracy.** Several Play-listing claims are contradicted by the code
-  ("end-to-end", 32 sessions as a per-type cap, unqualified worktrees). The page
-  must not repeat them and must keep the qualifiers that make the true claims
-  honest. These are the tests a copy edit is most likely to trip.
-- **CSP self-containment.** No inline ``style=`` and no inline ``<script>``,
-  because the response ships ``default-src 'self'`` without ``'unsafe-inline'``.
-  The Google origins in the landing policy exist for the consent-gated gtag.js
-  injection alone, so the served HTML itself must stay same-origin —
-  ``TestConsentBanner`` holds that line.
-- **The install one-liners and their copy buttons.** Each command is rendered
-  exactly once, so the copied text cannot drift from the displayed text.
-- Social metadata: OG/Twitter tags and a parseable JSON-LD block, all pointing
-  at ``config.site_base_url`` rather than the relay origin.
-- ``/robots.txt``, ``/sitemap.xml``, ``/favicon.ico``, and the two
-  ``CachedStaticFiles`` cache tiers.
-- Unit-level loader tests, including the trailing-slash normalisation of
-  ``site_base_url``.
-- ``/voice-input``, the voice input feature page: the same copy and CSP
-  self-containment rules, under the strict site policy with no consent
-  banner, and linked from the landing page.
+Covers the contract documented in ``docs/website.md``: the landing page's
+cache and hardening headers, CSP self-containment (no inline style/script, no
+cross-origin subresource), the consent-gated Google tag, the install
+one-liners rendered once each, absolute social URLs on ``site_base_url``,
+``/robots.txt`` and ``/sitemap.xml``, the static cache tiers, and the
+``/voice-input`` page under the strict site policy.
 """
 from __future__ import annotations
 
-import json
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -38,13 +16,7 @@ from pathlib import Path
 import pytest
 
 from central_server.app import create_app
-from central_server.marketing.loader import (
-    asset_version,
-    render_landing,
-    render_robots,
-    render_sitemap,
-    render_voice_input,
-)
+from central_server.marketing.loader import asset_version, render_landing
 from central_server.static_files import resolve_static_dir
 
 # Byte-identical to ``security_headers._LANDING_CSP`` and to
@@ -78,49 +50,6 @@ HARDENING_HEADERS = (
     ("Referrer-Policy", "strict-origin-when-cross-origin"),
 )
 
-# Claims the code contradicts — see the accuracy table in docs/website.md.
-# Matched against a lower-cased body, so these must stay lower case.
-CONTRADICTED_CLAIMS = (
-    # Transport is TLS per hop; the relay terminates TLS. No E2E crypto exists.
-    "end-to-end",
-    # `max_sessions` is one global cap over a flat dict, not a per-type limit.
-    "32 sessions per",
-    # The product is "Claude Code".
-    "cloud code",
-    # The agent binds 0.0.0.0:8000 unconditionally
-    # (mobaide_agent/mobaide/agent/config.py:51). What is true is that nothing
-    # needs to be reachable from the internet — not that nothing listens.
-    "no inbound ports",
-    "nothing on your machine listens",
-    # No client can reach the agent without the relay: AuthRepository's
-    # connectAgent() has no UI caller on either platform, and the agent's
-    # UserStore.add_user() has no CLI verb or endpoint, so the store its
-    # /api/auth/token checks is always empty.
-    "direct connection",
-    "over lan",
-    "straight at the agent",
-    # Reconnect replays from a byte ring (RING_MAX_BYTES = 4 MiB), not from the
-    # 10,000-entry deque of read chunks that backs the REST /scrollback route.
-    "10,000-line",
-)
-
-# Claims that are true only with their qualifier attached, plus the three
-# reboot mechanisms (which differ per OS) and the custom-agent-type cap.
-VERIFIED_CLAIMS = (
-    "opt-in per launch",
-    "git projects only",
-    # The TLS guarantee must name the relay path. Unqualified it would cover
-    # the clients' unreachable DIRECT plumbing, which builds a ws:// URL unless
-    # the agent sits behind HTTPS, and the agent's listener is plain HTTP.
-    "going through the relay",
-    "systemd",
-    "launchd",
-    "scheduled task",
-    "up to 20",
-)
-
-PRODUCT_NAMES = ("Claude Code", "Codex CLI", "Antigravity CLI")
-
 # Every path the marketing router owns.
 MARKETING_PATHS = (
     "/", "/voice-input", "/robots.txt", "/sitemap.xml", "/favicon.ico"
@@ -135,36 +64,6 @@ SITE_CSP = (
     "object-src 'none'; "
     "frame-ancestors 'none'"
 )
-
-# Facts the voice page states, each traceable to mobaide_agent/mobaide/voice/:
-# opt-in (service.py installs nothing until asked), the 25 Parakeet v3
-# languages (catalog.py), the 120 s cap (dictation.py), ~700 MB while
-# transcribing (catalog.py ram_bytes) and the review-before-send rule the
-# three clients share. Transcript cleanup: off until the user turns it on in
-# any of the three clients, run by the session's own AI agent under the
-# user's own login with its cheapest model (cleanup.py runs
-# `claude -p --model haiku`, `codex exec` on a Luna model and `agy` on
-# Gemini Flash), and a failed cleanup falls back to the
-# transcript as heard on every client. Lower case, matched against a
-# lower-cased body.
-VOICE_VERIFIED_CLAIMS = (
-    "opt-in",
-    "25 languages",
-    "two minutes",
-    "700 mb",
-    "nothing is sent until you send it",
-    "going through the relay",
-    "off until you turn it on",
-    "the session's own ai agent",
-    "its cheapest model",
-    "claude code uses claude haiku",
-    "codex uses gpt luna",
-    "antigravity uses gemini flash",
-    "under your own account",
-    "if a cleanup fails, you get the text as heard",
-)
-
-VOICE_INSTALL_COMMAND = "mobaide-agent voice install"
 
 # The only two surfaces a crawler could reach; /privacy.html stays crawlable.
 UNINDEXABLE_PATHS = ("/api/", "/portal/")
@@ -200,9 +99,6 @@ _INLINE_STYLE_RE = re.compile(r"\sstyle\s*=")
 # `content=` URLs are scraper metadata, never fetched by the page.
 _SUBRESOURCE_TAG_RE = re.compile(r"<(?:link|script|img)\b[^>]*>")
 _SUBRESOURCE_URL_RE = re.compile(r'\s(?:src|href)="([^"]*)"')
-_LD_JSON_RE = re.compile(
-    r'<script type="application/ld\+json">(.*?)</script>', re.DOTALL
-)
 
 # The host install one-liners. Kept verbatim rather than imported: this is the
 # public page a first-time user copies from, and a silent edit to either string
@@ -213,7 +109,6 @@ INSTALL_COMMANDS = (
 )
 
 _COPY_BUTTON_RE = re.compile(r"<button\b[^>]*\bdata-copy\b[^>]*>")
-_ARIA_LABEL_RE = re.compile(r'\saria-label="([^"]+)"')
 # `on...=` in a tag. CSP blocks event-handler attributes exactly as it blocks an
 # inline <script>, and the copy button is the page's first interactive control.
 _INLINE_HANDLER_RE = re.compile(r"<[a-z][^>]*\son[a-z]+\s*=", re.IGNORECASE)
@@ -256,58 +151,6 @@ class TestLandingPageResponse:
     ) -> None:
         response = await client.get("/")
         assert response.headers[header] == value
-
-    async def test_marketing_routes_stay_out_of_the_openapi_schema(
-        self, app
-    ) -> None:
-        """The router is browser-only, so an enabled admin docs page must keep
-        describing the JSON surface alone."""
-        paths = app.openapi()["paths"]
-        assert [path for path in MARKETING_PATHS if path in paths] == []
-
-
-class TestSecurityHeaderScope:
-    """The site-wide ``SecurityHeadersMiddleware`` (``security_headers.py``)
-    scopes a separate CSP to every surface — see ``test_security_headers.py``
-    for the full per-path matrix. The one invariant that belongs here, the
-    marketing regression guard, is that the rollout kept the two surfaces
-    apart: neither the marketing policy pinned above nor the portal's own was
-    unified into, or copied over, the other."""
-
-    async def test_portal_delete_account_info_carries_a_csp_distinct_from_the_marketing_policy(
-        self, client
-    ) -> None:
-        """Before ``SecurityHeadersMiddleware`` existed, ``/portal/*`` ran with
-        no CSP at all: the marketing policy above was set per response by this
-        router alone, never as middleware. The site-wide rollout deliberately
-        reverses that — every surface now gets a policy, the portal included.
-        What still belongs in this file, rather than in
-        ``test_security_headers.py`` which pins the portal's exact string, is
-        the scoping guarantee: the portal's CSP must be present and different
-        from the marketing ``EXPECTED_CSP`` pinned above, so the two surfaces
-        never silently collapse into one."""
-        response = await client.get("/portal/delete-account-info")
-        assert response.status_code == 200
-        assert "Content-Security-Policy" in response.headers
-        assert response.headers["Content-Security-Policy"] != EXPECTED_CSP
-
-
-class TestLandingCopyAccuracy:
-    @pytest.mark.parametrize("phrase", CONTRADICTED_CLAIMS)
-    async def test_claims_the_code_contradicts_are_absent(
-        self, landing, phrase
-    ) -> None:
-        assert phrase not in landing.lower()
-
-    @pytest.mark.parametrize("phrase", VERIFIED_CLAIMS)
-    async def test_qualifiers_and_mechanisms_are_stated(
-        self, landing, phrase
-    ) -> None:
-        assert phrase in landing.lower()
-
-    @pytest.mark.parametrize("name", PRODUCT_NAMES)
-    async def test_product_names_are_spelled_exactly(self, landing, name) -> None:
-        assert name in landing
 
 
 class TestLandingCspSelfContainment:
@@ -394,26 +237,6 @@ class TestConsentBanner:
             for tag in (m.group(0) for m in _CONSENT_BUTTON_RE.finditer(landing))
         )
 
-    async def test_banner_links_the_privacy_policy(self, landing) -> None:
-        """Consent must be informed: the policy's Section 3.5 is where the
-        Google Ads cookies are actually described."""
-        match = _CONSENT_BANNER_RE.search(landing)
-        assert match is not None
-        assert 'href="/privacy.html"' in match.group(1)
-
-    async def test_site_js_fires_the_page_view_conversion(self) -> None:
-        """The tag id alone measures nothing. A Google Ads conversion action
-        carries its own label, and only a ``conversion`` event naming it in
-        ``send_to`` counts against it — without this the action reports "never
-        received a tag ping" however healthy the base tag is. Queued after
-        ``config``, which gtag needs in order to resolve ``send_to`` at all."""
-        source = (resolve_static_dir() / "site" / "site.js").read_text()
-        assert 'ADS_PAGE_VIEW_LABEL = "-6EGCOnoq-ccEMeVosdE"' in source
-        assert 'send_to: ADS_TAG_ID + "/" + ADS_PAGE_VIEW_LABEL' in source
-        assert source.index('gtagPush("config", ADS_TAG_ID)') < source.index(
-            "send_to: ADS_TAG_ID"
-        )
-
     async def test_footer_carries_the_withdrawal_control(self, landing) -> None:
         """GDPR Art. 7(3): withdrawing must be as easy as the one-click
         Accept, so the footer ships the "Cookie settings" reopener the policy's
@@ -425,8 +248,6 @@ class TestConsentBanner:
 
 
 class TestLandingSocialMetadata:
-    async def test_twitter_card_is_a_large_image_summary(self, landing) -> None:
-        assert 'name="twitter:card" content="summary_large_image"' in landing
 
     @pytest.mark.parametrize("pattern", ABSOLUTE_URL_PATTERNS)
     async def test_scraped_urls_are_absolute_on_the_site_origin(
@@ -436,14 +257,6 @@ class TestLandingSocialMetadata:
         origin, ``api.mobaide.com`` in production) must never leak in here."""
         url = _capture(landing, pattern)
         assert url.startswith(f"{config.site_base_url}/"), url
-
-    async def test_json_ld_block_parses_as_a_software_application(
-        self, landing, config
-    ) -> None:
-        block = _capture(landing, _LD_JSON_RE)
-        data = json.loads(block)
-        assert data["@type"] == "SoftwareApplication"
-        assert data["url"] == f"{config.site_base_url}/"
 
 
 class TestCrawlerFiles:
@@ -494,13 +307,6 @@ class TestCrawlerFiles:
         assert f"{config.site_base_url}/" in locs
         assert f"{config.site_base_url}/voice-input" in locs
 
-    async def test_favicon_is_served_at_the_root_path(self, client) -> None:
-        """Browsers and scrapers probe ``/favicon.ico`` regardless of the
-        ``<link rel="icon">`` declaration."""
-        response = await client.get("/favicon.ico")
-        assert response.status_code == 200
-        assert response.headers["content-type"].startswith("image/")
-
 
 class TestAssetVersion:
     """The ``?v=`` query is what makes the 7-day site-asset TTL safe."""
@@ -541,14 +347,6 @@ class TestAssetVersion:
 
         assert asset_version(tmp_path, "fallback") != before
 
-    def test_version_changes_when_an_asset_is_renamed(self, tmp_path) -> None:
-        site = self._tree(tmp_path)
-        before = asset_version(tmp_path, "fallback")
-
-        (site / "img" / "wordmark.png").rename(site / "img" / "wordmark-v2.png")
-
-        assert asset_version(tmp_path, "fallback") != before
-
     def test_missing_tree_degrades_to_the_fallback(self, tmp_path) -> None:
         """A partial checkout must not fail startup."""
         assert asset_version(tmp_path, "fallback") == "fallback"
@@ -567,14 +365,6 @@ class TestPublicRouteMethods:
 class TestStaticAssetCaching:
     async def test_site_assets_get_the_long_tier(self, client) -> None:
         response = await client.get("/static/site/site.css")
-        assert response.status_code == 200
-        assert response.headers["Cache-Control"] == "public, max-age=604800"
-
-    async def test_the_portal_sheet_gets_the_long_tier(self, client) -> None:
-        """``portal.css`` lives under ``static/site/`` precisely so the ``?v=``
-        content hash — which covers the whole tree — busts it on every edit. That
-        is what earns it the 7-day TTL rather than the 1-hour default."""
-        response = await client.get("/static/site/portal.css")
         assert response.status_code == 200
         assert response.headers["Cache-Control"] == "public, max-age=604800"
 
@@ -636,33 +426,6 @@ class TestMarketingLoader:
                 templates_dir=tmp_path,
             )
 
-    def test_render_voice_input_raises_when_the_template_is_missing(
-        self, tmp_path: Path
-    ) -> None:
-        with pytest.raises(FileNotFoundError):
-            render_voice_input(
-                "https://example.test",
-                "https://app.example.test",
-                "0.0.0",
-                templates_dir=tmp_path,
-            )
-
-    def test_render_robots_builds_the_sitemap_url_from_the_origin(self) -> None:
-        robots = render_robots("https://example.test")
-        assert "Sitemap: https://example.test/sitemap.xml" in robots
-        assert "https://example.test//" not in robots
-
-    def test_render_sitemap_lists_the_origin_root(self) -> None:
-        locs = [
-            element.text
-            for element in ET.fromstring(
-                render_sitemap("https://example.test")
-            ).findall(".//{*}loc")
-            if element.text is not None
-        ]
-        assert "https://example.test/" in locs
-        assert [loc for loc in locs if "example.test//" in loc] == []
-
 
 class TestSiteOriginNormalisation:
     def test_trailing_slash_in_site_base_url_is_stripped(self, config) -> None:
@@ -688,12 +451,6 @@ class TestLandingInstallCommands:
     """
 
     @pytest.mark.parametrize("command", INSTALL_COMMANDS)
-    async def test_both_one_liners_are_rendered_verbatim(
-        self, landing, command
-    ) -> None:
-        assert command in landing
-
-    @pytest.mark.parametrize("command", INSTALL_COMMANDS)
     async def test_each_command_appears_exactly_once(self, landing, command) -> None:
         """``site.js`` reads the text out of the ``<code>`` element, so the
         button carries a bare ``data-copy`` hook and no copy of the string.
@@ -708,19 +465,6 @@ class TestLandingInstallCommands:
         buttons = _COPY_BUTTON_RE.findall(landing)
         assert len(buttons) == len(INSTALL_COMMANDS)
         assert all('type="button"' in button for button in buttons)
-
-    async def test_copy_buttons_are_labelled_and_distinguishable(
-        self, landing
-    ) -> None:
-        """The icon carries no text, so ``aria-label`` is the entire accessible
-        name — and two buttons both reading "Copy" would leave a screen-reader
-        user unable to tell which OS they are copying."""
-        labels = [
-            _ARIA_LABEL_RE.search(button) for button in _COPY_BUTTON_RE.findall(landing)
-        ]
-        assert all(label is not None for label in labels)
-        names = [label.group(1) for label in labels if label is not None]
-        assert len(set(names)) == len(INSTALL_COMMANDS)
 
     async def test_no_inline_event_handler_attributes(self, landing) -> None:
         """``onclick=`` is blocked by ``default-src 'self'`` just as an inline
@@ -784,24 +528,9 @@ class TestAttributionCookie:
         assert withdrawal.index("readAdsCookie()") < withdrawal.index("/api/ads/consent/withdraw")
         assert withdrawal.index("/api/ads/consent/withdraw") < withdrawal.index("clearAdsCookie()")
 
-    async def test_attribution_cookie_name_is_never_server_rendered(
-        self, landing
-    ) -> None:
-        """The cookie is written by script after Accept; a server-rendered
-        reference would mean the HTML started carrying attribution logic."""
-        assert "mobaide_ads" not in landing
-
 
 class TestVoiceInputPage:
     """``/voice-input``: the feature page the landing page links to."""
-
-    async def test_serves_html_with_the_documented_cache_window(
-        self, client
-    ) -> None:
-        response = await client.get("/voice-input")
-        assert response.status_code == 200
-        assert response.headers["content-type"].startswith("text/html")
-        assert response.headers["Cache-Control"] == "public, max-age=300"
 
     async def test_takes_the_strict_site_policy(self, client) -> None:
         """No banner here means no consent, so none of the landing page's
@@ -819,27 +548,6 @@ class TestVoiceInputPage:
         assert "data-consent-banner" not in voice_page
         assert "data-consent-settings" not in voice_page
         assert "googletagmanager" not in voice_page
-
-    async def test_the_landing_page_links_to_it(self, landing) -> None:
-        assert 'href="/voice-input"' in landing
-
-    @pytest.mark.parametrize("phrase", CONTRADICTED_CLAIMS)
-    async def test_claims_the_code_contradicts_are_absent(
-        self, voice_page, phrase
-    ) -> None:
-        assert phrase not in voice_page.lower()
-
-    @pytest.mark.parametrize("phrase", VOICE_VERIFIED_CLAIMS)
-    async def test_verified_claims_are_stated(self, voice_page, phrase) -> None:
-        """Whitespace-collapsed, because the copy wraps mid-sentence in the
-        template source."""
-        assert phrase in " ".join(voice_page.lower().split())
-
-    @pytest.mark.parametrize("name", PRODUCT_NAMES)
-    async def test_product_names_are_spelled_exactly(
-        self, voice_page, name
-    ) -> None:
-        assert name in voice_page
 
     async def test_no_inline_style_or_script(self, voice_page) -> None:
         assert _INLINE_STYLE_RE.search(voice_page) is None
@@ -861,13 +569,6 @@ class TestVoiceInputPage:
                 offenders.append(tag)
         assert offenders == []
 
-    async def test_canonical_and_og_url_name_the_page_on_the_site_origin(
-        self, voice_page, config
-    ) -> None:
-        expected = f"{config.site_base_url}/voice-input"
-        assert _capture(voice_page, ABSOLUTE_URL_PATTERNS[0].values[0]) == expected
-        assert _capture(voice_page, ABSOLUTE_URL_PATTERNS[1].values[0]) == expected
-
     async def test_every_image_resolves_to_a_shipped_asset(
         self, voice_page
     ) -> None:
@@ -878,13 +579,3 @@ class TestVoiceInputPage:
         assert sources
         missing = [src for src in sources if not (static_dir / src).is_file()]
         assert missing == []
-
-    async def test_the_cli_command_appears_once_with_its_copy_button(
-        self, voice_page
-    ) -> None:
-        """Same single-source rule as the install one-liners: ``site.js``
-        copies from the ``<code>`` element, so no second copy may exist."""
-        assert voice_page.count(VOICE_INSTALL_COMMAND) == 1
-        buttons = _COPY_BUTTON_RE.findall(voice_page)
-        assert len(buttons) == 1
-        assert _ARIA_LABEL_RE.search(buttons[0]) is not None

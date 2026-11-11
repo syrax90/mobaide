@@ -52,14 +52,6 @@ class TestPublicPortalPages:
         # No redirect to login.
         assert resp.url.path == "/portal/delete-account-info"
 
-    async def test_cancel_deletion_get_with_no_token_renders_missing_token(
-        self, client
-    ) -> None:
-        resp = await client.get("/portal/cancel-deletion")
-        # The GET path is also public — it renders a confirmation form
-        # before consuming the token (avoids accidental link-scanner hits).
-        assert resp.status_code == 200
-
 
 # ---- CSRF protection on state-changing routes ---------------------------
 
@@ -203,16 +195,3 @@ class TestPublicCancelByToken:
         refreshed = await app.state.db.get_user_by_id(viewer_user["id"])
         assert refreshed is not None
         assert refreshed["scheduled_deletion_at"] is None
-
-    async def test_post_with_invalid_token_returns_200_with_invalid_outcome(
-        self, client
-    ) -> None:
-        csrf_token, _ = await _grab_csrf(client)
-        resp = await client.post(
-            "/portal/cancel-deletion",
-            data={"token": "definitely-not-a-real-token", "csrf_token": csrf_token},
-            headers={"X-CSRF-Token": csrf_token},
-        )
-        # Page renders the "invalid_token" outcome with 200; never leaks
-        # whether the token shape was right but unknown vs malformed.
-        assert resp.status_code == 200

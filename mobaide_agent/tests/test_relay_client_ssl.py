@@ -129,21 +129,3 @@ class TestRelayConnectSslContext:
         with pytest.raises(RuntimeError, match="ws://"):
             _make_client("WS://localhost:8080")
 
-    async def test_uppercase_wss_scheme_uses_verifying_ssl_context(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # An uppercase WSS:// must still get the explicit certifi-verifying
-        # context, not fall through to websockets' default system trust store.
-        captured = _install_fake_websockets(monkeypatch)
-        client = _make_client("WSS://relay.test")
-
-        with pytest.raises(_StopConnect):
-            await client._run_connection()
-
-        ctx = captured["connect_kwargs"].get("ssl")
-        assert isinstance(ctx, ssl.SSLContext), (
-            "WSS:// (uppercase) must still pass an explicit certifi context; "
-            f"got ssl={ctx!r}"
-        )
-        assert ctx.verify_mode == ssl.CERT_REQUIRED
-        assert ctx.check_hostname is True

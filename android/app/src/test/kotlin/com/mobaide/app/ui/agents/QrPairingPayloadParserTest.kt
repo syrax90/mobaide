@@ -49,12 +49,6 @@ class QrPairingPayloadParserTest {
     }
 
     @Test
-    fun parseMoba1_blankNonce_returnsNull() {
-        val raw = "MOBA1|https://relay.test||${"f".repeat(64)}|1"
-        assertNull(parseMoba1(raw))
-    }
-
-    @Test
     fun parseMoba1_blankTrustKeyFp_returnsNull() {
         val raw = "MOBA1|https://relay.test|n||1"
         assertNull(parseMoba1(raw))
@@ -67,27 +61,9 @@ class QrPairingPayloadParserTest {
     }
 
     @Test
-    fun parseMoba1_emptyString_returnsNull() {
-        assertNull(parseMoba1(""))
-    }
-
-    @Test
     fun parseMoba1_unrelatedQrText_returnsNull() {
         // Bystander content: a plain URL or marketing QR must not parse.
         assertNull(parseMoba1("https://example.com/promo"))
         assertNull(parseMoba1("WIFI:T:WPA;S:my-net;P:secret;;"))
-    }
-
-    @Test
-    fun parseMoba1_negativeExpUnix_isAccepted() {
-        // The parser only rejects non-numeric exp; negative values are
-        // numerically valid but caller-side checks (the ViewModel)
-        // reject any expUnix <= now. We pin parser behaviour here so
-        // the contract stays explicit.
-        val raw = "MOBA1|https://relay.test|n|${"f".repeat(64)}|-5"
-
-        val parsed = parseMoba1(raw)
-
-        assertEquals(-5L, parsed?.expUnix)
     }
 }

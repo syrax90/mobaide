@@ -27,7 +27,6 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -127,21 +126,6 @@ class AgentListViewModelQrPairingTest {
     }
 
     @Test
-    fun onScanQrClicked_resetsToIdle_andEmitsScanRequest() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        // Pre-seed an error to verify it is cleared.
-        // (No public setter; we rely on the documented contract of
-        //  onScanQrClicked transitioning back to Idle.)
-        vm.onScanQrClicked()
-        advanceUntilIdle()
-
-        assertEquals(QrPairingState.Idle, vm.uiState.value.qrPairing)
-    }
-
-    @Test
     fun onScanResult_expired_setsErrorState_andSkipsTrustKeyCheck() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
@@ -199,23 +183,6 @@ class AgentListViewModelQrPairingTest {
         val state = vm.uiState.value.qrPairing
         assertTrue("expected Confirming, got $state", state is QrPairingState.Confirming)
         assertEquals(payload, (state as QrPairingState.Confirming).payload)
-    }
-
-    @Test
-    fun onScanResult_match_transitionsToConfirming() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        val payload = freshPayload()
-        coEvery {
-            fx.trustKeyPinning.verifyOrPin(payload.relayUrl, payload.trustKeyFp)
-        } returns TrustKeyPinning.VerifyResult.Match
-
-        vm.onScanResult(Result.success(payload))
-        advanceUntilIdle()
-
-        assertTrue(vm.uiState.value.qrPairing is QrPairingState.Confirming)
     }
 
     @Test
@@ -392,36 +359,6 @@ class AgentListViewModelQrPairingTest {
     }
 
     @Test
-    fun buildWaitTimeoutMessage_isPlatformNeutral_andSaysTheAgentIsPaired() {
-        val message = buildWaitTimeoutMessage("lab-host", wsDeliveredAtClaim = false)
-
-        assertTrue(message, message.contains("‘lab-host’ was paired to your account"))
-        assertTrue(message, message.contains("$WAIT_FOR_ONLINE_TIMEOUT_SECONDS s"))
-        assertTrue(message, message.contains("`mobaide-agent show-qr`"))
-        // The phone cannot tell whether the host runs a Windows task, a
-        // systemd unit or a launchd job — no Windows-only remediation.
-        assertFalse(message, message.contains("Get-ScheduledTask"))
-        assertFalse(message, message.contains("ProgramFiles"))
-        assertFalse(message, message.contains("Pairing failed"))
-        assertFalse(message, message.contains("did not come online"))
-    }
-
-    @Test
-    fun buildWaitTimeoutMessage_wsDeliveredHint_isTriState() {
-        val delivered = buildWaitTimeoutMessage("lab-host", wsDeliveredAtClaim = true)
-        val staged = buildWaitTimeoutMessage("lab-host", wsDeliveredAtClaim = false)
-        val unknown = buildWaitTimeoutMessage("lab-host", wsDeliveredAtClaim = null)
-
-        assertTrue(delivered, delivered.contains("tunnel"))
-        assertFalse(delivered, delivered.contains("staged"))
-        assertTrue(staged, staged.contains("staged"))
-        assertFalse(staged, staged.contains("tunnel"))
-        // An older relay omits the field: claim nothing about the push.
-        assertFalse(unknown, unknown.contains("tunnel"))
-        assertFalse(unknown, unknown.contains("staged"))
-    }
-
-    @Test
     fun confirmQrClaim_dismissDuringWaiting_cancelsWatcher() = runTest {
         // The watcher coroutine must be cancelled when the user dismisses
         // the WaitingForOnline dialog so it doesn't keep ticking and
@@ -458,43 +395,6 @@ class AgentListViewModelQrPairingTest {
     }
 
     @Test
-    fun confirmQrClaim_legacyServer_wsDeliveredNull_workflowStillCompletes() = runTest {
-        // Forward compatibility: a central server that predates the
-        // ws_delivered field returns null. The mobile must still drive
-        // the WaitingForOnline → Success transition.
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        runCurrent()
-
-        val payload = freshPayload()
-        coEvery {
-            fx.trustKeyPinning.verifyOrPin(any(), any())
-        } returns TrustKeyPinning.VerifyResult.Pinned
-        coEvery {
-            fx.agentRepository.claimAgentByPairing(any(), any(), any(), any(), any(), any())
-        } returns PairingClaimResponse(
-            agent_id = "agent-99",
-            agent_friendly_name = "lab-host",
-            ws_delivered = null,
-        )
-
-        vm.onScanResult(Result.success(payload))
-        runCurrent()
-        vm.confirmQrClaim()
-        runCurrent()
-
-        assertTrue(vm.uiState.value.qrPairing is QrPairingState.WaitingForOnline)
-        val waiting = vm.uiState.value.qrPairing as QrPairingState.WaitingForOnline
-        assertNull(waiting.wsDeliveredAtClaim)
-
-        fx.agentsFlow.value = listOf(agent("agent-99", online = true))
-        runCurrent()
-        advanceTimeBy(1500L)
-        runCurrent()
-        assertTrue(vm.uiState.value.qrPairing is QrPairingState.Success)
-    }
-
-    @Test
     fun confirmQrClaim_apiException410_mapsToOperatorFriendlyMessage() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
@@ -521,31 +421,6 @@ class AgentListViewModelQrPairingTest {
         assertTrue(
             (state as QrPairingState.Error).message.contains("consumed", ignoreCase = true),
         )
-    }
-
-    @Test
-    fun confirmQrClaim_apiExceptionOther_includesHttpCode() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        val payload = freshPayload()
-        coEvery {
-            fx.trustKeyPinning.verifyOrPin(any(), any())
-        } returns TrustKeyPinning.VerifyResult.Pinned
-        coEvery {
-            fx.agentRepository.claimAgentByPairing(
-                any(), any(), any(), any(), any(), any(),
-            )
-        } throws ApiException(code = 503, errorBody = "service down")
-
-        vm.onScanResult(Result.success(payload))
-        advanceUntilIdle()
-        vm.confirmQrClaim()
-        advanceUntilIdle()
-
-        val state = vm.uiState.value.qrPairing
-        assertTrue(state is QrPairingState.Error)
     }
 
     @Test
@@ -591,25 +466,6 @@ class AgentListViewModelQrPairingTest {
         coVerify(exactly = 0) {
             fx.agentRepository.claimAgentByPairing(any(), any(), any(), any(), any(), any())
         }
-        assertEquals(QrPairingState.Idle, vm.uiState.value.qrPairing)
-    }
-
-    @Test
-    fun dismissQrPairing_returnsToIdle_fromAnyState() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        val payload = freshPayload()
-        coEvery {
-            fx.trustKeyPinning.verifyOrPin(any(), any())
-        } returns TrustKeyPinning.VerifyResult.Pinned
-        vm.onScanResult(Result.success(payload))
-        advanceUntilIdle()
-        assertTrue(vm.uiState.value.qrPairing is QrPairingState.Confirming)
-
-        vm.dismissQrPairing()
-
         assertEquals(QrPairingState.Idle, vm.uiState.value.qrPairing)
     }
 

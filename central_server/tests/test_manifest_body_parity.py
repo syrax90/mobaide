@@ -29,7 +29,7 @@ from starlette.testclient import TestClient
 
 from central_server.manifest.router import broadcast_manifest_update
 from central_server.manifest.store import ManifestStore, StoredManifest, canonical_json
-from central_server.relay.envelope import CH_CONTROL, PROTOCOL_VERSION, decode
+from central_server.relay.envelope import PROTOCOL_VERSION, decode
 
 
 def _signed_manifest_record() -> tuple[StoredManifest, str]:

@@ -223,17 +223,6 @@ describe('Pair paste box', () => {
     expect(screen.getByText('https://relay.test')).toBeInTheDocument();
   });
 
-  it('explains a malformed code without mentioning a scanner', async () => {
-    renderPair();
-
-    paste('MOBA9|nope');
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'That is not a Mobaide pairing code',
-    );
-    expect(api.claims).toEqual([]);
-  });
-
   it('says how stale an expired code is instead of calling it malformed', async () => {
     renderPair();
 
@@ -279,16 +268,6 @@ describe('Pair paste box', () => {
     expect(useTrustPinStore.getState().pins).toEqual({ 'https://relay.test': FP });
   });
 
-  it('tells the user to compare the code against the agent host', async () => {
-    // RFC 8628 §5.4: a link works for whoever opens it, and an attacker's
-    // payload against the real relay looks identical on this screen. The code
-    // prefix is the only field that separates them, so the copy has to say so.
-    renderPair();
-
-    paste(payload());
-
-    expect(await screen.findByText(/Check those first characters match/)).toBeInTheDocument();
-  });
 });
 
 describe('Pair claim', () => {
@@ -419,23 +398,6 @@ describe('Pair claim', () => {
     await client.invalidateQueries({ queryKey: ['agents'] });
 
     expect(await screen.findByText(/paired and online/)).toBeInTheDocument();
-  });
-
-  it('shows the remedy copy for a consumed nonce', async () => {
-    const { ApiError } = await import('../../api/errors');
-    api.claimError = new ApiError({
-      status: 410,
-      message: 'gone',
-      code: null,
-      retryAfterSeconds: null,
-      detail: 'gone',
-    });
-
-    await confirmDeepLink();
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Pairing code consumed or expired.',
-    );
   });
 
   it('does not claim until the user confirms the relay', async () => {

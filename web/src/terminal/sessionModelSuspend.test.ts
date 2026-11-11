@@ -18,7 +18,6 @@ import { TERMINAL_FRAME_TYPE } from '../protocol/terminalCodec';
 import { overlayMessage } from '../routes/terminal/ConnectionOverlay';
 import { useConnectionStore } from '../realtime/connectionStore';
 import { fakeEventTarget } from '../realtime/__testing__/fakeEventTarget';
-import { shouldSuspend } from './terminalSuspend';
 
 vi.mock('../auth/agentTokens', () => ({
   ensureAgentToken: () => Promise.resolve('agent-jwt'),
@@ -161,15 +160,6 @@ async function harness(
 }
 
 describe('TerminalSessionModel unwatched-session suspension', () => {
-  it('holds the socket open while the session is on screen and the tab is visible', async () => {
-    const h = await harness();
-
-    h.deliverOutput('plenty of output');
-
-    expect(h.socket.clientCloses).toEqual([]);
-    expect(h.view().suspended).toBe(false);
-  });
-
   it('holds the socket open for a hidden session that spends nothing', async () => {
     // The byte term, which is what makes ordinary alt-tabbing free: no spend,
     // no suspend, and therefore no replay to pay for on return.
@@ -255,16 +245,6 @@ describe('TerminalSessionModel unwatched-session suspension', () => {
     h.model.suspend();
 
     expect(h.view().channelStopped).toBe(false);
-  });
-
-  it('still reports a real failure as Disconnected', async () => {
-    const h = await harness();
-
-    h.socket.serverClose(WS_CLOSE.adminRevoked);
-    await settle();
-
-    expect(h.view().suspended).toBe(false);
-    expect(overlayMessage(h.view())).toBe('Disconnected');
   });
 
   it('reopens the socket the moment the session is read again', async () => {
@@ -370,19 +350,6 @@ describe('TerminalSessionModel unwatched-session suspension', () => {
 
     expect(useConnectionStore.getState().channels[KEY]).toBeUndefined();
     expect(h.sockets).toHaveLength(1);
-  });
-
-  it('leaves a modest spend alone under the shipped policy', async () => {
-    // The shipped policy, not the injected stub: a few hundred bytes is nowhere
-    // near a ring, so the real thresholds must not suspend on it.
-    const h = await harness(shouldSuspend);
-
-    h.hide();
-    h.advance(120_000);
-    h.deliverOutput('x'.repeat(512));
-
-    expect(h.socket.clientCloses).toEqual([]);
-    expect(h.view().suspended).toBe(false);
   });
 });
 

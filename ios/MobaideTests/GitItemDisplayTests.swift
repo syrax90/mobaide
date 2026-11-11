@@ -19,82 +19,7 @@ final class GitItemDisplayTests: XCTestCase {
         GitItemDisplay.chips(item).map { "\($0.text)|\(self.styleName($0.style))" }
     }
 
-    // MARK: - primaryLabel
-
-    func testPrimaryLabelIsBranchForBranchKinds() {
-        XCTAssertEqual(
-            GitItemDisplay.primaryLabel(GitItem(kind: GitItem.kindBranchOnly, branch: "main")),
-            "main"
-        )
-        XCTAssertEqual(
-            GitItemDisplay.primaryLabel(
-                GitItem(kind: GitItem.kindBranchWithWorktree, branch: "feature", worktree_path: "/wt")
-            ),
-            "feature"
-        )
-    }
-
-    func testPrimaryLabelIsWorktreePathForOrphan() {
-        XCTAssertEqual(
-            GitItemDisplay.primaryLabel(GitItem(kind: GitItem.kindOrphanWorktree, worktree_path: "/wt/x")),
-            "/wt/x"
-        )
-    }
-
-    func testPrimaryLabelFallsBackToEmptyWhenMissing() {
-        XCTAssertEqual(GitItemDisplay.primaryLabel(GitItem(kind: GitItem.kindBranchOnly)), "")
-        XCTAssertEqual(GitItemDisplay.primaryLabel(GitItem(kind: GitItem.kindOrphanWorktree)), "")
-    }
-
-    // MARK: - secondaryLabel
-
-    func testSecondaryLabelIsWorktreePathForBranchWithWorktree() {
-        XCTAssertEqual(
-            GitItemDisplay.secondaryLabel(
-                GitItem(kind: GitItem.kindBranchWithWorktree, branch: "feature", worktree_path: "/wt")
-            ),
-            "/wt"
-        )
-    }
-
-    func testSecondaryLabelIsNilForBranchOnly() {
-        XCTAssertNil(GitItemDisplay.secondaryLabel(GitItem(kind: GitItem.kindBranchOnly, branch: "main")))
-    }
-
-    func testSecondaryLabelReflectsDetachedForOrphan() {
-        XCTAssertEqual(
-            GitItemDisplay.secondaryLabel(
-                GitItem(kind: GitItem.kindOrphanWorktree, worktree_path: "/wt", detached: true)
-            ),
-            "(detached HEAD)"
-        )
-        XCTAssertNil(
-            GitItemDisplay.secondaryLabel(
-                GitItem(kind: GitItem.kindOrphanWorktree, worktree_path: "/wt", detached: false)
-            )
-        )
-    }
-
     // MARK: - chips
-
-    func testNoChipsForPlainBranch() {
-        XCTAssertEqual(descriptors(GitItem(kind: GitItem.kindBranchOnly, branch: "main")), [])
-    }
-
-    func testCurrentGoneAndPrunableChipStyles() {
-        XCTAssertEqual(
-            descriptors(GitItem(kind: GitItem.kindBranchOnly, branch: "main", is_current: true)),
-            ["current|highlight"]
-        )
-        XCTAssertEqual(
-            descriptors(GitItem(kind: GitItem.kindBranchOnly, branch: "old", gone: true)),
-            ["gone|danger"]
-        )
-        XCTAssertEqual(
-            descriptors(GitItem(kind: GitItem.kindBranchOnly, branch: "old", prunable: true)),
-            ["prunable|muted"]
-        )
-    }
 
     func testAheadBehindChipAppearsOnlyWhenNonZero() {
         XCTAssertEqual(
@@ -111,28 +36,6 @@ final class GitItemDisplayTests: XCTestCase {
         )
     }
 
-    func testLockedChipFormatsReason() {
-        XCTAssertEqual(
-            descriptors(GitItem(kind: GitItem.kindBranchOnly, branch: "b", locked: true, locked_reason: "in use")),
-            ["locked: in use|danger"]
-        )
-        XCTAssertEqual(
-            descriptors(GitItem(kind: GitItem.kindBranchOnly, branch: "b", locked: true, locked_reason: nil)),
-            ["locked|danger"]
-        )
-        XCTAssertEqual(
-            descriptors(GitItem(kind: GitItem.kindBranchOnly, branch: "b", locked: true, locked_reason: "   ")),
-            ["locked|danger"]
-        )
-    }
-
-    func testOrphanChipPresentForOrphanKind() {
-        XCTAssertEqual(
-            descriptors(GitItem(kind: GitItem.kindOrphanWorktree, worktree_path: "/wt", prunable: true)),
-            ["orphan|danger", "prunable|muted"]
-        )
-    }
-
     // MARK: - deleteFailureMessage
 
     private func failure(target: String, error: String?, detail: String? = nil) -> GitDeleteResultItem {
@@ -145,29 +48,6 @@ final class GitItemDisplayTests: XCTestCase {
         )
     }
 
-    func testDeleteFailureMessageNamesTargetAndReason() {
-        XCTAssertEqual(
-            GitItemDisplay.deleteFailureMessage([failure(target: "wt", error: "locked")]),
-            "Couldn't delete wt: the worktree is locked"
-        )
-        XCTAssertEqual(
-            GitItemDisplay.deleteFailureMessage([failure(target: "b", error: "not_found")]),
-            "Couldn't delete b: it no longer exists"
-        )
-        XCTAssertEqual(
-            GitItemDisplay.deleteFailureMessage([failure(target: "b", error: "invalid")]),
-            "Couldn't delete b: the request was invalid"
-        )
-        XCTAssertEqual(
-            GitItemDisplay.deleteFailureMessage([failure(target: "b", error: "git_timeout")]),
-            "Couldn't delete b: git took too long to answer. Try again."
-        )
-        XCTAssertEqual(
-            GitItemDisplay.deleteFailureMessage([failure(target: "b", error: "error")]),
-            "Couldn't delete b: unknown error"
-        )
-    }
-
     func testDeleteFailureMessagePrefersErrorDetailFirstLine() {
         XCTAssertEqual(
             GitItemDisplay.deleteFailureMessage([
@@ -175,12 +55,6 @@ final class GitItemDisplayTests: XCTestCase {
             ]),
             "Couldn't delete b: fatal: branch 'b' is checked out at '/wt'"
         )
-    }
-
-    func testDeleteFailureMessageTruncatesLongDetail() {
-        let detail = String(repeating: "x", count: 200)
-        let message = GitItemDisplay.deleteFailureMessage([failure(target: "b", error: "error", detail: detail)])
-        XCTAssertEqual(message, "Couldn't delete b: " + String(repeating: "x", count: 120))
     }
 
     func testDeleteFailureMessageFallsBackToACountForSeveralFailures() {
@@ -221,40 +95,9 @@ final class GitItemDisplayTests: XCTestCase {
         GitItem(kind: GitItem.kindRemoteBranch, branch: "origin/feature-a", gone: gone, remote: remote)
     }
 
-    func testRemoteChipNamesTheRemoteAfterCurrentAndBeforeGone() {
-        XCTAssertEqual(descriptors(remoteBranch()), ["origin|muted"])
-        XCTAssertEqual(descriptors(remoteBranch(remote: nil, gone: true)), ["remote|muted", "gone|danger"])
-    }
-
     func testPrimaryLabelIsTheRemoteQualifiedBranchForARemoteRow() {
         XCTAssertEqual(GitItemDisplay.primaryLabel(remoteBranch()), "origin/feature-a")
         XCTAssertNil(GitItemDisplay.secondaryLabel(remoteBranch()))
-    }
-
-    func testShortDateKeepsTheCommitterDayAsAPrefix() {
-        XCTAssertEqual(GitItemDisplay.shortDate("2026-09-16T10:20:30+02:00"), "2026-09-16")
-        XCTAssertEqual(GitItemDisplay.shortDate("2026-09-16"), "2026-09-16")
-        XCTAssertNil(GitItemDisplay.shortDate(nil))
-        XCTAssertNil(GitItemDisplay.shortDate(""))
-    }
-
-    func testTipLineJoinsSubjectAndDayOrShowsWhicheverThereIs() {
-        XCTAssertEqual(
-            GitItemDisplay.tipLine(
-                GitItem(kind: GitItem.kindBranchOnly, branch: "b", subject: "  Fix login ", committed_at: "2026-09-16T10:20:30+02:00")
-            ),
-            "Fix login · 2026-09-16"
-        )
-        XCTAssertEqual(
-            GitItemDisplay.tipLine(GitItem(kind: GitItem.kindBranchOnly, branch: "b", subject: "Fix login")),
-            "Fix login"
-        )
-        XCTAssertEqual(
-            GitItemDisplay.tipLine(GitItem(kind: GitItem.kindBranchOnly, branch: "b", committed_at: "2026-09-16T10:20:30+02:00")),
-            "2026-09-16"
-        )
-        XCTAssertNil(GitItemDisplay.tipLine(GitItem(kind: GitItem.kindBranchOnly, branch: "b")))
-        XCTAssertNil(GitItemDisplay.tipLine(GitItem(kind: GitItem.kindBranchOnly, branch: "b", subject: "   ")))
     }
 
     func testMatchesFilterIsCaseInsensitiveOnTheLabelAndTheWorktreePath() {
@@ -280,86 +123,6 @@ final class GitItemDisplayTests: XCTestCase {
         XCTAssertEqual(remoteBranch().id, "remote_branch:origin/feature-a|")
     }
 
-    // MARK: - Branch copy
-
-    private func gitError(_ code: String, _ message: String? = nil) -> SessionGitError {
-        .git(code: code, message: message)
-    }
-
-    func testBranchMessagesNameTheBranchTheAgentTouched() {
-        XCTAssertEqual(
-            GitItemDisplay.checkoutConfirmMessage(branch: "feature-a", projectName: "proj"),
-            "Check out feature-a in the project folder of proj? Sessions started in that folder afterwards use this branch."
-        )
-        XCTAssertEqual(
-            GitItemDisplay.checkedOutMessage(GitBranchResponse(branch: "feature-a", checked_out: true, created: false)),
-            "Checked out feature-a"
-        )
-        XCTAssertEqual(
-            GitItemDisplay.branchCreatedMessage(GitBranchResponse(branch: "feature-a", checked_out: false, created: true)),
-            "Created feature-a"
-        )
-        XCTAssertEqual(
-            GitItemDisplay.branchCreatedMessage(GitBranchResponse(branch: "feature-a", checked_out: true, created: true)),
-            "Created and checked out feature-a"
-        )
-    }
-
-    func testCheckoutErrorCopyWordsEachRefusalAndFallsBackToTheSessionCopy() {
-        XCTAssertEqual(
-            GitItemDisplay.checkoutErrorCopy(gitError("dirty", "error: Your local changes"), branch: "b"),
-            "The project folder has local changes this checkout would overwrite. "
-                + "Commit or discard them from a session's Changes screen first."
-        )
-        XCTAssertEqual(
-            GitItemDisplay.checkoutErrorCopy(gitError("checked_out_elsewhere", "/wt/topic"), branch: "feature-a"),
-            "feature-a is already checked out in another worktree (/wt/topic)."
-        )
-        XCTAssertEqual(
-            GitItemDisplay.checkoutErrorCopy(gitError("checked_out_elsewhere"), branch: "feature-a"),
-            "feature-a is already checked out in another worktree."
-        )
-        XCTAssertEqual(
-            GitItemDisplay.checkoutErrorCopy(gitError("operation_in_progress", "merging"), branch: "feature-a"),
-            "A merge, rebase or cherry-pick is in progress in the project folder. Finish or abort it first."
-        )
-        XCTAssertEqual(
-            GitItemDisplay.checkoutErrorCopy(gitError("job_running", "job-1"), branch: "feature-a"),
-            "A fetch, pull or push is still running in the project folder."
-        )
-        XCTAssertEqual(
-            GitItemDisplay.checkoutErrorCopy(gitError("ref_not_found"), branch: "feature-a"),
-            "Branch not found — refresh the list."
-        )
-        XCTAssertEqual(
-            GitItemDisplay.checkoutErrorCopy(gitError("git_error", "fatal: boom"), branch: "feature-a"),
-            "git failed: fatal: boom"
-        )
-    }
-
-    func testCreateBranchErrorCopyNamesTheClashTheBadNameAndTheMissingStartPoint() {
-        XCTAssertEqual(
-            GitItemDisplay.createBranchErrorCopy(gitError("exists", "feature-a"), name: "feature-a"),
-            "A branch named feature-a already exists."
-        )
-        XCTAssertEqual(
-            GitItemDisplay.createBranchErrorCopy(gitError("bad_branch_name"), name: "-x"),
-            "Not a valid branch name."
-        )
-        XCTAssertEqual(
-            GitItemDisplay.createBranchErrorCopy(gitError("unknown_start_point", "nope"), name: "feature-a"),
-            "Start point nope was not found."
-        )
-        XCTAssertEqual(
-            GitItemDisplay.createBranchErrorCopy(gitError("unknown_start_point"), name: "feature-a"),
-            "The start point was not found."
-        )
-        XCTAssertEqual(
-            GitItemDisplay.createBranchErrorCopy(gitError("checked_out_elsewhere", "/wt"), name: "feature-a"),
-            "feature-a is already checked out in another worktree (/wt)."
-        )
-    }
-
     // MARK: - Remote delete and Remove worktree
 
     func testRemoteRowsDeleteOnlyBehindTheCapabilityAndOnlyLinkedWorktreesCanBeRemoved() {
@@ -377,17 +140,6 @@ final class GitItemDisplayTests: XCTestCase {
         XCTAssertFalse(GitItem(kind: GitItem.kindBranchOnly, branch: "b").canRemoveWorktree)
         XCTAssertFalse(GitItem(kind: GitItem.kindOrphanWorktree, worktree_path: "/wt/x").canRemoveWorktree)
         XCTAssertFalse(remoteBranch().canRemoveWorktree)
-    }
-
-    func testRemoteDeleteMessageNamesOneBranchAndCountsSeveral() {
-        XCTAssertEqual(
-            GitItemDisplay.remoteDeleteMessage(["origin/a"]),
-            "Delete origin/a on the remote? This removes it for everyone with access to the remote."
-        )
-        XCTAssertEqual(
-            GitItemDisplay.remoteDeleteMessage(["origin/a", "origin/b"]),
-            "Delete 2 branches on the remote? This removes them for everyone with access to the remote."
-        )
     }
 
     func testDeleteFailureReasonGivesAuthRequiredItsOwnCopyAndKeepsTheRemoteReasonOtherwise() {

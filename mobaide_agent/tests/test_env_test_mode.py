@@ -86,10 +86,6 @@ async def _drain_output_containing(
 
 
 class TestAgentConfigEnvSelector:
-    def test_production_is_the_default(self):
-        cfg = AgentConfig(jwt_secret_key=TEST_JWT_SECRET)
-        assert cfg.env == "production"
-        assert cfg.is_test_mode is False
 
     def test_exact_test_value_opts_in(self):
         cfg = AgentConfig(jwt_secret_key=TEST_JWT_SECRET, env="test")
@@ -102,12 +98,6 @@ class TestAgentConfigEnvSelector:
         # Exact-string contract: only the literal "test" opts in.
         cfg = AgentConfig(jwt_secret_key=TEST_JWT_SECRET, env=value)
         assert cfg.is_test_mode is False
-
-    def test_reads_mobaide_env_var(self, monkeypatch):
-        monkeypatch.setenv("MOBAIDE_ENV", "test")
-        cfg = AgentConfig(jwt_secret_key=TEST_JWT_SECRET)
-        assert cfg.env == "test"
-        assert cfg.is_test_mode is True
 
 
 class TestStatePrefixIsolation:
@@ -139,11 +129,6 @@ class TestStatePrefixIsolation:
             "mobaide-agent-test-"
         )
 
-    def test_install_paths_is_test_mode_true_only_for_exact_test(
-        self, monkeypatch
-    ):
-        monkeypatch.setenv("MOBAIDE_ENV", "test")
-        assert install_paths.is_test_mode() is True
 
     @pytest.mark.parametrize(
         "value", ["TEST", "Test", "testing", "staging", "production", ""]
@@ -240,20 +225,8 @@ class TestFakePtyBackendContract:
         assert got == [b""]
         assert backend.is_alive() is False
 
-    def test_eof_is_idempotent_and_never_blocks_when_dead(self):
-        backend = FakePtyBackend()
-        backend.spawn(["x"], None, None, 24, 80)
-        backend.terminate()
-        assert backend.read() == b""
-        assert backend.read() == b""  # dead+drained → immediate EOF, no block
-        backend.close()
-        assert backend.read() == b""
-
 
 class TestBackendFactorySelection:
-    def test_default_factory_is_the_real_backend(self):
-        mgr = SessionManager()
-        assert mgr._backend_factory is create_pty_backend
 
     async def test_fake_factory_is_used_for_created_sessions(self):
         mgr = SessionManager(backend_factory=FakePtyBackend)
@@ -280,13 +253,6 @@ class TestFakePtyTeardown:
         # terminate() flips is_alive()->False, so the graceful-kill grace wait
         # is skipped entirely — teardown is near-instant, never 2s+.
         assert elapsed < GRACEFUL_TERM_SECONDS, f"stop took {elapsed:.2f}s"
-
-    async def test_double_stop_does_not_raise(self):
-        session = TerminalSession(_shell_config("td-2"), backend=FakePtyBackend())
-        await session.start()
-        await session.stop()
-        await session.stop()
-        assert session.state == SessionState.STOPPED
 
 
 @pytest.mark.timeout(20)

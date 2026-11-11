@@ -1065,11 +1065,11 @@ The Android client has four distinct update paths that work together:
    fails when a new fixture file is neither asserted by a web test nor assigned
    an owning milestone.
 
-   This is the **only** CI-enforced fixture arm. iOS runs its suite on push to
-   `main` only, and no workflow runs Gradle unit tests, so Android's arm of
-   `keys/key_chords.json` (WEB-06) is a local check. Anything shared that only
-   Kotlin or Swift asserts can drift through a PR unnoticed; put the
-   load-bearing assertion in the TypeScript arm.
+   The other two arms are CI-gated too: `ios-build.yml` runs the Swift suite
+   on PRs that touch `ios/` or `tests/protocol_fixtures/`, and the `android`
+   job of `unit-tests.yml` runs the Kotlin suite (including `keys/key_chords.json`)
+   on every PR. This job is still the only arm that runs on every PR with no
+   paths filter, so keep the load-bearing assertion in the TypeScript arm.
 
 This is the safety net that lets the two component packages duplicate
 `envelope.py` (a deliberate constraint — the two packages are independent

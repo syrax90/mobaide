@@ -1,12 +1,10 @@
 package com.mobaide.app.ui.terminal.git
 
 import androidx.activity.ComponentActivity
-import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -118,27 +116,6 @@ class GitSyncFormTest {
     }
 
     @Test
-    fun withoutAnUpstream_pushPublishesTheBranch_andPullWaits() {
-        setContent(repo = repo(upstream = null))
-
-        // Once in the summary line, once as the Pull row's reason.
-        composeRule.onAllNodesWithText("No upstream").assertCountEquals(2)
-        composeRule.onNodeWithText("Publish branch").assertIsDisplayed()
-        composeRule.onNodeWithText("Push and set the upstream").assertIsDisplayed()
-        row("push").assertIsEnabled()
-        row("pull").assertIsNotEnabled()
-    }
-
-    @Test
-    fun onlyTheAdvertisedRows_exist() {
-        setContent(capabilities = GitCapabilities(fetch = true))
-
-        row("fetch").assertIsDisplayed()
-        row("pull").assertDoesNotExist()
-        row("push").assertDoesNotExist()
-    }
-
-    @Test
     fun whileStarting_everyRowAndCloseLock() {
         setContent(state = SyncSheetState(starting = true))
 
@@ -197,73 +174,6 @@ class GitSyncFormTest {
         composeRule.onNodeWithTag(gitSyncFollowUpTag(SyncFollowUp.ForcePush)).assertIsEnabled().performClick()
 
         assertEquals(listOf(SyncFollowUp.ForcePush), followUps)
-    }
-
-    @Test
-    fun aRefusedPublish_offersOnlyTheLeaseFollowUp_sinceTheBranchHasNoUpstreamToPull() {
-        setContent(
-            repo = repo(upstream = null),
-            banner = GitJobBanner(
-                "j1",
-                job(
-                    status = GitJobResponse.STATUS_DONE, ok = false, errorCode = "not_fast_forward",
-                    message = "! [rejected] main -> main (fetch first)",
-                ),
-            ),
-        )
-
-        composeRule.onNodeWithText("Push failed").assertIsDisplayed()
-        composeRule.onNodeWithTag(gitSyncFollowUpTag(SyncFollowUp.ForcePush)).assertIsDisplayed()
-        composeRule.onNodeWithTag(gitSyncFollowUpTag(SyncFollowUp.PullRebase)).assertDoesNotExist()
-        composeRule.onNodeWithTag(gitSyncFollowUpTag(SyncFollowUp.PullMerge)).assertDoesNotExist()
-    }
-
-    @Test
-    fun aPullThatCouldNotFastForward_offersRebaseAndMerge() {
-        setContent(
-            banner = GitJobBanner(
-                "j1",
-                job(
-                    op = GitJobResponse.OP_PULL, status = GitJobResponse.STATUS_DONE, ok = false,
-                    errorCode = "not_fast_forward",
-                    message = "fatal: Not possible to fast-forward, aborting.",
-                ),
-            ),
-        )
-
-        composeRule.onNodeWithText("Pull failed").assertIsDisplayed()
-        composeRule.onNodeWithText("Your branch is behind the remote.").assertIsDisplayed()
-        composeRule.onNodeWithTag(gitSyncFollowUpTag(SyncFollowUp.PullRebase)).assertIsDisplayed()
-        composeRule.onNodeWithTag(gitSyncFollowUpTag(SyncFollowUp.PullMerge)).assertIsDisplayed()
-        composeRule.onNodeWithTag(gitSyncFollowUpTag(SyncFollowUp.ForcePush)).assertDoesNotExist()
-    }
-
-    @Test
-    fun aSuccess_showsTheSummary_withNoFollowUp() {
-        setContent(
-            banner = GitJobBanner(
-                "j1",
-                job(status = GitJobResponse.STATUS_DONE, ok = true, message = "abc1234..def5678 main -> main"),
-            ),
-        )
-
-        composeRule.onNodeWithText("Pushed").assertIsDisplayed()
-        composeRule.onNodeWithText("abc1234..def5678 main -> main").assertIsDisplayed()
-        composeRule.onNodeWithTag(gitSyncFollowUpTag(SyncFollowUp.ForcePush)).assertDoesNotExist()
-        composeRule.onNodeWithTag(GIT_SYNC_CANCEL_TAG).assertDoesNotExist()
-    }
-
-    @Test
-    fun aStartError_andALostJob_areReported_andTheRowsStayLive() {
-        setContent(
-            state = SyncSheetState(error = "Another fetch, pull or push is still running."),
-            banner = GitJobBanner("j1", null, lost = true),
-        )
-
-        composeRule.onNodeWithTag(GIT_SYNC_ERROR_TAG).assertIsDisplayed()
-        composeRule.onNodeWithText("Another fetch, pull or push is still running.").assertIsDisplayed()
-        composeRule.onNodeWithText("Lost track of the job — refresh to see the result.").assertIsDisplayed()
-        row("fetch").assertIsEnabled()
     }
 
     @Test

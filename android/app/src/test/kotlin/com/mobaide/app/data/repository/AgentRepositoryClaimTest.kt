@@ -58,21 +58,6 @@ class AgentRepositoryClaimTest {
     }
 
     @Test
-    fun claimAgentByPairing_throwsWhenUserNotLoggedIn() = runTest {
-        val (repo) = newFixture(userToken = null)
-
-        try {
-            repo.claimAgentByPairing(
-                nonce = "n", trustKeyFp = "fp", mobileDeviceId = "dev",
-                mobileDeviceName = null, hostnameHint = null, friendlyName = null,
-            )
-            fail("expected IllegalStateException")
-        } catch (e: IllegalStateException) {
-            assertEquals("User not logged in", e.message)
-        }
-    }
-
-    @Test
     fun claimAgentByPairing_delegatesToApi_andReturnsSamePayload() = runTest {
         val (repo, api) = newFixture()
         val response = PairingClaimResponse(
@@ -123,23 +108,6 @@ class AgentRepositoryClaimTest {
             api.listAgents("tok-user-123")
         }
         assertEquals(listOf("a-new"), repo.observeAgents().value.map { it.agent_id })
-    }
-
-    @Test
-    fun claimAgentByPairing_passesNullableFields_unchanged() = runTest {
-        val (repo, api) = newFixture()
-        val captured = slot<PairingClaimRequest>()
-        coEvery { api.claimAgentByPairing(any(), capture(captured)) } returns
-            PairingClaimResponse(agent_id = "a", agent_friendly_name = "x")
-        coEvery { api.listAgents(any()) } returns emptyList()
-
-        repo.claimAgentByPairing(
-            nonce = "n", trustKeyFp = "fp", mobileDeviceId = "dev",
-            mobileDeviceName = null, hostnameHint = null, friendlyName = null,
-        )
-
-        assertEquals(null, captured.captured.hostname_hint)
-        assertEquals(null, captured.captured.friendly_name)
     }
 
     @Test

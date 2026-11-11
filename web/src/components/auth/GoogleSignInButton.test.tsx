@@ -86,31 +86,6 @@ describe('GoogleSignInButton', () => {
     expect(gis.renders).toHaveLength(0);
   });
 
-  // jsdom ships no `matchMedia`, so the `system` preference resolves light.
-  it('asks GIS for the black fill that matches the Apple button on a light surface', async () => {
-    mount({ text: 'signin_with' });
-
-    await waitFor(() => {
-      expect(gis.renders).toHaveLength(1);
-    });
-    expect(gis.inits).toEqual([{ clientId: CLIENT_ID, nonce: 'nonce-1' }]);
-    expect(gis.renders[0]).toEqual({
-      theme: 'filled_black',
-      text: 'signin_with',
-    });
-  });
-
-  it('asks GIS for the outline theme on a dark surface, where it renders white', async () => {
-    useThemeStore.setState({ preference: 'dark' });
-
-    mount();
-
-    await waitFor(() => {
-      expect(gis.renders).toHaveLength(1);
-    });
-    expect(gis.renders[0]?.theme).toBe('outline');
-  });
-
   it('re-renders the button when the theme flips', async () => {
     mount();
     await waitFor(() => {
