@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mobaide-agent"
-version = "0.3.27"
+version = "0.3.28"
 description = "Mobaide agent — cross-platform PTY session manager with WebSocket API"
 requires-python = ">=3.12"
 dependencies = [

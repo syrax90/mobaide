@@ -1,5 +1,12 @@
 # Android Changelog
 
+## [3.7.3](https://github.com/syrax90/mobaide/compare/android-v3.7.2...android-v3.7.3) (2026-11-11)
+
+
+### Features
+
+* **agent,android,ios,web:** sign in to Claude Code, Codex and Antigravity from the chat ([#866](https://github.com/syrax90/mobaide/issues/866)) ([8d5dec9](https://github.com/syrax90/mobaide/commit/8d5dec93dfc6f48245d0daf93328195ec360152f))
+
 ## [3.7.2](https://github.com/syrax90/mobaide/compare/android-v3.7.1...android-v3.7.2) (2026-11-11)
 
 
