@@ -271,12 +271,12 @@ def test_failed_chat_turn_alerts_the_owner(e2e_stack, spawn_agent, tmp_path):
     assert alert["agent_id"] == agent_id
 
 
-def test_chat_is_refused_for_a_kind_without_a_chat_agent(e2e_stack):
+def test_chat_is_refused_for_a_kind_without_a_chat_agent(e2e_stack, tmp_path):
     client = e2e_stack.client
     token = client.mint_mobile_token(e2e_stack.agent_id)
 
     refused = client.proxy_request(
-        e2e_stack.agent_id, token, "POST", "api/sessions", {"ui": "chat", "cwd": "/tmp"}
+        e2e_stack.agent_id, token, "POST", "api/sessions", {"ui": "chat", "cwd": str(tmp_path)}
     )
 
     assert refused.status_code == 400

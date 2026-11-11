@@ -37,7 +37,7 @@ jobs:
 
       - name: Run agent tests
         working-directory: mobaide_agent
-        run: python -m pytest -q --timeout=300
+        run: python -m pytest -q --timeout=300 --timeout-method=thread
 
   server:
     runs-on: ubuntu-latest
@@ -57,7 +57,7 @@ jobs:
 
       - name: Run relay tests
         working-directory: central_server
-        run: python -m pytest -q --timeout=300
+        run: python -m pytest -q --timeout=300 --timeout-method=thread
 
   # Install scripts, the Windows launcher and deploy helpers. Protocol
   # integrity, auto-update E2E and tests/e2e have their own workflows.
@@ -80,7 +80,7 @@ jobs:
 
       - name: Run repo-root tests
         run: >-
-          python -m pytest tests -q --timeout=300
+          python -m pytest tests -q --timeout=300 --timeout-method=thread
           --ignore=tests/e2e
           --ignore=tests/test_protocol_integrity.py
           --ignore=tests/test_e2e_autoupdate.py

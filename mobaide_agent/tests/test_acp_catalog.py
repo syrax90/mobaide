@@ -570,7 +570,10 @@ class TestChatRest:
         resp = await client.get(url, headers=auth_headers)
         assert resp.status_code == status
 
-    async def test_codex_chat_session_and_its_stored_sessions(self, client, auth_headers, tmp_path):
+    async def test_codex_chat_session_and_its_stored_sessions(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")  # passes the Codex auth guard on a clean host
         body = {
             "cli": "codex",
             "ui": "chat",

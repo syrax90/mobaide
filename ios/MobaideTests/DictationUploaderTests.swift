@@ -95,7 +95,8 @@ final class DictationUploaderTests: XCTestCase {
 
     func testRetriesAURLErrorAnUncoded5xxAndA503BusyLikeALostRequest() async {
         api.enqueueAudio(
-            .fail(URLError(.networkConnectionLost)),
+            // An explicit description: a cold CI simulator stalled ~20 s resolving the localized one.
+            .fail(URLError(.networkConnectionLost, userInfo: [NSLocalizedDescriptionKey: "connection lost"])),
             .fail(voiceRefusal(502, nil)),
             .fail(voiceRefusal(503, VoiceCodes.busy))
         )

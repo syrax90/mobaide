@@ -50,7 +50,8 @@ from .git_repo_support import (
     write_file,
 )
 
-_ISO_STRICT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$")
+# git >= 2.45 prints "Z" instead of "+00:00" for UTC dates.
+_ISO_STRICT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$")
 
 
 @pytest.fixture(autouse=True)

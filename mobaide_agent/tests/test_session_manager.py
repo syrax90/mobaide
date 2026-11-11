@@ -158,7 +158,7 @@ class TestProjectAwareLaunchBranching:
             ),
         )
 
-        mgr = SessionManager(projects_store=store, launcher=launcher)
+        mgr = SessionManager(projects_store=store, launcher=launcher, backend_factory=FakePtyBackend)
         try:
             config = SessionConfig(
                 session_id="claude-sess",
@@ -438,7 +438,7 @@ class TestAdHocClaudeLaunchBranching:
             ),
         )
 
-        mgr = SessionManager(projects_store=store, launcher=launcher)
+        mgr = SessionManager(projects_store=store, launcher=launcher, backend_factory=FakePtyBackend)
         try:
             config = SessionConfig(
                 session_id="adhoc-sess",
