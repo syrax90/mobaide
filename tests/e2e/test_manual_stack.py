@@ -11,8 +11,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import xml.dom.minidom as minidom
 from pathlib import Path
+
+import pytest
 
 import manual_stack as ms
 
@@ -347,6 +350,7 @@ def test_open_web_client_is_best_effort(monkeypatch):
     """The tab is a convenience layered on a stack that is already READY, so it
     targets the pre-filled /login screen and a browser-less box (SSH, CI, a
     stripped container) must not turn a working stack into a failed boot."""
+    monkeypatch.setattr(ms.sys, "platform", "linux")
     opened = []
     monkeypatch.setattr(ms.webbrowser, "open_new_tab", lambda url: opened.append(url) or True)
     ms.open_web_client(5180)
@@ -357,6 +361,20 @@ def test_open_web_client_is_best_effort(monkeypatch):
 
     monkeypatch.setattr(ms.webbrowser, "open_new_tab", explode)
     ms.open_web_client(5180)  # must return normally
+
+
+def test_open_web_client_uses_open_on_macos(monkeypatch):
+    """webbrowser's osascript route can fail silently from a background shell;
+    `open` both opens the tab and brings the browser to the front."""
+    monkeypatch.setattr(ms.sys, "platform", "darwin")
+    calls = []
+    monkeypatch.setattr(
+        ms, "_run_tool",
+        lambda cmd, **_: calls.append(cmd) or argparse.Namespace(returncode=0),
+    )
+    monkeypatch.setattr(ms.webbrowser, "open_new_tab", lambda url: pytest.fail(url))
+    ms.open_web_client(5180)
+    assert calls == [["open", "http://localhost:5180/login"]]
 
 
 def test_stale_matcher_covers_the_web_child():
@@ -575,3 +593,121 @@ def test_kill_tree_spares_the_given_subtree():
     finally:
         ms.kill_tree(psutil, spared_pid)
         ms.kill_tree(psutil, parent.pid)
+
+
+def _sim(name: str, udid: str, state: str = "Shutdown") -> dict:
+    return {"name": name, "udid": udid, "state": state,
+            "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-0"}
+
+
+def test_pick_simulator_reuses_a_booted_one_and_honors_a_request():
+    """A booted simulator is what the tester already looks at; a request pins
+    one by name or UDID; with nothing booted, iPhone 16 then any iPhone."""
+    sims = [_sim("iPhone 17", SIM_B, "Booted"), _sim("iPhone 16", SIM_A)]
+    assert ms.pick_simulator(sims, None)["udid"] == SIM_B
+    assert ms.pick_simulator(sims, "iPhone 16")["udid"] == SIM_A
+    assert ms.pick_simulator(sims, SIM_A)["name"] == "iPhone 16"
+    assert ms.pick_simulator(sims, "iPhone 99") is None
+
+    idle = [_sim("iPad Air", "C"), _sim("iPhone 17", SIM_B), _sim("iPhone 16", SIM_A)]
+    assert ms.pick_simulator(idle, None)["udid"] == SIM_A
+    assert ms.pick_simulator(idle[:2], None)["udid"] == SIM_B
+    assert ms.pick_simulator([], None) is None
+
+
+def test_runtime_version_orders_numerically():
+    ids = ["com.apple.CoreSimulator.SimRuntime.iOS-9-3",
+           "com.apple.CoreSimulator.SimRuntime.iOS-26-0",
+           "com.apple.CoreSimulator.SimRuntime.iOS-18-6"]
+    assert sorted(ids, key=ms._runtime_version, reverse=True)[0].endswith("iOS-26-0")
+
+
+def test_android_launch_command_survives_the_device_shell():
+    """adb hands the line to the device's sh: the default password's `>`
+    must stay inside a quoted word, not become a redirect."""
+    state = ms.default_state()
+    line = ms.android_launch_command(state)
+    words = shlex.split(line)
+    assert words[words.index(ms.ANDROID_DEV_LOGIN_PASSWORD_EXTRA) + 1] == "Qwe>1234"
+    assert words[words.index(ms.ANDROID_DEV_LOGIN_EMAIL_EXTRA) + 1] == ms.DEFAULT_EMAIL
+    assert words[words.index("-n") + 1] == "com.mobaide.app/.MainActivity"
+    assert {"-S", "--activity-clear-task"} <= set(words)
+
+
+def test_dev_login_keys_match_the_apps():
+    """The script and the two DEBUG readers must agree on the key names."""
+    root = Path(ms.__file__).resolve().parents[2]
+    kotlin = (root / "android/app/src/main/java/com/mobaide/app/ui/login/"
+              "DevLoginHandoff.kt").read_text(encoding="utf-8")
+    swift = (root / "ios/Mobaide/UI/Onboarding/LoginScreen.swift").read_text(encoding="utf-8")
+    assert f'"{ms.ANDROID_DEV_LOGIN_EMAIL_EXTRA}"' in kotlin
+    assert f'"{ms.ANDROID_DEV_LOGIN_PASSWORD_EXTRA}"' in kotlin
+    assert f'"{ms.IOS_DEV_LOGIN_EMAIL_ARG.lstrip("-")}"' in swift
+    assert f'"{ms.IOS_DEV_LOGIN_PASSWORD_ARG.lstrip("-")}"' in swift
+
+
+def test_children_import_this_checkouts_code(monkeypatch):
+    """The env's editable install usually points at the main checkout; the
+    children must still run the checkout the script lives in."""
+    monkeypatch.setenv("PYTHONPATH", "/somewhere/else")
+    parts = ms.base_child_env()["PYTHONPATH"].split(os.pathsep)
+    assert parts == [str(d) for d in ms.CHECKOUT_PYTHON_DIRS] + ["/somewhere/else"]
+    assert all((d / "pyproject.toml").exists() for d in ms.CHECKOUT_PYTHON_DIRS)
+
+
+def test_switching_checkouts_restores_the_previous_one(monkeypatch, tmp_path):
+    """The state dir is shared by main and every worktree: taking the Android
+    file over in checkout B must first restore checkout A's, and a revert run
+    from a third checkout must reach the checkout that wrote the file."""
+    a, b, c = tmp_path / "a", tmp_path / "b", tmp_path / "c"
+    state = ms.default_state()
+    _point_client_files_at(monkeypatch, a)
+    _seed_local_properties()
+    ms.sync_android_files(state, TEST_URL, lambda: None)
+    assert _central_url(ms.ANDROID_URL_FILE) == TEST_URL
+
+    _point_client_files_at(monkeypatch, b)
+    _seed_local_properties()
+    ms.sync_android_files(state, TEST_URL, lambda: None)
+    assert ms.same_checkout(state["android"]["checkout"], b)
+    assert "CENTRAL_SERVER_URL=" + PROD_URL in (
+        a / "android" / "local.properties").read_text(encoding="utf-8")
+    assert not (a / "android/app/src/debug").exists()
+
+    _point_client_files_at(monkeypatch, c)
+    c.mkdir()
+    ms.revert_android_files(state, lambda: None)
+    assert "CENTRAL_SERVER_URL=" + PROD_URL in (
+        b / "android" / "local.properties").read_text(encoding="utf-8")
+    assert ms.LOCAL_PROPERTIES_PATH == c / "android" / "local.properties"
+
+
+def test_revert_from_a_deleted_worktree_is_a_noop(monkeypatch, tmp_path):
+    state = ms.default_state()
+    _point_client_files_at(monkeypatch, tmp_path / "gone")
+    _seed_local_properties()
+    ms.sync_ios_files(state, LOOPBACK_URL, lambda: None)
+    import shutil
+    shutil.rmtree(tmp_path / "gone")
+    _point_client_files_at(monkeypatch, tmp_path / "here")
+    ms.revert_ios_files(state, lambda: None)
+    assert state["ios"]["managed_url"] is None
+    assert not (tmp_path / "gone").exists()
+
+
+def test_all_preset_turns_every_client_on():
+    args = ms.build_parser().parse_args(["up", "--all"])
+    ms.apply_all_preset(args)
+    assert args.install_app and args.web
+    assert args.emulator == ms.DEFAULT_AVD
+    assert args.android_url == "emulator"
+    assert args.simulator is None  # an open simulator is reused, not replaced
+
+    args = ms.build_parser().parse_args(
+        ["up", "--all", "--android-url", "reverse", "--emulator", "Pixel_9"])
+    ms.apply_all_preset(args)
+    assert (args.android_url, args.emulator) == ("reverse", "Pixel_9")
+
+    args = ms.build_parser().parse_args(["up"])
+    ms.apply_all_preset(args)
+    assert not args.install_app and not args.web and args.emulator is None

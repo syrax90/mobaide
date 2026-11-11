@@ -2,7 +2,7 @@
 
 `tests/e2e/manual_stack.py` boots the **real** central_server + **real** mobaide agent on your PC and wires the **real Android app** — and, on macOS, the **real iOS app** on the simulator — to them. A human tester can then exercise the full mobile ↔ server ↔ agent path hands-on: registration, login, agent list, SHELL terminals and managed claude/codex/antigravity sessions.
 
-With `up --web` it also serves the **web client** (`web/`) on `http://localhost:5173`, proxied to the same stack, and opens it in a browser tab with the throwaway account filled into the login form.
+With `up --web` it also serves the **web client** (`web/`) on `http://localhost:5173`, proxied to the same stack, and opens it in a browser tab that signs in with the throwaway account by itself.
 
 It is the manual-testing counterpart of the automated pytest harness in [e2e-harness.md](e2e-harness.md) and reuses its recipe outside pytest.
 
@@ -20,43 +20,43 @@ One command, cross-platform (Windows / macOS / Linux), repeatable, and safe: **n
 
 ## Quickstart
 
-```
-# 1. activate a Python 3.12+ env (example)          conda activate mobaide-e2e-tests
-# 2. from the repo root:
-python tests/e2e/manual_stack.py up
-```
-
-On the first run the script pip-installs `mobaide_agent[dev]` and
-`central_server[dev]` editable into the active interpreter if they are missing.
-When the READY banner appears:
+The whole loop is one command, from any directory, in the main checkout or any worktree:
 
 ```
-# 3a. Android: build + install the DEBUG app on a connected device
-cd android
-.\gradlew.bat :app:installDebug        # Windows
-./gradlew :app:installDebug            # macOS / Linux
-
-# 3b. iOS (macOS): boot a simulator, then let the script build + install
-xcrun simctl boot 'iPhone 16'
-python tests/e2e/manual_stack.py ios --install-app
-
-# 3c. web (optional): start with `up --web` instead -- a browser tab opens on
-#     http://localhost:5173/login with the banner credentials pre-filled;
-#     press Sign In yourself (--no-browser opts out of the tab)
-#     (the first --web run auto-installs web/node_modules via `npm ci`)
+# activate a Python 3.12+ env first (example: conda activate mobaide-e2e-tests)
+python <checkout>/tests/e2e/manual_stack.py up --all
 ```
 
-On Windows (no iOS) or any machine with the Android SDK, the whole Android +
-web loop is one command — the script boots the emulator, builds, installs and
-launches the app, and serves the web client:
+`--all` = `--install-app --web --emulator --android-url emulator`, plus the iOS simulator on macOS. When the stack is READY:
+
+- **Android:** the emulator `Mobaide-E2E` is booted (visible), and the debug app is installed, launched and signed in.
+- **iOS (macOS):** a simulator is booted and shown in Simulator.app, and the debug app is installed, launched and signed in. An already booted simulator is reused; `--simulator NAME_OR_UDID` picks one.
+- **Web:** a browser tab opens on `http://localhost:5173/login` and signs in (`--no-browser` skips the tab). The first run installs `web/node_modules` with `npm ci`.
+
+Stop it with `Ctrl+C`, or from any other shell (the only graceful stop on Windows):
 
 ```
-python tests/e2e/manual_stack.py up --host 127.0.0.1 --android-url emulator --emulator --install-app --web
-# later, from any other shell (the only graceful stop on Windows):
-python tests/e2e/manual_stack.py stop
+python <checkout>/tests/e2e/manual_stack.py stop
 ```
 
-Then open the app on the phone or simulator, **register or log in** with the credentials from the banner (email `dev@test.local`, password `Qwe>1234` — both fixed, easy dev-testing defaults; override with `--email`/`--password`), pick the `manual-e2e-agent`, and start testing.
+The pieces also work one by one: plain `up` boots only server + agent; `android --install-app` and `ios --install-app` (re)build and (re)install one app against a running stack. `--install-app` boots the default emulator when no Android device is attached, and a simulator when none is booted.
+
+On the first run the script pip-installs `mobaide_agent[dev]` and `central_server[dev]` editable into the active interpreter if they are missing.
+
+### Main checkout and worktrees
+
+All checkouts share one state dir, so one stack runs at a time:
+
+- The server and agent always run **the code of the checkout that holds the script**. The script puts that checkout's `central_server/` and `mobaide_agent/` ahead of the env's editable install (which usually points at the main checkout). The first log line names the checkout, and a WARNING appears if Python would still import another copy.
+- `up` from checkout B while a stack from checkout A runs stops A's stack first (A's client files are restored), then starts B's.
+- `stop`, `clean` and `android/ios --revert` restore the client files in the checkout that wrote them, even when run from another checkout. A worktree that was deleted in between is skipped.
+- A fresh worktree has no gitignored `google-services.json` / `GoogleService-Info.plist` / Google client ids. Debug builds work without them; only Google Sign-In and Firebase Analytics stay off.
+
+### Automatic sign-in
+
+The apps that the script launches sign in by themselves with the banner account. They receive it at launch: iOS as the `-MobaideDevLoginEmail`/`-MobaideDevLoginPassword` launch arguments, Android as two `am start` extras (`DevLoginHandoff`). Only **debug** builds read them (`#if DEBUG`, `BuildConfig.DEBUG`), and only once per app process, so a manual sign-out stays signed out. An app that is already signed in ignores them.
+
+On a real phone, or for an app you launched yourself, **log in** with the credentials from the banner (email `dev@test.local`, password `Qwe>1234` — both fixed, easy dev-testing defaults; override with `--email`/`--password`), pick the `manual-e2e-agent`, and start testing.
 
 `Ctrl+C` stops the stack and **restores `android/local.properties` and `ios/Config/Local.xcconfig`** to their previous `CENTRAL_SERVER_URL` (e.g. `https://mobaide.com`), so the checkout is left as it was found.
 
@@ -75,12 +75,14 @@ State persists, so the next `up` reuses the same account, agent, and database �
 6. Syncs the **gitignored** client overrides (next section) and prints the READY banner, then streams `[server]` / `[agent]` logs until `Ctrl+C` (logs are also written under the state dir).
    - iOS is synced only on macOS, where the app can actually be built; `--ios` forces it elsewhere.
 7. With `--web`, boots `npm run dev` in `web/` on port 5173 (`--web-port` to change) with the Vite proxy pointed at the actual `--host`/`--port` via `MOBAIDE_WEB_PROXY_TARGET`, auto-running `npm ci` first when `web/node_modules` is missing or older than the lockfile.
-   - Once the stack is READY it opens `http://localhost:5173/login` in a new browser tab (`--no-browser` to skip, e.g. over SSH) with the account pre-filled. Nothing is submitted; you press Sign In.
+   - Once the stack is READY it opens `http://localhost:5173/login` in a new browser tab (`--no-browser` to skip, e.g. over SSH; on macOS through `open`, which also brings the browser to the front). The form is pre-filled and submits itself once per page load, so a later sign-out stays signed out.
    - The credentials travel to the login form's `defaultValues` as `MOBAIDE_WEB_DEV_LOGIN_EMAIL`/`_PASSWORD`, which `web/vite.config.ts` injects **only** under `vite dev` -- `vite build` always bakes `null`, so no production bundle can carry them.
    - The web child is supervised, logged (`[web]`, `<state>/logs/web.log`), stopped and crash-reaped like server and agent. It writes nothing to the checkout except the gitignored `web/node_modules` (kept across runs).
 8. With `--emulator [AVD]` (default AVD `Mobaide-E2E`), reuses that AVD if it is already running, otherwise boots it (detached, log in `<state>/logs/emulator.log`).
    - A missing AVD is created once with `avdmanager` from the best installed phone system image for the host CPU, on the `pixel_7` profile with the host keyboard enabled.
-   - With `--install-app` the APK is assembled *while* the emulator boots, installed with `ANDROID_SERIAL` pinned to it, and launched once the stack is READY.
+   - With `--install-app` the APK is assembled *while* the emulator boots, installed with `ANDROID_SERIAL` pinned to it, and launched (signed in) once the stack is READY.
+   - `--install-app` with no `--emulator` and no attached device uses `Mobaide-E2E` too.
+   - On macOS, `--simulator [NAME_OR_UDID]` (or `--install-app` alone) picks a simulator: the requested one, else a booted one, else `iPhone 16`, else the newest iPhone. It boots it, opens Simulator.app on it, and the app is installed before the server boots and launched (signed in) once the stack is READY. The simulator is left running on stop.
    - The SDK is found via `ANDROID_HOME` / `ANDROID_SDK_ROOT`, else Android Studio's per-OS default location.
 9. On stop, restores both `CENTRAL_SERVER_URL` values to what they were, removes the generated Android debug override (skip with `--keep-android` / `--keep-ios`), and shuts down an emulator it booted with `adb emu kill`.
    - `adb emu kill` saves the quick-boot snapshot, so the next boot takes seconds. `--keep-emulator` leaves it running; an emulator it only reused is never touched.
@@ -183,14 +185,15 @@ The failure is asymmetric and confusing, which is why the script warns loudly ab
 
 | Command | Effect |
 |---|---|
+| `up --all` | everything: emulator + simulator booted and visible, both apps installed, launched and signed in, web client open and signed in |
 | `up` | boot; reuses persisted account/agent/DB (phone stays logged in) |
 | `up --fresh` | wipe state first: new secret, account, agent, empty DB |
 | `up --fake-pty [--smoke]` | echo-backend infra check (no shells/CLIs needed) |
 | `up --fake-voice` | voice input against a tiny generated model with deterministic `fake transcript <n> ms` results (`MOBAIDE_VOICE_FAKE=1`), so the enable → dictate flows need no 670 MB download |
 | `up --install-app` | build + install the app for every client that was synced |
 | `android --install-app` | also run `gradlew :app:installDebug` |
-| `ios --install-app` | also run `xcodebuild` + `xcrun simctl install`/`launch` against the **booted** simulator (uninstalling first when the URL changed) |
-| `up --web` | also serve the web client at `http://localhost:5173`, proxied to this stack, and open it with the login pre-filled (`--web-port <n>` changes the port, `--no-browser` skips the tab) |
+| `ios --install-app [--simulator NAME_OR_UDID]` | also run `xcodebuild` + `xcrun simctl install`, then launch the app signed in; boots and shows a simulator when needed (uninstalling first when the URL changed) |
+| `up --web` | also serve the web client at `http://localhost:5173`, proxied to this stack, and open it signed in (`--web-port <n>` changes the port, `--no-browser` skips the tab) |
 | `up --emulator [AVD]` | boot (or reuse) an Android emulator, default AVD `Mobaide-E2E`, created once if missing; shut down on stop when this run booted it (`--keep-emulator` leaves it running) |
 | `android --emulator --install-app` | boot/reuse the emulator, install the debug app on it and launch it (the emulator stays up; this command has no teardown) |
 | `stop` | gracefully stop the running `up` from another shell (any OS; the only graceful stop on Windows); reaps a hard-killed run's leftovers |

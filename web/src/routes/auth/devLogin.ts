@@ -7,7 +7,9 @@ const EMPTY: LoginDefaults = { email: '', password: '' };
 
 /**
  * Manual-stack convenience: `tests/e2e/manual_stack.py up --web` pre-fills the
- * login form with its throwaway account so a tester only has to press Sign In.
+ * login form with its throwaway account, and the form submits it once per
+ * page load (see takeDevAutoLogin) -- the iOS and Android debug builds sign
+ * in the same way.
  *
  * The fill has to happen here rather than from outside the page: the form is
  * react-hook-form with uncontrolled inputs, so an assigned `input.value` would
@@ -20,4 +22,18 @@ const EMPTY: LoginDefaults = { email: '', password: '' };
 export function devLoginDefaults(): LoginDefaults {
   if (!import.meta.env.DEV || __MOBAIDE_DEV_LOGIN__ === null) return EMPTY;
   return __MOBAIDE_DEV_LOGIN__;
+}
+
+let autoLoginTaken = false;
+
+/**
+ * True exactly once per page load when dev credentials are present, so the
+ * login screen signs in by itself on arrival but a later sign-out (a
+ * client-side navigation back to /login) stays signed out. Module state also
+ * absorbs React StrictMode's double-run of mount effects.
+ */
+export function takeDevAutoLogin(): boolean {
+  if (autoLoginTaken || devLoginDefaults().email === '') return false;
+  autoLoginTaken = true;
+  return true;
 }

@@ -33,6 +33,7 @@ import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.VersionGateRepository
 import com.mobaide.app.data.review.ReviewPromptCoordinator
 import com.mobaide.app.notifications.SessionEventService
+import com.mobaide.app.ui.login.DevLoginHandoff
 import com.mobaide.app.ui.navigation.AppNavigation
 import com.mobaide.app.ui.review.InAppReviewManager
 import com.mobaide.app.ui.theme.MobaideTheme
@@ -111,6 +112,7 @@ class MainActivity : ComponentActivity() {
         }
         maybeRequestNotificationPermission()
         consumeSessionExtra(intent)
+        DevLoginHandoff.offer(intent)
 
         // Start the notification foreground service only while this activity is
         // at least STARTED (foreground), so the start is never a background FGS
@@ -222,6 +224,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         consumeSessionExtra(intent)
+        DevLoginHandoff.offer(intent)
     }
 
     override fun onResume() {
