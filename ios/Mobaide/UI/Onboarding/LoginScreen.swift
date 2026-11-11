@@ -166,6 +166,11 @@ private struct LoginContent: View {
         .task {
             await model.observeSessionEvents()
         }
+        #if DEBUG
+        .task {
+            await model.signInWithDevLoginIfRequested()
+        }
+        #endif
     }
 
     private var orDivider: some View {
@@ -254,6 +259,26 @@ final class LoginModel {
             emitError("Login failed: \(String(describing: error))")
         }
     }
+
+    #if DEBUG
+    static let devLoginEmailKey = "MobaideDevLoginEmail"
+    static let devLoginPasswordKey = "MobaideDevLoginPassword"
+
+    /// Debug builds only: `tests/e2e/manual_stack.py` launches the app with
+    /// `-MobaideDevLoginEmail <email> -MobaideDevLoginPassword <password>`
+    /// (UserDefaults' volatile argument domain) to sign in to its throwaway
+    /// stack. Once per process, and never after a manual sign-out
+    /// (`DevLoginAllowance`).
+    func signInWithDevLoginIfRequested(defaults: UserDefaults = .standard) async {
+        guard let email = defaults.string(forKey: Self.devLoginEmailKey), !email.isEmpty,
+              let password = defaults.string(forKey: Self.devLoginPasswordKey), !password.isEmpty,
+              DevLoginAllowance.take()
+        else { return }
+        self.email = email
+        self.password = password
+        await loginWithPassword()
+    }
+    #endif
 
     func signInWithGoogle() async {
         guard !isLoading else { return }

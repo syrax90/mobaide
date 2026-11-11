@@ -17,7 +17,7 @@ import { GoogleSignInButton } from '../../components/auth/GoogleSignInButton';
 import { PasswordField } from '../../components/form/PasswordField';
 import { TextField } from '../../components/form/TextField';
 import { loginMessage } from './authCopy';
-import { devLoginDefaults } from './devLogin';
+import { devLoginDefaults, takeDevAutoLogin } from './devLogin';
 import { useAfterAuth } from './useAfterAuth';
 
 interface LoginForm {
@@ -90,6 +90,11 @@ export function Login() {
       setBusy(false);
     }
   });
+
+  useEffect(() => {
+    if (takeDevAutoLogin()) void onSubmit();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per mount
+  }, []);
 
   return (
     <div className="auth-card">
