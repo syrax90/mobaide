@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from mobaide.agent._env_writer import atomic_write
-from mobaide.core.codex_auth import codex_login_with_api_key
+from mobaide.core.codex_auth import codex_login_with_api_key, sanitize_codex_output
 from mobaide.core.claude_launcher import CLAUDE_SESSION_PRESET_ENV
 from mobaide.core.cli_launcher import (
     WINDOWS_NO_WINDOW,
@@ -82,6 +82,7 @@ AGY_PROBE_TIMEOUT = 10.0
 # fake login removes it.
 FAKE_SIGNED_OUT_ENV = "MOBAIDE_FAKE_ACP_SIGNED_OUT"
 CODEX_USER_CODE_PATTERN = r"\b[A-Z0-9]{4}-[A-Z0-9]{4,6}\b"
+CODEX_BRIDGE_SCRIPT = os.path.abspath(codex_bridge.__file__)
 
 
 class ChatAgentUnavailableError(RuntimeError):
@@ -243,18 +244,49 @@ def claude_sign_in_methods(
     return methods
 
 
+async def _codex_key_login(
+    api_key: str, *, codex_bin: str, env: Mapping[str, str]
+) -> tuple[bool, str]:
+    """An API key login through the shared app-server while it runs, else
+    ``codex login --with-api-key``."""
+    result = await codex_bridge.login_with_api_key(codex_bridge.control_socket(env), api_key)
+    if result is not None:
+        ok, detail = result
+        if ok:
+            return True, ""
+        return False, sanitize_codex_output(detail, api_key) or "Codex did not accept the API key."
+    return await codex_login_with_api_key(api_key, codex_bin=codex_bin, env=env)
+
+
 def codex_sign_in_methods(
-    codex_bin: str | None, env: Mapping[str, str], *, fake: bool = False
+    codex_bin: str | None,
+    env: Mapping[str, str],
+    *,
+    fake: bool = False,
+    shared_app_server: bool = False,
 ) -> list[SignInMethod]:
     """ChatGPT through ``codex login --device-auth`` (a one-time code to
     enter on the sign-in page), or an API key through ``codex login
-    --with-api-key``."""
+    --with-api-key``.
+
+    With ``shared_app_server`` (Codex's shared app-server can run on this
+    PC), both go through that app-server while it runs: it never reads a
+    login that ``codex login`` saves next to it (see :mod:`.codex_bridge`)."""
     if codex_bin is None and not fake:
         return []
     login_env = dict(env)
     if fake:
         device_argv = [*fake_login_argv("codex"), "--device"]
         submit_key = _fake_key_login
+    elif shared_app_server:
+        device_argv = [
+            sys.executable,
+            "-I",
+            CODEX_BRIDGE_SCRIPT,
+            codex_bin or "",
+            *codex_bridge.DEVICE_LOGIN_ARGS,
+        ]
+        submit_key = functools.partial(_codex_key_login, codex_bin=codex_bin or "", env=login_env)
     else:
         device_argv = shim_safe_argv(codex_bin or "", "login", "--device-auth")
         submit_key = functools.partial(
@@ -624,7 +656,9 @@ class CodexChatSpec(_AdapterSpec):
             trust=None if fake else CodexFolderTrust(spec.cwd, config_path=codex_config_path(env)),
             ensure_argv=ensure,
             shared_host=shared and not fake,
-            sign_in=codex_sign_in_methods(codex_bin, spec.env, fake=fake),
+            sign_in=codex_sign_in_methods(
+                codex_bin, spec.env, fake=fake, shared_app_server=self.live_sessions
+            ),
         )
 
     def _shared_codex_path(
@@ -649,13 +683,12 @@ class CodexChatSpec(_AdapterSpec):
         """A ``CODEX_PATH`` that runs the bridge for ``app-server`` and the
         real ``codex`` for anything else."""
         assert self._adapters_dir is not None
-        bridge = os.path.join(os.path.dirname(os.path.abspath(__file__)), "codex_bridge.py")
         script = (
             "#!/bin/sh\n"
             "# Written by Mobaide: lets the Codex ACP adapter join the app-server\n"
             "# that Codex already runs on this PC (see mobaide/acp/codex_bridge.py).\n"
             'if [ "$#" -eq 1 ] && [ "$1" = "app-server" ]; then\n'
-            f"  exec {shlex.quote(sys.executable)} -I {shlex.quote(bridge)} {shlex.quote(codex_bin)}\n"
+            f"  exec {shlex.quote(sys.executable)} -I {shlex.quote(CODEX_BRIDGE_SCRIPT)} {shlex.quote(codex_bin)}\n"
             "fi\n"
             f'exec {shlex.quote(codex_bin)} "$@"\n'
         )

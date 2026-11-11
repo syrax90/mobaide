@@ -172,3 +172,122 @@ class TestRelay:
             await asyncio.wait_for(proc.wait(), 20)
 
         assert proc.returncode is not None
+
+
+def _app_server(*, start: dict | None = None, error: str | None = None, success: bool = True):
+    """A shared app-server that answers ``account/login/start`` and then
+    completes the login; ``seen`` collects the requests it got."""
+    seen: list[dict] = []
+
+    async def handler(ws) -> None:
+        login_id = (start or {}).get("loginId")
+        async for message in ws:
+            frame = json.loads(message)
+            seen.append(frame)
+            if frame.get("method") == "initialize":
+                await ws.send(json.dumps({"id": frame["id"], "result": {}}))
+            elif frame.get("method") == "account/login/start":
+                if error is not None:
+                    await ws.send(json.dumps({"id": frame["id"], "error": {"code": -32600, "message": error}}))
+                    continue
+                # Another client's login completes first; it is not this one.
+                await ws.send(json.dumps({
+                    "method": "account/login/completed",
+                    "params": {"loginId": "someone-else", "success": False, "error": "x"},
+                }))
+                await ws.send(json.dumps({"id": frame["id"], "result": start or {"type": "apiKey"}}))
+                await ws.send(json.dumps({
+                    "method": "account/login/completed",
+                    "params": {
+                        "loginId": login_id,
+                        "success": success,
+                        "error": None if success else "Login was not completed",
+                    },
+                }))
+
+    return handler, seen
+
+
+async def _device_login(codex_home: Path) -> asyncio.subprocess.Process:
+    return await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-I",
+        BRIDGE,
+        str(codex_home / "no-codex"),
+        *codex_bridge.DEVICE_LOGIN_ARGS,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env={**os.environ, "CODEX_HOME": str(codex_home)},
+    )
+
+
+DEVICE_START = {
+    "type": "chatgptDeviceCode",
+    "loginId": "login-1",
+    "verificationUrl": "https://auth.openai.com/codex/device",
+    "userCode": "ABCD-12345",
+}
+
+
+@skip_if_not_linux
+class TestDeviceLogin:
+    async def test_signs_in_through_the_shared_app_server(self, codex_home):
+        """The shared app-server keeps the login it read at start, so a
+        ``codex login`` next to it would leave every chat signed out."""
+        handler, seen = _app_server(start=DEVICE_START)
+
+        async with unix_serve(handler, _socket_path(codex_home)):
+            proc = await _device_login(codex_home)
+            out, err = await asyncio.wait_for(proc.communicate(), 20)
+
+        assert proc.returncode == 0, err
+        text = out.decode()
+        assert "https://auth.openai.com/codex/device\n" in text
+        assert "ABCD-12345" in text
+        start = next(f for f in seen if f.get("method") == "account/login/start")
+        assert start["params"] == {"type": "chatgptDeviceCode"}
+
+    async def test_a_login_that_does_not_complete_fails(self, codex_home):
+        handler, _seen = _app_server(start=DEVICE_START, success=False)
+
+        async with unix_serve(handler, _socket_path(codex_home)):
+            proc = await _device_login(codex_home)
+            _out, err = await asyncio.wait_for(proc.communicate(), 20)
+
+        assert proc.returncode == 1
+        assert "Login was not completed" in err.decode()
+
+    def test_no_shared_app_server_runs_codex_login(self, tmp_path, monkeypatch):
+        calls: list[tuple[str, list[str]]] = []
+        monkeypatch.setattr(codex_bridge.os, "execv", lambda path, argv: calls.append((path, argv)))
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+
+        codex_bridge.main(["codex_bridge.py", "/opt/codex/bin/codex", "login", "--device-auth"])
+
+        assert calls == [
+            ("/opt/codex/bin/codex", ["/opt/codex/bin/codex", "login", "--device-auth"])
+        ]
+
+
+@skip_if_not_linux
+class TestApiKeyLogin:
+    async def test_saves_the_key_through_the_shared_app_server(self, codex_home):
+        handler, seen = _app_server()
+
+        async with unix_serve(handler, _socket_path(codex_home)):
+            result = await codex_bridge.login_with_api_key(_socket_path(codex_home), "sk-test")
+
+        assert result == (True, "")
+        start = next(f for f in seen if f.get("method") == "account/login/start")
+        assert start["params"] == {"type": "apiKey", "apiKey": "sk-test"}
+
+    async def test_a_refused_key_fails_with_the_reason(self, codex_home):
+        handler, _seen = _app_server(error="Invalid API key")
+
+        async with unix_serve(handler, _socket_path(codex_home)):
+            result = await codex_bridge.login_with_api_key(_socket_path(codex_home), "sk-test")
+
+        assert result == (False, "Invalid API key")
+
+    async def test_no_shared_app_server_is_none(self, codex_home):
+        assert await codex_bridge.login_with_api_key(_socket_path(codex_home), "sk-test") is None

@@ -585,7 +585,19 @@ class TestCodexPrepare:
 
         assert launcher.require_auth == [False]
         assert [m.id for m in plan.sign_in] == ["chatgpt", "api_key"]
-        assert plan.sign_in[0].argv == ["/opt/codex/bin/codex", "login", "--device-auth"]
+        if sys.platform == "win32":
+            assert plan.sign_in[0].argv == ["/opt/codex/bin/codex", "login", "--device-auth"]
+        else:
+            # Through the shared app-server while it runs: it never reads a
+            # login that ``codex login`` saves next to it.
+            assert plan.sign_in[0].argv == [
+                sys.executable,
+                "-I",
+                agents.CODEX_BRIDGE_SCRIPT,
+                "/opt/codex/bin/codex",
+                "login",
+                "--device-auth",
+            ]
 
     async def test_missing_codex_binary_leaves_the_adapter_default(self, bin_dir, tmp_path, monkeypatch):
         _socket_answers(monkeypatch)

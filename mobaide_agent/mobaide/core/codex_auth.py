@@ -130,7 +130,7 @@ def _status_probe_unsupported(completed: subprocess.CompletedProcess) -> bool:
     return completed.returncode == 2 or bool(_STATUS_UNSUPPORTED_RE.search(stderr))
 
 
-def _sanitize(text: str, api_key: str) -> str:
+def sanitize_codex_output(text: str, api_key: str) -> str:
     """Strip the submitted key + ``sk-`` shapes from captured output; truncate."""
     cleaned = text.strip()
     if api_key:
@@ -177,5 +177,5 @@ async def codex_login_with_api_key(
         return True, ""
     stderr = completed.stderr.decode(errors="replace") if completed.stderr else ""
     stdout = completed.stdout.decode(errors="replace") if completed.stdout else ""
-    detail = _sanitize(stderr, api_key) or _sanitize(stdout, api_key)
+    detail = sanitize_codex_output(stderr, api_key) or sanitize_codex_output(stdout, api_key)
     return False, detail or f"codex login exited with code {completed.returncode}."
