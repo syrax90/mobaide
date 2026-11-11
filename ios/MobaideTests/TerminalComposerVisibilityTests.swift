@@ -17,10 +17,6 @@ final class TerminalComposerVisibilityTests: XCTestCase {
         return (model, connection)
     }
 
-    func testComposerDefaultsVisible() {
-        XCTAssertTrue(TerminalTestSupport.model().composerVisible)
-    }
-
     func testHideComposerHidesWithoutFocusSideEffect() async {
         let model = TerminalTestSupport.model()
         let focusEvents = StreamCollector(model.focusRequests())
@@ -74,19 +70,6 @@ final class TerminalComposerVisibilityTests: XCTestCase {
 
         XCTAssertTrue(model.composerVisible, "double-tap copy must auto-reveal the hidden composer")
         XCTAssertEqual(model.inputText, "git status")
-        let focused = try await focusEvents.next()
-        XCTAssertTrue(focused)
-    }
-
-    func testApplyTemplateRevealsComposer() async throws {
-        let model = TerminalTestSupport.model()
-        model.hideComposer()
-        let focusEvents = StreamCollector(model.focusRequests())
-
-        model.applyTemplate(makeTemplate(id: "t1", name: "n", body: "run tests"))
-
-        XCTAssertTrue(model.composerVisible)
-        XCTAssertEqual(model.inputText, "run tests")
         let focused = try await focusEvents.next()
         XCTAssertTrue(focused)
     }

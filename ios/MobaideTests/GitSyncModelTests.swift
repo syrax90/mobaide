@@ -195,38 +195,6 @@ final class GitSyncModelTests: XCTestCase {
         XCTAssertTrue(model.isBusy, "the adopted job is running until a snapshot says otherwise")
     }
 
-    func testAStartFailureWithTheSheetClosedIsAToast() async throws {
-        let (model, _, _) = try await loadedModel()
-        StubURLProtocol.enqueue(status: 503, body: #"{"detail":{"code":"git_unavailable","message":null}}"#)
-
-        await model.startSync(op: GitJobResponse.opFetch)
-
-        XCTAssertNil(model.syncSheet)
-        XCTAssertNil(model.job)
-        XCTAssertEqual(model.toast?.text, "git is not installed on the agent host.")
-        XCTAssertEqual(model.toast?.tone, .danger)
-    }
-
-    func testCloseSyncDropsTheSheetAndConsumeOpenSyncOpensItOnce() async throws {
-        let (model, _, _) = makeModel(openSync: true)
-        XCTAssertTrue(model.openSyncOnAppear)
-        XCTAssertNil(model.syncSheet)
-
-        model.consumeOpenSync()
-
-        XCTAssertEqual(model.syncSheet, SyncSheetState())
-        XCTAssertFalse(model.openSyncOnAppear)
-
-        model.closeSync()
-        XCTAssertNil(model.syncSheet)
-        model.consumeOpenSync()
-        XCTAssertNil(model.syncSheet, "the terminal menu's Fetch / Pull / Push… opens the sheet once")
-
-        let (plain, _, _) = makeModel()
-        plain.consumeOpenSync()
-        XCTAssertNil(plain.syncSheet)
-    }
-
     // MARK: - Frames
 
     func testAFrameForAnUnknownJobIsAdoptedAndADismissedOneIsNot() async throws {

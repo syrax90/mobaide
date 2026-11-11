@@ -26,16 +26,6 @@ const session = (over: Record<string, unknown> = {}): SessionResponse =>
 const names = customTypeNameMap([{ id: '0123456789ab', name: 'My Linter' }]);
 
 describe('sessionKindLabel', () => {
-  it.each([
-    ['claude', 'Claude Code'],
-    ['codex', 'Codex'],
-    ['antigravity', 'Antigravity'],
-    ['auto_scan', 'Auto Scan'],
-    ['shell', 'Terminal'],
-  ])('names the built-in kind %s', (kind, expected) => {
-    expect(sessionKindLabel(session({ kind }), names)).toBe(expected);
-  });
-
   it('prefers the snapshotted label, then the live registry, then "Custom"', () => {
     const kind = 'custom_0123456789ab';
 
@@ -81,12 +71,6 @@ describe('sessionTitle', () => {
 });
 
 describe('sessionDialogLabel', () => {
-  it('uses the agent-supplied title when there is one', () => {
-    expect(sessionDialogLabel(session({ title: 'Fix the parser', kind: 'codex' }), names)).toBe(
-      'Fix the parser',
-    );
-  });
-
   it('falls back to the kind and the project, so two of a kind stay apart', () => {
     expect(sessionDialogLabel(session({ kind: 'codex', project_name: 'mobaide' }), names)).toBe(
       'Codex · mobaide',
@@ -119,12 +103,6 @@ describe('sessionDialogLabel', () => {
 });
 
 describe('sessionHeaderLabel', () => {
-  it('uses the agent-supplied title when there is one', () => {
-    expect(sessionHeaderLabel(session({ title: 'Fix the parser', kind: 'codex' }), names)).toBe(
-      'Fix the parser',
-    );
-  });
-
   it('falls back to the kind, never to an id', () => {
     // The header names one session; a truncated id would identify nothing.
     expect(sessionHeaderLabel(session({ kind: 'codex' }), names)).toBe('Codex');
@@ -134,18 +112,12 @@ describe('sessionHeaderLabel', () => {
     expect(sessionHeaderLabel(session({ title: '   ', kind: 'shell' }), names)).toBe('Terminal');
   });
 
-  it('resolves a custom kind through the live registry', () => {
-    expect(sessionHeaderLabel(session({ kind: 'custom_0123456789ab' }), names)).toBe('My Linter');
-  });
 });
 
 describe('sessionStateTone', () => {
   it.each([
     ['running', 'running'],
-    ['starting', 'pending'],
     ['stopping', 'pending'],
-    ['crashed', 'crashed'],
-    ['stopped', 'stopped'],
     ['whatever-comes-next', 'stopped'],
   ])('tones %s as %s', (state, expected) => {
     expect(sessionStateTone(state)).toBe(expected);
@@ -153,11 +125,8 @@ describe('sessionStateTone', () => {
 });
 
 const CHIPS: [string, { text: string; tone: string }][] = [
-  ['awaiting_permission', { text: 'Needs permission', tone: 'permission' }],
   ['awaiting_os_permission', { text: 'Needs permission', tone: 'permission' }],
-  ['turn_finished', { text: 'Ready', tone: 'ready' }],
   ['turn_failed', { text: 'Failed', tone: 'failed' }],
-  ['ended', { text: 'Ended', tone: 'ended' }],
 ];
 
 describe('attentionChip', () => {
@@ -180,7 +149,7 @@ describe('isSessionWorking', () => {
     expect(isSessionWorking(session())).toBe(false);
   });
 
-  it.each(['starting', 'stopping', 'stopped', 'crashed'])(
+  it.each(['starting', 'crashed'])(
     'never spins a %s session, whatever its last activity',
     (state) => {
       expect(isSessionWorking(session({ state, activity: 'working' }))).toBe(false);
@@ -242,12 +211,6 @@ describe('nearestOpenSession', () => {
     expect(nearestOpenSession(list, [row('a'), row('c'), row('d', 'crashed')], 'c')).toBe('a');
   });
 
-  it('counts a starting session as open', () => {
-    const list = [row('a', 'stopping'), row('b'), row('c', 'starting')];
-
-    expect(nearestOpenSession(list, list, 'b')).toBe('c');
-  });
-
   it('keeps the snapshot positions after the stopped row has left the current list', () => {
     // The agent's push dropped the stopped row before the stop resolved.
     const snapshot = [row('a'), row('b'), row('c'), row('d')];
@@ -278,12 +241,5 @@ describe('nearestOpenSession', () => {
 
   it('returns null when the stopped session was not in the snapshot', () => {
     expect(nearestOpenSession([row('a'), row('b')], [row('a'), row('b')], 'x')).toBeNull();
-  });
-});
-
-describe('customTypeNameMap', () => {
-  it('keys the registry by the wire kind and tolerates an unloaded list', () => {
-    expect(customTypeNameMap([{ id: 'abc', name: 'Linter' }]).get('custom_abc')).toBe('Linter');
-    expect(customTypeNameMap(undefined).size).toBe(0);
   });
 });

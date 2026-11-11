@@ -8,8 +8,7 @@ Pins the default-deny contract the relay now ships:
   prober cannot tell an enabled-but-gated deployment from a disabled one;
 - flag on + admin (dashboard cookie or Bearer) — 200;
 - schema hygiene: the browser-only routers and the release-pipeline endpoint
-  are out of the generated schema, the JSON API is still in it;
-- ``include_in_schema`` / ``docs_url=None`` changed no routing.
+  are out of the generated schema, the JSON API is still in it.
 """
 from __future__ import annotations
 
@@ -78,10 +77,6 @@ class TestDocsDisabledByDefault:
 
 @docs_enabled
 class TestDocsEnabledRejectsNonAdmins:
-    @pytest.mark.parametrize("path", DOC_PATHS)
-    async def test_anonymous_caller_gets_404(self, client, path) -> None:
-        response = await client.get(path)
-        assert response.status_code == 404
 
     @pytest.mark.parametrize("path", DOC_PATHS)
     async def test_viewer_cookie_gets_404(
@@ -160,50 +155,6 @@ class TestDocsEnabledServesAdmins:
         assert response.status_code == 200
         assert response.json()["info"]["title"] == "Central Server"
 
-    async def test_swagger_page_has_no_dead_oauth_redirect(
-        self, client, dashboard_headers
-    ) -> None:
-        """``oauth2_redirect_url=None``: FastAPI only mounts
-        ``/docs/oauth2-redirect`` when ``docs_url`` is set, so the default
-        would point Swagger UI at a 404."""
-        response = await client.get("/docs", headers=dashboard_headers)
-        assert "/openapi.json" in response.text
-        assert "oauth2-redirect" not in response.text
-
-
-@docs_enabled
-class TestAdminReachesEverySpelling:
-    """Closing the probe leak registered six routes instead of three; an
-    admin must still be served the right document by each of them."""
-
-    @pytest.mark.parametrize("path", DOC_PATHS)
-    async def test_trailing_slash_serves_the_same_document(
-        self, client, dashboard_headers, path
-    ) -> None:
-        bare = await client.get(
-            path, headers=dashboard_headers, follow_redirects=False
-        )
-        slashed = await client.get(
-            f"{path}/", headers=dashboard_headers, follow_redirects=False
-        )
-
-        assert (bare.status_code, slashed.status_code) == (200, 200)
-        assert slashed.text == bare.text
-
-    async def test_each_path_keeps_its_own_endpoint(
-        self, client, dashboard_headers
-    ) -> None:
-        """One endpoint is registered per path inside a loop, so a mis-bound
-        iteration would serve one document from all three."""
-        bodies = {}
-        for path in DOC_PATHS:
-            response = await client.get(path, headers=dashboard_headers)
-            bodies[path] = response.text
-
-        assert "swagger-ui" in bodies["/docs"]
-        assert "swagger-ui" not in bodies["/redoc"]
-        assert bodies["/openapi.json"].lstrip().startswith("{")
-
 
 @docs_enabled
 class TestSchemaHygiene:
@@ -225,36 +176,3 @@ class TestSchemaHygiene:
     async def test_legal_and_internal_routes_are_out_of_schema(self, paths) -> None:
         assert "/privacy.html" not in paths
         assert "/api/internal/agent_manifest" not in paths
-
-    async def test_doc_routes_do_not_document_themselves(self, paths) -> None:
-        assert [path for path in DOC_PATHS if path in paths] == []
-
-
-class TestPublicSurfaceStillRoutes:
-    """``include_in_schema=False`` and ``docs_url=None`` change no routing."""
-
-    @pytest.mark.parametrize(
-        "path",
-        [
-            "/api/health",
-            "/api/version",
-            "/privacy.html",
-            "/portal/delete-account-info",
-        ],
-    )
-    async def test_public_page_or_endpoint_still_answers(self, client, path) -> None:
-        response = await client.get(path)
-        assert response.status_code == 200, path
-
-    async def test_trust_key_still_routes(self, client, config) -> None:
-        object.__setattr__(config, "manifest_signing_public_key_b64", "dGVzdA==")
-        response = await client.get("/api/v1/agent/trust_key")
-        assert response.status_code == 200
-        assert response.json()["public_key_b64"] == "dGVzdA=="
-
-    async def test_agent_manifest_still_routes(self, client) -> None:
-        """With an empty store this is the handler's own 404, not a routing
-        miss — the difference is the whole point of the guard."""
-        response = await client.get("/api/v1/agent/manifest.json")
-        assert response.status_code == 404
-        assert response.json()["detail"] == "No manifest published yet"

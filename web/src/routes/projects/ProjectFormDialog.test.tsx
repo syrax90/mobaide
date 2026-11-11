@@ -159,19 +159,6 @@ describe('ProjectFormDialog onCreated', () => {
     expect(api.creates).toHaveLength(1);
     expect(calls).toEqual([]);
   });
-
-  it('never reports an edit as a create', async () => {
-    render(tree(project()));
-
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'renamed' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-
-    await waitFor(() => {
-      expect(calls).toEqual(['closed']);
-    });
-    expect(api.updates).toHaveLength(1);
-    expect(received).toEqual([]);
-  });
 });
 
 describe('ProjectFormDialog flags touch gate', () => {

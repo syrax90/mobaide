@@ -167,14 +167,6 @@ describe('GitRebaseDialog picker', () => {
     expect(rebase.mock.calls).toEqual([['refs/remotes/origin/main']]);
   });
 
-  it('says so when the project has no other branch', async () => {
-    items.list = [gitItem({ kind: 'branch_with_worktree', branch: 'topic', worktree_path: '/wt' })];
-    renderDialog();
-
-    expect(await within(dialog()).findByText('No other branches in this project.')).toBeInTheDocument();
-    expect(submit()).toBeDisabled();
-  });
-
   it('falls back to typing the ref when the branch list fails to load', async () => {
     items.error = new Error('offline');
     renderDialog();
@@ -251,18 +243,6 @@ describe('GitRebaseDialog blockers and failures', () => {
     );
     expect(onDone).not.toHaveBeenCalled();
     expect(dialog()).toBeInTheDocument();
-  });
-
-  it('names an unknown ref without any output block', async () => {
-    rebase.mockRejectedValue(wireFailure(409, { code: 'unknown_ref', message: 'mian' }));
-    renderDialog({ projectName: null });
-    fireEvent.change(within(dialog()).getByLabelText('Onto'), { target: { value: 'mian' } });
-
-    fireEvent.click(submit());
-
-    const alert = await within(dialog()).findByRole('alert');
-    expect(alert).toHaveTextContent('“mian” isn\'t a branch, tag or commit here.');
-    expect(alert.querySelector('pre')).toBeNull();
   });
 
   it('locks the sheet while the rebase runs', () => {

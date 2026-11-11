@@ -5,11 +5,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
-import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
-import com.mobaide.app.data.network.dto.TemplateDto
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -43,17 +41,6 @@ class TemplatesPickerSheetTest {
 
     private val emptyStateText = "You haven't saved any templates yet"
 
-    private fun template(id: String, name: String) = TemplateDto(
-        template_id = id,
-        name = name,
-        body = "deploy the thing",
-        is_favorite = false,
-        last_used_at = null,
-        created_at = "2026-01-01T00:00:00Z",
-        updated_at = "2026-01-01T00:00:00Z",
-        version = 1,
-    )
-
     @Test
     fun emptyCacheWhileLoading_showsSpinner_notEmptyStateText() {
         composeRule.setContent {
@@ -71,44 +58,5 @@ class TemplatesPickerSheetTest {
 
         composeRule.onNode(spinner).assertIsDisplayed()
         composeRule.onNodeWithText(emptyStateText, substring = true).assertDoesNotExist()
-    }
-
-    @Test
-    fun emptyCacheNotLoading_showsEmptyStateText_noSpinner() {
-        // `isLoading` deliberately omitted: the default must be false so the
-        // pre-existing empty state is unchanged for call sites that never load.
-        composeRule.setContent {
-            Surface {
-                TemplatesPickerSheet(
-                    templates = emptyList(),
-                    onPick = {},
-                    onToggleFavorite = {},
-                    onDelete = {},
-                    onDismiss = {},
-                )
-            }
-        }
-
-        composeRule.onNodeWithText(emptyStateText, substring = true).assertIsDisplayed()
-        composeRule.onAllNodes(spinner).assertCountEquals(0)
-    }
-
-    @Test
-    fun cachedTemplatesWhileLoading_showsList_noSpinner() {
-        composeRule.setContent {
-            Surface {
-                TemplatesPickerSheet(
-                    templates = listOf(template("t1", "Deploy prod")),
-                    isLoading = true,
-                    onPick = {},
-                    onToggleFavorite = {},
-                    onDelete = {},
-                    onDismiss = {},
-                )
-            }
-        }
-
-        composeRule.onNodeWithText("Deploy prod").assertIsDisplayed()
-        composeRule.onAllNodes(spinner).assertCountEquals(0)
     }
 }

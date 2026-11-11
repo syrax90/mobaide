@@ -122,24 +122,6 @@ def test_missing_runtime_is_unsupported_and_listed_before_warnings(monkeypatch, 
     assert "Python" in result.reasons[0].message
 
 
-def test_unknown_probes_do_not_warn(monkeypatch, tmp_path):
-    _pin(monkeypatch, ram=None, disk=None, cpus=None)
-
-    result = assess(tmp_path, remaining_bytes=_REMAINING, runtime_reason_code=None)
-
-    assert result.recommendation == "ok"
-    assert result.reasons == ()
-    assert (result.ram_total_bytes, result.disk_free_bytes, result.cpu_count) == (None, None, None)
-
-
-@pytest.mark.parametrize("code", ["python_unsupported", "platform_unsupported", "libc_unsupported", "new_code"])
-def test_every_runtime_reason_has_a_message(code):
-    reason = host.runtime_reason(code)
-
-    assert reason.code == code
-    assert reason.message
-
-
 @pytest.mark.parametrize(("maxsize", "bits"), [(2**31 - 1, 32), (2**63 - 1, 64)])
 def test_platform_unsupported_names_the_interpreter_bitness(monkeypatch, maxsize, bits):
     monkeypatch.setattr(

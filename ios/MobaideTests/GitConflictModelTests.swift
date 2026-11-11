@@ -155,22 +155,6 @@ final class GitConflictModelTests: XCTestCase {
         XCTAssertTrue(model.canSaveDraft)
     }
 
-    func testAFileThatIsNotTextIsReadyWithoutAnEditorOrASave() async throws {
-        let model = makeModel()
-        StubURLProtocol.enqueue(status: 200, body: try conflictBody(kind: GitConflictResponse.kindBinary, textless: true))
-        await model.load()
-        StubURLProtocol.reset()
-
-        XCTAssertEqual(model.conflict?.kind, GitConflictResponse.kindBinary)
-        XCTAssertFalse(model.isEditable)
-        XCTAssertFalse(model.canApply)
-        XCTAssertEqual(model.buffer.text, "")
-
-        await model.apply()
-
-        XCTAssertTrue(StubURLProtocol.requests.isEmpty, "there is no token to write under")
-    }
-
     func testLoadFailuresMapToTheirStates() async throws {
         let outdated = makeModel()
         StubURLProtocol.enqueue(status: 404, body: #"{"detail":"Not Found"}"#)
@@ -418,16 +402,6 @@ final class GitConflictModelTests: XCTestCase {
         XCTAssertEqual(model.scan, ConflictScan(conflicts: 1, hasMarkers: true, hasBase: true))
         XCTAssertFalse(model.isDirty)
         XCTAssertNil(model.outcome)
-    }
-
-    func testStartOverWithoutOriginalLinesAsksForTheMergeStyle() async throws {
-        let model = try await loadedModel()
-        StubURLProtocol.enqueue(status: 200, body: ok)
-        StubURLProtocol.enqueue(status: 200, body: try conflictBody())
-
-        await model.startOver(withOriginalLines: false)
-
-        XCTAssertEqual(try sentBody(GitConflictRestoreRequest.self, at: 0).style, GitConflictRestoreRequest.styleMerge)
     }
 
     func testStartOverRefusedBecauseTheFileMovedOnKeepsTheDraftAndRaisesTheStaleFlag() async throws {

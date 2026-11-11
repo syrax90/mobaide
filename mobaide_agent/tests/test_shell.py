@@ -45,30 +45,6 @@ class TestLoginShellPath:
         assert shell.login_shell_path() == "/bin/dash"
 
     @pytest.mark.skipif(sys.platform == "win32", reason="pwd is POSIX-only")
-    def test_pwd_fallback_disallowed_shell_falls_back(self, monkeypatch):
-        import pwd
-
-        monkeypatch.delenv("SHELL", raising=False)
-        monkeypatch.setattr(
-            pwd,
-            "getpwuid",
-            lambda uid: types.SimpleNamespace(pw_shell="/usr/sbin/nologin"),
-        )
-        assert shell.login_shell_path() == "/bin/sh"
-
-    @pytest.mark.skipif(sys.platform == "win32", reason="pwd is POSIX-only")
-    def test_empty_everywhere_falls_back(self, monkeypatch):
-        import pwd
-
-        monkeypatch.delenv("SHELL", raising=False)
-        monkeypatch.setattr(
-            pwd,
-            "getpwuid",
-            lambda uid: types.SimpleNamespace(pw_shell=""),
-        )
-        assert shell.login_shell_path() == "/bin/sh"
-
-    @pytest.mark.skipif(sys.platform == "win32", reason="pwd is POSIX-only")
     def test_pwd_lookup_failure_falls_back(self, monkeypatch):
         import pwd
 

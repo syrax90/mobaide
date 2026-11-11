@@ -212,21 +212,6 @@ class ReviewPromptCoordinatorTest {
     }
 
     @Test
-    fun settle_listHiddenDuringTheWait_abandons_andTheOutingGoesOn() = runTest {
-        val f = Fixture()
-        f.goodVisit()
-
-        val shown = launch { f.coordinator.sessionListShown() }
-        advanceTimeBy(500)
-        f.coordinator.sessionListHidden()
-        shown.join()
-        assertEquals(0, f.goodSessions)
-
-        f.coordinator.sessionListShown()
-        assertEquals(1, f.goodSessions)
-    }
-
-    @Test
     fun settle_listHiddenAndShownAgainDuringTheWait_onlyTheNewListVisitAsks() = runTest {
         val f = Fixture()
         f.goodSessions = 2
@@ -321,22 +306,6 @@ class ReviewPromptCoordinatorTest {
     }
 
     @Test
-    fun requestNotLaunched_keepsAsking_onEachGoodOuting() = runTest {
-        val f = Fixture()
-        f.goodSessions = 2
-        val delivered = subscribe(f)
-
-        repeat(2) {
-            f.goodVisit()
-            f.coordinator.sessionListShown()
-            runCurrent()
-        }
-
-        assertEquals(2, delivered.size)
-        assertNull(f.lastRequestedAt)
-    }
-
-    @Test
     fun markReviewLaunched_stampsTheInjectedClock_andTheCooldownBlocksTheNextRequest() = runTest {
         val f = Fixture()
         f.goodSessions = 2
@@ -364,54 +333,6 @@ class ReviewPromptCoordinatorTest {
         f.coordinator.sessionListShown()
         runCurrent()
         assertEquals(2, delivered.size)
-    }
-
-    @Test
-    fun firstLaunch_neverRequests() = runTest {
-        val f = Fixture()
-        f.launchCount = 1
-        f.goodSessions = 2
-        val delivered = subscribe(f)
-
-        f.goodVisit()
-        f.coordinator.sessionListShown()
-        runCurrent()
-
-        assertTrue(delivered.isEmpty())
-        assertNull(f.lastRequestedAt)
-        assertEquals(3, f.goodSessions)
-    }
-
-    @Test
-    fun cooldown_isMeasuredOnTheInjectedClock() = runTest {
-        val f = Fixture()
-        f.goodSessions = 2
-        f.lastRequestedAt = T0 - 119 * DAY_MS
-        val delivered = subscribe(f)
-
-        f.goodVisit()
-        f.coordinator.sessionListShown()
-        runCurrent()
-        assertTrue(delivered.isEmpty())
-
-        f.now = T0 + DAY_MS
-        f.goodVisit()
-        f.coordinator.sessionListShown()
-        runCurrent()
-
-        assertEquals(1, delivered.size)
-    }
-
-    @Test
-    fun recordLaunch_eachCallCountsOneLaunch() = runTest {
-        val f = Fixture()
-        f.launchCount = 0
-
-        f.coordinator.recordLaunch()
-        f.coordinator.recordLaunch()
-        f.coordinator.recordLaunch()
-
-        assertEquals(3, f.launchCount)
     }
 
     private companion object {

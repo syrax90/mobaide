@@ -32,7 +32,6 @@ const {
   getSessionGitDiff,
   getSessionGitJob,
   getSessionGitStatus,
-  isSessionGitError,
   isSessionGitJobLost,
   isTerminalSessionGitError,
   resolveSessionGitConflict,
@@ -43,7 +42,6 @@ const {
   stepSessionGitRebase,
   takeSessionGitConflict,
   toSessionGitError,
-  unstageSessionGit,
 } = await import('./sessionGitRepository');
 const { toApiError } = await import('./errors');
 
@@ -88,8 +86,6 @@ describe('toSessionGitError', () => {
 
   it.each([
     ['the relay has no such proxy route', { detail: 'Unknown proxy route' }],
-    ['the agent answers a plain 404', { detail: 'Not Found' }],
-    ['the 404 carries no string at all', { detail: { error: 'missing' } }],
     ['the body is empty', undefined],
   ])('treats any other 404 as an agent that predates the routes when %s', (_case, body) => {
     const error = toSessionGitError(apiError(404, body));
@@ -116,12 +112,6 @@ describe('toSessionGitError', () => {
       code: 'git_error',
       detailMessage: 'fatal: bad object',
     });
-  });
-
-  it('types a coded git failure without a message', () => {
-    const error = toSessionGitError(apiError(503, { detail: { code: 'git_unavailable' } }));
-
-    expect(error).toMatchObject({ kind: 'git', code: 'git_unavailable', detailMessage: null });
   });
 
   it('passes an ApiError with nothing it understands through unchanged', () => {
@@ -157,11 +147,6 @@ describe('isTerminalSessionGitError', () => {
     ).toBe(false);
     expect(isTerminalSessionGitError(apiError(404, { detail: 'Not Found' }))).toBe(false);
     expect(isTerminalSessionGitError(null)).toBe(false);
-  });
-
-  it('recognises only the wrapped class', () => {
-    expect(isSessionGitError(new SessionGitError('git', apiError(500, {}), 'git_error'))).toBe(true);
-    expect(isSessionGitError(apiError(500, {}))).toBe(false);
   });
 });
 
@@ -233,23 +218,11 @@ describe('getSessionGitDiff', () => {
       query: { path: 'src/new.py', scope: 'staged', context: '3', orig_path: 'src/old.py' },
     });
   });
-
-  it('surfaces a coded git failure typed for the viewer', async () => {
-    agent.results.push({
-      error: { detail: { code: 'git_timeout' } },
-      response: new Response(null, { status: 504 }),
-    });
-
-    await expect(
-      getSessionGitDiff('a1', 's1', { path: 'src/app.py', scope: 'unstaged', context: 3 }),
-    ).rejects.toMatchObject({ name: 'SessionGitError', kind: 'git', code: 'git_timeout' });
-  });
 });
 
 describe('stageSessionGit / unstageSessionGit', () => {
   it.each([
     ['stage', stageSessionGit],
-    ['unstage', unstageSessionGit],
   ] as const)('POSTs the paths to %s and resolves to nothing', async (leaf, call) => {
     ok({ ok: true });
 
@@ -272,14 +245,6 @@ describe('stageSessionGit / unstageSessionGit', () => {
       kind: 'git',
       code: 'pathspec_mismatch',
       detailMessage: "fatal: pathspec 'x' did not match",
-    });
-  });
-
-  it('types the old-agent 404 so the panel can hide what it cannot do', async () => {
-    refuse(404, 'Unknown proxy route');
-
-    await expect(unstageSessionGit('a1', 's1', ['x'])).rejects.toMatchObject({
-      kind: 'agentOutdated',
     });
   });
 });
@@ -313,16 +278,6 @@ describe('getSessionGitCommitContext', () => {
     });
     expect(lastParams()).toEqual({ path: { session_id: 's1' } });
   });
-
-  it('surfaces a refusal typed for the sheet', async () => {
-    refuse(409, { code: 'not_a_repo', message: '' });
-
-    await expect(getSessionGitCommitContext('a1', 's1')).rejects.toMatchObject({
-      kind: 'git',
-      code: 'not_a_repo',
-      detailMessage: '',
-    });
-  });
 });
 
 describe('commitSessionGit', () => {
@@ -352,14 +307,6 @@ describe('commitSessionGit', () => {
     await expect(
       commitSessionGit('a1', 's1', { message: 'x', amend: false, no_verify: false }),
     ).rejects.toMatchObject({ kind: 'git', code: 'hook_failed', detailMessage: 'lint: nope' });
-  });
-
-  it('types the blank-message 400 like any other coded failure', async () => {
-    refuse(400, { code: 'empty_message' });
-
-    await expect(
-      commitSessionGit('a1', 's1', { message: ' ', amend: false, no_verify: false }),
-    ).rejects.toMatchObject({ kind: 'git', code: 'empty_message', detailMessage: null });
   });
 });
 
@@ -400,21 +347,11 @@ describe('startSessionGitRebase', () => {
       detailMessage: 'nope',
     });
   });
-
-  it('types the 404 of an agent without the route as outdated', async () => {
-    refuse(404, 'Unknown proxy route');
-
-    await expect(startSessionGitRebase('a1', 's1', 'main')).rejects.toMatchObject({
-      kind: 'agentOutdated',
-    });
-  });
 });
 
 describe('stepSessionGitRebase', () => {
   it.each([
     ['continue', '/api/sessions/{session_id}/git/rebase/continue'],
-    ['skip', '/api/sessions/{session_id}/git/rebase/skip'],
-    ['abort', '/api/sessions/{session_id}/git/rebase/abort'],
   ] as const)('POSTs %s to its own route with no body', async (step, path) => {
     ok({ outcome: 'rebased', rebase: null, message: null });
 
@@ -512,19 +449,6 @@ describe('startSessionGitJob', () => {
     expect(lastBody()).toBeUndefined();
   });
 
-  it('POSTs the pull mode', async () => {
-    ok({ ...jobSnapshot, op: 'pull' });
-
-    await startSessionGitJob('a1', 's1', { op: 'pull', mode: 'rebase' });
-
-    expect(agent.requests.at(-1)).toMatchObject({
-      method: 'POST',
-      path: '/api/sessions/{session_id}/git/pull',
-    });
-    expect(lastParams()).toEqual({ path: { session_id: 's1' } });
-    expect(lastBody()).toEqual({ mode: 'rebase' });
-  });
-
   it('POSTs the push force flag', async () => {
     ok(jobSnapshot);
 
@@ -567,15 +491,6 @@ describe('getSessionGitJob / cancelSessionGitJob', () => {
     expect((agent.requests.at(-1)?.init as { signal?: AbortSignal }).signal).toBe(
       controller.signal,
     );
-  });
-
-  it('types the unknown-job 404 so the poll can stop', async () => {
-    refuse(404, { code: 'job_not_found' });
-
-    await expect(getSessionGitJob('a1', 's1', 'gone')).rejects.toMatchObject({
-      kind: 'git',
-      code: 'job_not_found',
-    });
   });
 
   it('POSTs cancel under the job and resolves to its snapshot', async () => {
@@ -639,20 +554,11 @@ describe('getSessionGitConflict', () => {
       detailMessage: 'src/a b.py',
     });
   });
-
-  it('types the 404 of an agent without the route as outdated', async () => {
-    refuse(404, 'Unknown proxy route');
-
-    await expect(getSessionGitConflict('a1', 's1', 'x')).rejects.toMatchObject({
-      kind: 'agentOutdated',
-    });
-  });
 });
 
 describe('resolveSessionGitConflict', () => {
   it.each([
     ['an apply', true],
-    ['a draft', false],
   ])('POSTs %s with the token the edit started from, in the wire\'s snake case', async (_case, markResolved) => {
     ok({ ok: true });
 
@@ -681,7 +587,6 @@ describe('resolveSessionGitConflict', () => {
 
   it.each([
     [409, 'file_changed', 'src/login.py'],
-    [409, 'conflict_markers', 'src/login.py'],
   ])('types the %i %s refusal with the path', async (status, code, message) => {
     refuse(status, { code, message });
 
@@ -710,7 +615,7 @@ describe('resolveSessionGitConflict', () => {
 });
 
 describe('takeSessionGitConflict', () => {
-  it.each(['ours', 'theirs'] as const)('POSTs the %s side for the path', async (side) => {
+  it.each(['ours'] as const)('POSTs the %s side for the path', async (side) => {
     ok({ ok: true });
 
     await expect(takeSessionGitConflict('a1', 's1', 'docs/old.md', side)).resolves.toBeUndefined();

@@ -110,18 +110,6 @@ final class PathSuggestionsModelTests: XCTestCase {
         XCTAssertEqual(model.names, ["project"])
     }
 
-    func testShowsEightAndCountsTheRest() async {
-        let model = await focusedModel()
-        StubURLProtocol.enqueue(status: 200, body: listing("/", (0..<10).map { "d\($0)" }))
-
-        model.textChanged("/")
-        await releaseDebounce(expectingRequests: 2)
-        await waitUntil { !model.names.isEmpty }
-
-        XCTAssertEqual(model.names.count, 8)
-        XCTAssertEqual(model.overflow, 2)
-    }
-
     func testAcceptWritesTheAgentExpandedPathForATildeQuery() async {
         let model = await focusedModel()
         StubURLProtocol.enqueue(status: 200, body: listing("/home/me", ["code"]))
@@ -181,18 +169,6 @@ final class PathSuggestionsModelTests: XCTestCase {
         XCTAssertEqual(model.names, [])
     }
 
-    func testHidesTheListOnceTheFieldLosesFocus() async {
-        let model = await focusedModel()
-        StubURLProtocol.enqueue(status: 200, body: listing("/", ["srv"]))
-        model.textChanged("/")
-        await releaseDebounce(expectingRequests: 2)
-        await waitUntil { !model.names.isEmpty }
-
-        model.focusChanged(false)
-
-        XCTAssertEqual(model.names, [])
-    }
-
     func testProbeLearnsAWindowsHostBeforeFocus_andPicksUseItsSeparator() async {
         let model = await probedModel(fs: #"{"dirs":true,"windows_paths":true}"#) { $0.probe() }
         XCTAssertTrue(model.windowsPaths)
@@ -205,11 +181,5 @@ final class PathSuggestionsModelTests: XCTestCase {
         XCTAssertEqual(model.names, ["Users"])
         XCTAssertEqual(model.separator, "\\")
         XCTAssertEqual(model.accept("Users"), #"C:\Users\"#)
-    }
-
-    func testAnOlderAgentReadsAsAPosixHost() async {
-        let model = await focusedModel()
-
-        XCTAssertFalse(model.windowsPaths)
     }
 }

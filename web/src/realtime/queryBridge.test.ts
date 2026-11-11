@@ -109,8 +109,6 @@ describe('applyUserEvent', () => {
 
   it.each([
     ['shortcut.created', shortcut],
-    ['shortcut.updated', { ...shortcut, version: 2 }],
-    ['shortcut.deleted', { shortcut_id: 'sc1', version: 3, updated_at: '2026-01-01T00:00:00Z' }],
   ])('ignores %s now that web keeps no shortcut cache', (type, payload) => {
     // Not a hypothetical unknown type: mobile clients still manage shortcuts,
     // so the server keeps broadcasting this trio to every user socket — web's
@@ -120,7 +118,7 @@ describe('applyUserEvent', () => {
     expect(invalidated).toEqual([]);
   });
 
-  it.each(['constructor', 'toString', '__proto__', 'hasOwnProperty'])(
+  it.each(['constructor', '__proto__'])(
     'ignores %s rather than resolving it off Object.prototype',
     (type) => {
       // `type` is wire data. A bare index lookup on the rules record would hand

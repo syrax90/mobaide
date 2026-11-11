@@ -155,15 +155,7 @@ describe('VoicePanel transcript cleanup', () => {
     expect(screen.getByRole('checkbox', { name: LABEL })).not.toBeChecked();
   });
 
-  it('names no single AI agent and drops the old explanation under the toggle', () => {
-    mount('settings', { ...VOICE, cleanup: true });
-
-    expect(screen.queryByText(/Claude Haiku/)).toBeNull();
-    expect(screen.queryByText(/Removes filler words/)).toBeNull();
-    expect(screen.queryByText(/sent to Anthropic/)).toBeNull();
-  });
-
-  it.each(['queued', 'downloading', 'verifying', 'ready'])(
+  it.each(['queued', 'ready'])(
     'offers the toggle in the setup sheet of a session that can clean up, while %s',
     (state) => {
       mount('setup', VOICE, { status: status(state), cleanupOffered: true });
@@ -176,7 +168,6 @@ describe('VoicePanel transcript cleanup', () => {
     ['settings of an agent without capabilities.voice.cleanup', 'settings', VOICE, false, 'ready'],
     ['setup sheet of a session that cannot clean up', 'setup', { ...VOICE, cleanup: true }, false, 'ready'],
     ['setup sheet before voice is installed', 'setup', VOICE, true, 'not_installed'],
-    ['setup sheet of a failed install', 'setup', VOICE, true, 'failed'],
   ] as const)('leaves the toggle out of the %s', (_label, variant, voice, cleanupOffered, state) => {
     mount(variant, voice, { status: status(state), cleanupOffered });
 

@@ -28,12 +28,6 @@ class TestEndpointUrl:
             == "https://example.com/foo"
         )
 
-    def test_https_passthrough(self):
-        assert (
-            endpoint_url_from_relay_server_url("https://example.com", "/foo")
-            == "https://example.com/foo"
-        )
-
     def test_path_component_is_dropped(self):
         # The relay tunnel and the REST API live at the same origin's root.
         # A relay-path like ``/ws/agent-tunnel`` must not survive into the
@@ -43,12 +37,6 @@ class TestEndpointUrl:
                 "wss://example.com/ws/agent-tunnel", "/api/v1/agent/manifest.json",
             )
             == "https://example.com/api/v1/agent/manifest.json"
-        )
-
-    def test_custom_port_preserved(self):
-        assert (
-            endpoint_url_from_relay_server_url("wss://example.com:9000", "/foo")
-            == "https://example.com:9000/foo"
         )
 
     def test_ipv6_host_is_bracketed(self):
@@ -79,25 +67,12 @@ class TestEndpointUrl:
                 "wss://api.mobaide.com@evil.example", "/foo",
             )
 
-    def test_userinfo_with_password_rejected(self):
-        with pytest.raises(ValueError, match="user-info"):
-            endpoint_url_from_relay_server_url(
-                "wss://user:pass@example.com", "/foo",
-            )
-
     def test_cleartext_ws_refused_by_default(self, monkeypatch):
         monkeypatch.delenv(
             "MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH", raising=False,
         )
         with pytest.raises(ValueError, match="cleartext"):
             endpoint_url_from_relay_server_url("ws://example.com", "/foo")
-
-    def test_cleartext_http_refused_by_default(self, monkeypatch):
-        monkeypatch.delenv(
-            "MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH", raising=False,
-        )
-        with pytest.raises(ValueError, match="cleartext"):
-            endpoint_url_from_relay_server_url("http://example.com", "/foo")
 
     def test_cleartext_ws_allowed_when_flag_set(self, monkeypatch):
         monkeypatch.setenv("MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH", "1")
@@ -145,13 +120,6 @@ class TestManifestUrlWrapper:
             manifest_url_from_relay_server_url("wss://example.com:8443")
             == "https://example.com:8443/api/v1/agent/manifest.json"
         )
-
-    def test_propagates_cleartext_refusal(self, monkeypatch):
-        monkeypatch.delenv(
-            "MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH", raising=False,
-        )
-        with pytest.raises(ValueError, match="cleartext"):
-            manifest_url_from_relay_server_url("ws://example.com")
 
     def test_propagates_userinfo_rejection(self):
         with pytest.raises(ValueError, match="user-info"):

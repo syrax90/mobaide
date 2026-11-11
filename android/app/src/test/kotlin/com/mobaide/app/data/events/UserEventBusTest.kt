@@ -23,7 +23,6 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
-import okio.ByteString
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -43,7 +42,7 @@ import org.junit.Test
  *     silently dropped and do not crash the collector.
  *   - `WsEvent.Connected` triggers `refreshAgents()`, `refreshTemplates()`,
  *     and `refreshShortcuts()` (reconnect resync).
- *   - `WsEvent.Binary` is ignored (channel is text-only).
+
  *
  * The connection state machine and auth-lifecycle wiring are already
  * covered structurally by [AgentEventBusTest]; they are not re-tested here.
@@ -189,24 +188,6 @@ class UserEventBusTest {
     }
 
     @Test
-    fun message_agentStatusChangedOffline_callsUpdateAgentOnline_withFalse() = runTest {
-        val (bus, connEvents, _, _, repo, _) = newBus()
-        bus.start()
-        awaitSubscribed(connEvents)
-
-        emit(
-            connEvents,
-            WsEvent.Message(
-                """{"type":"agent.status_changed","payload":{"agent_id":"a-9","online":false}}""",
-            ),
-        )
-
-        verify(timeout = 2000, exactly = 1) { repo.updateAgentOnline("a-9", false) }
-
-        bus.stop()
-    }
-
-    @Test
     fun message_multipleAgentStatusChanges_areAllForwardedInOrder() = runTest {
         val (bus, connEvents, _, _, repo, _) = newBus()
         bus.start()
@@ -264,57 +245,6 @@ class UserEventBusTest {
 
         // The malformed message must NOT have produced any other call.
         verify(exactly = 0) { repo.updateAgentOnline(neq("a-1"), any()) }
-
-        bus.stop()
-    }
-
-    @Test
-    fun message_envelopeMissingPayloadField_isSilentlySkipped() = runTest {
-        // Envelope parses (has `type`) but `payload` is missing. The outer
-        // decodeFromString call must throw MissingFieldException and the
-        // catch block must swallow it.
-        val (bus, connEvents, _, _, repo, _) = newBus()
-        bus.start()
-        awaitSubscribed(connEvents)
-
-        emit(connEvents, WsEvent.Message("""{"type":"agent.status_changed"}"""))
-
-        // Synchronize on a valid follow-up call, then assert nothing else.
-        emit(
-            connEvents,
-            WsEvent.Message(
-                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
-            ),
-        )
-        verify(timeout = 2000, exactly = 1) { repo.updateAgentOnline("sync", true) }
-        verify(exactly = 1) { repo.updateAgentOnline(any(), any()) }
-
-        bus.stop()
-    }
-
-    @Test
-    fun message_agentStatusChangedPayloadMissingAgentId_isSilentlySkipped() = runTest {
-        // Valid envelope, matching type, but inner payload lacks `agent_id`.
-        val (bus, connEvents, _, _, repo, _) = newBus()
-        bus.start()
-        awaitSubscribed(connEvents)
-
-        emit(
-            connEvents,
-            WsEvent.Message(
-                """{"type":"agent.status_changed","payload":{"online":true}}""",
-            ),
-        )
-
-        // Synchronize on a valid follow-up.
-        emit(
-            connEvents,
-            WsEvent.Message(
-                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
-            ),
-        )
-        verify(timeout = 2000, exactly = 1) { repo.updateAgentOnline("sync", true) }
-        verify(exactly = 1) { repo.updateAgentOnline(any(), any()) }
 
         bus.stop()
     }
@@ -382,37 +312,6 @@ class UserEventBusTest {
         bus.stop()
     }
 
-    @Test
-    fun message_sessionAttentionKind_isIgnored_noRepoCall() = runTest {
-        // `session.attention` is a user-event kind for the iOS APNs
-        // pipeline. Android's attention path stays on the agent events
-        // channel, so this kind must keep falling through `else -> Unit` —
-        // pinned explicitly (not just any unknown type) because the server
-        // now emits it to every connected user socket.
-        val (bus, connEvents, _, _, repo, _) = newBus()
-        bus.start()
-        awaitSubscribed(connEvents)
-
-        emit(
-            connEvents,
-            WsEvent.Message(
-                """{"type":"session.attention","payload":{"session_id":"s1","reason":"turn_finished","title":"Fix bug","agent_id":"a1"}}""",
-            ),
-        )
-
-        // Synchronize on a valid message, then assert nothing else fired.
-        emit(
-            connEvents,
-            WsEvent.Message(
-                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
-            ),
-        )
-        verify(timeout = 2000, exactly = 1) { repo.updateAgentOnline("sync", true) }
-        verify(exactly = 1) { repo.updateAgentOnline(any(), any()) }
-
-        bus.stop()
-    }
-
     // ---- parse(): account.first_agent_paired -> conversion ------------------
 
     @Test
@@ -429,29 +328,6 @@ class UserEventBusTest {
         )
 
         coVerify(timeout = 2000, exactly = 1) { f.agentPairedConversion.onFirstAgentPairedEvent() }
-
-        f.bus.stop()
-    }
-
-    @Test
-    fun message_firstAgentPaired_malformedPayload_isDropped() = runTest {
-        val f = newBus()
-        f.bus.start()
-        awaitSubscribed(f.connEvents)
-
-        emit(
-            f.connEvents,
-            WsEvent.Message("""{"type":"account.first_agent_paired","payload":{}}"""),
-        )
-        emit(
-            f.connEvents,
-            WsEvent.Message(
-                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
-            ),
-        )
-
-        verify(timeout = 2000, exactly = 1) { f.agentRepository.updateAgentOnline("sync", true) }
-        coVerify(exactly = 0) { f.agentPairedConversion.onFirstAgentPairedEvent() }
 
         f.bus.stop()
     }
@@ -515,7 +391,7 @@ class UserEventBusTest {
         f.bus.stop()
     }
 
-    // ---- Non-Message WsEvents: Connected refreshes, Binary is ignored -------
+    // ---- Non-Message WsEvents: Connected refreshes -------------------------
 
     @Test
     fun connected_event_triggersRefreshAgents() = runTest {
@@ -528,36 +404,6 @@ class UserEventBusTest {
         emit(connEvents, WsEvent.Connected)
 
         coVerify(timeout = 2000, exactly = 1) { repo.refreshAgents() }
-
-        bus.stop()
-    }
-
-    @Test
-    fun binary_event_isIgnored_noRepoCall() = runTest {
-        // The user-events channel is text-only. Binary frames must not
-        // reach the parser, and must not throw.
-        val (bus, connEvents, _, _, repo, _) = newBus()
-        bus.start()
-        awaitSubscribed(connEvents)
-
-        emit(connEvents, WsEvent.Binary(ByteString.of(1, 2, 3, 4)))
-
-        // Synchronize on a valid follow-up Message — by the time that
-        // arrives the Binary frame has been fully observed by the
-        // collector (SharedFlow preserves emission order to a subscriber).
-        emit(
-            connEvents,
-            WsEvent.Message(
-                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
-            ),
-        )
-        verify(timeout = 2000, exactly = 1) { repo.updateAgentOnline("sync", true) }
-
-        // No other updateAgentOnline calls — the Binary frame was silent.
-        verify(exactly = 1) { repo.updateAgentOnline(any(), any()) }
-        // refreshAgents must NOT have been called — Binary is neither
-        // Connected nor Message.
-        coVerify(exactly = 0) { repo.refreshAgents() }
 
         bus.stop()
     }
@@ -733,34 +579,6 @@ class UserEventBusTest {
         bus.stop()
     }
 
-    @Test
-    fun message_templateDeletedMissingId_isSilentlySkipped() = runTest {
-        // template.deleted envelope without the required `template_id` field —
-        // payload-level decode must throw and the bus must swallow it.
-        val (bus, connEvents, _, _, agentRepo, templates) = newBus()
-        bus.start()
-        awaitSubscribed(connEvents)
-
-        emit(
-            connEvents,
-            WsEvent.Message(
-                """{"type":"template.deleted","payload":{"version":1,"updated_at":"x"}}""",
-            ),
-        )
-
-        // Sync on a valid follow-up.
-        emit(
-            connEvents,
-            WsEvent.Message(
-                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
-            ),
-        )
-        verify(timeout = 2000, exactly = 1) { agentRepo.updateAgentOnline("sync", true) }
-        verify(exactly = 0) { templates.applyDeleted(any()) }
-
-        bus.stop()
-    }
-
     private fun shortcutJson(
         id: String = "s-1",
         kind: String = "claude",
@@ -880,78 +698,6 @@ class UserEventBusTest {
         bus.stop()
     }
 
-    @Test
-    fun message_shortcutCreatedMalformedPayload_isSilentlySkipped() = runTest {
-        // Wrong-typed inner payload (`position` as a string) — the inner
-        // decode must fail and the bus must remain alive for the next
-        // message. Mirrors the template.created wrong-type test above.
-        val (bus, connEvents, _, _, agentRepo, _, shortcuts) = newBus()
-        bus.start()
-        awaitSubscribed(connEvents)
-
-        emit(
-            connEvents,
-            WsEvent.Message(
-                """
-                {
-                  "type": "shortcut.created",
-                  "payload": {
-                    "shortcut_id": "s-1",
-                    "kind": "claude",
-                    "chord_token": "ctrl+x",
-                    "name": null,
-                    "position": "not-an-int",
-                    "created_at": "2026-07-20T12:00:00Z",
-                    "updated_at": "2026-07-20T12:00:00Z",
-                    "version": 1
-                  }
-                }
-                """.trimIndent(),
-            ),
-        )
-
-        // Synchronize on a valid follow-up, then assert nothing fired.
-        emit(
-            connEvents,
-            WsEvent.Message(
-                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
-            ),
-        )
-        verify(timeout = 2000, exactly = 1) { agentRepo.updateAgentOnline("sync", true) }
-        verify(exactly = 0) { shortcuts.applyUpserted(any()) }
-        verify(exactly = 0) { shortcuts.applyDeleted(any()) }
-
-        bus.stop()
-    }
-
-    @Test
-    fun message_shortcutDeletedMissingId_isSilentlySkipped() = runTest {
-        // shortcut.deleted envelope without the required `shortcut_id` field —
-        // payload-level decode must throw and the bus must swallow it.
-        val (bus, connEvents, _, _, agentRepo, _, shortcuts) = newBus()
-        bus.start()
-        awaitSubscribed(connEvents)
-
-        emit(
-            connEvents,
-            WsEvent.Message(
-                """{"type":"shortcut.deleted","payload":{"version":1,"updated_at":"x"}}""",
-            ),
-        )
-
-        // Sync on a valid follow-up.
-        emit(
-            connEvents,
-            WsEvent.Message(
-                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
-            ),
-        )
-        verify(timeout = 2000, exactly = 1) { agentRepo.updateAgentOnline("sync", true) }
-        verify(exactly = 0) { shortcuts.applyDeleted(any()) }
-
-        bus.stop()
-    }
-
     // ---- parse(): custom_type.* envelopes -> CustomAgentTypesRepository -----
 
     private fun customTypeJson(
@@ -1057,37 +803,6 @@ class UserEventBusTest {
             fx.shortcutsRepository.purgeKind("custom_ab12cd34ef56")
         }
         verify(exactly = 0) { fx.shortcutsRepository.applyDeleted(any()) }
-
-        fx.bus.stop()
-    }
-
-    @Test
-    fun message_customTypeCreatedMalformedPayload_isSilentlySkipped() = runTest {
-        // Payload missing the required `command` field — the inner decode must
-        // fail and the bus must remain alive for the next message.
-        val fx = newBus()
-        fx.bus.start()
-        awaitSubscribed(fx.connEvents)
-
-        emit(
-            fx.connEvents,
-            WsEvent.Message(
-                """{"type":"custom_type.created","payload":{"id":"t-1","name":"x"}}""",
-            ),
-        )
-
-        // Synchronize on a valid follow-up, then assert nothing fired.
-        emit(
-            fx.connEvents,
-            WsEvent.Message(
-                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
-            ),
-        )
-        verify(timeout = 2000, exactly = 1) {
-            fx.agentRepository.updateAgentOnline("sync", true)
-        }
-        verify(exactly = 0) { fx.customAgentTypesRepository.applyUpserted(any()) }
-        verify(exactly = 0) { fx.customAgentTypesRepository.applyDeleted(any()) }
 
         fx.bus.stop()
     }

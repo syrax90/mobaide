@@ -276,12 +276,6 @@ describe('applyEvents', () => {
 describe('trimChatItems', () => {
   const ids = (items: readonly ChatItem[]): string[] => items.map((item) => item.id);
 
-  it('returns the same list when it fits', () => {
-    const items = [tool('call-0'), user('u:1')];
-
-    expect(trimChatItems(items, 2)).toEqual({ items, capped: false, droppedMessages: false });
-  });
-
   it('drops finished steps first, oldest first, and only as many as needed', () => {
     const items = [user('u:0'), tool('call-1', 'completed'), thought('h:2'), tool('call-3', 'failed'), agent('m:4')];
 

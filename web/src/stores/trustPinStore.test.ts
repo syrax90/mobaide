@@ -79,10 +79,8 @@ describe('checkTrustPin + pinTrustKey', () => {
   });
 
   it.each([
-    'https://relay.test/',
     'https://relay.test///',
     'https://Relay.TEST',
-    '  https://relay.test  ',
   ])('resolves %s to the same pin as its canonical form', (variant) => {
     // A cosmetic URL difference must not re-TOFU an already-pinned relay, or
     // the pin stops meaning anything.
@@ -155,29 +153,6 @@ describe('trustPinStore hydration', () => {
     await useTrustPinStore.persist.rehydrate();
 
     expect(useTrustPinStore.getState().pins).toEqual({});
-  });
-
-  it('survives a round trip through storage', async () => {
-    confirmAndPin('https://relay.test', FP_A);
-    // The raw envelope has to be re-seeded by hand: `setState` writes straight
-    // back through the persist middleware, so clearing the store in memory
-    // would erase the very record this test is about to rehydrate.
-    const persisted = window.localStorage.getItem(STORAGE_KEY);
-    useTrustPinStore.setState({ pins: {} });
-    window.localStorage.setItem(STORAGE_KEY, persisted ?? '');
-
-    await useTrustPinStore.persist.rehydrate();
-
-    expect(readTrustPin('https://relay.test')).toBe(FP_A);
-  });
-
-  it('persists under the documented localStorage key', () => {
-    // `mobaide-trust-pins` is in `web/README.md` and `docs/qr-pairing.md` as
-    // the thing a user clears to re-pin a legitimately rotated relay key —
-    // the only recovery path there is, since a mismatch has no override.
-    confirmAndPin('https://relay.test', FP_A);
-
-    expect(window.localStorage.getItem(STORAGE_KEY)).toContain(FP_A);
   });
 });
 

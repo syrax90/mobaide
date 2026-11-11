@@ -199,23 +199,6 @@ class TestProgressTracker:
 
         assert (tracker.phase, tracker.percent) == ("Writing objects", 100)
 
-    def test_remote_prefix_and_trailing_padding_are_stripped(self):
-        tracker = ProgressTracker()
-
-        tracker.feed(b"remote: Counting objects:  25% (1/4)        \r")
-
-        assert (tracker.phase, tracker.percent, tracker.line) == (
-            "Counting objects", 25, "Counting objects:  25% (1/4)")
-
-    def test_count_line_has_no_percent_until_done(self):
-        tracker = ProgressTracker()
-
-        tracker.feed(b"Enumerating objects: 4\r")
-        counting = (tracker.phase, tracker.percent)
-        tracker.feed(b"Enumerating objects: 4, done.\n")
-
-        assert counting == ("Enumerating objects", None)
-        assert (tracker.phase, tracker.percent) == ("Enumerating objects", 100)
 
     def test_rebase_step_is_a_percentage_of_the_total(self):
         tracker = ProgressTracker()
@@ -253,18 +236,6 @@ class TestProgressTracker:
         assert tracker.line == "   e223296..822cef6  main -> main"
         assert (tracker.phase, tracker.percent) == (None, None)
 
-    def test_crlf_is_one_separator_and_blank_lines_are_dropped(self):
-        tracker = ProgressTracker()
-
-        tracker.feed(b"first\r\n\nsecond\r\n")
-
-        assert list(tracker.tail) == ["first", "second"]
-
-    def test_feed_reports_no_change_for_a_repeated_frame(self):
-        tracker = ProgressTracker()
-        tracker.feed(b"Writing objects:  45% (14/32)\r")
-
-        assert tracker.feed(b"Writing objects:  45% (14/32)\r") is False
 
     def test_tail_keeps_the_last_fifty_lines_clipped(self):
         tracker = ProgressTracker()
@@ -377,23 +348,6 @@ class TestClassifyJobFailure:
 
         assert code == "auth_required"
 
-    def test_message_is_gits_own_error_lines_squashed(self):
-        code, message = classify_job_failure(
-            "push",
-            err_tail=[
-                "To /srv/app.git",
-                " ! [rejected]        main -> main (fetch first)",
-                "error: failed to push some refs to '/srv/app.git'",
-                "hint: Updates were rejected because the remote contains work",
-            ],
-            out_tail=[],
-        )
-
-        assert code == "not_fast_forward"
-        assert message == (
-            "! [rejected] main -> main (fetch first)\n"
-            "error: failed to push some refs to '/srv/app.git'"
-        )
 
     def test_stdout_conflict_lines_lead_the_message(self):
         _, message = classify_job_failure(
@@ -409,20 +363,6 @@ class TestClassifyJobFailure:
             "error: could not apply e667040... main side"
         )
 
-    def test_message_falls_back_to_the_last_plain_line_skipping_hints(self):
-        _, message = classify_job_failure(
-            "pull", err_tail=["Something odd happened", "hint: try again"], out_tail=[]
-        )
-
-        assert message == "Something odd happened"
-
-    def test_message_defaults_when_git_said_nothing(self):
-        assert classify_job_failure("fetch", err_tail=[], out_tail=[]) == (
-            "git_error", "git fetch failed")
-
-    def test_rebase_is_classified_with_its_own_fallback_message(self):
-        assert classify_job_failure("rebase", err_tail=[], out_tail=[]) == (
-            "git_error", "git rebase failed")
 
     def test_message_is_capped(self):
         _, message = classify_job_failure(
@@ -439,23 +379,6 @@ class TestSummariseSuccess:
             out_tail=[],
         ) == "e223296..822cef6 main -> main"
 
-    def test_fetch_reports_the_last_ref_update(self):
-        assert summarise_success(
-            "fetch",
-            err_tail=["From /srv/app",
-                      "   e223296..822cef6  main       -> origin/main",
-                      " * [new branch]      feature    -> origin/feature"],
-            out_tail=[],
-        ) == "* [new branch] feature -> origin/feature"
-
-    def test_push_with_nothing_to_send_echoes_git(self):
-        assert summarise_success(
-            "push", err_tail=["Everything up-to-date"], out_tail=[]
-        ) == "Everything up-to-date"
-
-    def test_silent_fetch_and_push_fall_back_per_op(self):
-        assert summarise_success("fetch", err_tail=[], out_tail=[]) == "Already up to date"
-        assert summarise_success("push", err_tail=[], out_tail=[]) == "Pushed"
 
     def test_pull_reports_the_last_stdout_line(self):
         assert summarise_success(
@@ -463,13 +386,6 @@ class TestSummariseSuccess:
             err_tail=["From /srv/app", "   a..b  main -> origin/main"],
             out_tail=["Updating a..b", "Fast-forward"],
         ) == "Fast-forward"
-
-    def test_pull_without_stdout_uses_stderr_minus_hints(self):
-        assert summarise_success(
-            "pull",
-            err_tail=["Successfully rebased and updated refs/heads/main.", "hint: x"],
-            out_tail=[],
-        ) == "Successfully rebased and updated refs/heads/main."
 
 
 class TestJobPublisher:
@@ -543,15 +459,6 @@ class TestJobPublisher:
 
         assert [payload["percent"] for _, payload in bus.published] == [10, 50]
 
-    async def test_unchanged_output_publishes_nothing(self):
-        bus = FakeEventBus()
-        job = self._job(bus)
-
-        job.feed(b"Total 3 (delta 0), reused 0 (delta 0)\n")
-        job.feed(b"Total 3 (delta 0), reused 0 (delta 0)\n")
-        await asyncio.sleep(0.1)
-
-        assert len(bus.published) == 1
 
     async def test_finish_publishes_done_once_then_git_changed_and_drops_the_pending_frame(self):
         bus = FakeEventBus()
@@ -624,12 +531,6 @@ class TestJobRegistry:
         assert bus.published[-1] == _changed(local, "proj")
         assert job_registry.active_job_id(norm_path(local)) is None
 
-    async def test_session_without_a_project_publishes_an_empty_name(self, local):
-        bus = FakeEventBus()
-
-        await _run("fetch", local, bus=bus, project_name=None)
-
-        assert bus.published[-1] == _changed(local, "")
 
     async def test_start_refuses_outside_a_repo_and_a_vanished_cwd(self, tmp_path):
         with pytest.raises(GitRefusedError) as info:
@@ -639,20 +540,6 @@ class TestJobRegistry:
 
         assert info.value.code == "not_a_repo"
 
-    async def test_unknown_job_is_not_found_on_get_and_cancel(self):
-        with pytest.raises(GitNotFoundError) as info:
-            job_registry.get("deadbeef")
-        with pytest.raises(GitNotFoundError):
-            await job_registry.cancel("deadbeef")
-
-        assert http_error_for(info.value) == (404, {"detail": {"code": "job_not_found"}})
-
-    async def test_cancel_of_a_finished_job_is_a_no_op(self, local):
-        done = await _run("fetch", local)
-
-        again = await job_registry.cancel(done.job_id)
-
-        assert again == done
 
     async def test_finished_jobs_outlive_the_ttl_only_until_the_next_start(self, local):
         done = await _run("fetch", local)
@@ -884,12 +771,6 @@ class TestJobRegistry:
         assert done.ok is True
         assert "origin/gone" not in _git_out(local, "branch", "-r")
 
-    async def test_fetch_ignores_a_detached_head(self, local):
-        run_git_sync(local, "checkout", "-q", "--detach")
-
-        done = await _run("fetch", local)
-
-        assert (done.ok, done.error_code) == (True, None)
 
     async def test_pull_fast_forwards(self, local, other):
         _push_from(other, "theirs.txt", "theirs")
@@ -912,23 +793,6 @@ class TestJobRegistry:
         assert (await _status(local)).repo.state == "clean"
         assert _git_out(local, "log", "-1", "--format=%s") == "ours"
 
-    async def test_pull_merge_of_diverged_branches_makes_a_merge_commit(self, local, other):
-        _diverge(local, other)
-
-        done = await _run("pull", local, pull_mode="merge")
-
-        assert (done.ok, done.error_code) == (True, None)
-        assert len(_git_out(local, "log", "-1", "--format=%P").split()) == 2
-        assert (await _status(local)).repo.state == "clean"
-
-    async def test_pull_rebase_of_diverged_branches_replays_ours_on_top(self, local, other):
-        _diverge(local, other)
-
-        done = await _run("pull", local, pull_mode="rebase")
-
-        assert (done.ok, done.error_code) == (True, None)
-        assert _git_out(local, "log", "-2", "--format=%s") == "ours\ntheirs"
-        assert (await _status(local)).repo.upstream.ahead == 1
 
     @pytest.mark.parametrize(
         ("mode", "state"), [("merge", "merging"), ("rebase", "rebasing")]

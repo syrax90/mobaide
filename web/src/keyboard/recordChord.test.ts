@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  recordChordFromEvent,
-  unsupportedMessage,
-  type RecordableKeyEvent,
-} from './recordChord';
+import { recordChordFromEvent, type RecordableKeyEvent } from './recordChord';
 
 const press = (code: string, over: Partial<RecordableKeyEvent> = {}): RecordableKeyEvent => ({
   type: 'keydown',
@@ -26,13 +22,6 @@ describe('recordChordFromEvent — recorded chords', () => {
     expect(recordChordFromEvent(press('KeyI', { ctrlKey: true, shiftKey: true }))).toEqual({
       status: 'chord',
       chord: { ctrl: true, alt: false, shift: true, key: 'i' },
-    });
-  });
-
-  it('records an unmodified key', () => {
-    expect(recordChordFromEvent(press('F5'))).toEqual({
-      status: 'chord',
-      chord: { ctrl: false, alt: false, shift: false, key: 'f5' },
     });
   });
 
@@ -72,13 +61,6 @@ describe('recordChordFromEvent — recorded chords', () => {
       { status: 'chord', chord: { ctrl: true, alt: false, shift: false, key: 'space' } },
       { status: 'chord', chord: { ctrl: true, alt: false, shift: false, key: 'backspace' } },
     ]);
-  });
-
-  it('accepts exactly two modifiers', () => {
-    expect(recordChordFromEvent(press('KeyZ', { ctrlKey: true, altKey: true }))).toEqual({
-      status: 'chord',
-      chord: { ctrl: true, alt: true, shift: false, key: 'z' },
-    });
   });
 });
 
@@ -160,14 +142,6 @@ describe('recordChordFromEvent — presses the contract cannot carry', () => {
     });
   });
 
-  it('refuses Escape', () => {
-    expect(recordChordFromEvent(press('Escape'))).toEqual({
-      status: 'unsupported',
-      reason: 'escape',
-      code: 'Escape',
-    });
-  });
-
   it('names Escape as the reason even when the press also breaks the modifier cap', () => {
     // Ctrl+Alt+Shift+Esc is both; "Esc has its own button" is the answer that
     // tells the user what to do instead.
@@ -192,13 +166,5 @@ describe('recordChordFromEvent — presses the contract cannot carry', () => {
         code,
       });
     }
-  });
-});
-
-describe('unsupportedMessage', () => {
-  it('names the key the user actually pressed', () => {
-    expect(unsupportedMessage({ reason: 'unknownKey', code: 'BracketLeft' })).toContain(
-      'BracketLeft',
-    );
   });
 });

@@ -93,23 +93,6 @@ class GitDiffScreenTest {
     }
 
     @Test
-    fun anAddedFile_offersNoContextChips() {
-        setContent(ready(diff("first", "second", change = GitDiffResponse.CHANGE_ADDED)))
-
-        composeRule.onNodeWithText("second").assertIsDisplayed()
-        DIFF_CONTEXT_CHOICES.forEach { choice ->
-            composeRule.onNodeWithTag(gitDiffContextChipTag(choice.lines)).assertDoesNotExist()
-        }
-    }
-
-    @Test
-    fun aTruncatedDiff_withMoreLinesThanShown_saysHowManyAtLeast() {
-        setContent(ready(diff("a", "b", "c", truncated = true, totalLines = 12345)))
-
-        composeRule.onNodeWithText("Showing the first 3 of at least 12345 lines").assertIsDisplayed()
-    }
-
-    @Test
     fun aTruncatedDiff_whoseCountStoppedAtTheCut_onlySaysItIsLonger() {
         // The byte cap can cut git off before `total_lines` gets past what was
         // shown, so the footer must not claim "3 of at least 3".

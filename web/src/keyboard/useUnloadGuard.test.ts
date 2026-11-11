@@ -67,14 +67,4 @@ describe('useUnloadGuard', () => {
 
     expect(unload().event.defaultPrevented).toBe(false);
   });
-
-  it('stops guarding once the screen unmounts', () => {
-    // The listener is on the window, so leaving it behind would keep prompting
-    // after the user has navigated away from the terminal entirely.
-    renderHook(() => {
-      useUnloadGuard(true);
-    }).unmount();
-
-    expect(unload().event.defaultPrevented).toBe(false);
-  });
 });

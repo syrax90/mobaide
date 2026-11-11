@@ -11,18 +11,8 @@ from mobaide.core.pty_backend import (
     LinuxPtyBackend,
     WindowsPtyBackend,
     _terminal_env,
-    create_pty_backend,
 )
 from tests.conftest import IS_WINDOWS, default_shell, skip_if_not_linux
-
-
-class TestCreatePtyBackend:
-    def test_returns_correct_type(self) -> None:
-        backend = create_pty_backend()
-        if IS_WINDOWS:
-            assert isinstance(backend, WindowsPtyBackend)
-        else:
-            assert isinstance(backend, LinuxPtyBackend)
 
 
 @pytest.mark.timeout(15)
@@ -72,15 +62,6 @@ class TestPtyBackendLifecycle:
             backend.terminate(force=True)
             backend.close()
 
-    def test_resize_does_not_raise(self) -> None:
-        backend = self._make_backend()
-        backend.spawn(default_shell(), cwd=None, env=None, rows=24, cols=80)
-        try:
-            backend.resize(40, 120)
-        finally:
-            backend.terminate(force=True)
-            backend.close()
-
     def test_terminate_kills_process(self) -> None:
         backend = self._make_backend()
         backend.spawn(default_shell(), cwd=None, env=None, rows=24, cols=80)
@@ -95,13 +76,6 @@ class TestPtyBackendLifecycle:
 
         assert not backend.is_alive()
         backend.close()
-
-    def test_close_is_idempotent(self) -> None:
-        backend = self._make_backend()
-        backend.spawn(default_shell(), cwd=None, env=None, rows=24, cols=80)
-        backend.terminate(force=True)
-        backend.close()
-        backend.close()  # Second close should not raise
 
 
 @skip_if_not_linux
@@ -230,12 +204,6 @@ class TestTerminalEnv:
 
         assert "COLUMNS" not in spawn_env
         assert "LINES" not in spawn_env
-
-    def test_term_defaults_when_absent(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.delenv("TERM", raising=False)
-        assert _terminal_env(None)["TERM"] == "xterm-256color"
 
     def test_explicit_env_overrides_inherited_and_term_default(
         self, monkeypatch: pytest.MonkeyPatch

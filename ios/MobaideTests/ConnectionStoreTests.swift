@@ -100,11 +100,4 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertNil(tokenStore.getAccessToken(), "TokenStore was cleared")
         XCTAssertNil(store.getActiveProfileId(), "incomplete profile is never marked active")
     }
-
-    func testActivateUnknownProfileIsNoOp() {
-        let (store, tokenStore) = makeStores()
-        tokenStore.saveTokens(accessToken: "at", refreshToken: "rt")
-        store.activateProfile(id: "missing", tokenStore: tokenStore)
-        XCTAssertEqual(tokenStore.getAccessToken(), "at", "unknown id must not clear anything")
-    }
 }

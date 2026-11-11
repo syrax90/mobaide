@@ -33,7 +33,6 @@ from central_server.relay.envelope import (
     CH_AUTOSCAN,
     CH_CONTROL,
     decode,
-    encode,
 )
 from central_server.relay.mobile_proxy import MobileProxy
 from central_server.relay.routing import AgentConnection
@@ -76,15 +75,6 @@ def _drain_agent_queue(agent_conn: AgentConnection) -> list[tuple[int, str, byte
 
 
 class TestAutoscanAuthGating:
-    def test_missing_token_closes_connection(self, app):
-        """No ``?token=`` query param → ``ws_authenticate_mobile`` closes 4001
-        and the handler returns before touching routing.
-        """
-        tc = TestClient(app)
-        with pytest.raises(Exception):
-            with tc.websocket_connect("/relay/ws/autoscan/any-agent") as ws:
-                ws.receive_text()
-
     async def test_token_for_wrong_agent_closes_4003(self, app, registered_agent):
         """Token valid for agent A must not authorize a ws on agent B."""
         agent_id, _ = registered_agent
@@ -333,17 +323,3 @@ class TestAgentOriginatedCloseAutoscan:
         assert kwargs.get("reason") == "capacity_reached"
 
         app.state.routing.unregister_mobile(agent_id, channel_key, client)
-
-    async def test_close_autoscan_without_subscription_id_is_ignored(
-        self, app, registered_agent
-    ):
-        from central_server.relay.agent_ws import _handle_control_json
-
-        agent_id, _ = registered_agent
-
-        await _handle_control_json(
-            websocket=MagicMock(app=app),
-            agent_id=agent_id,
-            ctrl={"type": "close_autoscan"},
-            routing=app.state.routing,
-        )

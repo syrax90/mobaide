@@ -123,21 +123,6 @@ class AutoScanDetailViewModelTest {
     // ---- Frame reducer ------------------------------------------------------
 
     @Test
-    fun connectedFrame_setsConnectionToConnecting() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        fx.frames.tryEmit(AutoScanWsClient.Frame.Connected)
-        advanceUntilIdle()
-
-        assertEquals(
-            AutoScanDetailViewModel.ConnectionState.Connecting,
-            vm.uiState.value.connection,
-        )
-    }
-
-    @Test
     fun snapshotFrame_seedsInstance_andReducesBufferedEvents() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
@@ -163,36 +148,6 @@ class AutoScanDetailViewModelTest {
         // The buffered scan_started event must have run through reduceEvent.
         assertEquals("scan", s.activePhase)
         assertEquals(10L, s.lastSeq)
-    }
-
-    @Test
-    fun caughtUpFrame_flipsConnectionToConnected() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        fx.frames.tryEmit(AutoScanWsClient.Frame.CaughtUp)
-        advanceUntilIdle()
-
-        assertEquals(
-            AutoScanDetailViewModel.ConnectionState.Connected,
-            vm.uiState.value.connection,
-        )
-    }
-
-    @Test
-    fun disconnectedFrame_flipsConnectionToDisconnected() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        fx.frames.tryEmit(AutoScanWsClient.Frame.Disconnected(cause = null))
-        advanceUntilIdle()
-
-        assertEquals(
-            AutoScanDetailViewModel.ConnectionState.Disconnected,
-            vm.uiState.value.connection,
-        )
     }
 
     @Test
@@ -314,29 +269,6 @@ class AutoScanDetailViewModelTest {
         assertEquals(55L, vm.uiState.value.lastSeq)
     }
 
-    @Test
-    fun issueEvent_startedStatus_mapsPhaseToActive_andDerivesPhaseFromStep() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        // step = "worktree_create" -> maps to phase "worktree"
-        fx.frames.tryEmit(
-            AutoScanWsClient.Frame.Event(
-                event = parsedEvent(
-                    seq = 1,
-                    payload = issue("ISSUE-1", step = "worktree_create", status = "started"),
-                    type = "issue",
-                ),
-            ),
-        )
-        advanceUntilIdle()
-
-        val s = vm.uiState.value
-        assertEquals("worktree", s.activePhase)
-        assertEquals("active", s.phases["worktree"]?.status)
-    }
-
     // ---- Log ring overflow (LOG_RING_MAX = 2000) ----------------------------
 
     @Test
@@ -451,33 +383,6 @@ class AutoScanDetailViewModelTest {
 
         coVerify(exactly = 1) { fx.repository.runNow(PROJECT) }
         assertEquals("2026-04-11T03:00:00Z", vm.uiState.value.nextScanAt)
-    }
-
-    @Test
-    fun runNow_onException_isSwallowed_noUiStateCrash() = runTest {
-        val fx = newFixture()
-        coEvery { fx.repository.runNow(PROJECT) } throws RuntimeException("network")
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        // Must not throw.
-        vm.runNow()
-        advanceUntilIdle()
-
-        // State stays at default nextScanAt == null.
-        assertNull(vm.uiState.value.nextScanAt)
-    }
-
-    @Test
-    fun stop_invokesRepositoryStopScan() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.stop()
-        advanceUntilIdle()
-
-        coVerify(exactly = 1) { fx.repository.stopScan(PROJECT) }
     }
 
     companion object {

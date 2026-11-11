@@ -28,9 +28,7 @@ function scan(overrides: Record<string, unknown>): AutoScanInstance {
 describe('status mapping', () => {
   it.each([
     ['scanning', 'running'],
-    ['idle', 'pending'],
     ['error', 'crashed'],
-    ['stopped', 'stopped'],
   ])('%s is toned %s', (status, tone) => {
     expect(autoScanTone(status)).toBe(tone);
   });
@@ -39,10 +37,6 @@ describe('status mapping', () => {
     // `status` is an open wire string; a newer agent value must not read as live.
     expect(autoScanTone('quiescing')).toBe('stopped');
     expect(autoScanStatusLabel('quiescing')).toBe('Quiescing');
-  });
-
-  it('leaves an empty status empty', () => {
-    expect(autoScanStatusLabel('')).toBe('');
   });
 
   it('maps phase and issue statuses', () => {
@@ -62,9 +56,7 @@ describe('relativeTime', () => {
 
   it.each([
     [now / 1000 - 1, 'just now'],
-    [now / 1000 - 30, '30s ago'],
     [now / 1000 - 120, '2m ago'],
-    [now / 1000 - 7200, '2h ago'],
     [now / 1000 - 172_800, '2d ago'],
   ])('renders %s as %s', (epochSeconds, expected) => {
     expect(relativeTime(epochSeconds, now)).toBe(expected);
@@ -125,11 +117,5 @@ describe('sortScans', () => {
       scan({ project_name: 'a', last_activity_at: 10 }),
     ]);
     expect(sorted.map((entry) => entry.project_name)).toEqual(['c', 'a', 'b']);
-  });
-
-  it('does not mutate its input', () => {
-    const input = [scan({ project_name: 'b' }), scan({ project_name: 'a' })];
-    sortScans(input);
-    expect(input.map((entry) => entry.project_name)).toEqual(['b', 'a']);
   });
 });

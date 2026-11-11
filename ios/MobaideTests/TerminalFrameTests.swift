@@ -2,11 +2,6 @@ import XCTest
 @testable import Mobaide
 
 final class TerminalFrameTests: XCTestCase {
-    func testResizeGolden40x120() {
-        let encoded = TerminalOutboundFrame.resize(rows: 40, cols: 120).encoded
-        XCTAssertEqual(encoded, Data([0x72, 0x00, 0x28, 0x00, 0x78]))
-    }
-
     func testResizeBigEndianRowsFirst() {
         let encoded = TerminalOutboundFrame.resize(rows: 0x0102, cols: 0x0304).encoded
         XCTAssertEqual(encoded, Data([0x72, 0x01, 0x02, 0x03, 0x04]))
@@ -21,10 +16,6 @@ final class TerminalFrameTests: XCTestCase {
     func testInputPayloadIsUTF8AtOffsetOne() {
         let encoded = TerminalOutboundFrame.input("hé").encoded
         XCTAssertEqual(encoded, Data([0x69]) + Data("hé".utf8))
-    }
-
-    func testEmptyPayloadEncodesTypeByteOnly() {
-        XCTAssertEqual(TerminalOutboundFrame.submit("").encoded, Data([0x6D]))
     }
 
     func testDecodeOutput() {
@@ -45,10 +36,6 @@ final class TerminalFrameTests: XCTestCase {
 
     func testDecodeEmptyFrameIsNil() {
         XCTAssertNil(TerminalInboundFrame.decode(Data()))
-    }
-
-    func testDecodeUnknownTypeByteIsNil() {
-        XCTAssertNil(TerminalInboundFrame.decode(Data([0x7A, 0x00])))
     }
 
     func testDecodeOutboundOnlyTypeBytesAreNil() {

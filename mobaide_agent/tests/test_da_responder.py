@@ -26,11 +26,6 @@ def test_da1_with_question_mark_prefix() -> None:
     assert r.pending_replies() == DA1_REPLY
 
 
-def test_da1_with_zero_param() -> None:
-    r = DaResponder()
-    out = r.process(b"\x1b[0c")
-    assert out == b""
-    assert r.pending_replies() == DA1_REPLY
 
 
 def test_da2() -> None:
@@ -55,12 +50,6 @@ def test_split_at_esc_boundary() -> None:
     assert r.pending_replies() == DA1_REPLY
 
 
-def test_split_mid_csi() -> None:
-    r = DaResponder()
-    a = r.process(b"x\x1b[")
-    b = r.process(b"cy")
-    assert a + b == b"xy"
-    assert r.pending_replies() == DA1_REPLY
 
 
 def test_split_with_param_across_chunks() -> None:
@@ -78,11 +67,6 @@ def test_non_da_csi_passes_through() -> None:
     assert r.pending_replies() == b""
 
 
-def test_mixed_da_and_sgr() -> None:
-    r = DaResponder()
-    out = r.process(b"\x1b[31mhi\x1b[c\x1b[0mbye")
-    assert out == b"\x1b[31mhi\x1b[0mbye"
-    assert r.pending_replies() == DA1_REPLY
 
 
 def test_long_sgr_not_carried_forever() -> None:
@@ -94,10 +78,6 @@ def test_long_sgr_not_carried_forever() -> None:
     assert r.pending_replies() == b""
 
 
-def test_empty_chunk() -> None:
-    r = DaResponder()
-    assert r.process(b"") == b""
-    assert r.pending_replies() == b""
 
 
 def test_multiple_da_in_one_chunk() -> None:

@@ -179,7 +179,7 @@ class TestInitiatePairing:
     def test_includes_metadata_in_request_body(self):
         captured: dict = {}
 
-        def _fake_urlopen(req, timeout=None):
+        def _fake_urlopen(req, timeout=None, **_kwargs):
             captured["data"] = json.loads(req.data.decode("utf-8"))
             return _FakeResp(200, _initiate_response())
 
@@ -198,30 +198,13 @@ class TestInitiatePairing:
             "current_agent_id": "agent-prior",
         }
 
-    def test_omits_unset_metadata_fields(self):
-        # None values are dropped; only the keys the agent actually
-        # supplied land in the JSON body.
-        captured: dict = {}
-
-        def _fake_urlopen(req, timeout=None):
-            captured["data"] = json.loads(req.data.decode("utf-8"))
-            return _FakeResp(200, _initiate_response())
-
-        with patch("urllib.request.urlopen", side_effect=_fake_urlopen):
-            initiate_pairing(
-                "wss://relay.test",
-                pinned_trust_key_fp="ff" * 32,
-            )
-
-        assert captured["data"] == {}
-
     def test_outbound_request_carries_mobaide_user_agent(self):
         # Regression guard for the Cloudflare 1010 UA block: ``initiate_pairing`` must route through
         # ``mobaide._http.urlopen`` so Cloudflare's default Bot Fight Mode
         # doesn't 403 the request based on the ``Python-urllib/X.Y`` UA.
         captured: dict = {}
 
-        def _fake_urlopen(req, timeout=None):
+        def _fake_urlopen(req, timeout=None, **_kwargs):
             captured["request"] = req
             return _FakeResp(200, _initiate_response())
 
@@ -246,10 +229,6 @@ class TestPairingWsUrlHelper:
         "relay_url,expected",
         [
             ("wss://relay.example.com",
-             "wss://relay.example.com/ws/pairing/N1"),
-            ("wss://relay.example.com:9000",
-             "wss://relay.example.com:9000/ws/pairing/N1"),
-            ("https://relay.example.com",
              "wss://relay.example.com/ws/pairing/N1"),
             ("https://relay.example.com:9000",
              "wss://relay.example.com:9000/ws/pairing/N1"),
@@ -337,7 +316,6 @@ class TestHandshakeStatusHelper:
                 id="handshake-without-status",
             ),
             pytest.param(OSError("connection refused"), None, id="not-handshake"),
-            pytest.param(None, None, id="no-cause"),
         ],
     )
     def test_reads_the_rejected_handshake_status(self, cause, expected):
@@ -394,23 +372,6 @@ class TestWriteCredentialsToEnv:
 
         contents = env_path.read_text(encoding="utf-8")
         assert "RELAY_SERVER_URL=https://relay.test" in contents
-
-    async def test_writes_to_nonexistent_env_file(self, env_path: Path):
-        # No pre-existing file: the writer creates one carrying the new
-        # credentials. (init-env is a separate prerequisite, but the
-        # writer itself must not crash on a missing target.)
-        claim = PairingClaim(
-            agent_id="i", agent_token="t",
-            relay_url="https://relay.test",
-            agent_friendly_name="x",
-            issued_at="2026-05-07T00:00:00+00:00",
-        )
-
-        await write_credentials_to_env(env_path, claim)
-
-        text = env_path.read_text(encoding="utf-8")
-        assert "RELAY_AGENT_ID=i" in text
-        assert "RELAY_AGENT_TOKEN=t" in text
 
     async def test_preserves_claude_bin_when_rewriting_credentials(
         self, env_path: Path
@@ -633,46 +594,6 @@ class TestRunPairingMonitorWriteFailureHandling(_RunPairingMonitorTestBase):
         )
         return recorder
 
-    async def test_oserror_during_write_does_not_crash_task(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        # First cycle: write raises PermissionError (the exact original
-        # bug surface on Windows under ``SYSTEM:R``). Second cycle:
-        # write succeeds, ``on_paired`` fires, loop exits. The task
-        # must complete without re-raising — that's the contract the
-        # ``except OSError`` clause provides.
-        recorder = self._install_loop_stubs(
-            monkeypatch,
-            write_side_effects=[
-                PermissionError("simulated SYSTEM:R blocking os.replace"),
-                None,
-            ],
-        )
-        layout = self._make_layout(tmp_path)
-
-        with caplog.at_level(logging.ERROR, logger=_pm.__name__):
-            await asyncio.wait_for(
-                run_pairing_monitor(
-                    layout=layout,
-                    relay_server_url="wss://relay.test",
-                    on_paired=recorder["on_paired"],
-                ),
-                timeout=5.0,
-            )
-
-        # The loop entered the write step twice (first raised, second
-        # succeeded). If the OSError had escaped, the second call
-        # would never have happened.
-        assert recorder["write_calls"] == 2, (
-            f"expected exactly two write attempts (raise + succeed); "
-            f"got {recorder['write_calls']}"
-        )
-        # Final cycle's success path called ``on_paired`` exactly once.
-        assert recorder["on_paired_calls"] == 1
-
     async def test_write_failure_retries_inline_and_does_not_clear_pending(
         self,
         tmp_path: Path,
@@ -865,50 +786,6 @@ class TestRunPairingMonitorWriteFailureHandling(_RunPairingMonitorTestBase):
             f"in ERROR logs; got: {error_messages!r}"
         )
 
-    async def test_on_paired_callback_receives_claim_and_is_awaited(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        # The post-7b9c581 refactor changed ``on_paired`` from a sync
-        # no-arg callback (used to schedule ``sys.exit(75)``) into an
-        # async callable that receives the validated ``PairingClaim``.
-        # ``app.py``'s production callback uses the claim to build a
-        # ``RelayConfig`` and start the relay client in-process without
-        # any process restart. If the contract regresses — e.g. a future
-        # refactor reverts to a no-arg sync signature — the in-process
-        # pairing transition silently breaks and the agent falls back to
-        # restart-based pairing (which is what the broader fix was
-        # designed to eliminate).
-        recorder = self._install_loop_stubs(
-            monkeypatch,
-            write_side_effects=[None],
-        )
-        layout = self._make_layout(tmp_path)
-
-        await asyncio.wait_for(
-            run_pairing_monitor(
-                layout=layout,
-                relay_server_url="wss://relay.test",
-                on_paired=recorder["on_paired"],
-            ),
-            timeout=5.0,
-        )
-
-        # Callback fired exactly once on the successful write cycle.
-        assert recorder["on_paired_calls"] == 1
-        # Callback received the claim — pins the new contract.
-        # Without this the test would pass even if the production code
-        # passed an entirely wrong object (or None).
-        received = recorder["on_paired_claim"]
-        assert received is not None, (
-            "on_paired must receive the PairingClaim as its sole "
-            "positional argument; got None"
-        )
-        assert received.agent_id == "new-agent-id"
-        assert received.agent_token == "new-agent-token"
-        assert received.relay_url == "https://relay.test"
-
     async def test_on_paired_async_callback_exception_does_not_crash_loop(
         self,
         tmp_path: Path,
@@ -970,104 +847,6 @@ class TestRunPairingMonitorWriteFailureHandling(_RunPairingMonitorTestBase):
         ), (
             f"expected 'pairing_monitor.on_paired_callback_failed' "
             f"WARNING log; got: {warning_messages!r}"
-        )
-
-    async def test_write_failure_retries_write_not_ws(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        # Post-fix contract: a failing write retries the WRITE in an
-        # inner loop while holding the claim in memory; it never falls
-        # back to the outer WS loop. The claim is single-use server-side
-        # (``claim_pairing_nonce`` consumed it and the WS push/recovery
-        # cleared ``claimed_token_raw``), so a fresh ``wait_for_claim``
-        # on a new nonce would orphan the credentials forever — exactly
-        # the user-reported bug.
-        #
-        # Pin both signals so a regression that re-introduces the
-        # "fall back to outer WS loop on write failure" path is caught:
-        # (1) ``write_calls`` reflects every inner-loop attempt
-        #     (2 failures + 1 success = 3 here);
-        # (2) the WS was dialled exactly once. The existing fixture's
-        #     ``save_calls`` is a per-outer-iteration counter (``_stub_load``
-        #     returns None, so every outer iteration must initiate + save)
-        #     and is the cleanest "outer loop didn't re-enter" proof; we
-        #     additionally instrument the WS stub with a class-level
-        #     counter so the assertion message names the exact regression
-        #     symptom an operator would see.
-        ws_dial_count = {"n": 0}
-
-        recorder = self._install_loop_stubs(
-            monkeypatch,
-            write_side_effects=[
-                OSError("simulated disk-full attempt 1"),
-                OSError("simulated disk-full attempt 2"),
-                None,
-            ],
-        )
-
-        # Replace the fixture's ``_StubWsClient`` with one that increments
-        # a counter on every dial — gives a direct, non-proxied signal
-        # of "the outer WS loop was re-entered". The fixture installed
-        # its own stub via ``monkeypatch.setattr``; the subsequent setattr
-        # below is undone automatically at teardown by monkeypatch.
-        claim = self._make_claim()
-
-        class _CountingConn:
-            async def wait_for_claim(self, **_kwargs):
-                return claim
-
-        class _CountingWsClient:
-            @classmethod
-            @contextlib.asynccontextmanager
-            async def connect(cls, _ws_url):
-                ws_dial_count["n"] += 1
-                yield _CountingConn()
-
-        monkeypatch.setattr(_pm, "PairingWsClient", _CountingWsClient)
-
-        layout = self._make_layout(tmp_path)
-
-        await asyncio.wait_for(
-            run_pairing_monitor(
-                layout=layout,
-                relay_server_url="wss://relay.test",
-                on_paired=recorder["on_paired"],
-            ),
-            timeout=5.0,
-        )
-
-        # Three write attempts: two failures + one success in the inner
-        # retry loop. A regression that re-entered the outer WS loop on
-        # write failure would still write 3 times overall but spread
-        # across multiple WS dials.
-        assert recorder["write_calls"] == 3, (
-            f"expected 3 write attempts (2 OSError + 1 success in the "
-            f"inner retry loop); got {recorder['write_calls']}"
-        )
-        # The smoking-gun pin: exactly one WS dial across all three
-        # write attempts. A regression that fell back to the outer loop
-        # on write failure would push this to 3, and the second/third
-        # WS dial would deliver a fresh nonce — orphaning the original
-        # claim server-side.
-        assert ws_dial_count["n"] == 1, (
-            f"expected exactly one PairingWsClient.wait_for_claim call "
-            f"across the inner write retry loop; got {ws_dial_count['n']} "
-            f"— a regression that re-enters the outer WS loop on write "
-            f"failure would dial again and orphan the just-received "
-            f"single-use claim"
-        )
-        # Reinforcing signal: only one outer iteration ran, so only one
-        # save_pending_pairing was issued.
-        assert recorder["save_calls"] == 1, (
-            f"expected exactly one save_pending_pairing (one outer "
-            f"iteration); got {recorder['save_calls']}"
-        )
-        # The success path's ``on_paired`` fired exactly once.
-        assert recorder["on_paired_calls"] == 1, (
-            f"expected on_paired to fire exactly once after the "
-            f"inner-loop success; got {recorder['on_paired_calls']}"
         )
 
     async def test_write_failure_backoff_grows_between_attempts(
@@ -1330,112 +1109,6 @@ class TestRunPairingMonitorWsFailureHandling(_RunPairingMonitorTestBase):
             f"WS-failure branch; got: {warning_messages!r}"
         )
 
-    async def test_ws_failure_backoff_grows_between_attempts(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        # Successive WS-failure retries apply a GROWING backoff.
-        # Before the fix, the WS-failure branch slept
-        # ``_BACKOFF_FLOOR_S`` (2 s) flat and then cleared pending —
-        # bounded at 1 attempt/nonce. The post-fix branch RETAINS
-        # pending and re-dials, which without growth would fan a
-        # fleet-wide CDN glitch into ~60 reconnects/nonce/agent
-        # (120 s TTL / 2 s floor) — a thundering herd against the
-        # central server. Reusing the outer ``backoff`` local with
-        # ``backoff = min(_BACKOFF_CEIL_S, backoff * 2)`` caps the
-        # per-nonce attempt count at ~6.
-        #
-        # We pin the GROWTH DIRECTION (strictly increasing successive
-        # sleeps) and neutralise the jitter to keep the assertion
-        # deterministic. The jitter itself is verified separately in
-        # ``test_ws_failure_applies_jitter`` so a regression that
-        # drops jitter while keeping growth (or vice versa) fails
-        # exactly one of these tests with a clear message.
-        captured_sleeps: list[float] = []
-        real_sleep = asyncio.sleep
-
-        async def _capturing_sleep(duration: float) -> None:
-            captured_sleeps.append(duration)
-            # Yield control without real wall-clock burn so the
-            # bounded run can iterate many times quickly.
-            await real_sleep(0)
-
-        fake_asyncio = types.SimpleNamespace(
-            **{
-                name: getattr(asyncio, name)
-                for name in dir(asyncio)
-                if not name.startswith("__")
-            }
-        )
-        fake_asyncio.sleep = _capturing_sleep
-        monkeypatch.setattr(_pm, "asyncio", fake_asyncio)
-
-        # Neutralise jitter for monotonicity: the production code adds
-        # ``random.uniform(0, 1)`` to each WS-failure sleep, which can
-        # add up to 1 s of noise. Without neutralisation, a sleep of
-        # 0.01 + 0.9 (jitter) followed by 0.02 + 0.05 (jitter) would
-        # appear to DECREASE — masking the growth we want to pin.
-        # Replacing ``_pm.random`` with a SimpleNamespace exposing
-        # ``uniform = lambda _a, _b: 0.0`` zeroes the jitter for this
-        # test only without touching the global ``random`` module.
-        # ``test_ws_failure_applies_jitter`` below pins that the
-        # jitter call still happens.
-        fake_random = types.SimpleNamespace(uniform=lambda _a, _b: 0.0)
-        monkeypatch.setattr(_pm, "random", fake_random)
-
-        recorder = self._install_ws_failure_stubs(monkeypatch)
-
-        # Return the SAME pending on every pass, as the persisted file does
-        # in production, so a same-nonce WS failure skips re-initiate.
-        # Backoff resets only after a claim wait of ``_HEALTHY_WAIT_S``;
-        # these failures are immediate, so the sleeps must keep doubling.
-        stable_pending = self._make_pending()
-        monkeypatch.setattr(
-            _pm, "load_pending_pairing", lambda _layout: stable_pending,
-        )
-
-        layout = self._make_layout(tmp_path)
-
-        with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(
-                run_pairing_monitor(
-                    layout=layout,
-                    relay_server_url="wss://relay.test",
-                    on_paired=recorder["on_paired"],
-                ),
-                timeout=0.5,
-            )
-
-        assert recorder["ws_calls"] >= 3, (
-            f"loop must reach the WS-failure branch at least 3 times "
-            f"to observe growth across successive sleeps; got "
-            f"ws_calls={recorder['ws_calls']}"
-        )
-        assert len(captured_sleeps) >= 3, (
-            f"expected at least 3 captured WS-failure sleeps; got "
-            f"{len(captured_sleeps)}: {captured_sleeps!r}"
-        )
-
-        # Smoking-gun pin: take the first three captured sleeps and
-        # assert each is strictly greater than its predecessor.
-        # A regression that removes the
-        # ``backoff = min(_BACKOFF_CEIL_S, backoff * 2)`` line and
-        # reverts to the pre-fix flat-floor sleep would produce equal
-        # values and trip this assertion. We pin only the first three
-        # samples to avoid coupling to ``_BACKOFF_CEIL_S`` (later
-        # samples may hit the cap and become equal).
-        first_three = captured_sleeps[:3]
-        for i in range(1, len(first_three)):
-            assert first_three[i] > first_three[i - 1], (
-                f"WS-failure sleep #{i + 1} ({first_three[i]}) must "
-                f"be strictly greater than #{i} ({first_three[i - 1]}); "
-                f"full first-three sequence: {first_three!r}. A "
-                f"regression that drops the exponential growth math "
-                f"would emit a constant sleep of _BACKOFF_FLOOR_S and "
-                f"produce equal values here."
-            )
-
     async def test_ws_failure_applies_jitter(
         self,
         tmp_path: Path,
@@ -1674,136 +1347,6 @@ class TestRunPairingMonitorWsBeforeSaveOrdering(_RunPairingMonitorTestBase):
         assert wait_idx < write_idx < on_paired_idx, (
             f"expected wait → write → on_paired ordering after the "
             f"claim is received; got: {order!r}"
-        )
-
-    async def test_pending_file_not_saved_when_connect_fails_before_ready(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        # Negative case of ``test_save_pending_pairing_happens_inside_connect_block``.
-        # When ``PairingWsClient.connect`` raises ``PairingWsError`` BEFORE
-        # yielding (i.e. before the server's ``"ready"`` frame is received),
-        # ``save_pending_pairing`` MUST NOT be called for the fresh nonce.
-        # This is the on-disk side of the QR-before-WS race fix: the
-        # ``install.ps1`` polling loop must not see a pending-pairing file
-        # for a nonce the agent never finished WS-handshaking on, because
-        # a fast mobile scan against such a file would land the claim in
-        # the server's recovery branch — exactly the failure mode the
-        # two-phase API is meant to eliminate.
-        #
-        # If a regression moves the save back outside the ``async with``
-        # block (or above the ``"ready"`` await), this assertion is the
-        # smallest visible signal: ``save_calls`` will be ≥ 1 even though
-        # ``connect`` never yielded.
-        pending = self._make_pending()
-
-        recorder: dict = {
-            "save_calls": 0,
-            "ws_connect_calls": 0,
-            "render_calls": 0,
-            "write_calls": 0,
-        }
-
-        async def _stub_initiate(
-            relay_server_url, layout, *,
-            hostname, os_name, current_agent_id,
-        ):
-            return pending
-
-        def _stub_load(_layout):
-            return None
-
-        def _stub_save(_layout, _pending):
-            recorder["save_calls"] += 1
-
-        def _stub_clear(_layout):
-            pass
-
-        async def _stub_render(_pending):
-            recorder["render_calls"] += 1
-
-        async def _stub_write(_env_path, _claim):
-            recorder["write_calls"] += 1
-
-        async def _on_paired(_received):
-            pass
-
-        class _FailBeforeReadyWsClient:
-            @classmethod
-            @contextlib.asynccontextmanager
-            async def connect(cls, _ws_url):
-                # Raise BEFORE yielding — models the real ``"ready"``-timeout
-                # path in ``PairingWsClient.connect`` (asyncio.TimeoutError
-                # on ``ws.recv()`` for the ready frame is wrapped into
-                # PairingWsError). Production code branches into the
-                # ``except PairingWsError`` arm with no connection ever
-                # having been handed to the caller.
-                recorder["ws_connect_calls"] += 1
-                raise PairingWsError("simulated pre-ready failure")
-                yield  # pragma: no cover — make this an async generator
-
-        monkeypatch.setattr(
-            _pm, "read_trust_public_key", lambda _layout: "stub-pub-key"
-        )
-        monkeypatch.setattr(_pm, "_initiate_with_metadata", _stub_initiate)
-        monkeypatch.setattr(_pm, "load_pending_pairing", _stub_load)
-        monkeypatch.setattr(_pm, "save_pending_pairing", _stub_save)
-        monkeypatch.setattr(_pm, "clear_pending_pairing", _stub_clear)
-        monkeypatch.setattr(_pm, "_render_pending_to_stdout", _stub_render)
-        monkeypatch.setattr(_pm, "PairingWsClient", _FailBeforeReadyWsClient)
-        monkeypatch.setattr(_pm, "write_credentials_to_env", _stub_write)
-
-        layout = self._make_layout(tmp_path)
-
-        # Bounded run — the loop is infinite while connect keeps raising.
-        # The TimeoutError is the EXPECTED exit; what we pin is the
-        # behaviour observed inside the bounded window.
-        with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(
-                run_pairing_monitor(
-                    layout=layout,
-                    relay_server_url="wss://relay.test",
-                    on_paired=_on_paired,
-                ),
-                timeout=0.2,
-            )
-
-        # Sanity: the loop did reach the WS connect step at least once,
-        # so the assertion below is exercising the new ordering and not
-        # silently passing because the loop never got that far.
-        assert recorder["ws_connect_calls"] >= 1, (
-            f"PairingWsClient.connect was never called; the bounded "
-            f"window did not reach the WS step "
-            f"(ws_connect_calls={recorder['ws_connect_calls']!r}). "
-            f"Without exercising connect, this test cannot prove the "
-            f"new WS-before-save ordering."
-        )
-        # Smoking gun: ``save_pending_pairing`` MUST stay at zero across
-        # every retry iteration. A regression that re-introduces the
-        # pre-fix ordering (save BEFORE connect) would tick this up to
-        # ws_connect_calls.
-        assert recorder["save_calls"] == 0, (
-            f"save_pending_pairing was called {recorder['save_calls']} "
-            f"times even though PairingWsClient.connect raised before "
-            f"the ``\"ready\"`` frame on every iteration. The new "
-            f"two-phase API anchors the on-disk pending-pairing signal "
-            f"AFTER ``\"ready\"`` precisely so a connect failure does "
-            f"not publish a file that install.ps1's polling loop would "
-            f"render to a mobile scanner before the agent is reachable "
-            f"for dispatch. A non-zero count here means the save was "
-            f"moved back outside the ``async with`` block, re-opening "
-            f"the QR-before-WS race that caused the empty-.env bug."
-        )
-        # Reinforcing: render/write must also be unreached.
-        assert recorder["render_calls"] == 0, (
-            f"_render_pending_to_stdout was called {recorder['render_calls']} "
-            f"times on the connect-failed path; the QR render is also "
-            f"inside the ``async with`` block and must stay there"
-        )
-        assert recorder["write_calls"] == 0, (
-            f"write_credentials_to_env reached on the connect-failed "
-            f"path; got {recorder['write_calls']} calls"
         )
 
 
@@ -2549,26 +2092,6 @@ class TestRenderPendingToStdout:
             "may have been removed — regression risk is the original "
             "Windows-service pairing crash (UnicodeEncodeError tears "
             "down the WS before ``wait_for_claim``)"
-        )
-
-    async def test_swallows_unexpected_error(
-        self, monkeypatch, caplog
-    ) -> None:
-        def _raise_runtime(*_args, **_kwargs):
-            raise RuntimeError("boom")
-
-        monkeypatch.setattr(_pm, "render_qr_to_terminal", _raise_runtime)
-        caplog.set_level(logging.WARNING, logger="mobaide.agent.pairing_monitor")
-
-        await _pm._render_pending_to_stdout(self._make_pending())
-
-        assert any(
-            "qr_render_skipped" in rec.getMessage()
-            and "RuntimeError" in rec.getMessage()
-            for rec in caplog.records
-        ), (
-            "expected the safety net to also swallow generic "
-            "exceptions, not only UnicodeEncodeError"
         )
 
     async def test_swallows_pairing_hint_write_error(

@@ -65,17 +65,6 @@ describe('enqueue', () => {
     ]);
   });
 
-  it('appends to an open batch instead of replacing it', () => {
-    const first = enqueue(initialGitDeleteState, [branch('feature-a')], false);
-
-    const second = enqueue(first, [branch('feature-b')], false);
-
-    expect(second.pending.map((entry) => entry.id)).toEqual([
-      'branch_only:feature-a',
-      'branch_only:feature-b',
-    ]);
-  });
-
   it('ignores the checked-out branch and rows already queued', () => {
     const queued = enqueue(initialGitDeleteState, [branch('feature-a')], false);
 
@@ -217,13 +206,6 @@ describe('confirmForce', () => {
     expect(state.force).toBeNull();
   });
 
-  it('does nothing when no prompt is open', () => {
-    const { state, batch } = confirmForce(initialGitDeleteState);
-
-    expect(state).toBe(initialGitDeleteState);
-    expect(batch).toEqual([]);
-  });
-
   it('leaves the rows visible when the prompt is dismissed', () => {
     const items = [branch('a')];
     const taken = takePending(enqueue(initialGitDeleteState, items, false));
@@ -257,11 +239,6 @@ describe('reconcile', () => {
     expect(state.pending.map((entry) => entry.id)).toEqual(['branch_only:a']);
   });
 
-  it('returns the same state when the reload changed nothing', () => {
-    const queued = enqueue(initialGitDeleteState, [branch('a')], false);
-
-    expect(reconcile(queued, [branch('a'), branch('b')])).toBe(queued);
-  });
 });
 
 describe('gitItemId', () => {

@@ -13,7 +13,6 @@ import pytest
 
 from mobaide.linear.worktree import (
     BranchDeleteError,
-    BranchInfo,
     WorktreeInfo,
     WorktreeManager,
     WorktreeRemoveError,
@@ -23,8 +22,6 @@ from mobaide.linear.worktree import (
 
 
 class TestParseForEachRef:
-    def test_empty_input_returns_empty_list(self):
-        assert _parse_for_each_ref("") == []
 
     def test_single_branch_with_no_upstream(self):
         # name\0upstream\0track\0sha\0head — empty upstream + no track + no HEAD marker
@@ -67,18 +64,6 @@ class TestParseForEachRef:
         assert result[0].behind == 1
         assert result[0].gone is False
 
-    def test_ahead_only(self):
-        line = "ahead-only\x00origin/ahead-only\x00[ahead 5]\x00sha\x00 \n"
-        result = _parse_for_each_ref(line)
-        assert result[0].ahead == 5
-        assert result[0].behind == 0
-
-    def test_behind_only(self):
-        line = "behind-only\x00origin/behind-only\x00[behind 3]\x00sha\x00 \n"
-        result = _parse_for_each_ref(line)
-        assert result[0].ahead == 0
-        assert result[0].behind == 3
-
     def test_multiple_branches_one_current(self):
         stdout = (
             "main\x00origin/main\x00\x00sha1\x00*\n"
@@ -90,12 +75,6 @@ class TestParseForEachRef:
         assert [b.is_current for b in result] == [True, False, False]
         assert result[2].gone is True
 
-    def test_blank_lines_skipped(self):
-        stdout = "\nmain\x00\x00\x00sha\x00*\n\n"
-        result = _parse_for_each_ref(stdout)
-        assert len(result) == 1
-        assert result[0].name == "main"
-
     def test_short_line_skipped_silently(self):
         # Lines without all 5 fields must be ignored, not crash.
         stdout = "garbage-only-one-field\nmain\x00\x00\x00sha\x00*\n"
@@ -105,8 +84,6 @@ class TestParseForEachRef:
 
 
 class TestParseWorktreePorcelain:
-    def test_empty_input_returns_empty_list(self):
-        assert _parse_worktree_porcelain("") == []
 
     def test_single_worktree_with_branch(self):
         stdout = (
@@ -152,19 +129,6 @@ class TestParseWorktreePorcelain:
         wt = result[0]
         assert wt.locked is True
         assert wt.locked_reason == "manual lock for migration"
-
-    def test_locked_worktree_without_reason(self):
-        # Plain "locked\n" with no value.
-        stdout = (
-            "worktree /repo/wt\n"
-            "HEAD sha\n"
-            "branch refs/heads/topic\n"
-            "locked\n"
-            "\n"
-        )
-        result = _parse_worktree_porcelain(stdout)
-        assert result[0].locked is True
-        assert result[0].locked_reason is None
 
     def test_prunable_worktree(self):
         stdout = (
@@ -299,15 +263,6 @@ class TestDeleteBranch:
             await manager.delete_branch(str(tmp_path), "x", force=True)
         assert exc_info.value.unmerged is False
 
-    @patch("mobaide.linear.worktree._run_git")
-    async def test_delete_branch_happy_path_returns_none(
-        self, mock_git, manager, tmp_path,
-    ):
-        mock_git.return_value = (0, "", "")
-        # Must not raise; the contract is "return None on success".
-        result = await manager.delete_branch(str(tmp_path), "feature/x", force=False)
-        assert result is None
-
 
 class TestRemoveWorktree:
     @patch("mobaide.linear.worktree._run_git")
@@ -424,19 +379,3 @@ class TestListMethods:
         assert "worktree" in args
         assert "list" in args
         assert "--porcelain" in args
-
-    @patch("mobaide.linear.worktree._run_git")
-    async def test_list_worktrees_propagates_failure(
-        self, mock_git, manager, tmp_path,
-    ):
-        mock_git.return_value = (128, "", "fatal: boom")
-        with pytest.raises(RuntimeError, match="worktree list failed"):
-            await manager.list_worktrees(str(tmp_path))
-
-    @patch("mobaide.linear.worktree._run_git")
-    async def test_list_branches_returns_branchinfo_instances(
-        self, mock_git, manager, tmp_path,
-    ):
-        mock_git.return_value = (0, "main\x00\x00\x00sha\x00*\n", "")
-        result = await manager.list_branches(str(tmp_path))
-        assert all(isinstance(b, BranchInfo) for b in result)

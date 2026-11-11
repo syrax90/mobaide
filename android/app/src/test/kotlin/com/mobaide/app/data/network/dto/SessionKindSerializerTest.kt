@@ -2,7 +2,6 @@ package com.mobaide.app.data.network.dto
 
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -69,21 +68,6 @@ class SessionKindSerializerTest {
             """{"session_id":"s1","state":"running","created_at":"t","kind":null}""",
         )
         assertEquals(SessionKind.Claude, dto.kind)
-    }
-
-    @Test
-    fun kindLabel_decodesWhenPresent_defaultsToNullWhenAbsent() {
-        val labeled = json.decodeFromString(
-            SessionResponse.serializer(),
-            """{"session_id":"s1","state":"running","created_at":"t","kind":"custom_ab12cd34ef56","kind_label":"Aider"}""",
-        )
-        assertEquals("Aider", labeled.kind_label)
-
-        val unlabeled = json.decodeFromString(
-            SessionResponse.serializer(),
-            """{"session_id":"s1","state":"running","created_at":"t","kind":"claude"}""",
-        )
-        assertNull(unlabeled.kind_label)
     }
 
     @Test

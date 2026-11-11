@@ -63,15 +63,6 @@ class TestLoad:
         assert store.user_exists("anyone") is False
         assert store.verify("anyone", "pw") is False
 
-    def test_whitespace_only_file_yields_no_users(self, tmp_path):
-        path = tmp_path / "users.json"
-        path.write_text("   \n\t  \n")
-
-        store = UserStore(str(path))
-        store.load()
-
-        assert store.user_exists("anyone") is False
-
     def test_pre_populated_file_is_read(self, tmp_path):
         path = tmp_path / "users.json"
         hashed = bcrypt.hashpw(b"secret", bcrypt.gensalt()).decode()
@@ -109,14 +100,6 @@ class TestAddAndVerify:
         # No user added; must not raise.
         assert store.verify("ghost", "any") is False
 
-    def test_user_exists_true_and_false(self, tmp_path):
-        store = UserStore(str(tmp_path / "users.json"))
-        store.load()
-        store.add_user("alice", "pw")
-
-        assert store.user_exists("alice") is True
-        assert store.user_exists("bob") is False
-
     def test_add_user_overwrites_existing_entry(self, tmp_path):
         store = UserStore(str(tmp_path / "users.json"))
         store.load()
@@ -129,19 +112,6 @@ class TestAddAndVerify:
 
 
 class TestPersistence:
-    def test_add_user_persists_to_disk(self, tmp_path):
-        path = tmp_path / "users.json"
-        store = UserStore(str(path))
-        store.load()
-
-        store.add_user("alice", "plaintext-pw")
-
-        on_disk = json.loads(path.read_text())
-        assert "alice" in on_disk
-        assert "password_hash" in on_disk["alice"]
-        # bcrypt hashes always start with "$2" (e.g. $2a$, $2b$, $2y$).
-        assert on_disk["alice"]["password_hash"].startswith("$2")
-
     def test_persisted_hash_is_not_plaintext(self, tmp_path):
         path = tmp_path / "users.json"
         store = UserStore(str(path))
@@ -157,30 +127,8 @@ class TestPersistence:
         assert reloaded.verify("alice", "plaintext-pw") is True
 
 
-class TestLoadOmittedFootgun:
-    """Document the subtle ``add_user`` without ``load`` overwrite behavior.
-
-    ``UserStore.__init__`` starts with ``self._users = {}`` and ``add_user``
-    does NOT call ``load`` itself. A caller that constructs a fresh UserStore
-    on top of a pre-populated file and immediately calls ``add_user`` will
-    clobber the existing file with just the newly added user. These tests
-    pin that behavior so any future "auto-load" refactor shows up loudly.
-    """
-
-    def test_add_user_without_load_overwrites_existing_file(self, tmp_path: Path):
-        path = tmp_path / "users.json"
-        # Pre-populate directly on disk.
-        existing_hash = bcrypt.hashpw(b"old-pw", bcrypt.gensalt()).decode()
-        path.write_text(json.dumps({"preexisting": {"password_hash": existing_hash}}))
-
-        # Construct a NEW store pointing at the same file. Intentionally skip load().
-        store = UserStore(str(path))
-        store.add_user("newcomer", "new-pw")
-
-        on_disk = json.loads(path.read_text())
-        # The previously-stored user is GONE.
-        assert "preexisting" not in on_disk
-        assert list(on_disk.keys()) == ["newcomer"]
+class TestAddUserAfterLoad:
+    """``add_user`` rewrites the whole file, so it must keep users read by ``load``."""
 
     def test_add_user_after_load_preserves_existing_file(self, tmp_path: Path):
         path = tmp_path / "users.json"

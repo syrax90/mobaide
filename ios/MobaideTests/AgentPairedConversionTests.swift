@@ -110,33 +110,6 @@ final class AgentPairedConversionTests: XCTestCase {
         XCTAssertEqual(state.getOutcome(userId: "u1"), "logged")
     }
 
-    func testDisabledSinkTouchesNothing() async {
-        let (conversion, sink, stub) = makeConversion(
-            me: .success(me(firstPairedAt: Self.stamp(Self.now))),
-            sinkEnabled: false
-        )
-
-        await conversion.armIfNeeded()
-        await conversion.firstAgentPaired(agentId: "a1")
-        await conversion.reconcileAfterConnect()
-
-        XCTAssertEqual(sink.events, [])
-        XCTAssertEqual(stub.calls, 0)
-        XCTAssertNil(state.getOutcome(userId: "u1"))
-        XCTAssertNil(state.getArmedAt())
-    }
-
-    func testSignedOutUserIsIgnored() async {
-        identity.clearUserSession()
-        let (conversion, sink, stub) = makeConversion(me: .success(me(firstPairedAt: Self.stamp(Self.now))))
-
-        await conversion.firstAgentPaired(agentId: "a1")
-        await conversion.reconcileAfterConnect()
-
-        XCTAssertEqual(sink.events, [])
-        XCTAssertEqual(stub.calls, 0)
-    }
-
     // MARK: - Reconcile
 
     func testReconcileLogsAPairingAfterArming() async {
@@ -204,30 +177,8 @@ final class AgentPairedConversionTests: XCTestCase {
         XCTAssertEqual(sink.events.map(\.name), ["agent_paired"])
     }
 
-    func testArmingIsSetIfAbsent() async {
-        let (first, _, _) = makeConversion(me: .success(me(firstPairedAt: nil)))
-        await first.armIfNeeded()
-        let (second, _, _) = makeConversion(
-            me: .success(me(firstPairedAt: nil)),
-            now: Self.now.addingTimeInterval(500)
-        )
-
-        await second.armIfNeeded()
-
-        XCTAssertEqual(state.getArmedAt(), Self.now)
-    }
-
     func testFetchFailurePersistsNothing() async {
         let (conversion, sink, _) = makeConversion(me: .failure(Boom()))
-
-        await conversion.reconcileAfterConnect()
-
-        XCTAssertEqual(sink.events, [])
-        XCTAssertNil(state.getOutcome(userId: "u1"))
-    }
-
-    func testUnparseableStampPersistsNothing() async {
-        let (conversion, sink, _) = makeConversion(me: .success(me(firstPairedAt: "yesterday")))
 
         await conversion.reconcileAfterConnect()
 

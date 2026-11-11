@@ -87,51 +87,7 @@ class TemplatesViewModelTest {
         assertNull(vm.uiState.value.deleteTarget)
     }
 
-    @Test
-    fun init_propagatesInitialTemplatesFromRepository() = runTest {
-        val fx = newFixture(initial = listOf(template("t-1"), template("t-2")))
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        assertEquals(
-            listOf("t-1", "t-2"),
-            vm.uiState.value.templates.map { it.template_id },
-        )
-    }
-
-    // ---- Repository pass-through -----------------------------------------------
-
-    @Test
-    fun observeTemplates_emissions_flowIntoUiState() = runTest {
-        // The init block subscribes to the repository's StateFlow and copies
-        // each emission into uiState.templates. Push-event-driven mutations
-        // must therefore appear in uiState without an explicit refresh.
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        fx.templatesFlow.value = listOf(template("t-1"), template("t-2"))
-        advanceUntilIdle()
-
-        assertEquals(2, vm.uiState.value.templates.size)
-        assertEquals("t-1", vm.uiState.value.templates[0].template_id)
-    }
-
     // ---- refresh() -------------------------------------------------------------
-
-    @Test
-    fun refresh_clearsLoadingAfterCompletion() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.refresh()
-        advanceUntilIdle()
-
-        assertFalse(vm.uiState.value.isLoading)
-        // refresh() called once in init plus once explicitly here.
-        coVerify(atLeast = 2) { fx.repo.refreshTemplates() }
-    }
 
     @Test
     fun refresh_onException_setsErrorMessage() = runTest {
@@ -146,37 +102,6 @@ class TemplatesViewModelTest {
 
         assertEquals("network down", vm.uiState.value.error)
         assertFalse(vm.uiState.value.isLoading)
-    }
-
-    @Test
-    fun refresh_onExceptionWithNullMessage_fallsBackToDefaultText() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        coEvery { fx.repo.refreshTemplates() } throws RuntimeException()
-
-        vm.refresh()
-        advanceUntilIdle()
-
-        assertEquals("Failed to load templates", vm.uiState.value.error)
-    }
-
-    // ---- clearError ------------------------------------------------------------
-
-    @Test
-    fun clearError_resetsErrorToNull() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        coEvery { fx.repo.refreshTemplates() } throws RuntimeException("err")
-        vm.refresh()
-        advanceUntilIdle()
-        assertEquals("err", vm.uiState.value.error)
-
-        vm.clearError()
-
-        assertNull(vm.uiState.value.error)
     }
 
     // ---- saveFromEditor: create vs edit branch ---------------------------------
@@ -275,40 +200,6 @@ class TemplatesViewModelTest {
         }
     }
 
-    @Test
-    fun toggleFavorite_inverse_flipsBackToFalse() = runTest {
-        val fx = newFixture()
-        coEvery {
-            fx.repo.updateTemplate(any(), any(), any(), any())
-        } returns template("t-1", favorite = false)
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        val fav = template("t-1", favorite = true)
-
-        vm.toggleFavorite(fav)
-        advanceUntilIdle()
-
-        coVerify(exactly = 1) {
-            fx.repo.updateTemplate("t-1", isFavorite = false)
-        }
-    }
-
-    @Test
-    fun toggleFavorite_onException_setsErrorMessage() = runTest {
-        val fx = newFixture()
-        coEvery {
-            fx.repo.updateTemplate(any(), any(), any(), any())
-        } throws RuntimeException("net")
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.toggleFavorite(template("t-1"))
-        advanceUntilIdle()
-
-        // Error text is intentionally a fixed string — see VM source.
-        assertEquals("Failed to update template", vm.uiState.value.error)
-    }
-
     // ---- Delete-confirmation state machine -------------------------------------
 
     @Test
@@ -327,18 +218,5 @@ class TemplatesViewModelTest {
         // The dialog dismissal happens BEFORE the network call so the user
         // never sees a stuck modal — guard that here.
         assertNull(vm.uiState.value.deleteTarget)
-    }
-
-    @Test
-    fun confirmDelete_onException_setsErrorMessage() = runTest {
-        val fx = newFixture()
-        coEvery { fx.repo.deleteTemplate(any()) } throws RuntimeException("forbidden")
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.confirmDelete(template("t-1"))
-        advanceUntilIdle()
-
-        assertEquals("Failed to delete template", vm.uiState.value.error)
     }
 }

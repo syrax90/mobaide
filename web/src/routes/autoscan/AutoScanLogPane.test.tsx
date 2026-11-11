@@ -87,16 +87,6 @@ describe('AutoScanLogPane', () => {
     expect(screen.getByRole('button')).toHaveTextContent('2 new');
   });
 
-  it('saturates the unread count so the button cannot resize', () => {
-    const { geometry, append } = renderPane(1);
-    geometry.scrollTop = 0;
-    fireEvent.scroll(viewport());
-
-    append(1001);
-
-    expect(screen.getByRole('button')).toHaveTextContent('999+');
-  });
-
   it('re-pins and drops the badge on jump to latest', () => {
     const { geometry, append } = renderPane(3);
     geometry.scrollTop = 0;

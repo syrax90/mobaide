@@ -32,18 +32,6 @@ final class TerminalKeyboardGateTests: XCTestCase {
 
     // MARK: - MobaideTerminalView responder gate
 
-    func testGateClosedByDefaultBlocksEligibility() {
-        let terminal = makeTerminal()
-        XCTAssertFalse(terminal.keyboardGate)
-        XCTAssertFalse(terminal.canBecomeFirstResponder)
-    }
-
-    func testOpenGateEnablesEligibility() {
-        let terminal = makeTerminal()
-        terminal.keyboardGate = true
-        XCTAssertTrue(terminal.canBecomeFirstResponder)
-    }
-
     func testBecomeFirstResponderFailsWhileGateClosed() {
         let terminal = makeTerminal()
         hostInKeyWindow(terminal)

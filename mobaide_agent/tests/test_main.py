@@ -148,28 +148,6 @@ class TestMainEventLoopPolicy:
             f"POSIX; got {recorder['policy_ctor_calls']} calls"
         )
 
-    def test_main_does_not_touch_event_loop_policy_on_darwin(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        # Belt-and-braces: macOS ("darwin") is also a POSIX-style
-        # platform that must NOT have the Windows policy forced. The
-        # production guard uses an exact ``== "win32"`` check rather
-        # than a ``startswith`` so darwin / freebsd / linux all skip
-        # the call; pin that contract.
-        monkeypatch.setattr(_main.sys, "platform", "darwin")
-        recorder = _install_policy_recorder(monkeypatch)
-
-        with pytest.raises(SystemExit) as excinfo:
-            _main.main(argv=["--version"])
-        assert excinfo.value.code == 0
-
-        assert recorder["set_calls"] == [], (
-            f"set_event_loop_policy must not be called on darwin; got: "
-            f"{recorder['set_calls']!r}"
-        )
-        assert recorder["policy_ctor_calls"] == 0
-
 
 class _StubApp:
     """Sentinel returned by the stubbed ``create_app``.

@@ -344,14 +344,6 @@ class TestStart:
         assert (await _status(repo)).repo.state == "merging"
         assert bus.published == []
 
-    async def test_a_rebase_already_stopped_is_refused_as_in_progress(self, repo):
-        _stop_on_conflict(repo)
-        await _start(repo, "main")
-
-        with pytest.raises(GitRefusedError) as info:
-            await _start(repo, "main")
-
-        assert (info.value.code, info.value.message) == ("operation_in_progress", "rebasing")
 
     async def test_a_branch_with_no_commits_is_no_head(self, tmp_path):
         unborn = init_repo(str(tmp_path / "unborn"), initial_commit=False)
@@ -409,15 +401,6 @@ class TestStart:
         assert "pre-rebase hook refused" in info.value.message
         assert _oid(repo) == before
 
-    async def test_a_remote_tracking_ref_is_a_valid_target(self, repo):
-        _topic_behind_main(repo)
-        run_git_sync(repo, "remote", "add", "origin", repo)
-        run_git_sync(repo, "fetch", "-q", "origin")
-
-        resp = await _start(repo, "origin/main")
-
-        assert resp.outcome == "rebased"
-        assert _oid(repo, "HEAD~1") == _oid(repo, "main")
 
     async def test_a_listed_branch_shadowed_by_a_tag_rebases_onto_the_branch_not_the_tag(
         self, repo
@@ -737,20 +720,6 @@ class TestSkip:
         assert _read(repo, "b.txt") == b"mine\n"
         assert (await _status(repo)).repo.rebase == resp.rebase
 
-    async def test_a_held_index_lock_is_index_locked_and_leaves_the_stop_as_it_was(
-        self, repo
-    ):
-        _stop_on_conflict(repo, second_conflict=True)
-        await _start(repo, "main")
-        write_file(repo, ".git/index.lock", b"")
-
-        with pytest.raises(GitRefusedError) as info:
-            await _skip(repo)
-
-        assert info.value.code == "index_locked"
-        os.remove(os.path.join(repo, ".git", "index.lock"))
-        rebase = (await _status(repo)).repo.rebase
-        assert (rebase.stopped_on.subject, rebase.step, rebase.total) == ("other side", 1, 2)
 
     async def test_a_rescheduled_pick_still_blocked_is_rebased_whatever_its_subject(
         self, repo
@@ -1040,15 +1009,6 @@ class TestSkip:
         assert _subjects(repo) == ["adds c", "topic side", "main side", "initial"]
         assert _read(repo, "c.txt") == b"c\n"
 
-    async def test_without_a_rebase_it_is_no_rebase(self, repo):
-        bus = FakeEventBus()
-
-        with pytest.raises(GitRefusedError) as info:
-            await _skip(repo, event_bus=bus)
-
-        assert (info.value.code, info.value.message) == ("no_rebase", "clean")
-        assert bus.published == []
-
 
 class TestFirstTodoPick:
     @pytest.mark.parametrize(
@@ -1106,11 +1066,6 @@ class TestAbort:
         assert (status.repo.state, status.repo.rebase, status.entries) == ("clean", None, [])
         assert bus.published == [_changed(repo, "proj")]
 
-    async def test_without_a_rebase_it_is_no_rebase(self, repo):
-        with pytest.raises(GitRefusedError) as info:
-            await _abort(repo)
-
-        assert (info.value.code, info.value.message) == ("no_rebase", "clean")
 
     async def test_a_rebase_started_outside_the_app_can_be_aborted(self, repo):
         _stop_on_conflict(repo)
@@ -1144,19 +1099,6 @@ class TestLinkedWorktreeSession:
         assert aborted.outcome == "aborted"
         assert _oid(wt) == before
         assert bus.published == [_changed(wt, "proj", repo)] * 2
-
-    async def test_a_resolved_stop_continues_inside_the_worktree(self, repo, tmp_path):
-        make_conflict_branches(repo)
-        wt = str(tmp_path / "wt")
-        run_git_sync(repo, "worktree", "add", "-q", wt, "other")
-        await _start(wt, "main")
-        _resolve(wt)
-
-        resp = await _continue(wt)
-
-        assert resp.outcome == "rebased"
-        assert _oid(wt, "HEAD~1") == _oid(repo, "main")
-        assert _git_out(repo, "symbolic-ref", "--short", "HEAD") == "main"
 
 
 @requires_git

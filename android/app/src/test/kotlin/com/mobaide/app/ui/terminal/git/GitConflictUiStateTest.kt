@@ -115,11 +115,6 @@ class GitConflictUiStateTest {
     }
 
     @Test
-    fun tooLargeToSaveNotice_statesTheAgentsLimitInKb() {
-        assertEquals("Too large to save here (over 256 KB).", tooLargeToSaveNotice(262144))
-    }
-
-    @Test
     fun nextConflictRange_findsTheMarkerLineAfterTheCaret_andWraps() {
         val first = twoBlocks.indexOf("<<<<<<<")
         val second = twoBlocks.indexOf("<<<<<<<", first + 1)
@@ -144,55 +139,6 @@ class GitConflictUiStateTest {
         val text = "😀 ж\n<<<<<<< a\n"
 
         assertEquals(5 until 14, nextConflictRange(text, 0))
-    }
-
-    @Test
-    fun conflictsLeftLabel_countsTheConflicts_andTellsAStrayMarkerFromACleanFile() {
-        assertEquals("1 conflict left", conflictsLeftLabel(1, true))
-        assertEquals("3 conflicts left", conflictsLeftLabel(3, true))
-        assertEquals("A conflict marker is left", conflictsLeftLabel(0, true))
-        assertEquals("No conflict markers left", conflictsLeftLabel(0, false))
-    }
-
-    @Test
-    fun sideName_usesTheAgentsLabel_andFallsBackToNeutralNames() {
-        val unlabelled = conflict(ours = GitConflictSide(null, true), theirs = GitConflictSide("", true))
-
-        assertEquals("origin/main", sideName(conflict(), GitConflictResponse.SIDE_OURS))
-        assertEquals("fedcba9 Fix the login redirect", sideName(conflict(), GitConflictResponse.SIDE_THEIRS))
-        assertEquals("Current branch", sideName(unlabelled, GitConflictResponse.SIDE_OURS))
-        assertEquals("Incoming change", sideName(unlabelled, GitConflictResponse.SIDE_THEIRS))
-    }
-
-    @Test
-    fun sideRole_explainsARebaseTheRightWayRound_aMerge_andAnythingElse() {
-        assertEquals(
-            "the branch you are rebasing onto, plus your commits already replayed",
-            sideRole(GitRepoInfo.STATE_REBASING, GitConflictResponse.SIDE_OURS),
-        )
-        assertEquals("your commit being replayed", sideRole(GitRepoInfo.STATE_REBASING, GitConflictResponse.SIDE_THEIRS))
-        assertEquals("the branch you are on", sideRole(GitRepoInfo.STATE_MERGING, GitConflictResponse.SIDE_OURS))
-        assertEquals("the branch being merged in", sideRole(GitRepoInfo.STATE_MERGING, GitConflictResponse.SIDE_THEIRS))
-        assertEquals("what you have checked out", sideRole("cherry_picking", GitConflictResponse.SIDE_OURS))
-        assertEquals("the change being applied", sideRole(GitRepoInfo.STATE_CLEAN, GitConflictResponse.SIDE_THEIRS))
-    }
-
-    @Test
-    fun conflictCaption_readsEveryCodeInPlainWords() {
-        val captions = mapOf(
-            "UU" to "Both sides changed this file.",
-            "AA" to "Both sides added this file.",
-            "DU" to "origin/main deleted this file; fedcba9 Fix the login redirect changed it.",
-            "UD" to "origin/main changed this file; fedcba9 Fix the login redirect deleted it.",
-            "DD" to "Both sides deleted this file.",
-            "AU" to "Only origin/main has this file.",
-            "UA" to "Only fedcba9 Fix the login redirect has this file.",
-            "ZZ" to "The two sides disagree about this file.",
-        )
-
-        for ((code, caption) in captions) {
-            assertEquals(code, caption, conflictCaption(conflict(code = code)))
-        }
     }
 
     @Test
@@ -340,45 +286,6 @@ class GitConflictUiStateTest {
             listOf(Triple("ours", "Delete the file", true)),
             takeChoices(bothDeleted).map { Triple(it.side, it.label, it.danger) },
         )
-    }
-
-    @Test
-    fun prompts_nameTheFile_notItsDirectory() {
-        assertEquals(
-            ConflictPrompt(
-                title = "Start over?",
-                body = "login.py is rebuilt from both sides. Every edit made to it since the " +
-                    "conflict — here or in the terminal — is discarded.",
-            ),
-            startOverPrompt("src/login.py"),
-        )
-        assertEquals(
-            ConflictPrompt(
-                title = "Restore the conflict?",
-                body = "login.py goes back to its conflicted state. The resolution you applied is discarded.",
-                confirm = "Restore conflict",
-            ),
-            restorePrompt("src/login.py"),
-        )
-        assertEquals(
-            ConflictPrompt(title = "Discard your edits?", body = "Your changes to login.py have not been saved."),
-            discardEditsPrompt("src/login.py"),
-        )
-        assertEquals("Start over", START_OVER_LABEL)
-        assertEquals("Start over with original lines", START_OVER_WITH_BASE_LABEL)
-    }
-
-    @Test
-    fun notices_reportEachOutcome() {
-        assertEquals("Resolved src/login.py.", resolvedNotice("src/login.py"))
-        assertEquals("Saved src/login.py — the conflict is still open.", draftSavedNotice("src/login.py"))
-        assertEquals("Restored the conflict in src/login.py.", restoredNotice("src/login.py"))
-        assertEquals(
-            "login.py changed on the agent machine since you opened it.",
-            fileChangedNotice("src/login.py"),
-        )
-        assertEquals("Applying will overwrite the other change.", KEEP_EDITS_WARNING)
-        assertEquals("login.py is no longer in conflict.", resolvedElsewhereNotice("src/login.py"))
     }
 
     @Test

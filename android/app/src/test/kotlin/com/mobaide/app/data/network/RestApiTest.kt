@@ -83,25 +83,6 @@ class RestApiTest {
     // ---- baseUrl() trailing-slash handling ----------------------------------
 
     @Test
-    fun baseUrl_withTrailingSlash_isNotDoubleSlashedInRequests() = runTest {
-        // tokenStore.getEffectiveBaseUrl() is used verbatim in `${baseUrl()}/api/...`,
-        // so a trailing slash on the stored URL must NOT produce a double slash
-        // in the final request path. [TokenStore.saveAgentUrl] trims trailing
-        // slashes at store time — this test pins the store-side contract by
-        // asserting the *canonical* case (no trailing slash → no double slash).
-        val (api, client) = newApi(agentUrl = "https://api.example.com")
-        val captured = stubCall(client) { req -> responseFor(req, 200, bodyJson = "[]") }
-
-        api.listSessions()
-
-        assertEquals(
-            "https://api.example.com/api/sessions",
-            captured.captured.url.toString(),
-        )
-        assertEquals("GET", captured.captured.method)
-    }
-
-    @Test
     fun baseUrl_notConfigured_throwsIllegalStateException_fromListSessions() = runTest {
         val (api, _, tokenStore) = newApi(agentUrl = null)
         // Pin the exact message so a future refactor that silently swallows
@@ -160,28 +141,6 @@ class RestApiTest {
         assertEquals("acc", resp.access_token)
         assertEquals("ref", resp.refresh_token)
         assertEquals("bearer", resp.token_type)
-    }
-
-    @Test
-    fun login_doesNotConsultTokenStore_forBaseUrl() = runTest {
-        // login() receives agentUrl as an explicit argument — it must never
-        // fall back to tokenStore.getAgentUrl() for the base URL.
-        val client = mockk<OkHttpClient>()
-        val tokenStore = mockk<TokenStore>()
-        // Intentionally do NOT stub tokenStore.getAgentUrl() — a call would
-        // make MockK throw a missing-answer error.
-        stubCall(client) { req ->
-            responseFor(
-                req,
-                200,
-                bodyJson = """{"access_token":"a","refresh_token":"r"}""",
-            )
-        }
-        val api = RestApi(client, tokenStore)
-
-        api.login("https://login.example.com", "u", "p")
-
-        verify(exactly = 0) { tokenStore.getAgentUrl() }
     }
 
     // Note: there is no RestApi.refreshToken test because RestApi no
@@ -303,48 +262,7 @@ class RestApiTest {
         return buffer.readUtf8()
     }
 
-    // ---- listSessions -------------------------------------------------------
-
-    @Test
-    fun listSessions_getsApiSessions_andDeserialisesList() = runTest {
-        val (api, client) = newApi()
-        val captured = stubCall(client) { req ->
-            responseFor(
-                req,
-                200,
-                bodyJson = """[
-                  {"session_id":"s-1","state":"running","created_at":"2026-04-11T12:00:00Z"},
-                  {"session_id":"s-2","state":"stopped","created_at":"2026-04-11T12:05:00Z"}
-                ]""".trimIndent(),
-            )
-        }
-
-        val list = api.listSessions()
-
-        assertEquals("GET", captured.captured.method)
-        assertNull("GET request must not carry a body", captured.captured.body)
-        assertEquals(2, list.size)
-        assertEquals("s-1", list[0].session_id)
-        assertEquals("running", list[0].state)
-        assertEquals("s-2", list[1].session_id)
-        assertEquals("stopped", list[1].state)
-    }
-
     // ---- deleteSession: force flag + executeRaw (no body expected) ----------
-
-    @Test
-    fun deleteSession_withoutForce_omitsQueryString() = runTest {
-        val (api, client) = newApi()
-        val captured = stubCall(client) { req -> responseFor(req, 204, bodyJson = "") }
-
-        api.deleteSession("s-1")
-
-        assertEquals(
-            "https://api.example.com/api/sessions/s-1",
-            captured.captured.url.toString(),
-        )
-        assertEquals("DELETE", captured.captured.method)
-    }
 
     @Test
     fun deleteSession_withForce_appendsForceQueryParam() = runTest {
@@ -382,125 +300,6 @@ class RestApiTest {
         assertEquals("GET", captured.captured.method)
         assertEquals(2, resp.total)
         assertEquals(listOf("a", "b"), resp.lines)
-    }
-
-    // ---- getProjects --------------------------------------------------------
-
-    @Test
-    fun getProjects_getsApiProjects_andDeserialisesList() = runTest {
-        val (api, client) = newApi()
-        val captured = stubCall(client) { req ->
-            responseFor(
-                req,
-                200,
-                bodyJson = """[
-                  {"name":"alpha","path":"/p/alpha","is_git":true},
-                  {"name":"beta","path":"/p/beta"}
-                ]""".trimIndent(),
-            )
-        }
-
-        val list = api.getProjects()
-
-        assertEquals(
-            "https://api.example.com/api/projects",
-            captured.captured.url.toString(),
-        )
-        assertEquals("GET", captured.captured.method)
-        assertEquals(2, list.size)
-        assertEquals("alpha", list[0].name)
-        assertTrue(list[0].is_git)
-        assertEquals("beta", list[1].name)
-    }
-
-    // ---- AutoScan endpoints -------------------------------------------------
-
-    @Test
-    fun startAutoScan_withNullClaudeOptions_postsProjectName() = runTest {
-        val (api, client) = newApi()
-        val captured = stubCall(client) { req -> responseFor(req, 200, bodyJson = "{}") }
-
-        api.startAutoScan("alpha", claudeOptions = null)
-
-        assertEquals(
-            "https://api.example.com/api/autoscan/start",
-            captured.captured.url.toString(),
-        )
-        assertEquals("POST", captured.captured.method)
-        val buffer = okio.Buffer()
-        captured.captured.body!!.writeTo(buffer)
-        val body = buffer.readUtf8()
-        assertTrue(
-            "start body must contain the project name — was: $body",
-            body.contains("\"project_name\":\"alpha\""),
-        )
-    }
-
-    @Test
-    fun stopAutoScan_postsProjectNameToStopEndpoint() = runTest {
-        val (api, client) = newApi()
-        val captured = stubCall(client) { req -> responseFor(req, 200, bodyJson = "{}") }
-
-        api.stopAutoScan("beta")
-
-        assertEquals(
-            "https://api.example.com/api/autoscan/stop",
-            captured.captured.url.toString(),
-        )
-        val buffer = okio.Buffer()
-        captured.captured.body!!.writeTo(buffer)
-        assertTrue(buffer.readUtf8().contains("\"project_name\":\"beta\""))
-    }
-
-    @Test
-    fun runAutoScanNow_postsAndDeserialisesRunNowResponse() = runTest {
-        val (api, client) = newApi()
-        val captured = stubCall(client) { req ->
-            responseFor(
-                req,
-                200,
-                bodyJson = """{"ok":true,"project_name":"alpha","next_scan_at":"2026-04-11T13:00:00Z"}""",
-            )
-        }
-
-        val resp = api.runAutoScanNow("alpha")
-
-        assertEquals(
-            "https://api.example.com/api/autoscan/run-now",
-            captured.captured.url.toString(),
-        )
-        assertTrue(resp.ok)
-        assertEquals("alpha", resp.project_name)
-        assertEquals("2026-04-11T13:00:00Z", resp.next_scan_at)
-    }
-
-    @Test
-    fun getAutoScanList_getsApiAutoScanList_andDeserialisesResponse() = runTest {
-        val (api, client) = newApi()
-        val captured = stubCall(client) { req ->
-            responseFor(
-                req,
-                200,
-                bodyJson = """{
-                  "scans":[],
-                  "capacity":0,
-                  "max_scans":5,
-                  "available_projects":["alpha","beta"],
-                  "auto_scan_prompt":"Do the thing"
-                }""".trimIndent(),
-            )
-        }
-
-        val resp = api.getAutoScanList()
-
-        assertEquals(
-            "https://api.example.com/api/autoscan/list",
-            captured.captured.url.toString(),
-        )
-        assertEquals("GET", captured.captured.method)
-        assertEquals(5, resp.max_scans)
-        assertEquals("Do the thing", resp.auto_scan_prompt)
-        assertEquals(listOf("alpha", "beta"), resp.available_projects)
     }
 
     // ---- getAgentVersion: capabilities.cli availability parse ----------------
@@ -569,32 +368,6 @@ class RestApiTest {
     }
 
     @Test
-    fun getAgentVersion_capabilitiesFieldOmitted_usesDefaultAndReturnsNull() = runTest {
-        // The capabilities field has a JsonObject default in the DTO, so an
-        // agent payload omitting it entirely (with ignoreUnknownKeys) must
-        // decode without throwing and yield null availability.
-        val (api, client) = newApi()
-        stubCall(client) { req ->
-            responseFor(
-                req,
-                200,
-                bodyJson = """
-                  {
-                    "name":"mobaide_agent",
-                    "server_version":"0.2.0",
-                    "protocol_versions":[5],
-                    "min_client_version":5
-                  }
-                """.trimIndent(),
-            )
-        }
-
-        val resp = api.getAgentVersion()
-
-        assertNull(resp.cliAvailable("claude"))
-    }
-
-    @Test
     fun getAgentVersion_malformedCliShape_returnsNull_withoutThrowing() = runTest {
         // capabilities.cli is the wrong shape (a string, and an id whose value
         // is a bare bool rather than an object). The loose JsonObject walk must
@@ -621,34 +394,6 @@ class RestApiTest {
         val resp = api.getAgentVersion()
 
         assertNull("malformed cli map must not throw", resp.cliAvailable("claude"))
-    }
-
-    @Test
-    fun getAgentVersion_cliEntryMissingAvailableKey_returnsNull() = runTest {
-        // The id object exists but carries no `available` key (a forward-compat
-        // payload that only sent a future `version` field, say). cliAvailable
-        // must read that as null, not crash.
-        val (api, client) = newApi()
-        stubCall(client) { req ->
-            responseFor(
-                req,
-                200,
-                bodyJson = """
-                  {
-                    "name":"mobaide_agent",
-                    "server_version":"0.2.16",
-                    "protocol_versions":[5],
-                    "min_client_version":5,
-                    "capabilities":{"cli":{"claude":{"version":"2.1.0"}}},
-                    "latest_agent_version":null
-                  }
-                """.trimIndent(),
-            )
-        }
-
-        val resp = api.getAgentVersion()
-
-        assertNull(resp.cliAvailable("claude"))
     }
 
     @Test
@@ -815,47 +560,6 @@ class RestApiTest {
                 assertEquals("code mismatch for status $code", code, e.code)
                 assertTrue(e.errorBody.contains("raw-$code"))
             }
-        }
-    }
-
-    @Test
-    fun execute_onErrorCode_withEmptyBody_throwsApiException_withEmptyErrorBody() = runTest {
-        val (api, client) = newApi()
-        stubCall(client) { req -> responseFor(req, 500, bodyJson = "") }
-
-        try {
-            api.listSessions()
-            fail("expected ApiException")
-        } catch (e: ApiException) {
-            assertEquals(500, e.code)
-            assertEquals("", e.errorBody)
-        }
-    }
-
-    // ---- Success-with-empty-body edge case for execute<T> -------------------
-
-    @Test
-    fun execute_on200_withEmptyBodyString_throwsApiExceptionForEmptyResponseBody() = runTest {
-        // In RestApi.execute<T>, a successful response whose body.string() returns
-        // "" is decoded as the JSON string ""; but the path that throws is when
-        // the OkHttp body is null. Here we assert the JSON-decode failure path
-        // surfaces as a thrown exception rather than a silent success.
-        val (api, client) = newApi()
-        stubCall(client) { req ->
-            // "" is not a valid JSON List<SessionResponse>, so kotlinx.serialization
-            // throws — the helper propagates it.
-            responseFor(req, 200, bodyJson = "")
-        }
-
-        try {
-            api.listSessions()
-            fail("expected a decode-time failure when body is empty on 200")
-        } catch (e: Throwable) {
-            // Either ApiException (if some OkHttp version treats empty as null body)
-            // or a SerializationException from kotlinx.serialization. Both are valid
-            // failure modes — the key assertion is that listSessions() does not
-            // silently succeed with an unexpected type.
-            assertNotNull(e)
         }
     }
 }

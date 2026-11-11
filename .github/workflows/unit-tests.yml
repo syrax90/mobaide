@@ -1,0 +1,103 @@
+name: Unit tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: unit-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+# Declare contents:read so actions/checkout's GITHUB_TOKEN reliably has the
+# scope it needs, regardless of the repo's default token policy.
+permissions:
+  contents: read
+
+# No paths filter on purpose (same policy as web-ci.yml): the agent, relay and
+# clients share wire contracts, so every suite runs on every PR. iOS runs in
+# ios-build.yml and web in web-ci.yml.
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install the agent with dev extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e 'mobaide_agent[dev]'
+
+      - name: Run agent tests
+        working-directory: mobaide_agent
+        run: python -m pytest -q --timeout=300
+
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install the relay with dev extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e 'central_server[dev]'
+
+      - name: Run relay tests
+        working-directory: central_server
+        run: python -m pytest -q --timeout=300
+
+  # Install scripts, the Windows launcher and deploy helpers. Protocol
+  # integrity, auto-update E2E and tests/e2e have their own workflows.
+  root:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install both packages with dev extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e 'mobaide_agent[dev]'
+          python -m pip install -e 'central_server[dev]'
+
+      - name: Run repo-root tests
+        run: >-
+          python -m pytest tests -q --timeout=300
+          --ignore=tests/e2e
+          --ignore=tests/test_protocol_integrity.py
+          --ignore=tests/test_e2e_autoupdate.py
+
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Run Android unit tests
+        working-directory: android
+        run: ./gradlew testDebugUnitTest --console=plain --stacktrace

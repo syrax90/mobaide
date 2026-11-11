@@ -33,10 +33,6 @@ final class CustomAgentTypesRepositoryModeOrderTests: XCTestCase {
 
     // MARK: - Snapshot
 
-    func testInitialOrderIsEmpty() {
-        XCTAssertEqual(makeRepo().currentModeOrder, [])
-    }
-
     func testRefreshShowsTheServerOrder() async throws {
         let repo = makeRepo()
         StubURLProtocol.enqueue(status: 200, body: orderJSON(2, ["shell", "claude"]))

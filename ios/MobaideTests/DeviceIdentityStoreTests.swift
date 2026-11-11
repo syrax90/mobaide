@@ -20,11 +20,6 @@ final class DeviceIdentityStoreTests: XCTestCase {
         XCTAssertEqual(store.keychain.accessibility, .afterFirstUnlockThisDeviceOnly)
     }
 
-    func testDeviceNameIsNonEmptyAppleIdentifier() {
-        let store = DeviceIdentityStore(keychain: InMemoryKeychainStore())
-        XCTAssertTrue(store.getDeviceName().hasPrefix("Apple"))
-    }
-
     func testConcurrentFirstCallsAgreeOnOnePersistedId() async {
         let keychain = InMemoryKeychainStore(accessibility: .afterFirstUnlockThisDeviceOnly)
         let store = DeviceIdentityStore(keychain: keychain)

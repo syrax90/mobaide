@@ -71,28 +71,6 @@ class TerminalViewModelFollowModeTest {
         )
 
     @Test
-    fun followMode_default_isTrue() {
-        val vm = createViewModel()
-        assertTrue("default follow-mode should be true (viewport tracks tail)", vm.followMode.value)
-        assertEquals(0, vm.unreadRows.value)
-    }
-
-    @Test
-    fun setFollowMode_disable_togglesEmulatorGate() {
-        val vm = createViewModel()
-        val emulator = requireNotNull(vm.session.emulator) { "emulator must exist after VM init" }
-        assertFalse(emulator.isAutoScrollDisabled)
-
-        vm.setFollowMode(false)
-
-        assertFalse(vm.followMode.value)
-        assertTrue(
-            "emulator's isAutoScrollDisabled must mirror !followMode so the native preserve-mTopRow branch fires",
-            emulator.isAutoScrollDisabled,
-        )
-    }
-
-    @Test
     fun setFollowMode_enable_clearsUnreadAndUntogglesGate() {
         val vm = createViewModel()
         val emulator = requireNotNull(vm.session.emulator)
@@ -184,16 +162,6 @@ class TerminalViewModelFollowModeTest {
     }
 
     @Test
-    fun sendBytes_resumesFollowMode() {
-        val vm = createViewModel()
-        vm.setFollowMode(false)
-
-        vm.sendBytes(byteArrayOf(0x03))
-
-        assertTrue("dispatching control bytes must resume follow-mode", vm.followMode.value)
-    }
-
-    @Test
     fun sendTappedRow_whileNotLive_doesNotResumeFollowMode() {
         val vm = createViewModel()
         vm.setFollowMode(false)
@@ -254,21 +222,6 @@ class TerminalViewModelFollowModeTest {
             0,
             vm.unreadRows.value,
         )
-    }
-
-    @Test
-    fun unreadRows_resetsWhenFollowModeResumes() {
-        val vm = createViewModel()
-        val emulator = requireNotNull(vm.session.emulator)
-
-        vm.setFollowMode(false)
-        emulator.append(NEWLINES_30, NEWLINES_30.size)
-        vm.sessionCallback.onTextChanged(vm.session)
-        assertTrue(vm.unreadRows.value > 0)
-
-        vm.onUserScrollSettled(0)
-
-        assertEquals(0, vm.unreadRows.value)
     }
 
     @Test

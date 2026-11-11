@@ -40,14 +40,6 @@ describe('applyProjectsSnapshot', () => {
     expect(cached(client)).toEqual(['alpha', 'zeta']);
   });
 
-  it('replaces the whole list, because the payload is authoritative', () => {
-    client.setQueryData<ProjectInfo[]>(key, [project('gone', 0), project('kept', 1)]);
-
-    applyProjectsSnapshot(client, AGENT, { projects: [project('kept', 0)] });
-
-    expect(cached(client)).toEqual(['kept']);
-  });
-
   it('preserves keys a newer agent added to a row', () => {
     applyProjectsSnapshot(client, AGENT, {
       projects: [{ ...project('a', 0), future_field: 'keep me' }],

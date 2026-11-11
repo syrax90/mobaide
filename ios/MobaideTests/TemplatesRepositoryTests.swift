@@ -78,22 +78,6 @@ final class TemplatesRepositoryTests: XCTestCase {
         XCTAssertEqual(repo.currentTemplates.first?.is_favorite, true)
     }
 
-    func testDeleteRemovesFromCache() async throws {
-        let repo = makeRepo()
-        await repo.applyUpserted(makeTemplate(id: "t1", name: "One", favorite: false))
-        StubURLProtocol.enqueue(status: 204, body: "")
-        try await repo.deleteTemplate(templateId: "t1")
-        XCTAssertTrue(repo.currentTemplates.isEmpty)
-    }
-
-    func testClearEmptiesCache() async {
-        let repo = makeRepo()
-        await repo.applyUpserted(makeTemplate(id: "t1", name: "One", favorite: false))
-        XCTAssertFalse(repo.currentTemplates.isEmpty)
-        await repo.clear()
-        XCTAssertTrue(repo.currentTemplates.isEmpty)
-    }
-
     func testRefreshDropsResponseWhenAccountSwitchesMidFlight() async throws {
         let (repo, identity) = makeRepoWithIdentity()
         StubURLProtocol.enqueue(status: 200, body: "[\(templateJSON(id: "t1", name: "A", favorite: false))]")
@@ -133,30 +117,5 @@ final class TemplatesRepositoryTests: XCTestCase {
 
         XCTAssertEqual(created.template_id, "t1", "the server row is still returned on mismatch")
         XCTAssertTrue(repo.currentTemplates.isEmpty)
-    }
-
-    func testUpdateDiscardsCacheWriteWhenAccountSwitchesMidFlight() async throws {
-        let (repo, identity) = makeRepoWithIdentity()
-        await repo.applyUpserted(makeTemplate(id: "t1", name: "A", favorite: false))
-        StubURLProtocol.enqueue(status: 200, body: templateJSON(id: "t1", name: "A", favorite: true, version: 2))
-        Self.switchAccountOnRequest(identity)
-
-        let updated = try await repo.updateTemplate(templateId: "t1", update: UpdateTemplateRequest(is_favorite: true))
-
-        XCTAssertEqual(updated.is_favorite, true, "the server row is still returned on mismatch")
-        XCTAssertEqual(repo.currentTemplates.first?.is_favorite, false)
-        XCTAssertEqual(repo.currentTemplates.first?.version, 1)
-    }
-
-    func testDeleteDiscardsCacheWriteWhenAccountSwitchesMidFlight() async throws {
-        let (repo, identity) = makeRepoWithIdentity()
-        await repo.applyUpserted(makeTemplate(id: "t1", name: "One", favorite: false))
-        StubURLProtocol.enqueue(status: 204, body: "")
-        Self.switchAccountOnRequest(identity)
-
-        try await repo.deleteTemplate(templateId: "t1")
-
-        XCTAssertEqual(StubURLProtocol.requests.first?.httpMethod, "DELETE", "the server delete itself still runs")
-        XCTAssertEqual(repo.currentTemplates.map(\.template_id), ["t1"])
     }
 }

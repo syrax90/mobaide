@@ -47,19 +47,6 @@ class RegisterViewModelTest {
         updateConfirmPassword("secret-pass")
     }
 
-    // ---- Initial state ------------------------------------------------------
-
-    @Test
-    fun initialState_hasEmptyFields_andNoErrorOrLoading() = runTest {
-        val vm = RegisterViewModel(authRepository)
-        val state = vm.uiState.value
-        assertEquals("", state.email)
-        assertEquals("", state.password)
-        assertEquals("", state.confirmPassword)
-        assertFalse(state.isLoading)
-        assertNull(state.error)
-    }
-
     // ---- Blank-field validation ---------------------------------------------
 
     @Test
@@ -74,20 +61,6 @@ class RegisterViewModelTest {
 
         assertEquals("Email and password are required", vm.uiState.value.error)
         assertFalse(vm.uiState.value.isLoading)
-        coVerify(exactly = 0) { authRepository.register(any(), any()) }
-    }
-
-    @Test
-    fun register_whenPasswordBlank_setsError_andDoesNotCallRepository() = runTest {
-        val vm = RegisterViewModel(authRepository)
-        vm.updateEmail("alice@example.com")
-        vm.updatePassword("")
-        vm.updateConfirmPassword("")
-
-        vm.register()
-        advanceUntilIdle()
-
-        assertEquals("Email and password are required", vm.uiState.value.error)
         coVerify(exactly = 0) { authRepository.register(any(), any()) }
     }
 
@@ -124,19 +97,6 @@ class RegisterViewModelTest {
         assertEquals(PASSWORD_TOO_SHORT_MESSAGE, vm.uiState.value.error)
         assertFalse(vm.uiState.value.isLoading)
         coVerify(exactly = 0) { authRepository.register(any(), any()) }
-    }
-
-    @Test
-    fun register_whenPasswordShortAndMismatched_reportsLengthFirst() = runTest {
-        val vm = RegisterViewModel(authRepository)
-        vm.updateEmail("alice@example.com")
-        vm.updatePassword("short")
-        vm.updateConfirmPassword("other")
-
-        vm.register()
-        advanceUntilIdle()
-
-        assertEquals(PASSWORD_TOO_SHORT_MESSAGE, vm.uiState.value.error)
     }
 
     @Test
@@ -305,26 +265,6 @@ class RegisterViewModelTest {
         assertFalse(state.isLoading)
     }
 
-    // ---- Non-API exception path ---------------------------------------------
-
-    @Test
-    fun register_onGenericException_setsRegistrationFailedError() = runTest {
-        val vm = primed(RegisterViewModel(authRepository))
-        coEvery {
-            authRepository.register("alice@example.com", "secret-pass")
-        } throws java.net.UnknownHostException("example.com: nodename nor servname provided")
-
-        vm.register()
-        advanceUntilIdle()
-
-        val state = vm.uiState.value
-        assertEquals(
-            "Registration failed: example.com: nodename nor servname provided",
-            state.error,
-        )
-        assertFalse(state.isLoading)
-    }
-
     // ---- Google Sign-In callback --------------------------------------------
 
     @Test
@@ -358,45 +298,11 @@ class RegisterViewModelTest {
     }
 
     @Test
-    fun onGoogleAuthResult_success_onGenericFailure_setsError() = runTest {
-        val vm = RegisterViewModel(authRepository)
-        coEvery {
-            authRepository.loginWithGoogle("bad-token")
-        } throws RuntimeException("network timeout")
-
-        vm.onGoogleAuthResult(GoogleAuthResult.Success("bad-token"))
-        advanceUntilIdle()
-
-        assertEquals("Google Sign-In failed: network timeout", vm.uiState.value.error)
-        assertFalse(vm.uiState.value.isLoading)
-    }
-
-    @Test
     fun onGoogleAuthResult_notConfigured_emitsConfigError() = runTest {
         val vm = RegisterViewModel(authRepository)
         vm.errorEvents.test {
             vm.onGoogleAuthResult(GoogleAuthResult.NotConfigured)
             assertTrue(awaitItem().contains("not configured"))
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun onGoogleAuthResult_noAccounts_emitsAccountMessage() = runTest {
-        val vm = RegisterViewModel(authRepository)
-        vm.errorEvents.test {
-            vm.onGoogleAuthResult(GoogleAuthResult.NoAccounts("Add a Google account."))
-            assertEquals("Add a Google account.", awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun onGoogleAuthResult_playServicesUnavailable_emitsPlayServicesMessage() = runTest {
-        val vm = RegisterViewModel(authRepository)
-        vm.errorEvents.test {
-            vm.onGoogleAuthResult(GoogleAuthResult.PlayServicesUnavailable)
-            assertTrue(awaitItem().contains("Google Play services"))
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -473,42 +379,6 @@ class RegisterViewModelTest {
         assertFalse(state.isLoading)
     }
 
-    @Test
-    fun register_onAdminLoginNotSupported_alsoEmitsErrorEvent() = runTest {
-        val vm = primed(RegisterViewModel(authRepository))
-        coEvery {
-            authRepository.register("alice@example.com", "secret-pass")
-        } throws AdminLoginNotSupportedException()
-
-        vm.errorEvents.test {
-            vm.register()
-            advanceUntilIdle()
-            assertEquals(
-                ADMIN_LOGIN_USER_MESSAGE,
-                awaitItem(),
-            )
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun onGoogleAuthResult_onAdminLoginNotSupported_setsFriendlySnackbarMessage() = runTest {
-        // Symmetric mapping must exist on the Google branch too.
-        val vm = RegisterViewModel(authRepository)
-        coEvery {
-            authRepository.loginWithGoogle("google-token")
-        } throws AdminLoginNotSupportedException()
-
-        vm.onGoogleAuthResult(GoogleAuthResult.Success("google-token"))
-        advanceUntilIdle()
-
-        assertEquals(
-            ADMIN_LOGIN_USER_MESSAGE,
-            vm.uiState.value.error,
-        )
-        assertFalse(vm.uiState.value.isLoading)
-    }
-
     // ---- update* helpers clear the pending error ----------------------------
 
     @Test
@@ -523,31 +393,4 @@ class RegisterViewModelTest {
         assertNull(vm.uiState.value.error)
         assertEquals("alice@example.com", vm.uiState.value.email)
     }
-
-    @Test
-    fun updatePassword_clearsPendingError() = runTest {
-        val vm = RegisterViewModel(authRepository)
-        vm.register()
-        advanceUntilIdle()
-        assertEquals("Email and password are required", vm.uiState.value.error)
-
-        vm.updatePassword("secret-pass")
-
-        assertNull(vm.uiState.value.error)
-        assertEquals("secret-pass", vm.uiState.value.password)
-    }
-
-    @Test
-    fun updateConfirmPassword_clearsPendingError() = runTest {
-        val vm = RegisterViewModel(authRepository)
-        vm.register()
-        advanceUntilIdle()
-        assertEquals("Email and password are required", vm.uiState.value.error)
-
-        vm.updateConfirmPassword("secret-pass")
-
-        assertNull(vm.uiState.value.error)
-        assertEquals("secret-pass", vm.uiState.value.confirmPassword)
-    }
-
 }

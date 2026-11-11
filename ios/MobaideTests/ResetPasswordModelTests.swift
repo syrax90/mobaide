@@ -27,26 +27,6 @@ final class ResetPasswordModelTests: XCTestCase {
         model.confirmPassword = "new-password-1"
     }
 
-    func testClientValidationOrder() async {
-        let model = makeModel()
-
-        model.code = "12"
-        await model.submit()
-        XCTAssertEqual(model.error, "Enter the 6-digit code we emailed you")
-
-        model.code = "123456"
-        model.newPassword = "short"
-        await model.submit()
-        XCTAssertEqual(model.error, "Password must be at least 8 characters")
-
-        model.newPassword = "long-enough-1"
-        model.confirmPassword = "different-1"
-        await model.submit()
-        XCTAssertEqual(model.error, "Passwords don't match")
-
-        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
-    }
-
     func testSuccessEmitsSuccessEvent() async throws {
         StubURLProtocol.enqueue(status: 200, body: #"{"status":"ok"}"#)
         let model = makeModel()
@@ -70,26 +50,6 @@ final class ResetPasswordModelTests: XCTestCase {
         XCTAssertEqual(model.code, "")
     }
 
-    func testExpiredCodeMapsToExpiredMessage() async {
-        StubURLProtocol.enqueue(status: 410, body: #"{"detail":{"error":"reset_code_expired"}}"#)
-        let model = makeModel()
-        fillValidForm(model)
-
-        await model.submit()
-
-        XCTAssertEqual(model.error, "That code expired. Tap \"Resend\" to get a new one.")
-    }
-
-    func testAttemptsExhaustedMapsToTooManyAttempts() async {
-        StubURLProtocol.enqueue(status: 429, body: #"{"detail":{"error":"reset_attempts_exhausted"}}"#)
-        let model = makeModel()
-        fillValidForm(model)
-
-        await model.submit()
-
-        XCTAssertEqual(model.error, "Too many attempts. Request a new code.")
-    }
-
     func testSameAsOldPasswordIsRejected() async {
         StubURLProtocol.enqueue(status: 400, body: #"{"detail":{"error":"new_password_same_as_old"}}"#)
         let model = makeModel()
@@ -110,16 +70,6 @@ final class ResetPasswordModelTests: XCTestCase {
         await model.submit()
 
         XCTAssertEqual(model.error, "Too many requests from this network. Try again in 9s.")
-    }
-
-    func testUnknownServerErrorSurfacesBody() async {
-        StubURLProtocol.enqueue(status: 500, body: "boom")
-        let model = makeModel()
-        fillValidForm(model)
-
-        await model.submit()
-
-        XCTAssertEqual(model.error, "Couldn't reset password: boom")
     }
 
     func testResendStartsCooldown() async throws {

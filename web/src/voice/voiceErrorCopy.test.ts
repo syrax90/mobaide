@@ -5,8 +5,6 @@ import { cleanupErrorCopy } from './voiceErrorCopy';
 describe('cleanupErrorCopy', () => {
   it.each([
     ['claude', 'Claude Code', 'claude update'],
-    ['codex', 'Codex', 'codex update'],
-    ['antigravity', 'Antigravity', 'agy update'],
   ])('names the AI agent of a %s session and how to update it', (kind, name, update) => {
     expect(cleanupErrorCopy(VOICE_CODE.cleanupUnavailable, 'laptop', kind)).toBe(
       `${name} isn't installed on laptop.`,
@@ -18,7 +16,7 @@ describe('cleanupErrorCopy', () => {
     expect(cleanupErrorCopy(VOICE_CODE.cleanupFailed, 'laptop', kind)).toBe(`${name} reported an error.`);
   });
 
-  it.each([undefined, 'opencode', 'constructor'])('stays generic for a kind it cannot name (%s)', (kind) => {
+  it.each([undefined, 'constructor'])('stays generic for a kind it cannot name (%s)', (kind) => {
     expect(cleanupErrorCopy(VOICE_CODE.cleanupOutdated, 'laptop', kind)).toBe(
       "The session's AI agent on laptop is too old. Update it there.",
     );

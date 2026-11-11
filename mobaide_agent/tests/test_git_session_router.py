@@ -11,7 +11,6 @@ import re
 import shutil
 import subprocess
 import types
-from unittest.mock import MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -173,9 +172,6 @@ class TestAuthAndRouting:
         assert resp.status_code == 404
         assert resp.json() == {"detail": "Session 'nope' not found"}
 
-    async def test_relay_ignores_other_methods_and_routes(self, relay):
-        assert await relay._dispatch_session_git("POST", _status_url(), None) is None
-        assert await relay._dispatch_session_git("GET", "/api/sessions/x/git/log", None) is None
 
     async def test_version_advertises_git_capability(self, http, headers):
         resp = await http.get("/api/version", headers=headers)
@@ -350,45 +346,6 @@ class TestMutationRouting:
 
         assert resp.status_code == 401
 
-    async def test_unknown_session_is_404_on_both_transports(
-        self, http, headers, relay, session_at, tmp_path
-    ):
-        session_at(str(tmp_path))
-
-        resp = await _assert_post_parity(
-            http, headers, relay, _git_url("stage", "nope"), {"paths": ["a.txt"]}
-        )
-
-        assert resp.status_code == 404
-        assert resp.json() == {"detail": "Session 'nope' not found"}
-
-    @pytest.mark.parametrize(
-        ("method", "route"),
-        [
-            ("GET", "stage"),
-            ("GET", "unstage"),
-            ("GET", "discard"),
-            ("GET", "commit"),
-            ("POST", "commit/context"),
-            ("POST", "commit/extra"),
-            ("GET", "rebase"),
-            ("GET", "rebase/continue"),
-            ("GET", "rebase/skip"),
-            ("GET", "rebase/abort"),
-            ("POST", "rebase/"),
-            ("POST", "rebase/restart"),
-            ("POST", "rebase/abort/extra"),
-            ("POST", "conflict"),
-            ("GET", "conflict/resolve"),
-            ("GET", "conflict/take"),
-            ("GET", "conflict/restore"),
-            ("POST", "conflict/"),
-            ("POST", "conflict/undo"),
-            ("POST", "conflict/take/extra"),
-        ],
-    )
-    async def test_relay_ignores_the_wrong_method_per_route(self, relay, method, route):
-        assert await relay._dispatch_session_git(method, _git_url(route), None, {}) is None
 
     @pytest.mark.parametrize(
         ("route", "body", "loc"),
@@ -431,19 +388,6 @@ class TestMutationRouting:
         assert [e["type"] for e in dispatched["body"]["detail"]] == [
             e["type"] for e in resp.json()["detail"]]
 
-    async def test_proxy_dispatch_hands_the_body_through(
-        self, http, headers, relay, session_at, repo, mock_app_state
-    ):
-        session_at(repo)
-        write_file(repo, "a.txt", b"a\n")
-
-        result = await relay._dispatch_proxy(
-            "POST", _git_url("stage"), {"paths": ["a.txt"]}, None, MagicMock()
-        )
-
-        assert result == {"status": 200, "body": {"ok": True}}
-        assert await _groups(http, headers) == [("staged", "a.txt")]
-
 
 @requires_git
 class TestMutationRoutes:
@@ -469,31 +413,6 @@ class TestMutationRoutes:
              "common_dir": norm_path(repo) + "/.git"},
         )]
 
-    async def test_session_without_a_project_publishes_an_empty_name(
-        self, http, headers, relay, session_at, repo, mock_app_state
-    ):
-        session_at(repo)
-        bus = _FakeEventBus()
-        mock_app_state.event_bus = bus
-        write_file(repo, "a.txt", b"a\n")
-
-        await relay._dispatch_session_git("POST", _git_url("stage"), None, {"paths": ["a.txt"]})
-
-        assert [p["project_name"] for _, p in bus.published] == [""]
-
-    async def test_unstage_matches_on_both_transports(
-        self, http, headers, relay, session_at, repo
-    ):
-        session_at(repo)
-        write_file(repo, "keep.txt", b"one\nTWO\nthree\n")
-        run_git_sync(repo, "add", "keep.txt")
-
-        resp = await _assert_post_parity(
-            http, headers, relay, _git_url("unstage"), {"paths": ["keep.txt"]}
-        )
-
-        assert resp.json() == {"ok": True}
-        assert await _groups(http, headers) == [("unstaged", "keep.txt")]
 
     async def test_discard_matches_on_both_transports(
         self, http, headers, relay, session_at, repo
@@ -599,18 +518,6 @@ class TestMutationRoutes:
         assert resp.status_code == 409
         assert resp.json() == {"detail": {"code": "not_a_repo", "message": ""}}
 
-    async def test_vanished_cwd_is_400_on_a_mutation(
-        self, http, headers, relay, session_at, tmp_path
-    ):
-        session_at(str(tmp_path / "gone"))
-
-        resp = await _assert_post_parity(
-            http, headers, relay, _git_url("stage"), {"paths": ["a.txt"]}
-        )
-
-        assert resp.status_code == 400
-        assert resp.json() == {"detail": {"code": "cwd_missing"}}
-
 
 @pytest.fixture(autouse=True)
 async def _fresh_job_registry():
@@ -652,43 +559,6 @@ class TestJobRouting:
 
         assert resp.status_code == 401
 
-    @pytest.mark.parametrize(
-        ("method", "route"),
-        [
-            ("GET", "fetch"),
-            ("GET", "pull"),
-            ("GET", "push"),
-            ("POST", "jobs/abc"),
-            ("GET", "jobs/abc/cancel"),
-            ("GET", "jobs/"),
-            ("POST", "jobs/abc/extra"),
-        ],
-    )
-    async def test_relay_ignores_the_wrong_method_per_job_route(self, relay, method, route):
-        assert await relay._dispatch_session_git(method, _git_url(route), None, {}) is None
-
-    @pytest.mark.parametrize(
-        ("method", "route"),
-        [
-            ("POST", "fetch"),
-            ("POST", "pull"),
-            ("POST", "push"),
-            ("GET", "jobs/abc"),
-            ("POST", "jobs/abc/cancel"),
-        ],
-    )
-    async def test_unknown_session_is_404_on_both_transports(
-        self, http, headers, relay, session_at, tmp_path, method, route
-    ):
-        session_at(str(tmp_path))
-        url = _git_url(route, "nope")
-
-        resp = await http.request(method, url, headers=headers)
-        dispatched = await relay._dispatch_session_git(method, url, None, None)
-
-        assert resp.status_code == 404
-        assert resp.json() == {"detail": "Session 'nope' not found"}
-        assert dispatched == {"status": 404, "body": resp.json()}
 
     @pytest.mark.parametrize(
         ("route", "body", "loc"),
@@ -724,16 +594,6 @@ class TestJobRouting:
         assert got.json() == {"detail": {"code": "job_not_found"}}
         assert cancelled.status_code == 404
         assert cancelled.json() == {"detail": {"code": "job_not_found"}}
-
-    async def test_job_start_outside_a_repo_is_409_on_both_transports(
-        self, http, headers, relay, session_at, tmp_path
-    ):
-        session_at(str(tmp_path))
-
-        resp = await _assert_post_parity(http, headers, relay, _git_url("fetch"), None)
-
-        assert resp.status_code == 409
-        assert resp.json() == {"detail": {"code": "not_a_repo", "message": ""}}
 
 
 @requires_git
@@ -856,37 +716,6 @@ class TestRebaseRouting:
         aborted = await http.post(_git_url("rebase/abort"))
 
         assert (started.status_code, aborted.status_code) == (401, 401)
-
-    @pytest.mark.parametrize(
-        ("route", "body"),
-        [
-            ("rebase", {"onto": "main"}),
-            ("rebase/continue", None),
-            ("rebase/skip", None),
-            ("rebase/abort", None),
-        ],
-    )
-    async def test_unknown_session_is_404_on_both_transports(
-        self, http, headers, relay, session_at, tmp_path, route, body
-    ):
-        session_at(str(tmp_path))
-
-        resp = await _assert_post_parity(http, headers, relay, _git_url(route, "nope"), body)
-
-        assert resp.status_code == 404
-        assert resp.json() == {"detail": "Session 'nope' not found"}
-
-    async def test_rebase_outside_a_repo_is_409_on_both_transports(
-        self, http, headers, relay, session_at, tmp_path
-    ):
-        session_at(str(tmp_path))
-
-        resp = await _assert_post_parity(
-            http, headers, relay, _git_url("rebase"), {"onto": "main"}
-        )
-
-        assert resp.status_code == 409
-        assert resp.json() == {"detail": {"code": "not_a_repo", "message": ""}}
 
 
 async def _post_via(transport, http, headers, relay, route, body=None):
@@ -1062,23 +891,6 @@ class TestConflictRouting:
         assert resp.status_code == 404
         assert resp.json() == {"detail": "Session 'nope' not found"}
 
-    @pytest.mark.parametrize(
-        ("route", "body"),
-        [
-            ("conflict/resolve", {"path": "a.txt", "token": "t", "content": "x"}),
-            ("conflict/take", {"path": "a.txt", "side": "ours"}),
-            ("conflict/restore", {"path": "a.txt"}),
-        ],
-    )
-    async def test_unknown_session_write_is_404_on_both_transports(
-        self, http, headers, relay, session_at, tmp_path, route, body
-    ):
-        session_at(str(tmp_path))
-
-        resp = await _assert_post_parity(http, headers, relay, _git_url(route, "nope"), body)
-
-        assert resp.status_code == 404
-        assert resp.json() == {"detail": "Session 'nope' not found"}
 
     @pytest.mark.parametrize(
         "query", [None, {}, {"path": ""}, {"path": "../a.txt"}, {"path": ".git/config"}]

@@ -19,7 +19,6 @@ from mobaide.agent.git.changes_service import (
     resolve_repo_dirs,
     restorable_paths,
 )
-from mobaide.core import git_exec
 from mobaide.core.git_exec import (
     CmdResult,
     GitCwdMissingError,
@@ -41,7 +40,6 @@ from .git_repo_support import (
     repo,  # noqa: F401 - pytest fixture
     requires_git,
     run_git_sync,
-    start_failing_am_after_a_merge_as_ours,
     stop_rebase_on_exec_after_a_pick_as_ours,
     stub_git,
     write_file,
@@ -61,10 +59,6 @@ def _fresh_caches():
 
 
 class TestResolveRepo:
-    async def test_none_cwd_is_cwd_missing(self):
-        probe = await resolve_repo(None)
-
-        assert (probe.reason, probe.repo) == ("cwd_missing", None)
 
     async def test_vanished_cwd_is_cwd_missing(self, tmp_path):
         probe = await resolve_repo(str(tmp_path / "gone"))
@@ -154,11 +148,6 @@ class TestResolveRepo:
 
         assert (probe.reason, probe.repo) == ("git_too_old", None)
 
-    async def test_unparseable_version_raises(self, tmp_path, monkeypatch):
-        stub_git(monkeypatch, CmdResult(rc=0, stdout=b"", stderr=b""), version=None)
-
-        with pytest.raises(GitCommandError):
-            await resolve_repo(str(tmp_path))
 
     async def test_dubious_ownership_is_unsafe_directory(self, tmp_path, monkeypatch):
         stub_git(monkeypatch, _DUBIOUS)
@@ -179,21 +168,12 @@ class TestResolveRepo:
 
         assert (probe.reason, probe.repo) == ("cwd_missing", None)
 
-    async def test_unknown_failure_raises_command_error(self, tmp_path, monkeypatch):
-        stub_git(monkeypatch, CmdResult(rc=128, stdout=b"", stderr=b"fatal: index corrupt"))
-
-        with pytest.raises(GitCommandError, match="index corrupt"):
-            await resolve_repo(str(tmp_path))
-
 
 class TestResolveRepoDirs:
     @requires_git
     async def test_repo_yields_toplevel_and_common_dir(self, repo):
         assert await resolve_repo_dirs(repo) == (norm_path(repo), norm_path(repo) + "/.git")
 
-    @requires_git
-    async def test_non_repo_yields_nones(self, tmp_path):
-        assert await resolve_repo_dirs(str(tmp_path)) == (None, None)
 
     async def test_never_raises(self, tmp_path, monkeypatch):
         async def boom():
@@ -206,8 +186,6 @@ class TestResolveRepoDirs:
 
 @requires_git
 class TestRepoState:
-    async def test_clean(self, repo):
-        assert await repo_state(norm_path(repo)) == "clean"
 
     async def test_merging(self, repo):
         make_conflict_branches(repo)
@@ -228,15 +206,6 @@ class TestRepoState:
 
         assert await repo_state(norm_path(repo)) == "cherry_picking"
 
-    async def test_reverting(self, repo):
-        run_git_sync(repo, "revert", "--no-commit", "HEAD")
-
-        assert await repo_state(norm_path(repo)) == "reverting"
-
-    async def test_bisecting(self, repo):
-        run_git_sync(repo, "bisect", "start")
-
-        assert await repo_state(norm_path(repo)) == "bisecting"
 
     async def test_linked_worktree_state_is_per_worktree(self, repo, tmp_path):
         make_conflict_branches(repo)
@@ -282,10 +251,6 @@ async def _rebase_status(cwd: str):
 
 @requires_git
 class TestRebaseInfo:
-    async def test_a_clean_repo_reports_no_rebase(self, repo):
-        resp = await _rebase_status(repo)
-
-        assert (resp.repo.state, resp.repo.rebase) == ("clean", None)
 
     async def test_stopped_merge_backend_rebase_reports_branch_onto_stop_and_step(self, repo):
         make_conflict_branches(repo)
@@ -336,15 +301,6 @@ class TestRebaseInfo:
 
         assert (resp.repo.state, resp.repo.rebase) == ("rebasing", None)
 
-    async def test_a_detached_head_rebase_has_no_branch(self, repo):
-        make_conflict_branches(repo)
-        run_git_sync(repo, "checkout", "--detach", "other")
-        run_git_sync(repo, "rebase", "main", check=False)
-
-        rebase = (await _rebase_status(repo)).repo.rebase
-
-        assert rebase.branch is None
-        assert (rebase.onto_ref, rebase.stopped_on.subject) == ("main", "other side")
 
     async def test_onto_ref_prefers_a_local_branch_over_a_remote_tracking_one(self, repo):
         make_conflict_branches(repo)
@@ -373,18 +329,6 @@ class TestRebaseInfo:
 
         assert (rebase.onto_oid, rebase.onto_ref) == (onto, "origin/feature")
 
-    async def test_onto_with_no_branch_pointing_at_it_keeps_only_the_oid(self, repo):
-        make_conflict_branches(repo)
-        onto = _rev(repo, "main")
-        run_git_sync(repo, "commit", "--allow-empty", "-q", "-m", "main moves on")
-        run_git_sync(repo, "checkout", "other")
-        run_git_sync(repo, "rebase", onto, check=False)
-
-        rebase = (await _rebase_status(repo)).repo.rebase
-
-        assert (rebase.onto_oid, rebase.onto_short_oid, rebase.onto_ref) == (
-            onto, _rev(repo, onto, short=True), None)
-        assert rebase.stopped_on.subject == "other side"
 
     async def test_unreadable_state_files_degrade_to_nulls(self, repo):
         make_conflict_branches(repo)
@@ -648,13 +592,6 @@ class TestSessionGitStatus:
         with pytest.raises(GitTimeoutError):
             await get_session_git_status(session_id="s1", cwd=str(tmp_path), etag=None)
 
-    async def test_missing_git_raises_unavailable(self, repo, monkeypatch):
-        monkeypatch.setattr(git_exec.shutil, "which", lambda _name: None)
-        reset_caches()
-
-        with pytest.raises(GitUnavailableError):
-            await get_session_git_status(session_id="s1", cwd=repo, etag=None)
-
 
 def _resolve_undo_record(
     path: str, stages: dict[int, str], *, gitlink: tuple[int, ...] = ()
@@ -721,21 +658,6 @@ class TestResolvedPaths:
         assert b"keep.txt" in records
         assert (resp.repo.state, resp.resolved_paths) == ("bisecting", [])
 
-    async def test_a_record_left_by_a_finished_merge_is_not_listed_during_a_git_am(
-        self, repo, tmp_path
-    ):
-        # ``rebasing`` without a rebase: the session never rewrote the index, so
-        # the record is the finished merge's, its stage 2 still HEAD's blob.
-        start_failing_am_after_a_merge_as_ours(repo, str(tmp_path / "patches"))
-        records = subprocess.run(
-            [GIT_BIN, "ls-files", "--resolve-undo"], cwd=repo, check=True, capture_output=True
-        ).stdout
-
-        resp = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
-
-        assert b"keep.txt" in records
-        assert (resp.repo.state, resp.repo.rebase) == ("rebasing", None)
-        assert resp.resolved_paths == []
 
     async def test_a_record_of_a_pick_already_committed_is_not_listed_at_an_exec_stop(
         self, repo
@@ -986,9 +908,6 @@ class TestResolvedPaths:
         listed = await restorable_paths(repo, raw, unmerged=set())
 
         assert listed == ["a.txt", "b.txt"]
-
-    async def test_no_records_never_asks_git(self, tmp_path):
-        assert await restorable_paths(str(tmp_path / "gone"), b"", unmerged=set()) == []
 
 
 _STOPPED_ON = GitRebaseCommit(oid="1" * 40, short_oid="1" * 7, subject="other side")

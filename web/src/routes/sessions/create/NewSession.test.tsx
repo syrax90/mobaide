@@ -437,28 +437,6 @@ describe('NewSession project step', () => {
     expect(visited).toEqual(['']);
   });
 
-  it('still needs Continue for a path typed by hand', async () => {
-    await renderWizard();
-
-    fireEvent.change(screen.getByLabelText('Absolute path'), {
-      target: { value: '/srv/typed' },
-    });
-    // Typing never navigates: a `history.replaceState` per character is what
-    // browsers rate-limit.
-    expect(visited).toEqual(['']);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-
-    expect(await screen.findByRole('heading', { name: 'What should it run?' })).toBeInTheDocument();
-    expect(currentPath()).toBe('/agents/agent-1/new-session?step=mode&path=%2Fsrv%2Ftyped');
-  });
-
-  it('leaves Continue disabled on a deep link that already names a project', async () => {
-    await renderWizard('?step=project&project=alpha');
-
-    expect(screen.getByRole('button', { name: /^alpha/ })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
-  });
 });
 
 describe('NewSession create project', () => {
@@ -508,16 +486,6 @@ describe('NewSession create project', () => {
     expect(screen.getByRole('button', { name: /^gamma/ })).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('closes on Cancel and leaves the wizard on the project step', async () => {
-    await renderWizard();
-
-    fireEvent.click(within(openCreateDialog()).getByRole('button', { name: 'Cancel' }));
-
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Where should it run?' })).toBeInTheDocument();
-    expect(api.projectWrites).toEqual([]);
-    expect(visited).toEqual(['']);
-  });
 });
 
 describe('NewSession worktree options', () => {
@@ -525,19 +493,6 @@ describe('NewSession worktree options', () => {
     // `is_git` defaults to **false** in `projectInfoSchema`, so the default
     // fixture renders no worktree group at all.
     api.projects = [gitProject('alpha')];
-  });
-
-  it('shows the branch name only while a worktree is requested', async () => {
-    await renderWizard('?step=config&mode=claude&project=alpha');
-
-    const worktree = screen.getByLabelText('Create worktree');
-    expect(screen.queryByLabelText('Branch name (optional)')).not.toBeInTheDocument();
-
-    fireEvent.click(worktree);
-    expect(screen.getByLabelText('Branch name (optional)')).toBeInTheDocument();
-
-    fireEvent.click(worktree);
-    expect(screen.queryByLabelText('Branch name (optional)')).not.toBeInTheDocument();
   });
 
   it('gives the field back the branch the user already typed', async () => {

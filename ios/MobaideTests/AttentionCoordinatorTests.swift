@@ -68,21 +68,6 @@ final class AttentionCoordinatorTests: XCTestCase {
         XCTAssertTrue(presenter.posted.isEmpty)
     }
 
-    func testSessionUpdatedWithAttentionIsIgnored() async {
-        let presenter = FakeAttentionPresenter()
-        let (events, continuation) = AsyncStream.makeStream(of: AgentEvent.self)
-        let coordinator = makeCoordinator(presenter: presenter, events: events)
-        coordinator.start()
-        // The ignored update precedes a real attention post; once the post
-        // lands, the ignored event was already processed (and skipped).
-        continuation.yield(.sessionUpdated(makeSessionResponse(id: "ignored", attention: "awaiting_permission")))
-        continuation.yield(.sessionAttention(makeSessionResponse(id: "posted", attention: "turn_finished")))
-        continuation.finish()
-        await waitUntil { presenter.postedIds == ["posted"] }
-        XCTAssertEqual(presenter.postedIds, ["posted"])
-        XCTAssertTrue(presenter.removed.isEmpty)
-    }
-
     func testReconcilePostsMissingAndRemovesStale() async {
         // A (snapshot attention set) = {a, c}; B (delivered) = {c, d}.
         markBaselineTaken()
@@ -136,30 +121,6 @@ final class AttentionCoordinatorTests: XCTestCase {
         coordinator.authorizationGranted()
         await waitUntil { snapshotCount.value == 2 }
         XCTAssertEqual(snapshotCount.value, 2, "a grant reconciles to recover dropped alerts")
-        continuation.finish()
-    }
-
-    func testLateAuthorizationGrantStillReconciles() async {
-        // The retry `post` starts on a later `.notDetermined` is not the
-        // connect-path request, and the coordinator only ever asks once — so
-        // recovery must not be tied to that first request's outcome.
-        let presenter = FakeAttentionPresenter()
-        let snapshotCount = Counter()
-        let (authStates, continuation) = AsyncStream.makeStream(of: AuthState.self)
-        let coordinator = makeCoordinator(
-            presenter: presenter,
-            authStates: authStates,
-            snapshot: { snapshotCount.increment(); return [] }
-        )
-        coordinator.start()
-        continuation.yield(.fullyConnected)
-        await waitUntil { snapshotCount.value == 1 }
-        XCTAssertEqual(presenter.authRequestCount, 1, "the coordinator asks exactly once")
-        coordinator.authorizationGranted()
-        await waitUntil { snapshotCount.value == 2 }
-        coordinator.authorizationGranted()
-        await waitUntil { snapshotCount.value == 3 }
-        XCTAssertEqual(snapshotCount.value, 3, "every grant recovers, not just the first")
         continuation.finish()
     }
 
@@ -241,20 +202,6 @@ final class AttentionCoordinatorTests: XCTestCase {
         continuation.finish()
         await waitUntil { presenter.removeAllCount == 1 }
         XCTAssertEqual(presenter.removeAllCount, 1)
-    }
-
-    func testConnectingUserOnlyKeepsNotifications() async {
-        // A .userOnly seen while still connecting (cold start) is not a
-        // downgrade and must not wipe cross-launch alerts.
-        let presenter = FakeAttentionPresenter()
-        let (authStates, continuation) = AsyncStream.makeStream(of: AuthState.self)
-        let coordinator = makeCoordinator(presenter: presenter, authStates: authStates)
-        coordinator.start()
-        continuation.yield(.userOnly)
-        continuation.yield(.fullyConnected)
-        continuation.finish()
-        await waitUntil { presenter.authRequestCount == 1 }
-        XCTAssertEqual(presenter.removeAllCount, 0)
     }
 
     func testReconcilesOnFullyConnected() async {

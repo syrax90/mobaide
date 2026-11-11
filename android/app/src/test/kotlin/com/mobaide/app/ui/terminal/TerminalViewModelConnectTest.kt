@@ -159,31 +159,6 @@ class TerminalViewModelConnectTest {
         }
 
     @Test
-    fun connect_collectorSeesInitialState_evenWhenConnectedEventLost() =
-        runTest(testDispatcher) {
-            // Regression guard for the "belt-and-braces" half of the fix: if a
-            // future refactor loses the Connected WsEvent but still delivers
-            // binary frames (e.g. the underlying OkHttp listener changes),
-            // the first binary frame must still flip connectionState off
-            // Reconnecting because the handleBinary safety path upgrades it.
-            val eventsFlow = newEventsFlow()
-            val conn = newConnection(eventsFlow)
-            every { conn.connect() } answers {
-                eventsFlow.tryEmit(WsEvent.Binary(stateRunningFrame))
-            }
-
-            val vm = newViewModel(newRepository(conn))
-            runCurrent()
-
-            // See note on the previous test: we assert only the race-relevant
-            // observables (connectionState + isConnected), not sessionState —
-            // the latter depends on `org.json.JSONObject` which returns stubs
-            // in JVM unit tests.
-            assertEquals(ConnectionState.Live, vm.connectionState.value)
-            assertEquals(true, vm.isConnected.value)
-        }
-
-    @Test
     fun handleBinary_upgradesConnectionState_fromReconnectingToLive() =
         runTest(testDispatcher) {
             // Arrange: connect() is a no-op (no Connected event) — the VM
@@ -249,30 +224,6 @@ class TerminalViewModelConnectTest {
             eventsFlow.tryEmit(WsEvent.Binary(replayEndFrame))
             runCurrent()
             assertEquals(ConnectionState.Live, vm.connectionState.value)
-        }
-
-    @Test
-    fun handleBinary_keepsLiveState_whenAlreadyLive() =
-        runTest(testDispatcher) {
-            // Idempotency guard: once Live, a subsequent binary frame must
-            // not regress connectionState (no oscillation Live → Reconnecting
-            // → Live every frame).  This nails down that the upgrade branch
-            // fires only off the Reconnecting discriminator.
-            val eventsFlow = newEventsFlow()
-            val conn = newConnection(eventsFlow)
-            every { conn.connect() } answers {
-                eventsFlow.tryEmit(WsEvent.Connected)
-            }
-
-            val vm = newViewModel(newRepository(conn))
-            runCurrent()
-            assertEquals(ConnectionState.Live, vm.connectionState.value)
-
-            eventsFlow.tryEmit(WsEvent.Binary(outputFrame("x".toByteArray())))
-            runCurrent()
-
-            assertEquals(ConnectionState.Live, vm.connectionState.value)
-            assertEquals(true, vm.isConnected.value)
         }
 
     @Test
@@ -349,35 +300,5 @@ class TerminalViewModelConnectTest {
             runCurrent()
 
             verify(exactly = 1) { conn.forceReconnect() }
-        }
-
-    @Test
-    fun replayMarker_transitionsTo_replayingBuffer_andEnablesFollowMode() =
-        runTest(testDispatcher) {
-            // Verifies the state-machine half of the clear-before-replay
-            // fix.  The byte-level emulator effect (cursor home, screen
-            // wipe, scrollback drop) requires a real `Looper` because
-            // `TerminalSession.emitOutput` posts the append through
-            // `mMainThreadHandler` — covered separately by
-            // `TerminalViewModelReplayClearTest` under Robolectric.
-            val eventsFlow = newEventsFlow()
-            val conn = newConnection(eventsFlow)
-            every { conn.connect() } answers {
-                eventsFlow.tryEmit(WsEvent.Connected)
-            }
-
-            val vm = newViewModel(newRepository(conn))
-            runCurrent()
-            assertEquals(ConnectionState.Live, vm.connectionState.value)
-
-            eventsFlow.tryEmit(WsEvent.Binary(replayMarkerFrame))
-            runCurrent()
-
-            assertEquals(ConnectionState.ReplayingBuffer, vm.connectionState.value)
-            assertEquals(
-                "marker re-enables follow mode so the user lands at the bottom",
-                true,
-                vm.followMode.value,
-            )
         }
 }

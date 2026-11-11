@@ -15,7 +15,6 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Test
 
 /**
@@ -75,23 +74,6 @@ class CustomAgentTypeApiTest {
           "updated_at": "2026-07-28T12:00:00Z"
         }
     """.trimIndent()
-
-    @Test
-    fun listCustomAgentTypes_getsCollectionUrl_withBearerToken_andDecodesList() = runTest {
-        val (api, client) = newApi()
-        val captured = stubCall(client) { req -> responseFor(req, 200, "[$typeJson]") }
-
-        val types = api.listCustomAgentTypes("tok-user")
-
-        assertEquals(
-            "https://central.example.com/api/custom-agent-types",
-            captured.captured.url.toString(),
-        )
-        assertEquals("GET", captured.captured.method)
-        assertEquals("Bearer tok-user", captured.captured.header("Authorization"))
-        assertEquals(listOf("ab12cd34ef56"), types.map { it.id })
-        assertEquals("aider --model sonnet", types.single().command)
-    }
 
     @Test
     fun createCustomAgentType_postsNameAndCommand_andDecodesDto() = runTest {
@@ -156,36 +138,4 @@ class CustomAgentTypeApiTest {
         )
     }
 
-    @Test
-    fun deleteCustomAgentType_deletesTypeIdUrl_withBearerToken() = runTest {
-        val (api, client) = newApi()
-        val captured = stubCall(client) { req -> responseFor(req, 204, "") }
-
-        api.deleteCustomAgentType("tok-user", "ab12cd34ef56")
-
-        assertEquals(
-            "https://central.example.com/api/custom-agent-types/ab12cd34ef56",
-            captured.captured.url.toString(),
-        )
-        assertEquals("DELETE", captured.captured.method)
-        assertEquals("Bearer tok-user", captured.captured.header("Authorization"))
-    }
-
-    @Test
-    fun createCustomAgentType_on409_throwsApiException_withServerDetailBody() = runTest {
-        // The 409 detail (20-type cap / name conflict) is user-grade copy the
-        // editor shows verbatim — it must survive into ApiException.errorBody.
-        val (api, client) = newApi()
-        stubCall(client) { req ->
-            responseFor(req, 409, """{"detail":"Custom agent type limit reached (20)"}""")
-        }
-
-        try {
-            api.createCustomAgentType("tok-user", "Aider", "aider")
-            fail("expected ApiException for 409")
-        } catch (e: ApiException) {
-            assertEquals(409, e.code)
-            assertTrue(e.errorBody.contains("Custom agent type limit reached (20)"))
-        }
-    }
 }

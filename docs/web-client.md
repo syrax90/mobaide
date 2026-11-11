@@ -1305,8 +1305,8 @@ legacy-first encoder (C0 for Ctrl+letter, ESC-prefix for Alt over a single-byte
 core, xterm SS3 / CSI forms for F-keys, kitty CSI-u for everything legacy bytes
 cannot express) live in `tests/protocol_fixtures/keys/key_chords.json`, read by
 all three clients: `web/src/protocol/keyChord.ts` (gated by
-`protocol-integrity.yml` — the **only** CI-enforced arm, since iOS CI is
-push-to-main-only and Android's tests are not CI-gated),
+`protocol-integrity.yml`; iOS runs in `ios-build.yml` and Android in
+`unit-tests.yml`),
 `KeyChordFixtureTests.swift`, and `KeyChordFixtureTest.kt` (Android's first
 fixture consumer; extending its loader to `dto/` is CLA-235). Kotlin stays the
 reference implementation: a disagreement means the fixture is wrong.

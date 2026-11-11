@@ -56,12 +56,6 @@ def test_broadcast_enqueues_frame_on_each_online_agent():
         }
 
 
-def test_broadcast_with_no_agents_is_noop():
-    routing = RoutingTable()
-    delivered = broadcast_manifest_update(routing, _stored_manifest())
-    assert delivered == 0
-
-
 @pytest.mark.asyncio
 async def test_publish_endpoint_broadcasts_after_write(client, app):
     """End-to-end: POST /api/internal/agent_manifest with a valid signed

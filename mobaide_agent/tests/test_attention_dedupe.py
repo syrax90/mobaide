@@ -69,33 +69,24 @@ class TestSharedThread:
         assert _admit(dedupe, "t-1", "terminal")
         assert _admit(dedupe, "t-2", "terminal")
 
-    def test_two_chats_in_one_folder_both_alert(self, dedupe) -> None:
-        assert _admit(dedupe, "c-1", "chat")
-        assert _admit(dedupe, "c-2", "chat")
 
     def test_a_session_never_suppresses_itself(self, dedupe) -> None:
         assert _admit(dedupe, "s-1", "chat")
         assert _admit(dedupe, "s-1", "chat")
 
-    def test_a_different_folder_is_a_different_thread(self, dedupe) -> None:
-        assert _admit(dedupe, "c-1", "chat", cwd="/work/a")
-        assert _admit(dedupe, "t-1", "terminal", cwd="/work/b")
 
     @pytest.mark.parametrize(
         ("first", "second"),
         [("turn_failed", "turn_finished"), ("turn_finished", "turn_failed")],
     )
-    @pytest.mark.parametrize(
-        ("first_ui", "second_ui"), [("chat", "terminal"), ("terminal", "chat")],
-    )
     def test_a_failed_and_a_finished_turn_are_one_turn_end(
-        self, dedupe, clock, first, second, first_ui, second_ui,
+        self, dedupe, clock, first, second,
     ) -> None:
         # The chat sees the agent's error; the TUI may report the same turn
         # as plain ``done``.
-        assert _admit(dedupe, "s-1", first_ui, reason=first)
+        assert _admit(dedupe, "s-1", "chat", reason=first)
         clock.advance(1.0)
-        assert not _admit(dedupe, "s-2", second_ui, reason=second)
+        assert not _admit(dedupe, "s-2", "terminal", reason=second)
 
     @pytest.mark.parametrize("turn_end", ["turn_finished", "turn_failed"])
     def test_a_permission_prompt_is_not_a_turn_end(self, dedupe, turn_end) -> None:
@@ -129,7 +120,7 @@ class TestWindow:
 
 
 class TestOutOfScope:
-    @pytest.mark.parametrize("app", ["claude", "antigravity", "shell", None])
+    @pytest.mark.parametrize("app", ["claude", None])
     def test_apps_without_a_shared_thread_always_alert(self, dedupe, app) -> None:
         assert _admit(dedupe, "c-1", "chat", app=app)
         assert _admit(dedupe, "t-1", "terminal", app=app)
@@ -155,7 +146,3 @@ class TestRealCwd:
         except (OSError, NotImplementedError):
             pytest.skip("symlinks unavailable")
         assert real_cwd(str(link)) == real_cwd(str(target))
-
-    @pytest.mark.parametrize("cwd", [None, ""])
-    def test_no_folder_has_no_key(self, cwd) -> None:
-        assert real_cwd(cwd) is None

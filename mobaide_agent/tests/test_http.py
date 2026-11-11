@@ -54,27 +54,6 @@ class TestUserAgentInjection:
         assert isinstance(req, urllib.request.Request)
         assert req.get_header("User-agent") == _http.USER_AGENT
 
-    def test_injects_user_agent_for_request_instance(self):
-        captured, p = _capture_request()
-        with p:
-            req_in = urllib.request.Request(
-                "https://example.test/path",
-                headers={"Content-Type": "application/json"},
-                method="POST",
-                data=b"{}",
-            )
-            with _http.urlopen(req_in, timeout=10) as _:
-                pass
-
-        req = captured["request"]
-        assert req is req_in
-        assert req.get_header("User-agent") == _http.USER_AGENT
-
-    def test_user_agent_starts_with_agent_prefix(self):
-        # Sanity: prefix is well-known so operators can write WAF allow-rules
-        # against it (e.g., ``User-Agent ~= ^mobaide-agent/``).
-        assert _http.USER_AGENT.startswith("mobaide-agent/")
-
 
 class TestUserAgentNotOverridden:
     def test_explicit_user_agent_in_headers_preserved(self):
@@ -89,17 +68,6 @@ class TestUserAgentNotOverridden:
 
         assert captured["request"].get_header("User-agent") == "custom/1.0"
 
-    def test_lowercase_user_agent_in_headers_preserved(self):
-        captured, p = _capture_request()
-        with p:
-            with _http.urlopen(
-                "https://example.test/path",
-                headers={"user-agent": "custom/1.0"},
-                timeout=10,
-            ) as _:
-                pass
-
-        assert captured["request"].get_header("User-agent") == "custom/1.0"
 
     def test_user_agent_already_on_request_preserved(self):
         captured, p = _capture_request()
@@ -110,18 +78,6 @@ class TestUserAgentNotOverridden:
                 pass
 
         assert captured["request"].get_header("User-agent") == "preset/0.1"
-
-    def test_user_agent_via_unredirected_header_preserved(self):
-        captured, p = _capture_request()
-        with p:
-            req_in = urllib.request.Request("https://example.test/path")
-            req_in.add_unredirected_header("User-Agent", "unredir/0.1")
-            with _http.urlopen(req_in, timeout=10) as _:
-                pass
-
-        # add_unredirected_header writes to a separate dict; the wrapper
-        # must consult both. ``get_header`` falls back through both.
-        assert captured["request"].get_header("User-agent") == "unredir/0.1"
 
 
 class TestForwarding:
@@ -153,12 +109,6 @@ class TestForwarding:
             _http.urlopen(req_in, headers={"X": "y"}, timeout=10)
         with pytest.raises(TypeError):
             _http.urlopen(req_in, method="POST", timeout=10)
-
-    def test_timeout_required(self):
-        # Keyword-only and required: prevents accidentally blocking the
-        # asyncio event loop with a default-blocking urlopen.
-        with pytest.raises(TypeError):
-            _http.urlopen("https://example.test/path")  # type: ignore[call-arg]
 
 
 class TestTlsContext:

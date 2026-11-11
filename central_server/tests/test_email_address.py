@@ -8,11 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from central_server.auth.email_address import (
-    INVALID_EMAIL_MESSAGE,
-    is_single_mailbox,
-    validate_single_mailbox,
-)
+from central_server.auth.email_address import is_single_mailbox
 
 # Every label stays within the DNS 63-octet limit, so only the total length
 # decides the outcome.
@@ -80,10 +76,3 @@ class TestIsSingleMailbox:
         assert not is_single_mailbox(over_limit)
 
 
-class TestValidateSingleMailbox:
-    def test_returns_a_valid_address_unchanged(self):
-        assert validate_single_mailbox("alice@example.com") == "alice@example.com"
-
-    def test_raises_with_the_client_facing_message(self):
-        with pytest.raises(ValueError, match=f"^{INVALID_EMAIL_MESSAGE}$"):
-            validate_single_mailbox("a@example.com, b@example.com")

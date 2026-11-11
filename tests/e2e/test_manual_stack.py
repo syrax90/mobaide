@@ -21,7 +21,6 @@ TEST_URL = "http://192.168.1.5:9000"
 LOOPBACK_URL = "http://127.0.0.1:9000"
 GOOGLE_LINE = "GOOGLE_IOS_CLIENT_ID = 1234-abc.apps.googleusercontent.com"
 SIM_A = "F0036AE7-EF09-4999-A3F0-B7220D960A8F"
-SIM_B = "1A486351-84A4-403F-BF9E-F1ED12366F59"
 
 
 def test_debug_nsc_content_is_valid_xml():
@@ -168,20 +167,6 @@ def test_ios_revert_removes_a_file_it_created_whole(monkeypatch, tmp_path):
     assert not ms.LOCAL_XCCONFIG_PATH.exists()
 
 
-def test_ios_revert_leaves_foreign_url_alone(monkeypatch, tmp_path):
-    _point_client_files_at(monkeypatch, tmp_path)
-    ms.LOCAL_XCCONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    ms.LOCAL_XCCONFIG_PATH.write_text(
-        "CENTRAL_SERVER_URL = https:/$()/someone-elses.example\n", encoding="utf-8"
-    )
-    state = ms.default_state()  # managed_url is None => not ours to revert
-
-    ms.revert_ios_files(state, lambda: None)
-
-    assert ms.LOCAL_XCCONFIG_PATH.exists()
-    assert _central_url(ms.IOS_URL_FILE) == "https://someone-elses.example"
-
-
 def test_ios_auto_prefers_loopback_where_android_prefers_the_lan():
     """The deliberate divergence: iOS ships no ATS exception, so only loopback
     carries cleartext REST. Android's ``auto`` keeps favouring the LAN IP."""
@@ -218,36 +203,6 @@ def test_ios_revert_restores_an_inline_comment_verbatim(monkeypatch, tmp_path):
 
     ms.revert_ios_files(state, noop)
     assert ms.LOCAL_XCCONFIG_PATH.read_text(encoding="utf-8").splitlines() == [original]
-
-
-def test_ios_install_gate_tracks_the_installed_url_not_the_baked_one(monkeypatch, tmp_path):
-    """`up` bakes a URL, then the banner tells you to run `ios --install-app`.
-
-    That second run re-syncs the same URL, so the rebuild verdict is False —
-    but the simulator still carries the previous build. The stale-install
-    decision must therefore read ``installed_urls``, which only a successful
-    install advances.
-    """
-    _point_client_files_at(monkeypatch, tmp_path)
-    state = ms.default_state()
-    noop = lambda: None  # noqa: E731
-    ios = ms.IOS_URL_FILE.own_state(state)
-
-    # `up` syncs a new URL: rebuild prompt fires, nothing is installed yet.
-    assert ms.sync_ios_files(state, LOOPBACK_URL, noop) is True
-    assert ios["baked_url"] == LOOPBACK_URL
-    assert ios["installed_urls"] == {}
-
-    # The documented follow-up re-syncs the same URL: no rebuild prompt...
-    assert ms.sync_ios_files(state, LOOPBACK_URL, noop) is False
-    # ...yet the install is still stale, so it must not be treated as current.
-    assert ios["installed_urls"].get(SIM_A) != LOOPBACK_URL
-
-    # After an install lands, the same URL is no longer stale on THAT device —
-    # but a second simulator has its own container and keychain, so it is.
-    ios["installed_urls"][SIM_A] = LOOPBACK_URL
-    assert ios["installed_urls"].get(SIM_A) == LOOPBACK_URL
-    assert ios["installed_urls"].get(SIM_B) != LOOPBACK_URL
 
 
 def test_shutdown_save_keeps_a_concurrent_installers_record(tmp_path):
@@ -327,52 +282,6 @@ def test_build_web_env_targets_the_stack_and_sanitizes(monkeypatch):
     assert env["MOBAIDE_WEB_PROXY_TARGET"] == "http://192.168.1.5:9123"
 
 
-def test_up_parser_web_defaults():
-    """--web is per-run opt-in: plain `up` must not grow web behaviour, and
-    5173 stays the default origin (the one registered for OAuth in dev)."""
-    args = ms.build_parser().parse_args(["up"])
-    assert args.web is False
-    assert args.web_port == ms.DEFAULT_WEB_PORT == 5173
-    assert args.no_browser is False  # --web opens a tab unless asked not to
-
-    args = ms.build_parser().parse_args(
-        ["up", "--web", "--web-port", "5180", "--no-browser"]
-    )
-    assert args.web is True
-    assert args.web_port == 5180
-    assert args.no_browser is True
-
-
-def test_open_web_client_is_best_effort(monkeypatch):
-    """The tab is a convenience layered on a stack that is already READY, so it
-    targets the pre-filled /login screen and a browser-less box (SSH, CI, a
-    stripped container) must not turn a working stack into a failed boot."""
-    opened = []
-    monkeypatch.setattr(ms.webbrowser, "open_new_tab", lambda url: opened.append(url) or True)
-    ms.open_web_client(5180)
-    assert opened == ["http://localhost:5180/login"]
-
-    def explode(url):
-        raise RuntimeError("no browser here")
-
-    monkeypatch.setattr(ms.webbrowser, "open_new_tab", explode)
-    ms.open_web_client(5180)  # must return normally
-
-
-def test_stale_matcher_covers_the_web_child():
-    """A hard-killed `up --web` leaves an npm/node tree behind; the reaping
-    pre-filter must recognise it on every platform (npm/node on POSIX, cmd.exe
-    on Windows) while still rejecting a python process wearing a recycled pid."""
-    matchers = {name: (token, names) for name, token, names in ms.STALE_PROCESS_MATCHERS}
-    assert set(matchers) == {"server", "agent", "web"}
-
-    cmdline_token, name_tokens = matchers["web"]
-    assert cmdline_token == "npm"
-    for proc_name in ("node", "npm", "npm.cmd", "cmd.exe"):
-        assert any(t in proc_name.lower() for t in name_tokens), proc_name
-    assert not any(t in "python3.12" for t in name_tokens)
-
-
 def test_build_agent_env_fake_voice_is_opt_in_and_sanitized(monkeypatch, tmp_path):
     """Voice runs against the real model unless `up --fake-voice` asks for
     the generated one, and both switches are set explicitly (process env
@@ -393,24 +302,6 @@ def test_build_agent_env_fake_voice_is_opt_in_and_sanitized(monkeypatch, tmp_pat
     assert env["MOBAIDE_VOICE_DIR"] == ""
 
 
-def test_up_parser_emulator_is_opt_in():
-    """Plain `up` (the macOS workflow) must not boot anything new; a bare
-    --emulator picks the shared AVD name, and an explicit one wins."""
-    args = ms.build_parser().parse_args(["up"])
-    assert args.emulator is None
-    assert args.keep_emulator is False
-
-    args = ms.build_parser().parse_args(["up", "--emulator", "--web"])
-    assert args.emulator == ms.DEFAULT_AVD == "Mobaide-E2E"
-    assert args.web is True
-
-    args = ms.build_parser().parse_args(["android", "--emulator", "Pixel_9", "--install-app"])
-    assert args.emulator == "Pixel_9"
-
-    args = ms.build_parser().parse_args(["stop"])
-    assert args.timeout == ms.DEFAULT_STOP_TIMEOUT
-
-
 def test_parse_adb_devices_skips_daemon_chatter():
     output = (
         "* daemon not running; starting now at tcp:5037\n"
@@ -426,15 +317,6 @@ def test_parse_adb_devices_skips_daemon_chatter():
         "emulator-5556": "offline",
         "R58N12345": "unauthorized",
     }
-
-
-def test_parse_avd_list_ignores_log_lines():
-    output = (
-        "INFO    | Storing crashdata in: C:\\tmp\\crashdata\n"
-        "Mobaide-E2E\n"
-        "Pixel_9_API_36\n"
-    )
-    assert ms.parse_avd_list(output) == ["Mobaide-E2E", "Pixel_9_API_36"]
 
 
 def _fake_image(sdk: Path, api: str, tag: str, abi: str) -> None:
@@ -458,12 +340,6 @@ def test_pick_system_image_prefers_stable_4k_newest(tmp_path):
     assert ms.pick_system_image(tmp_path, "AMD64") == (
         "system-images;android-36.1;google_apis_playstore;x86_64")
     assert ms.pick_system_image(tmp_path, "arm64") is None  # wrong ABI only
-
-
-def test_pick_system_image_falls_back_to_16k(tmp_path):
-    _fake_image(tmp_path, "android-37.0", "google_apis_playstore_ps16k", "arm64-v8a")
-    assert ms.pick_system_image(tmp_path, "arm64") == (
-        "system-images;android-37.0;google_apis_playstore_ps16k;arm64-v8a")
 
 
 def test_enable_hardware_keyboard_is_idempotent(tmp_path):

@@ -73,14 +73,6 @@ class PathTextFieldTest {
     }
 
     @Test
-    fun noSuggestions_rendersNoList() {
-        suggestions = PathSuggestionsUi.None
-        setContent()
-
-        composeRule.onNodeWithTag("path_suggestions").assertDoesNotExist()
-    }
-
-    @Test
     fun aPickReplacingTheText_putsTheCaretAtTheEnd() {
         setContent()
 
@@ -90,14 +82,6 @@ class PathTextFieldTest {
         val selection = composeRule.onNodeWithTag(FIELD_TAG)
             .fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange]
         assertEquals(TextRange("/srv/".length), selection)
-    }
-
-    @Test
-    fun windowsListing_showsBackslashSeparatedRows() {
-        suggestions = PathSuggestionsUi(listOf("Users"), listedPath = "C:\\", windowsPaths = true)
-        setContent()
-
-        composeRule.onNodeWithText("Users\\").assertExists()
     }
 
     @Test

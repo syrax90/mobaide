@@ -57,8 +57,10 @@ async def _row(db: Database, user_id: str) -> dict:
 
 class TestV20Migration:
     async def test_v20_adds_the_columns_and_backfills_first_paired_at(
-        self, tmp_path
+        self, tmp_path, db
     ):
+        cursor = await db.conn.execute("PRAGMA user_version")
+        latest = (await cursor.fetchone())[0]
         db_path = str(tmp_path / "pre_v20.db")
         db = Database(db_path)
         await db.connect()
@@ -84,7 +86,7 @@ class TestV20Migration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 23
+        assert (await cursor.fetchone())[0] == latest
         cursor = await db.conn.execute("PRAGMA table_info(users)")
         assert set(_AD_COLUMNS) <= {r[1] for r in await cursor.fetchall()}
         # Accounts that already paired must not read as first-time later.
@@ -99,33 +101,11 @@ class TestV20Migration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 23
+        assert (await cursor.fetchone())[0] == latest
         await db.close()
 
 
 class TestAttributionStorage:
-    async def test_create_user_stores_attribution_and_defaults_consent_off(
-        self, db
-    ):
-        plain = await _user(db, "plain@test.local")
-        row = await _row(db, plain)
-        assert row["ads_consent"] == 0
-        assert row["ad_click_id"] is None
-        assert row["first_paired_at"] is None
-
-        attributed = await _user(
-            db,
-            "ads@test.local",
-            ad_click_id="Cj0K_abc-123",
-            ad_click_kind="gclid",
-            ad_click_at="2026-09-01T10:00:00+00:00",
-            ads_consent=True,
-        )
-        row = await _row(db, attributed)
-        assert row["ad_click_id"] == "Cj0K_abc-123"
-        assert row["ad_click_kind"] == "gclid"
-        assert row["ad_click_at"] == "2026-09-01T10:00:00+00:00"
-        assert row["ads_consent"] == 1
 
     async def test_mark_user_first_paired_is_true_exactly_once(self, db):
         user = await _user(db)

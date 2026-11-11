@@ -31,18 +31,6 @@ final class FakeAgentTokens: AgentTokenProviding, @unchecked Sendable {
     }
 }
 
-final class FakeUserTokens: UserTokenProviding, @unchecked Sendable {
-    private let token: String?
-
-    init(token: String? = "user-token") {
-        self.token = token
-    }
-
-    func userToken() async -> String? {
-        token
-    }
-}
-
 final class FakeSessionInvalidator: SessionInvalidating, @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0

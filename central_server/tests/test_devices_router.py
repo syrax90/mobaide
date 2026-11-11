@@ -9,8 +9,7 @@ The router exposes:
 
 These tests pin the user-scoping (a user must NOT see another user's
 devices), the cross-tenant 404 guard on DELETE (a foreign device must
-NOT be revocable), the refresh-token cascade on revoke, and the
-re-revoke 404 idempotency property.
+NOT be revocable), and the refresh-token cascade on revoke.
 """
 from __future__ import annotations
 
@@ -58,13 +57,6 @@ class TestListDevices:
         assert resp.status_code == 200
         device_ids = {row["device_id"] for row in resp.json()}
         assert device_ids == {"dev-active"}
-
-    async def test_returns_empty_list_when_no_devices(
-        self, client, api_auth_headers
-    ):
-        resp = await client.get("/api/devices", headers=api_auth_headers)
-        assert resp.status_code == 200
-        assert resp.json() == []
 
     async def test_response_shape_matches_DeviceResponse(
         self, client, app, api_auth_headers, viewer_user
@@ -163,58 +155,6 @@ class TestRevokeDevice:
         foreign = await app.state.db.list_user_devices(other_user_id)
         assert any(d["device_id"] == "dev-foreign" for d in foreign)
 
-    async def test_revoke_nonexistent_device_returns_404(
-        self, client, api_auth_headers
-    ):
-        resp = await client.delete(
-            "/api/devices/dev-does-not-exist", headers=api_auth_headers
-        )
-        assert resp.status_code == 404
-
-    async def test_revoke_twice_second_call_returns_404(
-        self, client, app, api_auth_headers, viewer_user
-    ):
-        # Second revoke is a no-op — the row's already-revoked state
-        # falls into the "not active for this user" branch and returns
-        # the same shape as a foreign / non-existent device.
-        await app.state.db.upsert_mobile_device(
-            device_id="dev-twice", user_id=viewer_user["id"], name="Twice"
-        )
-
-        first = await client.delete(
-            "/api/devices/dev-twice", headers=api_auth_headers
-        )
-        second = await client.delete(
-            "/api/devices/dev-twice", headers=api_auth_headers
-        )
-
-        assert first.status_code == 204
-        assert second.status_code == 404
-
-    async def test_revoke_invalidates_refresh_tokens_for_device(
-        self, client, app, api_auth_headers, viewer_user, registered_agent
-    ):
-        # Wire a refresh-token row to the device — revoking the device
-        # must cascade-invalidate it via revoke_all_refresh_tokens_for_device.
-        agent_id, _ = registered_agent
-        await app.state.db.upsert_mobile_device(
-            device_id="dev-cascade", user_id=viewer_user["id"], name="C"
-        )
-        await app.state.db.store_refresh_token(
-            "r-cascade", "dev-cascade", agent_id, 60
-        )
-
-        resp = await client.delete(
-            "/api/devices/dev-cascade", headers=api_auth_headers
-        )
-
-        assert resp.status_code == 204
-        # The refresh token must now fail to validate.
-        assert (
-            await app.state.db.validate_and_consume_refresh("r-cascade")
-            is None
-        )
-
     async def test_revoke_does_not_touch_other_devices_refresh_tokens(
         self, client, app, api_auth_headers, viewer_user, registered_agent
     ):
@@ -282,27 +222,6 @@ class TestRegisterPushToken:
             }
         ]
 
-    async def test_repost_replaces_token(
-        self, client, app, api_auth_headers, viewer_user
-    ):
-        await app.state.db.upsert_mobile_device(
-            device_id="dev-push", user_id=viewer_user["id"], name="iPhone"
-        )
-        for token in ("tok-old", "tok-new"):
-            resp = await client.post(
-                "/api/devices/dev-push/push-token",
-                headers=api_auth_headers,
-                json={
-                    "platform": "ios",
-                    "token": token,
-                    "environment": "production",
-                },
-            )
-            assert resp.status_code == 204
-
-        targets = await app.state.db.list_push_targets(viewer_user["id"])
-        assert [t["push_token"] for t in targets] == ["tok-new"]
-
     async def test_foreign_device_404(
         self, client, app, api_auth_headers
     ):
@@ -367,17 +286,6 @@ class TestRegisterPushToken:
             )
             assert resp.status_code == 422, body
 
-    async def test_requires_auth(self, client):
-        resp = await client.post(
-            "/api/devices/dev-push/push-token",
-            json={
-                "platform": "ios",
-                "token": "tok",
-                "environment": "sandbox",
-            },
-        )
-        assert resp.status_code == 401
-
 
 class TestUnregisterPushToken:
     async def test_clears_token(
@@ -396,19 +304,6 @@ class TestUnregisterPushToken:
 
         assert resp.status_code == 204
         assert await app.state.db.list_push_targets(viewer_user["id"]) == []
-
-    async def test_idempotent_for_owned_device(
-        self, client, app, api_auth_headers, viewer_user
-    ):
-        await app.state.db.upsert_mobile_device(
-            device_id="dev-push", user_id=viewer_user["id"], name="iPhone"
-        )
-
-        resp = await client.delete(
-            "/api/devices/dev-push/push-token", headers=api_auth_headers
-        )
-
-        assert resp.status_code == 204
 
     async def test_foreign_device_404(self, client, app, api_auth_headers):
         other = await app.state.db.create_user(

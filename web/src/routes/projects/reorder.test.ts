@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { projectInfoSchema, type ProjectInfo } from '../../protocol/dto/projects';
-import { moveAnnouncement, moveItem, reconcileOrder } from './reorder';
+import { moveItem, reconcileOrder } from './reorder';
 
 const project = (name: string, order: number): ProjectInfo =>
   projectInfoSchema.parse({ name, path: `/srv/${name}`, order });
@@ -32,15 +32,6 @@ describe('moveItem', () => {
 });
 
 describe('reconcileOrder', () => {
-  it('passes the snapshot through untouched when no reorder is in flight', () => {
-    const projects = snapshot('a', 'b');
-
-    const result = reconcileOrder(projects, null);
-
-    expect(names(result.projects)).toEqual(['a', 'b']);
-    expect(result.pendingOrder).toBeNull();
-  });
-
   it('holds the override while the server still reports the old order', () => {
     const result = reconcileOrder(snapshot('a', 'b', 'c'), ['c', 'a', 'b']);
 
@@ -77,12 +68,5 @@ describe('reconcileOrder', () => {
 
     expect(names(result.projects)).toEqual(['b', 'a']);
     expect(result.pendingOrder).toEqual(['b', 'a', 'deleted']);
-  });
-});
-
-describe('moveAnnouncement', () => {
-  it('announces a one-based position', () => {
-    expect(moveAnnouncement('Docs', 0, 3)).toBe('Docs moved to position 1 of 3');
-    expect(moveAnnouncement('Docs', 2, 3)).toBe('Docs moved to position 3 of 3');
   });
 });

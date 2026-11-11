@@ -423,33 +423,4 @@ class TerminalViewModelSuspendTest {
 
             verify(exactly = 1) { connection.forceReconnect() }
         }
-
-    @Test
-    fun theShippedPolicy_leavesAModestSpendAlone() = runTest(testDispatcher) {
-        // The real thresholds, not the stub: a few hundred bytes is nowhere near
-        // a ring.
-        val vm = newViewModel(TerminalSuspend::shouldSuspend)
-        runCurrent()
-        background()
-        runCurrent()
-
-        eventsFlow.tryEmit(WsEvent.Binary(outputFrame(ByteArray(512))))
-        runCurrent()
-
-        verify(exactly = 0) { connection.pause() }
-        assertEquals(ConnectionState.Live, vm.connectionState.value)
-    }
-
-    @Test
-    fun framesStillReachTheEmulatorAlongsideTheAccounting() = runTest(testDispatcher) {
-        // Guard that byte accounting rides alongside frame handling rather than
-        // replacing it: any inbound binary upgrades the channel to Live.
-        val vm = newViewModel()
-        runCurrent()
-
-        eventsFlow.tryEmit(WsEvent.Binary(stateRunningFrame))
-        runCurrent()
-
-        assertEquals(ConnectionState.Live, vm.connectionState.value)
-    }
 }

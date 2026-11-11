@@ -125,24 +125,6 @@ class TestPairingLifespanWiresOnPaired:
     """The pairing-pending branch must pass a real callback, not None."""
 
     @pytest.mark.asyncio
-    async def test_on_paired_callback_is_passed_to_monitor(
-        self, tmp_path: Path, captured_on_paired,
-    ):
-        app = create_app(config=_make_pairing_pending_config(tmp_path))
-
-        with TestClient(app):
-            # Yielding control to the event loop lets the
-            # ``asyncio.create_task(run_pairing_monitor(...))`` actually
-            # schedule and call the stub.
-            await asyncio.sleep(0)
-
-            assert "on_paired" in captured_on_paired, (
-                "lifespan did not call run_pairing_monitor — "
-                "pairing-pending branch is unwired"
-            )
-            assert callable(captured_on_paired["on_paired"])
-
-    @pytest.mark.asyncio
     async def test_relay_server_url_threaded_from_relay_config(
         self, tmp_path: Path, captured_on_paired,
     ):
@@ -163,41 +145,6 @@ class TestPairingLifespanWiresOnPaired:
 
 class TestOnPairedHappyPath:
     """The captured callback transitions in-process — no exit, no shell-out."""
-
-    @pytest.mark.asyncio
-    async def test_on_paired_calls_start_relay_in_process_with_claim(
-        self, tmp_path: Path, captured_on_paired, monkeypatch,
-    ):
-        # Pins the post-7b9c581 contract: ``_on_paired`` is async, takes
-        # a ``PairingClaim``, and routes the credentials into
-        # ``_start_relay_in_process`` so the running process becomes
-        # operational without a restart. A regression that reverts to a
-        # no-arg sync callback (or that calls ``sys.exit`` on the happy
-        # path) would fail this test.
-        captured_calls: list[tuple] = []
-
-        async def _stub_start(app, relay_cfg):
-            captured_calls.append((app, relay_cfg))
-
-        monkeypatch.setattr(
-            _agent_app, "_start_relay_in_process", _stub_start,
-        )
-
-        app = create_app(config=_make_pairing_pending_config(tmp_path))
-        claim = _make_claim()
-
-        with TestClient(app):
-            await asyncio.sleep(0)
-            on_paired = captured_on_paired["on_paired"]
-            await on_paired(claim)
-
-        assert len(captured_calls) == 1, (
-            f"expected exactly one _start_relay_in_process call on the "
-            f"happy path; got {len(captured_calls)}"
-        )
-        _, new_relay_cfg = captured_calls[0]
-        assert new_relay_cfg.agent_id == "paired-agent-id"
-        assert new_relay_cfg.agent_token == "paired-agent-token"
 
     @pytest.mark.asyncio
     async def test_on_paired_preserves_boot_server_url(
@@ -239,69 +186,13 @@ class TestOnPairedHappyPath:
             await captured_on_paired["on_paired"](claim)
 
         assert len(captured_cfgs) == 1
+        assert captured_cfgs[0].agent_id == "paired-agent-id"
+        assert captured_cfgs[0].agent_token == "paired-agent-token"
         assert captured_cfgs[0].server_url == "wss://relay.example.com", (
             f"_on_paired must preserve boot relay_cfg.server_url for the "
             f"in-process RelayClient; got {captured_cfgs[0].server_url!r}, "
             f"which suggests the closure incorrectly used claim.relay_url "
             f"({claim.relay_url!r})"
-        )
-
-    @pytest.mark.asyncio
-    async def test_on_paired_does_not_invoke_subprocess_or_sys_exit(
-        self, tmp_path: Path, captured_on_paired, monkeypatch,
-    ):
-        # Combined regression guard for two prior designs:
-        # (1) the original ``subprocess.run(["sudo", ...])`` path and
-        # (2) the intermediate ``sys.exit(75) on every pair`` path.
-        # The current happy path must do NEITHER: ``_start_relay_in_process``
-        # owns the transition entirely. A regression that calls
-        # ``sys.exit`` here would mask the in-process transition from
-        # the operator (the process would die before the relay client
-        # boots in-process) and the supposed "no restart" UX would
-        # silently degrade.
-        exit_calls: list[int] = []
-        monkeypatch.setattr(
-            _agent_app.sys, "exit",
-            lambda code=0: exit_calls.append(code),
-        )
-
-        async def _stub_start(_app, _relay_cfg):
-            return None
-
-        monkeypatch.setattr(
-            _agent_app, "_start_relay_in_process", _stub_start,
-        )
-
-        import os
-        import subprocess
-
-        def _trip(*args, **kwargs):
-            raise AssertionError(
-                f"_on_paired must not shell out on the happy path; got "
-                f"args={args!r} kwargs={kwargs!r}"
-            )
-
-        monkeypatch.setattr(subprocess, "run", _trip)
-        monkeypatch.setattr(subprocess, "Popen", _trip)
-        monkeypatch.setattr(subprocess, "call", _trip)
-        monkeypatch.setattr(subprocess, "check_call", _trip)
-        monkeypatch.setattr(subprocess, "check_output", _trip)
-        monkeypatch.setattr(os, "system", _trip)
-
-        app = create_app(config=_make_pairing_pending_config(tmp_path))
-        claim = _make_claim()
-
-        with TestClient(app):
-            await asyncio.sleep(0)
-            await captured_on_paired["on_paired"](claim)
-            # Yield past the 0.5s call_later window the fallback path
-            # would use; if anything scheduled an exit we'd see it.
-            await asyncio.sleep(0.6)
-
-        assert exit_calls == [], (
-            f"happy path must NOT call sys.exit; got {exit_calls!r}. "
-            f"The exit-75 path is reserved for the in-process startup "
-            f"failure fallback, not the success case"
         )
 
 

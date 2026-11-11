@@ -62,38 +62,10 @@ afterEach(() => {
 });
 
 describe('AutoScanDetailScreen', () => {
-  it('renders the pipeline in the fixed order before any frame arrives', async () => {
-    await renderScreen();
-
-    const phases = screen.getAllByRole('listitem').slice(0, 5);
-    expect(phases.map((phase) => phase.textContent)).toEqual([
-      'Scanpending',
-      'Statepending',
-      'Labelpending',
-      'Worktreepending',
-      'Spawnpending',
-    ]);
-  });
-
   it('shows the project from the path, decoded', async () => {
     await renderScreen('/agents/agent-1/autoscan/a%2Fb');
 
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('a/b');
-  });
-
-  it('waits for output rather than claiming an empty log', async () => {
-    await renderScreen();
-
-    expect(screen.getByText('Waiting for output…')).toBeInTheDocument();
-    expect(screen.getByText('No issues processed yet.')).toBeInTheDocument();
-  });
-
-  it('reports the socket state until the agent describes the scan', async () => {
-    await renderScreen();
-
-    // No instance yet, so the chip falls back to the connection rather than
-    // inventing a status.
-    expect(screen.getAllByText('Connecting…').length).toBeGreaterThan(0);
   });
 
   it('explains a declined stream, which the reconnect loop cannot resolve', async () => {

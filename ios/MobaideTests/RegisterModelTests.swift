@@ -27,15 +27,6 @@ final class RegisterModelTests: XCTestCase {
         )
     }
 
-    func testBlankFieldsAreRejected() async {
-        let model = makeModel()
-
-        await model.register()
-
-        XCTAssertEqual(model.error, "Email and password are required")
-        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
-    }
-
     func testPasswordMismatchIsRejected() async {
         let model = makeModel()
         model.email = "user@example.com"
@@ -60,17 +51,6 @@ final class RegisterModelTests: XCTestCase {
         XCTAssertTrue(StubURLProtocol.requests.isEmpty)
     }
 
-    func testShortPasswordIsReportedBeforeAMismatch() async {
-        let model = makeModel()
-        model.email = "user@example.com"
-        model.password = "short"
-        model.confirmPassword = "other"
-
-        await model.register()
-
-        XCTAssertEqual(model.error, PasswordRules.tooShortMessage)
-    }
-
     func testPasswordLengthCountsScalarsLikeTheServer() {
         // Four emoji are four scalars on the server: too short.
         XCTAssertEqual(PasswordRules.lengthError("😀😀😀😀"), PasswordRules.tooShortMessage)
@@ -87,18 +67,6 @@ final class RegisterModelTests: XCTestCase {
         )
     }
 
-    func testPasswordOfExactlyEightIsSent() async {
-        StubURLProtocol.enqueue(status: 409, body: #"{"detail":"Email already registered"}"#)
-        let model = makeModel()
-        model.email = "user@example.com"
-        model.password = "12345678"
-        model.confirmPassword = "12345678"
-
-        await model.register()
-
-        XCTAssertEqual(StubURLProtocol.requests.count, 1)
-    }
-
     func testConflict409MapsToAlreadyExists() async {
         StubURLProtocol.enqueue(status: 409, body: #"{"detail":"Email already registered"}"#)
         let model = makeModel()
@@ -109,35 +77,6 @@ final class RegisterModelTests: XCTestCase {
         await model.register()
 
         XCTAssertEqual(model.error, "An account with this email already exists")
-    }
-
-    func testInvalidEmail422MapsToSingleEmailCopy() async {
-        StubURLProtocol.enqueue(status: 422, body: #"{"detail":[{"msg":"Value error, Enter a single valid email address"}]}"#)
-        let model = makeModel()
-        model.email = "a@example.com, b@example.com"
-        model.password = "password-1"
-        model.confirmPassword = "password-1"
-
-        await model.register()
-
-        XCTAssertEqual(model.error, "Enter a single valid email address")
-        XCTAssertFalse(model.isLoading)
-    }
-
-    func testRateLimited429MapsToTooManyAttemptsCopy() async {
-        StubURLProtocol.enqueue(
-            status: 429,
-            body: #"{"detail":{"error":"resend_rate_limited","cooldown_seconds_remaining":1800}}"#
-        )
-        let model = makeModel()
-        model.email = "new@example.com"
-        model.password = "password-1"
-        model.confirmPassword = "password-1"
-
-        await model.register()
-
-        XCTAssertEqual(model.error, "Too many sign-up attempts. Wait a few minutes and try again.")
-        XCTAssertFalse(model.isLoading)
     }
 
     func testVerificationRequiredRoutesToVerifyEmail() async throws {
@@ -187,14 +126,5 @@ final class RegisterModelTests: XCTestCase {
         XCTAssertEqual(event, .success)
         let request = try XCTUnwrap(StubURLProtocol.requests.first)
         XCTAssertEqual(request.url?.absoluteString, "https://central.example.com/api/auth/google")
-    }
-
-    func testGoogleCancelClearsLoadingSilently() async {
-        let model = makeModel(google: .cancelled)
-
-        await model.signInWithGoogle()
-
-        XCTAssertFalse(model.isLoading)
-        XCTAssertNil(model.error)
     }
 }

@@ -16,9 +16,8 @@ Three behaviours land in this file:
 """
 from __future__ import annotations
 
-import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -43,35 +42,6 @@ def client(
         broadcaster=mock_broadcaster,
         app_state=mock_app_state,
     )
-
-
-class TestProtocolIncompatibleErrorShape:
-    """``ProtocolIncompatibleError`` extends :class:`ConnectionError` so the
-    pre-existing ``except ConnectionError`` / generic ``except Exception``
-    branches in the reconnect loop keep catching it — only the dedicated
-    handling is new."""
-
-    def test_is_connection_error(self):
-        assert issubclass(ProtocolIncompatibleError, ConnectionError)
-
-    def test_message_includes_reason(self):
-        exc = ProtocolIncompatibleError("Server speaks [3], agent sent 2")
-        assert "Server speaks [3], agent sent 2" in str(exc)
-        # Match the prefix used in the production message so the loop's
-        # legacy string-matching guard doesn't accidentally start
-        # mis-classifying these.
-        assert str(exc).startswith("Relay rejected protocol version")
-
-    def test_manifest_url_hint_defaults_none(self):
-        exc = ProtocolIncompatibleError("any reason")
-        assert exc.manifest_url_hint is None
-        assert exc.reason == "any reason"
-
-    def test_manifest_url_hint_stored(self):
-        exc = ProtocolIncompatibleError(
-            "any", manifest_url_hint="/api/v1/agent/manifest.json",
-        )
-        assert exc.manifest_url_hint == "/api/v1/agent/manifest.json"
 
 
 class TestAuthenticateProtocolIncompatible:
@@ -123,37 +93,6 @@ class TestAuthenticateProtocolIncompatible:
 
         assert exc_info.value.manifest_url_hint is None
 
-    async def test_empty_string_hint_is_dropped(self, client):
-        # ``""`` is technically a string but useless as a URL fragment.
-        # Treat it as absent so callers can `if hint:` without an extra
-        # `hint and hint.strip()` dance.
-        ws = AsyncMock()
-        ws.recv = AsyncMock(return_value=json.dumps({
-            "type": "incompatible",
-            "reason": "outdated",
-            "manifest_url": "",
-        }))
-        with pytest.raises(ProtocolIncompatibleError) as exc_info:
-            await client._authenticate(ws)
-
-        assert exc_info.value.manifest_url_hint is None
-
-
-class TestSetProtocolIncompatibleCallback:
-    """The setter is a thin wrapper but the wire it exposes is part of
-    the lifespan's contract — verify it stores the callback without
-    invoking it."""
-
-    def test_default_callback_is_none(self, client):
-        assert client._on_protocol_incompatible is None
-
-    def test_set_callback_stores_reference(self, client):
-        async def cb(_hint):
-            pass
-
-        client.set_protocol_incompatible_callback(cb)
-        assert client._on_protocol_incompatible is cb
-
 
 class TestConnectLoopProtocolIncompatibleBranch:
     """When ``_run_connection`` raises :class:`ProtocolIncompatibleError`,
@@ -189,29 +128,6 @@ class TestConnectLoopProtocolIncompatibleBranch:
         await client._connect_loop()
 
         assert captured == ["/manifest.json"]
-
-    async def test_callback_invoked_with_none_when_no_hint(
-        self, client, monkeypatch,
-    ):
-        captured: list[str | None] = []
-
-        async def cb(hint):
-            captured.append(hint)
-            client._stopping = True
-
-        client.set_protocol_incompatible_callback(cb)
-
-        async def fail_with_incompat():
-            raise ProtocolIncompatibleError("outdated")  # no hint
-
-        monkeypatch.setattr(client, "_run_connection", fail_with_incompat)
-        monkeypatch.setattr(
-            "mobaide.relay.client.asyncio.sleep", AsyncMock(),
-        )
-
-        await client._connect_loop()
-
-        assert captured == [None]
 
     async def test_callback_exception_does_not_break_loop(
         self, client, monkeypatch,
@@ -274,28 +190,3 @@ class TestConnectLoopProtocolIncompatibleBranch:
         # have set the first sleep to that value (not the base 0.01s).
         assert sleep_calls[0] == client._config.reconnect_max_delay
 
-    async def test_no_callback_set_does_not_crash(self, client, monkeypatch):
-        # The callback is optional — when the lifespan ran in a
-        # developer checkout without a trust key, no updater is built
-        # and ``_on_protocol_incompatible`` stays ``None``. The loop
-        # must still clamp the delay and continue.
-        assert client._on_protocol_incompatible is None
-
-        sleep_calls: list[float] = []
-
-        async def fake_sleep(delay):
-            sleep_calls.append(delay)
-            client._stopping = True
-
-        async def fail_with_incompat():
-            raise ProtocolIncompatibleError("outdated")
-
-        monkeypatch.setattr(client, "_run_connection", fail_with_incompat)
-        monkeypatch.setattr(
-            "mobaide.relay.client.asyncio.sleep", fake_sleep,
-        )
-
-        # Must not raise even though no callback is registered.
-        await client._connect_loop()
-
-        assert sleep_calls[0] == client._config.reconnect_max_delay

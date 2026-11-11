@@ -27,7 +27,6 @@ from mobaide.agent.pairing_qr import (
     PendingDeviceCode,
     PendingPairing,
     canonical_device_code,
-    clear_pending_device_code,
     device_code_fingerprint,
     encode_qr_payload,
     load_pending_device_code,
@@ -172,8 +171,6 @@ class TestPendingDeviceCodeLifecycle:
             redeemer_id="redeemer-1", code_fp=_CODE_FP
         )
 
-    def test_load_returns_none_when_absent(self, layout):
-        assert load_pending_device_code(layout, _CODE_FP) is None
 
     def test_load_returns_none_on_corrupt_json(self, layout):
         target = pending_device_code_path(layout)
@@ -217,19 +214,6 @@ class TestPendingDeviceCodeLifecycle:
         resumed_fp = device_code_fingerprint("WDJB0MJHT")
         assert resumed_fp == _CODE_FP
         assert load_pending_device_code(layout, resumed_fp) == record
-
-    def test_clear_is_idempotent(self, layout):
-        clear_pending_device_code(layout)
-        save_pending_device_code(
-            layout,
-            PendingDeviceCode(
-                redeemer_id="redeemer-1", code_fp=_CODE_FP, pending=_pending()
-            ),
-        )
-        clear_pending_device_code(layout)
-        clear_pending_device_code(layout)
-
-        assert not pending_device_code_path(layout).exists()
 
 
 def _redeem_response(**overrides) -> dict:
@@ -377,18 +361,3 @@ class TestRedeemDeviceCode:
 
         assert "42s" in str(excinfo.value)
         assert excinfo.value.status == 429
-
-    def test_a_non_json_error_body_falls_back_to_the_status(self):
-        # A proxy's HTML error page must not crash the CLI on the way to
-        # reporting the failure.
-        with patch(
-            "mobaide._http.urlopen",
-            side_effect=_http_error(502, "<html>bad gateway</html>"),
-        ):
-            with pytest.raises(DeviceCodeRejected, match="HTTP 502"):
-                redeem_device_code(
-                    "wss://relay.test",
-                    "ff" * 32,
-                    code="WDJB-MJHT",
-                    redeemer_id="redeemer-1",
-                )

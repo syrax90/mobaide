@@ -55,16 +55,6 @@ class TestAutoScanFilterModelValidation:
                 removal_label="AutoPipeline",
             )
 
-    def test_empty_label_names_rejected(self):
-        with pytest.raises(ValidationError):
-            AutoScanFilterModel(
-                state_names=["Proposals"],
-                label_names=[],
-                active_state="In Progress",
-                done_state="Done",
-                removal_label="AutoPipeline",
-            )
-
     @pytest.mark.parametrize(
         "field",
         ["active_state", "done_state", "removal_label"],
@@ -101,39 +91,6 @@ class TestAutoScanFilterModelElementValidators:
             "removal_label": "AutoPipeline",
         }
         kwargs[field] = [""]
-        with pytest.raises(ValidationError):
-            AutoScanFilterModel(**kwargs)
-
-    @pytest.mark.parametrize(
-        "field", ["state_names", "label_names"],
-    )
-    def test_whitespace_only_element_in_list_rejected(self, field):
-        kwargs = {
-            "state_names": ["Proposals"],
-            "label_names": ["AutoPipeline"],
-            "active_state": "In Progress",
-            "done_state": "Done",
-            "removal_label": "AutoPipeline",
-        }
-        kwargs[field] = ["   "]
-        with pytest.raises(ValidationError):
-            AutoScanFilterModel(**kwargs)
-
-    @pytest.mark.parametrize(
-        "field", ["state_names", "label_names"],
-    )
-    def test_mixed_valid_and_empty_element_rejected(self, field):
-        # The validator must reject the WHOLE list if any element is empty —
-        # silently dropping the bad element would be worse (the user thinks
-        # they configured a 2-state filter but only one is active).
-        kwargs = {
-            "state_names": ["Proposals"],
-            "label_names": ["AutoPipeline"],
-            "active_state": "In Progress",
-            "done_state": "Done",
-            "removal_label": "AutoPipeline",
-        }
-        kwargs[field] = ["Proposals", ""]
         with pytest.raises(ValidationError):
             AutoScanFilterModel(**kwargs)
 

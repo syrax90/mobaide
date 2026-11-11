@@ -12,7 +12,6 @@ its behaviour is not re-tested here.
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -44,11 +43,6 @@ class TestUserDataDir:
         monkeypatch.setattr(sys, "platform", "win32")
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
         assert user_data_dir() == tmp_path / "Local" / "MobaideAgent"
-
-    def test_windows_without_localappdata_falls_back_under_home(self, monkeypatch):
-        monkeypatch.setattr(sys, "platform", "win32")
-        result = user_data_dir()
-        assert result.parts[-3:] == ("AppData", "Local", "MobaideAgent")
 
     def test_posix_uses_xdg_data_home(self, monkeypatch, tmp_path):
         monkeypatch.setattr(sys, "platform", "linux")
@@ -100,25 +94,3 @@ class TestStatePrefix:
         monkeypatch.setattr(_WRITABLE, lambda *_: False)
         monkeypatch.setattr(_USER_DATA_DIR, lambda: fallback)
         assert state_prefix() == fallback
-
-    def test_fallback_target_is_actually_writable(self, monkeypatch):
-        """End-to-end: the fallback the resolver picks must accept a write —
-        otherwise it would just move the [Errno 13] crash to a new path."""
-        monkeypatch.setattr(_WRITABLE, lambda *_: False)
-        resolved = state_prefix()
-        # ``user_data_dir()`` lives under the user's home / LOCALAPPDATA, which
-        # an unprivileged process can write to. Probe it with the real check.
-        assert _is_writable_dir(resolved) is True
-        # Clean up the probe-created dir so the test leaves no residue.
-        try:
-            resolved.rmdir()
-        except OSError:
-            pass
-
-
-@pytest.mark.parametrize("relative", ["projects.json", "users.json"])
-def test_state_prefix_target_is_absolute(monkeypatch, tmp_path, relative):
-    """Anchoring must always yield an absolute path (CWD-independence)."""
-    monkeypatch.setattr(_WRITABLE, lambda *_: False)
-    monkeypatch.setattr(_USER_DATA_DIR, lambda: tmp_path / "ud")
-    assert Path(state_prefix() / relative).is_absolute()

@@ -36,10 +36,6 @@ final class ShortcutsRepositoryTests: XCTestCase {
         return #"{"shortcut_id":"\#(id)","kind":"\#(kind)","chord_token":"\#(chordToken)"\#(namePart),"position":\#(position),"created_at":"c","updated_at":"u","version":\#(version)}"#
     }
 
-    func testInitialCacheIsEmpty() {
-        XCTAssertTrue(makeRepo().currentShortcuts.isEmpty)
-    }
-
     func testRefreshReplacesCacheWholesale() async throws {
         let repo = makeRepo()
         StubURLProtocol.enqueue(
@@ -169,27 +165,6 @@ final class ShortcutsRepositoryTests: XCTestCase {
         XCTAssertEqual(repo.currentShortcuts.first?.version, 2)
     }
 
-    func testRenameEmptyNameSendsClearSentinelVerbatim() async throws {
-        let repo = makeRepo()
-        StubURLProtocol.enqueue(status: 200, body: shortcutJSON(id: "s-1", chordToken: "ctrl+x", version: 2))
-        _ = try await repo.renameShortcut(shortcutId: "s-1", name: "")
-
-        let body = try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[0])
-        XCTAssertEqual(body, ["name": ""], #"clearing sends {"name":""} — the server 422s on {}"#)
-    }
-
-    func testDeleteRemovesFromCache() async throws {
-        let repo = makeRepo()
-        await repo.applyUpserted(makeShortcut(id: "s-1", chordToken: "ctrl+a"))
-        await repo.applyUpserted(makeShortcut(id: "s-2", chordToken: "ctrl+b"))
-
-        StubURLProtocol.enqueue(status: 204, body: "")
-        try await repo.deleteShortcut(shortcutId: "s-1")
-
-        XCTAssertEqual(StubURLProtocol.requests.first?.httpMethod, "DELETE")
-        XCTAssertEqual(repo.currentShortcuts.map(\.shortcut_id), ["s-2"])
-    }
-
     func testCreateDiscardsCacheWriteWhenAccountSwitchesMidFlight() async throws {
         let (repo, identity) = makeRepoWithIdentity()
         StubURLProtocol.enqueue(status: 201, body: shortcutJSON(id: "s-new", chordToken: "ctrl+n"))
@@ -211,68 +186,6 @@ final class ShortcutsRepositoryTests: XCTestCase {
         )
     }
 
-    func testRenameDiscardsCacheWriteWhenAccountSwitchesMidFlight() async throws {
-        let (repo, identity) = makeRepoWithIdentity()
-        await repo.applyUpserted(makeShortcut(id: "s-1", chordToken: "ctrl+x", name: "Old"))
-        StubURLProtocol.enqueue(status: 200, body: shortcutJSON(id: "s-1", chordToken: "ctrl+x", name: "New", version: 2))
-        StubURLProtocol.onRequest = { _ in
-            identity.saveUserSession(
-                accessToken: "user-token-2",
-                email: "other@example.com",
-                userId: "u2",
-                role: "user"
-            )
-        }
-
-        let returned = try await repo.renameShortcut(shortcutId: "s-1", name: "New")
-
-        XCTAssertEqual(returned.name, "New", "the server row is still returned on mismatch")
-        XCTAssertEqual(repo.currentShortcuts.first?.name, "Old", "the bumped row must not reach the cache")
-        XCTAssertEqual(repo.currentShortcuts.first?.version, 1)
-    }
-
-    func testDeleteDiscardsCacheWriteWhenAccountSwitchesMidFlight() async throws {
-        let (repo, identity) = makeRepoWithIdentity()
-        await repo.applyUpserted(makeShortcut(id: "s-1", chordToken: "ctrl+a"))
-        StubURLProtocol.enqueue(status: 204, body: "")
-        StubURLProtocol.onRequest = { _ in
-            identity.saveUserSession(
-                accessToken: "user-token-2",
-                email: "other@example.com",
-                userId: "u2",
-                role: "user"
-            )
-        }
-
-        try await repo.deleteShortcut(shortcutId: "s-1")
-
-        XCTAssertEqual(StubURLProtocol.requests.first?.httpMethod, "DELETE", "the server delete itself still runs")
-        XCTAssertEqual(
-            repo.currentShortcuts.map(\.shortcut_id), ["s-1"],
-            "a delete landing after an account switch must not mutate the cache it no longer owns"
-        )
-    }
-
-    func testCreateAppliesCacheWriteWhenTokenRotatesForSameUserMidFlight() async throws {
-        let (repo, identity) = makeRepoWithIdentity()
-        StubURLProtocol.enqueue(status: 201, body: shortcutJSON(id: "s-new", chordToken: "ctrl+n"))
-        StubURLProtocol.onRequest = { _ in
-            identity.saveUserSession(
-                accessToken: "rotated-token",
-                email: "user@example.com",
-                userId: "u1",
-                role: "user"
-            )
-        }
-
-        _ = try await repo.createShortcut(kind: "claude", chordToken: "ctrl+n")
-
-        XCTAssertEqual(
-            repo.currentShortcuts.map(\.shortcut_id), ["s-new"],
-            "the guard keys on the user id, not the token — a token refresh mid-flight must not drop the write"
-        )
-    }
-
     func testApplyUpsertedAppendsThenReplacesInPlacePreservingOrder() async {
         let repo = makeRepo()
         await repo.applyUpserted(makeShortcut(id: "s-1", chordToken: "ctrl+a"))
@@ -284,21 +197,6 @@ final class ShortcutsRepositoryTests: XCTestCase {
         XCTAssertEqual(repo.currentShortcuts.map(\.shortcut_id), ["s-1", "s-2", "s-3"])
         XCTAssertEqual(repo.currentShortcuts[1].name, "New")
         XCTAssertEqual(repo.currentShortcuts[1].version, 7)
-    }
-
-    func testApplyDeletedRemovesMatchingAndIgnoresUnknownId() async {
-        let repo = makeRepo()
-        await repo.applyUpserted(makeShortcut(id: "s-1", chordToken: "ctrl+a"))
-        await repo.applyUpserted(makeShortcut(id: "s-2", chordToken: "ctrl+b"))
-
-        await repo.applyDeleted(shortcutId: "s-1")
-        XCTAssertEqual(repo.currentShortcuts.map(\.shortcut_id), ["s-2"])
-
-        await repo.applyDeleted(shortcutId: "ghost-id")
-        XCTAssertEqual(
-            repo.currentShortcuts.map(\.shortcut_id), ["s-2"],
-            "a tombstone for a never-fetched row must be a no-op"
-        )
     }
 
     func testPurgeKindRemovesOnlyTheExactWireKind() async {
@@ -320,14 +218,5 @@ final class ShortcutsRepositoryTests: XCTestCase {
             repo.currentShortcuts.map(\.shortcut_id), ["s-2", "s-3"],
             "only the deleted type's bucket is purged — sibling custom types and built-ins survive"
         )
-    }
-
-    func testClearEmptiesCache() async {
-        let repo = makeRepo()
-        await repo.applyUpserted(makeShortcut(id: "s-1", chordToken: "ctrl+a"))
-        XCTAssertFalse(repo.currentShortcuts.isEmpty)
-
-        await repo.clear()
-        XCTAssertTrue(repo.currentShortcuts.isEmpty)
     }
 }

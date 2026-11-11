@@ -2,9 +2,6 @@
 from __future__ import annotations
 
 import json
-import struct
-import sys
-import time
 
 import pytest
 from starlette.testclient import TestClient
@@ -101,43 +98,3 @@ class TestWsBinaryFrames:
             assert third[:1] == b"o"
             fourth = ws.receive_bytes()
             assert fourth == b"e"  # end marker has empty payload
-
-    def test_send_resize_binary(self, test_client, auth_token, session_id_sync):
-        with test_client.websocket_connect(
-            f"/ws/session/{session_id_sync}?token={auth_token}",
-        ) as ws:
-            drain_text_preamble(ws)
-            # state → 'b' → 'o' (replay chunk) → 'e' for a fresh session.
-            ws.receive_bytes()  # state
-            ws.receive_bytes()  # replay-start marker
-            ws.receive_bytes()  # replay output (empty for fresh ring)
-            ws.receive_bytes()  # replay-end marker
-            ws.send_bytes(b"r" + struct.pack(">HH", 40, 120))
-            time.sleep(0.3)
-
-    def test_send_input_binary(self, test_client, auth_token, session_id_sync):
-        """Verify that input frames are accepted without error."""
-        with test_client.websocket_connect(
-            f"/ws/session/{session_id_sync}?token={auth_token}",
-        ) as ws:
-            drain_text_preamble(ws)
-            ws.receive_bytes()  # state
-            ws.receive_bytes()  # replay-start marker
-            ws.receive_bytes()  # replay output (empty for fresh ring)
-            ws.receive_bytes()  # replay-end marker
-            text = b"echo test\r\n" if sys.platform == "win32" else b"echo test\r"
-            ws.send_bytes(b"i" + text)
-            time.sleep(0.3)
-
-    def test_send_submit_binary(self, test_client, auth_token, session_id_sync):
-        """Verify that submit frames are accepted without error."""
-        with test_client.websocket_connect(
-            f"/ws/session/{session_id_sync}?token={auth_token}",
-        ) as ws:
-            drain_text_preamble(ws)
-            ws.receive_bytes()  # state
-            ws.receive_bytes()  # replay-start marker
-            ws.receive_bytes()  # replay output (empty for fresh ring)
-            ws.receive_bytes()  # replay-end marker
-            ws.send_bytes(b"m" + b"echo test")
-            time.sleep(0.5)

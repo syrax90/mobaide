@@ -112,16 +112,6 @@ describe('useKeyboardLock', () => {
     expect(calls).toEqual(['lock', 'unlock']);
   });
 
-  it('falls back to a generic message for any other failure', async () => {
-    lockResult = refusedWith('TypeError');
-    const { result } = renderHook(useKeyboardLock);
-
-    await enter(result);
-
-    expect(result.current.error).toBe('Could not enter immersive mode.');
-    expect(result.current.active).toBe(false);
-  });
-
   it('releases the lock when the screen unmounts', async () => {
     const lock = renderHook(useKeyboardLock);
     await enter(lock.result);

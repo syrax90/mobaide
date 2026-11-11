@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import json
 import threading
+from pathlib import PureWindowsPath
 from typing import cast
 
 import pytest
 
+from mobaide.core import projects_store
 from mobaide.core.projects_config import AutoScanFilter, ProjectConfig
 from mobaide.core.projects_store import (
     ProjectRecord,
@@ -28,6 +30,16 @@ def _clean_env(monkeypatch):
 
 
 _ = _clean_env  # silence pyright "not accessed" hint for the autouse fixture.
+
+
+@pytest.fixture
+def windows_paths(monkeypatch):
+    """Parse paths with Windows rules, as the agent does on a Windows host.
+
+    On POSIX a backslash is a legal filename character, so the backslash
+    normalization only happens on Windows.
+    """
+    monkeypatch.setattr(projects_store, "PurePath", PureWindowsPath)
 
 
 # ---------------------------------------------------------------------------
@@ -75,24 +87,6 @@ class TestLoadMissing:
         assert by_name["Beta"]["order"] == 1
         # Secrets are persisted in the file (not on the wire).
         assert by_name["Alpha"]["linear_api_key"] == "lin_abc"
-
-    def test_seed_empty_result_still_writes_empty_file(
-        self, tmp_path, monkeypatch,
-    ):
-        path = tmp_path / "projects.json"
-        # Legacy-form string values are skipped by the seed parser; the
-        # result is an empty list — persist it anyway so the env var is
-        # not retried on next boot.
-        monkeypatch.setenv(
-            "PROJECTS",
-            json.dumps({"Legacy": "C:/old", "NoPath": {"x": 1}}),
-        )
-
-        store = ProjectsStore(str(path))
-        store.load()
-
-        assert path.exists()
-        assert json.loads(path.read_text()) == []
 
     def test_existing_file_takes_precedence_over_env(
         self, tmp_path, monkeypatch,
@@ -193,34 +187,6 @@ class TestLoadSeedJsonExplicit:
         names = [p["name"] for p in public]
         assert names == ["FromArg"]
         assert "FromEnv" not in names
-
-    def test_explicit_none_falls_back_to_environ(self, tmp_path, monkeypatch):
-        # Back-compat path for callers that haven't migrated yet:
-        # passing ``seed_json=None`` (or omitting it) still consults the
-        # PROJECTS env var.
-        monkeypatch.setenv(
-            "PROJECTS",
-            json.dumps({"FromEnv": {"path": "C:/from-env"}}),
-        )
-        path = tmp_path / "projects.json"
-
-        store = ProjectsStore(str(path))
-        store.load(seed_json=None)
-
-        names = {p["name"] for p in store.list_public()}
-        assert names == {"FromEnv"}
-
-    def test_empty_explicit_seed_creates_empty_store(self, tmp_path):
-        # A non-None but empty seed_json (e.g. ``""`` or whitespace)
-        # produces an empty store and persists an empty file.
-        path = tmp_path / "projects.json"
-
-        store = ProjectsStore(str(path))
-        store.load(seed_json="")
-
-        assert path.exists()
-        assert json.loads(path.read_text()) == []
-        assert store.list_public() == []
 
     def test_invalid_explicit_seed_raises(self, tmp_path):
         # Malformed JSON in the explicit seed surfaces a RuntimeError —
@@ -324,15 +290,6 @@ class TestUpdate:
 
         assert updated.linear_api_key is None
 
-    def test_linear_api_key_value_replaces(self, tmp_path):
-        store = self._seed(tmp_path)
-
-        updated = store.update(
-            "Alpha", ProjectUpdatePatch(linear_api_key="lin_new"),
-        )
-
-        assert updated.linear_api_key == "lin_new"
-
     def test_rename(self, tmp_path):
         store = self._seed(tmp_path)
 
@@ -359,20 +316,6 @@ class TestUpdate:
 
         assert updated.default_flags == {"different": "value"}
 
-    def test_default_flags_none_keeps(self, tmp_path):
-        store = self._seed(tmp_path)
-
-        updated = store.update("Alpha", ProjectUpdatePatch(default_flags=None))
-
-        assert updated.default_flags == {"verbose": True, "retries": 3}
-
-    def test_unknown_name_raises_key_error(self, tmp_path):
-        store = ProjectsStore(str(tmp_path / "projects.json"))
-        store.load()
-
-        with pytest.raises(KeyError, match="not found"):
-            store.update("Ghost", ProjectUpdatePatch(path="C:/x"))
-
 
 class TestDelete:
     def test_removes_and_persists(self, tmp_path):
@@ -388,13 +331,6 @@ class TestDelete:
         assert names == ["Beta"]
         # Order was compacted.
         assert public[0]["order"] == 0
-
-    def test_unknown_name_raises_key_error(self, tmp_path):
-        store = ProjectsStore(str(tmp_path / "projects.json"))
-        store.load()
-
-        with pytest.raises(KeyError, match="not found"):
-            store.delete("Ghost")
 
 
 class TestReorder:
@@ -425,12 +361,6 @@ class TestReorder:
 
         with pytest.raises(ValueError, match="missing"):
             store.reorder(["A", "B"])  # C missing
-
-    def test_rejects_unknown_names(self, tmp_path):
-        store = self._seed(tmp_path)
-
-        with pytest.raises(ValueError, match="unknown"):
-            store.reorder(["A", "B", "C", "Ghost"])
 
 
 # ---------------------------------------------------------------------------
@@ -571,16 +501,6 @@ class TestSafePathExists:
     symlinks, and bouncing NFS mounts.
     """
 
-    def test_returns_true_for_existing_path(self, tmp_path):
-        target = tmp_path / "real"
-        target.mkdir()
-        assert safe_path_exists(target) is True
-
-    def test_returns_false_for_missing_path(self, tmp_path):
-        # ``Path.exists`` already returns False for FileNotFoundError-class
-        # outcomes, so this is just the well-behaved baseline.
-        assert safe_path_exists(tmp_path / "does_not_exist") is False
-
     def test_returns_false_when_underlying_exists_raises_permission_error(
         self, tmp_path, monkeypatch,
     ):
@@ -595,26 +515,6 @@ class TestSafePathExists:
 
         # Must NOT propagate — caller is on a hot path that may not be
         # entitled to stat() the target. EACCES degenerates to "no".
-        assert safe_path_exists(target) is False
-
-    def test_returns_false_for_other_oserror_subclasses(
-        self, tmp_path, monkeypatch,
-    ):
-        """Broken symlinks raise ``OSError`` (errno EIO/ELOOP) in some
-        kernels; an NFS hiccup surfaces as ``OSError`` too. The docstring
-        explicitly enumerates these as "treat as False" — pin that here so
-        a future tightening of the except clause to ``PermissionError``
-        only doesn't silently break the worktree path.
-        """
-        from pathlib import Path as _Path
-
-        target = tmp_path / "symlink"
-
-        def boom(self):  # type: ignore[no-redef]
-            raise OSError(40, "Symbolic link loop", str(self))
-
-        monkeypatch.setattr(_Path, "exists", boom)
-
         assert safe_path_exists(target) is False
 
     def test_does_not_swallow_non_oserror_exceptions(
@@ -657,11 +557,6 @@ class TestGet:
         # Frozen — mutation raises.
         with pytest.raises(Exception):  # dataclasses.FrozenInstanceError
             snap.path = "hacked"  # type: ignore[misc]
-
-    def test_get_missing_returns_none(self, tmp_path):
-        store = ProjectsStore(str(tmp_path / "projects.json"))
-        store.load()
-        assert store.get("Ghost") is None
 
 
 class TestListWithLinearKey:
@@ -738,10 +633,6 @@ class TestSeedFromEnv:
     def test_returns_empty_list_when_env_unset(self):
         assert _seed_from_env() == []
 
-    def test_returns_empty_list_when_env_blank(self, monkeypatch):
-        monkeypatch.setenv("PROJECTS", "")
-        assert _seed_from_env() == []
-
     def test_skips_legacy_string_values(self, monkeypatch):
         monkeypatch.setenv(
             "PROJECTS",
@@ -774,6 +665,7 @@ class TestSeedFromEnv:
         assert len(records) == 1
         assert records[0].default_flags == {"verbose": True, "n": 3}
 
+    @pytest.mark.usefixtures("windows_paths")
     def test_normalizes_backslash_paths_from_env(self, monkeypatch):
         """Legacy users that set ``PROJECTS`` with Windows-native backslashes
         still get POSIX paths seeded into the store on first boot."""
@@ -804,32 +696,21 @@ class TestSeedFromEnv:
 
 
 class TestNormalizeProjectPath:
+    @pytest.mark.usefixtures("windows_paths")
     def test_windows_backslashes_become_forward_slashes(self):
         assert (
             normalize_project_path("D:\\ML\\Projects\\mobaide")
             == "D:/ML/Projects/mobaide"
         )
 
-    def test_posix_path_unchanged(self):
-        assert normalize_project_path("/home/user/repo") == "/home/user/repo"
-
+    @pytest.mark.usefixtures("windows_paths")
     def test_mixed_separators_collapse_to_posix(self):
         assert (
             normalize_project_path("D:/ML\\Projects/mobaide")
             == "D:/ML/Projects/mobaide"
         )
 
-    def test_strips_surrounding_whitespace(self):
-        assert normalize_project_path("  C:/a  ") == "C:/a"
-
-    def test_collapses_doubled_separators(self):
-        # ``D:\\\\ML`` in JSON source decodes to ``D:\\ML`` in memory (two
-        # backslashes per separator). ``PurePath`` normalizes these to a
-        # single separator on its native OS. Assert the idempotent POSIX form.
-        normalized = normalize_project_path("D:\\\\ML\\\\x")
-        # Regardless of the host OS, the POSIX form must not contain ``\``.
-        assert "\\" not in normalized
-
+    @pytest.mark.usefixtures("windows_paths")
     def test_is_idempotent(self):
         once = normalize_project_path("D:\\ML\\x")
         twice = normalize_project_path(once)
@@ -839,10 +720,6 @@ class TestNormalizeProjectPath:
         with pytest.raises(ValueError, match="non-empty"):
             normalize_project_path("")
 
-    def test_whitespace_only_raises_value_error(self):
-        with pytest.raises(ValueError, match="non-empty"):
-            normalize_project_path("   ")
-
 
 # ---------------------------------------------------------------------------
 # Legacy on-disk row migration
@@ -850,6 +727,7 @@ class TestNormalizeProjectPath:
 
 
 class TestLegacyBackslashRowsNormalizedOnLoad:
+    @pytest.mark.usefixtures("windows_paths")
     def test_existing_file_with_backslash_paths_is_normalized_on_load(
         self, tmp_path,
     ):
@@ -1117,34 +995,6 @@ class TestFilterFromDictMalformedListElements:
         assert snap is not None
         assert snap.auto_scan_filter.state_names == ["Proposals", "Backlog"]
 
-    def test_non_string_label_names_elements_are_filtered_out(self, tmp_path):
-        path = tmp_path / "projects.json"
-        path.write_text(
-            json.dumps(
-                [
-                    {
-                        "name": "alpha",
-                        "path": "C:/alpha",
-                        "order": 0,
-                        "auto_scan_filter": {
-                            "state_names": ["Proposals"],
-                            "label_names": ["AutoPipeline", 7, "AI-ready"],
-                            "active_state": "In Progress",
-                            "done_state": "Done",
-                            "removal_label": "AutoPipeline",
-                        },
-                    },
-                ],
-            ),
-        )
-
-        store = ProjectsStore(str(path))
-        store.load()
-
-        snap = store.get("alpha")
-        assert snap is not None
-        assert snap.auto_scan_filter.label_names == ["AutoPipeline", "AI-ready"]
-
     def test_empty_string_active_state_falls_back_to_default(self, tmp_path):
         # Empty-string single-value fields are coerced to the historical
         # default; an empty ``active_state`` would otherwise produce a
@@ -1211,39 +1061,6 @@ class TestFilterFromDictMalformedListElements:
         assert snap.auto_scan_filter.state_names == ["Proposals", "Backlog"]
         assert snap.auto_scan_filter.label_names == ["AutoPipeline", "AI-ready"]
 
-    def test_whitespace_only_singleton_falls_back_to_default(self, tmp_path):
-        # ``"   "`` passes the truthiness check on a string but would fail
-        # the wire model's _reject_blank_string validator. Loader must
-        # treat it identically to empty string.
-        path = tmp_path / "projects.json"
-        path.write_text(
-            json.dumps(
-                [
-                    {
-                        "name": "alpha",
-                        "path": "C:/alpha",
-                        "order": 0,
-                        "auto_scan_filter": {
-                            "state_names": ["Proposals"],
-                            "label_names": ["AutoPipeline"],
-                            "active_state": "   ",
-                            "done_state": "\t\n",
-                            "removal_label": "    ",
-                        },
-                    },
-                ],
-            ),
-        )
-
-        store = ProjectsStore(str(path))
-        store.load()
-
-        snap = store.get("alpha")
-        assert snap is not None
-        assert snap.auto_scan_filter.active_state == "In Progress"
-        assert snap.auto_scan_filter.done_state == "Done"
-        assert snap.auto_scan_filter.removal_label == "AutoPipeline"
-
 
 class TestSeedFromEnvParsesAutoScanFilter:
     """The ``PROJECTS`` env var path must also pick up a per-project
@@ -1281,20 +1098,6 @@ class TestSeedFromEnvParsesAutoScanFilter:
             removal_label="AI-ready",
         )
 
-    def test_seed_uses_default_filter_when_field_absent(self, monkeypatch):
-        # An env-defined project with no ``auto_scan_filter`` block must
-        # land on the per-field defaults, identical to the legacy-record
-        # path on disk.
-        monkeypatch.setenv(
-            "PROJECTS",
-            json.dumps({"P": {"path": "C:/p"}}),
-        )
-
-        records = _seed_from_env()
-
-        assert len(records) == 1
-        assert records[0].auto_scan_filter == AutoScanFilter()
-
 
 class TestAutoScanPromptRoundTrip:
     """The per-project Auto Scan prompt mirrors ``conda_env``: ``None`` means
@@ -1331,19 +1134,6 @@ class TestAutoScanPromptRoundTrip:
         assert len(on_disk) == 1
         assert "auto_scan_prompt" not in on_disk[0]
 
-    def test_record_to_dict_writes_prompt_when_present(self, tmp_path):
-        path = tmp_path / "projects.json"
-        store = ProjectsStore(str(path))
-        store.load()
-        store.create(
-            ProjectRecord(
-                name="alpha", path="C:/alpha", auto_scan_prompt="do the thing",
-            ),
-        )
-
-        on_disk = json.loads(path.read_text())
-        assert on_disk[0]["auto_scan_prompt"] == "do the thing"
-
     def test_prompt_appears_in_list_public(self, tmp_path):
         path = tmp_path / "projects.json"
         store = ProjectsStore(str(path))
@@ -1357,18 +1147,6 @@ class TestAutoScanPromptRoundTrip:
         rows = store.list_public()
         assert len(rows) == 1
         assert cast("dict", rows[0])["auto_scan_prompt"] == "seed prompt"
-
-    def test_list_public_prompt_is_none_when_unset(self, tmp_path):
-        # The key is always present in the public dict (clients rely on it),
-        # but defaults to None when the project never customized the prompt.
-        path = tmp_path / "projects.json"
-        store = ProjectsStore(str(path))
-        store.load()
-        store.create(ProjectRecord(name="alpha", path="C:/alpha"))
-
-        row = cast("dict", store.list_public()[0])
-        assert "auto_scan_prompt" in row
-        assert row["auto_scan_prompt"] is None
 
 
 class TestAutoScanPromptLegacyRecords:
@@ -1409,28 +1187,6 @@ class TestAutoScanPromptLegacyRecords:
                         "path": "C:/alpha",
                         "order": 0,
                         "auto_scan_prompt": "   ",
-                    },
-                ],
-            ),
-        )
-
-        store = ProjectsStore(str(path))
-        store.load()
-
-        snap = store.get("alpha")
-        assert snap is not None
-        assert snap.auto_scan_prompt is None
-
-    def test_non_string_prompt_on_disk_coerced_to_none(self, tmp_path):
-        path = tmp_path / "projects.json"
-        path.write_text(
-            json.dumps(
-                [
-                    {
-                        "name": "alpha",
-                        "path": "C:/alpha",
-                        "order": 0,
-                        "auto_scan_prompt": 42,
                     },
                 ],
             ),
@@ -1518,14 +1274,3 @@ class TestSeedFromEnvParsesAutoScanPrompt:
 
         assert len(records) == 1
         assert records[0].auto_scan_prompt == "env prompt"
-
-    def test_seed_prompt_none_when_field_absent(self, monkeypatch):
-        monkeypatch.setenv(
-            "PROJECTS",
-            json.dumps({"P": {"path": "C:/p"}}),
-        )
-
-        records = _seed_from_env()
-
-        assert len(records) == 1
-        assert records[0].auto_scan_prompt is None

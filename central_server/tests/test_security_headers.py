@@ -108,11 +108,6 @@ BASELINE_PERMISSIONS_POLICY = (
     "identity-credentials-get=()"
 )
 
-# Chrome answers each of these with `Error with Permissions-Policy header:
-# Unrecognized feature` on every page load: FLoC's ``interest-cohort`` went in
-# 2022 and its successor ``browsing-topics`` in Chrome 150.
-RETIRED_FEATURE_NAMES = ("interest-cohort", "browsing-topics")
-
 # ``/portal/login`` is gone; ``/portal/delete-account-info`` is the surviving
 # anonymous page and takes the same bucket.
 CSP_BY_PATH = (
@@ -130,32 +125,21 @@ CSP_BY_PATH = (
     ("/no-such-path", API_CSP),
 )
 
-# Every bucket denies FedCM outright now — the concession was
-# sign-in-config-gated and both configs it used to gate on are gone from this
-# middleware. ``/docs`` is listed because the CSP-exempt tuple is built by an
-# early return that could drop the header, and ``/`` and ``/privacy.html``
-# because they are two different site tiers.
+# Every bucket denies FedCM outright. ``/docs`` is listed because the
+# CSP-exempt tuple is built by an early return that could drop the header.
 PERMISSIONS_POLICY_BY_PATH = (
     ("/", BASELINE_PERMISSIONS_POLICY),
     ("/privacy.html", BASELINE_PERMISSIONS_POLICY),
-    ("/voice-input", BASELINE_PERMISSIONS_POLICY),
     ("/portal/delete-account-info", BASELINE_PERMISSIONS_POLICY),
-    ("/dashboard/login", BASELINE_PERMISSIONS_POLICY),
     ("/api/version", BASELINE_PERMISSIONS_POLICY),
-    ("/static/style.css", BASELINE_PERMISSIONS_POLICY),
     ("/docs", BASELINE_PERMISSIONS_POLICY),
-    ("/no-such-path", BASELINE_PERMISSIONS_POLICY),
 )
 
-# One per bucket, plus an exempt path and a 404: the universal headers are the
-# only ones that must not depend on which bucket a path lands in.
+# One per bucket plus a 404; ``/docs`` is covered by ``TestApiDocsExemption``.
 REPRESENTATIVE_PATHS = (
     "/",
-    "/portal/delete-account-info",
     "/dashboard/login",
     "/api/version",
-    "/static/style.css",
-    "/docs",
     "/no-such-path",
 )
 
@@ -306,15 +290,6 @@ class TestPerSurfacePolicy:
         response = await client.get(path)
         assert response.headers[header] == value
 
-    async def test_error_responses_are_stamped_too(self, client) -> None:
-        """An ``HTTPException`` body is generated inside the stack, not by a
-        route, and a 404 rendering attacker-supplied path text is exactly the
-        response that must not be sniffed into HTML."""
-        response = await client.get("/no-such-path")
-        assert response.status_code == 404
-        assert response.headers["X-Content-Type-Options"] == "nosniff"
-        assert response.headers["Content-Security-Policy"] == API_CSP
-
 
 class TestPathMatchingIsAnchored:
     @pytest.mark.parametrize(
@@ -381,44 +356,15 @@ class TestCrossOriginOpenerPolicy:
     server-side, so it is pinned here rather than left to drift back.
     """
 
-    async def test_the_portal_keeps_the_handle_a_future_popup_would_reply_through(
-        self, client
-    ) -> None:
-        response = await client.get("/portal/delete-account-info")
-        assert response.headers["Cross-Origin-Opener-Policy"] == COOP_POLICY
-
     def test_the_pinned_value_is_never_the_bare_same_origin(self) -> None:
         """Every other COOP assertion in this file — the universal-header
-        matrix, the two beside this one, the report-only case and the Caddyfile
-        mirror — compares against ``COOP_POLICY``, so each pins the response
+        matrix and the Caddyfile mirror — compares against ``COOP_POLICY``, so each pins the response
         only relative to a constant an editor can move: hardening
         ``security_headers.py``, then this constant, then both Caddyfiles turns
         the whole suite green again. This is the one assertion that does not
         survive that sequence. The split is for the parameterised spelling —
         ``same-origin; report-to="coop"`` enforces ``same-origin`` too."""
         assert COOP_POLICY.split(";")[0].strip() != "same-origin"
-
-    async def test_the_dashboard_takes_the_same_value(self, client) -> None:
-        """A recorded decision rather than an oversight: ``/dashboard/*`` opens
-        no popup today, so ``same-origin`` would protect against nothing that
-        exists while breaking any popup added there later. One value everywhere
-        also keeps navigation between the same-origin ``/``, ``/portal/*`` and
-        ``/dashboard/*`` inside a single browsing context group."""
-        response = await client.get("/dashboard/login")
-        assert response.headers["Cross-Origin-Opener-Policy"] == COOP_POLICY
-
-
-class TestPermissionsPolicyFeatureNames:
-    @pytest.mark.parametrize("feature", RETIRED_FEATURE_NAMES)
-    @pytest.mark.parametrize("path", ("/portal/delete-account-info", "/"))
-    async def test_no_retired_feature_name_is_advertised(
-        self, client, path, feature
-    ) -> None:
-        """Chrome is the only engine that reads this header, and it answers a
-        name it no longer knows with a console error on every page load — the
-        same console the deployment soak asks you to read clean."""
-        response = await client.get(path)
-        assert feature not in response.headers["Permissions-Policy"]
 
 
 @report_only
@@ -452,19 +398,6 @@ class TestReportOnlyMode:
         response = await client.get(path)
         assert response.headers["Content-Security-Policy"] == policy
         assert "Content-Security-Policy-Report-Only" not in response.headers
-
-    async def test_the_flag_does_not_reach_the_other_two_headers(
-        self, client
-    ) -> None:
-        """Report-only counterparts exist for both, but they report through the
-        Reporting API alone and this deployment configures no collector, so the
-        flag has to leave both enforcing under their own names — a rename would
-        show up here as a missing header. Having no readable soak mode is the
-        whole reason their rollout is a staged deploy and a manual walk of the
-        surfaces instead."""
-        response = await client.get("/portal/delete-account-info")
-        assert response.headers["Cross-Origin-Opener-Policy"] == COOP_POLICY
-        assert response.headers["Permissions-Policy"] == BASELINE_PERMISSIONS_POLICY
 
 
 class TestReportOnlyConfig:

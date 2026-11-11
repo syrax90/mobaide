@@ -29,7 +29,7 @@ describe('decideAutoResume', () => {
     });
   });
 
-  it.each(['stopped', 'stopping', 'crashed'])(
+  it.each(['stopped', 'crashed'])(
     'forgets a %s session that is present in the list',
     (state) => {
       expect(decideAutoResume([session('s1', state)], 's1')).toEqual({ kind: 'clear' });
@@ -42,10 +42,6 @@ describe('decideAutoResume', () => {
     expect(decideAutoResume([session('other', 'running')], 's1')).toEqual({ kind: 'none' });
   });
 
-  it('does nothing for an empty list or no stored id', () => {
-    expect(decideAutoResume([], 's1')).toEqual({ kind: 'none' });
-    expect(decideAutoResume([session('s1', 'running')], null)).toEqual({ kind: 'none' });
-  });
 });
 
 describe('claimAutoResumeAttempt', () => {

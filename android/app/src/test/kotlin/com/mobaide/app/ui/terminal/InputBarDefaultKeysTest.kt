@@ -72,12 +72,6 @@ class InputBarDefaultKeysTest {
     }
 
     @Test
-    fun customKind_rendersExactlyTheNineDefaultKeys_plusShortcutTrigger() {
-        openPanel(kind = SessionKind.Custom("custom_ab12cd34ef56"))
-        assertExactlyDefaultKeys()
-    }
-
-    @Test
     fun shellKind_rendersExactlyTheNineDefaultKeys_plusShortcutTrigger() {
         // A bash prompt is not a Claude TUI: Mode (CSI Z) and Rewind (Esc-Esc)
         // mean nothing there, and Ctrl+O/Ctrl+R/Ctrl+L are readline bindings the

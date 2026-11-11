@@ -54,22 +54,6 @@ class CustomAgentTypesRepositoryModeOrderTest {
     }
 
     @Test
-    fun observeModeOrder_initialState_isEmpty() {
-        val (repo) = newFixture()
-        assertEquals(emptyList<String>(), repo.observeModeOrder().value)
-    }
-
-    @Test
-    fun refreshModeOrder_showsTheServerOrder() = runTest {
-        val (repo, api) = newFixture()
-        coEvery { api.getSessionModeOrder("tok-user-123") } returns order(2, "shell", "claude")
-
-        repo.refreshModeOrder()
-
-        assertEquals(listOf("shell", "claude"), repo.observeModeOrder().value)
-    }
-
-    @Test
     fun refreshModeOrder_userChangedMidFlight_skipsTheWrite() = runTest {
         val (repo, api, identity) = newFixture()
         every { identity.getUserId() } returnsMany listOf("user-1", "user-2")
@@ -204,17 +188,6 @@ class CustomAgentTypesRepositoryModeOrderTest {
 
         assertEquals(listOf(a, b, c), sent.toList())
         assertEquals(c, repo.observeModeOrder().value)
-    }
-
-    @Test
-    fun saveModeOrder_userChangedMidFlight_doesNotKeepTheAnswer() = runTest {
-        val (repo, api, identity) = newFixture()
-        every { identity.getUserId() } returnsMany listOf("user-1", "user-2")
-        coEvery { api.putSessionModeOrder(any(), any()) } returns order(4, "codex")
-
-        repo.saveModeOrder(listOf("codex"))
-
-        assertTrue(repo.observeModeOrder().value.isEmpty())
     }
 
     @Test

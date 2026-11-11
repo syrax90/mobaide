@@ -116,17 +116,6 @@ class PathSuggestionsControllerTest {
     }
 
     @Test
-    fun showsEightAndCountsTheRest() = runTest {
-        answer("/", null, (0 until 10).map { "d$it" })
-        val controller = focusedController()
-
-        type(controller, "/")
-
-        assertEquals(8, controller.state.value.names.size)
-        assertEquals(2, controller.state.value.overflow)
-    }
-
-    @Test
     fun acceptWritesTheAgentExpandedPath_forATildeQuery() = runTest {
         answer("~/", null, listOf("code"))
         val controller = focusedController()

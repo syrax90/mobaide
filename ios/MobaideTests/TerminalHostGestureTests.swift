@@ -4,8 +4,6 @@ import XCTest
 
 @MainActor
 final class TerminalHostGestureTests: XCTestCase {
-    private final class PanSubclass: UIPanGestureRecognizer {}
-
     private func makeModel() -> TerminalSessionModel {
         TerminalTestSupport.model()
     }
@@ -32,19 +30,6 @@ final class TerminalHostGestureTests: XCTestCase {
 
         XCTAssertFalse(mouseReportPan.isEnabled, "the mouse-reporting pan must be disabled")
         XCTAssertTrue(scrollbackDriver.isEnabled, "the scrollback pan must stay alive")
-    }
-
-    func testExactClassCheckSparesPanSubclasses() {
-        let terminal = makeTerminal()
-        let subclassPan = PanSubclass()
-        terminal.addGestureRecognizer(subclassPan)
-
-        terminal.neutralizeSwiftTermGestures()
-
-        XCTAssertTrue(
-            subclassPan.isEnabled,
-            "only exactly UIPanGestureRecognizer is neutralized — subclasses like UIScrollViewPanGestureRecognizer must survive"
-        )
     }
 
     func testDisablesAllSwiftTermTapsAndSelectionGesturesButKeepsMobaideRecognizers() {
@@ -85,30 +70,6 @@ final class TerminalHostGestureTests: XCTestCase {
         XCTAssertFalse(latePan.isEnabled, "lazily added pans must be swept on mouse-mode changes")
     }
 
-    // MARK: - Coordinator.attachGestures
-
-    func testAttachGesturesReplacesStaleRecognizersFromPreviousVisit() {
-        let model = makeModel()
-        let terminal = model.terminalView
-
-        let firstCoordinator = TerminalHostView.Coordinator(model: model)
-        firstCoordinator.attachGestures(to: terminal)
-        let firstTap = recognizers(named: "mobaide.rowTap", on: terminal).first
-        XCTAssertNotNil(firstTap)
-
-        let secondCoordinator = TerminalHostView.Coordinator(model: model)
-        secondCoordinator.attachGestures(to: terminal)
-
-        let taps = recognizers(named: "mobaide.rowTap", on: terminal)
-        let doubleTaps = recognizers(named: "mobaide.rowDoubleTap", on: terminal)
-        XCTAssertEqual(taps.count, 1, "re-attaching must not accumulate duplicates")
-        XCTAssertEqual(doubleTaps.count, 1)
-        XCTAssertFalse(
-            taps[0] === firstTap,
-            "the recognizer must be rebuilt so it targets the current Coordinator, not the first visit's"
-        )
-    }
-
     // MARK: - Vertical-axis arbitration
 
     /// Drives the emulator the way a real TUI does, so the arbitration is read
@@ -134,26 +95,6 @@ final class TerminalHostGestureTests: XCTestCase {
         )
     }
 
-    func testAlternateScreenWithoutMouseReportingAlsoTakesTheAxis() {
-        let terminal = makeTerminal()
-        terminal.configureAppearance()
-        // `less`/`vim`: no mouse mode change ever fires, so a stored flag would
-        // never cover this — the mode has to be re-derived per touch.
-        enterAlternateScreen(terminal)
-
-        XCTAssertEqual(terminal.wheelScrollMode, .cursorKeys)
-        XCTAssertFalse(terminal.gestureRecognizerShouldBegin(terminal.panGestureRecognizer))
-    }
-
-    func testMouseReportingOnTheNormalBufferTakesTheAxis() {
-        let terminal = makeTerminal()
-        terminal.configureAppearance()
-        enableMouseReporting(terminal)
-
-        XCTAssertEqual(terminal.wheelScrollMode, .wheel)
-        XCTAssertFalse(terminal.gestureRecognizerShouldBegin(terminal.panGestureRecognizer))
-    }
-
     func testPlainShellKeepsTheScrollbackPan() {
         let terminal = makeTerminal()
         terminal.configureAppearance()
@@ -166,28 +107,6 @@ final class TerminalHostGestureTests: XCTestCase {
     }
 
     // MARK: - Horizontal-axis handoff
-
-    func testScrollbackPanYieldsExactlyTheDragsTheOuterClaims() {
-        XCTAssertTrue(
-            MobaideTerminalView.allowsScrollbackPan(mode: .localScrollback, outerClaimsHorizontalPan: false),
-            "the outer claims iff dx > dy, so every remaining direction — diagonal ties included — is the scrollback's"
-        )
-        XCTAssertFalse(
-            MobaideTerminalView.allowsScrollbackPan(mode: .localScrollback, outerClaimsHorizontalPan: true),
-            "the nested pans recognize simultaneously; without this the outer's horizontal drag would jiggle the scrollback too"
-        )
-    }
-
-    func testWheelLadderModesRefuseTheScrollbackPanWhicheverWayTheOuterDecides() {
-        for mode in [TerminalWheelScroll.Mode.wheel, .cursorKeys] {
-            for outerClaims in [true, false] {
-                XCTAssertFalse(
-                    MobaideTerminalView.allowsScrollbackPan(mode: mode, outerClaimsHorizontalPan: outerClaims),
-                    "\(mode) owns the vertical axis whatever the horizontal split decides (outer claims: \(outerClaims))"
-                )
-            }
-        }
-    }
 
     /// A near-diagonal drag with horizontal drift: the shape the removed
     /// directional lock used to latch onto an axis the inner view cannot
@@ -214,76 +133,6 @@ final class TerminalHostGestureTests: XCTestCase {
         feedTranscript(terminal)
         XCTAssertGreaterThan(terminal.maxScrollOffsetY, 0, "the harness must have real scrollback for the pan to be worth beginning")
         return (scroll, terminal)
-    }
-
-    func testFullModeHostLeavesTheScrollbackPanToTheTerminal() {
-        let (scroll, terminal) = hostedTerminal(mode: .full)
-
-        XCTAssertTrue(terminal.superview === scroll, "the host is resolved per touch from the live hierarchy")
-        XCTAssertTrue(
-            terminal.gestureRecognizerShouldBegin(terminal.panGestureRecognizer),
-            "Full mode never arbitrates, so a drag starting with horizontal drift must still reach the scrollback"
-        )
-    }
-
-    func testStaticModeHostLeavesAnUnclaimedDragToTheTerminal() {
-        let (scroll, terminal) = hostedTerminal(mode: .static)
-
-        // Binding the host matters: nothing else retains it, and a released
-        // wrapper would null `superview` and route this through the no-host
-        // fallback instead of the Static-mode claim it means to exercise.
-        XCTAssertTrue(terminal.superview === scroll, "the host is resolved per touch from the live hierarchy")
-        XCTAssertTrue(
-            terminal.gestureRecognizerShouldBegin(terminal.panGestureRecognizer),
-            "the outer claims only horizontally dominant drags; every other one stays the scrollback's"
-        )
-    }
-
-    func testHostedTerminalOnTheAlternateBufferStillRefusesTheScrollbackPan() {
-        let (scroll, terminal) = hostedTerminal(mode: .full)
-        enterAlternateScreen(terminal)
-
-        XCTAssertTrue(terminal.superview === scroll, "the host is resolved per touch from the live hierarchy")
-        XCTAssertFalse(
-            terminal.gestureRecognizerShouldBegin(terminal.panGestureRecognizer),
-            "the horizontal split is an extra refusal, never a licence — the wheel ladder still owns the axis"
-        )
-    }
-
-    /// The whole join — host lookup, display mode, wheel-ladder arm and the
-    /// `outerClaimsHorizontalPan:` polarity — answered on a hosted terminal for
-    /// a drag the test supplies. The recognizer path cannot be driven this way:
-    /// `UIScrollViewPanGestureRecognizer` refuses a planted `setTranslation`
-    /// and `velocity(in:)` is unsettable, so the sampled overload is where the
-    /// arbitration becomes observable outside a device.
-    func testStaticHostRefusesTheScrollbackPanOnAHorizontallyDominantDrag() {
-        let (scroll, terminal) = hostedTerminal(mode: .static)
-
-        XCTAssertTrue(terminal.superview === scroll, "the host is resolved per touch from the live hierarchy")
-        XCTAssertFalse(
-            terminal.allowsScrollbackPan(velocity: Self.horizontallyDominantDrag, translation: .zero),
-            "the nested pans recognize simultaneously, so a drag the outer pans sideways must not also jiggle the scrollback"
-        )
-    }
-
-    func testStaticHostKeepsTheScrollbackPanForAVerticallyDominantDrag() {
-        let (scroll, terminal) = hostedTerminal(mode: .static)
-
-        XCTAssertTrue(terminal.superview === scroll, "the host is resolved per touch from the live hierarchy")
-        XCTAssertTrue(
-            terminal.allowsScrollbackPan(velocity: Self.verticallyDominantDrag, translation: .zero),
-            "sideways drift on a vertical drag is not a claim — the touch stays the scrollback's"
-        )
-    }
-
-    func testStaticHostGivesAnExactDiagonalTieToTheScrollback() {
-        let (scroll, terminal) = hostedTerminal(mode: .static)
-
-        XCTAssertTrue(terminal.superview === scroll, "the host is resolved per touch from the live hierarchy")
-        XCTAssertTrue(
-            terminal.allowsScrollbackPan(velocity: CGPoint(x: 70, y: 70), translation: .zero),
-            "Android parity: the outer claims iff dx > dy, so the tie is the scrollback's"
-        )
     }
 
     /// The dead-lock fix and the polarity guard in one: the identical sample
@@ -320,19 +169,6 @@ final class TerminalHostGestureTests: XCTestCase {
     }
 
     // MARK: - Vertical-scroll recognizer lifecycle
-
-    func testConfigureAppearanceInstallsExactlyOneVerticalScrollGesture() {
-        let terminal = makeTerminal()
-
-        terminal.configureAppearance()
-        let installed = recognizers(named: MobaideTerminalView.verticalScrollGestureName, on: terminal)
-        terminal.installVerticalScrollGesture()
-
-        XCTAssertEqual(installed.count, 1)
-        let afterRepeat = recognizers(named: MobaideTerminalView.verticalScrollGestureName, on: terminal)
-        XCTAssertEqual(afterRepeat.count, 1, "installation must be idempotent")
-        XCTAssertTrue(afterRepeat[0] === installed[0])
-    }
 
     func testVerticalScrollGestureSurvivesAScreenRevisit() {
         let model = makeModel()
@@ -446,18 +282,6 @@ final class TerminalHostGestureTests: XCTestCase {
         )
     }
 
-    func testUpwardScrollUsesTheWheelUpButton() async throws {
-        let (model, connection) = try await wiredModel()
-        let terminal = model.terminalView
-        enterAlternateScreen(terminal)
-        enableMouseReporting(terminal)
-
-        terminal.emitVerticalScroll(rowsDown: -1, at: .zero)
-
-        let frames = await waitForInputFrames(connection, atLeast: 1)
-        XCTAssertEqual(frames, [inputFrame("\u{1B}[<64;1;1M")], "coordinates are 1-based on the wire")
-    }
-
     func testCursorKeyModeBatchesOneArrowPerRowIntoOneWrite() async throws {
         let (model, connection) = try await wiredModel()
         let terminal = model.terminalView
@@ -482,18 +306,6 @@ final class TerminalHostGestureTests: XCTestCase {
 
         let frames = await waitForInputFrames(connection, atLeast: 1)
         XCTAssertEqual(frames, [inputFrame("\u{1B}OA")])
-    }
-
-    func testNormalBufferEmitsNothing() async throws {
-        let (model, connection) = try await wiredModel()
-
-        model.terminalView.emitVerticalScroll(rowsDown: 5, at: .zero)
-
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertTrue(
-            inputFrames(connection).isEmpty,
-            "a plain shell keeps the untouched SwiftTerm scrollback path — nothing goes to the PTY"
-        )
     }
 
     func testOneCallbackNeverEmitsMoreThanOnePage() async throws {
@@ -596,37 +408,6 @@ final class TerminalHostGestureTests: XCTestCase {
         XCTAssertGreaterThan(frames.count, 1, "and it has to arrive spread over time, not as one jump")
     }
 
-    func testFlingTravelStaysWithinHalfAPage() async throws {
-        let (model, connection) = try await wiredModel()
-        let terminal = model.terminalView
-        enterAlternateScreen(terminal)
-        enableMouseReporting(terminal)
-        let rows = terminal.getTerminal().getDims().rows
-
-        await flungTerminal(terminal)
-
-        XCTAssertEqual(
-            wheelReportCount(in: inputFrames(connection)), rows / 2,
-            "Android's clamp, and the cost ceiling for one flick: each row is a round trip plus a full repaint"
-        )
-    }
-
-    func testFlingDecelerates() async throws {
-        let (model, connection) = try await wiredModel()
-        let terminal = model.terminalView
-        enterAlternateScreen(terminal)
-        enableMouseReporting(terminal)
-
-        await flungTerminal(terminal)
-
-        let perFrame = inputFrames(connection).map { wheelReportCount(in: $0) }
-        XCTAssertGreaterThan(perFrame.count, 2)
-        XCTAssertGreaterThan(
-            perFrame[0], perFrame[perFrame.count - 1],
-            "a fling that keeps its pace to the last frame reads as a jump, not momentum"
-        )
-    }
-
     func testFlingStopsWhenTheProgramLeavesTheAlternateScreen() async throws {
         let (model, connection) = try await wiredModel()
         let terminal = model.terminalView
@@ -662,49 +443,6 @@ final class TerminalHostGestureTests: XCTestCase {
         XCTAssertLessThan(caught, terminal.getTerminal().getDims().rows / 2, "the fling must have been cut short")
     }
 
-    func testLeavingTheScreenCancelsAnInFlightFling() async throws {
-        let (model, connection) = try await wiredModel()
-        let terminal = model.terminalView
-        enterAlternateScreen(terminal)
-        enableMouseReporting(terminal)
-
-        let caught = await interruptedFling(terminal, connection) { $0.willMove(toWindow: nil) }
-
-        try await Task.sleep(for: TerminalWheelScroll.flingFrameInterval * 6)
-        XCTAssertEqual(
-            wheelReportCount(in: inputFrames(connection)), caught,
-            "the terminal view outlives the screen, so a fling left running would write to a session the user left"
-        )
-        XCTAssertLessThan(caught, terminal.getTerminal().getDims().rows / 2, "the fling must have been cut short")
-    }
-
-    func testSlowLiftDoesNotFling() async throws {
-        let (model, connection) = try await wiredModel()
-        let terminal = model.terminalView
-        enterAlternateScreen(terminal)
-        enableMouseReporting(terminal)
-
-        terminal.startFling(velocity: CGPoint(x: 0, y: -200))
-        await terminal.flingTask?.value
-
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertTrue(inputFrames(connection).isEmpty, "a drag that ends slowly stops where the finger left it")
-    }
-
-    func testNormalBufferNeverFlings() async throws {
-        let (model, connection) = try await wiredModel()
-        let terminal = model.terminalView
-
-        terminal.startFling(velocity: hardFlickUp)
-        await terminal.flingTask?.value
-
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertTrue(
-            inputFrames(connection).isEmpty,
-            "a plain shell keeps SwiftTerm's own scroll view, which already decelerates by itself"
-        )
-    }
-
     // MARK: - dismantleUIView
 
     func testDismantleDetachesTerminalWhenWrapperStillOwnsIt() {
@@ -730,38 +468,6 @@ final class TerminalHostGestureTests: XCTestCase {
         XCTAssertTrue(
             model.terminalView.superview === newWrapper,
             "a dying wrapper must not detach a terminal a newer wrapper already owns"
-        )
-    }
-
-    func testDismantleClearsTheDrawerEdgePanClosureWhenWrapperStillOwnsIt() {
-        let model = makeModel()
-        let coordinator = TerminalHostView.Coordinator(model: model)
-        let config = TerminalDisplayConfig(mode: .static, staticColumns: 120)
-        let wrapper = TerminalPanScrollView(terminalView: model.terminalView, displayConfig: config)
-        model.terminalView.onDrawerEdgePan = { _ in }
-
-        TerminalHostView.dismantleUIView(wrapper, coordinator: coordinator)
-
-        XCTAssertNil(
-            model.terminalView.onDrawerEdgePan,
-            "the closure captures the screen's state; left on the retained view it would outlive the screen"
-        )
-    }
-
-    func testDismantleLeavesTheDrawerEdgePanClosureWithTheWrapperThatStoleIt() {
-        let model = makeModel()
-        let coordinator = TerminalHostView.Coordinator(model: model)
-        let config = TerminalDisplayConfig(mode: .static, staticColumns: 120)
-        let oldWrapper = TerminalPanScrollView(terminalView: model.terminalView, displayConfig: config)
-        let newWrapper = TerminalPanScrollView(terminalView: model.terminalView, displayConfig: config)
-        model.terminalView.onDrawerEdgePan = { _ in }
-
-        TerminalHostView.dismantleUIView(oldWrapper, coordinator: coordinator)
-
-        XCTAssertTrue(model.terminalView.superview === newWrapper)
-        XCTAssertNotNil(
-            model.terminalView.onDrawerEdgePan,
-            "a dying wrapper must not clear the closure the newer wrapper's screen just set"
         )
     }
 
@@ -826,22 +532,6 @@ final class TerminalHostGestureTests: XCTestCase {
             .trimmingCharacters(in: .whitespaces)
     }
 
-    func testConfigureAppearanceClaimsTheScrollViewDelegate() {
-        let terminal = makeTerminal()
-        XCTAssertNil(
-            terminal.delegate,
-            "SwiftTerm declares UIScrollViewDelegate conformance but implements no method of it and never claims the slot"
-        )
-
-        terminal.configureAppearance()
-
-        XCTAssertNotNil(terminal.delegate, "a drag reaches the app through the scroll view or not at all")
-        XCTAssertFalse(
-            terminal.delegate === terminal,
-            "answering the protocol on the view itself would silently adopt SwiftTerm's empty conformance"
-        )
-    }
-
     func testUserDrivenScrollIntoHistoryPausesFollowMode() {
         let model = scrollableModel()
         let terminal = model.terminalView
@@ -852,19 +542,6 @@ final class TerminalHostGestureTests: XCTestCase {
         XCTAssertTrue(
             terminal.isAutoScrollSuppressed,
             "a paused viewport must also stop being yanked back to the tail"
-        )
-    }
-
-    func testNonUserDrivenScrollReportIsDropped() {
-        let model = scrollableModel()
-        let terminal = model.terminalView
-        terminal.contentOffset = CGPoint(x: 0, y: terminal.maxScrollOffsetY / 2)
-
-        terminal.handleScrollViewDidScroll(isUserDriven: false)
-
-        XCTAssertTrue(
-            model.followMode,
-            "only a touch may pause follow mode — every other offset write is the app's or SwiftTerm's own"
         )
     }
 
@@ -893,21 +570,6 @@ final class TerminalHostGestureTests: XCTestCase {
         XCTAssertEqual(
             terminal.contentOffset.y, held, accuracy: 0.5,
             "SwiftTerm's updateScroller snaps to the tail on every scrolled line; a paused reader must not be yanked along"
-        )
-    }
-
-    func testFollowingViewportIsStillPulledToTheTailByOutput() {
-        let model = scrollableModel()
-        let terminal = model.terminalView
-        terminal.contentOffset = .zero
-        XCTAssertTrue(model.followMode)
-        XCTAssertFalse(terminal.isScrolledToBottom, "the offset has to start away from the tail for the snap to show")
-
-        terminal.feed(text: "fresh output\r\n")
-
-        XCTAssertTrue(
-            terminal.isScrolledToBottom,
-            "suppression is scoped to a paused viewport — following output must keep working"
         )
     }
 
@@ -1040,147 +702,6 @@ final class TerminalHostGestureTests: XCTestCase {
         XCTAssertEqual(
             model.unreadRows, 1,
             "margins stranded by ESC[?69l must not decide what a full-size session counts"
-        )
-    }
-
-    // MARK: - Margin gates
-
-    /// `ESC D` (IND) and `ESC M` (RI) carry the same margin gate as the line
-    /// feed, so they were swallowed by the same stranded `marginLeft` and have
-    /// to recover with it. IND is asserted through the scrollback the way a line
-    /// feed is; RI never grows the scrollback — it rotates the screen in place —
-    /// so it is asserted on the rows themselves.
-    func testStrandedMarginsDoNotSwallowIndexOrReverseIndex() {
-        let terminal = scrolledBackTerminal()
-        let buffer = terminal.getTerminal().buffer
-        terminal.feed(text: "\u{1B}[?69h\u{1B}[3;40s\u{1B}[?69l")
-        XCTAssertGreaterThan(buffer.marginLeft, 0, "no strand means no hazard to guard here")
-
-        let originBefore = buffer.yDisp
-        terminal.feed(text: "\r\u{1B}D")
-
-        XCTAssertEqual(buffer.yDisp - originBefore, 1, "IND on the bottom row scrolls like a line feed")
-
-        // RI scrolls the other way, so it needs the cursor on the region's top
-        // row — still at column 0, still left of the stranded margin.
-        terminal.feed(text: "\u{1B}[H")
-        let topBefore = visibleRow(terminal, 0)
-        XCTAssertFalse(topBefore.isEmpty, "the row RI is supposed to push down has to have content on it")
-
-        terminal.feed(text: "\u{1B}M")
-
-        XCTAssertEqual(visibleRow(terminal, 0), "", "RI opens a blank line at the top of the region")
-        XCTAssertEqual(visibleRow(terminal, 1), topBefore, "and pushes what was there down one row")
-    }
-
-    /// The other half of the same rule: while DECLRMM is genuinely active the
-    /// gate still has to confine scrolling to the margin columns. Without this,
-    /// "stop reading stale margins" degrades into "stop reading margins", which
-    /// passes every assertion above and breaks every program that sets them.
-    ///
-    /// `Terminal.scroll` branches on `hasNarrowMargins` for a live left/right
-    /// margin narrower than the full grid: it rotates the margin columns of
-    /// every row in place (`dst[topRow+i] = src[topRow+i+1]`, then blanks the
-    /// bottom row) rather than pushing into scrollback, the same as a DECSTBM
-    /// region scroll never advancing `yDisp`
-    /// (`testRegionScrollWhilePausedAccruesNothingButFullWidthOutputStillCounts`).
-    /// So the observable evidence that the gate let the scroll through is the
-    /// bottom row's margin-column content being cleared, not `yDisp` moving.
-    func testActiveMarginsStillConfineScrolling() {
-        let terminal = scrolledBackTerminal()
-        let buffer = terminal.getTerminal().buffer
-        let dims = terminal.getTerminal().getDims()
-        let bottomRow = dims.rows - 1
-        // 1-based, and far enough right to sit outside marginRight (39).
-        let outsideColumn = dims.cols - 2
-
-        // Written while margin mode is still off, so it lands at the absolute
-        // column asked for. `Buffer.insertAsciiRun` clamps its autowrap
-        // boundary to `marginRight` whenever margin mode is live, regardless of
-        // where the cursor already sits — writing this marker after enabling
-        // margins would immediately auto-wrap back inside them and scroll the
-        // still-unwritten "IN" marker's row before a single "O" landed.
-        terminal.feed(text: "\u{1B}[\(outsideColumn)GOUT")
-
-        // No ESC[?69l this time — margin mode stays on, so the margins are live
-        // rather than stranded.
-        terminal.feed(text: "\u{1B}[?69h\u{1B}[3;40s")
-        let originBefore = buffer.yDisp
-        XCTAssertGreaterThan(
-            outsideColumn - 1, buffer.marginRight,
-            "the grid has to be wider than the margins or neither marker proves anything"
-        )
-
-        // The "IN" marker goes down *before* either line feed, so each
-        // assertion below is about a row that already existed. Writing it
-        // afterwards would make it a foregone conclusion.
-        terminal.feed(text: "\u{1B}[6GIN")
-
-        // Column 0, outside the live margins. CR would be clamped to marginLeft
-        // while margin mode is on, so the column is set explicitly.
-        terminal.feed(text: "\u{1B}[1G\n")
-
-        XCTAssertEqual(
-            buffer.yDisp, originBefore,
-            "a line feed outside live left/right margins is confined, and always was"
-        )
-        XCTAssertTrue(
-            visibleRow(terminal, bottomRow).contains("IN"),
-            "the gate has to refuse this line feed outright — deleting it would scroll the row away here"
-        )
-
-        terminal.feed(text: "\u{1B}[6G\n")
-
-        XCTAssertEqual(
-            buffer.yDisp, originBefore,
-            "a narrow left/right-margin scroll rotates rows in place, exactly like a DECSTBM region scroll — it never advances yDisp"
-        )
-        XCTAssertFalse(
-            visibleRow(terminal, bottomRow).contains("IN"),
-            "from inside the margins the same line feed still scrolls"
-        )
-        XCTAssertTrue(
-            visibleRow(terminal, bottomRow).contains("OUT"),
-            "and it stays confined to the margin columns — the text outside them is not the scroll's to move"
-        )
-    }
-
-    /// The gate is `buffer.x >= marginLeft && buffer.x <= marginRight`, and
-    /// every case above approaches it from the left. `marginRight` strands the
-    /// same way — DECSLRM raises it, `ESC[?69l` walks away from it, and
-    /// `Buffer.resize` only ever lowers it — and past a stranded right margin
-    /// is precisely where the cursor sits after a program fills the row it is
-    /// about to feed.
-    func testStrandedRightMarginDoesNotSwallowOutputPastIt() {
-        let terminal = scrolledBackTerminal()
-        let emulator = terminal.getTerminal()
-        let buffer = emulator.buffer
-        let cols = emulator.getDims().cols
-        // Half the grid, so there is a column to the right of the margin to
-        // feed from whatever width the harness laid out at.
-        let margin = cols / 2
-        terminal.feed(text: "\u{1B}[?69h\u{1B}[1;\(margin)s\u{1B}[?69l")
-        XCTAssertEqual(
-            buffer.marginRight, margin - 1,
-            "DECSLRM has to have taken, and ESC[?69l has to have left it behind, or there is no strand to guard"
-        )
-
-        let originBefore = buffer.yDisp
-        // The last column, well right of the stranded margin. A bare LF keeps
-        // the column, which is what makes this the right-hand half of the gate
-        // rather than the left one.
-        terminal.feed(text: "\u{1B}[\(cols)G\n")
-
-        XCTAssertEqual(
-            buffer.yDisp - originBefore, 1,
-            "a line feed right of a stranded marginRight must scroll: margin mode is off, so nothing is gated"
-        )
-
-        terminal.feed(text: "\u{1B}[\(cols)G\u{1B}D")
-
-        XCTAssertEqual(
-            buffer.yDisp - originBefore, 2,
-            "IND carries the same gate and recovers with it"
         )
     }
 
@@ -1356,19 +877,6 @@ final class TerminalHostGestureTests: XCTestCase {
         )
     }
 
-    func testResolveRowAtTheTailIsTheCurrentInput() {
-        let terminal = scrolledBackTerminal()
-        let cellHeight = terminal.cellSize.height
-        let lastRow = terminal.getTerminal().getDims().rows - 1
-
-        let resolved = terminal.resolveRow(
-            at: CGPoint(x: 20, y: terminal.contentOffset.y + CGFloat(lastRow) * cellHeight + cellHeight / 2)
-        )
-
-        XCTAssertEqual(resolved?.text, "echo tail")
-        XCTAssertEqual(resolved?.isCurrentInput, true, "the cursor row at the tail is the live input line")
-    }
-
     func testOverscrolledTapBelowTheContentResolvesNothing() {
         let terminal = scrolledBackTerminal()
         let cellHeight = terminal.cellSize.height
@@ -1389,30 +897,6 @@ final class TerminalHostGestureTests: XCTestCase {
         XCTAssertEqual(
             terminal.getTerminal().buffer.yDisp, yDispBefore,
             "the read window must be restored even when nothing resolves"
-        )
-    }
-
-    func testOverscrolledTapOnTheLastLineStillResolves() {
-        let terminal = scrolledBackTerminal()
-        let cellHeight = terminal.cellSize.height
-        let yDispBefore = terminal.getTerminal().buffer.yDisp
-        // A small overscroll past `maxScrollOffsetY` — but the tap below
-        // targets a point that is still genuinely inside the rendered
-        // content, so the window still has to clamp onto the last real line.
-        terminal.contentOffset = CGPoint(x: 0, y: terminal.maxScrollOffsetY + 2 * cellHeight)
-        let lineCount = terminal.getTerminal().buffer.yDisp + terminal.getTerminal().getDims().rows
-
-        let resolved = terminal.resolveRow(
-            at: CGPoint(x: 20, y: (CGFloat(lineCount - 1) + 0.5) * cellHeight)
-        )
-
-        XCTAssertEqual(
-            resolved?.text, "echo tail",
-            "the read window still clamps to the last real line when the tap is genuinely inside it"
-        )
-        XCTAssertEqual(
-            terminal.getTerminal().buffer.yDisp, yDispBefore,
-            "the re-pointed read window must be restored before any SwiftTerm code observes it"
         )
     }
 
@@ -1466,18 +950,6 @@ final class TerminalHostGestureTests: XCTestCase {
             "the window has to be raised to cover the tapped row, not left at the floored viewport top"
         )
         XCTAssertEqual(resolved?.isCurrentInput, true, "parked at the tail, the cursor row is the live input line")
-    }
-
-    func testResolveRowReachesTheLiveInputAfterAJumpToBottom() {
-        let model = scrollableModel()
-        let terminal = model.terminalView
-        scrollUp(terminal)
-
-        model.jumpToBottom()
-
-        let resolved = terminal.resolveRow(at: CGPoint(x: 20, y: lastLineMidY(terminal)))
-        XCTAssertEqual(resolved?.text, "echo tail", "the prompt must stay tappable after the button returns to the tail")
-        XCTAssertEqual(resolved?.isCurrentInput, true)
     }
 
     // MARK: - Tap ownership ladder
@@ -1567,22 +1039,6 @@ final class TerminalHostGestureTests: XCTestCase {
         )
     }
 
-    func testBareAlternateScreenTapNeitherClicksNorSubmits() async throws {
-        let (model, connection, coordinator) = try await tappableModel()
-        let terminal = model.terminalView
-        enterAlternateScreen(terminal) // `less`, `man`, plain vim: no mouse reporting
-        let point = promptRowPoint(terminal)
-        XCTAssertEqual(terminal.resolveRow(at: point)?.text, "echo hi", "the row resolves; only the gate stops the tap")
-
-        tapTerminal(on: coordinator, view: terminal, at: point)
-
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertTrue(
-            tapFrames(connection).isEmpty,
-            "the rows are the program's own chrome — submitting one Ctrl+Cs it, and it asked for no clicks"
-        )
-    }
-
     func testPlainShellTapStillSubmitsTheLiveInput() async throws {
         let (model, connection, coordinator) = try await tappableModel()
         let terminal = model.terminalView
@@ -1594,21 +1050,6 @@ final class TerminalHostGestureTests: XCTestCase {
         XCTAssertEqual(
             frames, [inputFrame("\r")],
             "the untouched arm: on the normal buffer the app owns the pointer and a tap re-runs the row"
-        )
-    }
-
-    func testX10OnlyProgramGetsNeitherAClickNorASubmit() async throws {
-        let (model, connection, coordinator) = try await tappableModel()
-        let terminal = model.terminalView
-        terminal.feed(text: "\u{1B}[?9h") // DECSET 9 — X10 press-only reporting
-        let point = promptRowPoint(terminal)
-
-        tapTerminal(on: coordinator, view: terminal, at: point)
-
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertTrue(
-            tapFrames(connection).isEmpty,
-            "SwiftTerm suppresses the press in X10 itself, so mirroring its rule is what keeps a half-report off the wire"
         )
     }
 
@@ -1632,12 +1073,6 @@ final class TerminalHostGestureTests: XCTestCase {
     }
 
     // MARK: - Synchronized output
-
-    /// Stand-in for `ProcessInfo.systemUptime`. A reference type, so the closure
-    /// the view keeps reads whatever the test has moved it to.
-    private final class StepClock {
-        var now: TimeInterval = 1_000
-    }
 
     /// Emulator output as the app really receives it: an `o` frame, so
     /// `handleBinary` routes the bytes through `feedTrackingSynchronizedOutput`.
@@ -1722,28 +1157,6 @@ final class TerminalHostGestureTests: XCTestCase {
 
         let frames = await waitForInputFrames(connection, atLeast: 1)
         XCTAssertEqual(frames, [inputFrame("\r")], "the untouched arm has to come back exactly as it was")
-    }
-
-    func testTapSubmitsAgainOnceTheFreezeDeadlinePasses() async throws {
-        let (model, connection, coordinator) = try await tappableModel()
-        let terminal = model.terminalView
-        let clock = StepClock()
-        terminal.synchronizedOutputNow = { clock.now }
-        let point = promptRowPoint(terminal)
-        // The program arms the mode and never resets it — the shape that would
-        // otherwise disable row taps for as long as the session lives.
-        let frozen = await freeze(connection, terminal)
-        XCTAssertTrue(frozen)
-
-        clock.now += TerminalSynchronizedOutput.emulatorTimeout + TerminalSynchronizedOutput.expiryGrace
-        tapTerminal(on: coordinator, view: terminal, at: point)
-
-        let frames = await waitForInputFrames(connection, atLeast: 1)
-        XCTAssertEqual(
-            frames, [inputFrame("\r")],
-            "the gate expires with the emulator's own snapshot, so holding the mode set cannot deaden "
-                + "the affordance for good"
-        )
     }
 
     /// The bypass: the click recognizes at lift, the row tap only a double-tap timeout

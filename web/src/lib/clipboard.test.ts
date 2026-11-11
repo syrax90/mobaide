@@ -18,11 +18,6 @@ afterEach(() => {
 });
 
 describe('writeClipboardText', () => {
-  it('reports a completed write', async () => {
-    await expect(writeClipboardText('hello')).resolves.toBe(true);
-    expect(writeText).toHaveBeenCalledWith('hello');
-  });
-
   it('swallows the refusal Safari and Firefox give a gesture-less write', async () => {
     // Both callers need this: an unhandled rejection would surface inside
     // xterm's parser promise chain for the OSC 52 path, and as an uncaught

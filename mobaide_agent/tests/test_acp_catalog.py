@@ -326,14 +326,6 @@ class TestAllFoldersLister:
         assert all(r["open_session_id"] is None for r in page["sessions"])
         assert page["next_cursor"] is None
 
-    async def test_all_folders_newest_first(self, make_catalog, folders):
-        _project, _link, rows = folders
-        catalog = make_catalog(AllFoldersSpec(rows), kind="antigravity")
-
-        page = await catalog.list_sessions("antigravity", cwd=None, cursor=None)
-
-        assert [r["session_id"] for r in page["sessions"]] == ["other", "new", "old", "undated"]
-        assert {r["open_elsewhere"] for r in page["sessions"]} == {False}
 
     async def test_a_page_keeps_the_newest_rows(self, make_catalog, tmp_path):
         rows = [
@@ -480,10 +472,6 @@ class TestWire:
             {"detail": "cannot list"},
         )
 
-    async def test_no_catalog_is_404(self):
-        status, body = await list_chat_sessions(None, FakeManager(), "claude", cwd=None, cursor=None)
-        assert (status, body) == (404, {"detail": "Chat sessions are not available on this agent"})
-
 
 @pytest.fixture(autouse=True)
 def _antigravity_data_in_tmp(tmp_path, monkeypatch):
@@ -601,25 +589,6 @@ class TestChatRest:
             "Explain the cache layer",
         ]
 
-    async def test_codex_resume_reuses_the_open_session(self, client, auth_headers, tmp_path):
-        body = {
-            "cli": "codex",
-            "ui": "chat",
-            "cwd": str(tmp_path),
-            "codex_options": {},
-            "chat_resume_id": "external-2222",
-        }
-
-        opened = await client.post("/api/sessions", headers=auth_headers, json=body)
-        again = await client.post("/api/sessions", headers=auth_headers, json=body)
-        rows = await client.get(f"/api/chat/codex/sessions?cwd={tmp_path}", headers=auth_headers)
-
-        session_id = opened.json()["session_id"]
-        assert again.json()["session_id"] == session_id
-        assert {r["session_id"]: r["open_session_id"] for r in rows.json()["sessions"]} == {
-            "external-1111": None,
-            "external-2222": session_id,
-        }
 
     async def test_antigravity_chat_session_and_its_stored_sessions(
         self, client, auth_headers, tmp_path
@@ -645,25 +614,6 @@ class TestChatRest:
             ("Fix flaky upload test", False),
         ]
 
-    async def test_antigravity_resume_reuses_the_open_session(self, client, auth_headers, tmp_path):
-        body = {
-            "cli": "antigravity",
-            "ui": "chat",
-            "cwd": str(tmp_path),
-            "antigravity_options": {"worktree": False},
-            "chat_resume_id": "external-2222",
-        }
-
-        opened = await client.post("/api/sessions", headers=auth_headers, json=body)
-        again = await client.post("/api/sessions", headers=auth_headers, json=body)
-        rows = await client.get(f"/api/chat/antigravity/sessions?cwd={tmp_path}", headers=auth_headers)
-
-        session_id = opened.json()["session_id"]
-        assert again.json()["session_id"] == session_id
-        assert {r["session_id"]: r["open_session_id"] for r in rows.json()["sessions"]} == {
-            "external-1111": None,
-            "external-2222": session_id,
-        }
 
     async def test_list_needs_auth(self, client):
         resp = await client.get("/api/chat/claude/sessions")

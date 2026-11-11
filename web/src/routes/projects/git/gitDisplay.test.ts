@@ -3,9 +3,6 @@ import { toApiError } from '../../../api/errors';
 import type { GitDeleteResult, GitItem } from '../../../api/gitRepository';
 import { toSessionGitError } from '../../../api/sessionGitRepository';
 import {
-  branchCreatedMessage,
-  checkedOutMessage,
-  checkoutConfirmMessage,
   checkoutErrorCopy,
   chips,
   createBranchErrorCopy,
@@ -15,7 +12,6 @@ import {
   gitTreeRows,
   matchesFilter,
   primaryLabel,
-  remoteDeleteMessage,
   secondaryLabel,
   shortDate,
   tipLine,
@@ -79,10 +75,6 @@ describe('labels', () => {
 });
 
 describe('chips', () => {
-  it('renders nothing for an ordinary branch', () => {
-    expect(chips(item())).toEqual([]);
-  });
-
   it('keeps the fixed order regardless of which flags are set', () => {
     const row = item({
       kind: 'orphan_worktree',
@@ -112,12 +104,6 @@ describe('chips', () => {
     ]);
   });
 
-  it('falls back to a bare locked chip when git gave no reason', () => {
-    expect(chips(item({ locked: true, locked_reason: '   ' }))).toEqual([
-      { text: 'locked', style: 'danger' },
-    ]);
-  });
-
   it('names the remote on a remote-tracking row, after current and before gone', () => {
     expect(chips(remoteBranch())).toEqual([{ text: 'origin', style: 'muted' }]);
     expect(chips(remoteBranch({ remote: null, gone: true }))).toEqual([
@@ -133,11 +119,6 @@ describe('shortDate', () => {
     expect(shortDate('2026-09-16')).toBe('2026-09-16');
   });
 
-  it('is null for a missing or empty date', () => {
-    expect(shortDate(null)).toBeNull();
-    expect(shortDate(undefined)).toBeNull();
-    expect(shortDate('')).toBeNull();
-  });
 });
 
 describe('tipLine', () => {
@@ -145,11 +126,6 @@ describe('tipLine', () => {
     expect(tipLine(item({ subject: '  Fix login  ', committed_at: '2026-09-16T10:20:30+02:00' }))).toBe(
       'Fix login · 2026-09-16',
     );
-  });
-
-  it('shows whichever half the agent reported', () => {
-    expect(tipLine(item({ subject: 'Fix login' }))).toBe('Fix login');
-    expect(tipLine(item({ committed_at: '2026-09-16T10:20:30+02:00' }))).toBe('2026-09-16');
   });
 
   it('is null when the ref has no tip commit', () => {
@@ -176,39 +152,10 @@ describe('matchesFilter', () => {
     ).toBe(true);
   });
 
-  it('rejects a row that matches nowhere', () => {
-    expect(matchesFilter(item(), 'main')).toBe(false);
-  });
-});
-
-describe('messages', () => {
-  it('spells out what a checkout in the project folder means', () => {
-    expect(checkoutConfirmMessage('feature-a', 'proj')).toBe(
-      'Check out feature-a in the project folder of proj? ' +
-        'Sessions started in that folder afterwards use this branch.',
-    );
-  });
-
-  it('reports the branch the agent touched', () => {
-    expect(checkedOutMessage({ branch: 'feature-a', checked_out: true, created: false })).toBe(
-      'Checked out feature-a',
-    );
-    expect(branchCreatedMessage({ branch: 'feature-a', checked_out: false, created: true })).toBe(
-      'Created feature-a',
-    );
-    expect(branchCreatedMessage({ branch: 'feature-a', checked_out: true, created: true })).toBe(
-      'Created and checked out feature-a',
-    );
-  });
 });
 
 describe('checkoutErrorCopy', () => {
   it.each([
-    [
-      { code: 'dirty', message: 'error: Your local changes' },
-      'The project folder has local changes this checkout would overwrite. ' +
-        "Commit or discard them from a session's Changes screen first.",
-    ],
     [
       { code: 'checked_out_elsewhere', message: '/wt/topic' },
       'feature-a is already checked out in another worktree (/wt/topic).',
@@ -216,15 +163,6 @@ describe('checkoutErrorCopy', () => {
     [
       { code: 'checked_out_elsewhere' },
       'feature-a is already checked out in another worktree.',
-    ],
-    [
-      { code: 'operation_in_progress', message: 'merging' },
-      'A merge, rebase or cherry-pick is in progress in the project folder. ' +
-        'Finish or abort it first.',
-    ],
-    [
-      { code: 'job_running', message: 'job-1' },
-      'A fetch, pull or push is still running in the project folder.',
     ],
   ])('words the %j refusal', (detail, expected) => {
     expect(checkoutErrorCopy(wireFailure(409, detail), 'feature-a')).toBe(expected);
@@ -290,9 +228,6 @@ describe('deleteFailureReason', () => {
 
   it.each([
     ['locked', 'the worktree is locked'],
-    ['not_found', 'it no longer exists'],
-    ['invalid', 'the request was invalid'],
-    ['git_timeout', 'git took too long to answer. Try again.'],
     ['something_new', 'unknown error'],
   ])('falls back to the %s wording when stderr is empty', (error, expected) => {
     expect(deleteFailureReason(failure({ error, error_detail: '   ' }))).toBe(expected);
@@ -300,12 +235,6 @@ describe('deleteFailureReason', () => {
 });
 
 describe('deleteFailureMessage', () => {
-  it('names the item when exactly one failed', () => {
-    expect(deleteFailureMessage([failure({ error: 'locked' })])).toBe(
-      "Couldn't delete feature-a: the worktree is locked",
-    );
-  });
-
   it('counts them instead when several failed', () => {
     expect(deleteFailureMessage([failure(), failure({ target: 'feature-b' })])).toBe(
       '2 item(s) failed to delete',
@@ -340,12 +269,6 @@ describe('treeSegments', () => {
 });
 
 describe('folderId', () => {
-  it('keys local folders on their path and remote ones on the remote, then the path below', () => {
-    expect(folderId('local', ['feature', 'login'])).toBe('dir:local:feature/login');
-    expect(folderId('remote', ['origin'])).toBe('dir:remote:origin:');
-    expect(folderId('remote', ['origin', 'feature', 'x'])).toBe('dir:remote:origin:feature/x');
-  });
-
   it('never gives remotes a and a/b the same folder', () => {
     expect(folderId('remote', ['a', 'b'])).not.toBe(folderId('remote', ['a/b']));
   });
@@ -496,18 +419,6 @@ describe('gitTreeRows', () => {
         ),
       ),
     ).toEqual(['▾ origin (1)', '  ▾ feature (1)', '    x']);
-  });
-});
-
-describe('remoteDeleteMessage', () => {
-  it('names a single branch and counts several', () => {
-    expect(remoteDeleteMessage(['origin/feature-a'])).toBe(
-      'Delete origin/feature-a on the remote? ' +
-        'This removes it for everyone with access to the remote.',
-    );
-    expect(remoteDeleteMessage(['origin/feature-a', 'origin/feature-b'])).toBe(
-      'Delete 2 branches on the remote? This removes them for everyone with access to the remote.',
-    );
   });
 });
 

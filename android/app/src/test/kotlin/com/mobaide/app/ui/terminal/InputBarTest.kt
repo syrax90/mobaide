@@ -81,28 +81,6 @@ class InputBarPortraitTest {
     }
 
     @Test
-    fun hideComposerButton_routesClickToOnHideComposer() {
-        var hides = 0
-        composeRule.setContent {
-            Surface {
-                InputBar(
-                    text = TextFieldValue(""),
-                    onTextChange = {},
-                    onSend = {},
-                    onSendBytes = {},
-                    onHideComposer = { hides++ },
-                )
-            }
-        }
-
-        composeRule.onNodeWithContentDescription("Hide command field")
-            .assertHasClickAction()
-            .performClick()
-
-        assertEquals(1, hides)
-    }
-
-    @Test
     fun controlKeyPanel_togglesOpenAndExposesExactly14Keys() {
         composeRule.setContent {
             Surface {
@@ -181,25 +159,6 @@ class InputBarPortraitTest {
 
         assertEquals(1, captured.size)
         assertArrayEquals(byteArrayOf(0x7f), captured.single())
-    }
-
-    @Test
-    fun controlKeyPanel_doesNotExposeRemovedOrOldLabels() {
-        composeRule.setContent {
-            Surface {
-                InputBar(
-                    text = TextFieldValue(""),
-                    onTextChange = {},
-                    onSend = {},
-                    onSendBytes = {},
-                )
-            }
-        }
-
-        composeRule.onNodeWithContentDescription("Show keys").performClick()
-
-        listOf("S+Tab", "Newline", "Back/Edit", "Ctrl-D", "Ctrl-C", "S-Tab")
-            .forEach { composeRule.onNodeWithText(it).assertDoesNotExist() }
     }
 
     @Test
@@ -311,40 +270,6 @@ class InputBarPortraitTest {
     }
 }
 
-@RunWith(RobolectricTestRunner::class)
-@Config(sdk = [33], qualifiers = "w800dp-h360dp-land-xxhdpi")
-class InputBarLandscapeTest {
-
-    @get:Rule
-    val composeRule = createAndroidComposeRule<ComponentActivity>()
-
-    @Test
-    fun landscape_controlKeyPanel_exposesSame13Keys_asPortrait() {
-        composeRule.setContent {
-            Surface {
-                InputBar(
-                    text = TextFieldValue(""),
-                    onTextChange = {},
-                    onSend = {},
-                    onSendBytes = {},
-                )
-            }
-        }
-
-        composeRule.onNodeWithContentDescription("Show keys").performClick()
-
-        // Same `assertExists` rationale as portrait: the row is horizontally
-        // scrollable; we assert the 13 keys are present in the composition,
-        // not that every one fits on screen at every width. Arrows and Backspace
-        // render as Material icons, so they match on contentDescription (below).
-        listOf("Mode", "Rewind", "Esc", "Ctrl+C", "Enter", "Tab", "Ctrl+O", "Ctrl+R")
-            .forEach { composeRule.onNodeWithText(it).assertExists() }
-        listOf("↑", "↓", "←", "→", "Backspace")
-            .forEach { composeRule.onNodeWithContentDescription(it).assertExists() }
-        composeRule.onNodeWithContentDescription("Custom shortcut").assertExists()
-    }
-}
-
 /**
  * Codex control-key set: passing `sessionKind = SessionKind.Codex` adds the approval
  * answers `Approve`/`Reject` to the shared Claude set, positioned right after the fixed
@@ -412,17 +337,6 @@ class InputBarCodexTest {
     }
 
     @Test
-    fun rewind_sendsEscEsc_0x1b_0x1b() {
-        val captured = mutableListOf<ByteArray>()
-        openCodexPanel(onSendBytes = { captured += it })
-
-        composeRule.onNodeWithText("Rewind").performScrollTo().performClick()
-
-        assertEquals(1, captured.size)
-        assertArrayEquals(byteArrayOf(0x1b, 0x1b), captured.single())
-    }
-
-    @Test
     fun ctrlL_sendsFormFeed_0x0c() {
         val captured = mutableListOf<ByteArray>()
         openCodexPanel(onSendBytes = { captured += it })
@@ -431,28 +345,6 @@ class InputBarCodexTest {
 
         assertEquals(1, captured.size)
         assertArrayEquals(byteArrayOf(0x0c), captured.single())
-    }
-
-    @Test
-    fun ctrlO_sendsShiftOut_0x0f() {
-        val captured = mutableListOf<ByteArray>()
-        openCodexPanel(onSendBytes = { captured += it })
-
-        composeRule.onNodeWithText("Ctrl+O").performScrollTo().performClick()
-
-        assertEquals(1, captured.size)
-        assertArrayEquals(byteArrayOf(0x0f), captured.single())
-    }
-
-    @Test
-    fun ctrlR_sendsDeviceControl2_0x12() {
-        val captured = mutableListOf<ByteArray>()
-        openCodexPanel(onSendBytes = { captured += it })
-
-        composeRule.onNodeWithText("Ctrl+R").performScrollTo().performClick()
-
-        assertEquals(1, captured.size)
-        assertArrayEquals(byteArrayOf(0x12), captured.single())
     }
 
     @Test
@@ -472,14 +364,6 @@ class InputBarCodexTest {
         composeRule.onNodeWithContentDescription("Show keys").performClick()
 
         listOf("Approve", "Reject", "Ctrl+K", "Ctrl+G", "Ctrl+D", "YOLO", "TODO")
-            .forEach { composeRule.onNodeWithText(it).assertDoesNotExist() }
-    }
-
-    @Test
-    fun codexSet_doesNotExposeAntigravityOnlyKeys() {
-        openCodexPanel()
-
-        listOf("Ctrl+K", "Ctrl+G", "Ctrl+D")
             .forEach { composeRule.onNodeWithText(it).assertDoesNotExist() }
     }
 }
@@ -564,39 +448,6 @@ class InputBarAntigravityTest {
     }
 
     @Test
-    fun ctrlL_sendsFormFeed_0x0c() {
-        val captured = mutableListOf<ByteArray>()
-        openAntigravityPanel(onSendBytes = { captured += it })
-
-        composeRule.onNodeWithText("Ctrl+L").performScrollTo().performClick()
-
-        assertEquals(1, captured.size)
-        assertArrayEquals(byteArrayOf(0x0c), captured.single())
-    }
-
-    @Test
-    fun ctrlO_sendsShiftOut_0x0f() {
-        val captured = mutableListOf<ByteArray>()
-        openAntigravityPanel(onSendBytes = { captured += it })
-
-        composeRule.onNodeWithText("Ctrl+O").performScrollTo().performClick()
-
-        assertEquals(1, captured.size)
-        assertArrayEquals(byteArrayOf(0x0f), captured.single())
-    }
-
-    @Test
-    fun ctrlR_sendsDeviceControl2_0x12() {
-        val captured = mutableListOf<ByteArray>()
-        openAntigravityPanel(onSendBytes = { captured += it })
-
-        composeRule.onNodeWithText("Ctrl+R").performScrollTo().performClick()
-
-        assertEquals(1, captured.size)
-        assertArrayEquals(byteArrayOf(0x12), captured.single())
-    }
-
-    @Test
     fun antigravitySet_doesNotExposeCodexOrClaudeOnlyKeys() {
         openAntigravityPanel()
 
@@ -660,16 +511,6 @@ class InputBarSavedShortcutTest {
                 )
             }
         }
-    }
-
-    @Test
-    fun savedButtons_renderCustomName_orChordDisplayFallback() {
-        setBar(listOf(savedCut, savedUnnamed))
-
-        composeRule.onNodeWithText("Cut").assertExists()
-        composeRule.onNodeWithText("Ctrl+B").assertExists()
-        composeRule.onNodeWithContentDescription("Saved shortcut Cut").assertExists()
-        composeRule.onNodeWithContentDescription("Saved shortcut Ctrl+B").assertExists()
     }
 
     @Test

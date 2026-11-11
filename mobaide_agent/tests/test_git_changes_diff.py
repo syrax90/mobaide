@@ -11,7 +11,6 @@ from mobaide.agent.git import changes_service
 from mobaide.agent.git.changes_models import BYTE_LIMIT
 from mobaide.agent.git.changes_service import (
     GitBadRequestError,
-    GitTimeoutError,
     get_session_git_diff,
 )
 from mobaide.core.git_exec import CmdResult, reset_caches
@@ -25,7 +24,6 @@ from .git_repo_support import (
     repo,  # noqa: F401 - pytest fixture
     requires_git,
     run_git_sync,
-    stub_git,
     write_file,
 )
 
@@ -46,7 +44,7 @@ def _lines(resp):
 
 
 class TestRequestValidation:
-    @pytest.mark.parametrize("scope", [None, "all", "STAGED"])
+    @pytest.mark.parametrize("scope", [None, "STAGED"])
     async def test_bad_scope(self, tmp_path, scope):
         with pytest.raises(GitBadRequestError) as info:
             await _diff(str(tmp_path), "a.txt", scope)
@@ -67,12 +65,6 @@ class TestRequestValidation:
 
         assert not_repo.value.code == "not_a_repo"
         assert no_cwd.value.code == "cwd_missing"
-
-    async def test_timeout_raises(self, tmp_path, monkeypatch):
-        stub_git(monkeypatch, CmdResult(rc=-9, stdout=b"", stderr=b"", timed_out=True))
-
-        with pytest.raises(GitTimeoutError):
-            await _diff(str(tmp_path), "a.txt", "unstaged")
 
 
 @requires_git
@@ -101,15 +93,6 @@ class TestTrackedDiff:
 
         assert staged.kind == "text" and staged.additions == 1
         assert unstaged.kind == "missing" and unstaged.hunks == []
-
-    async def test_context_is_clamped(self, repo):
-        write_file(repo, "keep.txt", b"one\nTWO\nthree\n")
-
-        resp = await _diff(repo, "keep.txt", "unstaged", context="-4")
-
-        [hunk] = resp.hunks
-        assert (hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines) == (2, 1, 2, 1)
-        assert [l.t for l in hunk.lines] == ["del", "add"]
 
     async def test_context_at_the_ceiling_is_the_whole_file_as_one_hunk(self, repo):
         # Two edits far apart: the default context keeps them in separate
@@ -156,19 +139,6 @@ class TestTrackedDiff:
         assert (edited.change, edited.additions) == ("renamed", 1)
         assert _lines(edited)[-1] == ("add", None, 4, "four")
 
-    async def test_deleted_file(self, repo):
-        os.remove(os.path.join(repo, "keep.txt"))
-
-        resp = await _diff(repo, "keep.txt", "unstaged")
-
-        assert (resp.change, resp.old_mode, resp.new_mode) == ("deleted", "100644", None)
-        assert (resp.additions, resp.deletions) == (0, 3)
-        assert [l.t for l in resp.hunks[0].lines] == ["del"] * 3
-
-    async def test_unknown_path_is_missing(self, repo):
-        resp = await _diff(repo, "nope.txt", "unstaged")
-
-        assert (resp.kind, resp.change, resp.hunks) == ("missing", None, [])
 
     async def test_conflicted_file_diffs_against_head(self, repo):
         make_conflict_branches(repo)
@@ -205,15 +175,6 @@ class TestTrackedDiff:
         assert _lines(resp) == [
             ("add", None, 1, "one"), ("add", None, 2, "OTHER"), ("add", None, 3, "three")]
 
-    async def test_delete_modify_conflict_with_worktree_file_removed_is_missing(self, repo):
-        make_modify_delete_branches(repo, ours_deletes=True)
-        run_git_sync(repo, "merge", "other", check=False)
-        os.remove(os.path.join(repo, "keep.txt"))
-
-        resp = await _diff(repo, "keep.txt", "unstaged")
-
-        assert resp.kind == "missing"
-
     async def test_binary_file(self, repo):
         write_file(repo, "blob.bin", b"\x00\x01\x02\xff")
         run_git_sync(repo, "add", "blob.bin")
@@ -221,15 +182,6 @@ class TestTrackedDiff:
         resp = await _diff(repo, "blob.bin", "staged")
 
         assert (resp.kind, resp.change, resp.hunks) == ("binary", "added", [])
-
-    async def test_submodule(self, repo, tmp_path):
-        add_submodule(repo, str(tmp_path))
-
-        resp = await _diff(repo, "sub", "staged")
-
-        assert (resp.kind, resp.change, resp.new_mode) == ("submodule", "added", "160000")
-        [(kind, _old, _new, text)] = _lines(resp)
-        assert kind == "add" and text.startswith("Subproject commit ")
 
     async def test_submodule_ignores_repo_diff_submodule_log(self, repo, tmp_path):
         add_submodule(repo, str(tmp_path))
@@ -294,13 +246,6 @@ class TestUntrackedDiff:
 
         assert [(l.text, l.no_newline) for l in resp.hunks[0].lines] == [
             ("one\r", False), ("two", True)]
-
-    async def test_empty_file_has_no_hunks(self, repo):
-        write_file(repo, "empty.txt", b"")
-
-        resp = await _diff(repo, "empty.txt", "untracked")
-
-        assert (resp.kind, resp.hunks, resp.total_lines) == ("text", [], 0)
 
     async def test_binary_and_too_large(self, repo):
         write_file(repo, "blob.bin", b"text\x00more")

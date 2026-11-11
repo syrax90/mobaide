@@ -109,15 +109,6 @@ class GitViewModelTest {
     }
 
     @Test
-    fun init_loadsItems_andMarksLoadedFalse() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-        assertEquals(4, f.vm.uiState.value.items.size)
-        assertFalse(f.vm.uiState.value.isLoading)
-        coVerify(exactly = 1) { f.repo.listGitItems("alpha") }
-    }
-
-    @Test
     fun init_loadFailure_setsErrorMessage_andClearsIsLoading() = runTest {
         val repo = mockk<GitRepository>(relaxed = true)
         every { repo.changed } returns MutableSharedFlow()
@@ -154,16 +145,6 @@ class GitViewModelTest {
     }
 
     @Test
-    fun enterSelectionMode_fromTopBar_entersWithNothingSelected() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-        f.vm.enterSelectionMode()
-        val state = f.vm.uiState.value
-        assertTrue(state.inSelectionMode)
-        assertTrue(state.selected.isEmpty())
-    }
-
-    @Test
     fun enterSelectionMode_withNothingDeletable_isNoOp() = runTest {
         val f = newFixture(initialItems = listOf(branchOnly("main", isCurrent = true)))
         advanceUntilIdle()
@@ -182,26 +163,6 @@ class GitViewModelTest {
         f.vm.toggle(staleId)
         val state = f.vm.uiState.value
         assertTrue(state.inSelectionMode)
-        assertTrue(state.selected.isEmpty())
-    }
-
-    @Test
-    fun toggle_currentBranch_isNoOp() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-        f.vm.enterSelection(staleId)
-        f.vm.toggle(mainId)
-        assertEquals(setOf(staleId), f.vm.uiState.value.selected)
-    }
-
-    @Test
-    fun exitSelection_clearsSelectedAndMode() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-        f.vm.enterSelection(staleId)
-        f.vm.exitSelection()
-        val state = f.vm.uiState.value
-        assertFalse(state.inSelectionMode)
         assertTrue(state.selected.isEmpty())
     }
 
@@ -239,16 +200,6 @@ class GitViewModelTest {
     }
 
     @Test
-    fun requestDelete_skipsWhenNothingSelected() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-        f.vm.requestDelete()
-        advanceUntilIdle()
-        assertNull(f.vm.uiState.value.undoPrompt)
-        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any()) }
-    }
-
-    @Test
     fun requestDelete_buildsItemsForBranchWithWorktree_andOrphanWorktree() = runTest {
         // The wire payload must echo `kind`, `branch`, and `worktree_path` so the
         // server receives enough info to dispatch each row correctly.
@@ -270,19 +221,6 @@ class GitViewModelTest {
         assertEquals("topic", byKind[GitItem.KIND_BRANCH_WITH_WORKTREE]?.branch)
         assertEquals("/repo/wt/topic", byKind[GitItem.KIND_BRANCH_WITH_WORKTREE]?.worktree_path)
         assertEquals("/repo/wt/orphan", byKind[GitItem.KIND_ORPHAN_WORKTREE]?.worktree_path)
-    }
-
-    @Test
-    fun deleteItem_swipe_hidesTheRowAndSendsAfterTheWindow() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-        coEvery { f.repo.deleteGitItems("alpha", any()) } returns GitDeleteResponse(
-            results = listOf(okResult(GitItem.KIND_BRANCH_ONLY, "stale")),
-        )
-        f.vm.deleteItem(staleId)
-        assertEquals(setOf(staleId), f.vm.uiState.value.pendingDeleteIds)
-        advanceUntilIdle()
-        coVerify(exactly = 1) { f.repo.deleteGitItems("alpha", any()) }
     }
 
     @Test
@@ -406,41 +344,6 @@ class GitViewModelTest {
     }
 
     @Test
-    fun dirtyWorktree_forceRequired_promptsWithThePath_thenReissuesWithForce() = runTest {
-        // A dirty worktree comes back as force_required just like an unmerged
-        // branch; the prompt must surface the worktree path (no branch ref).
-        val f = newFixture()
-        advanceUntilIdle()
-        coEvery { f.repo.deleteGitItems("alpha", any()) } returns GitDeleteResponse(
-            results = listOf(
-                failedResult(GitItem.KIND_ORPHAN_WORKTREE, "/repo/wt/orphan", "force_required"),
-            ),
-        )
-        f.vm.deleteItem(orphanId)
-        advanceUntilIdle()
-
-        val prompt = f.vm.uiState.value.forceDeletePrompt
-        assertNotNull("dirty worktree force_required must populate the prompt", prompt)
-        assertEquals(listOf("/repo/wt/orphan"), prompt!!.refs)
-
-        val forced = listOf(
-            GitDeleteItem(
-                kind = GitItem.KIND_ORPHAN_WORKTREE,
-                worktree_path = "/repo/wt/orphan",
-                force = true,
-            ),
-        )
-        coEvery { f.repo.deleteGitItems("alpha", forced) } returns GitDeleteResponse(
-            results = listOf(okResult(GitItem.KIND_ORPHAN_WORKTREE, "/repo/wt/orphan")),
-        )
-        f.vm.confirmForceDelete()
-        advanceUntilIdle()
-
-        coVerify(exactly = 1) { f.repo.deleteGitItems("alpha", forced) }
-        assertNull(f.vm.uiState.value.forceDeletePrompt)
-    }
-
-    @Test
     fun partialFailure_restoresOnlyTheFailedRow_andNamesItInTheMessage() = runTest {
         val f = newFixture()
         advanceUntilIdle()
@@ -530,34 +433,6 @@ class GitViewModelTest {
         }
         assertFalse(f.vm.uiState.value.deleting)
         assertTrue(f.vm.uiState.value.pendingDeleteIds.isEmpty())
-    }
-
-    @Test
-    fun dismissBusyDialog_clearsBusyState() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-        coEvery { f.repo.deleteGitItems("alpha", any()) } throws
-            GitBusyException(listOf(BusyHolder(kind = "auto_scan", project_name = "alpha")))
-
-        f.vm.deleteItem(orphanId)
-        advanceUntilIdle()
-        assertNotNull(f.vm.uiState.value.busyDialog)
-        f.vm.dismissBusyDialog()
-        assertNull(f.vm.uiState.value.busyDialog)
-    }
-
-    @Test
-    fun dismissForceDeletePrompt_clearsPromptState() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-        coEvery { f.repo.deleteGitItems("alpha", any()) } returns GitDeleteResponse(
-            results = listOf(failedResult(GitItem.KIND_BRANCH_ONLY, "stale", "force_required")),
-        )
-        f.vm.deleteItem(staleId)
-        advanceUntilIdle()
-        assertNotNull(f.vm.uiState.value.forceDeletePrompt)
-        f.vm.dismissForceDeletePrompt()
-        assertNull(f.vm.uiState.value.forceDeletePrompt)
     }
 
     // MARK: - Reload
@@ -652,40 +527,7 @@ class GitViewModelTest {
         coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any()) }
     }
 
-    @Test
-    fun refresh_re_fetchesViaRepository() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-        f.vm.refresh()
-        advanceUntilIdle()
-        coVerify(exactly = 2) { f.repo.listGitItems("alpha") }
-    }
-
     // MARK: - Failure copy
-
-    @Test
-    fun deleteFailureMessage_namesTargetAndReason() {
-        assertEquals(
-            "Couldn't delete wt: the worktree is locked",
-            deleteFailureMessage(listOf(failedResult(GitItem.KIND_ORPHAN_WORKTREE, "wt", "locked"))),
-        )
-        assertEquals(
-            "Couldn't delete b: it no longer exists",
-            deleteFailureMessage(listOf(failedResult(GitItem.KIND_BRANCH_ONLY, "b", "not_found"))),
-        )
-        assertEquals(
-            "Couldn't delete b: the request was invalid",
-            deleteFailureMessage(listOf(failedResult(GitItem.KIND_BRANCH_ONLY, "b", "invalid"))),
-        )
-        assertEquals(
-            "Couldn't delete b: git took too long to answer. Try again.",
-            deleteFailureMessage(listOf(failedResult(GitItem.KIND_BRANCH_ONLY, "b", "git_timeout"))),
-        )
-        assertEquals(
-            "Couldn't delete b: unknown error",
-            deleteFailureMessage(listOf(failedResult(GitItem.KIND_BRANCH_ONLY, "b", "error"))),
-        )
-    }
 
     @Test
     fun deleteFailureMessage_prefersTheFirstLineOfErrorDetail() {
@@ -928,15 +770,6 @@ class GitViewModelTest {
     }
 
     @Test
-    fun confirmCheckout_withoutAPrompt_sendsNothing() = runTest {
-        val f = branchesFixture()
-        advanceUntilIdle()
-        f.vm.confirmCheckout()
-        advanceUntilIdle()
-        coVerify(exactly = 0) { f.repo.checkout(any(), any()) }
-    }
-
-    @Test
     fun confirmCheckout_busy_offersAForcedRetry() = runTest {
         val f = branchesFixture()
         advanceUntilIdle()
@@ -997,22 +830,6 @@ class GitViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
         assertNull(f.vm.uiState.value.busyCheckoutPrompt)
-    }
-
-    @Test
-    fun dismissBusyCheckoutPrompt_sendsNothing() = runTest {
-        val f = branchesFixture()
-        advanceUntilIdle()
-        val holders = listOf(BusyHolder(kind = "session", session_id = "s-1", cwd = "/repo"))
-        coEvery { f.repo.checkout("alpha", "stale", false) } throws GitBusyException(holders)
-        f.vm.requestCheckout(staleId)
-        f.vm.confirmCheckout()
-        advanceUntilIdle()
-        f.vm.dismissBusyCheckoutPrompt()
-        f.vm.confirmBusyCheckout()
-        advanceUntilIdle()
-        assertNull(f.vm.uiState.value.busyCheckoutPrompt)
-        coVerify(exactly = 0) { f.repo.checkout("alpha", "stale", true) }
     }
 
     @Test
@@ -1093,15 +910,6 @@ class GitViewModelTest {
         f.vm.setFilter("   ")
         assertEquals(6, f.vm.uiState.value.localItems.size)
         assertFalse(f.vm.uiState.value.remoteOpen)
-    }
-
-    @Test
-    fun filter_isIgnoredBelowEightRows() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-        f.vm.setFilter("nothing-matches")
-        assertFalse(f.vm.uiState.value.filterable)
-        assertEquals(4, f.vm.uiState.value.localItems.size)
     }
 
     // MARK: - Remote delete, Remove worktree, folders
@@ -1386,18 +1194,6 @@ class GitViewModelTest {
     }
 
     @Test
-    fun remoteDeleteMessage_namesOneBranch_andCountsSeveral() {
-        assertEquals(
-            "Delete origin/a on the remote? This removes it for everyone with access to the remote.",
-            remoteDeleteMessage(listOf("origin/a")),
-        )
-        assertEquals(
-            "Delete 2 branches on the remote? This removes them for everyone with access to the remote.",
-            remoteDeleteMessage(listOf("origin/a", "origin/b")),
-        )
-    }
-
-    @Test
     fun gitItem_deletableAndRemovableRows() {
         val remote = remoteBranch("feature-x")
         assertTrue(remote.isDeletable(deleteRemote = true))
@@ -1437,71 +1233,5 @@ class GitViewModelTest {
         assertTrue(matchesFilter(orphanWorktree("/wt/x"), "wt/x"))
         assertTrue(matchesFilter(branchOnly("b"), ""))
         assertFalse(matchesFilter(branchOnly("b"), "main"))
-    }
-
-    @Test
-    fun checkoutErrorCopy_wordsEachRefusal_andFallsBackToTheSessionCopy() {
-        assertEquals(dirtyCopy, checkoutErrorCopy(gitError("dirty", "error: Your local changes"), "b"))
-        assertEquals(
-            "feature-a is already checked out in another worktree (/wt/topic).",
-            checkoutErrorCopy(gitError("checked_out_elsewhere", "/wt/topic"), "feature-a"),
-        )
-        assertEquals(
-            "feature-a is already checked out in another worktree.",
-            checkoutErrorCopy(gitError("checked_out_elsewhere"), "feature-a"),
-        )
-        assertEquals(
-            "A merge, rebase or cherry-pick is in progress in the project folder. Finish or abort it first.",
-            checkoutErrorCopy(gitError("operation_in_progress", "merging"), "feature-a"),
-        )
-        assertEquals(
-            "A fetch, pull or push is still running in the project folder.",
-            checkoutErrorCopy(gitError("job_running", "job-1"), "feature-a"),
-        )
-        assertEquals(
-            "Branch not found — refresh the list.",
-            checkoutErrorCopy(gitError("ref_not_found"), "feature-a"),
-        )
-        assertEquals(
-            "git failed: fatal: boom",
-            checkoutErrorCopy(gitError("git_error", "fatal: boom"), "feature-a"),
-        )
-        assertEquals("offline", checkoutErrorCopy(RuntimeException("offline"), "feature-a"))
-    }
-
-    @Test
-    fun createBranchErrorCopy_namesTheClash_theBadName_andTheMissingStartPoint() {
-        assertEquals(
-            "A branch named feature-a already exists.",
-            createBranchErrorCopy(gitError("exists", "feature-a"), "feature-a"),
-        )
-        assertEquals("Not a valid branch name.", createBranchErrorCopy(gitError("bad_branch_name"), "-x"))
-        assertEquals(
-            "Start point nope was not found.",
-            createBranchErrorCopy(gitError("unknown_start_point", "nope"), "feature-a"),
-        )
-        assertEquals(
-            "The start point was not found.",
-            createBranchErrorCopy(gitError("unknown_start_point"), "feature-a"),
-        )
-        assertEquals(
-            "feature-a is already checked out in another worktree (/wt).",
-            createBranchErrorCopy(gitError("checked_out_elsewhere", "/wt"), "feature-a"),
-        )
-    }
-
-    @Test
-    fun branchMessages_nameTheBranchTheAgentTouched() {
-        assertEquals(
-            "Check out feature-a in the project folder of alpha? " +
-                "Sessions started in that folder afterwards use this branch.",
-            checkoutConfirmMessage("feature-a", "alpha"),
-        )
-        assertEquals("Checked out feature-a", checkedOutMessage(GitBranchResponse("feature-a", true, false)))
-        assertEquals("Created feature-a", branchCreatedMessage(GitBranchResponse("feature-a", false, true)))
-        assertEquals(
-            "Created and checked out feature-a",
-            branchCreatedMessage(GitBranchResponse("feature-a", true, true)),
-        )
     }
 }

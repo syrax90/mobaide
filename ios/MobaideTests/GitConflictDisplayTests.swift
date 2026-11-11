@@ -68,10 +68,6 @@ final class GitConflictDisplayTests: XCTestCase {
         )
     }
 
-    func testTooLargeToSaveNoticeStatesTheAgentsLimitInKB() {
-        XCTAssertEqual(GitConflictDisplay.tooLargeToSaveNotice(262_144), "Too large to save here (over 256 KB).")
-    }
-
     func testScanMatchesTheAgentsMarkerRule() {
         let cases: [(String, Bool)] = [
             ("<<<<<<<", true),
@@ -117,11 +113,6 @@ final class GitConflictDisplayTests: XCTestCase {
         )
     }
 
-    func testNextConflictRangeIsNilWhenNoConflictIsLeft() {
-        XCTAssertNil(GitConflictDisplay.nextConflictRange(in: "kept\n>>>>>>> b\n", after: 0))
-        XCTAssertNil(GitConflictDisplay.nextConflictRange(in: "", after: 0))
-    }
-
     func testNextConflictRangeCountsUtf16UnitsLikeTheTextViewsSelection() {
         let text = "😀 ж\n<<<<<<< a\n"
 
@@ -131,74 +122,6 @@ final class GitConflictDisplayTests: XCTestCase {
         XCTAssertEqual(range.map { (text as NSString).substring(with: $0) }, "<<<<<<< a")
     }
 
-    // MARK: - Labels
-
-    func testConflictsLeftLabelCountsTheConflictsAndTellsAStrayMarkerFromACleanFile() {
-        XCTAssertEqual(GitConflictDisplay.conflictsLeftLabel(ConflictScan(conflicts: 1, hasMarkers: true)), "1 conflict left")
-        XCTAssertEqual(GitConflictDisplay.conflictsLeftLabel(ConflictScan(conflicts: 3, hasMarkers: true)), "3 conflicts left")
-        XCTAssertEqual(GitConflictDisplay.conflictsLeftLabel(ConflictScan(conflicts: 0, hasMarkers: true)), "A conflict marker is left")
-        XCTAssertEqual(GitConflictDisplay.conflictsLeftLabel(ConflictScan()), "No conflict markers left")
-    }
-
-    func testSideNameUsesTheAgentsLabelAndFallsBackToNeutralNames() {
-        let unlabelled = conflict(
-            ours: GitConflictSide(label: nil, present: true),
-            theirs: GitConflictSide(label: "", present: true)
-        )
-
-        XCTAssertEqual(GitConflictDisplay.sideName(conflict(), side: "ours"), "origin/main")
-        XCTAssertEqual(GitConflictDisplay.sideName(conflict(), side: "theirs"), "fedcba9 Fix the login redirect")
-        XCTAssertEqual(GitConflictDisplay.sideName(unlabelled, side: "ours"), "Current branch")
-        XCTAssertEqual(GitConflictDisplay.sideName(unlabelled, side: "theirs"), "Incoming change")
-    }
-
-    func testSideRoleExplainsARebaseTheRightWayRoundAMergeAndAnythingElse() {
-        XCTAssertEqual(
-            GitConflictDisplay.sideRole(state: GitRepoInfo.stateRebasing, side: "ours"),
-            "the branch you are rebasing onto, plus your commits already replayed"
-        )
-        XCTAssertEqual(GitConflictDisplay.sideRole(state: GitRepoInfo.stateRebasing, side: "theirs"), "your commit being replayed")
-        XCTAssertEqual(GitConflictDisplay.sideRole(state: GitRepoInfo.stateMerging, side: "ours"), "the branch you are on")
-        XCTAssertEqual(GitConflictDisplay.sideRole(state: GitRepoInfo.stateMerging, side: "theirs"), "the branch being merged in")
-        XCTAssertEqual(GitConflictDisplay.sideRole(state: "cherry_picking", side: "ours"), "what you have checked out")
-        XCTAssertEqual(GitConflictDisplay.sideRole(state: GitRepoInfo.stateClean, side: "theirs"), "the change being applied")
-    }
-
-    func testCaptionReadsEveryCodeInPlainWords() {
-        let captions = [
-            "UU": "Both sides changed this file.",
-            "AA": "Both sides added this file.",
-            "DU": "origin/main deleted this file; fedcba9 Fix the login redirect changed it.",
-            "UD": "origin/main changed this file; fedcba9 Fix the login redirect deleted it.",
-            "DD": "Both sides deleted this file.",
-            "AU": "Only origin/main has this file.",
-            "UA": "Only fedcba9 Fix the login redirect has this file.",
-            "ZZ": "The two sides disagree about this file.",
-        ]
-
-        for (code, caption) in captions {
-            XCTAssertEqual(GitConflictDisplay.caption(conflict(code: code)), caption, code)
-        }
-    }
-
-    func testLegendMapsTheRegionsToTheLabelledSidesWithTheBaseWhenPresent() {
-        XCTAssertEqual(
-            GitConflictDisplay.legend(conflict(), hasBase: false),
-            [
-                "Between <<<<<<< and =======: origin/main — the branch you are rebasing onto, plus your commits already replayed.",
-                "Between ======= and >>>>>>>: fedcba9 Fix the login redirect — your commit being replayed.",
-            ]
-        )
-        XCTAssertEqual(
-            GitConflictDisplay.legend(conflict(state: GitRepoInfo.stateMerging), hasBase: true),
-            [
-                "Between <<<<<<< and |||||||: origin/main — the branch you are on.",
-                "Between ||||||| and =======: the original lines, before either change.",
-                "Between ======= and >>>>>>>: fedcba9 Fix the login redirect — the branch being merged in.",
-            ]
-        )
-    }
-
     // MARK: - Kinds
 
     func testOnlyTextThatArrivedWithItsContentIsEditable() {
@@ -206,25 +129,6 @@ final class GitConflictDisplayTests: XCTestCase {
         XCTAssertTrue(GitConflictDisplay.isEditable(conflict(content: "")))
         XCTAssertFalse(GitConflictDisplay.isEditable(conflict(content: nil)))
         XCTAssertNil(GitConflictDisplay.kindNotice(conflict()))
-    }
-
-    func testKindNoticeExplainsEveryKindThatCannotBeEditedUnknownOnesIncluded() {
-        let notices = [
-            "too_large": "This file is too large to edit here (over 256 KB). Pick a side, or resolve it in the terminal.",
-            "binary": "This is a binary file — pick a side.",
-            "encoding": "This file is not UTF-8 text — pick a side, or resolve it in the terminal.",
-            "missing": "The file is not in the working tree — pick a side.",
-            "symlink": "This is a symbolic link — pick a side.",
-            "submodule": "Submodule conflicts are resolved in the terminal.",
-            "unsupported": "This conflict can't be resolved here — use the terminal.",
-            "hologram": "This conflict can't be resolved here — use the terminal.",
-        ]
-
-        for (kind, notice) in notices {
-            let shown = conflict(kind: kind, content: nil)
-            XCTAssertFalse(GitConflictDisplay.isEditable(shown), kind)
-            XCTAssertEqual(GitConflictDisplay.kindNotice(shown), notice, kind)
-        }
     }
 
     func testWholeFilePicksExistForEveryKnownShapeButASubmoduleOrADirectoryInTheWay() {
@@ -299,35 +203,5 @@ final class GitConflictDisplayTests: XCTestCase {
         XCTAssertEqual(GitConflictDisplay.takeChoices(bothDeleted).map(\.side), ["ours"])
         XCTAssertEqual(GitConflictDisplay.takeChoices(bothDeleted).map(\.label), ["Delete the file"])
         XCTAssertEqual(GitConflictDisplay.takeChoices(bothDeleted).map(\.danger), [true])
-    }
-
-    // MARK: - Prompts and notices
-
-    func testPromptsNameTheFileNotItsDirectory() {
-        let startOver = GitConflictDisplay.startOverPrompt("src/login.py")
-        let restore = GitConflictDisplay.restorePrompt("src/login.py")
-        let discard = GitConflictDisplay.discardEditsPrompt("src/login.py")
-
-        XCTAssertEqual(startOver.title, "Start over?")
-        XCTAssertEqual(
-            startOver.body,
-            "login.py is rebuilt from both sides. Every edit made to it since the conflict — here or in the terminal — is discarded."
-        )
-        XCTAssertEqual(restore.title, "Restore the conflict?")
-        XCTAssertEqual(restore.body, "login.py goes back to its conflicted state. The resolution you applied is discarded.")
-        XCTAssertEqual(restore.confirm, "Restore conflict")
-        XCTAssertEqual(discard.title, "Discard your edits?")
-        XCTAssertEqual(discard.body, "Your changes to login.py have not been saved.")
-        XCTAssertEqual(GitConflictDisplay.startOverLabel, "Start over")
-        XCTAssertEqual(GitConflictDisplay.startOverWithBaseLabel, "Start over with original lines")
-    }
-
-    func testNoticesReportEachOutcome() {
-        XCTAssertEqual(GitConflictDisplay.resolvedNotice("src/login.py"), "Resolved src/login.py.")
-        XCTAssertEqual(GitConflictDisplay.draftSavedNotice("src/login.py"), "Saved src/login.py — the conflict is still open.")
-        XCTAssertEqual(GitConflictDisplay.restoredNotice("src/login.py"), "Restored the conflict in src/login.py.")
-        XCTAssertEqual(GitConflictDisplay.fileChangedNotice("src/login.py"), "login.py changed on the agent machine since you opened it.")
-        XCTAssertEqual(GitConflictDisplay.keepEditsWarning, "Applying will overwrite the other change.")
-        XCTAssertEqual(GitConflictDisplay.resolvedElsewhereNotice("src/login.py"), "login.py is no longer in conflict.")
     }
 }

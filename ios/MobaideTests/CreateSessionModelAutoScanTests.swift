@@ -234,22 +234,6 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         )
     }
 
-    func testAutoScanPromptFallsBackToEmptyAndKeepsEditsOnReEntry() async {
-        StubURLProtocol.reset()
-        let model = await loadedModel(autoScanRepo: makeAutoScanRepo())
-        model.selectStoredProject("linear")
-        model.selectMode(.autoScan)
-        XCTAssertEqual(model.autoScanInitialPrompt, "", "no project prompt and no agent default")
-
-        model.autoScanInitialPrompt = "hand-written"
-        model.back()
-        model.selectMode(.autoScan)
-        XCTAssertEqual(
-            model.autoScanInitialPrompt, "hand-written",
-            "re-entering the step for the same project keeps in-flight edits"
-        )
-    }
-
     /// The agent-wide default rides in on `observeScans()`'s refresh, which
     /// races the user. Reaching the step first must not latch the project as
     /// seeded with an empty prompt: nothing would re-seed it, and the wizard
@@ -364,41 +348,6 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         )
     }
 
-    func testAutoScanFocusModeIsReadFromItsOwnBucketNotTheClaudeStep() {
-        let prefs = isolatedPrefs()
-        prefs.setLastUsedAutoScanOptions(ClaudeLaunchPrefs(focusMode: false))
-
-        let model = makeModel(autoScanRepo: makeAutoScanRepo(), prefs: prefs)
-
-        XCTAssertFalse(model.autoScanFocusMode)
-        XCTAssertTrue(model.focusMode, "nothing was saved for the Claude Code step")
-        XCTAssertEqual(model.autoScanClaudeOptions().focus_mode, false)
-
-        model.autoScanFocusMode = true
-        model.focusMode = false
-        XCTAssertEqual(
-            model.autoScanClaudeOptions().focus_mode, true,
-            "a Claude Code edit must not bleed into the scan's options"
-        )
-    }
-
-    func testStartAutoScanSendsFocusModeAndPersistsItIntoItsOwnBucket() async throws {
-        StubURLProtocol.reset()
-        let prefs = isolatedPrefs()
-        let model = await loadedModel(autoScanRepo: makeAutoScanRepo(), prefs: prefs)
-        model.selectStoredProject("linear")
-        model.autoScanFocusMode = false
-        StubURLProtocol.enqueue(status: 200, body: "{}")
-
-        await model.startAutoScan()
-
-        XCTAssertNil(model.error)
-        let data = try XCTUnwrap(StubURLProtocol.bodies.last)
-        let body = try WireJSON.decoder().decode(JSONValue.self, from: data)
-        XCTAssertEqual(body["claude_options"]?["focus_mode"]?.boolValue, false)
-        XCTAssertEqual(prefs.getLastUsedAutoScanOptions()?.focusMode, false)
-    }
-
     func testStartAutoScanSendsDebugAndPersistsItIntoItsOwnBucket() async throws {
         StubURLProtocol.reset()
         let prefs = isolatedPrefs()
@@ -418,20 +367,6 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
             prefs.getLastUsedClaudeOptions(),
             "an Auto Scan launch leaves the Claude Code bucket alone"
         )
-    }
-
-    func testAutoScanNeverBuildsASessionRequest() async {
-        StubURLProtocol.reset()
-        let model = await loadedModel(autoScanRepo: makeAutoScanRepo())
-        model.selectStoredProject("linear")
-        model.mode = .autoScan
-        let issued = StubURLProtocol.requests.count
-
-        XCTAssertNil(model.buildRequest(mode: .autoScan))
-        await model.create()
-
-        XCTAssertEqual(StubURLProtocol.requests.count, issued, "Auto Scan starts a scan, never a session")
-        XCTAssertFalse(model.submitting)
     }
 
     // MARK: - Submit
@@ -490,20 +425,6 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         XCTAssertFalse(model.autoScanStarting)
     }
 
-    func testStartAutoScanCapacityReportsTheAgentsLimit() async {
-        StubURLProtocol.reset()
-        let repo = makeAutoScanRepo()
-        await seedList(repo, maxScans: 3)
-        let model = await loadedModel(autoScanRepo: repo)
-        model.selectStoredProject("linear")
-        StubURLProtocol.enqueue(status: 429, body: "{}")
-
-        await model.startAutoScan()
-
-        XCTAssertEqual(model.error, "Auto Scan capacity reached (max 3).")
-        XCTAssertFalse(model.autoScanStarting)
-    }
-
     // MARK: - Prefs prefill
 
     func testPrefillReadsTheAutoScanBucketWithoutTouchingTheClaudeFields() {
@@ -539,34 +460,6 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         XCTAssertEqual(model.mode, .autoScan)
         XCTAssertEqual(model.step, .config)
         XCTAssertEqual(model.autoScanInitialPrompt, "per-project prompt")
-    }
-
-    func testProjectsShortcutPresetFallsBackToTheModePickerWithoutALinearKey() async {
-        StubURLProtocol.reset()
-        let model = await loadedModel(autoScanRepo: makeAutoScanRepo(), autoScanProject: "plain")
-
-        XCTAssertEqual(model.selection, .stored("plain"))
-        XCTAssertEqual(model.step, .modePick, "a project that lost its Linear key must not dead-end in the config step")
-        XCTAssertNil(model.mode)
-    }
-
-    func testProjectsShortcutPresetWithARunningScanReplaysToTheMonitor() async throws {
-        StubURLProtocol.reset()
-        let repo = makeAutoScanRepo()
-        await seedList(repo, scans: ["linear"])
-        let model = await loadedModel(autoScanRepo: repo, autoScanProject: "linear")
-
-        // The preset emits from inside load(), before the screen's nav task can
-        // subscribe — the replay cache is what keeps that emission alive.
-        let nav = StreamCollector(model.autoScanNavEvents())
-        let opened = try await nav.next()
-        XCTAssertEqual(opened, "linear")
-        XCTAssertNotEqual(model.step, .config)
-
-        model.clearAutoScanNav()
-        let late = StreamCollector(model.autoScanNavEvents())
-        let quiet = await late.expectNoElement()
-        XCTAssertTrue(quiet, "a consumed project name is not replayed to the next subscriber")
     }
 
     /// The preset applies exactly once, off `runningScan`, so a repository

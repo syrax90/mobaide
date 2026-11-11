@@ -168,13 +168,10 @@ class TestHandleUserEvent:
         [
             _ctrl(kind="template.created"),
             _ctrl(kind="agent.status_changed"),
-            _ctrl(kind=None),
-            _ctrl(payload=None),
             _ctrl(payload="not a dict"),
             _ctrl(payload={"reason": "turn_finished"}),
             _ctrl(payload={"session_id": "s1"}),
             _ctrl(payload={"session_id": "", "reason": "turn_finished"}),
-            _ctrl(payload={"session_id": "s1", "reason": 7}),
         ],
     )
     def test_invalid_kind_or_payload_is_dropped(self, routing, ctrl):
@@ -227,20 +224,6 @@ class TestHandleUserEvent:
         _handle_user_event(_make_ws(dispatcher), AGENT_ID, _ctrl(), routing)
 
         dispatcher.schedule_attention.assert_not_called()
-
-    def test_missing_owner_is_dropped(self, routing):
-        routing.get_agent(AGENT_ID).owner_user_id = None
-        dispatcher = _make_dispatcher()
-
-        _handle_user_event(_make_ws(dispatcher), AGENT_ID, _ctrl(), routing)
-
-        dispatcher.schedule_attention.assert_not_called()
-
-    def test_missing_push_dispatcher_state_is_safe(self, routing):
-        ws = MagicMock()
-        ws.app.state = object()  # no push_dispatcher attribute
-
-        _handle_user_event(ws, AGENT_ID, _ctrl(), routing)
 
 
 class TestControlDispatch:

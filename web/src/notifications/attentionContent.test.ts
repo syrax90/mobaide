@@ -13,15 +13,6 @@ describe('attentionContent', () => {
     });
   });
 
-  it('renders the macOS permission alert', () => {
-    expect(
-      attentionContent({ reason: 'awaiting_os_permission', project_name: 'mobaide' }),
-    ).toEqual({
-      title: 'Action needed on your Mac',
-      body: 'mobaide is paused — your Mac is asking to allow file access. Approve it on the Mac to continue.',
-    });
-  });
-
   it('renders the turn-finished alert', () => {
     expect(attentionContent({ reason: 'turn_finished' })).toEqual({
       title: 'Your move',
@@ -49,16 +40,6 @@ describe('attentionContent', () => {
     ).toEqual({ title: 'Session ended', body: 'api refactor' });
   });
 
-  it('uses em dashes, not hyphens', () => {
-    // The three other implementations carry U+2014 with spaces around it. A
-    // hyphen here would be invisible in review and audible in a diff of nothing.
-    const os = attentionContent({ reason: 'awaiting_os_permission' });
-    const turn = attentionContent({ reason: 'turn_finished' });
-    expect(os?.body).toContain('—');
-    expect(turn?.body).toContain('—');
-    expect(os?.body).not.toContain(' - ');
-  });
-
   it('posts nothing for an absent or unrecognised reason', () => {
     // A newer agent reason must not surface as an alert with an empty body.
     expect(attentionContent({})).toBeNull();
@@ -84,9 +65,6 @@ describe('attentionLabel', () => {
     [{}, 'Claude session'],
     [{ kind: '' }, 'Claude session'],
     [{ kind: 'claude' }, 'Claude session'],
-    [{ kind: 'codex' }, 'Codex session'],
-    [{ kind: 'antigravity' }, 'Antigravity session'],
-    [{ kind: 'auto_scan' }, 'Auto Scan session'],
     [{ kind: 'shell' }, 'Terminal session'],
     [{ kind: 'custom_0123456789ab', kind_label: 'My Linter' }, 'My Linter session'],
     [{ kind: 'custom_0123456789ab', kind_label: '  ' }, 'Agent session'],

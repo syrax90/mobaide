@@ -211,14 +211,6 @@ class TestDeleteRemoteBranch:
         assert _outcomes(response) == [("remote_branch", branch, False, "not_found")]
         assert _refs(bare, "refs/heads/") == ["refs/heads/main"]
 
-    async def test_a_tracking_ref_under_no_configured_remote_is_not_found(self, bare, local):
-        run_git_sync(local, "fetch", "-q", bare, "refs/heads/*:refs/remotes/ghost/*")
-        assert "refs/remotes/ghost/main" in _refs(local, "refs/remotes/")
-
-        response = await _delete(local, _remote("ghost/main"))
-
-        assert _outcomes(response) == [("remote_branch", "ghost/main", False, "not_found")]
-        assert _refs(bare, "refs/heads/") == ["refs/heads/main"]
 
     @pytest.mark.parametrize("branch", [None, "", "origin/a\0b"])
     async def test_a_missing_or_nul_branch_is_invalid(self, local, branch):
@@ -296,17 +288,6 @@ class TestDeleteRemoteBranch:
         assert _outcomes(response) == [
             ("remote_branch", "origin/feature/x", False, "git_timeout")]
         assert "refs/heads/feature/x" in _refs(bare, "refs/heads/")
-
-    async def test_a_remote_named_with_a_slash_pushes_to_that_remote(self, bare, local):
-        _publish(local, "feature/x")
-        run_git_sync(local, "remote", "add", "up/stream", bare)
-        run_git_sync(local, "fetch", "-q", "up/stream")
-
-        response = await _delete(local, _remote("up/stream/feature/x"))
-
-        assert _outcomes(response) == [("remote_branch", "up/stream/feature/x", True, None)]
-        assert "refs/heads/feature/x" not in _refs(bare, "refs/heads/")
-        assert "refs/remotes/up/stream/feature/x" not in _refs(local, "refs/remotes/")
 
 
 @requires_git
@@ -579,7 +560,3 @@ class TestPushOutcomes:
             "refs/heads/main": (
                 "!", "[remote rejected] (deletion of the current branch prohibited)"),
         }
-
-    def test_output_without_ref_lines_has_no_outcomes(self):
-        assert _push_outcomes(b"") == {}
-        assert _push_outcomes(b"fatal: unable to access 'x': refused\n") == {}

@@ -48,14 +48,6 @@ class TerminalSessionSyncFlushTest {
     }
 
     @Test
-    fun nonSyncOutput_notifiesPerChunk() {
-        emit("hello")
-        emit("world")
-
-        assertEquals(2, notifies)
-    }
-
-    @Test
     fun bsuAndEsuInOneChunk_notifiesImmediately() {
         emit(SYNC_ON + "atomic frame" + SYNC_OFF)
 

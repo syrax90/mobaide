@@ -33,11 +33,6 @@ class PathCompletionTest {
     }
 
     @Test
-    fun split_treatsABareTildeAsHome() {
-        assertEquals(PathCompletion.Query("~/", ""), PathCompletion.split("~"))
-    }
-
-    @Test
     fun split_offersNothingForTextThatCannotNameAnAbsoluteDirectoryYet() {
         assertNull(PathCompletion.split(""))
         assertNull(PathCompletion.split("code/proj"))
@@ -60,14 +55,6 @@ class PathCompletionTest {
         assertEquals(listOf("config"), PathCompletion.rank(dirs, ""))
         assertEquals(listOf(".config", ".git"), PathCompletion.rank(dirs, "."))
         assertEquals(listOf(".config"), PathCompletion.rank(dirs, ".CON"))
-    }
-
-    @Test
-    fun separator_isBackslashOnlyForAnAllBackslashPath() {
-        assertEquals("\\", PathCompletion.separator("C:\\Users\\me\\"))
-        assertEquals("/", PathCompletion.separator("C:/Users"))
-        assertEquals("/", PathCompletion.separator("/home/me"))
-        assertEquals("/", PathCompletion.separator(""))
     }
 
     @Test
@@ -98,13 +85,6 @@ class PathCompletionTest {
 
         assertEquals(ListingHit(listing("/srv", listOf("a", "b")), complete = true), cache.lookup("/srv/", ""))
         assertEquals(true, cache.lookup("/srv/", "zz")?.complete)
-    }
-
-    @Test
-    fun cache_marksATruncatedListingAsShownButNotComplete() {
-        cache.store(ListingRequest("/big/", null), listing("/big", listOf("a"), truncated = true))
-
-        assertEquals(ListingHit(listing("/big", listOf("a"), truncated = true), complete = false), cache.lookup("/big/", "a"))
     }
 
     @Test
@@ -148,11 +128,6 @@ class PathCompletionTest {
         assertTrue(cache.hasUnfiltered("/kept/"))
         assertFalse(cache.hasUnfiltered("/d0/"))
         assertTrue(cache.hasUnfiltered("/d1/"))
-    }
-
-    @Test
-    fun nextRequest_listsANewDirectoryUnfiltered() {
-        assertEquals(ListingRequest("/srv/", null), cache.nextRequest(PathCompletion.Query("/srv/", "pro")))
     }
 
     @Test

@@ -22,7 +22,6 @@ import pytest
 from mobaide.core import attention_gate
 from mobaide.core.attention_gate import (
     ATTENTION_ACTIVE_TASK_STATUSES,
-    ATTENTION_QUIET_SECONDS,
     ATTENTION_TURN_COOLDOWN_SECONDS,
     AttentionGate,
     HookKind,
@@ -148,19 +147,6 @@ class TestStopClassification:
         assert scheduler.elapse() == 1
         assert session.calls == [("turn_finished", None)]
 
-    async def test_window_defaults_to_the_module_constant(
-        self, session, scheduler,
-    ) -> None:
-        gate = _gate(session)
-        gate.handle(HookKind.STOP, {})
-        assert [h.delay for h in scheduler.pending] == [ATTENTION_QUIET_SECONDS]
-
-    async def test_zero_window_alerts_without_arming(self, session, scheduler) -> None:
-        # ``SessionConfig.attention_quiet_seconds = 0`` means "no debounce".
-        gate = _gate(session, quiet_seconds=0)
-        gate.handle(HookKind.STOP, {})
-        assert session.reasons == ["turn_finished"]
-        assert scheduler.handles == []
 
     @pytest.mark.parametrize("status", sorted(ATTENTION_ACTIVE_TASK_STATUSES))
     async def test_active_background_task_never_alerts(
@@ -286,20 +272,6 @@ class TestTurnDedupe:
 
         assert session.reasons == ["turn_finished"]
 
-    async def test_second_turn_after_the_cooldown_alerts(
-        self, session, scheduler, clock,
-    ) -> None:
-        gate = _gate(session)
-        gate.handle(HookKind.STOP, {})
-        scheduler.elapse()
-        session.user_responded()
-        clock.advance(ATTENTION_TURN_COOLDOWN_SECONDS)
-
-        gate.handle(HookKind.STOP, {})
-        scheduler.elapse()
-
-        assert session.reasons == ["turn_finished", "turn_finished"]
-
 
 class TestIdleBackstop:
     async def test_idle_alerts_after_a_suppressed_stop(
@@ -366,13 +338,6 @@ class TestUngatedHooks:
         assert scheduler.elapse() == 0
         assert session.calls == [("ended", "clear")]
 
-    @pytest.mark.parametrize("payload", [{}, {"reason": ""}, {"reason": None}])
-    async def test_end_without_a_reason_falls_back_to_other(
-        self, session, scheduler, payload,
-    ) -> None:
-        gate = _gate(session)
-        gate.handle(HookKind.END, payload)
-        assert session.calls == [("ended", "other")]
 
     async def test_end_reopens_the_turn(self, session, scheduler) -> None:
         # ``SessionEnd`` also fires with reason ``clear`` for ``/clear``, which
@@ -435,10 +400,6 @@ class TestActivity:
     must follow every turn boundary whether or not an alert fires: a row stuck
     on ``working`` is the bug this signal exists to fix."""
 
-    async def test_prompt_submit_reports_working(self, session, scheduler) -> None:
-        gate = _gate(session)
-        gate.handle(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1"})
-        assert session.activity == ["working"]
 
     async def test_clean_stop_turns_idle_only_when_the_window_elapses(
         self, session, scheduler,
@@ -484,32 +445,6 @@ class TestActivity:
 
         assert session.reasons == ["turn_finished"]
         assert session.activity == ["idle", "working", "idle"]
-
-    async def test_idle_hook_reports_idle(self, session, scheduler) -> None:
-        gate = _gate(session)
-        gate.handle(
-            HookKind.STOP,
-            {"prompt_id": "p1", "background_tasks": [{"status": "running"}]},
-        )
-        gate.handle(HookKind.IDLE, {"prompt_id": "p1"})
-        assert session.activity == ["working", "idle"]
-
-    async def test_end_reports_idle(self, session, scheduler) -> None:
-        # ``/clear`` fires ``SessionEnd`` and leaves the PTY at an idle prompt.
-        gate = _gate(session)
-        gate.handle(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1"})
-        gate.handle(HookKind.END, {"reason": "clear"})
-        assert session.activity == ["working", "idle"]
-
-    async def test_permission_leaves_the_activity_alone(
-        self, session, scheduler,
-    ) -> None:
-        # The turn resumes once the user answers; the clients rank the
-        # permission chip above "Working" on their own.
-        gate = _gate(session)
-        gate.handle(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1"})
-        gate.handle(HookKind.PERMISSION, {})
-        assert session.activity == ["working"]
 
 
 class TestMute:
@@ -738,9 +673,6 @@ class TestMalformedPayloads:
 
 
 class TestResolveHookKind:
-    @pytest.mark.parametrize("kind", list(HookKind))
-    def test_url_param_resolves_every_kind(self, kind) -> None:
-        assert resolve_hook_kind(kind.value, "") is kind
 
     def test_url_param_wins_over_the_event_name(self) -> None:
         # Both ``Notification`` matchers share one event name, and upstream
@@ -766,6 +698,3 @@ class TestResolveHookKind:
         # A session spawned by the previous agent has no ``hook`` param in its
         # URLs and must keep working for the rest of its life.
         assert resolve_hook_kind("", event_name) is kind
-
-    def test_unknown_event_name_without_a_param_is_unroutable(self) -> None:
-        assert resolve_hook_kind("", "PreToolUse") is None

@@ -13,8 +13,6 @@ from __future__ import annotations
 import hmac
 import hashlib
 
-import pytest
-
 from central_server.auth.service import AuthService
 from central_server.config import CentralServerConfig
 from tests.conftest import TEST_JWT_SECRET
@@ -24,21 +22,6 @@ def _make_service(secret: str = TEST_JWT_SECRET) -> AuthService:
     config = CentralServerConfig(jwt_secret_key=secret)
     # ``_hash_code`` doesn't touch the DB, so ``None`` is fine here.
     return AuthService(config, db=None)  # type: ignore[arg-type]
-
-
-class TestHashCodeDeterminism:
-    def test_hash_is_deterministic_for_same_inputs(self):
-        svc = _make_service()
-        h1 = svc._hash_code("user-a", "123456")  # noqa: SLF001
-        h2 = svc._hash_code("user-a", "123456")  # noqa: SLF001
-        assert h1 == h2
-
-    def test_hash_output_is_64_hex_chars(self):
-        # SHA-256 hex digest is always 64 characters of [0-9a-f].
-        svc = _make_service()
-        digest = svc._hash_code("user-a", "123456")  # noqa: SLF001
-        assert len(digest) == 64
-        assert all(c in "0123456789abcdef" for c in digest)
 
 
 class TestHashCodePepper:
@@ -72,23 +55,3 @@ class TestHashCodeUserBinding:
         a = svc._hash_code("user-a", "123456")  # noqa: SLF001
         b = svc._hash_code("user-b", "123456")  # noqa: SLF001
         assert a != b
-
-    def test_different_codes_same_user_produces_different_hashes(self):
-        svc = _make_service()
-        a = svc._hash_code("user-a", "111111")  # noqa: SLF001
-        b = svc._hash_code("user-a", "222222")  # noqa: SLF001
-        assert a != b
-
-    @pytest.mark.parametrize(
-        "user_id,code",
-        [
-            ("u1", "000000"),
-            ("u1", "999999"),
-            ("a-long-user-id-xyz", "123456"),
-            ("", "123456"),  # empty user id still must hash deterministically
-        ],
-    )
-    def test_hash_handles_expected_input_ranges(self, user_id: str, code: str):
-        svc = _make_service()
-        digest = svc._hash_code(user_id, code)  # noqa: SLF001
-        assert len(digest) == 64

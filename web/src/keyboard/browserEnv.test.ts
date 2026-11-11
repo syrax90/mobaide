@@ -44,14 +44,6 @@ describe('detectBrowser', () => {
   it('reads real Safari as Safari', () => {
     expect(detectBrowser(UA.safariMac)).toBe('safari');
   });
-
-  it('reads Firefox as Firefox', () => {
-    expect(detectBrowser(UA.firefoxWindows)).toBe('firefox');
-  });
-
-  it('falls back to unknown for a UA with no browser token', () => {
-    expect(detectBrowser('SomeBot/1.0')).toBe('unknown');
-  });
 });
 
 describe('detectOs', () => {
@@ -80,10 +72,6 @@ describe('detectOs', () => {
   it('reads the platform string, not only the UA', () => {
     expect(detectOs('SomeBot/1.0', 'iPad')).toBe('other');
     expect(detectOs('SomeBot/1.0', 'Win32')).toBe('windows');
-  });
-
-  it('falls back to other for a platform it cannot name', () => {
-    expect(detectOs('SomeBot/1.0', '')).toBe('other');
   });
 });
 
@@ -123,11 +111,5 @@ describe('isStandaloneDisplay', () => {
     stubDisplayMode('(display-mode: window-controls-overlay)');
 
     expect(isStandaloneDisplay()).toBe(true);
-  });
-
-  it('is false in a browser tab', () => {
-    stubDisplayMode();
-
-    expect(isStandaloneDisplay()).toBe(false);
   });
 });

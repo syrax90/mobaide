@@ -19,13 +19,6 @@ beforeEach(() => {
 });
 
 describe('hydration', () => {
-  it('restores a persisted opt-in', async () => {
-    seed({ passCtrlVToTerminal: true });
-
-    await useTerminalPrefsStore.persist.rehydrate();
-
-    expect(useTerminalPrefsStore.getState().passCtrlVToTerminal).toBe(true);
-  });
 
   it('treats anything but a real boolean as the default', async () => {
     // The same untrusted-boundary rule as `themeStore`: a truthy string

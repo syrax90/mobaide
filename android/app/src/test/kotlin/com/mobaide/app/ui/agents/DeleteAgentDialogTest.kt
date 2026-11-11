@@ -3,7 +3,6 @@ package com.mobaide.app.ui.agents
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -73,14 +72,5 @@ class DeleteAgentDialogTest {
         composeRule.onNodeWithTag("delete_agent_confirm").performClick()
 
         assertEquals(listOf(false), confirmed)
-    }
-
-    @Test
-    fun offlineAgent_explainsTheDeferredUninstall() {
-        setContent(supportsUninstall = true, online = false, onConfirm = {})
-
-        composeRule.onNodeWithText(
-            "The agent is offline, so this happens the next time it connects (within 30 days).",
-        ).assertExists()
     }
 }

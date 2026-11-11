@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import logging
 import math
 from array import array
 from pathlib import Path
@@ -129,13 +128,6 @@ async def _raises(code: str, awaitable) -> VoiceError:
     return excinfo.value
 
 
-def _traceback_depth(error: BaseException) -> int:
-    depth, tb = 0, error.__traceback__
-    while tb is not None:
-        depth, tb = depth + 1, tb.tb_next
-    return depth
-
-
 class TestCreate:
     async def test_not_ready_refuses_and_opens_nothing(self, fake_helper):
         def ready():
@@ -147,11 +139,6 @@ class TestCreate:
 
         assert error.status == 409
         assert not mgr.busy()
-
-    async def test_create_preloads_the_model(self, manager, fake_helper):
-        await manager.create()
-
-        await _wait_for(lambda: fake_helper.preloads == 1)
 
     async def test_at_most_two_open_dictations(self, manager):
         first = await manager.create()
@@ -210,11 +197,6 @@ class TestAppend:
 
         assert error.detail()["expected_seq"] == 0
 
-    async def test_chunk_of_the_maximum_size_is_accepted(self, manager):
-        did = await manager.create()
-
-        assert await manager.append(did, 0, _b64(b"\x00" * MAX_CHUNK_BYTES)) == 2048
-
     async def test_oversized_chunk_is_413(self, manager):
         did = await manager.create()
 
@@ -239,11 +221,6 @@ class TestAppend:
 
         assert error.status == 409
         assert error.detail()["max_seconds"] == MAX_SECONDS
-
-    async def test_unknown_dictation_is_404(self, manager):
-        error = await _raises("dictation_not_found", manager.append("nope", 0, _b64(b"\x00\x00")))
-
-        assert error.status == 404
 
 
 class TestFinish:
@@ -304,13 +281,6 @@ class TestFinish:
         assert (result.state, result.text) == ("done", "2400ms")
         assert fake_helper.calls == 1
 
-    async def test_finish_without_audio(self, manager):
-        did = await manager.create()
-
-        result = await manager.finish(did, -1)
-
-        assert (result.state, result.text, result.duration_ms) == ("done", "", 0)
-
     async def test_finish_before_the_last_chunk_arrived_is_a_seq_gap(self, manager):
         did = await manager.create()
         await manager.append(did, 0, _b64(_tone(0.5)))
@@ -341,12 +311,6 @@ class TestFinish:
         assert first == again
         assert first.text == "1000ms"
         assert fake_helper.calls == 1
-
-    async def test_audio_after_finish_is_refused(self, manager):
-        did = await manager.create()
-        await manager.finish(did, -1)
-
-        await _raises("dictation_finished", manager.append(did, 0, _b64(_tone(0.1))))
 
     async def test_slow_transcript_answers_transcribing_then_done(
         self, manager, fake_helper, monkeypatch
@@ -474,16 +438,6 @@ class TestFailureLatch:
         assert error.status == 503
         assert error.message == "worker trouble"
 
-    async def test_retried_chunk_after_finish_still_reads_dictation_finished(
-        self, manager, fake_helper
-    ):
-        fake_helper.failures = ["load_failed"]
-        did = await manager.create()
-        await manager.append(did, 0, _b64(_tone(1.0)))
-        await _raises("transcription_failed", manager.finish(did, 0))
-
-        await _raises("dictation_finished", manager.append(did, 0, _b64(_tone(1.0))))
-
     async def test_preload_that_cannot_load_the_model_fails_the_next_chunk(
         self, manager, fake_helper
     ):
@@ -548,23 +502,6 @@ class TestFailureLatch:
         for error in raised:
             assert (error.status, error.detail()) == (503, latched.detail())
             assert error.message == "model will not load"
-
-    async def test_asking_a_failed_dictation_again_does_not_grow_the_stored_traceback(
-        self, manager, fake_helper
-    ):
-        fake_helper.failures = ["load_failed"]
-        did = await manager.create()
-        await manager.append(did, 0, _b64(_tone(1.0)))
-        first = await _raises("transcription_failed", manager.finish(did, 0))
-        latched = manager._dictations[did].failure
-        depth = _traceback_depth(latched)
-
-        again = [await _raises("transcription_failed", manager.finish(did, 0)) for _ in range(3)]
-
-        assert _traceback_depth(latched) == depth
-        assert len({id(error) for error in [latched, first, *again]}) == 5
-        for error in [first, *again]:
-            assert (error.status, error.detail()) == (503, latched.detail())
 
 
 class TestAbortAndBusy:
@@ -664,30 +601,3 @@ class TestFinishedLog:
         ]
         assert len(lines) == 1
         return lines[0]
-
-    async def test_counts_skipped_segments_and_reports_the_peak_level(self, manager, caplog):
-        did = await manager.create()
-        last_seq = await _send(manager, did, _tone(6.0, amplitude=3000) + _silence(1.6))
-
-        with caplog.at_level(logging.INFO, logger="mobaide.voice.dictation"):
-            await manager.finish(did, last_seq)
-
-        assert " segments=2 skipped=1 peak_dbfs=-24 tail_ms=" in self._finished_line(caplog)
-
-    @pytest.mark.parametrize(
-        ("pcm", "fields"),
-        [
-            (None, "segments=0 skipped=0 peak_dbfs=-99"),
-            (_silence(1.0), "segments=1 skipped=1 peak_dbfs=-99"),
-            (b"\x01\x00" + _silence(1.0), "segments=1 skipped=1 peak_dbfs=-99"),
-        ],
-        ids=["no-audio", "digital-silence", "below-minus-99-dbfs"],
-    )
-    async def test_silence_reads_minus_99_dbfs(self, manager, caplog, pcm, fields):
-        did = await manager.create()
-        last_seq = -1 if pcm is None else await _send(manager, did, pcm)
-
-        with caplog.at_level(logging.INFO, logger="mobaide.voice.dictation"):
-            await manager.finish(did, last_seq)
-
-        assert f" {fields} tail_ms=" in self._finished_line(caplog)

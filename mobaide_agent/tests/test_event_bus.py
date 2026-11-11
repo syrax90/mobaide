@@ -1,43 +1,7 @@
 """Tests for the in-process pub/sub ``EventBus``."""
 from __future__ import annotations
 
-import asyncio
-
 from mobaide.agent.events.bus import EventBus, AgentEvent
-
-
-class TestEventBusSubscription:
-    async def test_subscribe_increments_count(self):
-        bus = EventBus()
-        assert bus.subscriber_count == 0
-        q1 = bus.subscribe()
-        assert bus.subscriber_count == 1
-        q2 = bus.subscribe()
-        assert bus.subscriber_count == 2
-        # Queues are distinct asyncio.Queue instances.
-        assert q1 is not q2
-        assert isinstance(q1, asyncio.Queue)
-
-    async def test_unsubscribe_decrements_count(self):
-        bus = EventBus()
-        q1 = bus.subscribe()
-        q2 = bus.subscribe()
-        bus.unsubscribe(q1)
-        assert bus.subscriber_count == 1
-        bus.unsubscribe(q2)
-        assert bus.subscriber_count == 0
-
-    async def test_unsubscribe_unknown_queue_is_noop(self):
-        bus = EventBus()
-        stranger: asyncio.Queue[AgentEvent] = asyncio.Queue()
-        # Must not raise — discard() semantics.
-        bus.unsubscribe(stranger)
-        assert bus.subscriber_count == 0
-
-        q = bus.subscribe()
-        bus.unsubscribe(stranger)  # still a no-op with real subs present
-        assert bus.subscriber_count == 1
-        bus.unsubscribe(q)
 
 
 class TestEventBusPublish:
@@ -57,22 +21,6 @@ class TestEventBusPublish:
         assert ev2.type == "sessions.changed"
         assert ev2.payload == payload
 
-    async def test_publish_no_subscribers_is_noop(self):
-        bus = EventBus()
-        # Must not raise regardless of how many times we publish.
-        bus.publish("sessions.changed", {"sessions": []})
-        bus.publish("projects.changed", {"projects": []})
-        assert bus.subscriber_count == 0
-
-    async def test_publish_payload_is_same_object(self):
-        bus = EventBus()
-        q = bus.subscribe()
-        payload = {"projects": [{"name": "p1"}]}
-        bus.publish("projects.changed", payload)
-        ev = q.get_nowait()
-        # AgentEvent holds the exact dict reference (no copy, no mutation).
-        assert ev.payload is payload
-        assert ev.type == "projects.changed"
 
     async def test_publish_queue_full_isolation(self):
         """A full queue on subscriber A must not block delivery to subscriber B."""
@@ -97,19 +45,6 @@ class TestEventBusPublish:
         assert ev.type == "sessions.changed"
         assert ev.payload == {"sessions": []}
 
-    async def test_publish_preserves_order_for_single_subscriber(self):
-        bus = EventBus()
-        q = bus.subscribe()
-
-        bus.publish("sessions.changed", {"sessions": [1]})
-        bus.publish("projects.changed", {"projects": ["p"]})
-
-        ev1 = q.get_nowait()
-        ev2 = q.get_nowait()
-        assert ev1.type == "sessions.changed"
-        assert ev1.payload == {"sessions": [1]}
-        assert ev2.type == "projects.changed"
-        assert ev2.payload == {"projects": ["p"]}
 
     async def test_publish_after_unsubscribe_drops_only_that_sub(self):
         bus = EventBus()

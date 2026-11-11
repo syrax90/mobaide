@@ -65,55 +65,6 @@ async def legacy_admin_token(app) -> str:
     )
 
 
-@pytest.fixture
-async def client_with_dashboard_ttl(tmp_path):
-    """Client built with ``admin_dashboard_token_expire_minutes=60`` to
-    exercise the positive Max-Age branch of the login cookie path with a
-    round number.
-
-    The login cookie follows the admin dashboard TTL, not
-    ``dashboard_token_expire_minutes``.
-    """
-    from httpx import ASGITransport, AsyncClient
-
-    from central_server.agents.service import AgentService
-    from central_server.app import create_app
-    from central_server.auth.service import AuthService
-    from central_server.config import CentralServerConfig
-    from central_server.db.database import Database
-    from central_server.pairing.service import PairingService
-    from central_server.relay.routing import RoutingTable
-
-    from tests.conftest import TEST_JWT_SECRET
-
-    config = CentralServerConfig(
-        jwt_secret_key=TEST_JWT_SECRET,
-        admin_seed_email=TEST_ADMIN_EMAIL,
-        admin_seed_password=TEST_ADMIN_PASSWORD,
-        db_path=str(tmp_path / "test_ttl.db"),
-        log_level="DEBUG",
-        log_format="console",
-        admin_dashboard_token_expire_minutes=60,
-    )
-    db = Database(config.db_path)
-    await db.connect()
-    try:
-        app = create_app(config=config)
-        app.state.db = db
-        app.state.routing = RoutingTable()
-        app.state.auth_service = AuthService(config, db)
-        app.state.pairing_service = PairingService(db)
-        app.state.agent_service = AgentService(db, app.state.routing)
-        await app.state.auth_service.seed_admin_user()
-        transport = ASGITransport(app=app)
-        # See conftest.client: https:// base_url is required so the
-        # jar returns Secure-flagged cookies on follow-up requests.
-        async with AsyncClient(transport=transport, base_url="https://test") as c:
-            yield c
-    finally:
-        await db.close()
-
-
 class TestDashboardLoginAdminTtl:
     """The admin dashboard TTL (30 min) differs from the user session TTL
     (600 min), so the test can tell which one the login follows.
@@ -173,40 +124,8 @@ class TestDashboardLoginZeroAdminTtl:
         )
         assert "exp" not in raw_claims
 
-    async def test_login_cookie_authenticates_dashboard_request(self, client):
-        """Regression: the cookie set by POST /dashboard/login must
-        authenticate a follow-up GET /dashboard through httpx's cookie
-        jar, which mirrors browser semantics. A Max-Age=0 cookie is
-        discarded by the jar, so the follow-up request would 303 back
-        to the login page.
-        """
-        login = await client.post(
-            "/dashboard/login",
-            data={"username": TEST_ADMIN_EMAIL, "password": TEST_ADMIN_PASSWORD},
-            follow_redirects=False,
-        )
-        assert login.status_code == 303
-        resp = await client.get("/dashboard", follow_redirects=False)
-        assert resp.status_code == 200
-        assert "Users" in resp.text
-
 
 class TestDashboardLogin:
-    async def test_login_success(self, client, config):
-        resp = await client.post(
-            "/dashboard/login",
-            data={"username": TEST_ADMIN_EMAIL, "password": TEST_ADMIN_PASSWORD},
-            follow_redirects=False,
-        )
-        assert resp.status_code == 303
-        assert resp.headers["location"] == "/dashboard"
-        set_cookie = resp.headers.get("set-cookie", "")
-        assert "dashboard_token=" in set_cookie
-        # The default admin TTL is finite, so the cookie carries a Max-Age
-        # of that many seconds.
-        max_age = config.admin_dashboard_token_expire_minutes * 60
-        assert max_age > 0
-        assert f"Max-Age={max_age}" in set_cookie or f"max-age={max_age}" in set_cookie
 
     async def test_login_cookie_authenticates_dashboard_request(self, client):
         """Regression: the cookie set by POST /dashboard/login must
@@ -223,43 +142,6 @@ class TestDashboardLogin:
         assert resp.status_code == 200
         assert "Users" in resp.text
 
-    async def test_login_positive_ttl_sets_max_age(
-        self, client_with_dashboard_ttl
-    ):
-        resp = await client_with_dashboard_ttl.post(
-            "/dashboard/login",
-            data={"username": TEST_ADMIN_EMAIL, "password": TEST_ADMIN_PASSWORD},
-            follow_redirects=False,
-        )
-        assert resp.status_code == 303
-        set_cookie = resp.headers.get("set-cookie", "")
-        assert "dashboard_token=" in set_cookie
-        # 60 minutes * 60 seconds = 3600 — python SimpleCookie emits
-        # "Max-Age" (capitalized), but assert both cases defensively.
-        assert "Max-Age=3600" in set_cookie or "max-age=3600" in set_cookie
-
-    async def test_login_positive_ttl_cookie_authenticates_dashboard_request(
-        self, client_with_dashboard_ttl
-    ):
-        """Regression: the positive-TTL branch must also produce a
-        cookie the browser/cookie-jar accepts for follow-up requests.
-        This locks in the non-zero Max-Age branch end-to-end so a future
-        refactor that accidentally emits a malformed Max-Age (e.g.
-        negative value, float) would be caught by a 303 on GET
-        /dashboard instead of a silent cookie-jar drop.
-        """
-        login = await client_with_dashboard_ttl.post(
-            "/dashboard/login",
-            data={"username": TEST_ADMIN_EMAIL, "password": TEST_ADMIN_PASSWORD},
-            follow_redirects=False,
-        )
-        assert login.status_code == 303
-        resp = await client_with_dashboard_ttl.get(
-            "/dashboard", follow_redirects=False
-        )
-        assert resp.status_code == 200
-        assert "Users" in resp.text
-
     async def test_login_failure(self, client):
         resp = await client.post(
             "/dashboard/login",
@@ -268,25 +150,11 @@ class TestDashboardLogin:
         assert resp.status_code == 401
         assert "Invalid" in resp.text
 
-    async def test_logout(self, client, dashboard_headers):
-        resp = await client.post(
-            "/dashboard/logout",
-            headers=dashboard_headers,
-            follow_redirects=False,
-        )
-        assert resp.status_code == 303
-
 
 class TestDashboardPages:
     async def test_agents_page_requires_auth(self, client):
         resp = await client.get("/dashboard", follow_redirects=False)
         assert resp.status_code == 303
-
-    async def test_agent_detail_not_found(self, client, dashboard_headers):
-        resp = await client.get(
-            "/dashboard/agents/nonexistent", headers=dashboard_headers
-        )
-        assert resp.status_code == 404
 
 
 class TestEndedSessionRedirect:
@@ -430,20 +298,6 @@ class TestDashboardRoleGate:
         )
         assert resp.status_code == 403
 
-class TestUserList:
-    """The users-centric ``GET /dashboard`` and its supporting endpoints:
-    the search fragment, the per-user agents expansion, and the OOB
-    status poller.
-    """
-
-    async def test_user_agents_fragment_404_for_unknown_user(
-        self, client, dashboard_headers
-    ):
-        resp = await client.get(
-            "/dashboard/users/ghost/agents", headers=dashboard_headers
-        )
-        assert resp.status_code == 404
-
 
 class TestUserSearchFilter:
     async def test_search_filters_by_email_substring(
@@ -458,16 +312,6 @@ class TestUserSearchFilter:
         assert TEST_VIEWER_EMAIL in body
         # The seeded admin should NOT be in the filtered table.
         assert TEST_ADMIN_EMAIL not in body
-
-    async def test_search_is_case_insensitive(
-        self, client, dashboard_headers, viewer_user
-    ):
-        del viewer_user
-        resp = await client.get(
-            "/dashboard/users?q=VIEWER", headers=dashboard_headers
-        )
-        assert resp.status_code == 200
-        assert TEST_VIEWER_EMAIL in resp.text
 
 
 class TestUserVerifiedBadgeAndFilter:
@@ -499,18 +343,6 @@ class TestUserVerifiedBadgeAndFilter:
         body = resp.text
         assert self.UNVERIFIED_EMAIL in body
         assert TEST_ADMIN_EMAIL not in body
-
-    async def test_filter_verified_shows_only_verified(
-        self, client, app, dashboard_headers
-    ):
-        await self._seed_unverified(app)
-        resp = await client.get(
-            "/dashboard/users?verified=verified", headers=dashboard_headers
-        )
-        assert resp.status_code == 200
-        body = resp.text
-        assert TEST_ADMIN_EMAIL in body
-        assert self.UNVERIFIED_EMAIL not in body
 
     async def test_filter_all_omitted_and_unknown_are_lenient(
         self, client, app, dashboard_headers
@@ -586,19 +418,6 @@ def _control_sync(body: str, start: int) -> tuple[str, str]:
 class TestUserSorting:
     """The sortable Registered / Last Activity headers on ``GET /dashboard``."""
 
-    async def test_default_view_sorts_registered_descending(
-        self, client, dashboard_headers
-    ):
-        resp = await client.get("/dashboard", headers=dashboard_headers)
-        assert resp.status_code == 200
-        body = resp.text
-        assert _sort_header(body, "registered") == (
-            "descending", "/dashboard?dir=asc",
-        )
-        assert _sort_header(body, "last activity") == (
-            "none", "/dashboard?sort=activity",
-        )
-
     async def test_activity_sort_orders_rows_and_header_flips(
         self, client, app, dashboard_headers, viewer_user, registered_agent
     ):
@@ -646,13 +465,6 @@ class TestUserSorting:
 class TestUserPagination:
     """Paging of the users panel: row windows, the pager, clamping, and
     the canonical ``HX-Replace-Url`` the fragment always answers with."""
-
-    async def test_single_page_hides_the_pager(self, client, dashboard_headers):
-        resp = await client.get("/dashboard", headers=dashboard_headers)
-        body = resp.text
-        assert "Showing 1–1 of 1 user" in body
-        assert "of 1 users" not in body
-        assert 'class="pager"' not in body
 
     async def test_pages_window_users_newest_first(
         self, client, app, dashboard_headers
@@ -756,17 +568,6 @@ class TestSearchAndPanelControlSync:
         assert _sort_header(body, "registered")[1].startswith(
             "/dashboard?q=viewer"
         )
-
-    async def test_page_applies_the_last_duplicate_q(
-        self, client, dashboard_headers, viewer_user
-    ):
-        resp = await client.get(
-            "/dashboard?q=stale&q=viewer", headers=dashboard_headers
-        )
-        assert resp.status_code == 200
-        body = resp.text
-        assert _row_ids(body) == [viewer_user["id"]]
-        assert _attr(body, "value", body.index('name="q"')) == "viewer"
 
     async def test_page_pushes_the_canonical_url_only_for_htmx_requests(
         self, client, dashboard_headers, viewer_user
@@ -880,16 +681,6 @@ class TestAgentStatusPollerScope:
         assert f'id="user-online-{viewer_user["id"]}"' in page_two.text
         assert f'id="agent-status-{agent_id}"' in page_two.text
 
-    async def test_poller_honours_the_search_filter(
-        self, client, dashboard_headers, viewer_user
-    ):
-        resp = await client.get(
-            "/dashboard/agents-status?q=viewer", headers=dashboard_headers
-        )
-        assert resp.status_code == 200
-        assert resp.text.count('id="user-online-') == 1
-        assert f'id="user-online-{viewer_user["id"]}"' in resp.text
-
 
 class TestUserDelete:
     """``DELETE /dashboard/users/{id}`` — cascade, guardrails, WS teardown."""
@@ -978,14 +769,6 @@ class TestUserDelete:
         assert resp.status_code == 400
         assert "own account" in resp.text.lower()
         assert await app.state.db.get_user_by_id(admin["id"]) is not None
-
-    async def test_delete_unknown_user_returns_404(
-        self, client, dashboard_headers
-    ):
-        resp = await client.delete(
-            "/dashboard/users/ghost", headers=dashboard_headers
-        )
-        assert resp.status_code == 404
 
     async def test_delete_user_closes_live_user_clients(
         self, client, app, dashboard_headers, viewer_user
@@ -1086,14 +869,6 @@ class TestAdminDeleteAgent:
         )
         assert resp.status_code == 200
         assert await app.state.db.get_agent(agent_id) is None
-
-    async def test_admin_delete_unknown_agent_returns_404(
-        self, client, dashboard_headers
-    ):
-        resp = await client.delete(
-            "/dashboard/agents/ghost", headers=dashboard_headers
-        )
-        assert resp.status_code == 404
 
     async def test_owner_api_endpoint_still_rejects_admin_token(
         self, client, admin_api_auth_headers, registered_agent

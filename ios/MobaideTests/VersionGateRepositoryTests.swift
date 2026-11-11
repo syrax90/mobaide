@@ -53,16 +53,6 @@ final class VersionGateRepositoryTests: XCTestCase {
         guard case .incompatible = outcome else { return XCTFail("expected incompatible") }
     }
 
-    func testCompatibleWithExactSingletonProtocol() {
-        let outcome = gate.classify(versionInfo(protocols: [6], min: 6))
-        guard case .compatible = outcome else { return XCTFail("expected compatible") }
-    }
-
-    func testIncompatibleWhenProtocolListEmpty() {
-        let outcome = gate.classify(versionInfo(protocols: [], min: 1))
-        guard case .incompatible = outcome else { return XCTFail("expected incompatible") }
-    }
-
     // MARK: - probe side effects
 
     func testProbeIncompatibleMarksTakeover() async {

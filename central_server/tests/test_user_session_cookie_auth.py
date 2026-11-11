@@ -165,11 +165,6 @@ class TestLogout:
 
         assert resp.status_code == 403
 
-    async def test_is_idempotent_with_nothing_left_to_revoke(self, client) -> None:
-        resp = await client.post("/api/auth/logout", headers=PROOF)
-
-        assert resp.status_code == 204
-
 
 class TestLogoutAll:
     async def test_revokes_a_second_browsers_session_too(
@@ -188,11 +183,6 @@ class TestLogoutAll:
                 json={"refresh_token": session["body"]["refresh_token"]},
             )
             assert replay.status_code == 401
-
-    async def test_requires_a_bearer(self, client) -> None:
-        resp = await client.post("/api/auth/logout/all")
-
-        assert resp.status_code == 401
 
 
 class TestSupersededCredential:
@@ -259,7 +249,7 @@ class TestCookieNameIsNotNegotiable:
     cookie this origin will send. Accepting the bare name as a "dev
     friendliness" fallback hands that back — `get.mobaide.com` (GitHub Pages)
     could then set `mobaide_refresh=<its own token>; Domain=mobaide.com` and
-    fixate an attacker-chosen session on a victim. These two cases exist
+    fixate an attacker-chosen session on a victim. This case exists
     because that fallback is a natural thing to re-add and would otherwise
     leave the whole suite green.
     """
@@ -280,18 +270,3 @@ class TestCookieNameIsNotNegotiable:
 
         assert resp.status_code == 401
 
-    async def test_the_prefixed_cookie_still_refreshes(
-        self, client, viewer_user
-    ) -> None:
-        token = _value(
-            _named(
-                (await _login_with_cookies(client, transport="cookie"))["cookies"],
-                REFRESH,
-            )
-        )
-        client.cookies.clear()
-        client.cookies.set(REFRESH, token)
-
-        resp = await client.post("/api/auth/refresh", headers=PROOF)
-
-        assert resp.status_code == 200

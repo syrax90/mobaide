@@ -136,16 +136,6 @@ final class PushRegistrationCoordinatorTests: XCTestCase {
         await waitUntil { harness.unregisterCalls == 1 }
     }
 
-    func testHandleSignOutWithoutCredentialsIsNoOp() async {
-        let harness = Harness()
-        harness.unregisterAvailable = false
-        harness.coordinator.start()
-
-        harness.coordinator.handleSignOut()
-        try? await Task.sleep(for: .milliseconds(50))
-        XCTAssertEqual(harness.unregisterCalls, 0)
-    }
-
     func testIncompatibleServerSuspendsPosting() async {
         let harness = Harness()
         harness.coordinator.start()

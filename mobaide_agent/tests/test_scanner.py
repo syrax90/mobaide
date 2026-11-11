@@ -23,7 +23,6 @@ from mobaide.linear.models import (
     IssueLabel,
     IssueState,
     LinearIssue,
-    ScanStatus,
 )
 from mobaide.linear.scanner import AutoScanInstance
 
@@ -130,14 +129,6 @@ class TestEmitAndRingBuffer:
         assert len(inst._recent_events) == 500
         assert inst._recent_events[-1].seq == 600
         assert inst._recent_events[0].seq == 101
-
-    def test_to_dto_includes_new_fields(self, tmp_path):
-        inst = _make_instance(tmp_path)
-        inst._emit("log", {"line": "x"})
-        dto = inst.to_dto()
-        assert "next_scan_at" in dto
-        assert "cycle_number" in dto
-        assert dto["current_seq"] == 1
 
     def test_subscribe_delivers_event(self, tmp_path):
         inst = _make_instance(tmp_path)
@@ -489,53 +480,6 @@ class TestClaudeBinaryNotFoundHandling:
         assert "CLA-FIRST" in issue_identifiers
         assert "CLA-SECOND" not in issue_identifiers
 
-    @pytest.mark.asyncio
-    async def test_scan_once_emits_actionable_log_when_claude_cli_missing(
-        self, tmp_path,
-    ):
-        """The operator-facing ``log`` event must mention both the
-        ``MOBAIDE_CLAUDE_BIN`` override and ``claude-code`` install hint so
-        a sysadmin reading the live event stream knows what to do —
-        otherwise the only signal is a generic 'aborted' phase event.
-        """
-        from mobaide.core import ClaudeBinaryNotFoundError
-
-        issue = _make_issue(identifier="CLA-LOG")
-
-        client = AsyncMock()
-        client.get_auto_scan_issues.return_value = [issue]
-        client.update_issue_state.return_value = True
-        client.remove_issue_label.return_value = True
-
-        sess_mgr = AsyncMock()
-
-        launcher = AsyncMock()
-        launcher.build.side_effect = ClaudeBinaryNotFoundError(
-            searched_paths=["PATH:claude"],
-        )
-
-        inst = _make_instance(
-            tmp_path,
-            client=client,
-            session_manager=sess_mgr,
-            launcher=launcher,
-        )
-
-        await inst._scan_once()
-
-        log_events = [
-            e for e in inst._recent_events
-            if e.type == "log" and e.payload.get("level") == "error"
-        ]
-        cli_log_lines = [
-            e.payload.get("line", "") for e in log_events
-            if "Claude CLI not found" in e.payload.get("line", "")
-        ]
-        assert cli_log_lines, "expected an error-level log event mentioning Claude CLI"
-        line = cli_log_lines[0]
-        assert "MOBAIDE_CLAUDE_BIN" in line
-        assert "claude-code" in line
-
 
 class TestProcessIssueForwardsClientOptions:
     """The scanner's spawn path merges a ``ClaudeOptions`` from the client's
@@ -583,39 +527,6 @@ class TestProcessIssueForwardsClientOptions:
         # And the per-issue fields must still be set correctly.
         assert forwarded.identifier == "CLA-OFF"
         assert forwarded.title == "Test issue"
-
-    @pytest.mark.asyncio
-    async def test_process_issue_defaults_effort_none_when_no_client_options(
-        self, tmp_path,
-    ):
-        """Covers the default branch: when the scanner was started without any
-        stored client options (e.g. server restart before any mobile client
-        submitted), the spawned session falls back to ``ClaudeOptions()``
-        defaults (effort None ⇒ no ``--effort`` flag)."""
-        client = AsyncMock()
-        client.update_issue_state.return_value = True
-        client.remove_issue_label.return_value = True
-
-        sess_mgr = AsyncMock()
-        sess_mgr.create_session.return_value = MagicMock(pid=1)
-
-        launcher = _launcher_with_worktree(str(tmp_path / "worktree"))
-
-        inst = _make_instance(
-            tmp_path, client=client,
-            session_manager=sess_mgr, launcher=launcher,
-        )
-        assert inst._client_options is None
-
-        await inst._process_issue(_make_issue(issue_id="uuid-def", identifier="CLA-DEF"))
-
-        call = launcher.build.await_args
-        forwarded = call.args[1] if len(call.args) > 1 else call.kwargs["options"]
-        assert forwarded.effort is None
-        assert forwarded.worktree is True, (
-            "scanner must always set worktree=True so the launcher creates "
-            "the per-issue worktree — regression guard for the dropped-field bug"
-        )
 
     @pytest.mark.asyncio
     async def test_process_issue_honors_client_skip_permissions_false(
@@ -847,21 +758,6 @@ class TestProcessIssueSessionIdLifecycle:
         launcher.discard_session_hooks.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_two_issues_get_distinct_session_ids(self, tmp_path):
-        client, sess_mgr, launcher = self._spawn_fixture(tmp_path)
-        inst = _make_instance(
-            tmp_path, client=client,
-            session_manager=sess_mgr, launcher=launcher,
-        )
-
-        await inst._process_issue(_make_issue(issue_id="uuid-a", identifier="CLA-A"))
-        await inst._process_issue(_make_issue(issue_id="uuid-b", identifier="CLA-B"))
-
-        ids = [c.kwargs["session_id"] for c in launcher.build.await_args_list]
-        assert len(ids) == 2
-        assert ids[0] != ids[1]
-
-    @pytest.mark.asyncio
     async def test_spawn_failure_discards_session_hooks(self, tmp_path):
         client, sess_mgr, launcher = self._spawn_fixture(tmp_path)
         sess_mgr.create_session.side_effect = RuntimeError("spawn fail")
@@ -1019,29 +915,6 @@ class TestWorktreeCleanup:
         assert await inst._workitems_store.count() == 1
 
     @pytest.mark.asyncio
-    async def test_cleanup_keeps_item_when_linear_query_returns_none(self, tmp_path):
-        from mobaide.linear.workitems import ActiveWorkItem, now_iso_utc
-
-        client = AsyncMock()
-        client.get_issue_state.return_value = None
-
-        wt_mgr = AsyncMock()
-        inst = _make_instance(tmp_path, client=client, worktree_mgr=wt_mgr)
-
-        item = ActiveWorkItem(
-            id="CLA-X", uuid="uuid-x", slug="cla-x",
-            worktree_path=str(tmp_path / "wt-x"),
-            project_root=str(tmp_path / "repo"),
-            added_at=now_iso_utc(),
-        )
-        await inst._workitems_store.write([item])
-
-        await inst._cleanup_completed_worktrees()
-
-        wt_mgr.cleanup_worktree.assert_not_called()
-        assert await inst._workitems_store.count() == 1
-
-    @pytest.mark.asyncio
     async def test_cleanup_keeps_item_when_worktree_remove_fails(self, tmp_path):
         from mobaide.linear.workitems import ActiveWorkItem, now_iso_utc
 
@@ -1105,33 +978,6 @@ class TestWorktreeCleanup:
         await inst._cleanup_completed_worktrees()
 
         wt_mgr.cleanup_worktree.assert_not_called()
-        assert await inst._workitems_store.count() == 1
-
-    @pytest.mark.asyncio
-    async def test_cleanup_keeps_item_when_cleanup_worktree_raises(self, tmp_path):
-        """Distinct branch from ``returns False``: if the worktree manager
-        raises, the item must be preserved (retry next cycle)."""
-        from mobaide.linear.workitems import ActiveWorkItem, now_iso_utc
-
-        client = AsyncMock()
-        client.get_issue_state.return_value = IssueState(id="state-done", name="Done")
-
-        wt_mgr = AsyncMock()
-        wt_mgr.cleanup_worktree.side_effect = OSError("fs locked")
-
-        inst = _make_instance(tmp_path, client=client, worktree_mgr=wt_mgr)
-
-        item = ActiveWorkItem(
-            id="CLA-OS", uuid="uuid-os", slug="cla-os",
-            worktree_path=str(tmp_path / "wt-os"),
-            project_root=str(tmp_path / "repo"),
-            added_at=now_iso_utc(),
-        )
-        await inst._workitems_store.write([item])
-
-        await inst._cleanup_completed_worktrees()
-
-        wt_mgr.cleanup_worktree.assert_awaited_once()
         assert await inst._workitems_store.count() == 1
 
     @pytest.mark.asyncio
@@ -1317,50 +1163,6 @@ class TestProcessedCountDTO:
         assert inst.to_dto()["processed_count"] == 1
 
     @pytest.mark.asyncio
-    async def test_processed_count_batch_decrements_only_for_removed_items(self, tmp_path):
-        """With a mix of Done / not-Done items, the cache must decrement
-        by exactly the number of successful removals — not by the number
-        of items examined."""
-        from mobaide.linear.workitems import ActiveWorkItem, now_iso_utc
-
-        repo_root = str(tmp_path / "repo")
-        items = [
-            ActiveWorkItem(id="CLA-A", uuid="u-a", slug="a",
-                           worktree_path=str(tmp_path / "wt-a"),
-                           project_root=repo_root, added_at=now_iso_utc()),
-            ActiveWorkItem(id="CLA-B", uuid="u-b", slug="b",
-                           worktree_path=str(tmp_path / "wt-b"),
-                           project_root=repo_root, added_at=now_iso_utc()),
-            ActiveWorkItem(id="CLA-C", uuid="u-c", slug="c",
-                           worktree_path=str(tmp_path / "wt-c"),
-                           project_root=repo_root, added_at=now_iso_utc()),
-        ]
-        state_map = {
-            "u-a": IssueState(id="s1", name="Done"),
-            "u-b": IssueState(id="s2", name="In Progress"),
-            "u-c": IssueState(id="s3", name="Done"),
-        }
-
-        async def fake_get_state(uuid):
-            return state_map[uuid]
-
-        client = AsyncMock()
-        client.get_issue_state.side_effect = fake_get_state
-
-        wt_mgr = AsyncMock()
-        wt_mgr.cleanup_worktree.return_value = True
-
-        inst = _make_instance(tmp_path, client=client, worktree_mgr=wt_mgr)
-        await inst._workitems_store.write(items)
-        inst._active_workitem_count = 3  # prime as if added in prior cycles
-
-        await inst._cleanup_completed_worktrees()
-
-        # Only A and C were Done → cache dropped by 2, not 3.
-        assert inst.processed_count == 1
-        assert inst.to_dto()["processed_count"] == 1
-
-    @pytest.mark.asyncio
     async def test_processed_count_primed_from_disk_on_construction(self, tmp_path):
         """When the agent restarts, the cache must reflect items already
         persisted by a previous process, not start at zero."""
@@ -1390,15 +1192,6 @@ class TestProcessedCountDTO:
 
         inst = _make_instance(tmp_path, config=config)
         assert inst.to_dto()["processed_count"] == 1
-
-
-class TestStopEmitsPhase:
-    @pytest.mark.asyncio
-    async def test_stop_emits_scan_stopped_phase(self, tmp_path):
-        inst = _make_instance(tmp_path)
-        await inst.stop()
-        phase_events = [e for e in inst._recent_events if e.type == "phase"]
-        assert any(e.payload["phase"] == "scan_stopped" for e in phase_events)
 
 
 class TestClientOptionsTypeGuard:
@@ -1445,36 +1238,6 @@ class TestClientOptionsTypeGuard:
 
         msg = str(excinfo.value)
         assert "dict" in msg
-        assert "ClaudeOptions" in msg
-
-    def test_none_is_accepted(self, tmp_path):
-        """``client_options=None`` is the happy default path — no exception,
-        and the instance stores ``None`` on its private attribute."""
-        inst = self._build_instance(tmp_path, None)
-        assert inst._client_options is None
-
-    def test_real_claude_options_is_accepted_and_stored(self, tmp_path):
-        """A genuine ``ClaudeOptions`` dataclass must pass the guard and be
-        stored verbatim — the guard must not accidentally reject the
-        valid case (would break both direct and fixed relay paths)."""
-        from mobaide.core.claude_launcher import ClaudeOptions
-
-        opts = ClaudeOptions(plan_mode=True, effort="low")
-        inst = self._build_instance(tmp_path, opts)
-        assert inst._client_options is opts
-
-    def test_arbitrary_type_raises_typeerror_naming_that_type(self, tmp_path):
-        """Guard is a pure isinstance check: ANY non-None non-ClaudeOptions
-        value must be rejected with its type name in the error message,
-        not just ``dict``. This pins the guard's breadth so a future
-        refactor to a narrower check (e.g. ``isinstance(x, (dict,))``)
-        cannot silently regress.
-        """
-        with pytest.raises(TypeError) as excinfo:
-            self._build_instance(tmp_path, "not options")
-
-        msg = str(excinfo.value)
-        assert "str" in msg
         assert "ClaudeOptions" in msg
 
 

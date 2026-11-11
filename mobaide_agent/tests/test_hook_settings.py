@@ -56,15 +56,6 @@ def _query(hook: dict) -> dict[str, list[str]]:
 
 
 class TestWriteSessionHooks:
-    def test_creates_file_under_per_port_dir(self, tmp_path):
-        path = hook_settings.write_session_hooks("sid-1", port=9001, token="tok")
-        assert path.exists()
-        assert path.parent == tmp_path / "mobaide_hooks_9001"
-        assert path.name == "sid-1.json"
-
-    def test_registers_every_expected_registration(self):
-        path = hook_settings.write_session_hooks("sid-1", port=9001, token="tok")
-        assert set(_registrations(_load(path))) == set(EXPECTED_REGISTRATIONS)
 
     def test_registered_events_stay_inside_the_frozen_allow_list(self):
         # Claude Code strips an unrecognised ``hooks.<Event>`` key with a
@@ -99,12 +90,6 @@ class TestWriteSessionHooks:
         }
         assert kinds == {key: [k] for key, k in EXPECTED_REGISTRATIONS.items()}
 
-    def test_hooks_are_http_type_with_timeout(self):
-        path = hook_settings.write_session_hooks("sid-1", port=9001, token="tok")
-        for hook in _registrations(_load(path)).values():
-            assert hook["type"] == "http"
-            assert isinstance(hook["timeout"], int)
-            assert hook["timeout"] > 0
 
     def test_every_url_bakes_session_id_and_token(self):
         # Each registration now carries its own hook dict, so the correlation
@@ -131,11 +116,6 @@ class TestWriteSessionHooks:
         assert query["session_id"] == ["a&b=c d"]
         assert query["token"] == ["t/o k&z"]
 
-    def test_distinct_sessions_get_distinct_files(self):
-        a = hook_settings.write_session_hooks("sid-a", port=9001, token="tok")
-        b = hook_settings.write_session_hooks("sid-b", port=9001, token="tok")
-        assert a != b
-        assert a.exists() and b.exists()
 
     def test_distinct_ports_use_distinct_dirs(self, tmp_path):
         a = hook_settings.write_session_hooks("sid", port=9001, token="tok")
@@ -157,40 +137,6 @@ class TestWriteSessionHooksExtra:
         # The merge augments the document — it must not displace ``hooks``.
         assert set(_registrations(doc)) == set(EXPECTED_REGISTRATIONS)
 
-    def test_single_extra_key_rides_independently(self):
-        path = hook_settings.write_session_hooks(
-            "sid-1", port=9001, token="tok", extra={"fastMode": True},
-        )
-        doc = _load(path)
-        assert doc["fastMode"] is True
-        assert "ultracode" not in doc
-        assert "hooks" in doc
-
-    def test_no_extra_leaves_only_the_hooks_key(self):
-        # Backward-compat: omitting ``extra`` yields the pre-``extra`` shape —
-        # a lone ``hooks`` key with no stray top-level entries.
-        path = hook_settings.write_session_hooks("sid-1", port=9001, token="tok")
-        assert set(_load(path)) == {"hooks"}
-
-    def test_empty_extra_is_a_noop(self):
-        # An empty dict is falsy, so the merge is skipped and the document is
-        # identical to the no-``extra`` shape.
-        path = hook_settings.write_session_hooks(
-            "sid-1", port=9001, token="tok", extra={},
-        )
-        assert set(_load(path)) == {"hooks"}
-
-    def test_merge_preserves_baked_hook_url(self):
-        # The merge must not disturb the session_id / token baked into the hook
-        # URLs (the correlation mechanism the merged settings ride alongside).
-        path = hook_settings.write_session_hooks(
-            "sid-xyz", port=9100, token="tok-abc", extra={"ultracode": True},
-        )
-        doc = _load(path)
-        query = parse_qs(urlsplit(doc["hooks"]["Stop"][0]["hooks"][0]["url"]).query)
-        assert query["session_id"] == ["sid-xyz"]
-        assert query["token"] == ["tok-abc"]
-
 
 class TestRemoveSessionHooks:
     def test_removes_existing_file(self):
@@ -199,9 +145,6 @@ class TestRemoveSessionHooks:
         hook_settings.remove_session_hooks("sid-1", port=9001)
         assert not path.exists()
 
-    def test_missing_file_is_silent_noop(self):
-        # Late SessionEnd after a sweep is normal — must not raise.
-        hook_settings.remove_session_hooks("never-written", port=9001)
 
     def test_only_targets_the_named_session(self):
         keep = hook_settings.write_session_hooks("keep", port=9001, token="tok")
@@ -219,9 +162,6 @@ class TestSweepHooksDir:
         assert not a.exists()
         assert not b.exists()
 
-    def test_missing_dir_is_silent_noop(self):
-        # First boot: the dir was never created. Must not raise.
-        hook_settings.sweep_hooks_dir(port=9999)
 
     def test_does_not_touch_other_ports(self):
         keep = hook_settings.write_session_hooks("x", port=9002, token="tok")

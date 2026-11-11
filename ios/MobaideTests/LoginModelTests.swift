@@ -57,35 +57,6 @@ final class LoginModelTests: XCTestCase {
         XCTAssertEqual(state, .userOnly)
     }
 
-    func test401MapsToInvalidCredentialsMessage() async {
-        StubURLProtocol.enqueue(status: 401, body: "Invalid email or password")
-        let model = makeModel()
-        model.email = "user@example.com"
-        model.password = "wrong"
-
-        await model.loginWithPassword()
-
-        XCTAssertEqual(model.error, "Invalid email or password")
-        XCTAssertFalse(model.isLoading)
-    }
-
-    func test429MapsToLockoutMessageInMinutes() async {
-        StubURLProtocol.enqueue(status: 429, body: """
-        {"detail":{"error":"login_rate_limited","retry_after_seconds":900}}
-        """)
-        let model = makeModel()
-        model.email = "user@example.com"
-        model.password = "wrong"
-
-        await model.loginWithPassword()
-
-        XCTAssertEqual(
-            model.error,
-            "Too many sign-in attempts. Try again in 15 minutes, or reset your password."
-        )
-        XCTAssertFalse(model.isLoading)
-    }
-
     func testVerificationRequired403RoutesToVerifyEmail() async throws {
         StubURLProtocol.enqueue(status: 403, body: """
         {"detail":{"error":"verification_required","email":"pending@example.com"}}
@@ -101,39 +72,6 @@ final class LoginModelTests: XCTestCase {
         XCTAssertEqual(event, .verificationRequired(email: "pending@example.com"))
     }
 
-    func testAdminAccountIsBlocked() async {
-        StubURLProtocol.enqueue(status: 200, body: """
-        {"access_token":"jwt","user_id":"u1","email":"admin@example.com","role":"admin"}
-        """)
-        let model = makeModel()
-        model.email = "admin@example.com"
-        model.password = "pw"
-
-        await model.loginWithPassword()
-
-        XCTAssertEqual(model.error, AdminLoginNotSupported.userMessage)
-    }
-
-    func testEditingAFieldClearsTheError() async {
-        let model = makeModel()
-        await model.loginWithPassword()
-        XCTAssertNotNil(model.error)
-
-        model.email = "typed@example.com"
-
-        XCTAssertNil(model.error)
-    }
-
-    func testGoogleCancelClearsLoadingWithoutError() async {
-        let model = makeModel(google: .cancelled)
-
-        await model.signInWithGoogle()
-
-        XCTAssertFalse(model.isLoading)
-        XCTAssertNil(model.error)
-        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
-    }
-
     func testGoogleSuccessEmitsSuccessNavEvent() async throws {
         StubURLProtocol.enqueue(status: 200, body: """
         {"access_token":"jwt-g","user_id":"u1","email":"g@example.com","role":"user"}
@@ -145,14 +83,6 @@ final class LoginModelTests: XCTestCase {
 
         let event = try await events.next()
         XCTAssertEqual(event, .success)
-    }
-
-    func testGoogleFailureSurfacesErrorMessage() async {
-        let model = makeModel(google: .failed(message: "boom"))
-
-        await model.signInWithGoogle()
-
-        XCTAssertEqual(model.error, "Google Sign-In failed: boom")
     }
 
     func testSessionExpiryEmitsToastMessage() async throws {

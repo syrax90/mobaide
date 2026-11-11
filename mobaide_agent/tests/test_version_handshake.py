@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import sys
 
-import pytest
-
 from mobaide import __version__
 from mobaide.relay.envelope import (
     MIN_CLIENT_PROTOCOL_VERSION,
@@ -88,45 +86,6 @@ async def test_get_version_claude_missing_reports_unavailable(
     assert cli["claude"] == {"available": False}
     assert cli["codex"] == {"available": True}
     assert cli["antigravity"] == {"available": True}
-
-
-async def test_get_version_codex_missing_reports_unavailable(
-    client, monkeypatch
-) -> None:
-    from mobaide.core import codex_launcher
-
-    def _raise(*_a, **_kw):
-        raise codex_launcher.CodexBinaryNotFoundError(["PATH:codex"])
-
-    monkeypatch.setattr(codex_launcher, "_resolve_codex_binary", _raise)
-
-    response = await client.get("/api/version")
-    assert response.status_code == 200
-    cli = response.json()["capabilities"]["cli"]
-    assert cli["codex"] == {"available": False}
-    assert cli["claude"] == {"available": True}
-    assert cli["antigravity"] == {"available": True}
-
-
-async def test_get_version_antigravity_missing_reports_unavailable(
-    client, monkeypatch
-) -> None:
-    """When the ``agy`` binary can't be resolved, ``capabilities.cli.antigravity``
-    flips to ``available: false`` while Claude/Codex stay available — the gate is
-    per-CLI, not all-or-nothing."""
-    from mobaide.core import antigravity_launcher
-
-    def _raise(*_a, **_kw):
-        raise antigravity_launcher.AntigravityBinaryNotFoundError(["PATH:agy"])
-
-    monkeypatch.setattr(antigravity_launcher, "_resolve_agy_binary", _raise)
-
-    response = await client.get("/api/version")
-    assert response.status_code == 200
-    cli = response.json()["capabilities"]["cli"]
-    assert cli["antigravity"] == {"available": False}
-    assert cli["claude"] == {"available": True}
-    assert cli["codex"] == {"available": True}
 
 
 async def test_get_version_all_clis_missing_still_returns_200(

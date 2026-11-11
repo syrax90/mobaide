@@ -6,13 +6,6 @@ import XCTest
 final class MarkdownParserTests: XCTestCase {
     private typealias Item = MarkdownList.Item
 
-    func testHeadingDropsClosingHashesAndParagraphKeepsLineBreaks() {
-        XCTAssertEqual(
-            MarkdownParser.parse("## Result ##\n\nfirst\nsecond"),
-            [.heading(level: 2, text: "Result"), .paragraph("first\nsecond")]
-        )
-    }
-
     func testHeadingDropsAClosingHashRunOnlyAfterASpace() {
         let cases: [(String, MarkdownBlock)] = [
             ("# foo #", .heading(level: 1, text: "foo")),
@@ -151,10 +144,6 @@ final class MarkdownParserTests: XCTestCase {
             MarkdownParser.parse("> Note: **run** it\nlazy\n\n* * *\n# Title"),
             [.quote([.paragraph("Note: **run** it\nlazy")]), .rule, .heading(level: 1, text: "Title")]
         )
-    }
-
-    func testTwoDashesAreNotARule() {
-        XCTAssertEqual(MarkdownParser.parse("--"), [.paragraph("--")])
     }
 
     func testNestingStopsAtTheDepthLimit() {

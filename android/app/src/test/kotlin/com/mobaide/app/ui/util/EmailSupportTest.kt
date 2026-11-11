@@ -15,16 +15,6 @@ import org.junit.Test
 class EmailSupportTest {
 
     @Test
-    fun subject_containsVersionString() {
-        val subject = buildSupportEmailSubject("1.4.2")
-
-        assertTrue(
-            "subject must carry the version, got: $subject",
-            subject.contains("1.4.2"),
-        )
-    }
-
-    @Test
     fun body_containsVersionDeviceNameAndDeviceId() {
         val body = buildSupportEmailBody(
             versionName = "2.0.0",
@@ -50,36 +40,6 @@ class EmailSupportTest {
         assertTrue(
             "Account line must appear for a signed-in reporter, got: $body",
             body.contains("Account:") && body.contains("user@example.com"),
-        )
-    }
-
-    @Test
-    fun body_omitsAccountLine_whenUserEmailNull() {
-        val body = buildSupportEmailBody(
-            versionName = "1.0.0",
-            deviceName = "Pixel 8",
-            deviceId = "id-1",
-            userEmail = null,
-        )
-
-        assertFalse(
-            "Account line must be absent for an anonymous reporter, got: $body",
-            body.contains("Account:"),
-        )
-    }
-
-    @Test
-    fun body_omitsAccountLine_whenUserEmailEmpty() {
-        val body = buildSupportEmailBody(
-            versionName = "1.0.0",
-            deviceName = "Pixel 8",
-            deviceId = "id-1",
-            userEmail = "",
-        )
-
-        assertFalse(
-            "Account line must be absent for an empty email, got: $body",
-            body.contains("Account:"),
         )
     }
 

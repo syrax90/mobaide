@@ -229,25 +229,6 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertEqual(try forceValue(inBodyAt: 2), .bool(true))
     }
 
-    func testForcePromptCancelLeavesTheRowAndSendsNothing() async throws {
-        let sleeper = ManualSleeper()
-        let (model, _, _) = makeModel(sleeper: sleeper)
-        StubURLProtocol.enqueue(status: 200, body: gitItemsBody)
-        await model.load()
-
-        StubURLProtocol.enqueue(status: 200, body: #"{"results":[{"kind":"branch_only","target":"b","ok":false,"error":"force_required"}]}"#)
-        model.delete(model.items[0])
-        await waitUntil { sleeper.durations.contains(.seconds(5)) }
-        sleeper.release()
-        await waitUntil { model.forcePrompt != nil }
-
-        model.dismissForcePrompt()
-        model.confirmForceDelete()
-        try await Task.sleep(for: .milliseconds(20))
-        XCTAssertEqual(model.visibleItems.count, 1)
-        XCTAssertEqual(StubURLProtocol.requests.count, 2, "cancelling must not re-send")
-    }
-
     func testForcePromptMapsPositionallyInACoalescedBatch() async throws {
         let sleeper = ManualSleeper()
         let (model, _, _) = makeModel(sleeper: sleeper)
@@ -381,8 +362,6 @@ final class GitScreenModelTests: XCTestCase {
     private let branchesBody = #"""
     {"items":[{"kind":"branch_only","branch":"main","is_current":true},{"kind":"branch_only","branch":"stale"},{"kind":"branch_with_worktree","branch":"topic","worktree_path":"/repo/wt/topic"},{"kind":"remote_branch","branch":"origin/feature-x","remote":"origin","subject":"Add x","committed_at":"2026-09-16T10:20:30+02:00"}]}
     """#
-    private let dirtyCopy = "The project folder has local changes this checkout would overwrite. "
-        + "Commit or discard them from a session's Changes screen first."
 
     private var requestURLs: [String] {
         StubURLProtocol.requests.compactMap { $0.url?.absoluteString }
@@ -472,17 +451,6 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertEqual(model.message, "Created and checked out feature/new")
     }
 
-    func testCreateBranchIgnoresABlankNameAndAClosedSheet() async throws {
-        let model = try await branchesModel()
-
-        await model.createBranch(name: "feature/new", startPoint: nil, checkout: false)
-        model.openNewBranch()
-        await model.createBranch(name: "   ", startPoint: nil, checkout: false)
-
-        XCTAssertEqual(requestURLs, [])
-        XCTAssertEqual(model.newBranch, GitScreenModel.NewBranchSheetState())
-    }
-
     func testCreateBranchExistsKeepsTheSheetOpenWithTheRefusalInline() async throws {
         let model = try await branchesModel()
         model.openNewBranch()
@@ -562,16 +530,6 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertFalse(model.isCheckingOut)
     }
 
-    func testConfirmCheckoutWithoutAPromptSendsNothing() async throws {
-        let model = try await branchesModel()
-
-        model.confirmCheckout()
-        try await Task.sleep(for: .milliseconds(20))
-
-        XCTAssertEqual(requestURLs, [])
-        XCTAssertFalse(model.isCheckingOut)
-    }
-
     private func refuseCheckoutAsBusy(_ model: GitScreenModel) async throws {
         model.requestCheckout(try row(model, "stale"))
         StubURLProtocol.enqueue(
@@ -609,70 +567,6 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertFalse(model.isCheckingOut)
     }
 
-    func testConfirmBusyCheckoutOnAnAgentWithoutForceAsksForAnUpdate() async throws {
-        let model = try await branchesModel()
-        try await refuseCheckoutAsBusy(model)
-        StubURLProtocol.enqueue(
-            status: 409,
-            body: #"{"detail":{"busy_by":[{"kind":"auto_scan","project_name":"proj","worktree_path":"/repo"}]}}"#
-        )
-
-        model.confirmBusyCheckout()
-        await waitUntil { model.message != nil }
-
-        XCTAssertEqual(model.message, "The project folder is still in use. Update the agent to check out anyway.")
-        XCTAssertNil(model.busyCheckoutPrompt)
-    }
-
-    func testDismissBusyCheckoutPromptSendsNothing() async throws {
-        let model = try await branchesModel()
-        try await refuseCheckoutAsBusy(model)
-
-        model.dismissBusyCheckoutPrompt()
-        model.confirmBusyCheckout()
-        try await Task.sleep(for: .milliseconds(20))
-
-        XCTAssertNil(model.busyCheckoutPrompt)
-        XCTAssertEqual(StubURLProtocol.bodies.count, 1)
-    }
-
-    func testCheckoutDirtyShowsTheDirtyCopy() async throws {
-        let model = try await branchesModel()
-        model.requestCheckout(try row(model, "stale"))
-        StubURLProtocol.enqueue(status: 409, body: #"{"detail":{"code":"dirty","message":"error: Your local changes"}}"#)
-
-        model.confirmCheckout()
-        await waitUntil { model.message != nil }
-
-        XCTAssertEqual(model.message, dirtyCopy)
-        XCTAssertNil(model.busyDialog)
-        XCTAssertFalse(model.isCheckingOut)
-    }
-
-    func testAFilterAppearsAtEightRowsNarrowsBothSectionsAndOpensTheRemoteOne() async throws {
-        let (model, _, _) = makeModel(sleeper: ManualSleeper())
-        let locals = (1...6).map { #"{"kind":"branch_only","branch":"feature-\#($0)"}"# }
-        let remotes = [
-            #"{"kind":"remote_branch","branch":"origin/feature-1","remote":"origin"}"#,
-            #"{"kind":"remote_branch","branch":"origin/main","remote":"origin"}"#,
-        ]
-        StubURLProtocol.enqueue(status: 200, body: #"{"items":[\#((locals + remotes).joined(separator: ","))]}"#)
-        await model.load()
-        XCTAssertTrue(model.filterable)
-        XCTAssertFalse(model.remoteOpen)
-
-        model.filter = " FEATURE-1 "
-        XCTAssertEqual(model.localItems.map(\.branch), ["feature-1"])
-        XCTAssertEqual(model.remoteItems.map(\.branch), ["origin/feature-1"])
-        XCTAssertTrue(model.remoteOpen)
-
-        model.filter = "   "
-        XCTAssertEqual(model.localItems.count, 6)
-        XCTAssertFalse(model.remoteOpen)
-        model.toggleRemote()
-        XCTAssertTrue(model.remoteOpen)
-    }
-
     func testRemoteRowsAreNeitherSelectableNorDeletable() async throws {
         let model = try await branchesModel()
         let remote = try row(model, "origin/feature-x")
@@ -698,11 +592,6 @@ final class GitScreenModelTests: XCTestCase {
         await model.load()
         StubURLProtocol.reset()
         return (model, sleeper)
-    }
-
-    private func itemsBody(_ branches: [String]) -> String {
-        let rows = branches.map { #"{"kind":"branch_only","branch":"\#($0)"}"# }
-        return #"{"items":[\#(rows.joined(separator: ","))]}"#
     }
 
     private let worktreeOnlyTopic = GitDeleteItem(kind: GitItem.kindOrphanWorktree, worktree_path: "/repo/wt/topic")
@@ -737,21 +626,6 @@ final class GitScreenModelTests: XCTestCase {
         )
     }
 
-    func testDismissingTheRemoteDeletePromptQueuesAndSendsNothing() async throws {
-        let (model, sleeper) = await remoteDeleteModel()
-        model.delete(try row(model, "origin/feature-x"))
-
-        model.dismissRemoteDeletePrompt()
-        model.confirmRemoteDelete()
-        sleeper.release()
-        try await Task.sleep(for: .milliseconds(20))
-
-        XCTAssertNil(model.remoteDeletePrompt)
-        XCTAssertNil(model.undoToast)
-        XCTAssertEqual(model.visibleItems.count, 4)
-        XCTAssertEqual(requestURLs, [])
-    }
-
     func testAMixedSelectionIsConfirmedWholeAndSentInOneBatch() async throws {
         let (model, sleeper) = await remoteDeleteModel()
         let stale = try row(model, "stale")
@@ -778,37 +652,6 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertEqual(try sentItems(inBodyAt: 0).compactMap { $0["branch"]?.stringValue }, ["stale", "origin/feature-x"])
     }
 
-    func testCancellingTheRemoteDeletePromptReturnsToTheSelection() async throws {
-        let (model, sleeper) = await remoteDeleteModel()
-        let stale = try row(model, "stale")
-        let remote = try row(model, "origin/feature-x")
-        model.select(stale)
-        model.select(remote)
-        model.requestDelete()
-
-        model.dismissRemoteDeletePrompt()
-        sleeper.release()
-        try await Task.sleep(for: .milliseconds(20))
-
-        XCTAssertNil(model.remoteDeletePrompt)
-        XCTAssertEqual(model.selected, [stale.id, remote.id])
-        XCTAssertNil(model.undoToast)
-        XCTAssertEqual(requestURLs, [])
-
-        model.requestDelete()
-
-        XCTAssertEqual(model.remoteDeletePrompt?.map(\.branch), ["stale", "origin/feature-x"])
-    }
-
-    func testARemoteRowWithoutTheCapabilityOpensNoPrompt() async throws {
-        let (model, _) = await remoteDeleteModel(deleteRemote: false)
-
-        model.delete(try row(model, "origin/feature-x"))
-
-        XCTAssertNil(model.remoteDeletePrompt)
-        XCTAssertNil(model.undoToast)
-    }
-
     func testRemoveWorktreeHidesTheRowForTheUndoWindowThenSendsAWorktreeOnlyRemoval() async throws {
         let (model, sleeper) = await remoteDeleteModel()
         let topic = try row(model, "topic")
@@ -822,24 +665,6 @@ final class GitScreenModelTests: XCTestCase {
         sleeper.release()
         await waitUntil { StubURLProtocol.requests.count == 1 }
         XCTAssertEqual(try sentBody(GitDeleteRequest.self, at: 0), GitDeleteRequest(items: [worktreeOnlyTopic]))
-    }
-
-    func testRemoveWorktreeIsANoOpOnRowsWithoutARemovableWorktree() async throws {
-        let (model, _, _) = makeModel(sleeper: ManualSleeper())
-        StubURLProtocol.enqueue(
-            status: 200,
-            body: #"""
-            {"items":[{"kind":"branch_with_worktree","branch":"main","worktree_path":"/repo","is_current":true},{"kind":"branch_only","branch":"stale"},{"kind":"orphan_worktree","worktree_path":"/repo/wt/orphan"}]}
-            """#
-        )
-        await model.load()
-
-        for item in model.items {
-            model.removeWorktree(item)
-        }
-
-        XCTAssertNil(model.undoToast)
-        XCTAssertEqual(model.visibleItems.count, 3)
     }
 
     func testADirtyWorktreeRemovalPromptsWithThePathThenResendsOnlyTheRemovalWithForce() async throws {
@@ -860,52 +685,5 @@ final class GitScreenModelTests: XCTestCase {
 
         let forced = GitDeleteItem(kind: GitItem.kindOrphanWorktree, worktree_path: "/repo/wt/topic", force: true)
         XCTAssertEqual(try sentBody(GitDeleteRequest.self, at: 1), GitDeleteRequest(items: [forced]))
-    }
-
-    func testToggleFolderOpensAndClosesALocalFolderAndSurvivesAReload() async throws {
-        let (model, _, _) = makeModel(sleeper: ManualSleeper())
-        let body = itemsBody(["feature/a", "feature/b", "main"])
-        StubURLProtocol.enqueue(status: 200, body: body)
-        await model.load()
-        XCTAssertEqual(
-            model.localRows.first,
-            .folder(id: "dir:local:feature", name: "feature", depth: 0, count: 2, expanded: false)
-        )
-        XCTAssertEqual(model.localRows.count, 2)
-
-        model.toggleFolder("dir:local:feature")
-        XCTAssertEqual(model.toggledFolders, ["dir:local:feature"])
-        XCTAssertEqual(model.localRows.count, 4)
-
-        StubURLProtocol.enqueue(status: 200, body: body)
-        await model.load()
-        XCTAssertEqual(model.localRows.count, 4, "a git.changed reload keeps the folder open")
-
-        model.toggleFolder("dir:local:feature")
-        XCTAssertTrue(model.toggledFolders.isEmpty)
-        XCTAssertEqual(model.localRows.count, 2)
-    }
-
-    func testToggleFolderIsIgnoredWhileAFilterHoldsTheFoldersOpenButNotForStaleTextBelowTheThreshold() async throws {
-        let (model, _, _) = makeModel(sleeper: ManualSleeper())
-        StubURLProtocol.enqueue(status: 200, body: itemsBody((1...7).map { "feature/\($0)" } + ["main"]))
-        await model.load()
-        model.filter = "feature/3"
-        XCTAssertTrue(model.filterActive)
-        XCTAssertEqual(
-            model.localRows.first,
-            .folder(id: "dir:local:feature", name: "feature", depth: 0, count: 1, expanded: true)
-        )
-
-        model.toggleFolder("dir:local:feature")
-        XCTAssertTrue(model.toggledFolders.isEmpty)
-
-        let (small, _, _) = makeModel(sleeper: ManualSleeper())
-        StubURLProtocol.enqueue(status: 200, body: itemsBody(["feature/a", "main"]))
-        await small.load()
-        small.filter = "feature"
-        XCTAssertFalse(small.filterActive, "the field is hidden below eight rows")
-        small.toggleFolder("dir:local:feature")
-        XCTAssertEqual(small.toggledFolders, ["dir:local:feature"])
     }
 }

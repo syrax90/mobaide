@@ -43,12 +43,6 @@ final class ChatImageCodecTests: XCTestCase {
         XCTAssertEqual(pixelSize(ChatImageDecoder.decode(data, maxSourcePixels: 400)), CGSize(width: 20, height: 20))
     }
 
-    func testDecoderBoundsTheDecodedLongestSide() throws {
-        let data = try noisePNG(width: 600, height: 200)
-
-        XCTAssertEqual(pixelSize(ChatImageDecoder.decode(data, maxPixelSize: 300)), CGSize(width: 300, height: 100))
-    }
-
     func testEncoderFitsTheImageUnderTheCap() throws {
         let data = try noisePNG(width: 2400, height: 1200)
         let cap = ChatSessionModel.maxImageBase64

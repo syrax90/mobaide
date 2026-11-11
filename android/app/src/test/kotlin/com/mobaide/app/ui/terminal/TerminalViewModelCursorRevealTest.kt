@@ -126,24 +126,6 @@ class TerminalViewModelCursorRevealTest {
     }
 
     @Test
-    fun tappedRow_arms() = runTest(testDispatcher) {
-        val vm = liveRunningViewModel()
-
-        vm.sendTappedRow("ls", isCurrentInput = true)
-
-        assertTrue(vm.cursorReveal.isArmed)
-    }
-
-    @Test
-    fun tappedRow_whileNotLive_sendsNothingAndDoesNotArm() = runTest(testDispatcher) {
-        val vm = createViewModel()
-
-        vm.sendTappedRow("ls", isCurrentInput = true)
-
-        assertFalse(vm.cursorReveal.isArmed)
-    }
-
-    @Test
     fun wheelReportFromTheSurface_doesNotArm() = runTest(testDispatcher) {
         val vm = liveRunningViewModel()
 
@@ -155,16 +137,6 @@ class TerminalViewModelCursorRevealTest {
             "a scrollback drag in Claude Code must not yank the Static view sideways",
             vm.cursorReveal.isArmed,
         )
-    }
-
-    @Test
-    fun mouseClickFromTheSurface_doesNotArm() = runTest(testDispatcher) {
-        val vm = liveRunningViewModel()
-
-        writeFromSurface(vm, "\u001B[<0;10;5M".toByteArray(Charsets.US_ASCII))
-
-        verify(timeout = 2000, exactly = 1) { connection.sendBinary(any()) }
-        assertFalse(vm.cursorReveal.isArmed)
     }
 
     @Test

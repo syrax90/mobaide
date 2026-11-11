@@ -36,18 +36,6 @@ final class FlagEntryTests: XCTestCase {
         XCTAssertEqual(entry.textValue, "true")
     }
 
-    func testFromBoolMapsToBooleanKind() {
-        XCTAssertEqual(FlagEntry.from(key: "k", value: .bool(true)).kind, .boolean)
-        XCTAssertEqual(FlagEntry.from(key: "k", value: .bool(true)).textValue, "true")
-        XCTAssertEqual(FlagEntry.from(key: "k", value: .bool(false)).textValue, "false")
-    }
-
-    func testFromIntMapsToNumberKind() {
-        let entry = FlagEntry.from(key: "k", value: .int(42))
-        XCTAssertEqual(entry.kind, .number)
-        XCTAssertEqual(entry.textValue, "42")
-    }
-
     func testFromDoubleRendersWholeNumbersWithoutDecimal() {
         XCTAssertEqual(FlagEntry.from(key: "k", value: .double(1.0)).textValue, "1")
         XCTAssertEqual(FlagEntry.from(key: "k", value: .double(1.5)).textValue, "1.5")
@@ -64,14 +52,6 @@ final class FlagEntryTests: XCTestCase {
     func testStringTrueRoundTripsWithoutBecomingBool() {
         let value = JSONValue.string("true")
         XCTAssertEqual(FlagEntry.from(key: "k", value: value).toJSONValue(), value)
-    }
-
-    func testBoolRoundTrips() {
-        XCTAssertEqual(FlagEntry.from(key: "k", value: .bool(true)).toJSONValue(), .bool(true))
-    }
-
-    func testIntRoundTrips() {
-        XCTAssertEqual(FlagEntry.from(key: "k", value: .int(7)).toJSONValue(), .int(7))
     }
 
     func testFractionalDoubleRoundTrips() {

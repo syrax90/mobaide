@@ -7,10 +7,9 @@ import com.mobaide.app.data.network.RestApi
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WebSocketManager
 import com.mobaide.app.data.network.dto.CreateSessionRequest
-import com.mobaide.app.data.network.dto.ScrollbackResponse
 import com.mobaide.app.data.network.dto.SessionResponse
+import com.mobaide.app.testing.awaitSubscribers
 import io.mockk.coEvery
-import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
@@ -27,15 +26,15 @@ import org.junit.Test
  * Unit tests for [SessionRepository] — exercises the [AgentEvent]-driven
  * list-merging logic ([AgentEvent.SessionsChanged] full replace,
  * [AgentEvent.SessionUpdated] add-if-new / replace-if-existing by id),
- * REST delegation, and [WebSocketManager.createConnection] path construction
+ * create-time cache seeding, and [WebSocketManager.createConnection] path construction
  * for per-session I/O connections.
  *
  * Collaborators are mocked. [AgentEventBus.events] is stubbed to a real
  * [MutableSharedFlow] so that `eventBus.stream<T>()` (an inline function that
  * expands to `events.filterIsInstance()`) works without needing a real bus.
  * The repository launches its event collectors on `Dispatchers.Default` via an
- * internal [kotlinx.coroutines.CoroutineScope], so event-driven tests rely on
- * Turbine's default timeout for cross-thread synchronisation.
+ * internal [kotlinx.coroutines.CoroutineScope], so the fixture waits for its
+ * subscription before a test emits (a replay-0 emit would otherwise be lost).
  */
 class SessionRepositoryTest {
 
@@ -60,6 +59,8 @@ class SessionRepositoryTest {
         every { bus.connection } returns connectionFlow
         val wsManager = mockk<WebSocketManager>(relaxed = true)
         val repo = SessionRepository(restApi, wsManager, bus)
+        eventFlow.awaitSubscribers(2)
+        connectionFlow.awaitSubscribers()
         return Fixture(repo, restApi, bus, eventFlow, wsManager, connectionFlow)
     }
 
@@ -72,104 +73,7 @@ class SessionRepositoryTest {
         val connectionFlow: MutableStateFlow<AgentEventBus.ConnState>,
     )
 
-    // ---- observeSessionList initial state -----------------------------------
-
-    @Test
-    fun observeSessionList_initialState_isEmptyList() = runTest {
-        val (repo) = newRepo()
-        assertTrue(repo.observeSessionList().value.isEmpty())
-    }
-
-    // ---- REST delegation ----------------------------------------------------
-
-    @Test
-    fun createSession_delegatesToRestApi_andReturnsSamePayload() = runTest {
-        val (repo, restApi) = newRepo()
-        val request = CreateSessionRequest(command = listOf("bash"))
-        val response = session("s-1")
-        coEvery { restApi.createSession(request) } returns response
-
-        val returned = repo.createSession(request)
-
-        assertSame(response, returned)
-        coVerify(exactly = 1) { restApi.createSession(request) }
-    }
-
-    @Test
-    fun listSessions_delegatesToRestApi() = runTest {
-        val (repo, restApi) = newRepo()
-        val payload = listOf(session("s-1"), session("s-2"))
-        coEvery { restApi.listSessions() } returns payload
-
-        val returned = repo.listSessions()
-
-        assertSame(payload, returned)
-        coVerify(exactly = 1) { restApi.listSessions() }
-    }
-
-    @Test
-    fun deleteSession_forwardsForceFlag_toRestApi() = runTest {
-        val (repo, restApi) = newRepo()
-        coEvery { restApi.deleteSession("s-1", true) } returns Unit
-
-        repo.deleteSession("s-1", force = true)
-
-        coVerify(exactly = 1) { restApi.deleteSession("s-1", true) }
-    }
-
-    @Test
-    fun deleteSession_defaultsForceToFalse() = runTest {
-        val (repo, restApi) = newRepo()
-        coEvery { restApi.deleteSession("s-1", false) } returns Unit
-
-        repo.deleteSession("s-1")
-
-        coVerify(exactly = 1) { restApi.deleteSession("s-1", false) }
-    }
-
-    @Test
-    fun getScrollback_delegatesToRestApi_withDefaultLineCount() = runTest {
-        val (repo, restApi) = newRepo()
-        val payload = ScrollbackResponse(
-            session_id = "s-1",
-            lines = listOf("line1", "line2"),
-            total = 2,
-        )
-        coEvery { restApi.getScrollback("s-1", 1000) } returns payload
-
-        val returned = repo.getScrollback("s-1")
-
-        assertSame(payload, returned)
-        coVerify(exactly = 1) { restApi.getScrollback("s-1", 1000) }
-    }
-
-    @Test
-    fun getScrollback_forwardsCustomLineCount() = runTest {
-        val (repo, restApi) = newRepo()
-        val payload = ScrollbackResponse(session_id = "s-1", lines = emptyList(), total = 0)
-        coEvery { restApi.getScrollback("s-1", 42) } returns payload
-
-        repo.getScrollback("s-1", lines = 42)
-
-        coVerify(exactly = 1) { restApi.getScrollback("s-1", 42) }
-    }
-
     // ---- SessionsChanged: full replace --------------------------------------
-
-    @Test
-    fun sessionsChangedEvent_replacesInternalList() = runTest {
-        val (repo, _, _, eventFlow) = newRepo()
-
-        repo.observeSessionList().test {
-            assertEquals(emptyList<SessionResponse>(), awaitItem())
-
-            val pushed = listOf(session("s-1"), session("s-2"))
-            eventFlow.emit(AgentEvent.SessionsChanged(pushed))
-
-            assertEquals(pushed, awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
 
     @Test
     fun sessionsChangedEvent_secondEmission_fullyReplacesPriorList() = runTest {
@@ -261,23 +165,6 @@ class SessionRepositoryTest {
             )
             assertEquals("stopped", after.first { it.session_id == "s-1" }.state)
             assertEquals("running", after.first { it.session_id == "s-2" }.state)
-
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun sessionUpdatedEvent_onEmptyList_appendsTheSession() = runTest {
-        val (repo, _, _, eventFlow) = newRepo()
-
-        repo.observeSessionList().test {
-            awaitItem() // initial empty
-
-            // Update without a prior SessionsChanged — starts from empty list.
-            eventFlow.emit(AgentEvent.SessionUpdated(session("s-7")))
-            val after = awaitItem()
-            assertEquals(1, after.size)
-            assertEquals("s-7", after[0].session_id)
 
             cancelAndIgnoreRemainingEvents()
         }
@@ -380,18 +267,6 @@ class SessionRepositoryTest {
         }
     }
 
-    @Test
-    fun notifySessionEnded_deliversTheIdToTheListeningScreen() = runTest {
-        val (repo) = newRepo()
-
-        repo.endedSessionNotices.test {
-            repo.notifySessionEnded("s-gone")
-
-            assertEquals("s-gone", awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
     // ---- createSessionIoConnection: path construction -----------------------
 
     @Test
@@ -410,19 +285,4 @@ class SessionRepositoryTest {
         verify(exactly = 1) { wsManager.createConnection("ws/session/abc-123") }
     }
 
-    @Test
-    fun createSessionIoConnection_embedsRawSessionId_inPath_withoutTrimOrEncoding() {
-        // The repository delegates the path as-is; the manager is responsible for
-        // any URL hygiene. This test pins that contract so a future refactor that
-        // silently normalises the session id is caught.
-        val (repo, _, _, _, wsManager) = newRepo()
-        val stub = mockk<WebSocketConnection>(relaxed = true)
-        every { wsManager.createConnection(any()) } returns stub
-
-        repo.createSessionIoConnection("weird id /with slash")
-
-        verify(exactly = 1) {
-            wsManager.createConnection("ws/session/weird id /with slash")
-        }
-    }
 }

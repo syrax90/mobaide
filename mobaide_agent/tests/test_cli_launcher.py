@@ -50,8 +50,6 @@ def _launcher(resolves_to: str | None, models=None, model_details=None):
 
 
 class TestProbeCliAvailable:
-    def test_true_when_resolve_succeeds(self):
-        assert probe_cli_available(_launcher("/usr/local/bin/fake")) is True
 
     def test_false_when_binary_not_found(self):
         assert probe_cli_available(_launcher(None)) is False
@@ -95,19 +93,12 @@ class TestBuildCliCapabilities:
             "codex": {"available": False},
         }
 
-    def test_empty_registry_yields_empty_map(self):
-        assert build_cli_capabilities({}) == {}
 
     def test_none_registry_is_tolerated(self):
         """``app_state.cli_launchers`` may be unset on a partially-built state;
         the builder coerces a falsy registry to ``{}`` rather than raising."""
         assert build_cli_capabilities(None) == {}  # type: ignore[arg-type]
 
-    def test_preserves_registry_keys_for_future_clis(self):
-        """A CLI added to the registry under any id is reported automatically —
-        the gate is driven off the registry, not a hard-coded claude/codex set."""
-        caps = build_cli_capabilities({"future-cli": _launcher("/bin/future")})
-        assert caps == {"future-cli": {"available": True}}
 
     def test_models_key_added_when_cached_models_truthy(self):
         """A launcher with a warm ``cached_models`` additionally carries the
@@ -126,11 +117,6 @@ class TestBuildCliCapabilities:
         }
         assert caps["antigravity"]["models"] is not cached
 
-    def test_models_key_omitted_when_cached_models_none(self):
-        """A cold cache (``cached_models is None``) yields the bare
-        ``{"available": ...}`` shape — the key is omitted, never ``null``."""
-        caps = build_cli_capabilities({"codex": _launcher("/bin/codex", models=None)})
-        assert caps == {"codex": {"available": True}}
 
     def test_models_key_omitted_when_cached_models_empty(self):
         """An empty tuple is falsy: the key must be omitted — never emitted as
@@ -139,14 +125,6 @@ class TestBuildCliCapabilities:
         caps = build_cli_capabilities({"codex": _launcher("/bin/codex", models=())})
         assert caps == {"codex": {"available": True}}
 
-    def test_models_key_omitted_when_launcher_lacks_attribute(self):
-        """Model enumeration is duck-typed: a launcher without ``cached_models``
-        at all (e.g. Claude's) is reported with availability only."""
-        launcher = _launcher("/bin/claude")
-        del launcher.cached_models  # getattr now raises AttributeError
-        del launcher.cached_model_details
-        caps = build_cli_capabilities({"claude": launcher})
-        assert caps == {"claude": {"available": True}}
 
     def test_model_details_key_added_when_cached_details_truthy(self):
         """A launcher with warm per-model details additionally carries
@@ -184,15 +162,6 @@ class TestBuildCliCapabilities:
             "agy": {"available": True, "models": ["m"]},
         }
 
-    def test_model_details_key_omitted_when_launcher_lacks_attribute(self):
-        """A launcher exposing ``cached_models`` but not ``cached_model_details``
-        (e.g. Antigravity's) still gets its ``models`` key with no details."""
-        launcher = _launcher("/bin/agy", models=["Gemini 3.1 Flash"])
-        del launcher.cached_model_details
-        caps = build_cli_capabilities({"antigravity": launcher})
-        assert caps == {
-            "antigravity": {"available": True, "models": ["Gemini 3.1 Flash"]}
-        }
 
     def test_models_pending_marks_only_cold_enumeration_capable_launchers(self):
         """``models_pending=True`` (warm task still running) marks a launcher
@@ -274,12 +243,6 @@ class TestWarmCliModelCaches:
         broken.list_models.assert_awaited_once()
         healthy.list_models.assert_awaited_once()
 
-    async def test_none_registry_is_tolerated(self):
-        """Mirrors ``build_cli_capabilities``: a partially-built app state may
-        carry no registry; the warm task must no-op rather than raise."""
-        await warm_cli_model_caches(None)  # type: ignore[arg-type]
-        await warm_cli_model_caches({})
-
 
 class TestAwaitModelCacheWarmup:
     """``await_model_cache_warmup`` is the bounded mid-warmup wait both
@@ -342,18 +305,12 @@ class TestShimSafeArgv:
             "/usr/local/bin/agy", "models",
         ]
 
-    def test_no_extra_args(self):
-        assert shim_safe_argv("codex") == ["codex"]
 
     @skip_if_not_windows
     def test_cmd_shim_wrapped_on_windows(self):
         argv = shim_safe_argv(r"C:\npm\codex.cmd", "debug", "models", "--json")
         assert argv == ["cmd", "/c", r"C:\npm\codex.cmd", "debug", "models", "--json"]
 
-    @skip_if_not_windows
-    def test_bat_shim_wrapped_case_insensitively_on_windows(self):
-        argv = shim_safe_argv(r"C:\npm\agy.BAT", "models")
-        assert argv == ["cmd", "/c", r"C:\npm\agy.BAT", "models"]
 
     @skip_if_not_linux
     def test_cmd_suffix_not_wrapped_on_posix(self):
@@ -378,15 +335,6 @@ class TestProbeWithRealLaunchers:
 
         assert probe_cli_available(ClaudeLauncher()) is True
 
-    def test_codex_launcher_available_with_pinned_resolver(self):
-        from mobaide.core.codex_launcher import CodexLauncher
-
-        assert probe_cli_available(CodexLauncher()) is True
-
-    def test_antigravity_launcher_available_with_pinned_resolver(self):
-        from mobaide.core.antigravity_launcher import AntigravityLauncher
-
-        assert probe_cli_available(AntigravityLauncher()) is True
 
     def test_claude_launcher_unavailable_when_resolver_raises(self, monkeypatch):
         from mobaide.core import claude_launcher

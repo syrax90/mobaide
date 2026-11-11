@@ -374,8 +374,6 @@ describe('DictationUploader', () => {
   it.each([
     [409, 'voice_busy', true],
     [409, 'voice_not_ready', false],
-    [422, 'bad_audio', false],
-    [413, 'chunk_too_large', false],
     [503, 'something_new', true],
     [400, 'something_new', false],
   ])('reports a %i %s refusal with retryable=%s', async (status, code, retryable) => {

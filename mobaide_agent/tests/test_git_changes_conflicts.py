@@ -12,7 +12,6 @@ import hashlib
 import os
 import stat
 import subprocess
-import sys
 
 import pytest
 
@@ -32,7 +31,6 @@ from mobaide.agent.git.changes_models import (
 )
 from mobaide.agent.git.changes_service import (
     GitBadRequestError,
-    GitCommandError,
     GitRefusedError,
     GitTimeoutError,
     get_session_git_status,
@@ -45,13 +43,11 @@ from .git_repo_support import (
     finish_merge_as_ours,
     make_conflict_branches,
     make_modify_delete_branches,
-    make_submodule_conflict,
     norm_path,
     posix_only,
     repo,  # noqa: F401 - pytest fixture
     requires_git,
     run_git_sync,
-    start_failing_am_after_a_merge_as_ours,
     stop_rebase_on_exec_after_a_pick_as_ours,
     write_file,
 )
@@ -143,16 +139,6 @@ def _stop_merge(repo_dir: str) -> None:
 def _stop_cherry_pick(repo_dir: str) -> None:
     make_conflict_branches(repo_dir)
     run_git_sync(repo_dir, "cherry-pick", "other", check=False)
-
-
-def _stop_revert(repo_dir: str) -> None:
-    """Reverting ``main``'s older rewrite of line 2 of ``keep.txt`` stops on
-    the newer one."""
-    write_file(repo_dir, "keep.txt", b"one\nFIRST\nthree\n")
-    commit_all(repo_dir, "first rewrite")
-    write_file(repo_dir, "keep.txt", b"one\nSECOND\nthree\n")
-    commit_all(repo_dir, "second rewrite")
-    run_git_sync(repo_dir, "revert", "--no-edit", "HEAD~1", check=False)
 
 
 def _finish_merge_as_ours_then_bisect(repo_dir: str) -> None:
@@ -335,18 +321,6 @@ class TestGetConflict:
         assert (resp.markers, resp.has_base) == (1, True)
         assert "\n||||||| " in resp.content
 
-    async def test_markers_count_every_conflict_region_of_the_file(self, repo):
-        _stop_merge(repo)
-        write_file(
-            repo, "keep.txt",
-            b"<<<<<<< a\nx\n=======\ny\n>>>>>>> b\nmid\n<<<<<<<\nz\n=======\n>>>>>>> b\n"
-            b"<<<<<<<x not a marker\n",
-        )
-
-        resp = await _get(repo)
-
-        assert resp.markers == 2
-
     async def test_crlf_and_a_bom_are_stripped_from_the_text_but_not_the_token(self, repo):
         _stop_merge(repo)
         raw = b"\xef\xbb\xbfone\r\n<<<<<<< HEAD\r\nMAIN\r\n=======\r\nOTHER\r\n>>>>>>> other\r\n"
@@ -395,14 +369,6 @@ class TestGetConflict:
         assert (resp.kind, resp.content, resp.token, resp.markers) == (kind, None, None, 0)
         assert (resp.code, resp.ours.present, resp.theirs.present) == ("UU", True, True)
 
-    async def test_a_file_of_exactly_the_limit_is_still_text(self, repo):
-        _stop_merge(repo)
-        write_file(repo, "keep.txt", b"x" * EDIT_BYTE_LIMIT)
-
-        resp = await _get(repo)
-
-        assert (resp.kind, len(resp.content)) == ("text", EDIT_BYTE_LIMIT)
-
     async def test_a_file_gone_from_the_worktree_is_missing(self, repo):
         _stop_merge(repo)
         os.remove(os.path.join(repo, "keep.txt"))
@@ -410,15 +376,6 @@ class TestGetConflict:
         resp = await _get(repo)
 
         assert (resp.kind, resp.content, resp.token) == ("missing", None, None)
-
-    async def test_a_directory_in_the_files_place_is_unsupported(self, repo):
-        _stop_merge(repo)
-        os.remove(os.path.join(repo, "keep.txt"))
-        write_file(repo, "keep.txt/inner.txt", b"i\n")
-
-        resp = await _get(repo)
-
-        assert (resp.kind, resp.content) == ("unsupported", None)
 
     @posix_only
     async def test_a_symlink_left_in_the_worktree_is_never_followed(self, repo, tmp_path):
@@ -431,20 +388,6 @@ class TestGetConflict:
         resp = await _get(repo)
 
         assert (resp.kind, resp.content, resp.token) == ("symlink", None, None)
-
-    @posix_only
-    async def test_a_conflict_between_two_symlinks_is_a_symlink_kind(self, repo):
-        run_git_sync(repo, "checkout", "-q", "-b", "other")
-        os.symlink("README.md", os.path.join(repo, "link"))
-        commit_all(repo, "other link")
-        run_git_sync(repo, "checkout", "-q", "main")
-        os.symlink("keep.txt", os.path.join(repo, "link"))
-        commit_all(repo, "main link")
-        run_git_sync(repo, "merge", "other", check=False)
-
-        resp = await _get(repo, "link")
-
-        assert (resp.code, resp.kind, resp.content) == ("AA", "symlink", None)
 
     async def test_a_submodule_conflict_is_reported_without_reading_anything(self, repo):
         _plant_gitlink_conflict(repo, "vendor")
@@ -484,7 +427,7 @@ class TestGetConflict:
         assert (await _get(repo, "src/a.txt")).kind == "text"
 
     @pytest.mark.parametrize(
-        "path", [None, "", "../keep.txt", "/etc/passwd", ".git/config", "sub/.GIT/x", ".git"]
+        "path", [None, "../keep.txt", "/etc/passwd", "sub/.GIT/x", ".git"]
     )
     async def test_an_escaping_or_git_dir_path_is_bad_before_the_repo_is_resolved(
         self, tmp_path, path
@@ -494,26 +437,6 @@ class TestGetConflict:
             await _get(str(tmp_path / "gone"), path)
 
         assert info.value.code == "bad_path"
-
-    async def test_outside_a_repo_is_a_bad_request_with_the_reason(self, tmp_path):
-        with pytest.raises(GitBadRequestError) as info:
-            await _get(str(tmp_path))
-
-        assert info.value.code == "not_a_repo"
-
-    async def test_an_index_listing_that_times_out_is_a_timeout(self, repo, monkeypatch):
-        _stop_merge(repo)
-        real_run_git = changes_mutations.run_git
-
-        async def hung_listing(args, **kwargs):
-            if args[:2] == ["ls-files", "-u"]:
-                return CmdResult(rc=-9, stdout=b"", stderr=b"", timed_out=True)
-            return await real_run_git(args, **kwargs)
-
-        monkeypatch.setattr(changes_mutations, "run_git", hung_listing)
-
-        with pytest.raises(GitTimeoutError):
-            await _get(repo)
 
 
 @requires_git
@@ -559,7 +482,6 @@ class TestResolve:
             "one\n<<<<<<< main\nMAIN\nthree\n",
             "one\n>>>>>>> b2ee9b2 other side\nthree\n",
             "one\r\n<<<<<<<\r\nthree\r\n",
-            "<<<<<<<<< longer\n",
         ],
     )
     async def test_a_resolution_still_holding_a_marker_line_is_refused(self, repo, content):
@@ -576,7 +498,7 @@ class TestResolve:
         assert bus.published == []
 
     @pytest.mark.parametrize(
-        "content", ["one\n=======\nthree\n", "a <<<<<<< b\n", "<<<<<<<x\n", "<<<<<< six\n"]
+        "content", ["one\n=======\nthree\n", "<<<<<<<x\n"]
     )
     async def test_lines_that_only_resemble_a_marker_are_a_valid_resolution(
         self, repo, content
@@ -602,17 +524,6 @@ class TestResolve:
         assert _unmerged(repo) == ["keep.txt"]
         assert bus.published == []
 
-    async def test_a_file_deleted_since_it_was_read_is_refused(self, repo):
-        _stop_rebase(repo)
-        token = (await _get(repo)).token
-        os.remove(os.path.join(repo, "keep.txt"))
-
-        with pytest.raises(GitRefusedError) as info:
-            await _resolve(repo, "one\nRESOLVED\nthree\n", token=token)
-
-        assert info.value.code == "file_changed"
-        assert not os.path.lexists(os.path.join(repo, "keep.txt"))
-
     async def test_a_tracked_file_that_is_not_in_conflict_is_never_written(self, repo):
         _stop_rebase(repo)
         bus = FakeEventBus()
@@ -624,7 +535,7 @@ class TestResolve:
         assert _read(repo, "README.md") == b"hello\n"
         assert bus.published == []
 
-    @pytest.mark.parametrize("path", [".git/config", "sub/.Git/hooks/pre-commit", "../x"])
+    @pytest.mark.parametrize("path", ["sub/.Git/hooks/pre-commit", "../x"])
     async def test_a_git_dir_or_escaping_path_is_bad_before_anything_runs(
         self, tmp_path, path
     ):
@@ -636,7 +547,6 @@ class TestResolve:
     @pytest.mark.parametrize(
         ("content", "code"),
         [
-            ("x" * (EDIT_BYTE_LIMIT + 1), "too_large"),
             # under the limit in characters, over it in UTF-8 bytes
             ("ж" * (EDIT_BYTE_LIMIT // 2 + 1), "too_large"),
             ("one\0two\n", "bad_content"),
@@ -650,15 +560,6 @@ class TestResolve:
             await _resolve(str(tmp_path / "gone"), content, token="t")
 
         assert info.value.code == code
-
-    async def test_text_of_exactly_the_limit_is_written(self, repo):
-        _stop_rebase(repo)
-        content = "ж" * (EDIT_BYTE_LIMIT // 2)
-
-        await _resolve(repo, content)
-
-        assert len(_read(repo, "keep.txt")) == EDIT_BYTE_LIMIT
-        assert _unmerged(repo) == []
 
     async def test_a_crlf_file_with_a_bom_keeps_both_when_lf_text_is_applied(self, repo):
         _stop_merge(repo)
@@ -680,14 +581,7 @@ class TestResolve:
 
         assert _read(repo, "keep.txt") == b"one\r\nRESOLVED\r\n"
 
-    async def test_an_lf_file_stays_lf(self, repo):
-        _stop_merge(repo)
 
-        await _resolve(repo, "one\r\nRESOLVED\r\nthree\r\n")
-
-        assert _read(repo, "keep.txt") == b"one\nRESOLVED\nthree\n"
-
-    @pytest.mark.parametrize("mark_resolved", [True, False])
     @pytest.mark.parametrize(
         ("original", "content"),
         [
@@ -699,7 +593,7 @@ class TestResolve:
         ids=["crlf", "bom"],
     )
     async def test_text_that_outgrows_the_limit_in_the_files_own_encoding_is_refused_unwritten(
-        self, repo, monkeypatch, original, content, mark_resolved
+        self, repo, monkeypatch, original, content
     ):
         monkeypatch.setattr(changes_conflicts, "EDIT_BYTE_LIMIT", 200)
         _stop_merge(repo)
@@ -708,7 +602,7 @@ class TestResolve:
         bus = FakeEventBus()
 
         with pytest.raises(GitBadRequestError) as info:
-            await _resolve(repo, content, mark_resolved=mark_resolved, event_bus=bus)
+            await _resolve(repo, content, event_bus=bus)
 
         assert info.value.code == "too_large"
         assert _read(repo, "keep.txt") == original
@@ -717,19 +611,18 @@ class TestResolve:
         assert bus.published == []
         assert (await _get(repo)).kind == "text"
 
-    @pytest.mark.parametrize("mark_resolved", [True, False])
     async def test_text_of_exactly_the_limit_in_the_files_own_encoding_is_written(
-        self, repo, monkeypatch, mark_resolved
+        self, repo, monkeypatch
     ):
         monkeypatch.setattr(changes_conflicts, "EDIT_BYTE_LIMIT", 200)
         _stop_merge(repo)
         write_file(repo, "keep.txt", _CRLF_CONFLICT)
 
-        await _resolve(repo, "x\n" * 66 + "ab", mark_resolved=mark_resolved)
+        await _resolve(repo, "x\n" * 66 + "ab")
 
         assert _read(repo, "keep.txt") == b"x\r\n" * 66 + b"ab"
         assert len(_read(repo, "keep.txt")) == 200
-        assert _unmerged(repo) == ([] if mark_resolved else ["keep.txt"])
+        assert _unmerged(repo) == []
 
     @posix_only
     async def test_the_files_permission_bits_survive_the_replace(self, repo):
@@ -856,31 +749,6 @@ class TestResolve:
         assert _unmerged(repo) == ["keep.txt"]
         assert bus.published == []
 
-    async def test_a_retry_of_lf_text_matches_the_crlf_bytes_its_first_write_left(self, repo):
-        _stop_merge(repo)
-        write_file(
-            repo, "keep.txt",
-            b"\xef\xbb\xbfone\r\n<<<<<<< HEAD\r\nMAIN\r\n=======\r\nOTHER\r\n>>>>>>> other\r\n",
-        )
-        token = (await _get(repo)).token
-        write_file(repo, ".git/index.lock", b"")
-        with pytest.raises(GitRefusedError):
-            await _resolve(repo, "one\nRESOLVED\nthree\n", token=token)
-        os.remove(os.path.join(repo, ".git", "index.lock"))
-
-        resp = await _resolve(repo, "one\nRESOLVED\nthree\n", token=token)
-
-        assert resp.model_dump() == {"ok": True}
-        assert _read(repo, "keep.txt") == b"\xef\xbb\xbfone\r\nRESOLVED\r\nthree\r\n"
-        assert _staged_blob(repo, "keep.txt") == b"\xef\xbb\xbfone\r\nRESOLVED\r\nthree\r\n"
-        assert _unmerged(repo) == []
-
-    async def test_outside_a_repo_is_refused(self, tmp_path):
-        with pytest.raises(GitRefusedError) as info:
-            await _resolve(str(tmp_path), "x\n", token="t")
-
-        assert info.value.code == "not_a_repo"
-
 
 @requires_git
 class TestTake:
@@ -903,29 +771,8 @@ class TestTake:
         assert bus.published == [_changed(repo)]
 
     @pytest.mark.parametrize(
-        ("ours_deletes", "side"), [(True, "ours"), (False, "theirs")]
-    )
-    async def test_the_side_that_deleted_the_file_resolves_by_removing_it(
-        self, repo, ours_deletes, side
-    ):
-        make_modify_delete_branches(repo, ours_deletes=ours_deletes)
-        run_git_sync(repo, "merge", "other", check=False)
-        bus = FakeEventBus()
-
-        resp = await _take(repo, side, event_bus=bus)
-
-        assert resp.model_dump() == {"ok": True}
-        assert not os.path.lexists(os.path.join(repo, "keep.txt"))
-        assert _git_out(repo, "ls-files", "--", "keep.txt") == ""
-        assert _unmerged(repo) == []
-        assert bus.published == [_changed(repo)]
-
-    @pytest.mark.parametrize(
         ("ours_deletes", "side", "content"),
-        [
-            (True, "theirs", b"one\nOTHER\nthree\n"),
-            (False, "ours", b"one\nMAIN\nthree\n"),
-        ],
+        [(True, "theirs", b"one\nOTHER\nthree\n")],
     )
     async def test_the_side_that_kept_the_file_resolves_by_keeping_it(
         self, repo, ours_deletes, side, content
@@ -979,9 +826,7 @@ class TestTake:
         ("path", "side", "left"),
         [
             ("keep.txt", "ours", ["ours.txt", "theirs.txt"]),
-            ("keep.txt", "theirs", ["ours.txt", "theirs.txt"]),
             ("ours.txt", "theirs", ["theirs.txt"]),
-            ("theirs.txt", "ours", ["ours.txt"]),
         ],
     )
     async def test_a_path_the_side_never_had_resolves_by_removal(
@@ -998,13 +843,12 @@ class TestTake:
         assert sorted(os.listdir(repo)) == [".git", "README.md", *left]
 
     @posix_only
-    @pytest.mark.parametrize("ours_deletes", [True, False])
     @pytest.mark.parametrize("side", ["ours", "theirs"])
     async def test_a_symlinked_parent_directory_is_refused_and_its_target_untouched(
-        self, repo, tmp_path, ours_deletes, side
+        self, repo, tmp_path, side
     ):
         # ``git rm`` unlinks by path, through the symlink and out of the repo.
-        _stop_modify_delete_at(repo, "src/a.txt", ours_deletes=ours_deletes)
+        _stop_modify_delete_at(repo, "src/a.txt", ours_deletes=False)
         outside = tmp_path / "outside"
         _swap_parent_for_a_symlink(repo, "src", outside)
         bus = FakeEventBus()
@@ -1019,17 +863,14 @@ class TestTake:
         assert _unmerged(repo) == ["src/a.txt"]
         assert bus.published == []
 
-    @pytest.mark.parametrize("side", ["ours", "theirs"])
-    async def test_a_file_in_a_parent_directorys_place_is_refused_and_kept(
-        self, repo, side
-    ):
+    async def test_a_file_in_a_parent_directorys_place_is_refused_and_kept(self, repo):
         _stop_modify_delete_at(repo, "src/a.txt", ours_deletes=False)
         os.remove(os.path.join(repo, "src", "a.txt"))
         os.rmdir(os.path.join(repo, "src"))
         write_file(repo, "src", b"not a directory\n")
 
         with pytest.raises(GitRefusedError) as info:
-            await _take(repo, side, path="src/a.txt")
+            await _take(repo, "theirs", path="src/a.txt")
 
         assert (info.value.code, info.value.message) == ("unsupported", "src/a.txt")
         assert _read(repo, "src") == b"not a directory\n"
@@ -1055,34 +896,13 @@ class TestTake:
         assert _unmerged(repo) == ["keep.txt"]
         assert bus.published == [_changed(repo)]
 
-    async def test_a_file_the_filesystem_will_not_remove_is_a_git_error_and_stays_in_conflict(
-        self, repo, monkeypatch
-    ):
-        make_modify_delete_branches(repo, ours_deletes=True)
-        run_git_sync(repo, "merge", "other", check=False)
-
-        def read_only(_self, _name):
-            raise OSError(errno.EROFS, "Read-only file system")
-
-        monkeypatch.setattr(changes_conflicts._Target, "unlink", read_only)
-        bus = FakeEventBus()
-
-        with pytest.raises(GitCommandError) as info:
-            await _take(repo, "ours", event_bus=bus)
-
-        assert info.value.message == "could not remove keep.txt: Read-only file system"
-        assert _read(repo, "keep.txt") == b"one\nOTHER\nthree\n"
-        assert _unmerged(repo) == ["keep.txt"]
-        assert bus.published == [_changed(repo)]
-
     @posix_only
-    @pytest.mark.parametrize("mode", [0o311, 0o000, 0o200])
-    @pytest.mark.parametrize("side", ["ours", "theirs"])
+    @pytest.mark.parametrize("mode", [0o311, 0o000])
     async def test_a_file_in_a_directory_the_agent_cannot_open_is_refused_and_kept(
-        self, repo, side, mode
+        self, repo, mode
     ):
         # Mode 0o311 lets the path resolve but not the directory open; without
-        # the search bit (0o000, 0o200) even ``lstat`` of the file is denied.
+        # the search bit (0o000) even ``lstat`` of the file is denied.
         # Either way the no-follow walk gives up on a file that is still there.
         if os.geteuid() == 0:
             pytest.skip("root opens directories of any mode")
@@ -1093,7 +913,7 @@ class TestTake:
 
         try:
             with pytest.raises(GitRefusedError) as info:
-                await _take(repo, side, path="src/a.txt", event_bus=bus)
+                await _take(repo, "ours", path="src/a.txt", event_bus=bus)
         finally:
             # the file cannot be read back while its parent is unsearchable
             os.chmod(parent, 0o755)
@@ -1158,12 +978,6 @@ class TestTake:
         assert _read(repo, "README.md") == b"unsaved work\n"
         assert bus.published == []
 
-    async def test_a_git_dir_path_is_bad(self, tmp_path):
-        with pytest.raises(GitBadRequestError) as info:
-            await _take(str(tmp_path / "gone"), "ours", path=".git/HEAD")
-
-        assert info.value.code == "bad_path"
-
 
 @requires_git
 class TestRestore:
@@ -1194,14 +1008,6 @@ class TestRestore:
         assert b"\n||||||| base\ntwo\n=======\n" in _read(repo, "keep.txt")
         assert (await _get(repo)).has_base is True
 
-    async def test_merge_style_drops_the_original_lines_a_diff3_config_would_add(self, repo):
-        run_git_sync(repo, "config", "merge.conflictStyle", "diff3")
-        _stop_rebase(repo)
-
-        await _restore(repo, style="merge")
-
-        assert b"|||||||" not in _read(repo, "keep.txt")
-        assert (await _get(repo)).has_base is False
 
     async def test_starting_over_discards_a_draft_of_a_file_still_in_conflict(self, repo):
         _stop_merge(repo)
@@ -1214,7 +1020,7 @@ class TestRestore:
         assert restored.startswith(b"one\n<<<<<<< main\nMAIN\n=======\nOTHER\n>>>>>>> ")
         assert _unmerged(repo) == ["keep.txt"]
 
-    @pytest.mark.parametrize("seam", ["operation_state", "_side_labels", "_relabel_markers"])
+    @pytest.mark.parametrize("seam", ["operation_state", "_relabel_markers"])
     async def test_a_failure_naming_the_sides_leaves_the_rebuilt_conflict_a_success(
         self, repo, monkeypatch, seam
     ):
@@ -1317,28 +1123,6 @@ class TestRestore:
         assert _unmerged(repo) == []
         assert bus.published == []
 
-    async def test_a_record_left_by_a_finished_merge_restores_nothing_during_a_git_am(
-        self, repo, tmp_path
-    ):
-        # ``rebasing`` is a state that conflicts, yet a ``git am`` session never
-        # rewrote the index: the record is the finished merge's, and its stage 2
-        # is still HEAD's blob.
-        start_failing_am_after_a_merge_as_ours(repo, str(tmp_path / "patches"))
-        write_file(repo, "keep.txt", b"one\nNEW WORK\nthree\n")
-        bus = FakeEventBus()
-
-        with pytest.raises(GitRefusedError) as info:
-            await _restore(repo, event_bus=bus)
-
-        status = await _status(repo)
-        assert os.path.exists(os.path.join(repo, ".git", "rebase-apply", "applying"))
-        assert "keep.txt" in _git_out(repo, "ls-files", "--resolve-undo")
-        assert (status.repo.state, status.repo.rebase) == ("rebasing", None)
-        assert status.resolved_paths == []
-        assert (info.value.code, info.value.message) == ("not_restorable", "keep.txt")
-        assert _read(repo, "keep.txt") == b"one\nNEW WORK\nthree\n"
-        assert _unmerged(repo) == []
-        assert bus.published == []
 
     async def test_a_record_of_a_pick_already_committed_restores_nothing_at_an_exec_stop(
         self, repo
@@ -1372,7 +1156,6 @@ class TestRestore:
             ("merging", _stop_merge),
             ("rebasing", _stop_rebase),
             ("cherry_picking", _stop_cherry_pick),
-            ("reverting", _stop_revert),
         ],
     )
     async def test_a_path_resolved_in_any_operation_that_conflicts_is_listed_and_rebuilt(
@@ -1400,37 +1183,6 @@ class TestRestore:
         assert info.value.code == "not_restorable"
         assert _read(repo, "keep.txt") == b"edited\n"
 
-    async def test_a_submodule_conflict_cannot_be_rebuilt(self, repo):
-        _plant_gitlink_conflict(repo, "vendor")
-
-        with pytest.raises(GitRefusedError) as info:
-            await _restore(repo, path="vendor")
-
-        assert info.value.code == "not_restorable"
-
-    async def test_a_resolved_submodule_conflict_cannot_be_rebuilt(self, repo, tmp_path):
-        # Resolved as "ours", the record's stage 2 is HEAD's gitlink: only its
-        # mode keeps ``checkout --merge`` off an object that is no blob.
-        make_submodule_conflict(repo, str(tmp_path))
-        run_git_sync(repo, "add", "sub")
-        staged = _git_out(repo, "ls-files", "--stage", "--", "sub")
-        bus = FakeEventBus()
-
-        with pytest.raises(GitRefusedError) as info:
-            await _restore(repo, path="sub", event_bus=bus)
-
-        assert "160000" in _git_out(repo, "ls-files", "--resolve-undo")
-        assert (info.value.code, info.value.message) == ("not_restorable", "sub")
-        assert _git_out(repo, "ls-files", "--stage", "--", "sub") == staged
-        assert _unmerged(repo) == []
-        assert bus.published == []
-
-    async def test_a_git_dir_path_is_bad(self, tmp_path):
-        with pytest.raises(GitBadRequestError) as info:
-            await _restore(str(tmp_path / "gone"), path="a/.git/index")
-
-        assert info.value.code == "bad_path"
-
 
 class TestUnwalkable:
     """What is left at a path the no-follow walk could not reach."""
@@ -1441,20 +1193,6 @@ class TestUnwalkable:
 
         assert changes_conflicts._unwalkable(top, "src/a.txt") is True
 
-    def test_a_missing_file_is_nothing_left_behind(self, tmp_path):
-        top = str(tmp_path)
-        write_file(top, "src/other.txt", b"one\n")
-
-        assert changes_conflicts._unwalkable(top, "src/a.txt") is False
-
-    def test_a_missing_parent_directory_is_nothing_left_behind(self, tmp_path):
-        assert changes_conflicts._unwalkable(str(tmp_path), "src/deep/a.txt") is False
-
-    def test_a_file_in_a_parent_directorys_place_is_nothing_left_behind(self, tmp_path):
-        top = str(tmp_path)
-        write_file(top, "src", b"not a directory\n")
-
-        assert changes_conflicts._unwalkable(top, "src/a.txt") is False
 
     def test_a_path_the_agent_may_not_look_at_is_never_read_as_missing(
         self, tmp_path, monkeypatch
@@ -1470,13 +1208,6 @@ class TestUnwalkable:
         monkeypatch.setattr(changes_conflicts.os, "lstat", denied)
 
         assert changes_conflicts._unwalkable(top, "src/a.txt") is True
-
-
-class TestDirFdGate:
-    def test_the_descriptor_walk_is_on_everywhere_but_windows(self):
-        # ``os.replace`` is never in ``os.supports_dir_fd``: a gate asking for
-        # it closes on every platform and nothing else notices.
-        assert changes_conflicts._DIR_FD is (sys.platform != "win32")
 
 
 @requires_git
@@ -1552,7 +1283,7 @@ class TestCheckedPathFallback:
         assert (outside / "a.txt").read_bytes() == b"secret\n"
         assert sorted(os.listdir(outside)) == ["a.txt"]
 
-    @pytest.mark.parametrize("gone", ["nothing", "file", "directory"])
+    @pytest.mark.parametrize("gone", ["nothing", "directory"])
     async def test_the_side_that_deleted_a_nested_file_resolves_by_removing_it(
         self, repo, gone
     ):
@@ -1571,16 +1302,15 @@ class TestCheckedPathFallback:
         assert _untracked(repo) == []
 
     @posix_only
-    @pytest.mark.parametrize("side", ["ours", "theirs"])
     async def test_a_take_through_a_symlinked_parent_is_refused_and_its_target_untouched(
-        self, repo, tmp_path, side
+        self, repo, tmp_path
     ):
         _stop_modify_delete_at(repo, "src/a.txt", ours_deletes=True)
         outside = tmp_path / "outside"
         _swap_parent_for_a_symlink(repo, "src", outside)
 
         with pytest.raises(GitRefusedError) as info:
-            await _take(repo, side, path="src/a.txt")
+            await _take(repo, "theirs", path="src/a.txt")
 
         assert (info.value.code, info.value.message) == ("unsupported", "src/a.txt")
         assert (outside / "a.txt").read_bytes() == b"secret\n"

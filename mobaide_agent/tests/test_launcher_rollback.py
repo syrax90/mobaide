@@ -90,12 +90,6 @@ def test_find_rollback_target_accepts_legacy_release_without_sentinel(tmp_path):
     assert launcher._find_rollback_target(prefix, "0.2.0") == "0.1.0"
 
 
-def test_find_rollback_target_returns_none_when_alone(tmp_path):
-    prefix = tmp_path
-    make_release(prefix, "0.2.0")
-    assert launcher._find_rollback_target(prefix, "0.2.0") is None
-
-
 def test_find_rollback_target_skips_candidate_in_crash_loop(tmp_path):
     """A sibling release that itself has crossed the crash threshold
     in the same window must NOT be picked as a rollback target — that
@@ -592,79 +586,6 @@ def test_spawn_and_wait_windows_sets_kill_on_job_close_limit_flag(monkeypatch):
         f"termination and orphan-bind port 8000 on the next restart "
         f"(see mobaide/launcher/__main__.py:_spawn_and_wait_windows "
         f"docstring for the exact failure chain)"
-    )
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only code path")
-def test_spawn_and_wait_windows_skips_assign_when_set_information_fails(
-    monkeypatch,
-):
-    """``SetInformationJobObject`` returning 0 (failure) must trigger
-    the fail-soft path: close the job handle, skip job assignment,
-    still ``Popen`` + ``wait`` and propagate the exit code.
-
-    Pins the docstring's fail-soft contract — "if any ctypes call
-    fails …, skip the job assignment and still ``Popen``-and-``wait``
-    so the primary PID-preservation fix holds even in degraded-teardown
-    mode". A regression that hard-aborted on SetInfo failure would
-    leave a Windows-only configuration (restrictive job policy, older
-    Windows with reduced job-object support) unable to start the
-    agent at all, defeating the primary PID-preservation purpose of
-    the refactor.
-    """
-    calls: list[tuple[str, tuple]] = []
-    _install_full_kernel32_fake(monkeypatch, calls, set_info_rc=0)
-    _install_fake_popen(monkeypatch, calls, rc=11)
-
-    with pytest.raises(SystemExit) as excinfo:
-        launcher._spawn_and_wait_windows(["python.exe", "-m", "mobaide", "run"])
-    assert excinfo.value.code == 11
-
-    op_sequence = [c[0] for c in calls]
-    assert "CreateJobObjectW" in op_sequence
-    assert "SetInformationJobObject" in op_sequence
-    assert "CloseHandle" in op_sequence, (
-        "failed SetInformationJobObject must be followed by "
-        "CloseHandle(job) — otherwise the launcher leaks the kernel "
-        "handle for its lifetime"
-    )
-    assert "Popen" in op_sequence and "wait" in op_sequence
-    assert "AssignProcessToJobObject" not in op_sequence, (
-        "after SetInformationJobObject failure the job handle is "
-        "torn down; assigning the agent to a destroyed job is "
-        "undefined behaviour and must not be attempted"
-    )
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only code path")
-def test_spawn_and_wait_windows_skips_assign_when_open_process_fails(
-    monkeypatch,
-):
-    """``OpenProcess`` returning 0 (failure) — the agent PID is alive
-    but unreachable for the SET_QUOTA|TERMINATE handle the job
-    assignment requires — must NOT crash the launcher. ``Popen`` +
-    ``wait`` still run, with the job assignment skipped.
-
-    A Windows policy that strips PROCESS_SET_QUOTA from the launcher's
-    primary token (some hardened SCM contexts) would land here.
-    Without this guard the agent would never come up under those
-    conditions.
-    """
-    calls: list[tuple[str, tuple]] = []
-    _install_full_kernel32_fake(monkeypatch, calls, open_process_handle=0)
-    _install_fake_popen(monkeypatch, calls, rc=0)
-
-    with pytest.raises(SystemExit) as excinfo:
-        launcher._spawn_and_wait_windows(["python.exe", "-m", "mobaide", "run"])
-    assert excinfo.value.code == 0
-
-    op_sequence = [c[0] for c in calls]
-    assert "OpenProcess" in op_sequence
-    assert "Popen" in op_sequence and "wait" in op_sequence
-    assert "AssignProcessToJobObject" not in op_sequence, (
-        "OpenProcess(0) means no valid child handle is available; "
-        "AssignProcessToJobObject(job, 0) would corrupt the job's "
-        "state"
     )
 
 

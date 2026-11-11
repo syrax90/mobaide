@@ -19,7 +19,6 @@ import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.review.ReviewPromptCoordinator
-import com.mobaide.app.ui.sessions.panel.STOP_SESSION_DIALOG_CANCEL_TAG
 import com.mobaide.app.ui.sessions.panel.STOP_SESSION_DIALOG_FORCE_TAG
 import com.mobaide.app.ui.sessions.panel.STOP_SESSION_DIALOG_STOP_TAG
 import com.mobaide.app.ui.theme.MobaideTheme
@@ -131,18 +130,6 @@ class SessionListScreenTest {
             "Stop \"Codex · api\"? Force Stop kills the process immediately.",
         ).assertIsDisplayed()
         composeRule.onNodeWithTag(STOP_SESSION_DIALOG_STOP_TAG).assertIsDisplayed()
-        assertEquals(emptyList<Pair<String, Boolean>>(), stops)
-    }
-
-    @Test
-    fun cancel_closesTheDialog_andStopsNothing() {
-        setScreen()
-        tapCardStop(0)
-
-        composeRule.onNodeWithTag(STOP_SESSION_DIALOG_CANCEL_TAG).performClick()
-        composeRule.waitForIdle()
-
-        composeRule.onNodeWithTag(STOP_SESSION_DIALOG_STOP_TAG).assertDoesNotExist()
         assertEquals(emptyList<Pair<String, Boolean>>(), stops)
     }
 

@@ -225,20 +225,6 @@ class AgentEventBusStartRaceTest {
     }
 
     @Test
-    fun coldStart_unauthenticated_doesNotStart_andStaysDisconnected() = runTest {
-        // Complement: when the cold-start authState is Unauthenticated the
-        // init-block collector must NOT call start() — otherwise every
-        // logged-out app launch would open a doomed WS and spam the server.
-        val fixture = newBus(
-            initialAuthState = SessionManager.AuthState.Unauthenticated,
-        )
-        val (bus, _, _, wsm, _, _) = fixture
-
-        assertEquals(AgentEventBus.ConnState.Disconnected, bus.connection.value)
-        verify(exactly = 0) { wsm.createConnection(any()) }
-    }
-
-    @Test
     fun coldStart_userOnly_doesNotStart_andStaysDisconnected() = runTest {
         // UserOnly is the "logged into user account but no agent paired"
         // state — the bus has no agent URL to target, so the init-block

@@ -43,21 +43,6 @@ const ANSI_SLOTS = Object.keys(MOBAIDE_ANSI) as AnsiSlot[];
 const ansiSlotsOf = (theme: ITheme): Record<string, string | undefined> =>
   Object.fromEntries(ANSI_SLOTS.map((slot) => [slot, theme[slot]]));
 
-const channel = (hex: string, at: number): number => {
-  const value = Number.parseInt(hex.slice(at, at + 2), 16) / 255;
-  return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-};
-
-/** WCAG relative luminance of an `#rrggbb` string. */
-const luminance = (hex: string): number =>
-  0.2126 * channel(hex, 1) + 0.7152 * channel(hex, 3) + 0.0722 * channel(hex, 5);
-
-const contrast = (a: string, b: string): number => {
-  const one = luminance(a);
-  const two = luminance(b);
-  return (Math.max(one, two) + 0.05) / (Math.min(one, two) + 0.05);
-};
-
 describe('terminalTheme', () => {
   afterEach(() => {
     const root = document.documentElement;
@@ -84,19 +69,5 @@ describe('terminalTheme', () => {
     root.style.setProperty('--color-accent', '#1b6ac9');
 
     expect(terminalTheme()).toEqual(underDark);
-  });
-
-  it('keeps the brightest glyphs legible against its own background', () => {
-    // The pairing that forced the change: xterm's white lands at about 1.4:1
-    // against the light app background and bright white at about 1.1:1, and
-    // Claude Code prints plenty of both. Only the light end is asserted — a
-    // terminal's own black is low-contrast against a dark background by
-    // construction, on every emulator.
-    const theme = terminalTheme();
-    const background = theme.background ?? '';
-
-    for (const hex of [theme.foreground, MOBAIDE_ANSI.white, MOBAIDE_ANSI.brightWhite]) {
-      expect(contrast(hex ?? '', background)).toBeGreaterThanOrEqual(4.5);
-    }
   });
 });

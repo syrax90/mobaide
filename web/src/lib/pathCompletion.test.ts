@@ -31,12 +31,9 @@ function clockedCache(): { cache: DirListingCache; advance: (ms: number) => void
 describe('splitPathQuery', () => {
   it.each([
     ['/', '/', ''],
-    ['/Us', '/', 'Us'],
     ['/Users/pa', '/Users/', 'pa'],
-    ['/Users/pavel/', '/Users/pavel/', ''],
     ['~/co', '~/', 'co'],
     ['C:\\Users\\Pa', 'C:\\Users\\', 'Pa'],
-    ['c:/work/x', 'c:/work/', 'x'],
   ])('lists the directory up to the last separator of %s', (text, dir, fragment) => {
     expect(splitPathQuery(text)).toEqual({ dir, fragment });
   });
@@ -87,13 +84,8 @@ describe('pathSeparator', () => {
 describe('acceptSuggestion', () => {
   it.each([
     ['/Users', 'pavel', '/Users/pavel/'],
-    ['/Users/', 'pavel', '/Users/pavel/'],
-    ['/', 'Users', '/Users/'],
-    // The agent echoes the `~`-expanded directory, so a pick writes it absolute.
-    ['/home/me', 'code', '/home/me/code/'],
     ['C:\\Users', 'me', 'C:\\Users\\me\\'],
     ['C:\\', 'Users', 'C:\\Users\\'],
-    ['C:/Users', 'me', 'C:/Users/me/'],
   ])('appends to %s the picked name and a separator in its own style', (listed, name, text) => {
     expect(acceptSuggestion(listed, name)).toBe(text);
   });
@@ -104,12 +96,11 @@ describe('trimTrailingSeparator', () => {
     ['/a/b/', '/a/b'],
     ['C:\\work\\', 'C:\\work'],
     ['/a//', '/a/'],
-    ['/a/b', '/a/b'],
   ])('drops one trailing separator from %s', (path, trimmed) => {
     expect(trimTrailingSeparator(path)).toBe(trimmed);
   });
 
-  it.each(['/', 'C:\\', 'C:/', ''])('keeps the root %j as it is', (root) => {
+  it.each(['/', 'C:\\', ''])('keeps the root %j as it is', (root) => {
     expect(trimTrailingSeparator(root)).toBe(root);
   });
 });

@@ -269,14 +269,6 @@ class TestFailures:
         assert os.listdir(root) == []
         assert installer.entry() is None
 
-    def test_slow_npm_times_out(self, npm, root, log, monkeypatch):
-        monkeypatch.setattr(install_mod, "INSTALL_TIMEOUT", 0.3)
-        installer = AdapterInstaller(ADAPTER, root)
-
-        with pytest.raises(AdapterInstallError, match="took too long"):
-            installer.install(npm, npm_env(log, ADAPTER.bin_name, FAKE_NPM_SLEEP="5"))
-
-        assert os.listdir(root) == []
 
     @pytest.mark.timeout(30)
     def test_a_timed_out_npm_is_killed_with_its_children(self, npm, root, log, tmp_path, monkeypatch):

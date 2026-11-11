@@ -1,13 +1,12 @@
 name: iOS build
 
 on:
-  # pull_request trigger temporarily disabled — TODO: re-enable.
-  # pull_request:
-  #   branches: [main]
-  #   paths:
-  #     - "ios/**"
-  #     - "tests/protocol_fixtures/**"
-  #     - ".github/workflows/ios-build.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "ios/**"
+      - "tests/protocol_fixtures/**"
+      - ".github/workflows/ios-build.yml"
   push:
     branches: [main]
     paths:

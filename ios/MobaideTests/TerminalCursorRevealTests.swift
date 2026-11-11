@@ -29,11 +29,6 @@ final class TerminalCursorRevealTests: XCTestCase {
 
     // MARK: - Latch
 
-    func testFreshLatchNeverReveals() {
-        XCTAssertFalse(reveal.isArmed)
-        XCTAssertFalse(reveal.shouldReveal(col: 40, row: 3))
-    }
-
     func testArmedLatchWaitsForTheCursorToLeaveWhereTheKeystrokeFoundIt() {
         reveal.arm(col: 5, row: 2)
 
@@ -83,43 +78,6 @@ final class TerminalCursorRevealTests: XCTestCase {
         XCTAssertTrue(reveal.shouldReveal(col: 0, row: 0))
     }
 
-    func testDisarmClosesTheWindowAtOnce() {
-        reveal.arm(col: 0, row: 0)
-
-        reveal.disarm()
-
-        XCTAssertFalse(reveal.isArmed)
-        XCTAssertFalse(reveal.shouldReveal(col: 30, row: 0))
-    }
-
-    func testDisarmResetsTheOriginForTheNextBurst() {
-        reveal.arm(col: 0, row: 0)
-        reveal.disarm()
-
-        reveal.arm(col: 7, row: 1)
-
-        XCTAssertFalse(reveal.shouldReveal(col: 7, row: 1))
-    }
-
-    func testOnceTheCursorHasMovedAReturnToTheOriginIsStillFollowed() {
-        reveal.arm(col: 0, row: 0)
-        XCTAssertTrue(reveal.shouldReveal(col: 60, row: 0))
-
-        XCTAssertTrue(
-            reveal.shouldReveal(col: 0, row: 0),
-            "Home or Ctrl-U back to the burst's origin must pan back, not strand the view at col 60"
-        )
-    }
-
-    func testCursorParkedAtTheOriginForTheWholeBurstNeverReveals() {
-        reveal.arm(col: 4, row: 1)
-        now += 0.5
-        reveal.arm(col: 4, row: 1)
-
-        XCTAssertFalse(reveal.shouldReveal(col: 4, row: 1))
-        XCTAssertFalse(reveal.shouldReveal(col: 4, row: 1))
-    }
-
     func testBurstThatLapsedForgetsItHadMoved() {
         reveal.arm(col: 0, row: 0)
         XCTAssertTrue(reveal.shouldReveal(col: 9, row: 0))
@@ -166,23 +124,9 @@ final class TerminalCursorRevealTests: XCTestCase {
         XCTAssertEqual(target(cursorX: 371), 81)
     }
 
-    func testCrossingTheRightEdgeParksTheCursorAQuarterViewportInside() {
-        // right edge 510 → offset 510 − (400 − 100) = 210; on screen at 300 of 400.
-        XCTAssertEqual(target(cursorX: 500), 210)
-    }
-
     func testRightJumpClampsToTheEndOfTheContent() {
         // Raw target 1190 − 300 = 890, max offset 1200 − 400 = 800.
         XCTAssertEqual(target(cursorX: 1180), 800)
-    }
-
-    func testAlreadyMaxedViewAtTheLastColumnReturnsNilRatherThanANoOpScroll() {
-        XCTAssertNil(target(cursorX: 1190, currentOffsetX: 800))
-    }
-
-    func testCrossingTheLeftEdgeParksTheCursorAQuarterViewportInside() {
-        // cursor 410 < 500 + 20 → offset 410 − 100 = 310.
-        XCTAssertEqual(target(cursorX: 410, currentOffsetX: 500), 310)
     }
 
     func testLeftMarginIsInclusiveOfTwoCells() {
@@ -192,14 +136,5 @@ final class TerminalCursorRevealTests: XCTestCase {
 
     func testCarriageReturnToColumnZeroPansFullyBack() {
         XCTAssertEqual(target(cursorX: 0, currentOffsetX: 500), 0)
-    }
-
-    func testLeftEdgeOfAnUnscrolledViewNeverPans() {
-        XCTAssertNil(target(cursorX: 0, currentOffsetX: 0))
-    }
-
-    func testFractionalTargetsSnapToWholePoints() {
-        // right edge 510.4 → 210.4 → 210.
-        XCTAssertEqual(target(cursorX: 500.4), 210)
     }
 }

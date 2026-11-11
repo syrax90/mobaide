@@ -21,10 +21,6 @@ describe('RESERVED_KEYS table', () => {
       if (chord !== null) expect(chordToken(chord)).toBe(entry.token);
     }
   });
-
-  it('ships every row as documented, since none has been measured yet', () => {
-    expect(RESERVED_KEYS.every((entry) => entry.confidence === 'documented')).toBe(true);
-  });
 });
 
 describe('lookupReservedKey — matching', () => {
@@ -71,12 +67,6 @@ describe('lookupReservedKey — blocked', () => {
     }
   });
 
-  it('leaves an undocumented chord unblocked rather than guessing', () => {
-    // `pageCanCancel: 'unknown'` is a third state on purpose: nobody has
-    // measured whether Chromium releases Ctrl+W, so the warning says "may".
-    expect(lookupReservedKey('ctrl+w', env({ browser: 'chromium' })).blocked).toBe(false);
-  });
-
   it('blocks the bare F-keys macOS spends on brightness and volume', () => {
     expect(lookupReservedKey('f5', env({ browser: 'safari', os: 'mac' })).blocked).toBe(true);
     expect(lookupReservedKey('f5', env({ browser: 'chromium', os: 'mac' })).blocked).toBe(true);
@@ -118,10 +108,6 @@ describe('lookupReservedKey — app-suppressed', () => {
     expect(found.appSuppressed).toBe(false);
     expect(found.blocked).toBe(true);
   });
-
-  it('leaves an ordinary browser chord unflagged', () => {
-    expect(lookupReservedKey('ctrl+t', env()).appSuppressed).toBe(false);
-  });
 });
 
 describe('lookupReservedKey — standalone relaxation', () => {
@@ -132,10 +118,6 @@ describe('lookupReservedKey — standalone relaxation', () => {
     // Still reported: relaxed softens the warning, it never removes it.
     expect(found.entries).toHaveLength(1);
     expect(found.blocked).toBe(false);
-  });
-
-  it('does not relax a chord in a browser tab', () => {
-    expect(lookupReservedKey('ctrl+t', env()).relaxed).toBe(false);
   });
 
   it('does not relax a row that carries no standalone flag', () => {

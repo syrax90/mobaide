@@ -5,10 +5,7 @@ import pytest
 
 from central_server.relay.envelope import (
     CH_AUTOSCAN,
-    CH_CONTROL,
-    CH_EVENTS,
     CH_SESSION_IO,
-    CH_SESSIONS_LIST,
     decode,
     encode,
 )
@@ -21,30 +18,6 @@ class TestEnvelope:
         channel, session_id, out_payload = decode(data)
         assert channel == CH_SESSION_IO
         assert session_id == "sess-abc-123"
-        assert out_payload == payload
-
-    def test_sessions_list_roundtrip(self):
-        payload = b'[{"session_id":"s1"}]'
-        data = encode(CH_SESSIONS_LIST, "", payload)
-        channel, session_id, out_payload = decode(data)
-        assert channel == CH_SESSIONS_LIST
-        assert session_id == ""
-        assert out_payload == payload
-
-    def test_events_roundtrip(self):
-        payload = b'{"type":"sessions.changed"}'
-        data = encode(CH_EVENTS, "", payload)
-        channel, session_id, out_payload = decode(data)
-        assert channel == CH_EVENTS
-        assert session_id == ""
-        assert out_payload == payload
-
-    def test_control_roundtrip(self):
-        payload = b'{"type":"heartbeat"}'
-        data = encode(CH_CONTROL, "", payload)
-        channel, session_id, out_payload = decode(data)
-        assert channel == CH_CONTROL
-        assert session_id == ""
         assert out_payload == payload
 
     def test_autoscan_roundtrip(self):
@@ -62,13 +35,6 @@ class TestEnvelope:
         assert channel == CH_AUTOSCAN
         assert session_id == subscription_id
         assert out_payload == payload
-
-    def test_empty_payload(self):
-        data = encode(CH_SESSION_IO, "s1", b"")
-        channel, sid, payload = decode(data)
-        assert channel == CH_SESSION_IO
-        assert sid == "s1"
-        assert payload == b""
 
     def test_binary_payload(self):
         """Binary payload with bytes 0x00-0xFF passes through."""

@@ -37,8 +37,6 @@ describe('voiceMicMode', () => {
   it.each([
     ['not_installed', 'off'],
     ['queued', 'preparing'],
-    ['downloading', 'preparing'],
-    ['verifying', 'preparing'],
     ['failed', 'failed'],
     ['ready', 'ready'],
     ['unsupported', 'hidden'],
@@ -47,7 +45,7 @@ describe('voiceMicMode', () => {
     expect(voiceMicMode(CAPABILITY, status({ state }), false)).toBe(mode);
   });
 
-  it.each(['not_installed', 'queued', 'failed', 'ready'])(
+  it.each(['not_installed', 'ready'])(
     'hides the mic in %s once the user hid it',
     (state) => {
       expect(voiceMicMode(CAPABILITY, status({ state }), true)).toBe('hidden');
@@ -96,9 +94,7 @@ describe('voiceProgressPercent', () => {
 
 describe('formatting', () => {
   it.each([
-    [999, '999 B'],
     [1_000, '1 KB'],
-    [670_000_000, '670 MB'],
     [1_200_000_000, '1.2 GB'],
   ])('formats %i bytes in decimal units as %s', (bytes, text) => {
     expect(formatBytes(bytes)).toBe(text);

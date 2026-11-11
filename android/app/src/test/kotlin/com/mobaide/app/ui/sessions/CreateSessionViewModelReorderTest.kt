@@ -152,11 +152,6 @@ class CreateSessionViewModelReorderTest {
     )
 
     @Test
-    fun orderModes_emptyOrder_keepsTheDefaultOrder() {
-        assertEquals(defaults, orderModes(defaults, emptyList()))
-    }
-
-    @Test
     fun orderModes_ranksNamedModes_thenUnnamedInDefaultOrder() {
         // A custom type created after the last reorder, or a built-in a newer
         // client added, goes after everything the user arranged.

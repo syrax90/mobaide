@@ -64,25 +64,21 @@ describe('key chord golden fixtures', () => {
     expect(fixture.parse_rejected.length).toBeGreaterThan(0);
   });
 
-  it.each(fixture.encode)('encodes $name to the golden bytes', (encodeCase) => {
+  // The token is what the server stores, so parsing a persisted string and
+  // encoding it — which is what the mobile clients' saved-shortcut buttons
+  // do — has to reach the same bytes as encoding a composed chord. Both
+  // mobile arms assert this.
+  it.each(fixture.encode)('encodes, labels and round-trips $name', (encodeCase) => {
     const encoding = encodeChord(encodeCase.chord);
     expect(encoding).not.toBeNull();
     expect(bytesToHex(encoding?.bytes ?? new Uint8Array())).toBe(encodeCase.bytes_hex);
     expect(encoding?.summary).toBe(encodeCase.summary);
     expect(encoding?.usesCsiU).toBe(encodeCase.uses_csi_u);
     expect(encoding?.sameAsPlainKey).toBe(encodeCase.same_as_plain_key);
-  });
 
-  it.each(fixture.encode)('renders $name as the golden token and label', (encodeCase) => {
     expect(chordToken(encodeCase.chord)).toBe(encodeCase.token);
     expect(chordDisplay(encodeCase.chord)).toBe(encodeCase.display);
-  });
 
-  // The token is what the server stores, so parsing a persisted string and
-  // encoding it — which is what the mobile clients' saved-shortcut buttons
-  // do — has to reach the same bytes as encoding a composed chord. Both
-  // mobile arms assert this.
-  it.each(fixture.encode)('encodes the $name token to the same bytes', (encodeCase) => {
     const parsed = parseChordToken(encodeCase.token);
     expect(parsed).not.toBeNull();
     const fromToken = parsed === null ? null : encodeChord(parsed);

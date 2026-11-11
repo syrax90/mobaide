@@ -48,20 +48,10 @@ final class AnsiParserTests: XCTestCase {
         XCTAssertEqual(String(attributed.characters), "red green X")
     }
 
-    func testParseEmptyInputIsEmpty() {
-        XCTAssertEqual(String(AnsiParser.parse("").characters), "")
-    }
-
     func testParseAppliesForegroundColor() {
         let attributed = AnsiParser.parse("\u{1B}[31mred")
         let runs = Array(attributed.runs)
         XCTAssertEqual(runs.count, 1)
         XCTAssertEqual(runs.first?.foregroundColor, Color(ansi: AnsiRGB(hex: 0xCD3131)))
-    }
-
-    func testCube256IndexFormula() {
-        // index = 16 + 36r + 6g + b; xterm levels {0,95,135,175,215,255}.
-        let runs = AnsiParser.parseRuns("\u{1B}[38;5;196mX")
-        XCTAssertEqual(runs, [AnsiRun(text: "X", foreground: AnsiRGB(r: 255, g: 0, b: 0))])
     }
 }

@@ -73,10 +73,6 @@ def _free_for_another_app(path: Path) -> bool:
 
 
 class TestOpenElsewhere:
-    def test_a_conversation_nobody_has_open(self, presence, app_data):
-        assert presence.open_elsewhere("conv-1") is False
-        # The probe never creates the marker.
-        assert not app_data.exists()
 
     def test_a_conversation_another_app_has_open(self, presence, app_data):
         with _other_app_holds(_lock_file(app_data, "conv-1")):

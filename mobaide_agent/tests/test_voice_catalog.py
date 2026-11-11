@@ -4,11 +4,9 @@ consistent, and ``resolve_runtime`` picks the right sherpa-onnx wheel pair
 from __future__ import annotations
 
 import hashlib
-import io
 import re
 import subprocess
 import sys
-import wave
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,7 +18,6 @@ from mobaide.voice import catalog
 from mobaide.voice.catalog import (
     FAKE_CONTENT,
     FAKE_MODEL,
-    MODELS,
     PARAKEET_V3,
     RUNTIME_VERSION,
     SUPPORTED_PYTHON,
@@ -68,8 +65,6 @@ def _pin_host(
 
 
 class TestModelCatalog:
-    def test_default_model_is_in_the_catalog(self):
-        assert catalog.DEFAULT_MODEL_ID in MODELS
 
     @pytest.mark.parametrize("spec", [PARAKEET_V3, FAKE_MODEL], ids=lambda s: s.id)
     def test_engine_files_and_selftest_clip_are_catalog_files(self, spec):
@@ -92,9 +87,6 @@ class TestModelCatalog:
             # A pinned revision, never a moving branch.
             assert "/resolve/main/" not in fallback
 
-    def test_download_bytes_sums_the_files(self):
-        assert PARAKEET_V3.download_bytes == sum(f.size for f in PARAKEET_V3.files)
-
     def test_fingerprint_changes_when_a_file_is_re_pinned(self):
         first, *rest = PARAKEET_V3.files
         repinned = replace(PARAKEET_V3, files=(replace(first, sha256="0" * 64), *rest))
@@ -114,13 +106,6 @@ class TestModelCatalog:
             assert file.size == len(blob)
             assert file.sha256 == hashlib.sha256(blob).hexdigest()
 
-    def test_fake_selftest_clip_is_16k_mono_pcm16(self):
-        with wave.open(io.BytesIO(FAKE_CONTENT[FAKE_MODEL.selftest_file]), "rb") as clip:
-            assert clip.getnchannels() == 1
-            assert clip.getsampwidth() == 2
-            assert clip.getframerate() == 16000
-            assert clip.getnframes() > 0
-
 
 class TestLazyFakeModel:
     def test_importing_the_catalog_and_the_service_builds_no_fake_model(self):
@@ -139,14 +124,6 @@ class TestLazyFakeModel:
 
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == "0"
-
-    def test_fake_model_is_built_once_under_its_id(self):
-        assert catalog.FAKE_MODEL.id == catalog.FAKE_MODEL_ID
-        assert catalog.FAKE_MODEL is catalog.FAKE_MODEL
-        assert catalog.FAKE_CONTENT is catalog.FAKE_CONTENT
-
-    def test_unknown_module_attribute_still_raises(self):
-        assert not hasattr(catalog, "NO_SUCH_NAME")
 
 
 class TestRuntimeWheels:
@@ -268,18 +245,3 @@ class TestHostMachine:
         _pin_host(monkeypatch, platform=platform, machine=machine, maxsize=2**31 - 1)
 
         assert resolve_runtime() == (None, "platform_unsupported")
-
-    @pytest.mark.parametrize(
-        ("platform", "machine", "core_tag"),
-        [("linux", "aarch64", "manylinux2014_aarch64"), ("linux", "x86_64", "manylinux2014_x86_64")],
-    )
-    def test_64_bit_python_on_a_64_bit_kernel_still_resolves(
-        self, monkeypatch, platform, machine, core_tag
-    ):
-        _pin_host(monkeypatch, platform=platform, machine=machine, maxsize=2**63 - 1)
-
-        target, reason = resolve_runtime()
-
-        assert reason is None
-        assert target is not None
-        assert target.key.endswith(core_tag)

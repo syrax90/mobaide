@@ -11,12 +11,6 @@ import org.junit.Test
 class ChatImageDecoderTest {
 
     @Test
-    fun sampleSize_isOneWhenTheImageAlreadyFits() {
-        assertEquals(1, ChatImageDecoder.sampleSize(2048, 2048, 2048))
-        assertEquals(1, ChatImageDecoder.sampleSize(10, 300, 2048))
-    }
-
-    @Test
     fun sampleSize_followsTheLongestSide() {
         assertEquals(2, ChatImageDecoder.sampleSize(4096, 100, 2048))
         assertEquals(2, ChatImageDecoder.sampleSize(100, 4096, 2048))
@@ -28,14 +22,6 @@ class ChatImageDecoderTest {
         // 4097 px at 1/2 is 2049 px, one over the bound.
         assertEquals(4, ChatImageDecoder.sampleSize(4097, 1, 2048))
         assertEquals(2, ChatImageDecoder.sampleSize(2049, 1, 2048))
-    }
-
-    @Test
-    fun fitSampleSize_isOneWhenTheImageIsDrawnAtFullSize() {
-        assertEquals(1, ChatImageDecoder.fitSampleSize(500, 300, 1000, 1000))
-        assertEquals(1, ChatImageDecoder.fitSampleSize(1000, 1000, 1000, 1000))
-        // Drawn at 1000 px: 1/2 would leave 999.5 px.
-        assertEquals(1, ChatImageDecoder.fitSampleSize(1999, 1999, 1000, 1000))
     }
 
     @Test

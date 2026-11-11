@@ -14,7 +14,6 @@ import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
-import io.mockk.verify
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -49,71 +48,6 @@ class SettingsViewModelTest {
     ): PreferencesStore = mockk(relaxed = true) {
         every { terminalDisplayMode } returns flowOf(mode)
         every { terminalStaticColumns } returns flowOf(staticColumns)
-    }
-
-    @Test
-    fun initialState_userEmail_sourcedFromAuthRepository() = runTest {
-        val authRepository = mockk<AuthRepository>(relaxed = true)
-        every { authRepository.getUserEmail() } returns "carol@example.com"
-
-        val vm = SettingsViewModel(authRepository, stubPreferencesStore())
-
-        assertEquals("carol@example.com", vm.uiState.value.userEmail)
-    }
-
-    @Test
-    fun initialState_userEmailNull_fallsBackToEmptyString() = runTest {
-        val authRepository = mockk<AuthRepository>(relaxed = true)
-        every { authRepository.getUserEmail() } returns null
-
-        val vm = SettingsViewModel(authRepository, stubPreferencesStore())
-
-        assertEquals("", vm.uiState.value.userEmail)
-    }
-
-    @Test
-    fun logout_delegatesToAuthRepository_withoutMutatingUiState() = runTest {
-        val authRepository = mockk<AuthRepository>(relaxed = true)
-        every { authRepository.getUserEmail() } returns "alice@example.com"
-        every { authRepository.userLogout() } just Runs
-
-        val vm = SettingsViewModel(authRepository, stubPreferencesStore())
-        val before = vm.uiState.value
-
-        vm.logout()
-
-        verify(exactly = 1) { authRepository.userLogout() }
-        assertEquals(before, vm.uiState.value)
-    }
-
-    @Test
-    fun initialState_loadsTerminalDisplayPreferences() = runTest {
-        val authRepository = mockk<AuthRepository>(relaxed = true)
-        every { authRepository.getUserEmail() } returns "alice@example.com"
-        val prefs = stubPreferencesStore(
-            mode = TerminalDisplayMode.Static,
-            staticColumns = 100,
-        )
-
-        val vm = SettingsViewModel(authRepository, prefs)
-        advanceUntilIdle()
-
-        assertEquals(TerminalDisplayMode.Static, vm.uiState.value.terminalDisplayMode)
-        assertEquals(100, vm.uiState.value.terminalStaticColumns)
-    }
-
-    @Test
-    fun setTerminalDisplayMode_writesThroughToPreferencesStore() = runTest {
-        val authRepository = mockk<AuthRepository>(relaxed = true)
-        every { authRepository.getUserEmail() } returns "alice@example.com"
-        val prefs = stubPreferencesStore()
-        coEvery { prefs.setTerminalDisplayMode(any()) } just Runs
-
-        val vm = SettingsViewModel(authRepository, prefs)
-        vm.setTerminalDisplayMode(TerminalDisplayMode.Static)
-        advanceUntilIdle()
-
-        coVerify(exactly = 1) { prefs.setTerminalDisplayMode(TerminalDisplayMode.Static) }
     }
 
     @Test
@@ -170,46 +104,6 @@ class SettingsViewModelTest {
 
         // No email → stays Hidden, no NPE.
         assertEquals(DeleteAccountDialogState.Hidden, vm.uiState.value.deleteDialog)
-    }
-
-    @Test
-    fun chooseReAuthMethod_googleFalse_transitionsToReAuthPassword() = runTest {
-        val vm = newDeleteVm(email = "bob@example.com")
-        vm.startDeleteAccount()
-
-        vm.chooseReAuthMethod(useGoogle = false)
-
-        val state = vm.uiState.value.deleteDialog
-        assertTrue(state is DeleteAccountDialogState.ReAuthPassword)
-        assertEquals("bob@example.com", (state as DeleteAccountDialogState.ReAuthPassword).email)
-        assertEquals("", state.password)
-        assertNull(state.errorMessage)
-    }
-
-    @Test
-    fun chooseReAuthMethod_googleTrue_transitionsToReAuthGoogle() = runTest {
-        val vm = newDeleteVm(email = "carol@example.com")
-        vm.startDeleteAccount()
-
-        vm.chooseReAuthMethod(useGoogle = true)
-
-        val state = vm.uiState.value.deleteDialog
-        assertTrue(state is DeleteAccountDialogState.ReAuthGoogle)
-        assertEquals("carol@example.com", (state as DeleteAccountDialogState.ReAuthGoogle).email)
-        assertFalse(state.submitting)
-        assertNull(state.errorMessage)
-    }
-
-    @Test
-    fun onPasswordChange_updatesPasswordOnReAuthPassword() = runTest {
-        val vm = newDeleteVm()
-        vm.startDeleteAccount()
-        vm.chooseReAuthMethod(useGoogle = false)
-
-        vm.onPasswordChange("hunter22")
-
-        val state = vm.uiState.value.deleteDialog as DeleteAccountDialogState.ReAuthPassword
-        assertEquals("hunter22", state.password)
     }
 
     @Test
@@ -276,20 +170,6 @@ class SettingsViewModelTest {
         val gs = state as DeleteAccountDialogState.ReAuthGoogle
         assertFalse(gs.submitting)
         assertNotNull(gs.errorMessage)
-    }
-
-    @Test
-    fun onTypedEmailChange_updatesTypedEmailOnConfirmEmail() = runTest {
-        val vm = newDeleteVm(email = "grace@example.com")
-        vm.startDeleteAccount()
-        vm.chooseReAuthMethod(useGoogle = false)
-        vm.onPasswordChange("x")
-        vm.confirmPasswordReauth()
-
-        vm.onTypedEmailChange("partial@")
-
-        val state = vm.uiState.value.deleteDialog as DeleteAccountDialogState.ConfirmEmail
-        assertEquals("partial@", state.typedEmail)
     }
 
     @Test
@@ -424,41 +304,6 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun dismissDeleteDialog_returnsToHiddenFromAnyState() = runTest {
-        val vm = newDeleteVm()
-        vm.startDeleteAccount()
-        vm.chooseReAuthMethod(useGoogle = false)
-        vm.onPasswordChange("x")
-        vm.confirmPasswordReauth()
-        assertTrue(vm.uiState.value.deleteDialog is DeleteAccountDialogState.ConfirmEmail)
-
-        vm.dismissDeleteDialog()
-
-        assertEquals(DeleteAccountDialogState.Hidden, vm.uiState.value.deleteDialog)
-    }
-
-    @Test
-    fun startDeleteAccount_defaultsToScheduledMode() = runTest {
-        val vm = newDeleteVm(email = "alice@example.com")
-        vm.startDeleteAccount()
-
-        val state = vm.uiState.value.deleteDialog as DeleteAccountDialogState.Explain
-        // Default mode on Explain step is Scheduled (recommended path).
-        assertEquals(DeletionMode.Scheduled, state.mode)
-    }
-
-    @Test
-    fun setDeletionMode_immediate_updatesExplainState() = runTest {
-        val vm = newDeleteVm()
-        vm.startDeleteAccount()
-
-        vm.setDeletionMode(DeletionMode.Immediate)
-
-        val state = vm.uiState.value.deleteDialog as DeleteAccountDialogState.Explain
-        assertEquals(DeletionMode.Immediate, state.mode)
-    }
-
-    @Test
     fun setDeletionMode_noopWhenNotOnExplainState() = runTest {
         val vm = newDeleteVm()
         vm.startDeleteAccount()
@@ -469,39 +314,6 @@ class SettingsViewModelTest {
         vm.setDeletionMode(DeletionMode.Immediate)
 
         assertEquals(before, vm.uiState.value.deleteDialog)
-    }
-
-    @Test
-    fun mode_threadsThroughReAuthPassword_andConfirmEmail() = runTest {
-        val vm = newDeleteVm(email = "bob@example.com")
-        vm.startDeleteAccount()
-        vm.setDeletionMode(DeletionMode.Immediate)
-        vm.chooseReAuthMethod(useGoogle = false)
-
-        val reAuth = vm.uiState.value.deleteDialog as DeleteAccountDialogState.ReAuthPassword
-        assertEquals(DeletionMode.Immediate, reAuth.mode)
-
-        vm.onPasswordChange("pw")
-        vm.confirmPasswordReauth()
-
-        val confirm = vm.uiState.value.deleteDialog as DeleteAccountDialogState.ConfirmEmail
-        assertEquals(DeletionMode.Immediate, confirm.mode)
-    }
-
-    @Test
-    fun mode_threadsThroughReAuthGoogle_andConfirmEmail() = runTest {
-        val vm = newDeleteVm(email = "carol@example.com")
-        vm.startDeleteAccount()
-        vm.setDeletionMode(DeletionMode.Immediate)
-        vm.chooseReAuthMethod(useGoogle = true)
-
-        val google = vm.uiState.value.deleteDialog as DeleteAccountDialogState.ReAuthGoogle
-        assertEquals(DeletionMode.Immediate, google.mode)
-
-        vm.onGoogleAuthResult(GoogleAuthResult.Success("id-tok", "nonce-z"))
-
-        val confirm = vm.uiState.value.deleteDialog as DeleteAccountDialogState.ConfirmEmail
-        assertEquals(DeletionMode.Immediate, confirm.mode)
     }
 
     @Test

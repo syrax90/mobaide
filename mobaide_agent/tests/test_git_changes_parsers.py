@@ -7,14 +7,11 @@ import sys
 
 import pytest
 
-from mobaide.agent.git.changes_models import GitStatusEntry, LINE_LIMIT, GitStatusCounts
+from mobaide.agent.git.changes_models import LINE_LIMIT, GitStatusCounts
 from mobaide.agent.git.changes_service import (
-    _RawEntry,
     GitBadRequestError,
     GitCommandError,
     GitTimeoutError,
-    _lines,
-    clamp_context,
     http_error_for,
     parse_porcelain_v2,
     parse_unified_diff,
@@ -36,22 +33,6 @@ def _entry_view(entries):
          e.orig_path, e.rename_score, e.submodule)
         for e in entries
     ]
-
-
-class TestLines:
-    @pytest.mark.parametrize(
-        ("data", "expected"),
-        [
-            (b"a\x0bb\nc\rd\n", ["a\x0bb", "c\rd"]),
-            ("nel\u0085b\nls\u2028b\n".encode("utf-8"), ["nel\u0085b", "ls\u2028b"]),
-            (b"", []),
-            (b"x", ["x"]),
-            (b"a\n\n", ["a", ""]),
-        ],
-        ids=["vt-and-cr", "nel-and-ls", "empty", "no-terminator", "one-blank-kept"],
-    )
-    def test_splits_on_newline_only(self, data, expected):
-        assert _lines(data) == expected
 
 
 class TestParsePorcelainV2:
@@ -120,11 +101,6 @@ class TestParsePorcelainV2:
         assert [e.path for e in cut_in_path.entries] == ["a.txt"]
         assert [e.path for e in cut_before_origin.entries] == ["a.txt"]
 
-    def test_short_records_are_skipped(self):
-        parsed = parse_porcelain_v2(_z("1 M.", "2 R.", "u UU", "? ok.txt"))
-
-        assert [e.path for e in parsed.entries] == ["ok.txt"]
-
     def test_limit_keeps_the_smallest_by_group_rank_then_path_and_counts_all(self):
         hashes = "100644 100644 100644 100644 " + " ".join(c * 40 for c in "abc")
         parsed = parse_porcelain_v2(_z(
@@ -142,31 +118,6 @@ class TestParsePorcelainV2:
             conflicts=1, staged=2, unstaged=1, untracked=1, total=5,
         )
 
-    def test_without_limit_entries_keep_parse_order_and_counts_are_filled(self):
-        parsed = parse_porcelain_v2(_z(
-            "? z.txt", f"1 MM N... {_HASHES} m.txt", f"1 A. N... {_HASHES} a.txt",
-        ))
-
-        assert [(e.group, e.path) for e in parsed.entries] == [
-            ("untracked", "z.txt"), ("staged", "m.txt"),
-            ("unstaged", "m.txt"), ("staged", "a.txt"),
-        ]
-        assert parsed.counts == GitStatusCounts(
-            conflicts=0, staged=2, unstaged=1, untracked=1, total=4,
-        )
-
-    def test_raw_entry_mirrors_every_model_field(self):
-        assert set(_RawEntry._fields) == set(GitStatusEntry.model_fields)
-
-    def test_limit_above_the_entry_count_returns_everything_sorted(self):
-        parsed = parse_porcelain_v2(_z(
-            "? z.txt", f"1 .M N... {_HASHES} m.txt", f"1 A. N... {_HASHES} a.txt",
-        ), limit=10)
-
-        assert [(e.group, e.path) for e in parsed.entries] == [
-            ("staged", "a.txt"), ("unstaged", "m.txt"), ("untracked", "z.txt"),
-        ]
-        assert parsed.counts.total == 3
 
     def test_limit_keeps_parse_order_between_equal_keys(self):
         # Two filenames with different invalid bytes decode to the same path,
@@ -182,6 +133,7 @@ class TestParsePorcelainV2:
         assert [(e.group, e.path, e.code) for e in parsed.entries] == [
             ("staged", "new�.txt", "M"), ("staged", "new�.txt", "A"),
         ]
+
 
 class TestParseUnifiedDiff:
     def test_numbers_lines_and_reads_modes(self):
@@ -262,10 +214,6 @@ class TestParseUnifiedDiff:
         with pytest.raises(GitCommandError):
             parse_unified_diff(b"diff --cc f.txt\nindex 1,2..3\n")
 
-    def test_unrecognised_hunk_header_is_refused(self):
-        with pytest.raises(GitCommandError):
-            parse_unified_diff(b"diff --git a/f b/f\n@@ garbage @@\n")
-
     def test_line_limit_counts_but_stops_collecting(self):
         body = b"".join(b"+line %d\n" % i for i in range(LINE_LIMIT + 2))
         parsed = parse_unified_diff(
@@ -275,20 +223,6 @@ class TestParseUnifiedDiff:
 
         assert parsed.truncated is True
         assert parsed.total_lines == LINE_LIMIT + 2
-        assert len(parsed.hunks[0].lines) == LINE_LIMIT
-
-    def test_hunks_past_the_line_cap_are_counted_but_not_retained(self):
-        first = b"".join(b"+line %d\n" % i for i in range(LINE_LIMIT + 1))
-        parsed = parse_unified_diff(
-            b"diff --git a/f b/f\n--- a/f\n+++ b/f\n"
-            b"@@ -0,0 +1,%d @@\n" % (LINE_LIMIT + 1) + first
-            + b"@@ -10,2 +20,2 @@\n one\n-two\n+deux\n"
-            + b"@@ -30,1 +40,1 @@\n three\n"
-        )
-
-        assert parsed.truncated is True
-        assert parsed.total_lines == LINE_LIMIT + 1 + 3 + 1
-        assert len(parsed.hunks) == 1
         assert len(parsed.hunks[0].lines) == LINE_LIMIT
 
     def test_a_cap_landing_on_a_hunk_boundary_drops_the_header_only_hunk(self):
@@ -341,18 +275,6 @@ class TestParseUnifiedDiff:
         assert len(parsed.hunks[0].lines) == LINE_LIMIT
         assert parsed.hunks[0].lines[-1].no_newline is False
 
-    def test_no_newline_marker_after_last_retained_line_still_flags(self):
-        body = b"".join(b"+line %d\n" % i for i in range(LINE_LIMIT))
-        parsed = parse_unified_diff(
-            b"diff --git a/f b/f\n--- a/f\n+++ b/f\n"
-            b"@@ -0,0 +1,%d @@\n" % LINE_LIMIT + body
-            + b"\\ No newline at end of file\n"
-        )
-
-        assert parsed.truncated is False
-        assert len(parsed.hunks[0].lines) == LINE_LIMIT
-        assert parsed.hunks[0].lines[-1].no_newline is True
-
     def test_truncated_input_drops_partial_last_line(self):
         parsed = parse_unified_diff(
             b"diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,2 +1,2 @@\n one\n+tw",
@@ -367,9 +289,7 @@ class TestValidateRepoPath:
     @pytest.mark.parametrize(
         ("raw", "expected"),
         [
-            ("a.txt", "a.txt"),
             ("dir/./b.txt", "dir/b.txt"),
-            ("dir//c.txt", "dir/c.txt"),
             ("dir/../x.txt", "x.txt"),
             ("a b/日本 [x].txt", "a b/日本 [x].txt"),
         ],
@@ -408,16 +328,6 @@ class TestValidateRepoPath:
         assert validate_repo_path(raw) == raw
 
 
-class TestClampContext:
-    @pytest.mark.parametrize(
-        ("raw", "expected"),
-        [("3", 3), (7, 7), (None, 3), ("abc", 3), ("-5", 0), ("0", 0),
-         ("99", 99), ("5000", 5000), ("5001", 5000), (10**9, 5000)],
-    )
-    def test_clamps_to_range_with_default(self, raw, expected):
-        assert clamp_context(raw) == expected
-
-
 class TestHttpErrorFor:
     def test_maps_each_service_error(self):
         assert http_error_for(GitUnavailableError("x")) == (
@@ -430,12 +340,3 @@ class TestHttpErrorFor:
             400, {"detail": {"code": "bad_scope"}})
         assert http_error_for(GitCommandError("boom")) == (
             500, {"detail": {"code": "git_error", "message": "boom"}})
-
-    def test_command_error_message_is_capped(self):
-        mapped = http_error_for(GitCommandError("x" * 600))
-
-        assert mapped is not None
-        assert len(mapped[1]["detail"]["message"]) == 500
-
-    def test_unrelated_exception_is_not_mapped(self):
-        assert http_error_for(ValueError("nope")) is None

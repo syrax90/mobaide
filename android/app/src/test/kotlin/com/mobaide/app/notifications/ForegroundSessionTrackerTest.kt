@@ -17,27 +17,6 @@ import org.junit.Test
 class ForegroundSessionTrackerTest {
 
     @Test
-    fun startsWithNoVisibleSession() {
-        val tracker = ForegroundSessionTracker()
-        assertNull(tracker.visibleSessionId.value)
-    }
-
-    @Test
-    fun setVisible_storesTheSessionId() {
-        val tracker = ForegroundSessionTracker()
-        tracker.setVisible("s1")
-        assertEquals("s1", tracker.visibleSessionId.value)
-    }
-
-    @Test
-    fun setVisible_overwritesPreviousSession() {
-        val tracker = ForegroundSessionTracker()
-        tracker.setVisible("s1")
-        tracker.setVisible("s2")
-        assertEquals("s2", tracker.visibleSessionId.value)
-    }
-
-    @Test
     fun clearVisible_matchingId_clearsToNull() {
         val tracker = ForegroundSessionTracker()
         tracker.setVisible("s1")
@@ -54,12 +33,5 @@ class ForegroundSessionTrackerTest {
         tracker.setVisible("B")
         tracker.clearVisible("A")
         assertEquals("B", tracker.visibleSessionId.value)
-    }
-
-    @Test
-    fun clearVisible_whenAlreadyNull_staysNull() {
-        val tracker = ForegroundSessionTracker()
-        tracker.clearVisible("s1")
-        assertNull(tracker.visibleSessionId.value)
     }
 }

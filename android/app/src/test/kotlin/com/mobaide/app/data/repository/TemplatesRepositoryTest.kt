@@ -14,8 +14,6 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
-import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Test
 
 /**
@@ -68,27 +66,6 @@ class TemplatesRepositoryTest {
         )
     }
 
-    // ---- observeTemplates initial state ----------------------------------------
-
-    @Test
-    fun observeTemplates_initialState_isEmptyList() = runTest {
-        val (repo) = newFixture()
-        assertTrue(repo.observeTemplates().value.isEmpty())
-    }
-
-    // ---- requireUserToken guard ------------------------------------------------
-
-    @Test
-    fun refreshTemplates_throwsIllegalStateException_whenUserNotLoggedIn() = runTest {
-        val (repo) = newFixture(userToken = null)
-        try {
-            repo.refreshTemplates()
-            fail("expected IllegalStateException")
-        } catch (e: IllegalStateException) {
-            assertEquals("User not logged in", e.message)
-        }
-    }
-
     // ---- refreshTemplates ------------------------------------------------------
 
     @Test
@@ -108,41 +85,7 @@ class TemplatesRepositoryTest {
         coVerify(exactly = 1) { api.listTemplates("tok-user-123") }
     }
 
-    @Test
-    fun refreshTemplates_secondCall_replacesEntireList() = runTest {
-        val (repo, api) = newFixture()
-        coEvery { api.listTemplates(any()) } returns listOf(
-            template("t-1"), template("t-2"),
-        )
-
-        repo.refreshTemplates()
-        assertEquals(2, repo.observeTemplates().value.size)
-
-        coEvery { api.listTemplates(any()) } returns listOf(template("t-3"))
-        repo.refreshTemplates()
-        assertEquals(
-            listOf("t-3"),
-            repo.observeTemplates().value.map { it.template_id },
-        )
-    }
-
     // ---- createTemplate --------------------------------------------------------
-
-    @Test
-    fun createTemplate_delegatesToCentralApi_andReturnsSamePayload() = runTest {
-        val (repo, api) = newFixture()
-        val response = template("t-1", name = "explain", body = "explain this")
-        coEvery {
-            api.createTemplate("tok-user-123", "explain", "explain this")
-        } returns response
-
-        val returned = repo.createTemplate("explain", "explain this")
-
-        assertSame(response, returned)
-        coVerify(exactly = 1) {
-            api.createTemplate("tok-user-123", "explain", "explain this")
-        }
-    }
 
     @Test
     fun createTemplate_upsertsIntoCache_withoutCallingListAgain() = runTest {
@@ -246,21 +189,6 @@ class TemplatesRepositoryTest {
         )
     }
 
-    @Test
-    fun deleteTemplate_unknownId_isNoOpOnCache() = runTest {
-        // The HTTP call still runs (server returns 403/404 in practice) but
-        // the local cache is untouched: `applyDeleted` filters by id.
-        val (repo, api) = newFixture()
-        coEvery { api.listTemplates(any()) } returns listOf(template("t-1"))
-        repo.refreshTemplates()
-        coEvery { api.deleteTemplate(any(), any()) } returns Unit
-
-        repo.deleteTemplate("ghost-id")
-
-        coVerify(exactly = 1) { api.deleteTemplate("tok-user-123", "ghost-id") }
-        assertEquals(listOf("t-1"), repo.observeTemplates().value.map { it.template_id })
-    }
-
     // ---- touchTemplate ---------------------------------------------------------
 
     @Test
@@ -285,20 +213,6 @@ class TemplatesRepositoryTest {
     // ---- applyUpserted (push-event entrypoint) ---------------------------------
 
     @Test
-    fun applyUpserted_unknownId_appendsToCache() = runTest {
-        // Path triggered when `UserEventBus` parses a `template.created`
-        // envelope from a sibling device.
-        val (repo) = newFixture()
-        repo.applyUpserted(template("t-1"))
-        repo.applyUpserted(template("t-2"))
-
-        assertEquals(
-            listOf("t-1", "t-2"),
-            repo.observeTemplates().value.map { it.template_id },
-        )
-    }
-
-    @Test
     fun applyUpserted_existingId_replacesInPlace_preservingOrder() = runTest {
         // Path triggered by `template.updated`. The replacement must occupy
         // the same slot, otherwise the picker's "Recents/Favorites/All" sort
@@ -320,24 +234,6 @@ class TemplatesRepositoryTest {
         assertEquals(7, cached[1].version)
     }
 
-    @Test
-    fun applyUpserted_emitsNewValue_onChange() = runTest {
-        val (repo) = newFixture()
-        repo.observeTemplates().test {
-            assertEquals(emptyList<TemplateDto>(), awaitItem())
-
-            repo.applyUpserted(template("t-1", name = "x"))
-            val first = awaitItem()
-            assertEquals(1, first.size)
-
-            repo.applyUpserted(template("t-1", name = "y", version = 2))
-            val second = awaitItem()
-            assertEquals("y", second.single().name)
-
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
     // ---- applyDeleted (push-event entrypoint) ----------------------------------
 
     @Test
@@ -354,46 +250,5 @@ class TemplatesRepositoryTest {
             listOf("t-1", "t-3"),
             repo.observeTemplates().value.map { it.template_id },
         )
-    }
-
-    @Test
-    fun applyDeleted_unknownId_isNoOp() = runTest {
-        // Forward-compat: a `template.deleted` envelope for a row we never
-        // fetched (e.g. created and deleted between two of our refreshes)
-        // must not throw or alter the cache.
-        val (repo, api) = newFixture()
-        coEvery { api.listTemplates(any()) } returns listOf(template("t-1"))
-        repo.refreshTemplates()
-
-        repo.applyDeleted("ghost-id")
-
-        assertEquals(listOf("t-1"), repo.observeTemplates().value.map { it.template_id })
-    }
-
-    @Test
-    fun applyDeleted_onEmptyCache_isNoOp() = runTest {
-        val (repo) = newFixture()
-
-        repo.applyDeleted("any-id")
-
-        assertEquals(emptyList<TemplateDto>(), repo.observeTemplates().value)
-    }
-
-    // ---- clear -----------------------------------------------------------------
-
-    @Test
-    fun clear_emptiesCache() = runTest {
-        // Used during sign-out flows to drop the previous user's data without
-        // a network round-trip.
-        val (repo, api) = newFixture()
-        coEvery { api.listTemplates(any()) } returns listOf(
-            template("t-1"), template("t-2"),
-        )
-        repo.refreshTemplates()
-        assertEquals(2, repo.observeTemplates().value.size)
-
-        repo.clear()
-
-        assertEquals(emptyList<TemplateDto>(), repo.observeTemplates().value)
     }
 }

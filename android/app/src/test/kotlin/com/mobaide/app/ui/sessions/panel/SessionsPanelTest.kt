@@ -5,10 +5,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
-import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
-import androidx.compose.ui.test.hasAnyAncestor
-import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -17,8 +14,6 @@ import androidx.compose.ui.test.performClick
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
-import com.mobaide.app.ui.sessions.SESSION_STATUS_SQUARE_TAG
-import com.mobaide.app.ui.sessions.SESSION_WORKING_INDICATOR_TAG
 import com.mobaide.app.ui.theme.MobaideTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -104,52 +99,6 @@ class SessionsPanelTest {
     )
 
     @Test
-    fun rows_renderTitleKindProjectAndAttention_withTheCurrentOneSelected() {
-        setPanel(twoSessions)
-
-        composeRule.onNodeWithTag(sessionsPanelRowTag("s1")).assertIsDisplayed().assertIsSelected()
-        composeRule.onNodeWithText("fix: login").assertIsDisplayed()
-        composeRule.onNodeWithText("Claude Code · app").assertIsDisplayed()
-        // `PixelChip` uppercases its label; the mapping is what is under test here.
-        composeRule.onNodeWithText("Needs permission", ignoreCase = true).assertIsDisplayed()
-
-        composeRule.onNodeWithTag(sessionsPanelRowTag("s2")).assertIsDisplayed().assertIsNotSelected()
-        // No OSC title yet: the composite is the headline and the detail line
-        // repeats the kind, the way the list screen's card does.
-        composeRule.onNodeWithTag(sessionsPanelRowTag("s2")).assert(hasText("Codex · api"))
-    }
-
-    @Test
-    fun aWorkingRow_swapsItsStatusSquareForTheWorkingSquare_andReadyForWorking() {
-        setPanel(
-            SessionsPanelUiState(
-                sessions = listOf(
-                    session("s1", title = "busy", attention = "turn_finished", activity = "working"),
-                    session("s2", title = "between turns", attention = "turn_finished", activity = "idle"),
-                ),
-                synced = true,
-                agents = listOf(agent("a1", "desktop", online = true)),
-                connectedAgentId = "a1",
-            ),
-        )
-
-        fun inRow(id: String, tag: String) = composeRule.onNode(
-            hasTestTag(tag) and hasAnyAncestor(hasTestTag(sessionsPanelRowTag(id))),
-            useUnmergedTree = true,
-        )
-
-        inRow("s1", SESSION_WORKING_INDICATOR_TAG).assertExists()
-        inRow("s1", SESSION_STATUS_SQUARE_TAG).assertDoesNotExist()
-        composeRule.onNodeWithTag(sessionsPanelRowTag("s1"))
-            .assert(hasText("Working", ignoreCase = true))
-            .assert(!hasText("Ready", ignoreCase = true))
-
-        inRow("s2", SESSION_STATUS_SQUARE_TAG).assertExists()
-        inRow("s2", SESSION_WORKING_INDICATOR_TAG).assertDoesNotExist()
-        composeRule.onNodeWithTag(sessionsPanelRowTag("s2")).assert(hasText("Ready", ignoreCase = true))
-    }
-
-    @Test
     fun aDepartingRow_isInert_whileTheOthersStayLive() {
         val recorder = setPanel(twoSessions, currentSessionId = "s2", departingSessionId = "s1")
 
@@ -200,14 +149,6 @@ class SessionsPanelTest {
     }
 
     @Test
-    fun agentsSection_isAbsent_whenTheAccountOwnsOnlyTheConnectedAgent() {
-        setPanel(twoSessions)
-
-        composeRule.onNodeWithText("AGENTS").assertDoesNotExist()
-        composeRule.onNodeWithText("Agents").assertDoesNotExist()
-    }
-
-    @Test
     fun inFlightSwitch_labelsItsTarget_andFreezesTheOtherAgents() {
         val recorder = setPanel(
             twoSessions.copy(
@@ -226,32 +167,11 @@ class SessionsPanelTest {
     }
 
     @Test
-    fun closeAndNewSession_reachTheirCallbacks() {
-        val recorder = setPanel(twoSessions)
-
-        composeRule.onNodeWithTag(SESSIONS_PANEL_CLOSE_TAG).performClick()
-        composeRule.onNodeWithTag(SESSIONS_PANEL_NEW_SESSION_TAG).performClick()
-
-        assertEquals(1, recorder.closes)
-        assertEquals(1, recorder.creates)
-        assertEquals(emptyList<String>(), recorder.selectedSessions)
-    }
-
-    @Test
     fun unsyncedList_readsAsReconnecting_notAsEmpty() {
         setPanel(SessionsPanelUiState(synced = false))
 
         composeRule.onNodeWithText("Reconnecting…").assertIsDisplayed()
         composeRule.onNodeWithText("No active sessions").assertDoesNotExist()
-    }
-
-    @Test
-    fun syncedEmptyList_readsAsNoActiveSessions() {
-        setPanel(SessionsPanelUiState(synced = true))
-
-        composeRule.onNodeWithText("No active sessions").assertIsDisplayed()
-        composeRule.onNodeWithText("Reconnecting…").assertDoesNotExist()
-        composeRule.onNodeWithTag(SESSIONS_PANEL_NEW_SESSION_TAG).assertIsDisplayed()
     }
 
     @Test

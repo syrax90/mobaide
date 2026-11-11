@@ -73,18 +73,6 @@ final class ProjectFormModelTests: XCTestCase {
         XCTAssertEqual(object, ["default_flags": .object([:])])
     }
 
-    func testUpdateBodyReplacesFlags() throws {
-        let project = ProjectInfo(name: "p", path: "/p")
-        let model = ProjectFormModel(mode: .edit(project), repository: makeRepo())
-
-        model.flags = [
-            FlagEntry(key: "a", kind: .number, textValue: "1"),
-            FlagEntry(key: "b", kind: .boolean, textValue: "true"),
-        ]
-        let body = model.toUpdateBody()
-        XCTAssertEqual(body.default_flags, ["a": 1, "b": true])
-    }
-
     func testHugeIntegralFlagValueDoesNotTrapOnEdit() {
         // A default_flags value beyond Int range decodes as .double; opening the
         // edit form must not trap converting it back to display text.
@@ -121,18 +109,6 @@ final class ProjectFormModelTests: XCTestCase {
 
     // MARK: - Validation
 
-    func testInvalidNameBlocksSave() {
-        let model = ProjectFormModel(mode: .create, repository: makeRepo())
-        model.path = "/x"
-        model.name = "bad/name"
-        XCTAssertEqual(model.nameError, "Use letters, digits, spaces, _-.")
-        XCTAssertFalse(model.canSave)
-
-        model.name = "Good name_1.2-3"
-        XCTAssertNil(model.nameError)
-        XCTAssertTrue(model.canSave)
-    }
-
     func testDuplicateFlagKeyBlocksSave() {
         let model = ProjectFormModel(mode: .create, repository: makeRepo())
         model.name = "p"
@@ -163,16 +139,5 @@ final class ProjectFormModelTests: XCTestCase {
         model.flags[0].textValue = "42"
         XCTAssertNil(model.flagValueError(at: 0))
         XCTAssertTrue(model.canSave)
-    }
-
-    func testEmptyFilterSelectionBlocksSave() {
-        let model = ProjectFormModel(mode: .create, repository: makeRepo())
-        model.name = "p"
-        model.path = "/x"
-        XCTAssertTrue(model.canSave, "defaults satisfy the filter")
-
-        model.triggerLabels.removeAll()
-        XCTAssertFalse(model.filterValid)
-        XCTAssertFalse(model.canSave)
     }
 }

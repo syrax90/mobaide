@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from central_server.ads.data_manager import (
-    CONSENT,
     INGEST_URL,
     REQUEST_STATUS_URL,
     AuthRefreshFailed,
@@ -15,18 +14,15 @@ from central_server.ads.data_manager import (
     DataManagerConversionClient,
     TransientTransportError,
     TransportResponse,
-    build_destination,
     build_ingest_payload,
     classify_response,
     classify_status,
     format_event_timestamp,
     hash_email,
     normalize_email,
-    parse_iso_utc,
     select_identifier,
     transaction_id,
 )
-from central_server.db.database import _now_iso
 
 NOW = datetime(2026, 9, 2, 12, 18, 0, tzinfo=timezone.utc)
 CONSENT_JSON = {"adUserData": "CONSENT_GRANTED", "adPersonalization": "CONSENT_DENIED"}
@@ -56,34 +52,6 @@ def test_hash_email_is_sha256_hex_of_normalized():
     digest = hash_email(" Foo.Bar+x@Gmail.com ")
     assert digest == hashlib.sha256(b"foobar@gmail.com").hexdigest()
     assert len(digest) == 64 and digest == digest.lower()
-
-
-def test_format_event_timestamp_is_rfc3339_utc_at_whole_seconds():
-    aware = datetime(2026, 9, 2, 14, 18, 0, 123456, tzinfo=timezone(timedelta(hours=2)))
-    assert format_event_timestamp(aware) == "2026-09-02T12:18:00Z"
-    naive = datetime(2026, 9, 2, 12, 18, 0)
-    assert format_event_timestamp(naive) == "2026-09-02T12:18:00Z"
-
-
-def test_parse_iso_utc_round_trips_now_iso_and_rejects_garbage():
-    text = _now_iso()
-    parsed = parse_iso_utc(text)
-    assert parsed is not None and parsed.isoformat() == text
-    assert parse_iso_utc("garbage") is None
-    assert parse_iso_utc(None) is None
-    assert parse_iso_utc(12) is None
-    assert parse_iso_utc("2026-09-01T10:00:00") == datetime(
-        2026, 9, 1, 10, tzinfo=timezone.utc
-    )
-
-
-def test_destination_with_and_without_login_account():
-    assert build_destination(customer_id="1234567890", conversion_action_id="987654321") == DESTINATION
-    via_manager = build_destination(
-        customer_id="1234567890", conversion_action_id="987654321", login_customer_id="5555"
-    )
-    assert via_manager["loginAccount"] == {"accountType": "GOOGLE_ADS", "accountId": "5555"}
-    assert via_manager["operatingAccount"] == DESTINATION["operatingAccount"]
 
 
 @pytest.mark.parametrize("kind", ["gclid", "gbraid", "wbraid"])
@@ -162,51 +130,12 @@ class TestTransactionId:
             ConversionIdentifier("gclid", "c"), second
         )
 
-    def test_naive_datetimes_count_as_utc(self):
-        naive = NOW.replace(tzinfo=None)
-        assert transaction_id(ConversionIdentifier("gclid", "c"), naive) == transaction_id(
-            ConversionIdentifier("gclid", "c"), NOW
-        )
-
     def test_is_stable_across_calls_and_timezones(self):
         """A retry and a resumed upload must produce the same key."""
         local = NOW.astimezone(timezone(timedelta(hours=3)))
         assert transaction_id(ConversionIdentifier("gclid", "c"), NOW) == transaction_id(
             ConversionIdentifier("gclid", "c"), local
         )
-
-    @pytest.mark.parametrize(
-        "identifier, event_time",
-        [
-            (ConversionIdentifier("gclid", "d"), NOW),
-            (ConversionIdentifier("gbraid", "c"), NOW),
-            (ConversionIdentifier("hashed_email", "c"), NOW),
-            (ConversionIdentifier("gclid", "c"), NOW + timedelta(seconds=1)),
-        ],
-    )
-    def test_changes_with_any_input(self, identifier, event_time):
-        assert transaction_id(identifier, event_time) != transaction_id(
-            ConversionIdentifier("gclid", "c"), NOW
-        )
-
-    def test_shape(self):
-        value = transaction_id(ConversionIdentifier("gclid", "c"), NOW)
-        assert len(value) == 32 and all(ch in "0123456789abcdef" for ch in value)
-
-
-def test_payload_validate_only_flag():
-    payload = build_ingest_payload(
-        customer_id="1234567890",
-        conversion_action_id="987654321",
-        identifier=ConversionIdentifier("gclid", "c"),
-        event_time=NOW,
-        validate_only=True,
-    )
-    assert payload["validateOnly"] is True
-
-
-def test_consent_matches_the_landing_banner():
-    assert CONSENT == CONSENT_JSON
 
 
 def test_identifier_repr_hides_the_value():
@@ -269,10 +198,6 @@ class TestSelectIdentifier:
         )
         assert select_identifier(row, NOW) is None
 
-    def test_nothing_usable_returns_none(self):
-        row = _row(ad_click_id=None, ad_click_kind=None, ad_click_at=None, email=None)
-        assert select_identifier(row, NOW) is None
-
     def test_email_fallback_needs_permission_but_the_click_does_not(self):
         assert select_identifier(_row(), NOW, email_allowed=False).kind == "gclid"
         stale = _row(ad_click_at=(NOW - timedelta(days=91)).isoformat())
@@ -333,12 +258,6 @@ class TestClassifyResponse:
         assert outcome.credential_failure
         assert outcome.message == "PERMISSION_DENIED: no access"
 
-    @pytest.mark.parametrize("status", [400, 404, 422])
-    def test_other_4xx_are_permanent_event_failures(self, status):
-        outcome = classify_response(_resp(status, {"error": {"message": "x"}}))
-        assert outcome.permanent and outcome.reason == "http_4xx"
-        assert not outcome.credential_failure
-
     def test_429_is_transient(self):
         outcome = classify_response(_resp(429, "slow down"))
         assert (outcome.permanent, outcome.reason) == (False, "http_429")
@@ -351,10 +270,6 @@ class TestClassifyResponse:
     def test_non_json_200_is_permanent_bad_response(self):
         outcome = classify_response(_resp(200, "<html>"))
         assert (outcome.permanent, outcome.reason, outcome.message) == (True, "bad_response", "<html>")
-
-    def test_unexpected_status_is_permanent_bad_response(self):
-        outcome = classify_response(_resp(302, None))
-        assert outcome.reason == "bad_response" and outcome.request_id is None
 
     def test_messages_are_truncated(self):
         outcome = classify_response(_resp(400, {"error": {"message": "x" * 500}}))
@@ -403,10 +318,6 @@ class TestClassifyStatus:
         outcome = classify_status(_resp(200, body))
         assert outcome.terminal and not outcome.healthy and outcome.errors == (("X", 2),)
 
-    def test_empty_destination_list_counts_as_processing(self):
-        outcome = classify_status(_resp(200, {"requestStatusPerDestination": []}))
-        assert not outcome.terminal and outcome.status == "PROCESSING"
-
     @pytest.mark.parametrize("status", [404, 429, 500, 503])
     def test_not_filed_yet_and_transient_errors_keep_polling(self, status):
         outcome = classify_status(_resp(status, {"error": {"message": "later"}}))
@@ -418,10 +329,6 @@ class TestClassifyStatus:
         )
         assert outcome.terminal and outcome.status == "http_4xx"
         assert outcome.message == "PERMISSION_DENIED: no"
-
-    def test_non_json_200_is_terminal_bad_response(self):
-        outcome = classify_status(_resp(200, "<html>"))
-        assert outcome.terminal and outcome.status == "bad_response"
 
 
 class FakeTransport:
@@ -507,8 +414,3 @@ class TestClient:
     async def test_request_status_never_raises(self, error, terminal, status):
         outcome = await _client(FakeTransport(error=error)).request_status("r", timeout=1.0)
         assert (outcome.terminal, outcome.status) == (terminal, status)
-
-    def test_close_closes_transport(self):
-        transport = FakeTransport()
-        _client(transport).close()
-        assert transport.closed

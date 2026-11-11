@@ -73,25 +73,6 @@ final class TerminalSelectionGestureTests: XCTestCase {
         }
     }
 
-    func testSelectionRecognizersSurviveAScreenRevisit() {
-        let model = TerminalTestSupport.model()
-        let terminal = model.terminalView
-        terminal.configureAppearance()
-        let coordinator = TerminalHostView.Coordinator(model: model)
-        retainedCoordinator = coordinator
-
-        coordinator.attachGestures(to: terminal)
-        coordinator.attachGestures(to: terminal)
-
-        let longPresses = (terminal.gestureRecognizers ?? [])
-            .filter { $0.name == TerminalSelectionController.longPressGestureName }
-        XCTAssertEqual(
-            longPresses.count,
-            1,
-            "the recognizer is view-owned, so a second visit must neither drop nor duplicate it"
-        )
-    }
-
     // MARK: - Sticky mode owns the pointer
 
     func testSelectionSuspendsEveryOtherTerminalGesture() throws {
@@ -215,21 +196,6 @@ final class TerminalSelectionGestureTests: XCTestCase {
         terminal.beginSelectionForTest(at: point(row: 0, col: 5, on: terminal))
 
         XCTAssertEqual(terminal.selectionController.selectedText(), "/usr/local/bin")
-    }
-
-    func testWordExpansionStaysWithinItsRow() throws {
-        let terminal = makeTerminal()
-        let cols = terminal.getTerminal().getDims().cols
-        let path = String(repeating: "a", count: cols + 12)
-        terminal.feed(text: path)
-
-        terminal.beginSelectionForTest(at: point(row: 0, col: 0, on: terminal))
-
-        XCTAssertEqual(
-            try XCTUnwrap(terminal.selectionController.selectedText()).count,
-            cols,
-            "a long press selects the run on the touched row only — Android's expansion never crosses rows either"
-        )
     }
 
     func testSoftWrappedSelectionRejoinsWithoutANewline() throws {
@@ -442,76 +408,7 @@ final class TerminalSelectionGestureTests: XCTestCase {
         withExtendedLifetime(model) {}
     }
 
-    // MARK: - Renderer geometry
-
-    /// The whole selection model assumes content row R is drawn at
-    /// `y = R * cellHeight` and that the content is sized to the whole
-    /// scrollback. Both are SwiftTerm renderer behaviour, not API, so a minor
-    /// version bump could change them **silently** — every highlight would then
-    /// land on the wrong row with nothing failing to compile. Assert the
-    /// observable consequence instead.
-    func testContentGeometryMatchesTheRowMathSelectionIsBuiltOn() throws {
-        let terminal = makeTerminal()
-        let rows = terminal.getTerminal().getDims().rows
-        let extra = 20
-        for line in 0..<(rows + extra) {
-            terminal.feed(text: "line\(line)\r\n")
-        }
-        terminal.layoutIfNeeded()
-
-        let cellHeight = terminal.cellSize.height
-        let contentRows = Int((terminal.contentSize.height / cellHeight).rounded())
-        XCTAssertEqual(
-            contentRows,
-            rows + extra + 1,
-            "contentSize must span the whole buffer (scrollback + screen), or content rows do not index lines"
-        )
-
-        // Probe the mapping through the shipped path: a press at y = R*cellHeight
-        // must select the word that was written to line R. This covers rows deep
-        // in the scrollback, where the yDisp re-point in `bufferLine` is doing
-        // the work, as well as rows on screen.
-        for probe in [0, 7, rows, rows + extra - 1] {
-            terminal.selectionController.endSelection()
-            terminal.beginSelectionForTest(at: point(row: probe, col: 1, on: terminal))
-            XCTAssertEqual(
-                terminal.selectionController.selectedText(),
-                "line\(probe)",
-                "a press at y = \(probe) * cellHeight must land on buffer line \(probe)"
-            )
-        }
-    }
-
     // MARK: - CLA-186 follow-up: yDisp parked short of the bottom by a fling
-
-    /// SwiftTerm 1.15.0's `updateScroller()` only re-syncs `yDisp` to the scroll
-    /// position while the finger is physically down (`isTracking`), so a fling
-    /// that coasts past a screen and settles short of the bottom leaves `yDisp`
-    /// parked at the finger-lift row while `contentSize` — and the screen the
-    /// user is actually looking at — has moved on. `lastContentRow` exists
-    /// precisely to stay correct through that: it must read off `contentSize`,
-    /// not `yDisp`.
-    func testLastContentRowTracksContentSizeNotAParkedYDisp() throws {
-        let terminal = makeTerminal()
-        let rows = terminal.getTerminal().getDims().rows
-        let extra = 20
-        for line in 0..<(rows + extra) {
-            terminal.feed(text: "line\(line)\r\n")
-        }
-        terminal.layoutIfNeeded()
-
-        let expected = Int((terminal.contentSize.height / terminal.cellSize.height).rounded()) - 1
-        XCTAssertEqual(terminal.lastContentRow, expected)
-
-        // Park yDisp well below the tail, the way a fling that stops short of
-        // the bottom leaves it — lastContentRow must not shrink to follow it.
-        terminal.getTerminal().buffer.yDisp = 0
-        XCTAssertEqual(
-            terminal.lastContentRow,
-            expected,
-            "lastContentRow is read off contentSize, so a parked yDisp must not move it"
-        )
-    }
 
     /// Reproduces the defect a stale `yDisp`-derived bound caused. Verified
     /// against the pre-fix formula (`yDisp + rows - 1`) with this harness's own

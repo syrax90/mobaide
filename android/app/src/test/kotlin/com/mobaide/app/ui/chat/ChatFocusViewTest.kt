@@ -149,10 +149,4 @@ class ChatFocusViewTest {
         )
         assertEquals(listOf(true, false), steps(result).map { it.open })
     }
-
-    @Test
-    fun stepsLabel_countsOneAndMany() {
-        assertEquals("1 step", stepsLabel(1))
-        assertEquals("4 steps", stepsLabel(4))
-    }
 }

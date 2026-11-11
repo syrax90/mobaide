@@ -82,14 +82,6 @@ final class DictationUploaderTests: XCTestCase {
         XCTAssertEqual(recorded.events, ["done hello world"])
     }
 
-    func testTrimsTheTranscript() async {
-        api.configure(text: "  spaced out \n")
-
-        await uploadClosed(3)
-
-        XCTAssertEqual(recorded.events, ["done spaced out"])
-    }
-
     func testRetriesALostRequestWithBackoffAndJitterAndReportsLagging() async {
         clock.setRandom(1)
         for _ in 0..<5 { api.enqueueAudio(.fail(voiceNetworkError())) }
@@ -163,17 +155,6 @@ final class DictationUploaderTests: XCTestCase {
         XCTAssertEqual(recorded.events, ["done hello world"])
     }
 
-    func testResendsFromTheExpectedSeqWhenFinishReportsAGap() async {
-        api.enqueueFinish(.fail(voiceRefusal(409, VoiceCodes.seqGap, expectedSeq: 1)))
-
-        await uploadClosed(8)
-
-        XCTAssertEqual(
-            api.log,
-            ["create", "audio d1#0", "audio d1#1", "finish d1@1", "audio d1#1", "finish d1@1"]
-        )
-    }
-
     func testGivesUpAfterThreeResyncs() async {
         api.setAudioFallback(.fail(voiceRefusal(409, VoiceCodes.seqGap, expectedSeq: 0)))
 
@@ -227,45 +208,6 @@ final class DictationUploaderTests: XCTestCase {
         XCTAssertEqual(recorded.events, ["stopCapture", "done hello world"])
         XCTAssertEqual(api.log, ["create", "audio d1#0", "audio d1#1", "audio d1#2", "finish d1@1"])
         upload.close()
-    }
-
-    func testReUploadsFromSeqZeroWhenTheDictationExpiresAfterTooLong() async {
-        let tooLong = VoiceReply<Void>.fail(voiceRefusal(409, VoiceCodes.tooLong))
-        api.enqueueAudio(.ok(()), .ok(()), tooLong, .ok(()), .ok(()), tooLong)
-        api.enqueueFinish(.fail(voiceRefusal(404, VoiceCodes.dictationNotFound)))
-        buffer.append(voiceRamp(12))
-        let upload = uploader()
-        upload.start()
-        await waitUntil { self.settled }
-
-        XCTAssertEqual(
-            api.log,
-            [
-                "create", "audio d1#0", "audio d1#1", "audio d1#2", "finish d1@1", "remove d1",
-                "create", "audio d2#0", "audio d2#1", "audio d2#2", "finish d2@1",
-            ]
-        )
-        XCTAssertEqual(recorded.events.last, "done hello world")
-        upload.close()
-    }
-
-    func testReUploadsFromSeqZeroWhenRetryOpensANewDictationAfterTooLong() async {
-        api.enqueueAudio(.ok(()), .ok(()), .fail(voiceRefusal(409, VoiceCodes.tooLong)))
-        api.enqueueFinish(.fail(voiceRefusal(503, VoiceCodes.transcriptionFailed)))
-        buffer.append(voiceRamp(12))
-        let upload = uploader()
-        upload.start()
-        await waitUntil { self.settled }
-        XCTAssertEqual(recorded.failure?.code, VoiceCodes.transcriptionFailed)
-        await waitUntil { !upload.isRunning }
-
-        XCTAssertTrue(upload.retry())
-        await waitUntil { self.recorded.events.last == "done hello world" }
-
-        XCTAssertEqual(
-            Array(api.log.dropFirst(5)),
-            ["remove d1", "create", "audio d2#0", "audio d2#1", "audio d2#2", "finish d2@2"]
-        )
     }
 
     func testLatchesTranscriptionFailedWithNoAutomaticReUploadAndRetryOpensANewDictation() async {

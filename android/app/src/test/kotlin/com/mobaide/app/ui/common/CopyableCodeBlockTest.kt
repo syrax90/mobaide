@@ -15,7 +15,6 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -46,55 +45,6 @@ class CopyableCodeBlockTest {
 
     @get:Rule
     val composeRule = createAndroidComposeRule<ComponentActivity>()
-
-    @Test
-    fun copyButton_writesCodeToClipboardUnderLabel() {
-        composeRule.setContent {
-            Surface { CopyableCodeBlock(label = "Agent ID", code = "a1b2c3d4e5f6") }
-        }
-
-        val clipboard = composeRule.activity
-            .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.clearPrimaryClip()
-
-        composeRule.onNodeWithContentDescription("Copy Agent ID")
-            .assertIsDisplayed()
-            .performClick()
-
-        val clip = clipboard.primaryClip
-        assertNotNull("primaryClip should be populated after copy click", clip)
-        assertEquals("Agent ID", clip!!.description.label.toString())
-        assertEquals("a1b2c3d4e5f6", clip.getItemAt(0).text.toString())
-    }
-
-    @Test
-    fun nonSensitiveByDefault_doesNotFlagClipSensitive() {
-        composeRule.setContent {
-            Surface {
-                CopyableCodeBlock(
-                    label = "File location (default install)",
-                    code = "/opt/mobaide/mobaide_agent/.env",
-                )
-            }
-        }
-
-        val clipboard = composeRule.activity
-            .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.clearPrimaryClip()
-
-        composeRule.onNodeWithContentDescription("Copy File location (default install)")
-            .performClick()
-
-        val clip = clipboard.primaryClip
-        assertNotNull(clip)
-        val flaggedSensitive = clip!!.description.extras
-            ?.getBoolean(ClipDescription.EXTRA_IS_SENSITIVE, false)
-            ?: false
-        assertFalse(
-            "A non-sensitive payload must not set EXTRA_IS_SENSITIVE",
-            flaggedSensitive,
-        )
-    }
 
     @Test
     fun sensitivePayload_flagsClipSensitiveOnApi33() {

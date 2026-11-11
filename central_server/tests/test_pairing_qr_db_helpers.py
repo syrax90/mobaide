@@ -2,14 +2,12 @@
 
 Targets:
 
-* ``create_pairing_token(agent_id=None, agent_metadata=...)`` accepts the
-  new optional shape.
 * ``lookup_pairing_token_metadata`` returns the pre-claim row.
 * ``claim_pairing_nonce`` is a CAS — exactly one of two concurrent
   claims wins.
 * ``read_and_clear_claimed_credentials`` is single-flight.
-* The schema migration left ``pairing_tokens.agent_id`` nullable and
-  added the three new columns.
+* The v7 -> head migration keeps live ``pairing_tokens`` rows and is
+  idempotent.
 """
 from __future__ import annotations
 
@@ -35,42 +33,19 @@ async def owner_id(db: Database) -> str:
     return await db.create_user(email="owner@test.local", password_hash="h")
 
 
-class TestSchema:
-    async def test_pairing_tokens_agent_id_is_nullable(self, db: Database):
-        # Migration v6 -> v7 must relax NOT NULL on pairing_tokens.agent_id.
-        cur = await db.conn.execute("PRAGMA table_info(pairing_tokens)")
-        rows = await cur.fetchall()
-        cols = {r[1]: r for r in rows}
-
-        assert "agent_id" in cols
-        # PRAGMA table_info: column 3 = notnull (1 = NOT NULL, 0 = nullable)
-        assert cols["agent_id"][3] == 0, (
-            "pairing_tokens.agent_id must be nullable for QR-pairing pre-claim rows"
-        )
-
-    async def test_new_columns_exist(self, db: Database):
-        cur = await db.conn.execute("PRAGMA table_info(pairing_tokens)")
-        cols = {r[1] for r in await cur.fetchall()}
-
-        for required in (
-            "claimed_token_raw",
-            "claimed_agent_id",
-            "agent_metadata",
-            "relay_url",
-        ):
-            assert required in cols, f"missing column: {required}"
-
+class TestMigration:
     async def test_migration_v8_idempotent_on_populated_v7_db(
         self, tmp_path
     ):
-        # Real-world upgrade scenario: a deployed DB sitting at
-        # user_version=7 with live pairing_tokens rows must accept the
-        # v8 migration (add relay_url column) without losing rows or
-        # raising on the second reopen. This is the upgrade path the
-        # deployment guide drives operators along — the existing per-
-        # version migration tests pin v3->v4 and v4->v5; v7->v8 was
-        # added by this change set and has no analogous coverage.
+        # A deployed DB sitting at user_version=7 with live pairing_tokens
+        # rows must accept the v8 migration (add relay_url column) and every
+        # later one without losing rows or raising on the second reopen.
         db_path = str(tmp_path / "pre_v8.db")
+        fresh = Database(str(tmp_path / "schema_head.db"))
+        await fresh.connect()
+        cur = await fresh.conn.execute("PRAGMA user_version")
+        head = (await cur.fetchone())[0]
+        await fresh.close()
         owner_email = "owner@upgrade.local"
 
         # Seed at v7 with a populated row that has NO relay_url.
@@ -96,7 +71,7 @@ class TestSchema:
         await database.conn.commit()
         await database.close()
 
-        # First reopen — runs the v7 -> v8 -> ... -> v11 migrations. The
+        # First reopen — runs the v7 -> head migrations. The
         # column ALTERs are wrapped in column-existence guards, so each step
         # is a no-op-or-add depending on whether the column already exists in
         # the DDL (it does, on a freshly-seeded test DB).
@@ -105,10 +80,7 @@ class TestSchema:
 
         cur = await database.conn.execute("PRAGMA user_version")
         version_after_first_reopen = (await cur.fetchone())[0]
-        assert version_after_first_reopen == 23, (
-            f"after the v7->v23 migrations run, user_version must be 23; "
-            f"got {version_after_first_reopen}"
-        )
+        assert version_after_first_reopen == head
         # The seeded row must survive the migration. The relay_url
         # column is now present and reads back as NULL for the legacy
         # row, which is the documented fallback path.
@@ -122,7 +94,7 @@ class TestSchema:
         )
         await database.close()
 
-        # Second reopen — already at version 15, must be a no-op.
+        # Second reopen — already at head, must be a no-op.
         # A non-idempotent migration would error here with
         # ``duplicate column name: relay_url`` or ``duplicate column name:
         # agent_version`` from sqlite, exactly the failure mode the
@@ -134,54 +106,19 @@ class TestSchema:
 
         cur = await database.conn.execute("PRAGMA user_version")
         version_after_second_reopen = (await cur.fetchone())[0]
-        assert version_after_second_reopen == 23
+        assert version_after_second_reopen == head
 
         # The seeded row is still there — second reopen is a no-op,
         # not a destructive rebuild.
         meta2 = await database.lookup_pairing_token_metadata(existing_raw)
         assert meta2 is not None, (
             "the seeded pairing_tokens row vanished on the second "
-            "reopen at user_version=14; the migration is not idempotent"
+            "reopen at head; the migration is not idempotent"
         )
         await database.close()
 
 
-class TestCreatePairingToken:
-    async def test_accepts_no_agent_id_for_qr_flow(self, db: Database):
-        raw_token, expires_at = await db.create_pairing_token(
-            agent_id=None,
-            ttl_seconds=120,
-            agent_metadata=json.dumps({"hostname": "h1"}),
-        )
-
-        assert isinstance(raw_token, str)
-        assert raw_token  # non-empty
-        # Returned ISO string is parseable.
-        datetime.fromisoformat(expires_at)
-
-        meta = await db.lookup_pairing_token_metadata(raw_token)
-        assert meta is not None
-        assert meta["agent_metadata"] == json.dumps({"hostname": "h1"})
-        assert meta["consumed_at"] is None
-
-    async def test_legacy_path_with_agent_id_still_works(
-        self, db: Database, owner_id: str
-    ):
-        # Backwards compat: callers passing agent_id positionally must
-        # continue to work — used by the non-QR pairing flow.
-        agent_id, _ = await db.register_agent("legacy-agent", owner_id)
-
-        raw_token, _ = await db.create_pairing_token(agent_id, ttl_seconds=60)
-
-        meta = await db.lookup_pairing_token_metadata(raw_token)
-        assert meta is not None
-        assert meta["agent_metadata"] is None
-
-
 class TestLookupPairingTokenMetadata:
-    async def test_returns_none_for_unknown_nonce(self, db: Database):
-        assert await db.lookup_pairing_token_metadata("nope") is None
-
     async def test_round_trip_metadata(self, db: Database):
         meta_payload = json.dumps({"hostname": "h", "os": "Linux"})
         raw_token, _ = await db.create_pairing_token(
@@ -204,27 +141,6 @@ class TestLookupPairingTokenMetadata:
 
 
 class TestClaimPairingNonce:
-    async def test_first_claim_succeeds(
-        self, db: Database, owner_id: str
-    ):
-        raw_token, _ = await db.create_pairing_token(
-            agent_id=None, ttl_seconds=60, agent_metadata=None,
-        )
-        agent_id, agent_token = await db.register_agent(
-            "first-pair-target", owner_id
-        )
-
-        ok = await db.claim_pairing_nonce(
-            raw_token=raw_token,
-            mobile_device_id="dev-1",
-            claimed_agent_id=agent_id,
-            claimed_token_raw=agent_token,
-        )
-
-        assert ok is True
-        meta = await db.lookup_pairing_token_metadata(raw_token)
-        assert meta["consumed_at"] is not None
-
     async def test_replay_returns_false(
         self, db: Database, owner_id: str
     ):

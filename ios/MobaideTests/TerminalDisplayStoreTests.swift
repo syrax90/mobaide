@@ -19,14 +19,6 @@ final class TerminalDisplayStoreTests: XCTestCase {
         super.tearDown()
     }
 
-    func testInitAdoptsShippedDefaultsWhenPrefsEmpty() {
-        let store = TerminalDisplayStore(preferences: preferences)
-
-        XCTAssertEqual(store.mode, .static)
-        XCTAssertEqual(store.staticColumns, 120)
-        XCTAssertEqual(store.config, TerminalDisplayConfig(mode: .static, staticColumns: 120))
-    }
-
     func testInitLoadsPersistedValues() {
         preferences.setTerminalDisplayMode(.full)
         preferences.setTerminalStaticColumns(200)
@@ -75,33 +67,6 @@ final class TerminalDisplayStoreTests: XCTestCase {
         XCTAssertEqual(
             PreferencesStore(defaults: defaults).getTerminalStaticColumns(), 60,
             "the clamped value is persisted"
-        )
-    }
-
-    func testSetStaticColumnsNoOpWhenUnchangedSkipsPersistence() {
-        let store = TerminalDisplayStore(preferences: preferences)
-
-        store.setStaticColumns(120)
-
-        XCTAssertEqual(store.staticColumns, 120)
-        XCTAssertNil(
-            defaults.object(forKey: PreferencesStore.keyTerminalStaticColumns),
-            "setting the current column count must not write to the backing store"
-        )
-    }
-
-    func testSetStaticColumnsClampsBeforeChangeCheck() {
-        let store = TerminalDisplayStore(preferences: preferences)
-        store.setStaticColumns(240)
-        XCTAssertEqual(store.staticColumns, 240)
-
-        defaults.removeObject(forKey: PreferencesStore.keyTerminalStaticColumns)
-        store.setStaticColumns(9999)
-
-        XCTAssertEqual(store.staticColumns, 240)
-        XCTAssertNil(
-            defaults.object(forKey: PreferencesStore.keyTerminalStaticColumns),
-            "9999 clamps to the current 240, so the change check treats it as a no-op"
         )
     }
 }

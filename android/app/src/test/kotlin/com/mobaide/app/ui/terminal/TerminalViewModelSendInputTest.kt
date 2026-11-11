@@ -143,50 +143,7 @@ class TerminalViewModelSendInputTest {
             clearPrefix + "hello".toByteArray(Charsets.UTF_8),
             payloadOf(captured.captured),
         )
-    }
-
-    @Test
-    fun sendInput_freshText_usesSubmitFrame() {
-        val vm = createViewModel()
-        val captured = slot<ByteString>()
-
-        vm.sendInput("hello")
-
-        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
-        assertEquals(
-            "fresh text must use 'm' (submit) frame so the server appends the delayed CR",
-            'm'.code.toByte(),
-            frameTypeOf(captured.captured),
-        )
-    }
-
-    @Test
-    fun sendInput_freshText_emptyString_sendsClearOnly() {
-        val vm = createViewModel()
-        val captured = slot<ByteString>()
-
-        vm.sendInput("")
-
-        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
-        assertArrayEquals(
-            "empty composer send still clears the line; the server appends the CR",
-            clearPrefix,
-            payloadOf(captured.captured),
-        )
-    }
-
-    @Test
-    fun sendInput_freshText_utf8_encodesCorrectly() {
-        val vm = createViewModel()
-        val captured = slot<ByteString>()
-
-        vm.sendInput("é")
-
-        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
-        assertArrayEquals(
-            clearPrefix + "é".toByteArray(Charsets.UTF_8),
-            payloadOf(captured.captured),
-        )
+        assertEquals('m'.code.toByte(), frameTypeOf(captured.captured))
     }
 
     @Test
@@ -202,52 +159,7 @@ class TerminalViewModelSendInputTest {
             clearPrefix + "[200~line1\nline2[201~".toByteArray(Charsets.UTF_8),
             payloadOf(captured.captured),
         )
-    }
-
-    @Test
-    fun sendInput_multilineText_usesSubmitFrame() {
-        val vm = createViewModel()
-        val captured = slot<ByteString>()
-
-        vm.sendInput("line1\nline2")
-
-        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
-        assertEquals(
-            "multi-line input must use 'm' (submit) frame so the server appends the delayed CR",
-            'm'.code.toByte(),
-            frameTypeOf(captured.captured),
-        )
-    }
-
-    @Test
-    fun sendInput_multilineText_markerBytes() {
-        val vm = createViewModel()
-        val captured = slot<ByteString>()
-
-        vm.sendInput("a\nb")
-
-        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
-        val payload = payloadOf(captured.captured)
-
-        // Typo guard: assert the literal escape-sequence bytes for the markers,
-        // not the Kotlin string literal that produced them. If someone replaces
-        // "[200~" with "[200~" the bytes will differ even if the source
-        // still "looks right".
-        val startMarker = byteArrayOf(0x1B, 0x5B, 0x32, 0x30, 0x30, 0x7E)
-        val endMarker = byteArrayOf(0x1B, 0x5B, 0x32, 0x30, 0x31, 0x7E)
-
-        assertArrayEquals(
-            "start marker must be ESC [ 2 0 0 ~  (0x1B 0x5B 0x32 0x30 0x30 0x7E)",
-            startMarker,
-            // Offset 2, not 0: the 2-byte Ctrl+A/Ctrl+K line clear precedes the marker.
-            payload.copyOfRange(2, 8),
-        )
-        assertArrayEquals(
-            "end marker must be ESC [ 2 0 1 ~  (0x1B 0x5B 0x32 0x30 0x31 0x7E) and " +
-                "must terminate the payload — the submitting CR is the server's job",
-            endMarker,
-            payload.copyOfRange(payload.size - 6, payload.size),
-        )
+        assertEquals('m'.code.toByte(), frameTypeOf(captured.captured))
     }
 
     @Test
@@ -262,29 +174,6 @@ class TerminalViewModelSendInputTest {
             "single-line input (no LF) must NOT be wrapped — markers would surface on non-Claude shells",
             clearPrefix + "single line".toByteArray(Charsets.UTF_8),
             payloadOf(captured.captured),
-        )
-    }
-
-    @Test
-    fun sendInput_prependsLineClear_ctrlA_thenCtrlK() {
-        val vm = createViewModel()
-        val captured = slot<ByteString>()
-
-        vm.sendInput("ls")
-
-        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
-        val payload = payloadOf(captured.captured)
-        // Typo guard: assert the literal clear bytes regardless of how CLEAR_INPUT_LINE
-        // is spelled in source. Ctrl+A = 0x01 (move to start), Ctrl+K = 0x0B (kill to end).
-        assertEquals(
-            "composer send must start with Ctrl+A (0x01) to clear the line",
-            0x01.toByte(),
-            payload[0],
-        )
-        assertEquals(
-            "Ctrl+A must be immediately followed by Ctrl+K (0x0B)",
-            0x0B.toByte(),
-            payload[1],
         )
     }
 
@@ -320,22 +209,7 @@ class TerminalViewModelSendInputTest {
             "\r".toByteArray(Charsets.UTF_8),
             payloadOf(captured.captured),
         )
-    }
-
-    @Test
-    fun sendTappedRow_currentInput_usesInputFrame() = runTest {
-        val vm = createViewModel()
-        goLive()
-        val captured = slot<ByteString>()
-
-        vm.sendTappedRow("/stats", isCurrentInput = true)
-
-        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
-        assertEquals(
-            "current-input tap must use 'i' (input) frame",
-            'i'.code.toByte(),
-            frameTypeOf(captured.captured),
-        )
+        assertEquals('i'.code.toByte(), frameTypeOf(captured.captured))
     }
 
     @Test
@@ -352,19 +226,8 @@ class TerminalViewModelSendInputTest {
             "/help".toByteArray(Charsets.UTF_8),
             payloadOf(captured.captured),
         )
-    }
-
-    @Test
-    fun sendTappedRow_historicalInput_usesExecuteFrame() = runTest {
-        val vm = createViewModel()
-        goLive()
-        val captured = slot<ByteString>()
-
-        vm.sendTappedRow("/help", isCurrentInput = false)
-
-        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertEquals(
-            "historical-row tap must use 'x' (execute) frame: server Ctrl+C-clears, types, submits",
+            "historical-row tap must use 'x' (execute): server Ctrl+C-clears, types, submits",
             'x'.code.toByte(),
             frameTypeOf(captured.captured),
         )

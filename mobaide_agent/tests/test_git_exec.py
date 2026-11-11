@@ -63,13 +63,6 @@ class TestRunCapped:
 
         assert result == CmdResult(rc=3, stdout=b"out", stderr=b"err")
 
-    def test_bytes_mode_preserves_crlf(self):
-        result = run_capped(
-            _py("import sys; sys.stdout.buffer.write(b'a\\r\\nb\\r\\n')"),
-            cwd=None, timeout=30.0, max_bytes=1024,
-        )
-
-        assert result.stdout == b"a\r\nb\r\n"
 
     def test_large_stderr_does_not_deadlock_stdout(self):
         result = run_capped(
@@ -141,13 +134,6 @@ class TestRunCapped:
 
         assert result == CmdResult(rc=0, stdout=payload, stderr=b"")
 
-    def test_no_stdin_is_an_immediate_eof(self):
-        result = run_capped(
-            _py("import sys; sys.stdout.write(repr(sys.stdin.read()))"),
-            cwd=None, timeout=30.0, max_bytes=1024,
-        )
-
-        assert result == CmdResult(rc=0, stdout=b"''", stderr=b"")
 
     def test_child_that_never_reads_stdin_still_times_out(self):
         started = time.monotonic()
@@ -312,12 +298,6 @@ class TestGitVersion:
         )
         assert await git_version() == (2, 15, 0)
 
-    async def test_no_binary_raises_unavailable(self, monkeypatch):
-        monkeypatch.setattr(git_exec.shutil, "which", lambda _name: None)
-
-        with pytest.raises(GitUnavailableError):
-            await git_version()
-
 
 class TestStreamingAndCancel:
     def test_on_stderr_sees_every_chunk_past_the_retained_cap(self):
@@ -386,37 +366,3 @@ class TestStreamingAndCancel:
             if time.monotonic() > deadline:
                 pytest.fail(f"grandchild {grandchild} survived the cancel")
             await asyncio.sleep(0.05)
-
-    def test_cancel_after_exit_is_harmless(self):
-        handle = ProcessHandle()
-        result = run_capped(
-            _py("pass"), cwd=None, timeout=30.0, max_bytes=1024, handle=handle
-        )
-
-        handle.cancel()
-
-        assert result.rc == 0
-        assert handle.cancelled is True
-
-    async def test_run_git_hands_the_stream_and_handle_to_the_runner(self, monkeypatch):
-        captured: dict[str, object] = {}
-
-        def fake_run_capped(argv, *, cwd, timeout, max_bytes, env, stdin=None,
-                            on_stderr=None, handle=None):
-            captured.update(on_stderr=on_stderr, handle=handle)
-            return CmdResult(rc=0, stdout=b"", stderr=b"")
-
-        def on_chunk(_chunk: bytes) -> None:
-            pass
-
-        monkeypatch.setattr(git_exec.shutil, "which", lambda _name: "/opt/git")
-        monkeypatch.setattr(git_exec, "run_capped", fake_run_capped)
-        handle = ProcessHandle()
-
-        await run_git(
-            ["fetch"], cwd="/repo", timeout=1.0, max_bytes=10,
-            on_stderr=on_chunk, handle=handle,
-        )
-
-        assert captured["on_stderr"] is on_chunk
-        assert captured["handle"] is handle

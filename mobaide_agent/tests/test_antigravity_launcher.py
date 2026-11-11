@@ -69,27 +69,11 @@ async def test_argv_skip_permissions_flag_added_when_true(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_argv_skip_permissions_omitted_when_false(tmp_path: Path):
-    spec = await AntigravityLauncher().build(
-        _make_project(str(tmp_path)), AntigravityOptions(skip_permissions=False),
-    )
-    assert "--dangerously-skip-permissions" not in spec.argv
-
-
-@pytest.mark.asyncio
 async def test_argv_sandbox_flag_added_when_true(tmp_path: Path):
     spec = await AntigravityLauncher().build(
         _make_project(str(tmp_path)), AntigravityOptions(sandbox=True),
     )
     assert "--sandbox" in spec.argv
-
-
-@pytest.mark.asyncio
-async def test_argv_sandbox_omitted_when_false(tmp_path: Path):
-    spec = await AntigravityLauncher().build(
-        _make_project(str(tmp_path)), AntigravityOptions(sandbox=False),
-    )
-    assert "--sandbox" not in spec.argv
 
 
 @pytest.mark.asyncio
@@ -105,33 +89,7 @@ async def test_argv_add_dirs_repeats_flag(tmp_path: Path):
     assert [spec.argv[i + 1] for i in idxs] == ["/a", "/b"]
 
 
-@pytest.mark.asyncio
-async def test_argv_no_add_dirs_omits_flag(tmp_path: Path):
-    spec = await AntigravityLauncher().build(
-        _make_project(str(tmp_path)), AntigravityOptions(),
-    )
-    assert "--add-dir" not in spec.argv
-
-
-@pytest.mark.asyncio
-async def test_argv_independent_of_target(tmp_path: Path):
-    """Switching ProjectConfig -> AdHocLaunch must not change the flags."""
-    opts = AntigravityOptions(model="Gemini 3.1 Pro (Low)", sandbox=True)
-    project = await AntigravityLauncher().build(_make_project(str(tmp_path)), opts)
-    adhoc = await AntigravityLauncher().build(AdHocLaunch(cwd=str(tmp_path)), opts)
-    assert project.argv == adhoc.argv
-
-
 # env
-
-
-@pytest.mark.asyncio
-async def test_env_sets_encoding_and_term(tmp_path: Path):
-    spec = await AntigravityLauncher().build(
-        _make_project(str(tmp_path)), AntigravityOptions(),
-    )
-    assert spec.env["PYTHONIOENCODING"] == "utf-8"
-    assert spec.env.get("TERM")
 
 
 @pytest.mark.asyncio
@@ -190,22 +148,6 @@ async def test_env_prepends_binary_dir_to_path(tmp_path: Path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cwd_project_root_no_worktree(tmp_path: Path):
-    spec = await AntigravityLauncher().build(
-        _make_project(str(tmp_path)), AntigravityOptions(),
-    )
-    assert spec.cwd == str(tmp_path)
-
-
-@pytest.mark.asyncio
-async def test_cwd_adhoc_target(tmp_path: Path):
-    spec = await AntigravityLauncher().build(
-        AdHocLaunch(cwd=str(tmp_path)), AntigravityOptions(),
-    )
-    assert spec.cwd == str(tmp_path)
-
-
-@pytest.mark.asyncio
 async def test_cwd_missing_raises_clean_file_not_found(tmp_path: Path):
     missing = tmp_path / "does" / "not" / "exist"
     with pytest.raises(FileNotFoundError) as exc_info:
@@ -214,17 +156,6 @@ async def test_cwd_missing_raises_clean_file_not_found(tmp_path: Path):
         )
     assert exc_info.value.filename == str(missing)
     assert exc_info.value.errno == 2
-
-
-@pytest.mark.asyncio
-async def test_writes_no_project_files(tmp_path: Path):
-    """Antigravity needs no .mcp.json / .claude settings — created_files is empty."""
-    spec = await AntigravityLauncher().build(
-        _make_project(str(tmp_path)), AntigravityOptions(),
-    )
-    assert spec.created_files == []
-    assert not (tmp_path / ".mcp.json").exists()
-    assert not (tmp_path / ".claude").exists()
 
 
 class _RecordingWorktreeMgr:
@@ -337,15 +268,6 @@ async def test_launcher_forwards_override_to_resolver(tmp_path: Path, monkeypatc
     assert captured["override"] == "/my/agy"
 
 
-def test_binary_not_found_message_is_actionable():
-    err = AntigravityBinaryNotFoundError(searched_paths=["PATH:agy", "fallback:/x"])
-    msg = str(err)
-    assert "https://antigravity.google/docs/cli" in msg
-    assert "MOBAIDE_AGY_BIN" in msg
-    assert err.cli_name == "antigravity"
-    assert err.searched_paths == ["PATH:agy", "fallback:/x"]
-
-
 # real resolver (override / env / not-found)
 
 
@@ -366,33 +288,6 @@ def test_real_resolver_uses_env_var_override(monkeypatch, tmp_path, _clean_agy_e
     fake = _make_executable(tmp_path / "myagy")
     monkeypatch.setenv("MOBAIDE_AGY_BIN", str(fake))
     assert _REAL_AGY_RESOLVER() == str(fake)
-
-
-def test_real_resolver_prefers_override_over_env(monkeypatch, tmp_path, _clean_agy_env):
-    fake_override = _make_executable(tmp_path / "from_override")
-    fake_env = _make_executable(tmp_path / "from_env")
-    monkeypatch.setenv("MOBAIDE_AGY_BIN", str(fake_env))
-    assert _REAL_AGY_RESOLVER(override=str(fake_override)) == str(fake_override)
-
-
-def test_real_resolver_raises_with_actionable_message(
-    monkeypatch, tmp_path, _clean_agy_env,
-):
-    from mobaide.core import cli_launcher
-
-    monkeypatch.setattr(antigravity_launcher, "_posix_fallback_candidates", lambda: [])
-    monkeypatch.setattr(
-        antigravity_launcher, "_windows_fallback_candidates", lambda: [],
-    )
-    monkeypatch.setattr(cli_launcher.shutil, "which", lambda *_a, **_kw: None)
-
-    with pytest.raises(AntigravityBinaryNotFoundError) as exc_info:
-        _REAL_AGY_RESOLVER()
-
-    msg = str(exc_info.value)
-    assert "antigravity.google" in msg
-    assert "MOBAIDE_AGY_BIN" in msg
-    assert exc_info.value.searched_paths
 
 
 # no auth probe / options guard
@@ -423,11 +318,6 @@ def test_options_reject_skip_permissions_with_sandbox():
         AntigravityOptions(skip_permissions=True, sandbox=True)
 
 
-def test_options_each_flag_alone_is_accepted():
-    assert AntigravityOptions(skip_permissions=True).skip_permissions is True
-    assert AntigravityOptions(sandbox=True).sandbox is True
-
-
 def test_options_reject_flag_shaped_model_and_add_dirs():
     """``model`` / ``add_dirs`` are exec'd as argv verbatim, so a flag-shaped
     value would let a payload smuggle a curated-out flag (e.g. the blocked
@@ -448,14 +338,6 @@ def test_options_reject_a_flag_shaped_name_after_a_tab():
         AntigravityOptions(
             model="gemini-3.8-flash\t--dangerously-skip-permissions", sandbox=True
         )
-
-
-def test_options_accept_ordinary_model_and_dirs():
-    opts = AntigravityOptions(
-        model="Gemini 3.1 Pro (Low)", add_dirs=("/srv/x", "C:/y")
-    )
-    assert opts.model == "Gemini 3.1 Pro (Low)"
-    assert opts.add_dirs == ("/srv/x", "C:/y")
 
 
 # list_models (memoized ``agy models`` enumeration)

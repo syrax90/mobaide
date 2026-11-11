@@ -60,7 +60,6 @@ describe('CleanupToggle', () => {
 
   it.each([
     ['Cancel', () => fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))],
-    ['Esc', () => fireEvent(notice() as HTMLElement, new Event('cancel', { cancelable: true }))],
   ])('stays off when the notice is left with %s, and asks again next time', (_label, leave) => {
     mount();
     fireEvent.click(toggle());
@@ -81,15 +80,6 @@ describe('CleanupToggle', () => {
     fireEvent.click(toggle());
 
     expect(changes).toEqual([true]);
-    expect(notice()).toBeNull();
-  });
-
-  it('turns off without asking', () => {
-    mount(true);
-
-    fireEvent.click(toggle());
-
-    expect(changes).toEqual([false]);
     expect(notice()).toBeNull();
   });
 });

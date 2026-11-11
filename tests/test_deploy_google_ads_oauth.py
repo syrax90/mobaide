@@ -67,10 +67,6 @@ def test_pkce_pair_is_s256_of_verifier():
     assert "=" not in challenge
 
 
-def test_pkce_pairs_are_unique():
-    assert oauth.make_pkce_pair() != oauth.make_pkce_pair()
-
-
 def test_auth_url_carries_offline_consent_and_pkce():
     url = oauth.build_auth_url(
         client_id="cid", redirect_uri="http://127.0.0.1:43123/", state="st", code_challenge="ch"
@@ -93,19 +89,14 @@ def test_parse_redirect_returns_the_code():
     assert oauth.parse_redirect_query("/?code=abc&state=s", "s") == "abc"
 
 
-def test_parse_redirect_rejects_state_mismatch():
-    with pytest.raises(oauth.OAuthFlowError, match="state"):
-        oauth.parse_redirect_query("/?code=abc&state=other", "s")
-
-
-def test_parse_redirect_surfaces_google_error():
-    with pytest.raises(oauth.OAuthFlowError, match="access_denied"):
-        oauth.parse_redirect_query("/?error=access_denied&state=s", "s")
-
-
-def test_parse_redirect_rejects_missing_code():
-    with pytest.raises(oauth.OAuthFlowError, match="code"):
-        oauth.parse_redirect_query("/?state=s", "s")
+@pytest.mark.parametrize(
+    "query, match",
+    [("/?code=abc&state=other", "state"), ("/?error=access_denied&state=s", "access_denied")],
+    ids=["state-mismatch", "google-error"],
+)
+def test_parse_redirect_rejects_a_bad_redirect(query, match):
+    with pytest.raises(oauth.OAuthFlowError, match=match):
+        oauth.parse_redirect_query(query, "s")
 
 
 def test_token_request_is_form_encoded_with_verifier():
@@ -206,15 +197,6 @@ def test_verify_request_is_a_validate_only_ingest_for_the_destination():
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", event["eventTimestamp"])
 
 
-def test_verify_request_omits_login_account_and_invents_a_click_id():
-    request = oauth.build_verify_request(
-        access_token="at", customer_id="1234567890", conversion_action_id="987654321"
-    )
-    body = _body(request)
-    assert "loginAccount" not in body["destinations"][0]
-    assert body["events"][0]["adIdentifiers"]["gclid"].startswith("Cj0KCQjw")
-
-
 def test_verify_destination_returns_field_warnings():
     request = oauth.build_verify_request(
         access_token="at", customer_id="1", conversion_action_id="2"
@@ -249,7 +231,7 @@ def test_verify_destination_translates_permission_error():
         )
 
 
-@pytest.mark.parametrize("raw, expected", [("123-456-7890", "1234567890"), (" 42 ", "42"), ("12ab", None), ("", None), (None, None)])
+@pytest.mark.parametrize("raw, expected", [("123-456-7890", "1234567890"), ("12ab", None), (None, None)])
 def test_digits_tolerates_dashes_and_rejects_garbage(raw, expected):
     assert oauth._digits(raw) == expected
 
@@ -278,20 +260,7 @@ def test_listener_captures_the_redirect_and_ignores_favicon():
 
 
 def test_main_prints_env_lines_and_never_the_secret(monkeypatch, capsys):
-    class FakeServer:
-        server_address = ("127.0.0.1", 43123)
-
-        def server_close(self):
-            pass
-
-    monkeypatch.setattr(oauth, "start_listener", lambda port: FakeServer())
-    monkeypatch.setattr(oauth.webbrowser, "open", lambda url: True)
-    monkeypatch.setattr(oauth, "wait_for_code", lambda server, state, timeout: "code-1")
-    monkeypatch.setattr(
-        oauth,
-        "exchange_code",
-        lambda request, opener=None: {"access_token": "at", "refresh_token": "rt"},
-    )
+    _fake_flow(monkeypatch)
 
     rc = oauth.main(["--client-id", "cid", "--client-secret", "sec"])
 

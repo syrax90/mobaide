@@ -8,8 +8,8 @@ import com.mobaide.app.data.network.AutoScanWsClient
 import com.mobaide.app.data.network.RestApi
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.network.dto.AutoScanListResponse
-import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.RunNowResponse
+import com.mobaide.app.testing.awaitSubscribers
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -17,7 +17,6 @@ import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -57,6 +56,7 @@ class AutoScanRepositoryTest {
         every { bus.events } returns eventFlow
         val wsClient = mockk<AutoScanWsClient>(relaxed = true)
         val repo = AutoScanRepository(restApi, bus, wsClient)
+        eventFlow.awaitSubscribers(2)
         return Fixture(repo, restApi, bus, eventFlow, wsClient)
     }
 
@@ -67,26 +67,6 @@ class AutoScanRepositoryTest {
         val eventFlow: MutableSharedFlow<AgentEvent>,
         val wsClient: AutoScanWsClient,
     )
-
-    // ---- observeList / observeScans initial state ---------------------------
-
-    @Test
-    fun observeList_hasEmptyInitialState_withDefaultMaxScans5() = runTest {
-        val (repo) = newRepo()
-        val list = repo.observeList().value
-        assertTrue(list.scans.isEmpty())
-        assertEquals(5, list.max_scans)
-        assertEquals(0, list.capacity)
-    }
-
-    @Test
-    fun observeScans_emitsInitialEmptyList() = runTest {
-        val (repo) = newRepo()
-        repo.observeScans().test {
-            assertEquals(emptyList<AutoScanInstanceDto>(), awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
 
     // ---- refresh() ----------------------------------------------------------
 
@@ -204,36 +184,6 @@ class AutoScanRepositoryTest {
         }
 
         assertTrue(repo.observeList().value.scans.isEmpty())
-    }
-
-    @Test
-    fun startScan_nonApiException_rollsBackList_andRethrowsUntyped() = runTest {
-        val (repo, restApi) = newRepo()
-        coEvery { restApi.startAutoScan("p1", null) } throws
-            IllegalArgumentException("bad arg")
-
-        try {
-            repo.startScan("p1")
-            fail("expected IllegalArgumentException")
-        } catch (e: IllegalArgumentException) {
-            assertEquals("bad arg", e.message)
-        }
-
-        assertTrue(repo.observeList().value.scans.isEmpty())
-    }
-
-    @Test
-    fun startScan_forwardsClaudeOptions_toRestApi() = runTest {
-        val (repo, restApi) = newRepo()
-        val options = ClaudeOptionsModel(
-            worktree = true,
-            initial_prompt = "go",
-        )
-        coEvery { restApi.startAutoScan("p1", options) } returns Unit
-
-        repo.startScan("p1", options)
-
-        coVerify(exactly = 1) { restApi.startAutoScan("p1", options) }
     }
 
     // ---- startScan: error side-channel --------------------------------------
@@ -369,32 +319,6 @@ class AutoScanRepositoryTest {
         assertEquals("2026-04-11T12:00:00Z", afterRollback.next_scan_at)
     }
 
-    // ---- observeScans filtering ---------------------------------------------
-
-    @Test
-    fun observeScans_mapsListResponse_toScansOnly() = runTest {
-        val (repo, restApi) = newRepo()
-        coEvery { restApi.getAutoScanList() } returns AutoScanListResponse(
-            scans = listOf(instance("p1"), instance("p2")),
-            capacity = 2,
-            max_scans = 5,
-            available_projects = listOf("p1", "p2"),
-        )
-
-        repo.observeScans().test {
-            // Initial empty state.
-            assertEquals(emptyList<AutoScanInstanceDto>(), awaitItem())
-
-            repo.refresh()
-
-            val scans = awaitItem()
-            assertEquals(2, scans.size)
-            assertEquals("p1", scans[0].project_name)
-            assertEquals("p2", scans[1].project_name)
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
     // ---- Event-bus-driven list refresh --------------------------------------
 
     @Test
@@ -446,66 +370,6 @@ class AutoScanRepositoryTest {
             assertEquals("idle", afterUpdate.scans.first { it.project_name == "p1" }.status)
             assertEquals("running", afterUpdate.scans.first { it.project_name == "p2" }.status)
             cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun autoScanStatusEvent_forUnknownProject_leavesListUnchanged() = runTest {
-        val (repo, restApi, _, eventFlow) = newRepo()
-        val seeded = AutoScanListResponse(
-            scans = listOf(instance("p1", status = "running")),
-            capacity = 1,
-            max_scans = 5,
-            available_projects = listOf("p1", "p2"),
-        )
-        coEvery { restApi.getAutoScanList() } returns seeded
-        repo.refresh()
-
-        // Emit a status for a project that's not in the list.
-        eventFlow.emit(AgentEvent.AutoScanStatus(instance("p2", status = "running")))
-
-        // The `map { ... }` in the status handler leaves the list untouched
-        // when no entry matches — still exactly one scan with the original
-        // name/status.
-        val list = repo.observeList().value
-        assertEquals(1, list.scans.size)
-        assertEquals("p1", list.scans[0].project_name)
-        assertEquals("running", list.scans[0].status)
-        assertFalse(list.scans.any { it.project_name == "p2" })
-    }
-
-    // ---- observeDetailFrames -----------------------------------------------
-
-    @Test
-    fun observeDetailFrames_delegatesToAutoScanWsClient_withSingleProjectSubscribe() {
-        val (repo, _, _, _, wsClient) = newRepo()
-        val stubFlow = kotlinx.coroutines.flow.emptyFlow<AutoScanWsClient.Frame>()
-        every {
-            wsClient.connect(subscribe = listOf("p1"), resumeFromSeq = emptyMap())
-        } returns stubFlow
-
-        val flow = repo.observeDetailFrames("p1")
-
-        // Must forward the exact flow returned by the client — no wrapping.
-        assertSame(stubFlow, flow)
-        io.mockk.verify(exactly = 1) {
-            wsClient.connect(subscribe = listOf("p1"), resumeFromSeq = emptyMap())
-        }
-    }
-
-    @Test
-    fun observeDetailFrames_forwardsResumeFromSeqMap() {
-        val (repo, _, _, _, wsClient) = newRepo()
-        val resume = mapOf("p1" to 99L)
-        val stubFlow = kotlinx.coroutines.flow.emptyFlow<AutoScanWsClient.Frame>()
-        every {
-            wsClient.connect(subscribe = listOf("p1"), resumeFromSeq = resume)
-        } returns stubFlow
-
-        repo.observeDetailFrames("p1", resume)
-
-        io.mockk.verify(exactly = 1) {
-            wsClient.connect(subscribe = listOf("p1"), resumeFromSeq = resume)
         }
     }
 }

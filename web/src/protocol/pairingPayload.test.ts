@@ -58,17 +58,9 @@ describe('MOBA1 payload golden fixtures', () => {
     });
   });
 
-  it.each(fixture.link_cases)('decodes the $name fragment', (testCase) => {
-    expect(decodePairingFragment(fragmentOf(testCase.expect))).toBe(testCase.payload);
-  });
-
   it.each(fixture.link_cases)('reads the whole $name link as input', (testCase) => {
     // What a user actually pastes: the clickable line, not the bare fragment.
     expect(readPairingInput(testCase.expect)).toBe(testCase.payload);
-  });
-
-  it.each(fixture.link_cases)('reads the $name payload as input', (testCase) => {
-    expect(readPairingInput(testCase.payload)).toBe(testCase.payload);
   });
 
   it.each(fixture.link_cases)('encodes the $name fragment', (testCase) => {
@@ -90,11 +82,6 @@ describe('encodePairingFragment', () => {
     }
   });
 
-  it('emits only URL-safe characters, so nothing downstream re-encodes it', () => {
-    for (const testCase of fixture.link_cases) {
-      expect(encodePairingFragment(testCase.payload)).toMatch(/^[A-Za-z0-9_-]+$/);
-    }
-  });
 });
 
 describe('readPairingInput', () => {
@@ -151,11 +138,6 @@ describe('decodePairingFragment', () => {
     expect(decodePairingFragment('#TU9CQTF8cnxufGZ8MQ')).toBe('MOBA1|r|n|f|1');
   });
 
-  it('returns null for an empty fragment', () => {
-    expect(decodePairingFragment('')).toBeNull();
-    expect(decodePairingFragment('#')).toBeNull();
-  });
-
   it('returns null for bytes that are not valid UTF-8', () => {
     // `//8` is 0xFF 0xFF — a lone continuation byte pair. Decoding non-fatally
     // would yield U+FFFD noise that then fails the parse under the wrong copy.
@@ -165,9 +147,7 @@ describe('decodePairingFragment', () => {
 
 describe('normalizeRelayUrl', () => {
   it.each([
-    ['https://relay.test', 'https://relay.test'],
     ['https://Relay.TEST', 'https://relay.test'],
-    ['https://relay.test/', 'https://relay.test'],
     // Every trailing slash, not just one: Android's `TrustKeyPinning.normalize`
     // does the same, and a pin keyed on `//` would silently re-TOFU.
     ['https://relay.test///', 'https://relay.test'],

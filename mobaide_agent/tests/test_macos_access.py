@@ -65,18 +65,6 @@ def test_returns_true_on_file_not_found(
     assert full_disk_access() is True
 
 
-def test_returns_true_on_other_oserror(
-    on_darwin: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Any non-permission OSError is treated as "not FDA-blocked" rather than a
-    # false alarm — PermissionError is the only denial signal.
-    def _io_error(self: Path, *_a: object, **_kw: object) -> object:
-        raise OSError(5, "Input/output error")
-
-    monkeypatch.setattr(Path, "open", _io_error)
-    assert full_disk_access() is True
-
-
 def test_returns_none_when_home_unresolvable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

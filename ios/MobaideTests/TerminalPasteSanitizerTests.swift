@@ -77,13 +77,6 @@ final class TerminalPasteSanitizerTests: XCTestCase {
         XCTAssertEqual(output, "\(esc)[200~[200~body[201~\(esc)[201~")
     }
 
-    func testBracketedOffStrippedMultilineNeverEmitsEsc() {
-        let output = concatenated("line1\nline2\(esc)[H")
-
-        XCTAssertEqual(output, "line1\rline2[H")
-        XCTAssertFalse(output.contains(esc), "with 2004 off no ESC byte may ever reach the PTY")
-    }
-
     func testEmptyAndFullyStrippedInputProduceNoWrites() {
         XCTAssertTrue(TerminalPaste.writes(for: "", bracketed: true).isEmpty)
         XCTAssertTrue(

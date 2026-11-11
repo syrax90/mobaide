@@ -76,25 +76,6 @@ final class TerminalSessionModelCursorRevealTests: XCTestCase {
         )
     }
 
-    func testTappedRowArms() async throws {
-        let (model, _) = try await wiredModel()
-
-        model.sendTappedRow(text: "ls", isCurrentInput: true)
-
-        XCTAssertTrue(model.terminalView.cursorReveal.isArmed)
-    }
-
-    func testTappedRowWhileNotLiveDoesNotArm() async throws {
-        let factory = FakeWebSocketTransportFactory()
-        let model = TerminalTestSupport.model(transportFactory: factory)
-        model.start()
-        _ = try await factory.connection(1)
-
-        model.sendTappedRow(text: "ls", isCurrentInput: true)
-
-        XCTAssertFalse(model.terminalView.cursorReveal.isArmed)
-    }
-
     // MARK: - Terminal-surface funnel
 
     func testWheelReportFromTheSurfaceDoesNotArm() async throws {

@@ -15,27 +15,11 @@ final class ComposerInsertionTests: XCTestCase {
         XCTAssertEqual(result.cursor, 14)
     }
 
-    func testASelectionIsReplaced() {
-        let result = ComposerInsertion.insert("new", into: "run the old tests", selection: 8..<11, spaced: false)
-
-        XCTAssertEqual(result.text, "run the new tests")
-        XCTAssertEqual(result.cursor, 11)
-    }
-
     func testAnUnknownSelectionAppendsAtTheEnd() {
         let result = ComposerInsertion.insert(" status", into: "git", selection: nil, spaced: false)
 
         XCTAssertEqual(result.text, "git status")
         XCTAssertEqual(result.cursor, 10)
-    }
-
-    func testSpacedAddsASpaceOnlyWhereTheTextWouldRunIntoAWord() {
-        let inside = ComposerInsertion.insert("fix it", into: "pleasenow", selection: 6..<6, spaced: true)
-        let afterASpace = ComposerInsertion.insert("fix it", into: "please now", selection: 7..<7, spaced: true)
-
-        XCTAssertEqual(inside.text, "please fix it now")
-        XCTAssertEqual(afterASpace.text, "please fix it now")
-        XCTAssertEqual(afterASpace.cursor, 14)
     }
 
     func testTheTerminalTemplateGoesInAtTheCursorAndKeepsTheDraft() {

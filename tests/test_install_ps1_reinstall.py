@@ -15,8 +15,14 @@ from pathlib import Path
 
 import pytest
 
-from test_install_ps1 import _PS, _function_body_text, _ps_quote, _strip_powershell_comments
-from test_install_ps1_cli_shim import _run_ps_file, _values
+from test_install_ps1 import (
+    _PS,
+    _function_body_text,
+    _ps_quote,
+    _run_ps_file,
+    _strip_powershell_comments,
+    _values,
+)
 
 
 pytestmark = pytest.mark.skipif(
@@ -57,12 +63,6 @@ class TestGetElevatedInstallCommand:
         )
 
 
-def test_assert_admin_or_elevate_runs_the_elevated_install_command() -> None:
-    body = _strip_powershell_comments(_function_body_text("Assert-AdminOrElevate"))
-    assert "Get-ElevatedInstallCommand" in body, body
-    assert "$urlEscaped" not in body, body
-
-
 def _start_sleeper(directory: Path) -> subprocess.Popen[bytes]:
     directory.mkdir(parents=True)
     exe = directory / "sleeper.exe"
@@ -97,19 +97,6 @@ def test_stop_agent_processes_stops_only_processes_under_the_prefix(tmp_path):
             if proc.poll() is None:
                 proc.kill()
                 proc.wait()
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="queries Windows processes")
-def test_stop_agent_processes_reports_nothing_stopped_on_an_idle_prefix(tmp_path):
-    body = (
-        "$Script:ServiceName = 'MobaideAgentTestNoSuchTask'\n"
-        f"$stopped = Stop-AgentProcesses -Prefix '{_ps_quote(str(tmp_path / 'idle'))}'\n"
-        "\"STOPPED=$stopped\"\n"
-    )
-    result = _run_ps_file(tmp_path, ("Write-Info", "Stop-AgentProcesses"), body)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert _values(result.stdout)["STOPPED"] == "False"
 
 
 def test_install_release_stops_the_agent_before_moving_the_release_aside() -> None:

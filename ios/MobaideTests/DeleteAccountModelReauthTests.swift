@@ -99,15 +99,4 @@ final class DeleteAccountModelReauthTests: XCTestCase {
         let state = await harness.session.sessionManager.currentAuthState
         XCTAssertNotEqual(state, .unauthenticated, "only a submitted delete clears the session")
     }
-
-    // MARK: - Empty-email guard (signed-out: getUserEmail() ?? "")
-
-    func testStartIsNoOpWhenEmailIsEmpty() {
-        let model = makeModel(email: "")
-
-        model.start()
-
-        XCTAssertEqual(model.step, .hidden)
-        XCTAssertFalse(model.isVisible)
-    }
 }

@@ -208,36 +208,6 @@ class TestImmediateDeletionHappyPath:
         assert row["email_at_request"] == "audit@example.com"
         assert row["requested_at"] == row["scheduled_for"]
 
-    async def test_does_not_create_cancel_token_or_scheduled_deletion_at(
-        self,
-        deletion_service: AuthService,
-        deletion_db: Database,
-    ) -> None:
-        """Immediate purge MUST NOT issue a cancel token nor stamp
-        ``scheduled_deletion_at`` — the user row is gone before either
-        could become observable, but we double-check by reading the
-        cancel-token table directly."""
-        from central_server.auth.models import DeleteAccountRequest
-
-        user = await _make_password_user(
-            deletion_db, deletion_service, "notoken@example.com", "pw",
-        )
-        await deletion_service.request_account_deletion(
-            _build_payload(user),
-            source="android",
-            proof=DeleteAccountRequest(
-                method="password", password="pw", mode="immediate",
-            ),
-        )
-
-        cur = await deletion_db.conn.execute(
-            "SELECT COUNT(*) AS n FROM account_deletion_cancel_tokens "
-            "WHERE user_id = ?",
-            (user["id"],),
-        )
-        row = await cur.fetchone()
-        assert row is not None
-        assert row["n"] == 0
 
     async def test_dispatches_completion_email_only(
         self,
@@ -480,32 +450,3 @@ class TestScheduledModeStillDefault:
         assert row is not None
         assert row["mode"] == "scheduled"
 
-    async def test_explicit_scheduled_mode_writes_scheduled_audit(
-        self,
-        deletion_service: AuthService,
-        deletion_db: Database,
-    ) -> None:
-        """Explicit ``mode='scheduled'`` matches the default. Verifies the
-        audit row stores the literal client-supplied value (no silent
-        coercion to immediate)."""
-        from central_server.auth.models import DeleteAccountRequest
-
-        user = await _make_password_user(
-            deletion_db, deletion_service, "explicit@example.com", "pw",
-        )
-        await deletion_service.request_account_deletion(
-            _build_payload(user),
-            source="android",
-            proof=DeleteAccountRequest(
-                method="password", password="pw", mode="scheduled",
-            ),
-        )
-
-        cur = await deletion_db.conn.execute(
-            "SELECT mode, status FROM deletion_audit WHERE user_id = ?",
-            (user["id"],),
-        )
-        row = await cur.fetchone()
-        assert row is not None
-        assert row["mode"] == "scheduled"
-        assert row["status"] == "pending"

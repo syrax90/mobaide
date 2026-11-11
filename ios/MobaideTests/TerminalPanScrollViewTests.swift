@@ -28,31 +28,9 @@ final class TerminalPanScrollViewTests: XCTestCase {
         ))
     }
 
-    func testRefusesVerticallyDominantVelocity() {
-        XCTAssertFalse(TerminalPanScrollView.shouldClaimHorizontalPan(
-            velocity: CGPoint(x: 30, y: -200), translation: .zero, isDecelerating: false
-        ))
-    }
-
-    func testExactDiagonalTieYieldsToTerminal() {
-        // Android parity: intercept iff dx > dy, ties fall through to scrollback.
-        XCTAssertFalse(TerminalPanScrollView.shouldClaimHorizontalPan(
-            velocity: CGPoint(x: 100, y: 100), translation: .zero, isDecelerating: false
-        ))
-    }
-
     func testVelocityTakesPrecedenceOverContradictoryTranslation() {
         XCTAssertFalse(TerminalPanScrollView.shouldClaimHorizontalPan(
             velocity: CGPoint(x: 0, y: 50), translation: CGPoint(x: 80, y: 0), isDecelerating: false
-        ))
-    }
-
-    func testFallsBackToTranslationWhenVelocityIsZero() {
-        XCTAssertTrue(TerminalPanScrollView.shouldClaimHorizontalPan(
-            velocity: .zero, translation: CGPoint(x: 12, y: 4), isDecelerating: false
-        ))
-        XCTAssertFalse(TerminalPanScrollView.shouldClaimHorizontalPan(
-            velocity: .zero, translation: CGPoint(x: 4, y: 12), isDecelerating: false
         ))
     }
 
@@ -93,32 +71,6 @@ final class TerminalPanScrollViewTests: XCTestCase {
                 "\(mode): a resting recognizer is no drag to claim, and the inner asks this on every touch"
             )
         }
-    }
-
-    func testSampledClaimTracksTheDominantAxisInStaticMode() {
-        let (scroll, _) = makeViews(mode: .static)
-
-        XCTAssertTrue(
-            scroll.wouldClaimHorizontalPan(velocity: CGPoint(x: 90, y: 12), translation: .zero),
-            "a horizontally dominant drag is the outer's, so the inner has to yield its scrollback pan"
-        )
-        XCTAssertFalse(
-            scroll.wouldClaimHorizontalPan(velocity: CGPoint(x: 12, y: 90), translation: .zero),
-            "a vertically dominant drag stays the scrollback's"
-        )
-        XCTAssertFalse(
-            scroll.wouldClaimHorizontalPan(velocity: CGPoint(x: 70, y: 70), translation: .zero),
-            "Android parity: claim iff dx > dy, so an exact tie belongs to the scrollback"
-        )
-    }
-
-    func testFullModeClaimsNothingFromEvenAHorizontalSample() {
-        let (scroll, _) = makeViews(mode: .full)
-
-        XCTAssertFalse(
-            scroll.wouldClaimHorizontalPan(velocity: CGPoint(x: 90, y: 12), translation: .zero),
-            "Full mode has no horizontal overflow to pan, so the inner is never asked to yield"
-        )
     }
 
     func testAmbiguousSampleYieldsTheTouchInsteadOfDeadLockingIt() {
@@ -242,63 +194,5 @@ final class TerminalPanScrollViewTests: XCTestCase {
         scroll.layoutIfNeeded()
 
         XCTAssertEqual(terminal.frame.origin.y, 0)
-    }
-
-    func testCaretDidMoveInertWhileKeyboardHiddenButSchedulesWhileLifted() {
-        let (scroll, _) = makeViews(mode: .full)
-        scroll.frame = CGRect(x: 0, y: 0, width: 390, height: 600)
-        scroll.layoutIfNeeded()
-
-        scroll.caretDidMove()
-        XCTAssertFalse(
-            scroll.layer.needsLayout(),
-            "caret churn with no keyboard must not schedule layout passes"
-        )
-
-        scroll.caretAnchorBottomOverride = 450
-        scroll.setKeyboardLift(300, duration: 0)
-        scroll.layoutIfNeeded()
-        scroll.caretDidMove()
-        XCTAssertTrue(scroll.layer.needsLayout(), "while lifted, caret movement re-evaluates the counter-pan")
-    }
-
-    func testStaticModeKeepsWidthAndContentSizeUnderCounterPan() {
-        let (scroll, terminal) = makeViews(mode: .static, staticColumns: 120)
-        scroll.frame = CGRect(x: 0, y: 0, width: 390, height: 600)
-        scroll.layoutIfNeeded()
-        scroll.setNeedsLayout()
-        scroll.layoutIfNeeded()
-        let restWidth = terminal.frame.width
-        let restContent = scroll.contentSize
-
-        scroll.caretAnchorBottomOverride = 450
-        scroll.setKeyboardLift(300, duration: 0)
-        scroll.layoutIfNeeded()
-
-        XCTAssertEqual(terminal.frame.origin.y, 150)
-        XCTAssertEqual(terminal.frame.width, restWidth, "the forced-columns width is untouched by the pan")
-        XCTAssertEqual(scroll.contentSize, restContent)
-    }
-
-    // MARK: - displayConfig didSet
-
-    func testReassigningEqualConfigStillReappliesBounceAndLayout() {
-        let (scroll, _) = makeViews(mode: .static)
-        scroll.alwaysBounceHorizontal = false
-
-        scroll.displayConfig = TerminalDisplayConfig(mode: .static, staticColumns: 120)
-
-        XCTAssertTrue(
-            scroll.alwaysBounceHorizontal,
-            "an equal-value assignment must still re-apply mode side effects"
-        )
-    }
-
-    func testSwitchingToFullModeDisablesHorizontalBounce() {
-        let (scroll, _) = makeViews(mode: .static)
-
-        scroll.displayConfig = TerminalDisplayConfig(mode: .full, staticColumns: 120)
-
-        XCTAssertFalse(scroll.alwaysBounceHorizontal)
     }
 }

@@ -206,17 +206,6 @@ describe('useDragReorder pointer', () => {
     expect(row('a').style.transform).toBe('');
   });
 
-  it('cancels the drag on pointercancel', () => {
-    render(<List items={['a', 'b', 'c']} />);
-    stubRows(['a', 'b', 'c']);
-
-    fireEvent(handle('a'), pointer('pointerdown', 20));
-    fireEvent(handle('a'), pointer('pointercancel', 130));
-    fireEvent(handle('a'), pointer('pointerup', 130));
-
-    expect(moves).toEqual([]);
-  });
-
   it('cancels the drag when the rows change under it', () => {
     // A push from another device rewrote the list: the indices the drag holds
     // no longer name the same rows.

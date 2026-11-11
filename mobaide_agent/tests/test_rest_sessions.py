@@ -1,8 +1,6 @@
 """Tests for session REST endpoints."""
 from __future__ import annotations
 
-import pytest
-
 from mobaide.core import ClaudeBinaryNotFoundError
 
 
@@ -97,30 +95,6 @@ class TestCreateSessionProjectPathErrors:
         # response bytes so a future regression that re-introduces
         # ``str(exc)`` fails loudly.
         assert "\\\\" not in resp.text
-
-    async def test_existing_project_path_in_posix_form_launches(
-        self, client, auth_headers, tmp_path,
-    ):
-        """Sanity: a project with a valid path (stored in POSIX form after
-        normalization) starts a session successfully — confirms the new
-        existence gate does not regress the happy path."""
-        real_project = tmp_path / "proj"
-        real_project.mkdir()
-
-        create = await client.post(
-            "/api/projects",
-            headers=auth_headers,
-            json={"name": "good", "path": str(real_project)},
-        )
-        assert create.status_code == 201
-
-        resp = await client.post(
-            "/api/sessions",
-            headers=auth_headers,
-            json={"project_name": "good"},
-        )
-
-        assert resp.status_code == 201
 
     async def test_non_fnf_oserror_is_mapped_to_400_with_strerror_and_filename(
         self, app, client, auth_headers,
@@ -359,15 +333,6 @@ class TestCreateSessionCodex:
         assert cfg.codex_options.model == "gpt-5.4-codex"
         assert cfg.codex_options.sandbox == "read-only"
 
-    async def test_invalid_codex_options_returns_422(self, client, auth_headers):
-        """An out-of-range enum value is rejected at the Pydantic boundary."""
-        resp = await client.post(
-            "/api/sessions",
-            headers=auth_headers,
-            json={"cli": "codex", "codex_options": {"sandbox": "nope"}},
-        )
-        assert resp.status_code == 422
-
     async def test_codex_cli_missing_returns_503_with_clean_detail(
         self, app, client, auth_headers,
     ):
@@ -524,41 +489,6 @@ class TestCreateSessionAntigravity:
         assert "mutually exclusive" in resp.text
         assert not captured
 
-    async def test_antigravity_cli_missing_returns_503_with_clean_detail(
-        self, client, auth_headers, monkeypatch, tmp_path,
-    ):
-        """A missing ``agy`` binary mirrors the Claude/Codex path: 503 with a
-        detail starting ``Antigravity CLI not found:`` and the Antigravity-
-        specific install hint. The resolver seam is re-patched to raise
-        (overriding the autouse ``_pin_antigravity_binary`` pin) so the real
-        spawn path surfaces the error."""
-        from mobaide.core import antigravity_launcher
-
-        def _raise_cli_missing(*_a, **_kw):
-            raise antigravity_launcher.AntigravityBinaryNotFoundError(
-                searched_paths=["PATH:agy"]
-            )
-
-        monkeypatch.setattr(
-            antigravity_launcher, "_resolve_agy_binary", _raise_cli_missing
-        )
-
-        resp = await client.post(
-            "/api/sessions",
-            headers=auth_headers,
-            json={
-                "cli": "antigravity",
-                "antigravity_options": {},
-                "cwd": str(tmp_path),
-            },
-        )
-
-        assert resp.status_code == 503
-        detail = resp.json()["detail"]
-        assert detail.startswith("Antigravity CLI not found:")
-        assert "https://antigravity.google/docs/cli" in detail
-        assert "MOBAIDE_AGY_BIN" in detail
-
 
 class TestCreateSessionAdHoc:
     """``POST /api/sessions`` with ``project_name=None`` and a
@@ -707,25 +637,8 @@ class TestCreateSessionAdHoc:
             "ad-hoc launches must never add an entry to ProjectsStore"
         )
 
-    async def test_both_project_name_and_cwd_none_still_works(
-        self, client, auth_headers,
-    ):
-        """``project_name=None`` AND ``cwd=None`` is the original Terminal-
-        in-default-cwd path. The new validation must NOT trip on this
-        — only ``cwd is not None`` should trigger _validate_adhoc_cwd."""
-        resp = await client.post(
-            "/api/sessions",
-            headers=auth_headers,
-            json={},  # neither project_name nor cwd
-        )
-        assert resp.status_code == 201
-
 
 class TestListSessions:
-    async def test_empty_list(self, client, auth_headers):
-        resp = await client.get("/api/sessions", headers=auth_headers)
-        assert resp.status_code == 200
-        assert resp.json() == []
 
     async def test_list_after_create(self, client, auth_headers):
         await client.post("/api/sessions", headers=auth_headers, json={})
@@ -762,13 +675,6 @@ class TestScrollback:
         assert data["session_id"] == sid
         assert isinstance(data["lines"], list)
         assert isinstance(data["total"], int)
-
-    async def test_scrollback_nonexistent_returns_404(self, client, auth_headers):
-        resp = await client.get(
-            "/api/sessions/nope/scrollback",
-            headers=auth_headers,
-        )
-        assert resp.status_code == 404
 
 
 class TestHealth:

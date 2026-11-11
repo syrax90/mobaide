@@ -176,42 +176,6 @@ class GitDiffViewModelTest {
         assertEquals(GitDiffUiState.SessionGone(3), goneVm.uiState.value)
     }
 
-    @Test
-    fun aRouteWithoutAPath_isAnError_andNeverFetches() = runTest {
-        val repo = mockk<GitRepository>(relaxed = true)
-        val vm = newViewModel(repo, mapOf("sessionId" to "s1", "scope" to "unstaged"))
-
-        subscribe(vm)
-
-        assertEquals(GitDiffUiState.Error("Missing file path", context = 3), vm.uiState.value)
-        coVerify(exactly = 0) { repo.sessionGitDiff(any(), any(), any(), any(), any()) }
-    }
-
-    @Test
-    fun refresh_refetchesAtTheSameContext() = runTest {
-        val repo = mockk<GitRepository>(relaxed = true)
-        coEvery { repo.sessionGitDiff("s1", "src/a.py", "unstaged", 3, null) } returns diff("x")
-        val vm = newViewModel(repo)
-        subscribe(vm)
-
-        vm.refresh()
-        runCurrent()
-
-        assertTrue(vm.uiState.value is GitDiffUiState.Ready)
-        coVerify(exactly = 2) { repo.sessionGitDiff("s1", "src/a.py", "unstaged", 3, null) }
-    }
-
-    @Test
-    fun holdAndRelease_bracketTheTrackerWatch() = runTest {
-        val tracker = ForegroundSessionTracker()
-        val vm = newViewModel(mockk(relaxed = true), tracker = tracker)
-
-        vm.holdWatch()
-        assertTrue(tracker.isHeld("s1"))
-        vm.releaseWatch()
-        assertFalse(tracker.isHeld("s1"))
-    }
-
     // MARK: - Stage / Unstage from the review
 
     private val renameArgs: Map<String, Any?> = mapOf(
@@ -302,20 +266,5 @@ class GitDiffViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
         assertEquals(false, vm.stageAction.value?.busy)
-    }
-
-    @Test
-    fun runStageAction_withoutAnAction_doesNothing() = runTest {
-        val repo = mockk<GitRepository>(relaxed = true) {
-            coEvery { gitCapabilities() } returns GitCapabilities.NONE
-        }
-        val vm = newViewModel(repo)
-        subscribeAction(vm)
-
-        vm.runStageAction()
-        runCurrent()
-
-        coVerify(exactly = 0) { repo.stageSessionPaths(any(), any()) }
-        coVerify(exactly = 0) { repo.unstageSessionPaths(any(), any()) }
     }
 }

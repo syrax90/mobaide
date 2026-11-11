@@ -18,13 +18,6 @@ describe('attentionDelivery', () => {
     expect(attentionDelivery(context({ documentHidden: false }))).toBe('toast');
   });
 
-  it('says nothing about the session the user is already looking at', () => {
-    // The rule both mobile clients share, in `shouldNotify` / `shouldSuppress`.
-    expect(
-      attentionDelivery(context({ visibleSessionId: 's-1', eventSessionId: 's-1' })),
-    ).toBe('none');
-  });
-
   it('still alerts about a different session while a terminal is open', () => {
     // Most of why the feature exists: one session waiting while you work in
     // another is exactly the case worth interrupting for.

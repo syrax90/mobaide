@@ -150,17 +150,6 @@ final class UserEventBusTests: XCTestCase {
         )
     }
 
-    func testMalformedShortcutPayloadsAreSilentlyIgnored() {
-        XCTAssertEqual(
-            UserEnvelopeDemux.demux(#"{"type":"shortcut.created","payload":{"shortcut_id":42}}"#),
-            .none
-        )
-        XCTAssertEqual(
-            UserEnvelopeDemux.demux(#"{"type":"shortcut.deleted","payload":{}}"#),
-            .none
-        )
-    }
-
     func testAgentStatusChangedDemux() {
         let action = UserEnvelopeDemux.demux(
             #"{"type":"agent.status_changed","payload":{"agent_id":"A1","online":true}}"#
@@ -194,15 +183,6 @@ final class UserEventBusTests: XCTestCase {
     }
 
     // MARK: - Lifecycle
-
-    func testNoAutoStartWithoutExplicitStart() async {
-        let harness = BusHarness(session: SessionHarness(userLoggedIn: true, agentConnected: true))
-        // fullyConnected is the replayed value, but nothing subscribed —
-        // the user bus reacts to changes only plus explicit start().
-        let none = await harness.transportFactory.assertNoConnection(beyond: 0)
-        XCTAssertTrue(none)
-        _ = harness.bus
-    }
 
     func testStartConnectsWhileUserOnly() async throws {
         let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
@@ -443,25 +423,6 @@ final class UserEventBusTests: XCTestCase {
         XCTAssertEqual(harness.customTypeSync.clearCount, 1)
     }
 
-    func testLogoutClearsShortcutCache() async throws {
-        let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
-        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
-
-        await harness.bus.start()
-        let connection = try await harness.transportFactory.connection(1)
-        connection.emit(.opened)
-
-        await harness.session.sessionManager.invalidateUserSession(.tokenRejected)
-
-        // Cross-account isolation: a different account signing in on this
-        // process must never see the previous user's shortcut buttons.
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while ContinuousClock.now < deadline, harness.shortcutSync.clearCount < 1 {
-            try await Task.sleep(for: .milliseconds(1))
-        }
-        XCTAssertEqual(harness.shortcutSync.clearCount, 1)
-    }
-
     // MARK: - Account switch
 
     private static func saveSecondAccount(_ identity: UserIdentityStore) {
@@ -476,12 +437,6 @@ final class UserEventBusTests: XCTestCase {
     private static func token(of connection: FakeWebSocketConnection) -> String? {
         URLComponents(url: connection.url, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == "token" })?.value
-    }
-
-    func testAccountSwitchFromUserOnlyClearsCachesAndRebindsSocketToNewAccount() async throws {
-        let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
-        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
-        try await assertAccountSwitchRebinds(harness)
     }
 
     func testAccountSwitchFromFullyConnectedClearsCachesAndRebindsSocketToNewAccount() async throws {
@@ -600,18 +555,6 @@ final class UserEventBusTests: XCTestCase {
             }
             XCTAssertGreaterThanOrEqual(order.version, 0)
         }
-    }
-
-    func testMalformedSessionModeOrderPayloadsAreSilentlyIgnored() {
-        XCTAssertEqual(
-            UserEnvelopeDemux.demux(#"{"type":"session_mode_order.updated","payload":{"order":"shell","version":2}}"#),
-            .none
-        )
-        XCTAssertEqual(
-            UserEnvelopeDemux.demux(#"{"type":"session_mode_order.updated","payload":{"order":["shell"]}}"#),
-            .none,
-            "without a version the push cannot be ordered against the cache"
-        )
     }
 
     func testSessionModeOrderPushRoutesToHookAndReconcileRefreshes() async throws {

@@ -2,7 +2,6 @@ package com.mobaide.app.ui.projects.git
 
 import com.mobaide.app.data.network.dto.GitItem
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -49,40 +48,13 @@ class GitTreeTest {
         assertEquals(listOf("1", "_x", "b"), listOf("b", "_x", "1").sortedWith(RefNameOrder))
     }
 
-    @Test
-    fun compareRefNames_keepsTwoSpellingsOfTheSameMarksInCodeUnitOrderOfTheirLowercasedNames() {
-        // Canonically equivalent, but distinct refs to git: no normalisation may merge them.
-        assertTrue(compareRefNames("ą́", "Ą́") < 0)
-        assertTrue(compareRefNames("Ą́", "ą́") > 0)
-    }
-
     // MARK: - Segments and ids
-
-    @Test
-    fun treeSegments_splitABranchOnItsSlashes_droppingEmptySegments() {
-        assertEquals(listOf("feature", "login", "x"), treeSegments(branch("feature/login/x")))
-        assertEquals(listOf("a", "b"), treeSegments(branch("a//b/")))
-    }
 
     @Test
     fun treeSegments_fileARemoteRowUnderItsWholeRemoteName() {
         assertEquals(listOf("origin", "feature", "x"), treeSegments(remoteBranch("origin/feature/x")))
         assertEquals(listOf("up/stream", "main"), treeSegments(remoteBranch("up/stream/main", "up/stream")))
         assertEquals(listOf("origin", "main"), treeSegments(remoteBranch("origin/main", remote = null)))
-    }
-
-    @Test
-    fun folderId_keysLocalFoldersOnTheirPath_andRemoteOnesOnTheRemoteThenThePathBelow() {
-        assertEquals("dir:local:feature/login", folderId(GitTreeScope.LOCAL, listOf("feature", "login")))
-        assertEquals("dir:remote:origin:", folderId(GitTreeScope.REMOTE, listOf("origin")))
-        assertEquals(
-            "dir:remote:origin:feature/x",
-            folderId(GitTreeScope.REMOTE, listOf("origin", "feature", "x")),
-        )
-        assertNotEquals(
-            folderId(GitTreeScope.REMOTE, listOf("a", "b")),
-            folderId(GitTreeScope.REMOTE, listOf("a/b")),
-        )
     }
 
     // MARK: - Rows

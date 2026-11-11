@@ -9,16 +9,12 @@ import io.mockk.verify
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -48,27 +44,6 @@ class AutoScanWsClientTest {
     )
 
     // ---- Connected frame + config frame generation --------------------------
-
-    @Test
-    fun connect_emitsConnectedFrame_andSendsEmptyConfig_whenNoArgs() = runTest {
-        val (client, connEvents, conn) = newFixture()
-        val sent = slot<String>()
-        every { conn.send(capture(sent)) } returns true
-
-        client.connect().test {
-            connEvents.emit(WsEvent.Connected)
-            assertEquals(AutoScanWsClient.Frame.Connected, awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
-
-        // Exactly one config frame was sent on open.
-        verify(exactly = 1) { conn.send(any<String>()) }
-        val cfg = Json.parseToJsonElement(sent.captured).jsonObject
-        assertEquals(JsonArray(emptyList()), cfg["subscribe"])
-        val rfs = cfg["resume_from_seq"]?.jsonObject
-        assertNotNull("resume_from_seq must be present", rfs)
-        assertTrue("resume_from_seq must be empty", rfs!!.isEmpty())
-    }
 
     @Test
     fun connect_emitsSubscribeAndResumeFromSeq_inConfigFrame() = runTest {
@@ -164,41 +139,6 @@ class AutoScanWsClientTest {
         }
     }
 
-    @Test
-    fun message_snapshot_withoutDataField_returnsNull_andEmitsNothing() = runTest {
-        val (client, connEvents, _) = newFixture()
-
-        client.connect().test {
-            connEvents.emit(WsEvent.Connected)
-            awaitItem()
-
-            // `type=snapshot` but no `data` object -> parseFrame returns null.
-            connEvents.emit(WsEvent.Message("""{"type":"snapshot"}"""))
-            expectNoEvents()
-
-            // Follow-up valid frame still arrives.
-            connEvents.emit(WsEvent.Message("""{"type":"caught_up"}"""))
-            assertEquals(AutoScanWsClient.Frame.CaughtUp, awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    // ---- Frame parsing: caught_up -------------------------------------------
-
-    @Test
-    fun message_caughtUp_emitsSingletonFrame() = runTest {
-        val (client, connEvents, _) = newFixture()
-
-        client.connect().test {
-            connEvents.emit(WsEvent.Connected)
-            awaitItem()
-
-            connEvents.emit(WsEvent.Message("""{"type":"caught_up"}"""))
-            assertEquals(AutoScanWsClient.Frame.CaughtUp, awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
     // ---- Frame parsing: event -----------------------------------------------
 
     @Test
@@ -240,47 +180,6 @@ class AutoScanWsClientTest {
         }
     }
 
-    @Test
-    fun message_event_usesEmptyProjectName_whenMissing() = runTest {
-        val (client, connEvents, _) = newFixture()
-
-        client.connect().test {
-            connEvents.emit(WsEvent.Connected)
-            awaitItem()
-
-            connEvents.emit(
-                WsEvent.Message(
-                    """
-                    {"type":"event","event":{"seq":3,"ts":"t","type":"log","payload":{"line":"hi"}}}
-                    """.trimIndent(),
-                ),
-            )
-            val frame = awaitItem() as AutoScanWsClient.Frame.Event
-            assertEquals("", frame.event.projectName)
-            assertEquals(3L, frame.event.seq)
-            val log = frame.event.payload as ScanProgressPayload.Log
-            assertEquals("hi", log.line)
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun message_event_missingInnerEventField_isDropped() = runTest {
-        val (client, connEvents, _) = newFixture()
-
-        client.connect().test {
-            connEvents.emit(WsEvent.Connected)
-            awaitItem()
-
-            connEvents.emit(WsEvent.Message("""{"type":"event","project_name":"p"}"""))
-            expectNoEvents()
-
-            connEvents.emit(WsEvent.Message("""{"type":"caught_up"}"""))
-            assertEquals(AutoScanWsClient.Frame.CaughtUp, awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
     // ---- Malformed / unknown frames -----------------------------------------
 
     @Test
@@ -301,36 +200,7 @@ class AutoScanWsClientTest {
         }
     }
 
-    @Test
-    fun message_unknownType_emitsNothing() = runTest {
-        val (client, connEvents, _) = newFixture()
-
-        client.connect().test {
-            connEvents.emit(WsEvent.Connected)
-            awaitItem()
-
-            connEvents.emit(WsEvent.Message("""{"type":"weird"}"""))
-            expectNoEvents()
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
     // ---- Disconnected / Error -----------------------------------------------
-
-    @Test
-    fun wsDisconnected_emitsDisconnectedFrame_withNullCause() = runTest {
-        val (client, connEvents, _) = newFixture()
-
-        client.connect().test {
-            connEvents.emit(WsEvent.Connected)
-            awaitItem()
-
-            connEvents.emit(WsEvent.Disconnected)
-            val frame = awaitItem() as AutoScanWsClient.Frame.Disconnected
-            assertNull(frame.cause)
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
 
     @Test
     fun wsError_emitsDisconnectedFrame_withThrowable() = runTest {

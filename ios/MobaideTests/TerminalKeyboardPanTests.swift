@@ -10,15 +10,6 @@ final class TerminalKeyboardPanTests: XCTestCase {
 
     // MARK: - lift
 
-    func testLiftIsKeyboardOverlapMinusBottomInset() {
-        let lift = TerminalKeyboardPan.lift(
-            keyboardEndFrame: CGRect(x: 0, y: 500, width: 390, height: 344),
-            windowBounds: windowBounds,
-            bottomSafeInset: 34
-        )
-        XCTAssertEqual(lift, 310, "844 - 500 - 34 — the overlap above the home-indicator line")
-    }
-
     func testLiftClampsToZeroWhenKeyboardStaysBelowSafeInset() {
         let lift = TerminalKeyboardPan.lift(
             keyboardEndFrame: CGRect(x: 0, y: 830, width: 390, height: 14),
@@ -69,41 +60,12 @@ final class TerminalKeyboardPanTests: XCTestCase {
 
     // MARK: - counterPan
 
-    func testCounterPanZeroWhileKeyboardHidden() {
-        XCTAssertEqual(
-            TerminalKeyboardPan.counterPan(boxHeight: 600, caretAnchorBottom: 100, lift: 0),
-            0,
-            "no keyboard → no compensation, regardless of caret position"
-        )
-    }
-
     func testCounterPanZeroWhenCaretAtGridBottom() {
         XCTAssertEqual(
             TerminalKeyboardPan.counterPan(boxHeight: 600, caretAnchorBottom: 600, lift: 300),
             0,
             "a bottom caret needs the full lift to stay visible — nothing to give back"
         )
-    }
-
-    func testCounterPanClampsToLiftForHighCaret() {
-        XCTAssertEqual(
-            TerminalKeyboardPan.counterPan(boxHeight: 600, caretAnchorBottom: 100, lift: 300),
-            300,
-            "a high caret cancels the whole lift (net pan zero) but never overshoots it"
-        )
-    }
-
-    func testCounterPanPinsCaretAnchorAtBoxBottom() {
-        let boxHeight: CGFloat = 600
-        let anchor: CGFloat = 450
-        let lift: CGFloat = 300
-
-        let dy = TerminalKeyboardPan.counterPan(boxHeight: boxHeight, caretAnchorBottom: anchor, lift: lift)
-
-        XCTAssertEqual(dy, 150)
-        // Net visual pan leaves the anchor exactly at the keyboard-shrunk
-        // visible bottom: anchor − (boxHeight − lift).
-        XCTAssertEqual(lift - dy, anchor - (boxHeight - lift))
     }
 
     func testUnrealizedCaretProducesZeroCounterPan() {

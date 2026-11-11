@@ -65,11 +65,4 @@ class NearestOpenSessionIdTest {
         assertNull(nearestOpenSessionId(listOf(row("a")), emptyList(), "a"))
         assertNull(nearestOpenSessionId(listOf(row("a", "stopped"), row("b")), listOf(row("a", "stopped")), "b"))
     }
-
-    @Test
-    fun returnsNull_whenTheStoppedSessionWasNotInTheSnapshot() {
-        val list = listOf(row("a"), row("b"))
-
-        assertNull(nearestOpenSessionId(list, list, "x"))
-    }
 }

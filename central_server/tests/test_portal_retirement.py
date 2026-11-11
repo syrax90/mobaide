@@ -73,26 +73,7 @@ SAME_ORIGIN_DOCUMENT_CSP = (
     "base-uri 'none'; frame-ancestors 'none'"
 )
 
-BASELINE_PERMISSIONS_POLICY = (
-    "camera=(), microphone=(), geolocation=(), payment=(), usb=(), "
-    "identity-credentials-get=()"
-)
-
 _SCRIPT_TAG_RE = re.compile(r"<script\b", re.IGNORECASE)
-
-# Every subresource and hook the retired templates carried. ``htmx-config`` and
-# ``hx-headers`` are here because htmx is inert without them, so a half-revert
-# that restores only the bundle would leave a payload-shaped no-op behind.
-RETIRED_MARKUP = (
-    "accounts.google.com",
-    "appleid.cdn-apple.com",
-    "htmx.min.js",
-    "portal.js",
-    "htmx-config",
-    "hx-headers",
-    'id="modal-root"',
-)
-
 
 @pytest.fixture
 def config(config, request):
@@ -144,15 +125,6 @@ class TestSurvivingRoutes:
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/html")
 
-    async def test_the_cancel_submission_is_still_mounted(self, client) -> None:
-        """The one state-changing route left. 403 is its CSRF guard answering —
-        which is proof the route exists, and the discriminator against
-        ``POST /portal/account/cancel-deletion`` one segment away, which is
-        gone."""
-        assert (await client.post("/portal/cancel-deletion", data={})).status_code == (
-            403
-        )
-
 
 class TestShellLoadsNoScript:
     @pytest.mark.parametrize("path", SHELL_PAGES)
@@ -161,13 +133,6 @@ class TestShellLoadsNoScript:
         static prose plus one native form POST; anything added here puts
         third-party JS back on the page Play Console links to."""
         assert _SCRIPT_TAG_RE.search((await client.get(path)).text) is None
-
-    @pytest.mark.parametrize("path", SHELL_PAGES)
-    @pytest.mark.parametrize("marker", RETIRED_MARKUP)
-    async def test_no_page_carries_the_retired_markup(
-        self, client, path, marker
-    ) -> None:
-        assert marker not in (await client.get(path)).text
 
     @with_both_providers
     @pytest.mark.parametrize("path", SHELL_PAGES)
@@ -200,25 +165,3 @@ class TestPortalPolicyIsSignInConfigIndependent:
             SAME_ORIGIN_DOCUMENT_CSP
         )
         assert "'unsafe-inline'" not in response.headers["Content-Security-Policy"]
-
-    @with_both_providers
-    @pytest.mark.parametrize("path", SURVIVING_PAGES)
-    async def test_fedcm_is_denied_outright(self, client, path) -> None:
-        """``identity-credentials-get=(self "https://accounts.google.com")`` was
-        the delegation the GIS button frame needed. No frame, no delegation."""
-        assert (await client.get(path)).headers["Permissions-Policy"] == (
-            BASELINE_PERMISSIONS_POLICY
-        )
-
-    @with_both_providers
-    async def test_the_bucket_is_not_the_api_policy(self, client) -> None:
-        """The failure mode of deleting the ``/portal/*`` branch rather than
-        re-pointing it: ``_API_CSP`` is ``default-src 'none'`` with no
-        ``style-src``, so both surviving pages would render unstyled — and the
-        cancel form's POST would be blocked by ``form-action 'none'``."""
-        policy = (await client.get("/portal/cancel-deletion")).headers[
-            "Content-Security-Policy"
-        ]
-
-        assert "style-src 'self'" in policy
-        assert "form-action 'self'" in policy

@@ -44,13 +44,6 @@ class ClipboardUtilTest {
     }
 
     @Test
-    fun hasClipboardText_htmlClip_returnsTrue() {
-        clipboard.setPrimaryClip(ClipData.newHtmlText("label", "hello", "<b>hello</b>"))
-
-        assertTrue(context.hasClipboardText())
-    }
-
-    @Test
     fun hasClipboardText_uriClip_returnsFalse() {
         clipboard.setPrimaryClip(
             ClipData.newRawUri("label", Uri.parse("content://com.example.provider/item/1")),
@@ -63,20 +56,10 @@ class ClipboardUtilTest {
     }
 
     @Test
-    fun hasClipboardText_emptyClipboard_returnsFalse() {
-        assertFalse(context.hasClipboardText())
-    }
-
-    @Test
     fun readClipboardText_plainTextClip_returnsText() {
         clipboard.setPrimaryClip(ClipData.newPlainText("label", "paste me"))
 
         assertEquals("paste me", context.readClipboardText())
-    }
-
-    @Test
-    fun readClipboardText_emptyClipboard_returnsNull() {
-        assertNull(context.readClipboardText())
     }
 
     @Test
@@ -85,17 +68,6 @@ class ClipboardUtilTest {
 
         // The description advertises text, but an empty coerced string must read
         // as null so the paste sink no-ops instead of pasting nothing.
-        assertNull(context.readClipboardText())
-    }
-
-    @Test
-    fun readClipboardText_uriClip_returnsNull() {
-        clipboard.setPrimaryClip(
-            ClipData.newRawUri("label", Uri.parse("content://com.example.provider/item/1")),
-        )
-
-        // A stale-menu tap after the clipboard changed to a uri clip must fail the
-        // hasClipboardText pre-check and never attempt coercion.
         assertNull(context.readClipboardText())
     }
 

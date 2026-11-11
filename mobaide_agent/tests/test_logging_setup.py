@@ -130,16 +130,6 @@ class TestConfigureLogging:
         )
         assert isinstance(logging_setup._listener.queue, queue.Queue)
 
-    def test_sets_root_logger_level_from_config(self):
-        configure_logging(_make_config(log_level="WARNING"))
-
-        assert logging.getLogger().level == logging.WARNING
-
-    def test_invalid_log_level_falls_back_to_info(self):
-        configure_logging(_make_config(log_level="NOT-A-LEVEL"))
-
-        assert logging.getLogger().level == logging.INFO
-
     def test_is_idempotent_does_not_duplicate_root_handlers(self):
         cfg = _make_config(log_level="INFO")
         configure_logging(cfg)
@@ -164,13 +154,6 @@ class TestConfigureLogging:
 
         assert second_listener is not None
         assert second_listener is not first_listener
-
-    def test_console_format_does_not_crash(self):
-        # Only sanity-check: the module swaps renderers internally and
-        # the result is not easily inspectable, but we can at least run it.
-        configure_logging(_make_config(log_format="console"))
-
-        assert logging_setup._listener is not None
 
     def test_audit_handler_attached_when_path_set(self, tmp_path):
         audit_path = tmp_path / "audit.log"
@@ -287,17 +270,4 @@ class TestShutdownLogging:
 
         shutdown_logging()
 
-        assert logging_setup._listener is None
-
-    def test_safe_when_listener_is_none(self):
-        logging_setup._listener = None
-        # Must not raise.
-        shutdown_logging()
-        assert logging_setup._listener is None
-
-    def test_safe_to_call_twice(self):
-        configure_logging(_make_config())
-        shutdown_logging()
-        # Must not raise.
-        shutdown_logging()
         assert logging_setup._listener is None

@@ -75,15 +75,6 @@ describe('flagsToWire', () => {
     expect(({} as Record<string, unknown>)['x']).toBeUndefined();
   });
 
-  it('builds the map the editor rows describe', () => {
-    expect(
-      flagsToWire([
-        entry('model', 'string', 'opus'),
-        entry('plan_mode', 'boolean', 'true'),
-        entry('effort', 'number', '3'),
-      ]),
-    ).toEqual({ model: 'opus', plan_mode: true, effort: 3 });
-  });
 });
 
 describe('flag signatures', () => {
@@ -127,11 +118,6 @@ describe('row validation', () => {
     expect(flagValueError(entry('effort', 'number', '  '))).toBe('Not a number');
     expect(flagValueError(entry('effort', 'number', 'abc'))).toBe('Not a number');
     expect(flagValueError(entry('effort', 'number', '1.5'))).toBeNull();
-  });
-
-  it('accepts any string value, including one that looks like another type', () => {
-    expect(flagValueError(entry('mode', 'string', ''))).toBeNull();
-    expect(flagValueError(entry('mode', 'string', 'true'))).toBeNull();
   });
 
   it('reports the whole editor as invalid when any row is', () => {

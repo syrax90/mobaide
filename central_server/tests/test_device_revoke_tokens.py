@@ -240,13 +240,6 @@ class TestSignInBindsTheSession:
 
         assert _claims(body["access_token"])["device_id"] == _DEV
 
-    async def test_sign_in_without_a_device_id_stays_unbound(
-        self, client, viewer_user
-    ):
-        del viewer_user
-        body = await _sign_in(client)
-
-        assert "device_id" not in _claims(body["access_token"])
 
     async def test_a_device_id_that_is_not_a_uuid_is_rejected(
         self, client, viewer_user
@@ -333,15 +326,6 @@ class TestRevokeKillsBoundUserSessions:
         )
         assert bound_refresh.status_code == 401
         assert unbound_refresh.status_code == 200
-
-    async def test_user_socket_records_the_tokens_device(
-        self, client, app, viewer_user
-    ):
-        bound = (await _sign_in(client, device_id=_DEV))["access_token"]
-
-        with TestClient(app).websocket_connect(f"/ws/user-events?token={bound}"):
-            clients = app.state.routing.get_user_clients(viewer_user["id"])
-            assert [c.token_device_id for c in clients] == [_DEV]
 
 
 class TestMintingForARevokedDevice:

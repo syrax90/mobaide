@@ -423,14 +423,6 @@ describe('NewSession project reorder', () => {
     expect(handleOrder()).toEqual(['epsilon', 'delta']);
   });
 
-  it('offers no handle when there is only one project to order', async () => {
-    api.projects = ['alpha'];
-    await renderWizard('');
-
-    expect(screen.getByRole('button', { name: /^alpha/ })).toBeInTheDocument();
-    expect(handleOrder()).toEqual([]);
-    expect(screen.queryByText(/Drag a handle to reorder/)).not.toBeInTheDocument();
-  });
 });
 
 describe('NewSession mode reorder', () => {

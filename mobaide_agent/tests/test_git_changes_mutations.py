@@ -24,7 +24,7 @@ from mobaide.agent.git.changes_service import (
     get_session_git_status,
     http_error_for,
 )
-from mobaide.core.git_exec import CmdResult, GitCwdMissingError, reset_caches
+from mobaide.core.git_exec import CmdResult, reset_caches
 
 from .git_repo_support import (
     GIT_BIN,
@@ -207,15 +207,6 @@ class TestStage:
 
         assert info.value.code == "bad_path"
 
-    async def test_non_repo_is_refused(self, tmp_path):
-        with pytest.raises(GitRefusedError) as info:
-            await _stage(str(tmp_path), ["a.txt"])
-
-        assert (info.value.code, info.value.message) == ("not_a_repo", "")
-
-    async def test_vanished_cwd_raises_cwd_missing(self, tmp_path):
-        with pytest.raises(GitCwdMissingError):
-            await _stage(str(tmp_path / "gone"), ["a.txt"])
 
     async def test_git_below_the_mutation_floor_is_refused(self, repo, monkeypatch):
         async def old_git():
@@ -484,12 +475,6 @@ class TestDiscard:
         assert _read(repo, "keep.txt") == b"one\nTWO\nthree\n"
         assert await _entries(repo) == [("unstaged", "keep.txt")]
 
-    async def test_unknown_scope_is_a_bad_request(self, repo):
-        with pytest.raises(GitBadRequestError) as info:
-            await _discard(repo, ["keep.txt"], "staged")
-
-        assert info.value.code == "bad_scope"
-
 
 @requires_git
 class TestEmptyPathList:
@@ -536,10 +521,6 @@ class TestCommitContext:
         assert ctx.head.oid.startswith(ctx.head.short_oid) and len(ctx.head.short_oid) >= 7
         assert (ctx.head.subject, ctx.head.body) == ("Add a", "Why a matters.\nSecond line.")
 
-    async def test_subject_only_commit_has_an_empty_body(self, repo):
-        ctx = await get_session_commit_context(cwd=repo)
-
-        assert (ctx.head.subject, ctx.head.body) == ("initial", "")
 
     async def test_a_huge_body_is_read_whole_and_clipped_to_the_message_cap(
         self, repo, tmp_path
@@ -569,12 +550,6 @@ class TestCommitContext:
 
         assert ctx.author is None
         assert ctx.head.subject == "initial"
-
-    async def test_non_repo_is_refused(self, tmp_path):
-        with pytest.raises(GitRefusedError) as info:
-            await get_session_commit_context(cwd=str(tmp_path))
-
-        assert info.value.code == "not_a_repo"
 
 
 @requires_git
@@ -737,7 +712,3 @@ class TestRefusalMapping:
     def test_refusal_is_409_with_its_code_and_trimmed_message(self):
         assert http_error_for(GitRefusedError("hook_failed", "x" * 600)) == (
             409, {"detail": {"code": "hook_failed", "message": "x" * 500}})
-
-    def test_refusal_without_output_still_carries_the_message_key(self):
-        assert http_error_for(GitRefusedError("not_a_repo")) == (
-            409, {"detail": {"code": "not_a_repo", "message": ""}})

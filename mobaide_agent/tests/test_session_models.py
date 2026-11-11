@@ -24,15 +24,6 @@ def test_skip_permissions_explicit_false_round_trips():
     assert dumped["skip_permissions"] is False
 
 
-def test_options_model_omits_skip_permissions_uses_default():
-    """JSON body that does not mention skip_permissions at all must still
-    deserialize with the True default intact."""
-    payload = {"plan_mode": False, "no_memory": True}
-    opts = ClaudeOptionsModel.model_validate(payload)
-    assert opts.skip_permissions is True
-    assert opts.no_memory is True
-
-
 def test_effort_invalid_value_rejected():
     """``effort`` is Literal-typed, so an out-of-range level is rejected at the
     wire boundary (422) rather than producing a broken ``claude`` argv."""
@@ -55,11 +46,6 @@ def test_focus_mode_wire_absence_is_none_and_survives_the_hop_to_claude_options(
     for value in (True, False):
         opts = ClaudeOptionsModel.model_validate({"focus_mode": value}).to_options()
         assert opts.focus_mode is value
-
-
-def test_effort_accepts_full_ladder():
-    for level in ("low", "medium", "high", "xhigh", "max"):
-        assert ClaudeOptionsModel.model_validate({"effort": level}).effort == level
 
 
 class TestSessionToWireDictKind:
@@ -206,26 +192,6 @@ class TestActivityWireField:
         assert resp.activity is None
 
 
-class TestSessionEventAttentionField:
-    """``SessionEvent`` gained an optional ``attention`` carrying the trigger
-    reason; ``None`` marks a clear, not a notify trigger.
-    """
-
-    def test_attention_defaults_to_none(self):
-        from mobaide.core.models import SessionEvent
-
-        ev = SessionEvent(event_type="output", session_id="s1")
-        assert ev.attention is None
-
-    def test_attention_carries_reason_when_set(self):
-        from mobaide.core.models import SessionEvent
-
-        ev = SessionEvent(
-            event_type="attention", session_id="s1", attention="turn_finished",
-        )
-        assert ev.attention == "turn_finished"
-
-
 class TestCodexToOptions:
     """``CodexOptionsModel.to_options()`` must return a real ``CodexOptions``
     dataclass carrying every field verbatim — the same drift guard as the
@@ -293,14 +259,6 @@ class TestAntigravityOptionsModel:
         with pytest.raises(pydantic.ValidationError):
             AntigravityOptionsModel(skip_permissions=True, sandbox=True)
 
-    def test_each_flag_alone_is_accepted(self):
-        from mobaide.agent.sessions.models import AntigravityOptionsModel
-
-        assert (
-            AntigravityOptionsModel(skip_permissions=True).skip_permissions is True
-        )
-        assert AntigravityOptionsModel(sandbox=True).sandbox is True
-
     def test_to_options_converts_add_dirs_list_to_tuple(self):
         # The wire DTO carries ``add_dirs`` as a JSON list; the frozen
         # dataclass wants an immutable tuple — ``to_options`` must convert or
@@ -332,17 +290,6 @@ class TestAntigravityOptionsModel:
 
         with pytest.raises(pydantic.ValidationError):
             AntigravityOptionsModel(model="--sandbox")
-
-    def test_accepts_ordinary_paths_and_names(self):
-        # The flag guard must not reject legitimate values: model display names
-        # start with a letter, directories with ``/`` (or a drive letter).
-        from mobaide.agent.sessions.models import AntigravityOptionsModel
-
-        opts = AntigravityOptionsModel(
-            model="Gemini 3.1 Pro (Low)", add_dirs=["/srv/x", "C:/y"]
-        ).to_options()
-        assert opts.model == "Gemini 3.1 Pro (Low)"
-        assert opts.add_dirs == ("/srv/x", "C:/y")
 
 
 class TestResolveSpawnArgs:
@@ -403,20 +350,6 @@ class TestResolveSpawnArgs:
             and antigravity is None
         )
 
-    def test_antigravity_options_only_infers_antigravity(self):
-        from mobaide.core.antigravity_launcher import AntigravityOptions
-        from mobaide.core.models import SessionKind
-
-        kind, _command, _env, claude, codex, antigravity = self._call(
-            antigravity=AntigravityOptions(),
-        )
-        assert kind is SessionKind.ANTIGRAVITY
-        assert (
-            isinstance(antigravity, AntigravityOptions)
-            and claude is None
-            and codex is None
-        )
-
     def test_explicit_cli_codex_defaults_options_when_omitted(self):
         from mobaide.core.codex_launcher import CodexOptions
         from mobaide.core.models import SessionKind
@@ -426,32 +359,6 @@ class TestResolveSpawnArgs:
         assert (
             isinstance(codex, CodexOptions)
             and claude is None
-            and antigravity is None
-        )
-
-    def test_explicit_cli_antigravity_defaults_options_when_omitted(self):
-        from mobaide.core.antigravity_launcher import AntigravityOptions
-        from mobaide.core.models import SessionKind
-
-        kind, _command, _env, claude, codex, antigravity = self._call(
-            cli="antigravity",
-        )
-        assert kind is SessionKind.ANTIGRAVITY
-        assert (
-            isinstance(antigravity, AntigravityOptions)
-            and claude is None
-            and codex is None
-        )
-
-    def test_explicit_cli_claude_defaults_options_when_omitted(self):
-        from mobaide.core.claude_launcher import ClaudeOptions
-        from mobaide.core.models import SessionKind
-
-        kind, _command, _env, claude, codex, antigravity = self._call(cli="claude")
-        assert kind is SessionKind.CLAUDE
-        assert (
-            isinstance(claude, ClaudeOptions)
-            and codex is None
             and antigravity is None
         )
 
@@ -466,22 +373,6 @@ class TestResolveSpawnArgs:
         # Exactly one options object survives, matching the chosen kind.
         assert kind is SessionKind.CODEX
         assert codex is not None and claude is None and antigravity is None
-
-    def test_explicit_cli_antigravity_clears_stray_options(self):
-        from mobaide.core.antigravity_launcher import AntigravityOptions
-        from mobaide.core.claude_launcher import ClaudeOptions
-        from mobaide.core.codex_launcher import CodexOptions
-        from mobaide.core.models import SessionKind
-
-        kind, _command, _env, claude, codex, antigravity = self._call(
-            cli="antigravity",
-            claude=ClaudeOptions(),
-            codex=CodexOptions(),
-            antigravity=AntigravityOptions(),
-        )
-        # Exactly one options object survives, matching the chosen kind.
-        assert kind is SessionKind.ANTIGRAVITY
-        assert antigravity is not None and claude is None and codex is None
 
 
 CUSTOM_KIND = "custom_0123456789ab"

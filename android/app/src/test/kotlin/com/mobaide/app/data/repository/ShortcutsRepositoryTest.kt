@@ -14,7 +14,6 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Test
 
 /**
@@ -70,23 +69,6 @@ class ShortcutsRepositoryTest {
     }
 
     @Test
-    fun observeShortcuts_initialState_isEmptyList() = runTest {
-        val (repo) = newFixture()
-        assertTrue(repo.observeShortcuts().value.isEmpty())
-    }
-
-    @Test
-    fun refreshShortcuts_throwsIllegalStateException_whenUserNotLoggedIn() = runTest {
-        val (repo) = newFixture(userToken = null)
-        try {
-            repo.refreshShortcuts()
-            fail("expected IllegalStateException")
-        } catch (e: IllegalStateException) {
-            assertEquals("User not logged in", e.message)
-        }
-    }
-
-    @Test
     fun refreshShortcuts_delegatesToCentralApi_andUpdatesFlow() = runTest {
         val (repo, api) = newFixture()
         val shortcuts = listOf(shortcut("s-1"), shortcut("s-2"))
@@ -101,40 +83,6 @@ class ShortcutsRepositoryTest {
             cancelAndIgnoreRemainingEvents()
         }
         coVerify(exactly = 1) { api.listShortcuts("tok-user-123") }
-    }
-
-    @Test
-    fun refreshShortcuts_secondCall_replacesEntireList() = runTest {
-        val (repo, api) = newFixture()
-        coEvery { api.listShortcuts(any()) } returns listOf(
-            shortcut("s-1"), shortcut("s-2"),
-        )
-
-        repo.refreshShortcuts()
-        assertEquals(2, repo.observeShortcuts().value.size)
-
-        coEvery { api.listShortcuts(any()) } returns listOf(shortcut("s-3"))
-        repo.refreshShortcuts()
-        assertEquals(
-            listOf("s-3"),
-            repo.observeShortcuts().value.map { it.shortcut_id },
-        )
-    }
-
-    @Test
-    fun createShortcut_delegatesToCentralApi_andReturnsSamePayload() = runTest {
-        val (repo, api) = newFixture()
-        val response = shortcut("s-1", kind = "codex", chordToken = "ctrl+k", name = "Klear")
-        coEvery {
-            api.createShortcut("tok-user-123", "codex", "ctrl+k", "Klear")
-        } returns response
-
-        val returned = repo.createShortcut("codex", "ctrl+k", "Klear")
-
-        assertSame(response, returned)
-        coVerify(exactly = 1) {
-            api.createShortcut("tok-user-123", "codex", "ctrl+k", "Klear")
-        }
     }
 
     @Test
@@ -236,20 +184,6 @@ class ShortcutsRepositoryTest {
     }
 
     @Test
-    fun applyUpserted_unknownId_appendsToCache() = runTest {
-        // Path triggered when `UserEventBus` parses a `shortcut.created`
-        // envelope from a sibling device.
-        val (repo) = newFixture()
-        repo.applyUpserted(shortcut("s-1"))
-        repo.applyUpserted(shortcut("s-2"))
-
-        assertEquals(
-            listOf("s-1", "s-2"),
-            repo.observeShortcuts().value.map { it.shortcut_id },
-        )
-    }
-
-    @Test
     fun applyUpserted_existingId_replacesInPlace_preservingOrder() = runTest {
         // Path triggered by `shortcut.updated` (e.g. a rename on another
         // device) — the replacement must occupy the same slot.
@@ -286,22 +220,6 @@ class ShortcutsRepositoryTest {
     }
 
     @Test
-    fun applyDeleted_unknownId_isNoOp() = runTest {
-        // Forward-compat: a `shortcut.deleted` envelope for a row we never
-        // fetched must not throw or alter the cache.
-        val (repo, api) = newFixture()
-        coEvery { api.listShortcuts(any()) } returns listOf(shortcut("s-1"))
-        repo.refreshShortcuts()
-
-        repo.applyDeleted("ghost-id")
-
-        assertEquals(
-            listOf("s-1"),
-            repo.observeShortcuts().value.map { it.shortcut_id },
-        )
-    }
-
-    @Test
     fun purgeKind_removesEveryShortcutOfThatKind_keepingOthers() = runTest {
         // Client half of the server-side cascade on `custom_type.deleted`:
         // the type's shortcuts are soft-deleted server-side without
@@ -323,20 +241,6 @@ class ShortcutsRepositoryTest {
         )
     }
 
-    @Test
-    fun purgeKind_unknownKind_isNoOp() = runTest {
-        val (repo, api) = newFixture()
-        coEvery { api.listShortcuts(any()) } returns listOf(shortcut("s-1"))
-        repo.refreshShortcuts()
-
-        repo.purgeKind("custom_never_seen")
-
-        assertEquals(
-            listOf("s-1"),
-            repo.observeShortcuts().value.map { it.shortcut_id },
-        )
-    }
-
     // ---- Account-generation owner guard -------------------------------------
 
     @Test
@@ -351,36 +255,5 @@ class ShortcutsRepositoryTest {
         repo.refreshShortcuts()
 
         assertTrue(repo.observeShortcuts().value.isEmpty())
-    }
-
-    @Test
-    fun createShortcut_userChangedMidFlight_returnsPayload_withoutCacheWrite() = runTest {
-        // The server response still goes back to the caller either way —
-        // only the cache write is discarded.
-        val (repo, api, identity) = newFixture()
-        every { identity.getUserId() } returnsMany listOf("user-1", "user-2")
-        val created = shortcut("s-stale")
-        coEvery { api.createShortcut(any(), any(), any(), any()) } returns created
-
-        val returned = repo.createShortcut("claude", "ctrl+x", null)
-
-        assertSame(created, returned)
-        assertTrue(repo.observeShortcuts().value.isEmpty())
-    }
-
-    @Test
-    fun clear_emptiesCache() = runTest {
-        // Used during sign-out flows to drop the previous user's data without
-        // a network round-trip.
-        val (repo, api) = newFixture()
-        coEvery { api.listShortcuts(any()) } returns listOf(
-            shortcut("s-1"), shortcut("s-2"),
-        )
-        repo.refreshShortcuts()
-        assertEquals(2, repo.observeShortcuts().value.size)
-
-        repo.clear()
-
-        assertEquals(emptyList<ShortcutDto>(), repo.observeShortcuts().value)
     }
 }

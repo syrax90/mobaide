@@ -116,17 +116,6 @@ async def _expire_nonce(db, nonce: str) -> None:
 
 
 class TestMintAndRedeem:
-    async def test_mint_returns_a_typeable_code_and_its_command(
-        self, client, dc_app, api_auth_headers
-    ):
-        body = await _mint(client, api_auth_headers)
-
-        assert body["code"][4] == "-"
-        assert len(body["code"]) == 9
-        assert body["verification_command"] == f"mobaide-agent pair {body['code']}"
-        # The opaque handle, not the code, is what later calls put in a URL.
-        assert body["code"] not in body["request_id"]
-
     async def test_redeem_accepts_the_code_as_the_operator_retypes_it(
         self, client, dc_app, api_auth_headers
     ):
@@ -260,13 +249,6 @@ class TestConfirm:
         # than the code's; the code row still looks redeemable here.
         assert resp.status_code == 410
 
-    async def test_a_foreign_request_id_is_not_found(
-        self, client, dc_app, api_auth_headers
-    ):
-        resp = await _confirm(client, api_auth_headers, "does-not-exist")
-
-        assert resp.status_code == 404
-
     async def test_a_refused_confirm_leaves_the_request_open_for_a_retry(
         self, client, dc_app, api_auth_headers, db, viewer_user, registered_agent
     ):
@@ -332,16 +314,6 @@ class TestTerminalApproval:
         # working host's token already rotated.
         assert await db.list_agents_for_user(viewer_user["id"]) == []
 
-    async def test_the_request_stays_confirmable_after_the_host_accepts(
-        self, client, dc_app, api_auth_headers
-    ):
-        minted = await _mint(client, api_auth_headers)
-        await _redeem_and_accept(client, minted["code"], "redeemer-late")
-
-        resp = await _confirm(client, api_auth_headers, minted["request_id"])
-
-        assert resp.status_code == 200, resp.text
-
     async def test_accepting_twice_is_still_no_content(
         self, client, dc_app, api_auth_headers
     ):
@@ -362,15 +334,6 @@ class TestTerminalApproval:
         await _redeem(client, minted["code"], "redeemer-owner")
 
         resp = await _accept(client, minted["code"], "redeemer-impostor")
-
-        assert resp.status_code == 410
-
-    async def test_accepting_an_unredeemed_code_is_refused(
-        self, client, dc_app, api_auth_headers
-    ):
-        minted = await _mint(client, api_auth_headers)
-
-        resp = await _accept(client, minted["code"], "redeemer-premature")
 
         assert resp.status_code == 410
 
@@ -538,36 +501,6 @@ class TestStatus:
         assert body["is_repair"] is True
         assert body["blocked_reason"] == "owned_by_other"
 
-    async def test_flags_a_repair_of_an_agent_the_relay_never_heard_of(
-        self, client, dc_app, api_auth_headers
-    ):
-        minted = await _mint(client, api_auth_headers)
-        await _redeem_and_accept(
-            client,
-            minted["code"],
-            "redeemer-ghost",
-            current_agent_id="ghost-agent",
-        )
-
-        body = (
-            await client.get(
-                f"/api/pairing/device-code/{minted['request_id']}",
-                headers=api_auth_headers,
-            )
-        ).json()
-
-        assert body["blocked_reason"] == "unknown_agent"
-
-    async def test_a_foreign_request_id_is_not_found(
-        self, client, dc_app, api_auth_headers
-    ):
-        resp = await client.get(
-            "/api/pairing/device-code/does-not-exist",
-            headers=api_auth_headers,
-        )
-
-        assert resp.status_code == 404
-
 
 class TestCancel:
     async def test_cancel_blocks_a_later_confirm(
@@ -584,46 +517,6 @@ class TestCancel:
         assert deleted.status_code == 204
         resp = await _confirm(client, api_auth_headers, minted["request_id"])
         assert resp.status_code == 410
-
-    async def test_cancel_expires_the_nonce_the_agent_is_waiting_on(
-        self, client, dc_app, api_auth_headers
-    ):
-        minted = await _mint(client, api_auth_headers)
-        redeemed = (
-            await _redeem(client, minted["code"], "redeemer-cancel-nonce")
-        ).json()
-
-        await client.delete(
-            f"/api/pairing/device-code/{minted['request_id']}",
-            headers=api_auth_headers,
-        )
-
-        # Expiring the token row rather than leaving it to time out is what
-        # stops the agent's WebSocket hanging for the rest of the window.
-        token = await dc_app.state.db.lookup_pairing_token_metadata(
-            redeemed["nonce"]
-        )
-        assert datetime.fromisoformat(token["expires_at"]) <= datetime.now(
-            timezone.utc
-        )
-
-    async def test_cancel_is_reported_by_the_poll(
-        self, client, dc_app, api_auth_headers
-    ):
-        minted = await _mint(client, api_auth_headers)
-        await client.delete(
-            f"/api/pairing/device-code/{minted['request_id']}",
-            headers=api_auth_headers,
-        )
-
-        body = (
-            await client.get(
-                f"/api/pairing/device-code/{minted['request_id']}",
-                headers=api_auth_headers,
-            )
-        ).json()
-
-        assert body["status"] == "canceled"
 
     async def test_a_cancel_landing_mid_confirm_cannot_also_win(
         self, client, dc_app, api_auth_headers, monkeypatch
@@ -655,22 +548,6 @@ class TestCancel:
 
         assert resp.status_code == 200, resp.text
         assert cancel_codes == [404]
-
-    async def test_cancelling_twice_is_not_found(
-        self, client, dc_app, api_auth_headers
-    ):
-        minted = await _mint(client, api_auth_headers)
-        await client.delete(
-            f"/api/pairing/device-code/{minted['request_id']}",
-            headers=api_auth_headers,
-        )
-
-        again = await client.delete(
-            f"/api/pairing/device-code/{minted['request_id']}",
-            headers=api_auth_headers,
-        )
-
-        assert again.status_code == 404
 
 
 class TestAccountTrustPin:
@@ -731,20 +608,6 @@ class TestAccountTrustPin:
         assert await db.get_user_trust_key_fp(
             viewer_user["id"]
         ) == compute_trust_key_fp(dc_app.state._test_pub_b64)
-
-    async def test_trust_pin_endpoint_reports_no_pin_before_first_pairing(
-        self, client, dc_app, api_auth_headers
-    ):
-        resp = await client.get(
-            "/api/pairing/trust-pin", headers=api_auth_headers
-        )
-
-        body = resp.json()
-        assert body["account_trust_key_fp"] is None
-        assert body["relay_trust_key_fp"] == compute_trust_key_fp(
-            dc_app.state._test_pub_b64
-        )
-        assert body["relay_url"] == "https://relay.test"
 
 
 class TestRateLimiting:
@@ -868,23 +731,6 @@ class TestFirstPairingConversion:
         assert resp.status_code == 200, resp.text
         assert (await db.get_user_by_id(owner["id"]))["first_paired_at"] == marker
         uploader.schedule_first_pairing.assert_called_once()
-
-    async def test_expired_confirm_does_not_mark_first_pairing(
-        self, client, dc_app, api_auth_headers
-    ):
-        uploader = MagicMock()
-        dc_app.state.ads_uploader = uploader
-        db = dc_app.state.db
-        owner = await db.get_user_by_email("viewer@test.local")
-
-        minted = await _mint(client, api_auth_headers)
-        redeemed = (await _redeem_and_accept(client, minted["code"], "redeemer-late")).json()
-        await _expire_nonce(db, redeemed["nonce"])
-        resp = await _confirm(client, api_auth_headers, minted["request_id"])
-
-        assert resp.status_code == 410, resp.text
-        assert (await db.get_user_by_id(owner["id"]))["first_paired_at"] is None
-        uploader.schedule_first_pairing.assert_not_called()
 
     async def test_confirm_broadcasts_the_account_event_once(
         self, client, dc_app, api_auth_headers

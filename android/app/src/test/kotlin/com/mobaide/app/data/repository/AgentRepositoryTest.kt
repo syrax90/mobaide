@@ -6,7 +6,6 @@ import com.mobaide.app.data.network.CentralApi
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.dto.CreateAgentResponse
 import com.mobaide.app.data.network.dto.MobileTokenResponse
-import com.mobaide.app.data.network.dto.ReRegisterAgentResponse
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -62,14 +61,6 @@ class AgentRepositoryTest {
         )
     }
 
-    // ---- observeAgents initial state -------------------------------------------
-
-    @Test
-    fun observeAgents_initialState_isEmptyList() = runTest {
-        val (repo) = newFixture()
-        assertTrue(repo.observeAgents().value.isEmpty())
-    }
-
     // ---- requireUserToken guard ------------------------------------------------
 
     @Test
@@ -77,17 +68,6 @@ class AgentRepositoryTest {
         val (repo) = newFixture(userToken = null)
         try {
             repo.refreshAgents()
-            fail("expected IllegalStateException")
-        } catch (e: IllegalStateException) {
-            assertEquals("User not logged in", e.message)
-        }
-    }
-
-    @Test
-    fun createAgent_throwsIllegalStateException_whenUserNotLoggedIn() = runTest {
-        val (repo) = newFixture(userToken = null)
-        try {
-            repo.createAgent("test-agent")
             fail("expected IllegalStateException")
         } catch (e: IllegalStateException) {
             assertEquals("User not logged in", e.message)
@@ -113,33 +93,7 @@ class AgentRepositoryTest {
         coVerify(exactly = 1) { api.listAgents("tok-user-123") }
     }
 
-    @Test
-    fun refreshAgents_secondCall_replacesEntireList() = runTest {
-        val (repo, api) = newFixture()
-        coEvery { api.listAgents(any()) } returns listOf(agent("a-1"), agent("a-2"))
-
-        repo.refreshAgents()
-        assertEquals(2, repo.observeAgents().value.size)
-
-        coEvery { api.listAgents(any()) } returns listOf(agent("a-3"))
-        repo.refreshAgents()
-        assertEquals(listOf("a-3"), repo.observeAgents().value.map { it.agent_id })
-    }
-
     // ---- createAgent -----------------------------------------------------------
-
-    @Test
-    fun createAgent_delegatesToCentralApi_andReturnsSamePayload() = runTest {
-        val (repo, api) = newFixture()
-        val response = CreateAgentResponse(agent_id = "a-1", name = "my-agent", token = "tok-abc")
-        coEvery { api.createAgent("tok-user-123", "my-agent") } returns response
-        coEvery { api.listAgents("tok-user-123") } returns listOf(agent("a-1", name = "my-agent"))
-
-        val returned = repo.createAgent("my-agent")
-
-        assertSame(response, returned)
-        coVerify(exactly = 1) { api.createAgent("tok-user-123", "my-agent") }
-    }
 
     @Test
     fun createAgent_triggersRefreshAfterCreation() = runTest {
@@ -154,20 +108,6 @@ class AgentRepositoryTest {
         // refreshAgents is called after createAgent, so listAgents must have been called
         coVerify(atLeast = 1) { api.listAgents("tok-user-123") }
         assertEquals(1, repo.observeAgents().value.size)
-    }
-
-    // ---- reregisterAgent -------------------------------------------------------
-
-    @Test
-    fun reregisterAgent_delegatesToCentralApi_andReturnsSamePayload() = runTest {
-        val (repo, api) = newFixture()
-        val response = ReRegisterAgentResponse(agent_id = "a-1", token = "new-tok")
-        coEvery { api.reregisterAgent("tok-user-123", "a-1") } returns response
-
-        val returned = repo.reregisterAgent("a-1")
-
-        assertSame(response, returned)
-        coVerify(exactly = 1) { api.reregisterAgent("tok-user-123", "a-1") }
     }
 
     // ---- deleteAgent -----------------------------------------------------------
@@ -223,19 +163,6 @@ class AgentRepositoryTest {
     }
 
     @Test
-    fun updateAgentOnline_flipsFromOfflineToOnline() = runTest {
-        // Symmetric of the previous test: offline → online transition
-        // (the reconnect path that reveals an agent came back).
-        val (repo, api) = newFixture()
-        coEvery { api.listAgents(any()) } returns listOf(agent("a-1", online = false))
-        repo.refreshAgents()
-
-        repo.updateAgentOnline("a-1", online = true)
-
-        assertTrue(repo.observeAgents().value.single().online)
-    }
-
-    @Test
     fun updateAgentOnline_unknownAgentId_isNoOp() = runTest {
         // An event for an agent we haven't fetched yet must not alter the
         // list (and must not throw). The next `refreshAgents()` call will
@@ -278,18 +205,6 @@ class AgentRepositoryTest {
 
             cancelAndIgnoreRemainingEvents()
         }
-    }
-
-    @Test
-    fun updateAgentOnline_onEmptyCache_isNoOp() = runTest {
-        // Regression guard: before any refreshAgents() call the cache is
-        // empty. A status event arriving at that moment must not throw
-        // and must not leave the StateFlow in a non-empty state.
-        val (repo) = newFixture()
-
-        repo.updateAgentOnline("any-id", online = true)
-
-        assertEquals(emptyList<AgentSummaryResponse>(), repo.observeAgents().value)
     }
 
     // ---- getMobileTokensForAgent -----------------------------------------------

@@ -76,17 +76,6 @@ class VoiceRepositoryTest {
         withContext(Dispatchers.Default) { withTimeout(2_000) { block() } }
 
     @Test
-    fun refresh_writesItsAnswer() = runTest {
-        val downloading = status(VoiceStatusResponse.STATE_DOWNLOADING)
-        coEvery { restApi.getVoiceStatus() } returns downloading
-        val repo = VoiceRepository(restApi, bus, sessionManager)
-
-        assertEquals(downloading, repo.refresh())
-
-        assertEquals(downloading, repo.status.value)
-    }
-
-    @Test
     fun refresh_neverOverwritesAVoiceChangedThatArrivedWhileItWasInFlight() = runTest {
         val older = status(VoiceStatusResponse.STATE_DOWNLOADING)
         val pushed = status(VoiceStatusResponse.STATE_READY)

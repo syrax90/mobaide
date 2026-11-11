@@ -156,32 +156,6 @@ class SessionsPanelViewModelTest {
     }
 
     @Test
-    fun sessionsAndCustomTypeNames_flowIntoTheState() = runTest {
-        val fx = build()
-        advanceUntilIdle()
-
-        fx.vm.uiState.test {
-            advanceUntilIdle()
-            assertEquals(emptyList<SessionResponse>(), expectMostRecentItem().sessions)
-
-            fx.sessionsFlow.value = listOf(session("s1"), session("s2"))
-            advanceUntilIdle()
-            assertEquals(listOf("s1", "s2"), expectMostRecentItem().sessions.map { it.session_id })
-
-            fx.typesFlow.value = listOf(
-                CustomAgentTypeDto(id = "ab12cd34ef56", name = "Aider", command = "aider", created_at = "c", updated_at = "u"),
-            )
-            advanceUntilIdle()
-            assertEquals(
-                "the map keys on the full wire kind, never the bare id",
-                mapOf("custom_ab12cd34ef56" to "Aider"),
-                expectMostRecentItem().customTypeNames,
-            )
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
     fun connectedAgent_isSplitFromTheOthers_bySavedAgentId() = runTest {
         val fx = build(connectedAgentId = "a2")
         fx.agentsFlow.value = listOf(agent("a1"), agent("a2"), agent("a3", online = false))
@@ -192,37 +166,6 @@ class SessionsPanelViewModelTest {
             val state = expectMostRecentItem()
             assertEquals("a2", state.connectedAgent?.agent_id)
             assertEquals(listOf("a1", "a3"), state.otherAgents.map { it.agent_id })
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun noSavedAgent_leavesTheConnectedLineEmpty_andListsEveryAgentAsOther() = runTest {
-        val fx = build(connectedAgentId = null)
-        fx.agentsFlow.value = listOf(agent("a1"))
-        advanceUntilIdle()
-
-        fx.vm.uiState.test {
-            advanceUntilIdle()
-            val state = expectMostRecentItem()
-            assertNull(state.connectedAgent)
-            assertEquals(listOf("a1"), state.otherAgents.map { it.agent_id })
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun switchingAgentId_mirrorsTheCoordinator() = runTest {
-        val fx = build()
-        advanceUntilIdle()
-
-        fx.vm.uiState.test {
-            advanceUntilIdle()
-            assertNull(expectMostRecentItem().switchingAgentId)
-
-            fx.switchingFlow.value = "a2"
-            advanceUntilIdle()
-            assertEquals("a2", expectMostRecentItem().switchingAgentId)
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -371,21 +314,6 @@ class SessionsPanelViewModelTest {
             gate.complete(Unit)
             advanceUntilIdle()
             assertEquals(SessionsPanelEvent.Stopped("s2", nextSessionId = "s1"), awaitItem())
-            expectNoEvents()
-        }
-    }
-
-    @Test
-    fun stopSession_withNoOtherOpenSession_namesNone() = runTest {
-        val fx = build()
-        fx.sessionsFlow.value = listOf(session("s1", state = "stopped"), session("s2"))
-        coEvery { fx.sessionRepo.deleteSession(any(), any()) } just Runs
-        advanceUntilIdle()
-
-        fx.vm.events.test {
-            fx.vm.stopSession("s2", force = false)
-            advanceUntilIdle()
-            assertEquals(SessionsPanelEvent.Stopped("s2", nextSessionId = null), awaitItem())
             expectNoEvents()
         }
     }

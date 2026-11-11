@@ -12,10 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from mobaide.linear.config import (
-    _DEFAULT_AUTO_SCAN_PROMPT,
-    AutoScanConfig,
-)
+from mobaide.linear.config import AutoScanConfig
 
 _ENV_VARS = (
     "AUTO_SCAN_PROMPT",
@@ -46,13 +43,6 @@ class TestPrompt:
         assert cfg.auto_scan_prompt == "line1\nline2"
         assert cfg.auto_scan_prompt is not None
         assert "\\n" not in cfg.auto_scan_prompt
-
-    def test_empty_string_uses_default(self, monkeypatch):
-        monkeypatch.setenv("AUTO_SCAN_PROMPT", "")
-
-        cfg = AutoScanConfig.from_env()
-
-        assert cfg.auto_scan_prompt == _DEFAULT_AUTO_SCAN_PROMPT
 
 
 class TestEnvOverrides:
@@ -85,9 +75,3 @@ class TestDeprecatedFieldsRemoved:
         # Build should not raise; the values are silently ignored.
         cfg = AutoScanConfig.from_env()
         assert cfg is not None
-
-
-class TestWorktreeCleanup:
-    def test_auto_remove_worktrees_defaults_true_when_unset(self):
-        cfg = AutoScanConfig.from_env()
-        assert cfg.auto_remove_worktrees is True

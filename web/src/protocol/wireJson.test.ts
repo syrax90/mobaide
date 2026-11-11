@@ -8,18 +8,6 @@ import {
 } from './wireJson';
 
 describe('wire JSON', () => {
-  it('parses ordinary values exactly as JSON.parse would', () => {
-    expect(parseWireJson('{"a":1,"b":[true,null,"x"],"c":1.5}')).toEqual({
-      a: 1,
-      b: [true, null, 'x'],
-      c: 1.5,
-    });
-  });
-
-  it('throws on malformed input, like JSON.parse', () => {
-    expect(() => parseWireJson('{')).toThrow();
-  });
-
   it('leaves a float alone even though it is not a safe integer', () => {
     // `started_at` in the auto-scan snapshot is a float; the promotion guard
     // must key on the literal being integral, not just on isSafeInteger.

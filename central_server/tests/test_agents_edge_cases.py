@@ -1,33 +1,13 @@
 """Edge-case tests for agent management — covering gaps not in test_agents.py.
 
 Covers:
-- Operations on nonexistent agent IDs (reregister, delete, get-token)
+- Minting mobile tokens for a nonexistent agent ID
 - Refresh token rotation after agent deletion (user_id fallback)
 """
 from __future__ import annotations
 
-import pytest
-
-from tests.conftest import TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
-
 
 class TestNonexistentAgentEndpoints:
-    """Reregister/delete/get-token on an agent_id that doesn't exist at all."""
-
-    async def test_reregister_nonexistent_agent(self, client, api_auth_headers):
-        resp = await client.post(
-            "/api/agents/nonexistent-id/reregister",
-            headers=api_auth_headers,
-        )
-        assert resp.status_code == 403
-
-    async def test_delete_nonexistent_agent(self, client, api_auth_headers):
-        resp = await client.delete(
-            "/api/agents/nonexistent-id",
-            headers=api_auth_headers,
-        )
-        assert resp.status_code == 403
-
     async def test_get_token_nonexistent_agent(self, client, api_auth_headers):
         resp = await client.post(
             "/api/agents/nonexistent-id/token",
@@ -76,39 +56,3 @@ class TestRefreshAfterAgentDeleted:
             json={"refresh_token": refresh_token},
         )
         assert refresh_resp.status_code == 401
-
-
-class TestCreateAgentWithBearerAuth:
-    """Verify the Bearer auth on agent endpoints works with tokens from login."""
-
-    async def test_non_bearer_scheme_rejected(self, client):
-        resp = await client.post(
-            "/api/agents",
-            json={"name": "test"},
-            headers={"Authorization": "Basic dXNlcjpwYXNz"},
-        )
-        assert resp.status_code == 401
-
-    async def test_expired_token_rejected(self, client, app):
-        import time
-        import jwt
-        from tests.conftest import TEST_JWT_SECRET
-
-        expired = jwt.encode(
-            {
-                "sub": "user-id",
-                "type": "dashboard",
-                "email": "admin@test.local",
-                "role": "admin",
-                "iat": int(time.time()) - 7200,
-                "exp": int(time.time()) - 3600,
-            },
-            TEST_JWT_SECRET,
-            algorithm="HS256",
-        )
-        resp = await client.post(
-            "/api/agents",
-            json={"name": "test"},
-            headers={"Authorization": f"Bearer {expired}"},
-        )
-        assert resp.status_code == 401

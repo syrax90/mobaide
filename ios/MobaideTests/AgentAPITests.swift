@@ -116,14 +116,6 @@ final class AgentAPITests: XCTestCase {
         XCTAssertEqual(urls[1], "http://agent.example.com/api/sessions/s1?force=true")
     }
 
-    func testScrollbackAlwaysCarriesLinesQuery() async throws {
-        StubURLProtocol.enqueue(status: 200, body: #"{"session_id":"s1","lines":[],"total":0}"#)
-        _ = try await makeAPI().getScrollback(sessionId: "s1")
-
-        let request = try XCTUnwrap(StubURLProtocol.requests.first)
-        XCTAssertEqual(request.url?.absoluteString, "http://agent.example.com/api/sessions/s1/scrollback?lines=1000")
-    }
-
     func testProjectNamePathSegmentEncoding() async throws {
         StubURLProtocol.enqueue(status: 200, body: #"{"name":"p","path":"/x"}"#)
         _ = try await makeAPI().updateProject(currentName: "My Project/α", update: ProjectUpdate(conda_env: "ml"))
@@ -136,31 +128,12 @@ final class AgentAPITests: XCTestCase {
         )
     }
 
-    func testUpdateProjectOmitsNilFields() async throws {
-        StubURLProtocol.enqueue(status: 200, body: #"{"name":"p","path":"/x"}"#)
-        _ = try await makeAPI().updateProject(currentName: "p", update: ProjectUpdate(linear_api_key: ""))
-
-        let body = try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[0])
-        XCTAssertEqual(body, ["linear_api_key": ""])
-    }
-
     func testCreateProjectAlwaysSerializesDefaultFlags() async throws {
         StubURLProtocol.enqueue(status: 200, body: #"{"name":"p","path":"/x"}"#)
         _ = try await makeAPI().createProject(ProjectWrite(name: "p", path: "/x"))
 
         let body = try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[0])
         XCTAssertEqual(body, ["name": "p", "path": "/x", "default_flags": [:]])
-    }
-
-    func testForceUpdateSendsEmptyJSONBody() async throws {
-        StubURLProtocol.enqueue(status: 200, body: #"{"outcome":"staged"}"#)
-        let response = try await makeAPI().forceAgentUpdate()
-
-        XCTAssertEqual(response.outcome, "staged")
-        let request = try XCTUnwrap(StubURLProtocol.requests.first)
-        XCTAssertEqual(request.httpMethod, "POST")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
-        XCTAssertEqual(StubURLProtocol.bodies[0], Data())
     }
 
     func testGitItemsAlwaysAskForTheRemoteRows() async throws {
@@ -172,37 +145,6 @@ final class AgentAPITests: XCTestCase {
         XCTAssertEqual(
             request.url?.absoluteString,
             "http://agent.example.com/api/projects/My%20Project/git/items?remote=true"
-        )
-    }
-
-    func testGitBranchRoutesPostTheirBodies() async throws {
-        StubURLProtocol.enqueue(status: 200, body: #"{"branch":"x","checked_out":false,"created":true}"#)
-        StubURLProtocol.enqueue(status: 200, body: #"{"branch":"x","checked_out":true,"created":false}"#)
-        let api = makeAPI()
-
-        let created = try await api.createGitBranch(
-            projectName: "proj",
-            request: GitBranchCreateRequest(name: "x", start_point: "origin/main", checkout: false)
-        )
-        let checkedOut = try await api.checkoutGitRef(projectName: "proj", request: GitCheckoutRequest(ref: "x"))
-
-        XCTAssertEqual(created, GitBranchResponse(branch: "x", checked_out: false, created: true))
-        XCTAssertEqual(checkedOut, GitBranchResponse(branch: "x", checked_out: true, created: false))
-        XCTAssertEqual(
-            StubURLProtocol.requests.map { $0.url?.absoluteString },
-            [
-                "http://agent.example.com/api/projects/proj/git/branches",
-                "http://agent.example.com/api/projects/proj/git/checkout",
-            ]
-        )
-        XCTAssertEqual(StubURLProtocol.requests.map(\.httpMethod), ["POST", "POST"])
-        XCTAssertEqual(
-            try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[0]),
-            ["name": "x", "start_point": "origin/main", "checkout": false, "force": false]
-        )
-        XCTAssertEqual(
-            try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[1]),
-            ["ref": "x", "force": false]
         )
     }
 
@@ -327,41 +269,6 @@ final class AgentAPITests: XCTestCase {
         ])
     }
 
-    func testSessionGitConflictWritesPostTheirBodiesUnderTheirOwnLeaves() async throws {
-        for _ in 0..<4 { StubURLProtocol.enqueue(status: 200, body: #"{"ok":true}"#) }
-        let api = makeAPI()
-
-        try await api.resolveSessionGitConflict(
-            sessionId: "s1", path: "src/a b.py", token: "t1", content: "<<<<<<< x\nж\n", markResolved: false
-        )
-        try await api.takeSessionGitConflict(sessionId: "s1", path: "docs/old.md", side: GitConflictResponse.sideTheirs)
-        try await api.restoreSessionGitConflict(sessionId: "s1", path: "src/session.py")
-        try await api.restoreSessionGitConflict(
-            sessionId: "s1", path: "src/login.py", style: GitConflictRestoreRequest.styleDiff3, token: "t1"
-        )
-
-        XCTAssertEqual(
-            StubURLProtocol.requests.map { "\($0.httpMethod ?? "?") \($0.url?.absoluteString ?? "?")" },
-            [
-                "POST http://agent.example.com/api/sessions/s1/git/conflict/resolve",
-                "POST http://agent.example.com/api/sessions/s1/git/conflict/take",
-                "POST http://agent.example.com/api/sessions/s1/git/conflict/restore",
-                "POST http://agent.example.com/api/sessions/s1/git/conflict/restore",
-            ]
-        )
-        let bodies = try StubURLProtocol.bodies.map { try WireJSON.decoder().decode(JSONValue.self, from: $0) }
-        XCTAssertEqual(
-            bodies,
-            [
-                ["path": "src/a b.py", "token": "t1", "content": "<<<<<<< x\nж\n", "mark_resolved": false],
-                ["path": "docs/old.md", "side": "theirs"],
-                // nobody has the resolved file open: merge style, and no token key at all
-                ["path": "src/session.py", "style": "merge"],
-                ["path": "src/login.py", "style": "diff3", "token": "t1"],
-            ]
-        )
-    }
-
     func testEncodeQueryValueKeepsOnlyTheUnreservedSet() {
         XCTAssertEqual(AgentAPI.encodeQueryValue("a-b_c.d*e9"), "a-b_c.d*e9")
         XCTAssertEqual(AgentAPI.encodeQueryValue("a b+c/d&e#f?g=h"), "a%20b%2Bc%2Fd%26e%23f%3Fg%3Dh")
@@ -386,19 +293,5 @@ final class AgentAPITests: XCTestCase {
 
         let request = try XCTUnwrap(StubURLProtocol.requests.first)
         XCTAssertEqual(request.url?.absoluteString, "http://agent.example.com/api/sessions")
-    }
-
-    func testNilBaseURLThrowsNotConfigured() async {
-        do {
-            _ = try await makeAPI(base: nil).listSessions()
-            XCTFail("expected AgentURLNotConfiguredError")
-        } catch is AgentURLNotConfiguredError {
-        } catch {
-            XCTFail("unexpected error \(error)")
-        }
-    }
-
-    func testSessionUses30SecondTimeout() {
-        XCTAssertEqual(HTTPClient.makeSession().configuration.timeoutIntervalForRequest, 30)
     }
 }

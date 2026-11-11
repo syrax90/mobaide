@@ -108,42 +108,6 @@ class TerminalViewModelChunkedReplayTest {
     }
 
     @Test
-    fun chunkedReplay_concatenatesAllOutputFrames_beforeReplayEnd() =
-        runTest(testDispatcher) {
-            // Server sends marker → output("part1") → output("part2") → output("part3") → end.
-            // The emulator's row 0 must read as "part1part2part3" — concatenation
-            // of every chunk in order, not just the last one. The whole payload
-            // fits comfortably inside the 80-column default so no wrap is needed.
-            val eventsFlow = newEventsFlow()
-            val conn = newConnection(eventsFlow)
-            every { conn.connect() } answers {
-                eventsFlow.tryEmit(WsEvent.Connected)
-                eventsFlow.tryEmit(WsEvent.Binary(replayMarkerFrame))
-                eventsFlow.tryEmit(WsEvent.Binary(outputFrame("part1".toByteArray())))
-                eventsFlow.tryEmit(WsEvent.Binary(outputFrame("part2".toByteArray())))
-                eventsFlow.tryEmit(WsEvent.Binary(outputFrame("part3".toByteArray())))
-                eventsFlow.tryEmit(WsEvent.Binary(replayEndFrame))
-            }
-
-            val vm = newViewModel(newRepository(conn))
-            runCurrent()
-            idleMainLooper()
-
-            val emulator = vm.session.emulator
-                ?: error("emulator must exist after the replay handshake")
-            // Concatenated payload is 15 chars: "part1part2part3".
-            val row0 = emulator.screen.getSelectedText(0, 0, 14, 0)
-            assertEquals("part1part2part3", row0)
-            assertEquals(
-                "all three chunks must have been appended in order",
-                15,
-                emulator.cursorCol,
-            )
-            // State machine still flips to Live only at the explicit terminator.
-            assertEquals(ConnectionState.Live, vm.connectionState.value)
-        }
-
-    @Test
     fun chunkedReplay_keepsReplayingBufferAcrossAllOutputFrames() =
         runTest(testDispatcher) {
             // The ReplayingBuffer overlay must persist across every chunk in

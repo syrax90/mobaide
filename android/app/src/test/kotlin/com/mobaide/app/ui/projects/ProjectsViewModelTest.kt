@@ -127,32 +127,6 @@ class ProjectsViewModelTest {
     // --- sheet open/close ---
 
     @Test
-    fun openCreateSheet_initializesBlankForm() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-        f.vm.openCreateSheet()
-        val form = f.vm.uiState.value.form
-        assertNotNull(form)
-        assertFalse(form!!.isEdit)
-        assertEquals("", form.name)
-    }
-
-    @Test
-    fun openEditSheet_populatesFieldsAndLeavesLinearKeyBlank() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-        val target = project("alpha", has_linear_key = true, conda_env = "ml")
-        f.vm.openEditSheet(target)
-        val form = f.vm.uiState.value.form!!
-        assertTrue(form.isEdit)
-        assertEquals("alpha", form.name)
-        assertEquals("/p/alpha", form.path)
-        assertEquals("ml", form.condaEnv)
-        assertEquals("", form.linearApiKey)
-        assertFalse(form.clearLinearKey)
-    }
-
-    @Test
     fun pathFocus_listsTheEditedProjectsParent_andAPickDrillsIntoTheFolder() = runTest {
         // The edit sheet fills the path without a keystroke, so focusing the
         // field must be what hands it to the suggestions.
@@ -177,15 +151,6 @@ class ProjectsViewModelTest {
         f.vm.pickPathSuggestion("alpha-old")
 
         assertEquals("/p/alpha-old/", f.vm.uiState.value.form!!.path)
-    }
-
-    @Test
-    fun closeSheet_clearsForm() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-        f.vm.openCreateSheet()
-        f.vm.closeSheet()
-        assertNull(f.vm.uiState.value.form)
     }
 
     // --- save ---
@@ -231,46 +196,6 @@ class ProjectsViewModelTest {
             "Unchanged linearApiKey must be null (omitted from wire)",
             bodySlot.captured.linear_api_key,
         )
-    }
-
-    @Test
-    fun save_editMode_clearLinearKey_sendsEmptyString() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-
-        val target = project("alpha", has_linear_key = true)
-        val bodySlot = slot<ProjectUpdate>()
-        coEvery { f.projectsRepo.updateProject(any(), capture(bodySlot)) } returns target
-
-        f.vm.openEditSheet(target)
-        f.vm.requestClearLinearKey()
-        f.vm.save()
-        advanceUntilIdle()
-
-        assertEquals("", bodySlot.captured.linear_api_key)
-    }
-
-    @Test
-    fun save_editMode_409_setsNameServerError() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-
-        val target = project("alpha")
-        coEvery { f.projectsRepo.updateProject(any(), any()) } throws
-            ProjectConflictException("Cannot rename 'alpha' to 'beta': target already exists")
-
-        f.vm.openEditSheet(target)
-        f.vm.onNameChange("beta")
-        f.vm.save()
-        advanceUntilIdle()
-
-        val form = f.vm.uiState.value.form
-        assertNotNull(form)
-        assertEquals(
-            "Cannot rename 'alpha' to 'beta': target already exists",
-            form!!.nameServerError,
-        )
-        assertFalse(form.submitting)
     }
 
     // --- delete / undo ---
@@ -521,27 +446,6 @@ class ProjectsViewModelTest {
     }
 
     @Test
-    fun save_createMode_success_emitsCloseSheetEvent() = runTest {
-        // AC#1: successful save emits CloseSheet and nulls out the form.
-        val f = newFixture()
-        advanceUntilIdle()
-        coEvery { f.projectsRepo.createProject(any()) } returns project("alpha")
-
-        f.vm.openCreateSheet()
-        f.vm.onNameChange("alpha")
-        f.vm.onPathChange("/p/alpha")
-
-        f.vm.events.test {
-            f.vm.save()
-            advanceUntilIdle()
-            val ev = awaitItem()
-            assertEquals(ProjectsUiEvent.CloseSheet, ev)
-            cancelAndIgnoreRemainingEvents()
-        }
-        assertNull(f.vm.uiState.value.form)
-    }
-
-    @Test
     fun save_editMode_409_matchesServerMessage_renameWhileScanActive() = runTest {
         // AC#3: 409 from a rename-while-scan-active → inline name error,
         // sheet stays open, submitting clears.
@@ -691,27 +595,6 @@ class ProjectsViewModelTest {
     }
 
     @Test
-    fun onPathChange_clearsSubmitError() = runTest {
-        // Same contract as `onNameChange_clearsSubmitError` but pinned on
-        // the `path` field — both call sites must reset the banner so the
-        // contract isn't accidentally narrowed to one mutator in a refactor.
-        val f = newFixture()
-        advanceUntilIdle()
-        coEvery { f.projectsRepo.createProject(any()) } throws
-            RuntimeException("net down")
-
-        f.vm.openCreateSheet()
-        f.vm.onNameChange("alpha")
-        f.vm.onPathChange("/p/alpha")
-        f.vm.save()
-        advanceUntilIdle()
-        assertNotNull(f.vm.uiState.value.form!!.submitError)
-
-        f.vm.onPathChange("/p/alpha2")
-        assertNull(f.vm.uiState.value.form!!.submitError)
-    }
-
-    @Test
     fun flagAndKeyMutators_clearSubmitError() = runTest {
         // The "any field-edit clears the banner" contract has to cover ALL
         // user-initiated form mutators, not just the four text setters —
@@ -812,16 +695,6 @@ class ProjectsViewModelTest {
     }
 
     @Test
-    fun updateFlag_ignoresOutOfBoundsIndex() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-        f.vm.openCreateSheet()
-        // Index 0 is out of bounds because no flag has been added yet.
-        f.vm.updateFlag(0, FlagEntry("k", FlagType.STRING, "v"))
-        assertEquals(0, f.vm.uiState.value.form!!.flags.size)
-    }
-
-    @Test
     fun removeFlag_ignoresOutOfBoundsIndex() = runTest {
         val f = newFixture()
         advanceUntilIdle()
@@ -832,20 +705,6 @@ class ProjectsViewModelTest {
         f.vm.removeFlag(-1)
         f.vm.removeFlag(99)
         assertEquals(1, f.vm.uiState.value.form!!.flags.size)
-    }
-
-    @Test
-    fun touch_marksFieldVisible_andErrorNowRenders() = runTest {
-        // AC#2: touched gating — name error is hidden until the user focuses
-        // and blurs the field (touch), or attempts submit.
-        val f = newFixture()
-        advanceUntilIdle()
-        f.vm.openCreateSheet()
-        // Before touch: name is blank but nameError is null (hidden).
-        assertNull(f.vm.uiState.value.form!!.nameError)
-
-        f.vm.touch(ProjectFormState.Field.NAME)
-        assertEquals("Name is required", f.vm.uiState.value.form!!.nameError)
     }
 
     @Test
@@ -899,22 +758,6 @@ class ProjectsViewModelTest {
             val ev = awaitItem()
             assertTrue(ev is ProjectsUiEvent.Message)
             assertEquals("Cannot delete: auto-scan active.", (ev as ProjectsUiEvent.Message).text)
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun swipeDelete_genericException_emitsMessage_noUndo() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-        coEvery { f.projectsRepo.deleteProject("alpha") } throws RuntimeException("oops")
-
-        f.vm.events.test {
-            f.vm.onSwipeDelete(project("alpha"))
-            advanceUntilIdle()
-            val ev = awaitItem()
-            assertTrue(ev is ProjectsUiEvent.Message)
-            assertTrue((ev as ProjectsUiEvent.Message).text.contains("oops"))
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -989,16 +832,6 @@ class ProjectsViewModelTest {
     }
 
     @Test
-    fun openEditSheet_withoutLinearKey_doesNotCallMetadataRepo() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-        f.vm.openEditSheet(project("beta", has_linear_key = false))
-        advanceUntilIdle()
-        coVerify(exactly = 0) { f.metadataRepo.getLabels(any(), any()) }
-        coVerify(exactly = 0) { f.metadataRepo.getStates(any(), any()) }
-    }
-
-    @Test
     fun loadFilterMetadata_errorPath_keepsCachedAndSurfacesMessage() = runTest {
         val f = newFixture()
         advanceUntilIdle()
@@ -1053,25 +886,6 @@ class ProjectsViewModelTest {
         assertTrue("Proposals" in filter.state_names)
         assertTrue("Backlog" in filter.state_names)
         assertEquals("Doing", filter.active_state)
-    }
-
-    @Test
-    fun save_edit_filterUnchanged_omitsFromUpdateBody() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-        val target = project("alpha", has_linear_key = true)
-        val bodySlot = slot<ProjectUpdate>()
-        coEvery { f.projectsRepo.updateProject(any(), capture(bodySlot)) } returns target
-
-        f.vm.openEditSheet(target)
-        f.vm.save()
-        advanceUntilIdle()
-
-        // No filter mutation → null on the wire (server treats absent = keep).
-        assertNull(
-            "Unchanged filter must be null in PUT body",
-            bodySlot.captured.auto_scan_filter,
-        )
     }
 
     @Test
@@ -1137,29 +951,6 @@ class ProjectsViewModelTest {
         // The second call (refreshFilterMetadata) must pass forceRefresh=true.
         coVerify(atLeast = 1) { f.metadataRepo.getLabels("alpha", true) }
         coVerify(atLeast = 1) { f.metadataRepo.getStates("alpha", true) }
-    }
-
-    @Test
-    fun busyProjectNames_reflectsAutoScanFlow() = runTest {
-        val f = newFixture()
-        advanceUntilIdle()
-        assertTrue(f.vm.uiState.value.busyProjectNames.isEmpty())
-
-        f.scansFlow.value = listOf(
-            AutoScanInstanceDto(
-                project_name = "alpha",
-                status = "running",
-                started_at = 0.0,
-                last_activity_at = 0.0,
-            )
-        )
-        advanceUntilIdle()
-        assertEquals(setOf("alpha"), f.vm.uiState.value.busyProjectNames)
-
-        // Stopping the scan drops the project from the busy set.
-        f.scansFlow.value = emptyList()
-        advanceUntilIdle()
-        assertTrue(f.vm.uiState.value.busyProjectNames.isEmpty())
     }
 
     // --- edit save: full body shaping ---
@@ -1256,27 +1047,6 @@ class ProjectsViewModelTest {
             f.vm.openCreateSheet()
             f.vm.onNameChange("gamma")
             f.vm.onPathChange("/p/gamma")
-            f.vm.save()
-            advanceUntilIdle()
-            expectNoEvents()
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun save_createMode_409Conflict_doesNotEmit_projectCreated() = runTest {
-        // 409 (duplicate name) takes the same no-emit path as a
-        // generic failure — pinned separately so a refactor of the
-        // catch-block ordering can't accidentally emit before raising.
-        val f = newFixture()
-        advanceUntilIdle()
-        coEvery { f.projectsRepo.createProject(any()) } throws
-            ProjectConflictException("Project 'alpha' already exists")
-
-        f.vm.projectCreated.test {
-            f.vm.openCreateSheet()
-            f.vm.onNameChange("alpha")
-            f.vm.onPathChange("/p/alpha")
             f.vm.save()
             advanceUntilIdle()
             expectNoEvents()

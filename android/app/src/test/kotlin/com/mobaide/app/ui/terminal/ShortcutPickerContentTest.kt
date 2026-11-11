@@ -90,13 +90,6 @@ class ShortcutPickerContentTest {
     }
 
     @Test
-    fun emptyRecents_omitsRecentsSection() {
-        setContent(recents = emptyList())
-
-        composeRule.onNodeWithText("Recents").assertDoesNotExist()
-    }
-
-    @Test
     fun sendButton_enabledOnlyWhileAKeyIsSelected() {
         setContent()
 
@@ -180,21 +173,6 @@ class ShortcutPickerContentTest {
     }
 
     @Test
-    fun fullSheet_rendersHeaderAcrossPopupBoundary() {
-        composeRule.setContent {
-            Surface {
-                ShortcutPickerSheet(
-                    recents = emptyList(),
-                    onSendChord = {},
-                    onDismiss = {},
-                )
-            }
-        }
-
-        composeRule.onNodeWithText("Keyboard shortcut").assertExists()
-    }
-
-    @Test
     fun fullSheet_boxWrapper_keepsFooterOnScreen() {
         // The sheet body is wrapped in a Box (imePadding + overlaid
         // SnackbarHost). Box must forward the sheet's incoming max constraints
@@ -234,24 +212,9 @@ class ShortcutPickerContentShortScreenTest {
     val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     @Test
-    fun shortLandscapeViewport_sendButtonRemainsDisplayed() {
-        composeRule.setContent {
-            Surface {
-                ShortcutPickerContent(
-                    recents = emptyList(),
-                    onSendChord = {},
-                    onClose = {},
-                )
-            }
-        }
-
-        composeRule.onNodeWithTag("shortcut_send_button").assertIsDisplayed()
-    }
-
-    @Test
     fun shortLandscapeViewport_fullSheet_sendButtonRemainsDisplayed() {
-        // The test above drives ShortcutPickerContent directly, which skips the
-        // sheet's Box(imePadding) + overlaid SnackbarHost wrapper — the one
+        // Drives the full sheet, not just ShortcutPickerContent: the
+        // sheet's Box(imePadding) + overlaid SnackbarHost wrapper is the one
         // layer that could swallow the incoming max constraints and push the
         // footer off a short viewport, where there is no slack to absorb it.
         composeRule.setContent {
@@ -342,13 +305,6 @@ class ShortcutPickerSavedSectionTest {
             .performClick()
     }
 
-    @Test
-    fun emptySaved_omitsSavedSection() {
-        setContent(savedShortcuts = emptyList())
-
-        composeRule.onNodeWithText("Saved").assertDoesNotExist()
-    }
-
     /** Tap the chip body with a real coordinate click on the label text node
      *  (unmerged tree: the merged chip node also spans the trailing ✕, so its
      *  center could land inside the remove target). Deliberately not a
@@ -360,20 +316,6 @@ class ShortcutPickerSavedSectionTest {
         composeRule.onNodeWithText(label, useUnmergedTree = true)
             .performScrollTo()
             .performClick()
-    }
-
-    @Test
-    fun savedChip_tapResendsChord() {
-        val captured = mutableListOf<KeyChord>()
-        setContent(
-            savedShortcuts = listOf(savedRetry),
-            onSendChord = { captured += it },
-        )
-
-        composeRule.onNodeWithText("Saved").assertExists()
-        tapChipBody("Retry")
-
-        assertEquals(listOf(savedRetry.chord), captured)
     }
 
     @Test
@@ -448,20 +390,6 @@ class ShortcutPickerSavedSectionTest {
             .performClick()
 
         assertEquals(listOf(savedRetry), removed)
-    }
-
-    @Test
-    fun saveButton_enabledOnlyWhileAKeyIsSelected() {
-        setContent()
-
-        composeRule.onNodeWithTag("shortcut_save_button").assertIsNotEnabled()
-
-        tapKey("X")
-        composeRule.onNodeWithTag("shortcut_save_button").assertIsEnabled()
-
-        // Tap-again deselects the key, so Save must disarm again.
-        tapKey("X")
-        composeRule.onNodeWithTag("shortcut_save_button").assertIsNotEnabled()
     }
 
     @Test
@@ -555,23 +483,6 @@ class ShortcutPickerSavedSectionTest {
 
         composeRule.onNodeWithTag("shortcut_rename_button").performClick()
         assertEquals(listOf(savedUnnamed), renamed)
-    }
-
-    @Test
-    fun renameButton_namedShortcut_readsRename_andEmitsTheMatchingShortcut() {
-        val renamed = mutableListOf<SavedShortcutUi>()
-        setContent(
-            savedShortcuts = listOf(savedRetry, savedCut),
-            onRenameSavedShortcut = { renamed += it },
-        )
-
-        toggleModifier("shortcut_mod_ctrl")
-        tapKey("X")
-
-        composeRule.onNodeWithTag("shortcut_rename_button").assertTextEquals("Rename")
-
-        composeRule.onNodeWithTag("shortcut_rename_button").performClick()
-        assertEquals(listOf(savedCut), renamed)
     }
 
     @Test

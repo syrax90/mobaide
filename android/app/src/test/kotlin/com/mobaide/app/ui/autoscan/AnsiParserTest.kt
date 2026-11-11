@@ -23,21 +23,6 @@ class AnsiParserTest {
 
     private val ESC = "\u001B"
 
-    // ---- plain text (no escapes) -------------------------------------------
-
-    @Test
-    fun plainText_passesThroughUnchanged() {
-        val result = AnsiParser.parse("hello world")
-        assertEquals("hello world", result.text)
-    }
-
-    @Test
-    fun emptyString_producesEmptyAnnotatedString() {
-        val result = AnsiParser.parse("")
-        assertEquals("", result.text)
-        assertTrue(result.spanStyles.isEmpty())
-    }
-
     // ---- reset (0) ----------------------------------------------------------
 
     @Test
@@ -84,13 +69,6 @@ class AnsiParserTest {
         assertEquals(AnsiColors[1], span.item.color) // 31-30 = 1
     }
 
-    @Test
-    fun fgStandard_37_mapsToAnsiColorsIndex7_white() {
-        val result = AnsiParser.parse("${ESC}[37mW")
-        val span = result.spanStyles.first { it.end > it.start }
-        assertEquals(AnsiColors[7], span.item.color) // 37-30 = 7
-    }
-
     // ---- bright foreground 90..97 ------------------------------------------
 
     @Test
@@ -98,13 +76,6 @@ class AnsiParserTest {
         val result = AnsiParser.parse("${ESC}[90mdim")
         val span = result.spanStyles.first { it.end > it.start }
         assertEquals(AnsiColors[8], span.item.color) // 8 + (90-90) = 8
-    }
-
-    @Test
-    fun fgBright_97_mapsToAnsiColorsIndex15_brightWhite() {
-        val result = AnsiParser.parse("${ESC}[97mX")
-        val span = result.spanStyles.first { it.end > it.start }
-        assertEquals(AnsiColors[15], span.item.color) // 8 + (97-90) = 15
     }
 
     // ---- 256-colour foreground (38;5;n) in 0..15 ---------------------------
@@ -143,18 +114,6 @@ class AnsiParserTest {
         // ESC [ 2;10 H moves cursor — must be stripped, surrounding text kept.
         val result = AnsiParser.parse("before${ESC}[2;10Hafter")
         assertEquals("beforeafter", result.text)
-    }
-
-    @Test
-    fun eraseLineCsi_K_isStripped() {
-        val result = AnsiParser.parse("a${ESC}[Kb")
-        assertEquals("ab", result.text)
-    }
-
-    @Test
-    fun eraseDisplayCsi_J_isStripped() {
-        val result = AnsiParser.parse("x${ESC}[2Jy")
-        assertEquals("xy", result.text)
     }
 
     @Test

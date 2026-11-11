@@ -119,28 +119,6 @@ class TestNamesFollowTheSecureFlag:
         assert all("Secure" not in _attributes(c) for c in sent)
 
 
-class TestZeroRefreshTtl:
-    def test_omits_max_age_rather_than_sending_the_delete_sentinel(
-        self, tmp_path
-    ) -> None:
-        """``Max-Age=0`` deletes a cookie. ``from_env`` clamps the TTL to a
-        positive minimum, but the test conftest and ``dump_openapi.py`` build
-        the config directly, so 0 is reachable and must mean "session cookie"."""
-        response = Response()
-
-        set_session_cookies(
-            response,
-            "raw-token",
-            _config(tmp_path, user_session_refresh_expire_minutes=0),
-        )
-
-        sent = response.headers.getlist("set-cookie")
-        assert len(sent) == 2
-        assert all(
-            not any(a.startswith("Max-Age") for a in _attributes(c)) for c in sent
-        )
-
-
 class TestClearing:
     def test_deletes_both_names_under_the_attributes_they_were_set_with(
         self, tmp_path

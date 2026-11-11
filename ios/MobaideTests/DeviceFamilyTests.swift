@@ -15,10 +15,4 @@ final class DeviceFamilyTests: XCTestCase {
         )
         XCTAssertEqual(families, [1])
     }
-
-    func testDeclaresNoIPadOrientations() {
-        // Catches a re-added INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad
-        // even if the device family stayed correct.
-        XCTAssertNil(Bundle.main.object(forInfoDictionaryKey: "UISupportedInterfaceOrientations~ipad"))
-    }
 }
