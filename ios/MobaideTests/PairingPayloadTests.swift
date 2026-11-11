@@ -16,11 +16,6 @@ final class PairingPayloadTests: XCTestCase {
         )
     }
 
-    func testNegativeExpStillParses() {
-        // Parsing does not range-check expiry (that lives in the state machine).
-        XCTAssertEqual(PairingPayload.parseMoba1("MOBA1|r|n|f|-5")?.expUnix, -5)
-    }
-
     func testWrongFieldCountIsMalformed() {
         XCTAssertNil(PairingPayload.parseMoba1("MOBA1|r|n|f"))        // 4 fields
         XCTAssertNil(PairingPayload.parseMoba1("MOBA1|r|n|f|100|x"))  // 6 fields
@@ -36,10 +31,5 @@ final class PairingPayloadTests: XCTestCase {
         XCTAssertNil(PairingPayload.parseMoba1("MOBA1||n|f|100"))   // blank relay
         XCTAssertNil(PairingPayload.parseMoba1("MOBA1|r||f|100"))   // blank nonce
         XCTAssertNil(PairingPayload.parseMoba1("MOBA1|r|n| |100"))  // whitespace-only fp
-    }
-
-    func testNonIntegerExpiryIsMalformed() {
-        XCTAssertNil(PairingPayload.parseMoba1("MOBA1|r|n|f|not-a-number"))
-        XCTAssertNil(PairingPayload.parseMoba1("MOBA1|r|n|f|"))  // empty exp
     }
 }

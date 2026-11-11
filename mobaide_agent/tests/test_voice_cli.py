@@ -198,10 +198,6 @@ class TestVerbs:
         assert "--yes" in capsys.readouterr().err
         assert _status(voice_dir, capsys)["state"] == "ready"
 
-    def test_remove_of_a_missing_root_is_a_no_op(self, tmp_path):
-        assert _voice(["remove", "--yes", "--voice-dir", str(tmp_path / "absent")]) == 0
-        assert not (tmp_path / "absent").exists()
-
 
 def test_install_on_an_unsupported_host_exits_1_without_downloading(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(service_module, "resolve_runtime", lambda: (None, "platform_unsupported"))

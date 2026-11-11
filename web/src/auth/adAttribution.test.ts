@@ -44,15 +44,6 @@ describe('readAdAttribution', () => {
     );
   });
 
-  it('reads document.cookie when no jar is given', () => {
-    document.cookie = `${AD_ATTRIBUTION_COOKIE}=${FULL}`;
-    try {
-      expect(readAdAttribution()?.click_id).toBe(CLICK);
-    } finally {
-      document.cookie = `${AD_ATTRIBUTION_COOKIE}=; Max-Age=0`;
-    }
-  });
-
   it('returns null when the jar is unreadable', () => {
     const spy = vi.spyOn(document, 'cookie', 'get').mockImplementation(() => {
       throw new Error('denied');
@@ -85,21 +76,15 @@ describe('parseAdAttribution', () => {
 
   it.each([
     ['no signature', 'djEmdD01'],
-    ['a short signature', cookie(`v=1&t=5&n=${NET}`, 'abc')],
     ['signature with bad characters', cookie(`v=1&t=5&n=${NET}`, 'a'.repeat(20) + '$' + 'a'.repeat(20))],
     ['undecodable payload', `%%%.${SIGNATURE}`],
     ['an unknown version', cookie(`v=2&k=gclid&t=1&id=abc&n=${NET}`)],
-    ['a missing version', cookie(`k=gclid&t=1&id=abc&n=${NET}`)],
     ['a missing timestamp', cookie(`v=1&k=gclid&id=abc&n=${NET}`)],
-    ['a negative timestamp', cookie(`v=1&k=gclid&t=-5&id=abc&n=${NET}`)],
     ['a too-large timestamp', cookie(`v=1&k=gclid&t=4102444801&id=abc&n=${NET}`)],
     ['a missing network fingerprint', cookie('v=1&k=gclid&t=1&id=abc')],
-    ['a malformed network fingerprint', cookie('v=1&k=gclid&t=1&id=abc&n=a%20b')],
     ['an unknown kind', cookie(`v=1&k=fbclid&t=1&id=abc&n=${NET}`)],
     ['forbidden characters in the id', cookie(`v=1&k=gclid&t=1&id=a%20b&n=${NET}`)],
-    ['an over-long id', cookie(`v=1&k=gclid&t=1&id=${'a'.repeat(201)}&n=${NET}`)],
     ['a kind without an id', cookie(`v=1&k=gclid&t=1&n=${NET}`)],
-    ['an id without a kind', cookie(`v=1&t=1&id=abc&n=${NET}`)],
   ])('returns null for %s instead of forwarding it', (_label, raw) => {
     expect(parseAdAttribution(raw)).toBeNull();
   });

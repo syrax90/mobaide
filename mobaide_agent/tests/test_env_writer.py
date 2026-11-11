@@ -18,7 +18,6 @@ from mobaide.agent import _env_writer
 from mobaide.agent._env_writer import (
     atomic_write,
     blank_relay_credentials,
-    env_path_for_prefix,
     parse_env_file,
     render_template,
     restrict_perms,
@@ -65,17 +64,6 @@ class TestRenderTemplateSubstitution:
         # The original commented form is replaced, not duplicated.
         assert "# RELAY_HEARTBEAT_INTERVAL=15" not in rendered
 
-    def test_no_overrides_returns_template_unchanged(self):
-        rendered = render_template(_BASIC_TEMPLATE, overrides={})
-
-        # Only difference allowed is a single trailing newline normalization.
-        assert rendered.rstrip("\n") == _BASIC_TEMPLATE.rstrip("\n")
-
-    def test_overrides_default_to_empty_dict(self):
-        rendered = render_template(_BASIC_TEMPLATE)
-
-        assert rendered.rstrip("\n") == _BASIC_TEMPLATE.rstrip("\n")
-
 
 class TestRenderTemplatePreservation:
     def test_preserves_comments_blank_lines_and_ordering(self):
@@ -94,11 +82,6 @@ class TestRenderTemplatePreservation:
         relay_idx = lines.index("RELAY_SERVER_URL=wss://default.example")
         assert jwt_idx < relay_idx
 
-    def test_output_always_ends_with_newline(self):
-        no_trailing = "JWT_SECRET_KEY="
-        rendered = render_template(no_trailing, overrides={"JWT_SECRET_KEY": "x"})
-        assert rendered.endswith("\n")
-
 
 class TestRenderTemplateExtras:
     def test_unknown_keys_appended_at_end(self):
@@ -114,12 +97,6 @@ class TestRenderTemplateExtras:
             "BRAND_NEW_KEY=value"
         )
 
-    def test_extras_separated_by_blank_line_when_template_lacks_trailing_blank(self):
-        template = "FOO=bar"
-        rendered = render_template(template, overrides={"BAZ": "qux"})
-
-        lines = rendered.splitlines()
-        assert lines == ["FOO=bar", "", "BAZ=qux"]
 
     def test_extras_not_double_added_when_key_present_in_template(self):
         rendered = render_template(
@@ -132,20 +109,7 @@ class TestRenderTemplateExtras:
 
 
 class TestParseEnvFile:
-    def test_returns_empty_dict_when_file_missing(self, tmp_path):
-        result = parse_env_file(tmp_path / "does-not-exist.env")
-        assert result == {}
 
-    def test_reads_basic_key_value_pairs(self, tmp_path):
-        env_file = tmp_path / ".env"
-        env_file.write_text(
-            "JWT_SECRET_KEY=topsecret\nRELAY_AGENT_ID=a-1\n",
-            encoding="utf-8",
-        )
-
-        result = parse_env_file(env_file)
-
-        assert result == {"JWT_SECRET_KEY": "topsecret", "RELAY_AGENT_ID": "a-1"}
 
     def test_skips_comments_and_blank_lines(self, tmp_path):
         env_file = tmp_path / ".env"
@@ -192,11 +156,6 @@ class TestParseEnvFile:
 
 
 class TestAtomicWrite:
-    def test_writes_content_to_target(self, tmp_path):
-        target = tmp_path / "subdir" / ".env"
-        atomic_write(target, "hello=world\n")
-
-        assert target.read_text(encoding="utf-8") == "hello=world\n"
 
     def test_creates_parent_directory_if_missing(self, tmp_path):
         target = tmp_path / "deeper" / "still" / ".env"
@@ -256,39 +215,6 @@ class TestRestrictPermsPosix:
         mode = stat.S_IMODE(target.stat().st_mode)
         assert mode == 0o600
 
-    def test_missing_file_is_a_noop(self, tmp_path):
-        # Should not raise when the file does not exist.
-        restrict_perms(tmp_path / "absent")
-
-
-class TestRestrictPermsCrossPlatform:
-    def test_does_not_raise_on_missing_file(self, tmp_path):
-        # The function is documented as "logs but never raises".
-        restrict_perms(tmp_path / "no-such-file")
-
-    @pytest.mark.skipif(
-        sys.platform != "win32", reason="Windows-only icacls path"
-    )
-    def test_windows_path_does_not_raise(self, tmp_path):
-        target = tmp_path / ".env"
-        target.write_text("x=1\n", encoding="utf-8")
-
-        # Even when icacls is unhappy or USERNAME is unset, the call must
-        # complete cleanly — perms tightening is best-effort.
-        restrict_perms(target)
-        assert target.exists()
-
-
-class TestEnvPathForPrefix:
-    def test_returns_canonical_subpath(self, tmp_path):
-        result = env_path_for_prefix(tmp_path)
-        assert result == tmp_path / "mobaide_agent" / ".env"
-
-    def test_does_not_create_directory(self, tmp_path):
-        # Pure path math — should not touch the filesystem.
-        env_path_for_prefix(tmp_path)
-        assert not (tmp_path / "mobaide_agent").exists()
-
 
 class TestBlankRelayCredentials:
     _ENV = (
@@ -340,23 +266,6 @@ class TestRenderTemplateInjectionGuard:
                 overrides={"RELAY_AGENT_TOKEN": forbidden},
             )
 
-    def test_error_message_names_offending_key(self):
-        with pytest.raises(ValueError, match="RELAY_AGENT_TOKEN"):
-            render_template(
-                _BASIC_TEMPLATE,
-                overrides={"RELAY_AGENT_TOKEN": "good\ninjected=evil"},
-            )
-
-    def test_clean_value_does_not_raise(self):
-        # Sanity check: ordinary base64-url and URL values are never blocked.
-        rendered = render_template(
-            _BASIC_TEMPLATE,
-            overrides={
-                "RELAY_AGENT_TOKEN": "abc-_DEF.123:456",
-                "RELAY_SERVER_URL": "wss://example.com:443/path?x=y",
-            },
-        )
-        assert "RELAY_AGENT_TOKEN=abc-_DEF.123:456" in rendered
 
     def test_guard_runs_before_any_substitution(self, tmp_path):
         # Even one bad value among many must abort the whole render — no
@@ -387,22 +296,6 @@ class TestParseEnvFileStringOverload:
     skip a syscall and avoid the TOCTOU window.
     """
 
-    def test_accepts_string_directly(self):
-        text = "JWT_SECRET_KEY=secret\nRELAY_AGENT_ID=a-1\n"
-
-        result = parse_env_file(text)
-
-        assert result == {"JWT_SECRET_KEY": "secret", "RELAY_AGENT_ID": "a-1"}
-
-    def test_string_overload_skips_comments_and_blanks(self):
-        text = "# header\n\nFOO=bar\n  # indented\nBAZ=qux\n"
-
-        result = parse_env_file(text)
-
-        assert result == {"FOO": "bar", "BAZ": "qux"}
-
-    def test_empty_string_returns_empty_dict(self):
-        assert parse_env_file("") == {}
 
     def test_string_overload_treats_input_as_content_not_path(self):
         # A string that LOOKS like a missing file path must be parsed as

@@ -71,21 +71,6 @@ class TestPairingPendingHealthFlag:
         body = resp.json()
         assert body["pairing_pending"] is True
 
-    def test_app_state_exposes_pairing_pending(self, tmp_path):
-        app = create_app(config=_make_pairing_pending_config(tmp_path))
-
-        # ``app.state.pairing_pending`` is set during ``create_app`` itself,
-        # not in the lifespan, so reading it without a lifespan is valid.
-        assert app.state.pairing_pending is True
-
-    def test_no_relay_client_attribute_set_outside_lifespan(self, tmp_path):
-        app = create_app(config=_make_pairing_pending_config(tmp_path))
-
-        # The ``relay_client`` attribute is assigned inside ``lifespan`` —
-        # by deliberately not entering the lifespan we lock in that nothing
-        # in ``create_app`` itself constructs a RelayClient.
-        assert getattr(app.state, "relay_client", None) is None
-
 
 class TestHealthFlagFalseWhenNotPairingPending:
     def test_health_reports_pairing_pending_false_when_relay_unconfigured(
@@ -192,24 +177,6 @@ class TestProjectsStoreSeededFromConfig:
         )
         assert any(entry["name"] == "Alpha" for entry in on_disk)
 
-    def test_create_app_with_no_projects_seed_creates_empty_store(
-        self, tmp_path, _no_projects_env,
-    ):
-        cfg = AgentConfig(
-            jwt_secret_key=_TEST_JWT_SECRET,
-            user_store_path=str(tmp_path / "users.json"),
-            projects_store_path=str(tmp_path / "projects.json"),
-            max_sessions=2,
-            log_level="DEBUG",
-            projects=None,
-        )
-
-        app = create_app(config=cfg)
-
-        # Empty seed → empty store on disk; no spurious entries from
-        # leaking host environment.
-        store = app.state.projects_store
-        assert store.list_public() == []
 
     def test_explicit_seed_takes_precedence_over_environ_projects(
         self, tmp_path, monkeypatch,

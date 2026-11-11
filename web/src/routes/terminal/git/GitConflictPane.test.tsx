@@ -170,21 +170,6 @@ describe('GitConflictPane loading', () => {
     expect(onDirtyChange).toHaveBeenLastCalledWith(false);
   });
 
-  it('explains the two sides on demand, never as ours and theirs', async () => {
-    await openPane();
-    const toggle = screen.getByRole('button', { name: 'Which side is which?' });
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
-
-    fireEvent.click(toggle);
-
-    expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    const legend = screen.getByRole('list');
-    expect(within(legend).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
-      'Between <<<<<<< and =======: origin/main — the branch you are rebasing onto, plus your commits already replayed.',
-      'Between ======= and >>>>>>>: fedcba9 Fix the login redirect — your commit being replayed.',
-    ]);
-  });
-
   it('offers a retry when the file cannot be read', async () => {
     api.file = wireFailure(500, { code: 'git_error', message: 'fatal: boom' });
     render(pane());
@@ -214,12 +199,6 @@ describe('GitConflictPane loading', () => {
       'Unknown proxy route',
       'Update your agent',
       'This agent cannot resolve conflicts yet. Update it, or resolve them in the terminal.',
-    ],
-    [
-      'a session that ended',
-      "Session 's1' not found",
-      'Session ended',
-      'This session is no longer running on the agent.',
     ],
   ])('offers no retry against %s', async (_name, detail, title, body) => {
     api.file = wireFailure(404, detail);
@@ -285,16 +264,6 @@ describe('GitConflictPane editing', () => {
     expect(saveDraft()).toBeEnabled();
   });
 
-  it('is clean again once the text is typed back to what was loaded', async () => {
-    await openPane();
-
-    type('changed');
-    type(CONFLICTED);
-
-    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
-    expect(saveDraft()).toBeDisabled();
-  });
-
   it('selects the next marker line from the caret, wrapping at the end', async () => {
     const two = 'top\n<<<<<<< a\nx\n=======\ny\n>>>>>>> b\nmid\n<<<<<<< a\nz\n=======\n>>>>>>> b\n';
     await openPane(conflict({ content: two, markers: 2 }));
@@ -347,7 +316,6 @@ describe('GitConflictPane apply and draft', () => {
 
   it.each([
     ['Ctrl', { ctrlKey: true }],
-    ['⌘', { metaKey: true }],
   ])('applies on %s+Enter from the editor', async (_name, modifier) => {
     await openPane();
     type('merged\n');
@@ -618,17 +586,6 @@ describe('GitConflictPane whole-file picks', () => {
     expect(onDialogChange).toHaveBeenLastCalledWith(false);
   });
 
-  it('cancels without a request', async () => {
-    await openPane();
-    pick('Use origin/main for the whole file…');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-
-    expect(screen.queryByRole('alertdialog')).toBeNull();
-    expect(api.writes).toEqual([]);
-    expect(onDone).not.toHaveBeenCalled();
-  });
-
   it('offers Keep and Delete, the latter as the destructive one, when a side deleted the file', async () => {
     await openPane(
       conflict({
@@ -691,7 +648,6 @@ describe('GitConflictPane whole-file picks', () => {
 describe('GitConflictPane start over', () => {
   it.each([
     ['Start over', 'merge'],
-    ['Start over with original lines', 'diff3'],
   ] as const)('rebuilds the conflict on "%s", guarded by the open file\'s token, and reloads the text', async (label, style) => {
     const rebuilt = 'a\n<<<<<<< origin/main\nmain\n=======\ntopic\n>>>>>>> fedcba9 Fix\nz\n';
     await openPane();

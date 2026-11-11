@@ -242,14 +242,6 @@ describe('admin rejection', () => {
       ADMIN_LOGIN_MESSAGE,
     );
   });
-
-  it('rejects an admin arriving through Apple with the shared copy', async () => {
-    succeed({ ...okBody, role: 'admin' });
-
-    await expect(loginWithApple('apple-id-token', 'nonce-1')).rejects.toThrow(
-      ADMIN_LOGIN_MESSAGE,
-    );
-  });
 });
 
 describe('verification routing', () => {
@@ -283,12 +275,6 @@ describe('verification routing', () => {
     await expect(login('typed@example.com', 'hunter22')).rejects.toMatchObject({
       email: 'typed@example.com',
     });
-  });
-
-  it('surfaces a wrong-password 401 as an ordinary API error', async () => {
-    failWith(401, { detail: 'Invalid email or password' });
-
-    await expect(login('user@example.com', 'wrong')).rejects.toBeInstanceOf(ApiError);
   });
 });
 

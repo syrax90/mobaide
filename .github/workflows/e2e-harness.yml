@@ -1,11 +1,10 @@
 name: E2E harness (subprocess)
 
 on:
-  # Temporarily disabled — TODO: re-enable by uncommenting pull_request/push below.
-  # pull_request:
-  #   branches: [main]
-  # push:
-  #   branches: [main]
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:

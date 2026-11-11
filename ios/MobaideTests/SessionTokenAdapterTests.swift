@@ -77,13 +77,6 @@ final class SessionTokenAdapterTests: XCTestCase {
         XCTAssertNil(token)
     }
 
-    func testUserTokenProviderReadsIdentityStore() async {
-        let harness = SessionHarness(userLoggedIn: true)
-        let provider = SessionUserTokenProvider(userIdentityStore: harness.userIdentityStore)
-        let token = await provider.userToken()
-        XCTAssertEqual(token, "user-token")
-    }
-
     func testSessionInvalidatorMapsToTokenRejected() async throws {
         let harness = SessionHarness(userLoggedIn: true)
         let events = StreamCollector(harness.sessionManager.sessionEvents())

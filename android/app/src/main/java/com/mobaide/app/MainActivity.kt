@@ -22,6 +22,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.mobaide.app.data.analytics.AgentPairedConversion
+import com.mobaide.app.data.auth.DevLoginHandoff
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.events.UserEventBus
@@ -111,6 +112,7 @@ class MainActivity : ComponentActivity() {
         }
         maybeRequestNotificationPermission()
         consumeSessionExtra(intent)
+        DevLoginHandoff.offer(intent)
 
         // Start the notification foreground service only while this activity is
         // at least STARTED (foreground), so the start is never a background FGS
@@ -222,6 +224,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         consumeSessionExtra(intent)
+        DevLoginHandoff.offer(intent)
     }
 
     override fun onResume() {

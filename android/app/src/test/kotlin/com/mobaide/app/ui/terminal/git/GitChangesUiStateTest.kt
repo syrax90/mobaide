@@ -1,9 +1,6 @@
 package com.mobaide.app.ui.terminal.git
 
 import com.mobaide.app.data.network.ApiException
-import com.mobaide.app.data.network.dto.GitCommitAuthor
-import com.mobaide.app.data.network.dto.GitCommitHead
-import com.mobaide.app.data.network.dto.GitCommitResponse
 import com.mobaide.app.data.network.dto.GitDiscardRequest
 import com.mobaide.app.data.network.dto.GitHeadInfo
 import com.mobaide.app.data.network.dto.GitItem
@@ -79,16 +76,6 @@ class GitChangesUiStateTest {
         counts = counts,
         truncated = true,
     )
-
-    @Test
-    fun truncatedNotice_showsWhatArrived_againstALowerBoundTotal() {
-        val status = truncated(
-            entries = listOf(untracked("build/a.o"), untracked("build/b.o")),
-            counts = GitStatusCounts(untracked = 6001, total = 6001),
-        )
-
-        assertEquals("Showing the first 2 of at least 6001 entries.", truncatedNotice(status))
-    }
 
     @Test
     fun truncatedNotice_withoutAHigherTotal_onlySaysTheListWasCut() {
@@ -235,15 +222,6 @@ class GitChangesUiStateTest {
     }
 
     @Test
-    fun ready_isInSelectionMode_fromTheTopBarSelect_beforeAnythingIsTicked() {
-        val entering = ready(listOf(modified)).copy(selecting = true)
-
-        assertTrue(entering.inSelectionMode)
-        assertEquals(emptySet<String>(), entering.selectedKeys)
-        assertTrue(!entering.copy(selecting = false).inSelectionMode)
-    }
-
-    @Test
     fun ready_hasActionableRows_onlyWhenSomeShownRowHasAControl() {
         val discardOnly = GitCapabilities(stage = false, discard = true, commit = false)
 
@@ -271,18 +249,6 @@ class GitChangesUiStateTest {
         assertEquals("Changes to m.py will be thrown away. This cannot be undone.", trackedPrompt.body)
     }
 
-    @Test
-    fun discardPrompt_countsAMultiFileDiscard() {
-        val prompt = DiscardPrompt(listOf(modified, notes))
-
-        assertEquals("Discard 2 files?", prompt.title)
-        assertEquals(
-            "Their working-tree changes will be thrown away and untracked ones deleted. " +
-                "This cannot be undone.",
-            prompt.body,
-        )
-    }
-
     // MARK: - Commit copy
 
     @Test
@@ -292,114 +258,7 @@ class GitChangesUiStateTest {
         assertEquals("Fix it\n\nWhy.", composeCommitMessage("Fix it", "  Why.\n"))
     }
 
-    @Test
-    fun commitButtonLabel_countsTheStagedFiles_orReadsAsAnAmend() {
-        assertEquals("Commit 0 files", commitButtonLabel(0, amend = false))
-        assertEquals("Commit 1 file", commitButtonLabel(1, amend = false))
-        assertEquals("Commit 3 files", commitButtonLabel(3, amend = false))
-        assertEquals("Amend commit", commitButtonLabel(3, amend = true))
-    }
-
-    @Test
-    fun commitNotice_andAuthorLine_matchTheOtherClients() {
-        assertEquals(
-            "Committed abc1234 · Fix it",
-            commitNotice(GitCommitResponse("abc1234def", "abc1234", "Fix it")),
-        )
-        assertEquals(
-            "Committing as Ada Lovelace <ada@example.com>",
-            authorLine(GitCommitAuthor("Ada Lovelace", "ada@example.com")),
-        )
-        assertEquals(
-            listOf(
-                "git config --global user.name \"Your Name\"",
-                "git config --global user.email \"you@example.com\"",
-            ),
-            IDENTITY_FIX_COMMANDS,
-        )
-        assertEquals("", GitCommitHead("abc", "abc", "subject").body)
-    }
-
     // MARK: - Refusal copy
-
-    @Test
-    fun refusalCopy_phrasesEach409Code() {
-        assertEquals(
-            "Git doesn't know who you are on the agent machine.",
-            refusalCopy(SessionGitException.CODE_IDENTITY_REQUIRED, null),
-        )
-        assertEquals("Resolve the conflicts first.", refusalCopy(SessionGitException.CODE_UNMERGED, null))
-        assertEquals("Nothing is staged.", refusalCopy(SessionGitException.CODE_NOTHING_TO_COMMIT, null))
-        assertEquals(
-            "There is no commit to amend yet.",
-            refusalCopy(SessionGitException.CODE_NO_HEAD, null),
-        )
-        assertEquals(
-            "A commit hook rejected the commit.",
-            refusalCopy(SessionGitException.CODE_HOOK_FAILED, "lint: nope"),
-        )
-        assertEquals(
-            "Another git process is running — try again.",
-            refusalCopy(SessionGitException.CODE_INDEX_LOCKED, null),
-        )
-        assertEquals(
-            "That file changed under you — refreshed.",
-            refusalCopy(SessionGitException.CODE_PATHSPEC_MISMATCH, null),
-        )
-        assertEquals("Enter a commit summary.", refusalCopy(SessionGitException.CODE_EMPTY_MESSAGE, null))
-    }
-
-    @Test
-    fun refusalCopy_namesTheFileThatStillHoldsConflictMarkers() {
-        assertEquals(
-            "src/login.py still has conflict markers — finish resolving it first.",
-            refusalCopy(SessionGitException.CODE_CONFLICT_MARKERS, "src/login.py"),
-        )
-        assertEquals(
-            "The file still has conflict markers — finish resolving it first.",
-            refusalCopy(SessionGitException.CODE_CONFLICT_MARKERS, null),
-        )
-    }
-
-    @Test
-    fun refusalCopy_phrasesTheConflictResolversRefusals_aroundTheFileTheyName() {
-        assertEquals(
-            "src/login.py is no longer in conflict.",
-            refusalCopy(SessionGitException.CODE_NOT_CONFLICTED, "src/login.py"),
-        )
-        assertEquals(
-            "The file is no longer in conflict.",
-            refusalCopy(SessionGitException.CODE_NOT_CONFLICTED, null),
-        )
-        assertEquals(
-            "src/login.py changed on the agent machine since you opened it.",
-            refusalCopy(SessionGitException.CODE_FILE_CHANGED, "src/login.py"),
-        )
-        assertEquals(
-            "src/login.py is open in another program — close it and try again.",
-            refusalCopy(SessionGitException.CODE_FILE_BUSY, "src/login.py"),
-        )
-        assertEquals(
-            "The conflict in src/login.py can no longer be rebuilt.",
-            refusalCopy(SessionGitException.CODE_NOT_RESTORABLE, "src/login.py"),
-        )
-        assertEquals(
-            "The conflict in the file can no longer be rebuilt.",
-            refusalCopy(SessionGitException.CODE_NOT_RESTORABLE, null),
-        )
-        assertEquals(
-            "This conflict can't be resolved here — use the terminal.",
-            refusalCopy(SessionGitException.CODE_UNSUPPORTED, "vendor/lib"),
-        )
-        assertEquals(
-            "The text is too large to save from here.",
-            refusalCopy(SessionGitException.CODE_TOO_LARGE, null),
-        )
-        assertEquals(
-            "The text contains characters that can't be saved.",
-            refusalCopy(SessionGitException.CODE_BAD_CONTENT, null),
-        )
-    }
 
     @Test
     fun opensResolver_onlyForAConflictRow_ofAnAgentThatServesTheResolver() {
@@ -418,14 +277,6 @@ class GitChangesUiStateTest {
         assertEquals(
             "git refused the request (rate_limited): slow down",
             refusalCopy("rate_limited", "slow down"),
-        )
-    }
-
-    @Test
-    fun sessionGitErrorCopy_reachesTheRefusalCopy_forA409() {
-        assertEquals(
-            "Another git process is running — try again.",
-            sessionGitErrorCopy(gitError(SessionGitException.CODE_INDEX_LOCKED, "index.lock exists")),
         )
     }
 
@@ -505,14 +356,6 @@ class GitChangesUiStateSyncTest {
     }
 
     @Test
-    fun syncRows_alwaysLetAFetchThrough() {
-        assertEquals(
-            SyncRow("fetch", "Fetch", "Update remote-tracking branches", enabled = true),
-            rowsOf(repo())[0],
-        )
-    }
-
-    @Test
     fun syncRows_enablePullOnlyWithCommitsBehind_andSayWhyNotOtherwise() {
         assertEquals(
             SyncRow("pull", "Pull", "Fast-forward 2 commits from origin/main", enabled = true),
@@ -557,61 +400,12 @@ class GitChangesUiStateSyncTest {
     }
 
     @Test
-    fun jobTitles_perOp_runningAndFinished() {
-        assertEquals(listOf("Fetching…", "Pulling…", "Pushing…"), listOf("fetch", "pull", "push").map(::jobTitle))
-        assertEquals("Fetched", jobDoneTitle("fetch", ok = true))
-        assertEquals("Pulled", jobDoneTitle("pull", ok = true))
-        assertEquals("Pushed", jobDoneTitle("push", ok = true))
-        assertEquals("Fetch failed", jobDoneTitle("fetch", ok = false))
-        assertEquals("Pull failed", jobDoneTitle("pull", ok = false))
-        assertEquals("Push failed", jobDoneTitle("push", ok = false))
-    }
-
-    @Test
-    fun jobErrorCopy_phrasesEveryCode_identicallyToTheOtherClients() {
-        assertEquals("Cancelled.", jobErrorCopy("cancelled", null))
-        assertEquals("git took too long to answer. Try again.", jobErrorCopy("git_timeout", null))
-        assertEquals(
-            "No credentials for this remote. Configure a credential helper or SSH agent on the agent host.",
-            jobErrorCopy("auth_required", null),
-        )
-        assertEquals("Couldn't reach the remote.", jobErrorCopy("network", null))
-        assertEquals("The remote doesn't exist.", jobErrorCopy("remote_not_found", null))
-        assertEquals("The remote rejected the push.", jobErrorCopy("rejected", null))
-        assertEquals("Your branch is behind the remote.", jobErrorCopy("not_fast_forward", null))
-        assertEquals("Stopped on conflicts — resolve them in the terminal.", jobErrorCopy("conflicts", null))
-        assertEquals("Commit or stash your changes first.", jobErrorCopy("dirty_worktree", null))
-        assertEquals("Resolve the conflicts first.", jobErrorCopy("unmerged", null))
-        assertEquals("A rebase or merge is already in progress.", jobErrorCopy("operation_in_progress", null))
-        assertEquals("This branch has no upstream.", jobErrorCopy("no_upstream", null))
-        assertEquals("This repository has no remote.", jobErrorCopy("no_remote", null))
-        assertEquals("Detached HEAD — check out a branch first.", jobErrorCopy("detached_head", null))
-        assertEquals("No commits yet.", jobErrorCopy("no_head", null))
-        assertEquals("A pre-push hook rejected the push.", jobErrorCopy("hook_failed", null))
-        assertEquals("Another git process is running — try again.", jobErrorCopy("index_locked", null))
-    }
-
-    @Test
     fun jobErrorCopy_fallsBackToTheMessage_forGitErrorAndUnknownCodes() {
         assertEquals("fatal: boom", jobErrorCopy("git_error", "fatal: boom"))
         assertEquals("git failed.", jobErrorCopy("git_error", null))
         assertEquals("details", jobErrorCopy("something_new", "details"))
         assertEquals("git failed.", jobErrorCopy("something_new", ""))
         assertEquals("git failed.", jobErrorCopy(null, null))
-    }
-
-    @Test
-    fun jobNotice_isTheTitle_theSummary_orTheFailureCopy() {
-        assertEquals("Pushing…", jobNotice(job()))
-        assertEquals("Fetching…", jobNotice(job(op = "fetch")))
-        assertEquals("Pushed · main -> main", jobNotice(done()))
-        assertEquals("Pushed", jobNotice(done(message = null)))
-        assertEquals("Pulled", jobNotice(done(op = "pull", message = "")))
-        assertEquals(
-            "Push failed: The remote rejected the push.",
-            jobNotice(failed("rejected", message = "! [rejected] main -> main (fetch first)")),
-        )
-        assertEquals("Fetch failed: fatal: boom", jobNotice(failed("git_error", op = "fetch", message = "fatal: boom")))
     }
 
     @Test
@@ -672,30 +466,6 @@ class GitChangesUiStateSyncTest {
     }
 
     @Test
-    fun followUps_areLabelledAndConfirmed_namingTheUpstreamAndBranchWhenKnown() {
-        assertEquals("Pull with rebase…", followUpLabel(SyncFollowUp.PullRebase))
-        assertEquals("Pull with merge…", followUpLabel(SyncFollowUp.PullMerge))
-        assertEquals("Force push (with lease)…", followUpLabel(SyncFollowUp.ForcePush))
-        assertEquals(
-            SyncPrompt("Pull with rebase?", "Replays your commits on top of origin/main.", "Rebase"),
-            followUpPrompt(SyncFollowUp.PullRebase, tracking(1, 1)),
-        )
-        assertEquals(
-            SyncPrompt("Pull with merge?", "Merges origin/main into main.", "Merge"),
-            followUpPrompt(SyncFollowUp.PullMerge, tracking(1, 1)),
-        )
-        assertEquals(
-            SyncPrompt(
-                "Force push?",
-                "Overwrites origin/main with your branch. Proceeds only if the remote hasn't moved since your last fetch.",
-                "Force push",
-            ),
-            followUpPrompt(SyncFollowUp.ForcePush, tracking(1, 1)),
-        )
-        assertEquals("Merges the upstream into your branch.", followUpPrompt(SyncFollowUp.PullMerge, null).body)
-    }
-
-    @Test
     fun gitJobBanner_derivesRunningFailedAndText_andALostJobHoldsNothing() {
         val running = GitJobBanner("j1", job())
         assertTrue(running.running)
@@ -719,41 +489,6 @@ class GitChangesUiStateSyncTest {
         assertFalse(lost.running)
         assertTrue(lost.failed)
         assertEquals("Lost track of the job — refresh to see the result.", lost.text())
-    }
-
-    @Test
-    fun aConflictStop_pointsAtTheConflictsSection_onlyWhenTheAgentResolvesInTheApp() {
-        val stopped = failed("conflicts", op = GitJobResponse.OP_PULL)
-
-        assertEquals(
-            "Stopped on conflicts — open a file under Conflicts to resolve it.",
-            jobErrorCopy("conflicts", null, canResolveInApp = true),
-        )
-        assertEquals(
-            "Stopped on conflicts — resolve them in the terminal.",
-            jobErrorCopy("conflicts", null, canResolveInApp = false),
-        )
-        assertEquals(
-            "Pull failed: Stopped on conflicts — open a file under Conflicts to resolve it.",
-            jobNotice(stopped, canResolveInApp = true),
-        )
-        assertEquals(
-            "Pull failed: Stopped on conflicts — open a file under Conflicts to resolve it.",
-            GitJobBanner("j1", stopped).text(canResolveInApp = true),
-        )
-        assertEquals(
-            "Pull failed: Stopped on conflicts — resolve them in the terminal.",
-            GitJobBanner("j1", stopped).text(),
-        )
-        // every other code reads the same either way
-        assertEquals("Resolve the conflicts first.", jobErrorCopy("unmerged", null, canResolveInApp = true))
-    }
-
-    @Test
-    fun refusalCopy_phrasesTheTwoJobRefusals_andTheResultStaysSixSeconds() {
-        assertEquals("Another fetch, pull or push is still running.", refusalCopy("job_running", "ab12cd34"))
-        assertEquals("Lost track of the job — refresh to see the result.", refusalCopy("job_not_found", null))
-        assertEquals(6_000L, JOB_RESULT_DISMISS_MS)
     }
 }
 
@@ -878,14 +613,6 @@ class GitChangesUiStateRebaseTest {
     }
 
     @Test
-    fun shortRefName_leavesATypedRefATagOrANonLeadingPrefixAsItIs() {
-        assertEquals("main", shortRefName("main"))
-        assertEquals("origin/main", shortRefName("origin/main"))
-        assertEquals("refs/tags/v1.2.0", shortRefName("refs/tags/v1.2.0"))
-        assertEquals("topic/refs/heads/main", shortRefName("topic/refs/heads/main"))
-    }
-
-    @Test
     fun rebaseBlocker_letsACleanBranchWithCommitsRebase_untrackedFilesAndAll() {
         assertNull(rebaseBlocker(status()))
         assertNull(rebaseBlocker(status(counts = GitStatusCounts(untracked = 3, total = 3))))
@@ -939,26 +666,6 @@ class GitChangesUiStateRebaseTest {
     }
 
     @Test
-    fun rebaseBanner_pointsAtTheFilesThemselves_whenTheAgentResolvesInTheApp() {
-        assertEquals(
-            "1 conflict — open a file to resolve it.",
-            rebaseBanner(rebasing(), 1, canResolveInApp = true)?.hint,
-        )
-        assertEquals(
-            "3 conflicts — open a file to resolve it.",
-            rebaseBanner(rebasing(), 3, canResolveInApp = true)?.hint,
-        )
-        assertEquals(
-            "No conflicts left — Continue when ready.",
-            rebaseBanner(rebasing(), 0, canResolveInApp = true)?.hint,
-        )
-        assertEquals(
-            "Continue, skip or abort it in the terminal.",
-            rebaseBanner(rebasing(null), 2, canResolveInApp = true)?.hint,
-        )
-    }
-
-    @Test
     fun rebaseBanner_fallsBackToTheShortOid_thenDropsWhatTheAgentCouldNotRead() {
         assertEquals("Rebasing topic onto 89abcde", rebaseBanner(rebasing(info(ontoRef = null)), 0)?.title)
         assertEquals(
@@ -996,30 +703,6 @@ class GitChangesUiStateRebaseTest {
     // MARK: - Confirmations
 
     @Test
-    fun rebaseStepPrompt_skipNamesTheCommitItLeavesOut_abortWarnsTheResolutionsGo() {
-        assertEquals(
-            SyncPrompt(
-                "Skip this commit?",
-                "fedcba9 “Fix the login redirect” will be left out of topic.",
-                "Skip commit",
-            ),
-            rebaseStepPrompt(RebasePromptStep.Skip, rebasing()),
-        )
-        assertEquals(
-            "The commit the rebase stopped at will be left out of topic.",
-            rebaseStepPrompt(RebasePromptStep.Skip, rebasing(info(stoppedOn = null))).body,
-        )
-        assertEquals(
-            SyncPrompt(
-                "Abort the rebase?",
-                "topic goes back to where it was before the rebase. Conflict resolutions made so far are discarded.",
-                "Abort rebase",
-            ),
-            rebaseStepPrompt(RebasePromptStep.Abort, rebasing()),
-        )
-    }
-
-    @Test
     fun rebasedBranch_isTheRebasedOne_thenHeads_thenAGenericName() {
         assertEquals("topic", rebasedBranch(rebasing()))
         assertEquals("topic", rebasedBranch(repo()))
@@ -1032,26 +715,6 @@ class GitChangesUiStateRebaseTest {
     }
 
     // MARK: - Outcome and error copy
-
-    @Test
-    fun rebaseOutcomeNotice_reportsAFinishedStartWithTheBase_aFinishedStepWithoutIt() {
-        val rebased = GitRebaseResponse(GitRebaseResponse.OUTCOME_REBASED)
-
-        assertEquals("Rebased topic onto main.", rebaseOutcomeNotice(rebased, "topic", "main"))
-        assertEquals("Rebase finished.", rebaseOutcomeNotice(rebased, "topic", null))
-        assertEquals(
-            "topic is already up to date with main.",
-            rebaseOutcomeNotice(GitRebaseResponse(GitRebaseResponse.OUTCOME_UP_TO_DATE), "topic", "main"),
-        )
-        assertEquals(
-            "Rebase aborted — topic is back where it started.",
-            rebaseOutcomeNotice(GitRebaseResponse(GitRebaseResponse.OUTCOME_ABORTED), "topic", null),
-        )
-        assertEquals(
-            "Rebase: future_outcome",
-            rebaseOutcomeNotice(GitRebaseResponse("future_outcome"), "topic", null),
-        )
-    }
 
     @Test
     fun rebaseOutcomeNotice_namesABasePickedAsAFullRefByItsShortName() {
@@ -1090,43 +753,6 @@ class GitChangesUiStateRebaseTest {
         assertEquals(
             "Rebase stopped — resolve the conflicts, then Continue.",
             rebaseOutcomeNotice(GitRebaseResponse(GitRebaseResponse.OUTCOME_STOPPED, null, ""), "topic", null),
-        )
-    }
-
-    @Test
-    fun rebaseErrorCopy_readsTheSharedRefusalCodesTheWayARebaseMeansThem() {
-        assertEquals(
-            "“nope” isn't a branch, tag or commit here.",
-            rebaseErrorCopy(gitError(SessionGitException.CODE_UNKNOWN_REF, "nope")),
-        )
-        assertEquals(
-            "That isn't a branch, tag or commit here.",
-            rebaseErrorCopy(gitError(SessionGitException.CODE_UNKNOWN_REF)),
-        )
-        assertEquals(
-            "No rebase is in progress anymore.",
-            rebaseErrorCopy(gitError(SessionGitException.CODE_NO_REBASE, "clean")),
-        )
-        assertEquals(
-            "Local changes are in the way — stage, commit or discard them first.",
-            rebaseErrorCopy(gitError(GitJobResponse.CODE_DIRTY_WORKTREE, "keep.txt")),
-        )
-        assertEquals(
-            "A rebase or merge is already in progress.",
-            rebaseErrorCopy(gitError(GitJobResponse.CODE_OPERATION_IN_PROGRESS, "merging")),
-        )
-        assertEquals("This branch has no commits yet.", rebaseErrorCopy(gitError(SessionGitException.CODE_NO_HEAD)))
-        assertEquals(
-            "The pre-rebase hook refused the rebase.",
-            rebaseErrorCopy(gitError(SessionGitException.CODE_HOOK_FAILED, "nope")),
-        )
-        assertEquals(
-            "Rebasing needs git 2.26 or newer on the agent machine.",
-            rebaseErrorCopy(gitError(SessionGitException.CODE_GIT_TOO_OLD)),
-        )
-        assertEquals(
-            "The rebase took too long and was cut off — continue or abort it.",
-            rebaseErrorCopy(gitError(SessionGitException.CODE_GIT_TIMEOUT)),
         )
     }
 

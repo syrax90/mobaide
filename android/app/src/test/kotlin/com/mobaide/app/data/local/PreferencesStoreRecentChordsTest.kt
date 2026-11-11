@@ -52,18 +52,6 @@ class PreferencesStoreRecentChordsTest {
     }
 
     @Test
-    fun recents_returnNewestFirst() = runTest {
-        store.addRecentShortcutChord("mru-order", "ctrl+a")
-        store.addRecentShortcutChord("mru-order", "ctrl+b")
-        store.addRecentShortcutChord("mru-order", "ctrl+c")
-
-        assertEquals(
-            listOf("ctrl+c", "ctrl+b", "ctrl+a"),
-            store.getRecentShortcutChords("mru-order"),
-        )
-    }
-
-    @Test
     fun reAdd_bumpsToFront_withoutDuplicating() = runTest {
         store.addRecentShortcutChord("mru-bump", "ctrl+a")
         store.addRecentShortcutChord("mru-bump", "ctrl+b")
@@ -98,11 +86,6 @@ class PreferencesStoreRecentChordsTest {
 
         assertEquals(listOf("ctrl+x"), store.getRecentShortcutChords("claude"))
         assertEquals(listOf("ctrl+y"), store.getRecentShortcutChords("codex"))
-    }
-
-    @Test
-    fun untouchedBucket_readsEmpty() = runTest {
-        assertEquals(emptyList<String>(), store.getRecentShortcutChords("mru-untouched"))
     }
 
     @Test

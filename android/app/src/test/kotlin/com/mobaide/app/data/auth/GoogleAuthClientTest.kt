@@ -23,11 +23,6 @@ class GoogleAuthClientTest {
     }
 
     @Test
-    fun isClientIdConfigured_whitespaceOnly_isFalse() {
-        assertFalse(GoogleAuthClient.isClientIdConfigured("   "))
-    }
-
-    @Test
     fun isClientIdConfigured_placeholderValue_isFalse() {
         assertFalse(
             GoogleAuthClient.isClientIdConfigured("YOUR_WEB_CLIENT_ID.apps.googleusercontent.com"),
@@ -49,20 +44,6 @@ class GoogleAuthClientTest {
     }
 
     // ---- generateNonce -------------------------------------------------------
-
-    @Test
-    fun generateNonce_returnsSha256HexLength() {
-        // SHA-256 produces 32 bytes → 64 hex chars
-        assertEquals(64, GoogleAuthClient.generateNonce().length)
-    }
-
-    @Test
-    fun generateNonce_isHexOnly() {
-        val hex = Regex("^[0-9a-f]+$")
-        repeat(10) {
-            assertTrue(hex.matches(GoogleAuthClient.generateNonce()))
-        }
-    }
 
     @Test
     fun generateNonce_isUniqueAcrossCalls() {

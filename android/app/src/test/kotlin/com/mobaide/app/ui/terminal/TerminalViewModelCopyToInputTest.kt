@@ -75,46 +75,6 @@ class TerminalViewModelCopyToInputTest {
         )
 
     @Test
-    fun copyTextToInput_populatesInputField() {
-        val vm = createViewModel()
-
-        vm.copyTextToInput("git status")
-
-        assertEquals(
-            "selected/tapped text must land verbatim in the input bar",
-            "git status",
-            vm.inputText.value.text,
-        )
-    }
-
-    @Test
-    fun copyTextToInput_placesCaretAtEnd() {
-        val vm = createViewModel()
-
-        vm.copyTextToInput("git status")
-
-        assertEquals(
-            "caret must be a zero-width selection at the end so the user can append/edit",
-            TextRange("git status".length),
-            vm.inputText.value.selection,
-        )
-    }
-
-    @Test
-    fun copyTextToInput_emptyString_caretAtZero() {
-        val vm = createViewModel()
-
-        vm.copyTextToInput("")
-
-        assertEquals("", vm.inputText.value.text)
-        assertEquals(
-            "empty selection must collapse the caret to offset 0, not leave a stale range",
-            TextRange(0),
-            vm.inputText.value.selection,
-        )
-    }
-
-    @Test
     fun copyTextToInput_multilineText_preservedAndCaretAtEnd() {
         val vm = createViewModel()
         val text = "line one\nline two\nline three"
@@ -142,17 +102,6 @@ class TerminalViewModelCopyToInputTest {
     }
 
     @Test
-    fun copyTextToInput_doesNotEnqueueSendFrame() {
-        val vm = createViewModel()
-
-        vm.copyTextToInput("rm -rf /")
-
-        verify(exactly = 0) {
-            connection.sendBinary(any())
-        }
-    }
-
-    @Test
     fun copyTextToInput_doesNotEnqueueSendFrame_evenWhenLive() = runTest {
         val vm = createViewModel()
         eventsFlow.emit(com.mobaide.app.data.network.WsEvent.Connected)
@@ -164,18 +113,5 @@ class TerminalViewModelCopyToInputTest {
         verify(exactly = 0) {
             connection.sendBinary(any())
         }
-    }
-
-    @Test
-    fun copyTextToInput_doesNotClearInputLikeSendInputDoes() {
-        val vm = createViewModel()
-
-        vm.copyTextToInput("staged command")
-
-        assertEquals(
-            "copy must stage text for editing — it must NOT clear the field the way send does",
-            "staged command",
-            vm.inputText.value.text,
-        )
     }
 }

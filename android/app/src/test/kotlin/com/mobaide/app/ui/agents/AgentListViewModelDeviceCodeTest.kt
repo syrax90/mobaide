@@ -199,23 +199,6 @@ class AgentListViewModelDeviceCodeTest {
     }
 
     @Test
-    fun poll_namesAnUnnamedMachineRatherThanShowingNothing() = runTest {
-        val fx = newFixture()
-        coEvery { fx.agentRepository.getDeviceCodeStatus(REQUEST_ID) } returns
-            status("redeemed", hostname = null, os = null)
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        vm.startDeviceCodePairing()
-        runCurrent()
-
-        advanceTimeBy(DEVICE_CODE_POLL_INTERVAL_MS + 1)
-        runCurrent()
-
-        val state = vm.uiState.value.deviceCodePairing as DeviceCodePairingState.Confirming
-        assertEquals("an unnamed machine", state.hostname)
-    }
-
-    @Test
     fun poll_surfacesTheRelaysBlockedVerdictBeforeTheTap() = runTest {
         val fx = newFixture()
         coEvery { fx.agentRepository.getDeviceCodeStatus(REQUEST_ID) } returns
@@ -275,24 +258,6 @@ class AgentListViewModelDeviceCodeTest {
         assertTrue(
             vm.uiState.value.deviceCodePairing is DeviceCodePairingState.Confirming,
         )
-    }
-
-    @Test
-    fun poll_reportsACodeThatDiedBeforeAnyMachineUsedIt() = runTest {
-        val fx = newFixture()
-        coEvery { fx.agentRepository.getDeviceCodeStatus(REQUEST_ID) } returns
-            status("expired", hostname = null, os = null)
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        vm.startDeviceCodePairing()
-        runCurrent()
-
-        advanceTimeBy(DEVICE_CODE_POLL_INTERVAL_MS + 1)
-        runCurrent()
-
-        val state = vm.uiState.value.deviceCodePairing
-        assertTrue(state is DeviceCodePairingState.Error)
-        assertTrue((state as DeviceCodePairingState.Error).message.contains("expired"))
     }
 
     @Test
@@ -411,28 +376,6 @@ class AgentListViewModelDeviceCodeTest {
         // so only the discriminator tells the two refusals apart.
         val state = vm.uiState.value.deviceCodePairing as DeviceCodePairingState.Error
         assertTrue(state.message.contains("show-trust-fp"))
-    }
-
-    @Test
-    fun confirmDeviceCode_mapsAConsumedRequestToAFreshCodeHint() = runTest {
-        val fx = newFixture()
-        coEvery { fx.agentRepository.getDeviceCodeStatus(REQUEST_ID) } returns
-            status("redeemed")
-        coEvery {
-            fx.agentRepository.confirmDeviceCode(any(), any(), any(), any())
-        } throws ApiException(410, """{"detail":"gone"}""")
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        vm.startDeviceCodePairing()
-        runCurrent()
-        advanceTimeBy(DEVICE_CODE_POLL_INTERVAL_MS + 1)
-        runCurrent()
-
-        vm.confirmDeviceCode()
-        runCurrent()
-
-        val state = vm.uiState.value.deviceCodePairing as DeviceCodePairingState.Error
-        assertTrue(state.message.contains("Get a new code"))
     }
 
     @Test

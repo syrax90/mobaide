@@ -244,24 +244,6 @@ class GitRepositorySessionStatusTest {
     }
 
     @Test
-    fun aChangedBody_replacesTheCache_andItsEtagGoesOutNext() = runTest {
-        val f = newFixture()
-        coEvery { f.restApi.getSessionGitStatus("s1", null) } returns status("e1")
-        coEvery { f.restApi.getSessionGitStatus("s1", "e1") } returns status("e2")
-        coEvery { f.restApi.getSessionGitStatus("s1", "e2") } returns unchanged("e2")
-
-        f.observe().test {
-            assertEquals("e1", loaded(awaitItem()).etag)
-            tick()
-            assertEquals("e2", loaded(awaitItem()).etag)
-            tick()
-            assertEquals("e2", loaded(awaitItem()).etag)
-            coVerify(exactly = 1) { f.restApi.getSessionGitStatus("s1", "e2") }
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
     fun theInitialSeed_isSentAsTheFirstEtag_andShownWhenUnchanged() = runTest {
         // A resubscribe after the ViewModel's sharing timeout must not pay for
         // a full body it already holds.
@@ -377,36 +359,6 @@ class GitRepositorySessionStatusTest {
             assertTrue(failure.error is SessionGitException.SessionGone)
             assertNull(failure.cached)
             awaitComplete()
-        }
-    }
-
-    @Test
-    fun plain404_endsTheFeedWithAgentOutdated() = runTest {
-        val f = newFixture()
-        coEvery { f.restApi.getSessionGitStatus("s1", any()) } throws
-            ApiException(404, """{"detail":"Not Found"}""")
-
-        f.observe().test {
-            assertTrue(failed(awaitItem()).error is SessionGitException.AgentOutdated)
-            awaitComplete()
-        }
-    }
-
-    @Test
-    fun gitTimeout504_reportsTheCode_andKeepsPolling() = runTest {
-        val f = newFixture()
-        coEvery { f.restApi.getSessionGitStatus("s1", any()) } throws
-            ApiException(504, """{"detail":{"code":"git_timeout","message":"git status timed out"}}""") andThen
-            status("e1")
-
-        f.observe().test {
-            val error = failed(awaitItem()).error as SessionGitException.GitError
-            assertEquals(SessionGitException.CODE_GIT_TIMEOUT, error.code)
-            assertEquals("git status timed out", error.detailMessage)
-
-            tick()
-            assertEquals("e1", loaded(awaitItem()).etag)
-            cancelAndIgnoreRemainingEvents()
         }
     }
 

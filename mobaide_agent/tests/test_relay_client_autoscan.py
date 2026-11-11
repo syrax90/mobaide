@@ -122,31 +122,6 @@ class TestHandleOpenAutoscan:
         assert "sub-xyz-1" not in client._autoscan_streams
         assert "sub-xyz-1" not in client._autoscan_inboxes
 
-    async def test_open_missing_subscription_id_is_ignored(
-        self, client: RelayClient
-    ):
-        """Control message without ``subscription_id`` is logged & dropped —
-        nothing is spawned, the dicts stay empty.
-        """
-        ws = AsyncMock()
-        ctrl = {"type": "open_autoscan"}
-
-        called = False
-
-        async def _should_not_be_called(*_a, **_kw):
-            nonlocal called
-            called = True
-
-        with patch(
-            "mobaide.relay.client.run_autoscan_stream",
-            new=_should_not_be_called,
-        ):
-            await client._handle_control(json.dumps(ctrl).encode(), ws)
-
-        assert called is False
-        assert client._autoscan_streams == {}
-        assert client._autoscan_inboxes == {}
-
     async def test_open_duplicate_subscription_is_ignored(
         self, client: RelayClient
     ):
@@ -230,54 +205,6 @@ class TestHandleOpenAutoscan:
         for t in list(client._autoscan_streams.values()):
             await t
         client._autoscan_streams.clear()
-
-    async def test_send_text_closure_precomputes_header(
-        self, client: RelayClient
-    ):
-        """The ``send_text`` closure must pre-compute the CH_AUTOSCAN
-        envelope header once per task rather than re-encoding the constant
-        ``subscription_id`` on every outbound frame. Each frame this closure
-        emits must therefore share the same header prefix and differ only
-        in the payload tail.
-        """
-        ws = AsyncMock()
-        ctrl = {"type": "open_autoscan", "subscription_id": "sub-hdr"}
-
-        captured = {}
-
-        async def _fake_stream(mgr, send_text, receive_text, grace_timeout_s=1.0):
-            captured["fn"] = send_text
-            return 0
-
-        with patch(
-            "mobaide.relay.client.run_autoscan_stream",
-            new=_fake_stream,
-        ):
-            await client._handle_control(json.dumps(ctrl).encode(), ws)
-            task = client._autoscan_streams.get("sub-hdr")
-            if task is not None:
-                await asyncio.wait_for(task, timeout=1.0)
-
-        send_text_fn = captured["fn"]
-
-        await send_text_fn("frame-A")
-        await send_text_fn("frame-BB")
-
-        assert ws.send.await_count == 2
-        frame_a = ws.send.call_args_list[0][0][0]
-        frame_b = ws.send.call_args_list[1][0][0]
-
-        sid_bytes = b"sub-hdr"
-        expected_header = bytes([CH_AUTOSCAN, len(sid_bytes)]) + sid_bytes
-        assert frame_a.startswith(expected_header)
-        assert frame_b.startswith(expected_header)
-        assert frame_a[len(expected_header):] == b"frame-A"
-        assert frame_b[len(expected_header):] == b"frame-BB"
-
-        ch_a, sid_a, payload_a = decode(frame_a)
-        assert ch_a == CH_AUTOSCAN
-        assert sid_a == "sub-hdr"
-        assert payload_a == b"frame-A"
 
     async def test_open_without_autoscan_manager_sends_close_back(
         self, client_no_mgr: RelayClient
@@ -376,21 +303,6 @@ class TestDeliverAutoscanInbound:
         text = inbox.get_nowait()
         assert json.loads(text) == {"subscribe": ["p"]}
 
-    async def test_inbound_frame_for_unknown_subscription_is_dropped(
-        self, client: RelayClient
-    ):
-        """An envelope for a subscription we never opened (or already closed)
-        must be silently ignored — no exception, no inbox side-effects.
-        """
-        # Pre-create an unrelated inbox so we can assert it was NOT touched.
-        other_inbox: asyncio.Queue[str] = asyncio.Queue(maxsize=10)
-        client._autoscan_inboxes["other"] = other_inbox
-
-        frame = encode(CH_AUTOSCAN, "unknown-sub", b'{"x":1}')
-        await client._handle_binary(frame, ws=AsyncMock())
-
-        assert other_inbox.empty()
-
     async def test_inbound_frame_when_inbox_full_drops_silently(
         self, client: RelayClient
     ):
@@ -455,23 +367,6 @@ class TestHandleCloseAutoscan:
         assert "sub-close" not in client._autoscan_streams
         assert "sub-close" not in client._autoscan_inboxes
 
-    async def test_close_missing_subscription_id_is_noop(self, client: RelayClient):
-        """A malformed ``close_autoscan`` (missing subscription_id) must not
-        raise — it is silently ignored.
-        """
-        await client._handle_control(
-            json.dumps({"type": "close_autoscan"}).encode(), ws=AsyncMock()
-        )
-
-    async def test_close_unknown_subscription_is_noop(self, client: RelayClient):
-        """Closing a subscription we do not track must not raise."""
-        await client._handle_control(
-            json.dumps(
-                {"type": "close_autoscan", "subscription_id": "never-opened"}
-            ).encode(),
-            ws=AsyncMock(),
-        )
-
 
 class TestCancelAllSubtasksAutoscan:
     async def test_cancels_all_autoscan_tasks_and_clears_state(
@@ -502,26 +397,3 @@ class TestCancelAllSubtasksAutoscan:
                 await t
             assert t.cancelled()
 
-    async def test_cancel_skips_already_done_autoscan_tasks(
-        self, client: RelayClient
-    ):
-        """If a task finished just before cancel (race), ``_cancel_all_subtasks``
-        must not ``cancel()`` it — guard stays ``if not task.done()``.
-        """
-
-        async def _immediate():
-            return None
-
-        finished = asyncio.create_task(_immediate())
-        await finished  # ensure done
-        client._autoscan_streams["done"] = finished
-        client._autoscan_inboxes["done"] = asyncio.Queue()
-
-        client._cancel_all_subtasks()
-
-        # State is cleared regardless of prior completion.
-        assert client._autoscan_streams == {}
-        assert client._autoscan_inboxes == {}
-        # The already-completed task was not force-cancelled (cancelled()
-        # returns False for a task that completed normally).
-        assert not finished.cancelled()

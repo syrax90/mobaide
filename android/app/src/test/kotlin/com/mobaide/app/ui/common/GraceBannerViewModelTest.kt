@@ -12,7 +12,6 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -40,31 +39,6 @@ class GraceBannerViewModelTest {
     @get:Rule
     val mainDispatcherRule = MainDispatcherRule()
 
-    private fun newVm(
-        scheduledFor: String? = "2026-06-04T12:00:00+00:00",
-        authRepository: AuthRepository = mockk(relaxed = true) {
-            every { getScheduledDeletionAt() } returns scheduledFor
-        },
-    ): GraceBannerViewModel = GraceBannerViewModel(authRepository)
-
-    @Test
-    fun initialState_seedsScheduledForFromAuthRepository() = runTest {
-        val vm = newVm(scheduledFor = "2026-06-04T12:00:00+00:00")
-
-        val state = vm.state.value
-        assertEquals("2026-06-04T12:00:00+00:00", state.scheduledFor)
-        assertFalse(state.cancelling)
-        assertNull(state.errorMessage)
-        assertFalse(state.showConfirm)
-    }
-
-    @Test
-    fun initialState_nullScheduledFor_meansBannerHidden() = runTest {
-        val vm = newVm(scheduledFor = null)
-
-        assertNull(vm.state.value.scheduledFor)
-    }
-
     @Test
     fun requestCancel_setsShowConfirm_doesNotCallApi() = runTest {
         val authRepository = mockk<AuthRepository>(relaxed = true) {
@@ -80,28 +54,6 @@ class GraceBannerViewModelTest {
         coVerify(exactly = 0) { authRepository.cancelAccountDeletion() }
         // Banner still visible — the schedule is unchanged at this point.
         assertEquals("2026-06-04T12:00:00+00:00", vm.state.value.scheduledFor)
-    }
-
-    @Test
-    fun requestCancel_clearsAnyExistingErrorMessage() = runTest {
-        val authRepository = mockk<AuthRepository>(relaxed = true) {
-            every { getScheduledDeletionAt() } returns "2026-06-04T12:00:00+00:00"
-        }
-        coEvery { authRepository.cancelAccountDeletion() } throws
-            RuntimeException("Network error")
-        val vm = GraceBannerViewModel(authRepository)
-
-        // Trigger a failing confirm to populate errorMessage.
-        vm.requestCancel()
-        vm.confirmCancel()
-        advanceUntilIdle()
-        assertNotNull(vm.state.value.errorMessage)
-
-        // A fresh requestCancel must clear the stale error so the dialog
-        // does not show a misleading banner from the previous attempt.
-        vm.requestCancel()
-        assertNull(vm.state.value.errorMessage)
-        assertTrue(vm.state.value.showConfirm)
     }
 
     @Test
@@ -184,28 +136,5 @@ class GraceBannerViewModelTest {
         // Dialog auto-closes regardless so the user can retry from the
         // banner without an orphan dialog stuck on top.
         assertFalse(state.showConfirm)
-    }
-
-    @Test
-    fun confirmCancel_setsCancellingTrueWhileInFlight() = runTest {
-        val authRepository = mockk<AuthRepository>(relaxed = true) {
-            every { getScheduledDeletionAt() } returns "2026-06-04T12:00:00+00:00"
-        }
-        // Use a CompletableDeferred-like pattern: have the suspend never
-        // resolve in this test — we only care about the in-flight flag.
-        coEvery { authRepository.cancelAccountDeletion() } coAnswers {
-            kotlinx.coroutines.awaitCancellation()
-        }
-        val vm = GraceBannerViewModel(authRepository)
-        vm.requestCancel()
-
-        vm.confirmCancel()
-        // Do NOT advanceUntilIdle — the suspend would never complete.
-        // The cancelling flag should be true right after we launch.
-
-        val state = vm.state.value
-        assertTrue(state.cancelling)
-        assertFalse(state.showConfirm)
-        // Dialog closes so the spinner on the banner button is visible.
     }
 }

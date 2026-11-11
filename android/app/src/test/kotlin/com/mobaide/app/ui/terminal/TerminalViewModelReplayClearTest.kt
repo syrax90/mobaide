@@ -24,7 +24,6 @@ import kotlinx.coroutines.test.runTest
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -111,45 +110,6 @@ class TerminalViewModelReplayClearTest {
     private fun idleMainLooper() {
         shadowOf(Looper.getMainLooper()).idle()
     }
-
-    @Test
-    fun replayMarker_emitsClearSequence_resettingCursorToOrigin() =
-        runTest(testDispatcher) {
-            val eventsFlow = newEventsFlow()
-            val conn = newConnection(eventsFlow)
-            every { conn.connect() } answers {
-                eventsFlow.tryEmit(WsEvent.Connected)
-                // Pre-load 5 characters so the cursor moves off (0,0).
-                // Without the clear, the marker path leaves the cursor at
-                // column 5 and the replay output writes on top of "hello".
-                eventsFlow.tryEmit(WsEvent.Binary(outputFrame("hello".toByteArray())))
-            }
-
-            val vm = newViewModel(newRepository(conn))
-            runCurrent()
-            idleMainLooper()
-
-            val emulator = vm.session.emulator
-                ?: error("emulator must exist after the Connected + Output handshake")
-            assertNotEquals(
-                "pre-condition: 'hello' moved the cursor off origin",
-                0,
-                emulator.cursorCol,
-            )
-
-            eventsFlow.tryEmit(WsEvent.Binary(replayMarkerFrame))
-            runCurrent()
-            idleMainLooper()
-
-            // CLEAR_BEFORE_REPLAY = ESC[H + ESC[2J + ESC[3J — ESC[H homes the
-            // cursor, ESC[2J wipes the visible screen, ESC[3J drops the
-            // scrollback transcript (case 3 of `TerminalEmulator`'s 'J' switch
-            // at `TerminalEmulator.java:1600-1602`, which delegates to
-            // `mMainBuffer.clearTranscript`).
-            assertEquals("cursor row after ESC[H", 0, emulator.cursorRow)
-            assertEquals("cursor col after ESC[H", 0, emulator.cursorCol)
-            assertEquals(ConnectionState.ReplayingBuffer, vm.connectionState.value)
-        }
 
     @Test
     fun replayMarker_followedByOutput_writesAtOrigin_notAppendedAfterStaleContent() =

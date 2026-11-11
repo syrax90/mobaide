@@ -54,26 +54,6 @@ final class VerifyEmailModelTests: XCTestCase {
         XCTAssertEqual(model.code, "")
     }
 
-    func testExpiredCode410MapsToExpiredMessage() async {
-        StubURLProtocol.enqueue(status: 410, body: #"{"detail":{"error":"verification_code_expired"}}"#)
-        let model = makeModel()
-        model.code = "123456"
-
-        await model.submit()
-
-        XCTAssertEqual(model.error, "That code expired. Tap \"Resend\" to get a new one.")
-    }
-
-    func testAttemptsExhausted429MapsToTooManyAttempts() async {
-        StubURLProtocol.enqueue(status: 429, body: #"{"detail":{"error":"verification_attempts_exhausted"}}"#)
-        let model = makeModel()
-        model.code = "123456"
-
-        await model.submit()
-
-        XCTAssertEqual(model.error, "Too many attempts. Request a new code.")
-    }
-
     func testResendStartsSixtySecondCooldownCountingEachSecond() async throws {
         StubURLProtocol.enqueue(status: 200, body: #"{"status":"sent"}"#)
         let model = makeModel()

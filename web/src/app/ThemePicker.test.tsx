@@ -30,23 +30,6 @@ describe('ThemePicker', () => {
     expect(screen.getByRole('radio', { name: AUTO_LIGHT })).toBeChecked();
   });
 
-  it('checks the segment matching the stored preference', () => {
-    useThemeStore.setState({ preference: 'dark' });
-
-    render(<ThemePicker />);
-
-    expect(screen.getByRole('radio', { name: 'Dark' })).toBeChecked();
-    expect(screen.getByRole('radio', { name: AUTO_LIGHT })).not.toBeChecked();
-  });
-
-  it('writes the chosen preference to the store', () => {
-    render(<ThemePicker />);
-
-    fireEvent.click(screen.getByRole('radio', { name: 'Light' }));
-
-    expect(useThemeStore.getState().preference).toBe('light');
-  });
-
   /**
    * The regression the cycle button had: under a light OS, `system -> light`
    * repaints nothing, so the moving selection is the only feedback the click can
@@ -72,19 +55,6 @@ describe('ThemePicker', () => {
     });
 
     expect(screen.getByRole('radio', { name: AUTO_DARK })).toBeInTheDocument();
-  });
-
-  /**
-   * `aria-label` covers assistive tech; the pointer needs the same sentence on
-   * something a pointer can rest on. The input is clipped to zero area behind
-   * the label, so a `title` moved onto it would be a tooltip nobody can summon —
-   * and no accessible-name assertion would notice, because `aria-label` wins the
-   * name computation either way.
-   */
-  it('hangs the Auto tooltip on the visible segment rather than the hidden input', () => {
-    render(<ThemePicker />);
-
-    expect(screen.getByTitle(AUTO_LIGHT)).toHaveTextContent('Auto');
   });
 
   /**

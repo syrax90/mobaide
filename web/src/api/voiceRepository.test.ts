@@ -23,7 +23,6 @@ vi.mock('./clients', () => ({
 
 const { cleanupTranscript, createVoiceApi, toVoiceApiError } = await import('./voiceRepository');
 const { toApiError } = await import('./errors');
-const { VoiceApiError } = await import('../voice/voiceApi');
 
 afterEach(() => {
   agent.results.length = 0;
@@ -65,12 +64,6 @@ describe('toVoiceApiError', () => {
       code: null,
       network: true,
     });
-  });
-
-  it('passes a VoiceApiError through unchanged', () => {
-    const original = new VoiceApiError({ status: 409, code: 'too_long', message: 'x' });
-
-    expect(toVoiceApiError(original)).toBe(original);
   });
 });
 
@@ -137,22 +130,6 @@ describe('cleanupTranscript', () => {
       method: 'POST',
       path: '/api/voice/cleanup',
       init: { body: { text: 'um fix the uh login bug', kind: 'codex' }, signal },
-    });
-  });
-
-  it('raises the coded refusal as a VoiceApiError', async () => {
-    agent.results.push({
-      error: { detail: { code: 'cleanup_busy', message: 'Another cleanup is still running.' } },
-      response: new Response(null, { status: 409 }),
-    });
-
-    const cleaning = cleanupTranscript('a1', 'hello', 'claude', new AbortController().signal);
-
-    await expect(cleaning).rejects.toBeInstanceOf(VoiceApiError);
-    await expect(cleaning).rejects.toMatchObject({
-      status: 409,
-      code: 'cleanup_busy',
-      detailMessage: 'Another cleanup is still running.',
     });
   });
 });

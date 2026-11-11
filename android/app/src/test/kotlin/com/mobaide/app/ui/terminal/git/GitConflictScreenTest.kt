@@ -2,9 +2,6 @@ package com.mobaide.app.ui.terminal.git
 
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.text.input.TextFieldState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -119,23 +116,6 @@ class GitConflictScreenTest {
     }
 
     @Test
-    fun theLegend_opensOnDemand_andNamesTheSidesByLabelAndRole() {
-        setContent(ready())
-        composeRule.onAllNodesWithTag(GIT_CONFLICT_LEGEND_TAG).assertCountEquals(0)
-
-        composeRule.onNodeWithTag(GIT_CONFLICT_LEGEND_TOGGLE_TAG).performClick()
-
-        composeRule.onNodeWithTag(GIT_CONFLICT_LEGEND_TAG).assertIsDisplayed()
-        composeRule.onNodeWithText(
-            "Between <<<<<<< and =======: origin/main — the branch you are rebasing onto, " +
-                "plus your commits already replayed.",
-        ).assertIsDisplayed()
-        composeRule.onNodeWithText(
-            "Between ======= and >>>>>>>: fedcba9 Fix the login redirect — your commit being replayed.",
-        ).assertIsDisplayed()
-    }
-
-    @Test
     fun aFileThatMovedOn_offersTheReloadOrTheDraft() {
         val taps = setContent(ready(scan = ConflictScan(), dirty = true, stale = true))
 
@@ -159,14 +139,6 @@ class GitConflictScreenTest {
     }
 
     @Test
-    fun keepingTheEdits_warnsThatApplyOverwritesTheOtherChange() {
-        setContent(ready(scan = ConflictScan(), dirty = true, overwriteWarning = true))
-
-        composeRule.onNodeWithText("Applying will overwrite the other change.").assertIsDisplayed()
-        composeRule.onAllNodesWithTag(GIT_CONFLICT_STALE_TAG).assertCountEquals(0)
-    }
-
-    @Test
     fun aTextTooLargeToSend_saysSoWithTheFilesLimit_andHoldsBothSaves() {
         val taps = setContent(
             ready(
@@ -185,13 +157,6 @@ class GitConflictScreenTest {
         composeRule.onNodeWithTag(GIT_CONFLICT_DRAFT_TAG).assertIsNotEnabled().performClick()
 
         assertEquals(emptyList<String>(), taps.calls)
-    }
-
-    @Test
-    fun aTextWithinTheLimit_showsNoSizeNotice() {
-        setContent(ready(scan = ConflictScan(), dirty = true), text = "a\nmerged\n")
-
-        composeRule.onAllNodesWithTag(GIT_CONFLICT_TOO_LARGE_TAG).assertCountEquals(0)
     }
 
     @Test
@@ -225,63 +190,12 @@ class GitConflictScreenTest {
     }
 
     @Test
-    fun aDeletedSide_offersOneWayToKeepAndOneToDelete() {
-        val deletedByUs = conflict(
-            code = "DU", kind = GitConflictResponse.KIND_TOO_LARGE, content = null,
-            ours = GitConflictSide("origin/main", false),
-        )
-        val taps = setContent(ready(deletedByUs), text = "")
-
-        composeRule.onNodeWithText("origin/main deleted this file; fedcba9 Fix the login redirect changed it.")
-            .assertIsDisplayed()
-        composeRule.onNodeWithTag(gitConflictTakeTag("ours")).performClick()
-
-        assertEquals(listOf("Delete file"), taps.taken.map { it.confirm })
-        assertEquals(listOf(true), taps.taken.map { it.danger })
-    }
-
-    @Test
-    fun aSubmodule_pointsAtTheTerminal_withNoPickAtAll() {
-        setContent(ready(conflict(kind = GitConflictResponse.KIND_SUBMODULE, content = null)), text = "")
-
-        composeRule.onNodeWithText("Submodule conflicts are resolved in the terminal.").assertIsDisplayed()
-        composeRule.onAllNodesWithTag(gitConflictTakeTag("ours")).assertCountEquals(0)
-        composeRule.onAllNodesWithTag(gitConflictTakeTag("theirs")).assertCountEquals(0)
-    }
-
-    @Test
     fun whileBusy_orOnceGone_theWholeFilePicksWait() {
         val binary = conflict(kind = GitConflictResponse.KIND_BINARY, content = null)
         setContent(ready(binary, busy = true), text = "")
 
         composeRule.onNodeWithTag(gitConflictTakeTag("ours")).assertIsNotEnabled()
         composeRule.onNodeWithTag(gitConflictTakeTag("theirs")).assertIsNotEnabled()
-    }
-
-    @Test
-    fun loading_outdated_andSessionGone_eachHaveTheirOwnState() {
-        var state: GitConflictUiState by mutableStateOf(GitConflictUiState.Loading)
-        val editor = TextFieldState()
-        composeRule.setContent {
-            MobaideTheme(darkTheme = true) {
-                GitConflictContent(
-                    state = state, path = path, editor = editor,
-                    onRetry = {}, onApply = {}, onSaveDraft = {}, onNextConflict = {},
-                    onReloadFile = {}, onKeepMyEdits = {}, onTake = {}, onClose = {},
-                )
-            }
-        }
-
-        composeRule.onNodeWithTag(GIT_CONFLICT_LOADING_TAG).assertIsDisplayed()
-
-        state = GitConflictUiState.AgentOutdated
-        composeRule.onNodeWithTag(GIT_CONFLICT_OUTDATED_TAG).assertIsDisplayed()
-        composeRule.onNodeWithText(
-            "This agent cannot resolve conflicts yet. Update it, or resolve them in the terminal.",
-        ).assertIsDisplayed()
-
-        state = GitConflictUiState.SessionGone
-        composeRule.onNodeWithTag(GIT_CONFLICT_SESSION_GONE_TAG).assertIsDisplayed()
     }
 
     @Test

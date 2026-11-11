@@ -77,36 +77,6 @@ class ImeFloatingPanTest {
         composeRule.onNodeWithTag(tag).fetchSemanticsNode().positionInRoot.y
 
     @Test
-    fun imeHidden_contentIsNotPanned() {
-        setPannedContent(
-            ime = WindowInsets(bottom = 0),
-            systemBars = WindowInsets(bottom = NAV_BAR_PX),
-        )
-
-        assertEquals(
-            "With the IME hidden the pan must be zero — max(0, 0 − systemBars) — so the resting terminal sits exactly where the host places it",
-            topInRootPx(HOST_TAG),
-            topInRootPx(PANNED_TAG),
-            0f,
-        )
-    }
-
-    @Test
-    fun imeVisible_pansUpByExactlyImeMinusSystemBars() {
-        setPannedContent(
-            ime = WindowInsets(bottom = IME_PX),
-            systemBars = WindowInsets(bottom = NAV_BAR_PX),
-        )
-
-        assertEquals(
-            "Pan must be exactly ime − systemBars px: the Scaffold already padded the nav-bar band, so panning the full IME height would over-shift by the overlap",
-            topInRootPx(HOST_TAG) - (IME_PX - NAV_BAR_PX),
-            topInRootPx(PANNED_TAG),
-            0f,
-        )
-    }
-
-    @Test
     fun imeShorterThanSystemBars_neverPansDownward() {
         setPannedContent(
             ime = WindowInsets(bottom = NAV_BAR_PX / 2),

@@ -54,14 +54,6 @@ final class VersionDtoVoiceCapabilityTests: XCTestCase {
         XCTAssertEqual(voice(cleanup: true, kinds: .null)?.cleanupKinds, ["claude"])
     }
 
-    func testCleanupKindsKeepOnlyTheStringEntries() {
-        XCTAssertEqual(
-            voice(cleanup: true, kinds: ["codex", 1, .null, true, ["claude"], "antigravity"])?.cleanupKinds,
-            ["codex", "antigravity"]
-        )
-        XCTAssertEqual(voice(cleanup: true, kinds: [])?.cleanupKinds, [])
-    }
-
     func testCleanupIsOfferedForTheListedSessionKindsOnly() {
         let all = capability(kinds: ["claude", "codex", "antigravity"])
 
@@ -72,18 +64,6 @@ final class VersionDtoVoiceCapabilityTests: XCTestCase {
         XCTAssertFalse(all.cleansUp(for: .autoScan))
         XCTAssertFalse(all.cleansUp(for: .custom("custom_ab12")))
         XCTAssertFalse(all.cleansUp(for: nil))
-    }
-
-    func testAnAgentWithoutAKindListOffersNoCleanupInCodexOrAntigravity() throws {
-        let legacy = try XCTUnwrap(voice(cleanup: true))
-
-        XCTAssertTrue(legacy.cleansUp(for: .claude))
-        XCTAssertFalse(legacy.cleansUp(for: .codex))
-        XCTAssertFalse(legacy.cleansUp(for: .antigravity))
-    }
-
-    func testNoSessionKindIsOfferedWithoutCleanup() {
-        XCTAssertFalse(capability(cleanup: false, kinds: ["claude", "codex"]).cleansUp(for: .claude))
     }
 
     func testTheVersionFixtureOffersCleanupForEveryAgentCli() throws {

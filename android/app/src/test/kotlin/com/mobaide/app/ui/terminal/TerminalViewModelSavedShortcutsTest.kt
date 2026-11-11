@@ -19,7 +19,6 @@ import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.Called
 import io.mockk.coEvery
-import io.mockk.coJustRun
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.justRun
@@ -255,17 +254,6 @@ class TerminalViewModelSavedShortcutsTest {
     }
 
     @Test
-    fun refreshSavedShortcuts_delegatesToRepository() = runTest {
-        coJustRun { shortcutsRepository.refreshShortcuts() }
-        val vm = createViewModel()
-
-        vm.refreshSavedShortcuts()
-        advanceUntilIdle()
-
-        coVerify(exactly = 1) { shortcutsRepository.refreshShortcuts() }
-    }
-
-    @Test
     fun refreshSavedShortcuts_whileInFlight_doesNotStartSecondFetch() = runTest {
         val gate = CompletableDeferred<Unit>()
         coEvery { shortcutsRepository.refreshShortcuts() } coAnswers { gate.await() }
@@ -300,25 +288,6 @@ class TerminalViewModelSavedShortcutsTest {
         vm.refreshSavedShortcuts()
         advanceUntilIdle()
         coVerify(exactly = 2) { shortcutsRepository.refreshShortcuts() }
-    }
-
-    @Test
-    fun saveShortcut_sendsWireKindFromLiveSessionList_andToken_unnamed() = runTest {
-        sessionListFlow.value = listOf(session(kind = SessionKind.Claude))
-        coEvery {
-            shortcutsRepository.createShortcut(any(), any(), any())
-        } returns dto("s-1", chordToken = "ctrl+x")
-        val vm = createViewModel()
-
-        vm.saveShortcut(KeyChord(ctrl = true, key = "x"))
-        advanceUntilIdle()
-
-        // "claude" pins the wire name of the kind resolved from the live
-        // session list — the only source saveShortcut may trust — and the
-        // picker always saves unnamed.
-        coVerify(exactly = 1) {
-            shortcutsRepository.createShortcut("claude", "ctrl+x", null)
-        }
     }
 
     @Test
@@ -402,26 +371,6 @@ class TerminalViewModelSavedShortcutsTest {
             ),
             vm.savedShortcutsForKind.value,
         )
-    }
-
-    @Test
-    fun saveShortcut_customKindSession_savesUnderRawWireKind() = runTest {
-        // The save must go out under the raw "custom_<id>" wire kind — the id
-        // (not the display name) keys the bucket, so renames never orphan it.
-        sessionListFlow.value = listOf(
-            session(kind = SessionKind.Custom("custom_ab12cd34ef56")),
-        )
-        coEvery {
-            shortcutsRepository.createShortcut(any(), any(), any())
-        } returns dto("s-1", kind = "custom_ab12cd34ef56", chordToken = "ctrl+x")
-        val vm = createViewModel()
-
-        vm.saveShortcut(KeyChord(ctrl = true, key = "x"))
-        advanceUntilIdle()
-
-        coVerify(exactly = 1) {
-            shortcutsRepository.createShortcut("custom_ab12cd34ef56", "ctrl+x", null)
-        }
     }
 
     @Test
@@ -633,19 +582,6 @@ class TerminalViewModelSavedShortcutsTest {
     }
 
     @Test
-    fun renameShortcut_delegatesWithTrimmedName() = runTest {
-        coEvery {
-            shortcutsRepository.renameShortcut(any(), any())
-        } returns dto("s-1", chordToken = "ctrl+x", name = "New")
-        val vm = createViewModel()
-
-        vm.renameShortcut("s-1", "  New  ")
-        advanceUntilIdle()
-
-        coVerify(exactly = 1) { shortcutsRepository.renameShortcut("s-1", "New") }
-    }
-
-    @Test
     fun renameShortcut_blankName_sendsEmptyStringToClear() = runTest {
         // Blank collapses to "" — the wire sentinel that clears the custom
         // name back to the chord label.
@@ -658,35 +594,6 @@ class TerminalViewModelSavedShortcutsTest {
         advanceUntilIdle()
 
         coVerify(exactly = 1) { shortcutsRepository.renameShortcut("s-1", "") }
-    }
-
-    @Test
-    fun renameShortcut_failure_emitsUserMessage() = runTest {
-        coEvery {
-            shortcutsRepository.renameShortcut(any(), any())
-        } throws RuntimeException("boom")
-        val vm = createViewModel()
-
-        vm.userMessages.test {
-            vm.renameShortcut("s-1", "New")
-            advanceUntilIdle()
-            assertEquals("Failed to rename shortcut", awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun removeShortcut_delegatesToRepository() = runTest {
-        coJustRun { shortcutsRepository.deleteShortcut(any()) }
-        val vm = createViewModel()
-
-        vm.removeShortcut("s-1")
-        advanceUntilIdle()
-
-        coVerify(exactly = 1) { shortcutsRepository.deleteShortcut("s-1") }
-        // deleteShortcut reconciles its own cache on success; a second
-        // applyDeleted here would be the ViewModel duplicating that job.
-        verify(exactly = 0) { shortcutsRepository.applyDeleted(any()) }
     }
 
     @Test

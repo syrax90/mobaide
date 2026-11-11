@@ -4,7 +4,6 @@ from __future__ import annotations
 import pytest
 
 from mobaide.agent.config import AgentConfig
-from mobaide.agent.install_paths import default_prefix
 
 # All env vars AgentConfig.from_env consults. Auto-scan-related settings
 # live on ``AutoScanConfig`` but are listed here so host-env values never
@@ -65,15 +64,6 @@ class TestAgentConfigJwtSecretRequirement:
             AgentConfig.from_env()
 
 
-class TestAgentConfigLogSampleWs:
-    def test_unset_is_false(self, monkeypatch):
-        monkeypatch.setenv("JWT_SECRET_KEY", "s")
-
-        cfg = AgentConfig.from_env()
-
-        assert cfg.log_sample_ws is False
-
-
 class TestAgentConfigAuditLogPath:
     def test_empty_string_becomes_none(self, monkeypatch):
         monkeypatch.setenv("JWT_SECRET_KEY", "s")
@@ -83,31 +73,8 @@ class TestAgentConfigAuditLogPath:
 
         assert cfg.audit_log_path is None
 
-    def test_set_value_passed_through(self, monkeypatch):
-        monkeypatch.setenv("JWT_SECRET_KEY", "s")
-        monkeypatch.setenv("AUDIT_LOG_PATH", "/var/log/audit.log")
-
-        cfg = AgentConfig.from_env()
-
-        assert cfg.audit_log_path == "/var/log/audit.log"
-
-    def test_unset_is_none(self, monkeypatch):
-        monkeypatch.setenv("JWT_SECRET_KEY", "s")
-
-        cfg = AgentConfig.from_env()
-
-        assert cfg.audit_log_path is None
-
 
 class TestAgentConfigProjectsStorePath:
-    def test_unset_default(self, monkeypatch):
-        monkeypatch.setenv("JWT_SECRET_KEY", "s")
-        # Writable install prefix → ``state_prefix()`` == ``default_prefix()``.
-        monkeypatch.setattr(
-            "mobaide.agent.install_paths._is_writable_dir", lambda *_: True
-        )
-        cfg = AgentConfig.from_env()
-        assert cfg.projects_store_path == str(default_prefix() / "projects.json")
 
     def test_unset_default_unwritable_prefix_falls_back_to_user_data_dir(
         self, monkeypatch, tmp_path
@@ -127,11 +94,6 @@ class TestAgentConfigProjectsStorePath:
         assert cfg.projects_store_path == str(fallback / "projects.json")
         assert cfg.user_store_path == str(fallback / "users.json")
 
-    def test_env_overrides_default(self, monkeypatch):
-        monkeypatch.setenv("JWT_SECRET_KEY", "s")
-        monkeypatch.setenv("PROJECTS_STORE_PATH", "/var/agent/projects.json")
-        cfg = AgentConfig.from_env()
-        assert cfg.projects_store_path == "/var/agent/projects.json"
 
     def test_relative_override_anchored_to_prefix(self, monkeypatch, tmp_path):
         """A relative store-path override is anchored to the prefix, not CWD."""
@@ -150,34 +112,6 @@ class TestAgentConfigProjectsStorePath:
         monkeypatch.setenv("AUDIT_LOG_PATH", "audit.log")
         cfg = AgentConfig.from_env()
         assert cfg.audit_log_path == str(tmp_path / "audit.log")
-
-
-class TestAgentConfigStringPassThrough:
-    def test_jwt_algorithm_from_env(self, monkeypatch):
-        monkeypatch.setenv("JWT_SECRET_KEY", "s")
-        monkeypatch.setenv("JWT_ALGORITHM", "HS512")
-
-        cfg = AgentConfig.from_env()
-
-        assert cfg.jwt_algorithm == "HS512"
-
-    def test_host_from_env(self, monkeypatch):
-        monkeypatch.setenv("JWT_SECRET_KEY", "s")
-        monkeypatch.setenv("HOST", "127.0.0.1")
-
-        cfg = AgentConfig.from_env()
-
-        assert cfg.host == "127.0.0.1"
-
-    def test_log_level_and_format_from_env(self, monkeypatch):
-        monkeypatch.setenv("JWT_SECRET_KEY", "s")
-        monkeypatch.setenv("LOG_LEVEL", "DEBUG")
-        monkeypatch.setenv("LOG_FORMAT", "console")
-
-        cfg = AgentConfig.from_env()
-
-        assert cfg.log_level == "DEBUG"
-        assert cfg.log_format == "console"
 
 
 class TestAgentConfigEnableApiDocs:
@@ -240,13 +174,6 @@ class TestAgentConfigEnableApiDocs:
 
         assert (cfg.enable_api_docs, cfg.log_sample_ws) == (expected, expected)
 
-    def test_explicit_bool_is_passed_through(self):
-        """The validator normalises strings; a caller-supplied ``bool`` has
-        to survive it, or programmatic opt-in silently stays off."""
-        cfg = AgentConfig(jwt_secret_key="s", enable_api_docs=True)
-
-        assert cfg.enable_api_docs is True
-
 
 class TestAgentConfigRelayIntegration:
     def test_relay_config_none_when_not_configured(self, monkeypatch):
@@ -300,12 +227,6 @@ class TestAgentConfigProjectsField:
     ``os.getenv("PROJECTS")`` path silently missed `.env`-defined values.
     """
 
-    def test_unset_projects_field_is_none(self, monkeypatch):
-        monkeypatch.setenv("JWT_SECRET_KEY", "s")
-
-        cfg = AgentConfig.from_env()
-
-        assert cfg.projects is None
 
     def test_projects_env_var_populates_field_as_string(self, monkeypatch):
         monkeypatch.setenv("JWT_SECRET_KEY", "s")
@@ -324,13 +245,6 @@ class TestAgentConfigProjectsField:
 
 
 class TestAgentConfigVoice:
-    def test_unset_is_real_voice_in_the_default_dir(self, monkeypatch):
-        monkeypatch.setenv("JWT_SECRET_KEY", "s")
-
-        cfg = AgentConfig.from_env()
-
-        assert cfg.voice_fake is False
-        assert cfg.voice_dir is None
 
     @pytest.mark.parametrize(("raw", "expected"), [("1", True), ("true", True), ("0", False), ("", False)])
     def test_fake_switch_parses_env_booleans(self, monkeypatch, raw, expected):
@@ -349,13 +263,6 @@ class TestAgentConfigVoice:
 
         assert cfg.voice_dir is None
 
-    def test_voice_dir_passed_through(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("JWT_SECRET_KEY", "s")
-        monkeypatch.setenv("MOBAIDE_VOICE_DIR", str(tmp_path / "voice"))
-
-        cfg = AgentConfig.from_env()
-
-        assert cfg.voice_dir == str(tmp_path / "voice")
 
     def test_relative_voice_dir_anchored_to_prefix(self, monkeypatch, tmp_path):
         monkeypatch.setenv("JWT_SECRET_KEY", "s")

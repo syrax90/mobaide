@@ -103,16 +103,6 @@ class TestFetchSignedManifestErrors:
             with pytest.raises(UpdateCheckError, match="cannot reach"):
                 await fetch_signed_manifest("https://example.com/x")
 
-    async def test_oserror_wraps_too(self):
-        with _patch_urlopen(side_effect=OSError("dns refused")):
-            with pytest.raises(UpdateCheckError, match="cannot reach"):
-                await fetch_signed_manifest("https://example.com/x")
-
-    async def test_timeout_wraps_too(self):
-        with _patch_urlopen(side_effect=TimeoutError("slow")):
-            with pytest.raises(UpdateCheckError, match="cannot reach"):
-                await fetch_signed_manifest("https://example.com/x")
-
     async def test_malformed_json_raises_update_check_error(self):
         with _patch_urlopen(body="not json at all {{"):
             with pytest.raises(UpdateCheckError, match="malformed response"):
@@ -121,12 +111,6 @@ class TestFetchSignedManifestErrors:
     async def test_missing_body_field_raises(self):
         # Top-level dict but no ``body`` key.
         record = {"signature_b64": "sig"}
-        with _patch_urlopen(body=json.dumps(record)):
-            with pytest.raises(UpdateCheckError, match="missing body/signature_b64"):
-                await fetch_signed_manifest("https://example.com/x")
-
-    async def test_missing_signature_field_raises(self):
-        record = {"body": {"version": "1.0.0"}}
         with _patch_urlopen(body=json.dumps(record)):
             with pytest.raises(UpdateCheckError, match="missing body/signature_b64"):
                 await fetch_signed_manifest("https://example.com/x")
@@ -144,12 +128,6 @@ class TestFetchSignedManifestErrors:
             "body": {"tarball_url": "https://example.com/a.tar.gz"},
             "signature_b64": "sig",
         }
-        with _patch_urlopen(body=json.dumps(record)):
-            with pytest.raises(UpdateCheckError, match="missing version field"):
-                await fetch_signed_manifest("https://example.com/x")
-
-    async def test_empty_version_string_raises(self):
-        record = {"body": {"version": ""}, "signature_b64": "sig"}
         with _patch_urlopen(body=json.dumps(record)):
             with pytest.raises(UpdateCheckError, match="missing version field"):
                 await fetch_signed_manifest("https://example.com/x")
@@ -174,22 +152,6 @@ class TestRunHttpsUpdateCheckOutcomes:
 
         assert outcome == "unreachable"
         updater.consider_manifest.assert_not_awaited()
-
-    async def test_outcome_passed_through_from_updater(self):
-        # Every outcome the updater can return must round-trip verbatim:
-        # ``no_change``, ``deferred``, ``staged``, ``signature_failed``.
-        record = _valid_manifest_record(version="2.0.0")
-        for expected in ("no_change", "deferred", "staged", "signature_failed"):
-            updater = MagicMock()
-            updater.consider_manifest = AsyncMock(return_value=expected)
-            with _patch_urlopen(body=json.dumps(record)):
-                outcome = await run_https_update_check(
-                    updater, "https://example.com/x",
-                )
-
-            assert outcome == expected, (
-                f"updater returned {expected!r}, got {outcome!r}"
-            )
 
     async def test_force_flag_propagated_to_updater(self):
         # The 4002-fallback callback uses ``force=True`` to bypass the

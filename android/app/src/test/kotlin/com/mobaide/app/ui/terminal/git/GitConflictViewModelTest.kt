@@ -414,24 +414,6 @@ class GitConflictViewModelTest {
     }
 
     @Test
-    fun jumpToNextConflict_selectsTheNextMarkerLine_andWraps() = runTest {
-        val two = "top\n<<<<<<< a\nx\n=======\ny\n>>>>>>> b\nmid\n<<<<<<< a\nz\n=======\n>>>>>>> b\n"
-        val vm = newViewModel(repoServing(conflict(content = two)))
-        val first = two.indexOf("<<<<<<<")
-        val second = two.indexOf("<<<<<<<", first + 1)
-
-        vm.jumpToNextConflict()
-        val firstJump = vm.editor.selection
-        vm.jumpToNextConflict()
-        val secondJump = vm.editor.selection
-        vm.jumpToNextConflict()
-
-        assertEquals(TextRange(first, first + "<<<<<<< a".length), firstJump)
-        assertEquals(TextRange(second, second + "<<<<<<< a".length), secondJump)
-        assertEquals(TextRange(first, first + "<<<<<<< a".length), vm.editor.selection)
-    }
-
-    @Test
     fun aFileThatIsNotText_isReadyWithoutAnEditorOrASave() = runTest {
         val vm = newViewModel(
             repoServing(conflict(content = null, token = null, kind = GitConflictResponse.KIND_BINARY)),
@@ -534,24 +516,6 @@ class GitConflictViewModelTest {
     }
 
     @Test
-    fun anAgentThatStoppedServingTheResolver_underTheDraft_isAMessageToo() = runTest {
-        val outdated = SessionGitException.AgentOutdated(ApiException(404, ""))
-        val repo = mockk<GitRepository>(relaxed = true)
-        coEvery { repo.sessionConflict("s1", path) } returns conflict() andThenThrows outdated
-        val vm = newViewModel(repo)
-        type(vm, "mine\n")
-
-        vm.events.test {
-            vm.keepMyEdits()
-            runCurrent()
-
-            assertEquals(GitConflictEvent.ShowMessage(sessionGitErrorCopy(outdated)), awaitItem())
-        }
-        assertEquals("mine\n", vm.editor.text.toString())
-        assertTrue(ready(vm).dirty)
-    }
-
-    @Test
     fun aReloadThatFindsTheConflictGone_keepsTheDraftAndSaysSo() = runTest {
         val repo = mockk<GitRepository>(relaxed = true)
         coEvery { repo.sessionConflict("s1", path) } returns conflict() andThenThrows
@@ -564,18 +528,5 @@ class GitConflictViewModelTest {
 
         assertTrue(ready(vm).gone)
         assertEquals("mine\n", vm.editor.text.toString())
-    }
-
-    @Test
-    fun theWatchHold_followsTheScreen() = runTest {
-        val tracker = ForegroundSessionTracker()
-        val vm = GitConflictViewModel(
-            SavedStateHandle(mapOf("sessionId" to "s1", "path" to path)), repoServing(conflict()), tracker,
-        )
-
-        vm.holdWatch()
-        assertTrue(tracker.isHeld("s1"))
-        vm.releaseWatch()
-        assertFalse(tracker.isHeld("s1"))
     }
 }

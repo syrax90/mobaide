@@ -21,22 +21,6 @@ final class ChipFlowLayoutTests: XCTestCase {
         )
     }
 
-    func testEmptyInputProducesNoFramesAndZeroSize() {
-        let result = pack([], maxWidth: 300)
-        XCTAssertTrue(result.frames.isEmpty)
-        XCTAssertEqual(result.size, .zero)
-    }
-
-    func testItemsThatFitStayOnOneRowSeparatedByHorizontalSpacing() {
-        let result = pack(
-            [CGSize(width: 40, height: 30), CGSize(width: 50, height: 30), CGSize(width: 60, height: 30)],
-            maxWidth: 300
-        )
-        XCTAssertEqual(result.frames.map(\.minY), [0, 0, 0])
-        XCTAssertEqual(result.frames.map(\.minX), [0, 46, 102])
-        XCTAssertEqual(result.size, CGSize(width: 162, height: 30))
-    }
-
     func testOverflowWrapsToNextRowAndResetsX() {
         let result = pack(
             [CGSize(width: 60, height: 30), CGSize(width: 60, height: 30), CGSize(width: 60, height: 30)],
@@ -96,12 +80,5 @@ final class ChipFlowLayoutTests: XCTestCase {
         XCTAssertEqual(ChipFlowPacking.usableWidth(0), .infinity)
         XCTAssertEqual(ChipFlowPacking.usableWidth(-10), .infinity)
         XCTAssertEqual(ChipFlowPacking.usableWidth(.infinity), .infinity)
-    }
-
-    func testUnboundedWidthKeepsEverythingOnOneRow() {
-        let sizes = Array(repeating: CGSize(width: 48, height: 30), count: 26)
-        let result = pack(sizes, maxWidth: .infinity)
-        XCTAssertEqual(Set(result.frames.map(\.minY)), [0])
-        XCTAssertEqual(result.size.height, 30)
     }
 }

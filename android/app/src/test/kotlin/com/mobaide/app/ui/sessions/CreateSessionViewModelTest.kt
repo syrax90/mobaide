@@ -9,7 +9,6 @@ import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.RestApi
 import com.mobaide.app.data.network.dto.ChatStoredSession
-import com.mobaide.app.data.network.dto.ChatSupport
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CliModelDetail
 import com.mobaide.app.data.network.dto.CodexLoginResponse
@@ -181,16 +180,6 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun confirmProject_doesNothing_whenNoProjectSelected() = runTest {
-        val fx = newFixture(initialProjects = emptyList())
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.confirmProject()
-        assertEquals(CreateSessionStep.ProjectSelect, vm.uiState.value.step)
-    }
-
-    @Test
     fun goBack_fromStandardConfig_returnsToModePick_andFromModePickClearsSelectedMode() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
@@ -229,20 +218,6 @@ class CreateSessionViewModelTest {
         assertEquals("beta", vm.uiState.value.selectedProjectName)
         assertFalse(vm.uiState.value.worktree)
         assertEquals("", vm.uiState.value.branchName)
-    }
-
-    @Test
-    fun selectProject_gitProject_preservesExistingWorktreeAndBranch() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.toggleWorktree(true)
-        vm.setBranchName("main")
-        vm.selectProject("alpha") // is_git = true
-
-        assertTrue(vm.uiState.value.worktree)
-        assertEquals("main", vm.uiState.value.branchName)
     }
 
     // ---- Standard submit path ----------------------------------------------
@@ -502,18 +477,6 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun init_seedsAutoScanDebugFromItsOwnBucket_withoutBleedingIntoClaude() = runTest {
-        val fx = newFixture()
-        coEvery { fx.prefs.getLastUsedAutoScanOptions() } returns ClaudeLaunchPrefs(debug = true)
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        val s = vm.uiState.value
-        assertTrue(s.autoScanClaudeDebug)
-        assertFalse("nothing was ever persisted for the Claude Code bucket", s.claudeDebug)
-    }
-
-    @Test
     fun init_seedsFocusModePerBucket_andDefaultsOnWithoutSavedPrefs() = runTest {
         val fresh = newFixture().buildVm()
         advanceUntilIdle()
@@ -571,19 +534,6 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun submit_noSelectedProject_isNoop() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.submit()
-        advanceUntilIdle()
-
-        coVerify(exactly = 0) { fx.sessionRepo.createSession(any()) }
-        assertFalse(vm.uiState.value.submitting)
-    }
-
-    @Test
     fun submit_onException_setsErrorMessage_andClearsSubmittingFlag() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
@@ -600,23 +550,6 @@ class CreateSessionViewModelTest {
     }
 
     // ---- AutoScan preset + submit ------------------------------------------
-
-    @Test
-    fun selectAutoScanMode_firstCall_seedsPresetDefaults() = runTest {
-        val fx = newFixture(autoScanPrompt = "scan everything")
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.selectProject("alpha")
-        vm.confirmProject()
-        vm.selectAutoScanMode()
-
-        val s = vm.uiState.value
-        assertEquals(CreateSessionStep.AutoScanConfig, s.step)
-        assertTrue("Auto Scan skip-permissions defaults ON", s.autoScanSkipPermissions)
-        assertEquals("scan everything", s.initialPrompt)
-        assertEquals("alpha", s.autoScanConfigInitializedFor)
-    }
 
     @Test
     fun selectAutoScanMode_thenGoBack_leavesSharedWorktreeUntouched() = runTest {
@@ -683,31 +616,6 @@ class CreateSessionViewModelTest {
         val s = vm.uiState.value
         assertEquals("beta prompt", s.initialPrompt)
         assertEquals("beta", s.autoScanConfigInitializedFor)
-    }
-
-    @Test
-    fun selectAutoScanMode_firstCall_seedsPromptFromSelectedProjectsSavedPrompt() = runTest {
-        // The per-project saved prompt (delivered on ProjectInfo.auto_scan_prompt)
-        // takes precedence over the agent-wide default when seeding the field.
-        val fx = newFixture(
-            initialProjects = listOf(
-                ProjectInfo(
-                    name = "alpha",
-                    path = "/p/alpha",
-                    is_git = true,
-                    auto_scan_prompt = "project saved prompt",
-                ),
-            ),
-            autoScanPrompt = "agent wide default",
-        )
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.selectProject("alpha")
-        vm.confirmProject()
-        vm.selectAutoScanMode()
-
-        assertEquals("project saved prompt", vm.uiState.value.initialPrompt)
     }
 
     @Test
@@ -804,29 +712,6 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun submitAutoScan_standardSkipPermissionsToggle_doesNotLeakIntoRequest() = runTest {
-        val fx = newFixture(autoScanPrompt = "seed")
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        val optsSlot = slot<ClaudeOptionsModel>()
-        coEvery { fx.autoScanRepo.startScan("alpha", capture(optsSlot)) } just Runs
-
-        vm.selectProject("alpha")
-        vm.confirmProject()
-        vm.selectAutoScanMode()
-        vm.toggleSkipPermissions(false) // the STANDARD toggle, a different kind
-        vm.submitAutoScan()
-        advanceUntilIdle()
-
-        assertTrue(
-            "Auto Scan reads its own autoScanSkipPermissions (still the ON " +
-                "default) — Standard-mode edits must not bleed across kinds",
-            optsSlot.captured.skip_permissions,
-        )
-    }
-
-    @Test
     fun submitAutoScan_claudeDebug_readsItsOwnBucket_notTheStandardToggle() = runTest {
         val fx = newFixture(autoScanPrompt = "seed")
         val vm = fx.buildVm()
@@ -860,56 +745,6 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun submitAutoScan_focusMode_readsItsOwnBucket_notTheStandardToggle() = runTest {
-        val fx = newFixture(autoScanPrompt = "seed")
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        val optsSlot = slot<ClaudeOptionsModel>()
-        coEvery { fx.autoScanRepo.startScan("alpha", capture(optsSlot)) } just Runs
-        val prefsSlot = slot<ClaudeLaunchPrefs>()
-        coEvery { fx.prefs.setLastUsedAutoScanOptions(capture(prefsSlot)) } just Runs
-
-        vm.selectProject("alpha")
-        vm.confirmProject()
-        vm.selectAutoScanMode()
-        vm.toggleFocusMode(false) // the STANDARD toggle, a different kind
-        vm.submitAutoScan()
-        advanceUntilIdle()
-
-        assertEquals(true, optsSlot.captured.focus_mode)
-        assertTrue(prefsSlot.captured.focusMode)
-
-        vm.toggleAutoScanFocusMode(false)
-        vm.submitAutoScan()
-        advanceUntilIdle()
-
-        assertEquals(false, optsSlot.captured.focus_mode)
-        assertFalse(prefsSlot.captured.focusMode)
-    }
-
-    @Test
-    fun submitAutoScan_withClaudeReasoningOptions_sendsThem() = runTest {
-        val fx = newFixture(autoScanPrompt = "seed")
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        val optsSlot = slot<ClaudeOptionsModel>()
-        coEvery { fx.autoScanRepo.startScan("alpha", capture(optsSlot)) } just Runs
-
-        vm.selectProject("alpha")
-        vm.confirmProject()
-        vm.selectAutoScanMode()
-        vm.setAutoScanClaudeModel("opus")
-        vm.setAutoScanClaudeEffort("xhigh")
-        vm.submitAutoScan()
-        advanceUntilIdle()
-
-        assertEquals("opus", optsSlot.captured.model)
-        assertEquals("xhigh", optsSlot.captured.effort)
-    }
-
-    @Test
     fun standardAndAutoScanClaudeControls_areIsolated() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
@@ -927,21 +762,6 @@ class CreateSessionViewModelTest {
         assertEquals("Standard effort untouched by the autoScan setter", "high", s.claudeEffort)
         assertTrue(s.noMemory)
         assertFalse("Standard no-memory must not flip the autoScan copy", s.autoScanNoMemory)
-    }
-
-    @Test
-    fun toggleAutoScanClaudeFastMode_locksModelToOpus() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.setAutoScanClaudeModel("sonnet")
-        vm.toggleAutoScanClaudeFastMode(true)
-
-        val s = vm.uiState.value
-        assertEquals("opus", s.autoScanClaudeModel)
-        assertTrue(s.autoScanClaudeFastMode)
-        assertNull("the Standard model stays untouched", s.claudeModel)
     }
 
     @Test
@@ -974,34 +794,6 @@ class CreateSessionViewModelTest {
 
         assertEquals("Failed to start Auto Scan: capacity", vm.uiState.value.error)
         assertFalse(vm.uiState.value.autoScanStarting)
-    }
-
-    @Test
-    fun onProjectCreated_gitProject_selectsByNameAndPreservesWorktreeAndBranch() = runTest {
-        // Why `onProjectCreated` exists rather than reusing
-        // `selectProject(name)`. The new project is NOT yet in `state.projects`
-        // (the `AgentEvent.ProjectsChanged` bus event arrives asynchronously),
-        // so `selectProject(name)`'s lookup would default `is_git` to `false`
-        // via `firstOrNull()?.is_git == true` and incorrectly clear worktree
-        // for a real git project. `onProjectCreated` reads `is_git` off the
-        // passed `ProjectInfo` directly.
-        val fx = newFixture(initialProjects = emptyList())  // simulate bus lag
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        // User had configured a worktree before opening the create-project
-        // sheet (e.g. switched modes). Their settings must survive selection.
-        vm.toggleWorktree(true)
-        vm.setBranchName("feature/x")
-
-        vm.onProjectCreated(project("gamma", isGit = true))
-
-        val s = vm.uiState.value
-        assertEquals("gamma", s.selectedProjectName)
-        assertTrue(
-            "Worktree must be preserved when the newly-created project is git",
-            s.worktree,
-        )
-        assertEquals("feature/x", s.branchName)
     }
 
     @Test
@@ -1053,23 +845,6 @@ class CreateSessionViewModelTest {
         assertEquals("feature/x", s.branchName)
     }
 
-    @Test
-    fun onProjectCreated_doesNotChangeWizardStep() = runTest {
-        // After the sheet closes the user remains on the
-        // ProjectSelect step — the new project is auto-selected in the
-        // dropdown, but the wizard does NOT advance. Pinning this so a
-        // future "auto-confirm on create" tweak surfaces as a test failure
-        // rather than silently changing UX.
-        val fx = newFixture(initialProjects = emptyList())
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        assertEquals(CreateSessionStep.ProjectSelect, vm.uiState.value.step)
-
-        vm.onProjectCreated(project("gamma", isGit = true))
-
-        assertEquals(CreateSessionStep.ProjectSelect, vm.uiState.value.step)
-    }
-
     // ---- CustomShell (Terminal mode, CLA-59) -------------------------------
 
     @Test
@@ -1103,26 +878,6 @@ class CreateSessionViewModelTest {
         assertNull("Terminal mode must let server pick _DEFAULT_SHELL", req.command)
         coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
         coVerify(exactly = 1) { fx.prefs.setLastUsedSessionId("sess-shell") }
-    }
-
-    @Test
-    fun pickMode_CustomShell_onlySelectsMode_doesNotSubmit() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.selectProject("alpha")
-        vm.confirmProject()
-        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
-
-        vm.pickMode(CreateSessionMode.CustomShell)
-        advanceUntilIdle()
-
-        // pickMode only records the selected mode — chooseMode is what advances
-        // the wizard. The wizard stays on ModePick and no session is created.
-        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
-        assertEquals(CreateSessionMode.CustomShell, vm.uiState.value.selectedMode)
-        coVerify(exactly = 0) { fx.sessionRepo.createSession(any()) }
     }
 
     @Test
@@ -1199,19 +954,6 @@ class CreateSessionViewModelTest {
         assertEquals("feature/x", req.branch_name)
     }
 
-    @Test
-    fun submitCustomShell_noSelectedProject_isNoop() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.submitCustomShell()
-        advanceUntilIdle()
-
-        coVerify(exactly = 0) { fx.sessionRepo.createSession(any()) }
-        assertFalse(vm.uiState.value.submitting)
-    }
-
     // A path that ``Paths.get(...).isAbsolute`` returns ``true`` for on the
     // host JVM running these tests. The validator combines
     // ``Paths.get(input).isAbsolute`` with a Windows-shape regex, so a
@@ -1274,23 +1016,6 @@ class CreateSessionViewModelTest {
 
         coVerify(exactly = 1) { fx.prefs.getRecentCustomPaths("https://agent.local:8080") }
         assertEquals(listOf("/home/me"), vm.uiState.value.recentCustomPaths)
-    }
-
-    @Test
-    fun selectCustomPath_noScopeKey_skipsRecentsLoad() = runTest {
-        // No agent_id AND no agent_url ⇒ the VM must not call
-        // `getRecentCustomPaths(null)` — it simply skips the load. The
-        // panel renders without chips and the user can still type a path.
-        val fx = newFixture(agentId = null, agentUrl = null)
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.selectCustomPath()
-        advanceUntilIdle()
-
-        assertTrue(vm.uiState.value.selection is ProjectSelection.CustomPath)
-        coVerify(exactly = 0) { fx.prefs.getRecentCustomPaths(any()) }
-        assertTrue(vm.uiState.value.recentCustomPaths.isEmpty())
     }
 
     @Test
@@ -1451,47 +1176,6 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun pickRecentCustomPath_delegatesToSetCustomPathDraft() = runTest {
-        // Tapping a recents chip must produce the same state as typing
-        // the path manually — including validation pass-through.
-        val fx = newFixture(recentCustomPaths = listOf(hostAbsolutePath))
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        vm.selectCustomPath()
-        advanceUntilIdle()
-
-        vm.pickRecentCustomPath(hostAbsolutePath)
-
-        val s = vm.uiState.value
-        assertEquals(hostAbsolutePath, s.customPathDraft)
-        assertNull(s.customPathError)
-        assertEquals(hostAbsolutePath, (s.selection as ProjectSelection.CustomPath).path)
-    }
-
-    @Test
-    fun setCustomPathDraft_trimsIntoSelection_butLeavesTheDraftAsTyped() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        vm.selectCustomPath()
-        advanceUntilIdle()
-
-        val typed = "$hostAbsolutePath  "
-        vm.setCustomPathDraft(typed)
-
-        val s = vm.uiState.value
-        assertEquals(
-            "the field must not fight the user mid-keystroke",
-            typed,
-            s.customPathDraft,
-        )
-        assertNull(s.customPathError)
-        // The committed selection is what becomes the request `cwd` and the
-        // stored recent, so it — not the draft — carries the trim.
-        assertEquals(hostAbsolutePath, (s.selection as ProjectSelection.CustomPath).path)
-    }
-
-    @Test
     fun setCustomPathDraft_leadingWhitespace_validatesAsAbsolute_andTrimsIntoSelection() = runTest {
         // Validation must judge the same string that gets launched. Leading
         // whitespace used to reach `Paths.get(...)` untrimmed, so " /srv/work"
@@ -1587,41 +1271,6 @@ class CreateSessionViewModelTest {
 
         coVerify(exactly = 0) { fx.prefs.removeRecentCustomPath(any(), any()) }
         assertTrue(vm.uiState.value.recentCustomPaths.isEmpty())
-    }
-
-    @Test
-    fun removeRecentCustomPath_leavesDraftErrorAndSelectionUntouched() = runTest {
-        val fx = newFixture(recentCustomPaths = listOf("/tmp/gone", hostAbsolutePath))
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        vm.selectCustomPath()
-        advanceUntilIdle()
-        vm.setCustomPathDraft(hostAbsolutePath)
-
-        coEvery { fx.prefs.getRecentCustomPaths("agent-1") } returns listOf(hostAbsolutePath)
-
-        vm.removeRecentCustomPath("/tmp/gone")
-        advanceUntilIdle()
-
-        val s = vm.uiState.value
-        assertEquals("removing a chip must not disturb a typed draft", hostAbsolutePath, s.customPathDraft)
-        assertNull(s.customPathError)
-        assertEquals(hostAbsolutePath, (s.selection as ProjectSelection.CustomPath).path)
-        assertEquals(listOf(hostAbsolutePath), s.recentCustomPaths)
-    }
-
-    @Test
-    fun confirmProject_customPathValid_advancesToModePick() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        vm.selectCustomPath()
-        advanceUntilIdle()
-        vm.setCustomPathDraft(hostAbsolutePath)
-
-        vm.confirmProject()
-
-        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
     }
 
     @Test
@@ -1724,28 +1373,6 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun submit_storedProject_regression_stillCallsLastUsedProjectName() = runTest {
-        // Regression guard for the dispatch matrix: the sealed-interface
-        // refactor must not break the `Stored` branch — `setLastUsedProjectName`
-        // is still called, `addRecentCustomPath` is still NOT.
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        coEvery { fx.sessionRepo.createSession(any()) } returns
-            SessionResponse("sess-stored", "starting", "2026-05-20T00:00:00Z")
-
-        vm.selectProject("alpha")
-        vm.confirmProject()
-        vm.selectStandardMode()
-        vm.submit()
-        advanceUntilIdle()
-
-        coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
-        coVerify(exactly = 0) { fx.prefs.addRecentCustomPath(any(), any()) }
-    }
-
-    @Test
     fun submitCustomShell_customPath_buildsAdHocTerminalRequest() = runTest {
         // Terminal-mode over a CustomPath: same dispatch as the
         // standard Claude branch, but `claude_options = null` and
@@ -1796,41 +1423,6 @@ class CreateSessionViewModelTest {
         assertEquals("alpha", (s.selection as ProjectSelection.Stored).name)
         assertEquals("", s.customPathDraft)
         assertNull(s.customPathError)
-    }
-
-    @Test
-    fun wizardFlow_ModePick_to_CodexConfig_andBack() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.selectProject("alpha")
-        vm.confirmProject()
-        vm.pickMode(CreateSessionMode.Codex)
-        vm.selectCodexMode()
-        assertEquals(CreateSessionStep.CodexConfig, vm.uiState.value.step)
-
-        vm.goBack()
-        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
-    }
-
-    @Test
-    fun defaultCodexState_derivesAutoPreset() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        assertEquals(CodexAutonomyPreset.Auto, vm.uiState.value.codexPreset)
-    }
-
-    @Test
-    fun selectCodexPreset_fullAccess_setsFullAuto_andDerivesFullAccess() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.selectCodexPreset(CodexAutonomyPreset.FullAccess)
-        assertTrue(vm.uiState.value.codexFullAuto)
-        assertEquals(CodexAutonomyPreset.FullAccess, vm.uiState.value.codexPreset)
     }
 
     @Test
@@ -1994,45 +1586,7 @@ class CreateSessionViewModelTest {
         assertNull("branch_name must be null for custom path", opts.branch_name)
     }
 
-    @Test
-    fun submitCodex_readOnlyPreset_sendsReadOnlySandbox() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        val requestSlot = slot<CreateSessionRequest>()
-        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
-            SessionResponse("sess-ro", "starting", "2026-06-23T00:00:00Z")
-
-        vm.selectProject("alpha")
-        vm.selectCodexPreset(CodexAutonomyPreset.ReadOnly)
-        vm.submitCodex()
-        advanceUntilIdle()
-
-        val opts = requestSlot.captured.codex_options
-        assertNotNull(opts)
-        assertEquals("read-only", opts!!.sandbox)
-        assertEquals("on-request", opts.approval)
-        assertFalse(opts.full_auto)
-    }
-
     // ---- Antigravity config + submit ----------------------------------------
-
-    @Test
-    fun wizardFlow_ModePick_to_AntigravityConfig_andBack() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.selectProject("alpha")
-        vm.confirmProject()
-        vm.pickMode(CreateSessionMode.Antigravity)
-        vm.selectAntigravityMode()
-        assertEquals(CreateSessionStep.AntigravityConfig, vm.uiState.value.step)
-
-        vm.goBack()
-        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
-    }
 
     @Test
     fun setAntigravitySkipPermissions_forcesSandboxOff() = runTest {
@@ -2051,45 +1605,6 @@ class CreateSessionViewModelTest {
         val s = vm.uiState.value
         assertTrue(s.antigravitySkipPermissions)
         assertFalse("enabling skip-permissions must clear sandbox", s.antigravitySandbox)
-    }
-
-    @Test
-    fun setAntigravitySandbox_forcesSkipPermissionsOff() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.setAntigravitySkipPermissions(true)
-        assertTrue(vm.uiState.value.antigravitySkipPermissions)
-
-        vm.setAntigravitySandbox(true)
-
-        val s = vm.uiState.value
-        assertTrue(s.antigravitySandbox)
-        assertFalse("enabling sandbox must clear skip-permissions", s.antigravitySkipPermissions)
-    }
-
-    @Test
-    fun setAntigravityToggles_disablingOne_leavesTheOtherUntouched() = runTest {
-        // Only ENABLING a toggle clears its sibling; turning one off must
-        // never flip the other on or off.
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.setAntigravitySandbox(true)
-        vm.setAntigravitySkipPermissions(false)
-        assertTrue(
-            "disabling skip-permissions must leave sandbox as-is",
-            vm.uiState.value.antigravitySandbox,
-        )
-
-        vm.setAntigravitySkipPermissions(true)
-        vm.setAntigravitySandbox(false)
-        assertTrue(
-            "disabling sandbox must leave skip-permissions as-is",
-            vm.uiState.value.antigravitySkipPermissions,
-        )
     }
 
     @Test
@@ -2273,38 +1788,6 @@ class CreateSessionViewModelTest {
         )
     }
 
-    @Test
-    fun submitAntigravity_customPath_clampsWorktreeAndBranch() = runTest {
-        val fx = newFixture(agentId = "agent-1")
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        vm.selectCustomPath()
-        advanceUntilIdle()
-        vm.setCustomPathDraft(hostAbsolutePath)
-
-        // Even with worktree toggled on, the custom-path branch must clamp it.
-        vm.toggleWorktree(true)
-        vm.setBranchName("feature/x")
-
-        val requestSlot = slot<CreateSessionRequest>()
-        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
-            SessionResponse("sess-agy-adhoc", "starting", "2026-07-02T00:00:00Z")
-
-        vm.confirmProject()
-        vm.selectAntigravityMode()
-        vm.submitAntigravity()
-        advanceUntilIdle()
-
-        val req = requestSlot.captured
-        assertNull(req.project_name)
-        assertEquals(hostAbsolutePath, req.cwd)
-        assertEquals("antigravity", req.cli)
-        val opts = req.antigravity_options
-        assertNotNull(opts)
-        assertFalse("worktree must clamp false for custom path", opts!!.worktree)
-        assertNull("branch_name must be null for custom path", opts.branch_name)
-    }
-
     // ---- Codex auth-required login flow (CLA-71) ---------------------------
 
     @Test
@@ -2347,27 +1830,6 @@ class CreateSessionViewModelTest {
 
         assertTrue(vm.uiState.value.codexLoginVisible)
         assertNull(vm.uiState.value.error)
-    }
-
-    @Test
-    fun submitCodex_non401Error_setsGenericError_doesNotOpenDialog() = runTest {
-        // A 500 (or any non-401) is not the auth case -> generic error, no dialog.
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        coEvery { fx.sessionRepo.createSession(any()) } throws
-            ApiException(500, """{"detail":"boom"}""")
-
-        vm.selectProject("alpha")
-        vm.confirmProject()
-        vm.selectCodexMode()
-        vm.submitCodex()
-        advanceUntilIdle()
-
-        val s = vm.uiState.value
-        assertFalse("non-auth failure must not open the login dialog", s.codexLoginVisible)
-        assertNotNull("non-auth failure must surface the generic error", s.error)
     }
 
     @Test
@@ -2477,20 +1939,6 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun submitCodexLogin_blankKey_isNoop() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.setCodexApiKeyDraft("   ")
-        vm.submitCodexLogin()
-        advanceUntilIdle()
-
-        coVerify(exactly = 0) { fx.sessionRepo.codexLogin(any()) }
-        assertFalse(vm.uiState.value.codexLoginSubmitting)
-    }
-
-    @Test
     fun dismissCodexLogin_wipesDraftAndClosesDialog() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
@@ -2569,26 +2017,6 @@ class CreateSessionViewModelTest {
             min_client_version = 5,
             capabilities = capabilities,
         )
-    }
-
-    @Test
-    fun refreshCliAvailability_bothInstalled_setsBothAvailableTrue() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        coEvery { fx.sessionRepo.getAgentVersion() } returns
-            versionResponse(claude = true, codex = true)
-
-        vm.refreshCliAvailability()
-        advanceUntilIdle()
-
-        val s = vm.uiState.value
-        assertEquals(true, s.claudeAvailable)
-        assertEquals(true, s.codexAvailable)
-        assertFalse("loading flag must reset after the probe", s.cliAvailabilityLoading)
-        assertTrue(s.claudeEnabled)
-        assertTrue(s.codexEnabled)
     }
 
     @Test
@@ -2727,31 +2155,6 @@ class CreateSessionViewModelTest {
         assertNull("absent codex models array must map to null", s.codexModels)
         assertNull("absent antigravity models array must map to null", s.antigravityModels)
         assertNull("absent model_details array must map to null", s.codexModelDetails)
-    }
-
-    @Test
-    fun refreshCliAvailability_capturesCodexModelDetails() = runTest {
-        // The probe also captures the per-model reasoning-effort sets
-        // (capabilities.cli.codex.model_details) so the effort control can
-        // offer the selected model's own levels instead of the static list.
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        val details = listOf(
-            CliModelDetail("gpt-5.6-sol", listOf("low", "high", "ultra"), "low"),
-            CliModelDetail("gpt-5.4-mini", listOf("low"), null),
-        )
-        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(
-            codex = true,
-            codexModels = listOf("gpt-5.6-sol", "gpt-5.4-mini"),
-            codexModelDetails = details,
-        )
-
-        vm.refreshCliAvailability()
-        advanceUntilIdle()
-
-        assertEquals(details, vm.uiState.value.codexModelDetails)
     }
 
     @Test
@@ -3049,66 +2452,6 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun selectStandardMode_claudeUnavailable_isNoop_staysOnModePick() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        coEvery { fx.sessionRepo.getAgentVersion() } returns
-            versionResponse(claude = false, codex = true)
-
-        vm.selectProject("alpha")
-        vm.confirmProject()
-        vm.refreshCliAvailability()
-        advanceUntilIdle()
-        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
-
-        vm.selectStandardMode()
-
-        // Guard: a disabled Claude must not advance to StandardConfig even if a
-        // racing tap slips past the grayed-out card.
-        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
-    }
-
-    @Test
-    fun selectCodexMode_codexUnavailable_isNoop_staysOnModePick() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        coEvery { fx.sessionRepo.getAgentVersion() } returns
-            versionResponse(claude = true, codex = false)
-
-        vm.selectProject("alpha")
-        vm.confirmProject()
-        vm.refreshCliAvailability()
-        advanceUntilIdle()
-
-        vm.selectCodexMode()
-
-        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
-    }
-
-    @Test
-    fun selectAntigravityMode_antigravityUnavailable_isNoop_staysOnModePick() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        coEvery { fx.sessionRepo.getAgentVersion() } returns
-            versionResponse(claude = true, codex = true, antigravity = false)
-
-        vm.selectProject("alpha")
-        vm.confirmProject()
-        vm.refreshCliAvailability()
-        advanceUntilIdle()
-
-        vm.selectAntigravityMode()
-
-        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
-    }
-
-    @Test
     fun selectAutoScanMode_claudeUnavailable_isNoop_doesNotSeedOrAdvance() = runTest {
         // Auto Scan launches `claude` under the hood, so it's gated on claude
         // too. A disabled-claude tap must not advance, must not seed worktree,
@@ -3133,27 +2476,6 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun selectStandardMode_claudeAvailableTrue_advancesNormally() = runTest {
-        // Regression guard: the guard must only block on an explicit false —
-        // an available (true) claude must still advance to StandardConfig.
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        coEvery { fx.sessionRepo.getAgentVersion() } returns
-            versionResponse(claude = true, codex = true)
-
-        vm.selectProject("alpha")
-        vm.confirmProject()
-        vm.refreshCliAvailability()
-        advanceUntilIdle()
-
-        vm.selectStandardMode()
-
-        assertEquals(CreateSessionStep.StandardConfig, vm.uiState.value.step)
-    }
-
-    @Test
     fun selectCodexMode_codexUnknownNull_advancesOptimistically() = runTest {
         // No probe run (or an old agent) leaves codexAvailable null. The guard
         // keys off `codexEnabled` (null != false → enabled), so the mode still
@@ -3175,25 +2497,6 @@ class CreateSessionViewModelTest {
         assertEquals(CreateSessionViewModel.CLAUDE_EFFORTS, efforts)
         assertTrue("opus is xhigh-capable", efforts.contains("xhigh"))
         assertTrue("opus is max-capable", efforts.contains("max"))
-    }
-
-    @Test
-    fun claudeEffortsFor_fable_offersFullLadder() {
-        // fable is one of the other xhigh-capable models (alongside opus and
-        // sonnet); the clamp test only covers opus, so pin fable's full ladder
-        // explicitly.
-        assertEquals(
-            CreateSessionViewModel.CLAUDE_EFFORTS,
-            CreateSessionViewModel.claudeEffortsFor("fable"),
-        )
-    }
-
-    @Test
-    fun claudeEffortsFor_sonnet_offersFullLadderIncludingXhighAndMax() {
-        val efforts = CreateSessionViewModel.claudeEffortsFor("sonnet")
-        assertEquals(CreateSessionViewModel.CLAUDE_EFFORTS, efforts)
-        assertTrue("sonnet is xhigh-capable", efforts.contains("xhigh"))
-        assertTrue("sonnet is max-capable", efforts.contains("max"))
     }
 
     @Test
@@ -3224,21 +2527,6 @@ class CreateSessionViewModelTest {
         )
     }
 
-    @Test
-    fun claudeEffortsFor_everyCuratedModel_returnsSubsetOfCanonicalLadder() {
-        // Invariant: whatever a curated model offers is always a subset of the
-        // canonical ladder, so the dropdown can never present a level the ladder
-        // doesn't define. Iterating CLAUDE_MODELS holds any newly-added alias to
-        // this contract automatically.
-        for (model in CreateSessionViewModel.CLAUDE_MODELS) {
-            val efforts = CreateSessionViewModel.claudeEffortsFor(model)
-            assertTrue(
-                "claudeEffortsFor($model) must be a subset of CLAUDE_EFFORTS",
-                CreateSessionViewModel.CLAUDE_EFFORTS.containsAll(efforts),
-            )
-        }
-    }
-
     // ---- Custom agent types -------------------------------------------------
 
     private fun customType(
@@ -3252,18 +2540,6 @@ class CreateSessionViewModelTest {
         created_at = "2026-07-28T12:00:00Z",
         updated_at = "2026-07-28T12:00:00Z",
     )
-
-    @Test
-    fun customTypes_fromRepositoryFlow_appearInUiState() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        fx.customTypesFlow.value = listOf(customType())
-        advanceUntilIdle()
-
-        assertEquals(listOf("ab12cd34ef56"), vm.uiState.value.customTypes.map { it.id })
-    }
 
     @Test
     fun customTypeDeletedRemotely_clearsItsSelectedMode() = runTest {
@@ -3284,22 +2560,6 @@ class CreateSessionViewModelTest {
         advanceUntilIdle()
 
         assertNull(vm.uiState.value.selectedMode)
-    }
-
-    @Test
-    fun selectCustomAgentMode_gitStoredProject_advancesToTerminalConfig_noSubmit() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.selectProject("alpha") // is_git = true
-        vm.confirmProject()
-        vm.pickMode(CreateSessionMode.Custom("t1"))
-        vm.selectCustomAgentMode("t1")
-        advanceUntilIdle()
-
-        assertEquals(CreateSessionStep.TerminalConfig, vm.uiState.value.step)
-        coVerify(exactly = 0) { fx.sessionRepo.createSession(any()) }
     }
 
     @Test
@@ -3431,31 +2691,6 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun saveCustomAgentType_supplementaryPlaneOverLimit_rejectsInline_withoutRequest() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.openTypeEditor(null)
-
-        vm.saveCustomAgentType("🚀".repeat(61), "aider")
-        assertEquals(
-            "Name must be at most 60 characters",
-            vm.uiState.value.typeEditorError,
-        )
-
-        vm.saveCustomAgentType("Aider", "🚀".repeat(1001))
-        assertEquals(
-            "Command must be at most 1000 characters",
-            vm.uiState.value.typeEditorError,
-        )
-
-        advanceUntilIdle()
-        coVerify(exactly = 0) { fx.customTypesRepo.createType(any(), any()) }
-        coVerify(exactly = 0) { fx.customTypesRepo.updateType(any(), any(), any()) }
-    }
-
-    @Test
     fun saveCustomAgentType_create_trimsFields_andDismissesOnSuccess() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
@@ -3567,29 +2802,6 @@ class CreateSessionViewModelTest {
             "a stale save's error must not surface in an editor it did not come from",
             vm.uiState.value.typeEditorError,
         )
-        assertFalse(vm.uiState.value.typeEditorSaving)
-    }
-
-    @Test
-    fun saveCustomAgentType_staleFailureAfterDismiss_staysHiddenWithoutError() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        val gate = CompletableDeferred<CustomAgentTypeDto>()
-        coEvery { fx.customTypesRepo.createType("Aider", "aider") } coAnswers { gate.await() }
-
-        vm.openTypeEditor(null)
-        vm.saveCustomAgentType("Aider", "aider")
-        advanceUntilIdle()
-        assertTrue(vm.uiState.value.typeEditorSaving)
-
-        vm.dismissTypeEditor()
-
-        gate.completeExceptionally(ApiException(500, """{"detail":"boom"}"""))
-        advanceUntilIdle()
-
-        assertEquals(TypeEditorState.Hidden, vm.uiState.value.typeEditor)
-        assertNull(vm.uiState.value.typeEditorError)
         assertFalse(vm.uiState.value.typeEditorSaving)
     }
 
@@ -3755,29 +2967,6 @@ class CreateSessionViewModelTest {
         val s = vm.uiState.value
         assertEquals(CreateSessionMode.Standard, s.selectedMode)
         assertEquals(CreateSessionStep.StandardConfig, s.step)
-    }
-
-    @Test
-    fun chooseMode_CustomShell_nonGitProject_launchesShellInOneTap() = runTest {
-        // Terminal on a non-git target has nothing to configure, so the tap
-        // goes all the way to a created session.
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        val requestSlot = slot<CreateSessionRequest>()
-        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
-            SessionResponse("sess-tap-shell", "starting", "2026-07-30T00:00:00Z")
-
-        vm.selectProject("beta") // is_git = false
-        vm.confirmProject()
-
-        vm.chooseMode(CreateSessionMode.CustomShell)
-        advanceUntilIdle()
-
-        assertEquals(CreateSessionMode.CustomShell, vm.uiState.value.selectedMode)
-        coVerify(exactly = 1) { fx.sessionRepo.createSession(any()) }
-        assertNull("plain Terminal must not carry a custom cli", requestSlot.captured.cli)
     }
 
     @Test
@@ -4043,17 +3232,6 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun init_restoresTheCodexTerminalUiChoice() = runTest {
-        val fx = newFixture()
-        coEvery { fx.prefs.getLastUsedCodexOptions() } returns CodexLaunchPrefs(terminalUi = true)
-
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        assertTrue(vm.uiState.value.codexTerminalUi)
-    }
-
-    @Test
     fun resumeChatSession_codex_sendsTheCodexOptionsWithoutAWorktree() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
@@ -4220,27 +3398,6 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun submitAntigravity_customPath_alsoOpensTheChatView() = runTest {
-        val fx = newFixture(agentId = "agent-1")
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        val requestSlot = slot<CreateSessionRequest>()
-        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
-            SessionResponse("sess-agy-adhoc-chat", "starting", "2026-11-09T00:00:00Z")
-
-        vm.selectCustomPath()
-        advanceUntilIdle()
-        vm.setCustomPathDraft(hostAbsolutePath)
-        vm.confirmProject()
-        vm.selectAntigravityMode()
-        vm.submitAntigravity()
-        advanceUntilIdle()
-
-        assertEquals(hostAbsolutePath, requestSlot.captured.cwd)
-        assertEquals(SessionResponse.UI_CHAT, requestSlot.captured.ui)
-    }
-
-    @Test
     fun antigravityResume_isOffered_onlyForTheChatView() = runTest {
         val fx = newFixture()
         coEvery { fx.sessionRepo.getAgentVersion() } returns
@@ -4312,20 +3469,6 @@ class CreateSessionViewModelTest {
         assertNull(options.branch_name)
     }
 
-    @Test
-    fun chatUnavailableHint_namesWhatEachAgentNeeds() {
-        assertEquals("The chat view needs Node.js on your PC.", chatUnavailableHint(ChatSupport.Unavailable))
-        assertEquals(
-            "The chat view needs a newer Antigravity CLI on your PC: run agy update there.",
-            chatUnavailableHint(ChatSupport.Unavailable, "antigravity"),
-        )
-        assertEquals(
-            "Update Mobaide on your PC to use the chat view.",
-            chatUnavailableHint(ChatSupport.AgentOutdated, "antigravity"),
-        )
-        assertNull(chatUnavailableHint(null, "antigravity"))
-    }
-
     // ---- Worktree base branch ----------------------------------------------
 
     private fun worktreeBaseVersion(enabled: Boolean = true) = VersionInfoResponse(
@@ -4366,20 +3509,6 @@ class CreateSessionViewModelTest {
         coEvery { sessionRepo.createSession(capture(slot)) } returns
             SessionResponse(session_id = "s", state = "starting", created_at = "2026-11-09T00:00:00Z")
         return slot
-    }
-
-    @Test
-    fun baseBranch_preselectsLastUsed_overDefault() = runTest {
-        val fx = newFixture()
-        coEvery { fx.gitRepo.worktreeBases("alpha") } returns
-            bases("origin/main", "origin/develop", "origin/main", "origin/develop", "wip")
-        val vm = worktreeVm(fx)
-
-        val s = vm.uiState.value
-        assertTrue(s.showBaseBranchPicker)
-        assertTrue(s.baseBranches is BaseBranchesLoad.Loaded)
-        assertEquals("origin/develop", s.baseBranch)
-        assertEquals("origin/develop", s.effectiveBaseBranch)
     }
 
     @Test

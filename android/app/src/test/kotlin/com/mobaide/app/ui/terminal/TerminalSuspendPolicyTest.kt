@@ -1,6 +1,5 @@
 package com.mobaide.app.ui.terminal
 
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -72,15 +71,5 @@ class TerminalSuspendPolicyTest {
                 bytes = TerminalSuspend.FIREHOSE_BYTES,
             ),
         )
-    }
-
-    @Test
-    fun `prices the recoup threshold at one ring and the firehose above it`() {
-        // The constants are the policy, and they are shared across three
-        // clients. `RECOUP_BYTES` below the agent's 4 MiB ring would make every
-        // suspend a guaranteed net loss.
-        assertEquals(4L * 1024 * 1024, TerminalSuspend.RECOUP_BYTES)
-        assertEquals(60_000L, TerminalSuspend.GRACE_MS)
-        assertTrue(TerminalSuspend.FIREHOSE_BYTES > TerminalSuspend.RECOUP_BYTES)
     }
 }

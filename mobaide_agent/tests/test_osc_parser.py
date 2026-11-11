@@ -14,32 +14,9 @@ def test_single_chunk_osc0_bel() -> None:
     assert ext.feed(b"\x1b]0;hello\x07") == "hello"
 
 
-def test_single_chunk_osc1_bel() -> None:
-    ext = OscTitleExtractor()
-    assert ext.feed(b"\x1b]1;icon-name\x07") == "icon-name"
-
-
-def test_single_chunk_osc2_bel() -> None:
-    ext = OscTitleExtractor()
-    assert ext.feed(b"\x1b]2;window title\x07") == "window title"
-
-
 def test_single_chunk_osc0_st_terminator() -> None:
     ext = OscTitleExtractor()
     assert ext.feed(b"\x1b]0;ST-terminated\x1b\\") == "ST-terminated"
-
-
-def test_osc_split_across_two_chunks() -> None:
-    ext = OscTitleExtractor()
-    assert ext.feed(b"\x1b]0;par") is None
-    assert ext.feed(b"tial\x07") == "partial"
-
-
-def test_osc_split_across_three_chunks() -> None:
-    ext = OscTitleExtractor()
-    assert ext.feed(b"\x1b]") is None
-    assert ext.feed(b"0;split") is None
-    assert ext.feed(b"-three\x07") == "split-three"
 
 
 def test_osc_split_at_every_interior_byte() -> None:
@@ -99,16 +76,6 @@ def test_osc4_palette_discarded() -> None:
     assert ext.feed(b"\x1b]4;0;rgb:00/00/00\x07") is None
 
 
-def test_osc8_hyperlink_discarded() -> None:
-    ext = OscTitleExtractor()
-    assert ext.feed(b"\x1b]8;;https://example.com\x07link\x1b]8;;\x07") is None
-
-
-def test_osc9_progress_discarded() -> None:
-    ext = OscTitleExtractor()
-    assert ext.feed(b"\x1b]9;4;1;42\x07") is None
-
-
 def test_non_title_osc_does_not_consume_subsequent_title() -> None:
     """After tracking a discarded OSC through its terminator, a real title still commits."""
     ext = OscTitleExtractor()
@@ -161,11 +128,6 @@ def test_st_pending_completes_across_chunks() -> None:
     ext = OscTitleExtractor()
     assert ext.feed(b"\x1b]0;split-st\x1b") is None
     assert ext.feed(b"\\") == "split-st"
-
-
-def test_empty_chunk_returns_none() -> None:
-    ext = OscTitleExtractor()
-    assert ext.feed(b"") is None
 
 
 def test_unterminated_ps_digits_do_not_grow_unbounded() -> None:

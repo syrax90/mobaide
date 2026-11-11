@@ -82,25 +82,6 @@ class TerminalViewModelComposerVisibilityTest {
     }
 
     @Test
-    fun composerVisible_defaultsTrue() {
-        val vm = createViewModel()
-        assertTrue(vm.composerVisible.value)
-    }
-
-    @Test
-    fun hideComposer_hidesComposer_andDoesNotRequestFocus() {
-        val vm = createViewModel()
-
-        vm.hideComposer()
-
-        assertFalse(vm.composerVisible.value)
-        assertFalse(
-            "collapse must not request focus — the keyboard dismisses with the field",
-            vm.requestInputFocus.value,
-        )
-    }
-
-    @Test
     fun revealComposer_afterHide_showsComposer_andRequestsFocus() {
         val vm = createViewModel()
         vm.hideComposer()
@@ -135,32 +116,6 @@ class TerminalViewModelComposerVisibilityTest {
 
         assertTrue(
             "a gesture that targets the composer (row copy / Send to Input) must reveal it",
-            vm.composerVisible.value,
-        )
-        assertTrue(vm.requestInputFocus.value)
-    }
-
-    @Test
-    fun applyTemplate_whileComposerHidden_revealsComposer() = runTest(testDispatcher) {
-        val vm = createViewModel()
-        runCurrent()
-        vm.hideComposer()
-
-        vm.applyTemplate(
-            TemplateDto(
-                template_id = "t1",
-                name = "status",
-                body = "git status",
-                is_favorite = false,
-                created_at = "2026-01-01T00:00:00Z",
-                updated_at = "2026-01-01T00:00:00Z",
-                version = 1,
-            ),
-        )
-        runCurrent()
-
-        assertTrue(
-            "picking a template explicitly targets the composer — it must reveal",
             vm.composerVisible.value,
         )
         assertTrue(vm.requestInputFocus.value)

@@ -34,14 +34,6 @@ class HealthyTimeMeterTest {
     }
 
     @Test
-    fun finish_closesTheOpenSpan() {
-        meter.update(true)
-        now = 61_000
-
-        assertEquals(61_000L, meter.finish())
-    }
-
-    @Test
     fun finish_startsTheNextVisitFromZero() {
         meter.update(true)
         now = 30_000

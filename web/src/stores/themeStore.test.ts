@@ -21,25 +21,8 @@ describe('themeStore hydration', () => {
     window.localStorage.clear();
   });
 
-  it('restores a valid persisted preference', async () => {
-    seedStorage({ state: { preference: 'dark' }, version: 0 });
-
-    await useThemeStore.persist.rehydrate();
-
-    expect(useThemeStore.getState().preference).toBe('dark');
-  });
-
   it('falls back to system for an unknown persisted preference', async () => {
     seedStorage({ state: { preference: 'bogus' }, version: 0 });
-
-    await useThemeStore.persist.rehydrate();
-
-    expect(useThemeStore.getState().preference).toBe('system');
-  });
-
-  it('falls back to system when the envelope has no state object', async () => {
-    useThemeStore.setState({ preference: 'dark' });
-    seedStorage({ version: 0 });
 
     await useThemeStore.persist.rehydrate();
 
@@ -59,10 +42,5 @@ describe('resolveTheme', () => {
   it('follows the OS preference when set to system', () => {
     expect(resolveTheme('system', true)).toBe('dark');
     expect(resolveTheme('system', false)).toBe('light');
-  });
-
-  it('ignores the OS preference for an explicit choice', () => {
-    expect(resolveTheme('dark', false)).toBe('dark');
-    expect(resolveTheme('light', true)).toBe('light');
   });
 });

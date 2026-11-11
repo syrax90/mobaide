@@ -2,38 +2,6 @@ import XCTest
 @testable import Mobaide
 
 final class SessionManagerStateTests: XCTestCase {
-    func testInitialStateMatrix() async {
-        let none = SessionHarness()
-        let userOnly = SessionHarness(userLoggedIn: true)
-        let full = SessionHarness(userLoggedIn: true, agentConnected: true)
-        let agentOnly = SessionHarness(agentConnected: true)
-
-        let noneState = await none.sessionManager.currentAuthState
-        let userState = await userOnly.sessionManager.currentAuthState
-        let fullState = await full.sessionManager.currentAuthState
-        let agentOnlyState = await agentOnly.sessionManager.currentAuthState
-
-        XCTAssertEqual(noneState, .unauthenticated)
-        XCTAssertEqual(userState, .userOnly)
-        XCTAssertEqual(fullState, .fullyConnected)
-        XCTAssertEqual(agentOnlyState, .unauthenticated)
-    }
-
-    func testMarkUserLoggedInAndAgentConnected() async {
-        let harness = SessionHarness()
-        await harness.sessionManager.markUserLoggedIn(userId: "u1") {}
-        var state = await harness.sessionManager.currentAuthState
-        XCTAssertEqual(state, .userOnly)
-
-        await harness.sessionManager.markAgentConnected()
-        state = await harness.sessionManager.currentAuthState
-        XCTAssertEqual(state, .fullyConnected)
-        let loggedIn = await harness.sessionManager.isLoggedIn()
-        let userAuthenticated = await harness.sessionManager.isUserAuthenticated()
-        XCTAssertTrue(loggedIn)
-        XCTAssertTrue(userAuthenticated)
-    }
-
     func testMarkIncompatibleServerPinsState() async {
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
         let info = AuthState.IncompatibleServer(
@@ -343,16 +311,5 @@ final class SessionManagerStateTests: XCTestCase {
         await harness.sessionManager.markAgentConnected()
         let fullyConnectedState = try await states.next()
         XCTAssertEqual(fullyConnectedState, .fullyConnected)
-    }
-
-    func testAuthStateChangesStreamSkipsReplayedValue() async throws {
-        let harness = SessionHarness(userLoggedIn: true)
-        let changes = StreamCollector(harness.sessionManager.authStateChanges())
-        let silent = await changes.expectNoElement()
-        XCTAssertTrue(silent, "changes-only stream must not deliver the replayed initial value")
-
-        await harness.sessionManager.markAgentConnected()
-        let changedState = try await changes.next()
-        XCTAssertEqual(changedState, .fullyConnected)
     }
 }

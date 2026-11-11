@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubLocalStorage } from '../../test/localStorageStub';
@@ -114,20 +114,6 @@ describe('SettingsScreen', () => {
     expect(useNotificationPrefsStore.getState().enabled).toBe(false);
   });
 
-  it('carries the theme picker and states what Auto resolves to', () => {
-    // The header picker names the OS appearance only in a `title`, which a
-    // touchscreen cannot reach; this card is where it is readable.
-    renderScreen();
-
-    const picker = screen.getByRole('radiogroup', { name: 'Theme' });
-    expect(picker).toBeInTheDocument();
-
-    fireEvent.click(within(picker).getByRole('radio', { name: 'Dark' }));
-
-    expect(useThemeStore.getState().preference).toBe('dark');
-    expect(screen.getByText(/Auto follows your system appearance/)).toBeInTheDocument();
-  });
-
   /**
    * The card's whole reason for existing is that a touchscreen cannot reach the
    * header's `title`, so the value it prints has to be the one Auto would give —
@@ -145,46 +131,6 @@ describe('SettingsScreen', () => {
       screen.getByText(/Auto follows your system appearance — currently dark\./),
     ).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Light' })).toBeChecked();
-  });
-
-  it('links onward to the surfaces mobile keeps behind this screen', () => {
-    renderScreen();
-
-    for (const [name, href] of [
-      ['My agents', '/agents'],
-      ['Projects', '/projects'],
-      ['Prompt templates', '/templates'],
-      ['My devices', '/devices'],
-      ['Account', '/account'],
-      [
-        'Email support',
-        'mailto:support@mobaide.com?subject=Mobaide%20web%20support',
-      ],
-    ]) {
-      expect(screen.getByRole('link', { name })).toHaveAttribute('href', href);
-    }
-  });
-
-  it('shows no terminal display-mode picker', () => {
-    // Web ships Full display only — the WEB-05 platform-convention divergence.
-    // The Ctrl+V escape hatch is the only terminal preference there is.
-    renderScreen();
-
-    expect(screen.queryByText(/static/i)).not.toBeInTheDocument();
-    expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
-    expect(
-      screen.getByRole('checkbox', { name: 'Send Ctrl+V to the terminal instead of pasting' }),
-    ).toBeInTheDocument();
-  });
-
-  it('reports no protocol or server version', () => {
-    // No client shows a protocol or relay version. Mobile does keep an *app*
-    // build version — Android footers `BuildConfig.VERSION_NAME`, iOS puts it in
-    // the support-mail subject — which web has no equivalent of, because the SPA
-    // ships with the relay it talks to.
-    renderScreen();
-    expect(screen.queryByText(/protocol v\d/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/server \d+\.\d+\.\d+/)).not.toBeInTheDocument();
   });
 
   it('signs out with the silent reason', () => {

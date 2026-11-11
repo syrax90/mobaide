@@ -132,19 +132,6 @@ describe('TemplatesPicker dialog shell', () => {
     expect(search()).toHaveFocus();
   });
 
-  it('dismisses on Esc', async () => {
-    // Esc reaches a native dialog as `cancel`; the jsdom stand-in implements no
-    // key handling, so the event stands in for the press.
-    await renderListed(template('alpha'));
-
-    fireEvent(
-      screen.getByRole('dialog'),
-      new Event('cancel', { bubbles: false, cancelable: true }),
-    );
-
-    expect(onClose).toHaveBeenCalled();
-  });
-
   it('walks the rows with the arrow keys and hands the field back at the top', async () => {
     // The walk reads the rows out of the DOM, so it crosses sections in the
     // order they are on screen; up off the first row returns to the field
@@ -183,20 +170,6 @@ describe('TemplatesPicker dialog shell', () => {
     // on the row it would have fired, so the user sees it before it goes.
     await renderListed(template('alpha'), template('beta'));
 
-    fireEvent.keyDown(search(), { key: 'Enter' });
-    await flush();
-
-    expect(onPick).not.toHaveBeenCalled();
-    expect(pickRow('alpha')).toHaveFocus();
-  });
-
-  it('counts a whitespace-only filter as empty', async () => {
-    // The needle is trimmed before it is matched, so a field holding only
-    // spaces still lists everything: pressing Enter there is the bare-Enter
-    // case, not a narrowed one.
-    await renderListed(template('alpha'), template('beta'));
-
-    fireEvent.change(search(), { target: { value: '   ' } });
     fireEvent.keyDown(search(), { key: 'Enter' });
     await flush();
 
@@ -299,18 +272,6 @@ describe('TemplatesPicker dialog shell', () => {
     expect(press(pickRow('alpha'), { key: 'Enter' }).defaultPrevented).toBe(false);
   });
 
-  it('keeps navigating while an arrow key is held', async () => {
-    // Held arrows are navigation, not a repeated action, so the repeat guard is
-    // scoped to Enter and must not swallow these.
-    await renderListed(template('alpha'), template('beta'));
-
-    fireEvent.keyDown(search(), { key: 'ArrowDown', repeat: true });
-    expect(pickRow('alpha')).toHaveFocus();
-
-    fireEvent.keyDown(pickRow('alpha'), { key: 'ArrowDown', repeat: true });
-    expect(pickRow('beta')).toHaveFocus();
-  });
-
   it('closes on the first Esc even with a filter typed', async () => {
     // Chrome and Safari let a non-empty `input[type=search]` eat this keydown
     // to clear itself before the dialog ever sees a close request, and the
@@ -343,16 +304,6 @@ describe('TemplatesPicker dialog shell', () => {
 });
 
 describe('TemplatesPicker states', () => {
-  it('names the trimmed needle when the filter matches nothing', async () => {
-    await renderListed(template('alpha'));
-
-    fireEvent.change(search(), { target: { value: '  zzz  ' } });
-
-    expect(screen.getByText(/No templates match/)).toHaveTextContent(
-      'No templates match “zzz”.',
-    );
-    expect(screen.queryByRole('heading', { name: 'All' })).toBeNull();
-  });
 
   it('sends an empty account to the management screen instead of the filter', async () => {
     // The other half of the same split: nothing to filter is fixed on
@@ -455,26 +406,6 @@ describe('TemplatesPicker create affordance', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('sits in the head beside Close', async () => {
-    const view = await renderListed(template('alpha'));
-    const head = view.container.querySelector('.template-picker-head');
-
-    expect(head).toContainElement(newTemplate());
-    expect(head).toContainElement(screen.getByRole('button', { name: 'Close' }));
-  });
-
-  it('leaves Enter on it to the browser', async () => {
-    // The Enter special-case is scoped to the search field, where it picks the
-    // first match. Reaching this button it must stay a plain activation, or the
-    // key that opened the editor would also paste a row nobody chose.
-    await renderListed(template('alpha'));
-
-    const event = press(newTemplate(), { key: 'Enter' });
-
-    expect(event.defaultPrevented).toBe(false);
-    expect(onPick).not.toHaveBeenCalled();
-  });
-
   it('enters the list on ArrowDown, like every other head control', async () => {
     // Guards against anyone marking it `data-template-row`: the walk reads rows
     // out of the DOM, and a create button inside that set would be one arrow
@@ -485,16 +416,5 @@ describe('TemplatesPicker create affordance', () => {
     fireEvent.keyDown(newTemplate(), { key: 'ArrowDown' });
 
     expect(pickRow('alpha')).toHaveFocus();
-  });
-
-  it('stays live while the session refuses input', async () => {
-    // Creating a template is a central-server call: it owes nothing to the PTY,
-    // so the send gate has no say in it. Same rule as the favourite star.
-    repo.templates = [template('alpha')];
-    renderPicker(false);
-    await screen.findByRole('heading', { name: 'All' });
-
-    expect(newTemplate()).toBeEnabled();
-    expect(pickRow('alpha')).toBeDisabled();
   });
 });

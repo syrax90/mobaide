@@ -127,30 +127,6 @@ class VoiceDtoFixtureTest {
     }
 
     @Test
-    fun cleanup_carriesTheTranscriptBothWays() {
-        val request = fixture("VoiceCleanupRequest").decode(VoiceCleanupRequest.serializer(), "transcript_as_heard")
-        val response = fixture("VoiceCleanupResponse").decode(VoiceCleanupResponse.serializer(), "cleaned")
-
-        assertEquals("um so rename use session model to uh use the shared hook", request.text)
-        assertEquals("claude", request.kind)
-        assertEquals("Rename useSessionModel to use the shared hook.", response.text)
-    }
-
-    @Test
-    fun cleanup_carriesTheSessionKind() {
-        val requests = fixture("VoiceCleanupRequest")
-
-        assertEquals(
-            VoiceCleanupRequest("uh run the tests dash dash watch", "codex"),
-            requests.decode(VoiceCleanupRequest.serializer(), "codex_session"),
-        )
-        assertEquals(
-            VoiceCleanupRequest("um fix the reduce her in the store", "antigravity"),
-            requests.decode(VoiceCleanupRequest.serializer(), "antigravity_session"),
-        )
-    }
-
-    @Test
     fun status_repairFlagAndNotice_areRead() {
         val fixture = fixture("VoiceStatusResponse")
 

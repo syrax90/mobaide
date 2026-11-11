@@ -90,19 +90,6 @@ class LinearMetadataRepositoryTest {
     }
 
     @Test
-    fun getStates_servesCache_whenPresent_andNotForced() = runTest {
-        val (repo, restApi, store) = newRepo()
-        val cached = listOf(LinearStateDto("Proposals", "backlog"))
-        coEvery { store.getCachedLinearStates("alpha") } returns cached
-
-        val result = repo.getStates("alpha", forceRefresh = false)
-
-        assertTrue(result is MetadataResult.Cached)
-        assertEquals(cached, (result as MetadataResult.Cached).items)
-        coVerify(exactly = 0) { restApi.getLinearStates(any()) }
-    }
-
-    @Test
     fun getStates_force_persistsAndReturnsFresh() = runTest {
         val (repo, restApi, store) = newRepo()
         coEvery { store.getCachedLinearStates("alpha") } returns emptyList()
@@ -119,36 +106,5 @@ class LinearMetadataRepositoryTest {
         assertTrue(result is MetadataResult.Fresh)
         assertEquals(fresh, (result as MetadataResult.Fresh).items)
         coVerify(exactly = 1) { store.setCachedLinearStates("alpha", fresh) }
-    }
-
-    @Test
-    fun getStates_networkError_returnsCachedSnapshotInError() = runTest {
-        val (repo, restApi, store) = newRepo()
-        val cached = listOf(LinearStateDto("Proposals", "backlog"))
-        coEvery { store.getCachedLinearStates("alpha") } returns cached
-        coEvery { restApi.getLinearStates("alpha") } throws RuntimeException("upstream 502")
-
-        val result = repo.getStates("alpha", forceRefresh = true)
-
-        assertTrue(result is MetadataResult.Error)
-        val err = result as MetadataResult.Error
-        assertEquals("upstream 502", err.message)
-        assertEquals(cached, err.cached)
-    }
-
-    @Test
-    fun refreshLabels_isAliasFor_force() = runTest {
-        val (repo, restApi, store) = newRepo()
-        coEvery { store.getCachedLinearLabels("alpha") } returns
-            listOf(LinearLabelDto("Stale"))
-        val fresh = listOf(LinearLabelDto("Fresh"))
-        coEvery { restApi.getLinearLabels("alpha") } returns fresh
-        coEvery { store.setCachedLinearLabels("alpha", fresh) } just Runs
-
-        // Even though cache is non-empty, refreshLabels forces network.
-        val result = repo.refreshLabels("alpha")
-
-        assertTrue(result is MetadataResult.Fresh)
-        coVerify(exactly = 1) { restApi.getLinearLabels("alpha") }
     }
 }

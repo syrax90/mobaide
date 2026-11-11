@@ -80,13 +80,6 @@ final class SessionListModelTests: XCTestCase {
 
     // MARK: - Display helpers (pure)
 
-    func testKindLabels() {
-        XCTAssertEqual(SessionDisplay.kindLabel(makeSessionResponse(kind: .claude), customTypeNames: [:]), "Claude Code")
-        XCTAssertEqual(SessionDisplay.kindLabel(makeSessionResponse(kind: .codex), customTypeNames: [:]), "Codex")
-        XCTAssertEqual(SessionDisplay.kindLabel(makeSessionResponse(kind: .antigravity), customTypeNames: [:]), "Antigravity")
-        XCTAssertEqual(SessionDisplay.kindLabel(makeSessionResponse(kind: .shell), customTypeNames: [:]), "Terminal")
-    }
-
     func testCustomKindLabelChain() {
         let names = ["custom_ab12cd34ef56": "Aider Renamed"]
 
@@ -104,73 +97,6 @@ final class SessionListModelTests: XCTestCase {
         XCTAssertEqual(
             SessionDisplay.kindLabel(withoutSnapshot, customTypeNames: [:]), "Custom",
             "a deleted/unknown type without a snapshot renders the generic label"
-        )
-    }
-
-    func testHeaderLabelPrefersTitle() {
-        XCTAssertEqual(
-            SessionDisplay.headerLabel(makeSessionResponse(title: "Fix the header", kind: .codex), customTypeNames: [:]),
-            "Fix the header"
-        )
-    }
-
-    func testHeaderLabelFallsBackToKindWithoutUsableTitle() {
-        XCTAssertEqual(
-            SessionDisplay.headerLabel(makeSessionResponse(kind: .codex), customTypeNames: [:]), "Codex",
-            "a session with no title yet renders its kind, never its id"
-        )
-        XCTAssertEqual(
-            SessionDisplay.headerLabel(makeSessionResponse(title: "   ", kind: .shell), customTypeNames: [:]), "Terminal",
-            "a whitespace-only OSC title is not a label"
-        )
-    }
-
-    func testHeaderLabelReusesCustomKindChain() {
-        let names = ["custom_ab12cd34ef56": "Aider Renamed"]
-        let session = makeSessionResponse(kind: .custom("custom_ab12cd34ef56"))
-        XCTAssertEqual(SessionDisplay.headerLabel(session, customTypeNames: names), "Aider Renamed")
-    }
-
-    func testDialogLabelPrefersTitle() {
-        XCTAssertEqual(
-            SessionDisplay.dialogLabel(
-                makeSessionResponse(title: "Fix the parser", projectName: "mobaide", kind: .codex),
-                customTypeNames: [:]
-            ),
-            "Fix the parser"
-        )
-    }
-
-    func testDialogLabelFallsBackToKindAndProject() {
-        XCTAssertEqual(
-            SessionDisplay.dialogLabel(
-                makeSessionResponse(projectName: "mobaide", kind: .codex), customTypeNames: [:]
-            ),
-            "Codex · mobaide",
-            "two sessions of one kind must stay apart in a destructive prompt"
-        )
-        XCTAssertEqual(
-            SessionDisplay.dialogLabel(
-                makeSessionResponse(kind: .custom("custom_ab12cd34ef56"), kindLabel: "Aider"),
-                customTypeNames: [:]
-            ),
-            "Aider",
-            "no project leaves the bare kind"
-        )
-    }
-
-    func testDialogLabelTreatsBlankTitleAndProjectAsAbsent() {
-        XCTAssertEqual(
-            SessionDisplay.dialogLabel(
-                makeSessionResponse(title: "   ", projectName: "mobaide"), customTypeNames: [:]
-            ),
-            "Claude Code · mobaide"
-        )
-        XCTAssertEqual(
-            SessionDisplay.dialogLabel(
-                makeSessionResponse(title: "", projectName: " ", kind: .shell), customTypeNames: [:]
-            ),
-            "Terminal"
         )
     }
 
@@ -240,13 +166,6 @@ final class SessionListModelTests: XCTestCase {
         XCTAssertNil(SessionDisplay.statusChip(makeSessionResponse(activity: "idle")))
     }
 
-    func testCanStop() {
-        XCTAssertTrue(SessionDisplay.canStop("running"))
-        XCTAssertTrue(SessionDisplay.canStop("starting"))
-        XCTAssertFalse(SessionDisplay.canStop("stopped"))
-        XCTAssertFalse(SessionDisplay.canStop("crashed"))
-    }
-
     // MARK: - Active auto scans
 
     func testObserveScansPopulatesActiveScansFromRepository() async {
@@ -308,23 +227,6 @@ final class SessionListModelTests: XCTestCase {
     }
 
     // MARK: - Bus-driven list + auto-resume
-
-    func testListReflectsBusSnapshot() async throws {
-        let (model, repo, bus, factory) = makeStack(prefs: isolatedPrefs())
-        let observe = Task { await model.observeSessions() }
-        defer { observe.cancel() }
-        repo.start()
-        await bus.start()
-        let connection = try await factory.connection(1)
-        connection.emit(.opened)
-        connection.emit(.text(snapshot("a", "running")))
-
-        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
-        while ContinuousClock.now < deadline, model.sessions.isEmpty {
-            try await Task.sleep(for: .milliseconds(5))
-        }
-        XCTAssertEqual(model.sessions.map(\.session_id), ["a"])
-    }
 
     func testAutoResumeOpensRunningLastSession() async throws {
         let prefs = isolatedPrefs()

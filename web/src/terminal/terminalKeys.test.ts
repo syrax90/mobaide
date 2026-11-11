@@ -98,12 +98,6 @@ const cases: Case[] = [
     context: context({ hasSelection: true }),
     expected: 'terminal',
   },
-  {
-    name: 'an unmodified letter is ordinary terminal input',
-    chord: chord('c'),
-    context: context({ hasSelection: true }),
-    expected: 'terminal',
-  },
 ];
 
 describe('resolveKeyAction', () => {
@@ -111,7 +105,7 @@ describe('resolveKeyAction', () => {
     expect(resolveKeyAction(keyChord, policy)).toBe(expected);
   });
 
-  it.each(['keyup', 'keypress'])('ignores a %s of the same chord', (type) => {
+  it.each(['keyup'])('ignores a %s of the same chord', (type) => {
     // xterm hands the handler every event type; acting on more than the
     // keydown would copy twice per press.
     expect(

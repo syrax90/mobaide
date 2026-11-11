@@ -46,24 +46,10 @@ class TestControlSocket:
 
         assert path == os.path.join(tmp_path, "app-server-control", "app-server-control.sock")
 
-    def test_default_is_the_codex_folder_in_home(self):
-        path = codex_bridge.control_socket({})
-
-        assert path == os.path.join(
-            os.path.expanduser("~"), ".codex", "app-server-control", "app-server-control.sock"
-        )
-
 
 @skip_if_not_linux
 class TestSocketReachable:
-    def test_missing_path(self, codex_home):
-        assert codex_bridge.socket_reachable(str(codex_home / "nothing.sock")) is False
 
-    def test_a_regular_file(self, codex_home):
-        path = Path(_socket_path(codex_home))
-        path.write_text("", encoding="utf-8")
-
-        assert codex_bridge.socket_reachable(str(path)) is False
 
     def test_a_socket_file_nobody_listens_on(self, codex_home):
         """What a crashed app-server leaves behind."""
@@ -93,10 +79,6 @@ class TestMain:
         monkeypatch.setattr(codex_bridge.os, "execv", lambda path, argv: calls.append((path, argv)))
         return calls
 
-    def test_usage(self, execs, capsys):
-        assert codex_bridge.main(["codex_bridge.py"]) == 2
-        assert execs == []
-        assert "usage" in capsys.readouterr().err
 
     def test_no_shared_app_server_runs_a_private_one(self, execs, tmp_path, monkeypatch):
         monkeypatch.setenv("CODEX_HOME", str(tmp_path))

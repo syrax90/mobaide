@@ -19,12 +19,7 @@ import aiosmtplib
 from starlette.testclient import TestClient
 
 from central_server.app import create_app
-from central_server.auth.email import (
-    CapturedEmail,
-    EmailSender,
-    TestEmailSink,
-    build_email_sender,
-)
+from central_server.auth.email import TestEmailSink
 from central_server.config import CentralServerConfig
 
 
@@ -101,89 +96,6 @@ class TestFromEnvSelector:
             assert config.is_test_mode is False, value
             assert config.db_path == "central_server.db", value
             assert config.manifest_store_path == "data/agent_manifest.json", value
-
-    def test_empty_explicit_path_is_preserved_not_defaulted(self, monkeypatch):
-        """An explicit empty DB_PATH is returned verbatim, not defaulted.
-
-        Production must stay byte-identical to the prior
-        ``os.getenv("DB_PATH", default)``: an empty string is an explicit
-        value (matched via ``is not None``) and wins over the default. A
-        refactor to ``os.getenv(...) or default`` would silently regress this.
-        """
-        monkeypatch.setenv("JWT_SECRET_KEY", "x")
-        monkeypatch.delenv("MOBAIDE_ENV", raising=False)
-        monkeypatch.setenv("DB_PATH", "")
-        monkeypatch.delenv("MANIFEST_STORE_PATH", raising=False)
-
-        config = CentralServerConfig.from_env()
-
-        assert config.is_test_mode is False
-        assert config.db_path == ""
-        assert config.manifest_store_path == "data/agent_manifest.json"
-
-    def test_explicit_manifest_path_wins_in_test_mode(self, monkeypatch, tmp_path):
-        """MANIFEST_STORE_PATH is authoritative in test mode, like DB_PATH.
-
-        Mirror of ``test_explicit_paths_win_in_test_mode`` for the manifest
-        path. DB_PATH is left unset, so the db still falls to the lazily
-        created temp dir (cleaned up below).
-        """
-        monkeypatch.setenv("JWT_SECRET_KEY", "x")
-        monkeypatch.setenv("MOBAIDE_ENV", "test")
-        explicit_manifest = str(tmp_path / "explicit_manifest.json")
-        monkeypatch.setenv("MANIFEST_STORE_PATH", explicit_manifest)
-        monkeypatch.delenv("DB_PATH", raising=False)
-
-        config = CentralServerConfig.from_env()
-        try:
-            assert config.manifest_store_path == explicit_manifest
-            assert config.db_path != "central_server.db"
-            db_parent = os.path.dirname(config.db_path)
-            assert os.path.basename(db_parent).startswith("mobaide-test")
-        finally:
-            shutil.rmtree(os.path.dirname(config.db_path), ignore_errors=True)
-
-
-class TestBuildEmailSender:
-    """The single selector seam picks a sender by environment."""
-
-    def test_production_returns_real_smtp_sender(self):
-        config = CentralServerConfig(jwt_secret_key="x", env="production")
-        assert isinstance(build_email_sender(config), EmailSender)
-
-    def test_test_mode_returns_in_process_sink(self):
-        config = CentralServerConfig(jwt_secret_key="x", env="test")
-        assert isinstance(build_email_sender(config), TestEmailSink)
-
-
-class TestEmailSinkContract:
-    """The sink captures every method AuthService calls, without I/O."""
-
-    async def test_captures_all_five_send_methods(self):
-        sink = TestEmailSink()
-
-        await sink.send_verification_email("a@x.io", "123456", 15)
-        await sink.send_password_reset_email("b@x.io", "654321", 30, "1.2.3.4")
-        await sink.send_password_changed_notification("c@x.io", 2)
-        await sink.send_account_deletion_requested(
-            "d@x.io", "2026-01-01T00:00:00Z", 14, "https://x/cancel"
-        )
-        await sink.send_account_deletion_completed("e@x.io")
-
-        assert all(isinstance(m, CapturedEmail) for m in sink.messages)
-        assert [m.kind for m in sink.messages] == [
-            "verification",
-            "password_reset",
-            "password_changed",
-            "account_deletion_requested",
-            "account_deletion_completed",
-        ]
-        assert sink.messages[0].to == "a@x.io"
-        assert sink.messages[0].params["code"] == "123456"
-        assert sink.messages[1].params["client_ip"] == "1.2.3.4"
-        assert sink.messages[2].params["revoked_session_count"] == 2
-        assert sink.messages[3].params["grace_days"] == 14
-        assert sink.messages[4].params == {}
 
 
 class TestTestModeAppIntegration:

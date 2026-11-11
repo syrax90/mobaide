@@ -1,202 +1,89 @@
-"""Pins on the macOS launchd fix in ``deploy/install.sh`` (+ the static
-``deploy/launchd/com.mobaide.agent.plist`` reference template).
+"""Behavioural tests for ``resolve_run_as_user_macos`` in ``deploy/install.sh``.
 
-The reported failure: ``http://127.0.0.1:8000/api/health did not respond
-within 60s``. Root cause — the generated launcher used
-``#!/usr/bin/env bash`` while the launchd plist ``PATH`` omitted ``/bin``.
-macOS keeps bash only at ``/bin/bash``, so ``env`` could not resolve
-``bash`` and the launcher never exec'd (``env: bash: No such file or
-directory``, repeated by ``KeepAlive``). uvicorn never bound 8000 → health
-timed out. Additionally launchd does NOT expand ``$HOME`` in
-``EnvironmentVariables``, so the home-relative ``PATH`` entries were literal
-``$HOME/...`` garbage, and a root ``launchctl load`` of a per-user
-LaunchAgent warned and ran the agent as root.
+The agent must run in the developer's GUI session, never as root. The
+resolved name then reaches ``id``, ``dscl``, ``chown``, an ``eval echo ~user``
+and the generated plist, so anything outside the macOS short-name charset
+must be refused before the first of those runs.
 
-The fix: absolute ``#!/bin/bash`` shebang; plist ``PATH`` gains ``/bin:/sbin``
-and substitutes the expanded ``$RUN_HOME`` at install time; a ``HOME`` key;
-``resolve_run_as_user_macos`` resolves the GUI user; ``launchctl_user`` runs
-launchctl in that user's session; ``install_launchd_plist`` loads via
-``launchctl bootstrap gui/<uid>`` with bootout/enable/kickstart and a legacy
-``load`` fallback. The Linux systemd path is untouched.
-
-A second macOS-only defect in the same install path: the plist set no
-``WorkingDirectory``, so the agent ran with CWD ``/`` (read-only system
-volume on modern macOS). Its ``projects.json`` / ``users.json`` store paths
-are relative (``AgentConfig`` defaults) and are designed to resolve under
-the supervisor's working directory — the systemd unit pins
-``WorkingDirectory=$MOBAIDE_AGENT_PREFIX`` but the launchd plist did not, so
-the first-boot store write crashed with ``OSError: [Errno 30] Read-only file
-system: 'projects.json.tmp'`` and 8000 never bound (``KeepAlive`` looped it).
-The plist now pins ``WorkingDirectory`` to the writable prefix, matching
-systemd.
-
-These tests are pure text/AST pins on the source-of-truth files (the same
-convention as ``test_install_sh.py`` / ``test_install_sh_heredoc_no_subst.py``);
-they do NOT execute the installer. End-to-end execution is covered by the
-manual verification steps in the plan and by CI distro images. The shared
-``bash -n`` parse net is already provided by
-``test_install_sh.py::test_install_sh_parses_under_bash_n`` and is not
-duplicated here.
+``id``, ``stat`` and ``dscl`` are shell-function stubs; ``id`` records every
+user name it is asked about.
 """
 from __future__ import annotations
 
-import re
-from functools import cache
+import shlex
+import subprocess
 from pathlib import Path
 
-from test_install_script_trap import _sh_function_body
+import pytest
+
+from test_install_script_trap import _BASH, _sh_function
 
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-_DEPLOY_INSTALL_SH = _REPO_ROOT / "deploy" / "install.sh"
-_DEPLOY_PLIST = _REPO_ROOT / "deploy" / "launchd" / "com.mobaide.agent.plist"
+pytestmark = pytest.mark.skipif(_BASH is None, reason="bash unavailable")
 
 
-@cache
-def _read_install_sh_text() -> str:
-    assert _DEPLOY_INSTALL_SH.is_file(), (
-        f"missing install script: {_DEPLOY_INSTALL_SH}"
+def _resolve(
+    tmp_path: Path, *, override: str = "", sudo_user: str = "", console: str = ""
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    assert _BASH is not None
+    looked_up = tmp_path / "id-lookups"
+    harness = (
+        "set -euo pipefail\n"
+        "PLATFORM=darwin\n"
+        f"MOBAIDE_RUN_AS_USER={shlex.quote(override)}\n"
+        f"SUDO_USER={shlex.quote(sudo_user)}\n"
+        "info() { printf '[INFO] %s\\n' \"$*\"; }\n"
+        "fail() { printf '[ERROR] %s\\n' \"$*\" >&2; exit 1; }\n"
+        "id() {\n"
+        '  case "$1" in\n'
+        '    -u) [ $# -eq 1 ] && echo 0 || echo 501 ;;\n'
+        "    -gn) echo staff ;;\n"
+        "    -un) echo root ;;\n"
+        f"    *) printf '%s\\n' \"$1\" >> {shlex.quote(str(looked_up))} ;;\n"
+        "  esac\n"
+        "}\n"
+        f"stat() {{ printf '%s' {shlex.quote(console)}; }}\n"
+        "dscl() { printf 'NFSHomeDirectory: /Users/%s\\n' \"${3#/Users/}\"; }\n"
+        + _sh_function("resolve_run_as_user_macos")
+        + "resolve_run_as_user_macos\n"
+        + "printf 'RUN_USER=<%s> RUN_HOME=<%s>\\n' \"$RUN_USER\" \"$RUN_HOME\"\n"
     )
-    return _DEPLOY_INSTALL_SH.read_text(encoding="utf-8")
+    proc = subprocess.run([_BASH, "-c", harness], capture_output=True, text=True)
+    lookups = looked_up.read_text().split() if looked_up.exists() else []
+    return proc, lookups
 
 
-@cache
-def _read_plist_text() -> str:
-    assert _DEPLOY_PLIST.is_file(), (
-        f"missing launchd reference plist: {_DEPLOY_PLIST}"
-    )
-    return _DEPLOY_PLIST.read_text(encoding="utf-8")
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({"override": "alice", "sudo_user": "bob", "console": "carol"}, "alice"),
+        ({"sudo_user": "bob", "console": "carol"}, "bob"),
+        ({"console": "carol"}, "carol"),
+    ],
+    ids=["override-wins", "sudo-user-next", "console-owner-last"],
+)
+def test_resolution_precedence(tmp_path, kwargs, expected) -> None:
+    proc, _ = _resolve(tmp_path, **kwargs)
+
+    assert proc.returncode == 0, proc.stderr
+    assert f"RUN_USER=<{expected}> RUN_HOME=</Users/{expected}>" in proc.stdout
 
 
-def _list_function_names() -> list[str]:
-    return re.findall(
-        r"^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{", _read_install_sh_text(), re.M
-    )
+def test_refuses_to_run_as_root(tmp_path) -> None:
+    proc, _ = _resolve(tmp_path, override="root")
+
+    assert proc.returncode == 1
+    assert "Refusing to run the agent as 'root'" in proc.stderr
 
 
-def test_resolve_run_as_user_macos_resolution_precedence() -> None:
-    """``resolve_run_as_user_macos`` must resolve the run user in the
-    order: ``MOBAIDE_RUN_AS_USER`` → ``SUDO_USER`` → non-root self →
-    console owner (``stat -f '%Su' /dev/console``).
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"override": "x;touch pwned"}, {"sudo_user": "$(id)"}, {"console": ""}],
+    ids=["metachar-override", "subst-in-sudo-user", "empty-console-owner"],
+)
+def test_unsafe_names_are_refused_before_any_lookup(tmp_path, kwargs) -> None:
+    proc, lookups = _resolve(tmp_path, **kwargs)
 
-    The explicit override wins first; under sudo the invoking user is the
-    GUI user; a non-root install runs as itself; only a bare root shell
-    falls back to whoever owns the desktop console. Reordering these
-    (e.g. console owner before SUDO_USER) would pick the wrong session.
-    """
-    body = _sh_function_body("resolve_run_as_user_macos")
-    env_pos = body.find("MOBAIDE_RUN_AS_USER")
-    sudo_pos = body.find("SUDO_USER")
-    console_pos = body.find("/dev/console")
-    assert env_pos >= 0, (
-        "resolve_run_as_user_macos must honour the MOBAIDE_RUN_AS_USER "
-        "override. Body:\n" + repr(body)
-    )
-    assert sudo_pos >= 0, (
-        "resolve_run_as_user_macos must consider SUDO_USER (the invoking "
-        "user after auto-elevation). Body:\n" + repr(body)
-    )
-    assert console_pos >= 0, (
-        "resolve_run_as_user_macos must fall back to the console owner "
-        "via `stat -f '%Su' /dev/console` for a bare root shell. Body:\n"
-        + repr(body)
-    )
-    assert env_pos < sudo_pos < console_pos, (
-        f"resolution precedence is wrong: expected MOBAIDE_RUN_AS_USER "
-        f"(pos {env_pos}) < SUDO_USER (pos {sudo_pos}) < /dev/console "
-        f"console owner (pos {console_pos}). The explicit override must "
-        f"win, then the sudo invoker, and only a bare root shell may "
-        f"fall back to the desktop console owner. Body:\n" + repr(body)
-    )
-
-
-def test_resolve_run_as_user_macos_refuses_root() -> None:
-    """``resolve_run_as_user_macos`` must hard-fail if the resolved user is
-    ``root``.
-
-    A dev agent that manages the user's source tree must never run as
-    root. The function must call ``fail`` when ``RUN_USER`` resolves to
-    ``root`` rather than proceeding to load a root-owned agent.
-    """
-    body = _sh_function_body("resolve_run_as_user_macos")
-    assert re.search(r'\[\s*"\$RUN_USER"\s*=\s*"root"\s*\]', body), (
-        "resolve_run_as_user_macos must test `[ \"$RUN_USER\" = "
-        "\"root\" ]` and reject it. Body:\n" + repr(body)
-    )
-    assert "fail" in body, (
-        "resolve_run_as_user_macos must call `fail` when the resolved "
-        "user is root — the agent must not run as root. Body:\n"
-        + repr(body)
-    )
-
-
-def test_resolve_run_as_user_macos_rejects_unsafe_username_charset() -> None:
-    """``resolve_run_as_user_macos`` must reject any ``RUN_USER`` outside
-    the macOS short-name charset ``[A-Za-z0-9._-]`` (and the empty string).
-
-    [SEC-01] ``RUN_USER`` is sourced from ``MOBAIDE_RUN_AS_USER`` /
-    ``SUDO_USER`` / the ``/dev/console`` owner and then flows into ``id``,
-    ``dscl``, ``chown``, the tilde ``eval echo ~$RUN_USER``, and the
-    generated plist. A value containing a shell metacharacter (``;``,
-    ``$()``, a quote, whitespace) would be an injection sink at those
-    sites. The guard is a ``case "$RUN_USER" in`` with an
-    ``''|*[!A-Za-z0-9._-]*)`` arm that calls ``fail`` before any of those
-    consumers run. A regression that drops or loosens it re-opens the
-    injection vector.
-    """
-    body = _sh_function_body("resolve_run_as_user_macos")
-    assert re.search(r'case\s+"\$RUN_USER"\s+in', body), (
-        "resolve_run_as_user_macos must guard $RUN_USER with a "
-        '`case "$RUN_USER" in` statement before it reaches id/dscl/chown/'
-        "eval/plist. Body:\n" + repr(body)
-    )
-    assert "[!A-Za-z0-9._-]" in body, (
-        "resolve_run_as_user_macos must reject usernames outside the "
-        "macOS short-name charset via a `*[!A-Za-z0-9._-]*` case pattern "
-        "(rejecting any shell metacharacter before it flows into id/dscl/"
-        "chown/eval/plist). Body:\n" + repr(body)
-    )
-    assert re.search(r"''\s*\|\s*\*\[!A-Za-z0-9\._-\]\*\)", body), (
-        "the charset guard must also reject the empty username — the "
-        "case arm must be `''|*[!A-Za-z0-9._-]*)` so an unset console "
-        "owner (empty `stat -f '%Su' /dev/console`) is rejected, not "
-        "passed downstream. Body:\n" + repr(body)
-    )
-
-
-def test_resolve_run_as_user_macos_charset_guard_runs_before_id_check() -> None:
-    """The [SEC-01] charset guard must sit AFTER the root-refusal check and
-    BEFORE the ``id "$RUN_USER"`` existence probe.
-
-    Ordering is the whole point of the guard: ``id "$RUN_USER"`` is the
-    first consumer that interpolates the unvalidated name, so the
-    ``case``/charset rejection must run first. (It is placed after the
-    root-refusal so the more specific "never root" diagnostic still wins
-    for the literal ``root``.) If the guard were reordered below the
-    ``id`` probe, a metacharacter username would already have reached a
-    command substitution before being rejected.
-    """
-    body = _sh_function_body("resolve_run_as_user_macos")
-    root_pos = body.find('"$RUN_USER" = "root"')
-    guard_pos = body.find("[!A-Za-z0-9._-]")
-    id_check_pos = body.find('id "$RUN_USER"')
-    assert root_pos >= 0, (
-        "resolve_run_as_user_macos must keep the root-refusal check. "
-        "Body:\n" + repr(body)
-    )
-    assert guard_pos >= 0, (
-        "resolve_run_as_user_macos must contain the charset guard "
-        "pattern `[!A-Za-z0-9._-]`. Body:\n" + repr(body)
-    )
-    assert id_check_pos >= 0, (
-        "resolve_run_as_user_macos must probe `id \"$RUN_USER\"` for "
-        "existence. Body:\n" + repr(body)
-    )
-    assert root_pos < guard_pos < id_check_pos, (
-        f"the [SEC-01] charset guard (pos {guard_pos}) must sit AFTER the "
-        f"root-refusal check (pos {root_pos}) and BEFORE the "
-        f"`id \"$RUN_USER\"` existence probe (pos {id_check_pos}) — id is "
-        f"the first consumer that interpolates the unvalidated username, "
-        f"so the rejection must run first. Body:\n" + repr(body)
-    )
-
+    assert proc.returncode == 1
+    assert "Refusing unsafe agent username" in proc.stderr
+    assert lookups == []

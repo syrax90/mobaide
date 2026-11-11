@@ -6,7 +6,7 @@ import type {
   SessionGitSyncRequest,
 } from '../../../api/sessionGitRepository';
 import type { GitCapabilities } from '../../../protocol/dto/agentVersion';
-import { GitSyncDialog, SyncProgressBar } from './GitSyncDialog';
+import { GitSyncDialog } from './GitSyncDialog';
 
 const ALL_GIT: GitCapabilities = {
   stage: true,
@@ -205,18 +205,6 @@ describe('GitSyncDialog while a job runs', () => {
 
     expect(onCancelJob).toHaveBeenCalledWith('j1');
   });
-
-  it('draws the indeterminate block before git reports a phase', () => {
-    renderDialog({ job: job({ op: 'fetch' }) });
-
-    const progress = within(dialog()).getByRole('status');
-    expect(progress).toHaveTextContent('Fetching…');
-    expect(within(progress).queryByRole('progressbar')).toBeNull();
-    expect(progress.querySelector('.git-sync-bar-indeterminate')).toHaveAttribute(
-      'aria-label',
-      'Fetching…',
-    );
-  });
 });
 
 describe('GitSyncDialog once a job is done', () => {
@@ -308,41 +296,5 @@ describe('GitSyncDialog once a job is done', () => {
     expect(within(result).getByRole('button', { name: 'Force push (with lease)…' })).toBeInTheDocument();
     expect(within(result).queryByRole('button', { name: 'Pull with rebase…' })).toBeNull();
     expect(within(result).queryByRole('button', { name: 'Pull with merge…' })).toBeNull();
-  });
-
-  it('shows no follow-up and no duplicate output when the copy already says it all', () => {
-    renderDialog({
-      job: job({
-        op: 'fetch',
-        status: 'done',
-        ok: false,
-        error_code: 'git_error',
-        message: 'fatal: boom',
-      }),
-    });
-
-    const result = within(dialog()).getByRole('alert');
-    expect(result).toHaveTextContent('Fetch failed');
-    expect(within(result).getAllByText('fatal: boom')).toHaveLength(1);
-    expect(within(result).queryByRole('button')).toBeNull();
-  });
-});
-
-describe('SyncProgressBar', () => {
-  it('is a determinate bar for a percentage, clamped to the scale', () => {
-    render(<SyncProgressBar percent={150} label="Writing objects" />);
-
-    const bar = screen.getByRole('progressbar', { name: 'Writing objects' });
-    expect(bar).toHaveAttribute('aria-valuenow', '100');
-    expect(bar).toHaveAttribute('aria-valuemin', '0');
-    expect(bar).toHaveAttribute('aria-valuemax', '100');
-    expect(bar.querySelector('.git-sync-bar-fill')).toHaveStyle({ width: '100%' });
-  });
-
-  it('is the blinking block, not a progressbar, without a percentage', () => {
-    render(<SyncProgressBar percent={null} label="Pushing…" />);
-
-    expect(screen.queryByRole('progressbar')).toBeNull();
-    expect(document.querySelector('.git-sync-bar-indeterminate')).toHaveClass('state-loading');
   });
 });

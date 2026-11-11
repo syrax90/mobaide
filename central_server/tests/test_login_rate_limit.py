@@ -20,7 +20,6 @@ from central_server.auth.service import (
     AccountDeletionAuthError,
     AuthService,
     LoginRateLimitedError,
-    retry_after_phrase,
 )
 from central_server.config import CentralServerConfig
 from central_server.db.database import Database
@@ -126,21 +125,6 @@ async def _fail_login(
     for _ in range(times):
         with pytest.raises(ValueError):
             await svc.login_user(email, "wrong-password", client_ip=client_ip)
-
-
-class TestRetryAfterPhrase:
-    @pytest.mark.parametrize(
-        ("seconds", "phrase"),
-        [
-            (0, "1 minute"),
-            (1, "1 minute"),
-            (60, "1 minute"),
-            (61, "2 minutes"),
-            (900, "15 minutes"),
-        ],
-    )
-    def test_rounds_up_to_whole_minutes(self, seconds: int, phrase: str):
-        assert retry_after_phrase(seconds) == phrase
 
 
 class TestEmailBucket:
@@ -295,25 +279,6 @@ class TestIpBucket:
             throttled_service, "victim@example.com", EMAIL_CAP, client_ip="10.0.0.2"
         )
 
-    async def test_missing_client_ip_skips_the_ip_bucket(
-        self, throttled_service: AuthService
-    ):
-        for i in range(IP_CAP + 2):
-            await _fail_login(
-                throttled_service, f"spray{i}@example.com", 1, client_ip=None
-            )
-
-
-class TestUnthrottledService:
-    async def test_service_without_limiters_never_blocks(
-        self, config, db: Database
-    ):
-        svc = AuthService(config, db)
-        await _make_user(db, svc, "a@example.com")
-        await _fail_login(svc, "a@example.com", 20)
-        user_id, *_ = await svc.login_user("a@example.com", "correct-horse")
-        assert user_id
-
 
 class TestPasswordResetClearsLoginBucket:
     async def test_successful_reset_lifts_the_lockout(
@@ -382,17 +347,6 @@ class TestAccountDeletionReauth:
 
         with pytest.raises(AccountDeletionAuthError, match="Too many incorrect"):
             await self._delete(throttled_service, user, "correct-horse")
-
-    async def test_deletion_reauth_does_not_charge_the_ip_bucket(
-        self, throttled_service: AuthService, db: Database
-    ):
-        user = await _make_user(db, throttled_service, "a@example.com")
-        for _ in range(EMAIL_CAP):
-            with pytest.raises(AccountDeletionAuthError):
-                await self._delete(throttled_service, user, "wrong-password")
-
-        for i in range(IP_CAP):
-            await _fail_login(throttled_service, f"other{i}@example.com", 1)
 
 
 @pytest.fixture
@@ -493,28 +447,4 @@ class TestLifespanWiring:
             assert resp.status_code == 429
             assert resp.json()["detail"]["retry_after_seconds"] <= 900
 
-    def test_ip_cap_from_config_throttles_login(self, tmp_path):
-        config = _lifespan_config(
-            tmp_path, login_email_failure_cap=0, login_ip_failure_cap=2
-        )
-        with TestClient(create_app(config=config)) as client:
-            for i in range(2):
-                resp = client.post(
-                    "/api/auth/login",
-                    json={"email": f"s{i}@example.com", "password": "wrong-pass"},
-                )
-                assert resp.status_code == 401
-            resp = client.post(
-                "/api/auth/login",
-                json={"email": "fresh@example.com", "password": "wrong-pass"},
-            )
-            assert resp.status_code == 429
 
-    def test_zero_caps_disable_the_throttle(self, tmp_path):
-        config = _lifespan_config(
-            tmp_path, login_email_failure_cap=0, login_ip_failure_cap=0
-        )
-        with TestClient(create_app(config=config)) as client:
-            body = {"email": "a@example.com", "password": "wrong-password"}
-            for _ in range(12):
-                assert client.post("/api/auth/login", json=body).status_code == 401

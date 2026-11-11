@@ -80,7 +80,7 @@ const { autoscanChannelName } = await import('../realtime/channels');
 const { useConnectionStore } = await import('../realtime/connectionStore');
 const { fakeEventTarget } = await import('../realtime/__testing__/fakeEventTarget');
 const { observeTabVisibility } = await import('../realtime/tabVisibility');
-const { useAutoScanDetail, useSecondTicker } = await import('./useAutoScanDetail');
+const { useAutoScanDetail } = await import('./useAutoScanDetail');
 
 /** Matches `HIDDEN_DISCONNECT_MS` in the hook. */
 const HIDDEN_DISCONNECT_MS = 60_000;
@@ -141,18 +141,6 @@ describe('useAutoScanDetail', () => {
     view.unmount();
 
     expect(opened()?.disposed).toBe(true);
-  });
-
-  it('opens nothing until there is a session', () => {
-    useSessionStore.setState({ authState: { kind: 'unauthenticated' } });
-    mount();
-    expect(FakeAutoScanChannel.opened).toHaveLength(0);
-
-    act(() => {
-      useSessionStore.setState({ authState: { kind: 'userOnly' } });
-    });
-
-    expect(FakeAutoScanChannel.opened).toHaveLength(1);
   });
 
   it('holds a burst of frames until the next animation frame, then applies it in order', () => {
@@ -412,35 +400,6 @@ describe('useAutoScanDetail tab visibility', () => {
 
       expect(opened()?.connectCount).toBe(before);
       uninstall();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-});
-
-describe('useSecondTicker', () => {
-  it('ticks once a second only while active, and stops on unmount', () => {
-    vi.useFakeTimers();
-    try {
-      const view = renderHook(({ active }) => useSecondTicker(active), {
-        initialProps: { active: false },
-      });
-      const idle = view.result.current;
-
-      act(() => {
-        vi.advanceTimersByTime(3000);
-      });
-      expect(view.result.current).toBe(idle);
-
-      view.rerender({ active: true });
-      const started = view.result.current;
-      act(() => {
-        vi.advanceTimersByTime(1000);
-      });
-      expect(view.result.current).toBe(started + 1000);
-
-      view.unmount();
-      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }

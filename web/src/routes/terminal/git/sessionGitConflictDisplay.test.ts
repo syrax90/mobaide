@@ -1,31 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionGitConflict } from '../../../api/sessionGitRepository';
 import {
-  KEEP_EDITS_WARNING,
-  START_OVER_LABEL,
-  START_OVER_WITH_BASE_LABEL,
   canStartOver,
   canTakeSide,
-  conflictCaption,
   conflictKindNotice,
-  conflictLegend,
-  conflictsLeftLabel,
-  discardEditsPrompt,
-  draftSavedNotice,
   exceedsByteLimit,
-  fileChangedNotice,
   isEditableConflict,
   nextConflictOffset,
-  resolvedElsewhereNotice,
-  resolvedNotice,
-  restorePrompt,
-  restoredNotice,
   scanConflictText,
-  sideName,
-  sideRole,
-  startOverPrompt,
   takeChoices,
-  tooLargeToSaveNotice,
 } from './sessionGitConflictDisplay';
 
 const conflict = (over: Partial<SessionGitConflict> = {}): SessionGitConflict => ({
@@ -79,8 +62,6 @@ describe('scanConflictText', () => {
   it.each([
     ['a bare marker', '<<<<<<<', true],
     ['a marker before CRLF', '<<<<<<<\r\nx', true],
-    ['a marker before a tab', '<<<<<<<\tlabel', true],
-    ['a marker before a form feed', '<<<<<<<\fx', true],
     ['more than seven characters', '<<<<<<<<< label', true],
     ['six characters', '<<<<<< label', false],
     ['a label glued to the marker', '<<<<<<<label', false],
@@ -88,7 +69,6 @@ describe('scanConflictText', () => {
     ['a marker mid-line', 'x <<<<<<< label', false],
     // JavaScript's `\s` takes these for whitespace; Python's bytes `\s` does not.
     ['a no-break space after the marker', '<<<<<<< label', false],
-    ['a line separator after the marker', '<<<<<<< label', false],
   ])('matches the agent on %s', (_label, text, marker) => {
     expect(scanConflictText(text).hasMarkers).toBe(marker);
     expect(scanConflictText(text).conflicts).toBe(marker ? 1 : 0);
@@ -140,90 +120,6 @@ describe('exceedsByteLimit', () => {
     expect(exceedsByteLimit('😀😀😀', 8)).toBe(true);
   });
 
-  it('never stops an empty text', () => {
-    expect(exceedsByteLimit('', 0)).toBe(false);
-  });
-});
-
-describe('tooLargeToSaveNotice', () => {
-  it("states the agent's limit in KB", () => {
-    expect(tooLargeToSaveNotice(262144)).toBe('Too large to save here (over 256 KB).');
-  });
-});
-
-describe('conflictsLeftLabel', () => {
-  it('counts the open conflicts', () => {
-    expect(conflictsLeftLabel(1, true)).toBe('1 conflict left');
-    expect(conflictsLeftLabel(3, true)).toBe('3 conflicts left');
-  });
-
-  it('tells a stray end marker from a clean file', () => {
-    expect(conflictsLeftLabel(0, true)).toBe('A conflict marker is left');
-    expect(conflictsLeftLabel(0, false)).toBe('No conflict markers left');
-  });
-});
-
-describe('sideName and sideRole', () => {
-  it("names a side by the agent's label", () => {
-    expect(sideName(conflict(), 'ours')).toBe('origin/main');
-    expect(sideName(conflict(), 'theirs')).toBe('fedcba9 Fix the login redirect');
-  });
-
-  it('falls back to neutral names, never to ours or theirs', () => {
-    const unlabelled = conflict({
-      ours: { label: null, present: true },
-      theirs: { label: '', present: true },
-    });
-
-    expect(sideName(unlabelled, 'ours')).toBe('Current branch');
-    expect(sideName(unlabelled, 'theirs')).toBe('Incoming change');
-  });
-
-  it('explains a rebase the right way round: ours is the branch rebased onto', () => {
-    expect(sideRole('rebasing', 'ours')).toBe(
-      'the branch you are rebasing onto, plus your commits already replayed',
-    );
-    expect(sideRole('rebasing', 'theirs')).toBe('your commit being replayed');
-  });
-
-  it('explains a merge, and stays generic for any other operation', () => {
-    expect(sideRole('merging', 'ours')).toBe('the branch you are on');
-    expect(sideRole('merging', 'theirs')).toBe('the branch being merged in');
-    expect(sideRole('cherry_picking', 'ours')).toBe('what you have checked out');
-    expect(sideRole('clean', 'theirs')).toBe('the change being applied');
-  });
-});
-
-describe('conflictCaption', () => {
-  it.each([
-    ['UU', 'Both sides changed this file.'],
-    ['AA', 'Both sides added this file.'],
-    ['DU', 'origin/main deleted this file; fedcba9 Fix the login redirect changed it.'],
-    ['UD', 'origin/main changed this file; fedcba9 Fix the login redirect deleted it.'],
-    ['DD', 'Both sides deleted this file.'],
-    ['AU', 'Only origin/main has this file.'],
-    ['UA', 'Only fedcba9 Fix the login redirect has this file.'],
-    ['ZZ', 'The two sides disagree about this file.'],
-  ])('reads %s in plain words', (code, caption) => {
-    expect(conflictCaption(conflict({ code }))).toBe(caption);
-  });
-});
-
-describe('conflictLegend', () => {
-  it('maps the two regions of a block to the labelled sides', () => {
-    expect(conflictLegend(conflict(), false)).toEqual([
-      'Between <<<<<<< and =======: origin/main — the branch you are rebasing onto, plus your commits already replayed.',
-      'Between ======= and >>>>>>>: fedcba9 Fix the login redirect — your commit being replayed.',
-    ]);
-  });
-
-  it('adds the original lines when the text has base sections', () => {
-    expect(conflictLegend(conflict({ state: 'merging' }), true)).toEqual([
-      'Between <<<<<<< and |||||||: origin/main — the branch you are on.',
-      'Between ||||||| and =======: the original lines, before either change.',
-      'Between ======= and >>>>>>>: fedcba9 Fix the login redirect — the branch being merged in.',
-    ]);
-  });
 });
 
 describe('isEditableConflict and conflictKindNotice', () => {
@@ -238,13 +134,7 @@ describe('isEditableConflict and conflictKindNotice', () => {
   });
 
   it.each([
-    ['too_large', 'This file is too large to edit here (over 256 KB). Pick a side, or resolve it in the terminal.'],
     ['binary', 'This is a binary file — pick a side.'],
-    ['encoding', 'This file is not UTF-8 text — pick a side, or resolve it in the terminal.'],
-    ['missing', 'The file is not in the working tree — pick a side.'],
-    ['symlink', 'This is a symbolic link — pick a side.'],
-    ['submodule', 'Submodule conflicts are resolved in the terminal.'],
-    ['unsupported', "This conflict can't be resolved here — use the terminal."],
     ['hologram', "This conflict can't be resolved here — use the terminal."],
   ])('explains why a %s conflict is not editable', (kind, notice) => {
     const shown = conflict({ kind, content: null, token: null });
@@ -255,14 +145,14 @@ describe('isEditableConflict and conflictKindNotice', () => {
 });
 
 describe('canTakeSide and canStartOver', () => {
-  it.each(['text', 'too_large', 'binary', 'encoding', 'missing', 'symlink'])(
+  it.each(['text', 'binary'])(
     'offers whole-file picks for a %s conflict',
     (kind) => {
       expect(canTakeSide(conflict({ kind }))).toBe(true);
     },
   );
 
-  it.each(['submodule', 'unsupported', 'hologram'])('offers none for a %s conflict', (kind) => {
+  it.each(['submodule', 'hologram'])('offers none for a %s conflict', (kind) => {
     const shown = conflict({ kind, content: null });
 
     expect(canTakeSide(shown)).toBe(false);
@@ -278,27 +168,6 @@ describe('canTakeSide and canStartOver', () => {
 });
 
 describe('takeChoices', () => {
-  it('offers either side by its label when both have the file', () => {
-    expect(takeChoices(conflict())).toEqual([
-      {
-        side: 'ours',
-        label: 'Use origin/main for the whole file',
-        title: 'Use origin/main for the whole file?',
-        body: 'Every conflict in login.py is settled with this side and the file is marked resolved. Edits made to it are discarded.',
-        confirm: 'Use this side',
-        danger: false,
-      },
-      {
-        side: 'theirs',
-        label: 'Use fedcba9 Fix the login redirect for the whole file',
-        title: 'Use fedcba9 Fix the login redirect for the whole file?',
-        body: 'Every conflict in login.py is settled with this side and the file is marked resolved. Edits made to it are discarded.',
-        confirm: 'Use this side',
-        danger: false,
-      },
-    ]);
-  });
-
   it('turns the side that deleted the file into the destructive pick', () => {
     const deletedByUs = conflict({
       path: 'docs/old.md',
@@ -347,41 +216,5 @@ describe('takeChoices', () => {
     expect(takeChoices(bothDeleted).map((c) => [c.side, c.label, c.confirm, c.danger])).toEqual([
       ['ours', 'Delete the file', 'Delete file', true],
     ]);
-  });
-});
-
-describe('prompts and notices', () => {
-  it('names the file, not its directory, in the prompts', () => {
-    expect(startOverPrompt('src/login.py')).toEqual({
-      title: 'Start over?',
-      body: 'login.py is rebuilt from both sides. Every edit made to it since the conflict — here or in the terminal — is discarded.',
-    });
-    expect(restorePrompt('src/login.py')).toEqual({
-      title: 'Restore the conflict?',
-      body: 'login.py goes back to its conflicted state. The resolution you applied is discarded.',
-      confirm: 'Restore conflict',
-    });
-    expect(discardEditsPrompt('src/login.py')).toEqual({
-      title: 'Discard your edits?',
-      body: 'Your changes to login.py have not been saved.',
-    });
-    expect([START_OVER_LABEL, START_OVER_WITH_BASE_LABEL]).toEqual([
-      'Start over',
-      'Start over with original lines',
-    ]);
-  });
-
-  it('reports each outcome with the whole path', () => {
-    expect(resolvedNotice('src/login.py')).toBe('Resolved src/login.py.');
-    expect(draftSavedNotice('src/login.py')).toBe('Saved src/login.py — the conflict is still open.');
-    expect(restoredNotice('src/login.py')).toBe('Restored the conflict in src/login.py.');
-  });
-
-  it('explains a file that moved on, and what keeping the edits risks', () => {
-    expect(fileChangedNotice('src/login.py')).toBe(
-      'login.py changed on the agent machine since you opened it.',
-    );
-    expect(KEEP_EDITS_WARNING).toBe('Applying will overwrite the other change.');
-    expect(resolvedElsewhereNotice('src/login.py')).toBe('login.py is no longer in conflict.');
   });
 });

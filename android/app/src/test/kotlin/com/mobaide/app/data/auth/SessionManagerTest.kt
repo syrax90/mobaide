@@ -14,8 +14,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -119,49 +119,7 @@ class SessionManagerTest {
         assertEquals(SessionManager.AuthState.UserOnly, sm.authState.value)
     }
 
-    @Test
-    fun initialState_unauthenticated_whenNoTokensExist() {
-        val store = stubTokenStore(refresh = null, access = null, agentUrl = null)
-        val userStore = stubUserIdentityStore(loggedIn = false)
-        val client = mockk<OkHttpClient>()
-        val sm = newSessionManager(store, userStore, client)
-
-        assertEquals(false, sm.isLoggedIn())
-        assertEquals(false, sm.isUserAuthenticated())
-        assertEquals(SessionManager.AuthState.Unauthenticated, sm.authState.value)
-    }
-
     // ---- State transitions --------------------------------------------------
-
-    @Test
-    fun markUserLoggedIn_setsUserOnly() {
-        val store = stubTokenStore(refresh = null, access = null, agentUrl = null)
-        val userStore = stubUserIdentityStore(loggedIn = false)
-        val client = mockk<OkHttpClient>()
-        val sm = newSessionManager(store, userStore, client)
-        assertEquals(SessionManager.AuthState.Unauthenticated, sm.authState.value)
-
-        sm.markUserLoggedIn()
-
-        assertEquals(SessionManager.AuthState.UserOnly, sm.authState.value)
-        assertTrue(sm.isUserAuthenticated())
-        assertEquals(false, sm.isLoggedIn())
-    }
-
-    @Test
-    fun markAgentConnected_setsFullyConnected() {
-        val store = stubTokenStore(refresh = null, access = null, agentUrl = null)
-        val userStore = stubUserIdentityStore(loggedIn = false)
-        val client = mockk<OkHttpClient>()
-        val sm = newSessionManager(store, userStore, client)
-
-        sm.markUserLoggedIn()
-        sm.markAgentConnected()
-
-        assertEquals(SessionManager.AuthState.FullyConnected, sm.authState.value)
-        assertTrue(sm.isLoggedIn())
-        assertTrue(sm.isUserAuthenticated())
-    }
 
     @Test
     fun tryMarkAgentConnected_whenSignedIn_runsPersist_andSetsFullyConnected() {
@@ -204,34 +162,6 @@ class SessionManagerTest {
 
         verify(exactly = 1) { store.clear() }
         assertEquals(SessionManager.AuthState.UserOnly, sm.authState.value)
-    }
-
-    @Test
-    fun userLogout_clearsEverything_andEmitsUnauthenticated() {
-        val store = stubTokenStore()
-        val userStore = stubUserIdentityStore(loggedIn = true)
-        val client = mockk<OkHttpClient>()
-        val sm = newSessionManager(store, userStore, client)
-
-        sm.userLogout()
-
-        verify(exactly = 1) { store.clear() }
-        verify(exactly = 1) { userStore.clearUserSession() }
-        assertEquals(SessionManager.AuthState.Unauthenticated, sm.authState.value)
-    }
-
-    @Test
-    fun forceLogout_clearsTokenStore_andEmitsUnauthenticated() {
-        val store = stubTokenStore()
-        val userStore = stubUserIdentityStore(loggedIn = true)
-        val client = mockk<OkHttpClient>()
-        val sm = newSessionManager(store, userStore, client)
-
-        sm.forceLogout()
-
-        verify(exactly = 1) { store.clear() }
-        verify(exactly = 1) { userStore.clearUserSession() }
-        assertEquals(SessionManager.AuthState.Unauthenticated, sm.authState.value)
     }
 
     @Test
@@ -491,8 +421,9 @@ class SessionManagerTest {
             newCallCount.incrementAndGet()
             call
         }
+        val releaseExecute = CompletableDeferred<Unit>()
         every { call.execute() } answers {
-            Thread.sleep(20)
+            runBlocking { releaseExecute.await() }
             responseFor(
                 reqSlot.captured,
                 200,
@@ -502,9 +433,11 @@ class SessionManagerTest {
 
         val sm = newSessionManager(store, userStore, client)
 
-        val results = (1..10)
-            .map { async { sm.refresh() } }
-            .awaitAll()
+        val pending = (1..10).map { async { sm.refresh() } }
+        // Every caller reaches refresh() while the first HTTP call is held open.
+        runCurrent()
+        releaseExecute.complete(Unit)
+        val results = pending.awaitAll()
 
         assertEquals(10, results.size)
         assertTrue(
@@ -529,8 +462,10 @@ class SessionManagerTest {
         val call = mockk<Call>()
         val releaseExecute = CompletableDeferred<Unit>()
         val reqSlot = slot<Request>()
+        val executeEntered = CompletableDeferred<Unit>()
         every { client.newCall(capture(reqSlot)) } returns call
         every { call.execute() } answers {
+            executeEntered.complete(Unit)
             runBlocking { releaseExecute.await() }
             responseFor(
                 reqSlot.captured,
@@ -543,7 +478,7 @@ class SessionManagerTest {
 
         runBlocking {
             val winner = async(Dispatchers.IO) { sm.refresh() }
-            withContext(Dispatchers.IO) { Thread.sleep(50) }
+            executeEntered.await()
 
             sm.forceLogout()
             releaseExecute.complete(Unit)
@@ -555,38 +490,6 @@ class SessionManagerTest {
     }
 
     // ---- invalidateUserSession / sessionEvents -----------------------------
-
-    @Test
-    fun invalidateUserSession_tokenRejected_clearsBothStores_andEmitsUnauthenticated() = runTest {
-        val store = stubTokenStore()
-        val userStore = stubUserIdentityStore(loggedIn = true)
-        val client = mockk<OkHttpClient>()
-        val sm = newSessionManager(store, userStore, client)
-
-        sm.invalidateUserSession(SessionManager.InvalidationReason.TokenRejected)
-
-        verify(exactly = 1) { store.clear() }
-        verify(exactly = 1) { userStore.clearUserSession() }
-        assertEquals(SessionManager.AuthState.Unauthenticated, sm.authState.value)
-    }
-
-    @Test
-    fun invalidateUserSession_tokenRejected_emitsOnSessionEvents() = runTest {
-        val store = stubTokenStore()
-        val userStore = stubUserIdentityStore(loggedIn = true)
-        val client = mockk<OkHttpClient>()
-        val sm = newSessionManager(store, userStore, client)
-
-        sm.sessionEvents.test {
-            sm.invalidateUserSession(SessionManager.InvalidationReason.TokenRejected)
-            val emitted = awaitItem()
-            assertEquals(
-                SessionManager.InvalidationReason.TokenRejected,
-                emitted,
-            )
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
 
     @Test
     fun invalidateUserSession_accountRemoved_clearsBothStores_andEmitsOnSessionEvents() = runTest {

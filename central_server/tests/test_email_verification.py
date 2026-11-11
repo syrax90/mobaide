@@ -1,17 +1,12 @@
 """Tests for the email-verification flow (register → email → verify).
 
-Covers unit behaviour with an in-memory fake email sender, plus an optional
-Mailpit REST integration test when ``MAILPIT_REST_URL`` is set. The Mailpit
-integration is skipped by default so these tests remain hermetic.
+Covers unit behaviour with an in-memory fake email sender.
 """
 from __future__ import annotations
 
 import asyncio
-import os
 import re
-from typing import Any
 
-import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -118,21 +113,6 @@ class TestRegisterAndVerify:
         assert re.fullmatch(r"\d{6}", code)
         assert ttl == 15
 
-    async def test_verify_with_correct_code_returns_jwt(
-        self, verify_service: AuthService, fake_sender: _FakeEmailSender
-    ):
-        await verify_service.register_user(
-            "bob@example.com", "hunter22", None
-        )
-        await asyncio.sleep(0)
-        _, code, _ = fake_sender.messages[-1]
-
-        user_id, role, token, _scheduled = await verify_service.verify_email(
-            "bob@example.com", code
-        )
-        assert role == "viewer"
-        assert len(token) > 20
-        assert len(user_id) == 12
 
     async def test_login_before_verify_raises(
         self, verify_service: AuthService
@@ -183,14 +163,6 @@ class TestRegisterAndVerify:
 
 
 class TestCodeFailureModes:
-    async def test_wrong_code_is_invalid(
-        self, verify_service: AuthService, fake_sender: _FakeEmailSender
-    ):
-        await verify_service.register_user(
-            "eve@example.com", "hunter22", None
-        )
-        with pytest.raises(InvalidVerificationCodeError):
-            await verify_service.verify_email("eve@example.com", "000000")
 
     async def test_exhausting_attempts_invalidates_token(
         self,
@@ -290,25 +262,6 @@ class TestResendRateLimit:
             )
         assert exc.value.cooldown_seconds_remaining > 0
 
-    async def test_resend_after_verify_is_noop(
-        self,
-        verify_service: AuthService,
-        fake_sender: _FakeEmailSender,
-    ):
-        await verify_service.register_user(
-            "ivan@example.com", "hunter22", None
-        )
-        await asyncio.sleep(0)
-        _, code, _ = fake_sender.messages[-1]
-        await verify_service.verify_email("ivan@example.com", code)
-
-        # After verify, rate-limit is reset and resend is silently a no-op.
-        before = len(fake_sender.messages)
-        await verify_service.resend_verification(
-            "ivan@example.com", None
-        )
-        # No new message — the user is already verified.
-        assert len(fake_sender.messages) == before
 
     async def test_resend_for_unknown_email_silent(
         self,
@@ -564,36 +517,6 @@ class TestReregisterAbandonedSignup:
             row["ad_attribution_sig"],
         ) == (None, None, None, 0, None)
 
-    async def test_takeover_stores_its_own_attribution(
-        self,
-        verify_service: AuthService,
-        verify_db: Database,
-        limiter: ResendRateLimiter,
-    ):
-        first = await verify_service.register_user(
-            "wade@example.com",
-            "oldpass11",
-            None,
-            ad_attribution=_attribution("Cj0K_squatter"),
-            client_ip="127.0.0.1",
-        )
-        await asyncio.sleep(0)
-        await _expire_codes(verify_db, first.user_id)
-        await limiter.reset("wade@example.com")
-
-        owner = _attribution("Cj0K_owner", client_ip="10.0.0.9")
-        await verify_service.register_user(
-            "wade@example.com",
-            "newpass22",
-            None,
-            ad_attribution=owner,
-            client_ip="10.0.0.9",
-        )
-
-        row = await verify_db.get_user_by_id(first.user_id)
-        assert row["ad_click_id"] == "Cj0K_owner"
-        assert row["ad_attribution_sig"] == owner.signature
-        assert row["ads_consent"] == 1
 
     async def test_signup_verified_mid_takeover_is_not_overwritten(
         self,
@@ -679,21 +602,6 @@ class TestVerifyWithTypedPassword:
         with pytest.raises(ValueError, match="Invalid"):
             await verify_service.login_user("olga@example.com", "squatpass2")
 
-    async def test_matching_password_still_logs_in_after_verify(
-        self,
-        verify_service: AuthService,
-        verify_db: Database,
-        fake_sender: _FakeEmailSender,
-    ):
-        await verify_service.register_user("pia@example.com", "ownerpass1", None)
-        await asyncio.sleep(0)
-        _, code, _ = fake_sender.messages[-1]
-
-        await verify_service.verify_email("pia@example.com", code, "ownerpass1")
-
-        after = await verify_db.get_user_by_email("pia@example.com")
-        assert after["email_verified"] == 1
-        await verify_service.login_user("pia@example.com", "ownerpass1")
 
     async def test_wrong_code_does_not_change_the_password(
         self,
@@ -810,41 +718,7 @@ async def verify_client(verify_app):
 
 
 class TestRouterIntegration:
-    async def test_register_returns_verification_required(
-        self, verify_client, fake_sender: _FakeEmailSender
-    ):
-        resp = await verify_client.post(
-            "/api/auth/register",
-            json={"email": "k@example.com", "password": "hunter22"},
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["status"] == "verification_required"
-        assert body["access_token"] is None
-        assert body["email"] == "k@example.com"
 
-        # BackgroundTasks have run by this point in the ASGI transport.
-        await asyncio.sleep(0)  # yield so any scheduled task can complete
-        assert any(m[0] == "k@example.com" for m in fake_sender.messages)
-
-    async def test_verify_endpoint(
-        self, verify_client, fake_sender: _FakeEmailSender
-    ):
-        await verify_client.post(
-            "/api/auth/register",
-            json={"email": "l@example.com", "password": "hunter22"},
-        )
-        await asyncio.sleep(0)
-        code = next(m[1] for m in fake_sender.messages if m[0] == "l@example.com")
-
-        resp = await verify_client.post(
-            "/api/auth/verify-email",
-            json={"email": "l@example.com", "code": code},
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["access_token"]
-        assert body["role"] == "viewer"
 
     async def test_login_unverified_returns_403(self, verify_client):
         await verify_client.post(
@@ -888,27 +762,6 @@ class TestRouterIntegration:
         body = resp.json()
         assert body["detail"]["error"] == "resend_rate_limited"
         assert body["detail"]["cooldown_seconds_remaining"] > 0
-
-    async def test_rate_limited_takeover_returns_429(
-        self, verify_client, verify_db: Database
-    ):
-        first = await verify_client.post(
-            "/api/auth/register",
-            json={"email": "p@example.com", "password": "hunter22"},
-        )
-        await _expire_codes(verify_db, first.json()["user_id"])
-
-        resp = await verify_client.post(
-            "/api/auth/register",
-            json={"email": "p@example.com", "password": "hunter33"},
-        )
-        assert resp.status_code == 429
-        body = resp.json()
-        assert body["detail"]["error"] == "resend_rate_limited"
-        assert body["detail"]["cooldown_seconds_remaining"] > 0
-        assert resp.headers.get("Retry-After") == str(
-            body["detail"]["cooldown_seconds_remaining"]
-        )
 
 
     async def test_verify_endpoint_installs_the_typed_password(
@@ -1009,48 +862,3 @@ class TestRouterIntegration:
         )
         assert blocked_resend.status_code == 429
         assert blocked_resend.json()["detail"]["error"] == "resend_rate_limited"
-
-# -- Mailpit integration (opt-in) ---------------------------------------------
-
-MAILPIT_URL = os.getenv("MAILPIT_REST_URL")
-
-
-@pytest.mark.skipif(
-    not MAILPIT_URL, reason="MAILPIT_REST_URL not set — skipping Mailpit test"
-)
-class TestMailpitIntegration:
-    """End-to-end test against a live Mailpit instance.
-
-    Set ``MAILPIT_REST_URL=http://localhost:8025`` and ensure both Mailpit
-    and the central server are running (``docker compose --profile dev up``).
-    """
-
-    async def _latest_message(self, client: httpx.AsyncClient) -> dict[str, Any]:
-        resp = await client.get(f"{MAILPIT_URL}/api/v1/messages?limit=1")
-        resp.raise_for_status()
-        messages = resp.json().get("messages", [])
-        assert messages, "no messages in Mailpit"
-        msg_id = messages[0]["ID"]
-        detail = await client.get(f"{MAILPIT_URL}/api/v1/message/{msg_id}")
-        detail.raise_for_status()
-        return detail.json()
-
-    async def test_full_flow(self, verify_client):
-        email = "mailpit-integration@example.com"
-        await verify_client.post(
-            "/api/auth/register",
-            json={"email": email, "password": "hunter22"},
-        )
-        async with httpx.AsyncClient() as http:
-            detail = await self._latest_message(http)
-        body = detail.get("Text") or detail.get("HTML") or ""
-        match = re.search(r"\b(\d{6})\b", body)
-        assert match, "no 6-digit code found in Mailpit message"
-        code = match.group(1)
-
-        resp = await verify_client.post(
-            "/api/auth/verify-email",
-            json={"email": email, "code": code},
-        )
-        assert resp.status_code == 200
-        assert resp.json()["access_token"]

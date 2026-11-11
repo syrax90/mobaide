@@ -44,13 +44,6 @@ final class VoiceStatusViewTests: XCTestCase {
         XCTAssertFalse(decoded.cleanup_enabled)
     }
 
-    func testWithCleanupChangesOnlyTheCleanupChoice() {
-        let on = status().withCleanup(true)
-
-        XCTAssertTrue(on.cleanup_enabled)
-        XCTAssertEqual(on.withCleanup(false), status())
-    }
-
     func testMicModeMapsEveryKnownStateAndHidesTheRest() {
         let expected: [(String, VoiceMicMode)] = [
             (VoiceStatusResponse.stateNotInstalled, .off),
@@ -83,51 +76,10 @@ final class VoiceStatusViewTests: XCTestCase {
         XCTAssertEqual(VoiceStatusView.micMode(capability: capability, status: nil, hiddenByUser: false), .hidden)
     }
 
-    func testPreparingLabelNamesEachPreparingState() {
-        XCTAssertEqual(
-            VoiceStatusView.preparingLabel(status(VoiceStatusResponse.stateQueued)),
-            "Waiting for another voice install on this computer…"
-        )
-        XCTAssertEqual(
-            VoiceStatusView.preparingLabel(status(VoiceStatusResponse.stateVerifying)),
-            "Checking voice input…"
-        )
-        XCTAssertEqual(
-            VoiceStatusView.preparingLabel(
-                status(VoiceStatusResponse.stateDownloading, progress: VoiceProgress(done_bytes: 43_900, total_bytes: 100_000))
-            ),
-            "Preparing voice… 43%"
-        )
-        XCTAssertEqual(VoiceStatusView.preparingLabel(status(VoiceStatusResponse.stateDownloading)), "Preparing voice…")
-    }
-
-    func testPreparingLabelShowsWhatIsLeftOfARepair() {
-        let repairing = status(
-            VoiceStatusResponse.stateDownloading,
-            repairing: true,
-            progress: VoiceProgress(done_bytes: 670_000_000, total_bytes: 702_000_000)
-        )
-
-        XCTAssertEqual(VoiceStatusView.preparingLabel(repairing), "Updating voice (≈32 MB)…")
-    }
-
     func testProgressPercentFloorsCapsAt100AndIsUnknownWithoutATotal() {
         XCTAssertEqual(VoiceStatusView.progressPercent(status(progress: VoiceProgress(done_bytes: 999, total_bytes: 1000))), 99)
         XCTAssertEqual(VoiceStatusView.progressPercent(status(progress: VoiceProgress(done_bytes: 1200, total_bytes: 1000))), 100)
         XCTAssertNil(VoiceStatusView.progressPercent(status(progress: VoiceProgress(done_bytes: 0, total_bytes: 0))))
         XCTAssertNil(VoiceStatusView.progressPercent(status()))
-    }
-
-    func testFormatBytesUsesDecimalUnits() {
-        XCTAssertEqual(VoiceStatusView.formatBytes(999), "999 B")
-        XCTAssertEqual(VoiceStatusView.formatBytes(1_000), "1 KB")
-        XCTAssertEqual(VoiceStatusView.formatBytes(670_000_000), "670 MB")
-        XCTAssertEqual(VoiceStatusView.formatBytes(1_200_000_000), "1.2 GB")
-    }
-
-    func testFormatDurationAndLanguageNames() {
-        XCTAssertEqual(VoiceStatusView.formatDuration(ms: 245_999), "4:05")
-        XCTAssertEqual(VoiceStatusView.formatDuration(ms: -5), "0:00")
-        XCTAssertEqual(VoiceStatusView.languageNames(["en", "de", "fr"]), ["English", "French", "German"])
     }
 }

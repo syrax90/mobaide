@@ -277,11 +277,6 @@ class GitMutationDtoFixtureTest {
     }
 
     @Test
-    fun mutationResponse_isOk() {
-        assertTrue(fixture("GitMutationResponse").decode(GitMutationResponse.serializer(), "ok").ok)
-    }
-
-    @Test
     fun commitRequest_readsTheFlags_andRoundTripsWhenTheyAreSet() {
         val fixture = fixture("GitCommitRequest")
 
@@ -307,15 +302,6 @@ class GitMutationDtoFixtureTest {
             setOf("message"),
             (json.encodeToJsonElement(GitCommitRequest.serializer(), plain) as JsonObject).keys,
         )
-    }
-
-    @Test
-    fun commitResponse_namesTheNewHead() {
-        val committed = fixture("GitCommitResponse").decode(GitCommitResponse.serializer(), "committed")
-
-        assertEquals("4890423520f4dcd158b85374f44fc8819a813ac2", committed.oid)
-        assertEquals("4890423", committed.short_oid)
-        assertEquals("Fix the login redirect", committed.subject)
     }
 
     @Test

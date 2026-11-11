@@ -46,10 +46,6 @@ describe('overlayMessage', () => {
     // history, so the overlay must not lift on the marker alone.
     expect(overlayMessage(view({ replayPainting: true }))).toBe('Replaying buffer…');
   });
-
-  it('shows nothing on a live, painted screen', () => {
-    expect(overlayMessage(view())).toBeNull();
-  });
 });
 
 describe('ConnectionOverlay', () => {

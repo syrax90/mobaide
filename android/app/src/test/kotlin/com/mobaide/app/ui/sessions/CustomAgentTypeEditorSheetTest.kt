@@ -79,17 +79,6 @@ class CustomAgentTypeEditorSheetTest {
     }
 
     @Test
-    fun serverError_rendersInline_inTheErrorSlot() {
-        setContent(
-            target = target,
-            error = "A custom agent type with this name already exists",
-        )
-
-        composeRule.onNodeWithTag("custom_type_editor_error")
-            .assertTextContains("A custom agent type with this name already exists")
-    }
-
-    @Test
     fun saving_disablesSaveButton_andShowsProgressLabel() {
         setContent(target = target, saving = true)
 

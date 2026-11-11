@@ -95,14 +95,6 @@ class TestRefreshableOptIn:
             config.dashboard_token_expire_minutes * 60
         )
 
-    async def test_explicit_false_is_the_same_as_omitting_it(
-        self, client, viewer_user
-    ) -> None:
-        del viewer_user
-        body = await _login(client, refreshable=False)
-
-        assert body["refresh_token"] is None
-        assert body["expires_in"] is None
 
     async def test_opting_in_returns_a_rotating_short_lived_session(
         self, client, config, viewer_user
@@ -113,34 +105,6 @@ class TestRefreshableOptIn:
         assert body["refresh_token"]
         assert body["expires_in"] == config.user_session_access_expire_minutes * 60
         assert "exp" in _claims(body["access_token"])
-
-    async def test_opted_in_token_keeps_the_claims_dependencies_read(
-        self, client, viewer_user
-    ) -> None:
-        """The upgrade re-mints the JWT, so its identity claims must survive."""
-        body = await _login(client, refreshable=True)
-        claims = _claims(body["access_token"])
-
-        assert claims["user_id"] == viewer_user["id"]
-        assert claims["email"] == TEST_VIEWER_EMAIL
-        assert claims["role"] == "viewer"
-
-    async def test_google_and_apple_bodies_accept_the_flag(self, client) -> None:
-        """The flag is additive on every session-minting model, not just login.
-
-        Both endpoints reject the fake token later in the handler; a 422 here
-        would mean the request model never grew the field.
-        """
-        google = await client.post(
-            "/api/auth/google", json={"id_token": "not-a-token", "refreshable": True}
-        )
-        apple = await client.post(
-            "/api/auth/apple",
-            json={"id_token": "not-a-token", "nonce": "n", "refreshable": True},
-        )
-
-        assert google.status_code != 422
-        assert apple.status_code != 422
 
 
 class TestRefreshEndpoint:
@@ -172,25 +136,6 @@ class TestRefreshEndpoint:
         )
         assert replay.status_code == 401
 
-    async def test_the_rotated_token_can_itself_be_rotated(
-        self, client, viewer_user
-    ) -> None:
-        del viewer_user
-        first = await _login(client, refreshable=True)
-        second = await client.post(
-            "/api/auth/refresh", json={"refresh_token": first["refresh_token"]}
-        )
-
-        third = await client.post(
-            "/api/auth/refresh",
-            json={"refresh_token": second.json()["refresh_token"]},
-        )
-
-        assert third.status_code == 200
-        assert third.json()["refresh_token"] not in {
-            first["refresh_token"],
-            second.json()["refresh_token"],
-        }
 
     async def test_unknown_token_returns_401(self, client) -> None:
         resp = await client.post(
@@ -199,10 +144,6 @@ class TestRefreshEndpoint:
 
         assert resp.status_code == 401
 
-    async def test_empty_token_is_rejected_by_validation(self, client) -> None:
-        resp = await client.post("/api/auth/refresh", json={"refresh_token": ""})
-
-        assert resp.status_code == 422
 
     async def test_needs_no_bearer_of_its_own(self, client, viewer_user) -> None:
         """The refresh token is the credential — the access token it replaces

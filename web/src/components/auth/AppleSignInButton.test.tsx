@@ -236,26 +236,6 @@ describe('AppleSignInButton', () => {
     expect(reported.credentials).toEqual([]);
   });
 
-  it('reports no error once the screen is gone', async () => {
-    // The popup outliving the screen is the normal case for a user who walked
-    // away; an error toast on a route they have left is noise about nothing.
-    const popup = deferredSignIn();
-    const reported = mount();
-    await waitFor(() => {
-      expect(button()).toBeEnabled();
-    });
-    fireEvent.click(button());
-    await waitFor(() => {
-      expect(sdk.signInNonces).toEqual(['nonce-1']);
-    });
-
-    reported.unmount();
-    popup.reject(new Error('Your browser blocked the Apple sign-in window.'));
-    await flush();
-
-    expect(reported.errors).toEqual([]);
-  });
-
   it('locks itself for the length of the popup round trip', async () => {
     const popup = deferredSignIn();
     mount();

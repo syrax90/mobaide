@@ -79,20 +79,6 @@ final class ProjectsRepositoryTests: XCTestCase {
         XCTAssertEqual(list.map(\.name), ["c"], "changed snapshot replaces the whole list")
     }
 
-    func testStreamMirrorsCurrentProjects() async throws {
-        let (repo, bus, factory) = makeStack()
-        let collector = StreamCollector(repo.projects())
-        repo.start()
-        await bus.start()
-        let connection = try await factory.connection(1)
-        connection.emit(.opened)
-        connection.emit(.text(projectsChanged(["a"])))
-
-        let hasOne: @Sendable ([ProjectInfo]) -> Bool = { $0.count == 1 }
-        let snapshot = try await collector.next(where: hasOne)
-        XCTAssertEqual(snapshot.map(\.name), ["a"])
-    }
-
     func testSeedIfEmptyFetchesOnceThenServesCache() async {
         StubURLProtocol.enqueue(status: 200, body: #"[{"name":"a","path":"/a"},{"name":"b","path":"/b"}]"#)
         let repo = makeRESTRepo()

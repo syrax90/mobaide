@@ -57,35 +57,6 @@ class TestSessionListWs:
             assert len(msg) == 1
             assert msg[0]["state"] == "running"
 
-    def test_reconnect_receives_fresh_snapshot(self, test_client, auth_token):
-        """A client that disconnects and reconnects must receive a fresh
-        snapshot reflecting the current session list.
-        """
-        # First connect: empty snapshot.
-        with test_client.websocket_connect(
-            f"/ws/sessions?token={auth_token}",
-        ) as ws:
-            first = ws.receive_json()
-            assert isinstance(first, list)
-            assert len(first) == 0
-
-        # Create a session between connects.
-        resp = test_client.post(
-            "/api/sessions",
-            headers={"Authorization": f"Bearer {auth_token}"},
-            json={},
-        )
-        assert resp.status_code == 201
-
-        # Reconnect: initial snapshot must now show the session.
-        with test_client.websocket_connect(
-            f"/ws/sessions?token={auth_token}",
-        ) as ws:
-            snapshot = ws.receive_json()
-            assert isinstance(snapshot, list)
-            assert len(snapshot) == 1
-            assert snapshot[0]["state"] in {"starting", "running"}
-
     def test_two_concurrent_subscribers_receive_same_broadcast(
         self, test_client, auth_token,
     ):

@@ -1,6 +1,9 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubWebStorage } from '../test/localStorageStub';
 import type { UserSession } from './sessionTransport';
+
+const { discardDevAutoLogin } = vi.hoisted(() => ({ discardDevAutoLogin: vi.fn() }));
+vi.mock('../routes/auth/devLogin', () => ({ discardDevAutoLogin }));
 
 // Before importing anything that captures either global.
 stubWebStorage('sessionStorage');
@@ -29,6 +32,7 @@ function storedSession(): UserSession | null {
 }
 
 beforeEach(() => {
+  discardDevAutoLogin.mockClear();
   resetSessionTransport();
   resetSessionBootstrap();
   sessionStorage.clear();
@@ -195,12 +199,12 @@ describe('sessionStore recent custom paths', () => {
 
     const peer = new BroadcastChannel('mobaide-session');
     peer.postMessage({ type: 'logout', reason: 'manual', userId: session().userId });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
+    // Node delivers BroadcastChannel messages through a MessagePort, which a
+    // single setTimeout(0) does not outlast under load: wait for the effect.
+    await vi.waitFor(() => {
+      expect(useSessionStore.getState().session).toBeNull();
     });
     peer.close();
-
-    expect(useSessionStore.getState().session).toBeNull();
     expect(localStorage.getItem(BUCKET)).toBeNull();
     expect(localStorage.getItem(OTHER_BUCKET)).toBeNull();
   });
@@ -220,12 +224,10 @@ describe('sessionStore recent custom paths', () => {
       reason: 'tokenRejected',
       userId: session().userId,
     });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
+    await vi.waitFor(() => {
+      expect(useSessionStore.getState().session).toBeNull();
     });
     peer.close();
-
-    expect(useSessionStore.getState().session).toBeNull();
     expect(localStorage.getItem(BUCKET)).not.toBeNull();
   });
 
@@ -239,12 +241,10 @@ describe('sessionStore recent custom paths', () => {
 
     const peer = new BroadcastChannel('mobaide-session');
     peer.postMessage({ type: 'logout', reason: 'manual' });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
+    await vi.waitFor(() => {
+      expect(useSessionStore.getState().session).toBeNull();
     });
     peer.close();
-
-    expect(useSessionStore.getState().session).toBeNull();
   });
 
   it('drops them when the account was removed under a takeover', () => {
@@ -323,5 +323,37 @@ describe('bootstrapSession', () => {
     const state = useSessionStore.getState();
     expect(state.authState).toEqual({ kind: 'unauthenticated' });
     expect(state.session).toBeNull();
+  });
+});
+
+describe('the manual-stack dev sign-in', () => {
+  async function peerLogout(reason: string) {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
+    await bootstrapSession();
+    const peer = new BroadcastChannel('mobaide-session');
+    peer.postMessage({ type: 'logout', reason, userId: session().userId });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    peer.close();
+  }
+
+  it('is discarded by a manual sign-out in this tab', () => {
+    useSessionStore.getState().markUserLoggedIn(session());
+    useSessionStore.getState().invalidateUserSession('manual');
+    expect(discardDevAutoLogin).toHaveBeenCalled();
+  });
+
+  it('is discarded by a manual sign-out in a peer tab', async () => {
+    // Without it this tab mounts /login for the first time and signs itself
+    // straight back in, undoing the sign-out next door.
+    await peerLogout('manual');
+    expect(useSessionStore.getState().session).toBeNull();
+    expect(discardDevAutoLogin).toHaveBeenCalled();
+  });
+
+  it('survives a peer tab that only lost its token', async () => {
+    await peerLogout('tokenRejected');
+    expect(discardDevAutoLogin).not.toHaveBeenCalled();
   });
 });

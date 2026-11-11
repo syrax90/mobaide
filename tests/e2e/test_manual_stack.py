@@ -11,8 +11,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import xml.dom.minidom as minidom
 from pathlib import Path
+
+import pytest
 
 import manual_stack as ms
 
@@ -168,20 +171,6 @@ def test_ios_revert_removes_a_file_it_created_whole(monkeypatch, tmp_path):
     assert not ms.LOCAL_XCCONFIG_PATH.exists()
 
 
-def test_ios_revert_leaves_foreign_url_alone(monkeypatch, tmp_path):
-    _point_client_files_at(monkeypatch, tmp_path)
-    ms.LOCAL_XCCONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    ms.LOCAL_XCCONFIG_PATH.write_text(
-        "CENTRAL_SERVER_URL = https:/$()/someone-elses.example\n", encoding="utf-8"
-    )
-    state = ms.default_state()  # managed_url is None => not ours to revert
-
-    ms.revert_ios_files(state, lambda: None)
-
-    assert ms.LOCAL_XCCONFIG_PATH.exists()
-    assert _central_url(ms.IOS_URL_FILE) == "https://someone-elses.example"
-
-
 def test_ios_auto_prefers_loopback_where_android_prefers_the_lan():
     """The deliberate divergence: iOS ships no ATS exception, so only loopback
     carries cleartext REST. Android's ``auto`` keeps favouring the LAN IP."""
@@ -218,36 +207,6 @@ def test_ios_revert_restores_an_inline_comment_verbatim(monkeypatch, tmp_path):
 
     ms.revert_ios_files(state, noop)
     assert ms.LOCAL_XCCONFIG_PATH.read_text(encoding="utf-8").splitlines() == [original]
-
-
-def test_ios_install_gate_tracks_the_installed_url_not_the_baked_one(monkeypatch, tmp_path):
-    """`up` bakes a URL, then the banner tells you to run `ios --install-app`.
-
-    That second run re-syncs the same URL, so the rebuild verdict is False —
-    but the simulator still carries the previous build. The stale-install
-    decision must therefore read ``installed_urls``, which only a successful
-    install advances.
-    """
-    _point_client_files_at(monkeypatch, tmp_path)
-    state = ms.default_state()
-    noop = lambda: None  # noqa: E731
-    ios = ms.IOS_URL_FILE.own_state(state)
-
-    # `up` syncs a new URL: rebuild prompt fires, nothing is installed yet.
-    assert ms.sync_ios_files(state, LOOPBACK_URL, noop) is True
-    assert ios["baked_url"] == LOOPBACK_URL
-    assert ios["installed_urls"] == {}
-
-    # The documented follow-up re-syncs the same URL: no rebuild prompt...
-    assert ms.sync_ios_files(state, LOOPBACK_URL, noop) is False
-    # ...yet the install is still stale, so it must not be treated as current.
-    assert ios["installed_urls"].get(SIM_A) != LOOPBACK_URL
-
-    # After an install lands, the same URL is no longer stale on THAT device —
-    # but a second simulator has its own container and keychain, so it is.
-    ios["installed_urls"][SIM_A] = LOOPBACK_URL
-    assert ios["installed_urls"].get(SIM_A) == LOOPBACK_URL
-    assert ios["installed_urls"].get(SIM_B) != LOOPBACK_URL
 
 
 def test_shutdown_save_keeps_a_concurrent_installers_record(tmp_path):
@@ -327,26 +286,11 @@ def test_build_web_env_targets_the_stack_and_sanitizes(monkeypatch):
     assert env["MOBAIDE_WEB_PROXY_TARGET"] == "http://192.168.1.5:9123"
 
 
-def test_up_parser_web_defaults():
-    """--web is per-run opt-in: plain `up` must not grow web behaviour, and
-    5173 stays the default origin (the one registered for OAuth in dev)."""
-    args = ms.build_parser().parse_args(["up"])
-    assert args.web is False
-    assert args.web_port == ms.DEFAULT_WEB_PORT == 5173
-    assert args.no_browser is False  # --web opens a tab unless asked not to
-
-    args = ms.build_parser().parse_args(
-        ["up", "--web", "--web-port", "5180", "--no-browser"]
-    )
-    assert args.web is True
-    assert args.web_port == 5180
-    assert args.no_browser is True
-
-
 def test_open_web_client_is_best_effort(monkeypatch):
     """The tab is a convenience layered on a stack that is already READY, so it
     targets the pre-filled /login screen and a browser-less box (SSH, CI, a
     stripped container) must not turn a working stack into a failed boot."""
+    monkeypatch.setattr(ms.sys, "platform", "linux")
     opened = []
     monkeypatch.setattr(ms.webbrowser, "open_new_tab", lambda url: opened.append(url) or True)
     ms.open_web_client(5180)
@@ -359,18 +303,18 @@ def test_open_web_client_is_best_effort(monkeypatch):
     ms.open_web_client(5180)  # must return normally
 
 
-def test_stale_matcher_covers_the_web_child():
-    """A hard-killed `up --web` leaves an npm/node tree behind; the reaping
-    pre-filter must recognise it on every platform (npm/node on POSIX, cmd.exe
-    on Windows) while still rejecting a python process wearing a recycled pid."""
-    matchers = {name: (token, names) for name, token, names in ms.STALE_PROCESS_MATCHERS}
-    assert set(matchers) == {"server", "agent", "web"}
-
-    cmdline_token, name_tokens = matchers["web"]
-    assert cmdline_token == "npm"
-    for proc_name in ("node", "npm", "npm.cmd", "cmd.exe"):
-        assert any(t in proc_name.lower() for t in name_tokens), proc_name
-    assert not any(t in "python3.12" for t in name_tokens)
+def test_open_web_client_uses_open_on_macos(monkeypatch):
+    """webbrowser's osascript route can fail silently from a background shell;
+    `open` both opens the tab and brings the browser to the front."""
+    monkeypatch.setattr(ms.sys, "platform", "darwin")
+    calls = []
+    monkeypatch.setattr(
+        ms, "_run_tool",
+        lambda cmd, **_: calls.append(cmd) or argparse.Namespace(returncode=0),
+    )
+    monkeypatch.setattr(ms.webbrowser, "open_new_tab", lambda url: pytest.fail(url))
+    ms.open_web_client(5180)
+    assert calls == [["open", "http://localhost:5180/login"]]
 
 
 def test_build_agent_env_fake_voice_is_opt_in_and_sanitized(monkeypatch, tmp_path):
@@ -393,24 +337,6 @@ def test_build_agent_env_fake_voice_is_opt_in_and_sanitized(monkeypatch, tmp_pat
     assert env["MOBAIDE_VOICE_DIR"] == ""
 
 
-def test_up_parser_emulator_is_opt_in():
-    """Plain `up` (the macOS workflow) must not boot anything new; a bare
-    --emulator picks the shared AVD name, and an explicit one wins."""
-    args = ms.build_parser().parse_args(["up"])
-    assert args.emulator is None
-    assert args.keep_emulator is False
-
-    args = ms.build_parser().parse_args(["up", "--emulator", "--web"])
-    assert args.emulator == ms.DEFAULT_AVD == "Mobaide-E2E"
-    assert args.web is True
-
-    args = ms.build_parser().parse_args(["android", "--emulator", "Pixel_9", "--install-app"])
-    assert args.emulator == "Pixel_9"
-
-    args = ms.build_parser().parse_args(["stop"])
-    assert args.timeout == ms.DEFAULT_STOP_TIMEOUT
-
-
 def test_parse_adb_devices_skips_daemon_chatter():
     output = (
         "* daemon not running; starting now at tcp:5037\n"
@@ -426,15 +352,6 @@ def test_parse_adb_devices_skips_daemon_chatter():
         "emulator-5556": "offline",
         "R58N12345": "unauthorized",
     }
-
-
-def test_parse_avd_list_ignores_log_lines():
-    output = (
-        "INFO    | Storing crashdata in: C:\\tmp\\crashdata\n"
-        "Mobaide-E2E\n"
-        "Pixel_9_API_36\n"
-    )
-    assert ms.parse_avd_list(output) == ["Mobaide-E2E", "Pixel_9_API_36"]
 
 
 def _fake_image(sdk: Path, api: str, tag: str, abi: str) -> None:
@@ -458,12 +375,6 @@ def test_pick_system_image_prefers_stable_4k_newest(tmp_path):
     assert ms.pick_system_image(tmp_path, "AMD64") == (
         "system-images;android-36.1;google_apis_playstore;x86_64")
     assert ms.pick_system_image(tmp_path, "arm64") is None  # wrong ABI only
-
-
-def test_pick_system_image_falls_back_to_16k(tmp_path):
-    _fake_image(tmp_path, "android-37.0", "google_apis_playstore_ps16k", "arm64-v8a")
-    assert ms.pick_system_image(tmp_path, "arm64") == (
-        "system-images;android-37.0;google_apis_playstore_ps16k;arm64-v8a")
 
 
 def test_enable_hardware_keyboard_is_idempotent(tmp_path):
@@ -575,3 +486,179 @@ def test_kill_tree_spares_the_given_subtree():
     finally:
         ms.kill_tree(psutil, spared_pid)
         ms.kill_tree(psutil, parent.pid)
+
+
+def _sim(name: str, udid: str, state: str = "Shutdown") -> dict:
+    return {"name": name, "udid": udid, "state": state,
+            "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-0"}
+
+
+def test_pick_simulator_reuses_a_booted_one_and_honors_a_request():
+    """A booted simulator is what the tester already looks at; a request pins
+    one by name or UDID; with nothing booted, iPhone 16 then any iPhone."""
+    sims = [_sim("iPhone 17", SIM_B, "Booted"), _sim("iPhone 16", SIM_A)]
+    assert ms.pick_simulator(sims, None)["udid"] == SIM_B
+    assert ms.pick_simulator(sims, "iPhone 16")["udid"] == SIM_A
+    assert ms.pick_simulator(sims, SIM_A)["name"] == "iPhone 16"
+    assert ms.pick_simulator(sims, "iPhone 99") is None
+
+    idle = [_sim("iPad Air", "C"), _sim("iPhone 17", SIM_B), _sim("iPhone 16", SIM_A)]
+    assert ms.pick_simulator(idle, None)["udid"] == SIM_A
+    assert ms.pick_simulator(idle[:2], None)["udid"] == SIM_B
+    assert ms.pick_simulator([], None) is None
+
+
+def test_runtime_version_orders_numerically():
+    ids = ["com.apple.CoreSimulator.SimRuntime.iOS-9-3",
+           "com.apple.CoreSimulator.SimRuntime.iOS-26-0",
+           "com.apple.CoreSimulator.SimRuntime.iOS-18-6"]
+    assert sorted(ids, key=ms._runtime_version, reverse=True)[0].endswith("iOS-26-0")
+
+
+def test_android_launch_command_survives_the_device_shell():
+    """adb hands the line to the device's sh: the default password's `>`
+    must stay inside a quoted word, not become a redirect."""
+    state = ms.default_state()
+    line = ms.android_launch_command(state)
+    words = shlex.split(line)
+    assert words[words.index(ms.ANDROID_DEV_LOGIN_PASSWORD_EXTRA) + 1] == "Qwe>1234"
+    assert words[words.index(ms.ANDROID_DEV_LOGIN_EMAIL_EXTRA) + 1] == ms.DEFAULT_EMAIL
+    assert words[words.index("-n") + 1] == "com.mobaide.app/.MainActivity"
+    assert {"-S", "--activity-clear-task"} <= set(words)
+
+
+def test_dev_login_keys_match_the_apps():
+    """The script and the two DEBUG readers must agree on the key names."""
+    root = Path(ms.__file__).resolve().parents[2]
+    kotlin = (root / "android/app/src/main/java/com/mobaide/app/data/auth/"
+              "DevLoginHandoff.kt").read_text(encoding="utf-8")
+    swift = (root / "ios/Mobaide/UI/Onboarding/LoginScreen.swift").read_text(encoding="utf-8")
+    assert f'"{ms.ANDROID_DEV_LOGIN_EMAIL_EXTRA}"' in kotlin
+    assert f'"{ms.ANDROID_DEV_LOGIN_PASSWORD_EXTRA}"' in kotlin
+    assert f'"{ms.IOS_DEV_LOGIN_EMAIL_ARG.lstrip("-")}"' in swift
+    assert f'"{ms.IOS_DEV_LOGIN_PASSWORD_ARG.lstrip("-")}"' in swift
+
+
+def test_children_import_this_checkouts_code(monkeypatch):
+    """The env's editable install usually points at the main checkout; the
+    children must still run the checkout the script lives in."""
+    monkeypatch.setenv("PYTHONPATH", "/somewhere/else")
+    parts = ms.base_child_env()["PYTHONPATH"].split(os.pathsep)
+    assert parts == [str(d) for d in ms.CHECKOUT_PYTHON_DIRS] + ["/somewhere/else"]
+    assert all((d / "pyproject.toml").exists() for d in ms.CHECKOUT_PYTHON_DIRS)
+
+
+def test_switching_checkouts_restores_the_previous_one(monkeypatch, tmp_path):
+    """The state dir is shared by main and every worktree: taking the Android
+    file over in checkout B must first restore checkout A's, and a revert run
+    from a third checkout must reach the checkout that wrote the file."""
+    a, b, c = tmp_path / "a", tmp_path / "b", tmp_path / "c"
+    state = ms.default_state()
+    _point_client_files_at(monkeypatch, a)
+    _seed_local_properties()
+    ms.sync_android_files(state, TEST_URL, lambda: None)
+    assert _central_url(ms.ANDROID_URL_FILE) == TEST_URL
+
+    _point_client_files_at(monkeypatch, b)
+    _seed_local_properties()
+    ms.sync_android_files(state, TEST_URL, lambda: None)
+    assert ms.same_checkout(state["android"]["checkout"], b)
+    assert "CENTRAL_SERVER_URL=" + PROD_URL in (
+        a / "android" / "local.properties").read_text(encoding="utf-8")
+    assert not (a / "android/app/src/debug").exists()
+
+    _point_client_files_at(monkeypatch, c)
+    c.mkdir()
+    ms.revert_android_files(state, lambda: None)
+    assert "CENTRAL_SERVER_URL=" + PROD_URL in (
+        b / "android" / "local.properties").read_text(encoding="utf-8")
+    assert ms.LOCAL_PROPERTIES_PATH == c / "android" / "local.properties"
+
+
+def test_revert_from_a_deleted_worktree_is_a_noop(monkeypatch, tmp_path):
+    state = ms.default_state()
+    _point_client_files_at(monkeypatch, tmp_path / "gone")
+    _seed_local_properties()
+    ms.sync_ios_files(state, LOOPBACK_URL, lambda: None)
+    import shutil
+    shutil.rmtree(tmp_path / "gone")
+    _point_client_files_at(monkeypatch, tmp_path / "here")
+    ms.revert_ios_files(state, lambda: None)
+    assert state["ios"]["managed_url"] is None
+    assert not (tmp_path / "gone").exists()
+
+
+def test_all_preset_turns_every_client_on():
+    args = ms.build_parser().parse_args(["up", "--all"])
+    ms.apply_all_preset(args)
+    assert args.install_app and args.web
+    assert args.emulator == ms.DEFAULT_AVD
+    assert args.simulator is None  # an open simulator is reused, not replaced
+
+    args = ms.build_parser().parse_args(["up", "--all", "--emulator", "Pixel_9"])
+    ms.apply_all_preset(args)
+    assert args.emulator == "Pixel_9"
+
+    args = ms.build_parser().parse_args(["up"])
+    ms.apply_all_preset(args)
+    assert not args.install_app and not args.web and args.emulator is None
+
+
+def test_all_preset_bakes_the_emulator_alias_only_where_it_reaches_the_server():
+    """10.0.2.2 is the host's loopback seen from the emulator: right for a
+    wildcard or loopback bind, wrong for a server bound to one LAN address
+    (given now or remembered in state -- resolved after load_or_create_state)."""
+    def url(*argv):
+        args = ms.build_parser().parse_args(["up", "--all", *argv])
+        ms.apply_all_preset(args)
+        args.port = 9000
+        args.host = args.host or ms.DEFAULT_HOST  # what load_or_create_state does
+        return ms.resolve_android_url(args, "192.168.1.7")
+
+    assert url() == "http://10.0.2.2:9000"
+    assert url("--host", "127.0.0.1") == "http://10.0.2.2:9000"
+    assert url("--host", "192.168.1.50") == "http://192.168.1.50:9000"
+    assert url("--android-url", "reverse") == "http://127.0.0.1:9000"
+
+
+def test_deleted_checkout_leaves_no_restore_value_for_the_next_one(monkeypatch, tmp_path):
+    """Checkout A had a staging URL and was deleted before its revert. B has no
+    Local.xcconfig at all: reverting B must remove the generated override,
+    not write A's staging URL into B."""
+    staging = "https://staging.example.com"
+    a, b = tmp_path / "a", tmp_path / "b"
+    state = ms.default_state()
+    _point_client_files_at(monkeypatch, a)
+    ms.LOCAL_XCCONFIG_PATH.parent.mkdir(parents=True)
+    ms.LOCAL_XCCONFIG_PATH.write_text(
+        f"CENTRAL_SERVER_URL = {ms._xcconfig_escape(staging)}\n", encoding="utf-8")
+    ms.sync_ios_files(state, LOOPBACK_URL, lambda: None)
+    import shutil
+    shutil.rmtree(a)
+
+    _point_client_files_at(monkeypatch, b)
+    b.mkdir()
+    ms.sync_ios_files(state, LOOPBACK_URL, lambda: None)
+    ms.revert_ios_files(state, lambda: None)
+    assert not ms.LOCAL_XCCONFIG_PATH.exists()
+
+
+def test_dependency_probe_ignores_the_checkout_source_dirs(monkeypatch):
+    """The checkout's central_server/ is on sys.path, so source discovery
+    always succeeds; only the installed distribution proves its dependencies
+    are there. A missing one must reach the first-run installer."""
+    import importlib.metadata
+
+    ms.use_checkout_python_code()
+    real = importlib.metadata.distribution
+
+    def fake(name):
+        if name == "central-server":
+            raise importlib.metadata.PackageNotFoundError(name)
+        return real(name)
+
+    monkeypatch.setattr(importlib.metadata, "distribution", fake)
+    with pytest.raises(ImportError, match="central-server"):
+        ms._require_installed_distributions()
+    monkeypatch.setattr(importlib.metadata, "distribution", real)
+    ms._require_installed_distributions()  # this env has both

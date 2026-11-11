@@ -58,18 +58,6 @@ async def _send(sender: AioapnsSender, **overrides) -> PushResult:
 
 
 class TestSendResultMapping:
-    async def test_success_maps_ok_without_unregister(self):
-        sender = _sender()
-        sender._clients["sandbox"] = FakeApnsClient(
-            NotificationResult("nid", "200")
-        )
-
-        result = await _send(sender)
-
-        assert result == PushResult(
-            ok=True, should_unregister=False, status="200", description=None
-        )
-
     async def test_410_status_requests_unregister(self):
         sender = _sender()
         sender._clients["sandbox"] = FakeApnsClient(

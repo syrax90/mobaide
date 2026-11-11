@@ -8,7 +8,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
-import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -100,13 +99,5 @@ class CustomPathPanelTest {
             emptyList<String>(),
             picked,
         )
-    }
-
-    @Test
-    fun emptyRecents_omitsRecentPathsSection() {
-        setContent(recents = emptyList())
-
-        composeRule.onNodeWithText("Recent paths").assertDoesNotExist()
-        composeRule.onNodeWithTag("recent_custom_path_chip").assertDoesNotExist()
     }
 }

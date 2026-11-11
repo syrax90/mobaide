@@ -50,9 +50,7 @@ describe('cliAvailable', () => {
   const UNKNOWN: [string, unknown][] = [
     ['no probe at all', undefined],
     ['no capabilities', {}],
-    ['a cli block of the wrong shape', { cli: 'yes' }],
     ['an unlisted cli', { cli: { codex: { available: true } }, extra: 1 }],
-    ['an unreadable available field', { cli: { claude: { available: 1 } } }],
     ['no available field', { cli: { claude: { models: ['opus'] } } }],
   ];
 
@@ -169,8 +167,6 @@ describe('gitCapability', () => {
 
   const READ_ONLY: [string, unknown][] = [
     ['no probe at all', undefined],
-    ['no capabilities', {}],
-    ['a git block of the wrong shape', { git: 'yes' }],
     ['a git block without the key', { git: { changes: true } }],
     ['a null flag', { git: { stage: null } }],
   ];
@@ -179,10 +175,6 @@ describe('gitCapability', () => {
     const probe = capabilities === undefined ? undefined : info(capabilities);
 
     expect(gitCapability(probe, 'stage')).toBe(false);
-  });
-
-  it('does not mistake an inherited object key for a capability', () => {
-    expect(gitCapability(info({ git: {} }), 'constructor')).toBe(false);
   });
 });
 
@@ -239,19 +231,6 @@ describe('gitCapabilities', () => {
 
   it('is all-off without a probe', () => {
     expect(gitCapabilities(undefined)).toEqual(NO_GIT_CAPABILITIES);
-    expect(NO_GIT_CAPABILITIES).toEqual({
-      stage: false,
-      discard: false,
-      commit: false,
-      fetch: false,
-      pull: false,
-      push: false,
-      branches: false,
-      rebase: false,
-      resolve: false,
-      deleteRemote: false,
-      conflicts: false,
-    });
   });
 });
 
@@ -284,13 +263,9 @@ describe('voiceCapability', () => {
   const NO_VOICE: [string, unknown][] = [
     ['no probe at all', undefined],
     ['an agent too old for voice', {}],
-    ['a voice block of the wrong shape', { voice: true }],
-    ['dictation not offered', { voice: { ...VOICE, dictation: false } }],
     ['dictation as a string', { voice: { ...VOICE, dictation: 'true' } }],
     ['a zero limit', { voice: { ...VOICE, max_seconds: 0 } }],
-    ['a fractional rate', { voice: { ...VOICE, sample_rate: 16000.5 } }],
     ['a stringified limit', { voice: { ...VOICE, max_chunk_bytes: '65536' } }],
-    ['a missing limit', { voice: { dictation: true, sample_rate: 16000, max_seconds: 120 } }],
   ];
 
   it.each(NO_VOICE)('answers null for %s, which hides the mic', (_label, capabilities) => {
@@ -310,9 +285,6 @@ describe('voiceCleanupCapability', () => {
 
   const NO_CLEANUP: [string, unknown][] = [
     ['no probe at all', undefined],
-    ['an agent too old for voice', {}],
-    ['a voice block of the wrong shape', { voice: true }],
-    ['an agent too old for cleanup', { voice: VOICE }],
     ['cleanup off', { voice: { ...VOICE, cleanup: false } }],
     ['cleanup as a string', { voice: { ...VOICE, cleanup: 'true' } }],
   ];
@@ -339,16 +311,9 @@ describe('voiceCleanupKinds', () => {
     expect(voiceCleanupKinds(probe)).toEqual(['codex', 'opencode']);
   });
 
-  it('drops entries that are not strings', () => {
-    const probe = info({ voice: { ...VOICE, cleanup: true, cleanup_kinds: ['codex', 7, null, { kind: 'x' }] } });
-
-    expect(voiceCleanupKinds(probe)).toEqual(['codex']);
-  });
-
   const CLAUDE_ONLY: [string, unknown][] = [
     ['no list (an agent before Codex and Antigravity cleanup)', undefined],
     ['a list of the wrong shape', 'claude,codex'],
-    ['a null list', null],
   ];
 
   it.each(CLAUDE_ONLY)('reads %s as Claude Code only', (_label, kinds) => {

@@ -70,10 +70,6 @@ final class FakeWebSocketConnection: WebSocketTransportConnection, @unchecked Se
     func emit(_ event: WebSocketTransportEvent) {
         continuation.yield(event)
     }
-
-    func finishEvents() {
-        continuation.finish()
-    }
 }
 
 final class FakeWebSocketTransportFactory: WebSocketTransportFactory, @unchecked Sendable {

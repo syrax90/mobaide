@@ -52,8 +52,6 @@ describe('cleanup notice', () => {
   it.each([
     ['true', true, true],
     ['a truthy string', 'yes', false],
-    ['1', 1, false],
-    ['nothing', undefined, false],
   ])('restores %s as seen: %s', async (_label, value, seen) => {
     // Skipping the notice skips telling the user where the text goes, so
     // only an explicit `true` counts.

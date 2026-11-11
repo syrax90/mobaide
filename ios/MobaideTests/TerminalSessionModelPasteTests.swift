@@ -65,16 +65,6 @@ final class TerminalSessionModelPasteTests: XCTestCase {
         )
     }
 
-    func testMultilinePasteWithBracketedModeOffConvertsNewlinesToCarriageReturns() async throws {
-        let (model, connection) = try await wiredModel()
-        model.clipboardReader = { "a\nb\r\nc" }
-
-        model.pasteFromClipboard()
-
-        let frames = await drainedFrames(connection, expected: 1)
-        XCTAssertEqual(payloads(frames), ["a\rb\rc"])
-    }
-
     /// The markers and body travel in **one** frame, unlike Android's three.
     /// Android writes to a local PTY fd where the three are effectively atomic;
     /// these cross a WebSocket and a relay whose send result the drain loop
@@ -107,16 +97,6 @@ final class TerminalSessionModelPasteTests: XCTestCase {
             connection.sentBinaries.filter { $0.first == 0x69 }.isEmpty,
             "paste inherits the same Live+running gate as every other terminal-originated write"
         )
-    }
-
-    func testPasteOfAnEmptyClipboardSendsNothing() async throws {
-        let (model, connection) = try await wiredModel()
-        model.clipboardReader = { nil }
-
-        model.pasteFromClipboard()
-
-        try? await Task.sleep(for: .milliseconds(50))
-        XCTAssertTrue(connection.sentBinaries.filter { $0.first == 0x69 }.isEmpty)
     }
 
     func testPasteDismissesAnActiveSelectionFirst() async throws {

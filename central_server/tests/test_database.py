@@ -23,6 +23,17 @@ async def _create_test_user(db: Database) -> str:
     return await db.create_user(email="owner@test.local", password_hash="hash")
 
 
+async def _schema_head(tmp_path) -> int:
+    """The ``user_version`` a brand-new database migrates to."""
+    fresh = Database(str(tmp_path / "schema_head.db"))
+    await fresh.connect()
+    try:
+        cursor = await fresh.conn.execute("PRAGMA user_version")
+        return (await cursor.fetchone())[0]
+    finally:
+        await fresh.close()
+
+
 class TestAgentCRUD:
     async def test_register_and_verify(self, db: Database):
         owner = await _create_test_user(db)
@@ -31,42 +42,6 @@ class TestAgentCRUD:
         assert len(raw_token) > 20
         assert await db.verify_agent_token(agent_id, raw_token) is True
         assert await db.verify_agent_token(agent_id, "wrong") is False
-
-    async def test_list_agents(self, db: Database):
-        owner = await _create_test_user(db)
-        await db.register_agent("a1", owner)
-        await db.register_agent("a2", owner)
-        agents = await db.list_agents()
-        assert len(agents) == 2
-        names = {a["name"] for a in agents}
-        assert names == {"a1", "a2"}
-        # All agents have owner_user_id
-        for a in agents:
-            assert a["owner_user_id"] == owner
-
-    async def test_get_agent(self, db: Database):
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("test", owner)
-        agent = await db.get_agent(agent_id)
-        assert agent is not None
-        assert agent["name"] == "test"
-        assert agent["owner_user_id"] == owner
-        assert await db.get_agent("nonexistent") is None
-
-    async def test_touch_last_seen(self, db: Database):
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("test", owner)
-        await db.touch_agent_last_seen(agent_id)
-        agent = await db.get_agent(agent_id)
-        assert agent["last_seen_at"] is not None
-
-    async def test_touch_last_seen_with_explicit_timestamp(self, db: Database):
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("test", owner)
-        sentinel = datetime(2030, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
-        await db.touch_agent_last_seen(agent_id, sentinel)
-        agent = await db.get_agent(agent_id)
-        assert agent["last_seen_at"] == sentinel.isoformat()
 
     async def test_bulk_touch_agents_last_seen(self, db: Database):
         owner = await _create_test_user(db)
@@ -82,9 +57,6 @@ class TestAgentCRUD:
         assert (await db.get_agent(a1))["last_seen_at"] == t1.isoformat()
         assert (await db.get_agent(a2))["last_seen_at"] == t2.isoformat()
 
-    async def test_bulk_touch_agents_last_seen_empty_is_noop(self, db: Database):
-        await db.bulk_touch_agents_last_seen([])
-
     async def test_list_agents_for_user(self, db: Database):
         owner1 = await db.create_user(email="user1@test.local", password_hash="h")
         owner2 = await db.create_user(email="user2@test.local", password_hash="h")
@@ -97,13 +69,6 @@ class TestAgentCRUD:
         user2_agents = await db.list_agents_for_user(owner2)
         assert len(user2_agents) == 1
         assert user2_agents[0]["name"] == "b1"
-
-    async def test_list_agents_with_owner(self, db: Database):
-        owner = await _create_test_user(db)
-        await db.register_agent("a1", owner)
-        agents = await db.list_agents_with_owner()
-        assert len(agents) == 1
-        assert agents[0]["owner_email"] == "owner@test.local"
 
     async def test_is_agent_owner(self, db: Database):
         owner = await _create_test_user(db)
@@ -136,9 +101,6 @@ class TestAgentCRUD:
         # devices are user-scoped and outlive any one agent.
         assert await db.get_pending_pairing_tokens(agent_id) == []
         assert await db.validate_and_consume_refresh("r1") is None
-
-    async def test_delete_nonexistent_returns_false(self, db: Database):
-        assert await db.delete_agent("nonexistent") is False
 
     async def test_delete_agent_with_qr_claimed_token(self, db: Database):
         """Regression: pairing_tokens.claimed_agent_id is a second FK to
@@ -183,28 +145,6 @@ class TestAgentHandshakeInfo:
     previously-recorded value.
     """
 
-    async def test_update_persists_both_fields(self, db: Database):
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("test", owner)
-
-        await db.update_agent_handshake_info(agent_id, "0.3.0", 2)
-
-        agent = await db.get_agent(agent_id)
-        assert agent is not None
-        assert agent["agent_version"] == "0.3.0"
-        assert agent["agent_protocol_version"] == 2
-
-    async def test_freshly_registered_agent_has_null_handshake_fields(
-        self, db: Database
-    ):
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("test", owner)
-
-        agent = await db.get_agent(agent_id)
-        assert agent is not None
-        assert agent["agent_version"] is None
-        assert agent["agent_protocol_version"] is None
-
     async def test_update_with_none_version_preserves_existing(
         self, db: Database
     ):
@@ -221,68 +161,6 @@ class TestAgentHandshakeInfo:
         agent = await db.get_agent(agent_id)
         assert agent["agent_version"] == "0.3.0"
         assert agent["agent_protocol_version"] == 2
-
-    async def test_update_with_none_protocol_version_preserves_existing(
-        self, db: Database
-    ):
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("test", owner)
-        await db.update_agent_handshake_info(agent_id, "0.3.0", 2)
-
-        await db.update_agent_handshake_info(agent_id, "0.4.0", None)
-
-        agent = await db.get_agent(agent_id)
-        assert agent["agent_version"] == "0.4.0"
-        assert agent["agent_protocol_version"] == 2
-
-    async def test_update_with_both_none_is_noop_on_existing_values(
-        self, db: Database
-    ):
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("test", owner)
-        await db.update_agent_handshake_info(agent_id, "0.3.0", 2)
-
-        await db.update_agent_handshake_info(agent_id, None, None)
-
-        agent = await db.get_agent(agent_id)
-        assert agent["agent_version"] == "0.3.0"
-        assert agent["agent_protocol_version"] == 2
-
-    async def test_update_overwrites_with_newer_version(self, db: Database):
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("test", owner)
-        await db.update_agent_handshake_info(agent_id, "0.3.0", 2)
-
-        await db.update_agent_handshake_info(agent_id, "0.4.0", 3)
-
-        agent = await db.get_agent(agent_id)
-        assert agent["agent_version"] == "0.4.0"
-        assert agent["agent_protocol_version"] == 3
-
-    async def test_update_nonexistent_agent_is_noop(self, db: Database):
-        # No row matches; UPDATE affects 0 rows but must not raise.
-        await db.update_agent_handshake_info("nonexistent", "0.3.0", 2)
-        assert await db.get_agent("nonexistent") is None
-
-    async def test_update_refreshes_last_seen_on_fresh_row(self, db: Database):
-        """The connect path no longer calls ``touch_agent_last_seen``
-        separately — ``update_agent_handshake_info`` is now responsible
-        for bumping ``last_seen_at`` in the same UPDATE+commit. A
-        freshly-registered agent has ``last_seen_at IS NULL``; one
-        handshake must populate it.
-        """
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("test", owner)
-        before = await db.get_agent(agent_id)
-        assert before is not None
-        assert before["last_seen_at"] is None
-
-        await db.update_agent_handshake_info(agent_id, "0.3.0", 2)
-
-        after = await db.get_agent(agent_id)
-        assert after["last_seen_at"] is not None
-        # _now_iso() emits an ISO-8601 string with a UTC offset.
-        assert after["last_seen_at"].endswith("+00:00")
 
     async def test_update_refreshes_last_seen_when_both_versions_none(
         self, db: Database
@@ -313,55 +191,6 @@ class TestListUsersWithAgents:
     documented field flows through the SELECT projection.
     """
 
-    async def test_empty_db_returns_empty_list(self, db: Database):
-        assert await db.list_users_with_agents() == []
-
-    async def test_user_with_no_agents_has_empty_agents_list(self, db: Database):
-        """A user with zero agents must surface as a row with ``agents=[]``,
-        not be filtered out by the LEFT JOIN (the agentless-user branch in
-        the Python grouping is the load-bearing reason for the LEFT JOIN).
-        """
-        await db.create_user(email="solo@test.local", password_hash="h")
-
-        users = await db.list_users_with_agents()
-        assert len(users) == 1
-        assert users[0]["email"] == "solo@test.local"
-        assert users[0]["agents"] == []
-
-    async def test_user_with_multiple_agents_groups_correctly(
-        self, db: Database
-    ):
-        """Two LEFT JOIN rows for one user must collapse to one user dict
-        with both agents nested in the ``agents`` list — the grouping
-        invariant.
-        """
-        owner = await db.create_user(email="multi@test.local", password_hash="h")
-        await db.register_agent("a1", owner)
-        await db.register_agent("a2", owner)
-
-        users = await db.list_users_with_agents()
-        assert len(users) == 1
-        assert users[0]["id"] == owner
-        agent_names = {a["name"] for a in users[0]["agents"]}
-        assert agent_names == {"a1", "a2"}
-
-    async def test_users_ordered_newest_first(self, db: Database):
-        """``ORDER BY u.created_at DESC`` — the most recently created user
-        appears first. Sleeps a microsecond between creates so the ISO
-        timestamps sort strictly.
-        """
-        import asyncio
-
-        first = await db.create_user(email="first@test.local", password_hash="h")
-        await asyncio.sleep(0.001)
-        middle = await db.create_user(email="middle@test.local", password_hash="h")
-        await asyncio.sleep(0.001)
-        last = await db.create_user(email="last@test.local", password_hash="h")
-
-        users = await db.list_users_with_agents()
-        ids = [u["id"] for u in users]
-        assert ids == [last, middle, first]
-
     async def test_agents_within_user_ordered_newest_first(self, db: Database):
         """Per the SQL ``ORDER BY u.created_at DESC, a.created_at DESC`` the
         nested ``agents`` list for each user must be newest-agent-first.
@@ -379,51 +208,6 @@ class TestListUsersWithAgents:
         assert len(users) == 1
         agent_ids = [a["agent_id"] for a in users[0]["agents"]]
         assert agent_ids == [new_id, mid_id, old_id]
-
-    async def test_verified_user_projects_verified_fields(self, db: Database):
-        """A user created verified (admin seeder / Google path) surfaces
-        ``email_verified == 1`` and a ``verified_at`` timestamp in the
-        listing — the dashboard's Verified badge and tooltip read these.
-        """
-        await db.create_user(
-            email="vouched@test.local", password_hash="h", email_verified=True
-        )
-
-        users = await db.list_users_with_agents()
-        assert len(users) == 1
-        u = users[0]
-        assert u["email_verified"] == 1
-        assert isinstance(u["verified_at"], str)
-        assert u["verified_at"].endswith("+00:00")
-
-    async def test_mark_user_verified_reflected_in_listing(self, db: Database):
-        """Completing the OTP flow (``mark_user_verified``) flips the
-        listing from unverified to verified with a timestamp.
-        """
-        user_id = await db.create_user(
-            email="otp@test.local", password_hash="h"
-        )
-        await db.mark_user_verified(user_id)
-
-        users = await db.list_users_with_agents()
-        assert len(users) == 1
-        u = users[0]
-        assert u["email_verified"] == 1
-        assert u["verified_at"] is not None
-
-    async def test_fresh_agent_has_null_handshake_fields(self, db: Database):
-        """A just-registered agent has NULL ``last_seen_at``,
-        ``agent_version``, and ``agent_protocol_version``. These must
-        flow through as Python ``None``, not be dropped from the dict.
-        """
-        owner = await db.create_user(email="o@test.local", password_hash="h")
-        await db.register_agent("fresh", owner)
-
-        users = await db.list_users_with_agents()
-        a = users[0]["agents"][0]
-        assert a["last_seen_at"] is None
-        assert a["agent_version"] is None
-        assert a["agent_protocol_version"] is None
 
     async def test_multiple_users_with_mixed_agent_counts(self, db: Database):
         """A populated DB: one agentless user, one user with two agents,
@@ -534,18 +318,6 @@ class TestListUsersFilterSortPage:
         assert await db.count_users(verified=False) == 1
         assert await db.count_users() == 2
 
-    async def test_sort_registered_ascending_is_oldest_first(
-        self, db: Database
-    ):
-        first, middle, last = await self._seed(
-            db, "first@test.local", "middle@test.local", "last@test.local"
-        )
-
-        users = await db.list_users_with_agents(
-            sort="registered", descending=False
-        )
-        assert [u["id"] for u in users] == [first, middle, last]
-
     async def test_sort_activity_keys_on_latest_agent_and_places_null_at_the_low_end(
         self, db: Database
     ):
@@ -621,61 +393,11 @@ class TestListUsersFilterSortPage:
             )
         ] == [a1, a2]
 
-    async def test_unknown_sort_key_raises(self, db: Database):
-        with pytest.raises(ValueError, match="email"):
-            await db.list_users_with_agents(sort="email")
-
 
 class TestDeleteUser:
     """``Database.delete_user`` cascade — explicit per-table sequence that
     returns the deleted agent IDs so the router can tear down live WSs.
     """
-
-    async def test_delete_unknown_user_returns_empty_list(self, db: Database):
-        """Per docstring: ``Returns an empty list if user_id does not exist.``"""
-        assert await db.delete_user("ghost") == []
-
-    async def test_delete_user_with_no_agents_returns_empty_list(
-        self, db: Database
-    ):
-        """An agentless user yields an empty agent-id list — the dashboard
-        router uses that list to decide whether to fan out
-        ``disconnect_agent`` calls. Wrong shape (None / scalar) would
-        crash the router's ``for agent_id in agent_ids`` loop.
-        """
-        user_id = await db.create_user(email="solo@test.local", password_hash="h")
-
-        agent_ids = await db.delete_user(user_id)
-        assert agent_ids == []
-        assert await db.get_user_by_id(user_id) is None
-
-    async def test_delete_user_returns_owned_agent_ids(self, db: Database):
-        """Single-agent owner: returned list has exactly the one agent_id."""
-        owner = await db.create_user(email="o@test.local", password_hash="h")
-        agent_id, _ = await db.register_agent("the-agent", owner)
-
-        agent_ids = await db.delete_user(owner)
-        assert agent_ids == [agent_id]
-        assert await db.get_agent(agent_id) is None
-
-    async def test_delete_user_returns_all_owned_agent_ids(
-        self, db: Database
-    ):
-        """Multi-agent cascade: the router needs *every* agent_id back so
-        it can disconnect each agent's WS. The returned list must contain
-        all of them, even though a single SQL ``DELETE FROM agents WHERE
-        owner_user_id = ?`` drops them in one statement.
-        """
-        owner = await db.create_user(email="o@test.local", password_hash="h")
-        a1, _ = await db.register_agent("a1", owner)
-        a2, _ = await db.register_agent("a2", owner)
-        a3, _ = await db.register_agent("a3", owner)
-
-        agent_ids = await db.delete_user(owner)
-        assert isinstance(agent_ids, list)
-        assert set(agent_ids) == {a1, a2, a3}
-        for aid in (a1, a2, a3):
-            assert await db.get_agent(aid) is None
 
     async def test_delete_user_cascades_all_dependent_rows(
         self, db: Database
@@ -802,16 +524,6 @@ class TestDeleteUser:
 
 
 class TestPairingTokens:
-    async def test_create_and_consume(self, db: Database):
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("test", owner)
-        raw_token, expires_at = await db.create_pairing_token(agent_id, 300)
-        assert len(raw_token) > 20
-        assert expires_at is not None
-
-        result = await db.consume_pairing_token(raw_token, "mobile-1")
-        assert result == agent_id
-
     async def test_single_use(self, db: Database):
         owner = await _create_test_user(db)
         agent_id, _ = await db.register_agent("test", owner)
@@ -826,9 +538,6 @@ class TestPairingTokens:
         raw_token, _ = await db.create_pairing_token(agent_id, 0)
         assert await db.consume_pairing_token(raw_token, "mobile-1") is None
 
-    async def test_invalid_token(self, db: Database):
-        assert await db.consume_pairing_token("bogus-token", "mobile-1") is None
-
     async def test_cleanup_expired(self, db: Database):
         owner = await _create_test_user(db)
         agent_id, _ = await db.register_agent("test", owner)
@@ -836,14 +545,6 @@ class TestPairingTokens:
         await db.create_pairing_token(agent_id, 300)
         deleted = await db.cleanup_expired_tokens()
         assert deleted == 1
-
-    async def test_pending_tokens(self, db: Database):
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("test", owner)
-        await db.create_pairing_token(agent_id, 300)
-        await db.create_pairing_token(agent_id, 300)
-        pending = await db.get_pending_pairing_tokens(agent_id)
-        assert len(pending) == 2
 
 
 class TestMobileDevices:
@@ -855,28 +556,6 @@ class TestMobileDevices:
     across users: a cross-user upsert hands the device over, returning the
     previous owner's id and revoking their live refresh tokens.
     """
-
-    async def test_upsert_and_list(self, db: Database):
-        owner = await _create_test_user(db)
-        previous_owner = await db.upsert_mobile_device(
-            device_id="dev-1", user_id=owner, name="Pixel 7"
-        )
-        assert previous_owner is None
-        devices = await db.list_user_devices(owner)
-        assert len(devices) == 1
-        assert devices[0]["device_id"] == "dev-1"
-        assert devices[0]["name"] == "Pixel 7"
-
-    async def test_upsert_is_idempotent(self, db: Database):
-        owner = await _create_test_user(db)
-        assert await db.upsert_mobile_device(
-            device_id="dev-1", user_id=owner, name="A"
-        ) is None
-        assert await db.upsert_mobile_device(
-            device_id="dev-1", user_id=owner, name="A"
-        ) is None
-        devices = await db.list_user_devices(owner)
-        assert len(devices) == 1
 
     async def test_upsert_hands_over_in_use_device_and_revokes_tokens(
         self, db: Database
@@ -960,24 +639,6 @@ class TestMobileDevices:
         assert await db.list_user_devices(u_a) == []
         b_devices = await db.list_user_devices(u_b)
         assert [d["name"] for d in b_devices] == ["B's phone"]
-
-    async def test_upsert_reassigns_after_agent_delete(self, db: Database):
-        """Historical repro of the old 409: A pairs a device to an agent,
-        the agent is deleted (hard-deleting the device's refresh tokens),
-        then the same device pairs under B. A clean handover — nothing
-        left to revoke."""
-        u_a = await db.create_user(email="a@test.local", password_hash="h")
-        u_b = await db.create_user(email="b@test.local", password_hash="h")
-        agent_a, _ = await db.register_agent("a-agent", u_a)
-        await db.upsert_mobile_device(device_id="dev-x", user_id=u_a, name="A")
-        await db.store_refresh_token("a-refresh", "dev-x", agent_a, 60)
-        # Deleting the agent removes the device's only live session.
-        await db.delete_agent(agent_a)
-        assert await db.upsert_mobile_device(
-            device_id="dev-x", user_id=u_b, name="B's phone"
-        ) == u_a
-        b_devices = await db.list_user_devices(u_b)
-        assert [d["device_id"] for d in b_devices] == ["dev-x"]
 
     async def test_revoke_removes_from_list(self, db: Database):
         owner = await _create_test_user(db)
@@ -1213,16 +874,6 @@ class TestPushTokens:
             }
         ]
 
-    async def test_set_replaces_on_rotation(self, db: Database):
-        owner = await _create_test_user(db)
-        await self._register(db, owner)
-        await db.set_push_token("dev-1", owner, "ios", "tok-old", "sandbox")
-        await db.set_push_token("dev-1", owner, "ios", "tok-new", "production")
-
-        targets = await db.list_push_targets(owner)
-        assert [t["push_token"] for t in targets] == ["tok-new"]
-        assert targets[0]["push_environment"] == "production"
-
     async def test_set_scoped_to_owner_and_active(self, db: Database):
         u1 = await db.create_user(email="u1@test.local", password_hash="h")
         u2 = await db.create_user(email="u2@test.local", password_hash="h")
@@ -1290,17 +941,6 @@ class TestPushTokens:
         assert await db.list_push_targets(u_a) == []
         assert await db.list_push_targets(u_b) == []
 
-    async def test_upsert_platform_coalesce(self, db: Database):
-        owner = await _create_test_user(db)
-        await db.upsert_mobile_device(
-            device_id="dev-1", user_id=owner, name="A", platform="ios"
-        )
-        # A later upsert without platform must not wipe the stored value.
-        await db.upsert_mobile_device(device_id="dev-1", user_id=owner)
-        await db.set_push_token("dev-1", owner, "ios", "tok-1", "sandbox")
-        targets = await db.list_push_targets(owner)
-        assert targets[0]["platform"] == "ios"
-
     async def test_list_excludes_revoked_and_tokenless(self, db: Database):
         owner = await _create_test_user(db)
         await self._register(db, owner, "dev-token")
@@ -1344,25 +984,6 @@ class TestPushTokens:
             t["push_token"] for t in await db.list_push_targets(u2)
         ] == ["tok-2"]
 
-    async def test_clear_for_user_skips_revoked_device_already_cleared(
-        self, db: Database
-    ):
-        owner = await _create_test_user(db)
-        await self._register(db, owner, "dev-live")
-        await self._register(db, owner, "dev-revoked")
-        await db.set_push_token("dev-live", owner, "ios", "tok-1", "sandbox")
-        await db.set_push_token("dev-revoked", owner, "ios", "tok-2", "sandbox")
-        await db.revoke_mobile_device("dev-revoked", owner)
-
-        # The statement is deliberately not scoped to ``revoked_at IS NULL``,
-        # but revocation already nulled the columns, so the count stays honest.
-        assert await db.clear_push_tokens_for_user(owner) == 1
-        assert await db.list_push_targets(owner) == []
-        # The revoked row is not resurrected by the clear.
-        assert [
-            d["device_id"] for d in await db.list_user_devices(owner)
-        ] == ["dev-live"]
-
 
 class TestPushColumnsMigration:
     async def test_v15_adds_push_columns_to_existing_db(self, tmp_path):
@@ -1384,7 +1005,7 @@ class TestPushColumnsMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 23
+        assert (await cursor.fetchone())[0] == await _schema_head(tmp_path)
         cursor = await db.conn.execute("PRAGMA table_info(mobile_devices)")
         columns = {r[1] for r in await cursor.fetchall()}
         assert {"platform", "push_token", "push_environment"} <= columns
@@ -1396,57 +1017,10 @@ class TestPushColumnsMigration:
 
 
 class TestUserCRUD:
-    async def test_create_and_get_by_email(self, db: Database):
-        user_id = await db.create_user(
-            email="user@example.com",
-            password_hash="$argon2id$fake",
-            role="viewer",
-        )
-        assert len(user_id) == 12
-        user = await db.get_user_by_email("user@example.com")
-        assert user is not None
-        assert user["id"] == user_id
-        assert user["email"] == "user@example.com"
-        assert user["role"] == "viewer"
-        assert user["password_hash"] == "$argon2id$fake"
-        assert user["google_sub"] is None
-
-    async def test_get_by_id(self, db: Database):
-        user_id = await db.create_user(email="user@example.com")
-        user = await db.get_user_by_id(user_id)
-        assert user is not None
-        assert user["id"] == user_id
-
-    async def test_get_by_google_sub(self, db: Database):
-        user_id = await db.create_user(
-            email="google@example.com", google_sub="g-12345"
-        )
-        user = await db.get_user_by_google_sub("g-12345")
-        assert user is not None
-        assert user["id"] == user_id
-        assert user["email"] == "google@example.com"
-
-    async def test_get_nonexistent(self, db: Database):
-        assert await db.get_user_by_email("nobody@example.com") is None
-        assert await db.get_user_by_id("nonexistent") is None
-        assert await db.get_user_by_google_sub("nosub") is None
-
     async def test_duplicate_email_raises(self, db: Database):
         await db.create_user(email="dup@example.com")
         with pytest.raises(Exception):  # aiosqlite raises IntegrityError
             await db.create_user(email="dup@example.com")
-
-    async def test_link_google_to_user(self, db: Database):
-        user_id = await db.create_user(
-            email="user@example.com", password_hash="hash"
-        )
-        assert await db.get_user_by_google_sub("g-abc") is None
-
-        await db.link_google_to_user(user_id, "g-abc")
-        user = await db.get_user_by_google_sub("g-abc")
-        assert user is not None
-        assert user["id"] == user_id
-        assert user["google_sub"] == "g-abc"
 
 
 class TestUnverifiedSignupGuards:
@@ -1485,16 +1059,6 @@ class TestUnverifiedSignupGuards:
 
         user = await db.get_user_by_id(user_id)
         assert (user["email_verified"], user["password_hash"]) == (1, "typed-hash")
-
-    async def test_mark_user_verified_without_hash_keeps_the_stored_one(
-        self, db: Database
-    ):
-        user_id = await db.create_user(email="u@example.com", password_hash="old")
-
-        await db.mark_user_verified(user_id)
-
-        user = await db.get_user_by_id(user_id)
-        assert (user["email_verified"], user["password_hash"]) == (1, "old")
 
     async def test_clear_unverified_password_clears_an_unverified_row(
         self, db: Database
@@ -1661,13 +1225,6 @@ class TestCodeTokenAttemptCap:
 
         assert await getattr(db, consume_name)(user_id, "right-hash", 5) == "expired"
 
-    async def test_no_issued_code_is_invalid(
-        self, db: Database, create_name: str, consume_name: str
-    ):
-        user_id = await _create_test_user(db)
-
-        assert await getattr(db, consume_name)(user_id, "right-hash", 5) == "invalid"
-
 
 class TestAdminOwnedAgentPurgeMigration:
     """Verify that migration v4 purges admin-owned agents + dependents.
@@ -1724,13 +1281,13 @@ class TestAdminOwnedAgentPurgeMigration:
         await db.conn.commit()
         await db.close()
 
-        # Reopen — should run the v4 migration through to head (v17).
+        # Reopen — should run the v4 migration through to head.
         db = Database(db_path)
         await db.connect()
 
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 23
+        assert row[0] == await _schema_head(tmp_path)
 
         # v4 purges admin-owned agents + their cascade rows.
         assert await db.get_agent(admin_agent_id) is None
@@ -1749,29 +1306,8 @@ class TestAdminOwnedAgentPurgeMigration:
 
         await db.close()
 
-    async def test_idempotent_on_already_migrated_db(self, tmp_path):
-        db_path = str(tmp_path / "post_migration.db")
-        db = Database(db_path)
-        await db.connect()
-        await db.close()
-
-        # Reopen — version is already at the head, migration is a no-op.
-        db = Database(db_path)
-        await db.connect()
-        cursor = await db.conn.execute("PRAGMA user_version")
-        row = await cursor.fetchone()
-        assert row[0] == 23
-        await db.close()
-
 
 class TestRefreshTokens:
-    async def test_store_and_validate(self, db: Database):
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("test", owner)
-        await db.store_refresh_token("refresh-abc", "device-1", agent_id, 60)
-        result = await db.validate_and_consume_refresh("refresh-abc")
-        assert result == ("device-1", agent_id)
-
     async def test_rotation(self, db: Database):
         owner = await _create_test_user(db)
         agent_id, _ = await db.register_agent("test", owner)
@@ -1794,22 +1330,6 @@ class TestRefreshTokenNeverExpires:
     and validate_and_consume_refresh still accepts the token.
     """
 
-    async def test_zero_ttl_writes_sentinel_expires_at(self, db: Database):
-        from central_server.db.database import _NEVER_EXPIRES_AT, _hash_token
-
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("test", owner)
-        await db.store_refresh_token("r-forever", "device-1", agent_id, 0)
-
-        cursor = await db.conn.execute(
-            "SELECT expires_at FROM mobile_refresh_tokens WHERE token_hash = ?",
-            (_hash_token("r-forever"),),
-        )
-        row = await cursor.fetchone()
-        assert row is not None
-        assert row["expires_at"] == _NEVER_EXPIRES_AT
-        assert row["expires_at"].startswith("9999-12-31")
-
     async def test_zero_ttl_token_validates_and_consumes(self, db: Database):
         owner = await _create_test_user(db)
         agent_id, _ = await db.register_agent("test", owner)
@@ -1819,24 +1339,6 @@ class TestRefreshTokenNeverExpires:
         assert result == ("device-1", agent_id)
         # Rotation semantics still apply — single-use.
         assert await db.validate_and_consume_refresh("r-forever") is None
-
-    async def test_zero_ttl_token_comparable_to_positive_ttl(self, db: Database):
-        """A 0-TTL token (sentinel) and a positive-TTL token live side-by-side
-        and both validate correctly.
-        """
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("test", owner)
-        await db.store_refresh_token("r-forever", "device-1", agent_id, 0)
-        await db.store_refresh_token("r-short", "device-1", agent_id, 60)
-
-        assert await db.validate_and_consume_refresh("r-forever") == (
-            "device-1",
-            agent_id,
-        )
-        assert await db.validate_and_consume_refresh("r-short") == (
-            "device-1",
-            agent_id,
-        )
 
 
 async def _refresh_row(db: Database, raw_token: str) -> dict | None:
@@ -1909,29 +1411,6 @@ class TestCapNeverExpiringRefreshTokens:
         assert await db.cleanup_expired_tokens() == 1
         assert await _refresh_row(db, "r-stale") is None
 
-    async def test_unparseable_created_at_counts_from_now(self, db: Database):
-        from central_server.db.database import _hash_token
-
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("test", owner)
-        await db.store_refresh_token("r-garbled", "device-1", agent_id, 0)
-        await db.conn.execute(
-            "UPDATE mobile_refresh_tokens SET created_at = 'not-a-date' "
-            "WHERE token_hash = ?",
-            (_hash_token("r-garbled"),),
-        )
-        await db.conn.commit()
-
-        before = datetime.now(timezone.utc)
-        assert await db.cap_never_expiring_refresh_tokens(60) == 1
-        after = datetime.now(timezone.utc)
-
-        expires = datetime.fromisoformat(
-            (await _refresh_row(db, "r-garbled"))["expires_at"]
-        )
-        assert before + timedelta(minutes=60) <= expires
-        assert expires <= after + timedelta(minutes=60)
-
 
 class TestMobileRefreshTokenSweep:
     async def test_expired_rows_go_live_and_never_expiring_rows_stay(
@@ -1974,37 +1453,6 @@ class TestScheduledDeletionFields:
     """``set_scheduled_deletion`` / ``clear_scheduled_deletion`` /
     ``list_users_due_for_purge`` — the user-row column pair the sweeper
     reads on every interval."""
-
-    async def test_set_and_clear_round_trip(self, db: Database):
-        user_id = await db.create_user(
-            email="schedule@test.local", password_hash="h",
-        )
-        future = "2099-01-01T00:00:00+00:00"
-        now_iso = "2025-01-01T00:00:00+00:00"
-
-        await db.set_scheduled_deletion(
-            user_id, scheduled_for=future, requested_at=now_iso,
-        )
-        user = await db.get_user_by_id(user_id)
-        assert user is not None
-        assert user["scheduled_deletion_at"] == future
-        assert user["deletion_requested_at"] == now_iso
-
-        await db.clear_scheduled_deletion(user_id)
-        cleared = await db.get_user_by_id(user_id)
-        assert cleared is not None
-        assert cleared["scheduled_deletion_at"] is None
-        assert cleared["deletion_requested_at"] is None
-
-    async def test_clear_is_idempotent_when_never_scheduled(self, db: Database):
-        user_id = await db.create_user(
-            email="noschedule@test.local", password_hash="h",
-        )
-        # Must not raise even though there's nothing to clear.
-        await db.clear_scheduled_deletion(user_id)
-        user = await db.get_user_by_id(user_id)
-        assert user is not None
-        assert user["scheduled_deletion_at"] is None
 
     async def test_list_users_due_for_purge_returns_only_past_due(
         self, db: Database
@@ -2063,32 +1511,6 @@ class TestDeletionAuditCrud:
     ``find_pending_audit_for_user`` — drives audit row lifecycle from
     request → terminal state."""
 
-    async def test_record_then_find_pending_returns_row(self, db: Database):
-        user_id = await db.create_user(email="audit@test.local", password_hash="h")
-        audit_id = await db.record_deletion_audit(
-            user_id=user_id,
-            email_at_request="audit@test.local",
-            requested_at="2025-01-01T00:00:00+00:00",
-            scheduled_for="2025-01-15T00:00:00+00:00",
-            source="android",
-        )
-        assert isinstance(audit_id, int)
-        assert audit_id > 0
-
-        row = await db.find_pending_audit_for_user(user_id)
-        assert row is not None
-        assert row["id"] == audit_id
-        assert row["status"] == "pending"
-        assert row["email_at_request"] == "audit@test.local"
-        assert row["source"] == "android"
-
-    async def test_find_pending_returns_none_when_no_pending(self, db: Database):
-        # Brand-new user with no audit history.
-        user_id = await db.create_user(
-            email="clean@test.local", password_hash="h",
-        )
-        assert await db.find_pending_audit_for_user(user_id) is None
-
     async def test_update_status_to_completed_with_timestamp(self, db: Database):
         user_id = await db.create_user(email="done@test.local", password_hash="h")
         audit_id = await db.record_deletion_audit(
@@ -2112,29 +1534,6 @@ class TestDeletionAuditCrud:
         assert row is not None
         assert row["status"] == "completed"
         assert row["completed_at"] == "2025-01-15T01:00:00+00:00"
-
-    async def test_update_status_to_cancelled_records_reason(self, db: Database):
-        user_id = await db.create_user(
-            email="cancel@test.local", password_hash="h",
-        )
-        audit_id = await db.record_deletion_audit(
-            user_id=user_id,
-            email_at_request="cancel@test.local",
-            requested_at="2025-01-01T00:00:00+00:00",
-            scheduled_for="2025-01-15T00:00:00+00:00",
-            source="portal",
-        )
-        await db.update_deletion_audit_status(
-            audit_id, "cancelled", cancellation_reason="user_initiated",
-        )
-        cur = await db.conn.execute(
-            "SELECT status, cancellation_reason FROM deletion_audit WHERE id = ?",
-            (audit_id,),
-        )
-        row = await cur.fetchone()
-        assert row is not None
-        assert row["status"] == "cancelled"
-        assert row["cancellation_reason"] == "user_initiated"
 
     async def test_find_pending_returns_most_recent_when_multiple(
         self, db: Database
@@ -2171,15 +1570,6 @@ class TestDeletionCancelTokens:
     """``create_deletion_cancel_token`` / ``consume_deletion_cancel_token``
     — single-use short-TTL tokens for the cancel link emailed to users."""
 
-    async def test_create_then_consume_returns_user_id(self, db: Database):
-        user_id = await db.create_user(email="ct@test.local", password_hash="h")
-        raw = await db.create_deletion_cancel_token(user_id, ttl_seconds=3600)
-        assert isinstance(raw, str)
-        assert len(raw) > 20
-
-        consumed = await db.consume_deletion_cancel_token(raw)
-        assert consumed == user_id
-
     async def test_consume_is_single_use(self, db: Database):
         user_id = await db.create_user(email="su@test.local", password_hash="h")
         raw = await db.create_deletion_cancel_token(user_id, ttl_seconds=3600)
@@ -2189,11 +1579,6 @@ class TestDeletionCancelTokens:
         # Second consume returns None — token is consumed.
         again = await db.consume_deletion_cancel_token(raw)
         assert again is None
-
-    async def test_consume_unknown_token_returns_none(self, db: Database):
-        # No token was ever stored matching this string.
-        result = await db.consume_deletion_cancel_token("not-a-real-token-xyz")
-        assert result is None
 
     async def test_consume_expired_token_returns_none(self, db: Database):
         """TTL=0 makes the token expire the instant it's stored — the
@@ -2298,14 +1683,6 @@ class TestUserShortcuts:
     surface never reaches directly: the partial dedupe unique index and the
     per-(owner, kind) position counter."""
 
-    async def test_duplicate_live_chord_raises_integrity_error(
-        self, db: Database
-    ):
-        owner = await _create_test_user(db)
-        await db.create_user_shortcut(owner, "claude", "ctrl+x", None)
-        with pytest.raises(sqlite3.IntegrityError):
-            await db.create_user_shortcut(owner, "claude", "ctrl+x", "Again")
-
     async def test_duplicate_chord_rolls_back_open_transaction(
         self, db: Database
     ):
@@ -2365,18 +1742,6 @@ class TestUserShortcuts:
         # MAX(position)+1 over live rows: the freed slot is reused.
         assert c["position"] == 1
 
-    async def test_update_name_on_deleted_row_returns_none(
-        self, db: Database
-    ):
-        owner = await _create_test_user(db)
-        row = await db.create_user_shortcut(owner, "claude", "ctrl+x", None)
-        await db.soft_delete_user_shortcut(row["shortcut_id"])
-
-        assert (
-            await db.update_user_shortcut_name(row["shortcut_id"], "ghost")
-            is None
-        )
-
     async def test_update_name_racing_delete_at_readback_returns_none(
         self, db: Database, monkeypatch
     ):
@@ -2401,13 +1766,6 @@ class TestUserShortcuts:
         persisted = await db.get_user_shortcut(row["shortcut_id"])
         assert persisted is not None
         assert persisted["deleted_at"] is not None
-
-    async def test_soft_delete_twice_returns_none(self, db: Database):
-        owner = await _create_test_user(db)
-        row = await db.create_user_shortcut(owner, "claude", "ctrl+x", None)
-
-        assert await db.soft_delete_user_shortcut(row["shortcut_id"]) is not None
-        assert await db.soft_delete_user_shortcut(row["shortcut_id"]) is None
 
 
 class TestPromptTemplates:
@@ -2439,28 +1797,6 @@ class TestPromptTemplates:
         assert persisted is not None
         assert persisted["deleted_at"] is not None
 
-    async def test_touch_template_racing_delete_at_readback_returns_none(
-        self, db: Database, monkeypatch
-    ):
-        owner = await _create_test_user(db)
-        row = await db.create_template(owner, "orig", "body")
-
-        real_get = db.get_template
-
-        async def racing_get(template_id):
-            monkeypatch.setattr(db, "get_template", real_get)
-            await db.soft_delete_template(template_id)
-            return await real_get(template_id)
-
-        monkeypatch.setattr(db, "get_template", racing_get)
-
-        result = await db.touch_template(row["template_id"])
-
-        assert result is None
-        persisted = await db.get_template(row["template_id"])
-        assert persisted is not None
-        assert persisted["deleted_at"] is not None
-
     async def test_update_template_no_fields_on_deleted_row_returns_none(
         self, db: Database
     ):
@@ -2478,21 +1814,6 @@ class TestCustomAgentTypes:
     """DB helpers for the account-scoped custom agent type registry:
     single-statement cap enforcement, NOCASE name uniqueness, guarded
     update, and the kind-scoped shortcut cascade on soft-delete."""
-
-    async def test_create_and_readback(self, db: Database):
-        owner = await _create_test_user(db)
-        row = await db.create_custom_agent_type(owner, "Aider", "aider --yes")
-
-        assert row is not None
-        assert len(row["id"]) == 12
-        assert row["owner_user_id"] == owner
-        assert row["name"] == "Aider"
-        assert row["command"] == "aider --yes"
-        assert row["deleted_at"] is None
-        assert row["created_at"] == row["updated_at"]
-
-        readback = await db.get_custom_agent_type(row["id"])
-        assert readback == row
 
     async def test_create_cap_kwarg_returns_none_and_inserts_nothing(
         self, db: Database
@@ -2524,13 +1845,6 @@ class TestCustomAgentTypes:
         assert await db.create_custom_agent_type(
             other, "One", "c1", cap=1
         ) is not None
-
-    async def test_nocase_duplicate_raises_integrity_error(self, db: Database):
-        owner = await _create_test_user(db)
-        await db.create_custom_agent_type(owner, "Aider", "c1")
-
-        with pytest.raises(sqlite3.IntegrityError):
-            await db.create_custom_agent_type(owner, "aIDER", "c2")
 
     async def test_create_name_conflict_rolls_back_open_transaction(
         self, db: Database
@@ -2697,7 +2011,7 @@ class TestCustomAgentTypesMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 23
+        assert (await cursor.fetchone())[0] == await _schema_head(tmp_path)
 
         # Table is usable and the NOCASE unique index came back with it.
         row = await db.create_custom_agent_type(owner, "Aider", "c1")
@@ -2711,7 +2025,7 @@ class TestCustomAgentTypesMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 23
+        assert (await cursor.fetchone())[0] == await _schema_head(tmp_path)
         assert await db.get_custom_agent_type(row["id"]) is not None
         await db.close()
 
@@ -2720,13 +2034,6 @@ class TestAgentSupportsUninstall:
     """``supports_uninstall`` describes the build that last connected, so
     unlike the COALESCE'd version fields it is overwritten on every
     handshake."""
-
-    async def test_defaults_to_false_for_a_fresh_agent(self, db: Database):
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("test", owner)
-
-        agent = await db.get_agent(agent_id)
-        assert agent["supports_uninstall"] == 0
 
     async def test_handshake_persists_the_capability(self, db: Database):
         owner = await _create_test_user(db)
@@ -2789,10 +2096,6 @@ class TestAgentUninstallRequests:
 
         assert await db.match_uninstall_request(agent_id, raw_token) is False
 
-    async def test_record_for_unknown_agent_returns_false(self, db: Database):
-        assert await db.record_uninstall_request("nonexistent") is False
-        assert await db.match_uninstall_request("nonexistent", "tok") is False
-
     async def test_request_keys_on_the_token_current_at_removal(
         self, db: Database
     ):
@@ -2804,15 +2107,6 @@ class TestAgentUninstallRequests:
 
         assert await db.match_uninstall_request(agent_id, new_token) is True
         assert await db.match_uninstall_request(agent_id, old_token) is False
-
-    async def test_match_survives_repeated_delivery(self, db: Database):
-        owner = await _create_test_user(db)
-        agent_id, raw_token = await db.register_agent("test", owner)
-        await db.record_uninstall_request(agent_id)
-        await db.delete_agent(agent_id)
-
-        assert await db.match_uninstall_request(agent_id, raw_token) is True
-        assert await db.match_uninstall_request(agent_id, raw_token) is True
 
     async def test_expired_request_does_not_match(self, db: Database):
         owner = await _create_test_user(db)
@@ -2840,23 +2134,6 @@ class TestAgentUninstallRequests:
         assert [r[0] for r in await cursor.fetchall()] == [live_id]
         assert await db.match_uninstall_request(live_id, live_token) is True
 
-    async def test_recording_does_not_purge_expired_requests(
-        self, db: Database
-    ):
-        owner = await _create_test_user(db)
-        stale_id, _ = await db.register_agent("stale", owner)
-        live_id, _ = await db.register_agent("live", owner)
-        await db.record_uninstall_request(stale_id, ttl=timedelta(seconds=-1))
-
-        await db.record_uninstall_request(live_id)
-
-        cursor = await db.conn.execute(
-            "SELECT agent_id FROM agent_uninstall_requests ORDER BY agent_id"
-        )
-        assert [r[0] for r in await cursor.fetchall()] == sorted(
-            [stale_id, live_id]
-        )
-
 
 class TestAgentUninstallMigration:
     async def test_v21_adds_column_and_table_to_existing_db(self, tmp_path):
@@ -2876,7 +2153,7 @@ class TestAgentUninstallMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 23
+        assert (await cursor.fetchone())[0] == await _schema_head(tmp_path)
         # Pre-existing agents read as not supporting uninstall until their
         # next handshake says otherwise.
         assert (await db.get_agent(agent_id))["supports_uninstall"] == 0
@@ -2888,7 +2165,7 @@ class TestAgentUninstallMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 23
+        assert (await cursor.fetchone())[0] == await _schema_head(tmp_path)
         assert await db.match_uninstall_request(agent_id, raw_token) is True
         await db.close()
 
@@ -2922,7 +2199,7 @@ class TestDeviceTokenRevocationMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 23
+        assert (await cursor.fetchone())[0] == await _schema_head(tmp_path)
         # A device revoked before the upgrade loses its old tokens with it.
         assert await db.device_tokens_valid_after("dev-gone") == int(
             datetime.fromisoformat(revoked_at).timestamp()

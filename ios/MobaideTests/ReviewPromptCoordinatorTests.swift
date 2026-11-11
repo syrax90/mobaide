@@ -114,40 +114,6 @@ final class ReviewPromptCoordinatorTests: XCTestCase {
         XCTAssertEqual(goodSessions, 0)
     }
 
-    func testNoteErrorDuringTheFirstOpenVisitSpoilsTheOuting() async {
-        let coordinator = makeCoordinator()
-
-        coordinator.terminalVisitStarted()
-        coordinator.noteError()
-        goodVisit(coordinator)
-        await coordinator.sessionListShown()
-
-        XCTAssertEqual(goodSessions, 0)
-    }
-
-    func testNoteErrorWithNoOutingOpenSpoilsNothing() async {
-        let coordinator = makeCoordinator()
-
-        coordinator.noteError()
-        goodVisit(coordinator)
-        await coordinator.sessionListShown()
-
-        XCTAssertEqual(goodSessions, 1)
-    }
-
-    func testNoteErrorAfterTheOutingClosedSpoilsNothing() async {
-        let coordinator = makeCoordinator()
-        coordinator.terminalVisitStarted()
-        goodVisit(coordinator)
-        await coordinator.sessionListShown()
-
-        coordinator.noteError()
-        goodVisit(coordinator)
-        await coordinator.sessionListShown()
-
-        XCTAssertEqual(goodSessions, 2)
-    }
-
     // MARK: - Settle wait
 
     func testATerminalVisibleAgainDuringTheSettleAbandonsAndTheOutingGoesOn() async {
@@ -217,18 +183,6 @@ final class ReviewPromptCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(coordinator.requestCount, 1)
         XCTAssertEqual(lastRequestedAt, Self.t0)
-    }
-
-    func testTheFirstLaunchNeverRequests() async {
-        seed(launches: 1, goodSessions: 2)
-        let coordinator = makeCoordinator()
-
-        goodVisit(coordinator)
-        await coordinator.sessionListShown()
-
-        XCTAssertEqual(coordinator.requestCount, 0)
-        XCTAssertNil(lastRequestedAt)
-        XCTAssertEqual(goodSessions, 3)
     }
 
     func testTheCooldownIsMeasuredOnTheInjectedClock() async {

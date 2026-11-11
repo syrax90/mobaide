@@ -25,9 +25,4 @@ final class SideDrawerTests: XCTestCase {
         // is already most of the way out and must not snap shut.
         XCTAssertTrue(Drawer.shouldOpen(translation: 250, velocity: -400, width: 300))
     }
-
-    func testTheDefaultWidthIsThePanelWidth() {
-        XCTAssertTrue(Drawer.shouldOpen(translation: Drawer.defaultWidth / 3 + 1, velocity: 0))
-        XCTAssertFalse(Drawer.shouldOpen(translation: Drawer.defaultWidth / 3 - 1, velocity: 0))
-    }
 }

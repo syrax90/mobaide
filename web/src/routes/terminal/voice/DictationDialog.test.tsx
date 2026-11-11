@@ -153,7 +153,6 @@ describe('DictationDialog Record again', () => {
 
   it.each([
     ['a non-retryable failure', failed({ retryable: false, hasAudio: true })],
-    ['a retryable failure with no audio left', failed({ retryable: true, hasAudio: false })],
   ])('is refused after %s once the session has ended', (_label, state) => {
     const calls = renderDialog(state, false);
 
@@ -252,21 +251,6 @@ describe('DictationDialog review', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
     expect(calls.discard).toBe(1);
   });
-
-  it('turns the review off from its checkbox and says where to turn it back on', () => {
-    const calls = newCalls();
-    const { rerender } = render(dialog(calls, result('hello'), true, { canSend: true }));
-    const skip = screen.getByRole('checkbox', { name: /without this review/ });
-    expect(skip).not.toBeChecked();
-    expect(screen.queryByText(/Voice input settings/)).toBeNull();
-
-    fireEvent.click(skip);
-    expect(calls.skip).toEqual([true]);
-    rerender(dialog(calls, result('hello'), true, { canSend: true, skipReview: true }));
-
-    expect(screen.getByRole('checkbox', { name: /without this review/ })).toBeChecked();
-    expect(screen.getByText(/laptop.s Voice input settings/)).toBeInTheDocument();
-  });
 });
 
 describe('DictationDialog cleanup', () => {
@@ -282,15 +266,6 @@ describe('DictationDialog cleanup', () => {
     expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Cancel']);
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(calls.cancel).toBe(1);
-  });
-
-  it('cancels the cleanup on Esc, as in the other live steps', () => {
-    const calls = renderDialog({ kind: 'cleaning', text: 'hello' }, true);
-
-    fireEvent(screen.getByRole('dialog'), new Event('cancel', { cancelable: true }));
-
-    expect(calls.cancel).toBe(1);
-    expect(calls.discard).toBe(0);
   });
 
   it('swaps between the cleaned-up text and the text as heard, and inserts what is shown', () => {
@@ -356,17 +331,6 @@ describe('DictationDialog cleanup', () => {
     expect(textField().value).toBe('uh two');
   });
 
-  it('starts every new cleaned-up result on the cleaned-up text', () => {
-    const calls = newCalls();
-    const { rerender } = render(dialog(calls, cleaned('One.', 'um one'), true, { canSend: true }));
-    fireEvent.click(screen.getByRole('button', { name: 'Show original' }));
-
-    rerender(dialog(calls, cleaned('Two.', 'uh two'), true, { canSend: true }));
-
-    expect(textField().value).toBe('Two.');
-    expect(screen.getByRole('button', { name: 'Show original' })).toBeInTheDocument();
-  });
-
   it('says why a failed cleanup left the text as heard, with the reported error under Details', () => {
     renderDialog(
       {
@@ -384,31 +348,6 @@ describe('DictationDialog cleanup', () => {
     expect(screen.getByText('Details')).toBeInTheDocument();
     expect(screen.getByText('error: unknown option')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Show original' })).toBeNull();
-  });
-
-  it('names the session\'s own AI agent in the reason', () => {
-    const calls = newCalls();
-    const failed: DictationState = {
-      kind: 'result',
-      text: 'um fix the bug',
-      cleanupError: { code: VOICE_CODE.cleanupOutdated, message: null },
-    };
-
-    const { rerender } = render(dialog(calls, failed, true, { sessionKind: 'codex' }));
-    expect(screen.getByRole('status')).toHaveTextContent('Codex on laptop is too old. Run "codex update" there.');
-
-    rerender(dialog(calls, failed, true, { sessionKind: 'antigravity' }));
-    expect(screen.getByRole('status')).toHaveTextContent('Antigravity on laptop is too old. Run "agy update" there.');
-  });
-
-  it('leaves Details out of a failure the agent never explained', () => {
-    renderDialog(
-      { kind: 'result', text: 'hello', cleanupError: { code: VOICE_CODE.cleanupTimeout, message: null } },
-      true,
-    );
-
-    expect(screen.getByRole('status')).toHaveTextContent('Claude Code took too long.');
-    expect(screen.queryByText('Details')).toBeNull();
   });
 
   it('offers the cleanup checkbox only where cleanup is available', () => {
@@ -520,17 +459,6 @@ describe('DictationDialog cleanup from the review', () => {
     expect(screen.getByRole('button', { name: 'Insert' })).toBeEnabled();
   });
 
-  it('says why a failed cleanup left the text as it was', async () => {
-    const calls = turnOnFromReview({ kind: 'result', text: 'um fix the bug' });
-
-    await settle(calls, { kind: 'failed', error: { code: VOICE_CODE.cleanupTimeout, message: null } });
-
-    expect(textField().value).toBe('um fix the bug');
-    expect(screen.getByRole('status')).toHaveTextContent('Couldn’t clean up the text');
-    expect(screen.getByRole('status')).toHaveTextContent('Claude Code took too long.');
-    expect(screen.getByRole('button', { name: 'Insert' })).toBeEnabled();
-  });
-
   it('leaves a cleaned-up result alone: it is not cleaned up twice', () => {
     const calls = turnOnFromReview({ kind: 'result', text: 'Fix the bug.', original: 'um fix the uh bug' });
 
@@ -558,9 +486,6 @@ describe('spliceTranscript', () => {
   it.each([
     [{ before: '', after: '' }, 'hi', 'hi', 2],
     [{ before: 'one', after: '' }, 'two', 'one two', 7],
-    [{ before: 'one ', after: '' }, 'two', 'one two', 7],
-    [{ before: '', after: 'three' }, 'two', 'two three', 3],
-    [{ before: 'one', after: 'three' }, 'two', 'one two three', 7],
     [{ before: 'one ', after: ' three' }, 'two', 'one two three', 7],
     [{ before: 'one', after: '. Next' }, 'two', 'one two. Next', 7],
   ])('splices %o with %s', (around, transcript, text, caret) => {

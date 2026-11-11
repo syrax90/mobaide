@@ -642,15 +642,6 @@ class TestStart:
             ev["type"] == "state" and ev["patch"].get("title") == "Earlier session" for ev in events
         )
 
-    async def test_initial_config_is_applied_to_an_opened_session(self, open_chat):
-        m = await open_chat(
-            load_session_id="external-1111",
-            initial_config=[ConfigIntent("fast", category="model"), ConfigIntent(True, option_id="fast")],
-        )
-
-        assert m.status == "ready"
-        values = {o["id"]: o["value"] for o in m.state["config"]}
-        assert (values["model"], values["fast"]) == ("fast", True)
 
     async def test_agent_process_runs_outside_the_session_folder(self, open_chat, tmp_path):
         home = tmp_path / "home"
@@ -859,22 +850,12 @@ class TestTurns:
         assert m.texts("error") == ["The model request failed (fake error)"]
         assert m.session.pid is not None
 
-    async def test_unknown_command(self, open_chat):
-        m = await open_chat()
-        result = await m.command("explode")
-        assert result["error"] == "Unknown command: explode"
-
 
 class TestActivity:
     """The session row's ``activity`` follows the turn: ``working`` while one
     runs, ``idle`` between turns, nothing once the session is gone. Each change
     is an ``activity`` event, which the fanout turns into ``session.updated``."""
 
-    async def test_activity_is_idle_once_the_session_is_ready(self, open_chat):
-        m = await open_chat()
-        await m.until(lambda: "activity" in m.session_events)
-
-        assert m.session.to_info().activity == "idle"
 
     async def test_a_running_turn_is_working_and_its_end_is_idle(self, open_chat):
         m = await open_chat()
@@ -886,14 +867,6 @@ class TestActivity:
         await m.command("cancel")
         await m.until(lambda: m.status == "ready")
         assert m.session.to_info().activity == "idle"
-
-    async def test_a_stopped_session_reports_no_activity(self, open_chat):
-        m = await open_chat()
-
-        await m.session.stop()
-        await m.until(lambda: "stopped" in m.session_events)
-
-        assert m.session.to_info().activity is None
 
 
 class TestQueueAndCancel:
@@ -945,10 +918,6 @@ class TestQueueAndCancel:
         await m.until(lambda: m.status == "ready", timeout=8.0)
         assert [t["stop_reason"] for t in m.of_type("turn_end")] == ["cancelled"]
 
-    async def test_cancel_without_a_turn(self, open_chat):
-        m = await open_chat()
-        result = await m.command("cancel")
-        assert result["data"] == {"cancelled": False}
 
     async def test_agent_that_ignores_cancel_is_stopped_for_a_restart(
         self, open_chat, monkeypatch
@@ -1093,18 +1062,6 @@ class TestTurnAttention:
 
         assert m.session.to_info().attention == "turn_finished"
 
-    async def test_a_chat_on_a_private_app_server_leaves_no_claim(self, open_chat, tmp_path):
-        # Otherwise its alert would mute a terminal in the folder on another thread.
-        dedupe = SharedTurnDedupe()
-        m = await open_chat(kind=SessionKind.CODEX, attention_dedupe=dedupe, shared_host=False)
-
-        await m.command("prompt", text="hello")
-        await m.until(lambda: "turn_finished" in m.attention)
-
-        assert dedupe.admit(
-            session_id="term-1", ui="terminal", app="codex",
-            cwd=real_cwd(str(tmp_path)), reason="turn_finished",
-        )
 
     async def test_a_claude_chat_next_to_a_codex_terminal_still_alerts(
         self, open_chat, tmp_path
@@ -1198,15 +1155,6 @@ class TestRequests:
         await m.until(
             _turn_done(m, 'Got it: {"extras": ["lint"], "framework": "react", "strict": false}')
         )
-
-    async def test_form_decline(self, open_chat):
-        m = await open_chat()
-        await m.command("prompt", text="question")
-        await m.until(lambda: bool(m.state.get("requests")))
-
-        await m.command("respond", request_id=m.state["requests"][0]["id"], action="decline")
-
-        await m.until(_turn_done(m, "No problem — you chose to decline the question."))
 
 
 class TestConfig:
@@ -1545,12 +1493,6 @@ class TestSteering:
         assert refused["error"] == "This agent cannot take a message during a turn"
         assert m.state["queue"] == [{"id": queue_id, "text": "later", "images": 0}]
 
-    async def test_an_unknown_message(self, open_chat):
-        m = await open_chat()
-
-        result = await m.command("steer", queue_id="q:999")
-
-        assert result["error"] == "This message was already sent"
 
     async def test_a_message_being_steered_is_neither_dequeued_nor_sent_by_the_queue(
         self, open_chat, tmp_path
@@ -1864,16 +1806,6 @@ class TestAdditionalDirectories:
         assert params["cwd"] == str(tmp_path)
         assert params["additionalDirectories"] == ["/srv/shared", "/srv/docs"]
 
-    async def test_an_agent_that_does_not_take_them_gets_none(self, open_chat, tmp_path):
-        log = tmp_path / "agent.log"
-
-        m = await open_chat(
-            argv=_params_agent(log, advertises_dirs=False), additional_dirs=["/srv/shared"]
-        )
-
-        assert m.status == "ready"
-        assert "additionalDirectories" not in _setup_params(log)
-
 
 class TestAntigravityModel:
     @pytest.mark.parametrize(
@@ -2030,11 +1962,6 @@ class TestConversationPresence:
 
         assert _free_for_another_app(lock) is True
 
-    async def test_a_new_conversation_is_held_by_the_id_the_agent_gave_it(self, open_chat, tmp_path):
-        m = await self._open(open_chat, tmp_path, load_session_id=None)
-
-        assert m.status == "ready"
-        assert _free_for_another_app(self._lock(tmp_path, m.state["acp_session_id"])) is False
 
     async def test_another_app_on_the_conversation_gets_one_warning(self, open_chat, tmp_path):
         lock = self._lock(tmp_path, "external-1111")

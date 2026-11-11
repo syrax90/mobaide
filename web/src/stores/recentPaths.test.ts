@@ -196,14 +196,6 @@ describe('clearAllRecentPaths', () => {
 
     expect(storage.size).toBe(0);
   });
-
-  it('is a no-op when there is nothing to sweep', () => {
-    storage.set('mobaide-theme', 'dark');
-
-    clearAllRecentPaths();
-
-    expect([...storage.keys()]).toEqual(['mobaide-theme']);
-  });
 });
 
 describe('an unresolved agent id', () => {

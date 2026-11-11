@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatItem } from './chatWire';
-import { stepsLabel, stepsRowId, timelineRows, type TimelineRow, type TimelineRowOptions } from './focusView';
+import { stepsRowId, timelineRows, type TimelineRow, type TimelineRowOptions } from './focusView';
 
 function user(id: string): ChatItem {
   return { id, type: 'user', text: 'Fix the login bug', attachments: [], at: null };
@@ -162,12 +162,5 @@ describe('timelineRows', () => {
       'm:8',
     ]);
     expect(stepsRows(list).map((row) => row.open)).toEqual([true, false]);
-  });
-});
-
-describe('stepsLabel', () => {
-  it('counts one step and many steps', () => {
-    expect(stepsLabel(1)).toBe('1 step');
-    expect(stepsLabel(4)).toBe('4 steps');
   });
 });

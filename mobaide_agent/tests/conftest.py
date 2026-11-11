@@ -23,6 +23,15 @@ skip_if_not_linux = pytest.mark.skipif(IS_WINDOWS, reason="Linux/macOS only")
 
 
 @pytest.fixture(autouse=True)
+def _cheap_bcrypt(monkeypatch):
+    """Hash with the minimum bcrypt cost: the default costs ~1 s per ``add_user``."""
+    import bcrypt
+
+    real_gensalt = bcrypt.gensalt
+    monkeypatch.setattr(bcrypt, "gensalt", lambda rounds=4, prefix=b"2b": real_gensalt(rounds, prefix))
+
+
+@pytest.fixture(autouse=True)
 def _pin_claude_binary(monkeypatch):
     """Pin the resolver to the literal string ``"claude"`` for every test.
 

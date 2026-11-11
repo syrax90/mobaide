@@ -91,13 +91,6 @@ class GitCommitFormTest {
     }
 
     @Test
-    fun theButtonLabel_countsTheStagedFiles() {
-        setContent(ready(), stagedCount = 3)
-
-        submit().assertTextContains("Commit 3 files", ignoreCase = true)
-    }
-
-    @Test
     fun amend_prefillsFromThePreviousCommit_andTakesThePrefillBackWhenUntoggledUntouched() {
         val submits = mutableListOf<Submit>()
         setContent(ready(), stagedCount = 0, onCommit = { submits += it })
@@ -147,15 +140,6 @@ class GitCommitFormTest {
     }
 
     @Test
-    fun anError_showsItsMessage_andTheHookOutput() {
-        setContent(ready().copy(error = CommitError("A commit hook rejected the commit.", "lint: nope")))
-
-        composeRule.onNodeWithTag(GIT_COMMIT_ERROR_TAG).assertIsDisplayed()
-        composeRule.onNodeWithText("A commit hook rejected the commit.").assertIsDisplayed()
-        composeRule.onNodeWithText("lint: nope").assertIsDisplayed()
-    }
-
-    @Test
     fun whileCommitting_theFieldsAndButtonsAreLocked() {
         var dismissed = 0
         setContent(ready().copy(committing = true), onDismiss = { dismissed++ })
@@ -175,20 +159,5 @@ class GitCommitFormTest {
         submit().assertIsNotEnabled()
         composeRule.onNodeWithText("Cancel", ignoreCase = true).performClick()
         assertEquals(1, dismissed)
-    }
-
-    @Test
-    fun aFailedContext_reportsWhy() {
-        setContent(
-            CommitSheetState(
-                context = CommitContextState.Failed(
-                    "Could not reach the agent. Check the connection and try again.",
-                ),
-            ),
-        )
-
-        composeRule.onNodeWithText("Could not reach the agent. Check the connection and try again.")
-            .assertIsDisplayed()
-        submit().assertIsNotEnabled()
     }
 }

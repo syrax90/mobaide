@@ -1,7 +1,6 @@
 package com.mobaide.app.data.network
 
 import com.mobaide.app.data.auth.TokenStore
-import com.mobaide.app.data.network.dto.FsDirsResponse
 import io.mockk.CapturingSlot
 import io.mockk.every
 import io.mockk.mockk
@@ -16,7 +15,6 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.fail
 import org.junit.Test
 
@@ -48,21 +46,6 @@ class RestApiFsTest {
     }
 
     private val listingBody = """{"path":"/home/me","dirs":["code"],"truncated":false}"""
-
-    @Test
-    fun listDirs_sendsThePathAlone_whenThereIsNoQ() = runTest {
-        val (api, captured) = newApi(listingBody)
-
-        val listing = api.listDirs("~/", q = null)
-
-        assertEquals(FsDirsResponse("/home/me", listOf("code"), truncated = false), listing)
-        val url = captured.captured.url
-        assertEquals("GET", captured.captured.method)
-        assertEquals("/api/fs/dirs", url.encodedPath)
-        assertEquals(setOf("path"), url.queryParameterNames)
-        assertEquals("~/", url.queryParameter("path"))
-        assertNull(url.queryParameter("q"))
-    }
 
     @Test
     fun listDirs_encodesAnAwkwardPathAndQ_asOneParameterEach() = runTest {

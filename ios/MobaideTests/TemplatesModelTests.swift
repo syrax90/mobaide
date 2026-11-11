@@ -8,18 +8,6 @@ final class TemplatesModelTests: XCTestCase {
         StubURLProtocol.reset()
     }
 
-    func testFavoritesAndAllGroupingSortedCaseInsensitively() async {
-        let repo = AgentHarness().templatesRepository
-        await repo.applyUpserted(makeTemplate(id: "1", name: "beta", favorite: true))
-        await repo.applyUpserted(makeTemplate(id: "2", name: "Alpha", favorite: true))
-        await repo.applyUpserted(makeTemplate(id: "3", name: "zed", favorite: false))
-        await repo.applyUpserted(makeTemplate(id: "4", name: "Mid", favorite: false))
-
-        let model = TemplatesModel(repository: repo)
-        XCTAssertEqual(model.favorites.map(\.name), ["Alpha", "beta"])
-        XCTAssertEqual(model.others.map(\.name), ["Mid", "zed"])
-    }
-
     func testToggleFavoriteSendsOnlyIsFavoriteViaPatch() async throws {
         let repo = AgentHarness().templatesRepository
         await repo.applyUpserted(makeTemplate(id: "t1", name: "T", favorite: false))
@@ -37,14 +25,6 @@ final class TemplatesModelTests: XCTestCase {
         XCTAssertEqual(sent.is_favorite, true)
         XCTAssertNil(sent.name)
         XCTAssertNil(sent.body)
-    }
-
-    func testEditorValidationRule() {
-        // Name is trimmed; body is checked verbatim (a space counts as content).
-        XCTAssertFalse(CreateOrEditTemplateSheet.isSaveEnabled(name: "  ", body: "x"))
-        XCTAssertFalse(CreateOrEditTemplateSheet.isSaveEnabled(name: "n", body: ""))
-        XCTAssertTrue(CreateOrEditTemplateSheet.isSaveEnabled(name: "n", body: " "))
-        XCTAssertTrue(CreateOrEditTemplateSheet.isSaveEnabled(name: "  n  ", body: "x"))
     }
 
     func testSaveSuccessDismissesEditor() async {

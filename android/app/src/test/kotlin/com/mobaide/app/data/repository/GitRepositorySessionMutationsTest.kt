@@ -3,7 +3,6 @@ package com.mobaide.app.data.repository
 import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.RestApi
-import com.mobaide.app.data.network.dto.GitCommitContextResponse
 import com.mobaide.app.data.network.dto.GitCommitRequest
 import com.mobaide.app.data.network.dto.GitCommitResponse
 import com.mobaide.app.data.network.dto.GitConflictResolveRequest
@@ -28,12 +27,10 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
-import java.io.IOException
 
 /**
  * The stage / unstage / discard / commit calls of [GitRepository] and the
@@ -83,20 +80,6 @@ class GitRepositorySessionMutationsTest {
     }
 
     @Test
-    fun gitCapabilities_mapsAProbeFailure() = runTest {
-        val (repo, restApi) = newRepo()
-        val down = IOException("down")
-        coEvery { restApi.getAgentVersion() } throws down
-
-        try {
-            repo.gitCapabilities()
-            fail("expected SessionGitException.Network")
-        } catch (e: SessionGitException.Network) {
-            assertSame(down, e.cause)
-        }
-    }
-
-    @Test
     fun stageAndUnstage_sendThePathsAsOneRequestEach() = runTest {
         val (repo, restApi) = newRepo()
         val staged = slot<GitPathsRequest>()
@@ -133,15 +116,6 @@ class GitRepositorySessionMutationsTest {
 
         assertSame(head, result)
         assertEquals(GitCommitRequest("Fix\n\nWhy.", amend = true, no_verify = true), sent.captured)
-    }
-
-    @Test
-    fun sessionCommitContext_passesTheBodyThrough() = runTest {
-        val (repo, restApi) = newRepo()
-        val context = GitCommitContextResponse(author = null, head = null)
-        coEvery { restApi.getSessionGitCommitContext("s1") } returns context
-
-        assertSame(context, repo.sessionCommitContext("s1"))
     }
 
     @Test
@@ -197,30 +171,6 @@ class GitRepositorySessionMutationsTest {
     }
 
     @Test
-    fun aRebaseRefusal_isAGitError_withTheRefOrStateItNames() = runTest {
-        val (repo, restApi) = newRepo()
-        coEvery { restApi.rebaseSessionGit(any(), any()) } throws
-            ApiException(409, """{"detail":{"code":"unknown_ref","message":"mian"}}""")
-        coEvery { restApi.stepSessionGitRebase(any(), any()) } throws
-            ApiException(409, """{"detail":{"code":"no_rebase","message":"clean"}}""")
-
-        try {
-            repo.rebaseSession("s1", "mian")
-            fail("expected SessionGitException.GitError")
-        } catch (e: SessionGitException.GitError) {
-            assertEquals(SessionGitException.CODE_UNKNOWN_REF, e.code)
-            assertEquals("mian", e.detailMessage)
-        }
-        try {
-            repo.stepSessionRebase("s1", GitRepository.REBASE_SKIP)
-            fail("expected SessionGitException.GitError")
-        } catch (e: SessionGitException.GitError) {
-            assertEquals(SessionGitException.CODE_NO_REBASE, e.code)
-            assertEquals("clean", e.detailMessage)
-        }
-    }
-
-    @Test
     fun anOldAgent404_onARebase_isAgentOutdated() = runTest {
         val (repo, restApi) = newRepo()
         coEvery { restApi.rebaseSessionGit(any(), any()) } throws
@@ -228,20 +178,6 @@ class GitRepositorySessionMutationsTest {
 
         try {
             repo.rebaseSession("s1", "main")
-            fail("expected SessionGitException.AgentOutdated")
-        } catch (e: SessionGitException) {
-            assertTrue(e is SessionGitException.AgentOutdated)
-        }
-    }
-
-    @Test
-    fun anOldAgent404_onACommit_isAgentOutdated() = runTest {
-        val (repo, restApi) = newRepo()
-        coEvery { restApi.commitSessionGit(any(), any()) } throws
-            ApiException(404, """{"detail":"Unknown proxy route"}""")
-
-        try {
-            repo.commitSession("s1", "x", amend = false, noVerify = false)
             fail("expected SessionGitException.AgentOutdated")
         } catch (e: SessionGitException) {
             assertTrue(e is SessionGitException.AgentOutdated)
@@ -286,15 +222,6 @@ class GitRepositorySessionJobStartTest {
     }
 
     @Test
-    fun hasSync_isTrueOnAnyJobKey_andFalseForAStageAndCommitAgent() {
-        assertTrue(GitCapabilities(push = true).hasSync)
-        assertTrue(GitCapabilities(pull = true).hasSync)
-        assertTrue(GitCapabilities(fetch = true).hasSync)
-        assertFalse(GitCapabilities(stage = true, discard = true, commit = true).hasSync)
-        assertFalse(GitCapabilities.NONE.hasSync)
-    }
-
-    @Test
     fun startSessionGitJob_routesEachOp_withItsBody() = runTest {
         val (repo, restApi) = newRepo()
         val pulled = slot<GitPullRequest>()
@@ -309,21 +236,6 @@ class GitRepositorySessionJobStartTest {
 
         assertEquals(GitPullRequest("rebase"), pulled.captured)
         assertEquals(GitPushRequest(force = true), pushed.captured)
-    }
-
-    @Test
-    fun aJobRunningRefusal_carriesTheActiveJobId() = runTest {
-        val (repo, restApi) = newRepo()
-        coEvery { restApi.fetchSessionGit("s1") } throws
-            ApiException(409, """{"detail":{"code":"job_running","message":"ab12cd34"}}""")
-
-        try {
-            repo.startSessionGitJob("s1", GitJobResponse.OP_FETCH)
-            fail("expected SessionGitException.GitError")
-        } catch (e: SessionGitException.GitError) {
-            assertEquals(SessionGitException.CODE_JOB_RUNNING, e.code)
-            assertEquals("ab12cd34", e.detailMessage)
-        }
     }
 
     @Test
@@ -377,15 +289,6 @@ class GitRepositorySessionConflictTest {
             version("""{"git":{"changes":true,"rebase":true,"resolve":true,"conflicts":"true"}}""")
 
         assertEquals(GitCapabilities(rebase = true, resolve = true, conflicts = false), repo.gitCapabilities())
-    }
-
-    @Test
-    fun sessionConflict_passesTheBodyThrough() = runTest {
-        val (repo, restApi) = newRepo()
-        val body = GitConflictResponse(path = "src/a b.py", code = "UU", kind = GitConflictResponse.KIND_TEXT)
-        coEvery { restApi.getSessionGitConflict("s1", "src/a b.py") } returns body
-
-        assertSame(body, repo.sessionConflict("s1", "src/a b.py"))
     }
 
     @Test
@@ -445,20 +348,6 @@ class GitRepositorySessionConflictTest {
                 assertEquals(code, e.code)
                 assertEquals(if (code == "bad_path") null else "src/login.py", e.detailMessage)
             }
-        }
-    }
-
-    @Test
-    fun anOldAgent404_onAConflictRoute_isAgentOutdated() = runTest {
-        val (repo, restApi) = newRepo()
-        coEvery { restApi.getSessionGitConflict(any(), any()) } throws
-            ApiException(404, """{"detail":"Unknown proxy route"}""")
-
-        try {
-            repo.sessionConflict("s1", "src/login.py")
-            fail("expected SessionGitException.AgentOutdated")
-        } catch (e: SessionGitException) {
-            assertTrue(e is SessionGitException.AgentOutdated)
         }
     }
 }

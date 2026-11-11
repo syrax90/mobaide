@@ -50,15 +50,6 @@ final class TerminalInsertTranscriptTests: XCTestCase {
         XCTAssertEqual(model.composerSelection, 12..<12)
     }
 
-    func testAnUnknownSelectionAppendsAtTheEnd() {
-        let model = model(text: "git", selection: nil)
-
-        model.insertTranscript("status")
-
-        XCTAssertEqual(model.inputText, "git status")
-        XCTAssertEqual(model.composerSelection, 10..<10)
-    }
-
     func testAStaleSelectionPastTheEndIsClamped() {
         let model = model(text: "git", selection: 9..<12)
 

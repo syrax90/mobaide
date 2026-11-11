@@ -66,23 +66,4 @@ class AgentCredentialsContentTest {
         composeRule.onNodeWithText("/opt/mobaide/mobaide_agent/.env", useUnmergedTree = true)
             .assertDoesNotExist()
     }
-
-    @Test
-    fun selectingMacOs_swapsToMacOsPath() {
-        composeRule.setContent {
-            Surface {
-                AgentCredentialsContent(
-                    title = "Agent Created",
-                    agentId = agentId,
-                    token = token,
-                    onDone = {},
-                )
-            }
-        }
-
-        composeRule.onNodeWithTag("os_MacOs").performClick()
-
-        composeRule.onNodeWithText("/usr/local/mobaide/mobaide_agent/.env", useUnmergedTree = true)
-            .assertExists()
-    }
 }

@@ -1,8 +1,6 @@
 """Tests for JWT authentication endpoints."""
 from __future__ import annotations
 
-import pytest
-
 from tests.conftest import TEST_PASSWORD, TEST_USERNAME
 
 

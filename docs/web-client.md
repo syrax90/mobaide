@@ -1305,8 +1305,8 @@ legacy-first encoder (C0 for Ctrl+letter, ESC-prefix for Alt over a single-byte
 core, xterm SS3 / CSI forms for F-keys, kitty CSI-u for everything legacy bytes
 cannot express) live in `tests/protocol_fixtures/keys/key_chords.json`, read by
 all three clients: `web/src/protocol/keyChord.ts` (gated by
-`protocol-integrity.yml` — the **only** CI-enforced arm, since iOS CI is
-push-to-main-only and Android's tests are not CI-gated),
+`protocol-integrity.yml`; iOS runs in `ios-build.yml` and Android in
+`unit-tests.yml`),
 `KeyChordFixtureTests.swift`, and `KeyChordFixtureTest.kt` (Android's first
 fixture consumer; extending its loader to `dto/` is CLA-235). Kotlin stays the
 reference implementation: a disagreement means the fixture is wrong.
@@ -1593,8 +1593,8 @@ Web carries no analytics SDK, so nothing here logs anything.
 ## CI — `.github/workflows/web-ci.yml`
 
 Runs on every PR and push to main (no paths filter — schema drift is caused
-by `central_server/`/`mobaide_agent/` edits, not just `web/` ones). Single
-job, in this order:
+by `central_server/`/`mobaide_agent/` edits, not just `web/` ones). Two
+parallel jobs. `web-ci` runs, in this order:
 
 1. Python 3.12 + editable installs.
 2. **Schema drift gate** (regenerate JSON, fail on `git status --porcelain`
@@ -1605,8 +1605,10 @@ job, in this order:
 6. Lint.
 7. Vitest.
 8. Build.
-9. Playwright (`playwright install --with-deps chromium` + `npm run
-   test:e2e`).
+
+`web-e2e` runs Playwright: `npm ci`, a cached `playwright install --only-shell
+chromium` (no `--with-deps`: the runner image already has the libraries, and the
+apt step depended on Ubuntu's mirrors), then `npm run test:e2e`.
 
 The Playwright specs stub `/api/**` with `page.route`, so CI needs no relay.
 

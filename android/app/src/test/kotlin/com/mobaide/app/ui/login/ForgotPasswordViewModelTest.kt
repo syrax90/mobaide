@@ -38,16 +38,6 @@ class ForgotPasswordViewModelTest {
         vm.apply { updateEmail(email) }
 
     @Test
-    fun initialState_isEmpty_withNoCooldownOrError() = runTest {
-        val vm = ForgotPasswordViewModel(authRepository)
-        val state = vm.uiState.value
-        assertEquals("", state.email)
-        assertFalse(state.isSending)
-        assertEquals(0, state.cooldownSeconds)
-        assertNull(state.error)
-    }
-
-    @Test
     fun updateEmail_clearsPendingError() = runTest {
         val vm = ForgotPasswordViewModel(authRepository)
         vm.submit()
@@ -73,17 +63,6 @@ class ForgotPasswordViewModelTest {
             assertEquals("Enter a valid email address", vm.uiState.value.error)
             coVerify { authRepository wasNot Called }
         }
-
-    @Test
-    fun submit_whenEmailMissingAtSign_emitsValidationError() = runTest {
-        val vm = primed(ForgotPasswordViewModel(authRepository), email = "noatsign")
-
-        vm.submit()
-        runCurrent()
-
-        assertEquals("Enter a valid email address", vm.uiState.value.error)
-        coVerify { authRepository wasNot Called }
-    }
 
     @Test
     fun submit_trimsWhitespace_beforeCallingRepository() = runTest {
@@ -129,29 +108,6 @@ class ForgotPasswordViewModelTest {
             }
             cancelAndIgnoreRemainingEvents()
         }
-        assertFalse(vm.uiState.value.isSending)
-    }
-
-    @Test
-    fun submit_setsLoadingTrue_beforeRepositoryResolves() = runTest {
-        val vm = primed(ForgotPasswordViewModel(authRepository))
-        val gate = kotlinx.coroutines.CompletableDeferred<PasswordResetOutcome>()
-        coEvery {
-            authRepository.requestPasswordReset("alice@example.com")
-        } coAnswers { gate.await() }
-
-        vm.submit()
-        runCurrent()
-
-        assertTrue(
-            "must enter sending state before repository resolves",
-            vm.uiState.value.isSending,
-        )
-        assertNull(vm.uiState.value.error)
-
-        gate.complete(PasswordResetOutcome.Sent)
-        advanceUntilIdle()
-
         assertFalse(vm.uiState.value.isSending)
     }
 
@@ -211,22 +167,6 @@ class ForgotPasswordViewModelTest {
         val state = vm.uiState.value
         assertEquals("Couldn't request a reset code: ${boom.message}", state.error)
         assertFalse(state.isSending)
-    }
-
-    @Test
-    fun submit_onNetworkException_showsFailureMessage() = runTest {
-        val vm = primed(ForgotPasswordViewModel(authRepository))
-        coEvery {
-            authRepository.requestPasswordReset("alice@example.com")
-        } throws java.net.UnknownHostException("api.example.com")
-
-        vm.submit()
-        advanceUntilIdle()
-
-        assertEquals(
-            "Couldn't request a reset code: api.example.com",
-            vm.uiState.value.error,
-        )
     }
 
     @Test

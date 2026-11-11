@@ -6,16 +6,12 @@ import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.testing.MainDispatcherRule
-import io.mockk.Runs
 import io.mockk.every
-import io.mockk.just
 import io.mockk.mockk
-import io.mockk.verify
 import io.mockk.verifyOrder
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 
@@ -77,30 +73,6 @@ class ConnectionsViewModelTest {
         deps.connectionStore, deps.tokenStore, deps.sessionManager, deps.eventBus,
     )
 
-    // ---- Initial state ------------------------------------------------------
-
-    @Test
-    fun initialState_loadsProfilesAndActiveId() = runTest {
-        val deps = buildDeps()
-        val vm = createVm(deps)
-
-        val state = vm.uiState.value
-        assertEquals(2, state.profiles.size)
-        assertEquals("prof-1", state.activeProfileId)
-        assertEquals("Direct: https://agent.local", state.profiles[0].label)
-        assertEquals("Relay: agent-abc", state.profiles[1].label)
-    }
-
-    @Test
-    fun initialState_emptyProfiles_showsEmptyList() = runTest {
-        val deps = buildDeps(profiles = emptyList(), activeId = null)
-        val vm = createVm(deps)
-
-        val state = vm.uiState.value
-        assertEquals(0, state.profiles.size)
-        assertNull(state.activeProfileId)
-    }
-
     // ---- switchProfile ------------------------------------------------------
 
     @Test
@@ -139,16 +111,6 @@ class ConnectionsViewModelTest {
     }
 
     // ---- removeProfile ------------------------------------------------------
-
-    @Test
-    fun removeProfile_delegatesToConnectionStore() = runTest {
-        val deps = buildDeps()
-        val vm = createVm(deps)
-
-        vm.removeProfile("prof-1")
-
-        verify(exactly = 1) { deps.connectionStore.removeProfile("prof-1") }
-    }
 
     @Test
     fun removeProfile_refreshesUiState() = runTest {

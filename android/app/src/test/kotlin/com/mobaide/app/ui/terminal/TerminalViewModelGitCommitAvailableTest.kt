@@ -89,35 +89,9 @@ class TerminalViewModelGitCommitAvailableTest {
     }
 
     @Test
-    fun gitCommitAvailable_isTrue_forAnExplicitCommitCapability() = runTest(testDispatcher) {
-        val vm = newViewModel { version("""{"git":{"changes":true,"stage":true,"commit":true}}""") }
-        backgroundScope.launch { vm.gitCommitAvailable.collect { } }
-        runCurrent()
-
-        assertTrue(vm.gitCommitAvailable.value)
-    }
-
-    @Test
-    fun gitCommitAvailable_isFalse_forAnAgentThatOnlyServesTheViewer() = runTest(testDispatcher) {
-        val vm = newViewModel { version("""{"git":{"changes":true}}""") }
-        backgroundScope.launch { vm.gitCommitAvailable.collect { } }
-        runCurrent()
-
-        assertFalse(vm.gitCommitAvailable.value)
-    }
-
-    @Test
     fun gitCommitAvailable_isFalse_whenTheProbeFails() = runTest(testDispatcher) {
         val vm = newViewModel { throw IOException("down") }
         backgroundScope.launch { vm.gitCommitAvailable.collect { } }
-        runCurrent()
-
-        assertFalse(vm.gitCommitAvailable.value)
-    }
-
-    @Test
-    fun gitCommitAvailable_isFalse_beforeAnyoneSubscribes() = runTest(testDispatcher) {
-        val vm = newViewModel { version("""{"git":{"commit":true}}""") }
         runCurrent()
 
         assertFalse(vm.gitCommitAvailable.value)

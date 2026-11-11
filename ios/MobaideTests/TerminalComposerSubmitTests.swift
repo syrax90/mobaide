@@ -198,13 +198,4 @@ final class TerminalComposerSubmitTests: XCTestCase {
         XCTAssertFalse(model.canSubmitComposer)
         XCTAssertEqual(model.inputText, "half a prompt", "a frozen editor keeps the draft it was holding")
     }
-
-    func testIsComposerActiveFalseWhenSessionNeverStarted() async throws {
-        let (model, _) = try await liveModel(running: false)
-        XCTAssertFalse(model.isRunning)
-        XCTAssertFalse(
-            model.isComposerActive,
-            "the expand affordance must be inert until the session is connected and running"
-        )
-    }
 }

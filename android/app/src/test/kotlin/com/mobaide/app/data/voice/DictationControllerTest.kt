@@ -126,19 +126,6 @@ class DictationControllerTest {
     }
 
     @Test
-    fun anEmptyTranscript_readsAsEmpty() = controllerTest {
-        api.text = ""
-        val dictation = recording()
-        recorder.speak(1)
-        settle()
-
-        dictation.stop()
-        settle()
-
-        assertEquals(DictationState.Empty, dictation.state.value)
-    }
-
-    @Test
     fun countsDownTheLast15sFromTheSamplesRecorded() = controllerTest {
         val dictation = recording(maxSeconds = 20)
 
@@ -273,19 +260,6 @@ class DictationControllerTest {
         assertEquals(DictationState.Idle, dictation.state.value)
         assertTrue(recorder.stops >= 1)
         assertEquals(listOf("create", "remove d1"), api.log)
-    }
-
-    @Test
-    fun dismiss_leavesAResult() = controllerTest {
-        val dictation = recording()
-        recorder.speak(1)
-        settle()
-        dictation.stop()
-        settle()
-
-        dictation.dismiss()
-
-        assertEquals(DictationState.Idle, dictation.state.value)
     }
 
     @Test

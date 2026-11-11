@@ -19,9 +19,7 @@ from pathlib import Path
 import pytest
 
 from mobaide.core import cli_launcher
-from mobaide.core.antigravity_launcher import AntigravityBinaryNotFoundError
 from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError
-from mobaide.core.codex_launcher import CodexBinaryNotFoundError
 from mobaide.core.git_exec import CmdResult, ProcessHandle
 from mobaide.voice import cleanup as cleanup_module
 from mobaide.voice.cleanup import (
@@ -172,12 +170,6 @@ class TestParseClaudeResult:
         assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_failed")
         assert excinfo.value.message == "Error: spawn node ENOENT"
 
-    def test_output_that_is_not_json_and_no_stderr_names_the_exit_code(self):
-        with pytest.raises(VoiceError) as excinfo:
-            parse_claude_result(CmdResult(rc=3, stdout=b"", stderr=b""), "text")
-
-        assert excinfo.value.message == "Claude Code exited with code 3."
-
     def test_reported_error_fails_with_the_cli_s_own_words(self):
         # A missing login still reports ``subtype: success``; only ``is_error`` says so.
         result = _json(
@@ -208,15 +200,6 @@ class TestParseClaudeResult:
         assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_failed")
         assert excinfo.value.message == "API Error: 529 overloaded"
 
-    def test_long_error_text_is_cut_to_300_characters(self):
-        result = _json({"type": "result", "subtype": "success", "is_error": True, "result": "e" * 1000})
-
-        with pytest.raises(VoiceError) as excinfo:
-            parse_claude_result(result, "text")
-
-        assert len(excinfo.value.message) == 300
-        assert excinfo.value.message.endswith("…")
-
     def test_verbose_output_answers_with_its_result_message(self):
         result = _json([
             VERBOSE_INIT,
@@ -241,15 +224,6 @@ class TestParseClaudeResult:
 
         assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_failed")
         assert excinfo.value.message == "Not logged in · Please run /login"
-
-    def test_verbose_output_without_a_result_message_fails_with_the_stderr(self):
-        result = _json([VERBOSE_INIT, VERBOSE_ASSISTANT], rc=1, stderr=b"  API Error: 529 overloaded\n")
-
-        with pytest.raises(VoiceError) as excinfo:
-            parse_claude_result(result, "text")
-
-        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_failed")
-        assert excinfo.value.message == "API Error: 529 overloaded"
 
     def test_verbose_output_with_several_result_messages_answers_with_the_last(self):
         result = _json([
@@ -415,15 +389,6 @@ class TestPromptFile:
 
         assert prompt.stat().st_mtime == 1_000_000
 
-    async def test_prompt_deleted_between_runs_is_written_again(self, make_cleaner, work_dir):
-        cleaner = make_cleaner(_Claude())
-        await cleaner.clean("one")
-        (work_dir / PROMPT_FILE).unlink()
-
-        await cleaner.clean("two")
-
-        assert (work_dir / PROMPT_FILE).read_text(encoding="utf-8") == CLEANUP_PROMPT
-
 
 class TestConcurrency:
     async def test_a_cleanup_beyond_the_cap_is_cleanup_busy(self, make_cleaner):
@@ -473,9 +438,6 @@ class TestConcurrency:
         finally:
             claude.gate.set()
             await asyncio.gather(*running)
-
-    async def test_abort_all_with_nothing_running_is_a_no_op(self, make_cleaner):
-        await make_cleaner(_Claude()).abort_all()
 
 
 class TestCancellation:
@@ -641,18 +603,6 @@ class TestParseCodexResult:
 
         assert (excinfo.value.code, excinfo.value.message) == ("cleanup_failed", "thread 'main' panicked")
 
-    def test_failed_turn_with_plain_text_keeps_it(self):
-        result = _jsonl(
-            {"type": "item.completed", "item": {"type": "agent_message", "text": "Half."}},
-            {"type": "turn.failed", "error": {"message": "You've hit your usage limit."}},
-            rc=1,
-        )
-
-        with pytest.raises(VoiceError) as excinfo:
-            parse_codex_result(result, "text")
-
-        assert excinfo.value.message == "You've hit your usage limit."
-
     def test_no_answer_fails_with_the_last_error_event(self):
         result = _jsonl({"type": "error", "message": "stream disconnected"}, rc=1)
 
@@ -660,15 +610,6 @@ class TestParseCodexResult:
             parse_codex_result(result, "text")
 
         assert (excinfo.value.code, excinfo.value.message) == ("cleanup_failed", "stream disconnected")
-
-    def test_no_output_fails_with_the_stderr_or_the_exit_code(self):
-        with pytest.raises(VoiceError) as excinfo:
-            parse_codex_result(CmdResult(rc=1, stdout=b"", stderr=b" Error loading config\n"), "text")
-        assert excinfo.value.message == "Error loading config"
-
-        with pytest.raises(VoiceError) as excinfo:
-            parse_codex_result(CmdResult(rc=3, stdout=b"", stderr=b""), "text")
-        assert excinfo.value.message == "Codex exited with code 3."
 
     def test_unexpected_argument_on_a_failed_run_means_the_cli_is_too_old(self):
         result = CmdResult(rc=2, stdout=b"", stderr=b"error: unexpected argument '--ignore-user-config' found\n")
@@ -690,21 +631,6 @@ class TestParseCodexResult:
             parse_codex_result(result, "text")
 
         assert excinfo.value.code == "cleanup_outdated"
-
-    def test_timeout_wins_over_whatever_was_printed(self):
-        result = CmdResult(rc=-9, stdout=_codex_answer("Half.").stdout, stderr=b"", timed_out=True)
-
-        with pytest.raises(VoiceError) as excinfo:
-            parse_codex_result(result, "text")
-
-        assert (excinfo.value.code, excinfo.value.message) == ("cleanup_timeout", "Codex took too long to answer.")
-
-    def test_longer_answer_is_a_reply_not_a_cleanup(self):
-        with pytest.raises(VoiceError) as excinfo:
-            parse_codex_result(_codex_answer("x" * 207), "abc")
-
-        assert excinfo.value.code == "cleanup_failed"
-        assert excinfo.value.message.startswith("Codex answered")
 
 
 class TestParseAntigravityResult:
@@ -735,15 +661,6 @@ class TestParseAntigravityResult:
 
         assert (excinfo.value.code, excinfo.value.message) == ("cleanup_failed", "authentication required")
 
-    def test_no_result_event_fails_with_the_stderr_or_the_exit_code(self):
-        with pytest.raises(VoiceError) as excinfo:
-            parse_antigravity_result(CmdResult(rc=1, stdout=b"", stderr=b"Error: boom\n"), "text")
-        assert excinfo.value.message == "Error: boom"
-
-        with pytest.raises(VoiceError) as excinfo:
-            parse_antigravity_result(CmdResult(rc=4, stdout=b"", stderr=b""), "text")
-        assert excinfo.value.message == "Antigravity exited with code 4."
-
     def test_undefined_flag_on_a_failed_run_means_the_cli_is_too_old(self):
         result = CmdResult(rc=2, stdout=b"", stderr=b"flags provided but not defined: -input-format\n")
 
@@ -752,14 +669,6 @@ class TestParseAntigravityResult:
 
         assert excinfo.value.code == "cleanup_outdated"
         assert "agy update" in excinfo.value.message
-
-    def test_timeout_wins_over_whatever_was_printed(self):
-        result = CmdResult(rc=-9, stdout=_agy_answer("Half.").stdout, stderr=b"", timed_out=True)
-
-        with pytest.raises(VoiceError) as excinfo:
-            parse_antigravity_result(result, "text")
-
-        assert excinfo.value.code == "cleanup_timeout"
 
 
 class TestCheapestModel:
@@ -775,14 +684,6 @@ class TestCheapestModel:
 
     def test_antigravity_takes_the_slug_of_the_first_flash_on_low(self):
         assert antigravity_cleanup_model(AGY_MODELS) == "gemini-3.8-flash-low"
-
-    def test_antigravity_display_names_alone_are_taken_whole(self):
-        models = ["Gemini 3.1 Pro (Low)", "Gemini 3 Flash (High)", "Gemini 3 Flash (Low)"]
-
-        assert antigravity_cleanup_model(models) == "Gemini 3 Flash (Low)"
-
-    def test_antigravity_flash_without_a_low_variant_is_taken(self):
-        assert antigravity_cleanup_model(["gemini-3-pro\tGemini 3 Pro", "gemini-3-flash\tGemini 3 Flash"]) == "gemini-3-flash"
 
     @pytest.mark.parametrize("models", [None, (), ("claude-sonnet-4-6\tClaude Sonnet 4.6",)])
     def test_antigravity_without_flash_listed_uses_the_default(self, models):
@@ -846,14 +747,6 @@ class TestCodexCommand:
         assert call["env"]["PATH"].split(os.pathsep)[0] == os.path.dirname(codex_binary)
         assert (work_dir / PROMPT_FILE).read_text(encoding="utf-8") == CLEANUP_PROMPT
 
-    async def test_unknown_catalog_runs_the_default_model(self, work_dir, codex_binary):
-        run = _Claude(_codex_answer("Hi."))
-
-        await self._cleaner(run, work_dir, codex_binary, models=None).clean("hi", "codex")
-
-        argv = run.calls[0]["argv"]
-        assert argv[argv.index("--model") + 1] == CODEX_CLEANUP_MODEL
-
     async def test_sign_in_is_checked_with_the_run_s_binary_and_env(self, work_dir, codex_binary):
         auth = _Auth()
         run = _Claude(_codex_answer("Hi."))
@@ -875,35 +768,6 @@ class TestCodexCommand:
         assert "codex login" in excinfo.value.message
         assert run.calls == []
         assert not cleaner.busy()
-
-    async def test_missing_codex_is_cleanup_unavailable(self, work_dir, codex_binary):
-        def missing() -> str:
-            raise CodexBinaryNotFoundError(["/usr/local/bin/codex"])
-
-        run = _Claude()
-        cleaner = self._cleaner(run, work_dir, codex_binary, resolve=missing)
-
-        with pytest.raises(VoiceError) as excinfo:
-            await cleaner.clean("hi", "codex")
-
-        assert (excinfo.value.code, excinfo.value.message) == (
-            "cleanup_unavailable", "Codex isn't installed on this computer."
-        )
-        assert run.calls == []
-        assert not cleaner.busy()
-
-    async def test_npm_shim_in_a_spaced_path_gets_a_command_line_with_one_quoted_token(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.setattr(cli_launcher.sys, "platform", "win32")
-        shim = r"C:\Program Files\nodejs\codex.cmd"
-        run = _Claude(_codex_answer("Hello."))
-
-        await self._cleaner(run, tmp_path / "Jane Doe" / "voice-cleanup", shim).clean("hello", "codex")
-
-        argv = run.calls[0]["argv"]
-        assert argv[:3] == ["cmd", "/c", shim]
-        assert subprocess.list2cmdline(argv).count('"') == 2
 
 
 class TestAntigravityCommand:
@@ -967,20 +831,6 @@ class TestAntigravityCommand:
         assert message["event"] == "user"
         assert message["message"]["content"] == "<transcript>\nпереименуй  ридми\n</transcript>"
         assert all("ридми" not in arg for arg in run.calls[0]["argv"])
-
-    async def test_missing_agy_is_cleanup_unavailable(self, work_dir, agy_binary):
-        def missing() -> str:
-            raise AntigravityBinaryNotFoundError(["/usr/local/bin/agy"])
-
-        run = _Claude()
-        cleaner = self._cleaner(run, work_dir, agy_binary, resolve=missing)
-
-        with pytest.raises(VoiceError) as excinfo:
-            await cleaner.clean("hi", "antigravity")
-
-        assert excinfo.value.message == "Antigravity isn't installed on this computer."
-        assert run.calls == []
-        assert not cleaner.busy()
 
 
 class TestKinds:

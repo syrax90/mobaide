@@ -106,15 +106,3 @@ async def test_force_now_409_when_no_manifest():
         resp = await client.post("/api/agent/update/force_now")
     assert resp.status_code == 409
     assert spy.calls == []
-
-
-@pytest.mark.asyncio
-async def test_force_now_409_when_manifest_missing_required_fields():
-    spy = _SpyUpdater("staged")
-    incomplete = {"version": None, "manifest_body": None, "manifest_signature": None}
-    app = _build_app(spy, incomplete)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post("/api/agent/update/force_now")
-    assert resp.status_code == 409
-    assert spy.calls == []

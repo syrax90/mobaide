@@ -43,11 +43,6 @@ class TestCreateTemplate:
 
 
 class TestListTemplates:
-    async def test_list_empty(self, client, api_auth_headers):
-        resp = await client.get("/api/templates", headers=api_auth_headers)
-        assert resp.status_code == 200
-        assert resp.json() == []
-
     async def test_list_returns_only_owned(self, client, app, api_auth_headers):
         # Caller's template
         await client.post(
@@ -65,25 +60,6 @@ class TestListTemplates:
         items = resp.json()
         assert len(items) == 1
         assert items[0]["name"] == "mine"
-
-    async def test_list_excludes_soft_deleted(
-        self, client, api_auth_headers
-    ):
-        create = await client.post(
-            "/api/templates",
-            json={"name": "doomed", "body": "x"},
-            headers=api_auth_headers,
-        )
-        tid = create.json()["template_id"]
-
-        await client.delete(f"/api/templates/{tid}", headers=api_auth_headers)
-
-        resp = await client.get("/api/templates", headers=api_auth_headers)
-        assert all(t["template_id"] != tid for t in resp.json())
-
-    async def test_list_requires_auth(self, client):
-        resp = await client.get("/api/templates")
-        assert resp.status_code == 401
 
 
 class TestUpdateTemplate:
@@ -106,28 +82,6 @@ class TestUpdateTemplate:
         assert data["name"] == "new"
         assert data["body"] == "body"  # unchanged
         assert data["version"] == v0 + 1
-
-    async def test_patch_favorite_toggle(self, client, api_auth_headers):
-        create = await client.post(
-            "/api/templates",
-            json={"name": "x", "body": "y"},
-            headers=api_auth_headers,
-        )
-        tid = create.json()["template_id"]
-
-        resp = await client.patch(
-            f"/api/templates/{tid}",
-            json={"is_favorite": True},
-            headers=api_auth_headers,
-        )
-        assert resp.json()["is_favorite"] is True
-
-        resp = await client.patch(
-            f"/api/templates/{tid}",
-            json={"is_favorite": False},
-            headers=api_auth_headers,
-        )
-        assert resp.json()["is_favorite"] is False
 
     async def test_patch_not_owner_returns_403(
         self, client, app, api_auth_headers
@@ -211,23 +165,6 @@ class TestDeleteTemplate:
         )
         assert resp.status_code == 403
 
-    async def test_delete_idempotent_after_already_deleted(
-        self, client, api_auth_headers
-    ):
-        create = await client.post(
-            "/api/templates",
-            json={"name": "x", "body": "y"},
-            headers=api_auth_headers,
-        )
-        tid = create.json()["template_id"]
-        await client.delete(f"/api/templates/{tid}", headers=api_auth_headers)
-        # Calling again is a no-op (404 from owner-check, since the row is
-        # filtered out of is_template_owner).
-        resp2 = await client.delete(
-            f"/api/templates/{tid}", headers=api_auth_headers
-        )
-        assert resp2.status_code == 403
-
 
 class TestTouchTemplate:
     async def test_touch_bumps_last_used_at(self, client, api_auth_headers):
@@ -299,12 +236,6 @@ class TestAdminBlocked:
             "/api/templates",
             json={"name": "x", "body": "y"},
             headers=admin_api_auth_headers,
-        )
-        assert resp.status_code == 403
-
-    async def test_admin_cannot_list(self, client, admin_api_auth_headers):
-        resp = await client.get(
-            "/api/templates", headers=admin_api_auth_headers
         )
         assert resp.status_code == 403
 

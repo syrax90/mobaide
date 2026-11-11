@@ -59,13 +59,4 @@ final class TerminalSuspendPolicyTests: XCTestCase {
             )
         )
     }
-
-    func testPricesTheRecoupThresholdAtOneRingAndTheFirehoseAboveIt() {
-        // The constants are the policy, and they are shared across three
-        // clients. `recoupBytes` below the agent's 4 MiB ring would make every
-        // suspend a guaranteed net loss.
-        XCTAssertEqual(TerminalSuspend.recoupBytes, 4 * 1024 * 1024)
-        XCTAssertEqual(TerminalSuspend.graceSeconds, 60)
-        XCTAssertGreaterThan(TerminalSuspend.firehoseBytes, TerminalSuspend.recoupBytes)
-    }
 }

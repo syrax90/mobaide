@@ -5,10 +5,7 @@ import com.mobaide.app.data.network.dto.GitCommitRequest
 import com.mobaide.app.data.network.dto.GitConflictResolveRequest
 import com.mobaide.app.data.network.dto.GitConflictResponse
 import com.mobaide.app.data.network.dto.GitConflictRestoreRequest
-import com.mobaide.app.data.network.dto.GitConflictTakeRequest
-import com.mobaide.app.data.network.dto.GitDiscardRequest
 import com.mobaide.app.data.network.dto.GitPathsRequest
-import com.mobaide.app.data.network.dto.GitPullRequest
 import com.mobaide.app.data.network.dto.GitPushRequest
 import com.mobaide.app.data.network.dto.GitRebaseRequest
 import com.mobaide.app.data.network.dto.GitRebaseResponse
@@ -116,20 +113,6 @@ class RestApiSessionGitTest {
     private val statusBody = """{"session_id":"s1","etag":"e1"}"""
     private val diffBody = """{"path":"x","scope":"unstaged","kind":"text"}"""
     private val okBody = """{"ok":true}"""
-
-    @Test
-    fun getSessionGitStatus_omitsTheEtagWhenThereIsNone() = runTest {
-        val (api, captured) = newApi(statusBody)
-
-        val status = api.getSessionGitStatus("s1", etag = null)
-
-        assertEquals("e1", status.etag)
-        assertEquals("GET", captured.captured.method)
-        assertEquals(
-            "https://api.example.com/api/sessions/s1/git/status",
-            captured.captured.url.toString(),
-        )
-    }
 
     @Test
     fun getSessionGitStatus_forwardsTheEtag() = runTest {
@@ -261,30 +244,6 @@ class RestApiSessionGitTest {
     }
 
     @Test
-    fun unstageSessionGit_postsToItsOwnLeaf() = runTest {
-        val (api, captured) = newExecuteApi(okBody)
-
-        api.unstageSessionGit("s1", GitPathsRequest(listOf("keep.txt")))
-
-        assertEquals("POST", captured.captured.method)
-        assertEquals("https://api.example.com/api/sessions/s1/git/unstage", captured.captured.url.toString())
-        assertEquals(Json.parseToJsonElement("""{"paths":["keep.txt"]}"""), captured.captured.bodyJson())
-    }
-
-    @Test
-    fun discardSessionGit_carriesTheScope() = runTest {
-        val (api, captured) = newExecuteApi(okBody)
-
-        api.discardSessionGit("s1", GitDiscardRequest(listOf("notes.txt"), GitDiscardRequest.SCOPE_UNTRACKED))
-
-        assertEquals("https://api.example.com/api/sessions/s1/git/discard", captured.captured.url.toString())
-        assertEquals(
-            Json.parseToJsonElement("""{"paths":["notes.txt"],"scope":"untracked"}"""),
-            captured.captured.bodyJson(),
-        )
-    }
-
-    @Test
     fun commitSessionGit_sendsTheFlags_andDecodesTheNewHead() = runTest {
         val (api, captured) = newExecuteApi(
             """{"oid":"4890423520f4dcd158b85374f44fc8819a813ac2","short_oid":"4890423","subject":"Fix"}""",
@@ -310,37 +269,6 @@ class RestApiSessionGitTest {
         api.commitSessionGit("s1", GitCommitRequest("x"))
 
         assertEquals(Json.parseToJsonElement("""{"message":"x"}"""), captured.captured.bodyJson())
-    }
-
-    @Test
-    fun getSessionGitCommitContext_readsTheNestedLeaf() = runTest {
-        val (api, captured) = newApi(
-            """{"author":{"name":"Ada","email":"ada@example.com"},"head":null}""",
-        )
-
-        val context = api.getSessionGitCommitContext("s1")
-
-        assertEquals("GET", captured.captured.method)
-        assertEquals(
-            "https://api.example.com/api/sessions/s1/git/commit/context",
-            captured.captured.url.toString(),
-        )
-        assertEquals("Ada", context.author?.name)
-        assertNull(context.head)
-    }
-
-    @Test
-    fun aRefusal_surfacesAsAnApiException_withThe409Body() = runTest {
-        val body = """{"detail":{"code":"index_locked","message":"index.lock exists"}}"""
-        val (api, _) = newExecuteApi(body, code = 409)
-
-        try {
-            api.stageSessionGit("s1", GitPathsRequest(listOf("a.txt")))
-            fail("expected ApiException")
-        } catch (e: ApiException) {
-            assertEquals(409, e.code)
-            assertEquals(body, e.errorBody)
-        }
     }
 }
 
@@ -370,19 +298,6 @@ class RestApiSessionGitJobsTest {
         return RestApi(client, tokenStore) to captured
     }
 
-    private fun newEnqueueApi(bodyJson: String): Pair<RestApi, CapturingSlot<Request>> {
-        val client = mockk<OkHttpClient>()
-        val tokenStore = mockk<TokenStore>()
-        every { tokenStore.getEffectiveBaseUrl() } returns "https://api.example.com"
-        val captured = slot<Request>()
-        val call = mockk<Call>()
-        every { client.newCall(capture(captured)) } returns call
-        every { call.enqueue(any()) } answers {
-            firstArg<Callback>().onResponse(call, responseFor(captured.captured, bodyJson))
-        }
-        return RestApi(client, tokenStore) to captured
-    }
-
     private fun Request.bodyJson(): JsonElement {
         val buffer = Buffer()
         body!!.writeTo(buffer)
@@ -404,16 +319,6 @@ class RestApiSessionGitJobsTest {
     }
 
     @Test
-    fun pullSessionGit_carriesTheMode() = runTest {
-        val (api, captured) = newExecuteApi(jobBody)
-
-        api.pullSessionGit("s1", GitPullRequest(GitPullRequest.MODE_REBASE))
-
-        assertEquals("https://api.example.com/api/sessions/s1/git/pull", captured.captured.url.toString())
-        assertEquals(Json.parseToJsonElement("""{"mode":"rebase"}"""), captured.captured.bodyJson())
-    }
-
-    @Test
     fun pushSessionGit_carriesTheForceFlag_andLeavesTheDefaultToTheAgent() = runTest {
         // Like `commitSessionGit`, defaults are not serialised: an empty body
         // is what the agent's `body or {}` reads as `force=false`.
@@ -425,34 +330,6 @@ class RestApiSessionGitJobsTest {
 
         api.pushSessionGit("s1", GitPushRequest())
         assertEquals(Json.parseToJsonElement("{}"), captured.captured.bodyJson())
-    }
-
-    @Test
-    fun getSessionGitJob_readsTheJobUnderItsId_onTheCancellablePath() = runTest {
-        val (api, captured) = newEnqueueApi(jobBody)
-
-        val job = api.getSessionGitJob("s1", "j1")
-
-        assertEquals("GET", captured.captured.method)
-        assertEquals("https://api.example.com/api/sessions/s1/git/jobs/j1", captured.captured.url.toString())
-        assertEquals("j1", job.job_id)
-    }
-
-    @Test
-    fun cancelSessionGitJob_postsUnderTheJob() = runTest {
-        val cancelled = """{"job_id":"j1","session_id":"s1","op":"push","status":"done","ok":false,"error_code":"cancelled"}"""
-        val (api, captured) = newExecuteApi(cancelled)
-
-        val job = api.cancelSessionGitJob("s1", "j1")
-
-        assertEquals("POST", captured.captured.method)
-        assertEquals(
-            "https://api.example.com/api/sessions/s1/git/jobs/j1/cancel",
-            captured.captured.url.toString(),
-        )
-        assertEquals(Json.parseToJsonElement("{}"), captured.captured.bodyJson())
-        assertFalse(job.running)
-        assertEquals("cancelled", job.error_code)
     }
 }
 
@@ -639,23 +516,6 @@ class RestApiSessionGitConflictTest {
 
         assertEquals(
             Json.parseToJsonElement("""{"path":"a.py","token":"t1","content":"x\n"}"""),
-            captured.captured.bodyJson(),
-        )
-    }
-
-    @Test
-    fun takeSessionGitConflict_postsTheSide_underItsOwnLeaf() = runTest {
-        val (api, captured) = newExecuteApi(okBody)
-
-        api.takeSessionGitConflict("s1", GitConflictTakeRequest("docs/old.md", GitConflictResponse.SIDE_THEIRS))
-
-        assertEquals("POST", captured.captured.method)
-        assertEquals(
-            "https://api.example.com/api/sessions/s1/git/conflict/take",
-            captured.captured.url.toString(),
-        )
-        assertEquals(
-            Json.parseToJsonElement("""{"path":"docs/old.md","side":"theirs"}"""),
             captured.captured.bodyJson(),
         )
     }

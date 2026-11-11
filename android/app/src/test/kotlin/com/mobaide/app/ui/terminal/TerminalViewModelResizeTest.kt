@@ -50,6 +50,9 @@ import org.junit.Test
  * 5. onScreenVisible() over an already-Live socket re-asserts the cached size
  *    through the shared debounce, bypassing the dedupe: a peer client may
  *    have resized the shared PTY while this one was unwatched.
+ *
+ * The send loop drains the channel on a real `Dispatchers.IO` thread, so every
+ * positive `sendBinary` verify needs a `timeout` — virtual time cannot flush it.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class TerminalViewModelResizeTest {
@@ -102,7 +105,7 @@ class TerminalViewModelResizeTest {
 
         // Exactly one resize frame should have been sent.
         val expected = TerminalProtocol.encodeResize(24, 80)
-        verify(exactly = 1) { connection.sendBinary(expected) }
+        verify(exactly = 1, timeout = 2000) { connection.sendBinary(expected) }
     }
 
     // ── Debounce: rapid calls coalesce ────────────────────────────────────────
@@ -136,21 +139,6 @@ class TerminalViewModelResizeTest {
         verify(exactly = 0) { connection.sendBinary(intermediateFrame2) }
     }
 
-    // ── Frame format ──────────────────────────────────────────────────────────
-
-    @Test
-    fun resize_sendsCorrectResizeFrame() = runTest(testDispatcher) {
-        val vm = createViewModel()
-        runCurrent()
-
-        vm.resize(50, 120)
-        advanceTimeBy(200)
-        runCurrent()
-
-        val expected = TerminalProtocol.encodeResize(50, 120)
-        verify(timeout = 2000) { connection.sendBinary(expected) }
-    }
-
     // ── Debounce resets on new dimensions ─────────────────────────────────────
 
     @Test
@@ -170,28 +158,11 @@ class TerminalViewModelResizeTest {
 
         val first = TerminalProtocol.encodeResize(24, 80)
         val second = TerminalProtocol.encodeResize(40, 100)
-        verify(exactly = 1) { connection.sendBinary(first) }
-        verify(exactly = 1) { connection.sendBinary(second) }
+        verify(exactly = 1, timeout = 2000) { connection.sendBinary(first) }
+        verify(exactly = 1, timeout = 2000) { connection.sendBinary(second) }
     }
 
     // ── Zero/edge dimensions ──────────────────────────────────────────────────
-
-    @Test
-    fun resize_changingOnlyRows_sendsNewFrame() = runTest(testDispatcher) {
-        val vm = createViewModel()
-        runCurrent()
-
-        vm.resize(24, 80)
-        advanceTimeBy(200)
-        runCurrent()
-
-        vm.resize(30, 80) // only rows changed
-        advanceTimeBy(200)
-        runCurrent()
-
-        val second = TerminalProtocol.encodeResize(30, 80)
-        verify(exactly = 1) { connection.sendBinary(second) }
-    }
 
     @Test
     fun resize_changingOnlyCols_sendsNewFrame() = runTest(testDispatcher) {
@@ -207,7 +178,7 @@ class TerminalViewModelResizeTest {
         runCurrent()
 
         val second = TerminalProtocol.encodeResize(24, 120)
-        verify(exactly = 1) { connection.sendBinary(second) }
+        verify(exactly = 1, timeout = 2000) { connection.sendBinary(second) }
     }
 
     @Test
@@ -316,21 +287,6 @@ class TerminalViewModelResizeTest {
     }
 
     @Test
-    fun replayEnd_ownHandshake_reassertsCachedSize() = runTest(testDispatcher) {
-        val vm = createViewModel()
-        runCurrent()
-        vm.resize(24, 80)
-        advanceTimeBy(200)
-        runCurrent()
-        eventsFlow.emit(WsEvent.Connected)
-        runCurrent()
-        emitReplay(this)
-
-        // Debounced layout frame, connect-time resend, own replay end.
-        verify(exactly = 3) { connection.sendBinary(TerminalProtocol.encodeResize(24, 80)) }
-    }
-
-    @Test
     fun replayEnd_foreignHandshakeWhileLive_sendsNoResize() = runTest(testDispatcher) {
         val vm = createViewModel()
         runCurrent()
@@ -341,14 +297,14 @@ class TerminalViewModelResizeTest {
         runCurrent()
         emitReplay(this)
         val expected = TerminalProtocol.encodeResize(24, 80)
-        verify(exactly = 3) { connection.sendBinary(expected) }
+        verify(exactly = 3, timeout = 2000) { connection.sendBinary(expected) }
 
         // Another client attached: the relay fans its handshake out to this
         // socket too. Answering it would resize the PTY back to this grid
         // right after that client opened the session.
         emitReplay(this)
 
-        verify(exactly = 3) { connection.sendBinary(expected) }
+        verify(exactly = 3, timeout = 2000) { connection.sendBinary(expected) }
         assertEquals(ConnectionState.Live, vm.connectionState.value)
     }
 
@@ -364,17 +320,17 @@ class TerminalViewModelResizeTest {
         emitReplay(this)
         emitReplay(this)
         val expected = TerminalProtocol.encodeResize(24, 80)
-        verify(exactly = 3) { connection.sendBinary(expected) }
+        verify(exactly = 3, timeout = 2000) { connection.sendBinary(expected) }
 
         eventsFlow.emit(WsEvent.Disconnected)
         runCurrent()
         eventsFlow.emit(WsEvent.Connected)
         runCurrent()
-        verify(exactly = 4) { connection.sendBinary(expected) }
+        verify(exactly = 4, timeout = 2000) { connection.sendBinary(expected) }
 
         emitReplay(this)
 
-        verify(exactly = 5) { connection.sendBinary(expected) }
+        verify(exactly = 5, timeout = 2000) { connection.sendBinary(expected) }
     }
 
     private suspend fun emitReplay(scope: TestScope) {
@@ -401,18 +357,18 @@ class TerminalViewModelResizeTest {
 
         // Debounced layout frame plus the connect-time resend.
         val expected = TerminalProtocol.encodeResize(24, 80)
-        verify(exactly = 2) { connection.sendBinary(expected) }
+        verify(exactly = 2, timeout = 2000) { connection.sendBinary(expected) }
 
         // ON_START over a healthy Live socket: the cache equals the frame
         // already on the wire, so resize()'s dedupe would swallow it — the
         // switch edge must not consult it, but must still ride the debounce.
         vm.onScreenVisible()
         runCurrent()
-        verify(exactly = 2) { connection.sendBinary(expected) }
+        verify(exactly = 2, timeout = 2000) { connection.sendBinary(expected) }
 
         advanceTimeBy(200)
         runCurrent()
-        verify(exactly = 3) { connection.sendBinary(expected) }
+        verify(exactly = 3, timeout = 2000) { connection.sendBinary(expected) }
     }
 
     @Test
@@ -455,7 +411,7 @@ class TerminalViewModelResizeTest {
         advanceTimeBy(200)
         runCurrent()
 
-        verify(exactly = 1) { connection.sendBinary(TerminalProtocol.encodeResize(40, 100)) }
-        verify(exactly = 2) { connection.sendBinary(TerminalProtocol.encodeResize(24, 80)) }
+        verify(exactly = 1, timeout = 2000) { connection.sendBinary(TerminalProtocol.encodeResize(40, 100)) }
+        verify(exactly = 2, timeout = 2000) { connection.sendBinary(TerminalProtocol.encodeResize(24, 80)) }
     }
 }

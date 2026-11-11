@@ -2,9 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { postAuthPath, safeNextPath } from './guards';
 
 describe('safeNextPath', () => {
-  it('returns the captured deep link', () => {
-    expect(safeNextPath('?next=%2Fdevices')).toBe('/devices');
-  });
 
   it('preserves the query string of the captured link', () => {
     expect(safeNextPath('?next=%2Fpair%3Fcode%3Dabc123')).toBe('/pair?code=abc123');

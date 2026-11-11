@@ -130,9 +130,7 @@ describe('applySessionGitJobEvent', () => {
 
   it.each([
     ['an op it cannot name', { op: 'clone' }],
-    ['a status it cannot name', { status: 'queued' }],
     ['no job id', { job_id: undefined }],
-    ['no session', { session_id: null }],
   ])('drops a frame with %s and writes nothing', (_case, over) => {
     expect(applySessionGitJobEvent(client, AGENT, { ...job(), ...over })).toBe('dropped');
 

@@ -165,17 +165,27 @@ describe('a peer tab that took the same 4010 close', () => {
   // of them before the delete response returns, so each independently labels
   // the teardown `accountRemoved`. Only the tab that issued the delete knows
   // better, and it relays that over the session channel.
-  async function relayCorrection(): Promise<void> {
-    const peer = new BroadcastChannel('mobaide-session');
-    peer.postMessage({
-      type: 'reasonCorrection',
-      reason: 'deletionScheduled',
-      userId: session.userId,
+  // Node delivers BroadcastChannel messages through MessagePorts, so a single
+  // setTimeout(0) can fire first under load. A probe listener opened before
+  // the post shows the broadcast has been dispatched; one more macrotask lets
+  // this tab's own listener run too.
+  async function relay(message: Record<string, unknown>): Promise<void> {
+    const probe = new BroadcastChannel('mobaide-session');
+    const delivered = new Promise<void>((resolve) => {
+      probe.onmessage = () => resolve();
     });
+    const peer = new BroadcastChannel('mobaide-session');
+    peer.postMessage(message);
+    await delivered;
     await new Promise((resolve) => {
       setTimeout(resolve, 0);
     });
+    probe.close();
     peer.close();
+  }
+
+  async function relayCorrection(): Promise<void> {
+    await relay({ type: 'reasonCorrection', reason: 'deletionScheduled', userId: session.userId });
   }
 
   it('is re-labelled when the correction lands after its own teardown', async () => {
@@ -215,18 +225,16 @@ describe('a peer tab that took the same 4010 close', () => {
     // The server's 4010 lands first, then our own delete response settles.
     useSessionStore.getState().invalidateUserSession('accountRemoved');
     useSessionStore.getState().invalidateUserSession('deletionScheduled');
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    peer.close();
-
     // Naming the owner is load-bearing: it is what stops a tab holding another
     // account from arming its latch against a later removal of its own.
-    expect(seen).toContainEqual({
-      type: 'reasonCorrection',
-      reason: 'deletionScheduled',
-      userId: session.userId,
+    await vi.waitFor(() => {
+      expect(seen).toContainEqual({
+        type: 'reasonCorrection',
+        reason: 'deletionScheduled',
+        userId: session.userId,
+      });
     });
+    peer.close();
   });
 
   it('ignores a correction meant for a different account', async () => {
@@ -238,16 +246,7 @@ describe('a peer tab that took the same 4010 close', () => {
     sessionStorage.setItem('mobaide-session', JSON.stringify(session));
     await bootstrapSession();
 
-    const peer = new BroadcastChannel('mobaide-session');
-    peer.postMessage({
-      type: 'reasonCorrection',
-      reason: 'deletionScheduled',
-      userId: 'someone-else',
-    });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    peer.close();
+    await relay({ type: 'reasonCorrection', reason: 'deletionScheduled', userId: 'someone-else' });
     useSessionStore.getState().invalidateUserSession('accountRemoved');
 
     expect(useSessionStore.getState().consumeInvalidation()).toBe(

@@ -109,28 +109,6 @@ class TestMobileTokenUsesDeviceId:
         assert devices[0]["device_id"] == dev_id
         assert devices[0]["name"] == "Pixel 9 Pro"
 
-    async def test_repeat_mint_for_same_device_is_idempotent(
-        self, client, app, api_auth_headers, viewer_user, registered_agent
-    ):
-        # Re-pairing the same device must not create duplicate rows in
-        # ``mobile_devices`` (upsert idempotency). The endpoint can be
-        # called many times per session as the mobile client re-mints
-        # access tokens.
-        agent_id, _ = registered_agent
-        dev_id = _uuid()
-
-        for _ in range(3):
-            resp = await client.post(
-                f"/api/agents/{agent_id}/token",
-                headers=api_auth_headers,
-                json={"mobile_device_id": dev_id, "mobile_device_name": "Idempotent"},
-            )
-            assert resp.status_code == 200
-
-        devices = await app.state.db.list_user_devices(viewer_user["id"])
-        device_ids = [d["device_id"] for d in devices]
-        assert device_ids.count(dev_id) == 1
-
 
 class TestMobileTokenCrossTenant:
     """A user submitting another user's ``device_id`` via

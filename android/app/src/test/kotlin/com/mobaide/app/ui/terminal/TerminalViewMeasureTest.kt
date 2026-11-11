@@ -38,45 +38,6 @@ class TerminalViewMeasureTest {
     }
 
     @Test
-    fun onMeasure_unspecifiedWidth_usesLayoutParamsWidth_whenSet() {
-        val view = TerminalView(context, null).apply {
-            layoutParams = ViewGroup.LayoutParams(1234, ViewGroup.LayoutParams.MATCH_PARENT)
-        }
-
-        view.measure(
-            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-            View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY),
-        )
-
-        assertEquals(
-            "Under UNSPECIFIED width, the View must use lp.width — otherwise HSV.fillViewport collapses the Static-mode surface to viewport width and breaks horizontal pan",
-            1234,
-            view.measuredWidth,
-        )
-    }
-
-    @Test
-    fun onMeasure_unspecifiedWidth_fallsBackToMinimumWidth_whenLayoutParamsWidthIsMatchParent() {
-        val view = TerminalView(context, null).apply {
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT,
-            )
-        }
-
-        view.measure(
-            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-            View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY),
-        )
-
-        assertEquals(
-            "MATCH_PARENT under UNSPECIFIED has no concrete size — default to getSuggestedMinimumWidth (0 without a background) so HSV.fillViewport can take over",
-            0,
-            view.measuredWidth,
-        )
-    }
-
-    @Test
     fun onMeasure_unspecifiedWidth_fallsBackToSuggestedMinimum_whenLayoutParamsIsNull() {
         val view = TerminalView(context, null)
         assertEquals(

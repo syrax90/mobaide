@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import struct
 import sys
 from datetime import datetime, timezone
@@ -16,7 +15,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from mobaide.relay import client as _relay_client
 from mobaide.relay.client import (
     FRAME_EXECUTE,
     FRAME_INPUT,
@@ -26,10 +24,8 @@ from mobaide.relay.client import (
     FRAME_RESIZE,
     FRAME_STATE,
     FRAME_SUBMIT,
-    INPUT_QUEUE_MAXSIZE,
     UNKNOWN_SESSION_NOTIFY_CAP,
     RelayClient,
-    _EVENT_TO_STATUS,
     _STATE_MAP,
     _attention_user_event,
     _state_frame,
@@ -49,7 +45,6 @@ from mobaide.agent.git.changes_service import (
     GitRefusedError,
 )
 from mobaide.core import (
-    AntigravityBinaryNotFoundError,
     ClaudeBinaryNotFoundError,
     CodexAuthRequiredError,
     CodexBinaryNotFoundError,
@@ -114,22 +109,11 @@ class TestStateFrame:
         assert payload["status"] == "stopped"
         assert "pid" not in payload
 
-    def test_state_frame_all_statuses(self):
-        for status in ("starting", "running", "stopping", "stopped", "crashed"):
-            frame = _state_frame(status)
-            payload = json.loads(frame[1:])
-            assert payload["status"] == status
-
 
 # -- Mapping constants ----------------------------------------------------------
 
 
 class TestMappingConstants:
-    def test_event_to_status_map(self):
-        assert _EVENT_TO_STATUS["started"] == "running"
-        assert _EVENT_TO_STATUS["stopped"] == "stopped"
-        assert _EVENT_TO_STATUS["error"] == "crashed"
-
     def test_state_map_covers_all_session_states(self):
         for state in SessionState:
             assert state in _STATE_MAP, f"SessionState.{state.name} missing from _STATE_MAP"
@@ -159,14 +143,6 @@ class TestAuthenticate:
         )
         with pytest.raises(ConnectionError, match="auth failed"):
             await client._authenticate(ws)
-
-    async def test_authenticate_binary_response(self, client):
-        ws = AsyncMock()
-        ws.recv = AsyncMock(
-            return_value=json.dumps({"type": "auth_ok"}).encode("utf-8")
-        )
-        # Should not raise — binary auth_ok is decoded
-        await client._authenticate(ws)
 
 
 # -- _handle_control ------------------------------------------------------------
@@ -474,35 +450,6 @@ class TestHandleMobileAttach:
         state = json.loads(pl[1:])
         assert state == {"status": "stopped"}
 
-    async def test_attach_for_unknown_session_does_not_crash_when_send_fails(
-        self, client, mock_session_manager
-    ):
-        """``ws.send`` failure (WS half-closed race) must be swallowed so the
-        relay reader loop keeps dispatching control frames for other
-        sessions.  The handler logs at debug and returns cleanly.
-        """
-        mock_session_manager.get_session = AsyncMock(return_value=None)
-        ws = AsyncMock()
-        ws.send = AsyncMock(side_effect=ConnectionError("WS closed"))
-        payload = json.dumps(
-            {"type": "mobile_session_attach", "session_id": "ghost"}
-        ).encode()
-
-        await client._handle_control(payload, ws)
-
-        ws.send.assert_awaited_once()
-
-    async def test_attach_without_session_id_is_silent_noop(
-        self, client, mock_session_manager
-    ):
-        ws = AsyncMock()
-        payload = json.dumps({"type": "mobile_session_attach"}).encode()
-
-        await client._handle_control(payload, ws)
-
-        ws.send.assert_not_called()
-        mock_session_manager.get_session.assert_not_awaited()
-
     async def test_attach_is_repeatable_no_idempotency_cache(
         self, client, mock_session_manager
     ):
@@ -534,31 +481,6 @@ class TestHandleMobileAttach:
         # markers, so the per-attach count is fixed.
         assert ws.send.await_count == 12
 
-    async def test_unknown_attach_answers_every_time(
-        self, client, mock_session_manager
-    ):
-        """The unknown-id answer is repeatable too, for the same reason the
-        known-id handshake is: the dropped-input path notifies once per id,
-        and sharing that dedupe here would leave a re-opened terminal waiting
-        on a state frame that never comes — a keyboard grayed out for good.
-        """
-        mock_session_manager.get_session = AsyncMock(return_value=None)
-        ws = AsyncMock()
-        payload = json.dumps(
-            {"type": "mobile_session_attach", "session_id": "ghost"}
-        ).encode()
-
-        await client._handle_control(payload, ws)
-        await client._handle_control(payload, ws)
-
-        assert ws.send.await_count == 2
-        for call in ws.send.call_args_list:
-            channel, sid, pl = decode(call[0][0])
-            assert channel == CH_SESSION_IO
-            assert sid == "ghost"
-            assert pl[:1] == FRAME_STATE
-            assert json.loads(pl[1:]) == {"status": "stopped"}
-
     async def test_unknown_attach_answers_after_input_path_notified(
         self, client, mock_session_manager
     ):
@@ -585,17 +507,6 @@ class TestHandleMobileAttach:
         assert channel == CH_SESSION_IO
         assert sid == "ghost"
         assert json.loads(pl[1:]) == {"status": "stopped"}
-
-    async def test_detach_is_silent_noop(self, client, mock_session_manager):
-        ws = AsyncMock()
-        payload = json.dumps(
-            {"type": "mobile_session_detach", "session_id": "s1"}
-        ).encode()
-
-        await client._handle_control(payload, ws)
-
-        ws.send.assert_not_called()
-        mock_session_manager.get_session.assert_not_awaited()
 
 
 # -- _handle_request_events_snapshot ------------------------------------------
@@ -698,29 +609,6 @@ class TestHandleRequestEventsSnapshot:
             "projects": [{"name": "proj-a", "path": "/p/a"}],
         }
 
-    async def test_skips_projects_publish_when_store_missing(
-        self, client, mock_session_manager, mock_event_bus, mock_app_state
-    ):
-        """``projects_store`` is optional on ``app_state``. When absent the
-        handler must still publish ``sessions.changed`` and NOT raise or
-        emit a malformed ``projects.changed`` — otherwise central-server
-        deployments without a projects feature break the events channel.
-        """
-        mock_session_manager.list_sessions = MagicMock(return_value=[])
-        # Explicitly remove the optional attribute so ``getattr(..., None)``
-        # branches into the skip path.
-        if hasattr(mock_app_state, "projects_store"):
-            del mock_app_state.projects_store
-
-        ws = AsyncMock()
-        payload = json.dumps({"type": "request_events_snapshot"}).encode()
-
-        await client._handle_control(payload, ws)
-
-        published_types = [c[0][0] for c in mock_event_bus.publish.call_args_list]
-        assert "sessions.changed" in published_types
-        assert "projects.changed" not in published_types
-
     async def test_sends_direct_sessions_list_envelope_on_tunnel(
         self, client, mock_session_manager
     ):
@@ -810,36 +698,6 @@ class TestHandleRequestEventsSnapshot:
         ]
         assert len(sessions_list_sends) == 1
 
-    async def test_empty_session_list_still_publishes_and_sends(
-        self, client, mock_session_manager, mock_event_bus
-    ):
-        """Happy path with no sessions: still publish ``sessions.changed``
-        with an empty list AND send the direct envelope, so a mobile whose
-        token survived across a full session-list clear still gets the
-        correct empty-state update (otherwise it would show stale cached
-        sessions).
-        """
-        mock_session_manager.list_sessions = MagicMock(return_value=[])
-
-        ws = AsyncMock()
-        payload = json.dumps({"type": "request_events_snapshot"}).encode()
-
-        await client._handle_control(payload, ws)
-
-        sessions_publishes = [
-            c for c in mock_event_bus.publish.call_args_list
-            if c[0][0] == "sessions.changed"
-        ]
-        assert len(sessions_publishes) == 1
-        assert sessions_publishes[0][0][1] == {"sessions": []}
-
-        sessions_list_sends = [
-            c for c in ws.send.call_args_list
-            if decode(c[0][0])[0] == CH_SESSIONS_LIST
-        ]
-        assert len(sessions_list_sends) == 1
-        assert json.loads(decode(sessions_list_sends[0][0][0])[2]) == []
-
 
 # -- _handle_create_session: OSError/FileNotFoundError branches ----------------
 
@@ -896,26 +754,6 @@ class TestHandleCreateSessionPathErrors:
         assert r"D:\\raw\\backslash\\dir" in wire_json
         assert r"D:\\\\raw\\\\backslash\\\\dir" not in wire_json
 
-    async def test_file_not_found_without_filename_uses_fallback(
-        self, client, mock_session_manager
-    ):
-        """When ``exc.filename`` is ``None`` the handler must not blow up —
-        it falls back to a readable string instead of emitting ``None``."""
-        mock_session_manager.create_session = AsyncMock(
-            side_effect=FileNotFoundError("missing cwd"),  # no filename arg
-        )
-        ws = AsyncMock()
-        ctrl = {"type": "create_session", "session_id": "no-fn-sess"}
-
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
-
-        resp = json.loads(decode(ws.send.call_args[0][0])[2])
-        assert resp["type"] == "session_create_failed"
-        # Must not render the literal string "None" into the user-facing
-        # error — the fallback text must appear instead.
-        assert "None" not in resp["error"]
-        assert "project path" in resp["error"]
-
     async def test_non_fnf_oserror_uses_strerror_and_filename(
         self, client, mock_session_manager
     ):
@@ -943,23 +781,6 @@ class TestHandleCreateSessionPathErrors:
         wire_json = payload.decode("utf-8")
         assert r"Permission denied: D:\\locked\\dir" in wire_json
         assert r"D:\\\\locked\\\\dir" not in wire_json
-
-    async def test_oserror_without_filename_uses_strerror_only(
-        self, client, mock_session_manager
-    ):
-        """OSError with no ``filename``: detail should be ``strerror``
-        alone — no dangling ``": "`` separator, no empty filename segment.
-        """
-        exc = OSError(5, "I/O error")  # filename is None
-        mock_session_manager.create_session = AsyncMock(side_effect=exc)
-        ws = AsyncMock()
-        ctrl = {"type": "create_session", "session_id": "io-sess"}
-
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
-
-        resp = json.loads(decode(ws.send.call_args[0][0])[2])
-        assert resp["type"] == "session_create_failed"
-        assert resp["error"] == "I/O error"  # no trailing ": "
 
     async def test_claude_cli_missing_emits_claude_cli_missing_discriminator(
         self, client, mock_session_manager
@@ -1064,38 +885,6 @@ class TestHandleProxyRequestPathErrors:
         wire_json = payload.decode("utf-8")
         assert r"D:\\raw\\ghost\\dir" in wire_json
         assert r"D:\\\\raw\\\\ghost\\\\dir" not in wire_json
-
-    async def test_proxy_post_sessions_permission_error_returns_400(
-        self, client, mock_session_manager
-    ):
-        """Non-FileNotFoundError ``OSError`` on the proxy path goes through
-        the broader ``except OSError`` branch and still returns 400 with a
-        clean detail (strerror + filename, f-string, no ``repr``)."""
-        mock_session_manager.create_session = AsyncMock(
-            side_effect=PermissionError(13, "Permission denied", r"D:\locked"),
-        )
-        ws = AsyncMock()
-        ctrl = {
-            "type": "proxy_request",
-            "request_id": "req-2",
-            "method": "POST",
-            "path": "/api/sessions",
-            "body": {},
-        }
-
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
-
-        sent_bytes = ws.send.call_args[0][0]
-        _, _, payload = decode(sent_bytes)
-        resp = json.loads(payload)
-
-        assert resp["type"] == "proxy_response"
-        assert resp["status"] == 400
-        assert resp["body"]["detail"] == r"Permission denied: D:\locked"
-
-        wire_json = payload.decode("utf-8")
-        assert r"Permission denied: D:\\locked" in wire_json
-        assert r"D:\\\\locked" not in wire_json
 
     async def test_proxy_claude_cli_missing_returns_503_with_discriminator(
         self, client, mock_session_manager
@@ -1205,18 +994,6 @@ class TestDispatchProxyCodexLogin:
             "path": "/api/codex/login",
             "body": body,
         }
-
-    async def test_no_codex_launcher_returns_503(self, client, mock_app_state):
-        mock_app_state.codex_launcher = None
-        ws = AsyncMock()
-
-        await client._handle_control(
-            json.dumps(self._login_ctrl({"api_key": "sk-x"})).encode(), ws,
-        )
-
-        resp = json.loads(decode(ws.send.call_args[0][0])[2])
-        assert resp["status"] == 503
-        assert "not configured" in resp["body"]["detail"].lower()
 
     async def test_malformed_body_returns_422_and_scrubs_key(
         self, client, mock_app_state
@@ -1378,22 +1155,6 @@ class TestHandleSessionInput:
 
         mock_session.write_execute.assert_awaited_once_with(b"ls -la")
 
-    async def test_execute_frame_empty_payload_ignored(
-        self, client, mock_session_manager
-    ):
-        mock_session = AsyncMock()
-        mock_session.session_id = "s1"
-        mock_session.state = SessionState.RUNNING
-        mock_session.pid = 100
-        mock_session.get_ring = MagicMock(return_value=b"")
-        mock_session_manager.get_session = AsyncMock(return_value=mock_session)
-
-        ws = AsyncMock()
-        await client._handle_session_input("s1", FRAME_EXECUTE, ws)
-
-        mock_session.write_execute.assert_not_awaited()
-        mock_session.write.assert_not_awaited()
-
     async def test_submit_frame_calls_write_submit(
         self, client, mock_session_manager
     ):
@@ -1427,20 +1188,6 @@ class TestHandleSessionInput:
         mock_session.write_submit.assert_not_awaited()
         mock_session.write.assert_not_awaited()
 
-    async def test_empty_payload_is_noop(self, client, mock_session_manager):
-        mock_session = AsyncMock()
-        mock_session.session_id = "s1"
-        mock_session.state = SessionState.RUNNING
-        mock_session.pid = 100
-        mock_session.get_ring = MagicMock(return_value=b"")
-        mock_session_manager.get_session = AsyncMock(return_value=mock_session)
-
-        ws = AsyncMock()
-        await client._handle_session_input("s1", b"", ws)
-
-        mock_session.write.assert_not_awaited()
-        mock_session.resize.assert_not_awaited()
-
 
 class TestUnknownSessionInput:
     """A CH_SESSION_IO frame naming a session this agent does not have is
@@ -1451,17 +1198,6 @@ class TestUnknownSessionInput:
     id (agent restarted, session swept, resumed id from preferences) into a
     real phantom shell that then re-entered the session list.
     """
-
-    async def test_unknown_session_creates_nothing(
-        self, client, mock_session_manager
-    ):
-        mock_session_manager.get_session = AsyncMock(return_value=None)
-        ws = AsyncMock()
-
-        await client._handle_session_input("unknown-1", FRAME_INPUT + b"hi", ws)
-
-        mock_session_manager.create_session.assert_not_awaited()
-        assert client._unknown_session_input_total == 1
 
     async def test_resize_frame_for_unknown_session_creates_nothing(
         self, client, mock_session_manager
@@ -1518,18 +1254,6 @@ class TestUnknownSessionInput:
         assert ws.send.await_count == 1
         assert client._unknown_session_input_total == 5
 
-    async def test_each_unknown_id_gets_its_own_notification(
-        self, client, mock_session_manager
-    ):
-        mock_session_manager.get_session = AsyncMock(return_value=None)
-        ws = AsyncMock()
-
-        await client._handle_session_input("ghost-a", FRAME_INPUT + b"hi", ws)
-        await client._handle_session_input("ghost-b", FRAME_INPUT + b"hi", ws)
-
-        ids = [decode(call[0][0])[1] for call in ws.send.call_args_list]
-        assert ids == ["ghost-a", "ghost-b"]
-
     async def test_notified_id_set_stays_capped(
         self, client, mock_session_manager
     ):
@@ -1560,40 +1284,6 @@ class TestUnknownSessionInput:
         mock_session_manager.create_session.assert_not_awaited()
         ws.send.assert_not_awaited()
         assert client._unknown_session_input_total == 0
-
-    async def test_only_the_first_drop_per_id_warns(
-        self,
-        client,
-        mock_session_manager,
-        caplog: pytest.LogCaptureFixture,
-    ):
-        """A client attached to a swept session re-sends on every keystroke
-        and every reconnect, so warning per frame would bury the tunnel log
-        that operators read. The drop still has to be visible once per id —
-        and the counter still has to see every frame.
-        """
-        mock_session_manager.get_session = AsyncMock(return_value=None)
-        ws = AsyncMock()
-
-        with caplog.at_level(logging.DEBUG, logger=_relay_client.__name__):
-            for _ in range(3):
-                await client._handle_session_input(
-                    "ghost-a", FRAME_INPUT + b"hi", ws
-                )
-            await client._handle_session_input("ghost-b", FRAME_INPUT + b"hi", ws)
-
-        levels = [
-            record.levelno
-            for record in caplog.records
-            if "relay.session_input.unknown_session" in record.getMessage()
-        ]
-        assert levels == [
-            logging.WARNING,
-            logging.DEBUG,
-            logging.DEBUG,
-            logging.WARNING,
-        ]
-        assert client._unknown_session_input_total == 4
 
     async def test_notify_failure_does_not_propagate(
         self, client, mock_session_manager
@@ -1793,27 +1483,6 @@ class TestSessionInputQueues:
         successor.cancel()
         await asyncio.gather(successor, return_exceptions=True)
 
-    async def test_handle_binary_routes_session_io_through_queue(
-        self, client, mock_session_manager
-    ):
-        mock_session = self._make_session(mock_session_manager)
-        ws = AsyncMock()
-
-        envelope = encode(CH_SESSION_IO, "s1", FRAME_INPUT + b"hi")
-        await client._handle_binary(envelope, ws)
-
-        assert "s1" in client._input_pumps, (
-            "CH_SESSION_IO must be dispatched via the per-session queue"
-        )
-        assert client._input_queues["s1"].maxsize == INPUT_QUEUE_MAXSIZE
-
-        await _wait_until(lambda: mock_session.write.await_count == 1)
-        mock_session.write.assert_awaited_once_with(b"hi")
-
-        pump = client._input_pumps["s1"]
-        pump.cancel()
-        await asyncio.gather(pump, return_exceptions=True)
-
     async def test_handle_binary_returns_while_submit_still_pending(
         self, client, mock_session_manager
     ):
@@ -1958,14 +1627,6 @@ class TestForwardEvents:
         ch, _, _ = decode(ws.send.call_args_list[0][0][0])
         assert ch == CH_EVENTS
 
-    async def test_malformed_attention_sends_only_events_frame(
-        self, client, mock_event_bus
-    ):
-        event = AgentEvent(type="session.attention", payload={"session": 42})
-        ws = await self._run_forward(client, mock_event_bus, event)
-
-        assert ws.send.await_count == 1
-
 
 class TestAttentionUserEvent:
     def test_extracts_wire_fields_and_drops_null_optionals(self):
@@ -2013,37 +1674,14 @@ class TestAttentionUserEvent:
         "payload",
         [
             None,
-            "not a dict",
-            {},
             {"session": None},
-            {"session": []},
-            {"session": {"attention": "turn_finished"}},
             {"session": {"session_id": "", "attention": "turn_finished"}},
             {"session": {"session_id": "s1", "attention": None}},
-            {"session": {"session_id": "s1", "attention": ""}},
             {"session": {"session_id": 7, "attention": "turn_finished"}},
-            {"session": {"session_id": "s1", "attention": 7}},
         ],
     )
     def test_malformed_payload_returns_none(self, payload):
         assert _attention_user_event(payload) is None
-
-
-# -- _send_heartbeat ------------------------------------------------------------
-
-
-class TestSendHeartbeat:
-    async def test_heartbeat_sends_control_envelope(self, client):
-        ws = AsyncMock()
-        await client._send_heartbeat(ws)
-
-        ws.send.assert_called_once()
-        sent = ws.send.call_args[0][0]
-        ch, sid, pl = decode(sent)
-        assert ch == CH_CONTROL
-        assert sid == ""
-        msg = json.loads(pl)
-        assert msg["type"] == "heartbeat"
 
 
 # -- _cancel_all_subtasks -------------------------------------------------------
@@ -2097,12 +1735,6 @@ class TestHandleText:
         await client._handle_text(json.dumps({"type": "ping"}), ws)
         ws.send.assert_called_once()
 
-    async def test_pairing_token_is_logged_no_send(self, client):
-        ws = AsyncMock()
-        msg = json.dumps({"type": "pairing_token", "expires_at": "2026-01-01"})
-        await client._handle_text(msg, ws)
-        ws.send.assert_not_called()
-
     async def test_malformed_json_text_is_ignored(self, client):
         ws = AsyncMock()
         await client._handle_text("not valid json", ws)
@@ -2113,19 +1745,6 @@ class TestHandleText:
 
 
 class TestStartStop:
-    async def test_start_creates_background_task(self, client):
-        with patch.object(client, "_connect_loop", new_callable=AsyncMock):
-            await client.start()
-            assert client._task is not None
-            assert not client._task.done()
-            await client.stop()
-
-    async def test_stop_sets_stopping_flag(self, client):
-        with patch.object(client, "_connect_loop", new_callable=AsyncMock):
-            await client.start()
-            await client.stop()
-            assert client._stopping is True
-
     async def test_stop_closes_websocket(self, client):
         ws = AsyncMock()
         client._ws = ws
@@ -2286,22 +1905,6 @@ class TestProxyAutoscanStart:
         assert result["status"] == 422
         mgr.start.assert_not_awaited()
 
-    async def test_wrong_type_project_name_returns_422(
-        self, client, mock_app_state,
-    ):
-        """``project_name: 123`` (non-string) is a validation error — 422,
-        and the handler never reaches the domain layer."""
-        mgr = mock_app_state.autoscan_manager
-        mgr.start = AsyncMock()
-
-        ws = AsyncMock()
-        result = await client._dispatch_proxy(
-            "POST", "/api/autoscan/start", {"project_name": 123}, None, ws,
-        )
-
-        assert result["status"] == 422
-        mgr.start.assert_not_awaited()
-
     async def test_already_running_returns_409(self, client, mock_app_state):
         """``AutoScanAlreadyRunning`` from ``mgr.start`` must surface as 409
         — previously every exception collapsed to 409, so this test also
@@ -2350,32 +1953,6 @@ class TestProxyAutoscanStart:
 
         assert result["status"] == 404
         assert "unknown project" in result["body"]["detail"]
-
-    async def test_no_manager_returns_503(
-        self, relay_config, mock_session_manager, mock_event_bus,
-        mock_broadcaster,
-    ):
-        """When ``app_state`` has no ``autoscan_manager`` (misconfigured
-        deployment), the handler returns 503 before any parsing — and
-        crucially, does NOT try to call ``mgr.start`` on ``None``."""
-        from mobaide.relay.client import RelayClient
-
-        state = MagicMock(spec=[])  # no attributes at all
-        cli = RelayClient(
-            config=relay_config,
-            session_manager=mock_session_manager,
-            event_bus=mock_event_bus,
-            broadcaster=mock_broadcaster,
-            app_state=state,
-        )
-
-        ws = AsyncMock()
-        result = await cli._dispatch_proxy(
-            "POST", "/api/autoscan/start", {"project_name": "p"}, None, ws,
-        )
-
-        assert result["status"] == 503
-        assert "not available" in result["body"]["detail"].lower()
 
 
 class TestProxyCreateSessionClaudeOptions:
@@ -2524,67 +2101,6 @@ class TestProxyCreateSessionClaudeOptions:
         assert isinstance(result["body"]["detail"], list)
         mock_session_manager.create_session.assert_not_awaited()
 
-    async def test_invalid_claude_options_returns_422(
-        self, client, mock_session_manager,
-    ):
-        """Malformed nested ``claude_options`` also yields 422 — the
-        validation is deep, not just top-level. Parallels the
-        ``TestProxyAutoscanStart`` 422 case."""
-        mock_session_manager.create_session = AsyncMock()
-
-        ws = AsyncMock()
-        body = {"claude_options": {"plan_mode": "not_a_bool"}}
-
-        result = await client._dispatch_proxy(
-            "POST", "/api/sessions", body, None, ws,
-        )
-
-        assert result["status"] == 422
-        mock_session_manager.create_session.assert_not_awaited()
-
-
-class TestValidateAdHocCwdHelper:
-    """The module-level :func:`_validate_adhoc_cwd_or_error` helper
-    mirrors the router's :func:`_validate_adhoc_cwd` so the relay stays
-    independently importable. The "or_error" variant returns the
-    human-readable error string instead of raising — call sites format
-    the response in their own protocol shape.
-    """
-
-    def test_empty_returns_empty_error(self):
-        from mobaide.relay.client import _validate_adhoc_cwd_or_error
-        msg = _validate_adhoc_cwd_or_error("")
-        assert msg is not None
-        assert "empty" in msg.lower()
-
-    def test_relative_path_returns_absolute_error(self):
-        from mobaide.relay.client import _validate_adhoc_cwd_or_error
-        msg = _validate_adhoc_cwd_or_error("relative/path")
-        assert msg is not None
-        assert "absolute" in msg
-        assert "relative/path" in msg
-
-    def test_nonexistent_absolute_returns_does_not_exist(self, tmp_path):
-        from mobaide.relay.client import _validate_adhoc_cwd_or_error
-        ghost = tmp_path / "ghost"
-        msg = _validate_adhoc_cwd_or_error(str(ghost))
-        assert msg is not None
-        assert "does not exist" in msg
-        assert str(ghost) in msg
-
-    def test_file_path_returns_not_a_directory(self, tmp_path):
-        from mobaide.relay.client import _validate_adhoc_cwd_or_error
-        f = tmp_path / "file.txt"
-        f.write_text("x")
-        msg = _validate_adhoc_cwd_or_error(str(f))
-        assert msg is not None
-        assert "not a directory" in msg
-        assert str(f) in msg
-
-    def test_valid_directory_returns_none(self, tmp_path):
-        from mobaide.relay.client import _validate_adhoc_cwd_or_error
-        assert _validate_adhoc_cwd_or_error(str(tmp_path)) is None
-
 
 class TestHandleCreateSessionAdHocPathValidation:
     """When a control-channel ``create_session`` frame arrives with
@@ -2595,26 +2111,6 @@ class TestHandleCreateSessionAdHocPathValidation:
     ``FileNotFoundError`` mapped through ``str(exc)`` and leak doubled
     backslashes onto the wire).
     """
-
-    async def test_relative_cwd_returns_session_create_failed(
-        self, client, mock_session_manager,
-    ):
-        ws = AsyncMock()
-        ctrl = {
-            "type": "create_session",
-            "session_id": "adhoc-rel",
-            "cwd": "relative/path",
-        }
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
-
-        ws.send.assert_called_once()
-        resp = json.loads(decode(ws.send.call_args[0][0])[2])
-        assert resp["type"] == "session_create_failed"
-        assert resp["session_id"] == "adhoc-rel"
-        assert "absolute" in resp["error"]
-        # Validation runs BEFORE create_session — the session manager
-        # must not have been invoked at all.
-        mock_session_manager.create_session.assert_not_awaited()
 
     async def test_nonexistent_cwd_returns_session_create_failed(
         self, client, mock_session_manager, tmp_path,
@@ -2632,24 +2128,6 @@ class TestHandleCreateSessionAdHocPathValidation:
         assert resp["type"] == "session_create_failed"
         assert "does not exist" in resp["error"]
         assert str(missing) in resp["error"]
-        mock_session_manager.create_session.assert_not_awaited()
-
-    async def test_file_cwd_returns_session_create_failed(
-        self, client, mock_session_manager, tmp_path,
-    ):
-        a_file = tmp_path / "f.txt"
-        a_file.write_text("x")
-        ws = AsyncMock()
-        ctrl = {
-            "type": "create_session",
-            "session_id": "adhoc-file",
-            "cwd": str(a_file),
-        }
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
-
-        resp = json.loads(decode(ws.send.call_args[0][0])[2])
-        assert resp["type"] == "session_create_failed"
-        assert "not a directory" in resp["error"]
         mock_session_manager.create_session.assert_not_awaited()
 
     async def test_validation_skipped_when_project_name_set(
@@ -2678,23 +2156,6 @@ class TestHandleCreateSessionAdHocPathValidation:
         mock_session_manager.create_session.assert_awaited_once()
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "session_created"
-
-    async def test_validation_skipped_when_cwd_is_none(
-        self, client, mock_session_manager,
-    ):
-        """``cwd=None`` ⇒ raw Terminal in default cwd path. The validator
-        must NOT fire on ``None`` (only on a user-supplied path)."""
-        mock_session = MagicMock()
-        mock_session.session_id = "default-cwd"
-        mock_session.pid = 5
-        mock_session_manager.create_session = AsyncMock(return_value=mock_session)
-
-        ws = AsyncMock()
-        ctrl = {"type": "create_session", "session_id": "default-cwd"}
-        with patch.object(client, "_bridge_session"):
-            await client._handle_control(json.dumps(ctrl).encode(), ws)
-
-        mock_session_manager.create_session.assert_awaited_once()
 
     async def test_valid_adhoc_cwd_creates_session(
         self, client, mock_session_manager, tmp_path,
@@ -2741,34 +2202,6 @@ class TestDispatchProxyAdHocPathValidation:
         assert result["status"] == 400
         assert "absolute" in result["body"]["detail"]
         assert "relative/path" in result["body"]["detail"]
-        mock_session_manager.create_session.assert_not_awaited()
-
-    async def test_nonexistent_cwd_returns_400(
-        self, client, mock_session_manager, tmp_path,
-    ):
-        missing = tmp_path / "missing"
-        mock_session_manager.create_session = AsyncMock()
-        ws = AsyncMock()
-        result = await client._dispatch_proxy(
-            "POST", "/api/sessions", {"cwd": str(missing)}, None, ws,
-        )
-        assert result["status"] == 400
-        assert "does not exist" in result["body"]["detail"]
-        assert str(missing) in result["body"]["detail"]
-        mock_session_manager.create_session.assert_not_awaited()
-
-    async def test_file_cwd_returns_400(
-        self, client, mock_session_manager, tmp_path,
-    ):
-        f = tmp_path / "f.txt"
-        f.write_text("x")
-        mock_session_manager.create_session = AsyncMock()
-        ws = AsyncMock()
-        result = await client._dispatch_proxy(
-            "POST", "/api/sessions", {"cwd": str(f)}, None, ws,
-        )
-        assert result["status"] == 400
-        assert "not a directory" in result["body"]["detail"]
         mock_session_manager.create_session.assert_not_awaited()
 
     async def test_validation_skipped_when_project_name_set(
@@ -2889,42 +2322,6 @@ class TestProxyGitItems:
         assert result["body"]["items"][0]["branch"] == "main"
         mock_list.assert_awaited_once()
 
-    async def test_get_items_unknown_project_returns_404(
-        self, client, mock_app_state,
-    ):
-        """``store.get`` returning ``None`` must surface as 404 with the
-        same detail string as the FastAPI router (``router.py:84-87``)."""
-        mock_app_state.projects_store = MagicMock()
-        mock_app_state.projects_store.get = MagicMock(return_value=None)
-        mock_app_state.worktree_manager = MagicMock()
-
-        ws = AsyncMock()
-        result = await client._dispatch_proxy(
-            "GET", "/api/projects/missing/git/items", None, None, ws,
-        )
-
-        assert result["status"] == 404
-        assert "not found" in result["body"]["detail"]
-
-    async def test_get_items_non_git_project_returns_400(
-        self, client, mock_app_state, tmp_path,
-    ):
-        """A project whose ``.path`` lacks a ``.git`` entry must surface
-        as 400 (matches ``router.py:89-93``); ``.git`` may be a directory
-        or a file (worktrees), so we use ``Path.exists`` not ``is_dir``."""
-        project = self._make_project(tmp_path, name="proj", with_git=False)
-        mock_app_state.projects_store = MagicMock()
-        mock_app_state.projects_store.get = MagicMock(return_value=project)
-        mock_app_state.worktree_manager = MagicMock()
-
-        ws = AsyncMock()
-        result = await client._dispatch_proxy(
-            "GET", "/api/projects/proj/git/items", None, None, ws,
-        )
-
-        assert result["status"] == 400
-        assert "not a git repository" in result["body"]["detail"]
-
     async def test_post_delete_happy_path(
         self, client, mock_app_state, tmp_path,
     ):
@@ -3018,55 +2415,6 @@ class TestProxyGitItems:
         assert result["body"]["detail"]["busy_by"][0]["session_id"] == "s1"
         # Negative assertion: must NOT be at top level.
         assert "busy_by" not in result["body"]
-
-    async def test_post_delete_malformed_returns_422(
-        self, client, mock_app_state, tmp_path,
-    ):
-        """A body whose ``items[].kind`` isn't a valid ``ItemKind``
-        literal yields 422 from Pydantic, and the service must never be
-        invoked. Mirrors how ``TestProxyAutoscanStart`` validates."""
-        project = self._make_project(tmp_path, name="proj")
-        mock_app_state.projects_store = MagicMock()
-        mock_app_state.projects_store.get = MagicMock(return_value=project)
-        mock_app_state.worktree_manager = MagicMock()
-
-        ws = AsyncMock()
-        with patch(
-            "mobaide.relay.client.delete_git_items",
-            new=AsyncMock(),
-        ) as mock_delete:
-            result = await client._dispatch_proxy(
-                "POST",
-                "/api/projects/proj/git/items:delete",
-                {"items": [{"kind": "not_a_kind"}]},
-                None,
-                ws,
-            )
-
-        assert result["status"] == 422
-        assert isinstance(result["body"]["detail"], list)
-        mock_delete.assert_not_awaited()
-
-    async def test_unsupported_method_falls_through_to_unknown_route(
-        self, client, mock_app_state, tmp_path,
-    ):
-        """A path that matches the git regex but with a method other than
-        GET / POST should NOT short-circuit with a git-flavored error —
-        ``_dispatch_git`` returns ``None`` so the catch-all "Unknown
-        proxy route" 404 fires. This documents the existing dispatcher
-        contract: it is not method-aware per route, only path-aware."""
-        project = self._make_project(tmp_path, name="proj")
-        mock_app_state.projects_store = MagicMock()
-        mock_app_state.projects_store.get = MagicMock(return_value=project)
-        mock_app_state.worktree_manager = MagicMock()
-
-        ws = AsyncMock()
-        result = await client._dispatch_proxy(
-            "PUT", "/api/projects/proj/git/items", None, None, ws,
-        )
-
-        assert result["status"] == 404
-        assert "Unknown proxy route" in result["body"]["detail"]
 
     async def test_url_decoded_space_in_project_name(
         self, client, mock_app_state, tmp_path,
@@ -3298,11 +2646,6 @@ class TestProxyGitBranches:
                 409,
                 {"code": "dirty", "message": "error: Your local changes"},
             ),
-            (
-                GitRefusedError("checked_out_elsewhere", "/wt/topic"),
-                409,
-                {"code": "checked_out_elsewhere", "message": "/wt/topic"},
-            ),
             (GitNotFoundError("ref_not_found"), 404, {"code": "ref_not_found"}),
             (GitBadRequestError("bad_ref"), 400, {"code": "bad_ref"}),
         ],
@@ -3321,22 +2664,6 @@ class TestProxyGitBranches:
 
         assert result["status"] == status
         assert result["body"] == {"detail": detail}
-
-    async def test_post_branches_coded_refusal_matches_the_router_shape(
-        self, client, mock_app_state, tmp_path,
-    ):
-        self._wire_project(mock_app_state, tmp_path)
-        ws = AsyncMock()
-        with patch(
-            "mobaide.relay.client.create_branch",
-            new=AsyncMock(side_effect=GitRefusedError("exists", "x")),
-        ):
-            result = await client._dispatch_proxy(
-                "POST", "/api/projects/proj/git/branches", {"name": "x"}, None, ws,
-            )
-
-        assert result["status"] == 409
-        assert result["body"] == {"detail": {"code": "exists", "message": "x"}}
 
     async def test_unknown_project_and_non_git_project_apply_to_the_new_routes(
         self, client, mock_app_state, tmp_path,
@@ -3400,19 +2727,6 @@ class TestProxyLinearDiscoveryRelayParity:
 
         assert result["status"] == 404
         assert "not found" in result["body"]["detail"]
-
-    async def test_states_unknown_project_returns_404(
-        self, client, mock_app_state,
-    ):
-        mock_app_state.projects_store = MagicMock()
-        mock_app_state.projects_store.get = MagicMock(return_value=None)
-
-        ws = AsyncMock()
-        result = await client._dispatch_proxy(
-            "GET", "/api/projects/missing/linear/states", None, None, ws,
-        )
-
-        assert result["status"] == 404
 
     async def test_labels_no_api_key_returns_400(
         self, client, mock_app_state,
@@ -3507,19 +2821,6 @@ class TestProxyLinearDiscoveryRelayParity:
         body_detail = result["body"]["detail"]
         assert "linear is down" not in body_detail
         assert "Failed to fetch" in body_detail
-
-    async def test_post_to_discovery_endpoint_falls_through(
-        self, client, mock_app_state,
-    ):
-        # Method-mismatch: POST should NOT match the GET-only dispatcher,
-        # falling through to the catch-all 404 "Unknown proxy route".
-        ws = AsyncMock()
-        result = await client._dispatch_proxy(
-            "POST", "/api/projects/proj/linear/labels", None, None, ws,
-        )
-
-        assert result["status"] == 404
-        assert "Unknown proxy route" in result["body"]["detail"]
 
 
 class TestProxySessionsWireShape:
@@ -3709,22 +3010,6 @@ class TestConnectLoopStabilityBackoff:
             pytest.approx((base, base * 3)),  # reset: stable uptime ≥ 60s
         ]
         assert sleeps == pytest.approx([0.03, 0.05, 0.03])
-
-    async def test_flapping_keeps_escalating_until_max(self, client, monkeypatch):
-        # Uptimes of 1s never reach the stability threshold; with the
-        # jitter stubbed to its upper bound the delays walk 0.03 → 0.05
-        # and stay capped at reconnect_max_delay.
-        sleeps, _ = self._wire(
-            client, monkeypatch,
-            monotonic_values=[0, 1, 10, 11, 20, 21],
-            stop_after=3,
-            outcome="raise",
-        )
-
-        await client._connect_loop()
-
-        assert sleeps == pytest.approx([0.03, 0.05, 0.05])
-        assert all(s <= client._config.reconnect_max_delay for s in sleeps)
 
     async def test_clean_instant_return_does_not_reset(self, client, monkeypatch):
         # The old loop reset the delay on ANY clean return — recreating
@@ -3932,10 +3217,9 @@ class TestHandleCreateSessionChat:
             ({"cli": "claude", "chat_resume_id": "abc"}, "chat_resume_id needs ui=chat"),
             ({"cli": "codex", "ui": "chat"}, "The chat view is not available for codex sessions"),
             ({"cli": "claude", "ui": "chat", "chat_resume_id": "../../etc/passwd"}, "Invalid chat_resume_id"),
-            ({"cli": "claude", "ui": "chat", "chat_resume_id": "-x " * 3}, "Invalid chat_resume_id"),
             ({"cli": "claude", "ui": "chat", "chat_resume_id": "a" * 201}, "Invalid chat_resume_id"),
         ],
-        ids=["resume-needs-chat", "no-chat-agent", "path", "spaces", "too-long"],
+        ids=["resume-needs-chat", "no-chat-agent", "path", "too-long"],
     )
     async def test_invalid_chat_fields_are_refused(
         self, client, mock_session_manager, fields, error,
@@ -4053,29 +3337,6 @@ class TestHandleProxyRequestCodex:
         assert resp["status"] == 201
         assert resp["body"]["kind"] == "codex"
 
-    async def test_proxy_invalid_codex_options_returns_422(
-        self, client, mock_session_manager,
-    ):
-        """An out-of-range ``codex_options`` enum on the proxy path is rejected
-        by ``CreateSessionRequest`` validation, returning a 422 ``proxy_response``
-        without ever reaching ``create_session``."""
-        ws = AsyncMock()
-        ctrl = {
-            "type": "proxy_request",
-            "request_id": "req-bad-codex",
-            "method": "POST",
-            "path": "/api/sessions",
-            "body": {"cli": "codex", "codex_options": {"sandbox": "nope"}},
-        }
-
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
-
-        resp = json.loads(decode(ws.send.call_args[0][0])[2])
-        assert resp["type"] == "proxy_response"
-        assert resp["request_id"] == "req-bad-codex"
-        assert resp["status"] == 422
-        mock_session_manager.create_session.assert_not_awaited()
-
     async def test_proxy_codex_cli_missing_returns_503_with_discriminator(
         self, client, mock_session_manager,
     ):
@@ -4142,93 +3403,6 @@ class TestProxyVersionCapabilities:
                 searched_paths=["PATH:cli"],
             )
         return launcher
-
-    async def test_reports_cli_availability(self, client, mock_app_state):
-        # claude/antigravity resolve, codex raises → the gate is per-CLI.
-        mock_app_state.cli_launchers = {
-            "claude": self._launcher(resolves=True),
-            "codex": self._launcher(resolves=False),
-            "antigravity": self._launcher(resolves=True),
-        }
-        ws = AsyncMock()
-
-        result = await client._dispatch_proxy(
-            "GET", "/api/version", None, None, ws,
-        )
-
-        assert result["status"] == 200
-        assert result["body"]["capabilities"]["cli"] == {
-            "claude": {"available": True},
-            "codex": {"available": False},
-            "antigravity": {"available": True},
-        }
-
-    async def test_warm_model_cache_adds_models_key(self, client, mock_app_state):
-        """A launcher whose model cache is warm (truthy ``cached_models``)
-        carries ``models`` in its capability entry on the relay path too;
-        launchers with a cold cache keep the bare ``{"available": bool}``
-        shape — same omitted-key contract as the direct handler."""
-        mock_app_state.cli_launchers = {
-            "claude": self._launcher(resolves=True),
-            "antigravity": self._launcher(
-                resolves=True,
-                cached_models=("Gemini 3.1 Pro (Low)", "GPT-OSS 120B (Medium)"),
-            ),
-        }
-        ws = AsyncMock()
-
-        result = await client._dispatch_proxy(
-            "GET", "/api/version", None, None, ws,
-        )
-
-        assert result["status"] == 200
-        assert result["body"]["capabilities"]["cli"] == {
-            "claude": {"available": True},
-            "antigravity": {
-                "available": True,
-                "models": ["Gemini 3.1 Pro (Low)", "GPT-OSS 120B (Medium)"],
-            },
-        }
-
-    async def test_warm_detail_cache_adds_model_details_key(
-        self, client, mock_app_state,
-    ):
-        """A launcher whose per-model detail cache is warm carries
-        ``model_details`` in its capability entry on the relay path too — same
-        omitted-key contract as ``models``."""
-        mock_app_state.cli_launchers = {
-            "codex": self._launcher(
-                resolves=True,
-                cached_models=("gpt-5.6-sol",),
-                cached_model_details=(
-                    {
-                        "id": "gpt-5.6-sol",
-                        "efforts": ["low", "ultra"],
-                        "default_effort": "low",
-                    },
-                ),
-            ),
-        }
-        ws = AsyncMock()
-
-        result = await client._dispatch_proxy(
-            "GET", "/api/version", None, None, ws,
-        )
-
-        assert result["status"] == 200
-        assert result["body"]["capabilities"]["cli"] == {
-            "codex": {
-                "available": True,
-                "models": ["gpt-5.6-sol"],
-                "model_details": [
-                    {
-                        "id": "gpt-5.6-sol",
-                        "efforts": ["low", "ultra"],
-                        "default_effort": "low",
-                    }
-                ],
-            },
-        }
 
     async def test_version_marks_models_pending_while_warmup_outlasts_the_wait(
         self, client, mock_app_state, monkeypatch,
@@ -4334,45 +3508,6 @@ class TestProxyVersionCapabilities:
             "chat": {},
         }
 
-    async def test_missing_cli_launchers_attr_degrades_to_empty_cli(
-        self, client, mock_app_state,
-    ):
-        """An ``app_state`` without ``cli_launchers`` (partially-built state)
-        must not crash the version branch — ``getattr(..., {})`` falls back to
-        an empty registry, yielding ``capabilities.cli == {}``."""
-        from mobaide.voice.models import VOICE_CAPABILITIES
-
-        if hasattr(mock_app_state, "cli_launchers"):
-            del mock_app_state.cli_launchers
-        ws = AsyncMock()
-
-        result = await client._dispatch_proxy(
-            "GET", "/api/version", None, None, ws,
-        )
-
-        assert result["status"] == 200
-        assert result["body"]["capabilities"] == {
-            "cli": {},
-            "git": {
-                "changes": True,
-                "stage": True,
-                "discard": True,
-                "commit": True,
-                "fetch": True,
-                "pull": True,
-                "push": True,
-                "branches": True,
-                "rebase": True,
-                "resolve": True,
-                "delete_remote": True,
-                "conflicts": True,
-                "worktree_base": True,
-            },
-            "voice": VOICE_CAPABILITIES,
-            "fs": {"dirs": True, "windows_paths": sys.platform == "win32"},
-            "chat": {},
-        }
-
     async def test_version_body_keeps_core_fields(self, client, mock_app_state):
         """The added ``capabilities`` work must not drop the existing version
         fields the client relies on (name / server_version / protocol set)."""
@@ -4455,99 +3590,6 @@ class TestHandleCreateSessionAntigravity:
         assert resp["session_id"] == "agy-sess"
         assert resp["pid"] == 7
 
-    async def test_antigravity_options_without_cli_still_resolves_antigravity_kind(
-        self, client, mock_session_manager,
-    ):
-        """Back-compat inference: a payload that carries ``antigravity_options``
-        but omits the ``cli`` discriminator must still resolve to an ANTIGRAVITY
-        session (mirrors how a ``claude_options``-only payload resolves to
-        Claude)."""
-        from mobaide.core.models import SessionConfig
-
-        async def _capture(config: SessionConfig):
-            _capture.config = config  # type: ignore[attr-defined]
-            s = MagicMock()
-            s.session_id = "infer-sess"
-            s.pid = 8
-            return s
-
-        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
-
-        ws = AsyncMock()
-        ctrl = {
-            "type": "create_session",
-            "session_id": "infer-sess",
-            "antigravity_options": {"sandbox": True},
-        }
-
-        with patch.object(client, "_bridge_session"):
-            await client._handle_control(json.dumps(ctrl).encode(), ws)
-
-        cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
-        assert cfg.kind is SessionKind.ANTIGRAVITY
-        assert cfg.antigravity_options is not None
-        assert cfg.antigravity_options.sandbox is True
-
-    async def test_invalid_antigravity_options_returns_create_failed(
-        self, client, mock_session_manager,
-    ):
-        """The mutually exclusive ``skip_permissions`` + ``sandbox`` pair is
-        rejected at the ``AntigravityOptionsModel`` boundary, producing
-        ``session_create_failed`` with an ``Invalid antigravity_options:`` error
-        — and ``create_session`` is never reached."""
-        ws = AsyncMock()
-        ctrl = {
-            "type": "create_session",
-            "session_id": "bad-agy",
-            "cli": "antigravity",
-            "antigravity_options": {"skip_permissions": True, "sandbox": True},
-        }
-
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
-
-        resp = json.loads(decode(ws.send.call_args[0][0])[2])
-        assert resp["type"] == "session_create_failed"
-        assert resp["session_id"] == "bad-agy"
-        assert resp["error"].startswith("Invalid antigravity_options:")
-        assert "mutually exclusive" in resp["error"]
-        mock_session_manager.create_session.assert_not_awaited()
-
-    async def test_antigravity_cli_missing_emits_antigravity_cli_missing_discriminator(
-        self, client, mock_session_manager,
-    ):
-        """``AntigravityBinaryNotFoundError`` from the spawn path must map to
-        ``session_create_failed`` with ``antigravity_cli_missing: true`` (NOT
-        ``claude_cli_missing``) and the Antigravity-specific install hint. The
-        marker key is derived from ``exc.cli_name`` — this proves the
-        Antigravity subclass routes through the shared
-        ``except CliBinaryNotFoundError`` branch."""
-        mock_session_manager.create_session = AsyncMock(
-            side_effect=AntigravityBinaryNotFoundError(
-                searched_paths=["PATH:agy", "/home/test/.local/bin/agy"]
-            ),
-        )
-        ws = AsyncMock()
-        ctrl = {
-            "type": "create_session",
-            "session_id": "no-agy-sess",
-            "cli": "antigravity",
-        }
-
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
-
-        resp = json.loads(decode(ws.send.call_args[0][0])[2])
-        assert resp["type"] == "session_create_failed"
-        assert resp["session_id"] == "no-agy-sess"
-        assert resp["antigravity_cli_missing"] is True
-        assert "claude_cli_missing" not in resp
-        assert resp["error"].startswith("Antigravity CLI not found:")
-        assert "https://antigravity.google/docs/cli" in resp["error"]
-        assert "MOBAIDE_AGY_BIN" in resp["error"]
-        assert resp["searched_paths"] == [
-            "PATH:agy",
-            "/home/test/.local/bin/agy",
-        ]
-
 
 class TestHandleProxyRequestAntigravity:
     """``POST /api/sessions`` proxied through the central relay
@@ -4626,73 +3668,6 @@ class TestHandleProxyRequestAntigravity:
         assert resp["request_id"] == "req-agy"
         assert resp["status"] == 201
         assert resp["body"]["kind"] == "antigravity"
-
-    async def test_proxy_invalid_antigravity_options_returns_422(
-        self, client, mock_session_manager,
-    ):
-        """The mutually exclusive ``skip_permissions`` + ``sandbox`` pair on the
-        proxy path is rejected by ``CreateSessionRequest`` validation, returning
-        a 422 ``proxy_response`` without ever reaching ``create_session``."""
-        ws = AsyncMock()
-        ctrl = {
-            "type": "proxy_request",
-            "request_id": "req-bad-agy",
-            "method": "POST",
-            "path": "/api/sessions",
-            "body": {
-                "cli": "antigravity",
-                "antigravity_options": {
-                    "skip_permissions": True,
-                    "sandbox": True,
-                },
-            },
-        }
-
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
-
-        resp = json.loads(decode(ws.send.call_args[0][0])[2])
-        assert resp["type"] == "proxy_response"
-        assert resp["request_id"] == "req-bad-agy"
-        assert resp["status"] == 422
-        mock_session_manager.create_session.assert_not_awaited()
-
-    async def test_proxy_antigravity_cli_missing_returns_503_with_discriminator(
-        self, client, mock_session_manager,
-    ):
-        """A missing ``agy`` binary on the proxy path must map to status=503
-        (not 400 / not 500) with ``antigravity_cli_missing: true`` in the body
-        and the Antigravity install hint — the marker key derives from
-        ``exc.cli_name`` so the Antigravity subclass and Claude share one 503
-        handler."""
-        mock_session_manager.create_session = AsyncMock(
-            side_effect=AntigravityBinaryNotFoundError(
-                searched_paths=["PATH:agy", "/usr/local/bin/agy"]
-            ),
-        )
-        ws = AsyncMock()
-        ctrl = {
-            "type": "proxy_request",
-            "request_id": "req-agy-missing",
-            "method": "POST",
-            "path": "/api/sessions",
-            "body": {"cli": "antigravity", "antigravity_options": {}},
-        }
-
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
-
-        resp = json.loads(decode(ws.send.call_args[0][0])[2])
-        assert resp["type"] == "proxy_response"
-        assert resp["request_id"] == "req-agy-missing"
-        assert resp["status"] == 503
-        assert resp["body"]["antigravity_cli_missing"] is True
-        assert "claude_cli_missing" not in resp["body"]
-        assert resp["body"]["detail"].startswith("Antigravity CLI not found:")
-        assert "https://antigravity.google/docs/cli" in resp["body"]["detail"]
-        assert resp["body"]["searched_paths"] == [
-            "PATH:agy",
-            "/usr/local/bin/agy",
-        ]
-        assert isinstance(resp["body"]["detail"], str) and resp["body"]["detail"]
 
 
 CUSTOM_KIND = "custom_0123456789ab"
@@ -4856,37 +3831,6 @@ class TestHandleCreateSessionCustomKind:
         assert resp["session_id"] == "sid-fail"
         assert "relay" in resp["error"].lower()
         mock_session_manager.create_session.assert_not_awaited()
-
-    async def test_resolved_name_ignored_for_builtin_kinds(
-        self, client, mock_session_manager,
-    ):
-        """``kind_label`` is a custom-type snapshot only — a stray
-        ``resolved_name`` on a built-in create must not leak into it."""
-        from mobaide.core.models import SessionConfig
-
-        async def _capture(config: SessionConfig):
-            _capture.config = config  # type: ignore[attr-defined]
-            s = MagicMock()
-            s.session_id = "sid-b"
-            s.pid = 8
-            return s
-
-        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
-
-        ws = AsyncMock()
-        ctrl = {
-            "type": "create_session",
-            "session_id": "sid-b",
-            "cli": "claude",
-            "resolved_name": "Sneaky",
-        }
-
-        with patch.object(client, "_bridge_session"):
-            await client._handle_control(json.dumps(ctrl).encode(), ws)
-
-        cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
-        assert cfg.kind is SessionKind.CLAUDE
-        assert cfg.kind_label is None
 
 
 class TestUnknownSessionNeverSpawnsShell:

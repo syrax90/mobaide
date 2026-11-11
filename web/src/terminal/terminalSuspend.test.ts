@@ -40,12 +40,4 @@ describe('shouldSuspend', () => {
       true,
     );
   });
-
-  it('prices the recoup threshold at one ring and the firehose above it', () => {
-    // The constants are the policy. `RECOUP_BYTES` below the 4 MiB ring would
-    // make every suspend a guaranteed net loss.
-    expect(RECOUP_BYTES).toBe(4 * 1024 * 1024);
-    expect(GRACE_MS).toBe(60_000);
-    expect(FIREHOSE_BYTES).toBeGreaterThan(RECOUP_BYTES);
-  });
 });

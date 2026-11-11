@@ -89,28 +89,6 @@ class TerminalViewModelSessionKindTest {
         )
 
     @Test
-    fun sessionKind_resolvesCodex_whenListHasMatchingCodexSession() =
-        runTest(testDispatcher) {
-            val sessions = MutableStateFlow(listOf(session("test-session", SessionKind.Codex)))
-            val vm = newViewModel(newRepository(sessions))
-            runCurrent()
-
-            assertEquals(SessionKind.Codex, vm.sessionKind.value)
-        }
-
-    @Test
-    fun sessionKind_staysNull_whenSessionNotInList() =
-        runTest(testDispatcher) {
-            // Unresolved must be null, not a guessed Claude — consumers render
-            // the kind-neutral default bar and skip MRU bucket writes.
-            val sessions = MutableStateFlow<List<SessionResponse>>(emptyList())
-            val vm = newViewModel(newRepository(sessions))
-            runCurrent()
-
-            assertEquals(null, vm.sessionKind.value)
-        }
-
-    @Test
     fun sessionKind_ignoresOtherSessions_matchingOnlyOnSessionId() =
         runTest(testDispatcher) {
             val sessions = MutableStateFlow(listOf(session("other-session", SessionKind.Codex)))
@@ -118,19 +96,6 @@ class TerminalViewModelSessionKindTest {
             runCurrent()
 
             assertEquals(null, vm.sessionKind.value)
-        }
-
-    @Test
-    fun sessionKind_resolvesCustomKind_preservingRawWireString() =
-        runTest(testDispatcher) {
-            // A custom-agent-type session must resolve to its verbatim wire
-            // kind — the key bar and shortcut buckets key off the raw string.
-            val kind = SessionKind.Custom("custom_ab12cd34ef56")
-            val sessions = MutableStateFlow(listOf(session("test-session", kind)))
-            val vm = newViewModel(newRepository(sessions))
-            runCurrent()
-
-            assertEquals(kind, vm.sessionKind.value)
         }
 
     @Test

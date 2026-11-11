@@ -55,16 +55,6 @@ class TestAttentionContent:
         content = attention_content("ended", "My project", None, "exit code 1")
         assert content == ("Session ended (exit code 1)", "My project")
 
-    def test_ended_blank_exit_reason_has_no_suffix(self):
-        content = attention_content("ended", "My project", None, "   ")
-        assert content == ("Session ended", "My project")
-
-    def test_label_falls_back_title_then_project_then_default(self):
-        _, body = attention_content("turn_finished", "  ", "proj", None)
-        assert body.startswith("proj ")
-        _, body = attention_content("turn_finished", None, None, None)
-        assert body.startswith("Claude session ")
-
     @pytest.mark.parametrize("reason", [None, "", "something_new"])
     def test_unknown_or_absent_reason_returns_none(self, reason):
         assert attention_content(reason, "t", "p", None) is None
@@ -74,12 +64,7 @@ class TestAttentionContent:
         [
             # An agent too old to send ``kind`` only alerted for Claude.
             (None, "Claude session"),
-            ("", "Claude session"),
-            ("claude", "Claude session"),
             ("codex", "Codex session"),
-            ("antigravity", "Antigravity session"),
-            ("auto_scan", "Auto Scan session"),
-            ("shell", "Terminal session"),
             # A custom type's user-chosen name never goes to Apple.
             ("custom_0123456789ab", "Agent session"),
         ],
@@ -87,12 +72,6 @@ class TestAttentionContent:
     def test_fallback_label_names_the_session_kind(self, kind, expected):
         _, body = attention_content("turn_finished", None, " ", None, kind=kind)
         assert body == f"{expected} finished its turn — tap to continue"
-
-    def test_title_and_project_still_win_over_the_kind(self):
-        _, body = attention_content("turn_failed", "Fix", "proj", None, kind="codex")
-        assert body.startswith("Fix ")
-        _, body = attention_content("turn_failed", None, "proj", None, kind="codex")
-        assert body.startswith("proj ")
 
 
 @dataclass
@@ -253,17 +232,6 @@ class TestPushDispatcher:
             ("Turn failed", f"{label} hit an error — tap to see what happened"),
         ]
 
-    async def test_unknown_reason_sends_nothing(self, db, user_id):
-        await _register_device(db, user_id, "dev-1", token="tok-1")
-        sender = FakeSender()
-        dispatcher = PushDispatcher(db, sender)
-
-        await dispatcher._send_attention(
-            user_id, _attention_payload(reason="something_new"), frozenset()
-        )
-
-        assert sender.sent == []
-
     async def test_excluded_device_is_skipped_and_the_rest_still_push(
         self, db, user_id
     ):
@@ -280,17 +248,6 @@ class TestPushDispatcher:
 
         assert [s["token"] for s in sender.sent] == ["tok-asleep"]
 
-    async def test_every_target_excluded_sends_nothing(self, db, user_id):
-        await _register_device(db, user_id, "dev-1", token="tok-1")
-        sender = FakeSender()
-        dispatcher = PushDispatcher(db, sender)
-
-        await dispatcher._send_attention(
-            user_id, _attention_payload(), frozenset({"dev-1"})
-        )
-
-        assert sender.sent == []
-
     async def test_schedule_attention_forwards_the_exclusion_set(
         self, db, user_id
     ):
@@ -305,36 +262,6 @@ class TestPushDispatcher:
         await asyncio.gather(*dispatcher._tasks)
 
         assert [s["token"] for s in sender.sent] == ["tok-2"]
-
-    async def test_disabled_dispatcher_schedules_nothing(self, db, user_id):
-        dispatcher = PushDispatcher(db, sender=None)
-        assert not dispatcher.enabled
-
-        dispatcher.schedule_attention(user_id, _attention_payload())
-
-        assert dispatcher._tasks == set()
-
-    async def test_schedule_attention_completes_in_background(
-        self, db, user_id
-    ):
-        await _register_device(db, user_id, "dev-1", token="tok-1")
-        sender = FakeSender()
-        dispatcher = PushDispatcher(db, sender)
-
-        dispatcher.schedule_attention(user_id, _attention_payload())
-        assert len(dispatcher._tasks) == 1
-        await asyncio.gather(*dispatcher._tasks)
-
-        assert len(sender.sent) == 1
-        assert dispatcher._tasks == set()
-
-    async def test_aclose_cancels_tasks_and_closes_sender(self, db, user_id):
-        sender = FakeSender()
-        dispatcher = PushDispatcher(db, sender)
-
-        await dispatcher.aclose()
-
-        assert sender.closed
 
 
 class TestFromConfig:

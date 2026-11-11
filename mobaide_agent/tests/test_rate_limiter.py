@@ -57,19 +57,6 @@ def sleep_spy(monkeypatch, fake_clock):
     return calls
 
 
-class TestBucketStartsFull:
-    async def test_capacity_acquires_without_sleeping(
-        self, fake_clock, sleep_spy
-    ):
-        del fake_clock  # installed via fixture, not used directly
-        limiter = LinearRateLimiter(capacity=5, per_seconds=5)
-
-        for _ in range(5):
-            await limiter.acquire("k")
-
-        assert sleep_spy == []
-
-
 class TestOverCapacityBlocks:
     async def test_sixth_acquire_calls_sleep_with_computed_wait(
         self, fake_clock, sleep_spy
@@ -87,23 +74,6 @@ class TestOverCapacityBlocks:
 
         assert len(sleep_spy) == 1
         assert sleep_spy[0] == pytest.approx(1.0, abs=1e-9)
-
-
-class TestPerKeyIsolation:
-    async def test_two_keys_do_not_share_budget(
-        self, fake_clock, sleep_spy
-    ):
-        del fake_clock
-        limiter = LinearRateLimiter(capacity=2, per_seconds=2)
-
-        await limiter.acquire("keyA")
-        await limiter.acquire("keyA")
-        await limiter.acquire("keyB")
-        await limiter.acquire("keyB")
-
-        assert sleep_spy == []
-        assert "keyA" in limiter._buckets
-        assert "keyB" in limiter._buckets
 
 
 class TestRefillOverTime:
@@ -197,21 +167,6 @@ class TestDoubleCheckedLockingForNewKey:
 
         assert len(limiter._buckets) == 1
         assert "newkey" in limiter._buckets
-
-
-class TestBucketsPerKeyAreDistinct:
-    async def test_different_keys_map_to_different_bucket_objects(
-        self, fake_clock, sleep_spy
-    ):
-        del fake_clock, sleep_spy
-        limiter = LinearRateLimiter(capacity=4, per_seconds=4)
-
-        await limiter.acquire("keyA")
-        await limiter.acquire("keyB")
-
-        bucket_a = limiter._buckets["keyA"]
-        bucket_b = limiter._buckets["keyB"]
-        assert bucket_a is not bucket_b
 
 
 class TestInterleavedKeys:

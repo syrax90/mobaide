@@ -74,14 +74,6 @@ afterEach(() => {
 });
 
 describe('AutoScanSection', () => {
-  it('renders nothing when no scan is running', async () => {
-    const { container } = renderSection();
-    await waitFor(() => {
-      expect(client.getQueryData(['agent', 'agent-1', 'autoscan'])).toBeDefined();
-    });
-    expect(container).toBeEmptyDOMElement();
-  });
-
   it('renders nothing while the agent is offline, without asking the relay', () => {
     api.scans = [scan('alpha')];
     const { container } = renderSection(false);

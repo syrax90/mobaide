@@ -29,11 +29,13 @@ This file is intentionally not named test_*.py so pytest never collects it.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import platform
 import re
 import secrets
+import shlex
 import shutil
 import signal
 import socket
@@ -120,6 +122,20 @@ IOS_DEFAULT_SIM = "iPhone 16"
 
 WEB_DIR = REPO_ROOT / "web"
 
+# Put ahead of the env's editable installs (sys.path for this process,
+# PYTHONPATH for the server + agent children): the env usually points at the
+# main checkout, so a run from a worktree would otherwise boot main's code.
+CHECKOUT_PYTHON_DIRS = (REPO_ROOT / "central_server", REPO_ROOT / "mobaide_agent")
+
+# Launch-time credentials the DEBUG apps use to sign in to this stack by
+# themselves (ios LoginModel.signInWithDevLoginIfRequested, android
+# DevLoginHandoff). Release builds compile both readers out.
+IOS_DEV_LOGIN_EMAIL_ARG = "-MobaideDevLoginEmail"
+IOS_DEV_LOGIN_PASSWORD_ARG = "-MobaideDevLoginPassword"
+ANDROID_DEV_LOGIN_EMAIL_EXTRA = "com.mobaide.app.extra.DEV_LOGIN_EMAIL"
+ANDROID_DEV_LOGIN_PASSWORD_EXTRA = "com.mobaide.app.extra.DEV_LOGIN_PASSWORD"
+ANDROID_MAIN_ACTIVITY = f"{ANDROID_APP_ID}/.MainActivity"
+
 # Vars a shell may still export from the old copy-paste recipe (or a dev .env
 # may define). Children get them popped, then the script's explicit values --
 # a leftover MOBAIDE_ENV=test would otherwise silently flip the real-mode agent
@@ -179,19 +195,31 @@ PIP_HINT = (
 )
 
 
-def _import_deps() -> SimpleNamespace:
-    import importlib.util
+# Distribution names from the two pyproject.toml files.
+INSTALLED_DISTRIBUTIONS = ("mobaide-agent", "central-server")
 
+
+def _require_installed_distributions() -> None:
+    """Ask pip's metadata, not the import system: the checkout's source dirs
+    sit on sys.path (use_checkout_python_code), so `find_spec` finds both
+    packages even in an env that never installed them -- or their
+    dependencies, which the server child would then die on (aiosqlite...)."""
+    import importlib.metadata
+
+    for name in INSTALLED_DISTRIBUTIONS:
+        try:
+            importlib.metadata.distribution(name)
+        except importlib.metadata.PackageNotFoundError:
+            raise ImportError(f"distribution '{name}' is not installed") from None
+
+
+def _import_deps() -> SimpleNamespace:
     import httpx
     import psutil
 
+    _require_installed_distributions()
     import mock_mobile_client as mmc
 
-    # mock_mobile_client only pulls in the agent package; probe central_server
-    # too (without executing it) so a half-installed env still triggers the
-    # first-run installer instead of dying later inside the server child.
-    if importlib.util.find_spec("central_server") is None:
-        raise ImportError("No module named 'central_server' (editable install missing)")
     return SimpleNamespace(httpx=httpx, psutil=psutil, mmc=mmc)
 
 
@@ -231,6 +259,20 @@ def load_deps(*, auto_install: bool = False, reinstall: bool = False) -> SimpleN
             die(f"still missing after install ({exc2}).\nManually {PIP_HINT}")
     _DEPS = deps
     return deps
+
+
+def report_checkout_code() -> None:
+    """Say which checkout's server + agent code this run boots, and warn when
+    the import system would still pick another one."""
+    import importlib.util
+
+    log(f"checkout: {REPO_ROOT}")
+    for package, directory in zip(("central_server", "mobaide"), CHECKOUT_PYTHON_DIRS):
+        spec = importlib.util.find_spec(package)
+        origin = Path(spec.origin).resolve() if spec and spec.origin else None
+        if origin is None or not origin.is_relative_to(directory.resolve()):
+            log(f"WARNING: `{package}` resolves to {origin}, not {directory}; "
+                "the stack may run another checkout's code")
 
 
 def ensure_no_proxy_env() -> None:
@@ -310,9 +352,12 @@ def _default_client_state() -> dict:
     ``baked_url`` is the URL the next build will bake (set at sync time, drives
     the rebuild prompt); ``installed_urls`` maps a device id to the URL a build
     actually carried onto it (set only after a successful install), and only
-    that can say whether a given device's app is stale.
+    that can say whether a given device's app is stale. ``checkout`` is the
+    repo root whose file the bookkeeping describes: the state dir is shared by
+    every checkout (main and each worktree), so a revert has to go there.
     """
     return {
+        "checkout": None,
         "previous_central_server_url": None,
         "previous_line": None,
         "managed_url": None,
@@ -395,6 +440,21 @@ def free_loopback_port() -> int:
         return s.getsockname()[1]
     finally:
         s.close()
+
+
+def wait_for_port_release(host: str, port: int, timeout: float = 60.0) -> None:
+    """A just-stopped stack leaves its listener in TIME_WAIT for ~15-30 s on
+    macOS, and check_port_free (no SO_REUSEADDR) would call that busy."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.bind((host, port))
+            return
+        except OSError:
+            time.sleep(1)
+        finally:
+            s.close()
 
 
 def check_port_free(host: str, port: int, *, flag: str = "--port") -> None:
@@ -745,10 +805,20 @@ def recorded_live_process(runtime: dict, name: str, psutil_mod):
 # --------------------------------------------------------------------------
 
 
+def use_checkout_python_code() -> None:
+    for directory in reversed(CHECKOUT_PYTHON_DIRS):
+        if str(directory) not in sys.path:
+            sys.path.insert(1, str(directory))
+
+
 def base_child_env() -> dict:
     env = dict(os.environ)
     for var in SANITIZED_ENV_VARS:
         env.pop(var, None)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(d) for d in CHECKOUT_PYTHON_DIRS]
+        + [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p]
+    )
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
     return env
@@ -961,6 +1031,59 @@ def _is_loopback_url(url: str) -> bool:
     return host in ("localhost", "::1") or host.startswith("127.")
 
 
+def same_checkout(a: str | Path | None, b: str | Path | None) -> bool:
+    """Path equality that survives macOS's case-insensitive paths (git
+    worktree list reports some worktrees lower-cased)."""
+    if a is None or b is None:
+        return a is b
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return str(Path(a)) == str(Path(b))
+
+
+@contextlib.contextmanager
+def checkout_paths(root: str | None):
+    """Point the client-file paths at another checkout for one revert.
+
+    Yields False (and changes nothing) when that checkout no longer exists --
+    a deleted worktree has no files left to restore.
+    """
+    global REPO_ROOT, LOCAL_PROPERTIES_PATH, DEBUG_NSC_PATH, LOCAL_XCCONFIG_PATH
+    if root is None or same_checkout(root, REPO_ROOT):
+        yield True
+        return
+    other = Path(root)
+    if not other.is_dir():
+        yield False
+        return
+    saved = (REPO_ROOT, LOCAL_PROPERTIES_PATH, DEBUG_NSC_PATH, LOCAL_XCCONFIG_PATH)
+    REPO_ROOT = other
+    LOCAL_PROPERTIES_PATH = other / LOCAL_PROPERTIES_PATH.relative_to(saved[0])
+    DEBUG_NSC_PATH = other / DEBUG_NSC_PATH.relative_to(saved[0])
+    LOCAL_XCCONFIG_PATH = other / LOCAL_XCCONFIG_PATH.relative_to(saved[0])
+    log(f"reverting in the checkout that wrote the files: {other}")
+    try:
+        yield True
+    finally:
+        REPO_ROOT, LOCAL_PROPERTIES_PATH, DEBUG_NSC_PATH, LOCAL_XCCONFIG_PATH = saved
+
+
+def _client_checkout(state: dict, key: str) -> str | None:
+    return (state.get(key) or {}).get("checkout")
+
+
+def release_other_checkout(state: dict, key: str, revert, save) -> None:
+    """Before this checkout takes the client file over, restore the one the
+    shared state still manages in a different checkout -- the bookkeeping can
+    only describe one file, and that one would otherwise stay pointed at a
+    throwaway stack forever."""
+    own = state.get(key) or {}
+    other = own.get("checkout")
+    if other and own.get("managed_url") and not same_checkout(other, REPO_ROOT):
+        revert(state, save)
+
+
 class _ManagedUrlFile:
     """A gitignored per-developer config file whose CENTRAL_SERVER_URL this
     script owns.
@@ -1046,6 +1169,7 @@ class _ManagedUrlFile:
             log(f"{self.label}: unchanged (CENTRAL_SERVER_URL={url})")
         own["managed_url"] = url
         own["baked_url"] = url
+        own["checkout"] = str(REPO_ROOT)
         return prior_baked != url
 
     def revert(self, state: dict) -> None:
@@ -1086,6 +1210,13 @@ class _ManagedUrlFile:
                 log(f"{self.label}: CENTRAL_SERVER_URL restored to {previous}")
             else:
                 log(f"{self.label}: CENTRAL_SERVER_URL line removed")
+        self.forget_ownership(state)
+
+    def forget_ownership(self, state: dict) -> None:
+        """Drop the restore bookkeeping. All three keys go together: a stale
+        ``previous_line`` left behind would be written into the NEXT file this
+        script takes over (sync keeps it when that file has no URL line)."""
+        own = self.own_state(state)
         own["managed_url"] = None
         own["previous_central_server_url"] = None
         own["previous_line"] = None
@@ -1113,6 +1244,10 @@ IOS_URL_FILE = _ManagedUrlFile(
 def resolve_android_url(args: argparse.Namespace, lan_ip: str) -> str:
     mode = args.android_url
     if mode == "auto":
+        if getattr(args, "all", False) and args.host in ("0.0.0.0", "::", "", None):
+            # --all always boots the emulator, and on a wildcard bind its
+            # host alias stays valid when the Wi-Fi (and so the LAN IP) changes.
+            return f"http://10.0.2.2:{args.port}"
         if args.host in ("127.0.0.1", "localhost"):
             # Loopback bind: the LAN IP is unreachable; 10.0.2.2 maps to the
             # host's loopback from an emulator, which is the usual reason to
@@ -1173,6 +1308,7 @@ def sync_android_files(state: dict, url: str, save) -> bool:
     """Write both gitignored Android artifacts; returns True when the app must
     be rebuilt + reinstalled because the URL baked into the last build changed.
     """
+    release_other_checkout(state, "android", revert_android_files, save)
     rebuild_needed = ANDROID_URL_FILE.sync(state, url)
 
     nsc_rel = DEBUG_NSC_PATH.relative_to(REPO_ROOT).as_posix()
@@ -1198,6 +1334,17 @@ def sync_android_files(state: dict, url: str, save) -> bool:
 
 
 def revert_android_files(state: dict, save) -> None:
+    with checkout_paths(_client_checkout(state, "android")) as present:
+        if present:
+            _revert_android_files(state)
+        else:
+            log(f"android: checkout {_client_checkout(state, 'android')} is gone; "
+                "nothing to revert")
+            ANDROID_URL_FILE.forget_ownership(state)
+    save()
+
+
+def _revert_android_files(state: dict) -> None:
     ANDROID_URL_FILE.revert(state)
 
     if DEBUG_NSC_PATH.exists():
@@ -1222,7 +1369,6 @@ def revert_android_files(state: dict, save) -> None:
             )
     else:
         log(f"{DEBUG_NSC_PATH.relative_to(REPO_ROOT).as_posix()}: absent; nothing to revert")
-    save()
 
 
 def sync_ios_files(state: dict, url: str, save) -> bool:
@@ -1240,6 +1386,7 @@ def sync_ios_files(state: dict, url: str, save) -> bool:
             "CENTRAL_SERVER_URL for a specific configuration; that conditional "
             "line outranks the unconditional one written here"
         )
+    release_other_checkout(state, "ios", revert_ios_files, save)
     rebuild_needed = IOS_URL_FILE.sync(state, url)
     warn_if_ats_blocked(url)
     save()
@@ -1247,7 +1394,13 @@ def sync_ios_files(state: dict, url: str, save) -> bool:
 
 
 def revert_ios_files(state: dict, save) -> None:
-    IOS_URL_FILE.revert(state)
+    with checkout_paths(_client_checkout(state, "ios")) as present:
+        if present:
+            IOS_URL_FILE.revert(state)
+        else:
+            log(f"ios: checkout {_client_checkout(state, 'ios')} is gone; "
+                "nothing to revert")
+            IOS_URL_FILE.forget_ownership(state)
     save()
 
 
@@ -1274,7 +1427,7 @@ def run_gradle_install(
     if serial:
         env["ANDROID_SERIAL"] = serial
     if before_install is not None:
-        log("building the debug app while the emulator boots "
+        log("building the debug app before installing it "
             "(gradlew :app:assembleDebug) ...")
         try:
             result = subprocess.run(
@@ -1579,15 +1732,50 @@ def wait_for_emulator(emu: SimpleNamespace, log_path: Path,
     return False
 
 
-def launch_android_app(emu: SimpleNamespace) -> None:
-    result = _run_tool([
-        emu.adb, "-s", emu.serial, "shell", "monkey", "-p", ANDROID_APP_ID,
-        "-c", "android.intent.category.LAUNCHER", "1",
+def android_launch_command(state: dict) -> str:
+    """The remote-shell ``am start`` line: one quoted string, because adb hands
+    it to the device's sh, where the default password's ``>`` would redirect.
+
+    ``-S --activity-clear-task`` always creates a fresh activity: without them
+    a task left behind (e.g. under the notification-permission dialog) gets
+    the intent "delivered to the top-most instance", and the extras are lost.
+    """
+    return shlex.join([
+        "am", "start", "-S", "--activity-clear-task", "-n", ANDROID_MAIN_ACTIVITY,
+        "-a", "android.intent.action.MAIN",
+        "-c", "android.intent.category.LAUNCHER",
+        "--es", ANDROID_DEV_LOGIN_EMAIL_EXTRA, state["email"],
+        "--es", ANDROID_DEV_LOGIN_PASSWORD_EXTRA, state["password"],
     ])
-    if result is not None and result.returncode == 0:
-        log(f"launched {ANDROID_APP_ID} on {emu.serial}")
+
+
+def launch_android_app(emu: SimpleNamespace, state: dict) -> None:
+    """Start the app with the stack's credentials, so a signed-out DEBUG build
+    signs itself in (see DevLoginHandoff)."""
+    result = _run_tool([
+        emu.adb, "-s", emu.serial, "shell", android_launch_command(state),
+    ])
+    output = (result.stdout + result.stderr) if result is not None else ""
+    if result is not None and result.returncode == 0 and "Error" not in output:
+        log(f"launched {ANDROID_APP_ID} on {emu.serial} (signs in as "
+            f"{state['email']} if signed out)")
     else:
-        log(f"WARNING: could not launch {ANDROID_APP_ID} on {emu.serial}")
+        log(f"WARNING: could not launch {ANDROID_APP_ID} on {emu.serial} "
+            f"({output.strip()[-200:] or 'adb failed'})")
+
+
+def default_emulator_when_no_device(args: argparse.Namespace) -> None:
+    """``--install-app`` with nothing attached boots the default AVD instead of
+    letting Gradle fail on "no connected devices"."""
+    if args.emulator or not args.install_app:
+        return
+    adb = sdk_tool(android_sdk_dir(), "platform-tools", "adb")
+    if adb is None:
+        return
+    if any(state == "device" for state in adb_devices(adb).values()):
+        return
+    log(f"no Android device attached: using the emulator '{DEFAULT_AVD}'")
+    args.emulator = DEFAULT_AVD
 
 
 def record_emulator(state: dict, emu: SimpleNamespace, psutil_mod) -> None:
@@ -1632,11 +1820,16 @@ def install_on_emulator_or_device(
             log("skipping the app install: the requested emulator is not available")
             return False
         return run_gradle_install()
-    if emu.proc is None:  # reused: already booted, nothing to overlap
-        return wait_for_emulator(emu, log_path) and run_gradle_install(emu.serial)
-    return run_gradle_install(
-        emu.serial, before_install=lambda: wait_for_emulator(emu, log_path)
-    )
+    def ready_for_install() -> bool:
+        if not wait_for_emulator(emu, log_path):
+            return False
+        # Updating a RUNNING app makes newer Androids (SystemUI's package-update
+        # flow) relaunch it right after the install, racing the signed-in
+        # launch below and dropping its extras. A stopped app is not relaunched.
+        _run_tool([emu.adb, "-s", emu.serial, "shell", "am", "force-stop", ANDROID_APP_ID])
+        return True
+
+    return run_gradle_install(emu.serial, before_install=ready_for_install)
 
 
 def carry_over_emulator(runtime: dict, args: argparse.Namespace, psutil_mod) -> dict:
@@ -1653,31 +1846,126 @@ def carry_over_emulator(runtime: dict, args: argparse.Namespace, psutil_mod) -> 
     return {}
 
 
-def booted_simulator_udid() -> str | None:
+def _runtime_version(runtime_id: str) -> tuple[int, ...]:
+    """``com.apple.CoreSimulator.SimRuntime.iOS-26-0`` -> (26, 0)."""
+    return tuple(int(n) for n in re.findall(r"\d+", runtime_id.rsplit(".", 1)[-1]))
+
+
+def list_simulators() -> list[dict]:
+    """Available iOS simulators, newest runtime first."""
+    result = _run_tool(["xcrun", "simctl", "list", "devices", "available", "-j"], timeout=60)
+    if result is None or result.returncode != 0:
+        log("WARNING: could not list iOS simulators (`xcrun simctl` failed; "
+            "is Xcode installed and selected with xcode-select?)")
+        return []
     try:
-        result = subprocess.run(
-            ["xcrun", "simctl", "list", "devices", "booted", "-j"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
         runtimes = json.loads(result.stdout).get("devices", {})
-    except (OSError, subprocess.SubprocessError, ValueError) as exc:
-        log(f"WARNING: could not list booted simulators ({exc})")
-        return None
-    for runtime, devices in runtimes.items():
-        if "iOS" not in runtime:
+    except ValueError:
+        return []
+    sims = []
+    for runtime in sorted(runtimes, key=_runtime_version, reverse=True):
+        if ".iOS-" not in runtime:
             continue
-        for device in devices:
-            if device.get("state") == "Booted" and device.get("udid"):
-                return device["udid"]
-    return None
+        for device in runtimes[runtime]:
+            if device.get("udid") and device.get("name"):
+                sims.append({
+                    "udid": device["udid"],
+                    "name": device["name"],
+                    "state": device.get("state", ""),
+                    "runtime": runtime,
+                })
+    return sims
+
+
+def pick_simulator(sims: list[dict], requested: str | None) -> dict | None:
+    """The simulator to install on.
+
+    An explicit name or UDID wins (a booted match first). Otherwise an already
+    booted one -- ``iPhone 16`` among several -- so a tester's open simulator
+    is reused; with none booted, ``iPhone 16``, then the newest iPhone.
+    """
+    if requested:
+        matches = [s for s in sims if requested in (s["udid"], s["name"])]
+        booted = [s for s in matches if s["state"] == "Booted"]
+        return (booted or matches or [None])[0]
+    booted = [s for s in sims if s["state"] == "Booted"]
+    if booted:
+        preferred = [s for s in booted if s["name"] == IOS_DEFAULT_SIM]
+        return (preferred or booted)[0]
+    preferred = [s for s in sims if s["name"] == IOS_DEFAULT_SIM]
+    iphones = [s for s in sims if s["name"].startswith("iPhone")]
+    return (preferred or iphones or sims or [None])[0]
+
+
+def show_simulator(udid: str) -> None:
+    """Bring Simulator.app to the front on this device.
+
+    ``simctl boot`` alone boots a device headless: the app runs, but nobody
+    can see it. The preference makes the window open on this device when
+    Simulator.app starts; ``open`` then starts or activates it.
+    """
+    _run_tool(["defaults", "write", "com.apple.iphonesimulator",
+               "CurrentDeviceUDID", udid], timeout=15)
+    result = _run_tool(["open", "-a", "Simulator", "--args",
+                        "-CurrentDeviceUDID", udid], timeout=30)
+    if result is None or result.returncode != 0:
+        log("WARNING: could not open Simulator.app; the simulator runs headless "
+            "(open it from Xcode > Open Developer Tool > Simulator)")
+
+
+def prepare_simulator(requested: str | None) -> str | None:
+    """Boot (if needed) and show the simulator to use; its UDID, or None."""
+    if sys.platform != "darwin":
+        log("WARNING: the iOS simulator needs macOS; skipping it")
+        return None
+    sims = list_simulators()
+    sim = pick_simulator(sims, requested)
+    if sim is None:
+        names = ", ".join(sorted({s["name"] for s in sims})) or "none"
+        log(f"WARNING: no iOS simulator matches {requested or IOS_DEFAULT_SIM!r} "
+            f"(available: {names}); pass --simulator NAME, or add an iOS "
+            "runtime in Xcode > Settings > Components")
+        return None
+    udid = sim["udid"]
+    if sim["state"] != "Booted":
+        log(f"booting simulator '{sim['name']}' ({udid[:8]}...)")
+        # Exit 149 = already booted (a race with another boot); bootstatus decides.
+        _run_tool(["xcrun", "simctl", "boot", udid], timeout=120)
+    status = _run_tool(["xcrun", "simctl", "bootstatus", udid, "-b"], timeout=300)
+    if status is None or status.returncode != 0:
+        log(f"WARNING: simulator '{sim['name']}' did not finish booting")
+        return None
+    show_simulator(udid)
+    log(f"simulator '{sim['name']}' ({udid[:8]}...) is booted and shown")
+    return udid
+
+
+def launch_ios_app(udid: str, state: dict) -> bool:
+    """Start the app with the stack's credentials, so a signed-out DEBUG build
+    signs itself in (see LoginModel.signInWithDevLoginIfRequested)."""
+    cmd = [
+        "xcrun", "simctl", "launch", "--terminate-running-process", udid, IOS_BUNDLE_ID,
+        IOS_DEV_LOGIN_EMAIL_ARG, state["email"],
+        IOS_DEV_LOGIN_PASSWORD_ARG, state["password"],
+    ]
+    result = _run_tool(cmd, timeout=60)
+    if result is None or result.returncode != 0:
+        detail = (result.stderr.strip() if result else "") or "could not run simctl"
+        log(f"WARNING: could not launch {IOS_BUNDLE_ID} on the simulator ({detail})")
+        return False
+    show_simulator(udid)
+    log(f"launched {IOS_BUNDLE_ID} on the simulator (signs in as {state['email']} "
+        "if signed out)")
+    return True
 
 
 def run_xcode_install(
-    state: dict, state_dir: Path, url: str, save, *, reset_keychain: bool
+    state: dict, state_dir: Path, url: str, save, *, reset_keychain: bool, udid: str | None
 ) -> bool:
-    """Build the debug app and (re)install it on the booted simulator.
+    """Build the debug app and (re)install it on simulator ``udid``.
+
+    Launching is left to the caller (launch_ios_app): ``up`` installs before
+    the server listens, and a launch then would try to sign in to nothing.
 
     Warn-only at every step, exactly like run_gradle_install: a missing Xcode or
     simulator must never take the stack down. CODE_SIGNING_ALLOWED=NO is
@@ -1696,13 +1984,8 @@ def run_xcode_install(
     if not IOS_XCODEPROJ_PATH.exists():
         log(f"WARNING: {IOS_XCODEPROJ_PATH} not found; skipping iOS app install")
         return False
-    udid = booted_simulator_udid()
     if udid is None:
-        log(
-            "WARNING: no booted iOS simulator (start one with "
-            f"`xcrun simctl boot '{IOS_DEFAULT_SIM}'` or open Simulator.app); "
-            "skipping iOS app install"
-        )
+        log("WARNING: no iOS simulator available; skipping iOS app install")
         return False
 
     derived = state_dir / "ios-build"
@@ -1770,22 +2053,19 @@ def run_xcode_install(
             log("WARNING: --ios-keep-keychain: the previous stack's relay URL "
                 "survives in the keychain. If the app still talks to the old "
                 "server, sign out in-app or reset the keychain by hand")
-    for cmd in (
-        ["xcrun", "simctl", "install", udid, str(app)],
-        ["xcrun", "simctl", "launch", udid, IOS_BUNDLE_ID],
-    ):
-        try:
-            result = subprocess.run(cmd)
-        except OSError as exc:
-            log(f"WARNING: `{' '.join(cmd)}` could not run ({exc})")
-            return False
-        if result.returncode != 0:
-            log(f"WARNING: `{' '.join(cmd)}` failed")
-            return False
+    cmd = ["xcrun", "simctl", "install", udid, str(app)]
+    try:
+        result = subprocess.run(cmd)
+    except OSError as exc:
+        log(f"WARNING: `{' '.join(cmd)}` could not run ({exc})")
+        return False
+    if result.returncode != 0:
+        log(f"WARNING: `{' '.join(cmd)}` failed")
+        return False
     if cleaned and installed.get(udid) != url:
         installed[udid] = url
         save()
-    log("debug app installed and launched on the simulator")
+    log("debug app installed on the simulator")
     return True
 
 
@@ -1807,6 +2087,7 @@ def print_ready_banner(
     android: SimpleNamespace,
     ios: SimpleNamespace,
     emulator: SimpleNamespace | None = None,
+    simulator_udid: str | None = None,
 ) -> None:
     port = args.port
     gradle_cmd = (
@@ -1815,7 +2096,8 @@ def print_ready_banner(
         else "cd android && ./gradlew :app:installDebug"
     )
     bar = "=" * 74
-    lines = [bar, "  Mobaide manual E2E stack -- READY", bar]
+    lines = [bar, "  Mobaide manual E2E stack -- READY", bar,
+             f"  Checkout:           {REPO_ROOT}"]
     if args.host in ("127.0.0.1", "localhost"):
         lines.append(f"  Server bind:        {args.host}:{port}  (loopback only -- "
                      "the iOS simulator and adb reverse reach it, LAN phones do NOT)")
@@ -1828,15 +2110,15 @@ def print_ready_banner(
         f"  Emulator:           http://10.0.2.2:{port}",
         f"  USB (adb reverse):  adb reverse tcp:{port} tcp:{port}   "
         f"-> http://127.0.0.1:{port}",
-        f"  App login:          {state['email']}  /  {state['password']}",
+        f"  App login:          {state['email']}  /  {state['password']}  (apps "
+        "launched by this script sign in by themselves)",
         f"  Agent:              {state['agent_name']} (online, id {state['agent_id'][:8]}...)",
     ]
     if args.web:
         opens = "opens in your browser" if not args.no_browser else "--no-browser"
         lines.append(f"  Web client:         http://localhost:{args.web_port}  "
                      f"(vite dev, proxied to this stack; {opens})")
-        lines.append("      the App login above is pre-filled on /login -- press "
-                     "Sign In yourself")
+        lines.append("      /login signs in with the App login above by itself")
     if args.fake_pty:
         lines.append("  Sessions:           FAKE echo PTY (--fake-pty): terminals only "
                      "echo bytes back")
@@ -1882,6 +2164,9 @@ def print_ready_banner(
             else "restored to its previous value on stop"
         )
         lines.append(f"      ios/Config/Local.xcconfig {restore_note}")
+        if simulator_udid is not None:
+            lines.append(f"  iOS simulator:      {simulator_udid} (shown in "
+                         "Simulator.app; left running on stop)")
     elif sys.platform == "darwin":
         lines.append("  iOS files:          NOT synced (--no-ios); run "
                      "`python tests/e2e/manual_stack.py ios` when needed")
@@ -1906,6 +2191,14 @@ def open_web_client(port: int) -> None:
     a browser that still holds a session is bounced straight to the app.
     """
     url = f"http://localhost:{port}/login"
+    if sys.platform == "darwin":
+        # `open` hands the URL to the default browser and brings it to the
+        # front; webbrowser's osascript route can fail silently from a
+        # background shell, leaving the tester with no visible tab.
+        result = _run_tool(["open", url], timeout=30)
+        if result is not None and result.returncode == 0:
+            log(f"opened {url}")
+            return
     try:
         opened = webbrowser.open_new_tab(url)
     except Exception as exc:  # pragma: no cover - platform dependent
@@ -1942,8 +2235,19 @@ def merge_external_install_state(state_dir: Path, state: dict) -> None:
 
 def cmd_up(args: argparse.Namespace) -> int:
     deps = load_deps(auto_install=True, reinstall=args.reinstall)
+    report_checkout_code()
 
     state_dir = args.state_dir
+    running = _read_state(state_dir)
+    if running and recorded_live_process(
+        running.get("runtime") or {}, "up", deps.psutil
+    ) is not None:
+        # One stack per state dir (and port). Taking over instead of failing on
+        # "port busy" is what lets main and a worktree swap with a bare `up`.
+        log("another stack is running with this state dir; stopping it first")
+        stop_running_stack(state_dir, running, deps.psutil, DEFAULT_STOP_TIMEOUT)
+        wait_for_port_release(args.host or running.get("server_host") or DEFAULT_HOST,
+                              args.port or running.get("server_port") or DEFAULT_PORT)
     preserved_clients: dict[str, dict] = {}
     adopted_emulator: dict = {}
     if args.fresh and (state_dir / "state.json").exists():
@@ -1991,6 +2295,7 @@ def cmd_up(args: argparse.Namespace) -> int:
     # carry what teardown would have restored and the opt-outs it honors).
     state["runtime"] = {
         "started_at": _utc_now(),
+        "checkout": str(REPO_ROOT),
         "synced": [],
         "keep": [
             name for name, kept in (
@@ -2023,6 +2328,8 @@ def cmd_up(args: argparse.Namespace) -> int:
     ios = client_sync_state()
     emulator = None
     android_installed = False
+    simulator_udid = None
+    ios_installed = False
     children: list[ChildProcess] = []
     client = None
     exit_code = 0
@@ -2035,6 +2342,7 @@ def cmd_up(args: argparse.Namespace) -> int:
             state["runtime"]["synced"].append("android")
             android.rebuild_needed = sync_android_files(state, android.url, save)
             android.synced = True
+            default_emulator_when_no_device(args)
             if args.emulator:
                 # Launched first so its boot overlaps the Gradle build and the
                 # server/agent startup below.
@@ -2056,10 +2364,16 @@ def cmd_up(args: argparse.Namespace) -> int:
                 state["runtime"]["synced"].append("ios")
                 ios.rebuild_needed = sync_ios_files(state, ios.url, save)
                 ios.synced = True
+                if args.install_app or args.simulator:
+                    simulator_udid = prepare_simulator(args.simulator)
+                    if simulator_udid is not None:
+                        state["runtime"]["simulator_udid"] = simulator_udid
+                        save()
                 if args.install_app:
-                    run_xcode_install(
+                    ios_installed = run_xcode_install(
                         state, state_dir, ios.url, save,
                         reset_keychain=not args.ios_keep_keychain,
+                        udid=simulator_udid,
                     )
             else:
                 log("iOS sync skipped: not macOS (pass --ios to write "
@@ -2147,14 +2461,17 @@ def cmd_up(args: argparse.Namespace) -> int:
                 deps, f"http://localhost:{args.web_port}/", timeout=90, child=web
             )
 
-        print_ready_banner(args, state, lan_ip, all_ips, android, ios, emulator)
+        print_ready_banner(args, state, lan_ip, all_ips, android, ios, emulator,
+                           simulator_udid)
 
         if args.web and not args.no_browser:
             open_web_client(args.web_port)
+        # Only now: launched earlier, the apps would try to sign in to a server
+        # that is not listening yet.
         if android_installed and emulator is not None:
-            # Only now: launched earlier, the app would open on a server that
-            # is not listening yet.
-            launch_android_app(emulator)
+            launch_android_app(emulator, state)
+        if ios_installed and simulator_udid is not None:
+            launch_ios_app(simulator_udid, state)
 
         while True:
             time.sleep(1)
@@ -2242,6 +2559,7 @@ def cmd_android(args: argparse.Namespace) -> int:
         log("URL changed: rebuild + reinstall the debug app so it bakes the new value")
     emulator = None
     log_path = args.state_dir / "logs" / "emulator.log"
+    default_emulator_when_no_device(args)
     if args.emulator:
         # Not recorded as owned: a one-shot command has no teardown, so an
         # emulator it boots simply stays up for the testing that follows.
@@ -2252,7 +2570,7 @@ def cmd_android(args: argparse.Namespace) -> int:
     if args.install_app and install_on_emulator_or_device(
         emulator, log_path, emulator_requested=bool(args.emulator)
     ) and emulator is not None:
-        launch_android_app(emulator)
+        launch_android_app(emulator, state)
     return 0
 
 
@@ -2269,11 +2587,15 @@ def cmd_ios(args: argparse.Namespace) -> int:
     changed = sync_ios_files(state, url, save)
     if changed:
         log("URL changed: rebuild + reinstall the app so it bakes the new value")
-    if args.install_app:
-        run_xcode_install(
-            state, state_dir, url, save,
-            reset_keychain=not args.ios_keep_keychain,
-        )
+    udid = None
+    if args.install_app or args.simulator:
+        udid = prepare_simulator(args.simulator)
+    if args.install_app and run_xcode_install(
+        state, state_dir, url, save,
+        reset_keychain=not args.ios_keep_keychain, udid=udid,
+    ):
+        assert udid is not None
+        launch_ios_app(udid, state)
     return 0
 
 
@@ -2295,6 +2617,10 @@ def cmd_status(args: argparse.Namespace) -> int:
         if android.get("managed_url"):
             log(f"android:   CENTRAL_SERVER_URL={android['managed_url']}")
         runtime_info = state.get("runtime") or {}
+        if runtime_info.get("checkout"):
+            log(f"checkout:  {runtime_info['checkout']}")
+        if runtime_info.get("simulator_udid"):
+            log(f"simulator: {runtime_info['simulator_udid']}")
         if runtime_info.get("emulator_serial"):
             log(f"emulator:  {runtime_info.get('emulator_avd')} as "
                 f"{runtime_info['emulator_serial']} (booted by this stack)")
@@ -2376,32 +2702,37 @@ def cmd_stop(args: argparse.Namespace) -> int:
         log(f"no running stack recorded in {state_dir}; nothing to stop")
         return 0
     deps = load_deps(auto_install=False)
-    psutil_mod = deps.psutil
+    stop_running_stack(state_dir, state, deps.psutil, args.timeout)
+    log("stack stopped")
+    return 0
+
+
+def stop_running_stack(state_dir: Path, state: dict, psutil_mod, timeout: float) -> None:
+    """Stop the `up` recorded in ``state`` (any checkout's) and reap leftovers."""
     stop_request = state_dir / STOP_REQUEST_NAME
-    up = recorded_live_process(state["runtime"], "up", psutil_mod)
-    if up is not None:
-        log(f"asking the running stack (pid {up.pid}) to stop ...")
+    runtime = state.get("runtime") or {}
+    up = recorded_live_process(runtime, "up", psutil_mod)
+    if up is not None and up.pid != os.getpid():
+        where = runtime.get("checkout") or "unknown checkout"
+        log(f"asking the running stack (pid {up.pid}, {where}) to stop ...")
         stop_request.write_text(_utc_now() + "\n", encoding="utf-8")
         try:
-            up.wait(timeout=args.timeout)
+            up.wait(timeout=timeout)
         except psutil_mod.TimeoutExpired:
-            log(f"it did not stop within {args.timeout:.0f}s; killing it")
+            log(f"it did not stop within {timeout:.0f}s; killing it")
             # The emulator is still a descendant despite its own session, so a
             # plain tree kill would hard-kill it -- ignoring --keep-emulator and
             # losing the quick-boot snapshot. teardown_leftovers decides its fate.
             kill_tree(psutil_mod, up.pid, spare=recorded_live_process(
-                state["runtime"], "emulator", psutil_mod))
+                runtime, "emulator", psutil_mod))
         else:
             stop_request.unlink(missing_ok=True)
-            log("stack stopped")
-            return 0
+            return
         state = _read_state(state_dir) or state
     else:
         log("the recorded `up` is gone (hard-killed?); reaping what it left behind")
     stop_request.unlink(missing_ok=True)
     teardown_leftovers(state_dir, state, psutil_mod)
-    log("stack stopped")
-    return 0
 
 
 def cmd_clean(args: argparse.Namespace) -> int:
@@ -2491,6 +2822,16 @@ def _add_ios_args(parser: argparse.ArgumentParser) -> None:
              "(needs a hand-added ATS exception) | an explicit http(s) URL",
     )
     parser.add_argument(
+        "--simulator",
+        nargs="?",
+        const=IOS_DEFAULT_SIM,
+        default=None,
+        metavar="NAME_OR_UDID",
+        help="boot (or reuse) this iOS simulator and show it in Simulator.app "
+             f"(bare flag: {IOS_DEFAULT_SIM}). With --install-app and no "
+             "--simulator, an already booted simulator is used, else one is booted",
+    )
+    parser.add_argument(
         "--ios-keep-keychain",
         action="store_true",
         help="with --install-app, do not reset the simulator keychain when the "
@@ -2512,6 +2853,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_client_args(up)
     _add_android_args(up)
     _add_ios_args(up)
+    up.add_argument("--all", action="store_true",
+                    help="everything for hands-on testing: --install-app --web "
+                         "--emulator and an iOS simulator on macOS; Android "
+                         "bakes the emulator URL (10.0.2.2) unless --host binds "
+                         "one specific interface")
     up.add_argument("--host", default=None,
                     help=f"server bind address (default: last used, then {DEFAULT_HOST}; "
                          "use 127.0.0.1 for an emulator-only, no-firewall-prompt run)")
@@ -2614,6 +2960,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def apply_all_preset(args: argparse.Namespace) -> None:
+    """``up --all``: every client up, installed, launched and signed in. The
+    simulator is not pinned, so an already open one is reused."""
+    if not getattr(args, "all", False):
+        return
+    args.install_app = True
+    args.web = True
+    args.emulator = args.emulator or DEFAULT_AVD
+
+
 def main(argv: list[str] | None = None) -> int:
     if sys.version_info < MIN_PYTHON:
         die(f"Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ required "
@@ -2632,6 +2988,8 @@ def main(argv: list[str] | None = None) -> int:
 
     args = build_parser().parse_args(argv)
     args.state_dir = Path(args.state_dir).expanduser().resolve()
+    apply_all_preset(args)
+    use_checkout_python_code()
     return args.func(args) or 0
 
 

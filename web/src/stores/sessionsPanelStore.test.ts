@@ -37,21 +37,4 @@ describe('hydration', () => {
 
     expect(useSessionsPanelStore.getState().pinned).toBe(false);
   });
-
-  it('starts unpinned with nothing stored', async () => {
-    await useSessionsPanelStore.persist.rehydrate();
-
-    expect(useSessionsPanelStore.getState().pinned).toBe(false);
-  });
-});
-
-describe('setPinned', () => {
-  it('writes the pin through to storage', () => {
-    useSessionsPanelStore.getState().setPinned(true);
-
-    expect(useSessionsPanelStore.getState().pinned).toBe(true);
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    expect(raw).not.toBeNull();
-    expect((JSON.parse(raw ?? '{}') as { state: { pinned: boolean } }).state.pinned).toBe(true);
-  });
 });

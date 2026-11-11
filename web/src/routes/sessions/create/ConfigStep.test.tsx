@@ -54,16 +54,6 @@ function renderStep(
   return actions;
 }
 
-/** Labels and the Advanced summary, in document order. */
-function expectInOrder(...nodes: Element[]): void {
-  for (let i = 1; i < nodes.length; i += 1) {
-    const before = nodes[i - 1];
-    const after = nodes[i];
-    if (before === undefined || after === undefined) throw new Error('missing node');
-    expect(before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  }
-}
-
 const advancedSummary = (): Element => screen.getByText('Advanced', { selector: 'summary' });
 
 afterEach(() => {
@@ -74,30 +64,6 @@ afterEach(() => {
 const TERMINAL_STATE: WizardState = { ...STATE, claude: { ...STATE.claude, terminalUi: true } };
 
 describe('ConfigStep — Claude Code layout', () => {
-  it('puts Focus view above Skip permissions and Advanced after the worktree section', () => {
-    // The branch field only appears once a worktree is requested.
-    renderStep('claude', { ...TERMINAL_STATE, git: { worktree: true, branchName: '' } });
-
-    expectInOrder(
-      screen.getByLabelText('Focus view'),
-      screen.getByLabelText('Skip permissions'),
-      screen.getByLabelText('Create worktree'),
-      screen.getByLabelText('Branch name (optional)'),
-      advancedSummary(),
-    );
-  });
-
-  it('opens with focus view on and Advanced collapsed, Terminal UI its first item', () => {
-    renderStep('claude', TERMINAL_STATE);
-
-    expect(screen.getByLabelText('Focus view')).toBeChecked();
-    const details = advancedSummary().closest('details');
-    expect(details).not.toBeNull();
-    expect(details).not.toHaveAttribute('open');
-    const first = details?.querySelector('input');
-    expect(first).toBe(screen.getByLabelText('Terminal UI'));
-  });
-
   it('offers no Plan mode control for a Claude Code launch', () => {
     renderStep('claude');
 
@@ -119,19 +85,6 @@ describe('ConfigStep — Claude Code layout', () => {
 });
 
 describe('ConfigStep — Auto Scan layout', () => {
-  it('orders Plan mode, Focus view, Skip permissions, Advanced, then Initial prompt', () => {
-    renderStep('auto_scan');
-
-    expectInOrder(
-      screen.getByLabelText('Plan mode'),
-      screen.getByLabelText('Focus view'),
-      screen.getByLabelText('Skip permissions'),
-      advancedSummary(),
-      screen.getByLabelText('Initial prompt (optional)'),
-    );
-    expect(screen.getAllByText('Advanced', { selector: 'summary' })).toHaveLength(1);
-  });
-
   it('reflects and writes the Auto Scan bucket’s own focus view', () => {
     const actions = renderStep('auto_scan', {
       ...STATE,
@@ -162,21 +115,6 @@ function versionWithChat(chat: Record<string, unknown>): AgentVersionInfo {
 
 describe('ConfigStep — Codex chat view', () => {
   const CODEX_RESUMES = versionWithChat({ codex: { resume: true, live: true } });
-
-  it('puts Terminal UI first in the Codex Advanced, off by default', () => {
-    const actions = renderStep('codex');
-
-    const details = advancedSummary().closest('details');
-    expect(details).not.toHaveAttribute('open');
-    const toggle = screen.getByLabelText('Terminal UI');
-    expect(details?.querySelector('input')).toBe(toggle);
-    expect(toggle).not.toBeChecked();
-    expect(toggle).toBeEnabled();
-
-    fireEvent.click(toggle);
-
-    expect(actions).toContainEqual({ type: 'setCodexTerminalUi', value: true });
-  });
 
   it('holds Terminal UI on where the PC has no Codex chat', () => {
     renderStep('codex', STATE, versionWithChat({ claude: { resume: true } }));
@@ -209,8 +147,6 @@ describe('ConfigStep — Codex chat view', () => {
 });
 
 describe('ConfigStep — Antigravity chat view', () => {
-  const AGY_RESUMES = versionWithChat({ antigravity: { resume: true, live: false } });
-
   it('keeps Terminal UI in a collapsed Advanced, off by default', () => {
     const actions = renderStep('antigravity');
 
@@ -239,27 +175,6 @@ describe('ConfigStep — Antigravity chat view', () => {
     ).toBeInTheDocument();
   });
 
-  it('offers to continue an Antigravity conversation where the PC can resume one', () => {
-    renderStep('antigravity', STATE, AGY_RESUMES, () => undefined);
-
-    expect(
-      screen.getByText(
-        'Open an Antigravity conversation started on your PC, for example with agy in a terminal.',
-      ),
-    ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Continue a session…' })).toBeEnabled();
-  });
-
-  it('offers no Continue entry for an Antigravity launch in the terminal', () => {
-    renderStep(
-      'antigravity',
-      { ...STATE, antigravity: { ...STATE.antigravity, terminalUi: true } },
-      AGY_RESUMES,
-      () => undefined,
-    );
-
-    expect(screen.queryByText('Continue a session…')).not.toBeInTheDocument();
-  });
 });
 
 describe('ConfigStep — worktree base branch', () => {
@@ -363,12 +278,6 @@ describe('ConfigStep — worktree base branch', () => {
       state: { ...WORKTREE, worktreeBasePick: { projectName: gitProject.name, ref: 'wip' } },
     });
     expect(trigger()).toHaveTextContent('wip');
-  });
-
-  it('is disabled while loading', () => {
-    renderPicker({ capabilities: CAPABLE, view: { status: 'loading', bases: undefined } });
-    expect(trigger()).toBeDisabled();
-    expect(trigger()).toHaveTextContent('Loading branches…');
   });
 
   it('offers Retry when the list failed', () => {

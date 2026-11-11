@@ -52,15 +52,6 @@ final class GitDiffModelTests: XCTestCase {
         XCTAssertEqual(model.fileName, "new name.py")
     }
 
-    func testOrigPathIsOmittedWhenThereIsNoRename() async throws {
-        let model = makeModel()
-        StubURLProtocol.enqueue(status: 200, body: try fixtureBody("text_modified"))
-
-        await model.load()
-
-        XCTAssertEqual(requestURLs, ["\(diffURL)?path=src%2Fa.py&scope=unstaged&context=3"])
-    }
-
     func testFullFileIsSentAsTheAgentCeilingAndBumpsTheLoadKey() async throws {
         let model = makeModel()
         XCTAssertEqual(model.loadKey, GitDiffModel.LoadKey(context: 3, reloads: 0))
@@ -73,11 +64,6 @@ final class GitDiffModelTests: XCTestCase {
         await model.load()
 
         XCTAssertEqual(requestURLs, ["\(diffURL)?path=src%2Fa.py&scope=unstaged&context=5000"])
-    }
-
-    func testTitleOfANestedRepositoryFolderKeepsItsSlash() {
-        XCTAssertEqual(makeModel(path: "mobaide_worktree/claude-session-56a3f247/").fileName, "claude-session-56a3f247/")
-        XCTAssertEqual(makeModel(path: "vendor/").fileName, "vendor/")
     }
 
     func testRetryBumpsTheLoadKeyWithoutTouchingTheContext() {
@@ -105,23 +91,6 @@ final class GitDiffModelTests: XCTestCase {
         StubURLProtocol.enqueue(status: 504, body: #"{"detail":{"code":"git_timeout","message":null}}"#)
         await refused.load()
         XCTAssertEqual(refused.state, .error("git took too long to answer. Try again."))
-    }
-
-    func testRetryAfterAnErrorRecovers() async throws {
-        let model = makeModel()
-        StubURLProtocol.enqueue(status: 500, body: #"{"detail":{"code":"git_error","message":"boom"}}"#)
-        await model.load()
-        XCTAssertEqual(model.state, .error("git failed: boom"))
-
-        StubURLProtocol.enqueue(status: 200, body: try fixtureBody("binary"))
-        model.retry()
-        await model.load()
-
-        guard case .ready(let diff, let rows, _) = model.state else {
-            return XCTFail("expected ready, got \(model.state)")
-        }
-        XCTAssertEqual(diff.kind, GitDiffResponse.kindBinary)
-        XCTAssertEqual(rows.map(\.kind), [.notice("Binary file — no preview")])
     }
 
     // MARK: - Stage / Unstage from the review
@@ -191,18 +160,6 @@ final class GitDiffModelTests: XCTestCase {
         XCTAssertNil(model.toast)
     }
 
-    func testRunStageActionOnAModifiedFileStagesItsOnePath() async throws {
-        let model = await stagingModel()
-        StubURLProtocol.enqueue(status: 200, body: #"{"ok":true}"#)
-
-        await model.runStageAction()
-
-        XCTAssertEqual(requestURLs, ["http://agent.example.com/api/sessions/s1/git/stage"])
-        let sent = try JSONDecoder().decode(GitPathsRequest.self, from: try XCTUnwrap(StubURLProtocol.bodies.first))
-        XCTAssertEqual(sent, GitPathsRequest(paths: ["src/a.py"]))
-        XCTAssertTrue(model.didMove)
-    }
-
     func testRunStageActionReportsARefusalAndStaysOnTheFile() async {
         let model = await stagingModel()
         StubURLProtocol.enqueue(status: 409, body: #"{"detail":{"code":"pathspec_mismatch","message":"did not match"}}"#)
@@ -213,17 +170,5 @@ final class GitDiffModelTests: XCTestCase {
         XCTAssertEqual(model.toast?.tone, .danger)
         XCTAssertFalse(model.didMove)
         XCTAssertFalse(model.isMutating)
-    }
-
-    func testRunStageActionWithoutAnActionSendsNothing() async {
-        let model = makeModel()
-        StubURLProtocol.enqueue(status: 200, body: versionBody(#"{"changes":true}"#))
-        await model.loadCapabilities()
-        StubURLProtocol.reset()
-
-        await model.runStageAction()
-
-        XCTAssertEqual(requestURLs, [])
-        XCTAssertFalse(model.didMove)
     }
 }

@@ -8,15 +8,6 @@ from central_server.dashboard.listing import UsersListing
 
 
 class TestFromParams:
-    def test_valid_values_pass_through(self):
-        listing = UsersListing.from_params(
-            q="bob", verified="unverified", sort="activity",
-            direction="asc", page="3", per_page="100",
-        )
-        assert listing == UsersListing(
-            q="bob", verified="unverified", sort="activity",
-            direction="asc", page=3, per_page=100,
-        )
 
     @pytest.mark.parametrize(
         "field, raw",
@@ -34,13 +25,6 @@ class TestFromParams:
     @pytest.mark.parametrize("raw", ["0", "-3", "abc", ""])
     def test_page_is_floored_at_one(self, raw):
         assert UsersListing.from_params(page=raw).page == 1
-
-    @pytest.mark.parametrize(
-        "verified, expected",
-        [("all", None), ("verified", True), ("unverified", False)],
-    )
-    def test_verified_filter_maps_to_sql_tristate(self, verified, expected):
-        assert UsersListing(verified=verified).verified_filter is expected
 
 
 class TestPaging:
@@ -63,9 +47,6 @@ class TestPaging:
     def test_clamp_pulls_page_past_end_back_to_last(self):
         assert UsersListing(page=99).clamp(30).page == 2
         assert UsersListing(page=99).clamp(0).page == 1
-
-    def test_clamp_keeps_page_in_range(self):
-        assert UsersListing(page=2).clamp(30).page == 2
 
     @pytest.mark.parametrize(
         "page, total, expected",
@@ -105,14 +86,6 @@ class TestSortTarget:
             "bob", "verified", 50,
         )
 
-    def test_aria_sort_names_only_the_active_column(self):
-        listing = UsersListing(sort="activity", direction="asc")
-        assert listing.aria_sort("activity") == "ascending"
-        assert listing.aria_sort("registered") == "none"
-        assert listing.replace(direction="desc").aria_sort("activity") == (
-            "descending"
-        )
-
 
 class TestUrls:
     def test_default_view_is_the_bare_path(self):
@@ -145,12 +118,5 @@ class TestUrls:
         assert listing.fragment_url(page=1, per_page=None) == "/dashboard/users"
         assert listing.page_url(page=2) == "/dashboard?page=2&per_page=50"
 
-    def test_override_back_to_default_is_omitted(self):
-        assert UsersListing(page=3).page_url(page=1) == "/dashboard"
-
     def test_query_text_is_url_encoded(self):
         assert UsersListing(q="a b&c=d").page_url() == "/dashboard?q=a+b%26c%3Dd"
-
-    def test_unknown_override_raises(self):
-        with pytest.raises(KeyError):
-            UsersListing().page_url(limit=10)

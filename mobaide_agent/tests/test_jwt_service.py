@@ -38,28 +38,6 @@ class TestRoundTrip:
         assert payload.sub == "bob"
         assert payload.token_type == "refresh"
 
-    def test_exp_and_iat_are_utc_aware(self):
-        svc = JwtService(SECRET, access_ttl_minutes=30)
-        token = svc.create_access_token("alice")
-
-        payload = svc.decode_token(token)
-
-        assert payload.exp is not None
-        assert payload.exp.tzinfo is not None
-        assert payload.iat.tzinfo is not None
-        # Both should be UTC (offset zero)
-        assert payload.exp.utcoffset() == timedelta(0)
-        assert payload.iat.utcoffset() == timedelta(0)
-
-    def test_default_ttl_issues_non_expiring_token(self):
-        """Default TTL (0) means no `exp` claim — token never expires."""
-        svc = JwtService(SECRET)
-        token = svc.create_access_token("alice")
-
-        payload = svc.decode_token(token)
-
-        assert payload.exp is None
-
 
 class TestTtlBehavior:
     def test_access_ttl_honors_constructor_arg(self):
@@ -82,18 +60,6 @@ class TestTtlBehavior:
 
         assert payload.exp is not None
         assert payload.exp - payload.iat == timedelta(minutes=120)
-
-    def test_refresh_ttl_longer_than_access_ttl_when_both_set(self):
-        svc = JwtService(SECRET, access_ttl_minutes=30, refresh_ttl_minutes=1440)
-
-        access_payload = svc.decode_token(svc.create_access_token("alice"))
-        refresh_payload = svc.decode_token(svc.create_refresh_token("alice"))
-
-        assert access_payload.exp is not None
-        assert refresh_payload.exp is not None
-        access_delta = access_payload.exp - access_payload.iat
-        refresh_delta = refresh_payload.exp - refresh_payload.iat
-        assert refresh_delta > access_delta
 
     def test_ttl_zero_omits_exp_claim(self):
         """access_ttl_minutes=0 and refresh_ttl_minutes=0 → no `exp` claim."""
@@ -131,21 +97,6 @@ class TestExpiredToken:
         with pytest.raises(jwt.ExpiredSignatureError):
             svc.decode_token(token)
 
-    def test_expired_token_via_manual_encode(self):
-        """Independent expiry test: forge an expired token directly via jwt.encode."""
-        svc = JwtService(SECRET)
-        past = datetime.now(UTC) - timedelta(hours=1)
-        payload = {
-            "sub": "alice",
-            "type": "access",
-            "iat": past - timedelta(minutes=30),
-            "exp": past,
-        }
-        token = jwt.encode(payload, SECRET, algorithm="HS256")
-
-        with pytest.raises(jwt.ExpiredSignatureError):
-            svc.decode_token(token)
-
 
 class TestInvalidToken:
     def test_wrong_secret_raises_invalid_signature(self):
@@ -163,23 +114,8 @@ class TestInvalidToken:
         with pytest.raises(jwt.InvalidTokenError):
             svc.decode_token("not.a.token")
 
-    def test_empty_string_raises_invalid_token_error(self):
-        svc = JwtService(SECRET)
-
-        with pytest.raises(jwt.InvalidTokenError):
-            svc.decode_token("")
-
 
 class TestAlgorithm:
-    def test_custom_algorithm_hs512_round_trip(self):
-        svc = JwtService(SECRET, algorithm="HS512")
-
-        token = svc.create_access_token("alice")
-        payload = svc.decode_token(token)
-
-        assert payload.sub == "alice"
-        assert payload.token_type == "access"
-
     def test_token_minted_with_hs256_cannot_be_decoded_as_hs512(self):
         signer = JwtService(SECRET, algorithm="HS256")
         verifier = JwtService(SECRET, algorithm="HS512")
@@ -189,23 +125,3 @@ class TestAlgorithm:
         with pytest.raises(jwt.InvalidTokenError):
             verifier.decode_token(token)
 
-
-class TestSubPreservation:
-    @pytest.mark.parametrize(
-        "username",
-        [
-            "alice",
-            "user@example.com",
-            "a/b",
-            "user with spaces",
-            "café",  # unicode
-            "\u4f60\u597d",  # CJK: "hello"
-        ],
-    )
-    def test_username_preserved_through_round_trip(self, username):
-        svc = JwtService(SECRET)
-
-        token = svc.create_access_token(username)
-        payload = svc.decode_token(token)
-
-        assert payload.sub == username

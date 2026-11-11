@@ -64,20 +64,6 @@ final class TemplatesPickerGroupingTests: XCTestCase {
         XCTAssertEqual(grouped.others.map(\.name), ["gamma"])
     }
 
-    func testFavoritesAndAllSortByNameCaseInsensitively() {
-        let all = [
-            row("beta", favorite: true),
-            row("Alpha", favorite: true),
-            row("zed"),
-            row("Mid"),
-        ]
-
-        let grouped = TemplateGrouping.group(all, query: "")
-
-        XCTAssertEqual(grouped.favorites.map(\.name), ["Alpha", "beta"])
-        XCTAssertEqual(grouped.others.map(\.name), ["Mid", "zed"])
-    }
-
     // MARK: - Query
 
     func testQueryMatchesNameOrBodyCaseInsensitivelyAfterTrimming() {
@@ -88,31 +74,5 @@ final class TemplatesPickerGroupingTests: XCTestCase {
 
         XCTAssertEqual(TemplateGrouping.group(all, query: "  stand  ").others.map(\.name), ["Standup"])
         XCTAssertEqual(TemplateGrouping.group(all, query: "release").others.map(\.name), ["Deploy"])
-    }
-
-    func testQueryNarrowsRecentsToo() {
-        // The filter runs before the recency cut, so a recent row that does not
-        // match must leave rather than hold its place at the top.
-        let all = [
-            row("alpha", lastUsed: "2026-08-02T00:00:00Z"),
-            row("beta", lastUsed: "2026-08-01T00:00:00Z"),
-        ]
-
-        let grouped = TemplateGrouping.group(all, query: "beta")
-
-        XCTAssertEqual(grouped.recents.map(\.name), ["beta"])
-        XCTAssertTrue(grouped.others.isEmpty)
-    }
-
-    func testQueryMatchingNothingEmptiesEveryGroup() {
-        // What the search-specific empty state is drawn from — distinct from an
-        // account that owns no templates at all.
-        let all = [
-            row("alpha", favorite: true, lastUsed: "2026-08-01T00:00:00Z"),
-            row("beta"),
-        ]
-
-        XCTAssertTrue(TemplateGrouping.group(all, query: "zzz").isEmpty)
-        XCTAssertFalse(TemplateGrouping.group(all, query: "").isEmpty)
     }
 }

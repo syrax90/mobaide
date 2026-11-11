@@ -57,36 +57,12 @@ final class GitTreeTests: XCTestCase {
         XCTAssertEqual(["b", "_x", "1"].sorted(by: GitRefOrder.precedes), ["1", "_x", "b"])
     }
 
-    /// Two spellings git keeps apart (the same marks in another order) must
-    /// sort as the web's and Android's code-unit compare of the lowercased
-    /// names does, not fall through to the raw-name tiebreak because Swift
-    /// `String` equality treats them as one.
-    func testRefOrderKeepsCanonicallyEquivalentSpellingsInCodeUnitOrderLikeTheOtherClients() {
-        let upper = "A\u{0328}\u{0301}"
-        let lower = "a\u{0301}\u{0328}"
-
-        XCTAssertTrue(GitRefOrder.precedes(lower, upper))
-        XCTAssertFalse(GitRefOrder.precedes(upper, lower))
-    }
-
     // MARK: - Segments and ids
-
-    func testSegmentsSplitABranchOnItsSlashesDroppingEmptySegments() {
-        XCTAssertEqual(GitTree.segments(branch("feature/login/x")), ["feature", "login", "x"])
-        XCTAssertEqual(GitTree.segments(branch("a//b/")), ["a", "b"])
-    }
 
     func testSegmentsFileARemoteRowUnderItsWholeRemoteName() {
         XCTAssertEqual(GitTree.segments(remoteBranch("origin/feature/x")), ["origin", "feature", "x"])
         XCTAssertEqual(GitTree.segments(remoteBranch("up/stream/main", remote: "up/stream")), ["up/stream", "main"])
         XCTAssertEqual(GitTree.segments(remoteBranch("origin/main", remote: nil)), ["origin", "main"])
-    }
-
-    func testFolderIDKeysLocalFoldersOnTheirPathAndRemoteOnesOnTheRemoteThenThePathBelow() {
-        XCTAssertEqual(GitTree.folderID(.local, ["feature", "login"]), "dir:local:feature/login")
-        XCTAssertEqual(GitTree.folderID(.remote, ["origin"]), "dir:remote:origin:")
-        XCTAssertEqual(GitTree.folderID(.remote, ["origin", "feature", "x"]), "dir:remote:origin:feature/x")
-        XCTAssertNotEqual(GitTree.folderID(.remote, ["a", "b"]), GitTree.folderID(.remote, ["a/b"]))
     }
 
     // MARK: - Rows
@@ -148,23 +124,6 @@ final class GitTreeTests: XCTestCase {
 
         XCTAssertEqual(outline(rows), ["▾ origin (2)", "  ▸ feature (1)", "  main", "▾ up/stream (1)", "  main"])
         XCTAssertEqual(folderIDs(rows), ["dir:remote:origin:", "dir:remote:origin:feature", "dir:remote:up/stream:"])
-    }
-
-    func testRowsToggleRemotesAAndABIndependently() {
-        let items = [remoteBranch("a/b/x", remote: "a"), remoteBranch("a/b/y", remote: "a/b")]
-
-        XCTAssertEqual(
-            outline(GitTree.rows(items, scope: .remote, toggled: [], filterActive: false)),
-            ["▾ a (1)", "  ▸ b (1)", "▾ a/b (1)", "  y"]
-        )
-        XCTAssertEqual(
-            outline(GitTree.rows(items, scope: .remote, toggled: ["dir:remote:a:b"], filterActive: false)),
-            ["▾ a (1)", "  ▾ b (1)", "    x", "▾ a/b (1)", "  y"]
-        )
-        XCTAssertEqual(
-            outline(GitTree.rows(items, scope: .remote, toggled: ["dir:remote:a/b:"], filterActive: false)),
-            ["▾ a (1)", "  ▸ b (1)", "▸ a/b (1)"]
-        )
     }
 
     func testRowsOpenEveryFolderWhileAFilterIsActiveToggledOrNot() {

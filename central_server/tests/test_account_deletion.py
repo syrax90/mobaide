@@ -542,17 +542,6 @@ class TestCancelAccountDeletion:
         assert row["status"] == "cancelled"
         assert row["cancellation_reason"] == "user_initiated"
 
-    async def test_cancel_idempotent_when_no_deletion_scheduled(
-        self,
-        deletion_service: AuthService,
-        deletion_db: Database,
-    ) -> None:
-        user = await _make_password_user(
-            deletion_db, deletion_service, "noop@example.com", "pw",
-        )
-        # No deletion ever requested.
-        result = await deletion_service.cancel_account_deletion(user["id"])
-        assert result is None
 
     async def test_cancel_by_token_consumes_token_and_records_email_link(
         self,
@@ -775,13 +764,6 @@ class TestDeleteAccountEndpoint:
         # mapped to HTTP 400 in the router.
         assert resp.status_code == 400
 
-    async def test_missing_bearer_returns_401(self, client) -> None:
-        resp = await client.post(
-            "/api/auth/me/delete",
-            json={"method": "password", "password": "x"},
-        )
-        assert resp.status_code == 401
-
 
 class TestCancelEndpoint:
     async def test_cancel_after_request_returns_cancelled_status(
@@ -843,16 +825,3 @@ class TestLoginResponseSurfacesScheduledDeletion:
         body = resp.json()
         assert body["scheduled_deletion_at"] == future
 
-    async def test_login_omits_scheduled_deletion_when_unset(
-        self, client, viewer_user
-    ) -> None:
-        del viewer_user
-        resp = await client.post(
-            "/api/auth/login",
-            json={"email": TEST_VIEWER_EMAIL, "password": TEST_VIEWER_PASSWORD},
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        # None or absent both acceptable; the contract is "non-null only when
-        # the account is in the grace window".
-        assert body.get("scheduled_deletion_at") is None

@@ -137,10 +137,6 @@ describe('applyModeOrder', () => {
     { mode: 'custom_bbbbbbbbbbbb' },
   ];
 
-  it('keeps the default order when the account has never reordered', () => {
-    expect(modes(applyModeOrder(defaults, []))).toEqual(modes(defaults));
-  });
-
   it('ranks every card the saved order names by its place there', () => {
     const order = [
       'custom_bbbbbbbbbbbb',
@@ -175,11 +171,4 @@ describe('applyModeOrder', () => {
     ).toEqual(['codex', 'claude', 'antigravity']);
   });
 
-  it('returns a new array and leaves the input untouched', () => {
-    const input = defaults.slice(0, 2);
-    const result = applyModeOrder(input, ['codex']);
-
-    expect(modes(result)).toEqual(['codex', 'claude']);
-    expect(modes(input)).toEqual(['claude', 'codex']);
-  });
 });

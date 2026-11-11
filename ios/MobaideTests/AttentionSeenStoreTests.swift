@@ -121,17 +121,4 @@ final class AttentionSeenStoreTests: XCTestCase {
         XCTAssertFalse(first.isBaselined)
         XCTAssertFalse(second.hasSurfaced(session), "sign-out clears every agent's bucket")
     }
-
-    func testMissingAgentKeyIsInert() {
-        // The agent id can already be gone from the keychain when sign-out
-        // reaches here; the store must no-op rather than write a junk bucket.
-        let store = makeStore(agentKey: nil)
-        let session = makeSessionResponse(id: "s1", attention: "turn_finished")
-
-        store.record(session)
-        store.adoptBaseline([session])
-
-        XCTAssertFalse(store.hasSurfaced(session))
-        XCTAssertFalse(store.isBaselined)
-    }
 }

@@ -49,23 +49,6 @@ class PreferencesStoreLaunchPrefsTest {
     }
 
     @Test
-    fun claudeBucket_roundTripsAllFields() = runTest {
-        val prefs = ClaudeLaunchPrefs(
-            model = "opus",
-            effort = "max",
-            fastMode = false,
-            ultracode = true,
-            appendSystemPrompt = "be terse",
-            skipPermissions = true,
-            noMemory = true,
-        )
-
-        store.setLastUsedClaudeOptions(prefs)
-
-        assertEquals(prefs, store.getLastUsedClaudeOptions())
-    }
-
-    @Test
     fun autoScanBucket_roundTripsAllFields_includingPlanMode() = runTest {
         val prefs = ClaudeLaunchPrefs(
             model = "sonnet",

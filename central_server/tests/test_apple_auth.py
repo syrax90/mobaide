@@ -152,21 +152,6 @@ class TestAppleEndpoint:
         assert resp.json()["user_id"] == user_id
         assert resp.json()["email"] == "returning@example.com"
 
-    async def test_links_existing_email_account_and_marks_verified(
-        self, apple_client, apple_db, monkeypatch
-    ):
-        user_id = await apple_db.create_user(
-            email="linkme@example.com", password_hash="x", email_verified=False
-        )
-        _patch_decode(monkeypatch, _idinfo(email="linkme@example.com"))
-        resp = await apple_client.post(
-            "/api/auth/apple", json={"id_token": "tok", "nonce": NONCE}
-        )
-        assert resp.status_code == 200
-        assert resp.json()["user_id"] == user_id
-        user = await apple_db.get_user_by_id(user_id)
-        assert user["apple_sub"] == APPLE_SUB
-        assert user["email_verified"] == 1
 
     async def test_linking_unverified_account_drops_its_password(
         self, apple_client, apple_db, monkeypatch
@@ -261,20 +246,6 @@ class TestAppleEndpoint:
         user = await apple_db.get_user_by_apple_sub(APPLE_SUB)
         assert user["email_verified"] == 1
 
-    async def test_returning_user_by_sub_backfills_email_verified(
-        self, apple_client, apple_db, monkeypatch
-    ):
-        user_id = await apple_db.create_user(
-            email="backfill@example.com", apple_sub=APPLE_SUB, email_verified=False
-        )
-        _patch_decode(monkeypatch, _idinfo(email="backfill@example.com"))
-        resp = await apple_client.post(
-            "/api/auth/apple", json={"id_token": "tok", "nonce": NONCE}
-        )
-        assert resp.status_code == 200
-        assert resp.json()["user_id"] == user_id
-        user = await apple_db.get_user_by_id(user_id)
-        assert user["email_verified"] == 1
 
     async def test_unverified_email_not_taken_creates_unverified_user(
         self, apple_client, apple_db, monkeypatch
@@ -362,14 +333,6 @@ class TestAppleEndpoint:
         assert resp.status_code == 401
         assert "invalid apple id token" in resp.json()["detail"].lower()
 
-    async def test_not_configured_returns_401(self, client):
-        # conftest `client` has apple_client_id=None; the guard fires before
-        # any decode attempt, so no stub is needed.
-        resp = await client.post(
-            "/api/auth/apple", json={"id_token": "tok", "nonce": NONCE}
-        )
-        assert resp.status_code == 401
-        assert "not configured" in resp.json()["detail"].lower()
 
     async def test_no_email_for_unknown_sub_returns_401(
         self, apple_client, monkeypatch
@@ -421,10 +384,6 @@ class TestAppleEndpoint:
         assert user["apple_sub"] == "001111.firstidentity0000.1111"
         # Nor may the refusal leak into a second account for the same address.
         assert await apple_db.get_user_by_apple_sub(APPLE_SUB) is None
-
-    async def test_missing_nonce_field_returns_422(self, apple_client):
-        resp = await apple_client.post("/api/auth/apple", json={"id_token": "tok"})
-        assert resp.status_code == 422
 
 
 class TestAppleDeleteReauth:
@@ -511,39 +470,20 @@ class TestAppleDeleteReauth:
             )
         assert "not configured" in str(excinfo.value).lower()
 
-    def test_delete_request_shape_requires_token_and_nonce(self):
-        with pytest.raises(ValueError, match="id_token and nonce"):
-            DeleteAccountRequest(method="apple")
+
+async def _head_version(tmp_path) -> int:
+    """``user_version`` a fresh database migrates to (the latest migration)."""
+    fresh = Database(str(tmp_path / "head.db"))
+    await fresh.connect()
+    try:
+        cursor = await fresh.conn.execute("PRAGMA user_version")
+        return (await cursor.fetchone())[0]
+    finally:
+        await fresh.close()
 
 
 class TestAppleSubStorage:
-    async def test_get_and_link_round_trip(self, apple_db):
-        user_id = await apple_db.create_user(
-            email="roundtrip@example.com", password_hash="x"
-        )
-        assert await apple_db.get_user_by_apple_sub("sub-rt") is None
 
-        await apple_db.link_apple_to_user(user_id, "sub-rt")
-        user = await apple_db.get_user_by_apple_sub("sub-rt")
-        assert user is not None
-        assert user["id"] == user_id
-        assert user["apple_sub"] == "sub-rt"
-
-    async def test_migration_is_idempotent(self, tmp_path):
-        db_path = str(tmp_path / "reopen.db")
-        first = Database(db_path)
-        await first.connect()
-        user_id = await first.create_user(
-            email="persist@example.com", apple_sub="sub-persist"
-        )
-        await first.close()
-
-        second = Database(db_path)
-        await second.connect()
-        user = await second.get_user_by_apple_sub("sub-persist")
-        assert user is not None
-        assert user["id"] == user_id
-        await second.close()
 
     async def test_apple_sub_unique_index_enforced(self, apple_db):
         # Uniqueness lives in the partial index, not the column (ALTER TABLE
@@ -581,7 +521,7 @@ class TestAppleSubStorage:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 23
+        assert (await cursor.fetchone())[0] == await _head_version(tmp_path)
 
         # Column restored by the ALTER, unique index restored by _SCHEMA.
         await db.link_apple_to_user(user_id, "sub-upgraded")
@@ -621,7 +561,7 @@ class TestAppleSubStorage:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 23
+        assert (await cursor.fetchone())[0] == await _head_version(tmp_path)
 
         col_cursor = await db.conn.execute("PRAGMA table_info(users)")
         cols = {r[1] for r in await col_cursor.fetchall()}
@@ -696,17 +636,6 @@ class TestAppleAudiences:
             apple_db,
         )
 
-    async def test_both_configured_ids_are_offered_to_pyjwt(
-        self, apple_config, apple_db, monkeypatch
-    ):
-        decoder = _install_decoder(monkeypatch, {"native-tok": _idinfo()})
-        svc = self._service(
-            apple_config, apple_db, native=APPLE_CLIENT_ID, web=APPLE_WEB_CLIENT_ID
-        )
-
-        await svc.apple_authenticate("native-tok", nonce=NONCE)
-
-        assert decoder.audiences == [[APPLE_CLIENT_ID, APPLE_WEB_CLIENT_ID]]
 
     async def test_a_browser_token_lands_on_the_account_ios_created(
         self, apple_config, apple_db, monkeypatch

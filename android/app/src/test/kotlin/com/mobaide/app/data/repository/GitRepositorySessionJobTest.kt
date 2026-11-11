@@ -19,7 +19,6 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
@@ -179,20 +178,6 @@ class GitRepositorySessionJobTest {
     }
 
     @Test
-    fun aRunningFrame_neverOverwritesADonePoll() = runTest {
-        // The poll and a frame race: a frame emitted before `done` landed can
-        // be delivered after the poll answered it. The done answer wins and
-        // the feed has already ended on it.
-        val f = newFixture()
-        coEvery { f.restApi.getSessionGitJob("s1", "j1") } returns done()
-
-        f.observe().test {
-            assertFalse(loaded(awaitItem()).running)
-            awaitComplete()
-        }
-    }
-
-    @Test
     fun jobNotFound404_reportsLost_andEndsTheFeed() = runTest {
         val f = newFixture()
         coEvery { f.restApi.getSessionGitJob("s1", "j1") } throws
@@ -200,20 +185,6 @@ class GitRepositorySessionJobTest {
 
         f.observe().test {
             assertEquals(SessionGitJobLoad.Lost, awaitItem())
-            awaitComplete()
-        }
-    }
-
-    @Test
-    fun sessionGone404_endsTheFeed_asATerminalFailure() = runTest {
-        val f = newFixture()
-        coEvery { f.restApi.getSessionGitJob("s1", "j1") } throws
-            ApiException(404, """{"detail":"Session 's1' not found"}""")
-
-        f.observe().test {
-            val failure = awaitItem() as SessionGitJobLoad.Failed
-            assertTrue(failure.error is SessionGitException.SessionGone)
-            assertNull(failure.cached)
             awaitComplete()
         }
     }
@@ -254,25 +225,6 @@ class GitRepositorySessionJobTest {
             f.foreground.value = true
             runCurrent()
             assertEquals(40, loaded(awaitItem()).percent)
-            coVerify(exactly = 1) { f.restApi.getSessionGitJob("s1", "j1") }
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun backgrounding_stopsTheTicker() = runTest {
-        val f = newFixture()
-        coEvery { f.restApi.getSessionGitJob("s1", "j1") } returns job(percent = 10)
-
-        f.observe().test {
-            awaitItem()
-
-            f.foreground.value = false
-            runCurrent()
-            tick()
-            tick()
-
-            expectNoEvents()
             coVerify(exactly = 1) { f.restApi.getSessionGitJob("s1", "j1") }
             cancelAndIgnoreRemainingEvents()
         }

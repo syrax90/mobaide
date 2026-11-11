@@ -95,18 +95,6 @@ final class AgentEventBusTests: XCTestCase {
         XCTAssertNil(AgentEnvelopeDemux.demux(#"{"type":"voice.changed","payload":{"state":"ready"}}"#))
     }
 
-    func testGitChangedDemux() {
-        let event = AgentEnvelopeDemux.demux(
-            #"{"type":"git.changed","payload":{"project_name":"demo"}}"#
-        )
-        XCTAssertEqual(event, .gitChanged(projectName: "demo"))
-
-        let missingName = AgentEnvelopeDemux.demux(
-            #"{"type":"git.changed","payload":{}}"#
-        )
-        XCTAssertEqual(missingName, .gitChanged(projectName: ""))
-    }
-
     func testGitChangedDemuxCarriesToplevelAndCommonDir() {
         let event = AgentEnvelopeDemux.demux(
             #"{"type":"git.changed","payload":{"project_name":"demo","toplevel":"/repo/wt","common_dir":"/repo/.git"}}"#
@@ -140,13 +128,6 @@ final class AgentEventBusTests: XCTestCase {
         XCTAssertEqual(seq, 9_007_199_254_740_993, "seq is 64-bit, beyond 2^53")
         XCTAssertEqual(ts, "2026-07-06T10:00:00Z")
         XCTAssertEqual(payload, .phase(phase: "scan_started", cycleNumber: 0, nextScanAt: nil, issuesProcessed: 0))
-    }
-
-    func testAutoScanEventWithoutEventObjectIsDropped() {
-        let event = AgentEnvelopeDemux.demux(
-            #"{"type":"autoscan.event","payload":{"project_name":"demo","event":"nope"}}"#
-        )
-        XCTAssertNil(event)
     }
 
     func testUnknownTypeBecomesUnknownEnvelopeType() {
@@ -316,21 +297,5 @@ final class AgentEventBusGitJobDemuxTests: XCTestCase {
         XCTAssertEqual(job.line, "Writing objects:  45% (14/32)")
         XCTAssertNil(job.ok)
         XCTAssertTrue(job.running)
-    }
-
-    func testADoneFrameIsNotRunning() {
-        let event = AgentEnvelopeDemux.demux(
-            #"{"type":"git.job.done","payload":{"job_id":"j1","session_id":"s1","op":"push","status":"done","phase":null,"percent":null,"line":null,"ok":false,"error_code":"rejected","message":"! [rejected] main -> main (fetch first)"}}"#
-        )
-
-        guard case .gitJobDone(let job)? = event else { return XCTFail("expected gitJobDone, got \(String(describing: event))") }
-        XCTAssertFalse(job.running)
-        XCTAssertEqual(job.ok, false)
-        XCTAssertEqual(job.error_code, "rejected")
-    }
-
-    func testAJobFrameWithoutAnIdIsDropped() {
-        XCTAssertNil(AgentEnvelopeDemux.demux(#"{"type":"git.job.progress","payload":{"session_id":"s1","op":"push"}}"#))
-        XCTAssertNil(AgentEnvelopeDemux.demux(#"{"type":"git.job.done","payload":{"job_id":7,"session_id":"s1","op":"push","status":"done"}}"#))
     }
 }

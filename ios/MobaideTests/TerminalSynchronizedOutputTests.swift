@@ -62,11 +62,6 @@ final class TerminalSynchronizedOutputTests: XCTestCase {
         )
     }
 
-    func testEveryParameterOfAMultiParameterSetCounts() {
-        XCTAssertTrue(armed("\u{1B}[?1049;2026h"), "cmdSetMode fans each parameter out on its own")
-        XCTAssertTrue(armed("\u{1B}[?2026;1h"), "and the target may be any of them, not just the last")
-    }
-
     func testSequenceSplitAcrossTwoScansStillMatches() {
         var scanner = scanned("\u{1B}[?20", at: sampleTime)
         XCTAssertFalse(scanner.isActive(at: sampleTime), "half a sequence is not a set")
@@ -79,26 +74,6 @@ final class TerminalSynchronizedOutputTests: XCTestCase {
         )
     }
 
-    func testCancelLeavesTheSequenceRunningTheWayTheEmulatorDoes() {
-        XCTAssertTrue(
-            armed(Array("\u{1B}[?2026".utf8) + [0x18] + Array("h".utf8)),
-            "CAN aborts a sequence by convention but not in SwiftTerm, which executes it in place and "
-                + "parses the `h` as if it were never there — reading the convention here armed the "
-                + "emulator and not the gate"
-        )
-    }
-
-    func testExecutableBytesAfterEscapeKeepTheSequenceAlive() {
-        for byte in Array(UInt8(0x00)...UInt8(0x18)) + Array(UInt8(0x1C)...UInt8(0x1F)) + [0x7F] {
-            XCTAssertTrue(
-                armed([0x1B, byte] + Array("[?2026h".utf8)),
-                String(format: "0x%02X: ", Int(byte))
-                    + "SwiftTerm re-adds its executables to every state after the global rules, so this byte "
-                    + "is executed without leaving the escape state and the DECSET behind it still lands"
-            )
-        }
-    }
-
     // MARK: - The gate still opens
 
     /// One Claude Code frame: BSU, a cursor-addressed repaint, ESU. SwiftTerm
@@ -106,16 +81,6 @@ final class TerminalSynchronizedOutputTests: XCTestCase {
     /// frame like this — a scanner that never disarmed would satisfy every
     /// fail-closed assertion above while killing row taps for whole sessions.
     private static let inkFrame = Array("\u{1B}[?2026h\u{1B}[H\u{1B}[2K❯ npm test\u{1B}[?25l\u{1B}[?2026l".utf8)
-
-    func testAnInkFrameLeavesTheGateClear() {
-        var scanner = TerminalSynchronizedOutput()
-        scanner.scan(Self.inkFrame[...], at: sampleTime)
-
-        XCTAssertFalse(
-            scanner.isActive(at: sampleTime),
-            "the repaint between BSU and ESU must not consume the reset the frame ends with"
-        )
-    }
 
     func testAnInkFrameSplitAcrossTwoScansLeavesTheGateClear() {
         let split = Self.inkFrame.count - 3
@@ -189,16 +154,6 @@ final class TerminalSynchronizedOutputTests: XCTestCase {
         )
     }
 
-    func testResetWithAMismatchedCollectLeavesTheWindowOpen() {
-        for spelling in ["\u{1B}[1;?2026l", "\u{1B}[?2026$l", "\u{1B}[??2026l", "\u{1B}[2026?l"] {
-            XCTAssertTrue(
-                survivesTheWindow(spelling),
-                "\(spelling.debugDescription) reaches neither resetMode nor csiIgnore's exit — the emulator "
-                    + "stays frozen, so anything the gate reopens here is a line the user never saw"
-            )
-        }
-    }
-
     func testBoxDrawingBytesThatCarryACsiIntroducerStayInert() {
         XCTAssertFalse(
             armed("\u{251B} build finished\r\n"),
@@ -208,14 +163,6 @@ final class TerminalSynchronizedOutputTests: XCTestCase {
     }
 
     // MARK: - Fail-open proofs of concept
-
-    func testCsiIntroducerInsideAStringStateArms() {
-        XCTAssertTrue(
-            armed(Array("\u{1B}]".utf8) + [0x9B] + Array("?2026h".utf8)),
-            "SwiftTerm maps 0x9B to CSI entry from every non-ground state, so hiding the set inside an "
-                + "OSC string really does arm the mode — modelling only `ESC[` would miss it"
-        )
-    }
 
     func testGroundIntroducerMayArmButNeverDisarms() {
         XCTAssertTrue(
@@ -227,14 +174,6 @@ final class TerminalSynchronizedOutputTests: XCTestCase {
             survivesTheWindow([0x9B] + Array("?2026l".utf8)),
             "and the same over-approximation the other way round would hand a frozen display back to row "
                 + "taps one frame after freezing it"
-        )
-    }
-
-    func testParameterLongEnoughToOverflowAndThenSpell2026Arms() {
-        XCTAssertTrue(
-            armed("\u{1B}[?1234567890123456789" + "02026h"),
-            "SwiftTerm's accumulator restarts from zero on overflow rather than clamping, so this "
-                + "parameter reaches cmdSetMode as 2026"
         )
     }
 

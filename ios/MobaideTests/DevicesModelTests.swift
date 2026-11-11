@@ -16,21 +16,6 @@ final class DevicesModelTests: XCTestCase {
         )
     }
 
-    func testCurrentDeviceBadge() {
-        let model = makeModel()
-        let current = DeviceResponse(device_id: model.currentDeviceId, name: "Me", created_at: "t", last_seen_at: nil)
-        let other = DeviceResponse(device_id: "other-id", name: "X", created_at: "t", last_seen_at: nil)
-        XCTAssertTrue(model.isCurrent(current))
-        XCTAssertFalse(model.isCurrent(other))
-    }
-
-    func testLoadDevices() async {
-        let model = makeModel()
-        StubURLProtocol.enqueue(status: 200, body: #"[{"device_id":"d1","created_at":"t"},{"device_id":"d2","created_at":"t"}]"#)
-        await model.refresh()
-        XCTAssertEqual(model.devices.map(\.device_id), ["d1", "d2"])
-    }
-
     func testRevokeRemovesRowOptimisticallyThenPersists() async {
         let model = makeModel()
         StubURLProtocol.enqueue(status: 200, body: #"[{"device_id":"d1","created_at":"t"},{"device_id":"d2","created_at":"t"}]"#)

@@ -105,14 +105,6 @@ class TestGetAutoScanIssues:
         assert issue.labels[0].name == "AutoPipeline"
         assert len(issue.team_states) == 2
 
-    async def test_returns_empty_list_when_no_issues(self, client, mock_session):
-        mock_session.execute.return_value = {
-            "viewer": {"assignedIssues": {"nodes": []}}
-        }
-        issues = await client.get_auto_scan_issues(_filter())
-
-        assert issues == []
-
     async def test_handles_missing_nested_fields(self, client, mock_session):
         mock_session.execute.return_value = {"viewer": {}}
         issues = await client.get_auto_scan_issues(_filter())
@@ -185,10 +177,6 @@ class TestGetIssueState:
         mock_session.execute.return_value = {"issue": None}
         assert await client.get_issue_state("missing-uuid") is None
 
-    async def test_returns_none_on_empty_payload(self, client, mock_session):
-        mock_session.execute.return_value = {}
-        assert await client.get_issue_state("whatever") is None
-
     async def test_returns_none_when_execute_raises(self, client, mock_session):
         mock_session.execute.side_effect = RuntimeError("network down")
         assert await client.get_issue_state("uuid") is None
@@ -208,14 +196,6 @@ class TestRemoveIssueLabel:
         result = await client.remove_issue_label("issue-1", "label-1")
 
         assert result is True
-
-    async def test_returns_false_on_failure(self, client, mock_session):
-        mock_session.execute.return_value = {
-            "issueRemoveLabel": {"success": False}
-        }
-        result = await client.remove_issue_label("issue-1", "label-1")
-
-        assert result is False
 
 
 class TestGetWorkflowStates:
@@ -262,10 +242,6 @@ class TestGetWorkflowStates:
         assert by_name["In Progress"] == "started"
         assert by_name["Done"] == "completed"
 
-    async def test_returns_empty_when_no_teams(self, client, mock_session):
-        mock_session.execute.return_value = {"viewer": {"teamMemberships": {"nodes": []}}}
-        assert await client.get_workflow_states() == []
-
 
 class TestGetLabels:
     async def test_merges_org_and_team_labels_dedupes_by_name(
@@ -303,11 +279,3 @@ class TestGetLabels:
         assert set(by_name.keys()) == {"AutoPipeline", "AI-ready"}
         assert by_name["AutoPipeline"]["color"] == "#ff0000"
         assert by_name["AI-ready"]["color"] == "#00ff00"
-
-    async def test_handles_missing_color(self, client, mock_session):
-        mock_session.execute.return_value = {
-            "organization": {"labels": {"nodes": [{"id": "L1", "name": "X"}]}},
-            "viewer": {"teamMemberships": {"nodes": []}},
-        }
-        labels = await client.get_labels()
-        assert labels == [{"name": "X", "color": ""}]

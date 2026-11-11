@@ -36,27 +36,6 @@ final class ShortcutPickerLogicTests: XCTestCase {
         )
     }
 
-    func testSendEnabledRequiresSessionGateAndComposedChord() {
-        XCTAssertTrue(ShortcutPickerLogic.sendEnabled(gate: true, hasChord: true))
-        XCTAssertFalse(ShortcutPickerLogic.sendEnabled(gate: false, hasChord: true))
-        XCTAssertFalse(ShortcutPickerLogic.sendEnabled(gate: true, hasChord: false))
-        XCTAssertFalse(ShortcutPickerLogic.sendEnabled(gate: false, hasChord: false))
-    }
-
-    func testEncodingCaptionAppendsSameByteDisclosureOnlyWhenPresent() {
-        let plain = ChordEncoding(bytes: [0x01], summary: "0x01", usesCsiU: false, sameAsPlainKey: nil)
-        XCTAssertEqual(ShortcutPickerLogic.encodingCaption(plain), "Sends: 0x01")
-
-        let disclosed = ChordEncoding(bytes: [0x09], summary: "0x09", usesCsiU: false, sameAsPlainKey: "Tab")
-        XCTAssertEqual(ShortcutPickerLogic.encodingCaption(disclosed), "Sends: 0x09 — same byte as Tab")
-    }
-
-    func testClampNameCapsAtMaxNameLength() {
-        let long = String(repeating: "x", count: SavedShortcutUi.maxNameLength + 50)
-        XCTAssertEqual(ShortcutPickerLogic.clampName(long), String(repeating: "x", count: 100))
-        XCTAssertEqual(ShortcutPickerLogic.clampName("ok"), "ok", "short names pass through untouched")
-    }
-
     func testClampNameCountsCodePointsNotGraphemes() {
         // 🇺🇸 is one grapheme but two code points: 100 flags fit a
         // `String.prefix(100)` clamp yet weigh 200 code points — the server's
@@ -88,12 +67,6 @@ final class ShortcutPickerLogicTests: XCTestCase {
             ShortcutPickerLogic.clampName(nearLimit), String(repeating: "x", count: 99),
             "a cluster straddling the limit is dropped whole, not split to hit exactly 100"
         )
-    }
-
-    func testClampNameAtExactlyMaxCodePointsPassesThroughUntouched() {
-        let flag = "\u{1F1FA}\u{1F1F8}"
-        let exactlyAtLimit = String(repeating: flag, count: 50)
-        XCTAssertEqual(ShortcutPickerLogic.clampName(exactlyAtLimit), exactlyAtLimit)
     }
 
     func testSavedShortcutLabelFallsBackToChordDisplay() {

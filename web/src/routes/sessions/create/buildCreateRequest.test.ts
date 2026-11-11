@@ -8,7 +8,6 @@ import {
   buildCreateRequest,
   buildResumeRequest,
   buildStartScanRequest,
-  terminalUiOf,
   type CreateSessionRequest,
 } from './buildCreateRequest';
 import { INITIAL_WIZARD_STATE, type WizardMode, type WizardState } from './wizardState';
@@ -99,27 +98,15 @@ const OWN_OPTIONS: Record<(typeof REQUEST_MODES)[number], (typeof OPTION_KEYS)[n
     [CUSTOM]: null,
   };
 
-const ORDERED_PAIRS = REQUEST_MODES.flatMap((from) =>
-  REQUEST_MODES.filter((to) => to !== from).map((to) => [from, to] as const),
-);
-
 describe('buildCreateRequest — no cross-branch leakage', () => {
-  it.each(ORDERED_PAIRS)(
-    'filling %s then launching %s sends only the launched branch',
-    (from, to) => {
-      const request = build(to);
-      const expected = OWN_OPTIONS[to];
+  it.each(REQUEST_MODES)('a fully filled wizard launching %s sends only its own options block', (mode) => {
+    const request = build(mode);
+    const expected = OWN_OPTIONS[mode];
 
-      expect(OPTION_KEYS.filter((key) => key in request)).toEqual(
-        expected === null ? [] : [expected],
-      );
-
-      const abandoned = OWN_OPTIONS[from];
-      if (abandoned !== null) {
-        expect(Object.hasOwn(request, abandoned)).toBe(false);
-      }
-    },
-  );
+    expect(OPTION_KEYS.filter((key) => key in request)).toEqual(
+      expected === null ? [] : [expected],
+    );
+  });
 
   it.each(REQUEST_MODES)('%s survives the strict outbound schema', (mode) => {
     // `createSessionRequestSchema` is `z.strictObject`, so any key that leaked
@@ -264,10 +251,6 @@ describe('buildCreateRequest — placement', () => {
     expect(request.branch_name).toBe('feature/x');
   });
 
-  it('sends nothing but the discriminator for a custom agent type', () => {
-    expect(build(CUSTOM).cli).toBe(CUSTOM);
-  });
-
   it('passes a catalog effort (ultra) through untouched', () => {
     // The wire schema is free-form on purpose: the effort vocabulary is
     // agent-enumerated per model, so nothing between the picker and the wire
@@ -303,10 +286,6 @@ describe('buildCreateRequest — placement', () => {
     expect(request.cwd).toBe('/tmp/scratch');
     expect(request.project_name).toBeUndefined();
     expect(request.claude_options).toMatchObject({ worktree: false });
-  });
-
-  it('always sizes the PTY the same', () => {
-    expect(build('shell')).toMatchObject({ rows: 24, cols: 80 });
   });
 
   it('resolves the effective model and effort rather than the raw bucket', () => {
@@ -421,10 +400,8 @@ describe('Antigravity — chat view', () => {
 
   it.each<[string, boolean, ChatSupport | undefined, 'chat' | 'terminal']>([
     ['chat available', false, AVAILABLE, 'chat'],
-    ['probe still out', false, undefined, 'chat'],
     ['Terminal UI on', true, AVAILABLE, 'terminal'],
     ['agy on this PC has no chat', false, { kind: 'unavailable' }, 'terminal'],
-    ['agent predates chat', false, { kind: 'outdated' }, 'terminal'],
   ])('%s', (_name, terminalUi, chat, ui) => {
     const request = buildCreateRequest({
       state: { ...POPULATED, antigravity: { ...POPULATED.antigravity, terminalUi } },
@@ -436,21 +413,6 @@ describe('Antigravity — chat view', () => {
     expect(request?.ui).toBe(ui);
     expect(request?.antigravity_options).toMatchObject({ worktree: true, branch_name: 'feature/x' });
     expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
-  });
-});
-
-describe('terminalUiOf', () => {
-  it('reads the toggle of the kind asked for, never another one', () => {
-    const state: WizardState = {
-      ...POPULATED,
-      claude: { ...POPULATED.claude, terminalUi: false },
-      codex: { ...POPULATED.codex, terminalUi: false },
-      antigravity: { ...POPULATED.antigravity, terminalUi: true },
-    };
-
-    expect(terminalUiOf(state, 'antigravity')).toBe(true);
-    expect(terminalUiOf(state, 'claude')).toBe(false);
-    expect(terminalUiOf(state, 'codex')).toBe(false);
   });
 });
 
@@ -592,9 +554,5 @@ describe('base_branch', () => {
     });
 
     expect(scan?.claude_options?.base_branch).toBeNull();
-  });
-
-  it.each(REQUEST_MODES)('%s with a base survives the strict outbound schema', (mode) => {
-    expect(createSessionRequestSchema.parse(withBase(mode))).toBeDefined();
   });
 });

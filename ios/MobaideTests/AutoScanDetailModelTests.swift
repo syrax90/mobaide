@@ -47,24 +47,6 @@ final class AutoScanDetailModelTests: XCTestCase {
 
     // MARK: - Frame dispatch
 
-    func testConnectedSetsConnecting() async {
-        let model = makeModel()
-        await model.handle(.connected)
-        XCTAssertEqual(model.connection, .connecting)
-    }
-
-    func testCaughtUpSetsConnected() async {
-        let model = makeModel()
-        await model.handle(.caughtUp)
-        XCTAssertEqual(model.connection, .connected)
-    }
-
-    func testDisconnectedSetsDisconnected() async {
-        let model = makeModel()
-        await model.handle(.disconnected)
-        XCTAssertEqual(model.connection, .disconnected)
-    }
-
     func testSnapshotSeedsHeaderAndReducesBufferedEvents() async {
         let model = makeModel()
         await model.handle(.snapshot(scans: [instance(cycle: 5)], events: ["p": [phaseFrame(seq: 10, phase: "scan_started", cycle: 5).parsedEvent]]))

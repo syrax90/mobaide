@@ -8,8 +8,6 @@ router's import site.
 """
 from __future__ import annotations
 
-import pytest
-
 from mobaide.agent.codex import router as codex_router
 from mobaide.core import CodexBinaryNotFoundError
 

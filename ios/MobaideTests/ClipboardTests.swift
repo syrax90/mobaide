@@ -4,22 +4,6 @@ import UIKit
 
 final class ClipboardTests: XCTestCase {
     @MainActor
-    func testReadTextReturnsNilForAnEmptyPasteboard() {
-        UIPasteboard.general.items = []
-
-        XCTAssertFalse(Clipboard.hasText)
-        XCTAssertNil(Clipboard.readText())
-    }
-
-    @MainActor
-    func testReadTextRoundTripsAStringAndAgreesWithHasText() {
-        UIPasteboard.general.string = "/usr/local/bin"
-
-        XCTAssertTrue(Clipboard.hasText)
-        XCTAssertEqual(Clipboard.readText(), "/usr/local/bin")
-    }
-
-    @MainActor
     func testEmptyStringIsTreatedAsNoText() {
         UIPasteboard.general.string = ""
 

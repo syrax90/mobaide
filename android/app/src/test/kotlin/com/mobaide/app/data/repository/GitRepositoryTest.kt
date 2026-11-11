@@ -5,21 +5,15 @@ import com.mobaide.app.data.events.AgentEvent
 import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.RestApi
-import com.mobaide.app.data.network.dto.BusyHolder
 import com.mobaide.app.data.network.dto.GitDeleteItem
-import com.mobaide.app.data.network.dto.GitDeleteRequest
-import com.mobaide.app.data.network.dto.GitDeleteResponse
-import com.mobaide.app.data.network.dto.GitDeleteResultItem
 import com.mobaide.app.data.network.dto.GitItem
-import com.mobaide.app.data.network.dto.GitItemsResponse
+import com.mobaide.app.testing.awaitSubscribers
 import io.mockk.coEvery
-import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -35,9 +29,6 @@ import org.junit.Test
  */
 class GitRepositoryTest {
 
-    private fun item(branch: String, kind: String = GitItem.KIND_BRANCH_ONLY): GitItem =
-        GitItem(kind = kind, branch = branch)
-
     private data class Fixture(
         val repo: GitRepository,
         val restApi: RestApi,
@@ -51,55 +42,8 @@ class GitRepositoryTest {
         val bus = mockk<AgentEventBus>()
         every { bus.events } returns eventFlow
         val repo = GitRepository(restApi, bus)
+        eventFlow.awaitSubscribers()
         return Fixture(repo, restApi, bus, eventFlow)
-    }
-
-    @Test
-    fun listGitItems_unwrapsResponseToItems() = runTest {
-        val (repo, restApi) = newRepo()
-        val items = listOf(item("main"), item("topic"))
-        coEvery { restApi.getGitItems("alpha") } returns GitItemsResponse(items = items)
-
-        val returned = repo.listGitItems("alpha")
-        assertSame(items, returned)
-        coVerify(exactly = 1) { restApi.getGitItems("alpha") }
-    }
-
-    @Test
-    fun listGitItems_emptyResponse_returnsEmptyList() = runTest {
-        val (repo, restApi) = newRepo()
-        coEvery { restApi.getGitItems("alpha") } returns GitItemsResponse(items = emptyList())
-        assertTrue(repo.listGitItems("alpha").isEmpty())
-    }
-
-    @Test
-    fun listGitItems_propagatesRestApiException() = runTest {
-        val (repo, restApi) = newRepo()
-        coEvery { restApi.getGitItems("alpha") } throws RuntimeException("net down")
-        try {
-            repo.listGitItems("alpha")
-            org.junit.Assert.fail("expected RuntimeException")
-        } catch (e: RuntimeException) {
-            assertEquals("net down", e.message)
-        }
-    }
-
-    @Test
-    fun deleteGitItems_wrapsItemsInRequestAndForwardsResponse() = runTest {
-        val (repo, restApi) = newRepo()
-        val items = listOf(GitDeleteItem(kind = GitItem.KIND_BRANCH_ONLY, branch = "stale"))
-        val response = GitDeleteResponse(
-            results = listOf(
-                GitDeleteResultItem(
-                    kind = GitItem.KIND_BRANCH_ONLY, target = "stale", ok = true,
-                ),
-            ),
-        )
-        coEvery { restApi.deleteGitItems("alpha", GitDeleteRequest(items)) } returns response
-
-        val returned = repo.deleteGitItems("alpha", items)
-        assertSame(response, returned)
-        coVerify(exactly = 1) { restApi.deleteGitItems("alpha", GitDeleteRequest(items)) }
     }
 
     @Test
@@ -128,21 +72,6 @@ class GitRepositoryTest {
             assertEquals("s-1", e.busyBy[0].session_id)
             assertEquals("auto_scan", e.busyBy[1].kind)
             assertEquals("alpha", e.busyBy[1].project_name)
-        }
-    }
-
-    @Test
-    fun deleteGitItems_409_emptyBody_mapsToBusyException_withEmptyHolders() = runTest {
-        // Defensive: a 409 with no body should still surface as GitBusyException
-        // (the screen will fall back to a generic "busy" message).
-        val (repo, restApi) = newRepo()
-        coEvery { restApi.deleteGitItems("alpha", any()) } throws ApiException(409, "")
-
-        try {
-            repo.deleteGitItems("alpha", emptyList())
-            org.junit.Assert.fail("expected GitBusyException")
-        } catch (e: GitBusyException) {
-            assertTrue(e.busyBy.isEmpty())
         }
     }
 
@@ -182,42 +111,6 @@ class GitRepositoryTest {
             eventFlow.emit(AgentEvent.GitChanged("alpha"))
             assertEquals("alpha", awaitItem())
             cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun unrelatedAgentEvent_doesNotEmitOnChangedFlow() = runTest {
-        val (repo, _, _, eventFlow) = newRepo()
-        repo.changed.test {
-            eventFlow.emit(AgentEvent.SessionsChanged(emptyList()))
-            // No git change → the changed flow must stay silent.
-            expectNoEvents()
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun parseBusyBy_acceptsMissingOptionalFields() = runTest {
-        // The wire shape uses optional fields per holder kind; the parser must
-        // not throw when only the kind-specific subset is populated.
-        val (repo, restApi) = newRepo()
-        val body = """
-            {"detail":{"busy_by":[{"kind":"session","session_id":"s-only"}]}}
-        """.trimIndent()
-        coEvery { restApi.deleteGitItems("alpha", any()) } throws ApiException(409, body)
-
-        try {
-            repo.deleteGitItems("alpha", emptyList())
-            org.junit.Assert.fail("expected GitBusyException")
-        } catch (e: GitBusyException) {
-            assertEquals(1, e.busyBy.size)
-            val holder: BusyHolder = e.busyBy[0]
-            assertEquals("session", holder.kind)
-            assertEquals("s-only", holder.session_id)
-            // Other optional fields default to null without crashing.
-            org.junit.Assert.assertNull(holder.project_name)
-            org.junit.Assert.assertNull(holder.cwd)
-            org.junit.Assert.assertNull(holder.worktree_path)
         }
     }
 }

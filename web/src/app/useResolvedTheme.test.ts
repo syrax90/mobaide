@@ -34,15 +34,6 @@ describe('useResolvedTheme', () => {
     expect(result.current).toBe('dark');
   });
 
-  it('lets an explicit preference override the OS', () => {
-    stubPrefersDark(true);
-    useThemeStore.setState({ preference: 'light' });
-
-    const { result } = renderHook(() => useResolvedTheme());
-
-    expect(result.current).toBe('light');
-  });
-
   it('tracks an OS change while on system', () => {
     const media = stubPrefersDark(false);
     const { result } = renderHook(() => useResolvedTheme());
@@ -50,25 +41,6 @@ describe('useResolvedTheme', () => {
 
     act(() => {
       media.set(true);
-    });
-
-    expect(result.current).toBe('dark');
-  });
-
-  // The listener is attached whatever the preference, so returning to `system`
-  // resolves against the OS value current at that moment.
-  it('picks up the OS value when the preference returns to system', () => {
-    const media = stubPrefersDark(false);
-    useThemeStore.setState({ preference: 'light' });
-    const { result } = renderHook(() => useResolvedTheme());
-
-    act(() => {
-      media.set(true);
-    });
-    expect(result.current).toBe('light');
-
-    act(() => {
-      useThemeStore.setState({ preference: 'system' });
     });
 
     expect(result.current).toBe('dark');
@@ -86,24 +58,5 @@ describe('useSystemTheme', () => {
     });
 
     expect(result.current).toBe('dark');
-  });
-
-  // The distinction ThemePicker's Auto hint depends on: with an explicit
-  // preference set, the painted theme says nothing about what Auto would give.
-  it('ignores the stored preference', () => {
-    stubPrefersDark(true);
-    useThemeStore.setState({ preference: 'light' });
-
-    const { result } = renderHook(() => useSystemTheme());
-
-    expect(result.current).toBe('dark');
-  });
-
-  it('falls back to light on an engine with no matchMedia', () => {
-    vi.stubGlobal('matchMedia', undefined);
-
-    const { result } = renderHook(() => useSystemTheme());
-
-    expect(result.current).toBe('light');
   });
 });

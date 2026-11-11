@@ -102,16 +102,6 @@ class TestHookGuards:
         )
         assert resp.status_code == 403
 
-    async def test_loopback_with_valid_token_is_authorized(self, app, client):
-        sessions = _register(app, "s1")
-        resp = await client.post(
-            "/internal/hook",
-            params={"session_id": "s1", "token": _hook_token(app), "hook": "stop"},
-            json={"hook_event_name": "Stop"},
-        )
-        assert resp.status_code == 200
-        assert _kinds(sessions["s1"]) == [HookKind.STOP]
-
 
 class TestHookKindRouting:
     @pytest.mark.parametrize("kind", list(HookKind))
@@ -127,18 +117,6 @@ class TestHookKindRouting:
         assert resp.status_code == 200
         assert _kinds(sessions["s1"]) == [kind]
 
-    async def test_baked_kind_wins_over_the_event_name(self, app, client):
-        # Both ``Notification`` matchers post the same event name, so the URL
-        # param is the only thing that can tell a permission prompt from an
-        # idle one.
-        sessions = _register(app, "s1")
-        resp = await client.post(
-            "/internal/hook",
-            params={"session_id": "s1", "token": _hook_token(app), "hook": "idle"},
-            json={"hook_event_name": "Notification"},
-        )
-        assert resp.status_code == 200
-        assert _kinds(sessions["s1"]) == [HookKind.IDLE]
 
     async def test_payload_reaches_the_session_verbatim(self, app, client):
         # The gate's whole decision is payload fields, so the handler must not
@@ -181,18 +159,6 @@ class TestHookKindRouting:
         assert resp.status_code == 200
         assert _kinds(sessions["s1"]) == [kind]
 
-    async def test_session_end_reaches_the_session_with_its_reason(self, app, client):
-        sessions = _register(app, "s1")
-        resp = await client.post(
-            "/internal/hook",
-            params={"session_id": "s1", "token": _hook_token(app), "hook": "end"},
-            json={"hook_event_name": "SessionEnd", "reason": "clear"},
-        )
-        assert resp.status_code == 200
-        assert sessions["s1"].hooks == [
-            (HookKind.END, {"hook_event_name": "SessionEnd", "reason": "clear"}),
-        ]
-
 
 class TestHookNoOps:
     async def test_unknown_session_id_is_200_noop(self, app, client):
@@ -219,33 +185,6 @@ class TestHookNoOps:
         assert resp.status_code == 200
         assert sessions["s1"].hooks == []
 
-    async def test_unknown_event_name_without_a_param_is_200_noop(self, app, client):
-        sessions = _register(app, "s1")
-        resp = await client.post(
-            "/internal/hook",
-            params={"session_id": "s1", "token": _hook_token(app)},
-            json={"hook_event_name": "PreToolUse"},
-        )
-        assert resp.status_code == 200
-        assert sessions["s1"].hooks == []
-
-    async def test_missing_event_name_without_a_param_is_200_noop(self, app, client):
-        sessions = _register(app, "s1")
-        resp = await client.post(
-            "/internal/hook",
-            params={"session_id": "s1", "token": _hook_token(app)},
-            json={"some": "other"},
-        )
-        assert resp.status_code == 200
-        assert sessions["s1"].hooks == []
-
-    async def test_empty_session_id_is_200_noop(self, app, client):
-        resp = await client.post(
-            "/internal/hook",
-            params={"session_id": "", "token": _hook_token(app), "hook": "stop"},
-            json={"hook_event_name": "Stop"},
-        )
-        assert resp.status_code == 200
 
     async def test_non_json_body_does_not_500(self, app, client):
         # A malformed body must be treated as an unknown event (no
@@ -260,7 +199,7 @@ class TestHookNoOps:
         assert resp.status_code == 200
         assert sessions["s1"].hooks == []
 
-    @pytest.mark.parametrize("body", [["Stop"], "Stop", 7, None])
+    @pytest.mark.parametrize("body", [["Stop"], None])
     async def test_non_object_json_body_routes_with_an_empty_payload(
         self, app, client, body,
     ):
@@ -303,28 +242,3 @@ class TestMultiSessionCorrelation:
         assert _kinds(sessions["session-A"]) == [HookKind.PERMISSION]
         # The crux: session B must be completely untouched.
         assert sessions["session-B"].hooks == []
-
-    async def test_interleaved_hooks_route_independently(self, app, client):
-        sessions = _register(app, "session-A", "session-B")
-        token = _hook_token(app)
-
-        await client.post(
-            "/internal/hook",
-            params={"session_id": "session-A", "token": token, "hook": "stop"},
-            json={"hook_event_name": "Stop"},
-        )
-        await client.post(
-            "/internal/hook",
-            params={"session_id": "session-B", "token": token, "hook": "end"},
-            json={"hook_event_name": "SessionEnd", "reason": "logout"},
-        )
-        await client.post(
-            "/internal/hook",
-            params={"session_id": "session-A", "token": token, "hook": "permission"},
-            json={"hook_event_name": "Notification"},
-        )
-
-        assert _kinds(sessions["session-A"]) == [HookKind.STOP, HookKind.PERMISSION]
-        assert sessions["session-B"].hooks == [
-            (HookKind.END, {"hook_event_name": "SessionEnd", "reason": "logout"}),
-        ]

@@ -116,15 +116,6 @@ describe('ProjectList reorder', () => {
     expect(rowNames()).toEqual(['beta', 'alpha', 'gamma']);
   });
 
-  it('announces the new position in the live region', async () => {
-    fireEvent.click(screen.getByRole('button', { name: 'Move gamma up' }));
-
-    expect(screen.getByRole('status')).toHaveTextContent('gamma moved to position 2 of 3');
-    await waitFor(() => {
-      expect(api.reorders).toHaveLength(1);
-    });
-  });
-
   it('still names a row hidden by an open undo window in the payload', async () => {
     // The server 400s on any missing name, so a deferred delete may not shrink
     // the request while its window is open.

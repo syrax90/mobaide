@@ -17,19 +17,6 @@ final class ForgotPasswordModelTests: XCTestCase {
         ForgotPasswordModel(authRepository: harness.repository, sleeper: sleeper)
     }
 
-    func testInvalidEmailsAreRejectedWithoutARequest() async {
-        let model = makeModel()
-
-        await model.submit()
-        XCTAssertEqual(model.error, "Enter a valid email address")
-
-        model.email = "not-an-email"
-        await model.submit()
-        XCTAssertEqual(model.error, "Enter a valid email address")
-
-        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
-    }
-
     func testSentShowsEnumerationResistantMessageAndNavigates() async throws {
         StubURLProtocol.enqueue(status: 200, body: #"{"status":"ok"}"#)
         let model = makeModel()

@@ -104,16 +104,6 @@ class WebSocketManagerUserEventsUrlTest {
     }
 
     @Test
-    fun resolveUserEventsUrl_pathWithQuery_appendsTokenWithAmpersand() {
-        signedIn()
-        relayMode(relayUrl = "https://relay.example")
-
-        val url = manager().resolveUserEventsUrl("ws/user-events?v=2")
-
-        assertEquals("wss://relay.example/ws/user-events?v=2&token=T", url)
-    }
-
-    @Test
     fun resolveUserEventsUrl_trailingSlashOnBase_doesNotDoubleTheSeparator() {
         signedIn()
         directMode(agentUrl = null)

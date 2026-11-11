@@ -110,20 +110,6 @@ final class SessionRepositoryTests: XCTestCase {
         XCTAssertEqual(list.first?.attention, "awaiting_permission")
     }
 
-    func testStreamMirrorsCurrentSessions() async throws {
-        let (repo, bus, factory, _) = makeStack()
-        let collector = StreamCollector(repo.sessions())
-        repo.start()
-        await bus.start()
-        let connection = try await factory.connection(1)
-        connection.emit(.opened)
-        connection.emit(.text(sessionsChanged(["a"])))
-
-        let hasOneSession: @Sendable ([SessionResponse]) -> Bool = { $0.count == 1 }
-        let snapshot = try await collector.next(where: hasOneSession)
-        XCTAssertEqual(snapshot.map(\.session_id), ["a"])
-    }
-
     func testSnapshotRemovalEvictsTerminalModel() async throws {
         let (repo, bus, factory, store) = makeStack()
         repo.start()

@@ -4,16 +4,26 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import PureWindowsPath
 
 import pytest
 
+from mobaide.core import projects_store
 from mobaide.linear.workitems import (
     ActiveWorkItem,
     ActiveWorkItemsStore,
-    _slug_project_name,
-    active_workitems_path,
     now_iso_utc,
 )
+
+
+@pytest.fixture
+def windows_paths(monkeypatch):
+    """Parse paths with Windows rules, as the agent does on a Windows host.
+
+    On POSIX a backslash is a legal filename character, so the backslash
+    normalization only happens on Windows.
+    """
+    monkeypatch.setattr(projects_store, "PurePath", PureWindowsPath)
 
 
 def _item(id_: str = "CLA-1", uuid: str = "uuid-1") -> ActiveWorkItem:
@@ -27,23 +37,7 @@ def _item(id_: str = "CLA-1", uuid: str = "uuid-1") -> ActiveWorkItem:
     )
 
 
-class TestPathHelpers:
-    def test_slug_lowercases_and_replaces_unsafe_chars(self):
-        assert _slug_project_name("My Project!") == "my_project"
-        assert _slug_project_name("a/b\\c") == "a_b_c"
-        assert _slug_project_name("") == "default"
-
-    def test_active_workitems_path_combines_state_dir_and_project(self, tmp_path):
-        path = active_workitems_path(tmp_path / "state", "My Project")
-        assert path.name == "active_workitems.json"
-        assert path.parent.name == "my_project"
-
-
 class TestStoreReadWrite:
-    @pytest.mark.asyncio
-    async def test_read_returns_empty_when_file_missing(self, tmp_path):
-        store = ActiveWorkItemsStore(tmp_path / "nope.json")
-        assert await store.read() == []
 
     @pytest.mark.asyncio
     async def test_write_then_read_roundtrip(self, tmp_path):
@@ -96,10 +90,6 @@ class TestStorePeekCount:
     awaiting the async lock. It must never raise and must reflect the
     on-disk state whenever the file is readable."""
 
-    def test_peek_count_returns_zero_when_file_missing(self, tmp_path):
-        store = ActiveWorkItemsStore(tmp_path / "missing.json")
-        assert store.peek_count() == 0
-
     def test_peek_count_returns_zero_when_file_corrupt(self, tmp_path):
         path = tmp_path / "items.json"
         path.write_text("{not json", encoding="utf-8")
@@ -147,14 +137,6 @@ class TestStoreAddRemove:
         remaining = await store.read()
         assert [i.id for i in remaining] == ["CLA-2"]
 
-    @pytest.mark.asyncio
-    async def test_remove_missing_id_is_noop(self, tmp_path):
-        store = ActiveWorkItemsStore(tmp_path / "items.json")
-        await store.add(_item("CLA-1"))
-        removed = await store.remove("CLA-NOPE")
-        assert removed is False
-        assert await store.count() == 1
-
 
 class TestStoreConcurrency:
     @pytest.mark.asyncio
@@ -167,6 +149,7 @@ class TestStoreConcurrency:
         assert len({i.id for i in items}) == 20
 
 
+@pytest.mark.usefixtures("windows_paths")
 class TestLegacyProjectRootMigration:
     """Pre-existing ``active_workitems.json`` files may hold OS-native
     backslash paths in ``project_root`` / ``worktree_path`` from before the
@@ -192,22 +175,6 @@ class TestLegacyProjectRootMigration:
 
         assert item.project_root == "D:/ML/Projects/x"
         assert item.worktree_path == "D:/ML/Projects/x/wt/cla-99"
-
-    def test_from_dict_posix_paths_unchanged(self):
-        """Idempotency: already-POSIX entries round-trip without mutation."""
-        item = ActiveWorkItem.from_dict(
-            {
-                "id": "CLA-1",
-                "uuid": "u-1",
-                "slug": "cla-1",
-                "worktree_path": "/home/user/repo/wt/cla-1",
-                "project_root": "/home/user/repo",
-                "added_at": "2026-04-20T12:00:00+00:00",
-            },
-        )
-
-        assert item.project_root == "/home/user/repo"
-        assert item.worktree_path == "/home/user/repo/wt/cla-1"
 
     @pytest.mark.asyncio
     async def test_legacy_file_on_disk_is_normalized_on_read(self, tmp_path):

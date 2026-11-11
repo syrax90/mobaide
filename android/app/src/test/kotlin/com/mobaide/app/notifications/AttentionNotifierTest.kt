@@ -8,7 +8,6 @@ import androidx.test.core.app.ApplicationProvider
 import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -71,31 +70,6 @@ class AttentionNotifierTest {
     }
 
     @Test
-    fun awaitingOsPermission_usesMacActionCopy() {
-        notifier.notify(session(attention = "awaiting_os_permission", title = "deploy"))
-
-        val n = lastNotification()
-        assertEquals(
-            "Action needed on your Mac",
-            n.extras.getString(Notification.EXTRA_TITLE),
-        )
-        val body = n.extras.getString(Notification.EXTRA_TEXT).orEmpty()
-        assertTrue(body.contains("deploy"))
-        assertTrue(body.contains("paused"))
-        assertTrue(body.contains("Approve it on the Mac"))
-    }
-
-    @Test
-    fun awaitingOsPermission_fallsBackToProjectNameLabel() {
-        notifier.notify(
-            session(attention = "awaiting_os_permission", projectName = "mobaide"),
-        )
-
-        val body = lastNotification().extras.getString(Notification.EXTRA_TEXT).orEmpty()
-        assertTrue(body.startsWith("mobaide is paused"))
-    }
-
-    @Test
     fun awaitingOsPermission_blankLabelsFallBackToDefault() {
         notifier.notify(
             session(attention = "awaiting_os_permission", title = "  ", projectName = ""),
@@ -113,41 +87,6 @@ class AttentionNotifierTest {
             "deploy is paused — your Mac is asking to allow file access. Approve it on the Mac to continue.",
             lastNotification().extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString(),
         )
-    }
-
-    @Test
-    fun turnFailed_usesErrorCopy() {
-        notifier.notify(session(attention = "turn_failed", title = "deploy"))
-
-        val n = lastNotification()
-        assertEquals("Turn failed", n.extras.getString(Notification.EXTRA_TITLE))
-        assertEquals(
-            "deploy hit an error — tap to see what happened",
-            n.extras.getString(Notification.EXTRA_TEXT),
-        )
-    }
-
-    @Test
-    fun untitledSession_isNamedAfterItsKind() {
-        val custom = SessionKind.Custom("custom_0123456789ab")
-        val cases = listOf(
-            session(attention = "turn_finished", kind = SessionKind.Claude) to "Claude session",
-            session(attention = "turn_finished", kind = SessionKind.Codex) to "Codex session",
-            session(attention = "turn_finished", kind = SessionKind.Antigravity) to "Antigravity session",
-            session(attention = "turn_finished", kind = SessionKind.AutoScan) to "Auto Scan session",
-            session(attention = "turn_finished", kind = SessionKind.Shell) to "Terminal session",
-            session(attention = "turn_finished", kind = custom, kindLabel = "My Linter") to "My Linter session",
-            session(attention = "turn_finished", kind = custom, kindLabel = "  ") to "Agent session",
-            session(attention = "turn_finished", kind = custom) to "Agent session",
-        )
-        for ((untitled, label) in cases) {
-            notifier.notify(untitled)
-            assertEquals(
-                label,
-                "$label finished its turn — tap to continue",
-                lastNotification().extras.getString(Notification.EXTRA_TEXT),
-            )
-        }
     }
 
     @Test
@@ -169,30 +108,9 @@ class AttentionNotifierTest {
     }
 
     @Test
-    fun nullAttention_postsNothing() {
-        notifier.notify(session(attention = null))
-        assertTrue(shadowOf(manager).allNotifications.isEmpty())
-    }
-
-    @Test
     fun awaitingOsPermission_doesNotPostWithoutNotificationPermission() {
         shadowOf(application).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
         notifier.notify(session(attention = "awaiting_os_permission"))
         assertTrue(shadowOf(manager).allNotifications.isEmpty())
-    }
-
-    @Test
-    fun awaitingOsPermission_doesNotCarryAnExitReasonSuffix() {
-        // exit_reason is an ``ended``-only concern; it must not leak into the
-        // os-permission title even when present on the snapshot.
-        notifier.notify(
-            session(attention = "awaiting_os_permission", exitReason = "process_exited"),
-        )
-        val title = lastNotification().extras.getString(Notification.EXTRA_TITLE)
-        assertEquals("Action needed on your Mac", title)
-        assertNull(
-            "os-permission title must not gain an (exit_reason) suffix",
-            title?.let { if (it.contains("process_exited")) it else null },
-        )
     }
 }

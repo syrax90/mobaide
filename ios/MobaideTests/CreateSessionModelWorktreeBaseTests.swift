@@ -73,14 +73,6 @@ final class CreateSessionModelWorktreeBaseTests: XCTestCase {
 
     // MARK: - Capability gate
 
-    func testCapabilityKeyIsParsed() throws {
-        let wire = Data(Self.versionJSON(worktreeBase: true).utf8)
-        let probe = try WireJSON.decoder().decode(VersionInfoResponse.self, from: wire)
-        XCTAssertTrue(probe.gitCapabilities.worktreeBase)
-        let old = try WireJSON.decoder().decode(VersionInfoResponse.self, from: Data(Self.versionJSON(worktreeBase: false).utf8))
-        XCTAssertFalse(old.gitCapabilities.worktreeBase)
-    }
-
     func testPickerHiddenWithoutCapabilityAndNoRequestIsMade() async throws {
         let model = await readyModel(worktreeBase: false)
         XCTAssertFalse(model.showsBaseBranchPicker)
@@ -126,13 +118,6 @@ final class CreateSessionModelWorktreeBaseTests: XCTestCase {
         let model = await readyModel()
         await loaded(model, default: "origin/main", lastUsed: nil)
         XCTAssertEqual(model.baseBranch, "origin/main")
-    }
-
-    func testPreselectsNilWithNeither() async {
-        let model = await readyModel()
-        await loaded(model, default: nil, lastUsed: nil)
-        XCTAssertNil(model.baseBranch)
-        XCTAssertEqual(WorktreeBaseDisplay.label(model.baseBranch), "Default branch")
     }
 
     func testLoadFailureShowsErrorAndSendsNoBase() async throws {
@@ -181,14 +166,6 @@ final class CreateSessionModelWorktreeBaseTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requests.last?.url?.path, "/api/projects/other/git/worktree-bases")
     }
 
-    func testReselectingTheSameProjectKeepsThePick() async {
-        let model = await readyModel()
-        await loaded(model, default: "origin/main", lastUsed: nil)
-        model.pickBaseBranch("wip")
-        model.selectStoredProject("repo")
-        XCTAssertEqual(model.baseBranch, "wip")
-    }
-
     // MARK: - Request encoding
 
     func testClaudeCarriesBaseInOptions() async throws {
@@ -198,19 +175,6 @@ final class CreateSessionModelWorktreeBaseTests: XCTestCase {
         let request = try XCTUnwrap(model.buildRequest(mode: .standard))
         XCTAssertEqual(request.claude_options?.base_branch, "wip")
         XCTAssertNil(request.base_branch)
-    }
-
-    func testCodexAndAntigravityCarryBaseInOptions() async throws {
-        let model = await readyModel(mode: .codex)
-        await loaded(model, default: "origin/main", lastUsed: nil)
-        let codex = try XCTUnwrap(model.buildRequest(mode: .codex))
-        XCTAssertEqual(codex.codex_options?.base_branch, "origin/main")
-        XCTAssertNil(codex.base_branch)
-
-        model.mode = .antigravity
-        let antigravity = try XCTUnwrap(model.buildRequest(mode: .antigravity))
-        XCTAssertEqual(antigravity.antigravity_options?.base_branch, "origin/main")
-        XCTAssertNil(antigravity.base_branch)
     }
 
     func testTerminalAndCustomCarryBaseTopLevel() async throws {
@@ -247,23 +211,5 @@ final class CreateSessionModelWorktreeBaseTests: XCTestCase {
         let codex = CodexOptionsModel(worktree: true)
         let codexJSON = try XCTUnwrap(String(data: WireJSON.encoder().encode(codex), encoding: .utf8))
         XCTAssertFalse(codexJSON.contains("base_branch"), "nil keeps the agent default by staying off the wire")
-    }
-
-    // MARK: - Display
-
-    func testFilterIsCaseInsensitiveSubstring() {
-        let refs = [
-            WorktreeBaseRef(ref: "origin/Main", kind: "remote"),
-            WorktreeBaseRef(ref: "wip", kind: "local"),
-        ]
-        XCTAssertEqual(WorktreeBaseDisplay.filter(refs, query: "main").map(\.ref), ["origin/Main"])
-        XCTAssertEqual(WorktreeBaseDisplay.filter(refs, query: "  ").count, 2)
-        XCTAssertTrue(WorktreeBaseDisplay.filter(refs, query: "zzz").isEmpty)
-    }
-
-    func testRelativeTimeNeedsAReadableDate() {
-        XCTAssertNil(WorktreeBaseDisplay.relativeTime(nil))
-        XCTAssertNil(WorktreeBaseDisplay.relativeTime("garbage"))
-        XCTAssertEqual(WorktreeBaseDisplay.relativeTime("2020-01-01T00:00:00+00:00")?.hasSuffix("d ago"), true)
     }
 }

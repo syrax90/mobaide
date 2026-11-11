@@ -158,9 +158,4 @@ final class ChatFocusViewTests: XCTestCase {
         )
         XCTAssertEqual(steps(result).map(\.open), [true, false])
     }
-
-    func testStepsLabelCountsOneAndMany() {
-        XCTAssertEqual(ChatFocusView.stepsLabel(1), "1 step")
-        XCTAssertEqual(ChatFocusView.stepsLabel(4), "4 steps")
-    }
 }

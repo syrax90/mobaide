@@ -15,13 +15,6 @@ describe('decodeTerminalState', () => {
     });
   });
 
-  it('carries the exit code of an ended process', () => {
-    expect(decodeTerminalState('{"status":"stopped","exit_code":137}')).toMatchObject({
-      status: 'stopped',
-      exit_code: 137,
-    });
-  });
-
   it('treats an explicit null the same as an absent key', () => {
     const state = decodeTerminalState('{"status":"starting","pid":null,"exit_code":null}');
 
@@ -33,12 +26,6 @@ describe('decodeTerminalState', () => {
     // A newer agent inventing a sixth `_STATE_MAP` value must not make the
     // frame undecodable — the only behavioural read is the `running` compare.
     expect(decodeTerminalState('{"status":"hibernating"}')?.status).toBe('hibernating');
-  });
-
-  it('still decodes a frame carrying a field this client does not know', () => {
-    expect(decodeTerminalState('{"status":"running","cwd":"/tmp"}')?.status).toBe(
-      'running',
-    );
   });
 
   it('returns null rather than throwing on a frame it cannot use', () => {

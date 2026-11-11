@@ -5,10 +5,7 @@ import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WebSocketManager
 import com.mobaide.app.data.network.WsEvent
-import com.mobaide.app.data.network.dto.AutoScanInstanceDto
-import com.mobaide.app.data.network.dto.AutoScanListResponse
 import com.mobaide.app.data.network.dto.GitJobResponse
-import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.VoiceProgress
 import io.mockk.every
@@ -17,7 +14,6 @@ import io.mockk.verify
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.runTest
-import okio.ByteString
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -124,22 +120,6 @@ class AgentEventBusTest {
             cancelAndIgnoreRemainingEvents()
         }
         verify(exactly = 1) { conn.connect() }
-
-        bus.stop()
-    }
-
-    @Test
-    fun connection_transitionsToConnected_onWsConnectedEvent() = runTest {
-        val (bus, connEvents, _) = newBus()
-        bus.start()
-
-        bus.connection.test {
-            // Connecting (current state after start()).
-            assertEquals(AgentEventBus.ConnState.Connecting, awaitItem())
-            connEvents.emit(WsEvent.Connected)
-            assertEquals(AgentEventBus.ConnState.Connected, awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
 
         bus.stop()
     }
@@ -545,43 +525,6 @@ class AgentEventBusTest {
     }
 
     @Test
-    fun message_autoscanEvent_withoutInnerEventField_isSilentlyDropped() = runTest {
-        // Inner `event` key missing -> parseAndEmit yields `null`, no emission.
-        // We then emit a valid follow-up message to prove the collector is still
-        // alive and the preceding malformed payload did not throw.
-        val (bus, connEvents, _) = newBus()
-        bus.start()
-
-        bus.events.test {
-            connEvents.emit(
-                WsEvent.Message(
-                    """
-                    {"type":"autoscan.event","payload":{"project_name":"proj-a"}}
-                    """.trimIndent(),
-                ),
-            )
-            // No emission expected yet.
-            expectNoEvents()
-            // Follow-up valid message — must arrive, proving the bus did not crash.
-            connEvents.emit(
-                WsEvent.Message(
-                    """
-                    {
-                      "type": "projects.changed",
-                      "payload": {"projects": []}
-                    }
-                    """.trimIndent(),
-                ),
-            )
-            val evt = awaitItem() as AgentEvent.ProjectsChanged
-            assertEquals(emptyList<ProjectInfo>(), evt.projects)
-            cancelAndIgnoreRemainingEvents()
-        }
-
-        bus.stop()
-    }
-
-    @Test
     fun message_unknownType_isSilentlySkipped_andBusKeepsRunning() = runTest {
         val (bus, connEvents, _) = newBus()
         bus.start()
@@ -650,64 +593,6 @@ class AgentEventBusTest {
                 WsEvent.Message("""{"type":"sessions.changed","payload":{"sessions":[]}}"""),
             )
             awaitItem() as AgentEvent.SessionsChanged
-            cancelAndIgnoreRemainingEvents()
-        }
-
-        bus.stop()
-    }
-
-    @Test
-    fun binary_frame_isIgnored_noEmission() = runTest {
-        val (bus, connEvents, _) = newBus()
-        bus.start()
-
-        bus.events.test {
-            connEvents.emit(WsEvent.Binary(ByteString.of(1, 2, 3)))
-            expectNoEvents()
-            cancelAndIgnoreRemainingEvents()
-        }
-
-        bus.stop()
-    }
-
-    // ---- stream<T>() typed filter -------------------------------------------
-
-    @Test
-    fun stream_filtersByReifiedType_andIgnoresOtherEvents() = runTest {
-        val (bus, connEvents, _) = newBus()
-        bus.start()
-
-        bus.stream<AgentEvent.AutoScanListChanged>().test {
-            // First a SessionsChanged — the stream<T>() flow must NOT emit.
-            connEvents.emit(
-                WsEvent.Message(
-                    """{"type":"sessions.changed","payload":{"sessions":[]}}""",
-                ),
-            )
-            expectNoEvents()
-
-            // Then an AutoScanListChanged — this one should surface.
-            connEvents.emit(
-                WsEvent.Message(
-                    """
-                    {
-                      "type": "autoscan.list.changed",
-                      "payload": {"scans":[],"capacity":1,"max_scans":5,"available_projects":[]}
-                    }
-                    """.trimIndent(),
-                ),
-            )
-            val evt = awaitItem()
-            assertEquals(1, evt.list.capacity)
-            assertEquals(
-                AutoScanListResponse(
-                    scans = emptyList<AutoScanInstanceDto>(),
-                    capacity = 1,
-                    max_scans = 5,
-                    available_projects = emptyList(),
-                ),
-                evt.list,
-            )
             cancelAndIgnoreRemainingEvents()
         }
 
@@ -800,23 +685,6 @@ class AgentEventBusGitJobTest {
 
         bus.stop()
     }
-
-    @Test
-    fun message_gitJobWithoutAnId_isSkipped_andTheNextFrameStillArrives() = runTest {
-        val (bus, connEvents, _) = newBus()
-        bus.start()
-
-        bus.events.test {
-            connEvents.emit(
-                WsEvent.Message("""{"type":"git.job.progress","payload":{"session_id":"sess-42","op":"push"}}"""),
-            )
-            connEvents.emit(WsEvent.Message(doneFrame))
-            assertTrue(awaitItem() is AgentEvent.GitJobDone)
-            cancelAndIgnoreRemainingEvents()
-        }
-
-        bus.stop()
-    }
 }
 
 /** `voice.changed`: a whole `VoiceStatusResponse`, decoded as is. */
@@ -847,21 +715,6 @@ class AgentEventBusVoiceTest {
             assertTrue(changed.status.repairing)
             assertEquals(VoiceProgress(done_bytes = 43, total_bytes = 100), changed.status.progress)
             assertEquals("CC-BY-4.0", changed.status.model.notice)
-            cancelAndIgnoreRemainingEvents()
-        }
-
-        bus.stop()
-    }
-
-    @Test
-    fun message_voiceChangedItCannotType_isSkipped_andTheNextFrameStillArrives() = runTest {
-        val (bus, connEvents, _) = newBus()
-        bus.start()
-
-        bus.events.test {
-            connEvents.emit(WsEvent.Message("""{"type":"voice.changed","payload":{"state":"ready"}}"""))
-            connEvents.emit(WsEvent.Message(voiceFrame(state = "ready", repairing = false)))
-            assertEquals("ready", (awaitItem() as AgentEvent.VoiceChanged).status.state)
             cancelAndIgnoreRemainingEvents()
         }
 

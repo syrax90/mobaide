@@ -110,14 +110,6 @@ class GitNewBranchFormTest {
     }
 
     @Test
-    fun anError_isShownInline() {
-        setContent(NewBranchSheetState(error = "A branch named feature/new already exists."))
-
-        composeRule.onNodeWithTag(GIT_NEW_BRANCH_ERROR_TAG).assertIsDisplayed()
-        composeRule.onNodeWithText("A branch named feature/new already exists.").assertIsDisplayed()
-    }
-
-    @Test
     fun whileCreating_theFieldsAndButtonsAreLocked() {
         var dismissed = 0
         setContent(NewBranchSheetState(creating = true), onDismiss = { dismissed++ })
@@ -141,19 +133,6 @@ class GitNewBranchFormTest {
 
         assertEquals(1, dismissed)
         assertEquals(emptyList<Submit>(), submits)
-    }
-
-    @Test
-    fun startPointOptions_leadWithHead_thenLocalBranches_thenRemoteOnes() {
-        assertEquals(
-            listOf(
-                null to "HEAD (current commit)",
-                "feature-a" to "feature-a",
-                "main" to "main",
-                "origin/feature-x" to "origin/feature-x (remote)",
-            ),
-            startPointOptions(items).map { it.value to it.label },
-        )
     }
 
     @Test

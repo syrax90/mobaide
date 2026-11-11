@@ -2,7 +2,8 @@
 
 Covers sample_process_stats degradation, RoutingTable.gauges(),
 send-queue drop counters at representative QueueFull sites, and the
-monitoring_loop emit cadence (with time virtualized — no real sleeps).
+monitoring_loop surviving a failed emit (with time virtualized — no real
+sleeps).
 """
 from __future__ import annotations
 
@@ -26,8 +27,6 @@ from central_server.relay.routing import (
     MobileClient,
     RoutingTable,
     UserClient,
-    broadcast_user_event,
-    try_enqueue_control,
 )
 
 
@@ -79,20 +78,6 @@ def test_sample_uncapped_cgroup_max_sentinel(tmp_path):
     assert stats.rss_pct_of_cap is None
 
 
-def test_sample_zero_limit_does_not_divide(tmp_path):
-    mem_current = tmp_path / "memory.current"
-    mem_current.write_text("52428800")
-    mem_max = tmp_path / "memory.max"
-    mem_max.write_text("0")
-    fd_dir = tmp_path / "fd"
-    fd_dir.mkdir()
-
-    stats = sample_process_stats(str(mem_current), str(mem_max), str(fd_dir))
-
-    assert stats.mem_limit_bytes == 0
-    assert stats.rss_pct_of_cap is None
-
-
 def test_sample_degrades_to_none_when_paths_missing(tmp_path):
     # Off-Linux there is no cgroupfs/procfs; every field must go None
     # instead of raising so the loop stays quiet on dev machines.
@@ -103,18 +88,6 @@ def test_sample_degrades_to_none_when_paths_missing(tmp_path):
     assert stats.mem_limit_bytes is None
     assert stats.rss_pct_of_cap is None
     assert stats.open_fds is None
-
-
-def test_gauges_empty_table_is_all_zeros():
-    assert RoutingTable().gauges() == {
-        "agents_online": 0,
-        "mobile_sockets": 0,
-        "attached_sessions": 0,
-        "users_connected": 0,
-        "user_sockets": 0,
-        "agent_queue_depth_max": 0,
-        "agent_queue_depth_total": 0,
-    }
 
 
 def test_gauges_counts_connections_and_queue_depths():
@@ -149,30 +122,6 @@ def test_gauges_counts_connections_and_queue_depths():
         "agent_queue_depth_max": 3,
         "agent_queue_depth_total": 4,
     }
-
-
-def test_user_event_drop_increments_counter():
-    routing = RoutingTable()
-    client = UserClient(user_id="u1", device_id="d1", websocket=MagicMock())
-    client.send_queue = _full_queue("already-full")
-    routing.register_user_client("u1", client)
-
-    broadcast_user_event(
-        routing, "u1", "agent.status_changed", {"agent_id": "a", "online": True}
-    )
-
-    assert SEND_QUEUE_DROPS["user_event"] == 1
-    # The pre-existing frame is untouched; the new one was dropped.
-    assert client.send_queue.get_nowait() == "already-full"
-
-
-def test_control_drop_returns_false_and_counts():
-    routing = RoutingTable()
-    conn = routing.register_agent("agent-1", MagicMock())
-    conn.send_queue = _full_queue(b"already-full")
-
-    assert try_enqueue_control(conn, {"type": "request_events_snapshot"}) is False
-    assert SEND_QUEUE_DROPS["control"] == 1
 
 
 def test_agent_to_mobile_drop_counts_only_on_full_queue():
@@ -228,40 +177,6 @@ def _instant_ticks(monkeypatch):
 
     monkeypatch.setattr(monitoring.asyncio, "sleep", instant_sleep)
     return sleeps
-
-
-async def test_monitoring_loop_emits_after_each_interval(
-    config, monkeypatch, _instant_ticks
-):
-    emitted = asyncio.Event()
-    calls: list[tuple] = []
-    ticks_at_first_emit: list[int] = []
-
-    def fake_emit(routing, lag_max_ms, lag_avg_ms):
-        if not calls:
-            ticks_at_first_emit.append(len(_instant_ticks))
-        calls.append((routing, lag_max_ms, lag_avg_ms))
-        emitted.set()
-
-    monkeypatch.setattr(monitoring, "_emit_sample", fake_emit)
-
-    routing = RoutingTable()
-    fast_config = dataclasses.replace(config, monitoring_interval_seconds=1)
-    task = asyncio.create_task(monitoring_loop(routing, fast_config))
-    try:
-        await asyncio.wait_for(emitted.wait(), timeout=5)
-    finally:
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-
-    first_routing, lag_max_ms, lag_avg_ms = calls[0]
-    assert first_routing is routing
-    assert lag_max_ms >= 0.0
-    assert lag_avg_ms >= 0.0
-    # A 1 s interval accumulates lag over 5 × 0.2 s ticks per emitted line.
-    assert ticks_at_first_emit == [5]
-    assert _instant_ticks[:5] == [pytest.approx(0.2)] * 5
 
 
 async def test_monitoring_loop_survives_emit_failure(

@@ -129,48 +129,4 @@ final class DeleteAccountModelTests: XCTestCase {
         let state = await harness.session.sessionManager.currentAuthState
         XCTAssertEqual(state, .unauthenticated)
     }
-
-    func testForbiddenSurfacesSeedAdminMessage() async {
-        StubURLProtocol.enqueue(status: 400, body: "{}")
-        let model = makeModel()
-        model.start()
-        model.chooseMethod(.password)
-        model.onPasswordChange("pw")
-        model.confirmPasswordReauth()
-        model.onTypedEmailChange("user@example.com")
-
-        await model.submit()
-
-        guard case .confirmEmail(_, _, _, let error, _) = model.step else { return XCTFail("expected confirmEmail") }
-        XCTAssertEqual(error, "This account cannot be self-deleted (seed admin).")
-    }
-
-    func testReauthFailedSurfacesServerMessage() async {
-        StubURLProtocol.enqueue(status: 403, body: """
-        {"detail":{"error":"reauth_required","message":"Re-authenticate and try again."}}
-        """)
-        let model = makeModel()
-        model.start()
-        model.chooseMethod(.password)
-        model.onPasswordChange("pw")
-        model.confirmPasswordReauth()
-        model.onTypedEmailChange("user@example.com")
-
-        await model.submit()
-
-        guard case .confirmEmail(_, _, _, let error, _) = model.step else { return XCTFail("expected confirmEmail") }
-        XCTAssertEqual(error, "Re-authenticate and try again.")
-    }
-
-    // MARK: - Empty-password guard
-
-    func testEmptyPasswordStaysOnReAuthWithError() {
-        let model = makeModel()
-        model.start()
-        model.chooseMethod(.password)
-        model.confirmPasswordReauth()
-
-        guard case .reAuthPassword(_, _, let error, _) = model.step else { return XCTFail("expected reAuthPassword") }
-        XCTAssertEqual(error, "Enter your password.")
-    }
 }

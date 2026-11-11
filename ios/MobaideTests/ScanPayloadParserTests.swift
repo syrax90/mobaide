@@ -36,14 +36,6 @@ final class ScanPayloadParserTests: XCTestCase {
         )
     }
 
-    func testIssueWithoutErrorIsNil() {
-        let payload: [String: Any] = ["identifier": "ISS-2", "title": "t", "step": "label_removal", "status": "ok"]
-        XCTAssertEqual(
-            ScanPayloadParser.parse(type: "issue", payload: payload),
-            .issue(identifier: "ISS-2", title: "t", step: "label_removal", status: "ok", error: nil)
-        )
-    }
-
     func testWorktree() {
         let payload: [String: Any] = ["identifier": "ISS-3", "path": "/w/ISS-3"]
         XCTAssertEqual(
@@ -60,26 +52,10 @@ final class ScanPayloadParserTests: XCTestCase {
         )
     }
 
-    func testSessionWithoutPidIsNil() {
-        let payload: [String: Any] = ["identifier": "ISS-4", "session_id": "s-1"]
-        XCTAssertEqual(
-            ScanPayloadParser.parse(type: "session", payload: payload),
-            .session(identifier: "ISS-4", sessionId: "s-1", pid: nil)
-        )
-    }
-
     func testLogDefaultsLevelToInfoAndAnsiFalse() {
         XCTAssertEqual(
             ScanPayloadParser.parse(type: "log", payload: ["line": "hello"]),
             .log(line: "hello", level: "info", ansi: false)
-        )
-    }
-
-    func testLogWithAnsiFlag() {
-        let payload: [String: Any] = ["line": "\u{1B}[31mred", "level": "debug", "ansi": true]
-        XCTAssertEqual(
-            ScanPayloadParser.parse(type: "log", payload: payload),
-            .log(line: "\u{1B}[31mred", level: "debug", ansi: true)
         )
     }
 

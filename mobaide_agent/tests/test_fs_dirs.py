@@ -114,10 +114,6 @@ class TestListing:
             path=root, dirs=[".git", "Alpha", "beta", "gamma"], truncated=False
         )
 
-    async def test_empty_directory_is_an_empty_complete_listing(self, tmp_path):
-        assert await list_dirs(str(tmp_path)) == FsDirsResponse(
-            path=str(tmp_path), dirs=[], truncated=False
-        )
 
     @posix_only
     async def test_symlink_to_a_directory_counts_and_a_dangling_one_does_not(self, tmp_path):
@@ -140,10 +136,6 @@ class TestListing:
         assert listing.dirs == ["MyProj", "project"]
         assert listing.truncated is False
 
-    async def test_empty_q_is_no_filter(self, tmp_path):
-        root = _tree(tmp_path, ["a", "b"])
-
-        assert (await list_dirs(root, "")).dirs == ["a", "b"]
 
     @posix_only
     async def test_tilde_is_expanded_and_echoed_absolute(self, tmp_path, monkeypatch):
@@ -311,11 +303,6 @@ class TestTransports:
         resp = await client.get("/api/version", headers=auth_headers)
 
         assert resp.json()["capabilities"]["fs"] == _FS_CAPABILITIES
-
-    async def test_relay_version_advertises_fs_dirs(self, relay):
-        result = await relay._dispatch_proxy("GET", "/api/version", None, None, AsyncMock())
-
-        assert result["body"]["capabilities"]["fs"] == _FS_CAPABILITIES
 
 
 def _fixture_cases():

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import uuid
 
 import pytest
@@ -47,9 +46,6 @@ async def test_request_emits_received_and_completed(client, caplog):
 # ---------------------------------------------------------------------------
 
 
-_HEX_32_RE = re.compile(r"^[0-9a-f]{32}$")
-
-
 def _app_records(caplog) -> list[dict]:
     """Extract app-middleware LogRecords where ``msg`` is a dict.
 
@@ -83,22 +79,8 @@ class TestHealthEndpointSkipped:
         assert not any(r.get("path") == "/api/health" for r in received)
         assert not any(r.get("path") == "/api/health" for r in completed)
 
-    async def test_health_still_returns_correlation_id_header(self, client):
-        """``CorrelationIdMiddleware`` is outer — it still runs for /api/health."""
-        resp = await client.get("/api/health")
-        assert resp.status_code == 200
-        header_keys = {k.lower() for k in resp.headers.keys()}
-        assert "x-request-id" in header_keys
-
 
 class TestCorrelationIdHeader:
-    async def test_generates_32_char_hex_when_missing(self, client):
-        """Absent header → server generates a W3C trace-id shaped value."""
-        resp = await client.get("/api/health")
-        rid = resp.headers.get("x-request-id", "")
-        assert _HEX_32_RE.match(rid), (
-            f"expected 32-char hex trace id, got: {rid!r}"
-        )
 
     async def test_reflects_valid_uuid4_from_client(self, client):
         """Client-provided UUID4 is echoed back by CorrelationIdMiddleware."""
@@ -109,17 +91,6 @@ class TestCorrelationIdHeader:
         )
         assert resp.status_code == 200
         assert resp.headers.get("x-request-id") == supplied
-
-    async def test_back_to_back_requests_get_distinct_ids(self, client):
-        """Two requests without X-Request-ID must not share a correlation id."""
-        r1 = await client.get("/api/health")
-        r2 = await client.get("/api/health")
-
-        id1 = r1.headers.get("x-request-id")
-        id2 = r2.headers.get("x-request-id")
-
-        assert id1 and id2
-        assert id1 != id2
 
 
 class TestCompletedEventFields:

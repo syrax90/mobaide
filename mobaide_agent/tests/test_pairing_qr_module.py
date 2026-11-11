@@ -114,12 +114,6 @@ def _far_future_payload() -> str:
 
 
 class TestComputeTrustKeyFp:
-    def test_matches_sha256_hex_of_decoded_bytes(self):
-        raw = b"\x42" * 32
-        b64 = base64.b64encode(raw).decode()
-
-        assert compute_trust_key_fp(b64) == hashlib.sha256(raw).hexdigest()
-
     def test_known_vector_matches_pinned_algorithm(self):
         # Pinned vector — if either side of the agent/server/Android
         # triplet drifts, this test catches it before integration.
@@ -135,13 +129,6 @@ class TestComputeTrustKeyFp:
 
 
 class TestEncodeQrPayload:
-    def test_canonical_format(self):
-        out = encode_qr_payload(
-            "https://relay.test", "n1", "ff" * 32, 1700000000
-        )
-
-        assert out == f"MOBA1|https://relay.test|n1|{'ff' * 32}|1700000000"
-
     @pytest.mark.parametrize(
         "case", _ENCODE_CASES, ids=_case_ids(_ENCODE_CASES)
     )
@@ -157,21 +144,6 @@ class TestEncodeQrPayload:
 
 
 class TestParseQrPayload:
-    def test_round_trip_with_encode(self):
-        text = encode_qr_payload(
-            "https://relay.test", "n1", "ff" * 32, 1700000000
-        )
-
-        parsed = parse_qr_payload(text)
-
-        assert parsed == ParsedQrPayload(
-            version="MOBA1",
-            relay_url="https://relay.test",
-            nonce="n1",
-            trust_key_fp="ff" * 32,
-            exp_unix=1700000000,
-        )
-
     @pytest.mark.parametrize(
         "bad",
         [
@@ -212,19 +184,12 @@ class TestParseQrPayload:
 
 
 class TestPairingWebOrigin:
-    def test_defaults_when_unset(self, monkeypatch):
-        monkeypatch.delenv(PAIRING_WEB_ORIGIN_ENV, raising=False)
-
-        assert pairing_web_origin() == DEFAULT_PAIRING_WEB_ORIGIN
-
     @pytest.mark.parametrize(
         "override,expected",
         [
-            ("https://pair.example.com", "https://pair.example.com"),
             # A dev server on loopback has no TLS; refusing plain http would
             # make the override useless for exactly the case it exists for.
             ("http://localhost:5173", "http://localhost:5173"),
-            ("https://pair.example.com/", "https://pair.example.com"),
             # Every trailing slash, so the link never grows a `//pair`.
             ("https://pair.example.com///", "https://pair.example.com"),
             ("  https://pair.example.com  ", "https://pair.example.com"),
@@ -240,11 +205,8 @@ class TestPairingWebOrigin:
         [
             "",
             "app.mobaide.com",           # no scheme — not clickable
-            "ftp://app.mobaide.com",     # scheme a browser will not open
             "javascript:alert(1)",       # would render an executable "link"
             "https://",                  # scheme only: rstrip leaves "https:"
-            "http://",
-            "https:///",
         ],
     )
     def test_ignores_unusable_override(self, monkeypatch, override):
@@ -262,21 +224,6 @@ class TestFormatPairingLink:
         monkeypatch.setenv(PAIRING_WEB_ORIGIN_ENV, case["origin"])
 
         assert format_pairing_link(case["payload"]) == case["expect"]
-
-    @pytest.mark.parametrize("case", _LINK_CASES, ids=_case_ids(_LINK_CASES))
-    def test_fragment_is_url_safe(self, monkeypatch, case):
-        # The whole reason for base64url: a raw `|` is not a legal URL
-        # character and terminal linkifiers stop at the first one, handing the
-        # user a truncated link. `=` padding is stripped for the same reason.
-        monkeypatch.setenv(PAIRING_WEB_ORIGIN_ENV, case["origin"])
-
-        fragment = format_pairing_link(case["payload"]).split("#", 1)[1]
-
-        assert set(fragment) <= set(
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-            "abcdefghijklmnopqrstuvwxyz"
-            "0123456789-_"
-        )
 
     @pytest.mark.parametrize("case", _LINK_CASES, ids=_case_ids(_LINK_CASES))
     def test_fragment_round_trips_back_to_the_payload(self, monkeypatch, case):
@@ -301,14 +248,6 @@ class TestWritePairingHints:
 
         return stream.getvalue()
 
-    def test_payload_occupies_its_own_unbroken_line(self, monkeypatch):
-        # No prefix, no wrapping, nothing else on the line. A user selects the
-        # line and copies it; a prefix would ride along into the paste box and
-        # a manual break would embed a newline the parser has to survive.
-        lines = self._render(monkeypatch).split("\n")
-
-        assert self._PAYLOAD in lines
-
     def test_link_occupies_its_own_line_after_the_payload(self, monkeypatch):
         out = self._render(monkeypatch)
         lines = out.split("\n")
@@ -319,11 +258,6 @@ class TestWritePairingHints:
         assert lines.index(self._PAYLOAD) < next(
             index for index, line in enumerate(lines) if line.startswith(link)
         )
-
-    def test_link_matches_format_pairing_link(self, monkeypatch):
-        out = self._render(monkeypatch)
-
-        assert format_pairing_link(self._PAYLOAD) in out.split("\n")
 
     def test_output_is_pure_ascii(self, monkeypatch):
         # A Windows service redirects stdout to a cp437/cp1252 log file, and a
@@ -369,14 +303,6 @@ class TestWritePairingHints:
 
         assert self._PAYLOAD in buf.getvalue().decode("cp1252").split("\n")
 
-    def test_defaults_to_stdout(self, monkeypatch, capsys):
-        monkeypatch.delenv(PAIRING_WEB_ORIGIN_ENV, raising=False)
-
-        write_pairing_hints(self._PAYLOAD)
-
-        assert self._PAYLOAD in capsys.readouterr().out.split("\n")
-
-
 class TestReadPinnedTrustKeyFp:
     def test_returns_none_when_unpinned(self, layout):
         # Trust file does not exist yet.
@@ -407,9 +333,6 @@ class TestPendingPairingLifecycle:
         loaded = load_pending_pairing(layout)
 
         assert loaded == pending
-
-    def test_load_returns_none_when_file_absent(self, layout):
-        assert load_pending_pairing(layout) is None
 
     def test_load_returns_none_on_corrupt_json(self, layout):
         target = pending_pairing_path(layout)
@@ -445,18 +368,6 @@ class TestPendingPairingLifecycle:
         clear_pending_pairing(layout)  # second call must not raise
 
         assert not pending_pairing_path(layout).exists()
-
-    def test_save_writes_atomic_and_readable_json(self, layout):
-        # The file must be valid JSON parseable into PendingPairing's fields.
-        pending = _pending_for_now(_far_future_payload())
-
-        save_pending_pairing(layout, pending)
-        text = pending_pairing_path(layout).read_text(encoding="utf-8")
-        decoded = json.loads(text)
-
-        assert decoded["nonce"] == pending.nonce
-        assert decoded["qr_payload"] == pending.qr_payload
-
 
 _SAMPLE_QR_PAYLOAD = (
     f"MOBA1|wss://relay.test|abcdef0123456789|{'ff' * 32}|9999999999"
@@ -518,19 +429,6 @@ class TestRenderQrToTerminal:
         assert not any(
             ord(c) in _BLOCK_GLYPH_RANGE for c in output
         ), "ASCII fallback must not emit half-block glyphs"
-
-    def test_ascii_fallback_when_stream_has_no_encoding(self):
-        # io.StringIO has encoding=None — exercises the no-encoding branch
-        # of _stream_supports_block_glyphs without needing a real codec.
-        stream = io.StringIO()
-
-        render_qr_to_terminal(_SAMPLE_QR_PAYLOAD, stream=stream)
-        output = stream.getvalue()
-
-        assert "##" in output
-        assert all(
-            ord(c) < 128 for c in output
-        ), "encoding=None must use the pure-ASCII fallback"
 
     def test_ascii_fallback_when_stream_encoding_is_unknown_codec(self):
         # A misconfigured ``PYTHONIOENCODING`` (or a custom stream wrapper

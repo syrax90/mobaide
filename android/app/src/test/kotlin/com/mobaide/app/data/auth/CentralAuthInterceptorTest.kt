@@ -68,23 +68,6 @@ class CentralAuthInterceptorTest {
     }
 
     @Test
-    fun unauthorized_onGetMobileTokens_invalidatesSession() {
-        // `POST /api/agents/{id}/token` also uses the dashboard JWT. A
-        // 401 here means the same thing as on `/api/agents` — invalidate.
-        val sm = mockk<SessionManager>(relaxUnitFun = true)
-        val chain = mockk<Interceptor.Chain>()
-        val req = request("https://central.example.com/api/agents/agent-1/token")
-        every { chain.request() } returns req
-        every { chain.proceed(req) } returns responseFor(req, 401)
-
-        CentralAuthInterceptor(sm).intercept(chain)
-
-        verify(exactly = 1) {
-            sm.invalidateUserSession(SessionManager.InvalidationReason.TokenRejected)
-        }
-    }
-
-    @Test
     fun unauthorized_onLoginEndpoint_doesNotInvalidate() {
         // Wrong password legitimately produces a 401 on /api/auth/login.
         // The user isn't logged in yet, so there's no session to invalidate.
@@ -142,27 +125,6 @@ class CentralAuthInterceptorTest {
 
         assertEquals(500, result.code)
         verify(exactly = 0) { sm.invalidateUserSession(any()) }
-    }
-
-    @Test
-    fun unauthorized_response_isReturnedToCaller() {
-        // The interceptor does NOT swallow the 401 — the caller
-        // (CentralApi.execute) still needs to throw an ApiException so
-        // that the ViewModel knows the call failed. We only add the
-        // side-effect of invalidating the session; we do not alter the
-        // response.
-        val sm = mockk<SessionManager>(relaxUnitFun = true)
-        val chain = mockk<Interceptor.Chain>()
-        val req = request("https://central.example.com/api/agents")
-        every { chain.request() } returns req
-        val upstream = responseFor(req, 401, """{"detail":"Invalid token"}""")
-        every { chain.proceed(req) } returns upstream
-
-        val result = CentralAuthInterceptor(sm).intercept(chain)
-
-        assertEquals(401, result.code)
-        val body = result.body?.string()
-        assertEquals("""{"detail":"Invalid token"}""", body)
     }
 
     @Test

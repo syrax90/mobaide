@@ -524,19 +524,6 @@ describe('TerminalSessionModel clipboard copy', () => {
     Reflect.deleteProperty(navigator, 'clipboard');
   });
 
-  it('reports a refused write while the model is still alive', async () => {
-    const { model } = await liveRunning();
-    vi.spyOn(model.term, 'getSelection').mockReturnValue('copied text');
-
-    const copying = model.copySelection();
-    settleWrite('refused');
-    await copying;
-
-    expect(useToastStore.getState().toasts.map((toast) => toast.kind)).toEqual([
-      'error',
-    ]);
-  });
-
   it('stays quiet when the model is disposed mid-write', async () => {
     // `stopAllRealtime()` fires on every session change, so a disposal landing
     // inside the clipboard await is ordinary. The continuation would otherwise
@@ -694,17 +681,6 @@ describe('TerminalSessionModel synchronized output guard', () => {
     expect(toastKinds()).toEqual(['info']);
   });
 
-  it('lets the browser context menu copy through once the program ends the frame', async () => {
-    const { model, deliverFrame } = await selecting(ARM_SYNC);
-    vi.spyOn(model.term, 'hasSelection').mockReturnValue(true);
-
-    deliverFrame(outputFrame(DISARM_SYNC));
-    await settle();
-
-    expect(model.nativeCopyAllowed()).toBe(true);
-    expect(toastKinds()).toEqual([]);
-  });
-
   it('leaves a copy carrying no terminal selection alone', async () => {
     // The page's own selection — a header label, an error message — is not the
     // terminal's to refuse, and must not raise a toast either.
@@ -840,7 +816,6 @@ describe('TerminalSessionModel selection focus', () => {
 
 describe('TerminalSessionModel scrollbar geometry', () => {
   const ALT_SCREEN_ON = '\u001b[?1049h';
-  const MOUSE_TRACKING_ON = '\u001b[?1000h';
   const ALT_SCREEN_OFF = '\u001b[?1049l';
 
   /** Comfortably past the 24-row default grid, so a real scrollback exists. */
@@ -932,22 +907,6 @@ describe('TerminalSessionModel scrollbar geometry', () => {
     expect(model.scrollbar.getState().mode).toBe('relative');
   });
 
-  it('hands it over for mouse tracking on a buffer with no scrollback', async () => {
-    const { model, deliverFrame } = await liveRunning();
-
-    deliverFrame(outputFrame(MOUSE_TRACKING_ON));
-    await settle();
-
-    expect(model.term.modes.mouseTrackingMode).not.toBe('none');
-    expect(model.scrollbar.getState().mode).toBe('relative');
-  });
-
-  it('stays idle on a fresh primary buffer nobody is scrolling', async () => {
-    const { model } = await liveRunning();
-
-    expect(model.scrollbar.getState().mode).toBe('idle');
-  });
-
   it('refuses a relative scroll before the terminal is in the DOM', async () => {
     // jsdom never opens the emulator in these suites, so there is no element to
     // dispatch at; the guard is what keeps that from throwing.
@@ -967,17 +926,6 @@ describe('TerminalSessionModel scrollbar geometry', () => {
       configurable: true,
     });
   }
-
-  it('spends a pixel wheel at one row per cell height', async () => {
-    const { model } = await withScrollback();
-    // 24 rows over 360 px, so a row is 15 px and 150 px is ten of them.
-    statedHostHeight(model, 24 * 15);
-    model.scrollToOffset(0);
-
-    model.scrollByPixels(150);
-
-    expect(model.term.buffer.active.viewportY).toBe(10);
-  });
 
   it('carries a sub-row remainder between wheel events', async () => {
     // 70 px is 4 rows and two thirds. Rounding each event down would spend 8

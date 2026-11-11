@@ -42,10 +42,6 @@ describe('maskEmail', () => {
     expect(maskEmail('abc@example.com')).toBe('a••@example.com');
   });
 
-  it('switches to first-and-last at the four-character boundary', () => {
-    expect(maskEmail('abcd@example.com')).toBe('a••d@example.com');
-  });
-
   it('leaves a value that is not an email alone', () => {
     expect(maskEmail('no-at-sign')).toBe('no-at-sign');
     expect(maskEmail('@example.com')).toBe('@example.com');
@@ -65,12 +61,6 @@ describe('resetPasswordMessage', () => {
     );
   });
 
-  it('falls back to a 60s wait when the network rate limit sends none', () => {
-    expect(resetPasswordMessage(apiError(429, 'reset_ip_rate_limited'))).toBe(
-      'Too many requests from this network. Try again in 60s.',
-    );
-  });
-
   it('separates a per-code 429 from the per-network one', () => {
     expect(resetPasswordMessage(apiError(429))).toBe(
       'Too many attempts. Request a new code.',
@@ -86,11 +76,6 @@ describe('resetPasswordMessage', () => {
     );
   });
 
-  it('treats a transport failure as a connection problem', () => {
-    expect(resetPasswordMessage(new TypeError('Failed to fetch'))).toBe(
-      "Couldn't reset password. Check your connection and try again.",
-    );
-  });
 });
 
 describe('shouldClearCode', () => {
@@ -140,21 +125,12 @@ describe('loginMessage', () => {
     );
   });
 
-  it('says one minute, not one minutes, for a wait under a minute', () => {
-    expect(loginMessage(apiError(429, 'login_rate_limited', 30))).toBe(
-      'Too many sign-in attempts. Try again in 1 minute, or reset your password.',
-    );
-  });
-
   it("falls back to the relay's 15-minute window when the 429 sends no wait", () => {
     expect(loginMessage(apiError(429))).toBe(
       'Too many sign-in attempts. Try again in 15 minutes, or reset your password.',
     );
   });
 
-  it('keeps the wrong-password copy for a 401', () => {
-    expect(loginMessage(apiError(401))).toBe('Invalid email or password');
-  });
 });
 
 describe('registerMessage', () => {

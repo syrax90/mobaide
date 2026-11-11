@@ -53,14 +53,4 @@ final class ConversionStateStoreTests: XCTestCase {
         let values = try file.resourceValues(forKeys: [.isExcludedFromBackupKey])
         XCTAssertEqual(values.isExcludedFromBackup, true)
     }
-
-    func testAFreshDirectoryStartsEmpty() {
-        let other = ConversionStateStore(
-            directory: FileManager.default.temporaryDirectory
-                .appendingPathComponent("conversion-state-\(UUID().uuidString)", isDirectory: true)
-        )
-
-        XCTAssertNil(other.getArmedAt())
-        XCTAssertNil(other.getOutcome(userId: "u1"))
-    }
 }

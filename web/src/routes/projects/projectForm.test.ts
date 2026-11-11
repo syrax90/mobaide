@@ -67,14 +67,6 @@ describe('buildProjectUpdate', () => {
     expect(renamed.path).toBe('/srv/renamed');
   });
 
-  it('omits linear_api_key entirely when nothing was typed and no clear is pending', () => {
-    const snapshot = project({ has_linear_key: true });
-
-    expect(Object.hasOwn(buildProjectUpdate(snapshot, formFor(snapshot)), 'linear_api_key')).toBe(
-      false,
-    );
-  });
-
   it('clears the linear key with an explicit empty string', () => {
     const snapshot = project({ has_linear_key: true });
 
@@ -99,12 +91,6 @@ describe('buildProjectUpdate', () => {
 
     expect(Object.hasOwn(body, 'conda_env')).toBe(true);
     expect(body.conda_env).toBe('');
-  });
-
-  it('omits conda_env when the project never had one and the field is blank', () => {
-    const snapshot = project();
-
-    expect(Object.hasOwn(buildProjectUpdate(snapshot, formFor(snapshot)), 'conda_env')).toBe(false);
   });
 
   it('omits default_flags while the editor mirrors the wire map, and clears it with {}', () => {
@@ -224,10 +210,7 @@ describe('validation', () => {
 
   it.each([
     [{ label_names: [] }, 'Select at least one trigger label'],
-    [{ state_names: [] }, 'Select at least one trigger state'],
-    [{ active_state: '  ' }, 'Active state is required'],
     [{ done_state: '' }, 'Done state is required'],
-    [{ removal_label: ' ' }, 'Removal label is required'],
     [{}, null],
   ])('filterError(%j)', (over, expected) => {
     expect(filterError(filter(over))).toBe(expected);

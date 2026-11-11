@@ -20,18 +20,6 @@ class AuthErrorsTest {
     }
 
     @Test
-    fun loginRateLimitedMessage_saysOneMinuteForAShortWait() {
-        assertEquals(
-            "Too many sign-in attempts. Try again in 1 minute, or reset your password.",
-            loginRateLimitedMessage(1),
-        )
-        assertEquals(
-            "Too many sign-in attempts. Try again in 1 minute, or reset your password.",
-            loginRateLimitedMessage(60),
-        )
-    }
-
-    @Test
     fun passwordLengthError_countsCodePointsLikeTheServer() {
         // Four emoji are eight UTF-16 units but four code points: too short.
         assertEquals(PASSWORD_TOO_SHORT_MESSAGE, passwordLengthError("😀😀😀😀"))

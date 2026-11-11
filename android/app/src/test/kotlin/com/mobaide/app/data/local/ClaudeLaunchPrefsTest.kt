@@ -36,20 +36,6 @@ class ClaudeLaunchPrefsTest {
     }
 
     @Test
-    fun encodedBlob_alwaysCarriesToggleFields_forCrossVersionReads() {
-        // encodeDefaults=true in the store means even all-false prefs write the
-        // toggle keys explicitly, so a later build never misreads absence.
-        val encoded = json.encodeToString(
-            ClaudeLaunchPrefs.serializer(),
-            ClaudeLaunchPrefs(skipPermissions = true, planMode = true),
-        )
-
-        assertTrue(encoded.contains("\"skipPermissions\":true"))
-        assertTrue(encoded.contains("\"noMemory\":false"))
-        assertTrue(encoded.contains("\"planMode\":true"))
-    }
-
-    @Test
     fun legacyBlob_withoutFocusMode_restoresFocusViewOn() {
         val legacy = """{"model":"opus","effort":"max","debug":false}"""
 

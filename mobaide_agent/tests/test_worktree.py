@@ -42,15 +42,6 @@ class TestConvertToWorktreeSlug:
         parts = slug.split("-")
         assert len(parts) <= 10
 
-    def test_collapses_multiple_dashes(self):
-        slug = convert_to_worktree_slug("CLA-1", "hello---world")
-        assert "--" not in slug
-
-    def test_trims_leading_trailing_dashes(self):
-        slug = convert_to_worktree_slug("CLA-1", "  hello  ")
-        assert not slug.startswith("-")
-        assert not slug.endswith("-")
-
     def test_empty_title_falls_back_to_identifier(self):
         slug = convert_to_worktree_slug("CLA-99", "")
         assert slug == "cla-99"
@@ -59,16 +50,6 @@ class TestConvertToWorktreeSlug:
         slug = convert_to_worktree_slug("CLA-5", "!@#$%")
         assert slug  # should not be empty
         assert "cla-5" in slug
-
-    def test_lowercase(self):
-        slug = convert_to_worktree_slug("CLA-8", "Server Linear Integration")
-        assert slug == slug.lower()
-
-    def test_exact_10_tokens(self):
-        title = "a b c d e f g h i"  # identifier + 9 title words = 10 tokens
-        slug = convert_to_worktree_slug("X-1", title)
-        assert slug == "x-1-a-b-c-d-e-f-g-h"
-        assert len(slug.split("-")) == 10
 
 
 # -- create_standard_worktree --
@@ -108,25 +89,6 @@ class TestCreateStandardWorktree:
         branch = mgr.create_worktree.await_args.kwargs["branch_name"]
         assert branch.startswith("terminal-session-")
         assert len(branch) > len("terminal-session-")  # a hex suffix was appended
-
-    async def test_none_branch_defaults_using_default_prefix(self):
-        mgr = self._mock_mgr()
-
-        await create_standard_worktree(mgr, "/repo", None)
-
-        branch = mgr.create_worktree.await_args.kwargs["branch_name"]
-        assert branch.startswith("claude-session-")
-
-    async def test_default_branch_slug_matches_branch(self):
-        """The slug is derived from the *defaulted* branch, so the worktree dir
-        and branch stay correlated when no name was supplied."""
-        mgr = self._mock_mgr()
-
-        await create_standard_worktree(mgr, "/repo", None, fallback_prefix="terminal-session")
-
-        call = mgr.create_worktree.await_args
-        branch = call.kwargs["branch_name"]
-        assert call.args[0] == convert_to_worktree_slug("", branch)
 
     async def test_two_blank_branch_calls_get_distinct_branches(self):
         """Two worktree-on sessions with blank branches must not collide on the

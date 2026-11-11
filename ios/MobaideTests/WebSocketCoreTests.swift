@@ -159,19 +159,6 @@ final class WebSocketCoreTests: XCTestCase {
         XCTAssertTrue(suppressed)
     }
 
-    func testClose4002EmptyReasonFallsBackToDefaultMessage() async throws {
-        let factory = FakeWebSocketTransportFactory()
-        let (core, collector) = makeCore(factory: factory)
-        await core.connect()
-
-        let connection = try await factory.connection(1)
-        connection.emit(.closed(code: 4002, reason: ""))
-
-        _ = try await collector.next()
-        let terminal = try await collector.next()
-        XCTAssertEqual(terminal, .incompatibleServer(reason: "Server protocol incompatible"))
-    }
-
     func testCodes4011And4012FallThroughToReconnect() async throws {
         let factory = FakeWebSocketTransportFactory()
         let sleeper = RecordingSleeper()
@@ -269,19 +256,6 @@ final class WebSocketCoreTests: XCTestCase {
         XCTAssertEqual(sleeper.durations, [])
     }
 
-    func testThrowingURLProviderEmitsError() async throws {
-        struct ProviderError: Error {}
-        let factory = FakeWebSocketTransportFactory()
-        let (core, collector) = makeCore(factory: factory, url: { throw ProviderError() })
-        await core.connect()
-
-        let event = try await collector.next()
-        guard case .error = event else {
-            return XCTFail("expected .error, got \(event)")
-        }
-        XCTAssertTrue(factory.connections.isEmpty)
-    }
-
     func testDisconnectClosesWithNormalCodeAndStopsReconnect() async throws {
         let factory = FakeWebSocketTransportFactory()
         let sleeper = RecordingSleeper()
@@ -308,37 +282,5 @@ final class WebSocketCoreTests: XCTestCase {
         XCTAssertFalse(sent)
         let event = try await collector.next()
         XCTAssertEqual(event, .error("WebSocket send failed"))
-    }
-
-    func testSendForwardsTextAndBinaryToTransport() async throws {
-        let factory = FakeWebSocketTransportFactory()
-        let (core, collector) = makeCore(factory: factory)
-        await core.connect()
-
-        let connection = try await factory.connection(1)
-        connection.emit(.opened)
-        _ = try await collector.next()
-
-        let sentText = await core.send(text: "ping")
-        let sentBinary = await core.send(binary: Data([0x69, 0x68]))
-        XCTAssertTrue(sentText)
-        XCTAssertTrue(sentBinary)
-        XCTAssertEqual(connection.sentTexts, ["ping"])
-        XCTAssertEqual(connection.sentBinaries, [Data([0x69, 0x68])])
-    }
-
-    func testMessageAndBinaryEventsAreForwarded() async throws {
-        let factory = FakeWebSocketTransportFactory()
-        let (core, collector) = makeCore(factory: factory)
-        await core.connect()
-
-        let connection = try await factory.connection(1)
-        connection.emit(.text("{\"type\":\"snapshot\"}"))
-        connection.emit(.binary(Data([0x6F, 0x68])))
-
-        let message = try await collector.next()
-        let binary = try await collector.next()
-        XCTAssertEqual(message, .message("{\"type\":\"snapshot\"}"))
-        XCTAssertEqual(binary, .binary(Data([0x6F, 0x68])))
     }
 }

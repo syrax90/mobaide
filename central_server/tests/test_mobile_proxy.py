@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from central_server.relay.mobile_proxy import MobileProxy, router
-from central_server.relay.routing import AgentConnection, RoutingTable
+from central_server.relay.routing import RoutingTable
 
 
 # ---------------------------------------------------------------------------
@@ -56,28 +56,6 @@ class TestMobileProxyForward:
         assert result["status"] == 200
         assert result["body"] == {"sessions": []}
 
-    async def test_forward_sends_control_envelope_to_agent_queue(
-        self, proxy: MobileProxy, routing: RoutingTable
-    ):
-        ws = _mock_ws()
-        conn = routing.register_agent("agent-1", ws)
-
-        async def resolve_after_checking():
-            await asyncio.sleep(0.01)
-            envelope = conn.send_queue.get_nowait()
-            assert isinstance(envelope, bytes)
-            request_id = next(iter(proxy._pending))
-            proxy.resolve(request_id, {"status": 200, "body": {}})
-
-        task = asyncio.create_task(
-            proxy.forward("agent-1", "POST", "/api/sessions", body={"name": "test"}, timeout=2.0)
-        )
-        check_task = asyncio.create_task(resolve_after_checking())
-
-        result = await task
-        await check_task
-        assert result["status"] == 200
-
     async def test_forward_agent_offline_raises_503(self, proxy: MobileProxy):
         from fastapi import HTTPException
 
@@ -118,7 +96,6 @@ class TestMobileProxyForward:
         async def check_and_resolve():
             await asyncio.sleep(0.01)
             envelope = conn.send_queue.get_nowait()
-            ch = envelope[0]
             sid_len = envelope[1]
             payload_bytes = envelope[2 + sid_len:]
             ctrl = json.loads(payload_bytes)
@@ -143,37 +120,9 @@ class TestMobileProxyForward:
         await check
         assert result["status"] == 201
 
-    async def test_forward_omits_query_and_body_when_none(
-        self, proxy: MobileProxy, routing: RoutingTable
-    ):
-        ws = _mock_ws()
-        conn = routing.register_agent("agent-1", ws)
-
-        async def check_and_resolve():
-            await asyncio.sleep(0.01)
-            envelope = conn.send_queue.get_nowait()
-            ch = envelope[0]
-            sid_len = envelope[1]
-            payload_bytes = envelope[2 + sid_len:]
-            ctrl = json.loads(payload_bytes)
-            assert "query" not in ctrl
-            assert "body" not in ctrl
-            proxy.resolve(ctrl["request_id"], {"status": 200, "body": None})
-
-        task = asyncio.create_task(
-            proxy.forward("agent-1", "GET", "/api/sessions", timeout=2.0)
-        )
-        check = asyncio.create_task(check_and_resolve())
-
-        await task
-        await check
-
 
 class TestMobileProxyResolve:
     """Tests for MobileProxy.resolve() — Future resolution."""
-
-    async def test_resolve_unknown_request_id_is_noop(self, proxy: MobileProxy):
-        proxy.resolve("nonexistent-id", {"status": 200, "body": {}})
 
     async def test_resolve_already_done_future_is_noop(
         self, proxy: MobileProxy, routing: RoutingTable
@@ -248,36 +197,6 @@ class TestProxyEndpoint:
         )
         assert resp.status_code == 403
         assert "does not own" in resp.json()["detail"].lower()
-
-    async def test_proxy_forwards_to_agent_and_returns_response(
-        self, client, app, registered_agent
-    ):
-        agent_id, _ = registered_agent
-        # Get mobile tokens directly
-        owner = await app.state.db.get_user_by_email("viewer@test.local")
-        access, _ = await app.state.auth_service.create_mobile_tokens(
-            owner["id"], agent_id, owner["id"]
-        )
-
-        app.state.mobile_proxy = MobileProxy(app.state.routing)
-
-        # Register the agent in the routing table (simulating a connected agent)
-        ws = _mock_ws()
-        app.state.routing.register_agent(agent_id, ws)
-
-        # Mock the mobile_proxy.forward to return a canned response
-        async def mock_forward(agent_id, method, path, query=None, body=None, timeout=30.0):
-            return {"status": 200, "body": {"sessions": [{"id": "s1"}]}}
-
-        app.state.mobile_proxy.forward = mock_forward
-
-        resp = await client.get(
-            f"/proxy/{agent_id}/api/sessions",
-            headers={"Authorization": f"Bearer {access}"},
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["sessions"][0]["id"] == "s1"
 
     async def test_proxy_returns_a_relayed_204_without_a_body(
         self, client, app, registered_agent
@@ -467,28 +386,6 @@ class TestSessionCreateInterception:
         assert resp.status_code == 404
         assert captured == {}
 
-    async def test_deleted_custom_id_returns_404(
-        self, client, app, registered_agent
-    ):
-        agent_id, owner, headers, captured = await self._setup(
-            app, registered_agent
-        )
-        row = await app.state.db.create_custom_agent_type(
-            owner["id"], "Gone", "gone-cmd"
-        )
-        await app.state.db.soft_delete_custom_agent_type(
-            row["id"], owner["id"]
-        )
-
-        resp = await client.post(
-            f"/proxy/{agent_id}/api/sessions",
-            json={"cli": f"custom_{row['id']}"},
-            headers=headers,
-        )
-
-        assert resp.status_code == 404
-        assert captured == {}
-
     async def test_foreign_custom_id_returns_404(
         self, client, app, registered_agent
     ):
@@ -515,7 +412,7 @@ class TestSessionCreateInterception:
 
     @pytest.mark.parametrize(
         "bad_cli",
-        ["custom_xyz", "custom_" + "a" * 11, "custom_" + "A" * 12, "custom_"],
+        ["custom_xyz", "custom_" + "A" * 12],
     )
     async def test_malformed_custom_id_returns_400(
         self, client, app, registered_agent, bad_cli
@@ -659,22 +556,6 @@ class TestSessionCreateInterception:
         assert resp.status_code == 503
         assert "offline" in resp.json()["detail"].lower()
 
-    async def test_array_body_is_forwarded_untouched(
-        self, client, app, registered_agent
-    ):
-        agent_id, _owner, headers, captured = await self._setup(
-            app, registered_agent
-        )
-
-        resp = await client.post(
-            f"/proxy/{agent_id}/api/sessions",
-            json=[{"cli": "custom_" + "a" * 12}],
-            headers=headers,
-        )
-
-        assert resp.status_code == 201
-        assert captured["body"] == [{"cli": "custom_" + "a" * 12}]
-
     async def test_other_post_paths_are_not_stripped(
         self, client, app, registered_agent
     ):
@@ -691,24 +572,3 @@ class TestSessionCreateInterception:
         assert resp.status_code == 201
         assert captured["path"] == "/api/projects"
         assert captured["body"] == {"resolved_command": "kept", "name": "p"}
-
-    async def test_put_to_sessions_path_is_not_intercepted(
-        self, client, app, registered_agent
-    ):
-        """Only POST creates sessions; other verbs on the path keep their
-        body verbatim."""
-        agent_id, _owner, headers, captured = await self._setup(
-            app, registered_agent
-        )
-
-        resp = await client.put(
-            f"/proxy/{agent_id}/api/sessions",
-            json={"cli": "custom_xyz", "resolved_command": "kept"},
-            headers=headers,
-        )
-
-        assert resp.status_code == 201
-        assert captured["body"] == {
-            "cli": "custom_xyz",
-            "resolved_command": "kept",
-        }

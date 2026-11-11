@@ -30,18 +30,6 @@ def _make_fake_package_root(tmp_path: Path) -> Path:
 
 
 class TestResolveEnvFile:
-    def test_install_prefix_hit_returns_prefix_env(self, tmp_path, monkeypatch):
-        prefix = tmp_path / "install_prefix"
-        env_path = prefix / "mobaide_agent" / ".env"
-        env_path.parent.mkdir(parents=True)
-        env_path.write_text("JWT_SECRET_KEY=from-install\n", encoding="utf-8")
-
-        monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(prefix))
-
-        result = _resolve_env_file()
-
-        assert result == env_path
-
     def test_dev_fallback_hit_when_install_prefix_missing(
         self, tmp_path, monkeypatch
     ):

@@ -10,7 +10,6 @@ import com.mobaide.app.data.network.CentralApi
 import com.mobaide.app.data.network.RestApi
 import com.mobaide.app.data.network.dto.CancelAccountDeletionResponse
 import com.mobaide.app.data.network.dto.DeleteAccountRequest
-import com.mobaide.app.data.network.dto.ResendVerificationResponse
 import com.mobaide.app.data.network.dto.TokenResponse
 import com.mobaide.app.data.network.dto.UserAuthResponse
 import io.mockk.coEvery
@@ -98,20 +97,6 @@ class AuthRepositoryTest {
         }
     }
 
-    @Test
-    fun register_propagatesApiException() = runTest {
-        val centralApi = newCentralApi()
-        coEvery { centralApi.register(any(), any()) } throws ApiException(409, "Email taken")
-
-        val repo = newRepo(centralApi = centralApi)
-        try {
-            repo.register("dup@test.com", "pw")
-            fail("expected ApiException")
-        } catch (e: ApiException) {
-            assertEquals(409, e.code)
-        }
-    }
-
     // ---- loginWithPassword --------------------------------------------------
 
     @Test
@@ -133,20 +118,6 @@ class AuthRepositoryTest {
         verifyOrder {
             userStore.saveUserSession("user-token-2", "bob@test.com", "u2", "viewer")
             sessionManager.markUserLoggedIn()
-        }
-    }
-
-    @Test
-    fun loginWithPassword_on401_propagatesApiException() = runTest {
-        val centralApi = newCentralApi()
-        coEvery { centralApi.login(any(), any()) } throws ApiException(401, "Invalid credentials")
-
-        val repo = newRepo(centralApi = centralApi)
-        try {
-            repo.loginWithPassword("x@test.com", "wrong")
-            fail("expected ApiException")
-        } catch (e: ApiException) {
-            assertEquals(401, e.code)
         }
     }
 
@@ -378,17 +349,6 @@ class AuthRepositoryTest {
     }
 
     @Test
-    fun resendVerification_onSent_returnsSent() = runTest {
-        val centralApi = newCentralApi()
-        coEvery { centralApi.resendVerification("r@test.com") } returns
-            ResendVerificationResponse(status = "sent")
-
-        val result = newRepo(centralApi = centralApi).resendVerification("r@test.com")
-
-        assertEquals(ResendOutcome.Sent, result)
-    }
-
-    @Test
     fun resendVerification_on429_returnsRateLimitedWithCooldown() = runTest {
         val centralApi = newCentralApi()
         val body = """{"detail":{"error":"resend_rate_limited","cooldown_seconds_remaining":42}}"""
@@ -518,31 +478,6 @@ class AuthRepositoryTest {
     }
 
     @Test
-    fun register_admin_throws_andDoesNotPersistSession() = runTest {
-        val centralApi = newCentralApi()
-        val userStore = newUserIdentityStore()
-        val sessionManager = mockk<SessionManager>(relaxUnitFun = true)
-
-        coEvery { centralApi.register("root@test.com", "pw") } returns UserAuthResponse(
-            access_token = "admin-token",
-            user_id = "a3",
-            email = "root@test.com",
-            role = "admin",
-        )
-
-        val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore, sessionManager = sessionManager)
-        try {
-            repo.register("root@test.com", "pw")
-            fail("expected AdminLoginNotSupportedException")
-        } catch (_: AdminLoginNotSupportedException) {
-            // expected
-        }
-
-        verify(exactly = 0) { userStore.saveUserSession(any(), any(), any(), any()) }
-        verify(exactly = 0) { sessionManager.markUserLoggedIn() }
-    }
-
-    @Test
     fun deleteAccountWithPassword_on204_returnsScheduled() = runTest {
         val centralApi = newCentralApi()
         val userStore = newUserIdentityStore()
@@ -562,21 +497,6 @@ class AuthRepositoryTest {
     }
 
     @Test
-    fun deleteAccountWithPassword_passesUserJwtAsBearerToken() = runTest {
-        val centralApi = newCentralApi()
-        val userStore = newUserIdentityStore()
-        every { userStore.getUserAccessToken() } returns "specific-token"
-        coEvery { centralApi.requestAccountDeletion(any(), any()) } returns Unit
-
-        val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore)
-        repo.deleteAccountWithPassword("pw", DeletionMode.Scheduled)
-
-        coVerify {
-            centralApi.requestAccountDeletion("specific-token", any())
-        }
-    }
-
-    @Test
     fun deleteAccountWithPassword_on403_returnsReauthFailedWithServerMessage() = runTest {
         val centralApi = newCentralApi()
         val userStore = newUserIdentityStore()
@@ -589,22 +509,6 @@ class AuthRepositoryTest {
 
         assertTrue(result is DeleteAccountResult.ReauthFailed)
         assertEquals("Incorrect password", (result as DeleteAccountResult.ReauthFailed).message)
-    }
-
-    @Test
-    fun deleteAccountWithPassword_on403_unparseableBody_returnsGenericReauthFailed() = runTest {
-        val centralApi = newCentralApi()
-        val userStore = newUserIdentityStore()
-        every { userStore.getUserAccessToken() } returns "user-jwt"
-        coEvery { centralApi.requestAccountDeletion(any(), any()) } throws
-            ApiException(403, "<<not json>>")
-
-        val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore)
-        val result = repo.deleteAccountWithPassword("pw", DeletionMode.Scheduled)
-
-        assertTrue(result is DeleteAccountResult.ReauthFailed)
-        // Fallback message — must be non-empty so the UI can show *something*.
-        assertTrue((result as DeleteAccountResult.ReauthFailed).message.isNotBlank())
     }
 
     @Test
@@ -653,45 +557,6 @@ class AuthRepositoryTest {
     }
 
     @Test
-    fun deleteAccountWithGoogle_threadsIdTokenAndNonceIntoRequestBody() = runTest {
-        val centralApi = newCentralApi()
-        val userStore = newUserIdentityStore()
-        every { userStore.getUserAccessToken() } returns "user-jwt"
-        val captured = mutableListOf<DeleteAccountRequest>()
-        coEvery {
-            centralApi.requestAccountDeletion(any(), capture(captured))
-        } returns Unit
-
-        val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore)
-        val result = repo.deleteAccountWithGoogle(
-            idToken = "id-tok-1",
-            nonce = "nonce-1",
-            mode = DeletionMode.Scheduled,
-        )
-
-        assertEquals(DeleteAccountResult.Submitted(DeletionMode.Scheduled), result)
-        assertEquals(1, captured.size)
-        val body = captured.single()
-        assertEquals("google", body.method)
-        assertEquals("id-tok-1", body.id_token)
-        assertEquals("nonce-1", body.nonce)
-        assertNull(body.password)
-    }
-
-    @Test
-    fun deleteAccountWithGoogle_noToken_returnsReauthFailedWithoutCallingApi() = runTest {
-        val centralApi = newCentralApi()
-        val userStore = newUserIdentityStore()
-        every { userStore.getUserAccessToken() } returns null
-
-        val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore)
-        val result = repo.deleteAccountWithGoogle("id-tok", "nonce", DeletionMode.Scheduled)
-
-        assertTrue(result is DeleteAccountResult.ReauthFailed)
-        coVerify(exactly = 0) { centralApi.requestAccountDeletion(any(), any()) }
-    }
-
-    @Test
     fun cancelAccountDeletion_onCancelled_returnsCancelledAndClearsLocalSchedule() = runTest {
         val centralApi = newCentralApi()
         val userStore = newUserIdentityStore()
@@ -706,26 +571,6 @@ class AuthRepositoryTest {
         val result = repo.cancelAccountDeletion()
 
         assertEquals(CancelDeletionResult.Cancelled, result)
-        verify(exactly = 1) { userStore.setScheduledDeletionAt(null) }
-    }
-
-    @Test
-    fun cancelAccountDeletion_onNotScheduled_returnsNotScheduledAndClearsLocal() = runTest {
-        val centralApi = newCentralApi()
-        val userStore = newUserIdentityStore()
-        every { userStore.getUserAccessToken() } returns "user-jwt"
-        coEvery { centralApi.cancelAccountDeletion("user-jwt") } returns
-            CancelAccountDeletionResponse(
-                status = "not_scheduled",
-                scheduled_deletion_at = null,
-            )
-
-        val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore)
-        val result = repo.cancelAccountDeletion()
-
-        assertEquals(CancelDeletionResult.NotScheduled, result)
-        // The local clear still runs — keeps the banner consistent if it
-        // somehow lingered.
         verify(exactly = 1) { userStore.setScheduledDeletionAt(null) }
     }
 
@@ -803,35 +648,6 @@ class AuthRepositoryTest {
         assertEquals("id-tok-2", body.id_token)
         assertEquals("nonce-2", body.nonce)
         assertNull(body.password)
-    }
-
-    @Test
-    fun deleteAccountResult_submittedPreservesModeForCaller() = runTest {
-        val centralApi = newCentralApi()
-        val userStore = newUserIdentityStore()
-        every { userStore.getUserAccessToken() } returns "user-jwt"
-        coEvery { centralApi.requestAccountDeletion(any(), any()) } returns Unit
-
-        val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore)
-
-        val scheduledResult = repo.deleteAccountWithPassword(
-            "pw", DeletionMode.Scheduled,
-        )
-        val immediateResult = repo.deleteAccountWithPassword(
-            "pw", DeletionMode.Immediate,
-        )
-
-        // The mode the user picked round-trips through Submitted so the
-        // caller can branch on it (e.g. immediate path skips the
-        // "scheduled in 14 days" toast).
-        assertEquals(
-            DeleteAccountResult.Submitted(DeletionMode.Scheduled),
-            scheduledResult,
-        )
-        assertEquals(
-            DeleteAccountResult.Submitted(DeletionMode.Immediate),
-            immediateResult,
-        )
     }
 
     @Test

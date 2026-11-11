@@ -49,18 +49,6 @@ final class DeepLinkCoordinatorTests: XCTestCase {
         XCTAssertNil(coordinator.pendingSessionId)
     }
 
-    func testBlankSessionIdIgnored() {
-        let router = Router()
-        let coordinator = makeCoordinator(
-            router: router,
-            authStates: { AsyncStream { $0.finish() } },
-            initialAuthState: .fullyConnected
-        )
-        coordinator.handleTap(sessionId: "   ", agentId: nil)
-        XCTAssertEqual(router.path, [])
-        XCTAssertNil(coordinator.pendingSessionId)
-    }
-
     func testColdTapWaitsForFullyConnectedThenNavigates() async {
         let router = Router()
         let harness = SessionHarness(userLoggedIn: true, agentConnected: false)

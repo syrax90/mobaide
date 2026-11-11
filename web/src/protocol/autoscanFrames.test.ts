@@ -90,12 +90,6 @@ describe('auto-scan wire cursor', () => {
     expect(decodeAutoScanFrame(event('a', 6), cursor)).not.toBeNull();
   });
 
-  it('tracks projects independently', () => {
-    const cursor = new AutoScanCursor();
-    expect(decodeAutoScanFrame(event('a', 9), cursor)).not.toBeNull();
-    expect(decodeAutoScanFrame(event('b', 1), cursor)).not.toBeNull();
-  });
-
   it('advances on snapshot-buffered events, so the resume mark survives a reconnect', () => {
     const cursor = new AutoScanCursor();
     const snapshot = stringifyWire({

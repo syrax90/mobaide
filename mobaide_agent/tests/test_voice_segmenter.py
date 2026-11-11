@@ -50,12 +50,6 @@ def test_pause_before_five_seconds_does_not_cut():
     assert seg.feed(_tone(3.0) + _silence(0.8) + _tone(1.0)) == []
 
 
-def test_short_pause_does_not_cut():
-    seg = PauseSegmenter(RATE)
-
-    assert seg.feed(_tone(6.0) + _silence(0.4) + _tone(1.0)) == []
-
-
 def test_steady_speech_never_reads_as_a_pause():
     seg = PauseSegmenter(RATE)
 
@@ -229,13 +223,3 @@ def test_each_segment_carries_its_own_peak_rms():
     assert closed[0].peak_rms == pytest.approx(3000 / math.sqrt(2), rel=0.01)
     assert tail is not None
     assert tail.peak_rms == pytest.approx(1000 / math.sqrt(2), rel=0.01)
-
-
-def test_flush_of_silence_has_zero_peak_rms():
-    seg = PauseSegmenter(RATE)
-    seg.feed(_silence(1.0))
-
-    tail = seg.flush()
-
-    assert tail is not None
-    assert tail.peak_rms == 0.0

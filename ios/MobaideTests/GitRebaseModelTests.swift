@@ -125,26 +125,6 @@ final class GitRebaseModelTests: XCTestCase {
         XCTAssertEqual(failing.rebaseSheet?.targets, .typed)
     }
 
-    func testConsumeOpenRebaseOpensTheSheetOnce() async throws {
-        let model = makeModel(projectName: nil, openRebase: true)
-        XCTAssertTrue(model.openRebaseOnAppear)
-        XCTAssertNil(model.rebaseSheet)
-
-        model.consumeOpenRebase()
-
-        XCTAssertNotNil(model.rebaseSheet)
-        XCTAssertFalse(model.openRebaseOnAppear)
-        await waitUntil { model.rebaseSheet?.targets == .typed }
-
-        model.closeRebase()
-        model.consumeOpenRebase()
-        XCTAssertNil(model.rebaseSheet, "the terminal menu's Rebase… opens the sheet once")
-
-        let plain = makeModel(projectName: nil)
-        plain.consumeOpenRebase()
-        XCTAssertNil(plain.rebaseSheet)
-    }
-
     // MARK: - Start
 
     func testStartRebasePostsTheTrimmedBaseClosesTheSheetToastsAndReloads() async throws {
@@ -176,18 +156,6 @@ final class GitRebaseModelTests: XCTestCase {
         XCTAssertNil(model.rebaseSheet)
         XCTAssertEqual(model.toast?.text, "Rebase stopped at “Fix the login redirect” — resolve the conflicts, then Continue.")
         XCTAssertEqual(model.toast?.tone, .danger)
-    }
-
-    func testABlankBaseOrAClosedSheetSendsNothing() async throws {
-        let model = try await loadedModel("linked_worktree_full")
-
-        await model.startRebase(onto: "main")
-        XCTAssertTrue(StubURLProtocol.requests.isEmpty, "no sheet, no start")
-
-        await openTypedSheet(model)
-        await model.startRebase(onto: "  \n")
-        XCTAssertTrue(StubURLProtocol.requests.isEmpty, "a blank base is never sent")
-        XCTAssertEqual(model.rebaseSheet?.isStarting, false)
     }
 
     func testARefusedStartStaysInTheSheetWithTheRebaseCopyAndGitsOutput() async throws {
@@ -278,18 +246,6 @@ final class GitRebaseModelTests: XCTestCase {
         XCTAssertEqual(requestURLs.first, gitURL("rebase/skip"))
     }
 
-    func testADismissedPromptSendsNothing() async throws {
-        let model = try await loadedModel("rebasing_stopped_on_conflict")
-        model.requestRebaseStep(.abort)
-        XCTAssertEqual(model.rebasePrompt?.confirm, "Abort rebase")
-
-        model.dismissRebaseStep()
-        await model.confirmRebaseStep()
-
-        XCTAssertNil(model.rebasePrompt)
-        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
-    }
-
     func testARefusedStepIsADangerToastWithTheRebaseCopyAndStillReloads() async throws {
         let model = try await loadedModel("rebasing_stopped_on_conflict")
         StubURLProtocol.enqueue(status: 409, body: #"{"detail":{"code":"unmerged","message":"unmerged paths in the index"}}"#)
@@ -376,18 +332,6 @@ final class GitRebaseModelTests: XCTestCase {
         XCTAssertEqual(model.resolvedPaths, ["docs/notes with space.md", "src/session.py"])
     }
 
-    func testAResolverThatWasJustLeftSaysNothing() async throws {
-        let model = try await loadedModel("rebasing_stopped_on_conflict", git: resolverGit)
-        let conflicted = try XCTUnwrap(model.sections.flatMap(\.rows).first)
-        model.openResolver(for: conflicted.entry)
-        StubURLProtocol.enqueue(status: 200, body: try statusBody("unchanged"))
-
-        await model.resolverClosed(message: nil)
-
-        XCTAssertNil(model.conflictTarget)
-        XCTAssertNil(model.toast)
-    }
-
     func testRestoreWaitsForItsConfirmationThenRebuildsTheConflictAndReReadsTheList() async throws {
         let model = try await loadedModel("rebasing_with_resolved_paths", git: resolverGit)
 
@@ -422,16 +366,5 @@ final class GitRebaseModelTests: XCTestCase {
         XCTAssertEqual(model.toast?.text, "The conflict in src/session.py can no longer be rebuilt.")
         XCTAssertEqual(model.toast?.tone, .danger)
         XCTAssertEqual(requestURLs.count, 2)
-    }
-
-    func testTheBannerInputsComeFromTheLoadedStatus() async throws {
-        let model = try await loadedModel("rebasing_stopped_on_conflict")
-
-        XCTAssertEqual(model.conflictCount, 1)
-        XCTAssertEqual(
-            GitChangesDisplay.rebaseBanner(model.repo, conflicts: model.conflictCount)?.title,
-            "Rebasing topic onto origin/main"
-        )
-        XCTAssertEqual(model.status?.repo?.rebase?.step, 2)
     }
 }

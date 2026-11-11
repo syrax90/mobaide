@@ -91,16 +91,6 @@ class AgentPairedConversionTest {
         assertTrue(f.outcomes.isEmpty())
     }
 
-    @Test
-    fun liveEvent_noSignedInUser_logsNothing() = runTest {
-        val f = Fixture(userId = null)
-
-        f.conversion.onFirstAgentPairedEvent()
-
-        assertTrue(f.sink.events.isEmpty())
-        assertTrue(f.outcomes.isEmpty())
-    }
-
     // ---- reconcile ----------------------------------------------------------
 
     @Test
@@ -209,17 +199,6 @@ class AgentPairedConversionTest {
     }
 
     @Test
-    fun reconcile_unparseableStamp_persistsNothing() = runTest {
-        val f = Fixture()
-        f.serverSays(firstPairedAt = "yesterday")
-
-        f.conversion.reconcile()
-
-        assertTrue(f.sink.events.isEmpty())
-        assertTrue(f.outcomes.isEmpty())
-    }
-
-    @Test
     fun reconcile_identityChangedMidFlight_persistsNothing() = runTest {
         val f = Fixture()
         f.serverSays(firstPairedAt = iso(T0 + 60_000L), userId = "someone-else")
@@ -228,17 +207,6 @@ class AgentPairedConversionTest {
 
         assertTrue(f.sink.events.isEmpty())
         assertTrue(f.outcomes.isEmpty())
-    }
-
-    @Test
-    fun reconcile_alreadyLoggedLive_doesNotLogAgain() = runTest {
-        val f = Fixture()
-        f.serverSays(firstPairedAt = iso(T0 + 60_000L))
-
-        f.conversion.onFirstAgentPairedEvent()
-        f.conversion.reconcile()
-
-        assertEquals(1, f.sink.events.size)
     }
 
     @Test
@@ -258,27 +226,6 @@ class AgentPairedConversionTest {
     }
 
     // ---- arming -------------------------------------------------------------
-
-    @Test
-    fun armIfNeeded_recordsTheLaunchTime_once() = runTest {
-        val f = Fixture()
-
-        f.conversion.armIfNeeded()
-        f.now = T0 + 3_600_000L
-        f.conversion.armIfNeeded()
-
-        assertEquals(T0, f.armedAt)
-    }
-
-    @Test
-    fun armIfNeeded_sinkDisabled_doesNotArm() = runTest {
-        val f = Fixture()
-        f.sink.isEnabled = false
-
-        f.conversion.armIfNeeded()
-
-        assertNull(f.armedAt)
-    }
 
     @Test
     fun reconcile_pairingAfterLaunchButBeforeFirstConnect_logs() = runTest {

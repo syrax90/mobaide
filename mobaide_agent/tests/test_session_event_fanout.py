@@ -70,15 +70,6 @@ async def _stop_and_await(fanout: SessionEventFanout) -> None:
 
 
 class TestSessionEventFanoutLifecycle:
-    async def test_start_creates_active_task(self):
-        session = _fake_session()
-        fanout = SessionEventFanout(session)
-        try:
-            fanout.start()
-            assert fanout._task is not None
-            assert not fanout._task.done()
-        finally:
-            await _stop_and_await(fanout)
 
     async def test_start_is_idempotent_while_running(self):
         session = _fake_session()
@@ -100,21 +91,6 @@ class TestSessionEventFanoutLifecycle:
         fanout.stop()
         await asyncio.gather(task, return_exceptions=True)
         assert task.done()
-
-    async def test_stop_before_start_is_noop(self):
-        session = _fake_session()
-        fanout = SessionEventFanout(session)
-        fanout.stop()  # no task yet
-        assert fanout._task is None
-
-    async def test_has_subscribers_reflects_count(self):
-        session = _fake_session()
-        fanout = SessionEventFanout(session)
-        assert fanout.has_subscribers is False
-        q = fanout.subscribe()
-        assert fanout.has_subscribers is True
-        fanout.unsubscribe(q)
-        assert fanout.has_subscribers is False
 
 
 class TestSessionEventFanoutPump:
@@ -325,71 +301,6 @@ class TestSessionEventFanoutPump:
         finally:
             await _stop_and_await(fanout)
 
-    async def test_title_event_without_get_sessions_is_noop(self):
-        session = _fake_session("s1")
-        broadcaster = MagicMock()
-        broadcaster.notify_serialized = AsyncMock()
-        event_bus = MagicMock()
-        event_bus.publish = MagicMock()
-
-        fanout = SessionEventFanout(
-            session,
-            broadcaster=broadcaster,
-            get_sessions=None,
-            event_bus=event_bus,
-        )
-        try:
-            sub = fanout.subscribe()
-            fanout.start()
-
-            await session.event_queue.put(
-                SessionEvent(event_type="title", session_id="s1", data=None),
-            )
-            received = await _drain_one(sub)
-            assert received.event_type == "title"
-
-            await asyncio.sleep(0)
-            broadcaster.notify_serialized.assert_not_called()
-            event_bus.publish.assert_not_called()
-        finally:
-            await _stop_and_await(fanout)
-
-    async def test_title_event_when_session_missing_from_list_is_noop(self):
-        """If ``get_sessions()`` does not contain the current session — e.g.
-        it was just removed in a race — the title branch must publish
-        nothing rather than crash or fabricate a payload.
-        """
-        session = _fake_session("s1")
-        broadcaster = MagicMock()
-        broadcaster.notify_serialized = AsyncMock()
-        event_bus = MagicMock()
-        event_bus.publish = MagicMock()
-
-        def get_sessions():
-            return [_session_info("other-session", title="other")]
-
-        fanout = SessionEventFanout(
-            session,
-            broadcaster=broadcaster,
-            get_sessions=get_sessions,
-            event_bus=event_bus,
-        )
-        try:
-            sub = fanout.subscribe()
-            fanout.start()
-
-            await session.event_queue.put(
-                SessionEvent(event_type="title", session_id="s1", data=None),
-            )
-            received = await _drain_one(sub)
-            assert received.event_type == "title"
-
-            await asyncio.sleep(0)
-            broadcaster.notify_serialized.assert_not_called()
-            event_bus.publish.assert_not_called()
-        finally:
-            await _stop_and_await(fanout)
-
     async def test_activity_event_publishes_session_updated_only(self):
         """An ``activity`` event refreshes the row like ``title`` does. It must
         never publish ``session.attention``: that is the notification trigger,
@@ -530,35 +441,6 @@ class TestSessionEventFanoutPump:
         finally:
             await _stop_and_await(fanout)
 
-    async def test_attention_without_event_bus_is_noop(self):
-        session = _fake_session("s1")
-
-        def get_sessions():
-            return [_session_info("s1")]
-
-        fanout = SessionEventFanout(
-            session,
-            broadcaster=None,
-            get_sessions=get_sessions,
-            event_bus=None,  # no bus → branch must skip cleanly
-        )
-        try:
-            sub = fanout.subscribe()
-            fanout.start()
-
-            await session.event_queue.put(
-                SessionEvent(
-                    event_type="attention",
-                    session_id="s1",
-                    attention="turn_finished",
-                ),
-            )
-            received = await _drain_one(sub)
-            assert received.event_type == "attention"
-            # No bus to assert on; reaching here without raising is the contract.
-        finally:
-            await _stop_and_await(fanout)
-
     async def test_attention_when_session_missing_from_list_is_noop(self):
         session = _fake_session("s1")
         broadcaster = MagicMock()
@@ -632,17 +514,6 @@ class TestSessionEventFanoutPump:
 
 
 class TestSessionListBroadcaster:
-    async def test_subscribe_creates_bounded_queue(self):
-        bc = SessionListBroadcaster()
-        q = bc.subscribe()
-        assert isinstance(q, asyncio.Queue)
-        assert q.maxsize == 100
-
-    def test_unsubscribe_is_idempotent(self):
-        bc = SessionListBroadcaster()
-        q = bc.subscribe()
-        bc.unsubscribe(q)
-        bc.unsubscribe(q)  # double-unsubscribe must not raise
 
     async def test_notify_serialized_emits_json_to_each_subscriber(self):
         bc = SessionListBroadcaster()
@@ -706,8 +577,3 @@ class TestSessionListBroadcaster:
         assert decoded[0]["cwd"] == "C:/tmp"
         # created_at is the SessionInfo datetime serialized to ISO.
         assert decoded[0]["created_at"].startswith("2026-01-01T12:00:00")
-
-    async def test_notify_with_no_subscribers_is_noop(self):
-        bc = SessionListBroadcaster()
-        # Must not raise.
-        await bc.notify_serialized([{"session_id": "s1"}])

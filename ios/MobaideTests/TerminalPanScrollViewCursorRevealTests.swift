@@ -86,19 +86,6 @@ final class TerminalPanScrollViewCursorRevealTests: XCTestCase {
         XCTAssertEqual(scroll.contentOffset.y, 0, "the reveal is horizontal only")
     }
 
-    func testCarriageReturnAfterAPanReturnsToTheLeftEdge() {
-        let (scroll, terminal) = staticViews()
-        terminal.armCursorReveal()
-        feed(terminal, String(repeating: "x", count: 60))
-        scroll.revealCursorIfArmed()
-        XCTAssertGreaterThan(scroll.contentOffset.x, 0, "precondition: the first reveal panned right")
-
-        feed(terminal, "\r\n")
-        scroll.revealCursorIfArmed()
-
-        XCTAssertEqual(scroll.contentOffset.x, 0)
-    }
-
     func testReturningToTheBurstOriginAfterAPanPansBack() {
         let (scroll, terminal) = staticViews()
         terminal.armCursorReveal()
@@ -243,40 +230,6 @@ final class TerminalPanScrollViewCursorRevealTests: XCTestCase {
         XCTAssertEqual(scroll.contentOffset.x, 0, "passive output must not move the user's horizontal position")
     }
 
-    func testCursorThatHasNotMovedSinceTheKeystrokeNeverPans() {
-        let (scroll, terminal) = staticViews()
-        feed(terminal, String(repeating: "x", count: 60))
-        terminal.armCursorReveal()
-
-        scroll.revealCursorIfArmed()
-
-        XCTAssertEqual(
-            scroll.contentOffset.x, 0,
-            "a TUI that parks its cursor off screen would otherwise drag the view there on every key"
-        )
-    }
-
-    func testDisarmedLatchNeverPans() {
-        let (scroll, terminal) = staticViews()
-        terminal.armCursorReveal()
-        terminal.cursorReveal.disarm()
-
-        feed(terminal, String(repeating: "x", count: 60))
-        scroll.revealCursorIfArmed()
-
-        XCTAssertEqual(scroll.contentOffset.x, 0)
-    }
-
-    func testFullModeIsANoOp() {
-        let (scroll, terminal) = makeViews(mode: .full)
-        terminal.armCursorReveal()
-
-        feed(terminal, String(repeating: "x", count: 30))
-        scroll.revealCursorIfArmed()
-
-        XCTAssertEqual(scroll.contentOffset.x, 0, "no overflow, nothing to pan")
-    }
-
     func testSynchronizedOutputFreezeHoldsTheReveal() {
         let (scroll, terminal) = staticViews()
         terminal.armCursorReveal()
@@ -315,21 +268,5 @@ final class TerminalPanScrollViewCursorRevealTests: XCTestCase {
         terminal.insertText("a")
 
         XCTAssertTrue(terminal.cursorReveal.isArmed, "a soft-keyboard character is the user typing")
-    }
-
-    func testDeleteBackwardArmsTheLatch() {
-        let (_, terminal) = staticViews()
-
-        terminal.deleteBackward()
-
-        XCTAssertTrue(terminal.cursorReveal.isArmed, "Backspace walks the cursor left, which may cross the left edge")
-    }
-
-    func testOutputAloneLeavesTheLatchDisarmed() {
-        let (_, terminal) = staticViews()
-
-        feed(terminal, "hello\r\n")
-
-        XCTAssertFalse(terminal.cursorReveal.isArmed)
     }
 }

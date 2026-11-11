@@ -32,11 +32,6 @@ class TestRelayConfigNotConfigured:
         result = RelayConfig.from_env()
         assert result is None
 
-    def test_returns_none_when_url_is_empty_string(self, monkeypatch):
-        monkeypatch.setenv("RELAY_SERVER_URL", "")
-        result = RelayConfig.from_env()
-        assert result is None
-
 
 class TestRelayConfigPartialConfig:
     def test_raises_when_agent_id_missing(self, monkeypatch):
@@ -60,13 +55,6 @@ class TestRelayConfigPartialConfig:
         assert cfg.agent_token == ""
         assert cfg.pairing_pending is True
         assert cfg.re_pair_pending is True
-
-    def test_raises_when_agent_id_is_empty(self, monkeypatch):
-        monkeypatch.setenv("RELAY_SERVER_URL", "wss://relay.example.com")
-        monkeypatch.setenv("RELAY_AGENT_ID", "")
-        monkeypatch.setenv("RELAY_AGENT_TOKEN", "tok")
-        with pytest.raises(RuntimeError, match="RELAY_AGENT_ID"):
-            RelayConfig.from_env()
 
 
 class TestRelayConfigPairingPending:

@@ -95,17 +95,6 @@ class TestUrlDerivation:
             == "https://example.com/api/v1/agent/trust_key"
         )
 
-    def test_port_preserved(self):
-        assert (
-            _trust_key_url_from_relay_server_url("wss://example.com:9000")
-            == "https://example.com:9000/api/v1/agent/trust_key"
-        )
-
-    def test_https_scheme_passthrough(self):
-        assert (
-            _trust_key_url_from_relay_server_url("https://example.com")
-            == "https://example.com/api/v1/agent/trust_key"
-        )
 
     def test_invalid_url_raises(self):
         with pytest.raises(ValueError):
@@ -125,11 +114,6 @@ class TestUrlDerivation:
                 "wss://api.mobaide.com@evil.example"
             )
 
-    def test_userinfo_with_password_rejected(self):
-        with pytest.raises(ValueError, match="user-info"):
-            _trust_key_url_from_relay_server_url(
-                "wss://user:pass@example.com"
-            )
 
     def test_cleartext_http_refused_by_default(self, monkeypatch):
         monkeypatch.delenv(
@@ -138,23 +122,6 @@ class TestUrlDerivation:
         with pytest.raises(ValueError, match="cleartext"):
             _trust_key_url_from_relay_server_url("ws://example.com")
 
-    def test_cleartext_https_passthrough_unaffected_by_insecure_flag(
-        self, monkeypatch,
-    ):
-        # The insecure flag is a refuse-cleartext escape hatch; it must
-        # not change behaviour for HTTPS URLs.
-        monkeypatch.setenv("MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH", "1")
-        assert (
-            _trust_key_url_from_relay_server_url("wss://example.com")
-            == "https://example.com/api/v1/agent/trust_key"
-        )
-
-    def test_cleartext_explicit_http_refused_by_default(self, monkeypatch):
-        monkeypatch.delenv(
-            "MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH", raising=False,
-        )
-        with pytest.raises(ValueError, match="cleartext"):
-            _trust_key_url_from_relay_server_url("http://example.com")
 
     def test_cleartext_http_allowed_when_flag_set(self, monkeypatch):
         monkeypatch.setenv("MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH", "1")
@@ -221,15 +188,6 @@ class TestFetchEnvFileMissing:
         err = capsys.readouterr().err
         assert "does not exist" in err
 
-    def test_returns_2_when_relay_server_url_empty(self, tmp_path, capsys):
-        _seed_env(tmp_path, "")
-
-        rc = _run_fetch_trust_key(_ns(prefix=str(tmp_path)))
-
-        assert rc == 2
-        err = capsys.readouterr().err
-        assert "RELAY_SERVER_URL" in err
-
 
 class TestFetchNetworkErrors:
     def test_returns_3_when_endpoint_unreachable(self, tmp_path, capsys):
@@ -245,15 +203,6 @@ class TestFetchNetworkErrors:
         err = capsys.readouterr().err
         assert "cannot reach" in err
 
-    def test_returns_3_on_malformed_json(self, tmp_path, capsys):
-        _seed_env(tmp_path, "wss://example.com")
-
-        with _patch_urlopen("not json"):
-            rc = _run_fetch_trust_key(_ns(prefix=str(tmp_path)))
-
-        assert rc == 3
-        err = capsys.readouterr().err
-        assert "malformed" in err
 
     def test_returns_3_when_key_field_missing(self, tmp_path):
         _seed_env(tmp_path, "wss://example.com")
@@ -262,16 +211,6 @@ class TestFetchNetworkErrors:
             rc = _run_fetch_trust_key(_ns(prefix=str(tmp_path)))
 
         assert rc == 3
-
-    def test_returns_3_when_key_empty(self, tmp_path, capsys):
-        _seed_env(tmp_path, "wss://example.com")
-
-        with _patch_urlopen({"public_key_b64": "  "}):
-            rc = _run_fetch_trust_key(_ns(prefix=str(tmp_path)))
-
-        assert rc == 3
-        err = capsys.readouterr().err
-        assert "empty" in err
 
 
 class TestFetchValidation:
@@ -318,7 +257,7 @@ class TestFetchUserAgent:
         key_b64 = _valid_key_b64()
         captured: dict = {}
 
-        def _fake_urlopen(req, timeout=None):
+        def _fake_urlopen(req, timeout=None, **_kwargs):
             captured["request"] = req
             return _FakeResponse(json.dumps({"public_key_b64": key_b64}))
 

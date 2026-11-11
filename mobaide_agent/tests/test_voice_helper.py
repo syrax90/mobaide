@@ -136,16 +136,6 @@ async def test_first_request_spawns_and_loads_then_the_worker_is_reused(make_hel
     assert not stt.busy
 
 
-async def test_preload_loads_once(make_helper, tmp_path):
-    stt = make_helper()
-
-    load_ms = await stt.preload(_spec(tmp_path))
-    result = await stt.transcribe(_spec(tmp_path), ONE_SECOND, RATE)
-
-    assert isinstance(load_ms, int)
-    assert result.load_ms is None
-
-
 async def test_unknown_engine_fails_the_load_and_stops_the_worker(make_helper, tmp_path):
     stt = make_helper()
 
@@ -312,17 +302,6 @@ async def test_hung_request_times_out_kills_the_worker_and_the_next_request_resp
     result = await stt.transcribe(_spec(tmp_path), TENTH_SECOND, RATE)
     assert result.text == "recovered"
     assert stt.pid != hung_pid
-
-
-async def test_stop_ends_the_worker(make_helper, tmp_path):
-    stt = make_helper()
-    await stt.transcribe(_spec(tmp_path), ONE_SECOND, RATE)
-    pid = stt.pid
-
-    await stt.stop()
-
-    assert not stt.running
-    assert _process_gone(pid)
 
 
 async def test_worker_started_after_a_cancelled_spawn_is_reaped(

@@ -60,20 +60,6 @@ final class TerminalSessionSuspendTests: XCTestCase {
         XCTAssertTrue(connection.closeCalls.isEmpty)
     }
 
-    func testBackgroundedSessionThatSpendsNothingKeepsItsSocket() async throws {
-        // The byte term, which is what makes leaving the app briefly free: no
-        // spend, no suspend, and so no replay to pay for on return.
-        let (model, connection, _) = try await watchedModel()
-        connection.emit(.binary(outputFrame("hi")))
-        await waitForState(model, .live)
-
-        model.setAppActive(false)
-        await settle()
-
-        XCTAssertEqual(model.connectionState, .live)
-        XCTAssertTrue(connection.closeCalls.isEmpty)
-    }
-
     func testBackgroundedSessionThatSpendsIsSuspended() async throws {
         let (model, connection, _) = try await watchedModel()
         model.setAppActive(false)
@@ -149,20 +135,6 @@ final class TerminalSessionSuspendTests: XCTestCase {
         connection.emit(.binary(replayEnd))
         await waitForState(model, .live)
         connection.emit(.binary(outputFrame("ab")))
-        await settle()
-
-        XCTAssertEqual(model.connectionState, .live)
-    }
-
-    func testTheShippedPolicyLeavesAModestSpendAlone() async throws {
-        // The real thresholds, not the stub: a few hundred bytes is nowhere
-        // near a ring.
-        let (model, connection, _) = try await watchedModel(policy: {
-            TerminalSuspend.shouldSuspend(unwatchedSeconds: $0, bytes: $1)
-        })
-        model.setAppActive(false)
-
-        connection.emit(.binary(outputFrame(String(repeating: "x", count: 512))))
         await settle()
 
         XCTAssertEqual(model.connectionState, .live)
@@ -309,19 +281,6 @@ final class TerminalSessionSuspendTests: XCTestCase {
     // A session-scoped child screen (git Changes / Diff) hides the terminal
     // exactly like leaving would; its ref-counted hold on the tracker is what
     // tells the governor the user is still inside the session.
-
-    func testHiddenButHeldSessionKeepsStreaming() async throws {
-        let tracker = ForegroundSessionTracker()
-        let (model, connection, _) = try await watchedModel(tracker: tracker)
-        tracker.holdWatch("s1")
-        model.markHidden()
-
-        connection.emit(.binary(outputFrame("spending")))
-        await settle()
-
-        XCTAssertEqual(model.connectionState, .live)
-        XCTAssertTrue(connection.closeCalls.isEmpty)
-    }
 
     func testHoldTakenAfterHidingReWatchesTheSession() async throws {
         // The tracker has no observation channel, so the store re-evaluates

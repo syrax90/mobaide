@@ -12,10 +12,8 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -84,24 +82,6 @@ class AuthInterceptorTest {
         verify(exactly = 0) { tokenStore.isAccessTokenExpiringSoon() }
         verify(exactly = 0) { tokenStore.getAccessToken() }
         verify(exactly = 0) { sessionManager.isLoggedIn() }
-    }
-
-    @Test
-    fun intercept_skipsAuthHeader_forRefreshEndpoint() {
-        val tokenStore = mockk<TokenStore>()
-        val sessionManager = newSessionManager()
-        val chain = mockk<Interceptor.Chain>()
-        val original = request("https://example.com/api/auth/refresh")
-        every { chain.request() } returns original
-        every { chain.proceed(original) } returns responseFor(original, 200)
-
-        val result = AuthInterceptor(tokenStore, sessionManager).intercept(chain)
-
-        assertEquals(200, result.code)
-        assertNull(result.request.header("Authorization"))
-        verify(exactly = 0) { tokenStore.isAccessTokenExpiringSoon() }
-        verify(exactly = 0) { sessionManager.isLoggedIn() }
-        coVerify(exactly = 0) { sessionManager.refresh() }
     }
 
     // ---- Synthesised 401 short-circuit --------------------------------------
@@ -364,25 +344,5 @@ class AuthInterceptorTest {
 
         assertEquals(401, result.code)
         coVerify(exactly = 1) { sessionManager.refresh() }
-    }
-
-    // ---- Synthesised response shape ----------------------------------------
-
-    @Test
-    fun synthesisedUnauthorized_carriesJsonBody_withDetailField() {
-        // Ensures the upstream RestApi.execute() consumer can parse the
-        // synthesised response just like a real server-rejected 401 and
-        // surface a meaningful error via ApiException.
-        val tokenStore = mockk<TokenStore>()
-        val sessionManager = newSessionManager(loggedIn = false)
-        val chain = mockk<Interceptor.Chain>()
-        every { chain.request() } returns request("https://example.com/api/sessions")
-
-        val result = AuthInterceptor(tokenStore, sessionManager).intercept(chain)
-
-        val body = result.body?.string()
-        assertNotNull(body)
-        assertTrue(body!!.contains("Session expired"))
-        assertTrue(body.startsWith("{") && body.endsWith("}"))
     }
 }

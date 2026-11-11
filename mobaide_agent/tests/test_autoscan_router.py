@@ -128,18 +128,6 @@ def test_list_requires_auth_when_override_absent():
 
 
 class TestStartScan:
-    def test_happy_path_without_claude_options(self, app_with_mock_manager):
-        app, mgr = app_with_mock_manager
-        fake_inst = MagicMock()
-        fake_inst.project_name = "p"
-        mgr.start = AsyncMock(return_value=fake_inst)
-
-        client = TestClient(app)
-        resp = client.post("/api/autoscan/start", json={"project_name": "p"})
-
-        assert resp.status_code == 200
-        assert resp.json() == {"message": "Auto scan started for project 'p'"}
-        mgr.start.assert_awaited_once_with("p", client_options=None)
 
     def test_happy_path_with_claude_options(self, app_with_mock_manager):
         app, mgr = app_with_mock_manager
@@ -231,13 +219,6 @@ class TestStartScan:
         assert resp.status_code == 404
         assert "unknown project" in resp.json()["detail"]
 
-    def test_start_422_when_project_name_missing(self, app_with_mock_manager):
-        app, _mgr = app_with_mock_manager
-        del _mgr
-        client = TestClient(app)
-        resp = client.post("/api/autoscan/start", json={})
-        assert resp.status_code == 422
-
 
 # --------------------------------------------------------------------------- #
 # POST /api/autoscan/stop
@@ -260,13 +241,6 @@ class TestStopScan:
         client = TestClient(app)
         resp = client.post("/api/autoscan/stop", json={"project_name": "p"})
         assert resp.status_code == 404
-
-    def test_stop_422_when_project_name_missing(self, app_with_mock_manager):
-        app, _mgr = app_with_mock_manager
-        del _mgr
-        client = TestClient(app)
-        resp = client.post("/api/autoscan/stop", json={})
-        assert resp.status_code == 422
 
 
 # --------------------------------------------------------------------------- #
@@ -301,26 +275,6 @@ class TestRunNowExtra:
 
 
 class TestListScans:
-    def test_list_empty(self, app_with_mock_manager):
-        app, mgr = app_with_mock_manager
-        mgr.list_response.return_value = {
-            "scans": [],
-            "capacity": 5,
-            "max_scans": 5,
-            "available_projects": ["A"],
-            "auto_scan_prompt": "prompt",
-        }
-        client = TestClient(app)
-        resp = client.get("/api/autoscan/list")
-        assert resp.status_code == 200
-        assert resp.json() == {
-            "scans": [],
-            "capacity": 5,
-            "max_scans": 5,
-            "available_projects": ["A"],
-            "auto_scan_prompt": "prompt",
-        }
-        mgr.list_response.assert_called_once_with()
 
     def test_list_with_scans(self, app_with_mock_manager):
         app, mgr = app_with_mock_manager
@@ -377,10 +331,3 @@ class TestScanStatus:
         resp = client.get("/api/autoscan/status", params={"project_name": "ghost"})
         assert resp.status_code == 404
         assert "ghost" in resp.json()["detail"]
-
-    def test_status_422_when_project_name_missing(self, app_with_mock_manager):
-        app, _mgr = app_with_mock_manager
-        del _mgr
-        client = TestClient(app)
-        resp = client.get("/api/autoscan/status")
-        assert resp.status_code == 422

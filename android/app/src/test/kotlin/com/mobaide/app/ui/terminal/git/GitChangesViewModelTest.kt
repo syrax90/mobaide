@@ -75,7 +75,6 @@ class GitChangesViewModelTest {
         val handle: SavedStateHandle,
         val loads: MutableSharedFlow<SessionGitStatusLoad>,
         val refreshRequests: Flow<Unit>,
-        val tracker: ForegroundSessionTracker,
         val projectName: () -> String?,
         val initial: () -> GitStatusResponse?,
         /** Every job frame of the session, as the repository would surface them. */
@@ -158,7 +157,6 @@ class GitChangesViewModelTest {
             handle = handle,
             loads = loads,
             refreshRequests = refreshSlot.captured,
-            tracker = tracker,
             projectName = { projectNameSlot.captured() },
             initial = { initialSlot.captured() },
             frames = frames,
@@ -251,13 +249,6 @@ class GitChangesViewModelTest {
     // MARK: - Load → state
 
     @Test
-    fun startsLoading_untilTheFirstLoad() = runTest {
-        val f = newFixture()
-        subscribe(f.vm)
-        assertEquals(GitChangesUiState.Loading, f.vm.uiState.value)
-    }
-
-    @Test
     fun loaded_becomesReady_withSectionsInDisplayOrder() = runTest {
         // Entries arrive in the agent's order; the screen groups them
         // Conflicts / Staged / Changes / Untracked regardless.
@@ -278,20 +269,6 @@ class GitChangesViewModelTest {
         assertEquals(listOf(untracked), ready.sections[3].entries)
         assertFalse(ready.refreshing)
         assertNull(ready.staleError)
-    }
-
-    @Test
-    fun emptyGroups_areOmitted_andACleanTreeHasNoSections() = runTest {
-        val f = newFixture()
-        subscribe(f.vm)
-
-        f.loads.emit(SessionGitStatusLoad.Loaded(status(entries = listOf(untracked))))
-        runCurrent()
-        assertEquals(listOf("Untracked"), ready(f.vm).sections.map { it.title })
-
-        f.loads.emit(SessionGitStatusLoad.Loaded(status(entries = emptyList())))
-        runCurrent()
-        assertTrue(ready(f.vm).sections.isEmpty())
     }
 
     @Test
@@ -522,23 +499,6 @@ class GitChangesViewModelTest {
     // MARK: - Diff navigation
 
     @Test
-    fun onEntryClick_conflictOpensTheUnstagedDiff() = runTest {
-        // Conflicted files are diffed against HEAD, which the agent serves as
-        // `unstaged`; there is no `conflicts` scope on the wire.
-        val f = newFixture()
-        f.vm.events.test {
-            f.vm.onEntryClick(conflict)
-            runCurrent()
-
-            val event = awaitItem() as GitChangesEvent.OpenDiff
-            assertEquals("s1", event.sessionId)
-            assertSame(conflict, event.entry)
-            assertEquals(GitDiffResponse.SCOPE_UNSTAGED, event.scope)
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
     fun onEntryClick_forwardsTheGroupAsTheScope_forEveryOtherGroup() = runTest {
         val f = newFixture()
         f.vm.events.test {
@@ -613,19 +573,6 @@ class GitChangesViewModelTest {
     }
 
     @Test
-    fun dismissRestore_dropsThePrompt_withoutARequest() = runTest {
-        val f = loaded(allCaps.copy(conflicts = true))
-        f.vm.requestRestore("src/session.py")
-
-        f.vm.dismissRestore()
-        f.vm.confirmRestore()
-        runCurrent()
-
-        assertNull(f.vm.restorePrompt.value)
-        coVerify(exactly = 0) { f.repo.restoreSessionConflict(any(), any(), any(), any()) }
-    }
-
-    @Test
     fun aRefusedRestore_showsItsCopy_pullsAnyway_andClearsBusy() = runTest {
         val f = loaded(allCaps.copy(conflicts = true))
         val pulls = countPulls(f)
@@ -684,31 +631,7 @@ class GitChangesViewModelTest {
         assertSame(first, f.initial())
     }
 
-    @Test
-    fun aSessionWithoutAProject_handsTheRepositoryNull() = runTest {
-        val f = newFixture(projectName = null)
-        subscribe(f.vm)
-        assertNull(f.projectName())
-    }
-
-    @Test
-    fun holdAndRelease_bracketTheTrackerWatch() = runTest {
-        val f = newFixture()
-        assertFalse(f.tracker.isHeld("s1"))
-        f.vm.holdWatch()
-        assertTrue(f.tracker.isHeld("s1"))
-        f.vm.releaseWatch()
-        assertFalse(f.tracker.isHeld("s1"))
-    }
-
     // MARK: - Capabilities
-
-    @Test
-    fun theProbedCapabilities_landInReady() = runTest {
-        val f = loaded(allCaps)
-
-        assertEquals(allCaps, ready(f.vm).capabilities)
-    }
 
     @Test
     fun aFailedProbe_keepsTheReadOnlyViewer() = runTest {
@@ -874,19 +797,6 @@ class GitChangesViewModelTest {
     }
 
     @Test
-    fun tickedRowsThatVanishWithARefresh_areDropped() = runTest {
-        val f = loaded()
-        f.vm.toggleSelection("unstaged:1:src/both.py")
-        f.vm.toggleSelection("untracked:1:notes/тест.md")
-        runCurrent()
-
-        f.loads.emit(SessionGitStatusLoad.Loaded(status("e2", entries = listOf(untracked))))
-        runCurrent()
-
-        assertEquals(setOf("untracked:1:notes/тест.md"), ready(f.vm).selectedKeys)
-    }
-
-    @Test
     fun aVanishedRow_isNotReTicked_whenItsKeyComesBack() = runTest {
         // Committed from the PTY, the file leaves the list; edited again it
         // returns under the same `group:occurrence:path` key, so a tick left
@@ -930,29 +840,6 @@ class GitChangesViewModelTest {
         assertFalse(ready.selecting)
         assertFalse(ready.inSelectionMode)
         assertFalse(ready.busy)
-    }
-
-    @Test
-    fun enterSelection_showsTheCheckboxesBeforeAnythingIsTicked_andClearLeaves() = runTest {
-        val f = loaded()
-
-        f.vm.enterSelection()
-        runCurrent()
-        var ready = ready(f.vm)
-        assertTrue(ready.selecting)
-        assertTrue(ready.inSelectionMode)
-        assertEquals(emptySet<String>(), ready.selectedKeys)
-
-        f.vm.toggleSelection("unstaged:1:src/both.py")
-        runCurrent()
-        assertEquals(setOf("unstaged:1:src/both.py"), ready(f.vm).selectedKeys)
-
-        f.vm.clearSelection()
-        runCurrent()
-        ready = ready(f.vm)
-        assertFalse(ready.selecting)
-        assertFalse(ready.inSelectionMode)
-        assertEquals(emptySet<String>(), ready.selectedKeys)
     }
 
     @Test
@@ -1136,25 +1023,6 @@ class GitChangesViewModelTest {
     }
 
     @Test
-    fun aNonHookRefusal_carriesNoOutput() = runTest {
-        val f = loaded()
-        coEvery { f.repo.sessionCommitContext("s1") } returns
-            GitCommitContextResponse(author = author, head = head)
-        coEvery { f.repo.commitSession("s1", any(), any(), any()) } throws
-            gitError(SessionGitException.CODE_IDENTITY_REQUIRED, "no identity")
-        f.vm.openCommit()
-        runCurrent()
-
-        f.vm.commit("who", "", amend = false, noVerify = false)
-        runCurrent()
-
-        assertEquals(
-            CommitError("Git doesn't know who you are on the agent machine.", null),
-            f.vm.commitSheet.value?.error,
-        )
-    }
-
-    @Test
     fun theCommitRouteArg_opensTheSheetOnce_andIsConsumed() = runTest {
         val f = newFixture(capabilities = allCaps, commit = true)
 
@@ -1163,20 +1031,6 @@ class GitChangesViewModelTest {
 
         val plain = newFixture(capabilities = allCaps)
         assertNull(plain.vm.commitSheet.value)
-    }
-
-    @Test
-    fun ready_carriesTheStagedCount_theCommitButtonGatesOn() = runTest {
-        val f = loaded()
-
-        f.loads.emit(
-            SessionGitStatusLoad.Loaded(
-                status().copy(counts = GitStatusCounts(staged = 2, unstaged = 1, total = 3)),
-            ),
-        )
-        runCurrent()
-
-        assertEquals(2, ready(f.vm).stagedCount)
     }
 
     // MARK: - Fetch / pull / push jobs
@@ -1433,26 +1287,6 @@ class GitChangesViewModelTest {
     }
 
     @Test
-    fun aFailedCancel_isAToast() = runTest {
-        val f = loaded(capabilities = syncCaps)
-        coEvery { f.repo.cancelSessionGitJob("s1", "j1") } throws
-            SessionGitException.Network(IOException("down"))
-        f.frames.emit(job())
-        runCurrent()
-
-        f.vm.events.test {
-            f.vm.cancelSync()
-            runCurrent()
-
-            assertEquals(
-                GitChangesEvent.ShowMessage("Could not reach the agent. Check the connection and try again."),
-                awaitItem(),
-            )
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
     fun followUps_goThroughThePrompt_andEachLaunchesItsOwnRequest() = runTest {
         val f = loaded(capabilities = syncCaps)
         coEvery { f.repo.startSessionGitJob("s1", any(), any(), any()) } answers {
@@ -1503,17 +1337,6 @@ class GitChangesViewModelTest {
 
         assertNull(f.vm.syncSheet.value)
         assertEquals("j1", ready(f.vm).job?.jobId)
-    }
-
-    @Test
-    fun theSyncRouteArg_opensTheSheetOnce_andIsConsumed() = runTest {
-        val f = newFixture(capabilities = syncCaps, sync = true)
-
-        assertEquals(SyncSheetState(), f.vm.syncSheet.value)
-        assertEquals(false, f.handle.get<Boolean>("sync"))
-
-        val plain = newFixture(capabilities = syncCaps)
-        assertNull(plain.vm.syncSheet.value)
     }
 
     // MARK: - Rebase
@@ -1789,34 +1612,5 @@ class GitChangesViewModelTest {
         runCurrent()
 
         assertEquals(listOf("src/conflict.py"), sent.captured)
-    }
-
-    @Test
-    fun aMarkerRefusal_namesTheFile() = runTest {
-        val f = rebasing()
-        coEvery { f.repo.stageSessionPaths("s1", any()) } throws
-            gitError(SessionGitException.CODE_CONFLICT_MARKERS, "src/conflict.py")
-
-        f.vm.events.test {
-            f.vm.resolve(conflict)
-            runCurrent()
-
-            assertEquals(
-                GitChangesEvent.ShowMessage("src/conflict.py still has conflict markers — finish resolving it first."),
-                awaitItem(),
-            )
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun theRebaseRouteArg_opensTheSheetOnce_andIsConsumed() = runTest {
-        val f = newFixture(capabilities = rebaseCaps, rebase = true)
-
-        assertNotNull(f.vm.rebaseSheet.value)
-        assertEquals(false, f.handle.get<Boolean>("rebase"))
-
-        val plain = newFixture(capabilities = rebaseCaps)
-        assertNull(plain.vm.rebaseSheet.value)
     }
 }

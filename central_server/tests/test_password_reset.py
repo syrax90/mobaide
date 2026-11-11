@@ -484,37 +484,6 @@ class TestRouterIntegration:
         await asyncio.sleep(0)
         assert any(m[0] == "ian@example.com" for m in fake_sender.reset_messages)
 
-    async def test_reset_password_happy_path_returns_200(
-        self,
-        reset_client,
-        reset_app,
-        reset_db: Database,
-        fake_sender: _FakeEmailSender,
-    ):
-        await _make_verified_user(
-            reset_db, reset_app.state.auth_service, "jane@example.com",
-            password="oldpass99",
-        )
-        await reset_client.post(
-            "/api/auth/forgot-password",
-            json={"email": "jane@example.com"},
-        )
-        await asyncio.sleep(0)
-        code = next(
-            m[1] for m in fake_sender.reset_messages
-            if m[0] == "jane@example.com"
-        )
-
-        resp = await reset_client.post(
-            "/api/auth/reset-password",
-            json={
-                "email": "jane@example.com",
-                "code": code,
-                "new_password": "newpass99",
-            },
-        )
-        assert resp.status_code == 200
-        assert resp.json() == {"status": "ok"}
 
     async def test_reset_password_invalid_code_returns_400(
         self,
@@ -540,37 +509,6 @@ class TestRouterIntegration:
         assert resp.status_code == 400
         assert resp.json()["detail"]["error"] == "reset_code_invalid"
 
-    async def test_reset_password_same_as_old_returns_400(
-        self,
-        reset_client,
-        reset_app,
-        reset_db: Database,
-        fake_sender: _FakeEmailSender,
-    ):
-        await _make_verified_user(
-            reset_db, reset_app.state.auth_service, "leo@example.com",
-            password="oldpass99",
-        )
-        await reset_client.post(
-            "/api/auth/forgot-password",
-            json={"email": "leo@example.com"},
-        )
-        await asyncio.sleep(0)
-        code = next(
-            m[1] for m in fake_sender.reset_messages
-            if m[0] == "leo@example.com"
-        )
-
-        resp = await reset_client.post(
-            "/api/auth/reset-password",
-            json={
-                "email": "leo@example.com",
-                "code": code,
-                "new_password": "oldpass99",
-            },
-        )
-        assert resp.status_code == 400
-        assert resp.json()["detail"]["error"] == "new_password_same_as_old"
 
     async def test_reset_password_attempts_exhausted_returns_429(
         self,

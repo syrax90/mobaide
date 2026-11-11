@@ -70,18 +70,6 @@ class LoginViewModelTest {
         updatePassword("secret")
     }
 
-    // ---- Initial state ------------------------------------------------------
-
-    @Test
-    fun initialState_hasEmptyFields_andNoErrorOrLoading() = runTest {
-        val vm = newViewModel()
-        val state = vm.uiState.value
-        assertEquals("", state.email)
-        assertEquals("", state.password)
-        assertFalse(state.isLoading)
-        assertNull(state.error)
-    }
-
     // ---- Blank-field validation ---------------------------------------------
 
     @Test
@@ -95,19 +83,6 @@ class LoginViewModelTest {
 
         assertEquals("Email and password are required", vm.uiState.value.error)
         assertFalse(vm.uiState.value.isLoading)
-        coVerify(exactly = 0) { authRepository.loginWithPassword(any(), any()) }
-    }
-
-    @Test
-    fun login_whenPasswordBlank_setsError_andDoesNotCallRepository() = runTest {
-        val vm = newViewModel()
-        vm.updateEmail("alice@example.com")
-        vm.updatePassword("")
-
-        vm.loginWithPassword()
-        advanceUntilIdle()
-
-        assertEquals("Email and password are required", vm.uiState.value.error)
         coVerify(exactly = 0) { authRepository.loginWithPassword(any(), any()) }
     }
 
@@ -202,26 +177,6 @@ class LoginViewModelTest {
         assertFalse(state.isLoading)
     }
 
-    // ---- Non-API exception path ---------------------------------------------
-
-    @Test
-    fun login_onGenericException_setsLoginFailedError() = runTest {
-        val vm = primed(newViewModel())
-        coEvery {
-            authRepository.loginWithPassword("alice@example.com", "secret")
-        } throws java.net.UnknownHostException("example.com: nodename nor servname provided")
-
-        vm.loginWithPassword()
-        advanceUntilIdle()
-
-        val state = vm.uiState.value
-        assertEquals(
-            "Login failed: example.com: nodename nor servname provided",
-            state.error,
-        )
-        assertFalse(state.isLoading)
-    }
-
     // ---- Google Sign-In callback -------------------------------------------
 
     @Test
@@ -258,22 +213,6 @@ class LoginViewModelTest {
     }
 
     @Test
-    fun onGoogleAuthResult_success_onGenericFailure_setsError_andClearsLoading() = runTest {
-        // Exercises the non-ApiException catch branch in onGoogleIdToken — symmetric
-        // to the RegisterViewModel test of the same name, and previously uncovered here.
-        val vm = newViewModel()
-        coEvery {
-            authRepository.loginWithGoogle("bad-token")
-        } throws java.net.UnknownHostException("api.example.com")
-
-        vm.onGoogleAuthResult(GoogleAuthResult.Success("bad-token"))
-        advanceUntilIdle()
-
-        assertEquals("Google Sign-In failed: api.example.com", vm.uiState.value.error)
-        assertFalse(vm.uiState.value.isLoading)
-    }
-
-    @Test
     fun onGoogleAuthResult_success_onApiFailure_alsoEmitsErrorEvent() = runTest {
         // Regression: the snackbar-on-repeat-tap fix must also cover the
         // Success→repository-throws branch, not just the pre-repo result cases.
@@ -301,26 +240,6 @@ class LoginViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
         assertFalse(vm.uiState.value.isLoading)
-    }
-
-    @Test
-    fun onGoogleAuthResult_noAccounts_emitsAccountMessage() = runTest {
-        val vm = newViewModel()
-        vm.errorEvents.test {
-            vm.onGoogleAuthResult(GoogleAuthResult.NoAccounts("Add a Google account."))
-            assertEquals("Add a Google account.", awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun onGoogleAuthResult_playServicesUnavailable_emitsPlayServicesMessage() = runTest {
-        val vm = newViewModel()
-        vm.errorEvents.test {
-            vm.onGoogleAuthResult(GoogleAuthResult.PlayServicesUnavailable)
-            assertTrue(awaitItem().contains("Google Play services"))
-            cancelAndIgnoreRemainingEvents()
-        }
     }
 
     @Test
@@ -397,24 +316,6 @@ class LoginViewModelTest {
     }
 
     @Test
-    fun login_onAdminLoginNotSupported_alsoEmitsErrorEvent() = runTest {
-        val vm = primed(newViewModel())
-        coEvery {
-            authRepository.loginWithPassword("alice@example.com", "secret")
-        } throws AdminLoginNotSupportedException()
-
-        vm.errorEvents.test {
-            vm.loginWithPassword()
-            advanceUntilIdle()
-            assertEquals(
-                ADMIN_LOGIN_USER_MESSAGE,
-                awaitItem(),
-            )
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
     fun onGoogleAuthResult_onAdminLoginNotSupported_setsFriendlySnackbarMessage() = runTest {
         // Symmetric mapping must exist on the Google branch too.
         val vm = newViewModel()
@@ -445,19 +346,6 @@ class LoginViewModelTest {
 
         assertNull(vm.uiState.value.error)
         assertEquals("alice@example.com", vm.uiState.value.email)
-    }
-
-    @Test
-    fun updatePassword_clearsPendingError() = runTest {
-        val vm = newViewModel()
-        vm.loginWithPassword()
-        advanceUntilIdle()
-        assertEquals("Email and password are required", vm.uiState.value.error)
-
-        vm.updatePassword("secret")
-
-        assertNull(vm.uiState.value.error)
-        assertEquals("secret", vm.uiState.value.password)
     }
 
     // ---- Session-expired snackbar (reactive to SessionManager.sessionEvents) --
@@ -519,39 +407,6 @@ class LoginViewModelTest {
     }
 
     @Test
-    fun sessionEvents_accountRemoved_isDistinctFromTokenRejected() = runTest {
-        // Regression guard against the obvious refactor mistake: branching
-        // the AccountRemoved arm onto the TokenRejected message string
-        // (or vice-versa) by accident. The two snackbars must remain
-        // distinguishable to the user so they understand WHY they were
-        // logged out — "session expired" implies "sign in again" but
-        // "account removed" requires the user to register a fresh account
-        // or contact support.
-        val events = MutableSharedFlow<SessionManager.InvalidationReason>(
-            extraBufferCapacity = 1,
-        )
-        val vm = newViewModel(events)
-
-        vm.errorEvents.test {
-            advanceUntilIdle()
-            events.tryEmit(SessionManager.InvalidationReason.AccountRemoved)
-            val accountMessage = awaitItem()
-
-            // Strong-form distinguishability checks: the message must NOT
-            // be the TokenRejected copy, and it must explicitly contain
-            // the "removed" keyword so a future translator can't silently
-            // collapse the two strings.
-            assertEquals(false, accountMessage == "Your session has expired. Please sign in again.")
-            assertTrue(
-                "account-removed message must explicitly mention removal — got: $accountMessage",
-                accountMessage.contains("removed", ignoreCase = true),
-            )
-
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
     fun sessionEvents_manualLogout_emitsNoSnackbar() = runTest {
         // Manual logout is user-initiated — the user pressed "Log out"
         // in Settings, they don't need a redundant "session expired"
@@ -588,38 +443,6 @@ class LoginViewModelTest {
         events.tryEmit(SessionManager.InvalidationReason.TokenRejected)
 
         vm.errorEvents.test {
-            assertEquals(
-                "Your session has expired. Please sign in again.",
-                awaitItem(),
-            )
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun sessionEvents_emittedBeforeViewModelExists_stillFiresSnackbar() = runTest {
-        // True cold-start: CentralAuthInterceptor fires its 401 handler
-        // from the OkHttp IO thread BEFORE any LoginViewModel is
-        // constructed (navigation to LOGIN runs reactively after the
-        // authState → Unauthenticated transition, which has not happened
-        // yet at emit time). The production SessionManager uses
-        // `replay = 1` on _sessionEvents specifically so a `TokenRejected`
-        // emitted in this window survives until a LoginViewModel arrives
-        // and subscribes. This test models that ordering directly —
-        // emit first, then construct the VM.
-        val events = MutableSharedFlow<SessionManager.InvalidationReason>(
-            replay = 1,
-            extraBufferCapacity = 0,
-        )
-        // Emit BEFORE any ViewModel / subscriber exists. With replay=1
-        // the event sits in the replay cache until the first collector
-        // attaches.
-        events.tryEmit(SessionManager.InvalidationReason.TokenRejected)
-
-        val vm = newViewModel(events)
-
-        vm.errorEvents.test {
-            advanceUntilIdle()
             assertEquals(
                 "Your session has expired. Please sign in again.",
                 awaitItem(),

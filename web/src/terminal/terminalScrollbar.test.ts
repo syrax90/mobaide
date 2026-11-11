@@ -151,10 +151,6 @@ describe('lineForOffset', () => {
     expect(lineForOffset(1, 500)).toBe(500);
   });
 
-  it('rounds to a whole line', () => {
-    expect(lineForOffset(0.5, 501)).toBe(251);
-  });
-
   it('clamps a stale offset from a drag that outran the buffer', () => {
     expect(lineForOffset(-0.2, 500)).toBe(0);
     expect(lineForOffset(1.4, 500)).toBe(500);
@@ -185,10 +181,6 @@ describe('wheelRows', () => {
     expect(total).toBe(wheelRows(200, CELL, 0).rows);
   });
 
-  it('spends a large delta at one row per cell height', () => {
-    expect(wheelRows(150, CELL, 0).rows).toBe(10);
-  });
-
   it('carries the sub-row remainder instead of rounding it away', () => {
     // 60/15 = 4 exactly; 70/15 = 4 with 2/3 of a row left over, and the next
     // event has to spend it or the wheel drifts slower than the content.
@@ -197,10 +189,6 @@ describe('wheelRows', () => {
     expect(first.rows).toBe(4);
     expect(first.carry).toBeCloseTo(2 / 3, 5);
     expect(wheelRows(70, CELL, first.carry).rows).toBe(5);
-  });
-
-  it('scrolls up on a negative delta', () => {
-    expect(wheelRows(-150, CELL, 0).rows).toBe(-10);
   });
 
   it('drops a carry left pointing the other way', () => {

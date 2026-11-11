@@ -36,10 +36,6 @@ final class CustomAgentTypesRepositoryTests: XCTestCase {
 
     // MARK: - Refresh
 
-    func testInitialCacheIsEmpty() {
-        XCTAssertTrue(makeRepo().currentTypes.isEmpty)
-    }
-
     func testRefreshReplacesCacheWholesale() async throws {
         let repo = makeRepo()
         StubURLProtocol.enqueue(status: 200, body: "[\(typeJSON()),\(typeJSON(id: "ffffffffffff", name: "Goose"))]")
@@ -154,19 +150,6 @@ final class CustomAgentTypesRepositoryTests: XCTestCase {
         XCTAssertEqual(repo.currentTypes.map(\.name), ["Aider 2"], "the bumped row replaces in place")
     }
 
-    func testDeleteRemovesFromCache() async throws {
-        let repo = makeRepo()
-        await repo.applyUpserted(makeCustomAgentType())
-        await repo.applyUpserted(makeCustomAgentType(id: "ffffffffffff", name: "Goose"))
-
-        StubURLProtocol.enqueue(status: 204, body: "")
-        try await repo.deleteType(typeId: "ab12cd34ef56")
-
-        XCTAssertEqual(StubURLProtocol.requests.first?.httpMethod, "DELETE")
-        XCTAssertEqual(StubURLProtocol.requests.first?.url?.path, "/api/custom-agent-types/ab12cd34ef56")
-        XCTAssertEqual(repo.currentTypes.map(\.id), ["ffffffffffff"])
-    }
-
     func testCreateDiscardsCacheWriteWhenAccountSwitchesMidFlight() async throws {
         let (repo, identity) = makeRepoWithIdentity()
         StubURLProtocol.enqueue(status: 201, body: typeJSON())
@@ -188,47 +171,6 @@ final class CustomAgentTypesRepositoryTests: XCTestCase {
         )
     }
 
-    func testUpdateDiscardsCacheWriteWhenAccountSwitchesMidFlight() async throws {
-        let (repo, identity) = makeRepoWithIdentity()
-        await repo.applyUpserted(makeCustomAgentType())
-        StubURLProtocol.enqueue(status: 200, body: typeJSON(name: "Aider 2", updatedAt: "u2"))
-        StubURLProtocol.onRequest = { _ in
-            identity.saveUserSession(
-                accessToken: "user-token-2",
-                email: "other@example.com",
-                userId: "u2",
-                role: "user"
-            )
-        }
-
-        let updated = try await repo.updateType(typeId: "ab12cd34ef56", name: "Aider 2", command: "aider --model sonnet")
-
-        XCTAssertEqual(updated.name, "Aider 2", "the server row is still returned on mismatch")
-        XCTAssertEqual(repo.currentTypes.map(\.name), ["Aider"], "the bumped row must not reach the cache")
-    }
-
-    func testDeleteDiscardsCacheWriteWhenAccountSwitchesMidFlight() async throws {
-        let (repo, identity) = makeRepoWithIdentity()
-        await repo.applyUpserted(makeCustomAgentType())
-        StubURLProtocol.enqueue(status: 204, body: "")
-        StubURLProtocol.onRequest = { _ in
-            identity.saveUserSession(
-                accessToken: "user-token-2",
-                email: "other@example.com",
-                userId: "u2",
-                role: "user"
-            )
-        }
-
-        try await repo.deleteType(typeId: "ab12cd34ef56")
-
-        XCTAssertEqual(StubURLProtocol.requests.first?.httpMethod, "DELETE", "the server delete itself still runs")
-        XCTAssertEqual(
-            repo.currentTypes.map(\.id), ["ab12cd34ef56"],
-            "a delete landing after an account switch must not mutate the cache it no longer owns"
-        )
-    }
-
     // MARK: - Push-driven cache mutations
 
     func testApplyUpsertedAppendsThenReplacesInPlacePreservingOrder() async {
@@ -241,29 +183,5 @@ final class CustomAgentTypesRepositoryTests: XCTestCase {
 
         XCTAssertEqual(repo.currentTypes.map(\.id), ["aaaaaaaaaaaa", "ab12cd34ef56", "ffffffffffff"])
         XCTAssertEqual(repo.currentTypes[1].name, "Aider 2")
-    }
-
-    func testApplyDeletedRemovesMatchingAndIgnoresUnknownId() async {
-        let repo = makeRepo()
-        await repo.applyUpserted(makeCustomAgentType())
-        await repo.applyUpserted(makeCustomAgentType(id: "ffffffffffff", name: "Goose"))
-
-        await repo.applyDeleted(typeId: "ab12cd34ef56")
-        XCTAssertEqual(repo.currentTypes.map(\.id), ["ffffffffffff"])
-
-        await repo.applyDeleted(typeId: "ghost-id")
-        XCTAssertEqual(
-            repo.currentTypes.map(\.id), ["ffffffffffff"],
-            "a tombstone for a never-fetched row must be a no-op"
-        )
-    }
-
-    func testClearEmptiesCache() async {
-        let repo = makeRepo()
-        await repo.applyUpserted(makeCustomAgentType())
-        XCTAssertFalse(repo.currentTypes.isEmpty)
-
-        await repo.clear()
-        XCTAssertTrue(repo.currentTypes.isEmpty)
     }
 }

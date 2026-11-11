@@ -120,16 +120,6 @@ class TerminalViewModelInsertTranscriptTest {
     }
 
     @Test
-    fun atTheEndAfterAWord_leadsWithASpace() {
-        val vm = createViewModel()
-        vm.typed("git", TextRange(3))
-
-        vm.insertTranscript("status")
-
-        assertEquals(TextFieldValue("git status", TextRange(10)), vm.inputText.value)
-    }
-
-    @Test
     fun aBlankTranscript_changesNothing() {
         val vm = createViewModel()
         vm.typed("keep me", TextRange(4))

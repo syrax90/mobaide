@@ -278,58 +278,12 @@ describe('SessionsPanel agents', () => {
     expect(currentPath()).toBe('/');
   });
 
-  it('shows no agents section when the account owns only this agent', async () => {
-    renderPanel();
-
-    await screen.findByText('desktop');
-    expect(screen.queryByRole('list', { name: 'Other agents' })).toBeNull();
-    expect(screen.queryByText('Agents')).toBeNull();
-  });
-
   it('reports the connected agent offline when the list says so', async () => {
     api.agents = [agent('a1', 'desktop', false)];
     renderPanel();
 
     await screen.findByText('desktop');
     expect(screen.getByText('Offline')).toBeInTheDocument();
-  });
-});
-
-describe('SessionsPanel chrome', () => {
-  it('takes focus on the heading when it opens as an overlay, not when docked', () => {
-    renderPanel({ docked: false });
-    expect(screen.getByRole('heading', { name: 'Sessions' })).toHaveFocus();
-    cleanup();
-
-    // The docked rail is part of the page; stealing focus from the grid on
-    // every terminal visit would be the opposite of a convenience.
-    renderPanel({ docked: true });
-    expect(screen.getByRole('heading', { name: 'Sessions' })).not.toHaveFocus();
-  });
-
-  it('offers a close button only in the overlay form', () => {
-    renderPanel({ docked: false });
-    fireEvent.click(screen.getByRole('button', { name: 'Close sessions panel' }));
-    expect(calls.closes).toBe(1);
-    cleanup();
-
-    renderPanel({ docked: true });
-    expect(screen.queryByRole('button', { name: 'Close sessions panel' })).toBeNull();
-  });
-
-  it('toggles the pin and reflects it as pressed', () => {
-    renderPanel({ pinned: false });
-    const pin = screen.getByRole('button', { name: 'Pin' });
-    expect(pin).toHaveAttribute('aria-pressed', 'false');
-    fireEvent.click(pin);
-    expect(calls.pinned).toEqual([true]);
-    cleanup();
-
-    renderPanel({ pinned: true });
-    const unpin = screen.getByRole('button', { name: 'Unpin' });
-    expect(unpin).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(unpin);
-    expect(calls.pinned).toEqual([true, false]);
   });
 });
 

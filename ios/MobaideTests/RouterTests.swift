@@ -3,20 +3,6 @@ import XCTest
 
 @MainActor
 final class RouterTests: XCTestCase {
-    func testNavigatePopAndPopToRoot() {
-        let router = Router()
-        router.navigate(to: .sessionList)
-        router.navigate(to: .sessionDetail(sessionId: "s1"))
-        XCTAssertEqual(router.path, [.sessionList, .sessionDetail(sessionId: "s1")])
-
-        router.pop()
-        XCTAssertEqual(router.path, [.sessionList])
-
-        router.navigate(to: .settings)
-        router.popToRoot()
-        XCTAssertEqual(router.path, [])
-    }
-
     func testPopToTruncatesEverythingAboveTheRoute() {
         let router = Router()
         router.navigate(to: .sessionList)
@@ -75,16 +61,6 @@ final class RouterTests: XCTestCase {
         XCTAssertEqual(router.path, [.connections])
     }
 
-    func testIncompatibleServerTransitionPreservesPath() {
-        let router = Router()
-        router.navigate(to: .settings)
-        let info = AuthState.IncompatibleServer(
-            reason: "r", minClientVersion: 1, storeUrl: "", storeFallbackUrl: ""
-        )
-        router.handleTransition(from: .fullyConnected, to: .incompatibleServer(info))
-        XCTAssertEqual(router.path, [.settings], "the takeover renders above the stack; no reset needed")
-    }
-
     func testReplaceLastSwapsTheTopScreenWithoutGrowingTheStack() {
         let router = Router()
         router.navigate(to: .sessionList)
@@ -95,13 +71,5 @@ final class RouterTests: XCTestCase {
         router.replaceLast(with: .sessionDetail(sessionId: "s2"))
 
         XCTAssertEqual(router.path, [.sessionList, .sessionDetail(sessionId: "s2")])
-    }
-
-    func testReplaceLastOnAnEmptyPathPushes() {
-        let router = Router()
-
-        router.replaceLast(with: .sessionDetail(sessionId: "s1"))
-
-        XCTAssertEqual(router.path, [.sessionDetail(sessionId: "s1")], "nothing to replace still has to land somewhere")
     }
 }

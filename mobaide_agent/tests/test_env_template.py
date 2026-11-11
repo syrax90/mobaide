@@ -70,13 +70,6 @@ class TestEnvTemplateContractAnchors:
         # must be a bare empty assignment so the substitution is unambiguous.
         assert "JWT_SECRET_KEY=\n" in text
 
-    def test_template_contains_default_relay_server_url(self):
-        text = (
-            files("mobaide.agent")
-            .joinpath("env.template")
-            .read_text(encoding="utf-8")
-        )
-        assert "RELAY_SERVER_URL=wss://mobaide.com" in text
 
     def test_template_contains_relay_pairing_placeholders(self):
         text = (

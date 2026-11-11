@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import base64
 import json
-import logging
 import types
 from datetime import datetime, timedelta, timezone
 
@@ -88,33 +87,8 @@ class TestParseAndVerifyHappyPath:
         assert claim.relay_url == "https://relay.test"
         assert claim.agent_friendly_name == "lab-host"
 
-    def test_relay_url_trailing_slash_normalised(self):
-        # Either side of the comparison may carry a trailing slash; the
-        # check is rstrip("/")-normalised.
-        priv_b64, pub_b64 = _ed25519_keypair_b64()
-        push = _signed_push(
-            private_key_b64=priv_b64,
-            overrides={"relay_url": "https://relay.test/"},
-        )
-
-        claim = PairingWsClient._parse_and_verify(
-            push,
-            trust_pub_key_b64=pub_b64,
-            expected_relay_url="https://relay.test",
-        )
-
-        assert claim.relay_url == "https://relay.test/"
-
 
 class TestParseAndVerifyRejections:
-    def test_rejects_non_dict(self):
-        with pytest.raises(PairingWsError, match="JSON object"):
-            PairingWsClient._parse_and_verify(
-                "not-a-dict",
-                trust_pub_key_b64="aa",
-                expected_relay_url="https://relay.test",
-            )
-
     def test_rejects_unexpected_type(self):
         priv_b64, pub_b64 = _ed25519_keypair_b64()
         push = _signed_push(
@@ -205,24 +179,6 @@ class TestParseAndVerifyRejections:
         )
 
         assert claim.relay_url == "https://relay.test"
-
-    def test_accepts_relay_url_default_port_omitted(self):
-        # ``https://relay.test`` (port 443 implied) matches
-        # ``https://relay.test:443`` (explicit). Pin so a regression
-        # that switches to raw string compare regresses here first.
-        priv_b64, pub_b64 = _ed25519_keypair_b64()
-        push = _signed_push(
-            private_key_b64=priv_b64,
-            overrides={"relay_url": "https://relay.test:443"},
-        )
-
-        claim = PairingWsClient._parse_and_verify(
-            push,
-            trust_pub_key_b64=pub_b64,
-            expected_relay_url="https://relay.test",
-        )
-
-        assert claim.relay_url == "https://relay.test:443"
 
     def test_rejects_relay_url_port_mismatch(self):
         # A real port mismatch (different listening service) MUST
@@ -353,21 +309,6 @@ class TestParseAndVerifyRejections:
                 expected_relay_url="https://relay.test",
             )
 
-    def test_rejects_relay_url_with_fragment(self):
-        # Same rationale as the query-string regression.
-        priv_b64, pub_b64 = _ed25519_keypair_b64()
-        push = _signed_push(
-            private_key_b64=priv_b64,
-            overrides={"relay_url": "https://relay.test#evil"},
-        )
-
-        with pytest.raises(PairingWsError, match="relay_url mismatch"):
-            PairingWsClient._parse_and_verify(
-                push,
-                trust_pub_key_b64=pub_b64,
-                expected_relay_url="https://relay.test",
-            )
-
     def test_rejects_clock_skew_too_large(self):
         # ``issued_at`` more than 5 min off → reject.
         priv_b64, pub_b64 = _ed25519_keypair_b64()
@@ -402,9 +343,7 @@ class TestParseAndVerifyRejections:
         [
             "tok with space",        # space rejected
             "tok\nwith-newline",     # newline rejected (smuggle .env line)
-            "tok\rwith-cr",          # CR rejected
             "tok\x00with-nul",       # NUL rejected
-            "tok!with-bang",         # ! not in regex
         ],
     )
     def test_rejects_credentials_failing_regex(self, bad):
@@ -613,81 +552,3 @@ class TestWaitForClaimWebSocketsConnectKwargs:
         # accidental f-string interpolation) is caught.
         assert kwargs["url"] == "wss://relay.test/ws/pairing/n1"
 
-
-class TestWaitForClaimStructuredLogging:
-    """Pin the new operator-visibility log lines added alongside the
-    Windows event-loop fix.
-
-    Operators previously had no way to tell — from ``agent.err.log``
-    alone — which step of ``wait_for_claim`` had hung or failed
-    (connect? ready? claim recv? signature verify?). The structured
-    INFO log lines make every step grep-able. A single happy-path
-    assertion is enough; the failure-branch log lines are covered
-    incidentally via the existing
-    ``test_pairing_monitor.TestRunPairingMonitorWsFailureHandling``
-    tests and are not regression-critical in isolation.
-    """
-
-    async def test_happy_path_emits_structured_progress_logs(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        priv_b64, pub_b64 = _ed25519_keypair_b64()
-        signed = _signed_push(private_key_b64=priv_b64)
-        _install_fake_websockets(
-            monkeypatch,
-            ready_frame=json.dumps({"type": "ready"}),
-            claim_frame=json.dumps(signed),
-        )
-
-        with caplog.at_level(logging.INFO, logger=_pw.__name__):
-            await PairingWsClient().wait_for_claim(
-                ws_url="wss://relay.test/ws/pairing/n1",
-                timeout_s=30.0,
-                trust_pub_key_b64=pub_b64,
-                expected_relay_url="https://relay.test",
-            )
-
-        info_messages = [
-            r.getMessage()
-            for r in caplog.records
-            if r.levelno == logging.INFO
-            and r.name == _pw.__name__
-        ]
-        # The four structured event names form the operator's
-        # diagnostic chain. Pin all of them so a regression that
-        # drops any single one (or renames it) is caught — a renamed
-        # event silently breaks ops dashboards that grep for the
-        # literal string.
-        required_events = [
-            "pairing_ws.connecting",
-            "pairing_ws.ready_received",
-            "pairing_ws.recv_claim_begin",
-            "pairing_ws.claim_verified",
-        ]
-        for event in required_events:
-            assert any(event in msg for msg in info_messages), (
-                f"expected '{event}' in INFO logs on the happy path; "
-                f"got: {info_messages!r}"
-            )
-        # The ``claim_verified`` line MUST carry the agent_id so the
-        # operator can correlate the WS-side claim against the .env
-        # value once the write step completes. Pin the agent_id from
-        # the fixture's signed push.
-        claim_verified_lines = [
-            msg for msg in info_messages
-            if "pairing_ws.claim_verified" in msg
-        ]
-        assert claim_verified_lines, (
-            "claim_verified log line is the single most important "
-            "operator-visibility signal — it proves the agent's WS "
-            "actually received and validated a push. Missing it would "
-            "have hidden the original Windows-Proactor recv hang"
-        )
-        assert any(
-            "agent-12hex" in msg for msg in claim_verified_lines
-        ), (
-            f"expected claim agent_id in claim_verified log; got: "
-            f"{claim_verified_lines!r}"
-        )

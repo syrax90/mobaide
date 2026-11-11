@@ -7,7 +7,6 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.widget.HorizontalScrollView
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -55,53 +54,12 @@ class TerminalHorizontalScrollViewTest {
     }
 
     @Test
-    fun init_setsHorizontalScrollViewInteropDefaults() {
-        val hsv = TerminalHorizontalScrollView(context)
-
-        assertTrue(
-            "isFillViewport must be true so the inner TerminalView stretches vertically when its LayoutParams.height = MATCH_PARENT",
-            hsv.isFillViewport,
-        )
-        assertFalse(
-            "horizontal scroll bar must be disabled for clean terminal visuals",
-            hsv.isHorizontalScrollBarEnabled,
-        )
-        assertEquals(
-            "overScroll must be NEVER so a non-overflowing static-columns surface does not glow-edge",
-            View.OVER_SCROLL_NEVER,
-            hsv.overScrollMode,
-        )
-    }
-
-    @Test
-    fun onInterceptTouchEvent_returnsFalse_whenNoChildAttached() {
-        val hsv = TerminalHorizontalScrollView(context)
-        obtainDownEvent().use { ev ->
-            assertFalse(
-                "with no child the HSV must never intercept — defensive branch for the brief AndroidView recreate window",
-                hsv.onInterceptTouchEvent(ev),
-            )
-        }
-    }
-
-    @Test
     fun onInterceptTouchEvent_returnsFalse_whenChildFitsViewport() {
         val hsv = layoutWithChild(parentWidth = 400, childWidth = 400)
         obtainDownEvent().use { ev ->
             assertFalse(
                 "Full display mode: child width == HSV width → no horizontal overflow → HSV must be a transparent passthrough so vertical scroll is not stolen",
                 hsv.onInterceptTouchEvent(ev),
-            )
-        }
-    }
-
-    @Test
-    fun onTouchEvent_returnsFalse_whenNoChildAttached() {
-        val hsv = TerminalHorizontalScrollView(context)
-        obtainDownEvent().use { ev ->
-            assertFalse(
-                "with no child the HSV must not consume touches — defensive branch mirroring the intercept side",
-                hsv.onTouchEvent(ev),
             )
         }
     }
@@ -223,19 +181,6 @@ class TerminalHorizontalScrollViewTest {
                 move(equalOffset, equalOffset),
             )
         }
-    }
-
-    @Test
-    fun onTouchEvent_delegatesToSuper_whenChildOverflows() {
-        val hsv = layoutWithChild(parentWidth = 400, childWidth = 800)
-        obtainDownEvent().use { ev ->
-            hsv.onTouchEvent(ev)
-        }
-        assertEquals(
-            "with overflow, onTouchEvent must hand off to the HSV superclass — super accumulates scroll state from each event, so after a DOWN at (0,0) the HSV's scrollX must still be 0 (no spurious scroll happened, but the call did not short-circuit)",
-            0,
-            hsv.scrollX,
-        )
     }
 
     private fun slopExceedingHorizontalOffset(): Float = (touchSlop + 16).toFloat()

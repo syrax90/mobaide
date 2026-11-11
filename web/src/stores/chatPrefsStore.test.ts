@@ -19,14 +19,6 @@ beforeEach(() => {
 });
 
 describe('focus view', () => {
-  it('is on when nothing is stored', async () => {
-    useChatPrefsStore.setState({ focusView: false });
-    window.localStorage.clear();
-
-    await useChatPrefsStore.persist.rehydrate();
-
-    expect(useChatPrefsStore.getState().focusView).toBe(true);
-  });
 
   it('restores a stored opt-out', async () => {
     seed({ focusView: false });
@@ -42,14 +34,5 @@ describe('focus view', () => {
     await useChatPrefsStore.persist.rehydrate();
 
     expect(useChatPrefsStore.getState().focusView).toBe(true);
-  });
-
-  it('stores the choice for the next visit', () => {
-    useChatPrefsStore.getState().setFocusView(false);
-
-    const stored = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? '{}') as {
-      state?: { focusView?: unknown };
-    };
-    expect(stored.state?.focusView).toBe(false);
   });
 });

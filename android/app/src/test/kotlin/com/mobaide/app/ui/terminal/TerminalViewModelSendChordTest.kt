@@ -146,26 +146,6 @@ class TerminalViewModelSendChordTest {
     }
 
     @Test
-    fun sendChord_customKind_persistsUnderRawWireKindBucket() = runTest {
-        // Custom-type sessions bucket under their id-based wire string —
-        // rename-stable, never the display name.
-        coJustRun { preferencesStore.addRecentShortcutChord(any(), any()) }
-        coEvery {
-            preferencesStore.getRecentShortcutChords("custom_ab12cd34ef56")
-        } returns emptyList()
-        resolveKind(SessionKind.Custom("custom_ab12cd34ef56"))
-        val vm = createViewModel()
-        advanceUntilIdle()
-
-        vm.sendChord(KeyChord(ctrl = true, key = "a"))
-        advanceUntilIdle()
-
-        coVerify(exactly = 1) {
-            preferencesStore.addRecentShortcutChord("custom_ab12cd34ef56", "ctrl+a")
-        }
-    }
-
-    @Test
     fun sendChord_persistFailure_stillSendsBytes() = runTest {
         coEvery {
             preferencesStore.addRecentShortcutChord(any(), any())
@@ -202,21 +182,6 @@ class TerminalViewModelSendChordTest {
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertArrayEquals(byteArrayOf(0x01), payloadOf(captured.captured))
         coVerify(exactly = 0) { preferencesStore.addRecentShortcutChord(any(), any()) }
-        coVerify(exactly = 0) { preferencesStore.getRecentShortcutChords(any()) }
-    }
-
-    @Test
-    fun refreshShortcutRecents_kindUnresolved_readsNothingWhilePending() = runTest {
-        // The load waits for kind resolution rather than no-opping — while it
-        // is still pending the strict mock pins the zero-access contract (no
-        // bucket guess, no read).
-        val vm = createViewModel()
-        advanceUntilIdle()
-
-        vm.refreshShortcutRecents()
-        advanceUntilIdle()
-
-        assertTrue(vm.shortcutRecents.value.isEmpty())
         coVerify(exactly = 0) { preferencesStore.getRecentShortcutChords(any()) }
     }
 

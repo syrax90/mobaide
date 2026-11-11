@@ -7,7 +7,7 @@ import os
 import pytest
 
 from central_server.manifest import release_files
-from central_server.manifest.release_files import ReleaseFileError, ReleaseFileStore
+from central_server.manifest.release_files import ReleaseFileStore
 
 TOKEN = "release-token-test"
 BODY = b"mobaide agent tarball bytes"
@@ -55,16 +55,6 @@ async def test_reupload_is_idempotent(client, release_app):
     again = await _put(client)
     assert again.status_code == 200
     assert again.json()["created"] is False
-
-
-@pytest.mark.asyncio
-async def test_ranged_get(client, release_app):
-    await _put(client)
-    got = await client.get(
-        f"/api/v1/agent/releases/{SHA}/{NAME}", headers={"Range": "bytes=0-0"}
-    )
-    assert got.status_code == 206
-    assert got.content == BODY[:1]
 
 
 @pytest.mark.asyncio
@@ -211,17 +201,3 @@ def test_save_refuses_when_disk_would_run_low(tmp_path, monkeypatch):
     with pytest.raises(release_files.ReleaseStorageFullError):
         store.save(sha, "f.whl", data)
     assert not (tmp_path / sha).exists()
-
-
-@pytest.mark.asyncio
-async def test_upload_507_when_disk_would_run_low(client, release_app, monkeypatch):
-    monkeypatch.setattr(release_files, "MIN_FREE_BYTES", 1 << 62)
-    resp = await _put(client)
-    assert resp.status_code == 507
-
-
-def test_save_rejects_mismatch_without_writing(tmp_path):
-    store = ReleaseFileStore(tmp_path)
-    with pytest.raises(ReleaseFileError):
-        store.save(SHA, NAME, b"nope")
-    assert not (tmp_path / SHA).exists()

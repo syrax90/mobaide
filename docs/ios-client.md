@@ -999,12 +999,17 @@ End-to-end delivery needs a real device plus a server configured with
 
 ### CI
 
-`.github/workflows/ios-build.yml` runs the same command on `macos-latest`.
+`.github/workflows/ios-build.yml` runs the unit tests on `macos-latest` for PRs
+that touch `ios/` or `tests/protocol_fixtures/`, and on push to `main`.
 
 - It selects the newest installed Xcode 26.x at runtime (the runner pool mixes
   macos-15 and macos-26 image snapshots whose 26.x minors differ; the major is
   pinned and the job fails loudly if 26.x disappears), and creates the iPhone 16
   simulator device when the image doesn't pre-create it.
+- A fresh runner's first simulator boot takes about 4 minutes, so the job boots
+  the device in the background, runs `build-for-testing` (generic simulator
+  destination, `ARCHS=arm64`, no index store) at the same time, then runs
+  `test-without-building` on the booted device.
 - The job passes `-onlyUsePackageVersionsFromResolvedFile`, so the committed
   `Package.resolved` pins the SPM versions and drift fails loudly.
 - The pbxproj stays at `objectVersion = 70` (the minimum for synchronized folder

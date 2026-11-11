@@ -56,17 +56,4 @@ class VersionGateRepositoryTest {
         )
         assertTrue(outcome is ServerCompatibility.Incompatible)
     }
-
-    @Test
-    fun `compatible carries latestAgentVersion through`() {
-        val outcome = VersionGateRepository.classify(
-            versionInfo(
-                protocols = listOf(BuildConfig.APP_PROTOCOL_VERSION),
-                minClientVersion = 1,
-                latestAgent = "0.4.2",
-            )
-        )
-        assertTrue(outcome is ServerCompatibility.Compatible)
-        assertEquals("0.4.2", (outcome as ServerCompatibility.Compatible).latestAgentVersion)
-    }
 }

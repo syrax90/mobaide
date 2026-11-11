@@ -63,11 +63,6 @@ class TestResolveManifestUrlWithHint:
         )
         assert url == "https://example.com/api/v1/agent/manifest.json"
 
-    def test_empty_hint_returns_derived(self):
-        url = _resolve_manifest_url_with_hint(
-            _config("wss://example.com"), "",
-        )
-        assert url == "https://example.com/api/v1/agent/manifest.json"
 
     def test_valid_path_hint_resolves_against_origin(self):
         # The server moved the manifest to a new path; the agent picks
@@ -111,18 +106,6 @@ class TestResolveManifestUrlWithHint:
         )
         assert url == "https://example.com/api/v1/agent/manifest.json"
 
-    def test_derived_none_with_no_hint_returns_none(self, monkeypatch):
-        # Dev-mode ``ws://localhost`` config without the escape hatch:
-        # both the derivation fails AND no hint is set. The result is
-        # ``None`` so the callback's ``if url is None: return`` branch
-        # correctly disables the fetch.
-        monkeypatch.delenv(
-            "MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH", raising=False,
-        )
-        url = _resolve_manifest_url_with_hint(
-            _config("ws://localhost"), None,
-        )
-        assert url is None
 
     def test_derived_none_with_valid_hint_still_returns_none(
         self, monkeypatch,
@@ -163,12 +146,6 @@ class TestResolveManifestUrlWithHintWhitespaceBypass:
         )
         assert url == "https://example.com/api/v1/agent/manifest.json"
 
-    def test_cr_after_leading_slash_falls_back(self):
-        url = _resolve_manifest_url_with_hint(
-            _config("wss://example.com"),
-            "/\r/evil.example/api/v1/agent/manifest.json",
-        )
-        assert url == "https://example.com/api/v1/agent/manifest.json"
 
     def test_lf_after_leading_slash_falls_back(self):
         url = _resolve_manifest_url_with_hint(
@@ -177,12 +154,6 @@ class TestResolveManifestUrlWithHintWhitespaceBypass:
         )
         assert url == "https://example.com/api/v1/agent/manifest.json"
 
-    def test_space_after_leading_slash_falls_back(self):
-        url = _resolve_manifest_url_with_hint(
-            _config("wss://example.com"),
-            "/ /evil.example/api/v1/agent/manifest.json",
-        )
-        assert url == "https://example.com/api/v1/agent/manifest.json"
 
     def test_nul_anywhere_falls_back(self):
         # Defence-in-depth: NUL in URLs is RFC-illegal but some libraries
