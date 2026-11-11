@@ -312,6 +312,12 @@ export function bootstrapSession(): Promise<void> {
           return;
         }
         logoutGeneration += 1;
+        // A deliberate sign-out next door must stick here too: this tab may
+        // never have shown /login yet, and its first mount would otherwise
+        // spend the manual stack's dev sign-in and log straight back in.
+        if (message.reason === 'manual' || message.reason === 'deletionScheduled') {
+          discardDevAutoLogin();
+        }
         // Already broadcast by the originating tab — applying it locally must
         // not echo it back around the channel.
         adoptSession(null);

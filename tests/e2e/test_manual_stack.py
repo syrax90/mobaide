@@ -748,3 +748,24 @@ def test_deleted_checkout_leaves_no_restore_value_for_the_next_one(monkeypatch, 
     ms.sync_ios_files(state, LOOPBACK_URL, lambda: None)
     ms.revert_ios_files(state, lambda: None)
     assert not ms.LOCAL_XCCONFIG_PATH.exists()
+
+
+def test_dependency_probe_ignores_the_checkout_source_dirs(monkeypatch):
+    """The checkout's central_server/ is on sys.path, so source discovery
+    always succeeds; only the installed distribution proves its dependencies
+    are there. A missing one must reach the first-run installer."""
+    import importlib.metadata
+
+    ms.use_checkout_python_code()
+    real = importlib.metadata.distribution
+
+    def fake(name):
+        if name == "central-server":
+            raise importlib.metadata.PackageNotFoundError(name)
+        return real(name)
+
+    monkeypatch.setattr(importlib.metadata, "distribution", fake)
+    with pytest.raises(ImportError, match="central-server"):
+        ms._require_installed_distributions()
+    monkeypatch.setattr(importlib.metadata, "distribution", real)
+    ms._require_installed_distributions()  # this env has both

@@ -195,19 +195,31 @@ PIP_HINT = (
 )
 
 
-def _import_deps() -> SimpleNamespace:
-    import importlib.util
+# Distribution names from the two pyproject.toml files.
+INSTALLED_DISTRIBUTIONS = ("mobaide-agent", "central-server")
 
+
+def _require_installed_distributions() -> None:
+    """Ask pip's metadata, not the import system: the checkout's source dirs
+    sit on sys.path (use_checkout_python_code), so `find_spec` finds both
+    packages even in an env that never installed them -- or their
+    dependencies, which the server child would then die on (aiosqlite...)."""
+    import importlib.metadata
+
+    for name in INSTALLED_DISTRIBUTIONS:
+        try:
+            importlib.metadata.distribution(name)
+        except importlib.metadata.PackageNotFoundError:
+            raise ImportError(f"distribution '{name}' is not installed") from None
+
+
+def _import_deps() -> SimpleNamespace:
     import httpx
     import psutil
 
+    _require_installed_distributions()
     import mock_mobile_client as mmc
 
-    # mock_mobile_client only pulls in the agent package; probe central_server
-    # too (without executing it) so a half-installed env still triggers the
-    # first-run installer instead of dying later inside the server child.
-    if importlib.util.find_spec("central_server") is None:
-        raise ImportError("No module named 'central_server' (editable install missing)")
     return SimpleNamespace(httpx=httpx, psutil=psutil, mmc=mmc)
 
 
