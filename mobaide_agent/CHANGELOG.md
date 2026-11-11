@@ -1,5 +1,18 @@
 # mobaide_agent Changelog
 
+## [0.3.27](https://github.com/syrax90/mobaide/compare/agent-v0.3.26...agent-v0.3.27) (2026-11-11)
+
+
+### Features
+
+* **agent,android,ios,web:** show which sessions are working and fix missing Ready alerts ([#862](https://github.com/syrax90/mobaide/issues/862)) ([a000817](https://github.com/syrax90/mobaide/commit/a0008176762dd06595f03bacd92936670b32dc09))
+* **agent,server,android,ios,web:** notifications for Codex, Antigravity, Terminal sessions and failed turns ([#858](https://github.com/syrax90/mobaide/issues/858)) ([f22e0be](https://github.com/syrax90/mobaide/commit/f22e0bee88f2d989f962bb36c41f0f55dc9f8831))
+
+
+### Bug Fixes
+
+* **agent,web,android,ios:** keep older messages in long ACP chats ([#859](https://github.com/syrax90/mobaide/issues/859)) ([fa672bb](https://github.com/syrax90/mobaide/commit/fa672bb16c20ee2848cce290e322fa88e9a07a41))
+
 ## [0.3.26](https://github.com/syrax90/mobaide/compare/agent-v0.3.25...agent-v0.3.26) (2026-11-10)
 
 

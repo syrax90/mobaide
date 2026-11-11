@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.1.2](https://github.com/syrax90/mobaide/compare/ios-v1.1.1...ios-v1.1.2) (2026-11-11)
+
+
+### Features
+
+* **agent,android,ios,web:** show which sessions are working and fix missing Ready alerts ([#862](https://github.com/syrax90/mobaide/issues/862)) ([a000817](https://github.com/syrax90/mobaide/commit/a0008176762dd06595f03bacd92936670b32dc09))
+* **agent,server,android,ios,web:** notifications for Codex, Antigravity, Terminal sessions and failed turns ([#858](https://github.com/syrax90/mobaide/issues/858)) ([f22e0be](https://github.com/syrax90/mobaide/commit/f22e0bee88f2d989f962bb36c41f0f55dc9f8831))
+* **ios:** show the context-use percent next to the chat usage bar ([#863](https://github.com/syrax90/mobaide/issues/863)) ([db3b4c0](https://github.com/syrax90/mobaide/commit/db3b4c076712d8ff9fb9c8c07c943f5854e66e27))
+
+
+### Bug Fixes
+
+* **agent,web,android,ios:** keep older messages in long ACP chats ([#859](https://github.com/syrax90/mobaide/issues/859)) ([fa672bb](https://github.com/syrax90/mobaide/commit/fa672bb16c20ee2848cce290e322fa88e9a07a41))
+
 ## [1.1.1](https://github.com/syrax90/mobaide/compare/ios-v1.1.0...ios-v1.1.1) (2026-11-10)
 
 

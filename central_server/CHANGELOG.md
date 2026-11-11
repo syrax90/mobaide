@@ -1,5 +1,12 @@
 # central_server Changelog
 
+## [0.2.25](https://github.com/syrax90/mobaide/compare/server-v0.2.24...server-v0.2.25) (2026-11-11)
+
+
+### Features
+
+* **agent,server,android,ios,web:** notifications for Codex, Antigravity, Terminal sessions and failed turns ([#858](https://github.com/syrax90/mobaide/issues/858)) ([f22e0be](https://github.com/syrax90/mobaide/commit/f22e0bee88f2d989f962bb36c41f0f55dc9f8831))
+
 ## [0.2.24](https://github.com/syrax90/mobaide/compare/server-v0.2.23...server-v0.2.24) (2026-11-10)
 
 
