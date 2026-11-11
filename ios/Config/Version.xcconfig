@@ -4,4 +4,4 @@
 // A minor or major bump needs a `Release-As:` commit footer on a commit that
 // touches ios/ (see docs/versioning-and-updates.md).
 MARKETING_VERSION = 1.1.2 // x-release-please-version
-CURRENT_PROJECT_VERSION = 26
+CURRENT_PROJECT_VERSION = 27
