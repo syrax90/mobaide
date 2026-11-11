@@ -103,6 +103,9 @@ data class SessionResponse(
     val exit_reason: String? = null,
     // "chat" opens the structured chat screen; absent or anything else is the PTY terminal.
     val ui: String? = null,
+    // "working" while the agent is mid-turn, "idle" between turns, null when
+    // the agent cannot tell (Codex, Antigravity and Terminal PTY sessions).
+    val activity: String? = null,
 ) {
     val isChat: Boolean get() = ui == UI_CHAT
 

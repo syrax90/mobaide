@@ -217,6 +217,26 @@ enum SessionDisplay {
         }
     }
 
+    /// Whether the agent is mid-turn, so the row shows the spinner and the
+    /// "Working" chip. `activity` is nil where the agent cannot see it (a Codex,
+    /// Antigravity or Terminal PTY session, or an older agent): those rows keep
+    /// the plain status square. A pending permission prompt wins — the turn is
+    /// blocked on the user, not working.
+    static func isWorking(_ session: SessionResponse) -> Bool {
+        session.state == "running"
+            && session.activity == "working"
+            && session.attention != "awaiting_permission"
+            && session.attention != "awaiting_os_permission"
+    }
+
+    /// The row's chip: "Working" while the agent is mid-turn, otherwise the
+    /// attention chip. Working outranks a standing "Ready" — that alert was
+    /// for an earlier turn, and it shows again when this one ends.
+    static func statusChip(_ session: SessionResponse) -> (text: String, tone: PixelTone)? {
+        if isWorking(session) { return ("Working", .accent) }
+        return attention(session.attention)
+    }
+
     static func canStop(_ state: String) -> Bool {
         state == "running" || state == "starting"
     }

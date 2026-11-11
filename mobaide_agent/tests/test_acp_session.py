@@ -852,6 +852,37 @@ class TestTurns:
         assert result["error"] == "Unknown command: explode"
 
 
+class TestActivity:
+    """The session row's ``activity`` follows the turn: ``working`` while one
+    runs, ``idle`` between turns, nothing once the session is gone. Each change
+    is an ``activity`` event, which the fanout turns into ``session.updated``."""
+
+    async def test_activity_is_idle_once_the_session_is_ready(self, open_chat):
+        m = await open_chat()
+        await m.until(lambda: "activity" in m.session_events)
+
+        assert m.session.to_info().activity == "idle"
+
+    async def test_a_running_turn_is_working_and_its_end_is_idle(self, open_chat):
+        m = await open_chat()
+
+        await m.command("prompt", text="slow")
+        await m.until(lambda: m.status == "running" and bool(m.of_type("agent")))
+        assert m.session.to_info().activity == "working"
+
+        await m.command("cancel")
+        await m.until(lambda: m.status == "ready")
+        assert m.session.to_info().activity == "idle"
+
+    async def test_a_stopped_session_reports_no_activity(self, open_chat):
+        m = await open_chat()
+
+        await m.session.stop()
+        await m.until(lambda: "stopped" in m.session_events)
+
+        assert m.session.to_info().activity is None
+
+
 class TestQueueAndCancel:
     async def test_message_sent_during_a_turn_runs_after_cancel(self, open_chat):
         m = await open_chat()

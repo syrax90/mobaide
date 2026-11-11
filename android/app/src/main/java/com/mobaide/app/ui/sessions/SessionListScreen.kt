@@ -29,7 +29,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.MaterialTheme
-import com.mobaide.app.ui.common.pixel.PixelStatusDot
 import com.mobaide.app.ui.theme.pixel
 import com.mobaide.app.ui.common.pixel.PixelScaffold
 import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
@@ -237,7 +236,7 @@ private fun SessionCard(
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            PixelStatusDot(color = stateColor)
+            SessionStatusIndicator(session)
 
             Spacer(modifier = Modifier.width(12.dp))
 
@@ -274,9 +273,9 @@ private fun SessionCard(
                 )
             }
 
-            sessionAttention(session.attention)?.let { attention ->
+            sessionStatusChip(session)?.let { chip ->
                 Spacer(modifier = Modifier.width(8.dp))
-                SessionAttentionChip(attention)
+                SessionAttentionChip(chip)
             }
 
             if (session.state == "running" || session.state == "starting") {

@@ -11,15 +11,14 @@ import { useLastSessionStore } from '../../stores/lastSessionStore';
 import { useSelectedAgentStore } from '../../stores/selectedAgentStore';
 import { type DepartingSession, useStopHandOffStore } from '../../stores/stopHandOffStore';
 import { useToastStore } from '../../stores/toastStore';
+import { SessionStatusChip, SessionStatusIndicator } from '../sessions/SessionStatus';
 import { StopSessionDialog } from '../sessions/StopSessionDialog';
 import {
-  attentionChip,
   canStopSession,
   customTypeNameMap,
   nearestOpenSession,
   sessionDialogLabel,
   sessionKindLabel,
-  sessionStateTone,
   sessionTitle,
 } from '../sessions/sessionDisplay';
 import { newSessionPath, terminalPath } from '../sessions/terminalPath';
@@ -224,7 +223,6 @@ export function SessionsPanel({
           <ul className="sessions-panel-list" aria-label="Sessions">
             {rows.map(({ session, leaving }) => {
               const selected = session.session_id === sessionId;
-              const chip = attentionChip(session.attention);
               const kindLabel = sessionKindLabel(session, names);
               const stopping = stop.isPending && stop.variables.sessionId === session.session_id;
               const itemClass = [
@@ -255,21 +253,14 @@ export function SessionsPanel({
                       open(session);
                     }}
                   >
-                    <span
-                      className={`session-dot session-dot-${sessionStateTone(session.state)}`}
-                      aria-hidden="true"
-                    />
+                    <SessionStatusIndicator session={session} />
                     <span className="session-text">
                       <span className="session-title">{sessionTitle(session, kindLabel)}</span>
                       <span className="session-kind">
                         {[kindLabel, session.project_name].filter(Boolean).join(' · ')}
                       </span>
                     </span>
-                    {chip !== null && (
-                      <span className={`session-attention session-attention-${chip.tone}`}>
-                        {chip.text}
-                      </span>
-                    )}
+                    <SessionStatusChip session={session} />
                   </button>
                   {canStopSession(session.state) && (
                     <button

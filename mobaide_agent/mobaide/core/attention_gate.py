@@ -12,8 +12,6 @@ The ``Stop`` payload does carry everything needed to decide. Every field below
 is optional — an older CLI simply omits it, and the gate degrades to the quiet
 window plus a time cooldown:
 
-``stop_hook_active``
-    Another hook already blocked this turn's end, so Claude will continue.
 ``background_tasks``
     In-flight background work registered in the session, each with a status in
     ``pending | running | completed | failed | killed | paused``. Upstream
@@ -26,25 +24,43 @@ window plus a time cooldown:
     Correlates a user prompt with every event until the next prompt, which makes
     it a free per-turn dedupe key.
 
-State machine, one instance per session:
+``stop_hook_active`` is deliberately ignored. It marks the stop that follows a
+continuation an earlier ``Stop`` hook forced, and the CLI advises hooks to let
+such a stop through — so for a well-behaved hook it is the real end of the
+turn, not a sign that work continues. A hook that blocks again (a ``/goal``
+loop) just yields another ``Stop``, which re-arms the window; a continuation
+longer than the window still alerts early and dedupes the real end.
 
-* ``stop`` — cancel any pending window and drop when the payload says work
-  continues or this turn already alerted; otherwise (re)arm the quiet window.
-* window elapses — alert ``turn_finished``, unless the session died or another
-  attention reason was raised meanwhile.
+State machine, one instance per session. Besides alerts, the gate reports the
+session's ``activity`` (``working`` / ``idle``), which the clients render as a
+persistent "agent is working" indicator independent of whether an alert fired:
+
+* ``prompt_submit`` — resets the turn so the next stop can alert again;
+  activity ``working``.
+* ``stop`` — when the payload says work continues (background work in
+  flight, a scheduled wakeup), cancel any pending window and stay ``working``;
+  otherwise (re)arm the quiet window.
+* window elapses — activity ``idle``, then alert ``turn_finished`` unless the
+  session died, another attention reason was raised meanwhile, the turn already
+  alerted, or a keystroke muted the window.
 * ``idle`` (``Notification``/``idle_prompt``) — an independent backstop that
-  alerts immediately. Claude Code raises it after 60 s of genuine idleness, so
-  it covers what the payload-driven path suppresses wrongly: a task wedged in
-  ``running``, or a CLI too old to send ``background_tasks``. Both paths share
-  the turn dedupe, so neither can double-alert and neither can starve the other.
+  alerts immediately and sets activity ``idle``. Claude Code raises it after
+  60 s of genuine idleness, so it covers what the payload-driven path suppresses
+  wrongly: a task wedged in ``running``, a long-lived background shell (a dev
+  server never completes, so every ``Stop`` sees it in flight), or a CLI too old
+  to send ``background_tasks``. When the last ``Stop`` still saw background work
+  the alert is *provisional*: it does not consume the turn's dedupe key, so the
+  ``Stop`` that really ends the turn — after that work wakes the session — can
+  still alert. Older CLIs raise ``idle_prompt`` while background agents run;
+  without the provisional rule that early alert muted the real one.
 * ``permission`` — always alerts immediately. Being blocked on the user is never
-  debounced.
+  debounced. Activity is left alone: the turn resumes once the user answers.
 * ``end`` — cancels the window *before* alerting, so a pending ``turn_finished``
   cannot fire immediately ahead of ``ended``. Turn state resets rather than
   latches: ``SessionEnd`` also fires with reason ``clear`` for ``/clear``, which
-  leaves the PTY running.
-* ``prompt_submit``, or any user keystroke via ``reset_turn`` — cancels the
-  window and resets the turn so the next stop can alert again.
+  leaves the PTY running at an idle prompt.
+* a user keystroke (``mute``) — the pending window still elapses into ``idle``,
+  but raises no alert: the user is plainly present.
 """
 from __future__ import annotations
 
@@ -145,13 +161,19 @@ def _prompt_id(payload: Mapping[str, Any]) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _ignore_activity(_activity: str) -> None:
+    return None
+
+
 class AttentionGate:
     """Decides whether a Claude Code hook becomes a user-visible attention.
 
     ``on_alert`` is called only when an alert should actually reach the user; a
     suppressed hook leaves the session's public attention untouched, which
     matters because clients re-post notifications for any session carrying an
-    attention value in a full-state snapshot.
+    attention value in a full-state snapshot. ``on_activity`` receives every
+    ``working`` / ``idle`` transition the hooks imply, alerted or not; repeats
+    are expected and the receiver dedupes them.
 
     Timing uses ``loop.call_later`` rather than a sleeping task: cancelling a
     task after its sleep has already resumed still runs the body, since there is
@@ -164,9 +186,11 @@ class AttentionGate:
         on_alert: Callable[[str, str | None], None],
         is_running: Callable[[], bool],
         current_attention: Callable[[], str | None],
+        on_activity: Callable[[str], None] | None = None,
         quiet_seconds: float | None = None,
     ) -> None:
         self._on_alert = on_alert
+        self._on_activity = on_activity or _ignore_activity
         self._is_running = is_running
         self._current_attention = current_attention
         self._quiet_seconds = (
@@ -174,8 +198,11 @@ class AttentionGate:
         )
         self._timer: asyncio.TimerHandle | None = None
         self._armed_prompt_id: str | None = None
+        self._muted = False
         self._alerted_prompt_id: str | None = None
+        self._provisional_prompt_id: str | None = None
         self._alerted_at: float | None = None
+        self._background_pending = False
 
     def handle(self, kind: HookKind, payload: Mapping[str, Any]) -> None:
         """Apply one hook to the gate. Never raises on a malformed payload."""
@@ -184,13 +211,18 @@ class AttentionGate:
             self._on_alert("awaiting_permission", None)
         elif kind is HookKind.IDLE:
             self.cancel()
-            self._alert_turn(_prompt_id(payload))
+            self._on_activity("idle")
+            self._alert_turn(
+                _prompt_id(payload), provisional=self._background_pending,
+            )
         elif kind is HookKind.STOP:
             self._on_stop(payload)
         elif kind is HookKind.PROMPT_SUBMIT:
             self.reset_turn()
+            self._on_activity("working")
         elif kind is HookKind.END:
             self.reset_turn()
+            self._on_activity("idle")
             self._on_alert("ended", str(payload.get("reason") or "other"))
 
     def cancel(self) -> None:
@@ -199,25 +231,34 @@ class AttentionGate:
             self._timer.cancel()
             self._timer = None
         self._armed_prompt_id = None
+        self._muted = False
+
+    def mute(self) -> None:
+        """Let a pending window elapse into ``idle`` without alerting.
+
+        What a keystroke warrants: the user is plainly present, so a queued
+        "your move" should not fire — but the turn still ends, and the activity
+        indicator must not stay ``working`` because the user typed or scrolled.
+        """
+        if self._timer is not None:
+            self._muted = True
 
     def reset_turn(self) -> None:
         """Cancel the window and forget this turn, so the next stop can alert."""
         self.cancel()
         self._alerted_prompt_id = None
+        self._provisional_prompt_id = None
         self._alerted_at = None
+        self._background_pending = False
 
     def _on_stop(self, payload: Mapping[str, Any]) -> None:
-        if payload.get("stop_hook_active") is True:
-            self.cancel()
-            return
         if _has_active_background_work(payload):
+            self._background_pending = True
             self.cancel()
+            self._on_activity("working")
             return
-        prompt_id = _prompt_id(payload)
-        if prompt_id is not None and prompt_id == self._alerted_prompt_id:
-            self.cancel()
-            return
-        self._arm(prompt_id)
+        self._background_pending = False
+        self._arm(_prompt_id(payload))
 
     def _arm(self, prompt_id: str | None) -> None:
         self.cancel()
@@ -237,10 +278,14 @@ class AttentionGate:
     def _fire(self) -> None:
         self._timer = None
         prompt_id = self._armed_prompt_id
+        muted = self._muted
         self._armed_prompt_id = None
-        self._alert_turn(prompt_id)
+        self._muted = False
+        self._on_activity("idle")
+        if not muted:
+            self._alert_turn(prompt_id)
 
-    def _alert_turn(self, prompt_id: str | None) -> None:
+    def _alert_turn(self, prompt_id: str | None, *, provisional: bool = False) -> None:
         # The session-state check is what covers a session reaped without
         # ``stop()`` (the liveness poller removes crashed sessions from the
         # registry directly), so cancellation alone cannot be relied on.
@@ -251,7 +296,15 @@ class AttentionGate:
         if prompt_id is not None:
             if prompt_id == self._alerted_prompt_id:
                 return
-            self._alerted_prompt_id = prompt_id
+            if provisional:
+                # One provisional alert per turn: a background watcher that
+                # re-wakes the session must not turn every idle stretch into a
+                # fresh alert.
+                if prompt_id == self._provisional_prompt_id:
+                    return
+                self._provisional_prompt_id = prompt_id
+            else:
+                self._alerted_prompt_id = prompt_id
         elif (
             self._alerted_at is not None
             and time.monotonic() - self._alerted_at < ATTENTION_TURN_COOLDOWN_SECONDS

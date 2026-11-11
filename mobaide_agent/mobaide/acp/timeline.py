@@ -96,8 +96,11 @@ class ChatTimeline:
         flush_interval: float = FLUSH_INTERVAL,
         snapshot_max_bytes: int = SNAPSHOT_MAX_BYTES,
         memory_max_bytes: int = MEMORY_MAX_BYTES,
+        on_status: Callable[[Any], None] | None = None,
     ) -> None:
         self._sink = sink
+        # Told the new ``state["status"]`` whenever a patch changes it.
+        self._on_status = on_status
         self._flush_interval = flush_interval
         self._snapshot_max = snapshot_max_bytes
         self._memory_max = memory_max_bytes
@@ -183,6 +186,7 @@ class ChatTimeline:
 
     def patch_state(self, *, urgent: bool = False, **patch: Any) -> None:
         changed = False
+        status_before = self.state.get("status")
         for key, value in patch.items():
             if self.state.get(key) != value or key not in self.state:
                 changed = True
@@ -192,6 +196,9 @@ class ChatTimeline:
             self._schedule(urgent)
         elif urgent and (self._touched or self._state_patch):
             self.flush()
+        status = self.state.get("status")
+        if self._on_status is not None and status != status_before:
+            self._on_status(status)
 
     def snapshot_frame(self) -> bytes:
         self.flush()

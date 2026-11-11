@@ -63,6 +63,9 @@ struct SessionResponse: Codable, Equatable, Sendable {
     let exit_reason: String?
     /// `"chat"` or `"terminal"`; absent or any other value is the terminal.
     let ui: String?
+    /// `"working"` while the agent is mid-turn, `"idle"` between turns; nil
+    /// when the agent cannot tell (Codex, Antigravity and Terminal PTY sessions).
+    let activity: String?
 
     var isChat: Bool { ui == "chat" }
 
@@ -79,7 +82,8 @@ struct SessionResponse: Codable, Equatable, Sendable {
         kind_label: String? = nil,
         attention: String?,
         exit_reason: String?,
-        ui: String? = nil
+        ui: String? = nil,
+        activity: String? = nil
     ) {
         self.session_id = session_id
         self.state = state
@@ -94,6 +98,7 @@ struct SessionResponse: Codable, Equatable, Sendable {
         self.attention = attention
         self.exit_reason = exit_reason
         self.ui = ui
+        self.activity = activity
     }
 }
 
@@ -115,6 +120,7 @@ extension SessionResponse {
         attention = try container.decodeIfPresent(String.self, forKey: .attention)
         exit_reason = try container.decodeIfPresent(String.self, forKey: .exit_reason)
         ui = try container.decodeIfPresent(String.self, forKey: .ui)
+        activity = try container.decodeIfPresent(String.self, forKey: .activity)
     }
 }
 

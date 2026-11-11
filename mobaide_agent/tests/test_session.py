@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import threading
+from collections.abc import Callable
 from typing import cast
 from unittest.mock import AsyncMock, call, patch
 
@@ -878,6 +879,38 @@ def _running_hook_session(
     return session
 
 
+def _drain_event_types(session: TerminalSession) -> list[str]:
+    """Pull every queued event without blocking and return their types in order."""
+    types: list[str] = []
+    while not session.event_queue.empty():
+        types.append(session.event_queue.get_nowait().event_type)
+    return types
+
+
+class _ManualWindow:
+    """A quiet window armed through ``loop.call_later`` that fires on demand."""
+
+    def __init__(self, callback: Callable[[], None]) -> None:
+        self.callback = callback
+        self.cancelled = False
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
+@pytest.fixture
+async def manual_windows(monkeypatch) -> list[_ManualWindow]:
+    windows: list[_ManualWindow] = []
+
+    def call_later(_delay: float, callback: Callable[[], None]) -> _ManualWindow:
+        window = _ManualWindow(callback)
+        windows.append(window)
+        return window
+
+    monkeypatch.setattr(asyncio.get_running_loop(), "call_later", call_later)
+    return windows
+
+
 @pytest.mark.timeout(15)
 class TestClaudeHookAttention:
     """``on_claude_hook`` is what the ``/internal/hook`` endpoint calls. The
@@ -937,20 +970,28 @@ class TestClaudeHookAttention:
         ]
         assert backend._writes == [b"\x1b[A"]
 
-    async def test_user_input_cancels_a_pending_quiet_window(self) -> None:
+    async def test_user_input_mutes_a_pending_quiet_window(
+        self, manual_windows,
+    ) -> None:
         # The other half of the keystroke contract: a queued "your move" must
-        # not fire at someone who is demonstrably already at the terminal.
+        # not fire at someone who is demonstrably already at the terminal. The
+        # window still runs out, so the row stops showing "working" on time
+        # even while the user scrolls.
         backend = _ScriptedPtyBackend([])
         session = _running_hook_session(60.0, backend)
+        session.on_claude_hook(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1"})
         session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1"})
-        window = session._attention_gate._timer
-        assert window is not None
+        _drain_event_types(session)
 
         await session.write(b"\x1b[B")
+        (window,) = manual_windows
+        assert not window.cancelled
+        window.callback()
 
-        assert window.cancelled()
-        assert session._attention_gate._timer is None
-        assert _drain_attention_events(session) == []
+        info = session.to_info()
+        assert info.activity == "idle"
+        assert info.attention is None
+        assert _drain_event_types(session) == ["activity"]
 
     async def test_prompt_submit_reopens_the_turn(self) -> None:
         # ``UserPromptSubmit`` is the one unambiguous new-turn signal. The same
@@ -1044,6 +1085,61 @@ class TestClaudeHookAttention:
 
         assert window.cancelled()
         assert _drain_attention_events(session) == []
+
+
+@pytest.mark.timeout(15)
+class TestClaudeHookActivity:
+    """``activity`` is the always-current "agent is working" field the session
+    row carries. The gate decides the transitions (``test_attention_gate.py``);
+    the session publishes each change once, as a row refresh rather than an
+    attention event, and only while it is running.
+    """
+
+    async def test_prompt_submit_reports_working_without_an_attention_event(
+        self,
+    ) -> None:
+        session = _running_hook_session(0.0)
+        session.on_claude_hook(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1"})
+
+        assert session.to_info().activity == "working"
+        assert _drain_event_types(session) == ["activity"]
+
+    async def test_a_repeated_activity_emits_once(self) -> None:
+        # Every ``Stop`` of a background-agent burst re-reports ``working``;
+        # each emission is a ``session.updated`` on every device.
+        session = _running_hook_session(0.0)
+        session.on_claude_hook(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1"})
+        for _ in range(3):
+            session.on_claude_hook(
+                HookKind.STOP,
+                {"prompt_id": "p1", "background_tasks": [{"status": "running"}]},
+            )
+
+        assert session.to_info().activity == "working"
+        assert _drain_event_types(session) == ["activity"]
+
+    async def test_the_end_of_a_turn_reports_idle_before_the_alert(self) -> None:
+        session = _running_hook_session(0.0)
+        session.on_claude_hook(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1"})
+        session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1"})
+
+        info = session.to_info()
+        assert info.activity == "idle"
+        assert info.attention == "turn_finished"
+        assert _drain_event_types(session) == ["activity", "activity", "attention"]
+
+    @pytest.mark.parametrize(
+        "state", [SessionState.STOPPING, SessionState.STOPPED, SessionState.CRASHED],
+    )
+    async def test_only_a_running_session_reports_its_activity(self, state) -> None:
+        # A session that died mid-turn never gets the ``Stop`` that would turn
+        # it idle; its last ``working`` must not keep a row spinning.
+        session = _running_hook_session(0.0)
+        session.on_claude_hook(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1"})
+
+        session._state = state
+
+        assert session.to_info().activity is None
 
 
 @pytest.mark.timeout(15)

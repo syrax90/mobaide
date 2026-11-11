@@ -2388,6 +2388,8 @@ export interface components {
          *     ``SessionResponse`` DTO. Add or rename a field in one place only.
          */
         SessionResponse: {
+            /** Activity */
+            activity?: string | null;
             /** Attention */
             attention?: string | null;
             /** Command */

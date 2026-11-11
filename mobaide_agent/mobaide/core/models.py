@@ -151,11 +151,19 @@ class SessionInfo:
     exit_reason: str | None = None
     # ``"terminal"`` (PTY) or ``"chat"`` (ACP); clients pick the screen by it.
     ui: str = "terminal"
+    # Whether the agent is mid-turn: ``working`` | ``idle`` | ``None``. Unlike
+    # ``attention`` (a one-shot alert the user clears by answering) this is
+    # always current, so a list can show which sessions are still busy. Only a
+    # running session with a source for it reports a value: Claude Code hooks
+    # (terminal) and the turn state (chat). ``None`` means unknown.
+    activity: str | None = None
 
 
 @dataclass
 class SessionEvent:
-    event_type: str  # "output", "chat", "started", "stopped", "error", "title", "attention"
+    # "output", "chat", "started", "stopped", "error", "title", "attention",
+    # "activity" (``SessionInfo.activity`` changed; refreshes the session row)
+    event_type: str
     session_id: str
     # Output events carry raw PTY bytes and chat events one encoded chat
     # frame payload; other event types leave this None.
@@ -307,4 +315,5 @@ def session_to_wire_dict(info: SessionInfo) -> dict[str, Any]:
         "attention": info.attention,
         "exit_reason": info.exit_reason,
         "ui": info.ui,
+        "activity": info.activity,
     }

@@ -61,6 +61,9 @@ STEER_METHOD = "_session/steering"
 CONSOLE_RENDER_INTERVAL = 0.3
 CONSOLE_TOOLS_MAX = 64
 ACP_PROTOCOL_VERSION = 1
+# Timeline status → the session row's ``activity``; the other statuses
+# (``starting``, ``loading``, ``error``, ``stopped``) are no turn at all.
+_ACTIVITY_BY_STATUS = {"running": "working", "ready": "idle"}
 
 CLIENT_CAPABILITIES: dict[str, Any] = {
     "session": {
@@ -134,7 +137,8 @@ class ChatSession:
         self._event_queue: asyncio.Queue[SessionEvent] = asyncio.Queue(
             maxsize=EVENT_QUEUE_MAXSIZE
         )
-        self._timeline = ChatTimeline(self._emit_frame)
+        self._activity: str | None = None
+        self._timeline = ChatTimeline(self._emit_frame, on_status=self._on_timeline_status)
         self._timeline.state["cwd"] = plan.cwd
         self._title: str | None = plan.title
         self._attention: str | None = None
@@ -250,6 +254,7 @@ class ChatSession:
             attention=self._attention,
             exit_reason=self._exit_reason,
             ui="chat",
+            activity=self._activity if self._state == SessionState.RUNNING else None,
         )
 
     async def start(self) -> None:
@@ -1708,6 +1713,15 @@ class ChatSession:
         if title != self._title:
             self._title = title
             self._put_event(SessionEvent("title", self.session_id))
+
+    def _on_timeline_status(self, status: Any) -> None:
+        """Mirror a turn starting or ending (own or another app's) onto the
+        session row, so the sessions list can show which chats are busy."""
+        activity = _ACTIVITY_BY_STATUS.get(status)
+        if activity == self._activity:
+            return
+        self._activity = activity
+        self._put_event(SessionEvent("activity", self.session_id))
 
     def _set_attention(self, attention: str, exit_reason: str | None = None) -> None:
         changed = attention != self._attention or (

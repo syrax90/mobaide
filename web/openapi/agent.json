@@ -2839,6 +2839,17 @@
       "SessionResponse": {
         "description": "REST response for a single session.\n\nField set is the canonical wire shape \u2014 must stay in lockstep with\n:func:`mobaide.core.models.session_to_wire_dict` and the Android\n``SessionResponse`` DTO. Add or rename a field in one place only.",
         "properties": {
+          "activity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity"
+          },
           "attention": {
             "anyOf": [
               {

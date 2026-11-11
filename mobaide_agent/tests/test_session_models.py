@@ -165,6 +165,47 @@ class TestAttentionWireFields:
         assert resp.exit_reason is None
 
 
+class TestActivityWireField:
+    """``activity`` (``working`` / ``idle`` / ``None``) rides the same single
+    wire-shape builder and Pydantic response as ``attention``. The key is
+    always present so a client can tell "unknown" from a dropped field.
+    """
+
+    def test_wire_dict_always_carries_the_key(self):
+        from mobaide.core.models import session_to_wire_dict
+
+        wire = session_to_wire_dict(_attention_info())
+        assert "activity" in wire
+        assert wire["activity"] is None
+
+    def test_wire_dict_and_session_response_propagate_the_value(self):
+        from dataclasses import replace
+
+        from mobaide.agent.sessions.models import SessionResponse
+        from mobaide.core.models import session_to_wire_dict
+
+        info = replace(_attention_info(), activity="working")
+
+        assert session_to_wire_dict(info)["activity"] == "working"
+        assert SessionResponse.from_info(info).activity == "working"
+
+    def test_session_response_defaults_when_absent_from_payload(self):
+        # An older agent omits the field; it must read as unknown, not fail.
+        from mobaide.agent.sessions.models import SessionResponse
+
+        resp = SessionResponse.model_validate(
+            {
+                "session_id": "sid",
+                "state": "running",
+                "created_at": "2026-05-20T00:00:00+00:00",
+                "pid": 42,
+                "command": ["claude"],
+                "cwd": "/work",
+            },
+        )
+        assert resp.activity is None
+
+
 class TestSessionEventAttentionField:
     """``SessionEvent`` gained an optional ``attention`` carrying the trigger
     reason; ``None`` marks a clear, not a notify trigger.

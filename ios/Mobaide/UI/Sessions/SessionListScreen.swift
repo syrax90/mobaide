@@ -162,7 +162,7 @@ private struct SessionCardRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            PixelStatusSquare(tone: SessionDisplay.stateTone(session.state))
+            SessionStatusIndicator(session: session)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(session.title ?? kindLabel)
@@ -182,7 +182,7 @@ private struct SessionCardRow: View {
 
             Spacer()
 
-            if let attention = SessionDisplay.attention(session.attention) {
+            if let attention = SessionDisplay.statusChip(session) {
                 PixelChip(attention.text, .status(attention.tone))
             }
 

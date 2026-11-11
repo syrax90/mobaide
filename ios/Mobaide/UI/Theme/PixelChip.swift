@@ -63,3 +63,57 @@ struct PixelStatusSquare: View {
             .frame(width: size, height: size)
     }
 }
+
+/// `PixelStatusSquare`'s footprint split into four cells, one lit and walking
+/// clockwise with a fading trail. Hard steps, no
+/// tweening. Reduce Motion leaves a still checkerboard, still unlike the plain
+/// square.
+struct PixelWorkingSquare: View {
+    var size: CGFloat = PixelMetrics.statusSquare
+
+    @Environment(\.mobaideColors) private var colors
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Cells as (column, row), in the clockwise order the lit cell walks.
+    private static let cells: [(column: Int, row: Int)] = [(0, 0), (1, 0), (1, 1), (0, 1)]
+    private static let stepSeconds: TimeInterval = 0.2
+
+    var body: some View {
+        if reduceMotion {
+            grid(Self.cells.indices.map { $0 % 2 == 0 ? 1 : 0.25 })
+        } else {
+            TimelineView(.periodic(from: .now, by: Self.stepSeconds)) { context in
+                grid(Self.opacities(at: context.date))
+            }
+        }
+    }
+
+    private static func opacities(at date: Date) -> [Double] {
+        let count = cells.count
+        let step = Int(date.timeIntervalSinceReferenceDate / stepSeconds) % count
+        return cells.indices.map { index in
+            switch (step - index + count) % count {
+            case 0: return 1
+            case 1: return 0.55
+            default: return 0.25
+            }
+        }
+    }
+
+    private func grid(_ opacities: [Double]) -> some View {
+        let color = colors.accent
+        return Canvas { context, canvasSize in
+            let cell = canvasSize.width / 2
+            for (index, position) in Self.cells.enumerated() {
+                let rect = CGRect(
+                    x: CGFloat(position.column) * cell,
+                    y: CGFloat(position.row) * cell,
+                    width: cell,
+                    height: cell
+                )
+                context.fill(Path(rect), with: .color(color.opacity(opacities[index])))
+            }
+        }
+        .frame(width: size, height: size)
+    }
+}

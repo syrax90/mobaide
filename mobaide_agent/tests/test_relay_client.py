@@ -3548,7 +3548,7 @@ class TestProxySessionsWireShape:
         expected_keys = {
             "session_id", "state", "created_at", "pid",
             "command", "cwd", "title", "project_name", "kind",
-            "kind_label", "attention", "exit_reason", "ui",
+            "kind_label", "attention", "exit_reason", "ui", "activity",
         }
         assert set(a.keys()) == expected_keys
         assert set(b.keys()) == expected_keys
@@ -3608,7 +3608,7 @@ class TestProxySessionsWireShape:
         assert set(body.keys()) == {
             "session_id", "state", "created_at", "pid",
             "command", "cwd", "title", "project_name", "kind",
-            "kind_label", "attention", "exit_reason", "ui",
+            "kind_label", "attention", "exit_reason", "ui", "activity",
         }
         # The two new fields are present (even when title is None at create).
         assert body["title"] is None

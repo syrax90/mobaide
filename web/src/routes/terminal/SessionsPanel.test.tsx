@@ -194,6 +194,27 @@ describe('SessionsPanel rows', () => {
     expect(within(other).queryByText(/Needs permission|Ready|Ended/)).toBeNull();
   });
 
+  it('swaps the status square of a working row for the spinner and its chip for Working', async () => {
+    markSessionsSynced('a1');
+    api.sessions = [
+      session('s1', { title: 'busy', activity: 'working', attention: 'turn_finished' }),
+      session('s2', { title: 'between turns', activity: 'idle', attention: 'turn_finished' }),
+    ];
+    renderPanel();
+
+    const list = await screen.findByRole('list', { name: 'Sessions' });
+    const busy = within(list).getByRole('button', { name: /busy/ });
+    expect(within(busy).getByText('Working')).toBeInTheDocument();
+    expect(within(busy).queryByText('Ready')).toBeNull();
+    expect(busy.querySelector('.session-spinner')).not.toBeNull();
+    expect(busy.querySelector('.session-dot')).toBeNull();
+
+    const idle = within(list).getByRole('button', { name: /between turns/ });
+    expect(within(idle).getByText('Ready')).toBeInTheDocument();
+    expect(idle.querySelector('.session-spinner')).toBeNull();
+    expect(idle.querySelector('.session-dot-running')).not.toBeNull();
+  });
+
   it('says so when the agent has no sessions, and still offers to create one', async () => {
     markSessionsSynced('a1');
     renderPanel();

@@ -4,7 +4,9 @@ import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.ui.theme.DarkPixelColors
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -19,14 +21,19 @@ class SessionDisplayTest {
         kind: SessionKind = SessionKind.Claude,
         kindLabel: String? = null,
         projectName: String? = null,
+        state: String = "running",
+        attention: String? = null,
+        activity: String? = null,
     ): SessionResponse = SessionResponse(
         session_id = "0123456789abcdef",
-        state = "running",
+        state = state,
         created_at = "2026-01-01T00:00:00Z",
         title = title,
         project_name = projectName,
         kind = kind,
         kind_label = kindLabel,
+        attention = attention,
+        activity = activity,
     )
 
     @Test
@@ -149,5 +156,48 @@ class SessionDisplayTest {
         assertNull(sessionAttention(null))
         assertNull("a newer agent's reason must be invisible, not garbled", sessionAttention("something_else"))
         assertNull(sessionAttention(""))
+    }
+
+    @Test
+    fun working_onlyForARunningSessionTheAgentReportsMidTurn() {
+        assertTrue(isSessionWorking(session(activity = "working")))
+        assertFalse(isSessionWorking(session(activity = "idle")))
+        assertFalse(
+            "Codex, Antigravity and Terminal sessions report no activity and keep the plain square",
+            isSessionWorking(session()),
+        )
+        listOf("starting", "stopping", "stopped", "crashed").forEach { state ->
+            assertFalse(
+                "a $state session never spins, whatever its last activity",
+                isSessionWorking(session(state = state, activity = "working")),
+            )
+        }
+    }
+
+    @Test
+    fun working_yieldsToAPendingPermissionPrompt() {
+        assertFalse(isSessionWorking(session(activity = "working", attention = "awaiting_permission")))
+        assertFalse(isSessionWorking(session(activity = "working", attention = "awaiting_os_permission")))
+    }
+
+    @Test
+    fun statusChip_showsWorkingOverAStandingReadyFromAnEarlierTurn() {
+        assertEquals(
+            SessionAttention("Working", AttentionTone.Working),
+            sessionStatusChip(session(activity = "working", attention = "turn_finished")),
+        )
+    }
+
+    @Test
+    fun statusChip_fallsBackToTheAttentionChip_onceTheTurnIsNotWorking() {
+        assertEquals(
+            SessionAttention("Ready", AttentionTone.Ok),
+            sessionStatusChip(session(activity = "idle", attention = "turn_finished")),
+        )
+        assertEquals(
+            SessionAttention("Needs permission", AttentionTone.Warning),
+            sessionStatusChip(session(activity = "working", attention = "awaiting_permission")),
+        )
+        assertNull(sessionStatusChip(session(activity = "idle")))
     }
 }

@@ -4,11 +4,13 @@ import {
   attentionChip,
   canStopSession,
   customTypeNameMap,
+  isSessionWorking,
   nearestOpenSession,
   sessionDialogLabel,
   sessionHeaderLabel,
   sessionKindLabel,
   sessionStateTone,
+  sessionStatusChip,
   sessionTitle,
 } from './sessionDisplay';
 
@@ -166,6 +168,47 @@ describe('attentionChip', () => {
     expect(attentionChip(undefined)).toBeNull();
     // A newer agent inventing a reason should be invisible, not garbled.
     expect(attentionChip('awaiting_biometric')).toBeNull();
+  });
+});
+
+describe('isSessionWorking', () => {
+  it('is working only for a running session the agent reports mid-turn', () => {
+    expect(isSessionWorking(session({ activity: 'working' }))).toBe(true);
+    expect(isSessionWorking(session({ activity: 'idle' }))).toBe(false);
+    // Codex, Antigravity and Terminal sessions, or an older agent.
+    expect(isSessionWorking(session())).toBe(false);
+  });
+
+  it.each(['starting', 'stopping', 'stopped', 'crashed'])(
+    'never spins a %s session, whatever its last activity',
+    (state) => {
+      expect(isSessionWorking(session({ state, activity: 'working' }))).toBe(false);
+    },
+  );
+
+  it.each(['awaiting_permission', 'awaiting_os_permission'])(
+    'yields to %s: the turn is blocked on the user',
+    (attention) => {
+      expect(isSessionWorking(session({ activity: 'working', attention }))).toBe(false);
+    },
+  );
+});
+
+describe('sessionStatusChip', () => {
+  it('shows Working over a standing Ready from an earlier turn', () => {
+    expect(
+      sessionStatusChip(session({ activity: 'working', attention: 'turn_finished' })),
+    ).toEqual({ text: 'Working', tone: 'working' });
+  });
+
+  it('falls back to the attention chip once the turn is not working', () => {
+    expect(
+      sessionStatusChip(session({ activity: 'idle', attention: 'turn_finished' })),
+    ).toEqual({ text: 'Ready', tone: 'ready' });
+    expect(
+      sessionStatusChip(session({ activity: 'working', attention: 'awaiting_permission' })),
+    ).toEqual({ text: 'Needs permission', tone: 'permission' });
+    expect(sessionStatusChip(session({ activity: 'idle' }))).toBeNull();
   });
 });
 
