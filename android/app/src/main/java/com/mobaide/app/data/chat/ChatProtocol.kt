@@ -120,6 +120,26 @@ object ChatProtocol {
         put("queue_id", queueId)
     }
 
+    fun signInStart(id: String, method: String): JsonObject = buildJsonObject {
+        put("id", id)
+        put("op", "sign_in")
+        put("action", "start")
+        put("method", method)
+    }
+
+    fun signInSubmit(id: String, value: String): JsonObject = buildJsonObject {
+        put("id", id)
+        put("op", "sign_in")
+        put("action", "submit")
+        put("value", value)
+    }
+
+    fun signInCancel(id: String): JsonObject = buildJsonObject {
+        put("id", id)
+        put("op", "sign_in")
+        put("action", "cancel")
+    }
+
     private fun op(id: String, op: String): JsonObject = buildJsonObject {
         put("id", id)
         put("op", op)

@@ -4,6 +4,7 @@ message queue, cancel, permission and form requests, config changes, a
 crash with restart, a sandbox mode that every Restart must apply again,
 opening a stored session, the adapter install on first
 use, Send now (steering), command output (and how often it is re-sent),
+signing in from the chat (``sign_in`` and ``/login``),
 turns that another app on the PC runs in a shared Codex session (a Stop it
 never answers, a turn already running when the chat opens), extra folders
 (``additionalDirectories``), the Antigravity model name resolved into the
@@ -31,9 +32,13 @@ import psutil
 import pytest
 
 from mobaide.acp import session as session_mod
+from mobaide.acp import signin
 from mobaide.acp.agents import (
+    FAKE_SIGNED_OUT_ENV,
     ChatLaunchPlan,
     ConfigIntent,
+    claude_sign_in_methods,
+    codex_sign_in_methods,
     fake_agent_argv,
     resolve_antigravity_config,
 )
@@ -2227,3 +2232,413 @@ class TestConversationPresence:
         await m.until(lambda: m.status == "ready" and m.state.get("title") == "Earlier session")
 
         assert _free_for_another_app(lock) is False
+
+
+def _sign_in(m: TimelineMirror) -> dict[str, Any] | None:
+    return next((r for r in m.state.get("requests") or [] if r["kind"] == "sign_in"), None)
+
+
+class TestSignIn:
+    """The fake agent is signed out while the marker file exists; its fake
+    login prints a sign-in page, refuses the code ``bad``, fails on ``fail``
+    and removes the marker on any other code."""
+
+    NOT_SIGNED_IN = "Claude Code is not signed in on your PC. Sign in to continue."
+    SIGNED_IN = "Signed in to Claude Code"
+
+    @pytest.fixture
+    def signed_out(self, tmp_path, monkeypatch) -> Path:
+        marker = tmp_path / "signed-out"
+        marker.write_text("", encoding="utf-8")
+        monkeypatch.setenv(FAKE_SIGNED_OUT_ENV, str(marker))
+        monkeypatch.setattr(signin, "SUBMIT_SETTLE", 0.3)
+        return marker
+
+    @staticmethod
+    def _claude() -> dict[str, Any]:
+        return {"sign_in": claude_sign_in_methods(None, os.environ, fake=True)}
+
+    @staticmethod
+    def _codex() -> dict[str, Any]:
+        return {
+            "argv": fake_agent_argv("codex"),
+            "sign_in": codex_sign_in_methods(None, os.environ, fake=True),
+        }
+
+    async def _at_the_code_field(self, m: TimelineMirror) -> dict[str, Any]:
+        started = await m.command("sign_in", action="start", method="claude_ai")
+        assert started["ok"] is True
+        await m.until(lambda: _sign_in(m) is not None and _sign_in(m)["input"] is not None)
+        request = _sign_in(m)
+        assert request is not None
+        return request
+
+    async def test_a_signed_out_agent_offers_the_sign_in(self, open_chat, signed_out):
+        m = await open_chat(**self._claude())
+        await m.until(lambda: _sign_in(m) is not None)
+
+        request = _sign_in(m)
+        assert request is not None
+        assert request["id"] == "sign-in"
+        assert request["title"] == "Sign in to Claude Code"
+        assert request["stage"] == "choose"
+        assert [x["id"] for x in request["methods"]] == ["claude_ai", "console"]
+        await m.until(lambda: "review" in [c["name"] for c in m.state.get("commands") or []])
+        assert [c["name"] for c in m.state["commands"]] == ["review", "test", "compact", "login"]
+
+    async def test_a_signed_in_chat_offers_nothing(self, open_chat):
+        m = await open_chat(**self._claude())
+        await m.command("prompt", text="hi")
+        await m.until(_turn_done(m, "You said: hi"))
+
+        assert _sign_in(m) is None
+
+    async def test_the_sign_in_page_and_the_code_field(self, open_chat, signed_out):
+        m = await open_chat(**self._claude())
+
+        request = await self._at_the_code_field(m)
+
+        assert request["stage"] == "waiting"
+        assert request["url"] == "https://example.com/claude/sign-in?state=fake"
+        assert request["input"] == {"label": "Code from the sign-in page", "secret": False}
+        assert (request["busy"], request["error"]) == (False, None)
+
+    async def test_a_refused_message_is_sent_once_signed_in(self, open_chat, signed_out):
+        m = await open_chat(**self._claude())
+        await m.until(lambda: m.status == "ready")
+        first_session = m.state["acp_session_id"]
+
+        await m.command("prompt", text="hello")
+        await m.until(lambda: self.NOT_SIGNED_IN in m.texts("error"))
+        await self._at_the_code_field(m)
+        submitted = await m.command("sign_in", action="submit", value="good")
+        assert submitted["ok"] is True
+        await m.until(
+            lambda: self.SIGNED_IN in _notices(m) and "You said: hello" in m.texts("agent")
+        )
+
+        assert _sign_in(m) is None
+        assert not signed_out.exists()
+        # Nothing was stored before the sign-in, so a new session started.
+        assert m.state["acp_session_id"] != first_session
+        assert _notices(m).count(self.SIGNED_IN) == 1
+
+    async def test_a_chat_with_turns_reloads_its_conversation_after_the_sign_in(
+        self, open_chat, tmp_path, monkeypatch
+    ):
+        marker = tmp_path / "signed-out"
+        monkeypatch.setenv(FAKE_SIGNED_OUT_ENV, str(marker))
+        m = await open_chat(**self._claude())
+        await m.command("prompt", text="hi")
+        await m.until(_turn_done(m, "You said: hi"))
+        session_id = m.state["acp_session_id"]
+        marker.write_text("", encoding="utf-8")
+
+        await m.command("prompt", text="again")
+        await m.until(lambda: _sign_in(m) is not None)
+        await self._at_the_code_field(m)
+        await m.command("sign_in", action="submit", value="good")
+        await m.until(lambda: self.SIGNED_IN in _notices(m) and "You said: again" in m.texts("agent"))
+
+        assert m.state["acp_session_id"] == session_id
+        assert m.state.get("title") == "Earlier session"
+
+    async def test_a_wrong_code_is_shown_and_a_failed_login_goes_back_to_the_methods(
+        self, open_chat, signed_out
+    ):
+        m = await open_chat(**self._claude())
+        await self._at_the_code_field(m)
+
+        await m.command("sign_in", action="submit", value="bad")
+        await m.until(lambda: _sign_in(m)["error"] is not None)
+        wrong = _sign_in(m)
+        assert wrong["error"] == "Invalid code. Check the code and try again."
+        assert (wrong["stage"], wrong["busy"]) == ("waiting", False)
+
+        await m.command("sign_in", action="submit", value="fail")
+        await m.until(lambda: _sign_in(m)["stage"] == "choose")
+
+        assert _sign_in(m)["error"] == (
+            "The sign-in did not finish.\nLogin failed: the sign-in server refused the code."
+        )
+        assert signed_out.exists()
+
+    async def test_cancel_drops_the_sign_in(self, open_chat, signed_out):
+        m = await open_chat(**self._claude())
+        await self._at_the_code_field(m)
+
+        cancelled = await m.command("sign_in", action="cancel")
+
+        assert cancelled["ok"] is True
+        assert m.state["requests"] == []
+        assert signed_out.exists()
+
+    @pytest.mark.parametrize(
+        ("fields", "error"),
+        [
+            ({"action": "dance"}, "Unknown action"),
+            ({"action": "start", "method": "nope"}, "Unknown sign-in method"),
+            ({"action": "submit", "value": "abc"}, "Nothing to submit"),
+        ],
+    )
+    async def test_invalid_commands_are_refused(self, open_chat, fields, error):
+        m = await open_chat(**self._claude())
+
+        result = await m.command("sign_in", **fields)
+
+        assert result["error"] == error
+
+    async def test_slash_login_opens_the_sign_in_instead_of_a_prompt(self, open_chat):
+        m = await open_chat(**self._claude())
+
+        result = await m.command("prompt", text="/Login")
+        await m.until(lambda: _sign_in(m) is not None)
+
+        assert result["data"] == {"queued": False, "queue_id": None}
+        assert _sign_in(m)["stage"] == "choose"
+        assert m.texts("user") == []
+
+    async def test_slash_login_during_a_turn_is_refused(self, open_chat):
+        m = await open_chat(**self._claude())
+        await m.command("prompt", text="slow")
+        await m.until(lambda: m.status == "running")
+
+        result = await m.command("prompt", text="/login")
+
+        assert result["error"] == "Wait for the current turn to end, or stop it, then sign in."
+        assert _sign_in(m) is None
+
+    async def test_without_sign_in_methods_slash_login_goes_to_the_agent(self, open_chat):
+        m = await open_chat()
+
+        await m.command("prompt", text="/login")
+
+        await m.until(_turn_done(m, "You said: /login"))
+        assert _sign_in(m) is None
+
+    async def test_a_codex_start_refused_for_the_login_offers_the_sign_in(
+        self, open_chat, signed_out
+    ):
+        m = await open_chat(**self._codex())
+        await m.until(lambda: m.status == "error" and _sign_in(m) is not None)
+
+        assert m.state["error"] == self.NOT_SIGNED_IN
+        assert [x["id"] for x in _sign_in(m)["methods"]] == ["chatgpt", "api_key"]
+
+    async def test_a_codex_api_key_starts_the_agent(self, open_chat, signed_out):
+        m = await open_chat(**self._codex())
+        await m.until(lambda: _sign_in(m) is not None)
+
+        await m.command("sign_in", action="start", method="api_key")
+        assert _sign_in(m)["input"] == {"label": "OpenAI API key", "secret": True}
+        refused = await m.command("sign_in", action="submit", value="bad")
+        assert refused["ok"] is True
+        await m.until(lambda: _sign_in(m)["error"] is not None)
+        assert _sign_in(m)["error"] == "Incorrect API key provided (fake agent)."
+
+        await m.command("sign_in", action="submit", value="sk-test")
+        await m.until(lambda: m.status == "ready" and self.SIGNED_IN in _notices(m))
+
+        assert m.state["error"] is None
+        assert _sign_in(m) is None
+
+    async def test_a_codex_device_login_shows_the_one_time_code_and_finishes_alone(
+        self, open_chat, signed_out
+    ):
+        m = await open_chat(**self._codex())
+        await m.until(lambda: _sign_in(m) is not None)
+
+        await m.command("sign_in", action="start", method="chatgpt")
+        await m.until(lambda: _sign_in(m)["url"] is not None)
+        request = _sign_in(m)
+        assert request["url"] == "https://example.com/codex/sign-in?state=fake"
+        assert request["user_code"] == "FAKE-12345"
+        assert (request["input"], request["busy"]) == (None, True)
+
+        await m.until(lambda: m.status == "ready" and self.SIGNED_IN in _notices(m))
+        assert not signed_out.exists()
+
+    async def test_refused_messages_over_the_queue_limit_drop_the_oldest(
+        self, open_chat, signed_out, monkeypatch
+    ):
+        monkeypatch.setattr(session_mod, "QUEUE_MAX", 2)
+        m = await open_chat(**self._claude())
+        await m.until(lambda: m.status == "ready")
+
+        for text in ("one", "two", "three"):
+            assert (await m.command("prompt", text=text))["ok"] is True
+        await m.until(lambda: m.texts("error").count(self.NOT_SIGNED_IN) == 3 and m.status == "ready")
+        await self._at_the_code_field(m)
+        await m.command("sign_in", action="submit", value="good")
+        await m.until(
+            lambda: "You said: three" in m.texts("agent") and m.status == "ready"
+        )
+
+        assert m.texts("agent") == ["You said: two", "You said: three"]
+
+    async def test_a_finished_turn_withdraws_an_offer_nobody_took(self, open_chat):
+        m = await open_chat(**self._claude())
+        await m.command("prompt", text="/login")
+        await m.until(lambda: _sign_in(m) is not None)
+
+        await m.command("prompt", text="hi")
+        await m.until(_turn_done(m, "You said: hi"))
+
+        assert _sign_in(m) is None
+
+    async def test_a_finished_turn_keeps_a_running_login(self, open_chat):
+        m = await open_chat(**self._claude())
+        await self._at_the_code_field(m)
+
+        await m.command("prompt", text="hi")
+        await m.until(_turn_done(m, "You said: hi"))
+
+        assert _sign_in(m) is not None and _sign_in(m)["stage"] == "waiting"
+
+    async def test_a_login_the_agent_reports_withdraws_the_offer(self, open_chat, signed_out):
+        m = await open_chat(**self._claude())
+        await m.until(lambda: _sign_in(m) is not None)
+
+        # claude-agent-acp pushes the login it found once the user signed in on the PC.
+        m.session._on_notification(
+            "_auth/status_update", {"authStatus": {"kind": "apiKey", "label": "API key"}}
+        )
+        await m.until(lambda: _sign_in(m) is None)
+
+        assert m.state["requests"] == []
+
+    async def test_a_restart_after_signing_in_on_the_pc_withdraws_the_offer(
+        self, open_chat, signed_out
+    ):
+        m = await open_chat(**self._codex())
+        await m.until(lambda: m.status == "error" and _sign_in(m) is not None)
+
+        signed_out.unlink()
+        assert (await m.command("restart"))["ok"] is True
+        await m.until(lambda: m.status == "ready" and _sign_in(m) is None)
+
+        assert m.state["error"] is None
+
+    async def test_a_sign_in_during_a_turn_restarts_the_agent_once_the_turn_ends(
+        self, open_chat, signed_out
+    ):
+        m = await open_chat(**self._claude())
+        await m.until(lambda: m.status == "ready")
+        await m.command("prompt", text="hello")
+        await m.until(lambda: self.NOT_SIGNED_IN in m.texts("error") and m.status == "ready")
+        signed_out.unlink()
+        await m.command("prompt", text="slow")
+        await m.until(lambda: m.status == "running")
+        assert (await m.command("prompt", text="next"))["data"]["queued"] is True
+        turn_pid = m.session.pid
+        early: list[str] = []
+
+        def done() -> bool:
+            if self.SIGNED_IN in _notices(m) and m.session.pid == turn_pid:
+                early.append(m.status or "")
+            return m.status == "ready" and "You said: next" in m.texts("agent")
+
+        m.session._on_signed_in()
+        await m.until(done)
+
+        assert early == []
+        assert m.session.pid != turn_pid
+        # The message refused before the sign-in goes first, then the queue.
+        assert m.texts("agent")[-2:] == ["You said: hello", "You said: next"]
+        assert _notices(m).count(self.SIGNED_IN) == 1
+
+    async def test_a_sign_in_during_another_apps_turn_restarts_the_agent_once_it_ends(
+        self, open_chat
+    ):
+        m = await open_chat(argv=fake_agent_argv("codex"))
+        await m.command("prompt", text="external")
+        await m.until(
+            lambda: m.status == "running" and "Message sent from another app on your PC" in _notices(m)
+        )
+        turn_pid = m.session.pid
+        early: list[str] = []
+
+        def done() -> bool:
+            if self.SIGNED_IN in _notices(m) and m.session.pid == turn_pid:
+                early.append(m.status or "")
+            return m.status == "ready" and self.SIGNED_IN in _notices(m)
+
+        m.session._on_signed_in()
+        await m.until(done)
+
+        assert early == []
+        assert m.session.pid != turn_pid
+        assert _notices(m).count(self.SIGNED_IN) == 1
+
+    async def test_a_sign_in_during_a_restart_starts_the_agent_again_once_it_is_ready(
+        self, open_chat, signed_out
+    ):
+        m = await open_chat(**self._codex())
+        await m.until(lambda: m.status == "error" and _sign_in(m) is not None)
+        signed_out.unlink()
+        failed_pid = m.session.pid
+        pids: set[int] = set()
+
+        def done() -> bool:
+            if m.session.pid is not None and m.session.pid != failed_pid:
+                pids.add(m.session.pid)
+            return m.status == "ready" and self.SIGNED_IN in _notices(m)
+
+        await m.session.handle_command(orjson.dumps({"id": "restart", "op": "restart"}))
+        m.session._on_signed_in()
+        await m.until(done)
+
+        assert m.results["restart"]["ok"] is True
+        # The restart the user asked for, then the one for the new login.
+        assert len(pids) == 2
+        assert _notices(m).count(self.SIGNED_IN) == 1
+        assert m.state["error"] is None
+
+    async def test_a_turn_that_ends_after_a_sign_in_still_alerts_it_finished(self, open_chat):
+        m = await open_chat(**self._claude())
+        await m.command("prompt", text="slow")
+        await m.until(lambda: m.status == "running")
+        turn_pid = m.session.pid
+
+        m.session._on_signed_in()
+        await m.until(
+            lambda: m.status == "ready" and self.SIGNED_IN in _notices(m)
+            and m.session.pid != turn_pid
+        )
+
+        assert "turn_finished" in m.attention
+        assert "turn_failed" not in m.attention
+
+    async def test_a_turn_that_fails_after_a_sign_in_still_alerts_it_failed(self, open_chat):
+        m = await open_chat(**self._claude())
+        await m.until(lambda: m.status == "ready")
+        turn_pid = m.session.pid
+        await m.command("prompt", text="please fail")
+
+        m.session._on_signed_in()
+        await m.until(
+            lambda: m.status == "ready" and self.SIGNED_IN in _notices(m)
+            and m.session.pid != turn_pid
+        )
+
+        assert m.texts("error") == ["The model request failed (fake error)"]
+        assert "turn_failed" in m.attention
+        assert "turn_finished" not in m.attention
+
+    async def test_a_message_sent_while_the_sign_in_restart_closes_the_agent_waits_for_it(
+        self, open_chat
+    ):
+        m = await open_chat(**self._claude())
+        await m.until(lambda: m.status == "ready")
+        old_pid = m.session.pid
+
+        m.session._on_signed_in()
+        # The restart has begun and now waits for the old agent to close.
+        await asyncio.sleep(0)
+        sent = await m.command("prompt", text="hello")
+        await m.until(_turn_done(m, "You said: hello"))
+
+        assert sent["data"]["queued"] is True
+        assert m.session.pid != old_pid
+        assert m.texts("user") == ["hello"]
+        assert m.texts("error") == []

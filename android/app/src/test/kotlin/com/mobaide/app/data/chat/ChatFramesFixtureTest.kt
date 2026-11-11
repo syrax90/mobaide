@@ -67,6 +67,9 @@ class ChatFramesFixtureTest {
         "dequeue" to { id -> ChatProtocol.dequeue(id, "q:14") },
         "restart" to { id -> ChatProtocol.restart(id) },
         "steer" to { id -> ChatProtocol.steer(id, "q:14") },
+        "sign_in_start" to { id -> ChatProtocol.signInStart(id, "claude_ai") },
+        "sign_in_submit" to { id -> ChatProtocol.signInSubmit(id, "ab12-cd34") },
+        "sign_in_cancel" to { id -> ChatProtocol.signInCancel(id) },
     )
 
     private fun sync(id: String, request: ChatSyncRequest): JsonObject = when (request) {
@@ -230,6 +233,54 @@ class ChatFramesFixtureTest {
         val otherEpoch = loaded()
         assertEquals(ChatSyncRequest.Snapshot, otherEpoch.apply(batch().copy(epoch = "other")).sync)
         assertEquals(snapshot().items, otherEpoch.timeline!!.items)
+    }
+
+    @Test
+    fun signInEvents_decodeBothStages() {
+        val reducer = loaded().apply {
+            apply(batch())
+            apply(server("events_remove") as ChatFrame.Events)
+        }
+        val frame = server("events_sign_in") as ChatFrame.Events
+
+        assertNull(reducer.apply(frame.copy(seq = 49, events = frame.events.take(1))).sync)
+        val choose = reducer.timeline!!.state.requests.single() as ChatRequest.SignIn
+        assertEquals("Sign in to Claude Code", choose.title)
+        assertEquals("choose", choose.stage)
+        assertFalse(choose.waiting)
+        assertEquals(listOf("claude_ai", "console"), choose.methods.map { it.id })
+        assertNull(choose.url)
+        assertNull(choose.userCode)
+        assertNull(choose.input)
+        assertFalse(choose.busy)
+        assertNull(choose.error)
+
+        val reduction = reducer.apply(frame)
+
+        assertNull(reduction.sync)
+        assertEquals(50L, reducer.timeline!!.seq)
+        val waiting = reducer.timeline!!.state.requests.single() as ChatRequest.SignIn
+        assertEquals(
+            ChatRequest.SignIn(
+                id = "sign-in",
+                toolCallId = null,
+                title = "Sign in to Codex",
+                text = "Open the sign-in page, sign in to ChatGPT and enter the code below. " +
+                    "The chat continues when you are done.",
+                stage = "waiting",
+                methods = listOf(
+                    ChatSignInMethod("chatgpt", "ChatGPT account", "Plus, Pro, Business or Enterprise plan"),
+                    ChatSignInMethod("api_key", "OpenAI API key", "API usage billing"),
+                ),
+                url = "https://auth.openai.com/codex/device",
+                userCode = "CIQN-Y66ME",
+                input = ChatSignInInput("Code from the sign-in page", secret = false),
+                busy = true,
+                error = "That code did not work. Try again.",
+            ),
+            waiting,
+        )
+        assertTrue(waiting.waiting)
     }
 
     @Test

@@ -335,6 +335,8 @@ class CodexLauncher:
         target: LaunchTarget,
         options: CodexOptions,
         session_id: str | None = None,
+        *,
+        require_auth: bool = True,
     ) -> LaunchSpec:
         # ``session_id`` is accepted for ``CliLauncher`` parity but unused: Codex
         # has no per-session hooks. Build argv (resolves the binary) and verify
@@ -342,9 +344,10 @@ class CodexLauncher:
         # one (409) aborts before a worktree is created. The auth check reads the
         # built launch env (same CODEX_HOME / OPENAI_API_KEY / keyring the session
         # would use) and may probe ``codex login status``, so it needs the binary.
+        # A chat session skips it: the chat offers the sign-in itself.
         argv = self._build_argv(options)
         env = self._build_env(target)
-        if not await codex_auth_present(self._resolve_binary(), env):
+        if require_auth and not await codex_auth_present(self._resolve_binary(), env):
             raise CodexAuthRequiredError()
         cwd = await self._resolve_cwd(target, options)
         return LaunchSpec(argv=argv, cwd=cwd, env=env, created_files=[])

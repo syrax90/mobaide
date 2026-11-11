@@ -7,6 +7,7 @@ interface BasePasswordFieldProps {
   error?: string;
   autoFocus?: boolean;
   placeholder?: string;
+  disabled?: boolean;
   /**
    * What the reveal button calls the secret. Defaults to "password"; the
    * project form passes "key", which is what both mobile clients' content
@@ -31,6 +32,7 @@ export function PasswordField({
   error,
   autoFocus,
   placeholder,
+  disabled,
   secretNoun = 'password',
   registration,
   value,
@@ -63,6 +65,7 @@ export function PasswordField({
           autoComplete={autoComplete}
           autoFocus={autoFocus}
           placeholder={placeholder}
+          disabled={disabled}
           // Browser spellcheck ships the contents of ordinary text inputs to
           // Google/Microsoft; a `password` input is exempt, but this one stops
           // being one the moment Show is pressed.

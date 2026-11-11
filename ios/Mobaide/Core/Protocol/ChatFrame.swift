@@ -29,6 +29,7 @@ struct ChatCommand: Encodable, Equatable, Sendable {
     var action: String?
     var values: [String: JSONValue]?
     var queue_id: String?
+    var method: String?
 
     var encoded: Data {
         let body = (try? WireJSON.encoder().encode(self)) ?? Data("{}".utf8)
@@ -70,6 +71,18 @@ struct ChatCommand: Encodable, Equatable, Sendable {
 
     static func restart(id: String) -> ChatCommand {
         ChatCommand(id: id, op: "restart")
+    }
+
+    static func signInStart(id: String, method: String) -> ChatCommand {
+        ChatCommand(id: id, op: "sign_in", action: "start", method: method)
+    }
+
+    static func signInSubmit(id: String, value: String) -> ChatCommand {
+        ChatCommand(id: id, op: "sign_in", value: .string(value), action: "submit")
+    }
+
+    static func signInCancel(id: String) -> ChatCommand {
+        ChatCommand(id: id, op: "sign_in", action: "cancel")
     }
 }
 

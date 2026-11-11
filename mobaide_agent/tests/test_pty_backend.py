@@ -77,6 +77,29 @@ class TestPtyBackendLifecycle:
         assert not backend.is_alive()
         backend.close()
 
+    def test_wait_exit_returns_the_exit_code(self) -> None:
+        backend = self._make_backend()
+        backend.spawn(
+            [sys.executable, "-c", "import sys; sys.exit(7)"], cwd=None, env=None, rows=24, cols=80
+        )
+        try:
+            assert backend.wait_exit(10.0) == 7
+        finally:
+            backend.close()
+
+    def test_wait_exit_is_none_while_the_process_runs(self) -> None:
+        backend = self._make_backend()
+        backend.spawn(default_shell(), cwd=None, env=None, rows=24, cols=80)
+        try:
+            assert backend.wait_exit(0.1) is None
+            assert backend.is_alive()
+        finally:
+            backend.terminate(force=True)
+            backend.close()
+
+    def test_wait_exit_before_spawn_is_none(self) -> None:
+        assert self._make_backend().wait_exit(0.1) is None
+
 
 @skip_if_not_linux
 class TestLinuxPtyBackendWrite:

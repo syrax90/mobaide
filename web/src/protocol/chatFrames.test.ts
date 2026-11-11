@@ -52,6 +52,9 @@ const BUILDERS: Readonly<Record<string, () => ChatCommand>> = {
   dequeue: () => ({ op: 'dequeue', queue_id: 'q:14' }),
   restart: () => ({ op: 'restart' }),
   steer: () => ({ op: 'steer', queue_id: 'q:14' }),
+  sign_in_start: () => ({ op: 'sign_in', action: 'start', method: 'claude_ai' }),
+  sign_in_submit: () => ({ op: 'sign_in', action: 'submit', value: 'ab12-cd34' }),
+  sign_in_cancel: () => ({ op: 'sign_in', action: 'cancel' }),
 };
 
 function agentBytes(frame: unknown): Uint8Array {
@@ -191,6 +194,56 @@ describe('chat frame golden fixtures', () => {
     const otherEpoch = applyEvents(loaded, { ...events, epoch: 'other' });
     expect(otherEpoch.sync).toBeNull();
     expect(otherEpoch.timeline.items).toBe(loaded.items);
+  });
+
+  it('decodes the sign-in request in both stages', () => {
+    const frame = decodeServer('events_sign_in') as EventsFrame;
+    const [choose, waiting] = frame.events.map((event) =>
+      event.type === 'state' ? event.patch.requests?.[0] : undefined,
+    );
+
+    expect(choose).toEqual({
+      id: 'sign-in',
+      kind: 'sign_in',
+      tool_call_id: null,
+      title: 'Sign in to Claude Code',
+      text: 'Claude Code is not signed in on your PC. Sign in here to continue.',
+      stage: 'choose',
+      methods: [
+        { id: 'claude_ai', name: 'Claude subscription', description: 'Pro, Max, Team or Enterprise plan' },
+        { id: 'console', name: 'Anthropic Console', description: 'API usage billing' },
+      ],
+      url: null,
+      user_code: null,
+      input: null,
+      busy: false,
+      error: null,
+    });
+    expect(waiting).toMatchObject({
+      kind: 'sign_in',
+      stage: 'waiting',
+      url: 'https://auth.openai.com/codex/device',
+      user_code: 'CIQN-Y66ME',
+      input: { label: 'Code from the sign-in page', secret: false },
+      busy: true,
+      error: 'That code did not work. Try again.',
+    });
+  });
+
+  it('applies the sign-in request to the timeline state', () => {
+    const snapshot = decodeServer('snapshot_full') as SnapshotFrame;
+    const batch = decodeServer('events_batch') as EventsFrame;
+    const removed = decodeServer('events_remove') as EventsFrame;
+    let timeline = applySnapshot(INITIAL_CHAT_TIMELINE, snapshot).timeline;
+    timeline = applyEvents(applyEvents(timeline, batch).timeline, removed).timeline;
+
+    const { timeline: signedOut, sync } = applyEvents(timeline, decodeServer('events_sign_in') as EventsFrame);
+
+    expect(sync).toBeUndefined();
+    expect(signedOut.seq).toBe(50);
+    expect(signedOut.state.requests.map((request) => [request.kind, request.title])).toEqual([
+      ['sign_in', 'Sign in to Codex'],
+    ]);
   });
 
   it('decodes results', () => {

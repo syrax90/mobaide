@@ -51,6 +51,11 @@ class PtyBackend(Protocol):
 
     def get_pid(self) -> int | None: ...
 
+    def wait_exit(self, timeout: float) -> int | None:
+        """The exit code once the process has ended, or None if it is still
+        running after ``timeout`` seconds."""
+        ...
+
     def terminate(self, force: bool = False) -> None: ...
 
     def close(self) -> None: ...
@@ -124,6 +129,18 @@ class WindowsPtyBackend:
         if self._process is None:
             return None
         return self._process.pid  # type: ignore[union-attr]
+
+    def wait_exit(self, timeout: float) -> int | None:
+        import time
+
+        if self._process is None:
+            return None
+        deadline = time.monotonic() + timeout
+        while self._process.isalive():  # type: ignore[union-attr]
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.05)
+        return self._process.exitstatus  # type: ignore[union-attr]
 
     def terminate(self, force: bool = False) -> None:
         if self._process is None:
@@ -253,6 +270,14 @@ class LinuxPtyBackend:
             return None
         return self._process.pid
 
+    def wait_exit(self, timeout: float) -> int | None:
+        if self._process is None:
+            return None
+        try:
+            return self._process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+
     def terminate(self, force: bool = False) -> None:
         import signal
 
@@ -355,6 +380,9 @@ class FakePtyBackend:
 
     def get_pid(self) -> int | None:
         return None
+
+    def wait_exit(self, timeout: float) -> int | None:
+        return None if self._alive else 0
 
     def terminate(self, force: bool = False) -> None:
         # Flip _alive so the session's is_alive()-gated teardown skips the

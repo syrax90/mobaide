@@ -7,7 +7,10 @@ import type {
   FormValue,
   PermissionOption,
   PermissionRequest,
+  SignInRequest,
 } from '../../chat/chatWire';
+import { CopyableCode } from '../../components/CopyableCode';
+import { PasswordField } from '../../components/form/PasswordField';
 import { ToolKindIcon } from './ChatIcons';
 import { ContentParts } from './ChatItems';
 
@@ -339,6 +342,164 @@ function FormCard({
   );
 }
 
+/**
+ * Sign-in to the coding agent on the PC. `choose` offers the methods; in
+ * `waiting` the PC runs the agent's own login and shows its sign-in page, a
+ * one-time code to enter there, or a field for the code the page shows.
+ */
+function SignInCard({
+  model,
+  request,
+  live,
+}: {
+  model: ChatSessionModel;
+  request: SignInRequest;
+  live: boolean;
+}) {
+  const [pending, setPending] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [value, setValue] = useState('');
+  const headingId = useId();
+  const inputId = useId();
+  const busy = !live || pending !== null;
+
+  const run = (key: string, send: () => Promise<ChatResult>, after?: () => void) => {
+    setPending(key);
+    setError(null);
+    void send().then((result) => {
+      setPending(null);
+      const message = answerError(result);
+      if (message !== null) setError(message);
+      else after?.();
+    });
+  };
+
+  const shownError = error ?? request.error;
+  const url = request.url !== null && request.url.startsWith('https://') ? request.url : null;
+  const waiting = request.stage === 'waiting';
+  const submitting = request.busy || pending === 'submit';
+
+  return (
+    <form
+      className="chat-request"
+      aria-labelledby={headingId}
+      onSubmit={(event: FormEvent) => {
+        event.preventDefault();
+        if (request.input === null || busy || request.busy || value.trim() === '') return;
+        run('submit', () => model.submitSignIn(value.trim()), () => {
+          setValue('');
+        });
+      }}
+    >
+      <p className="chat-request-kicker" id={headingId}>
+        Sign-in needed
+      </p>
+      <div className="chat-request-body">
+        <p className="chat-request-title">{request.title}</p>
+        {request.text !== '' && <p className="chat-signin-text">{request.text}</p>}
+        {!waiting && request.methods.length > 1 && (
+          <ul className="chat-signin-methods">
+            {request.methods.map((method) => (
+              <li key={method.id}>
+                <strong>{method.name}</strong>
+                {method.description !== '' && ` — ${method.description}`}
+              </li>
+            ))}
+          </ul>
+        )}
+        {waiting && url !== null && (
+          <a className="button button-primary chat-signin-open" href={url} target="_blank" rel="noopener noreferrer">
+            Open sign-in page
+          </a>
+        )}
+        {waiting && request.user_code !== null && (
+          <CopyableCode label="One-time code" value={request.user_code} />
+        )}
+        {waiting && request.input?.secret === true && (
+          <PasswordField
+            label={request.input.label === '' ? 'Key' : request.input.label}
+            autoComplete="off"
+            secretNoun="key"
+            value={value}
+            onChange={setValue}
+            disabled={busy || request.busy}
+          />
+        )}
+        {waiting && request.input !== null && !request.input.secret && (
+          <div className="field">
+            <label className="field-label" htmlFor={inputId}>
+              {request.input.label === '' ? 'Code' : request.input.label}
+            </label>
+            <input
+              id={inputId}
+              className="field-input"
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              value={value}
+              disabled={busy || request.busy}
+              onChange={(event) => {
+                setValue(event.target.value);
+              }}
+            />
+          </div>
+        )}
+        {waiting && request.busy && request.input === null && (
+          <p className="chat-signin-status" role="status">
+            <span className="chat-spinner" aria-hidden="true" />
+            {url === null ? 'Starting the sign-in…' : 'Waiting for you to finish on the sign-in page…'}
+          </p>
+        )}
+        {shownError !== null && shownError !== '' && (
+          <p className="field-error chat-signin-error" role="alert">
+            {shownError}
+          </p>
+        )}
+      </div>
+      <div className="chat-request-actions">
+        {!waiting &&
+          request.methods.map((method, index) => (
+            <button
+              key={method.id}
+              type="button"
+              className={index === 0 ? 'button button-primary' : 'button'}
+              title={method.description === '' ? undefined : method.description}
+              disabled={busy}
+              aria-busy={pending === method.id}
+              onClick={() => {
+                run(method.id, () => model.startSignIn(method.id));
+              }}
+            >
+              {pending === method.id && <span className="chat-spinner" aria-hidden="true" />}
+              {request.methods.length === 1 ? 'Sign in' : method.name}
+            </button>
+          ))}
+        {waiting && request.input !== null && (
+          <button
+            type="submit"
+            className="button button-primary"
+            disabled={busy || request.busy || value.trim() === ''}
+          >
+            {submitting && <span className="chat-spinner" aria-hidden="true" />}
+            Submit
+          </button>
+        )}
+        <button
+          type="button"
+          className="chat-link-button"
+          disabled={!live || pending === 'cancel'}
+          onClick={() => {
+            run('cancel', () => model.cancelSignIn());
+          }}
+        >
+          {waiting ? 'Cancel' : 'Not now'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 /** The oldest pending request, expanded; the rest wait their turn. */
 export function RequestDock({
   model,
@@ -356,6 +517,11 @@ export function RequestDock({
     card = <PermissionCard key={first.id} model={model} request={first} live={live} />;
   } else if (first.kind === 'form') {
     card = <FormCard key={first.id} model={model} request={first} live={live} />;
+  } else if (first.kind === 'sign_in') {
+    // Keyed by stage too: a new stage starts with a clean field and no stale error.
+    card = (
+      <SignInCard key={`${first.id}:${first.stage}`} model={model} request={first} live={live} />
+    );
   } else {
     card = (
       <section key={first.id} className="chat-request">

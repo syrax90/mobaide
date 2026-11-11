@@ -285,6 +285,18 @@ export class ChatSessionModel {
     return this.command(formResponseCommand(requestId, action, values));
   }
 
+  startSignIn(methodId: string): Promise<ChatResult> {
+    return this.command({ op: 'sign_in', action: 'start', method: methodId });
+  }
+
+  submitSignIn(value: string): Promise<ChatResult> {
+    return this.command({ op: 'sign_in', action: 'submit', value });
+  }
+
+  cancelSignIn(): Promise<ChatResult> {
+    return this.command({ op: 'sign_in', action: 'cancel' });
+  }
+
   /** Shows the new value at once; the agent's state, or a refusal, settles it. */
   async setConfig(configId: string, value: string | boolean): Promise<ChatResult> {
     this.settledOverrides.delete(configId);

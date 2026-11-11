@@ -422,6 +422,9 @@ fun ChatScreen(
                     onPermission = viewModel::respondPermission,
                     onFormValue = viewModel::updateFormValue,
                     onFormAction = viewModel::respondForm,
+                    onSignInStart = viewModel::startSignIn,
+                    onSignInSubmit = viewModel::submitSignIn,
+                    onSignInCancel = viewModel::cancelSignIn,
                 )
             }
         }
@@ -554,6 +557,9 @@ private fun ChatDockArea(
     onPermission: (ChatRequest.Permission, String) -> Unit,
     onFormValue: (ChatRequest.Form, String, ChatFormValue) -> Unit,
     onFormAction: (ChatRequest.Form, String) -> Unit,
+    onSignInStart: (ChatRequest.SignIn, String) -> Unit,
+    onSignInSubmit: (ChatRequest.SignIn, String) -> Unit,
+    onSignInCancel: (ChatRequest.SignIn) -> Unit,
 ) {
     val commands = ui.state.commands
     val suggestions = remember(composer.text, commands) { slashSuggestions(composer.text, commands) }
@@ -594,6 +600,9 @@ private fun ChatDockArea(
                     onPermission = onPermission,
                     onFormValue = onFormValue,
                     onFormAction = onFormAction,
+                    onSignInStart = onSignInStart,
+                    onSignInSubmit = onSignInSubmit,
+                    onSignInCancel = onSignInCancel,
                 )
             }
             if (ui.state.plan.isNotEmpty()) ChatPlanBar(plan = ui.state.plan)

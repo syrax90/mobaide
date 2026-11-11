@@ -202,6 +202,14 @@ class TestFakePtyBackendContract:
         assert backend.read(3) == b"def"  # leftover survives terminate()
         assert backend.read() == b""  # now truly drained -> immediate EOF
 
+    def test_wait_exit_is_none_while_alive_and_zero_after_terminate(self):
+        backend = FakePtyBackend()
+        backend.spawn(["x"], None, None, 24, 80)
+
+        assert backend.wait_exit(0.1) is None
+        backend.terminate()
+        assert backend.wait_exit(0.1) == 0
+
     def test_read_blocks_then_wakes_on_terminate(self):
         # The load-bearing invariant: read() blocks while alive+empty (so the
         # session reader loop never busy-spins) and wakes with EOF on

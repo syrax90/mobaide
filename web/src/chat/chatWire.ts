@@ -271,16 +271,39 @@ const formRequestSchema = z.object({
   title: text,
   fields: lenientArray(formFieldSchema),
 });
+const signInMethodSchema = z.object({ id: z.string(), name: text, description: text });
+export type SignInMethod = z.infer<typeof signInMethodSchema>;
+/** The PC agent runs the agent's own login and shows what the user needs from it. */
+const signInRequestSchema = z.object({
+  id: z.string(),
+  kind: z.literal('sign_in'),
+  tool_call_id: nullableText,
+  title: text,
+  text,
+  stage: oneOf(['choose', 'waiting'] as const, 'choose'),
+  methods: lenientArray(signInMethodSchema),
+  url: nullableText,
+  user_code: nullableText,
+  input: z.object({ label: text, secret: flag }).nullable().catch(null),
+  busy: flag,
+  error: nullableText,
+});
 const unknownRequestSchema = z.object({
   id: z.string(),
   kind: z.string().transform((): 'unknown' => 'unknown'),
   tool_call_id: nullableText,
   title: text,
 });
-const requestSchema = z.union([permissionRequestSchema, formRequestSchema, unknownRequestSchema]);
+const requestSchema = z.union([
+  permissionRequestSchema,
+  formRequestSchema,
+  signInRequestSchema,
+  unknownRequestSchema,
+]);
 export type ChatRequest = z.infer<typeof requestSchema>;
 export type PermissionRequest = z.infer<typeof permissionRequestSchema>;
 export type FormRequest = z.infer<typeof formRequestSchema>;
+export type SignInRequest = z.infer<typeof signInRequestSchema>;
 
 const queuedSchema = z.object({ id: z.string(), text, images: count });
 export type ChatQueued = z.infer<typeof queuedSchema>;
@@ -472,7 +495,10 @@ export type ChatCommand =
     }
   | { op: 'dequeue'; queue_id: string }
   | { op: 'steer'; queue_id: string }
-  | { op: 'restart' };
+  | { op: 'restart' }
+  | { op: 'sign_in'; action: 'start'; method: string }
+  | { op: 'sign_in'; action: 'submit'; value: string }
+  | { op: 'sign_in'; action: 'cancel' };
 
 export function syncCommand(resume: { epoch: string; seq: number } | null): ChatCommand {
   return resume === null
