@@ -2591,3 +2591,127 @@ class TestSignIn:
         await m.until(lambda: m.status == "ready" and _sign_in(m) is None)
 
         assert m.state["error"] is None
+
+    async def test_a_sign_in_during_a_turn_restarts_the_agent_once_the_turn_ends(
+        self, open_chat, signed_out
+    ):
+        m = await open_chat(**self._claude())
+        await m.until(lambda: m.status == "ready")
+        await m.command("prompt", text="hello")
+        await m.until(lambda: self.NOT_SIGNED_IN in m.texts("error") and m.status == "ready")
+        signed_out.unlink()
+        await m.command("prompt", text="slow")
+        await m.until(lambda: m.status == "running")
+        assert (await m.command("prompt", text="next"))["data"]["queued"] is True
+        turn_pid = m.session.pid
+        early: list[str] = []
+
+        def done() -> bool:
+            if self.SIGNED_IN in _notices(m) and m.session.pid == turn_pid:
+                early.append(m.status or "")
+            return m.status == "ready" and "You said: next" in m.texts("agent")
+
+        m.session._on_signed_in()
+        await m.until(done)
+
+        assert early == []
+        assert m.session.pid != turn_pid
+        # The message refused before the sign-in goes first, then the queue.
+        assert m.texts("agent")[-2:] == ["You said: hello", "You said: next"]
+        assert _notices(m).count(self.SIGNED_IN) == 1
+
+    async def test_a_sign_in_during_another_apps_turn_restarts_the_agent_once_it_ends(
+        self, open_chat
+    ):
+        m = await open_chat(argv=fake_agent_argv("codex"))
+        await m.command("prompt", text="external")
+        await m.until(
+            lambda: m.status == "running" and "Message sent from another app on your PC" in _notices(m)
+        )
+        turn_pid = m.session.pid
+        early: list[str] = []
+
+        def done() -> bool:
+            if self.SIGNED_IN in _notices(m) and m.session.pid == turn_pid:
+                early.append(m.status or "")
+            return m.status == "ready" and self.SIGNED_IN in _notices(m)
+
+        m.session._on_signed_in()
+        await m.until(done)
+
+        assert early == []
+        assert m.session.pid != turn_pid
+        assert _notices(m).count(self.SIGNED_IN) == 1
+
+    async def test_a_sign_in_during_a_restart_starts_the_agent_again_once_it_is_ready(
+        self, open_chat, signed_out
+    ):
+        m = await open_chat(**self._codex())
+        await m.until(lambda: m.status == "error" and _sign_in(m) is not None)
+        signed_out.unlink()
+        failed_pid = m.session.pid
+        pids: set[int] = set()
+
+        def done() -> bool:
+            if m.session.pid is not None and m.session.pid != failed_pid:
+                pids.add(m.session.pid)
+            return m.status == "ready" and self.SIGNED_IN in _notices(m)
+
+        await m.session.handle_command(orjson.dumps({"id": "restart", "op": "restart"}))
+        m.session._on_signed_in()
+        await m.until(done)
+
+        assert m.results["restart"]["ok"] is True
+        # The restart the user asked for, then the one for the new login.
+        assert len(pids) == 2
+        assert _notices(m).count(self.SIGNED_IN) == 1
+        assert m.state["error"] is None
+
+    async def test_a_turn_that_ends_after_a_sign_in_still_alerts_it_finished(self, open_chat):
+        m = await open_chat(**self._claude())
+        await m.command("prompt", text="slow")
+        await m.until(lambda: m.status == "running")
+        turn_pid = m.session.pid
+
+        m.session._on_signed_in()
+        await m.until(
+            lambda: m.status == "ready" and self.SIGNED_IN in _notices(m)
+            and m.session.pid != turn_pid
+        )
+
+        assert "turn_finished" in m.attention
+        assert "turn_failed" not in m.attention
+
+    async def test_a_turn_that_fails_after_a_sign_in_still_alerts_it_failed(self, open_chat):
+        m = await open_chat(**self._claude())
+        await m.until(lambda: m.status == "ready")
+        turn_pid = m.session.pid
+        await m.command("prompt", text="please fail")
+
+        m.session._on_signed_in()
+        await m.until(
+            lambda: m.status == "ready" and self.SIGNED_IN in _notices(m)
+            and m.session.pid != turn_pid
+        )
+
+        assert m.texts("error") == ["The model request failed (fake error)"]
+        assert "turn_failed" in m.attention
+        assert "turn_finished" not in m.attention
+
+    async def test_a_message_sent_while_the_sign_in_restart_closes_the_agent_waits_for_it(
+        self, open_chat
+    ):
+        m = await open_chat(**self._claude())
+        await m.until(lambda: m.status == "ready")
+        old_pid = m.session.pid
+
+        m.session._on_signed_in()
+        # The restart has begun and now waits for the old agent to close.
+        await asyncio.sleep(0)
+        sent = await m.command("prompt", text="hello")
+        await m.until(_turn_done(m, "You said: hello"))
+
+        assert sent["data"]["queued"] is True
+        assert m.session.pid != old_pid
+        assert m.texts("user") == ["hello"]
+        assert m.texts("error") == []

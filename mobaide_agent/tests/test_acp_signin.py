@@ -8,6 +8,7 @@ import asyncio
 import queue
 import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -468,6 +469,24 @@ class TestPastedCode:
         assert h.pty.terminated is True
         assert h.signed_in == 0
 
+    async def test_a_login_runs_while_the_default_executor_is_full(self):
+        """Every open terminal session holds a blocked read there."""
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        held = threading.Event()
+        loop.run_in_executor(None, held.wait)
+        try:
+            h = Harness([_paste_method()])
+            await asyncio.wait_for(h.at_prompt(), 5)
+            await asyncio.wait_for(h.flow.submit("good"), 5)
+            h.flow.cancel()
+            await h.until(lambda: h.pty.terminated, timeout=5)
+        finally:
+            held.set()
+
+        assert len(h.pty.spawned) == 1
+        assert h.pty.typed == [b"good\r"]
+
 
 class TestOneTimeCode:
     async def test_the_page_shows_once_its_code_is_known(self):
@@ -645,6 +664,20 @@ class SlowStopPty(LoginPty):
         super().terminate(force)
 
 
+class BlockedWritePty(LoginPty):
+    """A write that hangs until the command is killed, like one into a PTY
+    nobody reads."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.writing = 0
+
+    def write(self, data: bytes) -> None:
+        self.writing += 1
+        self._exited.wait(5)
+        super().write(data)
+
+
 class TestLoginProcess:
     @staticmethod
     def _process(pty: LoginPty, exits: list[int | None] | None = None) -> LoginProcess:
@@ -719,3 +752,26 @@ class TestLoginProcess:
         await self._until(lambda: pty.terminated)
         await asyncio.sleep(0.1)
         assert exits == []
+
+    async def test_stop_ends_the_login_while_its_writes_hold_every_worker(self):
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        held = threading.Event()
+        loop.run_in_executor(None, held.wait)
+        pty = BlockedWritePty()
+        proc = self._process(pty)
+        proc.start()
+        writes = [
+            loop.run_in_executor(signin.SIGN_IN_POOL, proc.write_line, text)
+            for text in ("one", "two")
+        ]
+        try:
+            await self._until(lambda: pty.writing == 2)
+
+            proc.stop()
+            await self._until(lambda: pty.terminated, timeout=3)
+            await asyncio.wait_for(asyncio.gather(*writes), 3)
+        finally:
+            held.set()
+
+        assert sorted(pty.typed) == [b"one\r", b"two\r"]

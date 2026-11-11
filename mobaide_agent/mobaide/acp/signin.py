@@ -17,12 +17,18 @@ import logging
 import re
 import threading
 from collections.abc import Awaitable, Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
 from mobaide.core.pty_backend import PtyBackend, create_pty_backend
 
 logger = logging.getLogger(__name__)
+
+# Spawns of login commands and writes to them. Not the default executor, where
+# every open terminal session holds a blocked read, nor PROBE_POOL, which
+# every chat's probes share.
+SIGN_IN_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="acp-sign-in")
 
 # A device code expires after 15 minutes; a login still running later is stuck.
 LOGIN_TIMEOUT = 20 * 60.0
@@ -162,11 +168,11 @@ class LoginProcess:
 
     def stop(self) -> None:
         self._stopped = True
-        # Off the event loop: ConPTY's terminate sleeps between its signals.
-        try:
-            self._loop.run_in_executor(None, self._backend.terminate, True)
-        except RuntimeError:
-            pass
+        # Its own thread, off the event loop (ConPTY's terminate sleeps between
+        # its signals) and never queued behind a write that only this kill ends.
+        threading.Thread(
+            target=self._backend.terminate, args=(True,), name="acp-sign-in-kill", daemon=True
+        ).start()
 
     def _read_loop(self) -> None:
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -304,9 +310,7 @@ class SignInFlow:
         )
         self._proc = proc
         try:
-            # The default executor: a login's I/O must never hold up the
-            # probe pool that every chat shares.
-            await loop.run_in_executor(None, proc.start)
+            await loop.run_in_executor(SIGN_IN_POOL, proc.start)
         except Exception as exc:
             logger.warning("sign_in.start_failed method=%s: %s", method.id, exc)
             if self._proc is proc:
@@ -344,7 +348,7 @@ class SignInFlow:
         self._typed = text
         self._submitted_at = self._answer_from = len(self._output)
         self._update(busy=True, error=None)
-        await asyncio.get_running_loop().run_in_executor(None, proc.write_line, text)
+        await asyncio.get_running_loop().run_in_executor(SIGN_IN_POOL, proc.write_line, text)
 
     def cancel(self) -> None:
         self._stop()

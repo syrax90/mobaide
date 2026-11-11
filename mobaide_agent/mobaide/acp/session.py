@@ -213,6 +213,8 @@ class ChatSession:
         self._signed_in_notice = False
         # The last start failed for a missing login.
         self._start_auth_failed = False
+        # A sign-in finished while a turn or a restart ran.
+        self._resume_pending = False
         # Messages the agent refused for a missing login: sent again once signed in.
         self._auth_retry: list[_QueuedPrompt] = []
         # A turn has finished, so the agent has stored the conversation.
@@ -607,6 +609,8 @@ class ChatSession:
                 self._queue.insert(0, _QueuedPrompt(self._next_id("q"), initial_prompt, []))
             if self._external_turn:
                 self._publish_queue()
+            elif self._resume_if_pending():
+                pass
             elif self._queue:
                 self._start_next_prompt()
         except asyncio.CancelledError:
@@ -1011,7 +1015,7 @@ class ChatSession:
             self._has_turns = True
         if stop_reason is not None and not auth_failed:
             self._sign_in.withdraw()
-        if not auth_failed:
+        if not auth_failed and not self._resume_pending:
             # The agent took a message again: the refused ones are stale.
             self._auth_retry.clear()
         if stop_reason == "cancelled":
@@ -1026,6 +1030,14 @@ class ChatSession:
                 }
             )
         alive = self._conn is not None and self._conn.alive
+        if alive and not self._stopping and self._resume_pending:
+            # The turn's own alert goes out before the restart clears it.
+            if failed and not tl.state.get("cancelling"):
+                self._set_attention("turn_failed")
+            elif stop_reason not in (None, "cancelled"):
+                self._set_attention("turn_finished")
+            self._resume_if_pending()
+            return
         if any(not q.steering for q in self._queue) and alive and not self._stopping:
             tl.patch_state(status="ready", turn_started_at=None, cancelling=False)
             self._start_next_prompt()
@@ -1376,12 +1388,18 @@ class ChatSession:
         if self._stopping:
             return
         if self._restarting or self._own_turn_running() or self._external_turn:
-            # The next start of the agent reads the new login anyway.
-            self._show_signed_in()
+            # Done once the session is idle again (_resume_if_pending).
+            self._resume_pending = True
             return
         # Shown once the agent is back: a reload replays the conversation first.
         self._signed_in_notice = True
         self._restarting = True
+        # A message sent meanwhile must only queue, never start on the
+        # process that is closing (bootstrap sends the queue).
+        self._ready.clear()
+        self._timeline.patch_state(
+            status="starting", turn_started_at=None, cancelling=False, urgent=True
+        )
         try:
             bootstrap = self._bootstrap_task
             if bootstrap is not None and not bootstrap.done():
@@ -1403,6 +1421,15 @@ class ChatSession:
             self._fail_start("Could not start the agent again. Use Restart to try again.")
         finally:
             self._restarting = False
+
+    def _resume_if_pending(self) -> bool:
+        """Run the restart a sign-in left for later, once nothing else runs.
+        True when it started: the restarted agent sends the queue."""
+        if not self._resume_pending or self._stopping:
+            return False
+        self._resume_pending = False
+        self._run_aside(self._resume_after_sign_in())
+        return True
 
     def _show_signed_in(self) -> None:
         self._timeline.upsert(
@@ -1531,6 +1558,8 @@ class ChatSession:
             self._disarm_cancel_watchdog()
             self._close_streaming_items()
             tl.patch_state(status="ready", turn_started_at=None, cancelling=False, urgent=True)
+            if self._resume_if_pending():
+                return
             if self._queue:
                 self._start_next_prompt()
 
