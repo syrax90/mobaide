@@ -630,6 +630,116 @@ class TestGateGuards:
         assert session.alerts == ["turn_failed", "awaiting_permission"]
 
 
+class TestGatePendingFailure:
+    """A CLI may report ``done`` right after ``error`` for the same turn. That
+    ``done`` never alerts: not while the failure still waits out its quiet
+    window or the alert gap, nor after it alerted or client input dropped it.
+    The user would hear "finished" for a turn that failed."""
+
+    async def test_done_inside_the_window_keeps_the_failure(self, session, scheduler) -> None:
+        gate = _gate(session)
+        gate.handle(_status(ProgramState.ERROR))
+        gate.handle(_status(ProgramState.DONE))
+
+        assert len(scheduler.handles) == 1
+        assert [h.delay for h in scheduler.pending] == [PROGRAM_STATUS_QUIET_SECONDS]
+        assert scheduler.elapse() == 1
+        assert session.alerts == ["turn_failed"]
+
+    async def test_done_while_the_failure_waits_out_the_gap_keeps_it(
+        self, session, scheduler, clock,
+    ) -> None:
+        gate = _gate(session, min_alert_spacing_seconds=5.0, clock=clock)
+        gate.handle(_status(ProgramState.BLOCKED, "permission"))
+        gate.handle(_status(ProgramState.WORKING))
+        clock.now = 1.0
+        gate.handle(_status(ProgramState.ERROR))
+        # Past the quiet window, still inside the gap the prompt opened.
+        clock.now = 3.0
+        gate.handle(_status(ProgramState.DONE))
+
+        assert [h.delay for h in scheduler.pending] == [4.0]
+        clock.now = 5.0
+        assert scheduler.elapse() == 1
+        assert session.alerts == ["awaiting_permission", "turn_failed"]
+
+    @pytest.mark.parametrize(
+        "state", [ProgramState.WORKING, ProgramState.IDLE, ProgramState.CLEAR],
+    )
+    async def test_a_new_state_drops_the_failure_and_the_next_done_finishes(
+        self, session, scheduler, state,
+    ) -> None:
+        gate = _gate(session)
+        gate.handle(_status(ProgramState.ERROR))
+        gate.handle(_status(state))
+        gate.handle(_status(ProgramState.DONE))
+
+        assert scheduler.elapse() == 1
+        assert session.alerts == ["turn_finished"]
+
+    async def test_client_input_drops_the_failure_and_the_done_after_it_stays_quiet(
+        self, session, scheduler,
+    ) -> None:
+        # The user was present, and the ``done`` only ends the failed turn.
+        gate = _gate(session)
+        gate.handle(_status(ProgramState.ERROR))
+        _client_write(session, gate)
+        gate.handle(_status(ProgramState.DONE))
+
+        assert scheduler.elapse() == 0
+        assert session.alerts == []
+
+    async def test_done_after_an_alerted_failure_and_a_focus_report_stays_quiet(
+        self, session, scheduler,
+    ) -> None:
+        gate = _gate(session)
+        gate.handle(_status(ProgramState.ERROR))
+        assert scheduler.elapse() == 1
+        # A client emulator's focus report clears the badge but not the gate.
+        session.attention = None
+        gate.handle(_status(ProgramState.DONE))
+
+        assert scheduler.elapse() == 0
+        assert session.alerts == ["turn_failed"]
+
+    async def test_a_sign_in_report_between_error_and_done_keeps_the_failure(
+        self, session, scheduler,
+    ) -> None:
+        gate = _gate(session)
+        gate.handle(_status(ProgramState.ERROR))
+        gate.handle(_status(ProgramState.BLOCKED, "auth"))
+        gate.handle(_status(ProgramState.DONE))
+
+        assert len(scheduler.handles) == 1
+        assert scheduler.elapse() == 1
+        assert session.alerts == ["turn_failed"]
+
+    async def test_a_failure_after_done_replaces_the_pending_finish(
+        self, session, scheduler,
+    ) -> None:
+        gate = _gate(session)
+        gate.handle(_status(ProgramState.DONE))
+        gate.handle(_status(ProgramState.ERROR))
+
+        assert scheduler.elapse() == 1
+        assert session.alerts == ["turn_failed"]
+
+    async def test_done_still_replaces_a_deferred_prompt(self, session, scheduler, clock) -> None:
+        # Only a pending failure outranks ``done``.
+        gate = _gate(session, min_alert_spacing_seconds=5.0, clock=clock)
+        gate.handle(_status(ProgramState.BLOCKED, "permission"))
+        gate.handle(_status(ProgramState.WORKING))
+        clock.now = 1.0
+        gate.handle(_status(ProgramState.BLOCKED, "question"))
+        clock.now = 2.0
+        gate.handle(_status(ProgramState.DONE))
+
+        assert [h.delay for h in scheduler.pending] == [3.0]
+        clock.now = 5.0
+        assert scheduler.elapse() == 1
+        assert session.alerts == ["awaiting_permission", "turn_finished"]
+
+
 class TestGateAlertSpacing:
     """Alerts of one session are at least ``min_alert_spacing_seconds`` apart. A
     program that flips between states, or a session log replayed with

@@ -204,7 +204,8 @@ class ProgramStatusGate:
       once. ``blocked`` for ``auth`` is ignored: ``agy`` reports it for a moment
       at every start, and a sign-in prompt is answered on the PC anyway.
     * ``done`` alerts ``turn_finished`` and ``error`` alerts ``turn_failed``,
-      both after a short quiet window that a new ``working`` cancels.
+      both after a short quiet window that a new ``working`` cancels. A failed
+      turn never also alerts as finished.
     * ``working``, ``idle`` and ``clear`` cancel any pending alert and drop a
       standing ``awaiting_permission``: the prompt was answered or dismissed,
       possibly by another client on a shared thread, or the program exited.
@@ -245,6 +246,7 @@ class ProgramStatusGate:
         )
         self._clock = clock
         self._timer: asyncio.TimerHandle | None = None
+        self._armed_reason: str | None = None
         self._last: tuple[ProgramState, str | None] | None = None
         self._last_alert_at: float | None = None
         self.last_app: str | None = None
@@ -254,7 +256,8 @@ class ProgramStatusGate:
             self.last_app = status.app
         state = status.state
         report = (state, status.kind)
-        repeated = report == self._last
+        previous = self._last
+        repeated = report == previous
         self._last = None if state is ProgramState.CLEAR else report
         if repeated and state in (ProgramState.BLOCKED, ProgramState.DONE, ProgramState.ERROR):
             return
@@ -263,7 +266,11 @@ class ProgramStatusGate:
                 return
             self._schedule("awaiting_permission", 0.0)
         elif state is ProgramState.DONE:
-            self._schedule("turn_finished", self._quiet_seconds)
+            # A ``done`` straight after ``error`` closes the same failed turn:
+            # the failure is its outcome, whether it alerted yet or not.
+            failed = previous is not None and previous[0] is ProgramState.ERROR
+            if not failed and self._armed_reason != "turn_failed":
+                self._schedule("turn_finished", self._quiet_seconds)
         elif state is ProgramState.ERROR:
             self._schedule("turn_failed", self._quiet_seconds)
         else:
@@ -275,6 +282,7 @@ class ProgramStatusGate:
         if self._timer is not None:
             self._timer.cancel()
             self._timer = None
+        self._armed_reason = None
 
     def _schedule(self, reason: str, delay: float) -> None:
         self.cancel()
@@ -290,9 +298,11 @@ class ProgramStatusGate:
             self._alert(reason)
             return
         self._timer = loop.call_later(delay, self._fire, reason)
+        self._armed_reason = reason
 
     def _fire(self, reason: str) -> None:
         self._timer = None
+        self._armed_reason = None
         self._alert(reason)
 
     def _alert(self, reason: str) -> None:
