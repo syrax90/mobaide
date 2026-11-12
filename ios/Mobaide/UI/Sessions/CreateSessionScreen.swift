@@ -25,6 +25,7 @@ private struct CreateSessionContent: View {
     @State private var claudeAdvancedExpanded = false
     @State private var codexAdvancedExpanded = false
     @State private var antigravityAdvancedExpanded = false
+    @State private var opencodeAdvancedExpanded = false
     @State private var autoScanAdvancedExpanded = false
     @State private var showContinueSession = false
     @State private var pendingContinue: ChatStoredSession?
@@ -419,6 +420,7 @@ private struct CreateSessionContent: View {
             case .standard: claudeConfig
             case .codex: codexConfig
             case .antigravity: antigravityConfig
+            case .opencode: opencodeConfig
             case .custom(let id): customConfig(id)
             case .autoScan, .shell, .none: shellConfig
             }
@@ -431,6 +433,9 @@ private struct CreateSessionContent: View {
             }
             if model.mode == .antigravity {
                 antigravityAdvancedSection
+            }
+            if model.mode == .opencode {
+                opencodeAdvancedSection
             }
             Section {
                 Button {
@@ -784,6 +789,37 @@ private struct CreateSessionContent: View {
                         set: { model.antigravityTerminalUI = $0 }
                     ),
                     unavailableReason: model.antigravityChatUnavailableReason
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var opencodeConfig: some View {
+        @Bindable var model = model
+        Section(header: PixelSectionHeader("OpenCode")) {
+            Toggle("Auto-approve permissions (dangerous)", isOn: $model.opencodeAutoApprove)
+            Text("OpenCode accepts every request that your rules do not deny.")
+                .font(.footnote)
+                .foregroundStyle(colors.textMuted)
+        }
+        continueSessionSection(
+            agentName: "OpenCode",
+            hint: "Open an OpenCode session started on your PC, for example in a terminal."
+        )
+    }
+
+    /// Collapsed like the Codex one; rendered after the Worktree section.
+    @ViewBuilder
+    private var opencodeAdvancedSection: some View {
+        Section {
+            DisclosureGroup("Advanced", isExpanded: $opencodeAdvancedExpanded) {
+                terminalUIToggle(
+                    Binding(
+                        get: { model.opencodeTerminalUI || model.opencodeChatUnavailable },
+                        set: { model.opencodeTerminalUI = $0 }
+                    ),
+                    unavailableReason: model.opencodeChatUnavailableReason
                 )
             }
         }

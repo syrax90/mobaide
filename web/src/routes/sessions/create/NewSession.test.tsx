@@ -125,6 +125,7 @@ const NO_PREFS: LaunchPrefs = {
   autoScan: null,
   codex: null,
   antigravity: null,
+  opencode: null,
   lastProjectName: null,
 };
 

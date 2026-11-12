@@ -9,6 +9,7 @@ from mobaide.core.antigravity_launcher import AntigravityOptions
 from mobaide.core.claude_launcher import AdHocLaunch, ClaudeOptions, LaunchSpec
 from mobaide.core.codex_launcher import CodexOptions
 from mobaide.core.models import SessionConfig, SessionKind, SessionState
+from mobaide.core.opencode_launcher import OpenCodeOptions
 from mobaide.core.pty_backend import FakePtyBackend
 from mobaide.core.session_manager import MaxSessionsError, SessionManager
 from mobaide.linear.worktree import WorktreeResult
@@ -407,6 +408,91 @@ class TestAntigravityLaunchBranching:
             assert isinstance(
                 antigravity_launcher.build.await_args.args[0], AdHocLaunch,
             )
+        finally:
+            await mgr.shutdown()
+
+
+@pytest.mark.timeout(20)
+class TestOpenCodeLaunchBranching:
+    """``create_session`` routes an ``opencode_options`` session to the
+    OpenCode launcher (not a sibling's), and raises a clear error when no
+    OpenCode launcher is wired.
+    """
+
+    async def test_project_opencode_options_invokes_opencode_launcher(
+        self, tmp_path,
+    ) -> None:
+        project = MagicMock()
+        project.name = "proj"
+        project.path = str(tmp_path)
+        store = MagicMock()
+        store.get = MagicMock(return_value=project)
+
+        claude_launcher = MagicMock()
+        claude_launcher.build = AsyncMock()
+        antigravity_launcher = MagicMock()
+        antigravity_launcher.build = AsyncMock()
+        opencode_launcher = MagicMock()
+        # A real spawnable command, so the PTY start succeeds on a host
+        # without ``opencode``; the argv itself is covered by
+        # ``test_opencode_launcher``.
+        opencode_launcher.build = AsyncMock(
+            return_value=LaunchSpec(
+                argv=default_shell(),
+                cwd=str(tmp_path),
+                env={"X": "Y"},
+            ),
+        )
+        options = OpenCodeOptions(auto_approve=True)
+
+        mgr = SessionManager(
+            projects_store=store,
+            launcher=claude_launcher,
+            antigravity_launcher=antigravity_launcher,
+            opencode_launcher=opencode_launcher,
+        )
+        try:
+            config = SessionConfig(
+                session_id="opencode-sess",
+                command=default_shell(),
+                rows=24, cols=80, scrollback_size=50,
+                project_name="proj",
+                opencode_options=options,
+                kind=SessionKind.OPENCODE,
+            )
+            await mgr.create_session(config)
+
+            opencode_launcher.build.assert_awaited_once()
+            claude_launcher.build.assert_not_awaited()
+            antigravity_launcher.build.assert_not_awaited()
+            call = opencode_launcher.build.await_args
+            assert call.args[0] is project
+            assert call.args[1] is options
+            assert config.env == {"X": "Y"}
+            assert mgr.list_sessions()[0].kind == SessionKind.OPENCODE
+        finally:
+            await mgr.shutdown()
+
+    async def test_no_opencode_launcher_fails_instead_of_running_another_cli(
+        self, tmp_path,
+    ) -> None:
+        claude_launcher = MagicMock()
+        claude_launcher.build = AsyncMock()
+        mgr = SessionManager(projects_store=MagicMock(), launcher=claude_launcher)
+        try:
+            config = SessionConfig(
+                session_id="opencode-unwired",
+                command=default_shell(),
+                cwd=str(tmp_path),
+                rows=24, cols=80, scrollback_size=50,
+                opencode_options=OpenCodeOptions(),
+                kind=SessionKind.OPENCODE,
+            )
+            with pytest.raises(ValueError, match="OpenCode launcher"):
+                await mgr.create_session(config)
+
+            claude_launcher.build.assert_not_awaited()
+            assert mgr.list_sessions() == []
         finally:
             await mgr.shutdown()
 

@@ -24,6 +24,7 @@ from mobaide.core import (
     ClaudeLauncher,
     CodexLauncher,
     FakePtyBackend,
+    OpenCodeLauncher,
     ProjectsStore,
     SessionManager,
     create_pty_backend,
@@ -793,6 +794,12 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         agy_bin_override=config.agy_bin,
         worktree_mgr=worktree_mgr,
     )
+    # OpenCode CLI launcher — sibling of Antigravity: no hooks, no auth probe
+    # (OpenCode starts without an account). Binary resolves lazily.
+    app.state.opencode_launcher = OpenCodeLauncher(
+        opencode_bin_override=config.opencode_bin,
+        worktree_mgr=worktree_mgr,
+    )
     # Registry keyed by CLI name. SessionManager picks a launcher per session;
     # the Auto Scan scanner stays Claude-only. build_cli_capabilities reads this
     # registry, so a new entry auto-surfaces in /api/version capabilities.
@@ -800,6 +807,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         "claude": app.state.claude_launcher,
         "codex": app.state.codex_launcher,
         "antigravity": app.state.antigravity_launcher,
+        "opencode": app.state.opencode_launcher,
     }
     # Agents that can also run in the structured chat UI (over ACP), and the
     # lister of their stored sessions (continue a session started elsewhere).
@@ -810,6 +818,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             "claude": config.acp_claude_command,
             "codex": config.acp_codex_command,
             "antigravity": config.acp_antigravity_command,
+            "opencode": config.acp_opencode_command,
         },
         adapters_dir=state_prefix(test_mode=config.is_test_mode) / "acp-adapters",
     )
@@ -858,6 +867,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         launcher=app.state.claude_launcher,
         codex_launcher=app.state.codex_launcher,
         antigravity_launcher=app.state.antigravity_launcher,
+        opencode_launcher=app.state.opencode_launcher,
         worktree_mgr=worktree_mgr,
         event_bus=app.state.event_bus,
         on_session_created=_on_session_created,

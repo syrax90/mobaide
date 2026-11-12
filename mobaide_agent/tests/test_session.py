@@ -13,6 +13,7 @@ from mobaide.core.attention_dedupe import SharedTurnDedupe, real_cwd
 from mobaide.core.attention_gate import HookKind
 from mobaide.core.da_responder import DA1_REPLY
 from mobaide.core.models import SessionConfig, SessionEvent, SessionKind, SessionState
+from mobaide.core.program_status import ProgramState, ProgramStatus
 from mobaide.core.pty_backend import PtyBackend
 from mobaide.core.session import (
     EXECUTE_CLEAR_DELAY_SECONDS,
@@ -932,6 +933,9 @@ _DONE_REPORT = b"\x1b]7501;state=done:app=codex\x1b\\"
 _ERROR_REPORT = b"\x1b]7501;state=error\x07"
 _WORKING_REPORT = b"\x1b]7501;state=working:app=codex\x07"
 _CLEAR_REPORT = b"\x1b]7501;state=clear:app=codex\x07"
+_OPENCODE_WORKING_REPORT = b"\x1b]7501;state=working:app=opencode\x07"
+_OPENCODE_IDLE_REPORT = b"\x1b]7501;state=idle:app=opencode\x07"
+_OPENCODE_BLOCKED_REPORT = b"\x1b]7501;state=blocked:kind=permission:app=opencode\x07"
 _STATUS_QUERY = b"\x1b]7501;?\x1b\\"
 _STATUS_REPLY = (
     b"\x1b]7501;?:states=idle,working,done,blocked,error:kinds=permission,question,auth\x1b\\"
@@ -1357,6 +1361,43 @@ class TestProgramStatusAttention:
             assert await _read_script(session, backend) == ["turn_finished"]
         assert dedupe.asked == []
         assert resolved == []
+
+    async def test_an_opencode_turn_ends_when_it_goes_idle(self) -> None:
+        # OpenCode never reports ``done``.
+        backend = _ScriptedPtyBackend([_OPENCODE_WORKING_REPORT, _OPENCODE_IDLE_REPORT])
+        session = TerminalSession(
+            _status_config(SessionKind.OPENCODE), backend=cast(PtyBackend, backend),
+        )
+
+        assert await _read_script(session, backend) == ["turn_finished"]
+
+    async def test_a_request_opencode_accepts_itself_raises_nothing(self) -> None:
+        # With ``--auto`` each tool call is ``blocked`` for a few milliseconds.
+        backend = _ScriptedPtyBackend(
+            [_OPENCODE_WORKING_REPORT + _OPENCODE_BLOCKED_REPORT + _OPENCODE_WORKING_REPORT],
+        )
+        session = TerminalSession(
+            _status_config(SessionKind.OPENCODE), backend=cast(PtyBackend, backend),
+        )
+
+        assert await _read_script(session, backend) == []
+        assert session._status_gate._timer is None
+
+    async def test_an_opencode_turn_the_user_stopped_stays_quiet(self) -> None:
+        # The user who pressed Esc or Ctrl+C is at the terminal: the turn
+        # that goes idle right after needs no "your move".
+        backend = _ScriptedPtyBackend([])
+        session = TerminalSession(
+            _status_config(SessionKind.OPENCODE), backend=cast(PtyBackend, backend),
+        )
+        session._state = SessionState.RUNNING
+        session._status_gate.handle(ProgramStatus(ProgramState.WORKING, None, "opencode"))
+
+        await session.write(b"\x03")
+        session._status_gate.handle(ProgramStatus(ProgramState.IDLE, None, "opencode"))
+
+        assert session._status_gate._timer is None
+        assert _drain_attention_events(session) == []
 
 
 @pytest.mark.timeout(15)

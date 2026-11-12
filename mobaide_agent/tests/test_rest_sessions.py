@@ -490,6 +490,112 @@ class TestCreateSessionAntigravity:
         assert not captured
 
 
+class TestCreateSessionOpenCode:
+    """``POST /api/sessions`` with ``cli="opencode"`` threads
+    ``opencode_options`` through to an OPENCODE session and caps the first
+    prompt at the body boundary. No 409 auth case: OpenCode starts without an
+    account, so the ``<cli>_auth_required`` path can never fire for it.
+    """
+
+    async def test_cli_opencode_threads_options_and_kind(
+        self, app, client, auth_headers,
+    ):
+        """The router must build an OPENCODE ``SessionConfig`` carrying the
+        parsed ``opencode_options`` (and no other CLI's block), and surface
+        ``kind`` as ``"opencode"`` on the wire. ``create_session`` is captured
+        so the test is independent of whether ``opencode`` is installed."""
+        from datetime import datetime, timezone
+
+        from mobaide.core.models import (
+            SessionInfo,
+            SessionKind,
+            SessionState,
+        )
+        from mobaide.core.opencode_launcher import OpenCodeOptions
+
+        captured: dict = {}
+
+        class _FakeSession:
+            def __init__(self, config):
+                self.session_id = config.session_id
+                self._config = config
+
+            def to_info(self):
+                return SessionInfo(
+                    session_id=self.session_id,
+                    state=SessionState.RUNNING,
+                    created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    pid=123,
+                    command=self._config.command,
+                    cwd=self._config.cwd,
+                    kind=self._config.kind,
+                )
+
+        async def _capture(config):
+            captured["config"] = config
+            return _FakeSession(config)
+
+        app.state.session_manager.create_session = _capture
+
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={
+                "cli": "opencode",
+                "opencode_options": {
+                    "auto_approve": True,
+                    "initial_prompt": "--auto",
+                    "worktree": True,
+                    "branch_name": "feature/x",
+                    "base_branch": "origin/main",
+                },
+            },
+        )
+
+        assert resp.status_code == 201
+        assert resp.json()["kind"] == "opencode"
+
+        cfg = captured["config"]
+        assert cfg.kind is SessionKind.OPENCODE
+        assert cfg.claude_options is None
+        assert cfg.codex_options is None
+        assert cfg.antigravity_options is None
+        assert cfg.opencode_options == OpenCodeOptions(
+            auto_approve=True,
+            initial_prompt="--auto",
+            worktree=True,
+            branch_name="feature/x",
+            base_branch="origin/main",
+        )
+
+    async def test_a_prompt_over_the_cap_returns_422(
+        self, app, client, auth_headers,
+    ):
+        """The first prompt becomes one argv element, so an over-long one is
+        rejected at the FastAPI body boundary — 422, and no session is ever
+        created."""
+        from mobaide.core.opencode_launcher import INITIAL_PROMPT_MAX
+
+        captured: dict = {}
+
+        async def _capture(config):
+            captured["config"] = config
+
+        app.state.session_manager.create_session = _capture
+
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={
+                "cli": "opencode",
+                "opencode_options": {"initial_prompt": "x" * (INITIAL_PROMPT_MAX + 1)},
+            },
+        )
+
+        assert resp.status_code == 422
+        assert not captured
+
+
 class TestCreateSessionAdHoc:
     """``POST /api/sessions`` with ``project_name=None`` and a
     user-supplied ``cwd``: the new ad-hoc (custom-path) launch path.

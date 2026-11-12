@@ -41,6 +41,8 @@ _ENV_VARS = (
     "RELAY_RECONNECT_STABILITY_THRESHOLD",
     "MOBAIDE_VOICE_FAKE",
     "MOBAIDE_VOICE_DIR",
+    "MOBAIDE_OPENCODE_BIN",
+    "MOBAIDE_ACP_OPENCODE_COMMAND",
 )
 
 
@@ -272,3 +274,22 @@ class TestAgentConfigVoice:
         cfg = AgentConfig.from_env()
 
         assert cfg.voice_dir == str(tmp_path / "my-voice")
+
+
+class TestAgentConfigOpenCode:
+    def test_env_file_lines_reach_the_typed_fields(self, tmp_path):
+        # Without a typed field with the right alias, ``extra="ignore"`` drops
+        # a ``.env`` line silently: it never reaches ``os.environ`` either, so
+        # the launcher's own env lookup would not see the operator's path.
+        env_file = tmp_path / "test.env"
+        env_file.write_text(
+            "JWT_SECRET_KEY=s\n"
+            "MOBAIDE_OPENCODE_BIN=/abs/path/to/opencode\n"
+            "MOBAIDE_ACP_OPENCODE_COMMAND=opencode-dev acp\n",
+            encoding="utf-8",
+        )
+
+        cfg = AgentConfig.from_env(env_file=env_file)
+
+        assert cfg.opencode_bin == "/abs/path/to/opencode"
+        assert cfg.acp_opencode_command == "opencode-dev acp"

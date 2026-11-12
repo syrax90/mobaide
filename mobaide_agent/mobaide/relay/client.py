@@ -129,6 +129,7 @@ from mobaide.agent.autoscan.stream import run_autoscan_stream
 from mobaide.agent.codex.models import CodexLoginRequest
 from mobaide.agent.sessions.models import (
     AntigravityOptionsModel,
+    OpenCodeOptionsModel,
     ClaudeOptionsModel,
     CodexOptionsModel,
     CreateSessionRequest,
@@ -1154,6 +1155,26 @@ class RelayClient:
                 await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
                 return
 
+        opencode_options = None
+        raw_opencode_options = ctrl.get("opencode_options")
+        if raw_opencode_options is not None:
+            try:
+                opencode_options = OpenCodeOptionsModel.model_validate(
+                    raw_opencode_options
+                ).to_options()
+            except ValidationError as exc:
+                logger.warning(
+                    "relay.create_session_invalid_opencode_options session_id=%s: %s",
+                    session_id, exc,
+                )
+                resp = {
+                    "type": "session_create_failed",
+                    "session_id": session_id,
+                    "error": f"Invalid opencode_options: {exc}",
+                }
+                await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+                return
+
         ctrl_cwd = ctrl.get("cwd")
         ctrl_project_name = ctrl.get("project_name")
         if ctrl_project_name is None and ctrl_cwd is not None:
@@ -1178,6 +1199,7 @@ class RelayClient:
                 claude_options,
                 codex_options,
                 antigravity_options,
+                opencode_options,
             ) = resolve_spawn_args(
                 ctrl.get("cli"),
                 claude_options,
@@ -1187,6 +1209,7 @@ class RelayClient:
                 ctrl.get("env"),
                 resolve_default_shell(),
                 resolved_command=ctrl.get("resolved_command"),
+                opencode_options=opencode_options,
             )
         except CustomCommandUnresolvedError as exc:
             logger.warning(
@@ -1229,6 +1252,7 @@ class RelayClient:
             claude_options=claude_options,
             codex_options=codex_options,
             antigravity_options=antigravity_options,
+            opencode_options=opencode_options,
             worktree=bool(ctrl.get("worktree", False)),
             branch_name=ctrl.get("branch_name"),
             base_branch=ctrl.get("base_branch"),
@@ -1606,6 +1630,11 @@ class RelayClient:
                 if parsed.antigravity_options is not None
                 else None
             )
+            opencode_options = (
+                parsed.opencode_options.to_options()
+                if parsed.opencode_options is not None
+                else None
+            )
             try:
                 (
                     kind,
@@ -1614,6 +1643,7 @@ class RelayClient:
                     claude_options,
                     codex_options,
                     antigravity_options,
+                    opencode_options,
                 ) = resolve_spawn_args(
                     parsed.cli,
                     claude_options,
@@ -1623,6 +1653,7 @@ class RelayClient:
                     parsed.env,
                     resolve_default_shell(),
                     resolved_command=parsed.resolved_command,
+                    opencode_options=opencode_options,
                 )
             except CustomCommandUnresolvedError as exc:
                 # An unknown/malformed custom kind, or a relay too old to
@@ -1645,6 +1676,7 @@ class RelayClient:
                 claude_options=claude_options,
                 codex_options=codex_options,
                 antigravity_options=antigravity_options,
+                opencode_options=opencode_options,
                 worktree=parsed.worktree,
                 branch_name=parsed.branch_name,
                 base_branch=parsed.base_branch,

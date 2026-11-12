@@ -12,6 +12,7 @@ struct PreferencesStore: @unchecked Sendable {
     static let keyLastUsedAutoScanOptions = "last_used_auto_scan_options"
     static let keyLastUsedCodexOptions = "last_used_codex_options"
     static let keyLastUsedAntigravityOptions = "last_used_antigravity_options"
+    static let keyLastUsedOpenCodeOptions = "last_used_opencode_options"
     static let keyTerminalDisplayMode = "terminal_display_mode"
     static let keyTerminalStaticColumns = "terminal_static_columns"
     static let keyVoiceCleanupNoticeSeen = "voice_cleanup_notice_seen"
@@ -97,6 +98,14 @@ struct PreferencesStore: @unchecked Sendable {
 
     func setLastUsedAntigravityOptions(_ prefs: AntigravityLaunchPrefs) {
         encodeBlob(prefs, forKey: Self.keyLastUsedAntigravityOptions)
+    }
+
+    func getLastUsedOpenCodeOptions() -> OpenCodeLaunchPrefs? {
+        decodeBlob(forKey: Self.keyLastUsedOpenCodeOptions)
+    }
+
+    func setLastUsedOpenCodeOptions(_ prefs: OpenCodeLaunchPrefs) {
+        encodeBlob(prefs, forKey: Self.keyLastUsedOpenCodeOptions)
     }
 
     func getTerminalDisplayMode() -> TerminalDisplayMode {

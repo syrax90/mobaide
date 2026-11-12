@@ -513,6 +513,7 @@ class TestChatRest:
             "claude": {"resume": True, "live": False},
             "codex": {"resume": True, "live": False},
             "antigravity": {"resume": True, "live": False},
+            "opencode": {"resume": True, "live": False},
         }
 
     async def test_create_chat_session(self, client, auth_headers, tmp_path):
@@ -615,6 +616,30 @@ class TestChatRest:
         assert [(r["title"], r["open_elsewhere"]) for r in listed.json()["sessions"]] == [
             ("Refactor the login flow", False),
             ("Fix flaky upload test", False),
+        ]
+
+
+    async def test_opencode_chat_session_and_its_stored_sessions(
+        self, client, auth_headers, tmp_path
+    ):
+        body = {
+            "cli": "opencode",
+            "ui": "chat",
+            "cwd": str(tmp_path),
+            "opencode_options": {"auto_approve": True},
+        }
+
+        created = await client.post("/api/sessions", headers=auth_headers, json=body)
+        listed = await client.get(
+            f"/api/chat/opencode/sessions?cwd={tmp_path}", headers=auth_headers
+        )
+
+        assert created.status_code == 201, created.text
+        assert (created.json()["kind"], created.json()["ui"]) == ("opencode", "chat")
+        assert listed.status_code == 200
+        assert [r["title"] for r in listed.json()["sessions"]] == [
+            "Refactor the login flow",
+            "Fix flaky upload test",
         ]
 
 

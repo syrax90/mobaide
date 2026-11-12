@@ -5,6 +5,7 @@ import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.local.AntigravityLaunchPrefs
 import com.mobaide.app.data.local.ClaudeLaunchPrefs
 import com.mobaide.app.data.local.CodexLaunchPrefs
+import com.mobaide.app.data.local.OpenCodeLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.RestApi
@@ -123,6 +124,8 @@ class CreateSessionViewModelTest {
         coEvery { prefs.setLastUsedCodexOptions(any()) } just Runs
         coEvery { prefs.getLastUsedAntigravityOptions() } returns null
         coEvery { prefs.setLastUsedAntigravityOptions(any()) } just Runs
+        coEvery { prefs.getLastUsedOpenCodeOptions() } returns null
+        coEvery { prefs.setLastUsedOpenCodeOptions(any()) } just Runs
         coEvery { prefs.getRecentCustomPaths(any()) } returns recentCustomPaths
         coEvery { prefs.addRecentCustomPath(any(), any()) } just Runs
         coEvery { prefs.removeRecentCustomPath(any(), any()) } just Runs
@@ -3465,6 +3468,233 @@ class CreateSessionViewModelTest {
         assertTrue(options.sandbox)
         assertFalse(options.skip_permissions)
         assertEquals(listOf("/a", "/b"), options.add_dirs)
+        assertFalse(options.worktree)
+        assertNull(options.branch_name)
+    }
+
+    // ---- OpenCode -----------------------------------------------------------
+
+    private fun TestScope.opencodeSubmit(
+        fx: Fixture,
+        configure: (CreateSessionViewModel) -> Unit = {},
+    ): Pair<CreateSessionRequest, OpenCodeLaunchPrefs> {
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        val prefsSlot = slot<OpenCodeLaunchPrefs>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-opencode", "starting", "2026-11-12T00:00:00Z")
+        coEvery { fx.prefs.setLastUsedOpenCodeOptions(capture(prefsSlot)) } just Runs
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectOpenCodeMode()
+        configure(vm)
+        vm.submitOpenCode()
+        advanceUntilIdle()
+        return requestSlot.captured to prefsSlot.captured
+    }
+
+    @Test
+    fun submitOpenCode_byDefault_sendsCliOpenCode_withoutAutoApprove_inTheChatView() = runTest {
+        val fx = newFixture()
+        val (request, saved) = opencodeSubmit(fx)
+
+        assertEquals("alpha", request.project_name)
+        assertEquals("opencode", request.cli)
+        assertEquals(SessionResponse.UI_CHAT, request.ui)
+        assertNull("OpenCode must not send claude_options", request.claude_options)
+        assertNull("OpenCode must not send codex_options", request.codex_options)
+        assertNull("OpenCode must not send antigravity_options", request.antigravity_options)
+        val options = request.opencode_options
+        assertNotNull(options)
+        assertFalse("auto-approve is off unless the user turned it on", options!!.auto_approve)
+        assertFalse(options.worktree)
+        assertEquals(OpenCodeLaunchPrefs(autoApprove = false, terminalUi = false), saved)
+        // An OpenCode submit must write no other agent's blob.
+        coVerify(exactly = 0) { fx.prefs.setLastUsedClaudeOptions(any()) }
+        coVerify(exactly = 0) { fx.prefs.setLastUsedCodexOptions(any()) }
+        coVerify(exactly = 0) { fx.prefs.setLastUsedAntigravityOptions(any()) }
+    }
+
+    @Test
+    fun submitOpenCode_withAutoApproveTerminalUiAndWorktree_sendsAndRemembersThem() = runTest {
+        val (request, saved) = opencodeSubmit(newFixture()) { vm ->
+            vm.setOpenCodeAutoApprove(true)
+            vm.toggleOpenCodeTerminalUi(true)
+            vm.toggleWorktree(true)
+            vm.setBranchName("feature/x")
+        }
+
+        assertEquals(SessionResponse.UI_TERMINAL, request.ui)
+        val options = request.opencode_options!!
+        assertTrue(options.auto_approve)
+        assertTrue("worktree must travel inside opencode_options", options.worktree)
+        assertEquals("feature/x", options.branch_name)
+        assertFalse("not the top-level request field", request.worktree)
+        assertNull(request.branch_name)
+        // Worktree and branch are per-session: only the reusable choices are kept.
+        assertEquals(OpenCodeLaunchPrefs(autoApprove = true, terminalUi = true), saved)
+    }
+
+    @Test
+    fun submitOpenCode_whereThePcHasNoOpenCodeChat_opensTheTerminal() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns chatVersion(
+            chat = """{"claude":{"resume":true}}""",
+            cli = """{"opencode":{"available":true}}""",
+        )
+
+        val (request, _) = opencodeSubmit(fx) { vm ->
+            vm.refreshCliAvailability()
+            advanceUntilIdle()
+            assertNotNull(vm.uiState.value.opencodeChatUnavailableHint)
+            assertFalse(vm.uiState.value.opencodeResumeAvailable)
+        }
+
+        assertEquals(SessionResponse.UI_TERMINAL, request.ui)
+    }
+
+    @Test
+    fun submitOpenCode_customPath_sendsCwd_andNoGitIntent() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-opencode-path", "starting", "2026-11-12T00:00:00Z")
+
+        // A worktree choice left over from a git project must not follow the
+        // user to a one-off folder.
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+        vm.selectCustomPath()
+        advanceUntilIdle()
+        vm.setCustomPathDraft("/tmp/scratch")
+        vm.setOpenCodeAutoApprove(true)
+        vm.submitOpenCode()
+        advanceUntilIdle()
+
+        val request = requestSlot.captured
+        assertNull(request.project_name)
+        assertEquals("/tmp/scratch", request.cwd)
+        assertEquals("opencode", request.cli)
+        val options = request.opencode_options!!
+        assertTrue(options.auto_approve)
+        assertFalse(options.worktree)
+        assertNull(options.branch_name)
+        assertNull(options.base_branch)
+    }
+
+    @Test
+    fun init_seedsOpenCodeControlsFromPersistedPrefs() = runTest {
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedOpenCodeOptions() } returns
+            OpenCodeLaunchPrefs(autoApprove = true, terminalUi = true)
+
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertTrue(s.opencodeAutoApprove)
+        assertTrue(s.opencodeTerminalUi)
+        assertFalse("no bleed into another agent's bucket", s.antigravitySkipPermissions)
+        assertFalse(s.codexTerminalUi)
+    }
+
+    @Test
+    fun agentThatListsItsClisWithoutOpenCode_disablesTheCard_andRefusesTheMode() = runTest {
+        // That agent predates the kind and would open a plain shell for it.
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            versionResponse(claude = true, codex = true)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectProject("alpha")
+        vm.confirmProject()
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertFalse(s.opencodeKnown)
+        assertNull(s.opencodeAvailable)
+        assertFalse(s.opencodeEnabled)
+        assertFalse(s.isModeEnabled(CreateSessionMode.OpenCode))
+        assertTrue("the agent's own CLIs stay enabled", s.codexEnabled)
+
+        vm.selectOpenCodeMode()
+
+        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
+    }
+
+    @Test
+    fun openCodeCard_followsTheAgentsAvailabilityFlag() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns chatVersion(
+            chat = "{}", cli = """{"claude":{"available":true},"opencode":{"available":false}}""",
+        )
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.opencodeKnown)
+        assertFalse("known but not installed", vm.uiState.value.opencodeEnabled)
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns chatVersion(
+            chat = "{}", cli = """{"opencode":{"available":true}}""",
+        )
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.opencodeEnabled)
+    }
+
+    @Test
+    fun agentWithoutACliList_keepsOpenCodeOptimisticallyEnabled() = runTest {
+        // capabilities: {} is an agent that reports nothing: unknown, not absent.
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.opencodeKnown)
+        assertTrue(vm.uiState.value.opencodeEnabled)
+    }
+
+    @Test
+    fun resumeChatSession_opencode_sendsTheOpenCodeOptionsWithoutAWorktree() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-opencode-resumed", "starting", "2026-11-12T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectOpenCodeMode()
+        vm.setOpenCodeAutoApprove(true)
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+        vm.resumeChatSession("opencode", ChatStoredSession(session_id = "external-2222", cwd = "/p/alpha"))
+        advanceUntilIdle()
+
+        val request = requestSlot.captured
+        assertEquals("opencode", request.cli)
+        assertEquals("alpha", request.project_name)
+        assertNull(request.cwd)
+        assertEquals(SessionResponse.UI_CHAT, request.ui)
+        assertEquals("external-2222", request.chat_resume_id)
+        assertNull(request.claude_options)
+        assertNull(request.codex_options)
+        assertNull(request.antigravity_options)
+        val options = request.opencode_options
+        assertNotNull(options)
+        assertTrue(options!!.auto_approve)
         assertFalse(options.worktree)
         assertNull(options.branch_name)
     }

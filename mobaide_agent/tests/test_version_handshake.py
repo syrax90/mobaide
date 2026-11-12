@@ -31,6 +31,7 @@ async def test_get_version(client) -> None:
             "claude": {"available": True},
             "codex": {"available": True},
             "antigravity": {"available": True},
+            "opencode": {"available": True},
         },
         "git": {
             "changes": True,
@@ -59,6 +60,7 @@ async def test_get_version(client) -> None:
         "chat": {
             "claude": {"resume": True, "live": False},
             "codex": {"resume": True, "live": sys.platform != "win32"},
+            "opencode": {"resume": True, "live": False},
         },
     }
     # The signed manifest body now travels inline over the relay WebSocket
@@ -86,6 +88,7 @@ async def test_get_version_claude_missing_reports_unavailable(
     assert cli["claude"] == {"available": False}
     assert cli["codex"] == {"available": True}
     assert cli["antigravity"] == {"available": True}
+    assert cli["opencode"] == {"available": True}
 
 
 async def test_get_version_all_clis_missing_still_returns_200(
@@ -117,6 +120,7 @@ async def test_get_version_all_clis_missing_still_returns_200(
         "claude": {"available": False},
         "codex": {"available": False},
         "antigravity": {"available": False},
+        "opencode": {"available": True},
     }
 
 

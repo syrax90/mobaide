@@ -48,6 +48,8 @@ enum FixtureRegistry {
         "MobileTokenRequest": runner(MobileTokenRequest.self),
         // AntigravityOptionsModel.swift
         "AntigravityOptionsModel": runner(AntigravityOptionsModel.self),
+        // OpenCodeOptionsModel.swift
+        "OpenCodeOptionsModel": runner(OpenCodeOptionsModel.self),
         // AuthDto.swift
         "TokenRequest": runner(TokenRequest.self),
         "TokenResponse": runner(TokenResponse.self),

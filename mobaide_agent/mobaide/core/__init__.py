@@ -17,6 +17,11 @@ from .codex_launcher import (
     CodexOptions,
 )
 from .models import SessionConfig, SessionEvent, SessionInfo, SessionKind, SessionState
+from .opencode_launcher import (
+    OpenCodeBinaryNotFoundError,
+    OpenCodeLauncher,
+    OpenCodeOptions,
+)
 from .projects_config import AutoScanFilter, ProjectConfig
 from .projects_store import (
     ProjectRecord,
@@ -53,6 +58,9 @@ __all__ = [
     "AntigravityLauncher",
     "AntigravityOptions",
     "AntigravityBinaryNotFoundError",
+    "OpenCodeLauncher",
+    "OpenCodeOptions",
+    "OpenCodeBinaryNotFoundError",
     "LaunchSpec",
     "AutoScanFilter",
     "ProjectConfig",

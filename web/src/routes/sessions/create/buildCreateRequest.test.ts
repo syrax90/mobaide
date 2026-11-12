@@ -76,6 +76,7 @@ const POPULATED: WizardState = {
     addDirsDraft: '/one, /two\n/three',
     terminalUi: false,
   },
+  opencode: { autoApprove: true, terminalUi: false },
   git: { worktree: true, branchName: 'feature/x' },
   autoScanPromptSeededFor: gitProject.name,
 };
@@ -86,14 +87,20 @@ function build(mode: WizardMode, state: WizardState = POPULATED): CreateSessionR
   return request;
 }
 
-const REQUEST_MODES = ['claude', 'codex', 'antigravity', 'shell', CUSTOM] as const;
-const OPTION_KEYS = ['claude_options', 'codex_options', 'antigravity_options'] as const;
+const REQUEST_MODES = ['claude', 'codex', 'antigravity', 'opencode', 'shell', CUSTOM] as const;
+const OPTION_KEYS = [
+  'claude_options',
+  'codex_options',
+  'antigravity_options',
+  'opencode_options',
+] as const;
 
 const OWN_OPTIONS: Record<(typeof REQUEST_MODES)[number], (typeof OPTION_KEYS)[number] | null> =
   {
     claude: 'claude_options',
     codex: 'codex_options',
     antigravity: 'antigravity_options',
+    opencode: 'opencode_options',
     shell: null,
     [CUSTOM]: null,
   };
@@ -179,6 +186,11 @@ const ANTIGRAVITY_BOOLEANS: Record<
   true
 > = { skip_permissions: true, sandbox: true, worktree: true };
 
+const OPENCODE_BOOLEANS: Record<
+  RequiredBooleans<components['schemas']['OpenCodeOptionsModel']>,
+  true
+> = { auto_approve: true, worktree: true };
+
 const REQUEST_BOOLEANS: Record<RequiredBooleans<CreateSessionRequest>, true> = {
   worktree: true,
 };
@@ -205,6 +217,10 @@ describe('buildCreateRequest — every boolean explicit', () => {
 
   it('declares every Antigravity boolean', () => {
     expectExplicitBooleans(build('antigravity').antigravity_options, ANTIGRAVITY_BOOLEANS);
+  });
+
+  it('declares every OpenCode boolean', () => {
+    expectExplicitBooleans(build('opencode').opencode_options, OPENCODE_BOOLEANS);
   });
 
   it('declares every Claude boolean on the Auto Scan request too', () => {
@@ -416,6 +432,43 @@ describe('Antigravity — chat view', () => {
   });
 });
 
+describe('OpenCode — chat view', () => {
+  const AVAILABLE: ChatSupport = { kind: 'available', resume: true, live: false };
+
+  it.each<[string, boolean, ChatSupport | undefined, 'chat' | 'terminal']>([
+    ['chat available', false, AVAILABLE, 'chat'],
+    ['Terminal UI on', true, AVAILABLE, 'terminal'],
+    ['no chat for OpenCode on this PC', false, { kind: 'unavailable' }, 'terminal'],
+    ['agent predates chat', false, { kind: 'outdated' }, 'terminal'],
+  ])('%s', (_name, terminalUi, chat, ui) => {
+    const request = buildCreateRequest({
+      state: { ...POPULATED, opencode: { ...POPULATED.opencode, terminalUi } },
+      mode: 'opencode',
+      project: gitProject,
+      chat,
+    });
+
+    expect(request?.cli).toBe('opencode');
+    expect(request?.ui).toBe(ui);
+    expect(request?.worktree).toBe(false);
+    expect(request?.opencode_options).toMatchObject({
+      auto_approve: true,
+      worktree: true,
+      branch_name: 'feature/x',
+    });
+    expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
+  });
+
+  it('asks before each permission unless the user turned auto-approve on', () => {
+    const request = build('opencode', {
+      ...INITIAL_WIZARD_STATE,
+      selection: { kind: 'stored', name: gitProject.name },
+    });
+
+    expect(request.opencode_options?.auto_approve).toBe(false);
+  });
+});
+
 describe('buildResumeRequest', () => {
   const stored: ChatStoredSession = {
     session_id: 'external-2222',
@@ -492,6 +545,30 @@ describe('buildResumeRequest', () => {
     expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
   });
 
+  it('continues an OpenCode session with the OpenCode options and never a worktree', () => {
+    const request = buildResumeRequest(
+      { state: POPULATED, mode: 'opencode', project: gitProject },
+      'opencode',
+      stored,
+    );
+
+    expect(request).toMatchObject({
+      project_name: 'mobaide',
+      cli: 'opencode',
+      ui: 'chat',
+      chat_resume_id: 'external-2222',
+      worktree: false,
+    });
+    expect(request.opencode_options).toEqual({
+      auto_approve: true,
+      worktree: false,
+      branch_name: undefined,
+      base_branch: null,
+    });
+    expect(OPTION_KEYS.filter((key) => key in request)).toEqual(['opencode_options']);
+    expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
+  });
+
   it('sends the recorded folder as cwd when it is not the selected project', () => {
     const request = buildResumeRequest(
       { state: POPULATED, mode: 'codex', project: gitProject },
@@ -515,7 +592,8 @@ describe('base_branch', () => {
     expect(withBase('claude').claude_options?.base_branch).toBe('origin/dev');
     expect(withBase('codex').codex_options?.base_branch).toBe('origin/dev');
     expect(withBase('antigravity').antigravity_options?.base_branch).toBe('origin/dev');
-    for (const mode of ['claude', 'codex', 'antigravity'] as const) {
+    expect(withBase('opencode').opencode_options?.base_branch).toBe('origin/dev');
+    for (const mode of ['claude', 'codex', 'antigravity', 'opencode'] as const) {
       expect('base_branch' in withBase(mode)).toBe(false);
     }
   });

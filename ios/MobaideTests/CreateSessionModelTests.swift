@@ -279,6 +279,151 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(prefs.getLastUsedAntigravityOptions()?.terminalUI, true)
     }
 
+    // MARK: - OpenCode
+
+    /// `refreshCliAvailability` against a stubbed agent whose `capabilities`
+    /// object is `capabilitiesJSON`.
+    private func modelWithCapabilities(_ capabilitiesJSON: String) async -> CreateSessionModel {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(status: 200, body: """
+        {"name":"agent","server_version":"1.0.0","protocol_versions":[7],"min_client_version":1,
+         "capabilities":\(capabilitiesJSON)}
+        """)
+        let model = stubbedModel()
+        await model.refreshCliAvailability()
+        return model
+    }
+
+    func testOpenCodeRequestAsksBeforeEachPermissionUnlessAutoApproveIsOn() throws {
+        let model = makeModel()
+        model.selection = .stored("a")
+
+        let untouched = try XCTUnwrap(model.buildRequest(mode: .opencode))
+
+        XCTAssertEqual(untouched.cli, "opencode")
+        XCTAssertEqual(untouched.ui, "chat")
+        XCTAssertEqual(untouched.opencode_options?.auto_approve, false)
+        XCTAssertNil(untouched.claude_options)
+        XCTAssertNil(untouched.codex_options)
+        XCTAssertNil(untouched.antigravity_options)
+
+        model.opencodeAutoApprove = true
+        model.opencodeTerminalUI = true
+        let dialled = try XCTUnwrap(model.buildRequest(mode: .opencode))
+
+        XCTAssertEqual(dialled.opencode_options?.auto_approve, true)
+        XCTAssertEqual(dialled.ui, "terminal")
+    }
+
+    func testOpenCodeCarriesWorktreeInItsOwnOptionsBlock() async throws {
+        let model = await modelWithProjects(#"[{"name":"a","path":"/p","is_git":true}]"#)
+        model.selectStoredProject("a")
+        model.worktree = true
+        model.branchName = "feat"
+
+        let request = try XCTUnwrap(model.buildRequest(mode: .opencode))
+
+        XCTAssertEqual(request.project_name, "a")
+        XCTAssertEqual(request.opencode_options?.worktree, true)
+        XCTAssertEqual(request.opencode_options?.branch_name, "feat")
+        XCTAssertEqual(request.worktree, false, "a managed CLI's worktree never rides the top level")
+        XCTAssertNil(request.branch_name)
+    }
+
+    func testCreateSendsAndRemembersTheOpenCodeChoices() async throws {
+        StubURLProtocol.reset()
+        let prefs = isolatedPrefs()
+        let model = stubbedModel(prefs: prefs)
+        model.selection = .stored("a")
+        model.mode = .opencode
+        model.opencodeAutoApprove = true
+        model.opencodeTerminalUI = true
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"session_id":"s-new","state":"starting","created_at":"t"}"#
+        )
+
+        await model.create()
+
+        XCTAssertNil(model.error)
+        let body = try XCTUnwrap(try createBodies().last)
+        XCTAssertEqual(body["cli"] as? String, "opencode")
+        XCTAssertEqual(body["ui"] as? String, "terminal")
+        let options = try XCTUnwrap(body["opencode_options"] as? [String: Any])
+        XCTAssertEqual(options["auto_approve"] as? Bool, true)
+        XCTAssertNil(body["claude_options"])
+        XCTAssertEqual(prefs.getLastUsedOpenCodeOptions(), OpenCodeLaunchPrefs(autoApprove: true, terminalUI: true))
+        XCTAssertNil(prefs.getLastUsedClaudeOptions(), "an OpenCode launch writes no other agent's bucket")
+
+        let next = makeModel(prefs: prefs)
+        XCTAssertTrue(next.opencodeAutoApprove, "the saved choices pre-set the next wizard")
+        XCTAssertTrue(next.opencodeTerminalUI)
+        XCTAssertFalse(next.antigravitySkipPermissions)
+    }
+
+    func testAnAgentThatListsItsCLIsWithoutOpenCodeDisablesTheCard() async {
+        // That agent predates the kind and would open a plain shell for it.
+        let model = await modelWithCapabilities(
+            #"{"cli":{"claude":{"available":true},"codex":{"available":true}}}"#
+        )
+
+        XCTAssertTrue(model.opencodeNeedsAgentUpdate)
+        XCTAssertFalse(model.opencodeEnabled)
+        XCTAssertFalse(model.isEnabled(.opencode))
+        XCTAssertTrue(model.codexEnabled, "the agent's own CLIs stay enabled")
+    }
+
+    func testOpenCodeCardFollowsTheAgentsAvailabilityFlag() async {
+        let missing = await modelWithCapabilities(#"{"cli":{"opencode":{"available":false}}}"#)
+        XCTAssertFalse(missing.opencodeNeedsAgentUpdate, "known but not installed is not an outdated agent")
+        XCTAssertFalse(missing.isEnabled(.opencode))
+
+        let installed = await modelWithCapabilities(#"{"cli":{"opencode":{"available":true}}}"#)
+        XCTAssertTrue(installed.isEnabled(.opencode))
+
+        // No CLI list at all is an agent that reports nothing: unknown, not absent.
+        let silent = await modelWithCapabilities("{}")
+        XCTAssertFalse(silent.opencodeNeedsAgentUpdate)
+        XCTAssertTrue(silent.isEnabled(.opencode))
+    }
+
+    func testOpenCodeWithoutChatOnThePCOpensTheTerminal() async throws {
+        let model = await modelWithChat(#"{"claude":{"resume":true}}"#)
+        model.selection = .stored("a")
+        model.mode = .opencode
+
+        let request = try XCTUnwrap(model.buildRequest(mode: .opencode))
+
+        XCTAssertEqual(request.ui, "terminal")
+        XCTAssertNotNil(model.opencodeChatUnavailableReason)
+        XCTAssertFalse(model.canContinueSession)
+    }
+
+    func testOpenCodeContinueRequestUsesTheOpenCodeOptionsWithoutAWorktree() async {
+        let model = await modelWithProjects(#"[{"name":"a","path":"/p","is_git":true}]"#)
+        model.selectStoredProject("a")
+        model.mode = .opencode
+        model.opencodeAutoApprove = true
+        model.worktree = true
+        model.branchName = "feat"
+        let stored = ChatStoredSession(
+            session_id: "external-2222", cwd: "/srv/other", title: nil, updated_at: nil, open_session_id: nil
+        )
+
+        let request = model.continueRequest(for: stored)
+
+        XCTAssertEqual(request.cli, "opencode")
+        XCTAssertEqual(request.ui, "chat")
+        XCTAssertEqual(request.chat_resume_id, "external-2222")
+        XCTAssertEqual(request.cwd, "/srv/other")
+        XCTAssertNil(request.project_name)
+        XCTAssertNil(request.claude_options)
+        XCTAssertNil(request.codex_options)
+        XCTAssertEqual(request.opencode_options?.auto_approve, true)
+        XCTAssertEqual(request.opencode_options?.worktree, false)
+        XCTAssertNil(request.opencode_options?.branch_name)
+    }
+
     // MARK: - Codex continue after the Codex sign-in
 
     private let externalSession = ChatStoredSession(

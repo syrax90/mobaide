@@ -23,6 +23,7 @@ final class CreateSessionModel {
         case standard
         case codex
         case antigravity
+        case opencode
         case autoScan
         case shell
         /// An account-scoped custom agent type, identified by its 12-hex id
@@ -34,7 +35,7 @@ final class CreateSessionModel {
         case custom(String)
 
         /// The static mode cards, in default order; custom-type cards follow.
-        static let builtIn: [Mode] = [.standard, .codex, .antigravity, .autoScan, .shell]
+        static let builtIn: [Mode] = [.standard, .codex, .antigravity, .opencode, .autoScan, .shell]
 
         /// The id `/api/session-mode-order` stores for this card.
         var orderId: String {
@@ -42,6 +43,7 @@ final class CreateSessionModel {
             case .standard: return "claude"
             case .codex: return "codex"
             case .antigravity: return "antigravity"
+            case .opencode: return "opencode"
             case .autoScan: return "auto_scan"
             case .shell: return "shell"
             case .custom(let id): return "custom_\(id)"
@@ -145,6 +147,10 @@ final class CreateSessionModel {
     private(set) var claudeAvailable: Bool?
     private(set) var codexAvailable: Bool?
     private(set) var antigravityAvailable: Bool?
+    private(set) var opencodeAvailable: Bool?
+    /// The probed agent predates OpenCode: it would open a plain shell for
+    /// `cli = "opencode"`, so the card is disabled instead.
+    private(set) var opencodeNeedsAgentUpdate = false
     private(set) var codexModels: [String] = codexModelsFallback
     private(set) var antigravityModels: [String] = antigravityModelsFallback
     /// Per-model Codex effort sets from `capabilities.cli.codex.model_details`;
@@ -239,6 +245,14 @@ final class CreateSessionModel {
     var antigravityTerminalUI = false
     /// `capabilities.chat.antigravity`; nil until the probe answers.
     private(set) var antigravityChatCapability: ChatCapability?
+
+    // OpenCode
+    var opencodeAutoApprove = false
+    /// Off by default: an OpenCode session opens in the chat view whenever the
+    /// agent can run it.
+    var opencodeTerminalUI = false
+    /// `capabilities.chat.opencode`; nil until the probe answers.
+    private(set) var opencodeChatCapability: ChatCapability?
 
     // Shared git options
     var worktree = false
@@ -353,13 +367,25 @@ final class CreateSessionModel {
         Self.chatUnavailableReason(antigravityChatCapability, kind: "antigravity")
     }
 
+    var opencodeChatUnavailable: Bool { opencodeChatCapability.map { !$0.isAvailable } ?? false }
+
+    /// The OpenCode session will open in the chat view.
+    var opencodeUsesChat: Bool { !opencodeTerminalUI && !opencodeChatUnavailable }
+
+    var opencodeChatUnavailableReason: String? {
+        Self.chatUnavailableReason(opencodeChatCapability, kind: "opencode")
+    }
+
     static func chatUnavailableReason(_ capability: ChatCapability?, kind: String = "claude") -> String? {
         switch capability {
         case .unsupportedAgent?: return "Update Mobaide on your PC to use the chat view."
         case .unavailable?:
-            return kind == "antigravity"
-                ? "The chat view needs a newer Antigravity CLI on your PC: run agy update there."
-                : "The chat view needs Node.js on your PC."
+            switch kind {
+            case "antigravity":
+                return "The chat view needs a newer Antigravity CLI on your PC: run agy update there."
+            case "opencode": return "The chat view is not available for OpenCode on your PC."
+            default: return "The chat view needs Node.js on your PC."
+            }
         default: return nil
         }
     }
@@ -369,6 +395,7 @@ final class CreateSessionModel {
         switch mode {
         case .codex: return "codex"
         case .antigravity: return "antigravity"
+        case .opencode: return "opencode"
         default: return "claude"
         }
     }
@@ -377,6 +404,7 @@ final class CreateSessionModel {
         switch mode {
         case .codex: return codexChatCapability
         case .antigravity: return antigravityChatCapability
+        case .opencode: return opencodeChatCapability
         default: return chatCapability
         }
     }
@@ -390,6 +418,7 @@ final class CreateSessionModel {
         case .standard: return claudeUsesChat && chatCapability?.canResume == true
         case .codex: return codexUsesChat && codexChatCapability?.canResume == true
         case .antigravity: return antigravityUsesChat && antigravityChatCapability?.canResume == true
+        case .opencode: return opencodeUsesChat && opencodeChatCapability?.canResume == true
         default: return false
         }
     }
@@ -404,6 +433,7 @@ final class CreateSessionModel {
     }
     var codexEnabled: Bool { codexAvailable != false }
     var antigravityEnabled: Bool { antigravityAvailable != false }
+    var opencodeEnabled: Bool { opencodeAvailable != false && !opencodeNeedsAgentUpdate }
 
     /// Auto Scan additionally needs a Linear API key on the selected stored
     /// project — the agent scans Linear for that project's issues. A custom
@@ -425,6 +455,7 @@ final class CreateSessionModel {
         case .standard: return claudeEnabled
         case .codex: return codexEnabled
         case .antigravity: return antigravityEnabled
+        case .opencode: return opencodeEnabled
         // A running scan keeps the card tappable even when the launch gate
         // would refuse — tapping opens its monitor rather than the config step.
         case .autoScan: return autoScanEnabled || runningScan != nil
@@ -446,6 +477,10 @@ final class CreateSessionModel {
         case .antigravity:
             return antigravityEnabled ? "Configure and launch a Google Antigravity session."
                 : "Antigravity CLI (agy) is not installed on the agent."
+        case .opencode:
+            if opencodeNeedsAgentUpdate { return "Update Mobaide on your PC to use OpenCode." }
+            return opencodeEnabled ? "Configure and launch an OpenCode session."
+                : "OpenCode CLI is not installed on the agent."
         case .autoScan:
             if let running = runningScan {
                 return "Already running for \(running.project_name) — tap to open the live monitor."
@@ -478,6 +513,7 @@ final class CreateSessionModel {
         case .standard: return "Claude Code"
         case .codex: return "Codex"
         case .antigravity: return "Antigravity"
+        case .opencode: return "OpenCode"
         case .autoScan: return "Auto Scan"
         case .shell: return "Terminal"
         case .custom(let id): return customType(id: id)?.name ?? "Terminal session"
@@ -641,8 +677,11 @@ final class CreateSessionModel {
         chatCapability = version.chatCapability("claude")
         codexChatCapability = version.chatCapability("codex")
         antigravityChatCapability = version.chatCapability("antigravity")
+        opencodeChatCapability = version.chatCapability("opencode")
         codexAvailable = version.cliAvailable("codex")
         antigravityAvailable = version.cliAvailable("antigravity")
+        opencodeAvailable = version.cliAvailable("opencode")
+        opencodeNeedsAgentUpdate = !version.cliKnown("opencode")
         if let models = version.cliModels("codex"), !models.isEmpty { codexModels = models }
         if let models = version.cliModels("antigravity"), !models.isEmpty { antigravityModels = models }
         // Overwritten, never keep-last-known (unlike the model lists above): a
@@ -1376,6 +1415,14 @@ final class CreateSessionModel {
                 antigravity_options: antigravityOptions(worktree: effectiveWorktree, branchName: effectiveBranch, baseBranch: effectiveBase),
                 ui: antigravityUsesChat ? "chat" : "terminal"
             )
+        case .opencode:
+            return CreateSessionRequest(
+                cwd: cwd,
+                project_name: projectName,
+                cli: "opencode",
+                opencode_options: opencodeOptions(worktree: effectiveWorktree, branchName: effectiveBranch, baseBranch: effectiveBase),
+                ui: opencodeUsesChat ? "chat" : "terminal"
+            )
         case .shell:
             return CreateSessionRequest(
                 cwd: cwd,
@@ -1441,6 +1488,15 @@ final class CreateSessionModel {
         )
     }
 
+    private func opencodeOptions(worktree: Bool, branchName: String?, baseBranch: String? = nil) -> OpenCodeOptionsModel {
+        OpenCodeOptionsModel(
+            auto_approve: opencodeAutoApprove,
+            worktree: worktree,
+            branch_name: branchName,
+            base_branch: baseBranch
+        )
+    }
+
     private func codexLaunchPrefs() -> CodexLaunchPrefs {
         CodexLaunchPrefs(
             model: codexModel,
@@ -1482,6 +1538,16 @@ final class CreateSessionModel {
                 project_name: projectName,
                 cli: "antigravity",
                 antigravity_options: antigravityOptions(worktree: false, branchName: nil),
+                ui: "chat",
+                chat_resume_id: stored.session_id
+            )
+        }
+        if mode == .opencode {
+            return CreateSessionRequest(
+                cwd: cwd,
+                project_name: projectName,
+                cli: "opencode",
+                opencode_options: opencodeOptions(worktree: false, branchName: nil),
                 ui: "chat",
                 chat_resume_id: stored.session_id
             )
@@ -1606,6 +1672,11 @@ final class CreateSessionModel {
                 sandbox: antigravitySandbox,
                 terminalUI: antigravityTerminalUI
             ))
+        case .opencode:
+            preferencesStore.setLastUsedOpenCodeOptions(OpenCodeLaunchPrefs(
+                autoApprove: opencodeAutoApprove,
+                terminalUI: opencodeTerminalUI
+            ))
         // Auto Scan persists its own bucket from `startAutoScan`, which never
         // routes through `create()`.
         case .autoScan, .shell, .custom:
@@ -1653,6 +1724,10 @@ final class CreateSessionModel {
             antigravitySkipPermissions = antigravity.skipPermissions
             antigravitySandbox = antigravity.sandbox && !antigravity.skipPermissions
             antigravityTerminalUI = antigravity.terminalUI
+        }
+        if let opencode = preferencesStore.getLastUsedOpenCodeOptions() {
+            opencodeAutoApprove = opencode.autoApprove
+            opencodeTerminalUI = opencode.terminalUI
         }
     }
 

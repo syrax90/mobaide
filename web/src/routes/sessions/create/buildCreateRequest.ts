@@ -26,6 +26,7 @@ import {
   type AntigravityBucket,
   type ClaudeBucket,
   type CodexBucket,
+  type OpenCodeBucket,
   type WizardMode,
   type WizardState,
 } from './wizardState';
@@ -35,6 +36,7 @@ export type StartScanRequest = components['schemas']['StartScanRequest'];
 type ClaudeOptions = components['schemas']['ClaudeOptionsModel'];
 type CodexOptions = components['schemas']['CodexOptionsModel'];
 type AntigravityOptions = components['schemas']['AntigravityOptionsModel'];
+type OpenCodeOptions = components['schemas']['OpenCodeOptionsModel'];
 
 export interface BuildContext {
   state: WizardState;
@@ -66,10 +68,12 @@ export function claudeUsesChat(bucket: ClaudeBucket, chat: ChatSupport | undefin
 }
 
 /** The agent kinds whose sessions can open in the chat view. */
-export type ChatAgentKind = 'claude' | 'codex' | 'antigravity';
+export type ChatAgentKind = 'claude' | 'codex' | 'antigravity' | 'opencode';
 
 export function chatAgentKind(mode: WizardMode | null): ChatAgentKind | null {
-  return mode === 'claude' || mode === 'codex' || mode === 'antigravity' ? mode : null;
+  return mode === 'claude' || mode === 'codex' || mode === 'antigravity' || mode === 'opencode'
+    ? mode
+    : null;
 }
 
 /** The kind's "Terminal UI" toggle. */
@@ -81,6 +85,8 @@ export function terminalUiOf(state: WizardState, kind: ChatAgentKind): boolean {
       return state.codex.terminalUi;
     case 'antigravity':
       return state.antigravity.terminalUi;
+    case 'opencode':
+      return state.opencode.terminalUi;
   }
 }
 
@@ -169,6 +175,18 @@ function antigravityOptions(
   };
 }
 
+function opencodeOptions(
+  bucket: OpenCodeBucket,
+  extras: { worktree: boolean; branchName: string | undefined; baseBranch: string | null },
+): OpenCodeOptions {
+  return {
+    auto_approve: bucket.autoApprove,
+    worktree: extras.worktree,
+    branch_name: extras.branchName,
+    base_branch: extras.baseBranch,
+  };
+}
+
 /** `null` for `auto_scan`, which starts a scan rather than creating a session. */
 export function buildCreateRequest(context: BuildContext): CreateSessionRequest | null {
   const { state, mode } = context;
@@ -227,6 +245,20 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
     };
   }
 
+  if (mode === 'opencode') {
+    return {
+      ...base,
+      cli: 'opencode',
+      opencode_options: opencodeOptions(state.opencode, {
+        worktree: place.worktree,
+        branchName: place.branchName,
+        baseBranch: place.baseBranch,
+      }),
+      worktree: false,
+      ui: usesChatView(state.opencode.terminalUi, context.chat) ? 'chat' : 'terminal',
+    };
+  }
+
   // Terminal and custom agent types share plain-shell semantics: no options
   // block, worktree intent at the top level, and `command` omitted so the agent
   // picks the login shell (it discards client hints on this path regardless).
@@ -262,7 +294,9 @@ export function buildResumeRequest(
             cli: 'antigravity',
             antigravity_options: antigravityOptions(state.antigravity, noWorktree),
           }
-        : { cli: 'claude', claude_options: claudeOptions(state.claude, noWorktree) };
+        : kind === 'opencode'
+          ? { cli: 'opencode', opencode_options: opencodeOptions(state.opencode, noWorktree) }
+          : { cli: 'claude', claude_options: claudeOptions(state.claude, noWorktree) };
   return {
     project_name: sameFolder ? project.name : undefined,
     cwd: sameFolder ? undefined : stored.cwd,

@@ -7,13 +7,14 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * The Android arm of the session-create golden fixtures: every case of the
- * three CLI options blocks and the create request decodes, and the `full`
+ * CLI options blocks and the create request decodes, and the `full`
  * cases carry `base_branch` both ways.
  */
 class SessionCreateDtoFixtureTest {
@@ -72,6 +73,57 @@ class SessionCreateDtoFixtureTest {
         assertEquals("origin/main", full.base_branch)
         assertBaseBranchEncodes(AntigravityOptionsModel.serializer(), full, "origin/main")
         decoded.filterKeys { it != "full" }.values.forEach { assertNull(it.base_branch) }
+    }
+
+    @Test
+    fun opencodeOptions_fullCarriesEveryFieldBothWays() {
+        val fixture = fixture("OpenCodeOptionsModel")
+        val decoded = fixture.decodeAll(OpenCodeOptionsModel.serializer())
+        val full = decoded.getValue("full")
+        assertEquals(
+            OpenCodeOptionsModel(
+                auto_approve = true,
+                worktree = true,
+                branch_name = "b",
+                base_branch = "origin/main",
+            ),
+            full,
+        )
+        assertEquals(
+            fixture.cases.first { it.name == "full" }.wire,
+            json.encodeToJsonElement(OpenCodeOptionsModel.serializer(), full),
+        )
+        // An empty block is a session that asks before it acts.
+        assertEquals(OpenCodeOptionsModel(), decoded.getValue("empty_defaults_materialize"))
+        assertFalse(decoded.getValue("empty_defaults_materialize").auto_approve)
+    }
+
+    @Test
+    fun createSessionRequest_opencodeLaunchCarriesItsOptionsBlockBothWays() {
+        val decoded = fixture("CreateSessionRequest").decodeAll(CreateSessionRequest.serializer())
+        val launch = decoded.getValue("opencode_launch")
+        assertEquals("opencode", launch.cli)
+        assertEquals("chat", launch.ui)
+        assertEquals(
+            OpenCodeOptionsModel(
+                auto_approve = true,
+                worktree = true,
+                branch_name = "feature/x",
+                base_branch = "origin/main",
+            ),
+            launch.opencode_options,
+        )
+        assertNull(launch.claude_options)
+        assertNull(launch.codex_options)
+        assertNull(launch.antigravity_options)
+
+        val encoded = json.encodeToJsonElement(CreateSessionRequest.serializer(), launch) as JsonObject
+        assertEquals("opencode", encoded["cli"]?.jsonPrimitive?.content)
+        assertEquals(
+            json.encodeToJsonElement(OpenCodeOptionsModel.serializer(), launch.opencode_options!!),
+            encoded["opencode_options"],
+        )
+        assertTrue("claude_options" !in encoded)
     }
 
     @Test

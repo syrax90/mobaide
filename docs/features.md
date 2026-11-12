@@ -15,15 +15,15 @@ For the short overview, see the [README](../README.md). The wire contract itself
 
 ## Chat Sessions
 
-Claude Code, Codex and Antigravity sessions open in a **chat view** by default: messages, tool calls, diffs, plans, permission prompts and questions are native UI on Android, iOS and the web, instead of a terminal.
+Claude Code, Codex, Antigravity and OpenCode sessions open in a **chat view** by default: messages, tool calls, diffs, plans, permission prompts and questions are native UI on Android, iOS and the web, instead of a terminal.
 
-- **How it works.** The agent runs the coding agent over the [Agent Client Protocol](https://agentclientprotocol.com) (ACP) and streams a structured timeline. Claude Code uses the ACP adapter `@agentclientprotocol/claude-agent-acp`, which drives the PC's own `claude` binary. Codex uses `@agentclientprotocol/codex-acp`, which drives the PC's own `codex app-server` (`CODEX_PATH`). Antigravity uses the ACP server built into its CLI, `agy acp`: no adapter and no Node.js. Login, settings and CLI version are the same as in a terminal session.
+- **How it works.** The agent runs the coding agent over the [Agent Client Protocol](https://agentclientprotocol.com) (ACP) and streams a structured timeline. Claude Code uses the ACP adapter `@agentclientprotocol/claude-agent-acp`, which drives the PC's own `claude` binary. Codex uses `@agentclientprotocol/codex-acp`, which drives the PC's own `codex app-server` (`CODEX_PATH`). Antigravity uses the ACP server built into its CLI, `agy acp`: no adapter and no Node.js. OpenCode does the same with `opencode acp`. Login, settings and CLI version are the same as in a terminal session.
 - **Agent-agnostic.** The chat UI renders only ACP concepts (messages, tool kinds, config options, slash commands). Another ACP agent needs only a launch spec in `mobaide_agent/mobaide/acp/agents.py`.
-- **Requirements on the PC.** For Claude Code and Codex: Node.js 22+, or an adapter command on PATH. For Antigravity: an `agy` that supports `agy acp` (the agent checks `agy help acp`). Otherwise the wizard shows why and creates a terminal session. `MOBAIDE_ACP_CLAUDE_COMMAND`, `MOBAIDE_ACP_CODEX_COMMAND` and `MOBAIDE_ACP_ANTIGRAVITY_COMMAND` in the agent's env file override the launch commands.
+- **Requirements on the PC.** For Claude Code and Codex: Node.js 22+, or an adapter command on PATH. For Antigravity: an `agy` that supports `agy acp` (the agent checks `agy help acp`). Otherwise the wizard shows why and creates a terminal session. For OpenCode: an `opencode` binary (no auth probe, no Node.js). `MOBAIDE_ACP_CLAUDE_COMMAND`, `MOBAIDE_ACP_CODEX_COMMAND`, `MOBAIDE_ACP_ANTIGRAVITY_COMMAND` and `MOBAIDE_ACP_OPENCODE_COMMAND` in the agent's env file override the launch commands.
 - **Antigravity probe.** A yes or no answer is kept until the `agy` binary changes. A missing `agy` or a failed probe is checked again after 30 s. The agent warms the probe at start.
 - **Adapter install.** The agent installs each adapter once, at a pinned version, into `<state prefix>/acp-adapters/`. It uses `npm install --ignore-scripts --omit=optional --before=<release date>` and runs the adapter with `node`, not `npx`. The first chat shows "Setting up the ... chat on your PC" until the install ends, then the notice goes away. Uninstalling the agent removes `acp-adapters`.
 - **Codex modes.** Read-only maps to the read-only mode. Auto (workspace-write) maps to Workspace access, and a person approves anything outside it. Full access maps to full access only with `full_auto`, or `danger-full-access` with approval `never`. The mode is required: if the agent cannot apply it, the session does not start.
-- **Folder trust.** Before a chat session opens a folder Claude Code has not trusted, the chat asks **Trust this folder?**. Trust is recorded in `~/.claude.json`, like the CLI. For Codex, the chat reads and writes `[projects."<dir>"] trust_level` in `$CODEX_HOME/config.toml`, with the same lookup order as Codex, including linked worktrees. For the home folder, a folder above it, or a root, trust lasts for this session only. Parent folders count only up to the enclosing git repo root. Declining ends the start; Restart offers the choice again. `agy acp` skips the CLI's trust prompt, so for Antigravity the chat asks too. Trust is recorded as `trustedWorkspaces` in `~/.gemini/antigravity-cli/settings.json`, for the exact folder only.
+- **Folder trust.** Before a chat session opens a folder Claude Code has not trusted, the chat asks **Trust this folder?**. Trust is recorded in `~/.claude.json`, like the CLI. For Codex, the chat reads and writes `[projects."<dir>"] trust_level` in `$CODEX_HOME/config.toml`, with the same lookup order as Codex, including linked worktrees. For the home folder, a folder above it, or a root, trust lasts for this session only. Parent folders count only up to the enclosing git repo root. Declining ends the start; Restart offers the choice again. `agy acp` skips the CLI's trust prompt, so for Antigravity the chat asks too. Trust is recorded as `trustedWorkspaces` in `~/.gemini/antigravity-cli/settings.json`, for the exact folder only. OpenCode has no folder-trust gate, so its chat does not ask.
 
 ### What the chat view offers
 
@@ -35,18 +35,19 @@ Claude Code, Codex and Antigravity sessions open in a **chat view** by default: 
 | Composer | Slash-command suggestions, image attachments (when the agent accepts images), voice input, prompt templates (inserted at the cursor), save as template, and a full-screen editor on Android and iOS. Messages sent while the agent works are queued. You can remove one, or tap **Send now** to steer the agent with it. |
 | Controls | Stop, and chips for the mode (shield), model (chip) and effort (brain) and other agent options; the chips wrap onto a second line instead of scrolling. Context usage and cost in the top bar, and a full-screen button on the web. Plan progress above the composer. |
 | Command output | Command output shows as a console block, with a live tail while the command runs. |
-| Sign-in | A **Sign-in needed** card appears when the agent is signed out, or when you send `/login` (also in the slash-command suggestions). Pick a method. The PC agent runs the coding agent's own login command in a hidden terminal. Claude Code: Claude account or Console, then paste the code the page shows. Codex: open the page and enter the one-time code in the card, or use an OpenAI API key. While Codex's shared app-server runs on the PC, the Codex sign-in goes through it, because it does not read a login that `codex login` saves. Antigravity: Google sign-in, then paste the code or the address of the page you land on. On success the agent restarts and sends the refused messages again. A failed login, or one that takes over 20 min, returns to the method choice with the reason. |
+| Sign-in | A **Sign-in needed** card appears when the agent is signed out, or when you send `/login` (also in the slash-command suggestions). Pick a method. The PC agent runs the coding agent's own login command in a hidden terminal. Claude Code: Claude account or Console, then paste the code the page shows. Codex: open the page and enter the one-time code in the card, or use an OpenAI API key. While Codex's shared app-server runs on the PC, the Codex sign-in goes through it, because it does not read a login that `codex login` saves. Antigravity: Google sign-in, then paste the code or the address of the page you land on. OpenCode has no sign-in card: on a provider auth failure the chat says "OpenCode could not sign in to the model provider. Run `opencode auth login` on the PC, or use /connect in an OpenCode terminal session. Then tap Restart." On success the agent restarts and sends the refused messages again. A failed login, or one that takes over 20 min, returns to the method choice with the reason. |
 | Sync | Every open device shows the same state; a reconnect fetches only what it missed. |
 
 The terminal's control-key bar and custom keyboard shortcut buttons are not part of the chat view: they send raw terminal bytes. Templates and slash commands work in the chat view. Stop and the mode chip replace Esc / Ctrl+C and Shift+Tab.
 
 ### Terminal UI and continuing sessions
 
-- **Terminal UI.** The Claude Code, Codex and Antigravity pages of the new-session wizard have a **Terminal UI** toggle under Advanced, off by default and remembered. On, the session runs in the classic terminal (needed for TUI-only features such as Rewind). The wizard's Focus view and Debug logging apply only to terminal sessions; a chat session has its own Focus view in its ⋯ menu.
-- **Continue a session.** The same pages offer **Continue a session**: a list of the Claude Code, Codex or Antigravity sessions stored on the PC, for this folder or all folders, including sessions started outside Mobaide (for example by running `claude` in a terminal). Picking one opens it in the chat view with its history.
+- **Terminal UI.** The Claude Code, Codex, Antigravity and OpenCode pages of the new-session wizard have a **Terminal UI** toggle under Advanced, off by default and remembered. On, the session runs in the classic terminal (needed for TUI-only features such as Rewind). The wizard's Focus view and Debug logging apply only to terminal sessions; a chat session has its own Focus view in its ⋯ menu.
+- **Continue a session.** The same pages offer **Continue a session**: a list of the Claude Code, Codex, Antigravity or OpenCode sessions stored on the PC, for this folder or all folders, including sessions started outside Mobaide (for example by running `claude` in a terminal). Picking one opens it in the chat view with its history.
 - **Live Codex sessions.** When the Codex shared app-server runs (the daemon that `codex` in a terminal starts), chat sessions join it through `mobaide/acp/codex_bridge.py`. A session open in a terminal and on the phone stay in sync both ways. This works on macOS and Linux, not on Windows, and not for projects with a conda env. A message typed in another app shows as **Message sent from another app on your PC**, followed by its answer. The adapter does not forward the text of that message. Closing the chat cancels only its own turn.
 - **Antigravity sessions.** Each chat runs its own `agy acp` process in the session folder. Continue uses `session/list` and `session/load`, with history. It is not live: `agy` has no shared local server, so there is no sync with a terminal. There is no **Send now**, because `agy` has no steering.
 - **Antigravity conversation lock.** The chat holds the lock file that `agy` uses (`~/.gemini/antigravity-cli/presence/<id>.lock`). An `agy` terminal then warns "Conversation already open". When another app holds the lock, the Continue list shows "Open in another app on your PC. Close it there first.", and the chat shows a warning notice. Two processes that write one conversation overwrite each other. After the other app closes the conversation, the next message first reopens it, so the chat shows what was sent there ("Loaded the latest messages"), and then goes out.
+- **OpenCode sessions.** Each chat runs its own `opencode acp` process, apart from the server the OpenCode TUI uses. It is not live: there is no sync between a chat and a terminal on the same session. Continue lists the sessions stored per folder (`GET /api/chat/opencode/sessions`) and replays the history. The config chips come from OpenCode: model (`provider/model`), mode (Build or Plan) and, for models with variants, effort. With **Auto-approve permissions**, the agent answers each permission request with the "allow once" option and shows no card.
 - **Claude Code sessions.** There is no live attach. Close the session in the other terminal first: two writers on one session interleave.
 
 The wire details are in [PROTOCOL.md](../PROTOCOL.md).
@@ -68,11 +69,11 @@ A Settings toggle chooses between two modes:
 
 Run and switch between up to 32 concurrent sessions on one agent. 32 is the default `max_sessions`, which is configurable.
 
-A running session that is mid-turn shows an animated accent square and a "Working" chip in the session list and sessions panel. "Needs permission" outranks it, and it outranks "Ready". The agent reports this as the session's `activity` (`working` or `idle`) for Claude and Auto Scan terminal sessions and for chat sessions. Codex, Antigravity, Terminal and custom terminal sessions show no Working state.
+A running session that is mid-turn shows an animated accent square and a "Working" chip in the session list and sessions panel. "Needs permission" outranks it, and it outranks "Ready". The agent reports this as the session's `activity` (`working` or `idle`) for Claude and Auto Scan terminal sessions and for chat sessions. Codex, Antigravity, OpenCode, Terminal and custom terminal sessions show no Working state.
 
 ## Managed CLI agents
 
-The agent runs Claude Code by default. It can also launch the [OpenAI Codex CLI](https://developers.openai.com/codex/cli) or the [Antigravity CLI](https://antigravity.google/docs/cli) (binary `agy`) as additional managed coding agents.
+The agent runs Claude Code by default. It can also launch the [OpenAI Codex CLI](https://developers.openai.com/codex/cli) the [Antigravity CLI](https://antigravity.google/docs/cli) (binary `agy`) or [OpenCode](https://opencode.ai/docs/) as additional managed coding agents.
 
 ### Agent kinds at a glance
 
@@ -81,9 +82,10 @@ The agent runs Claude Code by default. It can also launch the [OpenAI Codex CLI]
 | Claude Code | `"claude"` | | `MOBAIDE_CLAUDE_BIN` | |
 | Codex CLI | `"codex"` | `codex_options` | `MOBAIDE_CODEX_BIN` | 503 with `codex_cli_missing` |
 | Antigravity CLI | `"antigravity"` | `antigravity_options` | `MOBAIDE_AGY_BIN` | 503 with `antigravity_cli_missing` |
+| OpenCode | `"opencode"` | `opencode_options` | `MOBAIDE_OPENCODE_BIN` | 503 with `opencode_cli_missing` |
 | Custom agent type | `"custom_<id>"` | | The stored launch command | |
 
-`MOBAIDE_CODEX_BIN` and `MOBAIDE_AGY_BIN` both mirror `MOBAIDE_CLAUDE_BIN`. The operator uses them to point the agent at each executable.
+`MOBAIDE_CODEX_BIN`, `MOBAIDE_AGY_BIN` and `MOBAIDE_OPENCODE_BIN` all mirror `MOBAIDE_CLAUDE_BIN`. The operator uses them to point the agent at each executable.
 
 ### Create-session contract
 
@@ -93,6 +95,7 @@ The create-session wire contract is REST `POST /api/sessions` and the relay `cre
 |---|---|
 | `codex_options` | model, sandbox, approval, reasoning effort, full-auto, initial prompt |
 | `antigravity_options` | model, skip-permissions, sandbox, add-directories, worktree/branch |
+| `opencode_options` | auto-approve, initial prompt (up to 32000 characters; no client sends it), worktree/branch/base branch |
 
 In `antigravity_options`, skip-permissions and sandbox are mutually exclusive, and the server rejects the combination.
 
@@ -113,6 +116,17 @@ The wire details are in [PROTOCOL.md](../PROTOCOL.md).
 
 **Antigravity (terminal sessions).** There is no auth probe. An unauthenticated `agy` shows its Google Sign-In prompt in the PTY, so the operator pre-authenticates `agy` on the host before launching a session. There is no API-key env var and no in-app Antigravity login route for terminal sessions. Chat sessions sign in from the chat card.
 
+**OpenCode.** There is no auth probe: OpenCode starts without an account and has free models. Sign in on the PC with `opencode auth login`, or with `/connect` in an OpenCode terminal session.
+
+### OpenCode terminal sessions
+
+- **Wizard.** OpenCode is the sixth built-in mode, after Antigravity (default order: Claude, Codex, Antigravity, OpenCode, Auto Scan, Terminal). Options: **Auto-approve permissions (dangerous)**, the worktree section and, under Advanced, **Terminal UI**. Launch options are remembered per device. The card is disabled with "Update Mobaide on your PC to use OpenCode." when the agent lists no `opencode` CLI, and with "OpenCode CLI is not installed on the agent." when the binary is missing.
+- **Launch.** `opencode [--auto]` runs in the session folder. `--auto` is the **Auto-approve permissions** option: OpenCode accepts every request its rules do not deny.
+- **No model picker.** The OpenCode 2 TUI has no `--model` or `--agent` flag. Pick the model and the Build or Plan agent inside the session.
+- **Tabs off.** The launcher starts the TUI with `OPENCODE_CLI_CONFIG_CONTENT={"tabs":{"mode":"off"}}`, merged into your own value. Your own `tabs` key wins. OpenCode shares one tab set per folder, and its status report covers all tabs. With tabs on, a request in one session would alert every session of the project.
+- **Binary lookup.** `MOBAIDE_OPENCODE_BIN`, then PATH, then `~/.opencode/bin/opencode`, npm-global, Homebrew and `~/.bun/bin`. On Windows: `%USERPROFILE%\.opencode\bin\opencode.exe`, npm shims and Bun. The Windows installer does not detect OpenCode.
+- **Voice cleanup.** Not available in OpenCode sessions.
+
 ### On-screen control-key bar
 
 The terminal's on-screen control-key bar is CLI-aware and sends raw PTY bytes. It is Android/iOS only, together with the chord picker and saved shortcuts. The web client removed them because a desktop has a physical keyboard, so every chord types directly into the terminal instead (see [docs/web-client.md](web-client.md)).
@@ -121,6 +135,7 @@ The terminal's on-screen control-key bar is CLI-aware and sends raw PTY bytes. I
 |---|---|---|
 | Claude, shell, auto-scan | 14 | Mode `Shift+Tab`, Rewind `Esc Esc`, Esc, Ctrl+C, Enter, Tab, Backspace `DEL 0x7f`, arrow keys, `Ctrl+O`, `Ctrl+R`, `Ctrl+L` |
 | Codex | 16 | The same bar, with the approval answers Approve `y` / Reject `n` prepended |
+| OpenCode | 11 | Mode `Shift+Tab` (cycles the agent), `Ctrl+P` (command palette), then the neutral set: Esc, Ctrl+C, Enter, Tab, Backspace, arrow keys |
 | Antigravity | 15 | `Ctrl+K`, `Ctrl+G`, `Ctrl+D`, then Esc, Ctrl+C, Enter, Tab, Backspace, arrow keys, `Ctrl+O`, `Ctrl+R`, and `Ctrl+L` |
 | Custom agent | 9 | Esc, Ctrl+C, Enter, Tab, Backspace, arrow keys |
 
@@ -170,7 +185,7 @@ For stored git projects, tapping the tile first shows a "Terminal session" confi
 
 ## Worktree Base Branch
 
-When "Create worktree" is on for a git project, the config page shows a "Base branch" picker. The new worktree branch starts from the selected branch. This works for Claude, Codex, Antigravity and Terminal sessions.
+When "Create worktree" is on for a git project, the config page shows a "Base branch" picker. The new worktree branch starts from the selected branch. This works for Claude, Codex, Antigravity, OpenCode and Terminal sessions.
 
 - **List.** The picker lists the local branches and the remote-tracking branches. It has a search field. The default branch is first, then the newest branches.
 - **Default.** The agent picks `origin/HEAD` first, then `origin/main`, then the local `main`.
@@ -329,7 +344,8 @@ The apps raise a notification whenever an agent session needs attention. This co
 - **Source.** One source per session, so nothing alerts twice.
   - Claude and Auto Scan terminal sessions: Claude Code hooks post to the agent's local `POST /internal/hook` endpoint.
   - Chat sessions: the agent raises the reason from the turn result. An RPC error on your own prompt gives `turn_failed`.
-  - Codex, Antigravity, Terminal and custom terminal sessions: the CLI writes OSC 7501 program-status reports. The agent maps them to reasons after a 1.5 s quiet window, and one session alerts at most every 5 s.
+  - Codex, Antigravity, OpenCode, Terminal and custom terminal sessions: the CLI writes OSC 7501 program-status reports. The agent maps them to reasons after a 1.5 s quiet window, and one session alerts at most every 5 s.
+  - OpenCode 2 reports only `idle`, `working` and `blocked`. A `working` to `idle` change is the turn end (`turn_finished` after the quiet window), unless client input arrived within 2 s before it (an interrupt). `blocked` alerts (`awaiting_permission`) only after it stands 0.5 s, because with `--auto` OpenCode reports `blocked` for about 10 ms per request. OpenCode raises no `turn_failed`. OpenCode 1.x reports nothing, so it has no terminal alerts.
   - `awaiting_os_permission` comes from the agent's own startup-stall watchdog.
 - **Notification label.** With no title and no project, the label names the session kind, for example "Codex session". APNs pushes show "Agent session" for custom kinds.
 - **Known limits.** Claude terminal sessions do not raise `turn_failed`. OSC 7501 on Windows ConPTY is unverified. Older clients show nothing for `turn_failed`.

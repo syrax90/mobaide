@@ -202,7 +202,7 @@ class TerminalSession:
         self._exit_reason: str | None = None
         # ``working`` / ``idle`` as Claude Code's hooks report it; ``None`` until
         # the first hook, and for good on a session without hooks (Codex,
-        # Antigravity, Terminal), whose activity the agent cannot see.
+        # Antigravity, OpenCode, Terminal), whose activity the agent cannot see.
         self._activity: str | None = None
         # Decides which Claude Code hooks actually become an alert. ``Stop``
         # fires once per model turn — including every re-invocation a completing
@@ -532,7 +532,7 @@ class TerminalSession:
         """
         self._attention_gate.mute()
         if self._status_gate is not None:
-            self._status_gate.cancel()
+            self._status_gate.on_input()
 
     def cancel_attention_window(self) -> None:
         """Drop every pending alert window outright: the session is stopping."""
