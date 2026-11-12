@@ -232,11 +232,24 @@ enum SessionDisplay {
             && session.attention != "awaiting_os_permission"
     }
 
-    /// The row's chip: "Working" while the agent is mid-turn, otherwise the
-    /// attention chip. Working outranks a standing "Ready" — that alert was
-    /// for an earlier turn, and it shows again when this one ends.
+    /// Whether the agent is parked on background work (a shell, a monitor, a
+    /// scheduled wakeup) that will normally resume the session by itself: not
+    /// working, and not the user's move either. A pending permission prompt
+    /// wins.
+    static func isWaiting(_ session: SessionResponse) -> Bool {
+        session.state == "running"
+            && session.activity == "waiting"
+            && session.attention != "awaiting_permission"
+            && session.attention != "awaiting_os_permission"
+    }
+
+    /// The row's chip: "Working" while the agent is mid-turn, "Background"
+    /// while it is parked on background work, otherwise the attention chip.
+    /// Both outrank a standing "Ready" — that alert was for an earlier turn,
+    /// and it shows again when this one ends.
     static func statusChip(_ session: SessionResponse) -> (text: String, tone: PixelTone)? {
         if isWorking(session) { return ("Working", .accent) }
+        if isWaiting(session) { return ("Background", .muted) }
         return attention(session.attention)
     }
 

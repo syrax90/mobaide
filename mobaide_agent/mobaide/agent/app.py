@@ -29,6 +29,7 @@ from mobaide.core import (
     SessionManager,
     create_pty_backend,
 )
+from mobaide.core.attention_gate import HookKind
 from mobaide.core.cli_launcher import (
     await_model_cache_warmup,
     build_cli_capabilities,
@@ -105,6 +106,14 @@ logger = get_logger(__name__)
 
 # Endpoints excluded from per-request HTTP middleware logging (high-frequency, low-value).
 _HTTP_LOG_SKIP_PATHS = frozenset({"/api/health"})
+
+
+def _is_tool_heartbeat(request: Request) -> bool:
+    """Whether the request is Claude Code's per-tool-call ``PreToolUse`` hook."""
+    return (
+        request.url.path == "/internal/hook"
+        and request.query_params.get("hook") == HookKind.TOOL.value
+    )
 
 
 def _generate_correlation_id() -> str:
@@ -696,6 +705,18 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     async def _http_logging_middleware(request: Request, call_next):
         if request.url.path in _HTTP_LOG_SKIP_PATHS:
             return await call_next(request)
+        if _is_tool_heartbeat(request):
+            # One per tool call of every session: two info lines each would
+            # bury the log. A rejection (bad token, non-loopback) still shows.
+            response = await call_next(request)
+            if response.status_code != 200:
+                logger.warning(
+                    "http.request.rejected",
+                    path=request.url.path,
+                    status=response.status_code,
+                    client_ip=request.client.host if request.client else None,
+                )
+            return response
 
         start = time.perf_counter()
         client_ip = request.client.host if request.client else None

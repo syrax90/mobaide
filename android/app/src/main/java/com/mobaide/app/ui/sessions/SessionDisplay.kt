@@ -84,13 +84,24 @@ fun isSessionWorking(session: SessionResponse): Boolean =
         session.attention != "awaiting_os_permission"
 
 /**
- * The row's chip: "Working" while the agent is mid-turn, otherwise the
- * attention chip. Working outranks a standing "Ready" — that alert was for an
- * earlier turn, and it shows again when this one ends.
+ * Whether the agent is parked on background work (a shell, a monitor, a
+ * scheduled wakeup) that will normally resume the session by itself: not
+ * working, and not the user's move either. A pending permission prompt wins.
  */
-fun sessionStatusChip(session: SessionResponse): SessionAttention? =
-    if (isSessionWorking(session)) {
-        SessionAttention("Working", AttentionTone.Working)
-    } else {
-        sessionAttention(session.attention)
-    }
+fun isSessionWaiting(session: SessionResponse): Boolean =
+    session.state == "running" &&
+        session.activity == "waiting" &&
+        session.attention != "awaiting_permission" &&
+        session.attention != "awaiting_os_permission"
+
+/**
+ * The row's chip: "Working" while the agent is mid-turn, "Background" while it
+ * is parked on background work, otherwise the attention chip. Both outrank a
+ * standing "Ready" — that alert was for an earlier turn, and it shows again
+ * when this one ends.
+ */
+fun sessionStatusChip(session: SessionResponse): SessionAttention? = when {
+    isSessionWorking(session) -> SessionAttention("Working", AttentionTone.Working)
+    isSessionWaiting(session) -> SessionAttention("Background", AttentionTone.Muted)
+    else -> sessionAttention(session.attention)
+}

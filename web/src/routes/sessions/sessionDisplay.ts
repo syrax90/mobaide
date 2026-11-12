@@ -100,7 +100,7 @@ export function sessionStateTone(state: string): SessionStateTone {
 
 export interface AttentionChip {
   text: string;
-  tone: 'permission' | 'ready' | 'failed' | 'ended' | 'working';
+  tone: 'permission' | 'ready' | 'failed' | 'ended' | 'working' | 'waiting';
 }
 
 /**
@@ -148,14 +148,31 @@ export function isSessionWorking(
 }
 
 /**
- * The row's chip: "Working" while the agent is mid-turn, otherwise the
- * attention pill. Working outranks a standing "Ready" — that alert was for an
- * earlier turn, and it shows again when this one ends.
+ * Whether the agent is parked on background work (a shell, a monitor, a
+ * scheduled wakeup) that will normally resume the session by itself: not
+ * working, and not the user's move either. A pending permission prompt wins.
+ */
+export function isSessionWaiting(
+  session: Pick<SessionResponse, 'state' | 'activity' | 'attention'>,
+): boolean {
+  return (
+    session.state === 'running' &&
+    session.activity === 'waiting' &&
+    !needsPermission(session.attention)
+  );
+}
+
+/**
+ * The row's chip: "Working" while the agent is mid-turn, "Background" while it
+ * is parked on background work, otherwise the attention pill. Both outrank a
+ * standing "Ready" — that alert was for an earlier turn, and it shows again
+ * when this one ends.
  */
 export function sessionStatusChip(
   session: Pick<SessionResponse, 'state' | 'activity' | 'attention'>,
 ): AttentionChip | null {
   if (isSessionWorking(session)) return { text: 'Working', tone: 'working' };
+  if (isSessionWaiting(session)) return { text: 'Background', tone: 'waiting' };
   return attentionChip(session.attention);
 }
 

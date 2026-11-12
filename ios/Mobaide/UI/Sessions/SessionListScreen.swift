@@ -184,6 +184,7 @@ private struct SessionCardRow: View {
 
             if let attention = SessionDisplay.statusChip(session) {
                 PixelChip(attention.text, .status(attention.tone))
+                    .fixedSize()
             }
 
             if SessionDisplay.canStop(session.state) {

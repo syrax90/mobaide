@@ -300,8 +300,9 @@ Android and iOS follow in CLA-229 / CLA-230.
 attention chip (`awaiting_permission` → "Needs permission", `turn_finished` →
 "Ready", `turn_failed` → "Failed", `ended` → "Ended"). A running session whose
 `activity` is `working` (and with no pending permission prompt) shows an
-animated 2×2 accent square instead of the state dot and a "Working" chip,
-which outranks "Ready". The sessions panel rows do the same. Unknown kinds fall back to
+animated 2×2 accent square instead of the state dot and a "Working" chip.
+A running session whose `activity` is `waiting` shows a muted "Background" chip and the static square.
+Chip order: "Needs permission", Working, Background, then Ready / Failed / Ended. The sessions panel rows do the same. Unknown kinds fall back to
 `kind_label`, then the live custom-type registry, then "Custom" — never the
 raw wire token. Stopping uses iOS's Stop / Force Stop / Cancel confirmation.
 

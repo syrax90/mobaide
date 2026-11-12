@@ -27,6 +27,7 @@ EXPECTED_REGISTRATIONS = {
     ("Stop", "*"): "stop",
     ("UserPromptSubmit", "*"): "prompt_submit",
     ("SessionEnd", "*"): "end",
+    ("PreToolUse", "*"): "tool",
 }
 
 
@@ -68,7 +69,7 @@ class TestWriteSessionHooks:
         # Widening this set is a compatibility decision, not a refactor: read
         # ``REGISTERED_HOOK_EVENTS`` before touching either side.
         assert set(hook_settings.REGISTERED_HOOK_EVENTS) == {
-            "Notification", "Stop", "UserPromptSubmit", "SessionEnd",
+            "Notification", "Stop", "UserPromptSubmit", "SessionEnd", "PreToolUse",
         }
         path = hook_settings.write_session_hooks("sid-1", port=9001, token="tok")
         assert set(_load(path)["hooks"]) <= set(hook_settings.REGISTERED_HOOK_EVENTS)
@@ -90,6 +91,16 @@ class TestWriteSessionHooks:
         }
         assert kinds == {key: [k] for key, k in EXPECTED_REGISTRATIONS.items()}
 
+    def test_tool_heartbeat_covers_every_tool_and_fails_fast(self):
+        # ``PreToolUse`` holds each tool call, of the main agent and of every
+        # sub-agent, until the hook answers. The heartbeat carries no alert, so
+        # an agent that does not answer must cost a tool call less time than it
+        # costs a ``Stop``.
+        path = hook_settings.write_session_hooks("sid-1", port=9001, token="tok")
+        registrations = _registrations(_load(path))
+        heartbeat = registrations[("PreToolUse", "*")]
+        assert _query(heartbeat)["hook"] == ["tool"]
+        assert heartbeat["timeout"] < registrations[("Stop", "*")]["timeout"]
 
     def test_every_url_bakes_session_id_and_token(self):
         # Each registration now carries its own hook dict, so the correlation

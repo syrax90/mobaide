@@ -200,9 +200,10 @@ class TerminalSession:
         # badge even if it missed the one-shot ``session.attention`` event.
         self._attention: str | None = None
         self._exit_reason: str | None = None
-        # ``working`` / ``idle`` as Claude Code's hooks report it; ``None`` until
-        # the first hook, and for good on a session without hooks (Codex,
-        # Antigravity, OpenCode, Terminal), whose activity the agent cannot see.
+        # ``working`` / ``waiting`` / ``idle`` as Claude Code's hooks report it;
+        # ``None`` until the first hook, and for good on a session without hooks
+        # (Codex, Antigravity, OpenCode, Terminal), whose activity the agent
+        # cannot see.
         self._activity: str | None = None
         # Decides which Claude Code hooks actually become an alert. ``Stop``
         # fires once per model turn — including every re-invocation a completing
@@ -554,7 +555,7 @@ class TerminalSession:
             self._status_gate.cancel()
 
     def set_activity(self, activity: str) -> None:
-        """Record ``working`` / ``idle`` and refresh the clients' session row.
+        """Record ``working`` / ``waiting`` / ``idle`` and refresh the session row.
 
         Only a change emits: the gate reports every transition its hooks imply,
         and ``Stop`` alone can fire several times per turn.
