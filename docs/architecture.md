@@ -47,7 +47,7 @@ Mobaide bridges this gap with a client-agent-relay architecture:
       |
       |  PTY (terminal sessions)  ·  ACP over stdio (chat sessions)
       v
-[ Claude / Codex / Antigravity CLI ]   (bash / cmd sessions, ACP adapters)
+[ Claude / Codex / Antigravity / GitHub Copilot CLI ]   (bash / cmd sessions, ACP adapters)
 ```
 
 Chat sessions run the coding agent through an [Agent Client Protocol](https://agentclientprotocol.com) adapter (`mobaide_agent/mobaide/acp/`) and stream a structured timeline on the same per-session socket. See [features.md](features.md#chat-sessions).

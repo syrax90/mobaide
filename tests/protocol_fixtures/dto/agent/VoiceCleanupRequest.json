@@ -21,6 +21,13 @@
         "text": "um fix the reduce her in the store",
         "kind": "antigravity"
       }
+    },
+    {
+      "name": "copilot_session",
+      "wire": {
+        "text": "um open a pull request for the uh login fix",
+        "kind": "copilot"
+      }
     }
   ]
 }

@@ -45,6 +45,7 @@ enum VoiceErrorCopy {
         case "claude": return ("Claude Code", "claude update")
         case "codex": return ("Codex", "codex update")
         case "antigravity": return ("Antigravity", "agy update")
+        case "copilot": return ("GitHub Copilot", "copilot update")
         default: return ("The session's AI agent", nil)
         }
     }

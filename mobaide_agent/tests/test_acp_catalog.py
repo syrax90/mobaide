@@ -20,6 +20,7 @@ from mobaide.acp.agents import ChatAgentUnavailableError, ChatLaunchPlan, fake_a
 from mobaide.acp.catalog import ChatCatalog, ChatCatalogError
 from mobaide.acp.wire import chat_request_error, list_chat_sessions, match_chat_sessions_route
 from mobaide.agent.app import create_app
+from mobaide.agent.install_paths import state_prefix
 from mobaide.agent.sessions.models import ChatStoredSessionsResponse
 from mobaide.core.models import SessionKind
 from tests.conftest import TEST_PASSWORD, TEST_USERNAME
@@ -118,6 +119,26 @@ for line in sys.stdin:
         reply = {"result": json.loads(os.environ["AGENT_RESULT"])}
     else:
         reply = {"result": {"sessions": rows}}
+    reply.update({"jsonrpc": "2.0", "id": msg["id"]})
+    sys.stdout.write(json.dumps(reply) + "\n")
+    sys.stdout.flush()
+"""
+
+
+# A paging agent: ``session/list`` answers AGENT_PAGES[cursor] (JSON, the
+# first page under the empty cursor).
+PAGED_AGENT = r"""
+import json, os, sys
+pages = json.loads(os.environ["AGENT_PAGES"])
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg or "method" not in msg:
+        continue
+    if msg["method"] == "initialize":
+        caps = {"loadSession": True, "sessionCapabilities": {"list": {}}}
+        reply = {"result": {"protocolVersion": 1, "agentCapabilities": caps}}
+    else:
+        reply = {"result": pages[(msg.get("params") or {}).get("cursor") or ""]}
     reply.update({"jsonrpc": "2.0", "id": msg["id"]})
     sys.stdout.write(json.dumps(reply) + "\n")
     sys.stdout.flush()
@@ -326,6 +347,77 @@ class TestAllFoldersLister:
         assert all(r["open_session_id"] is None for r in page["sessions"])
         assert page["next_cursor"] is None
 
+
+    @pytest.mark.parametrize("cwd", ["folder", None], ids=["one-folder", "all-folders"])
+    async def test_the_agent_s_own_work_folders_are_never_listed(self, tmp_path, cwd):
+        # A voice cleanup run leaves a stored session in its work folder.
+        work = tmp_path / "voice-cleanup"
+        work.mkdir()
+        rows = [
+            {"sessionId": "cleanup-1", "cwd": str(work), "title": "Voice-cleanup", "updatedAt": "2026-11-12T10:00:00Z"},
+            {"sessionId": "mine-1", "cwd": str(tmp_path), "title": "Mine", "updatedAt": "2026-11-12T09:00:00Z"},
+        ]
+        catalog = ChatCatalog({"antigravity": AllFoldersSpec(rows)}, hidden_folders=[work])
+        try:
+            page = await catalog.list_sessions(
+                "antigravity", cwd=str(work) if cwd else None, cursor=None
+            )
+        finally:
+            await catalog.close()
+
+        assert [r["session_id"] for r in page["sessions"]] == ([] if cwd else ["mine-1"])
+
+    async def test_hidden_rows_do_not_take_the_places_of_a_cut_page(self, tmp_path):
+        work = tmp_path / "voice-cleanup"
+        rows = [
+            {"sessionId": f"cleanup-{i}", "cwd": str(work), "updatedAt": f"2026-11-12T10:{i // 60:02}:{i % 60:02}Z"}
+            for i in range(catalog_mod.PAGE_MAX + 5)
+        ] + [{"sessionId": "mine-1", "cwd": str(tmp_path), "updatedAt": "2026-11-01T00:00:00Z"}]
+        catalog = ChatCatalog({"antigravity": AllFoldersSpec(rows)}, hidden_folders=[work])
+        try:
+            page = await catalog.list_sessions("antigravity", cwd=None, cursor=None)
+        finally:
+            await catalog.close()
+
+        assert [r["session_id"] for r in page["sessions"]] == ["mine-1"]
+
+    async def test_a_page_of_hidden_rows_alone_reads_on_to_the_next_page(self, tmp_path):
+        # Clients drop the cursor of an empty page, so the user's sessions
+        # behind a page of cleanup runs would be out of reach.
+        work = tmp_path / "voice-cleanup"
+        pages = {
+            "": {"sessions": [{"sessionId": "cleanup-1", "cwd": str(work)}], "nextCursor": "p2"},
+            "p2": {"sessions": [{"sessionId": "cleanup-2", "cwd": str(work)}], "nextCursor": "p3"},
+            "p3": {"sessions": [{"sessionId": "mine-1", "cwd": str(tmp_path)}], "nextCursor": "p4"},
+        }
+        spec = StubSpec([sys.executable, "-c", PAGED_AGENT], env={"AGENT_PAGES": json.dumps(pages)})
+        catalog = ChatCatalog({"claude": spec}, hidden_folders=[work])
+        try:
+            page = await catalog.list_sessions("claude", cwd=None, cursor=None)
+        finally:
+            await catalog.close()
+
+        assert [r["session_id"] for r in page["sessions"]] == ["mine-1"]
+        assert page["next_cursor"] == "p4"
+
+    async def test_hidden_rows_do_not_cut_the_page_of_an_agent_that_filters_by_folder(self, tmp_path):
+        # Copilot answers the whole list at once, with one stored session
+        # per voice cleanup run in front of the user's own.
+        work = tmp_path / "voice-cleanup"
+        rows = [
+            {"sessionId": f"cleanup-{i}", "cwd": str(work)} for i in range(catalog_mod.PAGE_MAX + 5)
+        ] + [{"sessionId": "broken", "cwd": ["not", "a", "path"]}, {"sessionId": "mine-1", "cwd": str(tmp_path)}]
+        spec = StubSpec(
+            [sys.executable, "-c", PAGED_AGENT],
+            env={"AGENT_PAGES": json.dumps({"": {"sessions": rows}})},
+        )
+        catalog = ChatCatalog({"copilot": spec}, hidden_folders=[work])
+        try:
+            page = await catalog.list_sessions("copilot", cwd=None, cursor=None)
+        finally:
+            await catalog.close()
+
+        assert [r["session_id"] for r in page["sessions"]] == ["mine-1"]
 
     async def test_a_page_keeps_the_newest_rows(self, make_catalog, tmp_path):
         rows = [
@@ -648,3 +740,13 @@ class TestChatRest:
     async def test_list_needs_auth(self, client):
         resp = await client.get("/api/chat/claude/sessions")
         assert resp.status_code == 401
+
+    async def test_the_voice_cleanup_work_folder_is_hidden_in_the_app(self, client, auth_headers):
+        # Copilot keeps every cleanup run as a stored session of that folder;
+        # the fake agent answers two rows for whatever folder is asked.
+        work = state_prefix(test_mode=True) / "voice-cleanup"
+
+        listed = await client.get(f"/api/chat/copilot/sessions?cwd={work}", headers=auth_headers)
+
+        assert listed.status_code == 200
+        assert listed.json()["sessions"] == []

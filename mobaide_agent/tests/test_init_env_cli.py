@@ -220,8 +220,9 @@ class TestInitEnvClaudeBin:
 
 
 class TestInitEnvCopilotBin:
-    """``MOBAIDE_COPILOT_BIN`` has no installer flag: the user sets it by hand
-    (or with ``set-env``) when Copilot is not on the agent's PATH. A
+    """``MOBAIDE_COPILOT_BIN`` has no ``init-env`` flag: the Windows installer
+    writes it with ``set-env`` (other users set it by hand) when Copilot is
+    not on the agent's PATH. A
     re-install runs ``init-env --force``, which rewrites every templated
     line, so it must carry the value over, and the agent must read it back.
     """

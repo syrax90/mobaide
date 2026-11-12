@@ -43,6 +43,7 @@ const CLEANUP_CLIS: Readonly<Record<string, { name: string; update: string }>> =
   claude: { name: 'Claude Code', update: 'claude update' },
   codex: { name: 'Codex', update: 'codex update' },
   antigravity: { name: 'Antigravity', update: 'agy update' },
+  copilot: { name: 'GitHub Copilot', update: 'copilot update' },
 };
 
 /** Why a cleanup failed in a `kind` session; the transcript is shown as heard. */

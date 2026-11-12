@@ -1,6 +1,7 @@
 """Transcript cleanup: a hidden one-shot run of the session's own CLI on its
 cheapest model — ``claude -p`` on Haiku, ``codex exec`` on Luna, ``agy`` on
-Gemini Flash.
+Gemini Flash. GitHub Copilot names no cheapest model, so ``copilot`` runs on
+its default model.
 
 The transcript goes on stdin, never in argv, because an npm ``.cmd`` shim on
 Windows is run through ``cmd /c`` and argv shows in process listings. Like
@@ -36,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 # The session kinds whose CLI can clean up a transcript; advertised as
 # ``capabilities.voice.cleanup_kinds``.
-CleanupKind = Literal["claude", "codex", "antigravity"]
+CleanupKind = Literal["claude", "codex", "antigravity", "copilot"]
 CLEANUP_KINDS: tuple[str, ...] = get_args(CleanupKind)
 
 # Below the relay's 30 s proxy timeout, so the agent's own answer arrives.
@@ -102,6 +103,28 @@ excludeDefaultComponents: true
 ---
 
 {CLEANUP_PROMPT}"""
+# Copilot's ``--available-tools`` is the list of tools the model may see. No
+# value means every tool, so the list names one that does not exist: the
+# model then has no tool to call.
+_COPILOT_NO_TOOLS = "mobaide-no-tools"
+# A second barrier, should a tool still reach the model: deny rules win over
+# every allow rule.
+_COPILOT_DENIED = ("shell", "write", "read", "url", "memory")
+# Variables of the user's own Copilot work that would let a prompt-mode run
+# act without approval, load the folder's hooks, MCP servers or extensions,
+# or split the stdin text into several turns.
+_COPILOT_UNSAFE_ENV = (
+    "COPILOT_ALLOW_ALL",
+    "COPILOT_ASSISTED_APPROVAL",
+    "COPILOT_PROMPT_TURN_DELIMITER",
+    "GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS",
+    "GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP",
+    "GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS",
+)
+# Copilot turns ``@<path>`` in a prompt into a file attachment when the path
+# exists. That is its own input handling, not a tool, so no tool rule stops
+# it, and no option turns it off. An e-mail address is not a mention.
+_COPILOT_MENTION = re.compile(r"(?<![A-Za-z0-9])@[^\s@]")
 _TAG = re.compile(r"<[\s/]*transcript\b[^<>]*>", re.IGNORECASE)
 
 
@@ -286,6 +309,53 @@ def parse_antigravity_result(result: CmdResult, source: str) -> str:
         error = final.get("error")
         message = error if isinstance(error, str) and error.strip() else stderr
         raise _failed(_short(message) or f"{name} reported an error.")
+    return _finish(answer, source, name)
+
+
+def parse_copilot_result(result: CmdResult, source: str) -> str:
+    """The cleaned text from one ``copilot --output-format json`` run (JSONL
+    events), or a coded ``VoiceError``. Only a run whose ``result`` event
+    reports exit code 0 counts. An empty answer keeps ``source``."""
+    name = "GitHub Copilot"
+    if result.timed_out:
+        raise _timed_out(name)
+    stderr = result.stderr.decode("utf-8", errors="replace")
+    if result.rc != 0 and "unexpected argument" in stderr:
+        raise _outdated(name, "copilot update")
+    if result.rc != 0 and "No authentication information" in stderr:
+        raise _failed(f"{name} isn't signed in on this computer; run `copilot login` there.")
+    answer: str | None = None
+    exit_code: object = None
+    error: str | None = None
+    used_tool = False
+    for event in _lines(result.stdout):
+        kind = event.get("type")
+        if kind == "result":
+            exit_code = event.get("exitCode")
+            continue
+        data = event.get("data")
+        if not isinstance(data, dict):
+            continue
+        if kind == "assistant.message":
+            if data.get("toolRequests"):
+                used_tool = True
+            elif isinstance(data.get("content"), str):
+                answer = data["content"]
+        elif kind == "tool.execution_start":
+            used_tool = True
+        elif kind == "session.error" and isinstance(data.get("message"), str):
+            error = data["message"]
+    if used_tool:
+        raise _failed(f"{name} tried to use a tool instead of cleaning up the text.")
+    if result.rc != 0 or exit_code != 0 or answer is None:
+        message = _short(error or stderr)
+        if not message:
+            message = (
+                f"{name} exited with code {result.rc}."
+                if result.rc != 0
+                else f"{name} stopped before it finished answering."
+            )
+        raise _failed(message)
     return _finish(answer, source, name)
 
 
@@ -475,6 +545,40 @@ class AntigravityCleanup(CleanupCli):
         return parse_antigravity_result(result, source)
 
 
+class CopilotCleanup(CleanupCli):
+    """``copilot`` has no system-prompt option, and it puts a custom agent's
+    prompt below its own coding-agent prompt, where a small model ignores it.
+    So the rules go before the transcript, in the one message on stdin. The
+    run is kept in Copilot's own session history on the PC; no flag turns
+    that off."""
+
+    name = "GitHub Copilot"
+
+    async def command(self, source: str) -> CleanupCommand:
+        if _COPILOT_MENTION.search(source):
+            raise _failed(f"{self.name} can't clean up text that holds an @ mention.")
+        binary = self.binary()
+        # Piped stdin is the prompt of a non-interactive run.
+        argv = shim_safe_argv(
+            binary,
+            "--output-format", "json",
+            "--stream", "off",
+            f"--available-tools={_COPILOT_NO_TOOLS}",
+            *(f"--deny-tool={kind}" for kind in _COPILOT_DENIED),
+            "--no-custom-instructions",
+            "--disable-builtin-mcps",
+            "--sync-session=off",
+        )
+        env = _cli_env(binary)
+        for name in _COPILOT_UNSAFE_ENV:
+            env.pop(name, None)
+        stdin = f"{CLEANUP_PROMPT}\n{_wrap(source)}".encode()
+        return CleanupCommand(argv=argv, env=env, stdin=stdin, model="default")
+
+    def parse(self, result: CmdResult, source: str) -> str:
+        return parse_copilot_result(result, source)
+
+
 class TranscriptCleaner:
     """Runs cleanups, at most ``MAX_ACTIVE_CLEANUPS`` at a time, whatever
     their CLI. ``clis`` maps a session kind to its CLI; ``work_dir`` holds
@@ -589,6 +693,7 @@ class TranscriptCleaner:
         # Each written once per process: replacing a file while another
         # run's CLI is reading it can fail on Windows.
         with self._files_lock:
+            self._work_dir.mkdir(parents=True, exist_ok=True)
             for name, content in files.items():
                 path = self._work_dir / name
                 if name in self._files_ready and path.exists():

@@ -2501,7 +2501,7 @@ export interface components {
              * @default claude
              * @enum {string}
              */
-            kind: "claude" | "codex" | "antigravity";
+            kind: "claude" | "codex" | "antigravity" | "copilot";
             /** Text */
             text: string;
         };

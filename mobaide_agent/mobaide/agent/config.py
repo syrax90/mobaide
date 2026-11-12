@@ -344,7 +344,8 @@ def _cmd_set_env(args: argparse.Namespace) -> int:
     Used by ``install.ps1`` to surgically backfill ``MOBAIDE_CLAUDE_BIN``
     / ``MOBAIDE_CODEX_BIN`` / ``MOBAIDE_AGY_BIN`` on a re-install over an
     already-paired agent without touching ``JWT_SECRET_KEY`` /
-    ``RELAY_AGENT_TOKEN``.
+    ``RELAY_AGENT_TOKEN``, and to write ``MOBAIDE_COPILOT_BIN`` on every
+    install (``init-env`` has no argument for it).
     ``init-env --force`` preserves those keys explicitly, but it's
     heavier — it rewrites every templated line. ``set-env`` is the
     smallest operation that achieves the same outcome for one key.
@@ -423,7 +424,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Set a single KEY=value in an existing .env (in-place; preserves "
             "all other keys). Used by install.ps1 to backfill "
-            "MOBAIDE_CLAUDE_BIN / MOBAIDE_CODEX_BIN / MOBAIDE_AGY_BIN."
+            "MOBAIDE_CLAUDE_BIN / MOBAIDE_CODEX_BIN / MOBAIDE_AGY_BIN / "
+            "MOBAIDE_COPILOT_BIN."
         ),
     )
     set_env.add_argument(

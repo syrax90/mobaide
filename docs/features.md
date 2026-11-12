@@ -86,7 +86,7 @@ The agent runs Claude Code by default. It can also launch the [OpenAI Codex CLI]
 | GitHub Copilot | `"copilot"` | `copilot_options` | `MOBAIDE_COPILOT_BIN` | 503 with `copilot_cli_missing` |
 | Custom agent type | `"custom_<id>"` | | The stored launch command | |
 
-`MOBAIDE_CODEX_BIN`, `MOBAIDE_AGY_BIN` and `MOBAIDE_COPILOT_BIN` all mirror `MOBAIDE_CLAUDE_BIN`. The operator uses them to point the agent at each executable. Without `MOBAIDE_COPILOT_BIN`, the agent looks in PATH, then the npm fallback folders, then (on Windows) the WinGet link. `deploy/install.ps1` does not find the Copilot binary, so set `MOBAIDE_COPILOT_BIN` by hand if the agent cannot find it.
+`MOBAIDE_CODEX_BIN`, `MOBAIDE_AGY_BIN` and `MOBAIDE_COPILOT_BIN` all mirror `MOBAIDE_CLAUDE_BIN`. The operator uses them to point the agent at each executable. Without `MOBAIDE_COPILOT_BIN`, the agent looks in PATH, then the npm fallback folders, then (on Windows) the WinGet link. On Windows, `deploy/install.ps1` finds the `copilot` command and writes `MOBAIDE_COPILOT_BIN` (see [deployment.md](deployment.md)). On other systems, set `MOBAIDE_COPILOT_BIN` by hand if the agent cannot find the binary.
 
 ### Create-session contract
 

@@ -145,7 +145,9 @@ GitHub Copilot CLI is a managed agent of kind `copilot`, for terminal and chat s
 * Sign-in: the method `github` (see Delta 2026-11-11, sign-in from the chat). GitHub Enterprise `--host` sign-in is not offered.
 * Command output: a finished command becomes a `console` part with the exit code. Live command output is sent at most once per 0.3 s. The "Info: <path>" note Copilot sends after it creates a file is not shown.
 * A continued session whose replay has no title takes it from the agent's session list, for every agent with the list capability.
-* Not supported for Copilot: a model or effort picker in the wizard, and voice transcript cleanup (`capabilities.voice.cleanup_kinds` does not list `copilot`).
+* Voice transcript cleanup: `capabilities.voice.cleanup_kinds` lists `copilot`, and `POST /api/voice/cleanup` accepts `kind: "copilot"`. The run is `copilot --output-format json --stream off --available-tools=mobaide-no-tools --deny-tool=shell --deny-tool=write --deny-tool=read --deny-tool=url --deny-tool=memory --no-custom-instructions --disable-builtin-mcps --sync-session=off`, on Copilot's default model, with the rules and the transcript on stdin (docs/voice-input.md, *Transcript cleanup*).
+* The chat's session list never shows sessions of the `voice-cleanup` work folder (the cleanup runs of Copilot and Antigravity), for every agent.
+* Not supported for Copilot: a model or effort picker in the wizard.
 * Test mode runs the fake agent with `--flavor copilot`.
 
 ### Delta 2026-11-11: sign-in from the chat
@@ -322,7 +324,7 @@ A session can now run in the structured **chat UI**. The agent then starts an [A
 
 `GET /api/chat/{kind}/sessions?cwd=<abs>&cursor=<opaque>` → `ChatStoredSessionsResponse` `{"sessions": [{"session_id", "cwd", "title", "updated_at", "open_session_id"}], "next_cursor"}`, newest first.
 
-* It lists every session the agent stored on the host, also those started outside Mobaide (for example `claude` in a terminal). This is how a client continues them; there is no live attach to a running TUI.
+* It lists every session the agent stored on the host, also those started outside Mobaide (for example `claude` in a terminal), except the sessions of the `voice-cleanup` work folder, which are dropped before the page is cut. This is how a client continues them; there is no live attach to a running TUI.
 * `open_session_id` names the open Mobaide chat session that already shows the row.
 * Errors carry `{"detail"}`: `400` bad `cwd` or cursor, `404` no chat agent of that kind, `409` the agent cannot list, `502` the agent failed, `503` it cannot run here, or its adapter is still installing for first use (the install goes on; retry in a minute).
 * On the relay it runs aside from the tunnel reader, like the voice routes: its first call starts the agent process.

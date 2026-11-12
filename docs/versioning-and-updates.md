@@ -930,6 +930,11 @@ the elevation re-launch re-fetches the installer from
      work the same way (`Find-CodexBinary` → `MOBAIDE_AGENT_CODEX_BIN_HINT` →
      `MOBAIDE_CODEX_BIN`; `Find-AgyBinary` → `MOBAIDE_AGENT_AGY_BIN_HINT` →
      `MOBAIDE_AGY_BIN`); a miss is silent.
+   - The optional GitHub Copilot CLI: `Find-CopilotBinary` →
+     `MOBAIDE_AGENT_COPILOT_BIN_HINT` → `MOBAIDE_COPILOT_BIN`. The installer
+     writes this key with `set-env` after `init-env`, not with an `init-env`
+     argument, so it also works with an agent release that is older than
+     Copilot support.
    - Re-running never overwrites an already-paired `.env` (pass `--force` to
      regenerate; paired credentials are preserved regardless).
 8. Register the service:
