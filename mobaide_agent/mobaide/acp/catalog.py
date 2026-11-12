@@ -84,8 +84,15 @@ class ChatCatalog:
             try:
                 if not lister.can_list:
                     raise ChatCatalogError(409, f"{spec.display_name} cannot list its sessions")
+                # One time budget for every hop: the relay stops waiting
+                # for the whole request after 30 s.
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + LIST_TIMEOUT
                 for _ in range(HIDDEN_PAGE_HOPS):
-                    result = await lister.conn.request("session/list", params, LIST_TIMEOUT)
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        raise TimeoutError("The agent did not answer in time")
+                    result = await lister.conn.request("session/list", params, remaining)
                     page = await self._page(spec, result, cwd)
                     # A page of hidden rows alone would read as "no sessions":
                     # clients drop the cursor of an empty page.
@@ -106,12 +113,7 @@ class ChatCatalog:
     async def _page(self, spec: ChatAgentSpec, result: Any, cwd: str | None) -> dict[str, Any]:
         """One ``session/list`` answer as a client page, hidden folders left out."""
         if not getattr(spec, "lists_all_folders", False):
-            page = _normalize_page(result)
-            if self._hidden:
-                page["sessions"] = [
-                    row for row in page["sessions"] if row["cwd"] not in self._hidden
-                ]
-            return page
+            return _normalize_page(result, self._hidden)
         # The agent ignored ``cwd`` and listed every folder: filter and order
         # here, off the event loop (one realpath per row).
         presence = getattr(spec, "presence", None)
@@ -221,6 +223,11 @@ class ChatCatalog:
         await lister.conn.close(grace=1.0)
 
 
+def _in_hidden_folder(entry: Any, hidden: frozenset[str]) -> bool:
+    cwd = entry.get("cwd") if isinstance(entry, dict) else None
+    return isinstance(cwd, str) and cwd in hidden
+
+
 def _local_page(
     result: Any, cwd: str | None, presence: Any, hidden: frozenset[str] = frozenset()
 ) -> dict[str, Any]:
@@ -231,7 +238,7 @@ def _local_page(
     raw = result.get("sessions") if isinstance(result, dict) else None
     rows = [entry for entry in raw if isinstance(entry, dict)] if isinstance(raw, list) else []
     if hidden:
-        rows = [entry for entry in rows if entry.get("cwd") not in hidden]
+        rows = [entry for entry in rows if not _in_hidden_folder(entry, hidden)]
     if cwd:
         wanted = os.path.realpath(cwd)
         real: dict[str, str] = {}
@@ -255,10 +262,14 @@ def _local_page(
     return page
 
 
-def _normalize_page(result: Any) -> dict[str, Any]:
+def _normalize_page(result: Any, hidden: frozenset[str] = frozenset()) -> dict[str, Any]:
+    """Rows of a ``hidden`` folder are left out before the page is cut, so
+    they do not take the places of the user's sessions."""
     sessions: list[dict[str, Any]] = []
     raw = result.get("sessions") if isinstance(result, dict) else None
     if isinstance(raw, list):
+        if hidden:
+            raw = [e for e in raw if not _in_hidden_folder(e, hidden)]
         for entry in raw[:PAGE_MAX]:
             if not isinstance(entry, dict):
                 continue

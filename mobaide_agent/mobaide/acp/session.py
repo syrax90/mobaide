@@ -52,6 +52,7 @@ EVENT_QUEUE_MAXSIZE = 256
 INITIALIZE_TIMEOUT = 120.0
 SETUP_TIMEOUT = 180.0
 CONFIG_TIMEOUT = 20.0
+TITLE_LOOKUP_TIMEOUT = 20.0
 CLOSE_TIMEOUT = 2.0
 PROMPT_TEXT_MAX = 100_000
 IMAGES_MAX = 4
@@ -71,6 +72,8 @@ LOGIN_COMMAND = "login"
 # Command output of a running tool is re-rendered at most this often.
 CONSOLE_RENDER_INTERVAL = 0.3
 CONSOLE_TOOLS_MAX = 64
+# Copilot follows a file tool with a message that only names the file again.
+TOOL_PATH_NOTE = "Info: "
 ACP_PROTOCOL_VERSION = 1
 # Timeline status → the session row's ``activity``; the other statuses
 # (``starting``, ``loading``, ``error``, ``stopped``) are no turn at all.
@@ -170,6 +173,7 @@ class ChatSession:
         self._current_agent_item: str | None = None
         self._current_thought_item: str | None = None
         self._current_user_item: str | None = None
+        self._last_tool_id: str | None = None
         self._last_agent_message_id: str | None = None
         self._last_thought_message_id: str | None = None
         self._last_user_message_id: str | None = None
@@ -195,6 +199,8 @@ class ChatSession:
         # The last busy report that came while the session was opening.
         self._busy_before_ready = False
         self._consoles: collections.OrderedDict[str, _Console] = collections.OrderedDict()
+        # Running commands whose latest output waits for its next frame.
+        self._output_touches: dict[str, asyncio.TimerHandle] = {}
         self._presence_hold: PresenceHold | None = None
         # The conversation was open in another app when this session took it.
         self._presence_conflict = False
@@ -580,6 +586,8 @@ class ChatSession:
             self._pending_config = []
             self._ready.set()
             tl.patch_state(status="ready", urgent=True)
+            if load_id and self._title is None:
+                self._run_aside(self._restore_title(conn, load_id))
             if self._start_auth_failed:
                 # The start that needed the sign-in works now (signed in on the PC).
                 self._start_auth_failed = False
@@ -739,6 +747,27 @@ class ChatSession:
         if during_setup:
             return f"The agent could not start the session: {detail}"
         return detail
+
+    async def _restore_title(self, conn: AcpConnection, acp_session_id: str) -> None:
+        """The title of a stored session that the agent replayed without it
+        (Copilot), from the agent's own session list."""
+        if not self._session_cap("list"):
+            return
+        try:
+            result = await conn.request(
+                "session/list", {"cwd": self._plan.cwd}, TITLE_LOOKUP_TIMEOUT
+            )
+        except (AcpRpcError, AcpProcessError, TimeoutError, OSError):
+            return
+        sessions = result.get("sessions") if isinstance(result, dict) else None
+        for entry in sessions if isinstance(sessions, list) else []:
+            if not isinstance(entry, dict) or entry.get("sessionId") != acp_session_id:
+                continue
+            title = entry.get("title")
+            # A title that arrived meanwhile, or a restart, wins.
+            if conn is self._conn and self._title is None and isinstance(title, str) and title.strip():
+                self._set_title(title)
+            return
 
     def _session_cap(self, name: str) -> bool:
         caps = self._agent_caps.get("sessionCapabilities")
@@ -1570,6 +1599,10 @@ class ChatSession:
         text = part["text"]
         message_id = update.get("messageId") if isinstance(update.get("messageId"), str) else None
         tl = self._timeline
+        if role == "agent" and message_id is None and self._repeats_tool_path(text):
+            return
+        # Only the text straight after a tool call can be its note.
+        self._last_tool_id = None
         if role == "agent":
             current, last_mid = self._current_agent_item, self._last_agent_message_id
         else:
@@ -1590,6 +1623,16 @@ class ChatSession:
             self._current_agent_item, self._last_agent_message_id = item_id, message_id
         else:
             self._current_thought_item, self._last_thought_message_id = item_id, message_id
+
+    def _repeats_tool_path(self, text: str) -> bool:
+        """Whether ``text`` is only the note that names the file of the tool
+        call before it; the tool item already shows that path."""
+        if not text.startswith(TOOL_PATH_NOTE):
+            return False
+        item = self._timeline.get(self._last_tool_id) if self._last_tool_id else None
+        if item is None:
+            return False
+        return text[len(TOOL_PATH_NOTE):].strip() in {loc["path"] for loc in item["locations"]}
 
     def _append_user_chunk(self, update: dict[str, Any]) -> None:
         if self._turn_task is not None and not self._turn_task.done():
@@ -1629,12 +1672,31 @@ class ChatSession:
         if item is None:
             item = nz.new_tool_item(tool_id)
         nz.merge_tool_update(item, update)
+        self._last_tool_id = tool_id
         deferred = self._apply_console(tool_id, item, update)
         self._current_agent_item = self._current_thought_item = self._current_user_item = None
         # A finished tool is sent at once, except in a session/load replay,
         # where one frame per tool would flood the event queue.
         terminal = item["status"] in nz.TERMINAL_TOOL_STATUSES
         urgent = terminal and tl.state.get("status") != "loading"
+        live_output = (
+            not is_new
+            and not create
+            and not terminal
+            and item["kind"] == "execute"
+            and update.keys() <= _CONTENT_ONLY_KEYS
+        )
+        if live_output:
+            # Some agents send the whole output so far with each chunk: one
+            # frame per interval, or every chunk would re-send the item.
+            if tool_id not in self._output_touches:
+                self._output_touches[tool_id] = asyncio.get_running_loop().call_later(
+                    CONSOLE_RENDER_INTERVAL, self._touch_output, tool_id
+                )
+            return
+        pending_touch = self._output_touches.pop(tool_id, None)
+        if pending_touch is not None:
+            pending_touch.cancel()
         if is_new or create:
             tl.upsert(item, urgent=urgent)
         elif not (deferred and update.keys() <= _OUTPUT_ONLY_KEYS):
@@ -1645,6 +1707,11 @@ class ChatSession:
                 if pending.tool_call_id == tool_id and not pending.future.done():
                     pending.future.set_result(self._cancel_outcome(pending))
                     self._drop_request(pending.key)
+
+    def _touch_output(self, tool_id: str) -> None:
+        self._output_touches.pop(tool_id, None)
+        if self._timeline.get(tool_id) is not None:
+            self._timeline.touch(tool_id)
 
     def _apply_console(self, tool_id: str, item: dict[str, Any], update: dict[str, Any]) -> bool:
         """Turn terminal output (``_meta.terminal_output*``) into a text part.
@@ -1766,6 +1833,9 @@ class ChatSession:
             if console.render is not None:
                 console.render.cancel()
         self._consoles.clear()
+        for handle in self._output_touches.values():
+            handle.cancel()
+        self._output_touches.clear()
 
     def _close_streaming_items(self) -> None:
         self._current_agent_item = None
@@ -2011,6 +2081,7 @@ class ChatSession:
 
 
 _OUTPUT_ONLY_KEYS = frozenset({"sessionUpdate", "toolCallId", "_meta"})
+_CONTENT_ONLY_KEYS = frozenset({"sessionUpdate", "toolCallId", "content"})
 
 
 def _release_acquired(future: asyncio.Future[PresenceHold | None]) -> None:

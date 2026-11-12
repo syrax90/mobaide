@@ -379,3 +379,115 @@ class AntigravityFolderTrust:
         mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
         atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n", mode=mode)
         return True
+
+
+def copilot_config_path(env: Mapping[str, str] | None = None) -> Path:
+    """The ``config.json`` of the GitHub Copilot CLI started with ``env``: the
+    state Copilot manages itself, trusted folders included."""
+    home = (env if env is not None else os.environ).get("COPILOT_HOME")
+    base = Path(home).expanduser() if home else Path.home() / ".copilot"
+    return base / "config.json"
+
+
+# The comment lines Copilot writes above the JSON object.
+_COPILOT_CONFIG_HEADER = (
+    "// User settings belong in settings.json.\n// This file is managed automatically.\n"
+)
+
+
+def _split_copilot_config(text: str) -> tuple[str, str]:
+    """``(comment lines at the top, JSON object)`` of Copilot's ``config.json``."""
+    lines = text.splitlines(keepends=True)
+    body_at = 0
+    while body_at < len(lines) and (
+        not lines[body_at].strip() or lines[body_at].lstrip().startswith("//")
+    ):
+        body_at += 1
+    return "".join(lines[:body_at]), "".join(lines[body_at:])
+
+
+def _inside(folder: str, parent: str) -> bool:
+    if sys.platform == "win32":
+        folder, parent = os.path.normcase(folder), os.path.normcase(parent)
+    try:
+        return os.path.commonpath([folder, parent]) == parent
+    except ValueError:
+        # Different drives, or a relative entry.
+        return False
+
+
+class CopilotFolderTrust:
+    """GitHub Copilot's own trust record: the ``trustedFolders`` list in its
+    ``config.json``. A listed folder also covers the folders inside it."""
+
+    prompt_title = "Trust this folder?"
+
+    def __init__(self, cwd: str, config_path: Path | None = None) -> None:
+        self._cwd = cwd
+        self._config_path = config_path or copilot_config_path()
+
+    @property
+    def prompt_text(self) -> str:
+        text = (
+            "GitHub Copilot will use this folder's instructions, hooks and MCP servers. "
+            "They can run commands on your PC. Only trust a folder whose files you know."
+        )
+        if too_broad_to_record(self._cwd):
+            text += " Trust for this folder lasts for this session only."
+        else:
+            text += " The trust also covers every folder inside it."
+        return text
+
+    def _load(self) -> dict[str, Any]:
+        try:
+            body = _split_copilot_config(self._config_path.read_text(encoding="utf-8"))[1]
+            data = json.loads(body)
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def is_trusted(self) -> bool:
+        listed = self._load().get("trustedFolders")
+        if not isinstance(listed, list):
+            return False
+        folder = os.path.realpath(self._cwd)
+        for entry in listed:
+            if not isinstance(entry, str) or not os.path.isabs(entry):
+                continue
+            if _inside(folder, os.path.normpath(entry)) or _inside(folder, os.path.realpath(entry)):
+                return True
+        return False
+
+    def grant(self) -> bool:
+        """Add the folder to ``trustedFolders`` as Copilot does (atomic
+        rewrite). Returns False, and writes nothing, for a folder too broad to
+        record."""
+        if too_broad_to_record(self._cwd):
+            return False
+        with _config_lock(self._config_path):
+            return self._grant_locked()
+
+    def _grant_locked(self) -> bool:
+        path = self._config_path
+        header = _COPILOT_CONFIG_HEADER
+        data: dict[str, Any] = {}
+        if path.exists():
+            header, body = _split_copilot_config(path.read_text(encoding="utf-8"))
+            # Never rewrite a file this code cannot read back whole.
+            loaded = json.loads(body) if body.strip() else {}
+            if not isinstance(loaded, dict):
+                raise ValueError(f"{path} is not a JSON object")
+            data = loaded
+        listed = data.get("trustedFolders")
+        if listed is None:
+            listed = []
+        if not isinstance(listed, list):
+            raise ValueError(f"{path}: trustedFolders is not a list")
+        folder = os.path.realpath(self._cwd)
+        if any(isinstance(e, str) and _same_folder(e, folder) for e in listed):
+            return True
+        data["trustedFolders"] = [*listed, folder]
+        # Copilot keeps the file private to the user.
+        mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
+        atomic_write(path, header + json.dumps(data, indent=2, ensure_ascii=False) + "\n", mode=mode)
+        return True

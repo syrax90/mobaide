@@ -19,6 +19,7 @@ fun sessionKindLabel(
     SessionKind.Codex -> "Codex"
     SessionKind.Antigravity -> "Antigravity"
     SessionKind.OpenCode -> "OpenCode"
+    SessionKind.Copilot -> "GitHub Copilot"
     SessionKind.AutoScan -> "Auto Scan"
     SessionKind.Shell -> "Terminal"
     is SessionKind.Custom -> session.kind_label

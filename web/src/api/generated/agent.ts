@@ -1433,6 +1433,29 @@ export interface components {
              */
             worktree: boolean;
         };
+        /**
+         * CopilotOptionsModel
+         * @description Wire DTO for GitHub Copilot CLI launch options (see :class:`CopilotOptions`).
+         *
+         *     ``allow_all`` is Copilot's ``--allow-all``: it runs tools and uses paths
+         *     and URLs without asking.
+         */
+        CopilotOptionsModel: {
+            /**
+             * Allow All
+             * @default false
+             */
+            allow_all: boolean;
+            /** Base Branch */
+            base_branch?: string | null;
+            /** Branch Name */
+            branch_name?: string | null;
+            /**
+             * Worktree
+             * @default false
+             */
+            worktree: boolean;
+        };
         /** CreateSessionRequest */
         CreateSessionRequest: {
             antigravity_options?: components["schemas"]["AntigravityOptionsModel"] | null;
@@ -1453,6 +1476,7 @@ export interface components {
             cols: number;
             /** Command */
             command?: string[] | null;
+            copilot_options?: components["schemas"]["CopilotOptionsModel"] | null;
             /** Cwd */
             cwd?: string | null;
             /** Env */
@@ -2511,7 +2535,7 @@ export interface components {
              * @default claude
              * @enum {string}
              */
-            kind: "claude" | "codex" | "antigravity" | "opencode";
+            kind: "claude" | "codex" | "antigravity" | "opencode" | "copilot";
             /** Text */
             text: string;
         };

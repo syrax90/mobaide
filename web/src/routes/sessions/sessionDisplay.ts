@@ -9,6 +9,7 @@ const BUILT_IN_KIND_LABELS: Readonly<Record<string, string>> = {
   codex: 'Codex',
   antigravity: 'Antigravity',
   opencode: 'OpenCode',
+  copilot: 'GitHub Copilot',
   auto_scan: 'Auto Scan',
   shell: 'Terminal',
 };

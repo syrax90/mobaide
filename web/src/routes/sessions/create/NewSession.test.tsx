@@ -130,6 +130,7 @@ const NO_PREFS: LaunchPrefs = {
   codex: null,
   antigravity: null,
   opencode: null,
+  copilot: null,
   lastProjectName: null,
 };
 

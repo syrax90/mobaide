@@ -7,6 +7,9 @@ agent round-trips correctly for the ``skip_permissions`` field added to
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from mobaide.agent.sessions.models import ClaudeOptionsModel
@@ -292,6 +295,48 @@ class TestAntigravityOptionsModel:
             AntigravityOptionsModel(model="--sandbox")
 
 
+class TestCopilotOptionsModel:
+    """``CopilotOptionsModel`` is the wire form of ``CopilotOptions``: the
+    shared golden fixtures decode to it."""
+
+    _FIXTURES = (
+        Path(__file__).resolve().parents[2] / "tests" / "protocol_fixtures" / "dto" / "agent"
+    )
+
+    def _cases(self, name: str) -> dict[str, dict]:
+        doc = json.loads((self._FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
+        assert doc["type"] == name
+        return {case["name"]: case for case in doc["cases"]}
+
+    def test_golden_fixture_cases_decode_to_the_wire_model(self):
+        from mobaide.agent.sessions.models import CopilotOptionsModel
+
+        cases = self._cases("CopilotOptionsModel")
+        assert cases, "CopilotOptionsModel has no cases — the golden would assert nothing"
+        for name, case in cases.items():
+            model = CopilotOptionsModel.model_validate(case["wire"])
+            assert model.model_dump(exclude_none=True) == case.get(
+                "decoded_canonical", case["wire"]
+            ), name
+
+    def test_golden_create_request_carries_the_copilot_block(self):
+        from mobaide.agent.sessions.models import CreateSessionRequest
+        from mobaide.core.copilot_launcher import CopilotOptions
+
+        case = self._cases("CreateSessionRequest")["copilot_launch"]
+
+        request = CreateSessionRequest.model_validate(case["wire"])
+
+        assert request.model_dump(exclude_none=True) == case["decoded_canonical"]
+        assert request.copilot_options is not None
+        assert request.copilot_options.to_options() == CopilotOptions(
+            allow_all=True,
+            worktree=True,
+            branch_name="feature/x",
+            base_branch="origin/main",
+        )
+
+
 class TestResolveSpawnArgs:
     """``resolve_spawn_args`` is the single normaliser the REST + relay create
     paths share: it picks the kind, applies the shell security guard, and
@@ -312,7 +357,7 @@ class TestResolveSpawnArgs:
     def test_no_cli_no_options_is_shell_with_clean_env(self):
         from mobaide.core.models import SessionKind
 
-        kind, command, env, claude, codex, antigravity, opencode = self._call(
+        kind, command, env, claude, codex, antigravity, opencode, _copilot = self._call(
             cmd=["rm", "-rf"], env={"EVIL": "1"},
         )
         # Security guard: client command/env hints are dropped for shell.
@@ -325,7 +370,7 @@ class TestResolveSpawnArgs:
         from mobaide.core.claude_launcher import ClaudeOptions
         from mobaide.core.models import SessionKind
 
-        kind, command, env, claude, codex, antigravity, opencode = self._call(
+        kind, command, env, claude, codex, antigravity, opencode, _copilot = self._call(
             claude=ClaudeOptions(), cmd=["claude"], env={"X": "1"},
         )
         assert kind is SessionKind.CLAUDE
@@ -341,7 +386,7 @@ class TestResolveSpawnArgs:
         from mobaide.core.codex_launcher import CodexOptions
         from mobaide.core.models import SessionKind
 
-        kind, _command, _env, claude, codex, antigravity, opencode = self._call(
+        kind, _command, _env, claude, codex, antigravity, opencode, _copilot = self._call(
             codex=CodexOptions(),
         )
         assert kind is SessionKind.CODEX
@@ -356,7 +401,7 @@ class TestResolveSpawnArgs:
         from mobaide.core.codex_launcher import CodexOptions
         from mobaide.core.models import SessionKind
 
-        kind, _command, _env, claude, codex, antigravity, opencode = self._call(cli="codex")
+        kind, _command, _env, claude, codex, antigravity, opencode, _copilot = self._call(cli="codex")
         assert kind is SessionKind.CODEX
         assert (
             isinstance(codex, CodexOptions)
@@ -370,12 +415,79 @@ class TestResolveSpawnArgs:
         from mobaide.core.codex_launcher import CodexOptions
         from mobaide.core.models import SessionKind
 
-        kind, _command, _env, claude, codex, antigravity, opencode = self._call(
+        kind, _command, _env, claude, codex, antigravity, opencode, _copilot = self._call(
             cli="codex", claude=ClaudeOptions(), codex=CodexOptions(),
         )
         # Exactly one options object survives, matching the chosen kind.
         assert kind is SessionKind.CODEX
         assert codex is not None and claude is None and antigravity is None and opencode is None
+
+
+class TestResolveSpawnArgsCopilot:
+    """The GitHub Copilot branch of ``resolve_spawn_args``: the kind comes from
+    ``cli="copilot"`` or from a lone ``copilot_options`` block, and exactly the
+    options object of the chosen kind survives."""
+
+    _SHELL = ["/bin/sh"]
+
+    def _call(self, cli=None, claude=None, codex=None, antigravity=None, copilot=None, cmd=None):
+        from mobaide.core.models import resolve_spawn_args
+
+        return resolve_spawn_args(
+            cli, claude, codex, antigravity, cmd, None, self._SHELL, copilot_options=copilot,
+        )
+
+    def test_explicit_cli_copilot_defaults_options_when_omitted(self):
+        from mobaide.core.copilot_launcher import CopilotOptions
+        from mobaide.core.models import SessionKind
+
+        kind, command, _env, claude, codex, antigravity, _opencode, copilot = self._call(cli="copilot")
+
+        assert kind is SessionKind.COPILOT
+        assert command == self._SHELL
+        assert copilot == CopilotOptions()
+        assert claude is None and codex is None and antigravity is None
+
+    def test_copilot_options_only_infers_copilot(self):
+        from mobaide.core.copilot_launcher import CopilotOptions
+        from mobaide.core.models import SessionKind
+
+        options = CopilotOptions(allow_all=True)
+
+        kind, _command, _env, claude, codex, antigravity, _opencode, copilot = self._call(copilot=options)
+
+        assert kind is SessionKind.COPILOT
+        assert copilot is options
+        assert claude is None and codex is None and antigravity is None
+
+    def test_explicit_cli_copilot_clears_stray_options_of_other_clis(self):
+        from mobaide.core.antigravity_launcher import AntigravityOptions
+        from mobaide.core.claude_launcher import ClaudeOptions
+        from mobaide.core.codex_launcher import CodexOptions
+        from mobaide.core.models import SessionKind
+
+        kind, _command, _env, claude, codex, antigravity, _opencode, copilot = self._call(
+            cli="copilot",
+            claude=ClaudeOptions(skip_permissions=True),
+            codex=CodexOptions(),
+            antigravity=AntigravityOptions(),
+        )
+
+        assert kind is SessionKind.COPILOT
+        assert copilot is not None and copilot.allow_all is False
+        assert claude is None and codex is None and antigravity is None
+
+    @pytest.mark.parametrize("cli", ["claude", "codex", "antigravity", "opencode"])
+    def test_another_explicit_cli_drops_a_stray_copilot_block(self, cli):
+        """A stray ``allow_all`` must never ride into another CLI's session."""
+        from mobaide.core.copilot_launcher import CopilotOptions
+        from mobaide.core.models import SessionKind
+
+        result = self._call(cli=cli, copilot=CopilotOptions(allow_all=True))
+
+        assert result[0] is SessionKind(cli)
+        assert result[7] is None
+        assert sum(options is not None for options in result[3:]) == 1
 
 
 CUSTOM_KIND = "custom_0123456789ab"
@@ -402,7 +514,7 @@ class TestResolveSpawnArgsCustomKind:
     def test_resolved_command_builds_login_shell_argv(self):
         from mobaide.core.shell import build_custom_argv
 
-        kind, command, env, claude, codex, antigravity, opencode = self._call(
+        kind, command, env, claude, codex, antigravity, opencode, _copilot = self._call(
             CUSTOM_KIND,
             resolved_command="aider --model x",
             cmd=["rm", "-rf"],
@@ -421,7 +533,7 @@ class TestResolveSpawnArgsCustomKind:
     def test_custom_branch_wins_over_stray_options(self):
         from mobaide.core.claude_launcher import ClaudeOptions
 
-        kind, _command, _env, claude, _codex, _antigravity, _opencode = self._call(
+        kind, _command, _env, claude, _codex, _antigravity, _opencode, _copilot = self._call(
             CUSTOM_KIND,
             resolved_command="echo hi",
             claude=ClaudeOptions(),
@@ -554,7 +666,7 @@ class TestResolveSpawnArgsOpenCode:
         from mobaide.core.models import SessionKind
         from mobaide.core.opencode_launcher import OpenCodeOptions
 
-        kind, command, _env, claude, codex, antigravity, opencode = self._call("opencode")
+        kind, command, _env, claude, codex, antigravity, opencode, _copilot = self._call("opencode")
 
         assert kind is SessionKind.OPENCODE
         assert command == self._SHELL
@@ -567,7 +679,7 @@ class TestResolveSpawnArgsOpenCode:
 
         options = OpenCodeOptions(auto_approve=True, initial_prompt="hi")
 
-        kind, _command, _env, claude, codex, antigravity, opencode = self._call(
+        kind, _command, _env, claude, codex, antigravity, opencode, _copilot = self._call(
             opencode=options,
         )
 
@@ -579,7 +691,7 @@ class TestResolveSpawnArgsOpenCode:
         from mobaide.core.claude_launcher import ClaudeOptions
         from mobaide.core.models import SessionKind
 
-        kind, _command, _env, claude, _codex, _antigravity, opencode = self._call(
+        kind, _command, _env, claude, _codex, _antigravity, opencode, _copilot = self._call(
             "opencode", claude=ClaudeOptions(skip_permissions=True),
         )
 
@@ -587,11 +699,11 @@ class TestResolveSpawnArgsOpenCode:
         assert claude is None
         assert opencode is not None and opencode.auto_approve is False
 
-    @pytest.mark.parametrize("cli", ["claude", "codex", "antigravity"])
+    @pytest.mark.parametrize("cli", ["claude", "codex", "antigravity", "copilot"])
     def test_another_explicit_cli_never_carries_the_opencode_block(self, cli):
         from mobaide.core.opencode_launcher import OpenCodeOptions
 
-        kind, *_rest, opencode = self._call(cli, opencode=OpenCodeOptions(auto_approve=True))
+        kind, *_rest, opencode, _copilot = self._call(cli, opencode=OpenCodeOptions(auto_approve=True))
 
         assert kind.value == cli
         assert opencode is None
@@ -604,7 +716,7 @@ class TestResolveSpawnArgsOpenCode:
         assert kind is SessionKind.SHELL
         assert command == self._SHELL
         assert env is None
-        assert options == [None, None, None, None]
+        assert options == [None, None, None, None, None]
 
 
 class TestSessionWireDictCustomKind:

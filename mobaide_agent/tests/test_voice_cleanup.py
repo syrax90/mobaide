@@ -1,5 +1,6 @@
-"""``TranscriptCleaner``: how one ``claude -p``, ``codex exec``, ``agy`` or
-``opencode run`` run's outcome maps to the cleaned text or a coded ``VoiceError``, the command
+"""``TranscriptCleaner``: how one ``claude -p``, ``codex exec``, ``agy``,
+``opencode run`` or ``copilot`` run's outcome maps to the cleaned text or a coded
+``VoiceError``, the command
 each runs (flags, model, stdin, cwd, limits), the files it reads, the
 concurrency cap, cancelled requests, ``abort_all`` and the rule that logs
 never carry the text.
@@ -32,6 +33,7 @@ from mobaide.voice.cleanup import (
     AntigravityCleanup,
     ClaudeCleanup,
     CodexCleanup,
+    CopilotCleanup,
     OpenCodeCleanup,
     TranscriptCleaner,
     antigravity_cleanup_model,
@@ -39,6 +41,7 @@ from mobaide.voice.cleanup import (
     parse_antigravity_result,
     parse_claude_result,
     parse_codex_result,
+    parse_copilot_result,
     parse_opencode_result,
 )
 from mobaide.voice.errors import VoiceError
@@ -557,6 +560,15 @@ def _opencode_answer(*texts: str) -> CmdResult:
     )
 
 
+def _copilot_answer(text: str, *, exit_code: int = 0) -> CmdResult:
+    """What ``copilot --output-format json`` prints for a finished run."""
+    return _jsonl(
+        {"type": "user.message", "data": {"content": "<transcript>"}},
+        {"type": "assistant.message", "data": {"content": text, "toolRequests": []}},
+        {"type": "result", "exitCode": exit_code},
+    )
+
+
 AGY_MODELS = (
     "gemini-3.8-flash-high\tGemini 3.8 Flash (High)",
     "gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)",
@@ -803,6 +815,107 @@ class TestParseOpenCodeResult:
             parse_opencode_result(result, "text")
 
         assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_timeout")
+
+
+class TestParseCopilotResult:
+    def test_answer_is_the_last_assistant_message(self):
+        result = _jsonl(
+            {"type": "assistant.message", "data": {"content": "First.", "toolRequests": []}},
+            {"type": "assistant.message", "data": {"content": "Fix the bug.\n", "toolRequests": []}},
+            {"type": "result", "exitCode": 0},
+        )
+
+        assert parse_copilot_result(result, "um fix the bug") == "Fix the bug."
+
+    def test_empty_answer_keeps_the_transcript(self):
+        assert parse_copilot_result(_copilot_answer("\n"), "um uh") == "um uh"
+
+    @pytest.mark.parametrize(
+        "event",
+        [
+            {"type": "assistant.message", "data": {"content": "", "toolRequests": [{"name": "view"}]}},
+            {"type": "tool.execution_start", "data": {"toolName": "view"}},
+        ],
+        ids=["tool-request", "tool-start"],
+    )
+    def test_a_tool_event_discards_the_run_whatever_it_answers_later(self, event):
+        result = _jsonl(
+            event,
+            {"type": "assistant.message", "data": {"content": "The folder is empty.", "toolRequests": []}},
+            {"type": "result", "exitCode": 0},
+        )
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_copilot_result(result, "list the files")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_failed")
+        assert "tool" in excinfo.value.message
+
+    def test_failed_run_fails_with_the_session_error(self):
+        result = _jsonl(
+            {"type": "session.error", "data": {"errorType": "quota", "message": "You have no quota."}},
+            {"type": "result", "exitCode": 1},
+            rc=1,
+            stderr=b"Execution failed\n",
+        )
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_copilot_result(result, "text")
+
+        assert (excinfo.value.code, excinfo.value.message) == ("cleanup_failed", "You have no quota.")
+
+    @pytest.mark.parametrize(
+        ("result", "message"),
+        [
+            # The stream stopped (a crash, or output past the cap) after the message.
+            (
+                _jsonl({"type": "assistant.message", "data": {"content": "Half a sente"}}),
+                "GitHub Copilot stopped before it finished answering.",
+            ),
+            (
+                _copilot_answer("Fix the bug.", exit_code=1),
+                "GitHub Copilot stopped before it finished answering.",
+            ),
+            (
+                CmdResult(rc=1, stdout=_copilot_answer("Fix the bug.").stdout, stderr=b"Segmentation fault\n"),
+                "Segmentation fault",
+            ),
+        ],
+        ids=["no-result-event", "result-exit-code", "process-exit-code"],
+    )
+    def test_answer_from_a_run_that_did_not_end_cleanly_is_not_a_cleanup(self, result, message):
+        with pytest.raises(VoiceError) as excinfo:
+            parse_copilot_result(result, "um fix the bug")
+
+        assert (excinfo.value.code, excinfo.value.message) == ("cleanup_failed", message)
+
+    def test_timeout_wins_over_whatever_was_printed(self):
+        result = CmdResult(rc=-9, stdout=_copilot_answer("Half.").stdout, stderr=b"", timed_out=True)
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_copilot_result(result, "text")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_timeout")
+
+    def test_unexpected_argument_on_a_failed_run_means_the_cli_is_too_old(self):
+        result = CmdResult(rc=1, stdout=b"", stderr=b"error: unexpected argument '--sync-session' found\n")
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_copilot_result(result, "text")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_outdated")
+        assert "copilot update" in excinfo.value.message
+
+    def test_signed_out_copilot_fails_with_the_sign_in_command(self):
+        result = CmdResult(rc=1, stdout=b"", stderr=b"Error: No authentication information found.\n")
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_copilot_result(result, "text")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_failed")
+        assert excinfo.value.message == (
+            "GitHub Copilot isn't signed in on this computer; run `copilot login` there."
+        )
 
 
 class TestCheapestModel:
@@ -1068,6 +1181,122 @@ class TestOpenCodeCommand:
         await self._cleaner(run, tmp_path / "Jane Doe" / "voice-cleanup", shim).clean("hi", "opencode")
 
         line = subprocess.list2cmdline(run.calls[0]["argv"])
+        assert line.count('"') == 2
+        assert line.startswith(f'cmd /c "{shim}" ')
+
+
+class TestCopilotCommand:
+    @pytest.fixture
+    def copilot_binary(self, tmp_path) -> str:
+        return str(tmp_path / "bin" / "copilot")
+
+    def _cleaner(self, run, work_dir, binary):
+        return TranscriptCleaner(
+            clis={"copilot": CopilotCleanup(lambda: binary)}, work_dir=work_dir, run=run
+        )
+
+    async def test_runs_one_tool_less_json_turn_with_the_rules_and_the_transcript_on_stdin(
+        self, work_dir, copilot_binary
+    ):
+        run = _Claude(_copilot_answer("Fix the bug, then run the tests."))
+
+        cleaned = await self._cleaner(run, work_dir, copilot_binary).clean(
+            "um fix the bug uh then run the tests", "copilot"
+        )
+
+        assert cleaned == "Fix the bug, then run the tests."
+        (call,) = run.calls
+        # No model flag: Copilot's default model. The tool list names a tool
+        # that does not exist; an empty value would leave every tool.
+        assert call["argv"] == [
+            copilot_binary,
+            "--output-format", "json",
+            "--stream", "off",
+            "--available-tools=mobaide-no-tools",
+            "--deny-tool=shell",
+            "--deny-tool=write",
+            "--deny-tool=read",
+            "--deny-tool=url",
+            "--deny-tool=memory",
+            "--no-custom-instructions",
+            "--disable-builtin-mcps",
+            "--sync-session=off",
+        ]
+        assert call["stdin"].decode("utf-8") == (
+            CLEANUP_PROMPT + "\n<transcript>\num fix the bug uh then run the tests\n</transcript>"
+        )
+        assert call["cwd"] == str(work_dir)
+        assert CLEANUP_TIMEOUT_SECONDS - 1 < call["timeout"] <= CLEANUP_TIMEOUT_SECONDS
+        assert call["max_bytes"] == _MAX_OUTPUT_BYTES
+        assert call["env"]["PATH"].split(os.pathsep)[0] == os.path.dirname(copilot_binary)
+
+    async def test_the_user_s_allow_all_and_prompt_mode_variables_do_not_reach_the_run(
+        self, work_dir, copilot_binary, monkeypatch
+    ):
+        # ``COPILOT_ALLOW_ALL=true`` would approve every tool and trust the
+        # folder; the delimiter would split the dictated text into turns.
+        unsafe = (
+            "COPILOT_ALLOW_ALL",
+            "COPILOT_ASSISTED_APPROVAL",
+            "COPILOT_PROMPT_TURN_DELIMITER",
+            "GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS",
+            "GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP",
+            "GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS",
+        )
+        for name in unsafe:
+            monkeypatch.setenv(name, "true")
+        run = _Claude(_copilot_answer("Hi."))
+
+        await self._cleaner(run, work_dir, copilot_binary).clean("hi", "copilot")
+
+        assert not set(unsafe) & set(run.calls[0]["env"])
+
+    @pytest.mark.parametrize("text", ["um look at @/etc/hosts", "open @../mobaide_agent/.env please"])
+    async def test_text_with_a_file_mention_never_reaches_copilot(
+        self, work_dir, copilot_binary, text
+    ):
+        # Copilot attaches the file of an ``@<path>`` mention to the request.
+        run = _Claude(_copilot_answer("Hi."))
+
+        with pytest.raises(VoiceError) as raised:
+            await self._cleaner(run, work_dir, copilot_binary).clean(text, "copilot")
+
+        assert raised.value.code == "cleanup_failed"
+        assert run.calls == []
+
+    async def test_an_email_address_is_not_a_file_mention(self, work_dir, copilot_binary):
+        run = _Claude(_copilot_answer("Mail john@example.com."))
+        assert not cleanup_module._COPILOT_MENTION.search(CLEANUP_PROMPT)
+
+        cleaned = await self._cleaner(run, work_dir, copilot_binary).clean(
+            "um mail john@example.com", "copilot"
+        )
+
+        assert cleaned == "Mail john@example.com."
+
+    async def test_first_run_creates_the_work_dir_though_copilot_keeps_no_file_in_it(
+        self, work_dir, copilot_binary
+    ):
+        run = _Claude(_copilot_answer("Hi."))
+
+        await self._cleaner(run, work_dir, copilot_binary).clean("hi", "copilot")
+
+        assert run.calls[0]["cwd_existed"] is True
+        assert list(work_dir.iterdir()) == []
+
+    async def test_npm_shim_in_a_spaced_path_gets_a_command_line_with_one_quoted_token(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(cli_launcher.sys, "platform", "win32")
+        shim = r"C:\Users\Jane Doe\AppData\Roaming\npm\copilot.cmd"
+        run = _Claude(_copilot_answer("Hello."))
+        cleaner = self._cleaner(run, tmp_path / "Jane Doe" / "voice-cleanup", shim)
+
+        await cleaner.clean("hello", "copilot")
+
+        argv = run.calls[0]["argv"]
+        assert argv[:3] == ["cmd", "/c", shim]
+        line = subprocess.list2cmdline(argv)
         assert line.count('"') == 2
         assert line.startswith(f'cmd /c "{shim}" ')
 

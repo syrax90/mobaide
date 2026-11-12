@@ -109,6 +109,23 @@ def _pin_opencode_binary(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _pin_copilot_binary(monkeypatch):
+    """Pin the Copilot resolver to the literal string ``"copilot"`` for every test.
+
+    Parallel of :func:`_pin_antigravity_binary`: a host with or without the
+    GitHub Copilot CLI must give the same launch argv and the same
+    ``capabilities.cli.copilot``. Tests of the missing-binary path re-patch
+    ``copilot_launcher._resolve_copilot_binary`` to raise inside the test body.
+    """
+    from mobaide.core import copilot_launcher
+
+    monkeypatch.setattr(
+        copilot_launcher, "_resolve_copilot_binary", lambda *_a, **_kw: "copilot"
+    )
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _pin_model_enumeration(monkeypatch):
     """Pin the model-enumeration subprocess seams to canned failures.
 

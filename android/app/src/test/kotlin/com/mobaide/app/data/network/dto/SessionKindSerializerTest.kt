@@ -28,6 +28,7 @@ class SessionKindSerializerTest {
         "codex" to SessionKind.Codex,
         "antigravity" to SessionKind.Antigravity,
         "opencode" to SessionKind.OpenCode,
+        "copilot" to SessionKind.Copilot,
         "auto_scan" to SessionKind.AutoScan,
         "shell" to SessionKind.Shell,
     )

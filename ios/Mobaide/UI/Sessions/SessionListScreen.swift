@@ -168,6 +168,8 @@ private struct SessionCardRow: View {
                 Text(session.title ?? kindLabel)
                     .font(.body.weight(.semibold))
                     .foregroundStyle(colors.text)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Text(kindLabel)
                     .font(.caption)
                     .foregroundStyle(colors.textMuted)

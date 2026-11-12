@@ -16,6 +16,11 @@ from .codex_launcher import (
     CodexLauncher,
     CodexOptions,
 )
+from .copilot_launcher import (
+    CopilotBinaryNotFoundError,
+    CopilotLauncher,
+    CopilotOptions,
+)
 from .models import SessionConfig, SessionEvent, SessionInfo, SessionKind, SessionState
 from .opencode_launcher import (
     OpenCodeBinaryNotFoundError,
@@ -61,6 +66,9 @@ __all__ = [
     "OpenCodeLauncher",
     "OpenCodeOptions",
     "OpenCodeBinaryNotFoundError",
+    "CopilotLauncher",
+    "CopilotOptions",
+    "CopilotBinaryNotFoundError",
     "LaunchSpec",
     "AutoScanFilter",
     "ProjectConfig",

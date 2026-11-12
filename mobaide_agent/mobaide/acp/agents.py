@@ -46,16 +46,19 @@ from .trust import (
     AntigravityFolderTrust,
     ClaudeFolderTrust,
     CodexFolderTrust,
+    CopilotFolderTrust,
     WorkspaceTrust,
     antigravity_settings_path,
     claude_config_path,
     codex_config_path,
+    copilot_config_path,
 )
 
 if TYPE_CHECKING:
     from mobaide.core.antigravity_launcher import AntigravityLauncher, AntigravityOptions
     from mobaide.core.claude_launcher import ClaudeLauncher, ClaudeOptions
     from mobaide.core.codex_launcher import CodexLauncher, CodexOptions
+    from mobaide.core.copilot_launcher import CopilotLauncher, CopilotOptions
     from mobaide.core.opencode_launcher import OpenCodeLauncher, OpenCodeOptions
 
 # ``resolve_before`` follows each release: dependencies resolve as they were
@@ -72,6 +75,7 @@ CLAUDE_ACP_COMMAND_ENV = "MOBAIDE_ACP_CLAUDE_COMMAND"
 CODEX_ACP_COMMAND_ENV = "MOBAIDE_ACP_CODEX_COMMAND"
 ANTIGRAVITY_ACP_COMMAND_ENV = "MOBAIDE_ACP_ANTIGRAVITY_COMMAND"
 OPENCODE_ACP_COMMAND_ENV = "MOBAIDE_ACP_OPENCODE_COMMAND"
+COPILOT_ACP_COMMAND_ENV = "MOBAIDE_ACP_COPILOT_COMMAND"
 REAL_IN_TEST_ENV = "MOBAIDE_ACP_REAL"
 AVAILABILITY_TTL = 30.0
 NODE_HINT = "The chat view needs Node.js 22 or later on the PC."
@@ -90,10 +94,18 @@ OPENCODE_SIGN_IN_HINT = (
     "OpenCode could not sign in to the model provider. In New session, pick OpenCode "
     "and use Connect a provider, or run `opencode auth login` on the PC. Then tap Restart."
 )
+COPILOT_HINT = (
+    "GitHub Copilot CLI is not installed on the PC. Install it with "
+    "`npm install -g @github/copilot`, then try again."
+)
 # Test mode: while this file exists the fake agent is signed out, and its
 # fake login removes it.
 FAKE_SIGNED_OUT_ENV = "MOBAIDE_FAKE_ACP_SIGNED_OUT"
 CODEX_USER_CODE_PATTERN = r"\b[A-Z0-9]{4}-[A-Z0-9]{4,6}\b"
+# GitHub's device code, as ``copilot login --device-code`` prints it.
+COPILOT_USER_CODE_PATTERN = r"\b[A-Z0-9]{4}-[A-Z0-9]{4}\b"
+# The config option of ``copilot --acp`` that turns its approval requests off.
+COPILOT_ALLOW_ALL_OPTION = "allow_all"
 CODEX_BRIDGE_SCRIPT = os.path.abspath(codex_bridge.__file__)
 
 
@@ -231,6 +243,10 @@ AGY_SIGN_IN_TEXT = (
     "Open the sign-in page and sign in with Google. Then paste the code that the "
     "page shows, or the full address of the page you land on."
 )
+COPILOT_SIGN_IN_TEXT = (
+    "Open the sign-in page, sign in to GitHub and enter the code below. "
+    "The chat continues when you are done."
+)
 
 
 def claude_sign_in_methods(
@@ -351,6 +367,32 @@ def antigravity_sign_in_methods(
             cwd=os.path.expanduser("~"),
             reads_code=True,
             input_label="Code or address from the sign-in page",
+        )
+    ]
+
+
+def copilot_sign_in_methods(
+    copilot_bin: str | None, env: Mapping[str, str], *, fake: bool = False
+) -> list[SignInMethod]:
+    """``copilot login --device-code``: it prints GitHub's device page and a
+    one-time code to enter there, then finishes alone."""
+    if copilot_bin is None and not fake:
+        return []
+    argv = (
+        [*fake_login_argv("copilot"), "--device"]
+        if fake
+        else shim_safe_argv(copilot_bin or "", "login", "--device-code")
+    )
+    return [
+        SignInMethod(
+            "github",
+            "GitHub account",
+            "The Copilot plan of your GitHub account",
+            COPILOT_SIGN_IN_TEXT,
+            argv=argv,
+            env=dict(env),
+            cwd=os.path.expanduser("~"),
+            user_code_pattern=COPILOT_USER_CODE_PATTERN,
         )
     ]
 
@@ -932,6 +974,80 @@ class OpenCodeChatSpec(_ChatSpecBase):
         )
 
 
+class CopilotChatSpec(_ChatSpecBase):
+    """GitHub Copilot through the ACP server built into its CLI
+    (``copilot --acp``), so chat and terminal sessions share the CLI version,
+    login, settings and stored sessions.
+
+    The server takes the session folder from ``session/new`` and filters
+    ``session/list`` by folder. It loads a folder's hooks and MCP servers
+    without Copilot's own trust question, so the chat asks it first.
+    """
+
+    kind = "copilot"
+    display_name = "GitHub Copilot"
+    command_env = COPILOT_ACP_COMMAND_ENV
+    fake_flavor = "copilot"
+
+    def __init__(
+        self,
+        launcher: CopilotLauncher,
+        *,
+        command_override: str | None = None,
+        test_mode: bool = False,
+    ) -> None:
+        super().__init__(launcher, command_override=command_override, test_mode=test_mode)
+
+    def _copilot_bin(self) -> str | None:
+        try:
+            return self._launcher.resolve_binary()
+        except CliBinaryNotFoundError:
+            return None
+
+    def command(self) -> list[str] | None:
+        fixed = self._fixed_command()
+        if fixed is not None:
+            return fixed
+        copilot_bin = self._copilot_bin()
+        return shim_safe_argv(copilot_bin, "--acp") if copilot_bin else None
+
+    def available(self) -> bool:
+        return self.command() is not None
+
+    def _argv(self) -> list[str]:
+        argv = self.command()
+        if argv is None:
+            raise ChatAgentUnavailableError(self.kind, COPILOT_HINT)
+        return argv
+
+    async def catalog_plan(self) -> ChatLaunchPlan:
+        home = os.path.expanduser("~")
+        env = dict(os.environ)
+        # An npm install of Copilot is a Node script: ``node`` sits next to it.
+        copilot_bin = self._copilot_bin()
+        if copilot_bin:
+            prepend_path_dir(env, os.path.dirname(copilot_bin))
+        return ChatLaunchPlan(argv=self._argv(), env=env, cwd=home, process_cwd=home)
+
+    async def prepare(self, target: LaunchTarget, options: CopilotOptions) -> ChatLaunchPlan:
+        # Before the launcher can create a worktree.
+        argv = self._argv()
+        fake = argv == fake_agent_argv(self.fake_flavor)
+        cwd = await self._launcher.resolve_cwd(target, options)
+        env = self._launcher.build_env(target)
+        return ChatLaunchPlan(
+            argv=argv,
+            env=env,
+            cwd=cwd,
+            initial_config=copilot_config_intents(options),
+            process_cwd=os.path.expanduser("~"),
+            trust=None if fake else CopilotFolderTrust(cwd, config_path=copilot_config_path(env)),
+            sign_in=copilot_sign_in_methods(
+                None if fake else self._copilot_bin(), env, fake=fake
+            ),
+        )
+
+
 async def _known_argv(argv: list[str], ensure: Callable[[], list[str]] | None) -> list[str]:
     if ensure is None:
         return argv
@@ -992,6 +1108,17 @@ def antigravity_config_intents(options: AntigravityOptions) -> list[ConfigIntent
     if not options.model:
         return []
     return [ConfigIntent(options.model, category="model")]
+
+
+def copilot_config_intents(options: CopilotOptions) -> list[ConfigIntent]:
+    """Map the Copilot create-session options onto ACP config values.
+
+    ``allow_all`` goes through Copilot's own config option, not a launch
+    flag: the chat then shows it, and the user can turn it off again.
+    """
+    if not options.allow_all:
+        return []
+    return [ConfigIntent("on", option_id=COPILOT_ALLOW_ALL_OPTION)]
 
 
 # Longer than any model name; bounds the work on a client-sent value.
@@ -1132,6 +1259,13 @@ def build_chat_agents(
         specs["opencode"] = OpenCodeChatSpec(
             opencode_launcher,
             command_override=overrides.get("opencode"),
+            test_mode=test_mode,
+        )
+    copilot_launcher = launchers.get("copilot")
+    if copilot_launcher is not None:
+        specs["copilot"] = CopilotChatSpec(
+            copilot_launcher,
+            command_override=overrides.get("copilot"),
             test_mode=test_mode,
         )
     return specs

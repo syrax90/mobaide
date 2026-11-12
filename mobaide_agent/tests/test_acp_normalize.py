@@ -587,6 +587,11 @@ def _agy_result(code: int, output: str | None) -> dict:
     return {"type": "text", "text": f"Command exited with code {code}.\n\n{tail}"}
 
 
+def _copilot_result(code: int, output: str, shell_id: int = 0) -> dict:
+    """The text of a finished Copilot command: its output, then one last line."""
+    return {"type": "text", "text": f"{output}<shellId: {shell_id} completed with exit code {code}>"}
+
+
 class TestCommandResultParts:
     @pytest.mark.parametrize(
         ("part", "expected"),
@@ -620,6 +625,69 @@ class TestCommandResultParts:
         ids=["text-around-it", "no-output-section"],
     )
     def test_other_parts_pass_through(self, part):
+        assert nz.command_result_parts([part]) == [part]
+
+    @pytest.mark.parametrize(
+        ("part", "expected"),
+        [
+            (
+                _copilot_result(0, "....\n4 passed in 0.12s\n"),
+                [{"type": "text", "text": "```console\n....\n4 passed in 0.12s\n```"}],
+            ),
+            (
+                _copilot_result(2, "boom\n", shell_id=14),
+                [{"type": "text", "text": "```console\nboom\n```\nExit code 2"}],
+            ),
+            (_copilot_result(0, ""), []),
+            (_copilot_result(1, ""), [{"type": "text", "text": "Exit code 1"}]),
+            (
+                _copilot_result(0, "first\r\nsecond\r\n"),
+                [{"type": "text", "text": "```console\nfirst\nsecond\n```"}],
+            ),
+            (
+                _copilot_result(3, "".join(f"line {n}\n" for n in range(40))),
+                [
+                    {
+                        "type": "text",
+                        "text": "```console\n" + "".join(f"line {n}\n" for n in range(40)) + "```\nExit code 3",
+                    }
+                ],
+            ),
+        ],
+        ids=[
+            "output",
+            "failed",
+            "silent-success",
+            "silent-failure",
+            "crlf-output",
+            "output-longer-than-the-searched-tail",
+        ],
+    )
+    def test_a_copilot_command_result(self, part, expected):
+        assert nz.command_result_parts([part]) == expected
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "....\n4 passed in 0.12s\n",
+            "<shellId: 0 completed with exit code 0>\nThe tests pass.",
+            "<shellId: 0 still running>",
+            "ok\n<shellId: 0 completed with exit code 1234567890>",
+            "ok\n<shellId: 1234567890 completed with exit code 0>",
+            "ok\n<shellId: 0 completed with exit code 0>" + "\n" * 200,
+        ],
+        ids=[
+            "output-so-far",
+            "text-after-the-line",
+            "another-shell-line",
+            "ten-digit-exit-code",
+            "ten-digit-shell-id",
+            "exit-line-before-the-searched-tail",
+        ],
+    )
+    def test_copilot_text_without_a_last_exit_line_passes_through(self, text):
+        part = {"type": "text", "text": text}
+
         assert nz.command_result_parts([part]) == [part]
 
 

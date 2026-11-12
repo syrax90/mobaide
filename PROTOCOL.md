@@ -149,6 +149,33 @@ Additive delta within proto-v7 (2026-11-12): **one session kind, one create-opti
 
 Golden fixtures: new `tests/protocol_fixtures/dto/agent/OpenCodeOptionsModel.json`; `CreateSessionRequest.json` gains an `opencode_launch` case. Both carry `connect`; `VersionInfoResponse.json` and `VoiceCleanupRequest.json` list `opencode`.
 
+### Delta 2026-11-12: GitHub Copilot sessions
+
+Additive delta within proto-v7 (2026-11-12): **one session kind, one options block, two capability entries. No version bump; `central_server` is untouched.**
+
+GitHub Copilot CLI is a managed agent of kind `copilot`, for terminal and chat sessions.
+
+| Where | Change |
+|-------|--------|
+| `POST /api/sessions` and relay `create_session` | `cli: "copilot"` with `copilot_options` (`allow_all`, `worktree`, `branch_name`, `base_branch`). A missing binary answers `503` with `copilot_cli_missing`. |
+| `capabilities.cli` | A `copilot` entry. |
+| `capabilities.chat` | A `copilot` entry (`resume: true`, `live: false`). |
+| Session mode order | The id `copilot`. Default position: after `opencode`. |
+
+* Binary: `MOBAIDE_COPILOT_BIN`, then PATH, then the npm fallback folders, then (on Windows) the WinGet link. `MOBAIDE_ACP_COPILOT_COMMAND` overrides the chat command.
+* Terminal sessions run `copilot [--allow-all]`. They raise attention from OSC 7501 reports (`app=copilot`; Copilot CLI 1.0.106 or later), with no hooks (see Delta 2026-11-10).
+* Chat sessions run the ACP server built into the CLI, `copilot --acp`. The process starts in the home folder and takes the session folder from `session/new`. `allow_all` sets the ACP config option `allow_all` to `on`; the chat shows it and the user can turn it off.
+* Mode values are Copilot's Agent, Plan and Autopilot. The model and reasoning-effort options appear only when the account's plan offers more than the Auto model.
+* Not live: no attach to a session open in Copilot's terminal UI. Continue uses `session/list` (kept to the requested folder) and `session/load`.
+* Folder trust: `copilot --acp` loads a folder's hooks and MCP servers without asking, so the PC agent asks in the chat. The record is `trustedFolders` in `$COPILOT_HOME/config.json` (default `~/.copilot/config.json`). A listed folder also covers the folders inside it. The home folder, a folder above it and a filesystem root are trusted for the session only.
+* Sign-in: the method `github` (see Delta 2026-11-11, sign-in from the chat). GitHub Enterprise `--host` sign-in is not offered.
+* Command output: a finished command becomes a `console` part with the exit code. Live command output is sent at most once per 0.3 s. The "Info: <path>" note Copilot sends after it creates a file is not shown.
+* A continued session whose replay has no title takes it from the agent's session list, for every agent with the list capability.
+* Voice transcript cleanup: `capabilities.voice.cleanup_kinds` lists `copilot`, and `POST /api/voice/cleanup` accepts `kind: "copilot"`. The run is `copilot --output-format json --stream off --available-tools=mobaide-no-tools --deny-tool=shell --deny-tool=write --deny-tool=read --deny-tool=url --deny-tool=memory --no-custom-instructions --disable-builtin-mcps --sync-session=off`, on Copilot's default model, with the rules and the transcript on stdin (docs/voice-input.md, *Transcript cleanup*).
+* The chat's session list never shows sessions of the `voice-cleanup` work folder (the cleanup runs of Antigravity, OpenCode and Copilot), for every agent.
+* Not supported for Copilot: a model or effort picker in the wizard.
+* Test mode runs the fake agent with `--flavor copilot`.
+
 ### Delta 2026-11-11: sign-in from the chat
 
 Additive delta within proto-v7 (2026-11-11): **one chat request kind, one chat command. No version bump; `central_server` is untouched.**
@@ -160,6 +187,7 @@ A chat session can now sign its coding agent in on the PC. ACP agents report a m
 | Claude Code | `claude_ai`, `console` | `claude auth login --claudeai` / `--console`: prints the sign-in page, then reads the code that the page shows. With the browser on the PC it finishes alone. |
 | Codex | `chatgpt`, `api_key` | `codex login --device-auth`: prints the page and a one-time code to enter there. `api_key`: the value goes to `codex login --with-api-key` on stdin. |
 | Antigravity | `google` | `agy acp --login`: prints the Google sign-in page, then reads the code (or the address of the page the user lands on). |
+| GitHub Copilot | `github` | `copilot login --device-code`: prints GitHub's device page and a one-time code to enter there. |
 
 * When it is offered: `session/new`, `session/load` or a prompt fails with `authRequired`, or claude-agent-acp pushes `_auth/status_update` with `authStatus.kind: "none"`. A user message `/login` (no images) also opens it, unless a turn runs. The state `commands` list gains a `login` entry.
 * The request in `requests`: `{"id": "sign-in", "kind": "sign_in", "tool_call_id": null, "title", "text", "stage", "methods": [{id, name, description}], "url", "user_code", "input", "busy", "error"}`.
@@ -180,7 +208,7 @@ The session wire dict (`sessions.changed`, `session.updated`, the `/ws/sessions`
 |---------|--------|
 | Claude Code and Auto Scan terminal | The attention gate's hooks. `UserPromptSubmit` → `working`. A `Stop` that lists a running background agent → `working`. A `Stop` that lists only passive work (a background shell, a monitor, a scheduled wakeup) or `session_crons` → `waiting`. Otherwise `idle` when the gate's quiet window ends, even when the alert is muted or deduped. A `PreToolUse` heartbeat from the main agent → `working` and cancels a pending quiet window. A sub-agent tool call → `working` only while the last `Stop` listed in-flight work. `idle_prompt` re-reports the activity the last `Stop` implied, or `idle`. `SessionEnd` → `idle`. `null` until the first hook. |
 | Chat (`ui: "chat"`), every kind | The timeline `status`: `running` → `working`, `ready` → `idle`, otherwise `null`. A turn another app on a shared host runs counts too. |
-| Codex, Antigravity, OpenCode, Terminal and custom terminal (PTY) sessions | Always `null`. Their OSC 7501 reports (Delta 2026-11-10) raise alerts but do not set `activity` yet. |
+| Codex, Antigravity, OpenCode, GitHub Copilot, Terminal and custom terminal (PTY) sessions | Always `null`. Their OSC 7501 reports (Delta 2026-11-10) raise alerts but do not set `activity` yet. |
 
 * Only a `running` session reports a value. Clients show a "Working" chip and an animated status square for `working`, and a muted "Background" chip with the static square for `waiting`. A pending `awaiting_permission` or `awaiting_os_permission` outranks it, because the turn waits for the user.
 * Gate rule: an `idle_prompt` no longer raises `turn_finished` while the last `Stop` listed in-flight work. It also does not alert again once the quiet window already alerted for the turn. A passive task still in flight when the user types the next prompt stops counting as in-flight work. Task notifications, sub-agent hand-backs and scheduled wakeups are not typed prompts.
@@ -194,7 +222,7 @@ Additive delta within proto-v7 (2026-11-10): **one attention reason, two optiona
 * New attention reason `turn_failed`. It appears on the session dict `attention`, the agent-bus `session.attention` event and the user-event `reason`. Older clients post nothing for an unknown reason.
 * Chat sessions raise `turn_failed` when the agent answers the user's own prompt with an RPC error. They do not raise it when the user pressed Stop, when the process died (that stays `ended`), or when a queued prompt starts next.
 * The slim `session.attention` user-event payload gains optional `kind` and `kind_label`. No `kind` (older agent) reads as a Claude session.
-* Terminal sessions of kind `codex`, `antigravity`, `opencode`, `shell` and `custom_*` have no Claude Code hooks. They raise attention from OSC 7501 program-status reports (Program Status Protocol rev 0.4, `ESC]7501;state=...[:kind=...][:app=...]`).
+* Terminal sessions of kind `codex`, `antigravity`, `opencode`, `copilot`, `shell` and `custom_*` have no Claude Code hooks. They raise attention from OSC 7501 program-status reports (Program Status Protocol rev 0.4, `ESC]7501;state=...[:kind=...][:app=...]`).
 * For these sessions the agent answers the support query `ESC]7501;?` and strips it from the replayed stream. For `agy` sessions it sets `AGY_CLI_OSC7501=on` and `AGY_CLI_OSC7501_MESSAGES=brief` unless the user set them.
 * Mapping: `blocked` (permission or question) gives `awaiting_permission` at once. `blocked` (auth) is ignored. `done` gives `turn_finished` and `error` gives `turn_failed`, both after a 1.5 s quiet window.
 * `working`, `idle`, `clear` and any client keystroke (except DEC 1004 focus reports) cancel a pending alert. `working`, `idle` and `clear` also drop a standing `awaiting_permission`.
@@ -322,7 +350,7 @@ A session can now run in the structured **chat UI**. The agent then starts an [A
 
 `GET /api/chat/{kind}/sessions?cwd=<abs>&cursor=<opaque>` → `ChatStoredSessionsResponse` `{"sessions": [{"session_id", "cwd", "title", "updated_at", "open_session_id"}], "next_cursor"}`, newest first.
 
-* It lists every session the agent stored on the host, also those started outside Mobaide (for example `claude` in a terminal). This is how a client continues them; there is no live attach to a running TUI.
+* It lists every session the agent stored on the host, also those started outside Mobaide (for example `claude` in a terminal), except the sessions of the `voice-cleanup` work folder, which are dropped before the page is cut. This is how a client continues them; there is no live attach to a running TUI.
 * `open_session_id` names the open Mobaide chat session that already shows the row.
 * Errors carry `{"detail"}`: `400` bad `cwd` or cursor, `404` no chat agent of that kind, `409` the agent cannot list, `502` the agent failed, `503` it cannot run here, or its adapter is still installing for first use (the install goes on; retry in a minute).
 * On the relay it runs aside from the tunnel reader, like the voice routes: its first call starts the agent process.
@@ -391,7 +419,7 @@ Additive delta within proto-v7 (2026-11-04, drag-to-reorder in the new-session w
 | ``PUT /api/session-mode-order`` | ``{"order": [str]}`` | Full replace; same body as ``GET``. ``[]`` restores the default order. |
 
 * Dashboard/user JWT, non-admin.
-* Each id matches the shortcuts ``KIND_PATTERN`` (``^[a-z0-9_]{1,32}$``): ``claude``, ``codex``, ``antigravity``, ``auto_scan``, ``shell``, ``custom_<12hex>``. At most 64 ids, no duplicates → else ``422``. The server stores the ids opaquely and does not check them against the live custom types.
+* Each id matches the shortcuts ``KIND_PATTERN`` (``^[a-z0-9_]{1,32}$``): ``claude``, ``codex``, ``antigravity``, ``opencode``, ``copilot``, ``auto_scan``, ``shell``, ``custom_<12hex>``. At most 64 ids, no duplicates → else ``422``. The server stores the ids opaquely and does not check them against the live custom types.
 * ``version`` grows by one on every change. A ``PUT`` of the stored order changes nothing and pushes nothing.
 * A change pushes the user event ``session_mode_order.updated`` with the same body to every user-events socket of the account. Clients keep the higher ``version`` of the cached and incoming snapshot, and reconcile with ``GET`` on every user-events connect.
 * Clients apply the list the same way: a card the list names is ranked by its place there; a card it does not name (a custom type created after the last save, a mode a newer client added) keeps its default place among the other unnamed cards, after the named ones; an id that names no card is skipped.

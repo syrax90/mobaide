@@ -15,6 +15,7 @@ import { ClaudeAdvancedPanel } from './panels/ClaudeAdvancedPanel';
 import { ClaudeOptionsPanel } from './panels/ClaudeOptionsPanel';
 import { CodexOptionsPanel } from './panels/CodexOptionsPanel';
 import { OpenCodeOptionsPanel } from './panels/OpenCodeOptionsPanel';
+import { CopilotOptionsPanel } from './panels/CopilotOptionsPanel';
 import type { BaseBranchStatus } from './panels/BaseBranchPicker';
 import { WorktreeSection } from './panels/WorktreeSection';
 import { chatAgentKind, terminalUiOf, usesChatView, type ChatAgentKind } from './buildCreateRequest';
@@ -69,6 +70,8 @@ export function modeTitle(
       return 'Antigravity session';
     case 'opencode':
       return 'OpenCode session';
+    case 'copilot':
+      return 'GitHub Copilot session';
     case 'auto_scan':
       return 'Auto Scan mode';
     case 'shell':
@@ -88,6 +91,8 @@ function continueHint(kind: ChatAgentKind | null): string {
       return 'Open an Antigravity conversation started on your PC, for example with agy in a terminal.';
     case 'opencode':
       return 'Open an OpenCode session started on your PC, for example in a terminal.';
+    case 'copilot':
+      return 'Open a GitHub Copilot session started on your PC, for example in a terminal.';
     default:
       return 'Open a Claude Code session started on your PC, for example in a terminal.';
   }
@@ -210,6 +215,9 @@ export function ConfigStep({
       )}
       {mode === 'opencode' && (
         <OpenCodeOptionsPanel bucket={state.opencode} chat={chat} dispatch={dispatch} />
+      )}
+      {mode === 'copilot' && (
+        <CopilotOptionsPanel bucket={state.copilot} chat={chat} dispatch={dispatch} />
       )}
       {mode === 'auto_scan' && (
         <AutoScanOptionsPanel

@@ -20,6 +20,7 @@ from mobaide.acp.agents import ChatAgentUnavailableError, ChatLaunchPlan, fake_a
 from mobaide.acp.catalog import ChatCatalog, ChatCatalogError
 from mobaide.acp.wire import chat_request_error, list_chat_sessions, match_chat_sessions_route
 from mobaide.agent.app import create_app
+from mobaide.agent.install_paths import state_prefix
 from mobaide.agent.sessions.models import ChatStoredSessionsResponse
 from mobaide.core.models import SessionKind
 from tests.conftest import TEST_PASSWORD, TEST_USERNAME
@@ -399,6 +400,25 @@ class TestAllFoldersLister:
         assert [r["session_id"] for r in page["sessions"]] == ["mine-1"]
         assert page["next_cursor"] == "p4"
 
+    async def test_hidden_rows_do_not_cut_the_page_of_an_agent_that_filters_by_folder(self, tmp_path):
+        # Copilot answers the whole list at once, with one stored session
+        # per voice cleanup run in front of the user's own.
+        work = tmp_path / "voice-cleanup"
+        rows = [
+            {"sessionId": f"cleanup-{i}", "cwd": str(work)} for i in range(catalog_mod.PAGE_MAX + 5)
+        ] + [{"sessionId": "broken", "cwd": ["not", "a", "path"]}, {"sessionId": "mine-1", "cwd": str(tmp_path)}]
+        spec = StubSpec(
+            [sys.executable, "-c", PAGED_AGENT],
+            env={"AGENT_PAGES": json.dumps({"": {"sessions": rows}})},
+        )
+        catalog = ChatCatalog({"copilot": spec}, hidden_folders=[work])
+        try:
+            page = await catalog.list_sessions("copilot", cwd=None, cursor=None)
+        finally:
+            await catalog.close()
+
+        assert [r["session_id"] for r in page["sessions"]] == ["mine-1"]
+
     async def test_a_page_keeps_the_newest_rows(self, make_catalog, tmp_path):
         rows = [
             {"sessionId": f"s{i:03}", "cwd": str(tmp_path), "updatedAt": f"2026-11-09T00:{i // 60:02}:{i % 60:02}Z"}
@@ -586,6 +606,7 @@ class TestChatRest:
             "codex": {"resume": True, "live": False},
             "antigravity": {"resume": True, "live": False},
             "opencode": {"resume": True, "live": False},
+            "copilot": {"resume": True, "live": False},
         }
 
     async def test_create_chat_session(self, client, auth_headers, tmp_path):
@@ -690,7 +711,6 @@ class TestChatRest:
             ("Fix flaky upload test", False),
         ]
 
-
     async def test_opencode_chat_session_and_its_stored_sessions(
         self, client, auth_headers, tmp_path
     ):
@@ -714,7 +734,43 @@ class TestChatRest:
             "Fix flaky upload test",
         ]
 
+    async def test_copilot_chat_session_and_its_stored_sessions(
+        self, client, auth_headers, tmp_path
+    ):
+        body = {
+            "cli": "copilot",
+            "ui": "chat",
+            "cwd": str(tmp_path),
+            "copilot_options": {"allow_all": True},
+        }
+
+        created = await client.post("/api/sessions", headers=auth_headers, json=body)
+        listed = await client.get(
+            f"/api/chat/copilot/sessions?cwd={tmp_path}", headers=auth_headers
+        )
+        version = await client.get("/api/version", headers=auth_headers)
+
+        assert created.status_code == 201, created.text
+        assert created.json()["ui"] == "chat"
+        assert created.json()["kind"] == "copilot"
+        assert listed.status_code == 200
+        assert [(r["session_id"], r["cwd"]) for r in listed.json()["sessions"]] == [
+            ("external-1111", str(tmp_path)),
+            ("external-2222", str(tmp_path)),
+        ]
+        assert version.json()["capabilities"]["chat"]["copilot"] == {"resume": True, "live": False}
+
 
     async def test_list_needs_auth(self, client):
         resp = await client.get("/api/chat/claude/sessions")
         assert resp.status_code == 401
+
+    async def test_the_voice_cleanup_work_folder_is_hidden_in_the_app(self, client, auth_headers):
+        # Copilot keeps every cleanup run as a stored session of that folder;
+        # the fake agent answers two rows for whatever folder is asked.
+        work = state_prefix(test_mode=True) / "voice-cleanup"
+
+        listed = await client.get(f"/api/chat/copilot/sessions?cwd={work}", headers=auth_headers)
+
+        assert listed.status_code == 200
+        assert listed.json()["sessions"] == []

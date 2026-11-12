@@ -73,12 +73,14 @@ describe('cliKnown', () => {
     const older = info({ cli: { claude: { available: true }, codex: { available: false } } });
 
     expect(cliKnown(older, 'opencode')).toBe(false);
+    expect(cliKnown(older, 'copilot')).toBe(false);
     expect(cliKnown(older, 'codex')).toBe(true);
   });
 
   it('knows a listed CLI whether or not it is installed', () => {
     expect(cliKnown(info({ cli: { opencode: { available: false } } }), 'opencode')).toBe(true);
     expect(cliKnown(info({ cli: { opencode: {} } }), 'opencode')).toBe(true);
+    expect(cliKnown(info({ cli: { copilot: { available: false } } }), 'copilot')).toBe(true);
   });
 
   const NO_LIST: [string, unknown][] = [
@@ -92,6 +94,7 @@ describe('cliKnown', () => {
     const probe = capabilities === undefined ? undefined : info(capabilities);
 
     expect(cliKnown(probe, 'opencode')).toBe(true);
+    expect(cliKnown(probe, 'copilot')).toBe(true);
   });
 
   it('does not mistake an inherited object key for a cli entry', () => {

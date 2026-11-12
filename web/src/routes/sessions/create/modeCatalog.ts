@@ -32,6 +32,10 @@ const BUILT_IN_COPY: Readonly<Record<BuiltInMode, { title: string; subtitle: str
     subtitle: 'Configure and launch a Google Antigravity session.',
   },
   opencode: { title: 'OpenCode', subtitle: 'Configure and launch an OpenCode session.' },
+  copilot: {
+    title: 'GitHub Copilot',
+    subtitle: 'Configure and launch a GitHub Copilot session.',
+  },
   auto_scan: {
     title: 'Auto Scan',
     subtitle: 'Scan Linear for matching issues and launch sessions.',
@@ -44,6 +48,7 @@ const MISSING_CLI: Readonly<Record<string, string>> = {
   codex: 'Codex CLI is not installed on the agent.',
   antigravity: 'Antigravity CLI (agy) is not installed on the agent.',
   opencode: 'OpenCode CLI is not installed on the agent.',
+  copilot: 'GitHub Copilot CLI is not installed on the agent.',
 };
 
 /**
@@ -86,6 +91,24 @@ export function buildModeCards(input: {
             ...copy,
             enabled: false,
             disabledReason: 'Update Mobaide on your PC to use OpenCode.',
+          };
+        }
+        const enabled = cliEnabled(input.capabilities, mode);
+        return {
+          mode,
+          ...copy,
+          enabled,
+          disabledReason: enabled ? undefined : MISSING_CLI[mode],
+        };
+      }
+      case 'copilot': {
+        // An agent from before GitHub Copilot support would open a plain shell for it.
+        if (!cliKnown(input.capabilities, mode)) {
+          return {
+            mode,
+            ...copy,
+            enabled: false,
+            disabledReason: 'Update Mobaide on your PC to use GitHub Copilot.',
           };
         }
         const enabled = cliEnabled(input.capabilities, mode);

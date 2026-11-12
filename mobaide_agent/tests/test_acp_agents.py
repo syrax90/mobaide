@@ -1,8 +1,9 @@
-"""Tests for the ACP launch specs: which command starts the Claude, Codex and
-Antigravity chat agents (including the pinned install on first use and the
-``agy help acp`` probe with its cache), the create-session options as ACP config intents
-(Antigravity's model name split into model and thinking level), the launch
-plan (Codex's shared app-server included) and the ``capabilities.chat`` map."""
+"""Tests for the ACP launch specs: which command starts the Claude, Codex,
+Antigravity and GitHub Copilot chat agents (including the pinned install on
+first use and the ``agy help acp`` probe with its cache), the create-session
+options as ACP config intents (Antigravity's model name split into model and
+thinking level), the launch plan (Codex's shared app-server included) and the
+``capabilities.chat`` map."""
 from __future__ import annotations
 
 import json
@@ -20,11 +21,13 @@ import pytest
 from mobaide.acp import agents, codex_bridge
 from mobaide.acp.agents import (
     CODEX_USER_CODE_PATTERN,
+    COPILOT_USER_CODE_PATTERN,
     AntigravityChatSpec,
     ChatAgentUnavailableError,
     ClaudeChatSpec,
     CodexChatSpec,
     ConfigIntent,
+    CopilotChatSpec,
     OpenCodeChatSpec,
     antigravity_config_intents,
     antigravity_sign_in_methods,
@@ -35,16 +38,18 @@ from mobaide.acp.agents import (
     codex_config_intents,
     codex_mode,
     codex_sign_in_methods,
+    copilot_sign_in_methods,
     fake_login_argv,
     resolve_antigravity_config,
 )
 from mobaide.acp.install import INSTALLED_MARKER
-from mobaide.acp.trust import AntigravityFolderTrust, CodexFolderTrust
+from mobaide.acp.trust import AntigravityFolderTrust, CodexFolderTrust, CopilotFolderTrust
 from mobaide.core.antigravity_launcher import AntigravityBinaryNotFoundError, AntigravityOptions
 from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError, ClaudeOptions
 from mobaide.core.cli_launcher import AdHocLaunch, LaunchSpec
 from mobaide.core import codex_auth
 from mobaide.core.codex_launcher import CodexBinaryNotFoundError, CodexOptions
+from mobaide.core.copilot_launcher import CopilotBinaryNotFoundError, CopilotOptions
 from mobaide.core.opencode_launcher import OpenCodeBinaryNotFoundError, OpenCodeOptions
 from mobaide.core.projects_config import ProjectConfig
 from tests.conftest import skip_if_not_linux
@@ -117,12 +122,36 @@ class FakeAgyLauncher:
         return LaunchSpec(argv=["agy"], cwd=cwd, env={"PATH": "/usr/bin", "LAUNCHER": "1"})
 
 
+class FakeCopilotLauncher:
+    """The three ``CopilotLauncher`` calls a chat spec makes."""
+
+    def __init__(
+        self, binary: str | None = "/opt/copilot/bin/copilot", env: dict[str, str] | None = None
+    ) -> None:
+        self.binary = binary
+        self.env = env or {}
+        self.resolved: list[tuple[object, CopilotOptions]] = []
+
+    def resolve_binary(self) -> str:
+        if self.binary is None:
+            raise CopilotBinaryNotFoundError(searched_paths=["PATH:copilot"])
+        return self.binary
+
+    async def resolve_cwd(self, target, options) -> str:
+        self.resolved.append((target, options))
+        return target.path if isinstance(target, ProjectConfig) else target.cwd
+
+    def build_env(self, target) -> dict[str, str]:
+        return {"PATH": "/usr/bin", "LAUNCHER": "1", **self.env}
+
+
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     for name in (
         agents.CLAUDE_ACP_COMMAND_ENV,
         agents.CODEX_ACP_COMMAND_ENV,
         agents.ANTIGRAVITY_ACP_COMMAND_ENV,
+        agents.COPILOT_ACP_COMMAND_ENV,
         agents.REAL_IN_TEST_ENV,
         "CLAUDE_CODE_EXECUTABLE",
         "CODEX_PATH",
@@ -1066,6 +1095,118 @@ class TestOpenCodePrepare:
         assert build_chat_capabilities(missing) == {}
 
 
+class TestCopilotCommand:
+    def test_copilot_runs_its_own_acp_server(self):
+        spec = CopilotChatSpec(FakeCopilotLauncher())
+
+        assert spec.command() == ["/opt/copilot/bin/copilot", "--acp"]
+        assert spec.available() is True
+        assert spec.uses_fake_agent() is False
+
+    def test_no_copilot_is_unavailable(self):
+        spec = CopilotChatSpec(FakeCopilotLauncher(binary=None))
+
+        assert spec.command() is None
+        assert spec.available() is False
+
+    def test_the_registry_gives_copilot_its_command_override(self):
+        specs = build_chat_agents(
+            {"copilot": FakeCopilotLauncher(binary=None), "shell": object()},
+            command_overrides={"copilot": "copilot-dev --acp"},
+        )
+
+        assert list(specs) == ["copilot"]
+        assert specs["copilot"].kind == "copilot"
+        assert specs["copilot"].command() == ["copilot-dev", "--acp"]
+
+
+class TestCopilotPrepare:
+    async def test_plan_runs_in_home_and_opens_the_session_folder(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        project = tmp_path / "work" / "app"
+        project.mkdir(parents=True)
+        copilot_home = tmp_path / "copilot-home"
+        copilot_home.mkdir()
+        (copilot_home / "config.json").write_text(
+            "// This file is managed automatically.\n"
+            + json.dumps({"trustedFolders": [os.path.realpath(project)]}),
+            encoding="utf-8",
+        )
+        launcher = FakeCopilotLauncher(env={"COPILOT_HOME": str(copilot_home)})
+        spec = CopilotChatSpec(launcher)
+        options = CopilotOptions(allow_all=True)
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(project)), options)
+
+        assert plan.argv == ["/opt/copilot/bin/copilot", "--acp"]
+        # The folder goes to Copilot in ``session/new``; the server runs in home.
+        assert plan.cwd == str(project)
+        assert plan.process_cwd == str(home)
+        assert plan.env["LAUNCHER"] == "1"
+        # ``allow_all`` is a config option of the session, never a launch flag.
+        assert plan.initial_config == [ConfigIntent("on", option_id="allow_all")]
+        assert plan.initial_prompt is None
+        # The trust record is the one of the Copilot the launch env points to.
+        assert isinstance(plan.trust, CopilotFolderTrust)
+        assert plan.trust.is_trusted() is True
+        assert [(m.id, m.argv) for m in plan.sign_in] == [
+            ("github", ["/opt/copilot/bin/copilot", "login", "--device-code"])
+        ]
+        assert plan.sign_in[0].env["COPILOT_HOME"] == str(copilot_home)
+
+    async def test_a_folder_copilot_does_not_trust_yet_gets_the_trust_gate(self, tmp_path):
+        """``copilot --acp`` loads a folder's hooks and MCP servers without its
+        own trust question, so the chat must ask first."""
+        project = tmp_path / "work" / "app"
+        project.mkdir(parents=True)
+        launcher = FakeCopilotLauncher(env={"COPILOT_HOME": str(tmp_path / "copilot-home")})
+
+        plan = await CopilotChatSpec(launcher).prepare(
+            AdHocLaunch(cwd=str(project)), CopilotOptions()
+        )
+
+        assert isinstance(plan.trust, CopilotFolderTrust)
+        assert plan.trust.is_trusted() is False
+        assert plan.initial_config == []
+        assert plan.initial_prompt is None
+
+    async def test_no_copilot_fails_before_the_launcher_runs(self, tmp_path):
+        launcher = FakeCopilotLauncher(binary=None)
+        spec = CopilotChatSpec(launcher)
+
+        with pytest.raises(ChatAgentUnavailableError) as excinfo:
+            await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), CopilotOptions(worktree=True))
+
+        assert excinfo.value.kind == "copilot"
+        assert "npm install -g @github/copilot" in str(excinfo.value)
+        # The launcher would have made a worktree for a session that never starts.
+        assert launcher.resolved == []
+
+    async def test_fake_agent_has_no_trust_gate_and_a_fake_device_login(self, tmp_path):
+        spec = CopilotChatSpec(FakeCopilotLauncher(binary=None), test_mode=True)
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), CopilotOptions(allow_all=True))
+
+        assert plan.argv[-2:] == ["--flavor", "copilot"]
+        assert plan.trust is None
+        assert plan.initial_config == [ConfigIntent("on", option_id="allow_all")]
+        assert [m.argv for m in plan.sign_in] == [[*fake_login_argv("copilot"), "--device"]]
+
+    async def test_catalog_plan_finds_the_node_next_to_an_npm_copilot(self, bin_dir):
+        """An npm install of Copilot is a Node script whose ``node`` sits next
+        to it; without that folder on ``PATH`` the stored sessions do not list."""
+        spec = CopilotChatSpec(FakeCopilotLauncher())
+
+        plan = await spec.catalog_plan()
+
+        assert plan.argv == ["/opt/copilot/bin/copilot", "--acp"]
+        assert plan.env["PATH"].split(os.pathsep) == ["/opt/copilot/bin", str(bin_dir)]
+        assert plan.cwd == os.path.expanduser("~")
+
+
 def _agy_setup(*, available_models: bool = True) -> dict:
     """The ``session/new`` result of ``agy acp`` 1.5: ``model`` and
     ``thought_level`` options, and one ``availableModels`` entry per model and
@@ -1362,7 +1503,13 @@ class TestSignInMethods:
         assert [m.argv for m in methods] == [fake_login_argv(), fake_login_argv()]
 
     @pytest.mark.parametrize(
-        "build", [claude_sign_in_methods, codex_sign_in_methods, antigravity_sign_in_methods]
+        "build",
+        [
+            claude_sign_in_methods,
+            codex_sign_in_methods,
+            antigravity_sign_in_methods,
+            copilot_sign_in_methods,
+        ],
     )
     def test_no_binary_means_no_sign_in(self, build):
         assert build(None, {"PATH": "/usr/bin"}) == []
@@ -1430,3 +1577,33 @@ class TestSignInMethods:
         assert method.argv == ["/opt/agy/bin/agy", "acp", "--login"]
         assert method.reads_code is True
         assert method.input_label == "Code or address from the sign-in page"
+
+    def test_copilot_shows_a_one_time_code_and_reads_nothing(self):
+        (method,) = copilot_sign_in_methods("/opt/copilot/bin/copilot", {"COPILOT_HOME": "/c"})
+
+        assert method.id == "github"
+        assert method.argv == ["/opt/copilot/bin/copilot", "login", "--device-code"]
+        assert method.env == {"COPILOT_HOME": "/c"}
+        assert method.cwd == os.path.expanduser("~")
+        assert method.user_code_pattern == COPILOT_USER_CODE_PATTERN
+        assert method.reads_code is False
+        assert method.submit_secret is None
+
+    @pytest.mark.parametrize(
+        ("text", "code"),
+        [
+            (
+                "To authenticate, visit https://github.com/login/device and enter code 1A2B-3C4D\n"
+                "Waiting for authorization...\n",
+                "1A2B-3C4D",
+            ),
+            ("To authenticate, visit https://github.com/login/device and enter code\n", None),
+            ("enter code ABCD-12345\n", None),
+            ("enter code abcd-1234\n", None),
+        ],
+        ids=["the-login-line", "code-not-printed-yet", "too-long", "lower-case"],
+    )
+    def test_the_copilot_one_time_code_pattern(self, text, code):
+        match = re.search(COPILOT_USER_CODE_PATTERN, text)
+
+        assert (match.group(0) if match else None) == code

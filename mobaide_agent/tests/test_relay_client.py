@@ -3859,6 +3859,145 @@ class TestHandleProxyRequestOpenCode:
         assert resp["body"]["searched_paths"] == ["PATH:opencode"]
 
 
+class TestHandleCreateSessionCopilot:
+    """The control-channel ``create_session`` path must support GitHub
+    Copilot: parse ``copilot_options``, thread the ``cli`` discriminator into a
+    COPILOT ``SessionConfig``, and answer ``session_create_failed`` for a block
+    it cannot parse. No auth case: Copilot has no sign-in probe.
+    """
+
+    async def test_create_session_forwards_copilot_options_and_kind(
+        self, client, mock_session_manager,
+    ):
+        """An explicit ``cli="copilot"`` plus a ``copilot_options`` block must
+        reach ``create_session`` as a COPILOT ``SessionConfig`` that carries the
+        parsed :class:`CopilotOptions` and no other options block. Otherwise
+        ``allow_all`` and the worktree are dropped on the relay control path."""
+        from mobaide.core.copilot_launcher import CopilotOptions
+        from mobaide.core.models import SessionConfig
+
+        async def _capture(config: SessionConfig):
+            _capture.config = config  # type: ignore[attr-defined]
+            s = MagicMock()
+            s.session_id = "copilot-sess"
+            s.pid = 7
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "copilot-sess",
+            "cli": "copilot",
+            "copilot_options": {
+                "allow_all": True,
+                "worktree": True,
+                "branch_name": "feature/x",
+            },
+        }
+        payload = json.dumps(ctrl).encode()
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(payload, ws)
+
+        cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
+        assert cfg.kind is SessionKind.COPILOT
+        assert cfg.claude_options is None
+        assert cfg.codex_options is None
+        assert cfg.antigravity_options is None
+        assert cfg.copilot_options == CopilotOptions(
+            allow_all=True, worktree=True, branch_name="feature/x",
+        )
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_created"
+        assert resp["session_id"] == "copilot-sess"
+        assert resp["pid"] == 7
+
+
+class TestHandleProxyRequestCopilot:
+    """``POST /api/sessions`` proxied through the central relay
+    (``proxy_request`` control frame) must thread GitHub Copilot the same way
+    the direct HTTP router does: this is the path the mobile and web clients
+    use.
+    """
+
+    async def test_proxy_post_sessions_threads_copilot_options(
+        self, client, mock_session_manager,
+    ):
+        """A proxied ``POST /api/sessions`` body with ``cli="copilot"`` builds a
+        COPILOT ``SessionConfig`` from ``copilot_options`` and returns a 201
+        ``proxy_response`` whose body reports ``kind == "copilot"``."""
+        from mobaide.core.copilot_launcher import CopilotOptions
+        from mobaide.core.models import SessionConfig
+
+        captured: dict[str, SessionConfig] = {}
+
+        async def _capture(config: SessionConfig):
+            captured["config"] = config
+            s = MagicMock()
+            s.session_id = "proxy-copilot"
+            s.pid = 11
+            info = MagicMock()
+            info.session_id = "proxy-copilot"
+            info.state = SessionState.RUNNING
+            info.created_at = datetime(2026, 11, 12, 9, 0, 0, tzinfo=timezone.utc)
+            info.pid = 11
+            info.command = ["copilot"]
+            info.cwd = None
+            info.title = None
+            info.project_name = None
+            info.kind = SessionKind.COPILOT
+            info.kind_label = None
+            info.attention = None
+            info.exit_reason = None
+            info.ui = "terminal"
+            info.activity = None
+            s.to_info = MagicMock(return_value=info)
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "proxy_request",
+            "request_id": "req-copilot",
+            "method": "POST",
+            "path": "/api/sessions",
+            "body": {
+                "cli": "copilot",
+                "copilot_options": {
+                    "allow_all": True,
+                    "worktree": True,
+                    "branch_name": "feature/x",
+                    "base_branch": "origin/dev",
+                },
+            },
+        }
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        cfg = captured["config"]
+        assert cfg.kind is SessionKind.COPILOT
+        assert cfg.claude_options is None
+        assert cfg.codex_options is None
+        assert cfg.antigravity_options is None
+        assert cfg.copilot_options == CopilotOptions(
+            allow_all=True,
+            worktree=True,
+            branch_name="feature/x",
+            base_branch="origin/dev",
+        )
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "proxy_response"
+        assert resp["request_id"] == "req-copilot"
+        assert resp["status"] == 201
+        assert resp["body"]["kind"] == "copilot"
+
+
 CUSTOM_KIND = "custom_0123456789ab"
 
 

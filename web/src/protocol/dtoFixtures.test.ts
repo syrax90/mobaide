@@ -18,6 +18,7 @@ import {
   antigravityOptionsSchema,
   claudeOptionsSchema,
   codexOptionsSchema,
+  copilotOptionsSchema,
   createSessionRequestSchema,
   opencodeOptionsSchema,
 } from './dto/sessionCreate';
@@ -44,6 +45,7 @@ const REGISTRY: Readonly<Record<string, z.ZodType>> = {
   CodexOptionsModel: codexOptionsSchema,
   AntigravityOptionsModel: antigravityOptionsSchema,
   OpenCodeOptionsModel: opencodeOptionsSchema,
+  CopilotOptionsModel: copilotOptionsSchema,
   VersionInfoResponse: agentVersionSchema,
   CreateCustomAgentTypeRequest: createCustomAgentTypeRequestSchema,
   ProjectInfo: projectInfoSchema,

@@ -105,6 +105,10 @@ export function applyLaunchPrefs(base: WizardState, prefs: LaunchPrefs): WizardS
       prefs.opencode === null
         ? base.opencode
         : { autoApprove: prefs.opencode.autoApprove, terminalUi: prefs.opencode.terminalUi },
+    copilot:
+      prefs.copilot === null
+        ? base.copilot
+        : { allowAll: prefs.copilot.allowAll, terminalUi: prefs.copilot.terminalUi },
   };
 }
 
@@ -179,6 +183,14 @@ export function launchPrefsFromState(
         prefs: {
           autoApprove: state.opencode.autoApprove,
           terminalUi: state.opencode.terminalUi,
+        },
+      };
+    case 'copilot':
+      return {
+        kind: 'copilot',
+        prefs: {
+          allowAll: state.copilot.allowAll,
+          terminalUi: state.copilot.terminalUi,
         },
       };
     default:

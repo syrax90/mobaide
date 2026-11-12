@@ -28,6 +28,13 @@
         "text": "uh add a retry to the fetch helper",
         "kind": "opencode"
       }
+    },
+    {
+      "name": "copilot_session",
+      "wire": {
+        "text": "um open a pull request for the uh login fix",
+        "kind": "copilot"
+      }
     }
   ]
 }

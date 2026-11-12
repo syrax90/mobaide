@@ -629,7 +629,12 @@ fun VoiceCleanupToggle(
         PixelAlertDialog(
             onDismissRequest = { noticeOpen = false },
             title = { Text(VoiceCleanupCopy.NOTICE_TITLE) },
-            text = { Text(VoiceCleanupCopy.notice(agentName)) },
+            text = {
+                Text(
+                    VoiceCleanupCopy.notice(agentName),
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                )
+            },
             confirmButton = {
                 PixelButton(
                     text = "Got it",
@@ -655,8 +660,9 @@ object VoiceCleanupCopy {
     fun notice(agentName: String): String =
         "The session's AI agent on $agentName cleans up each transcript with its cheapest model: " +
             "Claude Haiku for Claude Code, GPT Luna for Codex, Gemini Flash for Antigravity; " +
-            "OpenCode uses its default model. It runs under your own account: the text goes to " +
-            "that agent's provider and counts toward your usage. Mobaide doesn't store it."
+            "OpenCode uses its default model; GitHub Copilot uses its default model. It runs under " +
+            "your own account: the text goes to that agent's provider and counts toward your usage. " +
+            "Mobaide doesn't store it."
 }
 
 @Composable

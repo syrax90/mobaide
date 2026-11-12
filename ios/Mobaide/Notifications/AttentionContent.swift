@@ -22,6 +22,7 @@ enum AttentionContent {
         case .codex: return "Codex session"
         case .antigravity: return "Antigravity session"
         case .opencode: return "OpenCode session"
+        case .copilot: return "GitHub Copilot session"
         case .autoScan: return "Auto Scan session"
         case .shell: return "Terminal session"
         case .custom:

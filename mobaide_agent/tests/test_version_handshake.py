@@ -22,8 +22,9 @@ async def test_get_version(client) -> None:
     assert body["latest_agent_version"] is None
     # capabilities.cli now reports per-CLI binary availability so the Android
     # mode-picker can gray out a CLI that isn't installed. The autouse
-    # _pin_claude_binary / _pin_codex_binary / _pin_antigravity_binary fixtures
-    # make all three resolve, so all report available. The entries stay bare
+    # _pin_claude_binary / _pin_codex_binary / _pin_antigravity_binary /
+    # _pin_opencode_binary / _pin_copilot_binary fixtures make all five resolve,
+    # so all report available. The entries stay bare
     # {"available": bool} because the ASGITransport fixtures never run the app
     # lifespan, so the model-cache warm task never fires.
     assert body["capabilities"] == {
@@ -32,6 +33,7 @@ async def test_get_version(client) -> None:
             "codex": {"available": True},
             "antigravity": {"available": True},
             "opencode": {"available": True},
+            "copilot": {"available": True},
         },
         "git": {
             "changes": True,
@@ -54,13 +56,14 @@ async def test_get_version(client) -> None:
             "max_seconds": 120,
             "max_chunk_bytes": 65536,
             "cleanup": True,
-            "cleanup_kinds": ["claude", "codex", "antigravity", "opencode"],
+            "cleanup_kinds": ["claude", "codex", "antigravity", "opencode", "copilot"],
         },
         "fs": {"dirs": True, "windows_paths": sys.platform == "win32"},
         "chat": {
             "claude": {"resume": True, "live": False},
             "codex": {"resume": True, "live": sys.platform != "win32"},
             "opencode": {"resume": True, "live": False},
+            "copilot": {"resume": True, "live": False},
         },
     }
     # The signed manifest body now travels inline over the relay WebSocket
@@ -107,7 +110,12 @@ async def test_get_version_all_clis_missing_still_returns_200(
     """A host with no managed CLI installed must not error the version endpoint —
     all report unavailable and the client falls back to its optimistic default
     plus the create-time 503 backstop."""
-    from mobaide.core import antigravity_launcher, claude_launcher, codex_launcher
+    from mobaide.core import (
+        antigravity_launcher,
+        claude_launcher,
+        codex_launcher,
+        copilot_launcher,
+    )
 
     def _claude_raise(*_a, **_kw):
         raise claude_launcher.ClaudeBinaryNotFoundError(["PATH:claude"])
@@ -118,7 +126,11 @@ async def test_get_version_all_clis_missing_still_returns_200(
     def _antigravity_raise(*_a, **_kw):
         raise antigravity_launcher.AntigravityBinaryNotFoundError(["PATH:agy"])
 
+    def _copilot_raise(*_a, **_kw):
+        raise copilot_launcher.CopilotBinaryNotFoundError(["PATH:copilot"])
+
     monkeypatch.setattr(claude_launcher, "_resolve_claude_binary", _claude_raise)
+    monkeypatch.setattr(copilot_launcher, "_resolve_copilot_binary", _copilot_raise)
     monkeypatch.setattr(codex_launcher, "_resolve_codex_binary", _codex_raise)
     monkeypatch.setattr(
         antigravity_launcher, "_resolve_agy_binary", _antigravity_raise
@@ -131,6 +143,7 @@ async def test_get_version_all_clis_missing_still_returns_200(
         "codex": {"available": False},
         "antigravity": {"available": False},
         "opencode": {"available": True},
+        "copilot": {"available": False},
     }
 
 
@@ -254,3 +267,25 @@ async def test_get_version_waits_for_a_pending_model_warmup(app, client) -> None
     assert response.status_code == 200
     codex = response.json()["capabilities"]["cli"]["codex"]
     assert codex["models"] == ["gpt-5.6-sol"]
+
+
+async def test_get_version_lists_copilot_even_when_it_is_not_installed(
+    client, monkeypatch
+) -> None:
+    """The clients read a ``capabilities.cli`` map without a ``copilot`` key as
+    an agent from before GitHub Copilot support, and ask the user to update
+    Mobaide on the PC. So the key must stay when the CLI is missing: only
+    ``available`` flips, as for the other CLIs."""
+    from mobaide.core import copilot_launcher
+
+    def _raise(*_a, **_kw):
+        raise copilot_launcher.CopilotBinaryNotFoundError(["PATH:copilot"])
+
+    monkeypatch.setattr(copilot_launcher, "_resolve_copilot_binary", _raise)
+
+    response = await client.get("/api/version")
+
+    assert response.status_code == 200
+    cli = response.json()["capabilities"]["cli"]
+    assert cli["copilot"] == {"available": False}
+    assert cli["claude"] == {"available": True}

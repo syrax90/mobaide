@@ -39,6 +39,7 @@ from mobaide.acp.agents import (
     ConfigIntent,
     claude_sign_in_methods,
     codex_sign_in_methods,
+    copilot_sign_in_methods,
     fake_agent_argv,
     resolve_antigravity_config,
 )
@@ -1709,6 +1710,32 @@ def _sent_items(m: TimelineMirror, item_id: str) -> list[dict[str, Any]]:
     ]
 
 
+_RUNNING_MAKE = {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "make",
+    "title": "make",
+    "kind": "execute",
+    "status": "pending",
+}
+_AGENT_TEXT = {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Still running."}}
+
+
+def _agent_sends(m: TimelineMirror, update: dict[str, Any]) -> None:
+    """Apply one ``session/update`` as if ``MINI_AGENT`` sent it."""
+    m.session._on_notification("session/update", {"sessionId": "mini", "update": update})
+
+
+def _whole_output(tool: str, text: str, **fields: Any) -> dict[str, Any]:
+    """An update the way Copilot sends command output: all of it so far, as
+    ``content``."""
+    return {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": tool,
+        **fields,
+        "content": [{"type": "content", "content": {"type": "text", "text": text}}],
+    }
+
+
 class TestCommandOutput:
     async def test_terminal_output_becomes_one_console_part(self, open_chat, monkeypatch):
         monkeypatch.setattr(session_mod, "CONSOLE_RENDER_INTERVAL", 0.05)
@@ -1773,6 +1800,76 @@ class TestCommandOutput:
         ]
         [part] = m.items["make"]["content"]
         assert "line 0" in part["text"] and "done" in part["text"]
+
+    async def test_whole_output_updates_wait_for_their_frame_and_other_changes_go_out_at_once(
+        self, open_chat, monkeypatch
+    ):
+        """Copilot sends the whole output so far with each chunk. No frame is
+        due here before the command ends: only the start, the new title and
+        the end re-send the tool."""
+        monkeypatch.setattr(session_mod, "CONSOLE_RENDER_INTERVAL", 3600.0)
+        m = await open_chat(argv=MINI_AGENT_ARGV)
+        _agent_sends(m, _RUNNING_MAKE)
+        await m.until(lambda: "make" in m.items)
+
+        _agent_sends(m, _whole_output("make", "line 0\n"))
+        _agent_sends(m, _whole_output("make", "line 0\nline 1\n"))
+        # A frame from the two updates above would come no later than this text.
+        _agent_sends(m, _AGENT_TEXT)
+        await m.until(lambda: _AGENT_TEXT["content"]["text"] in m.texts("agent"))
+        assert len(_sent_items(m, "make")) == 1
+
+        _agent_sends(m, _whole_output("make", "line 0\nline 1\nline 2\n", title="make test"))
+        await m.until(lambda: m.items["make"]["title"] == "make test")
+        _agent_sends(
+            m,
+            _whole_output(
+                "make",
+                "line 0\nline 1\nline 2\ndone\n<shellId: 0 completed with exit code 0>",
+                status="completed",
+            ),
+        )
+        await m.until(lambda: m.items["make"]["status"] == "completed")
+
+        assert [(item["status"], item["title"], item["content"]) for item in _sent_items(m, "make")] == [
+            ("pending", "make", []),
+            ("pending", "make test", [{"type": "text", "text": "line 0\nline 1\nline 2\n"}]),
+            (
+                "completed",
+                "make test",
+                [{"type": "text", "text": "```console\nline 0\nline 1\nline 2\ndone\n```"}],
+            ),
+        ]
+
+    async def test_whole_output_goes_out_one_frame_later_and_the_end_drops_a_frame_not_yet_sent(
+        self, open_chat, monkeypatch
+    ):
+        # The frame of an output update is due on the next loop pass.
+        monkeypatch.setattr(session_mod, "CONSOLE_RENDER_INTERVAL", 0.0)
+        m = await open_chat(argv=MINI_AGENT_ARGV)
+        _agent_sends(m, _RUNNING_MAKE)
+        await m.until(lambda: "make" in m.items)
+
+        _agent_sends(m, _whole_output("make", "line 0\n"))
+        _agent_sends(m, _whole_output("make", "line 0\nline 1\n"))
+        await m.until(lambda: bool(m.items["make"]["content"]))
+
+        _agent_sends(m, _whole_output("make", "line 0\nline 1\nline 2\n"))
+        _agent_sends(
+            m,
+            _whole_output(
+                "make", "line 0\nline 1\nline 2\n<shellId: 0 completed with exit code 0>", status="completed"
+            ),
+        )
+        # A frame the end did not cancel would come no later than this text.
+        _agent_sends(m, _AGENT_TEXT)
+        await m.until(lambda: _AGENT_TEXT["content"]["text"] in m.texts("agent"))
+
+        assert [(item["status"], item["content"]) for item in _sent_items(m, "make")] == [
+            ("pending", []),
+            ("pending", [{"type": "text", "text": "line 0\nline 1\n"}]),
+            ("completed", [{"type": "text", "text": "```console\nline 0\nline 1\nline 2\n```"}]),
+        ]
 
     async def test_the_least_recently_updated_command_loses_its_output_first(
         self, open_chat, monkeypatch
@@ -1903,6 +2000,212 @@ class TestAntigravityModel:
 
         assert m.status == "ready"
         await m.until(lambda: {o["id"]: o["value"] for o in m.state["config"]} == values)
+
+
+class TestCopilotChat:
+    """A chat on ``copilot --acp``, against the fake agent's Copilot flavor."""
+
+    AGENT_MODE = "https://agentclientprotocol.com/protocol/session-modes#agent"
+
+    @staticmethod
+    def _config(m: TimelineMirror) -> dict[str, Any]:
+        return {o["id"]: o["value"] for o in m.state["config"]}
+
+    async def test_allow_all_from_the_wizard_turns_on_the_session_option(self, open_chat):
+        m = await open_chat(
+            argv=fake_agent_argv("copilot"),
+            initial_config=[ConfigIntent("on", option_id="allow_all")],
+        )
+
+        assert m.status == "ready"
+        await m.until(lambda: self._config(m) == {"mode": self.AGENT_MODE, "allow_all": "on"})
+
+    async def test_without_the_wizard_option_copilot_keeps_asking(self, open_chat):
+        m = await open_chat(argv=fake_agent_argv("copilot"))
+
+        assert m.status == "ready"
+        await m.until(lambda: bool(m.state.get("config")))
+        assert self._config(m) == {"mode": self.AGENT_MODE, "allow_all": "off"}
+
+    async def test_a_finished_command_shows_its_output_without_the_shell_line(self, open_chat):
+        m = await open_chat(argv=fake_agent_argv("copilot"))
+
+        await m.command("prompt", text="tools")
+        await m.until(_turn_done(m, "Done: I updated `main()` and the tests pass."))
+
+        run = next(t for t in m.of_type("tool") if t["title"] == "Run the tests")
+        assert run["status"] == "completed"
+        assert run["content"] == [
+            {"type": "text", "text": "```console\n....\n4 passed in 0.12s\n```"}
+        ]
+        sent = [
+            p.get("text", "")
+            for f in m.frames
+            if f["t"] == "events"
+            for ev in f["events"]
+            if ev["type"] == "item" and ev["item"]["id"] == run["id"]
+            for p in ev["item"]["content"]
+        ]
+        assert not any("shellId" in text for text in sent), sent
+
+
+# Opens the stored session ``conv-9`` and lists it second, as "Fix the login
+# handler". Logs each request as one JSON line ``{"method", "params"}`` to
+# argv[1] and echoes prompts. argv[2] picks the rest: ``plain`` replays no
+# title; ``replayed`` replays the title "Replayed title"; ``no-list`` does not
+# advertise ``session/list``; ``late`` sends the title "Live title" just
+# before its ``session/list`` answer.
+STORED_TITLE_AGENT = r"""
+import json, sys
+log = open(sys.argv[1], "a", encoding="utf-8")
+script = sys.argv[2]
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+def update(body):
+    send({"method": "session/update", "params": {"sessionId": "conv-9", "update": body}})
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg or "method" not in msg:
+        continue
+    method, params = msg["method"], msg.get("params") or {}
+    log.write(json.dumps({"method": method, "params": params}) + "\n")
+    log.flush()
+    if method == "initialize":
+        session_caps = {} if script == "no-list" else {"list": {}}
+        caps = {"loadSession": True, "sessionCapabilities": session_caps}
+        result = {"protocolVersion": 1, "agentCapabilities": caps}
+    elif method == "session/load":
+        update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Earlier answer."}})
+        if script == "replayed":
+            update({"sessionUpdate": "session_info_update", "title": "Replayed title"})
+        result = {}
+    elif method == "session/list":
+        if script == "late":
+            update({"sessionUpdate": "session_info_update", "title": "Live title"})
+        result = {"sessions": [
+            {"sessionId": "conv-8", "cwd": params.get("cwd"), "title": "Another session"},
+            {"sessionId": "conv-9", "cwd": params.get("cwd"), "title": "Fix the login handler"}]}
+    elif method == "session/prompt":
+        text = " ".join(block.get("text", "") for block in params["prompt"])
+        update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "echo " + text}})
+        result = {"stopReason": "end_turn"}
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+
+
+def _stored_title_agent(log, script: str) -> list[str]:
+    return [sys.executable, "-c", STORED_TITLE_AGENT, str(log), script]
+
+
+def _params_of(log, method: str) -> list[dict[str, Any]]:
+    """The params of each ``method`` request in a ``{"method", "params"}`` log."""
+    entries = [orjson.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    return [entry["params"] for entry in entries if entry["method"] == method]
+
+
+class TestContinuedSessionTitle:
+    """Copilot replays a stored session without its title: the chat takes the
+    title from the agent's own session list."""
+
+    async def test_a_replay_without_a_title_takes_it_from_the_session_list(
+        self, open_chat, tmp_path
+    ):
+        log = tmp_path / "agent.log"
+
+        m = await open_chat(load_session_id="conv-9", argv=_stored_title_agent(log, "plain"))
+        await m.until(lambda: m.state.get("title") == "Fix the login handler")
+
+        # The sessions list of the clients reads the row, not the chat state.
+        assert m.session.to_info().title == "Fix the login handler"
+        assert "title" in m.session_events
+        assert _params_of(log, "session/list") == [{"cwd": str(tmp_path)}]
+
+    @pytest.mark.parametrize(
+        ("script", "title"),
+        [("replayed", "Replayed title"), ("no-list", None)],
+        ids=["title-in-the-replay", "agent-without-session-list"],
+    )
+    async def test_the_session_list_is_not_asked(self, open_chat, tmp_path, script, title):
+        log = tmp_path / "agent.log"
+        m = await open_chat(load_session_id="conv-9", argv=_stored_title_agent(log, script))
+
+        # A lookup would reach the agent before this prompt.
+        await m.command("prompt", text="hello")
+        await m.until(_turn_done(m, "echo hello"))
+
+        assert _params_of(log, "session/list") == []
+        assert m.state.get("title") == title
+
+    async def test_a_title_that_arrives_during_the_lookup_wins(self, open_chat, tmp_path):
+        log = tmp_path / "agent.log"
+        m = await open_chat(load_session_id="conv-9", argv=_stored_title_agent(log, "late"))
+
+        # The lookup is answered before this turn ends.
+        await m.command("prompt", text="hello")
+        await m.until(_turn_done(m, "echo hello"))
+
+        assert len(_params_of(log, "session/list")) == 1
+        assert m.state["title"] == "Live title"
+        assert m.session.to_info().title == "Live title"
+
+
+_NOTES_PATH = "/project/notes.md"
+_CREATED_NOTES = {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "create",
+    "title": "Create notes.md",
+    "kind": "edit",
+    "status": "completed",
+    "locations": [{"path": _NOTES_PATH}],
+}
+
+
+def _agent_text(text: str, **fields: Any) -> dict[str, Any]:
+    return {"sessionUpdate": "agent_message_chunk", **fields, "content": {"type": "text", "text": text}}
+
+
+class TestToolPathNote:
+    """Copilot follows a file tool with a message that only names the file
+    again ("Info: <path>"); the tool item already shows that path."""
+
+    async def test_the_note_that_repeats_the_tool_path_is_not_shown(self, open_chat):
+        m = await open_chat(argv=MINI_AGENT_ARGV)
+
+        _agent_sends(m, _CREATED_NOTES)
+        _agent_sends(m, _agent_text(f"Info: {_NOTES_PATH}"))
+        _agent_sends(m, _agent_text("The notes are ready."))
+        await m.until(lambda: bool(m.texts("agent")))
+
+        assert m.texts("agent") == ["The notes are ready."]
+        assert m.items["create"]["locations"] == [{"path": _NOTES_PATH}]
+
+    @pytest.mark.parametrize(
+        ("tool", "note"),
+        [
+            (_CREATED_NOTES, _agent_text(f"Note: {_NOTES_PATH}")),
+            (_CREATED_NOTES, _agent_text("Info: /project/other.md")),
+            (_CREATED_NOTES, _agent_text(f"Info: {_NOTES_PATH}", messageId="answer-1")),
+            (None, _agent_text(f"Info: {_NOTES_PATH}")),
+        ],
+        ids=["other-prefix", "another-path", "part-of-a-message", "no-tool-before"],
+    )
+    async def test_any_other_agent_text_is_shown(self, open_chat, tool, note):
+        m = await open_chat(argv=MINI_AGENT_ARGV)
+
+        if tool is not None:
+            _agent_sends(m, tool)
+        _agent_sends(m, note)
+        _agent_sends(m, _agent_text(" Done."))
+        await m.until(lambda: "".join(m.texts("agent")).endswith(" Done."))
+
+        assert "".join(m.texts("agent")) == note["content"]["text"] + " Done."
 
 
 # Logs each request to argv[1] as one line: the method, and for a prompt its
@@ -2340,6 +2643,13 @@ class TestSignIn:
             "sign_in": codex_sign_in_methods(None, os.environ, fake=True),
         }
 
+    @staticmethod
+    def _copilot() -> dict[str, Any]:
+        return {
+            "argv": fake_agent_argv("copilot"),
+            "sign_in": copilot_sign_in_methods(None, os.environ, fake=True),
+        }
+
     async def _at_the_code_field(self, m: TimelineMirror) -> dict[str, Any]:
         started = await m.command("sign_in", action="start", method="claude_ai")
         assert started["ok"] is True
@@ -2542,6 +2852,26 @@ class TestSignIn:
         request = _sign_in(m)
         assert request["url"] == "https://example.com/codex/sign-in?state=fake"
         assert request["user_code"] == "FAKE-12345"
+        assert (request["input"], request["busy"]) == (None, True)
+
+        await m.until(lambda: m.status == "ready" and self.SIGNED_IN in _notices(m))
+        assert not signed_out.exists()
+
+    async def test_a_copilot_device_login_reads_the_page_and_the_code_from_one_line(
+        self, open_chat, signed_out
+    ):
+        """``copilot login --device-code`` prints the page and the code in one
+        line; Copilot refuses ``session/new`` until the login is done."""
+        m = await open_chat(**self._copilot())
+        await m.until(lambda: m.status == "error" and _sign_in(m) is not None)
+        assert m.state["error"] == self.NOT_SIGNED_IN
+        assert [x["id"] for x in _sign_in(m)["methods"]] == ["github"]
+
+        await m.command("sign_in", action="start", method="github")
+        await m.until(lambda: _sign_in(m)["url"] is not None)
+        request = _sign_in(m)
+        assert request["url"] == "https://example.com/copilot/sign-in?state=fake"
+        assert request["user_code"] == "FAKE-1234"
         assert (request["input"], request["busy"]) == (None, True)
 
         await m.until(lambda: m.status == "ready" and self.SIGNED_IN in _notices(m))

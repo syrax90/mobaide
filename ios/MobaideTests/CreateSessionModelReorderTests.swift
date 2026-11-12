@@ -128,7 +128,10 @@ final class CreateSessionModelReorderTests: XCTestCase {
 
         XCTAssertEqual(
             ordered.map(\.orderId),
-            ["custom_bbbbbbbbbbbb", "shell", "codex", "claude", "antigravity", "opencode", "auto_scan", "custom_aaaaaaaaaaaa"],
+            [
+                "custom_bbbbbbbbbbbb", "shell", "codex", "claude", "antigravity", "opencode", "copilot",
+                "auto_scan", "custom_aaaaaaaaaaaa",
+            ],
             "a custom type created after the last reorder goes after everything the user arranged"
         )
     }
@@ -139,13 +142,16 @@ final class CreateSessionModelReorderTests: XCTestCase {
             by: ["custom_deleted0000", "auto_scan", "future_mode"]
         )
 
-        XCTAssertEqual(ordered.map(\.orderId), ["auto_scan", "claude", "codex", "antigravity", "opencode", "shell"])
+        XCTAssertEqual(
+            ordered.map(\.orderId),
+            ["auto_scan", "claude", "codex", "antigravity", "opencode", "copilot", "shell"]
+        )
     }
 
     func testOrderIdsMatchTheWireIdsOfEveryClient() {
         XCTAssertEqual(
             (CreateSessionModel.Mode.builtIn + [.custom("ab12cd34ef56")]).map(\.orderId),
-            ["claude", "codex", "antigravity", "opencode", "auto_scan", "shell", "custom_ab12cd34ef56"]
+            ["claude", "codex", "antigravity", "opencode", "copilot", "auto_scan", "shell", "custom_ab12cd34ef56"]
         )
     }
 
@@ -160,7 +166,7 @@ final class CreateSessionModelReorderTests: XCTestCase {
         await typesRepo.applyModeOrder(SessionModeOrderDto(order: ["shell", "codex"], version: 2, updated_at: "u"))
 
         await waitUntil { model.orderedModes.first == .shell }
-        XCTAssertEqual(model.orderedModes, [.shell, .codex, .standard, .antigravity, .opencode, .autoScan])
+        XCTAssertEqual(model.orderedModes, [.shell, .codex, .standard, .antigravity, .opencode, .copilot, .autoScan])
     }
 
     func testMoveModesSavesTheWholeIdListAndShowsIt() async throws {
@@ -168,15 +174,18 @@ final class CreateSessionModelReorderTests: XCTestCase {
         let model = makeModel(typesRepo: typesRepo)
         let observer = Task { await model.observeModeOrder() }
         defer { observer.cancel() }
-        StubURLProtocol.enqueue(status: 200, body: orderJSON(1, ["shell", "claude", "codex", "antigravity", "opencode", "auto_scan"]))
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: orderJSON(1, ["shell", "claude", "codex", "antigravity", "opencode", "copilot", "auto_scan"])
+        )
 
-        model.moveModes(fromOffsets: IndexSet(integer: 5), toOffset: 0)
+        model.moveModes(fromOffsets: IndexSet(integer: 6), toOffset: 0)
 
         await waitUntil { typesRepo.currentModeOrder.first == "shell" && StubURLProtocol.requests.count == 1 }
         await waitUntil { model.orderedModes.first == .shell }
         let body = try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[0])
-        XCTAssertEqual(body, ["order": ["shell", "claude", "codex", "antigravity", "opencode", "auto_scan"]])
-        XCTAssertEqual(model.orderedModes, [.shell, .standard, .codex, .antigravity, .opencode, .autoScan])
+        XCTAssertEqual(body, ["order": ["shell", "claude", "codex", "antigravity", "opencode", "copilot", "auto_scan"]])
+        XCTAssertEqual(model.orderedModes, [.shell, .standard, .codex, .antigravity, .opencode, .copilot, .autoScan])
         XCTAssertNil(model.error)
     }
 

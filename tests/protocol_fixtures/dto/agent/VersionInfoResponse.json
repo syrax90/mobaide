@@ -34,7 +34,7 @@
         "protocol_versions": [6, 7],
         "min_client_version": 6,
         "capabilities": {
-          "voice": { "dictation": true, "sample_rate": 16000, "max_seconds": 120, "max_chunk_bytes": 65536, "cleanup": true, "cleanup_kinds": ["claude", "codex", "antigravity", "opencode"] }
+          "voice": { "dictation": true, "sample_rate": 16000, "max_seconds": 120, "max_chunk_bytes": 65536, "cleanup": true, "cleanup_kinds": ["claude", "codex", "antigravity", "opencode", "copilot"] }
         },
         "latest_agent_version": "0.3.14"
       }

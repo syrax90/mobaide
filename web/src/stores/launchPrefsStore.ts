@@ -81,6 +81,12 @@ export interface OpenCodeLaunchPrefs {
   terminalUi: boolean;
 }
 
+/** Android `CopilotLaunchPrefs`, iOS `CopilotLaunchPrefs`. */
+export interface CopilotLaunchPrefs {
+  allowAll: boolean;
+  terminalUi: boolean;
+}
+
 /**
  * The data half of the store. A `null` bucket means "never launched", which is
  * what keeps Auto Scan's `skipPermissions` default of `true` alive for a fresh
@@ -92,6 +98,7 @@ export interface LaunchPrefs {
   codex: CodexLaunchPrefs | null;
   antigravity: AntigravityLaunchPrefs | null;
   opencode: OpenCodeLaunchPrefs | null;
+  copilot: CopilotLaunchPrefs | null;
   lastProjectName: string | null;
 }
 
@@ -102,7 +109,8 @@ export type LaunchPrefsSnapshot =
   | { kind: ClaudePrefsBucketId; prefs: ClaudeLaunchPrefs }
   | { kind: 'codex'; prefs: CodexLaunchPrefs }
   | { kind: 'antigravity'; prefs: AntigravityLaunchPrefs }
-  | { kind: 'opencode'; prefs: OpenCodeLaunchPrefs };
+  | { kind: 'opencode'; prefs: OpenCodeLaunchPrefs }
+  | { kind: 'copilot'; prefs: CopilotLaunchPrefs };
 
 interface LaunchPrefsState extends LaunchPrefs {
   setLaunchPrefs: (snapshot: LaunchPrefsSnapshot) => void;
@@ -156,6 +164,11 @@ export const ANTIGRAVITY_PREFS_DEFAULTS: AntigravityLaunchPrefs = {
 
 export const OPENCODE_PREFS_DEFAULTS: OpenCodeLaunchPrefs = {
   autoApprove: false,
+  terminalUi: false,
+};
+
+export const COPILOT_PREFS_DEFAULTS: CopilotLaunchPrefs = {
+  allowAll: false,
   terminalUi: false,
 };
 
@@ -332,6 +345,14 @@ function sanitizeOpenCodePrefs(raw: unknown): OpenCodeLaunchPrefs | null {
   return { autoApprove, terminalUi };
 }
 
+function sanitizeCopilotPrefs(raw: unknown): CopilotLaunchPrefs | null {
+  if (!isRecord(raw)) return null;
+  const allowAll = field(raw, 'allowAll', COPILOT_PREFS_DEFAULTS.allowAll, isBoolean);
+  const terminalUi = field(raw, 'terminalUi', COPILOT_PREFS_DEFAULTS.terminalUi, isBoolean);
+  if (allowAll === undefined || terminalUi === undefined) return null;
+  return { allowAll, terminalUi };
+}
+
 export const useLaunchPrefsStore = create<LaunchPrefsState>()(
   persist(
     (set) => ({
@@ -340,6 +361,7 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
       codex: null,
       antigravity: null,
       opencode: null,
+      copilot: null,
       lastProjectName: null,
       setLaunchPrefs: (snapshot) => {
         switch (snapshot.kind) {
@@ -357,6 +379,9 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
             return;
           case 'opencode':
             set({ opencode: snapshot.prefs });
+            return;
+          case 'copilot':
+            set({ copilot: snapshot.prefs });
         }
       },
       setLastProjectName: (lastProjectName) => {
@@ -379,6 +404,7 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
           codex: sanitizeCodexPrefs(saved.codex),
           antigravity: sanitizeAntigravityPrefs(saved.antigravity),
           opencode: sanitizeOpenCodePrefs(saved.opencode),
+          copilot: sanitizeCopilotPrefs(saved.copilot),
           lastProjectName:
             typeof lastProjectName === 'string' && lastProjectName !== ''
               ? lastProjectName
@@ -391,7 +417,7 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
 
 /** Non-reactive read, for the wizard's reducer initializer and prefill effect. */
 export function readLaunchPrefs(): LaunchPrefs {
-  const { claude, autoScan, codex, antigravity, opencode, lastProjectName } =
+  const { claude, autoScan, codex, antigravity, opencode, copilot, lastProjectName } =
     useLaunchPrefsStore.getState();
-  return { claude, autoScan, codex, antigravity, opencode, lastProjectName };
+  return { claude, autoScan, codex, antigravity, opencode, copilot, lastProjectName };
 }

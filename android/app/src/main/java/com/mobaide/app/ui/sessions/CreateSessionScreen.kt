@@ -209,6 +209,7 @@ fun CreateSessionScreen(
                             CreateSessionStep.CodexConfig -> "Codex session"
                             CreateSessionStep.AntigravityConfig -> "Antigravity session"
                             CreateSessionStep.OpenCodeConfig -> "OpenCode session"
+                            CreateSessionStep.CopilotConfig -> "Copilot session"
                             CreateSessionStep.AutoScanConfig -> "Auto Scan mode"
                             // TerminalConfig is shared between Terminal mode and
                             // custom agent types — title by the selected mode.
@@ -219,7 +220,9 @@ fun CreateSessionScreen(
                                             .firstOrNull { it.id == mode.typeId }?.name
                                     }
                                     ?: "Terminal session"
-                        }
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 },
                 navigationIcon = {
@@ -323,6 +326,13 @@ fun CreateSessionScreen(
                             viewModel = viewModel,
                             onContinueSession = { openResume("opencode", state.opencodeChat) },
                         )
+                        CreateSessionStep.CopilotConfig -> CopilotConfigSection(
+                            state = state,
+                            showWorktreeToggle = state.selection is ProjectSelection.Stored &&
+                                storedProject?.is_git == true,
+                            viewModel = viewModel,
+                            onContinueSession = { openResume("copilot", state.copilotChat) },
+                        )
                         CreateSessionStep.AutoScanConfig -> AutoScanConfigSection(
                             state = state,
                             viewModel = viewModel,
@@ -343,6 +353,7 @@ fun CreateSessionScreen(
         CreateSessionStep.CodexConfig -> "codex"
         CreateSessionStep.AntigravityConfig -> "antigravity"
         CreateSessionStep.OpenCodeConfig -> "opencode"
+        CreateSessionStep.CopilotConfig -> "copilot"
         else -> null
     }
     if (showResume && resumeKind != null) {
@@ -350,6 +361,7 @@ fun CreateSessionScreen(
             "codex" -> state.codexChat
             "antigravity" -> state.antigravityChat
             "opencode" -> state.opencodeChat
+            "copilot" -> state.copilotChat
             else -> state.claudeChat
         }
         LaunchedEffect(resumeKind) {
@@ -1136,6 +1148,7 @@ private fun builtInModeTitle(mode: CreateSessionMode): String = when (mode) {
     CreateSessionMode.Codex -> "Codex session"
     CreateSessionMode.Antigravity -> "Antigravity session"
     CreateSessionMode.OpenCode -> "OpenCode session"
+    CreateSessionMode.Copilot -> "GitHub Copilot session"
     CreateSessionMode.AutoScan -> "Auto Scan mode"
     CreateSessionMode.CustomShell -> "Terminal"
     is CreateSessionMode.Custom -> "Custom agent"
@@ -1175,6 +1188,14 @@ private fun BuiltInModeCard(
                 else -> "Configure and launch an OpenCode session."
             },
             "mode_card_opencode",
+        )
+        CreateSessionMode.Copilot -> Pair(
+            when {
+                !state.copilotKnown -> "Update Mobaide on your PC to use GitHub Copilot."
+                !state.copilotEnabled -> "GitHub Copilot CLI is not installed on the agent."
+                else -> "Configure and launch a GitHub Copilot session."
+            },
+            "mode_card_copilot",
         )
         CreateSessionMode.AutoScan -> Pair(
             when {
@@ -1751,6 +1772,56 @@ private fun OpenCodeConfigSection(
     PixelButton(
         style = PixelButtonStyle.Primary,
         onClick = viewModel::submitOpenCode,
+        enabled = state.selection !is ProjectSelection.None && !state.submitting,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (state.submitting) "Creating…" else "Create session")
+    }
+}
+
+@Composable
+private fun CopilotConfigSection(
+    state: CreateSessionUiState,
+    showWorktreeToggle: Boolean,
+    viewModel: CreateSessionViewModel,
+    onContinueSession: () -> Unit,
+) {
+    if (state.copilotResumeAvailable) {
+        ContinueSessionCard(
+            subtitle = "Open a GitHub Copilot session started on your PC, for example in a terminal.",
+            onClick = onContinueSession,
+        )
+    }
+
+    Text("Permissions", style = MaterialTheme.typography.labelLarge)
+    ToggleRow(
+        label = "Allow all tools, paths and URLs (dangerous)",
+        checked = state.copilotAllowAll,
+        onChange = viewModel::setCopilotAllowAll,
+    )
+    Text(
+        text = "When on, Copilot does not ask before it runs commands, edits files or opens URLs.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    if (showWorktreeToggle) {
+        ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
+
+        if (state.worktree) WorktreeBranchFields(state, viewModel)
+    }
+
+    AdvancedSection {
+        TerminalUiToggle(
+            checked = state.copilotTerminalUi,
+            lockedHint = state.copilotChatUnavailableHint,
+            onChange = viewModel::toggleCopilotTerminalUi,
+        )
+    }
+
+    PixelButton(
+        style = PixelButtonStyle.Primary,
+        onClick = viewModel::submitCopilot,
         enabled = state.selection !is ProjectSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
     ) {

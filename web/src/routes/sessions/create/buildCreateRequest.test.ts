@@ -78,6 +78,7 @@ const POPULATED: WizardState = {
     terminalUi: false,
   },
   opencode: { autoApprove: true, terminalUi: false },
+  copilot: { allowAll: true, terminalUi: false },
   git: { worktree: true, branchName: 'feature/x' },
   autoScanPromptSeededFor: gitProject.name,
 };
@@ -88,12 +89,21 @@ function build(mode: WizardMode, state: WizardState = POPULATED): CreateSessionR
   return request;
 }
 
-const REQUEST_MODES = ['claude', 'codex', 'antigravity', 'opencode', 'shell', CUSTOM] as const;
+const REQUEST_MODES = [
+  'claude',
+  'codex',
+  'antigravity',
+  'opencode',
+  'copilot',
+  'shell',
+  CUSTOM,
+] as const;
 const OPTION_KEYS = [
   'claude_options',
   'codex_options',
   'antigravity_options',
   'opencode_options',
+  'copilot_options',
 ] as const;
 
 const OWN_OPTIONS: Record<(typeof REQUEST_MODES)[number], (typeof OPTION_KEYS)[number] | null> =
@@ -102,6 +112,7 @@ const OWN_OPTIONS: Record<(typeof REQUEST_MODES)[number], (typeof OPTION_KEYS)[n
     codex: 'codex_options',
     antigravity: 'antigravity_options',
     opencode: 'opencode_options',
+    copilot: 'copilot_options',
     shell: null,
     [CUSTOM]: null,
   };
@@ -192,6 +203,11 @@ const OPENCODE_BOOLEANS: Record<
   true
 > = { auto_approve: true, connect: true, worktree: true };
 
+const COPILOT_BOOLEANS: Record<
+  RequiredBooleans<components['schemas']['CopilotOptionsModel']>,
+  true
+> = { allow_all: true, worktree: true };
+
 const REQUEST_BOOLEANS: Record<RequiredBooleans<CreateSessionRequest>, true> = {
   worktree: true,
 };
@@ -222,6 +238,19 @@ describe('buildCreateRequest — every boolean explicit', () => {
 
   it('declares every OpenCode boolean', () => {
     expectExplicitBooleans(build('opencode').opencode_options, OPENCODE_BOOLEANS);
+  });
+
+  it('declares every Copilot boolean', () => {
+    expectExplicitBooleans(build('copilot').copilot_options, COPILOT_BOOLEANS);
+  });
+
+  it('sends allow_all: false for a default Copilot launch', () => {
+    const request = build('copilot', {
+      ...INITIAL_WIZARD_STATE,
+      selection: { kind: 'stored', name: gitProject.name },
+    });
+
+    expect(request.copilot_options?.allow_all).toBe(false);
   });
 
   it('declares every Claude boolean on the Auto Scan request too', () => {
@@ -471,6 +500,36 @@ describe('OpenCode — chat view', () => {
   });
 });
 
+describe('Copilot — chat view', () => {
+  const AVAILABLE: ChatSupport = { kind: 'available', resume: true, live: false };
+
+  it.each<[string, boolean, ChatSupport | undefined, 'chat' | 'terminal']>([
+    ['chat available', false, AVAILABLE, 'chat'],
+    ['probe still out', false, undefined, 'chat'],
+    ['Terminal UI on', true, AVAILABLE, 'terminal'],
+    ['no chat for Copilot on this PC', false, { kind: 'unavailable' }, 'terminal'],
+    ['agent predates chat', false, { kind: 'outdated' }, 'terminal'],
+  ])('%s', (_name, terminalUi, chat, ui) => {
+    const request = buildCreateRequest({
+      state: { ...POPULATED, copilot: { ...POPULATED.copilot, terminalUi } },
+      mode: 'copilot',
+      project: gitProject,
+      chat,
+    });
+
+    expect(request?.cli).toBe('copilot');
+    expect(request?.ui).toBe(ui);
+    expect(request?.worktree).toBe(false);
+    expect(request?.copilot_options).toEqual({
+      allow_all: true,
+      worktree: true,
+      branch_name: 'feature/x',
+      base_branch: null,
+    });
+    expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
+  });
+});
+
 describe('buildResumeRequest', () => {
   const stored: ChatStoredSession = {
     session_id: 'external-2222',
@@ -572,6 +631,32 @@ describe('buildResumeRequest', () => {
     expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
   });
 
+  it('continues a Copilot session with the Copilot options and never a worktree', () => {
+    const request = buildResumeRequest(
+      { state: POPULATED, mode: 'copilot', project: gitProject },
+      'copilot',
+      stored,
+    );
+
+    expect(request).toMatchObject({
+      project_name: 'mobaide',
+      cli: 'copilot',
+      ui: 'chat',
+      chat_resume_id: 'external-2222',
+      worktree: false,
+    });
+    expect(request.copilot_options).toEqual({
+      allow_all: true,
+      worktree: false,
+      branch_name: undefined,
+      base_branch: null,
+    });
+    expect('claude_options' in request).toBe(false);
+    expect('codex_options' in request).toBe(false);
+    expect('antigravity_options' in request).toBe(false);
+    expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
+  });
+
   it('sends the recorded folder as cwd when it is not the selected project', () => {
     const request = buildResumeRequest(
       { state: POPULATED, mode: 'codex', project: gitProject },
@@ -645,7 +730,8 @@ describe('base_branch', () => {
     expect(withBase('codex').codex_options?.base_branch).toBe('origin/dev');
     expect(withBase('antigravity').antigravity_options?.base_branch).toBe('origin/dev');
     expect(withBase('opencode').opencode_options?.base_branch).toBe('origin/dev');
-    for (const mode of ['claude', 'codex', 'antigravity', 'opencode'] as const) {
+    expect(withBase('copilot').copilot_options?.base_branch).toBe('origin/dev');
+    for (const mode of ['claude', 'codex', 'antigravity', 'opencode', 'copilot'] as const) {
       expect('base_branch' in withBase(mode)).toBe(false);
     }
   });

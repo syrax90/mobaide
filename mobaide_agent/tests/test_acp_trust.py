@@ -1,7 +1,7 @@
 """Folder trust for chat sessions (``mobaide/acp/trust.py``): where the
-Claude Code, Codex and Antigravity CLIs keep their trust records, which
-folders count as trusted, and how ``grant`` writes the record without losing
-the rest of the file."""
+Claude Code, Codex, Antigravity and GitHub Copilot CLIs keep their trust
+records, which folders count as trusted, and how ``grant`` writes the record
+without losing the rest of the file."""
 from __future__ import annotations
 
 import json
@@ -16,8 +16,10 @@ from mobaide.acp.trust import (
     AntigravityFolderTrust,
     ClaudeFolderTrust,
     CodexFolderTrust,
+    CopilotFolderTrust,
     claude_config_path,
     codex_config_path,
+    copilot_config_path,
     too_broad_to_record,
 )
 from tests.conftest import skip_if_not_linux
@@ -722,6 +724,16 @@ class TestConcurrentGrants:
 
         assert all(t.is_trusted() for t in trusts)
 
+    def test_copilot_keeps_both_records(self, tmp_path, monkeypatch):
+        self._slow_writes(monkeypatch)
+        config = tmp_path / "config.json"
+        a, b = _project(tmp_path, "a"), _project(tmp_path, "b")
+        trusts = [CopilotFolderTrust(str(f), config_path=config) for f in (a, b)]
+
+        assert self._grant_both([t.grant for t in trusts]) == [True, True]
+
+        assert all(t.is_trusted() for t in trusts)
+
 
 def _agy_settings(path: Path, data: object) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -882,4 +894,214 @@ class TestAntigravityGrant:
         assert trust.grant() is False
 
         assert not settings.parent.exists()
+        assert trust.prompt_text.endswith(f" {SESSION_ONLY}")
+
+
+# The comment lines Copilot writes above the JSON object of its ``config.json``.
+COPILOT_HEADER = "// User settings belong in settings.json.\n// This file is managed automatically.\n"
+
+
+def _copilot_config(path: Path, data: object, header: str = COPILOT_HEADER) -> None:
+    path.write_text(header + json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def _copilot_body(path: Path) -> dict:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return json.loads("\n".join(line for line in lines if not line.startswith("//")))
+
+
+def _copilot_trust(cwd: Path | str, config: Path) -> CopilotFolderTrust:
+    return CopilotFolderTrust(str(cwd), config_path=config)
+
+
+class TestCopilotConfigPath:
+    def test_copilot_home_of_the_launch_env_wins_over_the_host_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "host"))
+
+        path = copilot_config_path({"COPILOT_HOME": str(tmp_path / "launch")})
+
+        assert path == tmp_path / "launch" / "config.json"
+
+    def test_without_copilot_home_it_is_in_the_home_folder(self, home):
+        assert copilot_config_path({}) == home / ".copilot" / "config.json"
+
+
+class TestCopilotIsTrusted:
+    def test_the_listed_folder_below_the_comment_lines(self, tmp_path):
+        project = _project(tmp_path)
+        config = tmp_path / "config.json"
+        _copilot_config(config, {"trustedFolders": [os.path.realpath(project)]})
+
+        assert _copilot_trust(project, config).is_trusted() is True
+
+    def test_a_listed_parent_covers_its_children(self, tmp_path):
+        """Copilot trusts the folders inside a listed folder, unlike ``agy``."""
+        child = _project(tmp_path, "app", "src")
+        config = tmp_path / "config.json"
+        _copilot_config(config, {"trustedFolders": [os.path.realpath(tmp_path / "work" / "app")]})
+
+        assert _copilot_trust(child, config).is_trusted() is True
+
+    @pytest.mark.parametrize("listed", ["app/src", "ap"], ids=["child", "name-prefix"])
+    def test_a_listed_folder_covers_nothing_outside_it(self, tmp_path, listed):
+        project = _project(tmp_path, "app")
+        other = tmp_path.joinpath("work", listed)
+        other.mkdir(parents=True)
+        config = tmp_path / "config.json"
+        _copilot_config(config, {"trustedFolders": [os.path.realpath(other)]})
+
+        assert _copilot_trust(project, config).is_trusted() is False
+
+    def test_a_relative_entry_never_matches(self, tmp_path, monkeypatch):
+        """A relative entry would mean the folder the agent runs in."""
+        project = _project(tmp_path)
+        monkeypatch.chdir(project)
+        config = tmp_path / "config.json"
+        _copilot_config(config, {"trustedFolders": [".", ""]})
+
+        assert _copilot_trust(project, config).is_trusted() is False
+
+    @skip_if_not_linux
+    def test_a_symlinked_folder_matches_its_real_path(self, tmp_path):
+        project = _project(tmp_path, "real")
+        link = tmp_path / "link"
+        link.symlink_to(project, target_is_directory=True)
+        config = tmp_path / "config.json"
+        _copilot_config(config, {"trustedFolders": [os.path.realpath(project)]})
+
+        assert _copilot_trust(link, config).is_trusted() is True
+
+    @skip_if_not_linux
+    def test_a_listed_symlink_matches_the_folder_it_points_to(self, tmp_path):
+        project = _project(tmp_path, "real")
+        link = tmp_path / "link"
+        link.symlink_to(project, target_is_directory=True)
+        config = tmp_path / "config.json"
+        _copilot_config(config, {"trustedFolders": [str(link)]})
+
+        assert _copilot_trust(project, config).is_trusted() is True
+
+    @pytest.mark.parametrize(
+        "data",
+        [
+            {"trustedFolders": "FOLDER"},
+            {"trustedFolders": {"FOLDER": True}},
+            {"trustedFolders": [None, 1, ""]},
+            {"otherKey": ["FOLDER"]},
+            ["FOLDER"],
+        ],
+        ids=["string", "object", "no-strings", "other-key", "not-object"],
+    )
+    def test_anything_but_a_listed_folder_is_untrusted(self, tmp_path, data):
+        project = _project(tmp_path)
+        config = tmp_path / "config.json"
+        config.write_text(
+            COPILOT_HEADER + json.dumps(data).replace("FOLDER", os.path.realpath(project)),
+            encoding="utf-8",
+        )
+
+        assert _copilot_trust(project, config).is_trusted() is False
+
+    def test_an_unreadable_config_is_untrusted(self, tmp_path):
+        config = tmp_path / "config.json"
+        config.write_text(COPILOT_HEADER + "{not json", encoding="utf-8")
+
+        assert _copilot_trust(_project(tmp_path), config).is_trusted() is False
+
+
+class TestCopilotGrant:
+    def test_creates_a_private_config_file_as_copilot_writes_it(self, tmp_path):
+        project = _project(tmp_path)
+        config = tmp_path / "copilot" / "config.json"
+        trust = _copilot_trust(project, config)
+
+        assert trust.grant() is True
+
+        expected = {"trustedFolders": [os.path.realpath(project)]}
+        assert config.read_text(encoding="utf-8") == (
+            COPILOT_HEADER + json.dumps(expected, indent=2) + "\n"
+        )
+        assert trust.is_trusted() is True
+        if os.name != "nt":
+            assert stat.S_IMODE(config.stat().st_mode) == 0o600
+
+    def test_keeps_the_comment_lines_the_other_keys_and_the_file_mode(self, tmp_path):
+        project = _project(tmp_path, "new")
+        config = tmp_path / "config.json"
+        header = "// A newer Copilot wrote this line.\n\n// And this one.\n"
+        _copilot_config(
+            config,
+            {"firstLaunchAt": "2026-11-01", "trustedFolders": ["/srv/old"], "staff": False},
+            header=header,
+        )
+        config.chmod(0o640)
+
+        assert _copilot_trust(project, config).grant() is True
+
+        assert config.read_text(encoding="utf-8").startswith(header + "{")
+        assert _copilot_body(config) == {
+            "firstLaunchAt": "2026-11-01",
+            "trustedFolders": ["/srv/old", os.path.realpath(project)],
+            "staff": False,
+        }
+        if os.name != "nt":
+            assert stat.S_IMODE(config.stat().st_mode) == 0o640
+
+    def test_a_config_with_only_the_comment_lines_gets_the_list(self, tmp_path):
+        project = _project(tmp_path)
+        config = tmp_path / "config.json"
+        config.write_text(COPILOT_HEADER, encoding="utf-8")
+
+        assert _copilot_trust(project, config).grant() is True
+
+        assert config.read_text(encoding="utf-8").startswith(COPILOT_HEADER + "{")
+        assert _copilot_body(config) == {"trustedFolders": [os.path.realpath(project)]}
+
+    def test_a_folder_already_listed_is_not_written_again(self, tmp_path):
+        project = _project(tmp_path)
+        config = tmp_path / "config.json"
+        _copilot_config(config, {"trustedFolders": [os.path.realpath(project)]})
+        # The atomic rewrite replaces the file: a new inode.
+        before = config.stat().st_ino
+
+        assert _copilot_trust(project, config).grant() is True
+
+        assert config.stat().st_ino == before
+        assert _copilot_body(config)["trustedFolders"] == [os.path.realpath(project)]
+
+    @skip_if_not_linux
+    def test_a_symlinked_folder_is_recorded_by_its_real_path(self, tmp_path):
+        project = _project(tmp_path, "real")
+        link = tmp_path / "link"
+        link.symlink_to(project, target_is_directory=True)
+        config = tmp_path / "config.json"
+
+        assert _copilot_trust(link, config).grant() is True
+
+        assert _copilot_body(config) == {"trustedFolders": [os.path.realpath(project)]}
+
+    @pytest.mark.parametrize(
+        "body",
+        ["{not json", '["a list"]', '{"trustedFolders": "/srv/x"}'],
+        ids=["unreadable", "not-object", "list-not-a-list"],
+    )
+    def test_a_file_it_cannot_read_back_whole_is_never_rewritten(self, tmp_path, body):
+        config = tmp_path / "config.json"
+        content = COPILOT_HEADER + body
+        config.write_text(content, encoding="utf-8")
+
+        with pytest.raises(ValueError):
+            _copilot_trust(_project(tmp_path), config).grant()
+
+        assert config.read_text(encoding="utf-8") == content
+
+    @pytest.mark.parametrize("which", ["home", "above-home", "root"])
+    def test_a_folder_too_broad_to_record_writes_nothing(self, home, tmp_path, which):
+        folder = {"home": str(home), "above-home": str(tmp_path), "root": tmp_path.anchor}[which]
+        config = tmp_path / "copilot" / "config.json"
+        trust = CopilotFolderTrust(folder, config_path=config)
+
+        assert trust.grant() is False
+
+        assert not config.parent.exists()
         assert trust.prompt_text.endswith(f" {SESSION_ONLY}")

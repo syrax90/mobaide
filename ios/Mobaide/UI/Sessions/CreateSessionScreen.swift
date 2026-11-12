@@ -26,6 +26,7 @@ private struct CreateSessionContent: View {
     @State private var codexAdvancedExpanded = false
     @State private var antigravityAdvancedExpanded = false
     @State private var opencodeAdvancedExpanded = false
+    @State private var copilotAdvancedExpanded = false
     @State private var autoScanAdvancedExpanded = false
     @State private var showContinueSession = false
     @State private var pendingContinue: ChatStoredSession?
@@ -421,6 +422,7 @@ private struct CreateSessionContent: View {
             case .codex: codexConfig
             case .antigravity: antigravityConfig
             case .opencode: opencodeConfig
+            case .copilot: copilotConfig
             case .custom(let id): customConfig(id)
             case .autoScan, .shell, .none: shellConfig
             }
@@ -436,6 +438,9 @@ private struct CreateSessionContent: View {
             }
             if model.mode == .opencode {
                 opencodeAdvancedSection
+            }
+            if model.mode == .copilot {
+                copilotAdvancedSection
             }
             Section {
                 Button {
@@ -841,6 +846,34 @@ private struct CreateSessionContent: View {
                         set: { model.opencodeTerminalUI = $0 }
                     ),
                     unavailableReason: model.opencodeChatUnavailableReason
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var copilotConfig: some View {
+        @Bindable var model = model
+        Section(header: PixelSectionHeader("GitHub Copilot")) {
+            Toggle("Allow all tools, paths and URLs (dangerous)", isOn: $model.copilotAllowAll)
+            Text("When on, Copilot does not ask before it runs commands, edits files or opens URLs.")
+                .font(.footnote)
+                .foregroundStyle(colors.textMuted)
+        }
+        continueSessionSection(agentName: "GitHub Copilot")
+    }
+
+    /// Collapsed like the Codex one; rendered after the Worktree section.
+    @ViewBuilder
+    private var copilotAdvancedSection: some View {
+        Section {
+            DisclosureGroup("Advanced", isExpanded: $copilotAdvancedExpanded) {
+                terminalUIToggle(
+                    Binding(
+                        get: { model.copilotTerminalUI || model.copilotChatUnavailable },
+                        set: { model.copilotTerminalUI = $0 }
+                    ),
+                    unavailableReason: model.copilotChatUnavailableReason
                 )
             }
         }

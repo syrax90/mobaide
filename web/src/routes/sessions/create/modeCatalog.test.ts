@@ -42,7 +42,7 @@ const card = (list: ModeCard[], mode: string): ModeCard => {
 };
 
 describe('buildModeCards', () => {
-  it('offers the six built-ins in order, then the account’s custom types', () => {
+  it('offers the seven built-ins in order, then the account’s custom types', () => {
     const list = cards({
       customTypes: [
         {
@@ -60,6 +60,7 @@ describe('buildModeCards', () => {
       'codex',
       'antigravity',
       'opencode',
+      'copilot',
       'auto_scan',
       'shell',
       'custom_0123456789ab',
@@ -99,6 +100,27 @@ describe('buildModeCards', () => {
       'Antigravity CLI (agy) is not installed on the agent.',
     );
     expect(card(list, 'shell').enabled).toBe(true);
+  });
+
+  it('disables GitHub Copilot on an agent from before Copilot support', () => {
+    // That agent would open a plain shell for `cli: "copilot"`.
+    const older = cards({
+      capabilities: capabilities({ claude: { available: true }, codex: { available: true } }),
+    });
+    const missing = cards({ capabilities: capabilities({ copilot: { available: false } }) });
+    const installed = cards({ capabilities: capabilities({ copilot: { available: true } }) });
+
+    expect(card(older, 'copilot')).toMatchObject({
+      enabled: false,
+      disabledReason: 'Update Mobaide on your PC to use GitHub Copilot.',
+    });
+    expect(card(older, 'codex').enabled).toBe(true);
+    expect(card(missing, 'copilot')).toMatchObject({
+      enabled: false,
+      disabledReason: 'GitHub Copilot CLI is not installed on the agent.',
+    });
+    expect(card(installed, 'copilot')).toMatchObject({ enabled: true, disabledReason: undefined });
+    expect(card(cards({ capabilities: capabilities({}) }), 'copilot').enabled).toBe(true);
   });
 
   it('gates Auto Scan on both the Claude CLI and a Linear key', () => {

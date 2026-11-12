@@ -476,6 +476,157 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertNil(request.opencode_options?.branch_name)
     }
 
+    // MARK: - GitHub Copilot
+
+    func testCopilotRequestCarriesOnlyItsOwnOptionsBlock() async throws {
+        let model = await modelWithProjects(#"[{"name":"a","path":"/p","is_git":true}]"#)
+        model.selectStoredProject("a")
+        model.copilotAllowAll = true
+        model.worktree = true
+        model.branchName = "feat"
+
+        let request = try XCTUnwrap(model.buildRequest(mode: .copilot))
+
+        XCTAssertEqual(request.cli, "copilot")
+        XCTAssertEqual(request.project_name, "a")
+        XCTAssertEqual(request.ui, "chat")
+        XCTAssertNil(request.claude_options)
+        XCTAssertNil(request.codex_options)
+        XCTAssertNil(request.antigravity_options)
+        XCTAssertEqual(request.copilot_options?.allow_all, true)
+        XCTAssertEqual(request.copilot_options?.worktree, true, "the worktree rides inside copilot_options")
+        XCTAssertEqual(request.copilot_options?.branch_name, "feat")
+        XCTAssertEqual(request.worktree, false, "a managed CLI never uses the top-level worktree field")
+        XCTAssertNil(request.branch_name)
+    }
+
+    func testCopilotCustomPathSendsTheFolderAndNeverAWorktree() throws {
+        let model = makeModel()
+        model.setCustomPath("/abs/path")
+        model.worktree = true
+        model.branchName = "feat"
+
+        let request = try XCTUnwrap(model.buildRequest(mode: .copilot))
+
+        XCTAssertEqual(request.cli, "copilot")
+        XCTAssertEqual(request.cwd, "/abs/path")
+        XCTAssertNil(request.project_name)
+        XCTAssertEqual(request.copilot_options?.allow_all, false, "allow-all stays off until the user turns it on")
+        XCTAssertEqual(request.copilot_options?.worktree, false)
+        XCTAssertNil(request.copilot_options?.branch_name)
+    }
+
+    func testCreateSendsTheCopilotWireKeysAndRemembersTheChoices() async throws {
+        StubURLProtocol.reset()
+        let prefs = isolatedPrefs()
+        let model = stubbedModel(prefs: prefs)
+        model.selection = .stored("a")
+        model.mode = .copilot
+        model.copilotAllowAll = true
+        model.copilotTerminalUI = true
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"session_id":"s-new","state":"starting","created_at":"t"}"#
+        )
+
+        await model.create()
+
+        XCTAssertNil(model.error)
+        let body = try XCTUnwrap(try createBodies().last)
+        XCTAssertEqual(body["cli"] as? String, "copilot")
+        XCTAssertEqual(body["ui"] as? String, "terminal")
+        let options = try XCTUnwrap(body["copilot_options"] as? [String: Any])
+        XCTAssertEqual(options["allow_all"] as? Bool, true)
+        XCTAssertEqual(options["worktree"] as? Bool, false)
+        XCTAssertNil(body["claude_options"])
+        XCTAssertNil(body["antigravity_options"])
+        XCTAssertEqual(prefs.getLastUsedCopilotOptions(), CopilotLaunchPrefs(allowAll: true, terminalUI: true))
+        XCTAssertNil(prefs.getLastUsedAntigravityOptions(), "a Copilot launch writes no other agent's choices")
+
+        let next = stubbedModel(prefs: prefs)
+        XCTAssertTrue(next.copilotAllowAll, "the next wizard starts from the remembered choices")
+        XCTAssertTrue(next.copilotTerminalUI)
+        XCTAssertFalse(next.antigravityTerminalUI)
+    }
+
+    func testCopilotCardIsOffForAnAgentFromBeforeCopilotSupport() async {
+        // That agent lists its CLIs without Copilot, and would open a plain
+        // shell for `cli = "copilot"`.
+        let older = await modelWithCapabilities(
+            #"{"cli":{"claude":{"available":true},"codex":{"available":true}}}"#
+        )
+        XCTAssertFalse(older.isEnabled(.copilot))
+        XCTAssertTrue(older.isEnabled(.codex), "the agent's other CLIs stay usable")
+        older.selectMode(.copilot)
+        XCTAssertNil(older.mode, "a disabled card must not open the Copilot config step")
+
+        let notInstalled = await modelWithCapabilities(#"{"cli":{"copilot":{"available":false}}}"#)
+        XCTAssertFalse(notInstalled.isEnabled(.copilot))
+
+        let noCliList = await modelWithCapabilities("{}")
+        XCTAssertTrue(noCliList.isEnabled(.copilot), "an agent that reports no CLI list reads as unknown")
+
+        let installed = await modelWithCapabilities(#"{"cli":{"copilot":{"available":true}}}"#)
+        XCTAssertTrue(installed.isEnabled(.copilot))
+        installed.selectMode(.copilot)
+        XCTAssertEqual(installed.mode, .copilot)
+    }
+
+    func testCopilotWithoutChatOnThePCOpensTheTerminalAndCannotContinue() async throws {
+        let model = await modelWithCapabilities(
+            #"{"cli":{"copilot":{"available":true}},"chat":{"claude":{"resume":true}}}"#
+        )
+        model.selection = .stored("a")
+        model.mode = .copilot
+
+        let request = try XCTUnwrap(model.buildRequest(mode: .copilot))
+
+        XCTAssertEqual(request.ui, "terminal")
+        XCTAssertNotNil(model.copilotChatUnavailableReason)
+        XCTAssertFalse(model.canContinueSession)
+    }
+
+    func testCopilotContinueIsOfferedOnlyForTheChatView() async {
+        let model = await modelWithCapabilities(
+            #"{"cli":{"copilot":{"available":true}},"chat":{"copilot":{"resume":true,"live":false}}}"#
+        )
+        model.selection = .stored("a")
+        model.mode = .copilot
+
+        XCTAssertTrue(model.canContinueSession)
+        XCTAssertNil(model.copilotChatUnavailableReason)
+
+        model.copilotTerminalUI = true
+
+        XCTAssertFalse(model.canContinueSession)
+    }
+
+    func testCopilotContinueRequestUsesTheCopilotOptionsWithoutAWorktree() {
+        let model = makeModel()
+        model.mode = .copilot
+        model.selection = .stored("a")
+        model.copilotAllowAll = true
+        model.worktree = true
+        model.branchName = "feat"
+        let stored = ChatStoredSession(
+            session_id: "external-3333", cwd: "/srv/other", title: nil, updated_at: nil, open_session_id: nil
+        )
+
+        let request = model.continueRequest(for: stored)
+
+        XCTAssertEqual(request.cli, "copilot")
+        XCTAssertEqual(request.ui, "chat")
+        XCTAssertEqual(request.chat_resume_id, "external-3333")
+        XCTAssertEqual(request.cwd, "/srv/other")
+        XCTAssertNil(request.project_name)
+        XCTAssertNil(request.claude_options)
+        XCTAssertNil(request.codex_options)
+        XCTAssertNil(request.antigravity_options)
+        XCTAssertEqual(request.copilot_options?.allow_all, true)
+        XCTAssertEqual(request.copilot_options?.worktree, false)
+        XCTAssertNil(request.copilot_options?.branch_name)
+    }
+
     // MARK: - Codex continue after the Codex sign-in
 
     private let externalSession = ChatStoredSession(

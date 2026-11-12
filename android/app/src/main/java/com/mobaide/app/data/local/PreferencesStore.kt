@@ -30,6 +30,7 @@ class PreferencesStore(private val context: Context) {
     private val keyLastCodexOptions = stringPreferencesKey("last_used_codex_options")
     private val keyLastAntigravityOptions = stringPreferencesKey("last_used_antigravity_options")
     private val keyLastOpenCodeOptions = stringPreferencesKey("last_used_opencode_options")
+    private val keyLastCopilotOptions = stringPreferencesKey("last_used_copilot_options")
     private val keyLastAutoScanOptions = stringPreferencesKey("last_used_auto_scan_options")
     private val keyTerminalDisplayMode = stringPreferencesKey("terminal_display_mode")
     private val keyThemeMode = stringPreferencesKey("theme_mode")
@@ -214,6 +215,19 @@ class PreferencesStore(private val context: Context) {
     suspend fun setLastUsedOpenCodeOptions(prefs: OpenCodeLaunchPrefs) {
         val payload = cacheJson.encodeToString(OpenCodeLaunchPrefs.serializer(), prefs)
         context.dataStore.edit { it[keyLastOpenCodeOptions] = payload }
+    }
+
+    suspend fun getLastUsedCopilotOptions(): CopilotLaunchPrefs? {
+        val raw = context.dataStore.data.map { it[keyLastCopilotOptions] }.first()
+            ?: return null
+        return runCatching {
+            cacheJson.decodeFromString(CopilotLaunchPrefs.serializer(), raw)
+        }.getOrNull()
+    }
+
+    suspend fun setLastUsedCopilotOptions(prefs: CopilotLaunchPrefs) {
+        val payload = cacheJson.encodeToString(CopilotLaunchPrefs.serializer(), prefs)
+        context.dataStore.edit { it[keyLastCopilotOptions] = payload }
     }
 
     suspend fun setThemeMode(mode: ThemeMode) {

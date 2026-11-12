@@ -16,6 +16,8 @@ export function terminalUiHint(chat: ChatSupport, agent: ChatAgentKind = 'claude
         return 'The chat view needs a newer Antigravity CLI on your PC: run agy update there.';
       case 'opencode':
         return 'The chat view is not available for OpenCode on your PC.';
+      case 'copilot':
+        return 'The chat view is not available for GitHub Copilot on your PC.';
       default:
         return 'The chat view needs Node.js on your PC.';
     }

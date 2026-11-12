@@ -654,6 +654,45 @@
         "title": "CodexOptionsModel",
         "type": "object"
       },
+      "CopilotOptionsModel": {
+        "description": "Wire DTO for GitHub Copilot CLI launch options (see :class:`CopilotOptions`).\n\n``allow_all`` is Copilot's ``--allow-all``: it runs tools and uses paths\nand URLs without asking.",
+        "properties": {
+          "allow_all": {
+            "default": false,
+            "title": "Allow All",
+            "type": "boolean"
+          },
+          "base_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Branch"
+          },
+          "branch_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Name"
+          },
+          "worktree": {
+            "default": false,
+            "title": "Worktree",
+            "type": "boolean"
+          }
+        },
+        "title": "CopilotOptionsModel",
+        "type": "object"
+      },
       "CreateSessionRequest": {
         "properties": {
           "antigravity_options": {
@@ -750,6 +789,16 @@
               }
             ],
             "title": "Command"
+          },
+          "copilot_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CopilotOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "cwd": {
             "anyOf": [
@@ -3160,7 +3209,8 @@
               "claude",
               "codex",
               "antigravity",
-              "opencode"
+              "opencode",
+              "copilot"
             ],
             "title": "Kind",
             "type": "string"

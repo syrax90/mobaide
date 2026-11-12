@@ -15,6 +15,7 @@ const NEVER_LAUNCHED: LaunchPrefs = {
   codex: null,
   antigravity: null,
   opencode: null,
+  copilot: null,
   lastProjectName: null,
 };
 
@@ -149,12 +150,50 @@ describe('applyLaunchPrefs', () => {
       codex: null,
       antigravity: { model: null, skipPermissions: false, sandbox: true, terminalUi: false },
       opencode: null,
+      copilot: null,
       lastProjectName: 'mobaide',
     });
 
     expect(seeded.autoScan.initialPrompt).toBe('seeded from the project');
     expect(seeded.antigravity.addDirsDraft).toBe('/extra');
     expect(seeded.git).toEqual({ worktree: true, branchName: 'wip' });
+  });
+});
+
+describe('the Copilot bucket', () => {
+  const dialled: WizardState = {
+    ...INITIAL_WIZARD_STATE,
+    copilot: { allowAll: true, terminalUi: true },
+    git: { worktree: true, branchName: 'wip' },
+  };
+
+  it('is filed under its own kind, without the per-session git fields', () => {
+    expect(launchPrefsFromState(dialled, 'copilot')).toEqual({
+      kind: 'copilot',
+      prefs: { allowAll: true, terminalUi: true },
+    });
+  });
+
+  it('is restored into Copilot only', () => {
+    const seeded = applyLaunchPrefs(INITIAL_WIZARD_STATE, {
+      ...NEVER_LAUNCHED,
+      copilot: { allowAll: true, terminalUi: true },
+    });
+
+    expect(seeded.copilot).toEqual({ allowAll: true, terminalUi: true });
+    expect(seeded.claude).toEqual(INITIAL_WIZARD_STATE.claude);
+    expect(seeded.antigravity).toEqual(INITIAL_WIZARD_STATE.antigravity);
+    expect(seeded.codex.terminalUi).toBe(false);
+  });
+
+  it('stays at the wizard defaults for a profile that never launched Copilot', () => {
+    const seeded = applyLaunchPrefs(dialled, NEVER_LAUNCHED);
+
+    expect(seeded.copilot).toEqual({ allowAll: true, terminalUi: true });
+    expect(applyLaunchPrefs(INITIAL_WIZARD_STATE, NEVER_LAUNCHED).copilot).toEqual({
+      allowAll: false,
+      terminalUi: false,
+    });
   });
 });
 
