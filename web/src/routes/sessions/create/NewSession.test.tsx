@@ -77,7 +77,8 @@ vi.mock('../../../api/sessionRepository', async (importOriginal) => {
 });
 
 // Parsed through the real schema so the mode cards read it exactly as they read
-// a live probe; Claude reported present keeps the config step reachable.
+// a live probe; Claude and OpenCode reported present keep their config steps
+// reachable.
 vi.mock('../../../api/agentCapabilities', async () => {
   const { agentVersionSchema } = await import('../../../protocol/dto/agentVersion');
   const info = agentVersionSchema.parse({
@@ -85,7 +86,10 @@ vi.mock('../../../api/agentCapabilities', async () => {
     server_version: '1.0.0',
     protocol_versions: [8],
     min_client_version: 1,
-    capabilities: { cli: { claude: { available: true } }, git: { worktree_base: true } },
+    capabilities: {
+      cli: { claude: { available: true }, opencode: { available: true } },
+      git: { worktree_base: true },
+    },
   });
   return { fetchAgentCapabilities: () => Promise.resolve(info) };
 });
@@ -125,6 +129,7 @@ const NO_PREFS: LaunchPrefs = {
   autoScan: null,
   codex: null,
   antigravity: null,
+  opencode: null,
   copilot: null,
   lastProjectName: null,
 };
@@ -555,6 +560,53 @@ describe('NewSession worktree options', () => {
       expect(api.requests).toHaveLength(1);
     });
     expect(api.requests[0]?.claude_options).toMatchObject({ worktree: true, base_branch: null });
+  });
+});
+
+describe('NewSession OpenCode provider sign-in', () => {
+  const SIGN_IN: CreateSessionRequest = {
+    project_name: 'alpha',
+    cwd: undefined,
+    rows: 24,
+    cols: 80,
+    cli: 'opencode',
+    opencode_options: { auto_approve: false, connect: true, worktree: false },
+    worktree: false,
+    ui: 'terminal',
+  };
+
+  it('sends a bare terminal sign-in and files no OpenCode launch options', async () => {
+    api.projects = [gitProject('alpha')];
+    let fail!: (reason: Error) => void;
+    api.create = () =>
+      new Promise<SessionResponse>((_resolve, reject) => {
+        fail = reject;
+      });
+    await renderWizard('?step=config&mode=opencode&project=alpha');
+    fireEvent.click(screen.getByLabelText('Auto-approve permissions (dangerous)'));
+    fireEvent.click(screen.getByLabelText('Create worktree'));
+
+    // A launch that failed leaves its options pinned for filing; the sign-in
+    // that follows in the same wizard must not file them as its own.
+    fireEvent.click(screen.getByRole('button', { name: 'Create session' }));
+    await screen.findByRole('button', { name: 'Creating…' });
+    await act(async () => {
+      fail(new Error('agent unreachable'));
+      await Promise.resolve();
+    });
+    await screen.findByRole('button', { name: 'Create session' });
+    api.create = () => Promise.resolve(session('s-new'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect a provider…' }));
+
+    await waitFor(() => {
+      expect(currentPath()).toBe('/agents/agent-1/sessions/s-new');
+    });
+    expect(api.requests).toHaveLength(2);
+    expect(api.requests[0]?.opencode_options).toMatchObject({ auto_approve: true, connect: false });
+    expect(api.requests[1]).toEqual(SIGN_IN);
+    expect(useLaunchPrefsStore.getState().opencode).toBeNull();
+    expect(persistedPrefs().opencode ?? null).toBeNull();
   });
 });
 

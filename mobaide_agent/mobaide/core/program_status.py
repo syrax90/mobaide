@@ -1,8 +1,8 @@
 """Attention from the program-status reports a CLI writes to its terminal.
 
-Codex (0.163+), Antigravity ``agy`` (1.4+), GitHub Copilot (1.0.106+) and
-Claude Code report what they are doing with OSC 7501 (the Program Status
-Protocol)::
+Codex (0.163+), Antigravity ``agy`` (1.4+), OpenCode (2.0+), GitHub Copilot
+(1.0.106+) and Claude Code report what they are doing with OSC 7501 (the
+Program Status Protocol)::
 
     ESC ] 7501 ; state=blocked:kind=permission:app=codex ST
 
@@ -13,9 +13,15 @@ hooks, no config file and no trust prompt — which is how every terminal sessio
 without Claude Code hooks raises attention. Claude sessions keep their hooks as
 the only source: a session never listens to both.
 
-Codex and Copilot write reports unconditionally. ``agy`` and Claude Code first send the
-support query ``ESC ] 7501 ; ? ST`` and report only when the terminal answers,
-so :class:`ProgramStatusResponder` answers it for the sessions that listen.
+Codex and Copilot write reports unconditionally. ``agy``, OpenCode and Claude
+Code first send the support query ``ESC ] 7501 ; ? ST`` and report only when
+the terminal answers, so :class:`ProgramStatusResponder` answers it for the
+sessions that listen.
+
+OpenCode never reports ``done`` or ``error``: its root record is ``blocked``,
+``working`` or ``idle``, so the end of a turn is its change from ``working``
+to ``idle``. With ``--auto`` it also reports ``blocked`` for the few
+milliseconds it takes to accept a request itself (see :data:`APP_TRAITS`).
 
 Spec: https://www.superlogical.com/rex/docs/build/program-status (rev 0.4).
 """
@@ -50,12 +56,32 @@ PROGRAM_STATUS_QUIET_SECONDS = 1.5
 # prompt still standing at the end alerts once, one answered meanwhile never.
 PROGRAM_STATUS_MIN_ALERT_SPACING_SECONDS = 5.0
 
+# A turn that goes idle this soon after client input was stopped or answered
+# by a user who is at the terminal: it needs no "your move".
+IDLE_AFTER_INPUT_GRACE_SECONDS = 2.0
+
 # The answer to the support query, in the spec's long form. It must not equal
 # the query: a tty that echoes input back (``ECHO`` without ``ECHOCTL``) would
 # otherwise hand every reply straight back as a new query, forever.
 _QUERY_REPLY_BODY = (
     b"\x1b]7501;?:states=idle,working,done,blocked,error:kinds=permission,question,auth"
 )
+
+
+@dataclass(frozen=True, slots=True)
+class AppTraits:
+    """How one program's reports differ from the plain reading of the spec."""
+
+    # The program never reports ``done``: ``working`` -> ``idle`` ends a turn.
+    idle_ends_turn: bool = False
+    # How long ``blocked`` must stand before it alerts. A program that
+    # answers a request itself reports ``blocked`` only for a moment.
+    blocked_settle_seconds: float = 0.0
+
+
+_DEFAULT_TRAITS = AppTraits()
+# By the ``app`` name of the reports.
+APP_TRAITS = {"opencode": AppTraits(idle_ends_turn=True, blocked_settle_seconds=0.5)}
 
 
 class ProgramState(enum.Enum):
@@ -210,6 +236,10 @@ class ProgramStatusGate:
     * ``working``, ``idle`` and ``clear`` cancel any pending alert and drop a
       standing ``awaiting_permission``: the prompt was answered or dismissed,
       possibly by another client on a shared thread, or the program exited.
+    * For a program that never reports ``done`` (:data:`APP_TRAITS`), ``idle``
+      straight after ``working`` alerts ``turn_finished`` the way ``done``
+      does, unless client input came just before it (:meth:`on_input`): that
+      turn was stopped by a user who is present.
     * Alerts are at least ``min_alert_spacing_seconds`` apart (see
       :data:`PROGRAM_STATUS_MIN_ALERT_SPACING_SECONDS`).
 
@@ -250,6 +280,7 @@ class ProgramStatusGate:
         self._armed_reason: str | None = None
         self._last: tuple[ProgramState, str | None] | None = None
         self._last_alert_at: float | None = None
+        self._last_input_at: float | None = None
         self.last_app: str | None = None
 
     def handle(self, status: ProgramStatus) -> None:
@@ -262,10 +293,11 @@ class ProgramStatusGate:
         self._last = None if state is ProgramState.CLEAR else report
         if repeated and state in (ProgramState.BLOCKED, ProgramState.DONE, ProgramState.ERROR):
             return
+        traits = APP_TRAITS.get(self.last_app or "", _DEFAULT_TRAITS)
         if state is ProgramState.BLOCKED:
             if status.kind == "auth":
                 return
-            self._schedule("awaiting_permission", 0.0)
+            self._schedule("awaiting_permission", traits.blocked_settle_seconds)
         elif state is ProgramState.DONE:
             # A ``done`` straight after ``error`` closes the same failed turn:
             # the failure is its outcome, whether it alerted yet or not.
@@ -278,6 +310,26 @@ class ProgramStatusGate:
             self.cancel()
             if self._current_attention() == "awaiting_permission":
                 self._on_clear_permission()
+            if (
+                traits.idle_ends_turn
+                and state is ProgramState.IDLE
+                and previous is not None
+                and previous[0] is ProgramState.WORKING
+                and not self._input_just_now()
+            ):
+                self._schedule("turn_finished", self._quiet_seconds)
+
+    def on_input(self) -> None:
+        """Client input reached the program: the user is present, so a
+        pending alert is dropped."""
+        self._last_input_at = self._clock()
+        self.cancel()
+
+    def _input_just_now(self) -> bool:
+        return (
+            self._last_input_at is not None
+            and self._clock() - self._last_input_at < IDLE_AFTER_INPUT_GRACE_SECONDS
+        )
 
     def cancel(self) -> None:
         if self._timer is not None:

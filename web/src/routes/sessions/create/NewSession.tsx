@@ -62,6 +62,7 @@ import { ModeStep } from './ModeStep';
 import { ProjectStep } from './ProjectStep';
 import { effectiveWorktreeBase } from './worktreeBase';
 import {
+  buildConnectRequest,
   buildCreateRequest,
   buildResumeRequest,
   buildStartScanRequest,
@@ -747,6 +748,23 @@ export function NewSession() {
     }
   };
 
+  const connectProvider = () => {
+    if (location.mode !== 'opencode') return;
+    setError(null);
+    const request = buildConnectRequest({
+      state: { ...state, selection: location.selection },
+      mode: location.mode,
+      project,
+    });
+    if (request === null) {
+      setError('Pick a project before launching.');
+      return;
+    }
+    // A sign-in is not a launch of the agent: its options are not remembered.
+    pendingPrefs.current = null;
+    create.mutate(request);
+  };
+
   const resume = (stored: ChatStoredSession) => {
     setResumeError(null);
     const open = stored.open_session_id;
@@ -932,6 +950,7 @@ export function NewSession() {
             setResumeError(null);
             setResumeOpen(true);
           }}
+          onConnectProvider={connectProvider}
         />
       ) : null}
 

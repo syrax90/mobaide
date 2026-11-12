@@ -123,6 +123,32 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-12: OpenCode sessions
+
+Additive delta within proto-v7 (2026-11-12): **one session kind, one create-options block, two capability entries, one push label. No version bump (`PROTOCOL_VERSION` is unchanged).** `central_server` gained only the "OpenCode session" push label.
+
+| Where | Change |
+|-------|--------|
+| Create request | `cli: "opencode"` with `opencode_options` = `{auto_approve: bool = false, initial_prompt: str \| null (up to 32000 chars; no client sends it), worktree: bool = false, branch_name, base_branch, connect: bool = false}`. `ui` is `"chat"` or `"terminal"` as for the other agents. |
+| Missing binary | 503 with `opencode_cli_missing`, like `codex_cli_missing`. There is no auth probe: OpenCode starts without an account. |
+| `capabilities.cli` | `opencode: {"available": bool}`, with no `models`. A client treats an agent whose list has no `opencode` as too old (it would open a plain shell). |
+| `capabilities.chat` | `opencode: {"resume": true, "live": false}`. |
+| `capabilities.voice.cleanup_kinds` | Lists `opencode`: `POST /api/voice/cleanup` accepts `kind: "opencode"`. |
+
+* Binary lookup: `MOBAIDE_OPENCODE_BIN`, then PATH, then `~/.opencode/bin/opencode`, npm-global, Homebrew and `~/.bun/bin` (Windows: `%USERPROFILE%\.opencode\bin\opencode.exe`, npm shims, Bun). The Windows installer does not detect OpenCode.
+* Terminal sessions run `opencode [--auto]` in the session folder. OpenCode 2 has no `--model` or `--agent` flag, so there is no model option. The launcher sets `OPENCODE_CLI_CONFIG_CONTENT={"tabs":{"mode":"off"}}`, merged into the user's own value (the user's `tabs` key wins), because OpenCode shares one tab set per folder and its status report covers all tabs.
+* Terminal attention comes from OSC 7501 (`app=opencode`), which reports only `idle`, `working` and `blocked`. A `working` to `idle` change is the turn end: `turn_finished` after the usual quiet window, unless client input arrived within 2 s before it (an interrupt). `blocked` gives `awaiting_permission` only after it stands 0.5 s (with `--auto`, OpenCode reports `blocked` for about 10 ms per request). There is no `turn_failed`. OpenCode 1.x reports nothing. `activity` stays `null` for OpenCode terminal sessions.
+* Chat sessions run `opencode acp`, OpenCode's built-in ACP server: no adapter and no Node.js. It runs a server of its own, apart from the TUI's, so a chat and a terminal on one session do not sync. `GET /api/chat/opencode/sessions` lists the stored sessions of a folder, and Continue replays the history. There is no folder-trust gate.
+* Chat config options come from OpenCode: `model` (`provider/model`), `mode` (Build or Plan) and `effort` for models with variants. With `auto_approve`, the agent answers each permission request with its "allow once" option and shows no card.
+* `opencode_options.connect: true` starts a terminal session that runs `opencode auth login`, OpenCode's interactive provider sign-in. `ui` is forced to `terminal`, no worktree is created and the other options are ignored. The command ends the session as a normal `stopped` session (`SessionConfig.exits_when_done`): never `crashed`. Liveness cleanup removes its row and publishes `sessions.changed`, as for a user stop. Clients show a "Connect a provider" entry on the OpenCode options screen and do not remember the launch options for it.
+* The launcher sets `PWD` to the session folder, because OpenCode takes its folder from `PWD` when it is set.
+* A provider auth failure in a chat is not a sign-in card. The chat shows "OpenCode could not sign in to the model provider. In New session, pick OpenCode and use Connect a provider, or run `opencode auth login` on the PC. Then tap Restart."
+* Voice transcript cleanup runs `opencode run --standalone --agent mobaide-voice-cleanup --title Voice-cleanup --format json` with the transcript on stdin, on OpenCode's default model (one request per cleanup). The env drops `PWD` and sets `OPENCODE_DISABLE_PROJECT_CONFIG=1`. The cleanup agent (`system` = the shared cleanup prompt, deny-all permissions) goes inline in `OPENCODE_CONFIG_CONTENT`, merged into the PC's own value, with a top-level deny-all rule last and `share: "disabled"`. No file is written. An `error` event fails the cleanup even at exit code 0, and any tool event discards the run. OpenCode 1.x has no `--standalone`: `cleanup_outdated`. An `OPENCODE_CONFIG_CONTENT` that is not a plain JSON object: `cleanup_failed`. The user's global OpenCode config still applies, and OpenCode keeps each run in its session history (title `Voice-cleanup`).
+* `GET /api/chat/{kind}/sessions` never lists rows whose folder is the agent's `voice-cleanup` work dir. A page holding only such rows is read on (up to 10 agent pages), so a client never gets an empty page with a cursor.
+* The env file keys `MOBAIDE_OPENCODE_BIN` and `MOBAIDE_ACP_OPENCODE_COMMAND` override the binary and the `opencode acp` command.
+
+Golden fixtures: new `tests/protocol_fixtures/dto/agent/OpenCodeOptionsModel.json`; `CreateSessionRequest.json` gains an `opencode_launch` case. Both carry `connect`; `VersionInfoResponse.json` and `VoiceCleanupRequest.json` list `opencode`.
+
 ### Delta 2026-11-12: GitHub Copilot sessions
 
 Additive delta within proto-v7 (2026-11-12): **one session kind, one options block, two capability entries. No version bump; `central_server` is untouched.**
@@ -134,7 +160,7 @@ GitHub Copilot CLI is a managed agent of kind `copilot`, for terminal and chat s
 | `POST /api/sessions` and relay `create_session` | `cli: "copilot"` with `copilot_options` (`allow_all`, `worktree`, `branch_name`, `base_branch`). A missing binary answers `503` with `copilot_cli_missing`. |
 | `capabilities.cli` | A `copilot` entry. |
 | `capabilities.chat` | A `copilot` entry (`resume: true`, `live: false`). |
-| Session mode order | The id `copilot`. Default position: after `antigravity`. |
+| Session mode order | The id `copilot`. Default position: after `opencode`. |
 
 * Binary: `MOBAIDE_COPILOT_BIN`, then PATH, then the npm fallback folders, then (on Windows) the WinGet link. `MOBAIDE_ACP_COPILOT_COMMAND` overrides the chat command.
 * Terminal sessions run `copilot [--allow-all]`. They raise attention from OSC 7501 reports (`app=copilot`; Copilot CLI 1.0.106 or later), with no hooks (see Delta 2026-11-10).
@@ -146,7 +172,7 @@ GitHub Copilot CLI is a managed agent of kind `copilot`, for terminal and chat s
 * Command output: a finished command becomes a `console` part with the exit code. Live command output is sent at most once per 0.3 s. The "Info: <path>" note Copilot sends after it creates a file is not shown.
 * A continued session whose replay has no title takes it from the agent's session list, for every agent with the list capability.
 * Voice transcript cleanup: `capabilities.voice.cleanup_kinds` lists `copilot`, and `POST /api/voice/cleanup` accepts `kind: "copilot"`. The run is `copilot --output-format json --stream off --available-tools=mobaide-no-tools --deny-tool=shell --deny-tool=write --deny-tool=read --deny-tool=url --deny-tool=memory --no-custom-instructions --disable-builtin-mcps --sync-session=off`, on Copilot's default model, with the rules and the transcript on stdin (docs/voice-input.md, *Transcript cleanup*).
-* The chat's session list never shows sessions of the `voice-cleanup` work folder (the cleanup runs of Copilot and Antigravity), for every agent.
+* The chat's session list never shows sessions of the `voice-cleanup` work folder (the cleanup runs of Antigravity, OpenCode and Copilot), for every agent.
 * Not supported for Copilot: a model or effort picker in the wizard.
 * Test mode runs the fake agent with `--flavor copilot`.
 
@@ -182,7 +208,7 @@ The session wire dict (`sessions.changed`, `session.updated`, the `/ws/sessions`
 |---------|--------|
 | Claude Code and Auto Scan terminal | The attention gate's hooks. `UserPromptSubmit` → `working`. A `Stop` that leaves work in flight (in-flight `background_tasks`, `session_crons`) → stays `working`. Otherwise `idle` when the gate's quiet window ends, even when the alert is muted or deduped. `idle_prompt` and `SessionEnd` → `idle`. `null` until the first hook. |
 | Chat (`ui: "chat"`), every kind | The timeline `status`: `running` → `working`, `ready` → `idle`, otherwise `null`. A turn another app on a shared host runs counts too. |
-| Codex, Antigravity, GitHub Copilot, Terminal and custom terminal (PTY) sessions | Always `null`. Their OSC 7501 reports (Delta 2026-11-10) raise alerts but do not set `activity` yet. |
+| Codex, Antigravity, OpenCode, GitHub Copilot, Terminal and custom terminal (PTY) sessions | Always `null`. Their OSC 7501 reports (Delta 2026-11-10) raise alerts but do not set `activity` yet. |
 
 * Only a `running` session reports a value. Clients show a "Working" chip and an animated status square for `working`. A pending `awaiting_permission` or `awaiting_os_permission` outranks it, because the turn waits for the user.
 * Gate change in the same delta: an `idle_prompt` raised while the last `Stop` still saw background work is *provisional*. It alerts once but does not consume the turn's `prompt_id` dedupe key, so the `Stop` that really ends the turn can alert again. Older CLIs raise `idle_prompt` while background agents run, which used to mute the real end-of-turn alert.
@@ -196,7 +222,7 @@ Additive delta within proto-v7 (2026-11-10): **one attention reason, two optiona
 * New attention reason `turn_failed`. It appears on the session dict `attention`, the agent-bus `session.attention` event and the user-event `reason`. Older clients post nothing for an unknown reason.
 * Chat sessions raise `turn_failed` when the agent answers the user's own prompt with an RPC error. They do not raise it when the user pressed Stop, when the process died (that stays `ended`), or when a queued prompt starts next.
 * The slim `session.attention` user-event payload gains optional `kind` and `kind_label`. No `kind` (older agent) reads as a Claude session.
-* Terminal sessions of kind `codex`, `antigravity`, `copilot`, `shell` and `custom_*` have no Claude Code hooks. They raise attention from OSC 7501 program-status reports (Program Status Protocol rev 0.4, `ESC]7501;state=...[:kind=...][:app=...]`).
+* Terminal sessions of kind `codex`, `antigravity`, `opencode`, `copilot`, `shell` and `custom_*` have no Claude Code hooks. They raise attention from OSC 7501 program-status reports (Program Status Protocol rev 0.4, `ESC]7501;state=...[:kind=...][:app=...]`).
 * For these sessions the agent answers the support query `ESC]7501;?` and strips it from the replayed stream. For `agy` sessions it sets `AGY_CLI_OSC7501=on` and `AGY_CLI_OSC7501_MESSAGES=brief` unless the user set them.
 * Mapping: `blocked` (permission or question) gives `awaiting_permission` at once. `blocked` (auth) is ignored. `done` gives `turn_finished` and `error` gives `turn_failed`, both after a 1.5 s quiet window.
 * `working`, `idle`, `clear` and any client keystroke (except DEC 1004 focus reports) cancel a pending alert. `working`, `idle` and `clear` also drop a standing `awaiting_permission`.
@@ -393,7 +419,7 @@ Additive delta within proto-v7 (2026-11-04, drag-to-reorder in the new-session w
 | ``PUT /api/session-mode-order`` | ``{"order": [str]}`` | Full replace; same body as ``GET``. ``[]`` restores the default order. |
 
 * Dashboard/user JWT, non-admin.
-* Each id matches the shortcuts ``KIND_PATTERN`` (``^[a-z0-9_]{1,32}$``): ``claude``, ``codex``, ``antigravity``, ``copilot``, ``auto_scan``, ``shell``, ``custom_<12hex>``. At most 64 ids, no duplicates → else ``422``. The server stores the ids opaquely and does not check them against the live custom types.
+* Each id matches the shortcuts ``KIND_PATTERN`` (``^[a-z0-9_]{1,32}$``): ``claude``, ``codex``, ``antigravity``, ``opencode``, ``copilot``, ``auto_scan``, ``shell``, ``custom_<12hex>``. At most 64 ids, no duplicates → else ``422``. The server stores the ids opaquely and does not check them against the live custom types.
 * ``version`` grows by one on every change. A ``PUT`` of the stored order changes nothing and pushes nothing.
 * A change pushes the user event ``session_mode_order.updated`` with the same body to every user-events socket of the account. Clients keep the higher ``version`` of the cached and incoming snapshot, and reconcile with ``GET`` on every user-events connect.
 * Clients apply the list the same way: a card the list names is ranked by its place there; a card it does not name (a custom type created after the last save, a mode a newer client added) keeps its default place among the other unnamed cards, after the named ones; an id that names no card is skipped.

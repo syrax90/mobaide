@@ -22,6 +22,11 @@ from .copilot_launcher import (
     CopilotOptions,
 )
 from .models import SessionConfig, SessionEvent, SessionInfo, SessionKind, SessionState
+from .opencode_launcher import (
+    OpenCodeBinaryNotFoundError,
+    OpenCodeLauncher,
+    OpenCodeOptions,
+)
 from .projects_config import AutoScanFilter, ProjectConfig
 from .projects_store import (
     ProjectRecord,
@@ -58,6 +63,9 @@ __all__ = [
     "AntigravityLauncher",
     "AntigravityOptions",
     "AntigravityBinaryNotFoundError",
+    "OpenCodeLauncher",
+    "OpenCodeOptions",
+    "OpenCodeBinaryNotFoundError",
     "CopilotLauncher",
     "CopilotOptions",
     "CopilotBinaryNotFoundError",

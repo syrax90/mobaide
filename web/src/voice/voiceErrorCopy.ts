@@ -43,6 +43,7 @@ const CLEANUP_CLIS: Readonly<Record<string, { name: string; update: string }>> =
   claude: { name: 'Claude Code', update: 'claude update' },
   codex: { name: 'Codex', update: 'codex update' },
   antigravity: { name: 'Antigravity', update: 'agy update' },
+  opencode: { name: 'OpenCode', update: 'opencode upgrade' },
   copilot: { name: 'GitHub Copilot', update: 'copilot update' },
 };
 

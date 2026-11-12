@@ -219,6 +219,29 @@ class TestInitEnvClaudeBin:
         assert values["MOBAIDE_CLAUDE_BIN"] == "/new/location/claude"
 
 
+class TestInitEnvOpenCodeBin:
+    def test_force_preserves_a_hand_set_opencode_bin(self, tmp_path):
+        # No installer flag writes ``MOBAIDE_OPENCODE_BIN``: the operator sets
+        # it by hand, and a stock re-install must not drop it.
+        _run(["init-env", "--prefix", str(tmp_path)])
+        target = env_path_for_prefix(tmp_path)
+        text = target.read_text(encoding="utf-8")
+        assert "# MOBAIDE_OPENCODE_BIN=\n" in text
+        target.write_text(
+            text.replace(
+                "# MOBAIDE_OPENCODE_BIN=\n", "MOBAIDE_OPENCODE_BIN=/opt/oc/bin/opencode\n",
+            ),
+            encoding="utf-8",
+        )
+
+        rc = _run(["init-env", "--prefix", str(tmp_path), "--force"])
+
+        assert rc == 0
+        rewritten = target.read_text(encoding="utf-8")
+        assert parse_env_file(target)["MOBAIDE_OPENCODE_BIN"] == "/opt/oc/bin/opencode"
+        assert "# MOBAIDE_OPENCODE_BIN=" not in rewritten
+
+
 class TestInitEnvCopilotBin:
     """``MOBAIDE_COPILOT_BIN`` has no ``init-env`` flag: the Windows installer
     writes it with ``set-env`` (other users set it by hand) when Copilot is

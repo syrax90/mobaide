@@ -123,6 +123,10 @@ private val RejectKey = ControlKey("Reject", byteArrayOf('n'.code.toByte()))
 private val CtrlKKey = ControlKey("Ctrl+K", byteArrayOf(0x0b))
 private val CtrlGKey = ControlKey("Ctrl+G", byteArrayOf(0x07))
 private val CtrlDKey = ControlKey("Ctrl+D", byteArrayOf(0x04))
+// OpenCode TUI control: Ctrl+P opens the command palette (models, sessions, new
+// session). Its Ctrl+X leader key is left out: it needs a second key within two
+// seconds, and the composer takes that key.
+private val CtrlPKey = ControlKey("Ctrl+P", byteArrayOf(0x10))
 
 // Canonical left-to-right order for every control key. Each session kind renders only the
 // subset it supports (see the membership lists below), filtered from this single list, so the
@@ -138,6 +142,7 @@ private val CONTROL_KEY_ORDER = listOf(
     EscKey,
     ApproveKey, RejectKey,
     CtrlKKey, CtrlGKey, CtrlDKey,
+    CtrlPKey,
     RewindKey,
     TabKey, BackspaceKey,
     CtrlOKey, CtrlRKey,
@@ -190,9 +195,16 @@ private val DEFAULT_CONTROL_KEYS = orderedControlKeys(
     ),
 )
 
+// OpenCode = the neutral set plus Mode (Shift+Tab cycles the Build/Plan agent) and its
+// own Ctrl+P. Ctrl+O/Ctrl+R/Ctrl+L, Rewind and Approve/Reject are absent: its TUI binds
+// them differently or not at all.
+private val OPENCODE_CONTROL_KEYS =
+    orderedControlKeys(listOf(ModeKey, CtrlPKey) + DEFAULT_CONTROL_KEYS)
+
 private fun controlKeysFor(kind: SessionKind?): List<ControlKey> = when (kind) {
     SessionKind.Codex -> CODEX_CONTROL_KEYS
     SessionKind.Antigravity -> ANTIGRAVITY_CONTROL_KEYS
+    SessionKind.OpenCode -> OPENCODE_CONTROL_KEYS
     // null = kind not resolved yet: render the neutral set instead of guessing
     // Claude (its Mode/Rewind escape codes are wrong input for other TUIs). A
     // plain shell is the same case — Mode/Rewind/Ctrl+O/Ctrl+R carry Claude-TUI

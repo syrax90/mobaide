@@ -1,7 +1,7 @@
 """Transcript cleanup: a hidden one-shot run of the session's own CLI on its
 cheapest model — ``claude -p`` on Haiku, ``codex exec`` on Luna, ``agy`` on
-Gemini Flash. GitHub Copilot names no cheapest model, so ``copilot`` runs on
-its default model.
+Gemini Flash. OpenCode and GitHub Copilot name no cheapest model, so
+``opencode run`` and ``copilot`` use the user's default model.
 
 The transcript goes on stdin, never in argv, because an npm ``.cmd`` shim on
 Windows is run through ``cmd /c`` and argv shows in process listings. Like
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 # The session kinds whose CLI can clean up a transcript; advertised as
 # ``capabilities.voice.cleanup_kinds``.
-CleanupKind = Literal["claude", "codex", "antigravity", "copilot"]
+CleanupKind = Literal["claude", "codex", "antigravity", "opencode", "copilot"]
 CLEANUP_KINDS: tuple[str, ...] = get_args(CleanupKind)
 
 # Below the relay's 30 s proxy timeout, so the agent's own answer arrives.
@@ -103,6 +103,16 @@ excludeDefaultComponents: true
 ---
 
 {CLEANUP_PROMPT}"""
+# The OpenCode cleanup agent, handed over inline (see ``_opencode_config``).
+# Its ``system`` text replaces OpenCode's coding-agent prompt, and the deny
+# rule refuses every tool: the model can still ask for one, and a run that
+# did is discarded.
+_OPENCODE_AGENT = "mobaide-voice-cleanup"
+_OPENCODE_DENY_ALL = {"action": "*", "resource": "*", "effect": "deny"}
+# No space: a second quoted token breaks ``cmd /c`` for an npm shim in a
+# spaced path (see ``ClaudeCleanup.command``).
+_OPENCODE_SESSION_TITLE = "Voice-cleanup"
+_OPENCODE_CONFIG_ENV = "OPENCODE_CONFIG_CONTENT"
 # Copilot's ``--available-tools`` is the list of tools the model may see. No
 # value means every tool, so the list names one that does not exist: the
 # model then has no tool to call.
@@ -310,6 +320,48 @@ def parse_antigravity_result(result: CmdResult, source: str) -> str:
         message = error if isinstance(error, str) and error.strip() else stderr
         raise _failed(_short(message) or f"{name} reported an error.")
     return _finish(answer, source, name)
+
+
+def parse_opencode_result(result: CmdResult, source: str) -> str:
+    """The cleaned text from one ``opencode run --format json`` run (JSONL
+    events), or a coded ``VoiceError``; an empty answer keeps ``source``.
+    Only the events decide: a failed turn is an ``error`` event at exit 0."""
+    name = "OpenCode"
+    if result.timed_out:
+        raise _timed_out(name)
+    stderr = result.stderr.decode("utf-8", errors="replace")
+    events = _lines(result.stdout)
+    # OpenCode 1 does not know ``--standalone`` and prints its usage. It also
+    # ignores the agent's deny rule, so it must not run a cleanup at all.
+    if result.rc != 0 and not events and stderr.lstrip().startswith("opencode run [message"):
+        raise _outdated(name, "opencode upgrade")
+    texts: list[str] = []
+    finished = False
+    for event in events:
+        kind = event.get("type")
+        part = event.get("part")
+        if kind == "error":
+            error = event.get("error")
+            message = error.get("message") if isinstance(error, dict) else None
+            raise _failed(_short(message if isinstance(message, str) else "") or f"{name} reported an error.")
+        if isinstance(kind, str) and kind.startswith("tool"):
+            raise _failed(f"{name} tried to use a tool instead of cleaning up the text.")
+        if not isinstance(part, dict):
+            continue
+        if kind == "text" and isinstance(part.get("text"), str):
+            texts.append(part["text"])
+        elif kind == "step_finish":
+            finished = part.get("reason") == "stop"
+    if result.rc != 0 or not finished or not texts:
+        message = _short(stderr)
+        if not message:
+            message = (
+                f"{name} exited with code {result.rc}."
+                if result.rc != 0
+                else f"{name} stopped before it finished answering."
+            )
+        raise _failed(message)
+    return _finish("".join(texts), source, name)
 
 
 def parse_copilot_result(result: CmdResult, source: str) -> str:
@@ -545,6 +597,70 @@ class AntigravityCleanup(CleanupCli):
         return parse_antigravity_result(result, source)
 
 
+def _opencode_config(own: str | None) -> str:
+    """The user's own inline OpenCode config plus the cleanup agent, a last
+    (winning) deny rule for every agent and no session sharing. A value that
+    cannot be merged (OpenCode also reads JSONC) fails the cleanup: dropping
+    it could drop the user's provider and send the transcript to another."""
+    try:
+        settings = json.loads(own) if own and own.strip() else {}
+    except ValueError:
+        settings = None
+    if not isinstance(settings, dict):
+        raise _failed(
+            f"{_OPENCODE_CONFIG_ENV} on this computer isn't plain JSON, so the cleanup "
+            "can't add its rules to it."
+        )
+    agents = settings.get("agents")
+    rules = settings.get("permissions")
+    settings["agents"] = {
+        **(agents if isinstance(agents, dict) else {}),
+        _OPENCODE_AGENT: {
+            "description": "Cleans up one speech-to-text transcript.",
+            "mode": "primary",
+            "hidden": True,
+            "system": CLEANUP_PROMPT,
+            "permissions": [_OPENCODE_DENY_ALL],
+        },
+    }
+    settings["permissions"] = [*(rules if isinstance(rules, list) else []), _OPENCODE_DENY_ALL]
+    settings["share"] = "disabled"
+    return json.dumps(settings)
+
+
+class OpenCodeCleanup(CleanupCli):
+    """OpenCode names no cheapest model, so the run uses the user's default
+    one. The rules are an inline agent that denies every tool; project config
+    is off, because OpenCode merges it from every parent folder of the cwd.
+    The user's global config still applies (its rules file, its MCP servers),
+    and OpenCode keeps the run in its session history."""
+
+    name = "OpenCode"
+
+    async def command(self, source: str) -> CleanupCommand:
+        binary = self.binary()
+        # ``--standalone``: off OpenCode's shared background server. ``--title``
+        # spares the model call that would name the session.
+        argv = shim_safe_argv(
+            binary,
+            "run",
+            "--standalone",
+            "--agent", _OPENCODE_AGENT,
+            "--title", _OPENCODE_SESSION_TITLE,
+            "--format", "json",
+        )
+        env = _cli_env(binary)
+        # OpenCode takes its folder from ``PWD`` when it is set, and would file
+        # the run under the agent's own folder, not under the run's cwd.
+        env.pop("PWD", None)
+        env["OPENCODE_DISABLE_PROJECT_CONFIG"] = "1"
+        env[_OPENCODE_CONFIG_ENV] = _opencode_config(env.get(_OPENCODE_CONFIG_ENV))
+        return CleanupCommand(argv=argv, env=env, stdin=_wrap(source).encode(), model="default")
+
+    def parse(self, result: CmdResult, source: str) -> str:
+        return parse_opencode_result(result, source)
+
+
 class CopilotCleanup(CleanupCli):
     """``copilot`` has no system-prompt option, and it puts a custom agent's
     prompt below its own coding-agent prompt, where a small model ignores it.
@@ -693,6 +809,7 @@ class TranscriptCleaner:
         # Each written once per process: replacing a file while another
         # run's CLI is reading it can fail on Windows.
         with self._files_lock:
+            # A CLI without files still runs in the work dir.
             self._work_dir.mkdir(parents=True, exist_ok=True)
             for name, content in files.items():
                 path = self._work_dir / name

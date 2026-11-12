@@ -160,7 +160,7 @@ class CreateSessionViewModelReorderTest {
         assertEquals(
             listOf(
                 "custom_bbbbbbbbbbbb", "shell", "codex",
-                "claude", "antigravity", "copilot", "auto_scan", "custom_aaaaaaaaaaaa",
+                "claude", "antigravity", "opencode", "copilot", "auto_scan", "custom_aaaaaaaaaaaa",
             ),
             ordered.map { it.orderId },
         )
@@ -171,7 +171,7 @@ class CreateSessionViewModelReorderTest {
         val ordered = orderModes(BUILT_IN_MODES, listOf("custom_deleted0000", "auto_scan", "future_mode"))
 
         assertEquals(
-            listOf("auto_scan", "claude", "codex", "antigravity", "copilot", "shell"),
+            listOf("auto_scan", "claude", "codex", "antigravity", "opencode", "copilot", "shell"),
             ordered.map { it.orderId },
         )
     }
@@ -180,7 +180,7 @@ class CreateSessionViewModelReorderTest {
     fun orderId_matchesTheWireIdsOfEveryClient() {
         assertEquals(
             listOf(
-                "claude", "codex", "antigravity", "copilot", "auto_scan", "shell",
+                "claude", "codex", "antigravity", "opencode", "copilot", "auto_scan", "shell",
                 "custom_ab12cd34ef56",
             ),
             (BUILT_IN_MODES + CreateSessionMode.Custom("ab12cd34ef56")).map { it.orderId },
@@ -194,7 +194,7 @@ class CreateSessionViewModelReorderTest {
         advanceUntilIdle()
         assertEquals(
             listOf(
-                "claude", "codex", "antigravity", "copilot", "auto_scan", "shell",
+                "claude", "codex", "antigravity", "opencode", "copilot", "auto_scan", "shell",
                 "custom_t1", "custom_t2",
             ),
             f.modeIds,
@@ -206,7 +206,7 @@ class CreateSessionViewModelReorderTest {
 
         assertEquals(
             listOf(
-                "custom_t2", "shell", "claude", "codex", "antigravity", "copilot", "auto_scan",
+                "custom_t2", "shell", "claude", "codex", "antigravity", "opencode", "copilot", "auto_scan",
                 "custom_t1",
             ),
             f.modeIds,
@@ -218,10 +218,12 @@ class CreateSessionViewModelReorderTest {
         val f = newFixture(customTypes = listOf(customType("t1")))
         advanceUntilIdle()
 
-        f.vm.moveMode(6, 0)
+        f.vm.moveMode(7, 0)
         advanceUntilIdle()
 
-        val expected = listOf("custom_t1", "claude", "codex", "antigravity", "copilot", "auto_scan", "shell")
+        val expected = listOf(
+            "custom_t1", "claude", "codex", "antigravity", "opencode", "copilot", "auto_scan", "shell",
+        )
         assertEquals(listOf(expected), f.modeSaves)
         assertEquals(expected, f.modeIds)
     }
@@ -232,7 +234,7 @@ class CreateSessionViewModelReorderTest {
         advanceUntilIdle()
 
         f.vm.moveMode(0, 0)
-        f.vm.moveMode(0, 6)
+        f.vm.moveMode(0, 7)
         f.vm.moveMode(-1, 0)
         advanceUntilIdle()
 

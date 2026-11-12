@@ -23,7 +23,8 @@ async def test_get_version(client) -> None:
     # capabilities.cli now reports per-CLI binary availability so the Android
     # mode-picker can gray out a CLI that isn't installed. The autouse
     # _pin_claude_binary / _pin_codex_binary / _pin_antigravity_binary /
-    # _pin_copilot_binary fixtures make all four resolve, so all report available. The entries stay bare
+    # _pin_opencode_binary / _pin_copilot_binary fixtures make all five resolve,
+    # so all report available. The entries stay bare
     # {"available": bool} because the ASGITransport fixtures never run the app
     # lifespan, so the model-cache warm task never fires.
     assert body["capabilities"] == {
@@ -31,6 +32,7 @@ async def test_get_version(client) -> None:
             "claude": {"available": True},
             "codex": {"available": True},
             "antigravity": {"available": True},
+            "opencode": {"available": True},
             "copilot": {"available": True},
         },
         "git": {
@@ -54,12 +56,13 @@ async def test_get_version(client) -> None:
             "max_seconds": 120,
             "max_chunk_bytes": 65536,
             "cleanup": True,
-            "cleanup_kinds": ["claude", "codex", "antigravity", "copilot"],
+            "cleanup_kinds": ["claude", "codex", "antigravity", "opencode", "copilot"],
         },
         "fs": {"dirs": True, "windows_paths": sys.platform == "win32"},
         "chat": {
             "claude": {"resume": True, "live": False},
             "codex": {"resume": True, "live": sys.platform != "win32"},
+            "opencode": {"resume": True, "live": False},
             "copilot": {"resume": True, "live": False},
         },
     }
@@ -67,6 +70,16 @@ async def test_get_version(client) -> None:
     # — it is not exposed via this REST surface.
     assert "manifest_url" not in body
     assert "manifest_signature" not in body
+
+
+async def test_every_advertised_cleanup_kind_has_a_cli(app, client) -> None:
+    """A kind listed in ``capabilities.voice.cleanup_kinds`` with no CLI
+    behind it would make clients offer a cleanup that can only answer
+    ``cleanup_unavailable``."""
+    response = await client.get("/api/version")
+    advertised = response.json()["capabilities"]["voice"]["cleanup_kinds"]
+
+    assert set(app.state.voice._cleaner._clis) == set(advertised)
 
 
 async def test_get_version_claude_missing_reports_unavailable(
@@ -88,6 +101,7 @@ async def test_get_version_claude_missing_reports_unavailable(
     assert cli["claude"] == {"available": False}
     assert cli["codex"] == {"available": True}
     assert cli["antigravity"] == {"available": True}
+    assert cli["opencode"] == {"available": True}
 
 
 async def test_get_version_all_clis_missing_still_returns_200(
@@ -128,6 +142,7 @@ async def test_get_version_all_clis_missing_still_returns_200(
         "claude": {"available": False},
         "codex": {"available": False},
         "antigravity": {"available": False},
+        "opencode": {"available": True},
         "copilot": {"available": False},
     }
 

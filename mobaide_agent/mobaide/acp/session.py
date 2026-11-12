@@ -735,7 +735,7 @@ class ChatSession:
         if exc.code == ERR_AUTH_REQUIRED and self._sign_in.available:
             return f"{self._agent_title} is not signed in on your PC. Sign in to continue."
         if exc.code == ERR_AUTH_REQUIRED:
-            return (
+            return self._plan.sign_in_hint or (
                 f"{self._agent_title} is not signed in on the PC. Sign in there "
                 "(run it once in a terminal), then tap Restart."
             )
@@ -1870,6 +1870,10 @@ class ChatSession:
             self._apply_tool_update(dict(tool_call), create=False)
         if not options:
             return {"outcome": {"outcome": "cancelled"}}
+        if self._plan.auto_approve:
+            allow = next((o for o in options if o["kind"] == "allow_once"), None)
+            if allow is not None:
+                return {"outcome": {"outcome": "selected", "optionId": allow["id"]}}
         item = self._timeline.get(tool_id) if tool_id else None
         if item is None:
             item = nz.new_tool_item("preview")

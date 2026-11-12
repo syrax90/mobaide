@@ -69,6 +69,7 @@ beforeEach(() => {
     autoScan: null,
     codex: null,
     antigravity: null,
+    opencode: null,
     copilot: null,
     lastProjectName: null,
   });
@@ -128,6 +129,24 @@ describe('hydration', () => {
 
   it('voids the Codex bucket for a wrong-typed terminalUi', async () => {
     expect((await rehydrateWith({ codex: { ...CODEX_BLOB, terminalUi: 'on' } })).codex).toBeNull();
+  });
+
+  it('restores the OpenCode bucket, with the defaults for keys the blob never carried', async () => {
+    expect((await rehydrateWith({ opencode: { autoApprove: true, terminalUi: true } })).opencode)
+      .toEqual({ autoApprove: true, terminalUi: true });
+    expect((await rehydrateWith({ opencode: {} })).opencode).toEqual({
+      autoApprove: false,
+      terminalUi: false,
+    });
+  });
+
+  it.each([
+    ['a wrong-typed autoApprove', { autoApprove: 'yes', terminalUi: false }],
+    ['a wrong-typed terminalUi', { autoApprove: true, terminalUi: 1 }],
+    ['a bucket that is not an object', 'opencode'],
+  ])('voids the OpenCode bucket for %s', async (_name, blob) => {
+    // A tampered or damaged blob must not turn auto-approve on by coercion.
+    expect((await rehydrateWith({ opencode: blob })).opencode).toBeNull();
   });
 
   it('restores focus view on for a blob saved before the toggle existed', async () => {
@@ -225,6 +244,7 @@ describe('hydration', () => {
       autoScan: null,
       codex: null,
       antigravity: null,
+      opencode: null,
       copilot: null,
       lastProjectName: null,
     });

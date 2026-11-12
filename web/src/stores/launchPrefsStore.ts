@@ -75,6 +75,12 @@ export interface AntigravityLaunchPrefs {
   terminalUi: boolean;
 }
 
+/** Android `OpenCodeLaunchPrefs`, iOS `OpenCodeLaunchPrefs`. */
+export interface OpenCodeLaunchPrefs {
+  autoApprove: boolean;
+  terminalUi: boolean;
+}
+
 /** Android `CopilotLaunchPrefs`, iOS `CopilotLaunchPrefs`. */
 export interface CopilotLaunchPrefs {
   allowAll: boolean;
@@ -91,6 +97,7 @@ export interface LaunchPrefs {
   autoScan: ClaudeLaunchPrefs | null;
   codex: CodexLaunchPrefs | null;
   antigravity: AntigravityLaunchPrefs | null;
+  opencode: OpenCodeLaunchPrefs | null;
   copilot: CopilotLaunchPrefs | null;
   lastProjectName: string | null;
 }
@@ -102,6 +109,7 @@ export type LaunchPrefsSnapshot =
   | { kind: ClaudePrefsBucketId; prefs: ClaudeLaunchPrefs }
   | { kind: 'codex'; prefs: CodexLaunchPrefs }
   | { kind: 'antigravity'; prefs: AntigravityLaunchPrefs }
+  | { kind: 'opencode'; prefs: OpenCodeLaunchPrefs }
   | { kind: 'copilot'; prefs: CopilotLaunchPrefs };
 
 interface LaunchPrefsState extends LaunchPrefs {
@@ -151,6 +159,11 @@ export const ANTIGRAVITY_PREFS_DEFAULTS: AntigravityLaunchPrefs = {
   model: null,
   skipPermissions: false,
   sandbox: false,
+  terminalUi: false,
+};
+
+export const OPENCODE_PREFS_DEFAULTS: OpenCodeLaunchPrefs = {
+  autoApprove: false,
   terminalUi: false,
 };
 
@@ -324,6 +337,14 @@ function sanitizeAntigravityPrefs(raw: unknown): AntigravityLaunchPrefs | null {
   return { model, skipPermissions, sandbox, terminalUi };
 }
 
+function sanitizeOpenCodePrefs(raw: unknown): OpenCodeLaunchPrefs | null {
+  if (!isRecord(raw)) return null;
+  const autoApprove = field(raw, 'autoApprove', OPENCODE_PREFS_DEFAULTS.autoApprove, isBoolean);
+  const terminalUi = field(raw, 'terminalUi', OPENCODE_PREFS_DEFAULTS.terminalUi, isBoolean);
+  if (autoApprove === undefined || terminalUi === undefined) return null;
+  return { autoApprove, terminalUi };
+}
+
 function sanitizeCopilotPrefs(raw: unknown): CopilotLaunchPrefs | null {
   if (!isRecord(raw)) return null;
   const allowAll = field(raw, 'allowAll', COPILOT_PREFS_DEFAULTS.allowAll, isBoolean);
@@ -339,6 +360,7 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
       autoScan: null,
       codex: null,
       antigravity: null,
+      opencode: null,
       copilot: null,
       lastProjectName: null,
       setLaunchPrefs: (snapshot) => {
@@ -354,6 +376,9 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
             return;
           case 'antigravity':
             set({ antigravity: snapshot.prefs });
+            return;
+          case 'opencode':
+            set({ opencode: snapshot.prefs });
             return;
           case 'copilot':
             set({ copilot: snapshot.prefs });
@@ -378,6 +403,7 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
           autoScan: sanitizeClaudePrefs(saved.autoScan),
           codex: sanitizeCodexPrefs(saved.codex),
           antigravity: sanitizeAntigravityPrefs(saved.antigravity),
+          opencode: sanitizeOpenCodePrefs(saved.opencode),
           copilot: sanitizeCopilotPrefs(saved.copilot),
           lastProjectName:
             typeof lastProjectName === 'string' && lastProjectName !== ''
@@ -391,7 +417,7 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
 
 /** Non-reactive read, for the wizard's reducer initializer and prefill effect. */
 export function readLaunchPrefs(): LaunchPrefs {
-  const { claude, autoScan, codex, antigravity, copilot, lastProjectName } =
+  const { claude, autoScan, codex, antigravity, opencode, copilot, lastProjectName } =
     useLaunchPrefsStore.getState();
-  return { claude, autoScan, codex, antigravity, copilot, lastProjectName };
+  return { claude, autoScan, codex, antigravity, opencode, copilot, lastProjectName };
 }

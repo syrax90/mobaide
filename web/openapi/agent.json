@@ -825,6 +825,16 @@
             ],
             "title": "Env"
           },
+          "opencode_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpenCodeOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "project_name": {
             "anyOf": [
               {
@@ -2535,6 +2545,62 @@
         "title": "LinearStateModel",
         "type": "object"
       },
+      "OpenCodeOptionsModel": {
+        "description": "Wire DTO for OpenCode CLI launch options (see :class:`OpenCodeOptions`).\n\n``auto_approve`` is OpenCode's ``--auto``: it accepts every permission\nrequest that the user's OpenCode rules do not deny. ``initial_prompt`` is\nthe first message; it travels as one argv element, so its length is capped.\n``connect`` starts a terminal session that runs ``opencode auth login``\n(sign in to a model provider) in place of an OpenCode session.",
+        "properties": {
+          "auto_approve": {
+            "default": false,
+            "title": "Auto Approve",
+            "type": "boolean"
+          },
+          "base_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Branch"
+          },
+          "branch_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Name"
+          },
+          "connect": {
+            "default": false,
+            "title": "Connect",
+            "type": "boolean"
+          },
+          "initial_prompt": {
+            "anyOf": [
+              {
+                "maxLength": 32000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Initial Prompt"
+          },
+          "worktree": {
+            "default": false,
+            "title": "Worktree",
+            "type": "boolean"
+          }
+        },
+        "title": "OpenCodeOptionsModel",
+        "type": "object"
+      },
       "ProjectReadModel": {
         "description": "Client-safe view of a single project.",
         "properties": {
@@ -3143,6 +3209,7 @@
               "claude",
               "codex",
               "antigravity",
+              "opencode",
               "copilot"
             ],
             "title": "Kind",

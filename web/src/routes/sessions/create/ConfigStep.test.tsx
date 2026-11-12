@@ -178,6 +178,52 @@ describe('ConfigStep — Antigravity chat view', () => {
 
 });
 
+describe('ConfigStep — OpenCode', () => {
+  it('writes auto-approve, off by default, to the OpenCode bucket', () => {
+    const actions = renderStep('opencode');
+
+    const toggle = screen.getByLabelText('Auto-approve permissions (dangerous)');
+    expect(toggle).not.toBeChecked();
+
+    fireEvent.click(toggle);
+
+    expect(actions).toEqual([{ type: 'setOpenCodeAutoApprove', value: true }]);
+  });
+
+  it('keeps Terminal UI in a collapsed Advanced and writes it to the OpenCode bucket', () => {
+    const actions = renderStep('opencode');
+
+    const details = advancedSummary().closest('details');
+    expect(details).not.toHaveAttribute('open');
+    const toggle = screen.getByLabelText('Terminal UI');
+    expect(details?.contains(toggle)).toBe(true);
+    expect(toggle).not.toBeChecked();
+
+    fireEvent.click(toggle);
+
+    expect(actions).toEqual([{ type: 'setOpenCodeTerminalUi', value: true }]);
+  });
+
+  it('holds Terminal UI on where the PC has no OpenCode chat', () => {
+    renderStep('opencode', STATE, versionWithChat({ claude: { resume: true } }));
+
+    const toggle = screen.getByLabelText('Terminal UI');
+    expect(toggle).toBeChecked();
+    expect(toggle).toBeDisabled();
+  });
+
+  it('offers to continue an OpenCode session where the PC can resume one', () => {
+    renderStep(
+      'opencode',
+      STATE,
+      versionWithChat({ opencode: { resume: true, live: false } }),
+      () => undefined,
+    );
+
+    expect(screen.getByRole('button', { name: 'Continue a session…' })).toBeEnabled();
+  });
+});
+
 describe('ConfigStep — GitHub Copilot', () => {
   it('writes the allow-all and Terminal UI toggles to the Copilot bucket only', () => {
     const actions = renderStep('copilot');

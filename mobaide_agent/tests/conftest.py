@@ -90,6 +90,25 @@ def _pin_antigravity_binary(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _pin_opencode_binary(monkeypatch):
+    """Pin the OpenCode resolver to the literal string ``"opencode"`` for every test.
+
+    Parallel of :func:`_pin_antigravity_binary`: opencode launcher tests assert
+    ``spec.argv[0] == "opencode"`` and REST/relay/capability tests must not hit
+    the real host resolver, which finds the CLI on some dev hosts and never on
+    CI. Tests exercising the missing-binary path re-patch
+    ``opencode_launcher._resolve_opencode_binary`` to raise inside the test
+    body, which overrides this fixture.
+    """
+    from mobaide.core import opencode_launcher
+
+    monkeypatch.setattr(
+        opencode_launcher, "_resolve_opencode_binary", lambda *_a, **_kw: "opencode"
+    )
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _pin_copilot_binary(monkeypatch):
     """Pin the Copilot resolver to the literal string ``"copilot"`` for every test.
 

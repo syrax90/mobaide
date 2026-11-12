@@ -20,6 +20,7 @@ import {
   codexOptionsSchema,
   copilotOptionsSchema,
   createSessionRequestSchema,
+  opencodeOptionsSchema,
 } from './dto/sessionCreate';
 import {
   customAgentTypeSchema,
@@ -43,6 +44,7 @@ const REGISTRY: Readonly<Record<string, z.ZodType>> = {
   ClaudeOptionsModel: claudeOptionsSchema,
   CodexOptionsModel: codexOptionsSchema,
   AntigravityOptionsModel: antigravityOptionsSchema,
+  OpenCodeOptionsModel: opencodeOptionsSchema,
   CopilotOptionsModel: copilotOptionsSchema,
   VersionInfoResponse: agentVersionSchema,
   CreateCustomAgentTypeRequest: createCustomAgentTypeRequestSchema,

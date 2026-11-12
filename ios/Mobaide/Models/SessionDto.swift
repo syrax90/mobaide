@@ -8,6 +8,7 @@ enum SessionKind: Hashable, Sendable, Codable {
     case claude
     case codex
     case antigravity
+    case opencode
     case copilot
     case autoScan
     case shell
@@ -19,6 +20,7 @@ enum SessionKind: Hashable, Sendable, Codable {
         case .claude: return "claude"
         case .codex: return "codex"
         case .antigravity: return "antigravity"
+        case .opencode: return "opencode"
         case .copilot: return "copilot"
         case .autoScan: return "auto_scan"
         case .shell: return "shell"
@@ -31,6 +33,7 @@ enum SessionKind: Hashable, Sendable, Codable {
         case "claude": self = .claude
         case "codex": self = .codex
         case "antigravity": self = .antigravity
+        case "opencode": self = .opencode
         case "copilot": self = .copilot
         case "auto_scan": self = .autoScan
         case "shell": self = .shell
@@ -67,7 +70,7 @@ struct SessionResponse: Codable, Equatable, Sendable {
     /// `"chat"` or `"terminal"`; absent or any other value is the terminal.
     let ui: String?
     /// `"working"` while the agent is mid-turn, `"idle"` between turns; nil
-    /// when the agent cannot tell (Codex, Antigravity, Copilot and Terminal PTY sessions).
+    /// when the agent cannot tell (Codex, Antigravity, OpenCode, Copilot and Terminal PTY sessions).
     let activity: String?
 
     var isChat: Bool { ui == "chat" }
@@ -138,6 +141,7 @@ struct CreateSessionRequest: Codable, Equatable, Sendable {
     let claude_options: ClaudeOptionsModel?
     let codex_options: CodexOptionsModel?
     let antigravity_options: AntigravityOptionsModel?
+    let opencode_options: OpenCodeOptionsModel?
     let copilot_options: CopilotOptionsModel?
     let worktree: Bool
     let branch_name: String?
@@ -156,6 +160,7 @@ struct CreateSessionRequest: Codable, Equatable, Sendable {
         claude_options: ClaudeOptionsModel? = nil,
         codex_options: CodexOptionsModel? = nil,
         antigravity_options: AntigravityOptionsModel? = nil,
+        opencode_options: OpenCodeOptionsModel? = nil,
         copilot_options: CopilotOptionsModel? = nil,
         worktree: Bool = false,
         branch_name: String? = nil,
@@ -173,6 +178,7 @@ struct CreateSessionRequest: Codable, Equatable, Sendable {
         self.claude_options = claude_options
         self.codex_options = codex_options
         self.antigravity_options = antigravity_options
+        self.opencode_options = opencode_options
         self.copilot_options = copilot_options
         self.worktree = worktree
         self.branch_name = branch_name
@@ -195,6 +201,7 @@ extension CreateSessionRequest {
         claude_options = try container.decodeIfPresent(ClaudeOptionsModel.self, forKey: .claude_options)
         codex_options = try container.decodeIfPresent(CodexOptionsModel.self, forKey: .codex_options)
         antigravity_options = try container.decodeIfPresent(AntigravityOptionsModel.self, forKey: .antigravity_options)
+        opencode_options = try container.decodeIfPresent(OpenCodeOptionsModel.self, forKey: .opencode_options)
         copilot_options = try container.decodeIfPresent(CopilotOptionsModel.self, forKey: .copilot_options)
         worktree = try container.decodeIfPresent(Bool.self, forKey: .worktree) ?? false
         branch_name = try container.decodeIfPresent(String.self, forKey: .branch_name)

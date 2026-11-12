@@ -128,6 +128,7 @@ vi.mock('../../../api/agentCapabilities', async () => {
         claude: { available: true },
         codex: { available: true },
         antigravity: { available: true },
+        opencode: { available: true },
       },
     },
   });
@@ -153,6 +154,7 @@ const DEFAULT_MODES = [
   'Claude Code',
   'Codex',
   'Antigravity',
+  'OpenCode',
   'GitHub Copilot',
   'Auto Scan',
   'Terminal',
@@ -261,6 +263,7 @@ afterEach(() => {
     autoScan: null,
     codex: null,
     antigravity: null,
+    opencode: null,
     lastProjectName: null,
   });
   useSessionStore.setState({ session: null });
@@ -439,7 +442,7 @@ describe('NewSession mode reorder', () => {
     await renderModeStep();
 
     await waitFor(() => {
-      expect(handleOrder()).toEqual(['Terminal', 'Codex', 'Claude Code', 'Antigravity', 'GitHub Copilot', 'Auto Scan']);
+      expect(handleOrder()).toEqual(['Terminal', 'Codex', 'Claude Code', 'Antigravity', 'OpenCode', 'GitHub Copilot', 'Auto Scan']);
     });
   });
 
@@ -451,18 +454,18 @@ describe('NewSession mode reorder', () => {
 
     fireEvent.keyDown(handle('Terminal'), { key: 'ArrowUp' });
 
-    expect(handleOrder()).toEqual(['Claude Code', 'Codex', 'Antigravity', 'GitHub Copilot', 'Terminal', 'Auto Scan']);
-    expect(screen.getByRole('status')).toHaveTextContent('Terminal moved to position 5 of 6');
+    expect(handleOrder()).toEqual(['Claude Code', 'Codex', 'Antigravity', 'OpenCode', 'GitHub Copilot', 'Terminal', 'Auto Scan']);
+    expect(screen.getByRole('status')).toHaveTextContent('Terminal moved to position 6 of 7');
     await waitFor(() => {
-      expect(api.modeSaves).toEqual([['claude', 'codex', 'antigravity', 'copilot', 'shell', 'auto_scan']]);
+      expect(api.modeSaves).toEqual([['claude', 'codex', 'antigravity', 'opencode', 'copilot', 'shell', 'auto_scan']]);
     });
     await waitFor(() => {
       expect(client.getQueryData<SessionModeOrder>(queryKeys.sessionModeOrder())).toMatchObject({
-        order: ['claude', 'codex', 'antigravity', 'copilot', 'shell', 'auto_scan'],
+        order: ['claude', 'codex', 'antigravity', 'opencode', 'copilot', 'shell', 'auto_scan'],
         version: 1,
       });
     });
-    expect(handleOrder()).toEqual(['Claude Code', 'Codex', 'Antigravity', 'GitHub Copilot', 'Terminal', 'Auto Scan']);
+    expect(handleOrder()).toEqual(['Claude Code', 'Codex', 'Antigravity', 'OpenCode', 'GitHub Copilot', 'Terminal', 'Auto Scan']);
   });
 
   it('reverts to the saved order and says so when the save fails', async () => {
@@ -494,26 +497,26 @@ describe('NewSession mode reorder', () => {
     });
     fireEvent.keyDown(handle('Terminal'), { key: 'ArrowUp' });
     fireEvent.keyDown(handle('Terminal'), { key: 'ArrowUp' });
-    expect(handleOrder()).toEqual(['Claude Code', 'Codex', 'Terminal', 'Antigravity', 'GitHub Copilot', 'Auto Scan']);
+    expect(handleOrder()).toEqual(['Claude Code', 'Codex', 'Antigravity', 'Terminal', 'OpenCode', 'GitHub Copilot', 'Auto Scan']);
 
     await releaseOldestSave();
     await waitFor(() => {
       expect(api.modeSaves).toHaveLength(2);
     });
     expect(api.modeSaves).toEqual([
-      ['claude', 'codex', 'antigravity', 'copilot', 'shell', 'auto_scan'],
-      ['claude', 'codex', 'shell', 'antigravity', 'copilot', 'auto_scan'],
+      ['claude', 'codex', 'antigravity', 'opencode', 'copilot', 'shell', 'auto_scan'],
+      ['claude', 'codex', 'antigravity', 'shell', 'opencode', 'copilot', 'auto_scan'],
     ]);
-    expect(handleOrder()).toEqual(['Claude Code', 'Codex', 'Terminal', 'Antigravity', 'GitHub Copilot', 'Auto Scan']);
+    expect(handleOrder()).toEqual(['Claude Code', 'Codex', 'Antigravity', 'Terminal', 'OpenCode', 'GitHub Copilot', 'Auto Scan']);
 
     await releaseOldestSave();
     await waitFor(() => {
       expect(client.getQueryData<SessionModeOrder>(queryKeys.sessionModeOrder())).toMatchObject({
-        order: ['claude', 'codex', 'shell', 'antigravity', 'copilot', 'auto_scan'],
+        order: ['claude', 'codex', 'antigravity', 'shell', 'opencode', 'copilot', 'auto_scan'],
         version: 2,
       });
     });
-    expect(handleOrder()).toEqual(['Claude Code', 'Codex', 'Terminal', 'Antigravity', 'GitHub Copilot', 'Auto Scan']);
+    expect(handleOrder()).toEqual(['Claude Code', 'Codex', 'Antigravity', 'Terminal', 'OpenCode', 'GitHub Copilot', 'Auto Scan']);
     expect(api.modeSaves).toHaveLength(2);
   });
 
@@ -539,7 +542,7 @@ describe('NewSession mode reorder', () => {
     await waitFor(() => {
       expect(client.isMutating()).toBe(0);
     });
-    expect(api.modeSaves).toEqual([['claude', 'codex', 'antigravity', 'copilot', 'shell', 'auto_scan']]);
+    expect(api.modeSaves).toEqual([['claude', 'codex', 'antigravity', 'opencode', 'copilot', 'shell', 'auto_scan']]);
     expect(client.getQueryData<SessionModeOrder>(queryKeys.sessionModeOrder())).toMatchObject({
       order: [],
       version: 0,
@@ -563,7 +566,7 @@ describe('NewSession mode reorder', () => {
     });
 
     await waitFor(() => {
-      expect(handleOrder()).toEqual(['Auto Scan', 'Claude Code', 'Codex', 'Antigravity', 'GitHub Copilot', 'Terminal']);
+      expect(handleOrder()).toEqual(['Auto Scan', 'Claude Code', 'Codex', 'Antigravity', 'OpenCode', 'GitHub Copilot', 'Terminal']);
     });
   });
 
@@ -597,9 +600,9 @@ describe('NewSession mode reorder', () => {
       expect(client.isFetching({ queryKey: queryKeys.sessionModeOrder() })).toBe(0);
     });
     expect(client.getQueryData<SessionModeOrder>(queryKeys.sessionModeOrder())).toMatchObject({
-      order: ['claude', 'codex', 'antigravity', 'copilot', 'shell', 'auto_scan'],
+      order: ['claude', 'codex', 'antigravity', 'opencode', 'copilot', 'shell', 'auto_scan'],
       version: 1,
     });
-    expect(handleOrder()).toEqual(['Claude Code', 'Codex', 'Antigravity', 'GitHub Copilot', 'Terminal', 'Auto Scan']);
+    expect(handleOrder()).toEqual(['Claude Code', 'Codex', 'Antigravity', 'OpenCode', 'GitHub Copilot', 'Terminal', 'Auto Scan']);
   });
 });

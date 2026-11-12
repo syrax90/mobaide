@@ -25,6 +25,7 @@ export const BUILT_IN_MODES = [
   'claude',
   'codex',
   'antigravity',
+  'opencode',
   'copilot',
   'auto_scan',
   'shell',
@@ -94,6 +95,13 @@ export interface AntigravityBucket {
   terminalUi: boolean;
 }
 
+export interface OpenCodeBucket {
+  /** OpenCode's `--auto`: accept every permission request its rules do not deny. */
+  autoApprove: boolean;
+  /** The classic terminal instead of the chat view. */
+  terminalUi: boolean;
+}
+
 export interface CopilotBucket {
   /** Copilot's `--allow-all`: run tools and use paths and URLs without asking. */
   allowAll: boolean;
@@ -126,6 +134,7 @@ export interface WizardState {
   autoScan: ClaudeBucket;
   codex: CodexBucket;
   antigravity: AntigravityBucket;
+  opencode: OpenCodeBucket;
   copilot: CopilotBucket;
   git: GitBucket;
   /**
@@ -182,6 +191,7 @@ export const INITIAL_WIZARD_STATE: WizardState = {
     addDirsDraft: '',
     terminalUi: false,
   },
+  opencode: { autoApprove: false, terminalUi: false },
   copilot: { allowAll: false, terminalUi: false },
   git: { worktree: false, branchName: '' },
   worktreeBasePick: null,
@@ -351,6 +361,8 @@ export type WizardAction =
   | { type: 'setAntigravitySandbox'; value: boolean }
   | { type: 'setAntigravityAddDirs'; draft: string }
   | { type: 'setAntigravityTerminalUi'; value: boolean }
+  | { type: 'setOpenCodeAutoApprove'; value: boolean }
+  | { type: 'setOpenCodeTerminalUi'; value: boolean }
   | { type: 'setCopilotAllowAll'; value: boolean }
   | { type: 'setCopilotTerminalUi'; value: boolean }
   | { type: 'setWorktree'; value: boolean }
@@ -561,6 +573,12 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
 
     case 'setAntigravityTerminalUi':
       return { ...state, antigravity: { ...state.antigravity, terminalUi: action.value } };
+
+    case 'setOpenCodeAutoApprove':
+      return { ...state, opencode: { ...state.opencode, autoApprove: action.value } };
+
+    case 'setOpenCodeTerminalUi':
+      return { ...state, opencode: { ...state.opencode, terminalUi: action.value } };
 
     case 'setCopilotAllowAll':
       return { ...state, copilot: { ...state.copilot, allowAll: action.value } };

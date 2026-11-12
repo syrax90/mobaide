@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from .antigravity_launcher import AntigravityOptions  # noqa: F401
     from .claude_launcher import ClaudeOptions  # noqa: F401
     from .codex_launcher import CodexOptions  # noqa: F401
+    from .opencode_launcher import OpenCodeOptions  # noqa: F401
     from .copilot_launcher import CopilotOptions  # noqa: F401
 
 # Wire pattern for account-scoped custom AI agent type kinds. The 12-hex id
@@ -42,9 +43,11 @@ class SessionKind(enum.Enum):
     ``claude_options``). ``CODEX`` — Codex CLI launched via ``CodexLauncher``
     (create with ``cli="codex"`` / ``codex_options``). ``ANTIGRAVITY`` —
     Antigravity CLI (``agy``) launched via ``AntigravityLauncher`` (create with
-    ``cli="antigravity"`` / ``antigravity_options``). ``COPILOT`` — GitHub
-    Copilot CLI launched via ``CopilotLauncher`` (create with
-    ``cli="copilot"`` / ``copilot_options``). ``AUTO_SCAN`` —
+    ``cli="antigravity"`` / ``antigravity_options``). ``OPENCODE`` — OpenCode
+    CLI launched via ``OpenCodeLauncher`` (create with ``cli="opencode"`` /
+    ``opencode_options``). ``COPILOT`` — GitHub Copilot CLI launched via
+    ``CopilotLauncher`` (create with ``cli="copilot"`` /
+    ``copilot_options``). ``AUTO_SCAN`` —
     sub-sessions spawned by the Linear scanner; argv/cwd/env pre-built by the
     scanner. ``SHELL`` — the user's login shell anchored to a project's cwd;
     bypasses the managed-CLI launchers entirely.
@@ -59,6 +62,7 @@ class SessionKind(enum.Enum):
     CLAUDE = "claude"
     CODEX = "codex"
     ANTIGRAVITY = "antigravity"
+    OPENCODE = "opencode"
     COPILOT = "copilot"
     AUTO_SCAN = "auto_scan"
     SHELL = "shell"
@@ -92,6 +96,9 @@ class SessionConfig:
     # Set when the session runs the Antigravity CLI. Mutually exclusive with the
     # other options blocks; ``SessionManager`` dispatches to ``AntigravityLauncher``.
     antigravity_options: AntigravityOptions | None = None
+    # Set when the session runs the OpenCode CLI. Mutually exclusive with the
+    # other options blocks; ``SessionManager`` dispatches to ``OpenCodeLauncher``.
+    opencode_options: OpenCodeOptions | None = None
     # Set when the session runs the GitHub Copilot CLI. Mutually exclusive with
     # the other options blocks; ``SessionManager`` dispatches to ``CopilotLauncher``.
     copilot_options: CopilotOptions | None = None
@@ -121,6 +128,9 @@ class SessionConfig:
     # becomes an attention. ``None`` takes each gate's default; ``0`` alerts
     # without waiting.
     attention_quiet_seconds: float | None = None
+    # The command is meant to run to its end (a sign-in, not an agent): its
+    # own exit is a normal stop, not a crash.
+    exits_when_done: bool = False
     # ``"chat"`` runs the agent over ACP (``mobaide.acp``) and renders the
     # structured chat UI; ``"terminal"`` is the classic PTY session.
     ui: str = "terminal"
@@ -186,6 +196,7 @@ def _resolve_session_kind(
     claude_options: "ClaudeOptions | None",
     codex_options: "CodexOptions | None",
     antigravity_options: "AntigravityOptions | None",
+    opencode_options: "OpenCodeOptions | None" = None,
     copilot_options: "CopilotOptions | None" = None,
 ) -> SessionKind:
     """Pick the managed CLI from an explicit ``cli`` plus options presence.
@@ -194,6 +205,8 @@ def _resolve_session_kind(
     object the client sent (back-compat: a legacy ``claude_options``-only payload
     with no ``cli`` still resolves to ``CLAUDE``). Anything else is ``SHELL``.
     """
+    if cli == SessionKind.OPENCODE.value or (cli is None and opencode_options is not None):
+        return SessionKind.OPENCODE
     if cli == SessionKind.COPILOT.value or (cli is None and copilot_options is not None):
         return SessionKind.COPILOT
     if cli == SessionKind.ANTIGRAVITY.value or (
@@ -217,6 +230,7 @@ def resolve_spawn_args(
     default_shell: list[str],
     resolved_command: str | None = None,
     *,
+    opencode_options: "OpenCodeOptions | None" = None,
     copilot_options: "CopilotOptions | None" = None,
 ) -> tuple[
     SessionKind | str,
@@ -225,18 +239,19 @@ def resolve_spawn_args(
     "ClaudeOptions | None",
     "CodexOptions | None",
     "AntigravityOptions | None",
+    "OpenCodeOptions | None",
     "CopilotOptions | None",
 ]:
     """Resolve ``(kind, command, env, claude_options, codex_options,
-    antigravity_options, copilot_options)``.
+    antigravity_options, opencode_options, copilot_options)``.
 
     The single source of truth for the Terminal-mode security guard: for a
     non-managed (shell) request the spawn always uses ``default_shell`` with a
     clean env, regardless of any client-supplied ``command``/``env`` hints. This
     prevents an authenticated client from piggybacking arbitrary argv into a
-    project's cwd via the Terminal path. Managed (Claude/Codex/Antigravity/Copilot)
-    requests honour the hints (overwritten later by the launcher inside
-    ``SessionManager``).
+    project's cwd via the Terminal path. Managed
+    (Claude/Codex/Antigravity/OpenCode/Copilot) requests honour the hints
+    (overwritten later by the launcher inside ``SessionManager``).
 
     Custom agent types (``cli`` matching ``CUSTOM_KIND_PATTERN``) keep the
     same guard posture: the client hints are discarded and the spawn argv is
@@ -261,10 +276,37 @@ def resolve_spawn_args(
             raise CustomCommandUnresolvedError(
                 "Custom agent types can only be launched through the relay"
             )
-        return cli, build_custom_argv(resolved_command), None, None, None, None, None
+        return (
+            cli,
+            build_custom_argv(resolved_command),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
     kind = _resolve_session_kind(
-        cli, claude_options, codex_options, antigravity_options, copilot_options
+        cli,
+        claude_options,
+        codex_options,
+        antigravity_options,
+        opencode_options,
+        copilot_options,
     )
+    if kind is SessionKind.OPENCODE:
+        from .opencode_launcher import OpenCodeOptions
+
+        return (
+            kind,
+            command_hint or default_shell,
+            env_hint,
+            None,
+            None,
+            None,
+            opencode_options or OpenCodeOptions(),
+            None,
+        )
     if kind is SessionKind.COPILOT:
         from .copilot_launcher import CopilotOptions
 
@@ -272,6 +314,7 @@ def resolve_spawn_args(
             kind,
             command_hint or default_shell,
             env_hint,
+            None,
             None,
             None,
             None,
@@ -288,6 +331,7 @@ def resolve_spawn_args(
             None,
             antigravity_options or AntigravityOptions(),
             None,
+            None,
         )
     if kind is SessionKind.CODEX:
         from .codex_launcher import CodexOptions
@@ -298,6 +342,7 @@ def resolve_spawn_args(
             env_hint,
             None,
             codex_options or CodexOptions(),
+            None,
             None,
             None,
         )
@@ -312,8 +357,9 @@ def resolve_spawn_args(
             None,
             None,
             None,
+            None,
         )
-    return SessionKind.SHELL, default_shell, None, None, None, None, None
+    return SessionKind.SHELL, default_shell, None, None, None, None, None, None
 
 
 def session_to_wire_dict(info: SessionInfo) -> dict[str, Any]:

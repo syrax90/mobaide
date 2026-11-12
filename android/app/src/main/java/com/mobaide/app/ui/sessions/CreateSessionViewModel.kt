@@ -7,6 +7,7 @@ import com.mobaide.app.data.fs.PathCompletion
 import com.mobaide.app.data.local.AntigravityLaunchPrefs
 import com.mobaide.app.data.local.ClaudeLaunchPrefs
 import com.mobaide.app.data.local.CodexLaunchPrefs
+import com.mobaide.app.data.local.OpenCodeLaunchPrefs
 import com.mobaide.app.data.local.CopilotLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
@@ -18,6 +19,7 @@ import com.mobaide.app.data.network.dto.CodexOptionsModel
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.CliModelDetail
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
+import com.mobaide.app.data.network.dto.OpenCodeOptionsModel
 import com.mobaide.app.data.network.dto.CopilotOptionsModel
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.SessionResponse
@@ -63,7 +65,7 @@ import java.nio.file.InvalidPathException
 import java.nio.file.Paths
 import javax.inject.Inject
 
-enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig, CodexConfig, AntigravityConfig, CopilotConfig, AutoScanConfig, TerminalConfig }
+enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig, CodexConfig, AntigravityConfig, OpenCodeConfig, CopilotConfig, AutoScanConfig, TerminalConfig }
 
 /**
  * Mode-picker selection. The built-in modes are singletons; [Custom] carries
@@ -74,6 +76,7 @@ sealed interface CreateSessionMode {
     data object Standard : CreateSessionMode
     data object Codex : CreateSessionMode
     data object Antigravity : CreateSessionMode
+    data object OpenCode : CreateSessionMode
     data object Copilot : CreateSessionMode
     data object AutoScan : CreateSessionMode
     data object CustomShell : CreateSessionMode
@@ -86,6 +89,7 @@ val CreateSessionMode.orderId: String
         CreateSessionMode.Standard -> "claude"
         CreateSessionMode.Codex -> "codex"
         CreateSessionMode.Antigravity -> "antigravity"
+        CreateSessionMode.OpenCode -> "opencode"
         CreateSessionMode.Copilot -> "copilot"
         CreateSessionMode.AutoScan -> "auto_scan"
         CreateSessionMode.CustomShell -> "shell"
@@ -97,6 +101,7 @@ val BUILT_IN_MODES: List<CreateSessionMode> = listOf(
     CreateSessionMode.Standard,
     CreateSessionMode.Codex,
     CreateSessionMode.Antigravity,
+    CreateSessionMode.OpenCode,
     CreateSessionMode.Copilot,
     CreateSessionMode.AutoScan,
     CreateSessionMode.CustomShell,
@@ -170,6 +175,10 @@ data class CreateSessionUiState(
     val claudeAvailable: Boolean? = null,
     val codexAvailable: Boolean? = null,
     val antigravityAvailable: Boolean? = null,
+    val opencodeAvailable: Boolean? = null,
+    // false = the agent lists its CLIs but not OpenCode: it predates the kind
+    // and would open a plain shell for it.
+    val opencodeKnown: Boolean = true,
     val copilotAvailable: Boolean? = null,
     // false = the agent lists its CLIs but not Copilot: it predates the kind
     // and would open a plain shell for it.
@@ -238,6 +247,11 @@ data class CreateSessionUiState(
     val antigravityTerminalUi: Boolean = false,
     // capabilities.chat for Antigravity from the ModePick probe; null = not probed yet.
     val antigravityChat: ChatSupport? = null,
+    val opencodeAutoApprove: Boolean = false,
+    // OpenCode: start the classic terminal instead of the chat view.
+    val opencodeTerminalUi: Boolean = false,
+    // capabilities.chat for OpenCode from the ModePick probe; null = not probed yet.
+    val opencodeChat: ChatSupport? = null,
     val copilotAllowAll: Boolean = false,
     // Copilot: start the classic terminal instead of the chat view.
     val copilotTerminalUi: Boolean = false,
@@ -350,6 +364,7 @@ fun chatUnavailableHint(chat: ChatSupport?, kind: String = "claude"): String? = 
     ChatSupport.AgentOutdated -> "Update Mobaide on your PC to use the chat view."
     ChatSupport.Unavailable -> when (kind) {
         "antigravity" -> "The chat view needs a newer Antigravity CLI on your PC: run agy update there."
+        "opencode" -> "The chat view is not available for OpenCode on your PC."
         "copilot" -> "The chat view is not available for GitHub Copilot on your PC."
         else -> "The chat view needs Node.js on your PC."
     }
@@ -379,6 +394,15 @@ val CreateSessionUiState.antigravityChatUnavailableHint: String?
 
 val CreateSessionUiState.antigravityResumeAvailable: Boolean
     get() = antigravityUsesChat && (antigravityChat as? ChatSupport.Available)?.resume == true
+
+val CreateSessionUiState.opencodeUsesChat: Boolean
+    get() = usesChat(opencodeTerminalUi, opencodeChat)
+
+val CreateSessionUiState.opencodeChatUnavailableHint: String?
+    get() = chatUnavailableHint(opencodeChat, "opencode")
+
+val CreateSessionUiState.opencodeResumeAvailable: Boolean
+    get() = opencodeUsesChat && (opencodeChat as? ChatSupport.Available)?.resume == true
 
 val CreateSessionUiState.copilotUsesChat: Boolean
     get() = usesChat(copilotTerminalUi, copilotChat)
@@ -443,6 +467,12 @@ private fun CreateSessionUiState.toAntigravityLaunchPrefs() = AntigravityLaunchP
     terminalUi = antigravityTerminalUi,
 )
 
+/** Snapshot of the OpenCode launch controls for persistence / re-defaulting. */
+private fun CreateSessionUiState.toOpenCodeLaunchPrefs() = OpenCodeLaunchPrefs(
+    autoApprove = opencodeAutoApprove,
+    terminalUi = opencodeTerminalUi,
+)
+
 /** Snapshot of the Copilot launch controls for persistence / re-defaulting. */
 private fun CreateSessionUiState.toCopilotLaunchPrefs() = CopilotLaunchPrefs(
     allowAll = copilotAllowAll,
@@ -457,6 +487,7 @@ private fun CreateSessionUiState.toCopilotLaunchPrefs() = CopilotLaunchPrefs(
 val CreateSessionUiState.claudeEnabled: Boolean get() = claudeAvailable != false
 val CreateSessionUiState.codexEnabled: Boolean get() = codexAvailable != false
 val CreateSessionUiState.antigravityEnabled: Boolean get() = antigravityAvailable != false
+val CreateSessionUiState.opencodeEnabled: Boolean get() = opencodeAvailable != false && opencodeKnown
 val CreateSessionUiState.copilotEnabled: Boolean get() = copilotAvailable != false && copilotKnown
 
 /**
@@ -478,6 +509,7 @@ fun CreateSessionUiState.isModeEnabled(mode: CreateSessionMode): Boolean = when 
     CreateSessionMode.AutoScan -> autoScanEnabled
     CreateSessionMode.Codex -> codexEnabled
     CreateSessionMode.Antigravity -> antigravityEnabled
+    CreateSessionMode.OpenCode -> opencodeEnabled
     CreateSessionMode.Copilot -> copilotEnabled
     CreateSessionMode.CustomShell -> true
     is CreateSessionMode.Custom -> true
@@ -584,6 +616,15 @@ class CreateSessionViewModel @Inject constructor(
                         antigravitySkipPermissions = saved.skipPermissions,
                         antigravitySandbox = saved.sandbox && !saved.skipPermissions,
                         antigravityTerminalUi = saved.terminalUi,
+                    )
+                }
+            }
+            // Same pre-fill for the OpenCode launch controls.
+            preferencesStore.getLastUsedOpenCodeOptions()?.let { saved ->
+                _uiState.update {
+                    it.copy(
+                        opencodeAutoApprove = saved.autoApprove,
+                        opencodeTerminalUi = saved.terminalUi,
                     )
                 }
             }
@@ -972,9 +1013,12 @@ class CreateSessionViewModel @Inject constructor(
                         claudeChat = version.chatSupport("claude"),
                         codexChat = version.chatSupport("codex"),
                         antigravityChat = version.chatSupport("antigravity"),
+                        opencodeChat = version.chatSupport("opencode"),
                         copilotChat = version.chatSupport("copilot"),
                         codexAvailable = version.cliAvailable("codex"),
                         antigravityAvailable = version.cliAvailable("antigravity"),
+                        opencodeAvailable = version.cliAvailable("opencode"),
+                        opencodeKnown = version.cliKnown("opencode"),
                         copilotAvailable = version.cliAvailable("copilot"),
                         copilotKnown = version.cliKnown("copilot"),
                         codexModels = version.cliModels("codex"),
@@ -1031,6 +1075,7 @@ class CreateSessionViewModel @Inject constructor(
             CreateSessionMode.Standard -> selectStandardMode()
             CreateSessionMode.Codex -> selectCodexMode()
             CreateSessionMode.Antigravity -> selectAntigravityMode()
+            CreateSessionMode.OpenCode -> selectOpenCodeMode()
             CreateSessionMode.Copilot -> selectCopilotMode()
             CreateSessionMode.AutoScan -> selectAutoScanMode()
             CreateSessionMode.CustomShell -> selectTerminalMode()
@@ -1048,6 +1093,10 @@ class CreateSessionViewModel @Inject constructor(
 
     fun selectAntigravityMode() = _uiState.update {
         if (it.antigravityEnabled) it.copy(step = CreateSessionStep.AntigravityConfig) else it
+    }
+
+    fun selectOpenCodeMode() = _uiState.update {
+        if (it.opencodeEnabled) it.copy(step = CreateSessionStep.OpenCodeConfig) else it
     }
 
     fun selectCopilotMode() = _uiState.update {
@@ -1164,6 +1213,7 @@ class CreateSessionViewModel @Inject constructor(
             CreateSessionStep.StandardConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.CodexConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.AntigravityConfig -> it.copy(step = CreateSessionStep.ModePick)
+            CreateSessionStep.OpenCodeConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.CopilotConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.AutoScanConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.TerminalConfig -> it.copy(step = CreateSessionStep.ModePick)
@@ -1183,6 +1233,8 @@ class CreateSessionViewModel @Inject constructor(
     fun toggleCodexTerminalUi(v: Boolean) = _uiState.update { it.copy(codexTerminalUi = v) }
 
     fun toggleAntigravityTerminalUi(v: Boolean) = _uiState.update { it.copy(antigravityTerminalUi = v) }
+
+    fun toggleOpenCodeTerminalUi(v: Boolean) = _uiState.update { it.copy(opencodeTerminalUi = v) }
 
     fun toggleCopilotTerminalUi(v: Boolean) = _uiState.update { it.copy(copilotTerminalUi = v) }
     fun setClaudeModel(v: String?) = _uiState.update {
@@ -1366,6 +1418,8 @@ class CreateSessionViewModel @Inject constructor(
         else it.copy(antigravitySandbox = false)
     }
 
+    fun setOpenCodeAutoApprove(v: Boolean) = _uiState.update { it.copy(opencodeAutoApprove = v) }
+
     fun setCopilotAllowAll(v: Boolean) = _uiState.update { it.copy(copilotAllowAll = v) }
 
     fun consumeDismiss() = _uiState.update { it.copy(dismiss = false) }
@@ -1414,7 +1468,7 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     /**
-     * Continue a stored Claude Code, Codex, Antigravity or Copilot session ([kind]) in a
+     * Continue a stored Claude Code, Codex, Antigravity, OpenCode or Copilot session ([kind]) in a
      * new chat session: the agent's current options without a worktree, in the
      * selected project when its folder is the row's folder, otherwise in the
      * row's folder.
@@ -1437,6 +1491,11 @@ class CreateSessionViewModel @Inject constructor(
             base.copy(
                 cli = "antigravity",
                 antigravity_options = state.antigravityOptions(worktree = false, branchName = null),
+            )
+        } else if (kind == "opencode") {
+            base.copy(
+                cli = "opencode",
+                opencode_options = state.opencodeOptions(worktree = false, branchName = null),
             )
         } else if (kind == "copilot") {
             base.copy(
@@ -1490,6 +1549,17 @@ class CreateSessionViewModel @Inject constructor(
         skip_permissions = antigravitySkipPermissions,
         sandbox = antigravitySandbox,
         add_dirs = parseAddDirs(antigravityAddDirsDraft),
+        worktree = worktree,
+        branch_name = branchName,
+        base_branch = baseBranch,
+    )
+
+    private fun CreateSessionUiState.opencodeOptions(
+        worktree: Boolean,
+        branchName: String?,
+        baseBranch: String? = null,
+    ) = OpenCodeOptionsModel(
+        auto_approve = opencodeAutoApprove,
         worktree = worktree,
         branch_name = branchName,
         base_branch = baseBranch,
@@ -1575,6 +1645,76 @@ class CreateSessionViewModel @Inject constructor(
                         antigravity_options = antigravityOptions.copy(worktree = false, branch_name = null, base_branch = null),
                         ui = ui,
                     ),
+                )
+            }
+            ProjectSelection.None -> Unit
+        }
+    }
+
+    fun submitOpenCode() {
+        val state = _uiState.value
+        if (state.submitting) return
+        val opencodeOptions = state.opencodeOptions(
+            worktree = state.worktree,
+            branchName = state.branchName.takeIf { it.isNotBlank() },
+            baseBranch = state.effectiveBaseBranch,
+        )
+        val ui = if (state.opencodeUsesChat) SessionResponse.UI_CHAT else SessionResponse.UI_TERMINAL
+        when (val sel = state.selection) {
+            is ProjectSelection.Stored -> submitSession(
+                selection = sel,
+                request = CreateSessionRequest(
+                    project_name = sel.name,
+                    cli = "opencode",
+                    opencode_options = opencodeOptions,
+                    ui = ui,
+                ),
+            )
+            is ProjectSelection.CustomPath -> {
+                if (sel.path.isBlank() || state.customPathError != null) return
+                submitSession(
+                    selection = sel,
+                    request = CreateSessionRequest(
+                        project_name = null,
+                        cwd = sel.path,
+                        cli = "opencode",
+                        opencode_options = opencodeOptions.copy(worktree = false, branch_name = null, base_branch = null),
+                        ui = ui,
+                    ),
+                )
+            }
+            ProjectSelection.None -> Unit
+        }
+    }
+
+    /**
+     * Starts a terminal session that runs OpenCode's own sign-in in the chosen
+     * folder. It is not an OpenCode session: no launch option applies.
+     */
+    fun connectOpenCodeProvider() {
+        val state = _uiState.value
+        if (state.submitting) return
+        val request = CreateSessionRequest(
+            cli = "opencode",
+            opencode_options = OpenCodeOptionsModel(
+                auto_approve = false,
+                connect = true,
+                worktree = false,
+                branch_name = null,
+                base_branch = null,
+            ),
+            ui = SessionResponse.UI_TERMINAL,
+        )
+        when (val sel = state.selection) {
+            is ProjectSelection.Stored -> submitSession(
+                selection = sel,
+                request = request.copy(project_name = sel.name),
+            )
+            is ProjectSelection.CustomPath -> {
+                if (sel.path.isBlank() || state.customPathError != null) return
+                submitSession(
+                    selection = sel,
+                    request = request.copy(project_name = null, cwd = sel.path),
                 )
             }
             ProjectSelection.None -> Unit
@@ -1873,6 +2013,8 @@ class CreateSessionViewModel @Inject constructor(
                 // the same kind. The request shape selects which blob to write:
                 // Claude submits carry claude_options, Codex submits carry
                 // codex_options, Antigravity submits carry antigravity_options,
+                // OpenCode submits carry opencode_options (a provider sign-in
+                // is not a launch, so it stores nothing),
                 // Copilot submits carry copilot_options,
                 // shell submits carry none.
                 if (request.claude_options != null) {
@@ -1883,6 +2025,9 @@ class CreateSessionViewModel @Inject constructor(
                 }
                 if (request.antigravity_options != null) {
                     preferencesStore.setLastUsedAntigravityOptions(_uiState.value.toAntigravityLaunchPrefs())
+                }
+                if (request.opencode_options?.connect == false) {
+                    preferencesStore.setLastUsedOpenCodeOptions(_uiState.value.toOpenCodeLaunchPrefs())
                 }
                 if (request.copilot_options != null) {
                     preferencesStore.setLastUsedCopilotOptions(_uiState.value.toCopilotLaunchPrefs())

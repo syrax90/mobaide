@@ -11,7 +11,7 @@ import org.junit.Test
  * unknown-value-to-default coercion *before* invoking the custom deserializer
  * (kotlinx.serialization#1947), which would silently mislabel every unknown kind
  * as Claude again. These tests are the tripwire for that regression:
- *   - the five built-in kinds round-trip their wire strings;
+ *   - the built-in kinds round-trip their wire strings;
  *   - any other string (custom types, future kinds) is preserved verbatim in
  *     [SessionKind.Custom] and round-trips byte-identically;
  *   - an explicit `"kind": null` still coerces to the property default (Claude) —
@@ -27,6 +27,7 @@ class SessionKindSerializerTest {
         "claude" to SessionKind.Claude,
         "codex" to SessionKind.Codex,
         "antigravity" to SessionKind.Antigravity,
+        "opencode" to SessionKind.OpenCode,
         "copilot" to SessionKind.Copilot,
         "auto_scan" to SessionKind.AutoScan,
         "shell" to SessionKind.Shell,

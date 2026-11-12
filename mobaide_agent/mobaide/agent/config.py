@@ -103,6 +103,13 @@ class AgentConfig(BaseSettings):
         default=None, validation_alias="MOBAIDE_AGY_BIN",
     )
 
+    # Operator override pointing at the absolute path of the OpenCode CLI
+    # executable (``opencode.exe`` / ``opencode.cmd`` on Windows, ``opencode``
+    # on POSIX). Typed for the same reason as ``agy_bin``.
+    opencode_bin: str | None = Field(
+        default=None, validation_alias="MOBAIDE_OPENCODE_BIN",
+    )
+
     # Operator override pointing at the absolute path of the GitHub Copilot
     # CLI executable (``copilot.exe`` / ``copilot.cmd`` on Windows, ``copilot``
     # on POSIX). Typed for the same reason as ``agy_bin``.
@@ -123,6 +130,10 @@ class AgentConfig(BaseSettings):
     # The same for Antigravity, whose ACP server is ``agy acp``.
     acp_antigravity_command: str | None = Field(
         default=None, validation_alias="MOBAIDE_ACP_ANTIGRAVITY_COMMAND",
+    )
+    # The same for OpenCode, whose ACP server is ``opencode acp``.
+    acp_opencode_command: str | None = Field(
+        default=None, validation_alias="MOBAIDE_ACP_OPENCODE_COMMAND",
     )
     # The same for GitHub Copilot, whose ACP server is ``copilot --acp``.
     acp_copilot_command: str | None = Field(
@@ -309,6 +320,8 @@ def _cmd_init_env(args: argparse.Namespace) -> int:
             overrides["MOBAIDE_CODEX_BIN"] = existing["MOBAIDE_CODEX_BIN"]
         if existing.get("MOBAIDE_AGY_BIN"):
             overrides["MOBAIDE_AGY_BIN"] = existing["MOBAIDE_AGY_BIN"]
+        if existing.get("MOBAIDE_OPENCODE_BIN"):
+            overrides["MOBAIDE_OPENCODE_BIN"] = existing["MOBAIDE_OPENCODE_BIN"]
         if existing.get("MOBAIDE_COPILOT_BIN"):
             overrides["MOBAIDE_COPILOT_BIN"] = existing["MOBAIDE_COPILOT_BIN"]
 

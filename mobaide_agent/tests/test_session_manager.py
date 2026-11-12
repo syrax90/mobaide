@@ -10,6 +10,7 @@ from mobaide.core.claude_launcher import AdHocLaunch, ClaudeOptions, LaunchSpec
 from mobaide.core.codex_launcher import CodexOptions
 from mobaide.core.copilot_launcher import CopilotOptions
 from mobaide.core.models import SessionConfig, SessionKind, SessionState
+from mobaide.core.opencode_launcher import OpenCodeOptions
 from mobaide.core.pty_backend import FakePtyBackend
 from mobaide.core.session_manager import MaxSessionsError, SessionManager
 from mobaide.linear.worktree import WorktreeResult
@@ -408,6 +409,139 @@ class TestAntigravityLaunchBranching:
             assert isinstance(
                 antigravity_launcher.build.await_args.args[0], AdHocLaunch,
             )
+        finally:
+            await mgr.shutdown()
+
+
+@pytest.mark.timeout(20)
+class TestOpenCodeLaunchBranching:
+    """``create_session`` routes an ``opencode_options`` session to the
+    OpenCode launcher (not a sibling's), and raises a clear error when no
+    OpenCode launcher is wired.
+    """
+
+    async def test_project_opencode_options_invokes_opencode_launcher(
+        self, tmp_path,
+    ) -> None:
+        project = MagicMock()
+        project.name = "proj"
+        project.path = str(tmp_path)
+        store = MagicMock()
+        store.get = MagicMock(return_value=project)
+
+        claude_launcher = MagicMock()
+        claude_launcher.build = AsyncMock()
+        antigravity_launcher = MagicMock()
+        antigravity_launcher.build = AsyncMock()
+        opencode_launcher = MagicMock()
+        # A real spawnable command, so the PTY start succeeds on a host
+        # without ``opencode``; the argv itself is covered by
+        # ``test_opencode_launcher``.
+        opencode_launcher.build = AsyncMock(
+            return_value=LaunchSpec(
+                argv=default_shell(),
+                cwd=str(tmp_path),
+                env={"X": "Y"},
+            ),
+        )
+        options = OpenCodeOptions(auto_approve=True)
+
+        mgr = SessionManager(
+            projects_store=store,
+            launcher=claude_launcher,
+            antigravity_launcher=antigravity_launcher,
+            opencode_launcher=opencode_launcher,
+        )
+        try:
+            config = SessionConfig(
+                session_id="opencode-sess",
+                command=default_shell(),
+                rows=24, cols=80, scrollback_size=50,
+                project_name="proj",
+                opencode_options=options,
+                kind=SessionKind.OPENCODE,
+            )
+            await mgr.create_session(config)
+
+            opencode_launcher.build.assert_awaited_once()
+            claude_launcher.build.assert_not_awaited()
+            antigravity_launcher.build.assert_not_awaited()
+            call = opencode_launcher.build.await_args
+            assert call.args[0] is project
+            assert call.args[1] is options
+            assert config.env == {"X": "Y"}
+            assert mgr.list_sessions()[0].kind == SessionKind.OPENCODE
+        finally:
+            await mgr.shutdown()
+
+    async def test_no_opencode_launcher_fails_instead_of_running_another_cli(
+        self, tmp_path,
+    ) -> None:
+        claude_launcher = MagicMock()
+        claude_launcher.build = AsyncMock()
+        mgr = SessionManager(projects_store=MagicMock(), launcher=claude_launcher)
+        try:
+            config = SessionConfig(
+                session_id="opencode-unwired",
+                command=default_shell(),
+                cwd=str(tmp_path),
+                rows=24, cols=80, scrollback_size=50,
+                opencode_options=OpenCodeOptions(),
+                kind=SessionKind.OPENCODE,
+            )
+            with pytest.raises(ValueError, match="OpenCode launcher"):
+                await mgr.create_session(config)
+
+            claude_launcher.build.assert_not_awaited()
+            assert mgr.list_sessions() == []
+        finally:
+            await mgr.shutdown()
+
+    async def test_connect_is_a_terminal_session_even_when_the_chat_view_is_asked_for(
+        self, tmp_path,
+    ) -> None:
+        """``opencode auth login`` is an interactive terminal program: sent to
+        the chat (ACP) path it would start an agent session instead of the
+        sign-in."""
+
+        class _ChatSpec:
+            display_name = "OpenCode"
+            prepared = 0
+
+            async def prepare(self, target, options):
+                type(self).prepared += 1
+                raise AssertionError("a sign-in must not take the chat path")
+
+        opencode_launcher = MagicMock()
+        opencode_launcher.build = AsyncMock(
+            return_value=LaunchSpec(argv=["does-not-run"], cwd=str(tmp_path), env={}),
+        )
+        options = OpenCodeOptions(connect=True)
+        mgr = SessionManager(
+            opencode_launcher=opencode_launcher,
+            chat_agents={"opencode": _ChatSpec()},
+            backend_factory=FakePtyBackend,
+        )
+        try:
+            session = await mgr.create_session(
+                SessionConfig(
+                    session_id="opencode-connect",
+                    command=[],
+                    cwd=str(tmp_path),
+                    opencode_options=options,
+                    kind=SessionKind.OPENCODE,
+                    ui="chat",
+                )
+            )
+
+            assert _ChatSpec.prepared == 0
+            assert getattr(session, "is_chat", False) is not True
+            opencode_launcher.build.assert_awaited_once()
+            assert opencode_launcher.build.await_args.args[1] is options
+            (info,) = mgr.list_sessions()
+            assert (info.kind, info.ui) == (SessionKind.OPENCODE, "terminal")
+            # Its own exit is the end of the sign-in, not a crash.
+            assert session._config.exits_when_done is True
         finally:
             await mgr.shutdown()
 
@@ -917,5 +1051,54 @@ class TestSharedTurnDedupe:
 
             assert terminal._attention_dedupe is not None
             assert chat.attention_dedupe is terminal._attention_dedupe
+        finally:
+            await mgr.shutdown()
+
+
+class TestLivenessFinishedCommand:
+    """A session whose command is meant to end (a sign-in) leaves the list
+    like one the user stopped: no crash, the removed hook runs, and the
+    clients get a session list without its row."""
+
+    async def test_a_finished_sign_in_is_removed_and_announced(self) -> None:
+        published: list[list[str]] = []
+
+        class _Bus:
+            def publish(self, topic, payload):
+                if topic == "sessions.changed":
+                    published.append([s["session_id"] for s in payload["sessions"]])
+
+        removed: list[str] = []
+        mgr = SessionManager(event_bus=_Bus(), on_session_removed=removed.append)
+        session = _crashable_session("signin")
+        session._config.exits_when_done = True
+        mgr._sessions["signin"] = session
+        try:
+            # The process is gone, but the reader has not read the last
+            # output yet: the monitor must leave the ending to the reader.
+            await mgr._check_liveness()
+
+            assert session.state == SessionState.RUNNING
+            assert [info.session_id for info in mgr.list_sessions()] == ["signin"]
+            assert (removed, published) == ([], [])
+
+            session._state = SessionState.STOPPED  # the reader finished
+            await mgr._check_liveness()
+
+            assert session._exit_reason is None
+            assert removed == ["signin"]
+            assert published == [[]]
+        finally:
+            await mgr.shutdown()
+
+    async def test_a_crashed_session_is_still_cleaned_up_without_an_announcement(self) -> None:
+        removed: list[str] = []
+        mgr = SessionManager(on_session_removed=removed.append)
+        mgr._sessions["s1"] = _crashable_session("s1")
+        try:
+            await mgr._check_liveness()
+
+            assert mgr.list_sessions() == []
+            assert removed == []
         finally:
             await mgr.shutdown()

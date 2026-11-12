@@ -27,6 +27,15 @@ final class TerminalControlKeyTests: XCTestCase {
         )
     }
 
+    func testOpenCodeKindUsesTheNeutralSetPlusModeAndItsOwnKeys() {
+        // Rewind, Ctrl+O/Ctrl+R/Ctrl+L, Approve/Reject and Antigravity's keys
+        // are bound differently in the OpenCode TUI, or not at all.
+        XCTAssertEqual(
+            ids(TerminalControlKey.keys(for: .opencode)),
+            ["enter", "up", "down", "left", "right", "ctrlC", "mode", "esc", "ctrlP", "tab", "backspace"]
+        )
+    }
+
     // MARK: - Set composition (order is what the user sees + the fixed wire order)
 
     func testDefaultSetCompositionOmitsClaudeTUIKeys() {
@@ -70,5 +79,12 @@ final class TerminalControlKeyTests: XCTestCase {
         XCTAssertEqual(bytes("ctrlK", in: TerminalControlKey.antigravityKeys), [0x0B])
         XCTAssertEqual(bytes("ctrlG", in: TerminalControlKey.antigravityKeys), [0x07])
         XCTAssertEqual(bytes("ctrlD", in: TerminalControlKey.antigravityKeys), [0x04])
+    }
+
+    func testOpenCodeControlBytes() {
+        let opencode = TerminalControlKey.opencodeKeys
+        XCTAssertEqual(bytes("ctrlP", in: opencode), [0x10], "the command palette")
+        XCTAssertEqual(bytes("mode", in: opencode), [0x1B, 0x5B, 0x5A], "Shift+Tab cycles the agent")
+        XCTAssertEqual(bytes("backspace", in: opencode), [0x7F])
     }
 }

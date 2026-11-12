@@ -55,6 +55,26 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertNil(store.getLastUsedClaudeOptions())
     }
 
+    func testOpenCodeOptionsRoundTripAndADamagedBlobNeverTurnsAutoApproveOn() {
+        XCTAssertNil(store.getLastUsedOpenCodeOptions())
+
+        store.setLastUsedOpenCodeOptions(OpenCodeLaunchPrefs(autoApprove: true, terminalUI: true))
+        XCTAssertEqual(
+            store.getLastUsedOpenCodeOptions(),
+            OpenCodeLaunchPrefs(autoApprove: true, terminalUI: true)
+        )
+        XCTAssertNil(store.getLastUsedAntigravityOptions(), "its own key, no other agent's")
+
+        defaults.set(#"{"terminalUI":true}"#, forKey: PreferencesStore.keyLastUsedOpenCodeOptions)
+        XCTAssertEqual(
+            store.getLastUsedOpenCodeOptions(),
+            OpenCodeLaunchPrefs(autoApprove: false, terminalUI: true)
+        )
+
+        defaults.set(#"{"autoApprove":"yes"}"#, forKey: PreferencesStore.keyLastUsedOpenCodeOptions)
+        XCTAssertNil(store.getLastUsedOpenCodeOptions())
+    }
+
     func testCodexTerminalUIRoundTripsAndAnOlderBlobReadsAsOff() {
         store.setLastUsedCodexOptions(CodexLaunchPrefs(terminalUI: true))
         XCTAssertEqual(store.getLastUsedCodexOptions()?.terminalUI, true)

@@ -69,27 +69,31 @@ describe('cliAvailable', () => {
 
 describe('cliKnown', () => {
   it('is false only for an agent that lists its CLIs without this one', () => {
-    // Such an agent predates the CLI and would open a plain shell for it.
+    // An agent from before the CLI was supported would start a plain shell for it.
     const older = info({ cli: { claude: { available: true }, codex: { available: false } } });
 
+    expect(cliKnown(older, 'opencode')).toBe(false);
     expect(cliKnown(older, 'copilot')).toBe(false);
     expect(cliKnown(older, 'codex')).toBe(true);
   });
 
-  it('counts a CLI the agent lists as not installed as known', () => {
+  it('knows a listed CLI whether or not it is installed', () => {
+    expect(cliKnown(info({ cli: { opencode: { available: false } } }), 'opencode')).toBe(true);
+    expect(cliKnown(info({ cli: { opencode: {} } }), 'opencode')).toBe(true);
     expect(cliKnown(info({ cli: { copilot: { available: false } } }), 'copilot')).toBe(true);
   });
 
-  const UNKNOWN: [string, unknown][] = [
+  const NO_LIST: [string, unknown][] = [
     ['no probe at all', undefined],
     ['no capabilities', {}],
-    ['an empty cli map', { cli: {} }],
+    ['an empty cli list', { cli: {} }],
     ['a cli block that is not a map', { cli: ['claude'] }],
   ];
 
-  it.each(UNKNOWN)('reads %s as known, so the card stays usable', (_label, capabilities) => {
+  it.each(NO_LIST)('reads %s as known, like an unknown availability', (_label, capabilities) => {
     const probe = capabilities === undefined ? undefined : info(capabilities);
 
+    expect(cliKnown(probe, 'opencode')).toBe(true);
     expect(cliKnown(probe, 'copilot')).toBe(true);
   });
 

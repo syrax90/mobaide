@@ -26,6 +26,7 @@ import {
   type AntigravityBucket,
   type ClaudeBucket,
   type CodexBucket,
+  type OpenCodeBucket,
   type CopilotBucket,
   type WizardMode,
   type WizardState,
@@ -36,6 +37,7 @@ export type StartScanRequest = components['schemas']['StartScanRequest'];
 type ClaudeOptions = components['schemas']['ClaudeOptionsModel'];
 type CodexOptions = components['schemas']['CodexOptionsModel'];
 type AntigravityOptions = components['schemas']['AntigravityOptionsModel'];
+type OpenCodeOptions = components['schemas']['OpenCodeOptionsModel'];
 type CopilotOptions = components['schemas']['CopilotOptionsModel'];
 
 export interface BuildContext {
@@ -68,10 +70,14 @@ export function claudeUsesChat(bucket: ClaudeBucket, chat: ChatSupport | undefin
 }
 
 /** The agent kinds whose sessions can open in the chat view. */
-export type ChatAgentKind = 'claude' | 'codex' | 'antigravity' | 'copilot';
+export type ChatAgentKind = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'copilot';
 
 export function chatAgentKind(mode: WizardMode | null): ChatAgentKind | null {
-  return mode === 'claude' || mode === 'codex' || mode === 'antigravity' || mode === 'copilot'
+  return mode === 'claude' ||
+    mode === 'codex' ||
+    mode === 'antigravity' ||
+    mode === 'opencode' ||
+    mode === 'copilot'
     ? mode
     : null;
 }
@@ -85,6 +91,8 @@ export function terminalUiOf(state: WizardState, kind: ChatAgentKind): boolean {
       return state.codex.terminalUi;
     case 'antigravity':
       return state.antigravity.terminalUi;
+    case 'opencode':
+      return state.opencode.terminalUi;
     case 'copilot':
       return state.copilot.terminalUi;
   }
@@ -175,6 +183,19 @@ function antigravityOptions(
   };
 }
 
+function opencodeOptions(
+  bucket: OpenCodeBucket,
+  extras: { worktree: boolean; branchName: string | undefined; baseBranch: string | null },
+): OpenCodeOptions {
+  return {
+    auto_approve: bucket.autoApprove,
+    connect: false,
+    worktree: extras.worktree,
+    branch_name: extras.branchName,
+    base_branch: extras.baseBranch,
+  };
+}
+
 function copilotOptions(
   bucket: CopilotBucket,
   extras: { worktree: boolean; branchName: string | undefined; baseBranch: string | null },
@@ -245,6 +266,20 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
     };
   }
 
+  if (mode === 'opencode') {
+    return {
+      ...base,
+      cli: 'opencode',
+      opencode_options: opencodeOptions(state.opencode, {
+        worktree: place.worktree,
+        branchName: place.branchName,
+        baseBranch: place.baseBranch,
+      }),
+      worktree: false,
+      ui: usesChatView(state.opencode.terminalUi, context.chat) ? 'chat' : 'terminal',
+    };
+  }
+
   if (mode === 'copilot') {
     return {
       ...base,
@@ -294,9 +329,11 @@ export function buildResumeRequest(
             cli: 'antigravity',
             antigravity_options: antigravityOptions(state.antigravity, noWorktree),
           }
-        : kind === 'copilot'
-          ? { cli: 'copilot', copilot_options: copilotOptions(state.copilot, noWorktree) }
-          : { cli: 'claude', claude_options: claudeOptions(state.claude, noWorktree) };
+        : kind === 'opencode'
+          ? { cli: 'opencode', opencode_options: opencodeOptions(state.opencode, noWorktree) }
+          : kind === 'copilot'
+            ? { cli: 'copilot', copilot_options: copilotOptions(state.copilot, noWorktree) }
+            : { cli: 'claude', claude_options: claudeOptions(state.claude, noWorktree) };
   return {
     project_name: sameFolder ? project.name : undefined,
     cwd: sameFolder ? undefined : stored.cwd,
@@ -306,6 +343,26 @@ export function buildResumeRequest(
     worktree: false,
     ui: 'chat',
     chat_resume_id: stored.session_id,
+  };
+}
+
+/**
+ * A terminal session that runs OpenCode's own sign-in (`opencode auth login`)
+ * in the chosen folder, so a model provider can be connected from here. It is
+ * not an OpenCode session: no wizard option applies and nothing is remembered.
+ */
+export function buildConnectRequest(context: BuildContext): CreateSessionRequest | null {
+  if (context.state.selection.kind === 'none') return null;
+  const place = placement(context);
+  return {
+    project_name: place.projectName,
+    cwd: place.cwd,
+    rows: 24,
+    cols: 80,
+    cli: 'opencode',
+    opencode_options: { auto_approve: false, connect: true, worktree: false },
+    worktree: false,
+    ui: 'terminal',
   };
 }
 
