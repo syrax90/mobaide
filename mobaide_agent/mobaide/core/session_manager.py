@@ -505,9 +505,9 @@ class SessionManager:
         for sid, session in snapshot:
             if session.state == SessionState.RUNNING and not session.is_alive():
                 if getattr(getattr(session, "_config", None), "exits_when_done", False):
-                    # Its reader has not seen the end of output yet: the exit
-                    # is still the normal end of that command.
-                    session._state = SessionState.STOPPED
+                    # The exit is the normal end of that command. Its reader
+                    # ends the session once it has read the last output; a
+                    # state change here would cut that short.
                     continue
                 runtime_seconds = None
                 try:

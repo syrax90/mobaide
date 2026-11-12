@@ -991,9 +991,17 @@ class TestLivenessFinishedCommand:
         session._config.exits_when_done = True
         mgr._sessions["signin"] = session
         try:
+            # The process is gone, but the reader has not read the last
+            # output yet: the monitor must leave the ending to the reader.
             await mgr._check_liveness()
 
-            assert session.state == SessionState.STOPPED
+            assert session.state == SessionState.RUNNING
+            assert [info.session_id for info in mgr.list_sessions()] == ["signin"]
+            assert (removed, published) == ([], [])
+
+            session._state = SessionState.STOPPED  # the reader finished
+            await mgr._check_liveness()
+
             assert session._exit_reason is None
             assert removed == ["signin"]
             assert published == [[]]
