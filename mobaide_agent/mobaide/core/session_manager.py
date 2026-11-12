@@ -138,6 +138,11 @@ class SessionManager:
         ``config.ui == "chat"`` takes the ACP path instead
         (:meth:`_create_chat_session`).
         """
+        if config.opencode_options is not None and config.opencode_options.connect:
+            # ``opencode auth login`` is an interactive terminal program that
+            # ends when the sign-in does.
+            config.ui = "terminal"
+            config.exits_when_done = True
         if config.ui == "chat":
             return await self._create_chat_session(config)
         managed = (
@@ -499,6 +504,11 @@ class SessionManager:
             snapshot = list(self._sessions.items())
         for sid, session in snapshot:
             if session.state == SessionState.RUNNING and not session.is_alive():
+                if getattr(getattr(session, "_config", None), "exits_when_done", False):
+                    # Its reader has not seen the end of output yet: the exit
+                    # is still the normal end of that command.
+                    session._state = SessionState.STOPPED
+                    continue
                 runtime_seconds = None
                 try:
                     from datetime import UTC, datetime
@@ -523,14 +533,27 @@ class SessionManager:
                 dead_ids.append(sid)
 
         # Clean up STOPPED/CRASHED sessions
+        finished: list[str] = []
         async with self._lock:
             for sid in list(self._sessions):
-                if self._sessions[sid].state in (
-                    SessionState.STOPPED,
-                    SessionState.CRASHED,
-                ):
+                state = self._sessions[sid].state
+                if state in (SessionState.STOPPED, SessionState.CRASHED):
                     self._sessions.pop(sid, None)
                     logger.info("Cleaned up dead session: %s", sid)
+                    if state is SessionState.STOPPED:
+                        finished.append(sid)
+        # A session that ended on its own (``exits_when_done``) leaves like one
+        # the user stopped: its row goes from every client's list.
+        for sid in finished:
+            if self._on_session_removed is not None:
+                try:
+                    result = self._on_session_removed(sid)
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception:
+                    logger.exception("session_manager.on_removed_hook_failed")
+        if finished:
+            await self._publish_sessions_changed()
 
     async def shutdown(self) -> None:
         """Stop the liveness monitor and all sessions."""

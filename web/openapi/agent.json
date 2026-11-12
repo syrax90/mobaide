@@ -2497,7 +2497,7 @@
         "type": "object"
       },
       "OpenCodeOptionsModel": {
-        "description": "Wire DTO for OpenCode CLI launch options (see :class:`OpenCodeOptions`).\n\n``auto_approve`` is OpenCode's ``--auto``: it accepts every permission\nrequest that the user's OpenCode rules do not deny. ``initial_prompt`` is\nthe first message; it travels as one argv element, so its length is capped.",
+        "description": "Wire DTO for OpenCode CLI launch options (see :class:`OpenCodeOptions`).\n\n``auto_approve`` is OpenCode's ``--auto``: it accepts every permission\nrequest that the user's OpenCode rules do not deny. ``initial_prompt`` is\nthe first message; it travels as one argv element, so its length is capped.\n``connect`` starts a terminal session that runs ``opencode auth login``\n(sign in to a model provider) in place of an OpenCode session.",
         "properties": {
           "auto_approve": {
             "default": false,
@@ -2525,6 +2525,11 @@
               }
             ],
             "title": "Branch Name"
+          },
+          "connect": {
+            "default": false,
+            "title": "Connect",
+            "type": "boolean"
           },
           "initial_prompt": {
             "anyOf": [
@@ -3154,7 +3159,8 @@
             "enum": [
               "claude",
               "codex",
-              "antigravity"
+              "antigravity",
+              "opencode"
             ],
             "title": "Kind",
             "type": "string"

@@ -496,6 +496,54 @@ class TestOpenCodeLaunchBranching:
         finally:
             await mgr.shutdown()
 
+    async def test_connect_is_a_terminal_session_even_when_the_chat_view_is_asked_for(
+        self, tmp_path,
+    ) -> None:
+        """``opencode auth login`` is an interactive terminal program: sent to
+        the chat (ACP) path it would start an agent session instead of the
+        sign-in."""
+
+        class _ChatSpec:
+            display_name = "OpenCode"
+            prepared = 0
+
+            async def prepare(self, target, options):
+                type(self).prepared += 1
+                raise AssertionError("a sign-in must not take the chat path")
+
+        opencode_launcher = MagicMock()
+        opencode_launcher.build = AsyncMock(
+            return_value=LaunchSpec(argv=["does-not-run"], cwd=str(tmp_path), env={}),
+        )
+        options = OpenCodeOptions(connect=True)
+        mgr = SessionManager(
+            opencode_launcher=opencode_launcher,
+            chat_agents={"opencode": _ChatSpec()},
+            backend_factory=FakePtyBackend,
+        )
+        try:
+            session = await mgr.create_session(
+                SessionConfig(
+                    session_id="opencode-connect",
+                    command=[],
+                    cwd=str(tmp_path),
+                    opencode_options=options,
+                    kind=SessionKind.OPENCODE,
+                    ui="chat",
+                )
+            )
+
+            assert _ChatSpec.prepared == 0
+            assert getattr(session, "is_chat", False) is not True
+            opencode_launcher.build.assert_awaited_once()
+            assert opencode_launcher.build.await_args.args[1] is options
+            (info,) = mgr.list_sessions()
+            assert (info.kind, info.ui) == (SessionKind.OPENCODE, "terminal")
+            # Its own exit is the end of the sign-in, not a crash.
+            assert session._config.exits_when_done is True
+        finally:
+            await mgr.shutdown()
+
 
 @pytest.mark.timeout(20)
 class TestAdHocClaudeLaunchBranching:
@@ -920,5 +968,46 @@ class TestSharedTurnDedupe:
 
             assert terminal._attention_dedupe is not None
             assert chat.attention_dedupe is terminal._attention_dedupe
+        finally:
+            await mgr.shutdown()
+
+
+class TestLivenessFinishedCommand:
+    """A session whose command is meant to end (a sign-in) leaves the list
+    like one the user stopped: no crash, the removed hook runs, and the
+    clients get a session list without its row."""
+
+    async def test_a_finished_sign_in_is_removed_and_announced(self) -> None:
+        published: list[list[str]] = []
+
+        class _Bus:
+            def publish(self, topic, payload):
+                if topic == "sessions.changed":
+                    published.append([s["session_id"] for s in payload["sessions"]])
+
+        removed: list[str] = []
+        mgr = SessionManager(event_bus=_Bus(), on_session_removed=removed.append)
+        session = _crashable_session("signin")
+        session._config.exits_when_done = True
+        mgr._sessions["signin"] = session
+        try:
+            await mgr._check_liveness()
+
+            assert session.state == SessionState.STOPPED
+            assert session._exit_reason is None
+            assert removed == ["signin"]
+            assert published == [[]]
+        finally:
+            await mgr.shutdown()
+
+    async def test_a_crashed_session_is_still_cleaned_up_without_an_announcement(self) -> None:
+        removed: list[str] = []
+        mgr = SessionManager(on_session_removed=removed.append)
+        mgr._sessions["s1"] = _crashable_session("s1")
+        try:
+            await mgr._check_liveness()
+
+            assert mgr.list_sessions() == []
+            assert removed == []
         finally:
             await mgr.shutdown()

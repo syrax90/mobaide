@@ -1028,7 +1028,7 @@ The CLI works on the same files and lock as the running agent; the apps see the 
 
 **Privacy.** Audio is held in memory only, transcribed, and dropped; neither audio nor transcript text is logged or written to disk — logs carry only sizes, durations, timings and error codes.
 
-The one way the text leaves the PC is the opt-in transcript cleanup (web, Android and iOS; Claude Code, Codex and Antigravity sessions, not OpenCode). The agent hands the transcript to the session's CLI on that computer, which sends it to Anthropic, OpenAI or Google under the user's own login. The agent still never logs or stores it (docs/voice-input.md, *Transcript cleanup*).
+The one way the text leaves the PC is the opt-in transcript cleanup (web, Android and iOS; Claude Code, Codex, Antigravity and OpenCode sessions). The agent hands the transcript to the session's CLI on that computer, which sends it to Anthropic, OpenAI, Google or the user's OpenCode model provider under the user's own login. The agent still never logs or stores it (docs/voice-input.md, *Transcript cleanup*).
 
 **Testing without the model.** `MOBAIDE_VOICE_FAKE=1` swaps in a tiny generated model and a deterministic engine under `<state prefix>/voice-fake/`. `tests/e2e/manual_stack.py up --fake-voice` sets it.
 
@@ -1226,7 +1226,7 @@ Common causes:
   - The Windows installer auto-detects `agy` in `%USERPROFILE%\.local\bin` or the `Antigravity` program folders and writes `MOBAIDE_AGY_BIN`. If `agy` was installed after the agent, or lives elsewhere, re-run `irm https://get.mobaide.com/install.ps1 | iex` (it backfills `MOBAIDE_AGY_BIN` without touching pairing credentials), edit `<prefix>\mobaide_agent\.env` directly, or run the `set-env` verb as above with `--key MOBAIDE_AGY_BIN --value "C:\Users\<you>\.local\bin\agy.exe"`.
 - OpenCode not on the service's `PATH` (only relevant if you use the optional OpenCode agent).
   - The agent returns HTTP 503 with an `opencode_cli_missing` marker and a `searched_paths` list.
-  - There is no pre-spawn auth probe. Sign in on the PC with `opencode auth login`, or with `/connect` in an OpenCode terminal session.
+  - There is no pre-spawn auth probe. Sign in from the app (**Connect a provider** in New session), or on the PC with `opencode auth login`.
   - Set `MOBAIDE_OPENCODE_BIN` in the agent's env file when the binary lives elsewhere. The Windows installer does not write it.
 
 #### Agent not showing as online in the Android app

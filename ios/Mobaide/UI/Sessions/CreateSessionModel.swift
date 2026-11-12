@@ -1104,6 +1104,17 @@ final class CreateSessionModel {
         // Auto Scan has its own submit button and endpoint; it never reaches
         // the create-session path.
         guard let request = buildRequest(mode: mode) else { return }
+        await launch(request, mode: mode, savesLaunchPrefs: true)
+    }
+
+    /// Opens a terminal session that runs OpenCode's own provider sign-in.
+    func connectOpenCodeProvider() async {
+        guard mode == .opencode, canCreate, let request = connectRequest() else { return }
+        // A sign-in is not a launch of the agent: its options are not remembered.
+        await launch(request, mode: .opencode, savesLaunchPrefs: false)
+    }
+
+    private func launch(_ request: CreateSessionRequest, mode: Mode, savesLaunchPrefs: Bool) async {
         // Both halves of the recents write are pinned before the round-trip: the
         // wizard stays interactive while the POST is in flight, so re-reading
         // afterwards could file a directory that was never launched — or file it
@@ -1118,6 +1129,7 @@ final class CreateSessionModel {
                 selection: launchSelection,
                 scopeKey: launchScopeKey,
                 mode: mode,
+                savesLaunchPrefs: savesLaunchPrefs,
                 response: response
             )
             submitting = false
@@ -1497,6 +1509,36 @@ final class CreateSessionModel {
         )
     }
 
+    /// The request of `connectOpenCodeProvider()`; nil until a project or a
+    /// folder is selected. No wizard option applies to a sign-in.
+    func connectRequest() -> CreateSessionRequest? {
+        let projectName: String?
+        let cwd: String?
+        switch selection {
+        case .stored(let name):
+            projectName = name
+            cwd = nil
+        case .customPath(let path):
+            projectName = nil
+            cwd = path
+        case .none:
+            return nil
+        }
+        return CreateSessionRequest(
+            cwd: cwd,
+            project_name: projectName,
+            cli: "opencode",
+            opencode_options: OpenCodeOptionsModel(
+                auto_approve: false,
+                connect: true,
+                worktree: false,
+                branch_name: nil,
+                base_branch: nil
+            ),
+            ui: "terminal"
+        )
+    }
+
     private func codexLaunchPrefs() -> CodexLaunchPrefs {
         CodexLaunchPrefs(
             model: codexModel,
@@ -1637,6 +1679,7 @@ final class CreateSessionModel {
         selection: ProjectSelection,
         scopeKey: String?,
         mode: Mode,
+        savesLaunchPrefs: Bool,
         response: SessionResponse
     ) {
         switch selection {
@@ -1655,7 +1698,7 @@ final class CreateSessionModel {
             break
         }
         preferencesStore.setLastUsedSessionId(response.session_id)
-        persistLaunchPrefs(mode: mode)
+        if savesLaunchPrefs { persistLaunchPrefs(mode: mode) }
     }
 
     /// Remembers the agent's launch options for its next session.

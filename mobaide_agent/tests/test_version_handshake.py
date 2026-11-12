@@ -54,7 +54,7 @@ async def test_get_version(client) -> None:
             "max_seconds": 120,
             "max_chunk_bytes": 65536,
             "cleanup": True,
-            "cleanup_kinds": ["claude", "codex", "antigravity"],
+            "cleanup_kinds": ["claude", "codex", "antigravity", "opencode"],
         },
         "fs": {"dirs": True, "windows_paths": sys.platform == "win32"},
         "chat": {
@@ -67,6 +67,16 @@ async def test_get_version(client) -> None:
     # — it is not exposed via this REST surface.
     assert "manifest_url" not in body
     assert "manifest_signature" not in body
+
+
+async def test_every_advertised_cleanup_kind_has_a_cli(app, client) -> None:
+    """A kind listed in ``capabilities.voice.cleanup_kinds`` with no CLI
+    behind it would make clients offer a cleanup that can only answer
+    ``cleanup_unavailable``."""
+    response = await client.get("/api/version")
+    advertised = response.json()["capabilities"]["voice"]["cleanup_kinds"]
+
+    assert set(app.state.voice._cleaner._clis) == set(advertised)
 
 
 async def test_get_version_claude_missing_reports_unavailable(

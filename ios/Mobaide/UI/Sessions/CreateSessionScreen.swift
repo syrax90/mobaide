@@ -547,33 +547,46 @@ private struct CreateSessionContent: View {
         hint: String? = nil
     ) -> some View {
         if model.canContinueSession {
-            Section {
-                Button {
-                    showContinueSession = true
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "clock.arrow.circlepath")
-                            .foregroundStyle(colors.accent)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Continue a session")
-                                .foregroundStyle(colors.text)
-                            Text(hint ?? "Open a \(agentName) session started on your PC, for example in a terminal.")
-                                .font(.caption)
-                                .foregroundStyle(colors.textMuted)
-                        }
-                        Spacer()
-                        if model.submitting {
-                            PixelLoadingBlock(width: 7, height: 13)
-                        } else {
-                            Image(systemName: "chevron.right")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(colors.gray)
-                        }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .disabled(model.submitting)
+            configEntrySection(
+                systemImage: "clock.arrow.circlepath",
+                title: "Continue a session",
+                hint: hint ?? "Open a \(agentName) session started on your PC, for example in a terminal."
+            ) {
+                showContinueSession = true
             }
+        }
+    }
+
+    private func configEntrySection(
+        systemImage: String,
+        title: String,
+        hint: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Section {
+            Button(action: action) {
+                HStack(spacing: 10) {
+                    Image(systemName: systemImage)
+                        .foregroundStyle(colors.accent)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title)
+                            .foregroundStyle(colors.text)
+                        Text(hint)
+                            .font(.caption)
+                            .foregroundStyle(colors.textMuted)
+                    }
+                    Spacer()
+                    if model.submitting {
+                        PixelLoadingBlock(width: 7, height: 13)
+                    } else {
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(colors.gray)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .disabled(model.submitting)
         }
     }
 
@@ -807,6 +820,14 @@ private struct CreateSessionContent: View {
             agentName: "OpenCode",
             hint: "Open an OpenCode session started on your PC, for example in a terminal."
         )
+        configEntrySection(
+            systemImage: "person.badge.key",
+            title: "Connect a provider",
+            hint: "Sign in to a model provider, for example Anthropic, OpenAI or Google. "
+                + "OpenCode’s sign-in opens in a terminal and stays on your PC."
+        ) {
+            Task { await model.connectOpenCodeProvider() }
+        }
     }
 
     /// Collapsed like the Codex one; rendered after the Worktree section.

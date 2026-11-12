@@ -1,5 +1,5 @@
-"""``TranscriptCleaner``: how one ``claude -p``, ``codex exec`` or ``agy``
-run's outcome maps to the cleaned text or a coded ``VoiceError``, the command
+"""``TranscriptCleaner``: how one ``claude -p``, ``codex exec``, ``agy`` or
+``opencode run`` run's outcome maps to the cleaned text or a coded ``VoiceError``, the command
 each runs (flags, model, stdin, cwd, limits), the files it reads, the
 concurrency cap, cancelled requests, ``abort_all`` and the rule that logs
 never carry the text.
@@ -32,12 +32,14 @@ from mobaide.voice.cleanup import (
     AntigravityCleanup,
     ClaudeCleanup,
     CodexCleanup,
+    OpenCodeCleanup,
     TranscriptCleaner,
     antigravity_cleanup_model,
     codex_cleanup_model,
     parse_antigravity_result,
     parse_claude_result,
     parse_codex_result,
+    parse_opencode_result,
 )
 from mobaide.voice.errors import VoiceError
 
@@ -530,6 +532,31 @@ def _agy_answer(text: str, **extra: object) -> CmdResult:
     )
 
 
+def _opencode_event(kind: str, **fields: object) -> dict:
+    return {"type": kind, "timestamp": 1, "sessionID": "ses_x", **fields}
+
+
+def _opencode_part(kind: str, **fields: object) -> dict:
+    return {"id": "p1", "sessionID": "ses_x", "messageID": "m1", "type": kind, **fields}
+
+
+def _opencode_text(text: str) -> dict:
+    return _opencode_event("text", part=_opencode_part("text", text=text, time={"start": 1, "end": 2}))
+
+
+def _opencode_finish(reason: str = "stop") -> dict:
+    return _opencode_event("step_finish", part=_opencode_part("step-finish", reason=reason, cost=0))
+
+
+def _opencode_answer(*texts: str) -> CmdResult:
+    """What ``opencode run --format json`` prints for a finished turn."""
+    return _jsonl(
+        _opencode_event("step_start", part=_opencode_part("step-start")),
+        *(_opencode_text(text) for text in texts),
+        _opencode_finish(),
+    )
+
+
 AGY_MODELS = (
     "gemini-3.8-flash-high\tGemini 3.8 Flash (High)",
     "gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)",
@@ -669,6 +696,113 @@ class TestParseAntigravityResult:
 
         assert excinfo.value.code == "cleanup_outdated"
         assert "agy update" in excinfo.value.message
+
+
+class TestParseOpenCodeResult:
+    def test_answer_is_the_text_parts_joined(self):
+        result = _opencode_answer("Can you look at the auth service ", "and see why login fails? ")
+
+        assert parse_opencode_result(result, "um can you look at the auth service and see why login fails") == (
+            "Can you look at the auth service and see why login fails?"
+        )
+
+    def test_empty_answer_keeps_the_transcript(self):
+        assert parse_opencode_result(_opencode_answer("\n"), "um uh") == "um uh"
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, "
+            "or switch models.",
+            'Agent not found: "mobaide-voice-cleanup"',
+        ],
+        ids=["provider-limit", "agent-not-found"],
+    )
+    def test_error_event_of_a_run_that_exited_zero_fails_with_its_message(self, message):
+        # OpenCode reports a failed turn as an event and still exits 0.
+        result = _jsonl(_opencode_event("error", error={"type": "unknown", "message": message}), rc=0)
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_opencode_result(result, "text")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_failed")
+        assert excinfo.value.message == message
+
+    def test_error_event_wins_over_a_finished_answer(self):
+        result = _jsonl(
+            _opencode_text("Fix the bug."),
+            _opencode_finish(),
+            _opencode_event("error", error={"type": "unknown", "message": "stream disconnected"}),
+        )
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_opencode_result(result, "um fix the bug")
+
+        assert (excinfo.value.code, excinfo.value.message) == ("cleanup_failed", "stream disconnected")
+
+    def test_run_that_asked_for_a_tool_is_discarded_whatever_it_answered(self):
+        # The agent denies every tool, but the model can still ask for one:
+        # the dictated text was then read as a task, not as a transcript.
+        result = _jsonl(
+            _opencode_event(
+                "tool_use",
+                part=_opencode_part("tool", tool="bash", state={"status": "error", "input": {"command": "ls"}}),
+            ),
+            _opencode_text("There are three files."),
+            _opencode_finish(),
+        )
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_opencode_result(result, "list the files")
+
+        assert excinfo.value.code == "cleanup_failed"
+        assert "tool" in excinfo.value.message
+
+    @pytest.mark.parametrize(
+        ("events", "rc"),
+        [
+            ([_opencode_text("Fix the"), _opencode_finish("length")], 0),
+            ([_opencode_text("Fix the")], 0),
+            ([_opencode_finish()], 0),
+            ([_opencode_text("Fix the bug."), _opencode_finish()], 1),
+        ],
+        ids=["stopped-for-another-reason", "cut-off", "no-text", "non-zero-exit"],
+    )
+    def test_answer_that_is_not_one_finished_turn_of_a_clean_run_is_not_a_cleanup(self, events, rc):
+        with pytest.raises(VoiceError) as excinfo:
+            parse_opencode_result(_jsonl(*events, rc=rc), "um fix the bug")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_failed")
+
+    def test_failed_run_without_events_fails_with_the_stderr(self):
+        result = CmdResult(rc=1, stdout=b"", stderr=b"Error: cannot reach the provider\n")
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_opencode_result(result, "text")
+
+        assert (excinfo.value.code, excinfo.value.message) == (
+            "cleanup_failed", "Error: cannot reach the provider",
+        )
+
+    def test_usage_text_on_a_failed_run_means_the_cli_is_too_old(self):
+        # OpenCode 1 does not know ``--standalone`` and prints its usage.
+        result = CmdResult(
+            rc=1, stdout=b"", stderr=b"opencode run [message..]\n\nrun opencode with a message\n"
+        )
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_opencode_result(result, "text")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_outdated")
+        assert "opencode upgrade" in excinfo.value.message
+
+    def test_timeout_wins_over_whatever_was_printed(self):
+        result = CmdResult(rc=-9, stdout=_opencode_answer("Half.").stdout, stderr=b"", timed_out=True)
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_opencode_result(result, "text")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_timeout")
 
 
 class TestCheapestModel:
@@ -831,6 +965,111 @@ class TestAntigravityCommand:
         assert message["event"] == "user"
         assert message["message"]["content"] == "<transcript>\nпереименуй  ридми\n</transcript>"
         assert all("ридми" not in arg for arg in run.calls[0]["argv"])
+
+
+class TestOpenCodeCommand:
+    @pytest.fixture
+    def opencode_binary(self, tmp_path) -> str:
+        return str(tmp_path / "bin" / "opencode")
+
+    def _cleaner(self, run, work_dir, binary):
+        return TranscriptCleaner(
+            clis={"opencode": OpenCodeCleanup(lambda: binary)}, work_dir=work_dir, run=run
+        )
+
+    async def test_runs_one_standalone_json_turn_of_the_cleanup_agent_with_the_transcript_on_stdin(
+        self, work_dir, opencode_binary, monkeypatch
+    ):
+        # The agent's own folder: OpenCode would file the run there, not
+        # under the run's cwd, were ``PWD`` handed on.
+        monkeypatch.setenv("PWD", str(work_dir.parent / "agent-start-folder"))
+        run = _Claude(_opencode_answer("Fix the bug, then run the tests."))
+
+        cleaned = await self._cleaner(run, work_dir, opencode_binary).clean(
+            "um fix the bug uh then run the tests", "opencode"
+        )
+
+        assert cleaned == "Fix the bug, then run the tests."
+        (call,) = run.calls
+        assert call["argv"] == [
+            opencode_binary, "run",
+            "--standalone",
+            "--agent", "mobaide-voice-cleanup",
+            "--title", "Voice-cleanup",
+            "--format", "json",
+        ]
+        assert call["stdin"] == b"<transcript>\num fix the bug uh then run the tests\n</transcript>"
+        assert call["cwd"] == str(work_dir)
+        assert CLEANUP_TIMEOUT_SECONDS - 1 < call["timeout"] <= CLEANUP_TIMEOUT_SECONDS
+        assert "PWD" not in call["env"]
+        assert call["env"]["PATH"].split(os.pathsep)[0] == os.path.dirname(opencode_binary)
+
+    async def test_rules_are_an_inline_agent_that_denies_every_tool_with_project_config_off(
+        self, work_dir, opencode_binary, monkeypatch
+    ):
+        # OpenCode merges the config of every parent folder of the run's cwd;
+        # the user's own inline config (a provider, say) must survive.
+        monkeypatch.setenv(
+            "OPENCODE_CONFIG_CONTENT",
+            json.dumps({"model": "acme/big", "permissions": [{"action": "*", "resource": "*", "effect": "allow"}]}),
+        )
+        run = _Claude(_opencode_answer("Hi, how are you?"))
+
+        await self._cleaner(run, work_dir, opencode_binary).clean("hi how are you", "opencode")
+
+        env = run.calls[0]["env"]
+        assert env["OPENCODE_DISABLE_PROJECT_CONFIG"] == "1"
+        config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+        deny = {"action": "*", "resource": "*", "effect": "deny"}
+        assert config["model"] == "acme/big"
+        assert config["permissions"][-1] == deny
+        assert config["share"] == "disabled"
+        agent = config["agents"]["mobaide-voice-cleanup"]
+        assert agent["system"] == CLEANUP_PROMPT
+        assert agent["permissions"] == [deny]
+        assert not (work_dir / ".opencode").exists()
+
+    @pytest.mark.parametrize(
+        "own", ['{"model": "acme/big", // mine\n}', '["not", "an", "object"]'], ids=["jsonc", "not-an-object"]
+    )
+    async def test_an_inline_config_that_cannot_be_merged_fails_the_cleanup_and_runs_nothing(
+        self, work_dir, opencode_binary, monkeypatch, own
+    ):
+        # Dropping it could drop the user's provider with it.
+        monkeypatch.setenv("OPENCODE_CONFIG_CONTENT", own)
+        run = _Claude(_opencode_answer("Hi."))
+        cleaner = self._cleaner(run, work_dir, opencode_binary)
+
+        with pytest.raises(VoiceError) as excinfo:
+            await cleaner.clean("hi", "opencode")
+
+        assert excinfo.value.code == "cleanup_failed"
+        assert run.calls == []
+        assert not cleaner.busy()
+
+    async def test_the_run_s_folder_exists_although_opencode_needs_no_file_in_it(
+        self, tmp_path, opencode_binary
+    ):
+        work_dir = tmp_path / "state" / "voice-cleanup"
+        run = _Claude(_opencode_answer("Hi."))
+
+        await self._cleaner(run, work_dir, opencode_binary).clean("hi", "opencode")
+
+        assert run.calls[0]["cwd"] == str(work_dir)
+        assert work_dir.is_dir()
+
+    async def test_npm_shim_in_a_spaced_path_gets_a_command_line_with_one_quoted_token(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(cli_launcher.sys, "platform", "win32")
+        shim = r"C:\Users\Jane Doe\AppData\Roaming\npm\opencode.cmd"
+        run = _Claude(_opencode_answer("Hi."))
+
+        await self._cleaner(run, tmp_path / "Jane Doe" / "voice-cleanup", shim).clean("hi", "opencode")
+
+        line = subprocess.list2cmdline(run.calls[0]["argv"])
+        assert line.count('"') == 2
+        assert line.startswith(f'cmd /c "{shim}" ')
 
 
 class TestKinds:

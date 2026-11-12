@@ -121,10 +121,10 @@ CLA-170), but the website must not repeat them:
   `POST /api/auth/token` checks is always empty.
 
 The worktree capability itself is broad and true, and the page says so: every
-session kind supports it — Claude Code, Codex CLI, Antigravity CLI, raw
-Terminal, and custom agent types.
+session kind supports it — Claude Code, Codex CLI, Antigravity CLI, OpenCode,
+raw Terminal, and custom agent types.
 
-Spell the products **Claude Code**, **Codex CLI**, **Antigravity CLI**.
+Spell the products **Claude Code**, **Codex CLI**, **Antigravity CLI**, **OpenCode**.
 
 ## Response headers
 

@@ -35,7 +35,7 @@ Claude Code, Codex, Antigravity and OpenCode sessions open in a **chat view** by
 | Composer | Slash-command suggestions, image attachments (when the agent accepts images), voice input, prompt templates (inserted at the cursor), save as template, and a full-screen editor on Android and iOS. Messages sent while the agent works are queued. You can remove one, or tap **Send now** to steer the agent with it. |
 | Controls | Stop, and chips for the mode (shield), model (chip) and effort (brain) and other agent options; the chips wrap onto a second line instead of scrolling. Context usage and cost in the top bar, and a full-screen button on the web. Plan progress above the composer. |
 | Command output | Command output shows as a console block, with a live tail while the command runs. |
-| Sign-in | A **Sign-in needed** card appears when the agent is signed out, or when you send `/login` (also in the slash-command suggestions). Pick a method. The PC agent runs the coding agent's own login command in a hidden terminal. Claude Code: Claude account or Console, then paste the code the page shows. Codex: open the page and enter the one-time code in the card, or use an OpenAI API key. While Codex's shared app-server runs on the PC, the Codex sign-in goes through it, because it does not read a login that `codex login` saves. Antigravity: Google sign-in, then paste the code or the address of the page you land on. OpenCode has no sign-in card: on a provider auth failure the chat says "OpenCode could not sign in to the model provider. Run `opencode auth login` on the PC, or use /connect in an OpenCode terminal session. Then tap Restart." On success the agent restarts and sends the refused messages again. A failed login, or one that takes over 20 min, returns to the method choice with the reason. |
+| Sign-in | A **Sign-in needed** card appears when the agent is signed out, or when you send `/login` (also in the slash-command suggestions). Pick a method. The PC agent runs the coding agent's own login command in a hidden terminal. Claude Code: Claude account or Console, then paste the code the page shows. Codex: open the page and enter the one-time code in the card, or use an OpenAI API key. While Codex's shared app-server runs on the PC, the Codex sign-in goes through it, because it does not read a login that `codex login` saves. Antigravity: Google sign-in, then paste the code or the address of the page you land on. OpenCode has no sign-in card: on a provider auth failure the chat says "OpenCode could not sign in to the model provider. In New session, pick OpenCode and use Connect a provider, or run `opencode auth login` on the PC. Then tap Restart." On success the agent restarts and sends the refused messages again. A failed login, or one that takes over 20 min, returns to the method choice with the reason. |
 | Sync | Every open device shows the same state; a reconnect fetches only what it missed. |
 
 The terminal's control-key bar and custom keyboard shortcut buttons are not part of the chat view: they send raw terminal bytes. Templates and slash commands work in the chat view. Stop and the mode chip replace Esc / Ctrl+C and Shift+Tab.
@@ -43,7 +43,7 @@ The terminal's control-key bar and custom keyboard shortcut buttons are not part
 ### Terminal UI and continuing sessions
 
 - **Terminal UI.** The Claude Code, Codex, Antigravity and OpenCode pages of the new-session wizard have a **Terminal UI** toggle under Advanced, off by default and remembered. On, the session runs in the classic terminal (needed for TUI-only features such as Rewind). The wizard's Focus view and Debug logging apply only to terminal sessions; a chat session has its own Focus view in its ⋯ menu.
-- **Continue a session.** The same pages offer **Continue a session**: a list of the Claude Code, Codex, Antigravity or OpenCode sessions stored on the PC, for this folder or all folders, including sessions started outside Mobaide (for example by running `claude` in a terminal). Picking one opens it in the chat view with its history.
+- **Continue a session.** The same pages offer **Continue a session**: a list of the Claude Code, Codex, Antigravity or OpenCode sessions stored on the PC, for this folder or all folders, including sessions started outside Mobaide (for example by running `claude` in a terminal). Picking one opens it in the chat view with its history. Sessions in the agent's own `voice-cleanup` folder are never listed.
 - **Live Codex sessions.** When the Codex shared app-server runs (the daemon that `codex` in a terminal starts), chat sessions join it through `mobaide/acp/codex_bridge.py`. A session open in a terminal and on the phone stay in sync both ways. This works on macOS and Linux, not on Windows, and not for projects with a conda env. A message typed in another app shows as **Message sent from another app on your PC**, followed by its answer. The adapter does not forward the text of that message. Closing the chat cancels only its own turn.
 - **Antigravity sessions.** Each chat runs its own `agy acp` process in the session folder. Continue uses `session/list` and `session/load`, with history. It is not live: `agy` has no shared local server, so there is no sync with a terminal. There is no **Send now**, because `agy` has no steering.
 - **Antigravity conversation lock.** The chat holds the lock file that `agy` uses (`~/.gemini/antigravity-cli/presence/<id>.lock`). An `agy` terminal then warns "Conversation already open". When another app holds the lock, the Continue list shows "Open in another app on your PC. Close it there first.", and the chat shows a warning notice. Two processes that write one conversation overwrite each other. After the other app closes the conversation, the next message first reopens it, so the chat shows what was sent there ("Loaded the latest messages"), and then goes out.
@@ -95,7 +95,7 @@ The create-session wire contract is REST `POST /api/sessions` and the relay `cre
 |---|---|
 | `codex_options` | model, sandbox, approval, reasoning effort, full-auto, initial prompt |
 | `antigravity_options` | model, skip-permissions, sandbox, add-directories, worktree/branch |
-| `opencode_options` | auto-approve, initial prompt (up to 32000 characters; no client sends it), worktree/branch/base branch |
+| `opencode_options` | auto-approve, initial prompt (up to 32000 characters; no client sends it), worktree/branch/base branch, connect (sign in to a provider) |
 
 In `antigravity_options`, skip-permissions and sandbox are mutually exclusive, and the server rejects the combination.
 
@@ -116,7 +116,7 @@ The wire details are in [PROTOCOL.md](../PROTOCOL.md).
 
 **Antigravity (terminal sessions).** There is no auth probe. An unauthenticated `agy` shows its Google Sign-In prompt in the PTY, so the operator pre-authenticates `agy` on the host before launching a session. There is no API-key env var and no in-app Antigravity login route for terminal sessions. Chat sessions sign in from the chat card.
 
-**OpenCode.** There is no auth probe: OpenCode starts without an account and has free models. Sign in on the PC with `opencode auth login`, or with `/connect` in an OpenCode terminal session.
+**OpenCode.** There is no auth probe: OpenCode starts without an account and has free models. Sign in from the app with **Connect a provider** on the OpenCode options screen, or on the PC with `opencode auth login`.
 
 ### OpenCode terminal sessions
 
@@ -125,7 +125,8 @@ The wire details are in [PROTOCOL.md](../PROTOCOL.md).
 - **No model picker.** The OpenCode 2 TUI has no `--model` or `--agent` flag. Pick the model and the Build or Plan agent inside the session.
 - **Tabs off.** The launcher starts the TUI with `OPENCODE_CLI_CONFIG_CONTENT={"tabs":{"mode":"off"}}`, merged into your own value. Your own `tabs` key wins. OpenCode shares one tab set per folder, and its status report covers all tabs. With tabs on, a request in one session would alert every session of the project.
 - **Binary lookup.** `MOBAIDE_OPENCODE_BIN`, then PATH, then `~/.opencode/bin/opencode`, npm-global, Homebrew and `~/.bun/bin`. On Windows: `%USERPROFILE%\.opencode\bin\opencode.exe`, npm shims and Bun. The Windows installer does not detect OpenCode.
-- **Voice cleanup.** Not available in OpenCode sessions.
+- **Connect a provider.** The OpenCode options screen has a **Connect a provider** card (web: **Connect a provider…**). It starts a terminal session that runs `opencode auth login`, with no worktree and the other options ignored. When the command exits, the session ends as a normal stopped session and leaves the list. The launch options are not remembered for it.
+- **Voice cleanup.** Available. It uses OpenCode's default model, because OpenCode names no cheapest one. Your global OpenCode config still applies: its `AGENTS.md` joins the prompt and its MCP servers start on each cleanup (up to about 3 s more). OpenCode keeps each run in its session history under the title `Voice-cleanup`. Details are in voice-input.md.
 
 ### On-screen control-key bar
 

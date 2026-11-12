@@ -49,6 +49,7 @@ from mobaide.voice.cleanup import (
     AntigravityCleanup,
     ClaudeCleanup,
     CodexCleanup,
+    OpenCodeCleanup,
     TranscriptCleaner,
 )
 from mobaide.voice.models import VOICE_CAPABILITIES
@@ -822,7 +823,10 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         },
         adapters_dir=state_prefix(test_mode=config.is_test_mode) / "acp-adapters",
     )
-    app.state.chat_catalog = ChatCatalog(app.state.chat_agents)
+    voice_cleanup_dir = state_prefix(test_mode=config.is_test_mode) / "voice-cleanup"
+    app.state.chat_catalog = ChatCatalog(
+        app.state.chat_agents, hidden_folders=[voice_cleanup_dir]
+    )
 
     # event_bus / broadcaster / fanouts must exist before SessionManager
     # so the on_session_created hook can attach a SessionEventFanout
@@ -849,8 +853,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                     app.state.antigravity_launcher.resolve_binary,
                     lambda: app.state.antigravity_launcher.cached_models,
                 ),
+                "opencode": OpenCodeCleanup(app.state.opencode_launcher.resolve_binary),
             },
-            work_dir=state_prefix(test_mode=config.is_test_mode) / "voice-cleanup",
+            work_dir=voice_cleanup_dir,
         ),
     )
     app.state.fanouts = {}  # session_id -> SessionEventFanout

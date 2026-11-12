@@ -5,6 +5,7 @@ import type { ChatSupport } from '../../../protocol/dto/agentVersion';
 import type { ChatStoredSession } from '../../../protocol/dto/chatSessions';
 import { createSessionRequestSchema } from '../../../protocol/dto/sessionCreate';
 import {
+  buildConnectRequest,
   buildCreateRequest,
   buildResumeRequest,
   buildStartScanRequest,
@@ -189,7 +190,7 @@ const ANTIGRAVITY_BOOLEANS: Record<
 const OPENCODE_BOOLEANS: Record<
   RequiredBooleans<components['schemas']['OpenCodeOptionsModel']>,
   true
-> = { auto_approve: true, worktree: true };
+> = { auto_approve: true, connect: true, worktree: true };
 
 const REQUEST_BOOLEANS: Record<RequiredBooleans<CreateSessionRequest>, true> = {
   worktree: true,
@@ -453,6 +454,7 @@ describe('OpenCode — chat view', () => {
     expect(request?.worktree).toBe(false);
     expect(request?.opencode_options).toMatchObject({
       auto_approve: true,
+      connect: false,
       worktree: true,
       branch_name: 'feature/x',
     });
@@ -561,6 +563,7 @@ describe('buildResumeRequest', () => {
     });
     expect(request.opencode_options).toEqual({
       auto_approve: true,
+      connect: false,
       worktree: false,
       branch_name: undefined,
       base_branch: null,
@@ -578,6 +581,55 @@ describe('buildResumeRequest', () => {
 
     expect(request.cwd).toBe('/srv/elsewhere');
     expect(request.project_name).toBeUndefined();
+  });
+});
+
+describe('buildConnectRequest', () => {
+  const SIGN_IN = { auto_approve: false, connect: true, worktree: false };
+
+  it('asks for a bare terminal sign-in in the project, whatever the wizard holds', () => {
+    // `opencode auth login` is not an agent session: auto-approve, the
+    // worktree and its branch must not ride along, and neither may the chat view.
+    const request = buildConnectRequest({
+      state: POPULATED,
+      mode: 'opencode',
+      project: gitProject,
+      worktreeBase: 'origin/dev',
+      chat: { kind: 'available', resume: true, live: false },
+    });
+
+    expect(request).toEqual({
+      project_name: 'mobaide',
+      cwd: undefined,
+      rows: 24,
+      cols: 80,
+      cli: 'opencode',
+      opencode_options: SIGN_IN,
+      worktree: false,
+      ui: 'terminal',
+    });
+    expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
+  });
+
+  it('runs in a one-off folder, sent as cwd with no project', () => {
+    const request = buildConnectRequest({
+      state: { ...POPULATED, selection: { kind: 'customPath', path: '/tmp/scratch' } },
+      mode: 'opencode',
+      project: null,
+    });
+
+    expect(request).toMatchObject({ cwd: '/tmp/scratch', opencode_options: SIGN_IN, ui: 'terminal' });
+    expect(request?.project_name).toBeUndefined();
+  });
+
+  it('is refused without a folder to run in', () => {
+    expect(
+      buildConnectRequest({
+        state: { ...POPULATED, selection: { kind: 'none' } },
+        mode: 'opencode',
+        project: null,
+      }),
+    ).toBeNull();
   });
 });
 

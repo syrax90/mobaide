@@ -52,6 +52,8 @@ interface ConfigStepProps {
   onBack: () => void;
   /** Open the "Continue a session" picker; shown only where the PC can resume. */
   onContinueSession?: () => void;
+  /** Start OpenCode's provider sign-in in a terminal session (OpenCode only). */
+  onConnectProvider?: () => void;
 }
 
 export function modeTitle(
@@ -105,6 +107,7 @@ export function ConfigStep({
   onSubmit,
   onBack,
   onContinueSession,
+  onConnectProvider,
 }: ConfigStepProps) {
   const chatKind = chatAgentKind(mode);
   const chat = chatSupport(capabilities, chatKind ?? 'claude');
@@ -185,6 +188,25 @@ export function ConfigStep({
           chat={chat}
           dispatch={dispatch}
         />
+      )}
+      {mode === 'opencode' && onConnectProvider !== undefined && (
+        <div className="option-group resume-entry">
+          <div className="resume-entry-text">
+            <h3>Connect a provider</h3>
+            <p className="field-hint">
+              Sign in to a model provider, for example Anthropic, OpenAI or Google. OpenCode’s
+              sign-in opens in a terminal and stays on your PC.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="button"
+            disabled={submitting}
+            onClick={onConnectProvider}
+          >
+            Connect a provider…
+          </button>
+        </div>
       )}
       {mode === 'opencode' && (
         <OpenCodeOptionsPanel bucket={state.opencode} chat={chat} dispatch={dispatch} />

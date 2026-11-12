@@ -40,6 +40,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.Login
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -850,9 +851,11 @@ private fun WizardActionCard(
     onClick: () -> Unit,
     contentDescription: String,
     testTag: String,
+    enabled: Boolean = true,
 ) {
     Card(
         onClick = onClick,
+        enabled = enabled,
         colors = if (selected) selectedCardColors else CardDefaults.cardColors(),
         border = BorderStroke(
             2.dp,
@@ -1382,6 +1385,22 @@ private fun ContinueSessionCard(subtitle: String, onClick: () -> Unit) {
     )
 }
 
+/** Starts OpenCode's own provider sign-in in a terminal session. */
+@Composable
+private fun ConnectProviderCard(enabled: Boolean, onClick: () -> Unit) {
+    WizardActionCard(
+        title = "Connect a provider",
+        subtitle = "Sign in to a model provider, for example Anthropic, OpenAI or Google. " +
+            "OpenCode’s sign-in opens in a terminal and stays on your PC.",
+        icon = Icons.AutoMirrored.Outlined.Login,
+        selected = false,
+        onClick = onClick,
+        contentDescription = "Connect a provider",
+        testTag = "opencode_connect_provider",
+        enabled = enabled,
+    )
+}
+
 /** An agent's collapsed-by-default "Advanced" options. */
 @Composable
 private fun AdvancedSection(content: @Composable () -> Unit) {
@@ -1698,6 +1717,10 @@ private fun OpenCodeConfigSection(
             onClick = onContinueSession,
         )
     }
+    ConnectProviderCard(
+        enabled = !state.submitting,
+        onClick = viewModel::connectOpenCodeProvider,
+    )
 
     Text("Permissions", style = MaterialTheme.typography.labelLarge)
     ToggleRow(

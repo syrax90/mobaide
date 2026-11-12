@@ -181,6 +181,7 @@ function opencodeOptions(
 ): OpenCodeOptions {
   return {
     auto_approve: bucket.autoApprove,
+    connect: false,
     worktree: extras.worktree,
     branch_name: extras.branchName,
     base_branch: extras.baseBranch,
@@ -306,6 +307,26 @@ export function buildResumeRequest(
     worktree: false,
     ui: 'chat',
     chat_resume_id: stored.session_id,
+  };
+}
+
+/**
+ * A terminal session that runs OpenCode's own sign-in (`opencode auth login`)
+ * in the chosen folder, so a model provider can be connected from here. It is
+ * not an OpenCode session: no wizard option applies and nothing is remembered.
+ */
+export function buildConnectRequest(context: BuildContext): CreateSessionRequest | null {
+  if (context.state.selection.kind === 'none') return null;
+  const place = placement(context);
+  return {
+    project_name: place.projectName,
+    cwd: place.cwd,
+    rows: 24,
+    cols: 80,
+    cli: 'opencode',
+    opencode_options: { auto_approve: false, connect: true, worktree: false },
+    worktree: false,
+    ui: 'terminal',
   };
 }
 

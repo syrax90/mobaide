@@ -137,10 +137,13 @@ class OpenCodeOptionsModel(BaseModel):
     ``auto_approve`` is OpenCode's ``--auto``: it accepts every permission
     request that the user's OpenCode rules do not deny. ``initial_prompt`` is
     the first message; it travels as one argv element, so its length is capped.
+    ``connect`` starts a terminal session that runs ``opencode auth login``
+    (sign in to a model provider) in place of an OpenCode session.
     """
 
     auto_approve: bool = False
     initial_prompt: str | None = Field(default=None, max_length=INITIAL_PROMPT_MAX)
+    connect: bool = False
     worktree: bool = False
     branch_name: str | None = None
     base_branch: str | None = None

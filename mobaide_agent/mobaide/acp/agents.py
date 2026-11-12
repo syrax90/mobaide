@@ -87,8 +87,8 @@ OPENCODE_HINT = (
 # OpenCode has no account of its own to sign in to: a provider that refuses
 # its key is connected again in OpenCode itself.
 OPENCODE_SIGN_IN_HINT = (
-    "OpenCode could not sign in to the model provider. Run `opencode auth login` "
-    "on the PC, or use /connect in an OpenCode terminal session. Then tap Restart."
+    "OpenCode could not sign in to the model provider. In New session, pick OpenCode "
+    "and use Connect a provider, or run `opencode auth login` on the PC. Then tap Restart."
 )
 # Test mode: while this file exists the fake agent is signed out, and its
 # fake login removes it.

@@ -361,6 +361,58 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertFalse(next.antigravitySkipPermissions)
     }
 
+    func testConnectRequestIsABareTerminalSignInWhateverTheWizardHolds() async throws {
+        let model = await modelWithProjects(#"[{"name":"a","path":"/p","is_git":true}]"#)
+        XCTAssertNil(model.connectRequest(), "a sign-in needs a folder to run in")
+
+        // Options of the agent session the user did not launch.
+        model.selectStoredProject("a")
+        model.opencodeAutoApprove = true
+        model.worktree = true
+        model.branchName = "feat"
+        let inProject = try XCTUnwrap(model.connectRequest())
+
+        XCTAssertEqual(inProject.project_name, "a")
+        XCTAssertNil(inProject.cwd)
+        XCTAssertEqual(inProject.cli, "opencode")
+        XCTAssertEqual(inProject.ui, "terminal", "`opencode auth login` is a terminal program")
+        XCTAssertEqual(inProject.opencode_options, OpenCodeOptionsModel(connect: true))
+        XCTAssertEqual(inProject.worktree, false)
+        XCTAssertNil(inProject.branch_name)
+
+        model.selection = .customPath("/tmp/scratch")
+        let inFolder = try XCTUnwrap(model.connectRequest())
+
+        XCTAssertNil(inFolder.project_name)
+        XCTAssertEqual(inFolder.cwd, "/tmp/scratch")
+        XCTAssertEqual(inFolder.opencode_options, OpenCodeOptionsModel(connect: true))
+    }
+
+    func testConnectingAProviderSendsTheSignInAndRemembersNoOpenCodeChoices() async throws {
+        StubURLProtocol.reset()
+        let prefs = isolatedPrefs()
+        let model = stubbedModel(prefs: prefs)
+        model.selection = .stored("a")
+        model.mode = .opencode
+        model.opencodeAutoApprove = true
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"session_id":"s-connect","state":"starting","created_at":"t"}"#
+        )
+
+        await model.connectOpenCodeProvider()
+
+        XCTAssertNil(model.error)
+        let body = try XCTUnwrap(try createBodies().last)
+        XCTAssertEqual(body["cli"] as? String, "opencode")
+        XCTAssertEqual(body["ui"] as? String, "terminal")
+        let options = try XCTUnwrap(body["opencode_options"] as? [String: Any])
+        XCTAssertEqual(options["connect"] as? Bool, true)
+        XCTAssertEqual(options["auto_approve"] as? Bool, false)
+        XCTAssertNil(prefs.getLastUsedOpenCodeOptions(), "a sign-in is not a launch of the agent")
+        XCTAssertEqual(prefs.getLastUsedSessionId(), "s-connect")
+    }
+
     func testAnAgentThatListsItsCLIsWithoutOpenCodeDisablesTheCard() async {
         // That agent predates the kind and would open a plain shell for it.
         let model = await modelWithCapabilities(

@@ -121,6 +121,9 @@ class SessionConfig:
     # becomes an attention. ``None`` takes each gate's default; ``0`` alerts
     # without waiting.
     attention_quiet_seconds: float | None = None
+    # The command is meant to run to its end (a sign-in, not an agent): its
+    # own exit is a normal stop, not a crash.
+    exits_when_done: bool = False
     # ``"chat"`` runs the agent over ACP (``mobaide.acp``) and renders the
     # structured chat UI; ``"terminal"`` is the classic PTY session.
     ui: str = "terminal"

@@ -115,6 +115,7 @@ export const antigravityOptionsSchema = z
 export const opencodeOptionsSchema = z.strictObject({
   auto_approve: z.boolean().default(false),
   initial_prompt: optionalWireString(),
+  connect: z.boolean().default(false),
   worktree: z.boolean().default(false),
   branch_name: optionalWireString(),
   base_branch: optionalWireString(),

@@ -480,6 +480,7 @@ class TestOpenCodeOptionsModel:
         wire = {
             "auto_approve": True,
             "initial_prompt": "--auto",
+            "connect": True,
             "worktree": True,
             "branch_name": "feature/x",
             "base_branch": "origin/main",
@@ -522,9 +523,13 @@ class TestOpenCodeOptionsModel:
         assert request.cli == "opencode"
         assert request.ui == "chat"
         assert request.opencode_options is not None
+        # The wire block is one of a client from before ``connect``: it must
+        # read as a normal launch, never as a sign-in.
+        assert "connect" not in case["wire"]["opencode_options"]
         assert request.opencode_options.model_dump(mode="json", exclude_none=True) == (
-            case["wire"]["opencode_options"]
+            case["decoded_canonical"]["opencode_options"]
         )
+        assert request.opencode_options.connect is False
         assert request.claude_options is None
         assert request.codex_options is None
         assert request.antigravity_options is None

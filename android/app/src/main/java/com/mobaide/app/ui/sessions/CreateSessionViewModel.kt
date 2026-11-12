@@ -1617,6 +1617,40 @@ class CreateSessionViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Starts a terminal session that runs OpenCode's own sign-in in the chosen
+     * folder. It is not an OpenCode session: no launch option applies.
+     */
+    fun connectOpenCodeProvider() {
+        val state = _uiState.value
+        if (state.submitting) return
+        val request = CreateSessionRequest(
+            cli = "opencode",
+            opencode_options = OpenCodeOptionsModel(
+                auto_approve = false,
+                connect = true,
+                worktree = false,
+                branch_name = null,
+                base_branch = null,
+            ),
+            ui = SessionResponse.UI_TERMINAL,
+        )
+        when (val sel = state.selection) {
+            is ProjectSelection.Stored -> submitSession(
+                selection = sel,
+                request = request.copy(project_name = sel.name),
+            )
+            is ProjectSelection.CustomPath -> {
+                if (sel.path.isBlank() || state.customPathError != null) return
+                submitSession(
+                    selection = sel,
+                    request = request.copy(project_name = null, cwd = sel.path),
+                )
+            }
+            ProjectSelection.None -> Unit
+        }
+    }
+
     fun setCodexApiKeyDraft(v: String) = _uiState.update {
         it.copy(codexApiKeyDraft = v, codexLoginError = null)
     }
@@ -1873,7 +1907,8 @@ class CreateSessionViewModel @Inject constructor(
                 // the same kind. The request shape selects which blob to write:
                 // Claude submits carry claude_options, Codex submits carry
                 // codex_options, Antigravity submits carry antigravity_options,
-                // OpenCode submits carry opencode_options,
+                // OpenCode submits carry opencode_options (a provider sign-in
+                // is not a launch, so it stores nothing),
                 // shell submits carry none.
                 if (request.claude_options != null) {
                     preferencesStore.setLastUsedClaudeOptions(_uiState.value.toClaudeLaunchPrefs())
@@ -1884,7 +1919,7 @@ class CreateSessionViewModel @Inject constructor(
                 if (request.antigravity_options != null) {
                     preferencesStore.setLastUsedAntigravityOptions(_uiState.value.toAntigravityLaunchPrefs())
                 }
-                if (request.opencode_options != null) {
+                if (request.opencode_options?.connect == false) {
                     preferencesStore.setLastUsedOpenCodeOptions(_uiState.value.toOpenCodeLaunchPrefs())
                 }
                 preferencesStore.setLastUsedSessionId(response.session_id)

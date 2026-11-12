@@ -129,21 +129,25 @@ Additive delta within proto-v7 (2026-11-12): **one session kind, one create-opti
 
 | Where | Change |
 |-------|--------|
-| Create request | `cli: "opencode"` with `opencode_options` = `{auto_approve: bool = false, initial_prompt: str \| null (up to 32000 chars; no client sends it), worktree: bool = false, branch_name, base_branch}`. `ui` is `"chat"` or `"terminal"` as for the other agents. |
+| Create request | `cli: "opencode"` with `opencode_options` = `{auto_approve: bool = false, initial_prompt: str \| null (up to 32000 chars; no client sends it), worktree: bool = false, branch_name, base_branch, connect: bool = false}`. `ui` is `"chat"` or `"terminal"` as for the other agents. |
 | Missing binary | 503 with `opencode_cli_missing`, like `codex_cli_missing`. There is no auth probe: OpenCode starts without an account. |
 | `capabilities.cli` | `opencode: {"available": bool}`, with no `models`. A client treats an agent whose list has no `opencode` as too old (it would open a plain shell). |
 | `capabilities.chat` | `opencode: {"resume": true, "live": false}`. |
-| `capabilities.voice.cleanup_kinds` | Does not list `opencode`: voice transcript cleanup is not available in OpenCode sessions. |
+| `capabilities.voice.cleanup_kinds` | Lists `opencode`: `POST /api/voice/cleanup` accepts `kind: "opencode"`. |
 
 * Binary lookup: `MOBAIDE_OPENCODE_BIN`, then PATH, then `~/.opencode/bin/opencode`, npm-global, Homebrew and `~/.bun/bin` (Windows: `%USERPROFILE%\.opencode\bin\opencode.exe`, npm shims, Bun). The Windows installer does not detect OpenCode.
 * Terminal sessions run `opencode [--auto]` in the session folder. OpenCode 2 has no `--model` or `--agent` flag, so there is no model option. The launcher sets `OPENCODE_CLI_CONFIG_CONTENT={"tabs":{"mode":"off"}}`, merged into the user's own value (the user's `tabs` key wins), because OpenCode shares one tab set per folder and its status report covers all tabs.
 * Terminal attention comes from OSC 7501 (`app=opencode`), which reports only `idle`, `working` and `blocked`. A `working` to `idle` change is the turn end: `turn_finished` after the usual quiet window, unless client input arrived within 2 s before it (an interrupt). `blocked` gives `awaiting_permission` only after it stands 0.5 s (with `--auto`, OpenCode reports `blocked` for about 10 ms per request). There is no `turn_failed`. OpenCode 1.x reports nothing. `activity` stays `null` for OpenCode terminal sessions.
 * Chat sessions run `opencode acp`, OpenCode's built-in ACP server: no adapter and no Node.js. It runs a server of its own, apart from the TUI's, so a chat and a terminal on one session do not sync. `GET /api/chat/opencode/sessions` lists the stored sessions of a folder, and Continue replays the history. There is no folder-trust gate.
 * Chat config options come from OpenCode: `model` (`provider/model`), `mode` (Build or Plan) and `effort` for models with variants. With `auto_approve`, the agent answers each permission request with its "allow once" option and shows no card.
-* A provider auth failure in a chat is not a sign-in card. The chat shows "OpenCode could not sign in to the model provider. Run `opencode auth login` on the PC, or use /connect in an OpenCode terminal session. Then tap Restart."
+* `opencode_options.connect: true` starts a terminal session that runs `opencode auth login`, OpenCode's interactive provider sign-in. `ui` is forced to `terminal`, no worktree is created and the other options are ignored. The command ends the session as a normal `stopped` session (`SessionConfig.exits_when_done`): never `crashed`. Liveness cleanup removes its row and publishes `sessions.changed`, as for a user stop. Clients show a "Connect a provider" entry on the OpenCode options screen and do not remember the launch options for it.
+* The launcher sets `PWD` to the session folder, because OpenCode takes its folder from `PWD` when it is set.
+* A provider auth failure in a chat is not a sign-in card. The chat shows "OpenCode could not sign in to the model provider. In New session, pick OpenCode and use Connect a provider, or run `opencode auth login` on the PC. Then tap Restart."
+* Voice transcript cleanup runs `opencode run --standalone --agent mobaide-voice-cleanup --title Voice-cleanup --format json` with the transcript on stdin, on OpenCode's default model (one request per cleanup). The env drops `PWD` and sets `OPENCODE_DISABLE_PROJECT_CONFIG=1`. The cleanup agent (`system` = the shared cleanup prompt, deny-all permissions) goes inline in `OPENCODE_CONFIG_CONTENT`, merged into the PC's own value, with a top-level deny-all rule last and `share: "disabled"`. No file is written. An `error` event fails the cleanup even at exit code 0, and any tool event discards the run. OpenCode 1.x has no `--standalone`: `cleanup_outdated`. An `OPENCODE_CONFIG_CONTENT` that is not a plain JSON object: `cleanup_failed`. The user's global OpenCode config still applies, and OpenCode keeps each run in its session history (title `Voice-cleanup`).
+* `GET /api/chat/{kind}/sessions` never lists rows whose folder is the agent's `voice-cleanup` work dir. A page holding only such rows is read on (up to 10 agent pages), so a client never gets an empty page with a cursor.
 * The env file keys `MOBAIDE_OPENCODE_BIN` and `MOBAIDE_ACP_OPENCODE_COMMAND` override the binary and the `opencode acp` command.
 
-Golden fixtures: new `tests/protocol_fixtures/dto/agent/OpenCodeOptionsModel.json`; `CreateSessionRequest.json` gains an `opencode_launch` case.
+Golden fixtures: new `tests/protocol_fixtures/dto/agent/OpenCodeOptionsModel.json`; `CreateSessionRequest.json` gains an `opencode_launch` case. Both carry `connect`; `VersionInfoResponse.json` and `VoiceCleanupRequest.json` list `opencode`.
 
 ### Delta 2026-11-11: sign-in from the chat
 

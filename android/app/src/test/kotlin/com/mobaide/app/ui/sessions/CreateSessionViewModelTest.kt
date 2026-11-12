@@ -16,6 +16,7 @@ import com.mobaide.app.data.network.dto.CodexLoginResponse
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.data.network.dto.FsDirsResponse
+import com.mobaide.app.data.network.dto.OpenCodeOptionsModel
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.VersionInfoResponse
@@ -3584,6 +3585,59 @@ class CreateSessionViewModelTest {
         assertFalse(options.worktree)
         assertNull(options.branch_name)
         assertNull(options.base_branch)
+    }
+
+    @Test
+    fun connectOpenCodeProvider_sendsABareTerminalSignIn_andRemembersNoLaunchOptions() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-opencode-connect", "starting", "2026-11-12T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectOpenCodeMode()
+        // Options of the agent session the user did not launch.
+        vm.setOpenCodeAutoApprove(true)
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+        vm.connectOpenCodeProvider()
+        advanceUntilIdle()
+
+        val request = requestSlot.captured
+        assertEquals("alpha", request.project_name)
+        assertEquals("opencode", request.cli)
+        // `opencode auth login` is a terminal program, whatever the chat support.
+        assertEquals(SessionResponse.UI_TERMINAL, request.ui)
+        assertEquals(OpenCodeOptionsModel(connect = true), request.opencode_options)
+        assertFalse(request.worktree)
+        assertNull(request.branch_name)
+        // A sign-in is not a launch: the next wizard must not open on its options.
+        coVerify(exactly = 0) { fx.prefs.setLastUsedOpenCodeOptions(any()) }
+    }
+
+    @Test
+    fun connectOpenCodeProvider_customPath_runsTheSignInInThatFolder() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-opencode-connect-path", "starting", "2026-11-12T00:00:00Z")
+
+        vm.selectCustomPath()
+        advanceUntilIdle()
+        vm.setCustomPathDraft("/tmp/scratch")
+        vm.connectOpenCodeProvider()
+        advanceUntilIdle()
+
+        val request = requestSlot.captured
+        assertNull(request.project_name)
+        assertEquals("/tmp/scratch", request.cwd)
+        assertEquals(SessionResponse.UI_TERMINAL, request.ui)
+        assertEquals(OpenCodeOptionsModel(connect = true), request.opencode_options)
     }
 
     @Test

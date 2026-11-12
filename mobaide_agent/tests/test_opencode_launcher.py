@@ -82,6 +82,17 @@ async def test_argv_no_prompt_adds_no_prompt_flag(tmp_path: Path, prompt):
     assert spec.argv == ["opencode", "--auto"]
 
 
+@pytest.mark.asyncio
+async def test_argv_connect_runs_the_provider_sign_in_and_nothing_else(tmp_path: Path):
+    """A sign-in is not an agent session: neither ``--auto`` nor the first
+    message may reach ``opencode auth login``."""
+    spec = await OpenCodeLauncher().build(
+        _make_project(str(tmp_path)),
+        OpenCodeOptions(connect=True, auto_approve=True, initial_prompt="fix the bug"),
+    )
+    assert spec.argv == ["opencode", "auth", "login"]
+
+
 def test_options_cap_the_prompt_length():
     """The prompt is a single argv element, so its length is capped below the
     argv limit of every supported OS — the frozen dataclass rejects a longer
@@ -159,6 +170,20 @@ async def test_terminal_env_leaves_unreadable_tui_settings_alone(tmp_path: Path,
     assert spec.env["OPENCODE_CLI_CONFIG_CONTENT"] == "{not json"
 
 
+@pytest.mark.asyncio
+async def test_env_pwd_is_the_session_folder_not_the_agent_s_own(tmp_path: Path, monkeypatch):
+    """OpenCode takes its folder from ``PWD`` when it is set, and the agent's
+    inherited ``PWD`` is the folder the agent was started in. For a worktree
+    session it must be the worktree, not the project root."""
+    monkeypatch.setenv("PWD", str(tmp_path / "agent-start-folder"))
+    (tmp_path / ".git").mkdir()
+    spec = await OpenCodeLauncher(worktree_mgr=_RecordingWorktreeMgr()).build(  # type: ignore[arg-type]
+        _make_project(str(tmp_path)), OpenCodeOptions(worktree=True, branch_name="feature/x"),
+    )
+    assert spec.cwd != str(tmp_path)
+    assert spec.env["PWD"] == spec.cwd
+
+
 def test_build_env_works_without_the_binary(tmp_path: Path, monkeypatch):
     """A chat session builds its environment before OpenCode is looked up, so
     a missing binary must not fail ``build_env`` — the chat spec reports it
@@ -233,6 +258,21 @@ async def test_cwd_adhoc_worktree_is_ignored(tmp_path: Path):
     )
     assert spec.cwd == str(tmp_path)
     assert mgr.calls == []
+
+
+@pytest.mark.asyncio
+async def test_cwd_connect_never_creates_a_worktree(tmp_path: Path):
+    """A sign-in changes nothing in the project: a ``worktree`` flag that
+    arrives with ``connect`` must not leave a branch and a folder behind."""
+    (tmp_path / ".git").mkdir()
+    mgr = _RecordingWorktreeMgr()
+    spec = await OpenCodeLauncher(worktree_mgr=mgr).build(  # type: ignore[arg-type]
+        _make_project(str(tmp_path)),
+        OpenCodeOptions(connect=True, worktree=True, branch_name="feature/x"),
+    )
+    assert mgr.calls == []
+    assert spec.cwd == str(tmp_path)
+    assert spec.env["PWD"] == str(tmp_path)
 
 
 # binary resolution

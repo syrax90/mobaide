@@ -366,7 +366,20 @@ class TerminalSession:
                 )
                 break
 
-        if self._state == SessionState.RUNNING:
+        if self._state == SessionState.RUNNING and self._config.exits_when_done:
+            self._state = SessionState.STOPPED
+            await self._event_queue.put(
+                SessionEvent("stopped", self._config.session_id, timestamp=time.time()),
+            )
+            logger.info("Session %s finished", self.session_id)
+            # ``stop()`` returns early on a stopped session: free here what it
+            # would have freed.
+            self.cancel_attention_window()
+            for task in (self._title_task, self._stall_task):
+                if task is not None:
+                    task.cancel()
+            await loop.run_in_executor(None, self._backend.close)
+        elif self._state == SessionState.RUNNING:
             self._state = SessionState.CRASHED
             await self._event_queue.put(
                 SessionEvent(

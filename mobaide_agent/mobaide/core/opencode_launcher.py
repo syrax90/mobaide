@@ -112,11 +112,14 @@ class OpenCodeOptions:
 
     ``auto_approve`` maps to ``--auto``: OpenCode then accepts every permission
     request that its rules do not deny. ``initial_prompt`` is sent as the first
-    message (``--prompt``).
+    message (``--prompt``). ``connect`` runs ``opencode auth login`` in place
+    of the TUI, so the user can sign in to a model provider from the terminal
+    view; the other options do not apply to it.
     """
 
     auto_approve: bool = False
     initial_prompt: str | None = None
+    connect: bool = False
     # Worktree intent for a stored git project, resolved by ``resolve_cwd``
     # exactly like Codex; ignored for ad-hoc launches.
     worktree: bool = False
@@ -163,10 +166,14 @@ class OpenCodeLauncher:
         env = self.build_env(target)
         _turn_tabs_off(env)
         cwd = await self.resolve_cwd(target, options)
+        # Parts of OpenCode take the folder from ``PWD``, not from the real cwd.
+        env["PWD"] = cwd
         return LaunchSpec(argv=argv, cwd=cwd, env=env, created_files=[])
 
     def _build_argv(self, options: OpenCodeOptions) -> list[str]:
         argv = [self.resolve_binary()]
+        if options.connect:
+            return [*argv, "auth", "login"]
         if options.auto_approve:
             argv.append("--auto")
         if options.initial_prompt:
@@ -180,7 +187,8 @@ class OpenCodeLauncher:
         ``worktree`` is set on a stored git project, or the bare ad-hoc cwd."""
         return await resolve_standard_worktree_cwd(
             target,
-            worktree=options.worktree,
+            # A sign-in changes nothing in the project: it needs no worktree.
+            worktree=options.worktree and not options.connect,
             branch_name=options.branch_name,
             base_branch=options.base_branch,
             worktree_mgr=self._worktree_mgr,

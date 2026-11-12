@@ -9,6 +9,8 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class OpenCodeOptionsModel(
     val auto_approve: Boolean = false,
+    // true = a terminal session that runs OpenCode's own sign-in, not an OpenCode session.
+    val connect: Boolean = false,
     val worktree: Boolean = false,
     val branch_name: String? = null,
     // The ref the new worktree starts from; null = the agent's default branch.

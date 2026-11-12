@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from mobaide import __version__
@@ -30,6 +30,8 @@ LIST_TIMEOUT = 30.0
 # background and the request asks the user to try again.
 SETUP_WAIT = 15.0
 PAGE_MAX = 200
+# How many agent pages one request reads on while each holds hidden rows only.
+HIDDEN_PAGE_HOPS = 10
 TITLE_MAX = 200
 
 
@@ -48,8 +50,17 @@ class _Lister:
 
 
 class ChatCatalog:
-    def __init__(self, specs: Mapping[str, ChatAgentSpec]) -> None:
+    def __init__(
+        self,
+        specs: Mapping[str, ChatAgentSpec],
+        *,
+        hidden_folders: Iterable[str | os.PathLike[str]] = (),
+    ) -> None:
+        """``hidden_folders`` hold sessions that are the agent's own work,
+        not the user's (the voice cleanup runs): they are never listed."""
         self._specs = specs
+        hidden = [os.fspath(folder) for folder in hidden_folders]
+        self._hidden = frozenset(hidden) | frozenset(os.path.realpath(f) for f in hidden)
         self._listers: dict[str, _Lister] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._setups: dict[str, asyncio.Future[ChatLaunchPlan]] = {}
@@ -73,7 +84,14 @@ class ChatCatalog:
             try:
                 if not lister.can_list:
                     raise ChatCatalogError(409, f"{spec.display_name} cannot list its sessions")
-                result = await lister.conn.request("session/list", params, LIST_TIMEOUT)
+                for _ in range(HIDDEN_PAGE_HOPS):
+                    result = await lister.conn.request("session/list", params, LIST_TIMEOUT)
+                    page = await self._page(spec, result, cwd)
+                    # A page of hidden rows alone would read as "no sessions":
+                    # clients drop the cursor of an empty page.
+                    if page["sessions"] or not page["next_cursor"] or not self._hidden:
+                        break
+                    params = {**params, "cursor": page["next_cursor"]}
             except AcpRpcError as exc:
                 raise ChatCatalogError(
                     400 if exc.code == -32602 else 502, exc.message
@@ -83,13 +101,22 @@ class ChatCatalog:
                 raise ChatCatalogError(502, str(exc) or "The agent did not answer") from None
             finally:
                 self._arm_idle(kind)
+        return page
+
+    async def _page(self, spec: ChatAgentSpec, result: Any, cwd: str | None) -> dict[str, Any]:
+        """One ``session/list`` answer as a client page, hidden folders left out."""
         if not getattr(spec, "lists_all_folders", False):
-            return _normalize_page(result)
+            page = _normalize_page(result)
+            if self._hidden:
+                page["sessions"] = [
+                    row for row in page["sessions"] if row["cwd"] not in self._hidden
+                ]
+            return page
         # The agent ignored ``cwd`` and listed every folder: filter and order
         # here, off the event loop (one realpath per row).
         presence = getattr(spec, "presence", None)
         return await asyncio.get_running_loop().run_in_executor(
-            PROBE_POOL, _local_page, result, cwd, presence
+            PROBE_POOL, _local_page, result, cwd, presence, self._hidden
         )
 
     async def close(self) -> None:
@@ -194,12 +221,17 @@ class ChatCatalog:
         await lister.conn.close(grace=1.0)
 
 
-def _local_page(result: Any, cwd: str | None, presence: Any) -> dict[str, Any]:
+def _local_page(
+    result: Any, cwd: str | None, presence: Any, hidden: frozenset[str] = frozenset()
+) -> dict[str, Any]:
     """A page of an agent that lists every folder at once: the rows of
     ``cwd`` (compared as real paths), newest first, each marked when another
-    app on the PC has it open (``open_elsewhere``)."""
+    app on the PC has it open (``open_elsewhere``). Rows of a ``hidden``
+    folder are left out before the page is cut."""
     raw = result.get("sessions") if isinstance(result, dict) else None
     rows = [entry for entry in raw if isinstance(entry, dict)] if isinstance(raw, list) else []
+    if hidden:
+        rows = [entry for entry in rows if entry.get("cwd") not in hidden]
     if cwd:
         wanted = os.path.realpath(cwd)
         real: dict[str, str] = {}

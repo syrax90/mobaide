@@ -136,6 +136,26 @@ class TestTerminalSessionLifecycle:
 
         assert session.state in (SessionState.CRASHED, SessionState.STOPPED)
 
+    async def test_a_command_that_is_meant_to_end_stops_instead_of_crashing(
+        self, short_lived_config: SessionConfig
+    ) -> None:
+        """A sign-in that runs to its end is a normal stop: the clients must
+        not show it as a crashed session."""
+        short_lived_config.exits_when_done = True
+        session = TerminalSession(short_lived_config)
+        await session.start()
+
+        events: list[str] = []
+        deadline = asyncio.get_event_loop().time() + 5.0
+        while asyncio.get_event_loop().time() < deadline and session.state == SessionState.RUNNING:
+            await asyncio.sleep(0.05)
+        while not session.event_queue.empty():
+            events.append(session.event_queue.get_nowait().event_type)
+
+        assert session.state == SessionState.STOPPED
+        assert "stopped" in events
+        assert "error" not in events
+
     async def test_started_event_emitted(
         self, session_config: SessionConfig
     ) -> None:

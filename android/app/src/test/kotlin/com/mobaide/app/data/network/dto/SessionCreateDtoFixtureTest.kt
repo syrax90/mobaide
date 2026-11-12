@@ -83,6 +83,7 @@ class SessionCreateDtoFixtureTest {
         assertEquals(
             OpenCodeOptionsModel(
                 auto_approve = true,
+                connect = true,
                 worktree = true,
                 branch_name = "b",
                 base_branch = "origin/main",
