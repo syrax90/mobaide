@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://mobaide.com">
-    <img src="central_server/static/site/img/og.png" width="760" alt="Mobaide: run AI coding agents on your computer, from your phone. Claude Code, Codex CLI, Antigravity CLI, plus any CLI AI agent.">
+    <img src="central_server/static/site/img/og.png" width="760" alt="Mobaide: run AI coding agents on your computer, from your phone. Claude Code, Codex CLI, Antigravity CLI, OpenCode, GitHub Copilot, plus any CLI AI agent.">
   </a>
 </p>
 
