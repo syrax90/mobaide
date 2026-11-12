@@ -13,7 +13,7 @@ fun SessionAttentionChip(attention: SessionAttention, modifier: Modifier = Modif
     val tone = when (attention.tone) {
         AttentionTone.Warning -> MaterialTheme.pixel.warning
         AttentionTone.Ok -> MaterialTheme.pixel.ok
-        AttentionTone.Muted -> MaterialTheme.pixel.textMuted
+        AttentionTone.Muted -> MaterialTheme.pixel.gray
         AttentionTone.Working -> MaterialTheme.pixel.accent
     }
     PixelChip(text = attention.text, tone = tone, modifier = modifier)

@@ -68,7 +68,7 @@ A Settings toggle chooses between two modes:
 
 Run and switch between up to 32 concurrent sessions on one agent. 32 is the default `max_sessions`, which is configurable.
 
-A running session that is mid-turn shows an animated accent square and a "Working" chip in the session list and sessions panel. "Needs permission" outranks it, and it outranks "Ready". The agent reports this as the session's `activity` (`working` or `idle`) for Claude and Auto Scan terminal sessions and for chat sessions. Codex, Antigravity, Terminal and custom terminal sessions show no Working state.
+A running session that is mid-turn shows an animated accent square and a "Working" chip in the session list and sessions panel. A muted "Background" chip shows while the main agent is parked and only passive background work runs (a background shell, a monitor, a scheduled wakeup). "Needs permission" outranks both, and they outrank "Ready". The agent reports this as the session's `activity` (`working`, `waiting` or `idle`) for Claude and Auto Scan terminal sessions, and `working` or `idle` for chat sessions. Codex, Antigravity, Terminal and custom terminal sessions show no Working state.
 
 ## Managed CLI agents
 

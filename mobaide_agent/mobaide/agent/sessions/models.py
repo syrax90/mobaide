@@ -194,7 +194,8 @@ class SessionResponse(BaseModel):
     attention: str | None = None
     exit_reason: str | None = None
     ui: str = "terminal"
-    # ``working`` | ``idle`` | null (unknown); see ``SessionInfo.activity``.
+    # ``working`` | ``waiting`` | ``idle`` | null (unknown); see
+    # ``SessionInfo.activity``.
     activity: str | None = None
 
     @classmethod

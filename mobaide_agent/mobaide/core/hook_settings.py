@@ -8,6 +8,7 @@ hook's stdin JSON to the agent's local ``/internal/hook`` endpoint:
 * ``Notification`` (matcher ``idle_prompt``)       -> genuinely idle, your move
 * ``Stop``                                          -> turn ended (debounced)
 * ``UserPromptSubmit``                              -> new turn, reset the gate
+* ``PreToolUse``                                    -> heartbeat: work in progress
 * ``SessionEnd``                                    -> session ended (+ reason)
 
 ``Stop`` is not an alert on its own — see :mod:`mobaide.core.attention_gate` for
@@ -44,6 +45,11 @@ logger = logging.getLogger(__name__)
 # 200 immediately after an in-memory enqueue, so this is only a failsafe.
 _HOOK_TIMEOUT_SECONDS = 5
 
+# ``PreToolUse`` holds the tool call until the hook answers, and it fires for
+# every call of the main agent and of each sub-agent. A missed heartbeat costs
+# nothing, so it gets less patience than the hooks that carry an alert.
+_HEARTBEAT_TIMEOUT_SECONDS = 2
+
 # The hook *events* this file may ever register.
 #
 # Claude Code strips an unrecognised ``hooks.<Event>`` key with a validation
@@ -56,8 +62,12 @@ _HOOK_TIMEOUT_SECONDS = 5
 #
 # Only add a key at least as old as the ones already here. Anything else belongs
 # in a matcher value or an optional payload field: an unknown matcher simply
-# never fires, and a missing field reads as absent.
-REGISTERED_HOOK_EVENTS = ("Notification", "Stop", "UserPromptSubmit", "SessionEnd")
+# never fires, and a missing field reads as absent. ``PreToolUse`` qualifies: it
+# shipped with the first hooks release, before ``UserPromptSubmit`` and
+# ``SessionEnd`` existed.
+REGISTERED_HOOK_EVENTS = (
+    "Notification", "Stop", "UserPromptSubmit", "PreToolUse", "SessionEnd",
+)
 
 
 def _hooks_dir(port: int) -> Path:
@@ -69,14 +79,14 @@ def _settings_path(port: int, session_id: str) -> Path:
 
 
 def _build_settings(session_id: str, port: int, token: str) -> dict:
-    def hook(kind: HookKind) -> dict:
+    def hook(kind: HookKind, timeout: int = _HOOK_TIMEOUT_SECONDS) -> dict:
         url = (
             f"http://127.0.0.1:{port}/internal/hook"
             f"?session_id={quote(session_id, safe='')}"
             f"&token={quote(token, safe='')}"
             f"&hook={kind.value}"
         )
-        return {"type": "http", "url": url, "timeout": _HOOK_TIMEOUT_SECONDS}
+        return {"type": "http", "url": url, "timeout": timeout}
 
     return {
         "hooks": {
@@ -87,6 +97,12 @@ def _build_settings(session_id: str, port: int, token: str) -> dict:
             "Stop": [{"matcher": "*", "hooks": [hook(HookKind.STOP)]}],
             "UserPromptSubmit": [
                 {"matcher": "*", "hooks": [hook(HookKind.PROMPT_SUBMIT)]},
+            ],
+            "PreToolUse": [
+                {
+                    "matcher": "*",
+                    "hooks": [hook(HookKind.TOOL, _HEARTBEAT_TIMEOUT_SECONDS)],
+                },
             ],
             "SessionEnd": [{"matcher": "*", "hooks": [hook(HookKind.END)]}],
         },

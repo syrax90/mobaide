@@ -148,16 +148,16 @@ A chat session can now sign its coding agent in on the PC. ACP agents report a m
 
 Additive delta within proto-v7 (2026-11-11): **one nullable field on the session wire dict. No version bump; `central_server` is untouched.**
 
-The session wire dict (`sessions.changed`, `session.updated`, the `/ws/sessions` snapshot, `GET /sessions`) gains `activity`: `working` while the agent is mid-turn, `idle` between turns, `null` when unknown. A change publishes `session.updated` and never `session.attention`, so it never raises a notification.
+The session wire dict (`sessions.changed`, `session.updated`, the `/ws/sessions` snapshot, `GET /sessions`) gains `activity`: `working` while the agent is mid-turn, `waiting` while the main agent is parked and only passive background work runs (Claude Code and Auto Scan terminal sessions only), `idle` between turns, `null` when unknown. `activity` is a free string, so older clients render an unknown value as no chip. A change publishes `session.updated` and never `session.attention`, so it never raises a notification.
 
 | Session | Source |
 |---------|--------|
-| Claude Code and Auto Scan terminal | The attention gate's hooks. `UserPromptSubmit` → `working`. A `Stop` that leaves work in flight (in-flight `background_tasks`, `session_crons`) → stays `working`. Otherwise `idle` when the gate's quiet window ends, even when the alert is muted or deduped. `idle_prompt` and `SessionEnd` → `idle`. `null` until the first hook. |
+| Claude Code and Auto Scan terminal | The attention gate's hooks. `UserPromptSubmit` → `working`. A `Stop` that lists a running background agent → `working`. A `Stop` that lists only passive work (a background shell, a monitor, a scheduled wakeup) or `session_crons` → `waiting`. Otherwise `idle` when the gate's quiet window ends, even when the alert is muted or deduped. A `PreToolUse` heartbeat from the main agent → `working` and cancels a pending quiet window. A sub-agent tool call → `working` only while the last `Stop` listed in-flight work. `idle_prompt` re-reports the activity the last `Stop` implied, or `idle`. `SessionEnd` → `idle`. `null` until the first hook. |
 | Chat (`ui: "chat"`), every kind | The timeline `status`: `running` → `working`, `ready` → `idle`, otherwise `null`. A turn another app on a shared host runs counts too. |
 | Codex, Antigravity, Terminal and custom terminal (PTY) sessions | Always `null`. Their OSC 7501 reports (Delta 2026-11-10) raise alerts but do not set `activity` yet. |
 
-* Only a `running` session reports a value. Clients show a "Working" chip and an animated status square for `working`. A pending `awaiting_permission` or `awaiting_os_permission` outranks it, because the turn waits for the user.
-* Gate change in the same delta: an `idle_prompt` raised while the last `Stop` still saw background work is *provisional*. It alerts once but does not consume the turn's `prompt_id` dedupe key, so the `Stop` that really ends the turn can alert again. Older CLIs raise `idle_prompt` while background agents run, which used to mute the real end-of-turn alert.
+* Only a `running` session reports a value. Clients show a "Working" chip and an animated status square for `working`, and a muted "Background" chip with the static square for `waiting`. A pending `awaiting_permission` or `awaiting_os_permission` outranks it, because the turn waits for the user.
+* Gate rule: an `idle_prompt` no longer raises `turn_finished` while the last `Stop` listed in-flight work. It also does not alert again once the quiet window already alerted for the turn. A passive task still in flight when the user types the next prompt stops counting as in-flight work. Task notifications, sub-agent hand-backs and scheduled wakeups are not typed prompts.
 * A client keystroke no longer cancels a pending quiet window. It mutes the window's alert, and the window still turns the activity `idle`.
 * `stop_hook_active` no longer suppresses a `Stop`. It marks the stop after a continuation that another `Stop` hook forced, and Claude Code advises hooks to let that stop through, so for a well-behaved hook it is the real end of the turn. Before, a session with a blocking `Stop` hook lost that end-of-turn alert when the forced continuation ended within the quiet window. A longer continuation (a `/goal` loop, for example) still alerts once, early.
 
@@ -1419,7 +1419,7 @@ A suppressed hook never writes the public ``attention`` field, so a client resyn
 
 #### Hook settings registration
 
-The per-session settings file now registers ``Notification`` (``permission_prompt`` **and** ``idle_prompt``), ``Stop``, ``UserPromptSubmit`` and ``SessionEnd``, and bakes a ``hook=<kind>`` query param into each URL alongside ``session_id``/``token`` so the endpoint classifies without parsing the body. ``idle_prompt`` is the backstop that still alerts when the payload-driven suppression was wrong.
+The per-session settings file now registers ``Notification`` (``permission_prompt`` **and** ``idle_prompt``), ``Stop``, ``UserPromptSubmit``, ``SessionEnd`` and ``PreToolUse`` (matcher ``*``, ``hook=tool``, 2 s timeout, a per-tool activity heartbeat), and bakes a ``hook=<kind>`` query param into each URL alongside ``session_id``/``token`` so the endpoint classifies without parsing the body. ``idle_prompt`` is the backstop that still alerts when the payload-driven suppression was wrong.
 
 ``UserPromptSubmit`` is the turn boundary: it resets the gate and clears the public ``attention`` field, so a turn answered on the host cannot leave a stale badge that mutes later turns.
 

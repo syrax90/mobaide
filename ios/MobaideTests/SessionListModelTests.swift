@@ -166,6 +166,37 @@ final class SessionListModelTests: XCTestCase {
         XCTAssertNil(SessionDisplay.statusChip(makeSessionResponse(activity: "idle")))
     }
 
+    func testIsWaitingOnlyForARunningSessionParkedOnBackgroundWork() {
+        XCTAssertTrue(SessionDisplay.isWaiting(makeSessionResponse(activity: "waiting")))
+        XCTAssertFalse(SessionDisplay.isWaiting(makeSessionResponse(activity: "working")))
+        XCTAssertFalse(SessionDisplay.isWaiting(makeSessionResponse(activity: "idle")))
+        XCTAssertFalse(
+            SessionDisplay.isWaiting(makeSessionResponse(state: "crashed", activity: "waiting")),
+            "a crashed session is parked on nothing, whatever its last activity"
+        )
+        for attention in ["awaiting_permission", "awaiting_os_permission"] {
+            XCTAssertFalse(
+                SessionDisplay.isWaiting(makeSessionResponse(attention: attention, activity: "waiting")),
+                "\(attention): the session is blocked on the user"
+            )
+        }
+    }
+
+    func testStatusChipShowsBackgroundOverAStandingReadyWhileBackgroundWorkIsInFlight() {
+        // "Ready" here told the user it was their move on a session that was
+        // about to resume by itself.
+        let chip = SessionDisplay.statusChip(makeSessionResponse(attention: "turn_finished", activity: "waiting"))
+        XCTAssertEqual(chip?.text, "Background")
+        XCTAssertEqual(chip?.tone, .muted)
+    }
+
+    func testStatusChipShowsNeedsPermissionOverBackground() {
+        XCTAssertEqual(
+            SessionDisplay.statusChip(makeSessionResponse(attention: "awaiting_permission", activity: "waiting"))?.text,
+            "Needs permission"
+        )
+    }
+
     // MARK: - Active auto scans
 
     func testObserveScansPopulatesActiveScansFromRepository() async {
