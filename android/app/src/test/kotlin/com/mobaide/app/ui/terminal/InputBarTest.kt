@@ -457,6 +457,63 @@ class InputBarAntigravityTest {
 }
 
 /**
+ * OpenCode control-key set: passing `sessionKind = SessionKind.OpenCode` adds `Mode`
+ * (Shift+Tab cycles the Build/Plan agent) and `Ctrl+P` (command palette) to the neutral
+ * keys. Verifies the OpenCode key sends the correct raw byte (via `onSendBytes`, the raw
+ * 'i'-frame path) and that the keys OpenCode's TUI binds
+ * differently or not at all (`Rewind`, `Ctrl+O`/`Ctrl+R`/`Ctrl+L`, `Approve`/`Reject`,
+ * Antigravity's `Ctrl+K`/`Ctrl+G`/`Ctrl+D`) never leak into its set.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33], qualifiers = "w360dp-h800dp-port-xxhdpi")
+class InputBarOpenCodeTest {
+
+    @get:Rule
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
+
+    private fun openOpenCodePanel(onSendBytes: (ByteArray) -> Unit = {}) {
+        composeRule.setContent {
+            Surface {
+                InputBar(
+                    text = TextFieldValue(""),
+                    onTextChange = {},
+                    onSend = {},
+                    onSendBytes = onSendBytes,
+                    sessionKind = SessionKind.OpenCode,
+                )
+            }
+        }
+        composeRule.onNodeWithContentDescription("Show keys").performClick()
+    }
+
+    @Test
+    fun ctrlP_sendsDataLinkEscape_0x10() {
+        val captured = mutableListOf<ByteArray>()
+        openOpenCodePanel(onSendBytes = { captured += it })
+
+        composeRule.onNodeWithText("Ctrl+P").performScrollTo().performClick()
+
+        assertEquals(1, captured.size)
+        assertArrayEquals(byteArrayOf(0x10), captured.single())
+    }
+
+    @Test
+    fun opencodeSet_isTheNeutralKeysPlusMode_withoutOtherAgentsKeys() {
+        openOpenCodePanel()
+
+        listOf("Mode", "Ctrl+P", "Enter", "Ctrl+C", "Esc", "Tab")
+            .forEach { composeRule.onNodeWithText(it).assertExists() }
+        listOf("↑", "↓", "←", "→", "Backspace")
+            .forEach { composeRule.onNodeWithContentDescription(it).assertExists() }
+        composeRule.onNodeWithContentDescription("Custom shortcut").assertExists()
+        listOf(
+            "Rewind", "Ctrl+O", "Ctrl+R", "Ctrl+L",
+            "Approve", "Reject", "Ctrl+K", "Ctrl+G", "Ctrl+D",
+        ).forEach { composeRule.onNodeWithText(it).assertDoesNotExist() }
+    }
+}
+
+/**
  * User-saved shortcut buttons: server-synced chords rendered after the ⌘ trigger
  * at the literal end of the control-key row. The button is a Surface with
  * [androidx.compose.foundation.combinedClickable], not a disabled-able

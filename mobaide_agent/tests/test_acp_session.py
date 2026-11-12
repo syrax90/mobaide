@@ -1157,6 +1157,81 @@ class TestRequests:
         )
 
 
+# Asks one permission whose only options are ``allow_always`` and
+# ``reject_once``, then echoes the option the client chose.
+NO_ALLOW_ONCE_AGENT = r"""
+import json, sys
+pending = None
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method is None:
+        if msg.get("id") == 900 and pending is not None:
+            outcome = (msg.get("result") or {}).get("outcome") or {}
+            send({"method": "session/update", "params": {"sessionId": "strict", "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "chose " + str(outcome.get("optionId"))}}}})
+            send({"id": pending, "result": {"stopReason": "end_turn"}})
+            pending = None
+        continue
+    if "id" not in msg:
+        continue
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentCapabilities": {}}
+    elif method == "session/new":
+        result = {"sessionId": "strict"}
+    elif method == "session/prompt":
+        pending = msg["id"]
+        send({"id": 900, "method": "session/request_permission", "params": {
+            "sessionId": "strict",
+            "toolCall": {"toolCallId": "t1", "title": "git push", "kind": "execute"},
+            "options": [
+                {"optionId": "always", "name": "Always allow", "kind": "allow_always"},
+                {"optionId": "reject", "name": "Reject", "kind": "reject_once"},
+            ]}})
+        continue
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+NO_ALLOW_ONCE_AGENT_ARGV = [sys.executable, "-c", NO_ALLOW_ONCE_AGENT]
+
+
+class TestAutoApprove:
+    """OpenCode's auto-approve in the chat UI. ``opencode acp`` has no
+    ``--auto``, so the session answers each permission request itself: with
+    the one-time allow, never with a lasting rule, and without a request card
+    or an alert for a question nobody has to answer."""
+
+    async def test_a_permission_is_allowed_once_without_asking(self, open_chat):
+        m = await open_chat(auto_approve=True)
+
+        await m.command("prompt", text="permission")
+        await m.until(_turn_done(m, "The build folder is gone."))
+
+        assert not _asked(m.frames)
+        assert "awaiting_permission" not in m.attention
+        (tool,) = [t for t in m.of_type("tool") if t["title"] == "rm -rf build/"]
+        assert tool["status"] == "completed"
+
+    async def test_a_request_without_a_one_time_allow_is_still_asked(self, open_chat):
+        m = await open_chat(argv=NO_ALLOW_ONCE_AGENT_ARGV, auto_approve=True)
+
+        await m.command("prompt", text="push it")
+        await m.until(lambda: bool(m.state.get("requests")))
+        request = m.state["requests"][0]
+
+        assert [o["id"] for o in request["options"]] == ["always", "reject"]
+        await m.command("respond", request_id=request["id"], option_id="reject")
+        await m.until(_turn_done(m, "chose reject"))
+
+
 class TestConfig:
     async def test_set_config_changes_the_option(self, open_chat):
         m = await open_chat()
@@ -2414,6 +2489,20 @@ class TestSignIn:
         await m.command("prompt", text="/login")
 
         await m.until(_turn_done(m, "You said: /login"))
+        assert _sign_in(m) is None
+
+    async def test_without_sign_in_methods_the_agents_own_hint_is_shown(
+        self, open_chat, signed_out
+    ):
+        # OpenCode has no account of its own: the generic "sign in on the PC"
+        # text would send the user to a login that does not exist.
+        hint = "Connect a model provider in OpenCode on the PC."
+        m = await open_chat(argv=fake_agent_argv("opencode"), sign_in_hint=hint)
+
+        await m.command("prompt", text="hi")
+        await m.until(lambda: m.status == "ready" and bool(m.of_type("error")))
+
+        assert m.texts("error") == [hint]
         assert _sign_in(m) is None
 
     async def test_a_codex_start_refused_for_the_login_offers_the_sign_in(

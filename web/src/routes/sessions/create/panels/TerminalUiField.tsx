@@ -11,9 +11,14 @@ export function chatBlocked(chat: ChatSupport | undefined): boolean {
 export function terminalUiHint(chat: ChatSupport, agent: ChatAgentKind = 'claude'): string {
   if (chat.kind === 'outdated') return 'Update Mobaide on your PC to use the chat view.';
   if (chat.kind === 'unavailable') {
-    return agent === 'antigravity'
-      ? 'The chat view needs a newer Antigravity CLI on your PC: run agy update there.'
-      : 'The chat view needs Node.js on your PC.';
+    switch (agent) {
+      case 'antigravity':
+        return 'The chat view needs a newer Antigravity CLI on your PC: run agy update there.';
+      case 'opencode':
+        return 'The chat view is not available for OpenCode on your PC.';
+      default:
+        return 'The chat view needs Node.js on your PC.';
+    }
   }
   return 'Use the classic terminal instead of the chat view.';
 }

@@ -94,6 +94,7 @@ class AttentionNotifier @Inject constructor(
         SessionKind.Claude -> "Claude session"
         SessionKind.Codex -> "Codex session"
         SessionKind.Antigravity -> "Antigravity session"
+        SessionKind.OpenCode -> "OpenCode session"
         SessionKind.AutoScan -> "Auto Scan session"
         SessionKind.Shell -> "Terminal session"
         is SessionKind.Custom -> session.kind_label?.takeIf { it.isNotBlank() }

@@ -30,13 +30,14 @@ struct TerminalControlKey: Identifiable {
     static let ctrlK = TerminalControlKey(id: "ctrlK", label: "Ctrl+K", bytes: [0x0B])
     static let ctrlG = TerminalControlKey(id: "ctrlG", label: "Ctrl+G", bytes: [0x07])
     static let ctrlD = TerminalControlKey(id: "ctrlD", label: "Ctrl+D", bytes: [0x04])
+    static let ctrlP = TerminalControlKey(id: "ctrlP", label: "Ctrl+P", bytes: [0x10])
 
     /// Canonical left-to-right order for every control key (Android `CONTROL_KEY_ORDER`).
     /// Each kind renders only the subset it supports, filtered from this single list, so the
     /// button order stays consistent across kinds — only which buttons appear differs.
     static let controlKeyOrder: [TerminalControlKey] = [
         enter, up, down, left, right, ctrlC, mode, ctrlL, esc,
-        approve, reject, ctrlK, ctrlG, ctrlD, rewind, tab, backspace, ctrlO, ctrlR,
+        approve, reject, ctrlK, ctrlG, ctrlD, ctrlP, rewind, tab, backspace, ctrlO, ctrlR,
     ]
 
     /// Reorder a set of keys into the canonical layout (Android `orderedControlKeys`).
@@ -52,6 +53,11 @@ struct TerminalControlKey: Identifiable {
     static let claudeKeys: [TerminalControlKey] = ordered([mode, rewind] + sharedTail + [ctrlL])
     static let codexKeys: [TerminalControlKey] = ordered([approve, reject] + claudeKeys)
     static let antigravityKeys: [TerminalControlKey] = ordered([ctrlK, ctrlG, ctrlD] + sharedTail + [ctrlL])
+    /// Mode (Shift+Tab) cycles the OpenCode agent, Ctrl+P opens its command
+    /// palette. Its Ctrl+X leader key is left out: it needs a second key within
+    /// two seconds, and the composer takes that key. Ctrl+O/Ctrl+R/Ctrl+L, Rewind
+    /// and Approve/Reject are absent: the OpenCode TUI does not bind them that way.
+    static let opencodeKeys: [TerminalControlKey] = ordered([mode, ctrlP] + defaultKeys)
     /// Kind-neutral minimal set for custom agent types and the not-yet-resolved
     /// state (Android `DEFAULT_CONTROL_KEYS`): nav + the universal
     /// interrupt/erase keys only. Ctrl+O/Ctrl+R/Ctrl+L are deliberately absent —
@@ -67,6 +73,7 @@ struct TerminalControlKey: Identifiable {
         switch kind {
         case .codex: return codexKeys
         case .antigravity: return antigravityKeys
+        case .opencode: return opencodeKeys
         case nil, .custom, .shell: return defaultKeys
         case .claude, .autoScan: return claudeKeys
         }

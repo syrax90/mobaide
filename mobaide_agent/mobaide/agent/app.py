@@ -24,6 +24,7 @@ from mobaide.core import (
     ClaudeLauncher,
     CodexLauncher,
     FakePtyBackend,
+    OpenCodeLauncher,
     ProjectsStore,
     SessionManager,
     create_pty_backend,
@@ -49,6 +50,7 @@ from mobaide.voice.cleanup import (
     AntigravityCleanup,
     ClaudeCleanup,
     CodexCleanup,
+    OpenCodeCleanup,
     TranscriptCleaner,
 )
 from mobaide.voice.models import VOICE_CAPABILITIES
@@ -814,6 +816,12 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         agy_bin_override=config.agy_bin,
         worktree_mgr=worktree_mgr,
     )
+    # OpenCode CLI launcher — sibling of Antigravity: no hooks, no auth probe
+    # (OpenCode starts without an account). Binary resolves lazily.
+    app.state.opencode_launcher = OpenCodeLauncher(
+        opencode_bin_override=config.opencode_bin,
+        worktree_mgr=worktree_mgr,
+    )
     # Registry keyed by CLI name. SessionManager picks a launcher per session;
     # the Auto Scan scanner stays Claude-only. build_cli_capabilities reads this
     # registry, so a new entry auto-surfaces in /api/version capabilities.
@@ -821,6 +829,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         "claude": app.state.claude_launcher,
         "codex": app.state.codex_launcher,
         "antigravity": app.state.antigravity_launcher,
+        "opencode": app.state.opencode_launcher,
     }
     # Agents that can also run in the structured chat UI (over ACP), and the
     # lister of their stored sessions (continue a session started elsewhere).
@@ -831,10 +840,14 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             "claude": config.acp_claude_command,
             "codex": config.acp_codex_command,
             "antigravity": config.acp_antigravity_command,
+            "opencode": config.acp_opencode_command,
         },
         adapters_dir=state_prefix(test_mode=config.is_test_mode) / "acp-adapters",
     )
-    app.state.chat_catalog = ChatCatalog(app.state.chat_agents)
+    voice_cleanup_dir = state_prefix(test_mode=config.is_test_mode) / "voice-cleanup"
+    app.state.chat_catalog = ChatCatalog(
+        app.state.chat_agents, hidden_folders=[voice_cleanup_dir]
+    )
 
     # event_bus / broadcaster / fanouts must exist before SessionManager
     # so the on_session_created hook can attach a SessionEventFanout
@@ -861,8 +874,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                     app.state.antigravity_launcher.resolve_binary,
                     lambda: app.state.antigravity_launcher.cached_models,
                 ),
+                "opencode": OpenCodeCleanup(app.state.opencode_launcher.resolve_binary),
             },
-            work_dir=state_prefix(test_mode=config.is_test_mode) / "voice-cleanup",
+            work_dir=voice_cleanup_dir,
         ),
     )
     app.state.fanouts = {}  # session_id -> SessionEventFanout
@@ -879,6 +893,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         launcher=app.state.claude_launcher,
         codex_launcher=app.state.codex_launcher,
         antigravity_launcher=app.state.antigravity_launcher,
+        opencode_launcher=app.state.opencode_launcher,
         worktree_mgr=worktree_mgr,
         event_bus=app.state.event_bus,
         on_session_created=_on_session_created,

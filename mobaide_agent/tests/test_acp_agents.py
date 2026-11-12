@@ -25,6 +25,7 @@ from mobaide.acp.agents import (
     ClaudeChatSpec,
     CodexChatSpec,
     ConfigIntent,
+    OpenCodeChatSpec,
     antigravity_config_intents,
     antigravity_sign_in_methods,
     build_chat_agents,
@@ -44,6 +45,7 @@ from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError, ClaudeOption
 from mobaide.core.cli_launcher import AdHocLaunch, LaunchSpec
 from mobaide.core import codex_auth
 from mobaide.core.codex_launcher import CodexBinaryNotFoundError, CodexOptions
+from mobaide.core.opencode_launcher import OpenCodeBinaryNotFoundError, OpenCodeOptions
 from mobaide.core.projects_config import ProjectConfig
 from tests.conftest import skip_if_not_linux
 from tests.test_acp_install import fake_npm
@@ -961,6 +963,107 @@ class TestAntigravityPrepare:
             ("google", [str(agy_bin), "acp", "--login"])
         ]
         assert plan.sign_in[0].reads_code is True
+
+
+class FakeOpenCodeLauncher:
+    """The three ``OpenCodeLauncher`` calls a chat spec makes."""
+
+    def __init__(self, binary: str | None = "/opt/opencode/bin/opencode") -> None:
+        self.binary = binary
+        self.resolved: list[tuple[object, OpenCodeOptions]] = []
+
+    def resolve_binary(self) -> str:
+        if self.binary is None:
+            raise OpenCodeBinaryNotFoundError(searched_paths=["PATH:opencode"])
+        return self.binary
+
+    def build_env(self, target) -> dict[str, str]:
+        return {"PATH": "/usr/bin", "LAUNCHER": "1"}
+
+    async def resolve_cwd(self, target, options) -> str:
+        self.resolved.append((target, options))
+        return target.path if isinstance(target, ProjectConfig) else target.cwd
+
+
+class TestOpenCodePrepare:
+    async def test_plan_runs_opencode_acp_from_home_for_the_session_folder(
+        self, tmp_path, monkeypatch
+    ):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.delenv(agents.OPENCODE_ACP_COMMAND_ENV, raising=False)
+        project = tmp_path / "work" / "app"
+        project.mkdir(parents=True)
+        launcher = FakeOpenCodeLauncher()
+        spec = OpenCodeChatSpec(launcher)
+        options = OpenCodeOptions(auto_approve=True, initial_prompt="Fix the tests")
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(project)), options)
+
+        assert plan.argv == ["/opt/opencode/bin/opencode", "acp"]
+        assert plan.cwd == str(project)
+        assert plan.process_cwd == str(home)
+        assert plan.env["LAUNCHER"] == "1"
+        assert plan.initial_prompt == "Fix the tests"
+        # ``opencode acp`` has no ``--auto``: the chat session answers for it.
+        assert plan.auto_approve is True
+        assert "--auto" not in plan.argv
+        # OpenCode asks for no folder trust and has no account to sign in to.
+        assert plan.trust is None
+        assert plan.sign_in == []
+        assert plan.sign_in_hint == agents.OPENCODE_SIGN_IN_HINT
+        assert launcher.resolved == [(AdHocLaunch(cwd=str(project)), options)]
+
+    async def test_default_options_ask_before_each_permission(self, tmp_path, monkeypatch):
+        monkeypatch.delenv(agents.OPENCODE_ACP_COMMAND_ENV, raising=False)
+        spec = OpenCodeChatSpec(FakeOpenCodeLauncher())
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), OpenCodeOptions())
+
+        assert plan.auto_approve is False
+        assert plan.initial_prompt is None
+
+    async def test_no_opencode_fails_before_a_worktree_can_be_made(self, tmp_path, monkeypatch):
+        monkeypatch.delenv(agents.OPENCODE_ACP_COMMAND_ENV, raising=False)
+        launcher = FakeOpenCodeLauncher(binary=None)
+        spec = OpenCodeChatSpec(launcher)
+
+        assert spec.available() is False
+        with pytest.raises(ChatAgentUnavailableError) as excinfo:
+            await spec.prepare(
+                ProjectConfig(name="p", path=str(tmp_path)), OpenCodeOptions(worktree=True)
+            )
+
+        assert excinfo.value.kind == "opencode"
+        assert "opencode.ai" in str(excinfo.value)
+        # ``resolve_cwd`` would have made a worktree for a session that never starts.
+        assert launcher.resolved == []
+
+    async def test_test_mode_runs_the_fake_agent_without_the_cli(self, tmp_path, monkeypatch):
+        monkeypatch.delenv(agents.OPENCODE_ACP_COMMAND_ENV, raising=False)
+        monkeypatch.delenv(agents.REAL_IN_TEST_ENV, raising=False)
+        spec = OpenCodeChatSpec(FakeOpenCodeLauncher(binary=None), test_mode=True)
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), OpenCodeOptions())
+
+        assert plan.argv[-2:] == ["--flavor", "opencode"]
+        assert spec.uses_fake_agent() is True
+
+    def test_registry_and_capabilities_carry_opencode(self, monkeypatch):
+        monkeypatch.delenv(agents.OPENCODE_ACP_COMMAND_ENV, raising=False)
+        found = build_chat_agents(
+            {"opencode": FakeOpenCodeLauncher()},
+            command_overrides={"opencode": "opencode-dev acp"},
+        )
+        missing = build_chat_agents({"opencode": FakeOpenCodeLauncher(binary=None)})
+
+        assert found["opencode"].command() == ["opencode-dev", "acp"]
+        # Stored sessions can be continued; a session open in the terminal UI
+        # too is not kept in sync live.
+        assert build_chat_capabilities(found) == {"opencode": {"resume": True, "live": False}}
+        assert build_chat_capabilities(missing) == {}
 
 
 def _agy_setup(*, available_models: bool = True) -> dict:

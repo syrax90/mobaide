@@ -29,6 +29,7 @@ class PreferencesStore(private val context: Context) {
     private val keyLastClaudeOptions = stringPreferencesKey("last_used_claude_options")
     private val keyLastCodexOptions = stringPreferencesKey("last_used_codex_options")
     private val keyLastAntigravityOptions = stringPreferencesKey("last_used_antigravity_options")
+    private val keyLastOpenCodeOptions = stringPreferencesKey("last_used_opencode_options")
     private val keyLastAutoScanOptions = stringPreferencesKey("last_used_auto_scan_options")
     private val keyTerminalDisplayMode = stringPreferencesKey("terminal_display_mode")
     private val keyThemeMode = stringPreferencesKey("theme_mode")
@@ -200,6 +201,19 @@ class PreferencesStore(private val context: Context) {
     suspend fun setLastUsedAntigravityOptions(prefs: AntigravityLaunchPrefs) {
         val payload = cacheJson.encodeToString(AntigravityLaunchPrefs.serializer(), prefs)
         context.dataStore.edit { it[keyLastAntigravityOptions] = payload }
+    }
+
+    suspend fun getLastUsedOpenCodeOptions(): OpenCodeLaunchPrefs? {
+        val raw = context.dataStore.data.map { it[keyLastOpenCodeOptions] }.first()
+            ?: return null
+        return runCatching {
+            cacheJson.decodeFromString(OpenCodeLaunchPrefs.serializer(), raw)
+        }.getOrNull()
+    }
+
+    suspend fun setLastUsedOpenCodeOptions(prefs: OpenCodeLaunchPrefs) {
+        val payload = cacheJson.encodeToString(OpenCodeLaunchPrefs.serializer(), prefs)
+        context.dataStore.edit { it[keyLastOpenCodeOptions] = payload }
     }
 
     suspend fun setThemeMode(mode: ThemeMode) {

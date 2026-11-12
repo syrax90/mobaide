@@ -14,6 +14,7 @@ const NEVER_LAUNCHED: LaunchPrefs = {
   autoScan: null,
   codex: null,
   antigravity: null,
+  opencode: null,
   lastProjectName: null,
 };
 
@@ -147,6 +148,7 @@ describe('applyLaunchPrefs', () => {
       autoScan: claudePrefs({ debug: true }),
       codex: null,
       antigravity: { model: null, skipPermissions: false, sandbox: true, terminalUi: false },
+      opencode: null,
       lastProjectName: 'mobaide',
     });
 
@@ -205,6 +207,31 @@ describe('launchPrefsFromState', () => {
       terminalUi: true,
     });
     expect(launchPrefsFromState(terminal, 'codex')?.prefs).toMatchObject({ terminalUi: false });
+  });
+
+  it('round-trips the OpenCode bucket and touches no other', () => {
+    const state: WizardState = {
+      ...dialled,
+      opencode: { autoApprove: true, terminalUi: true },
+    };
+
+    const snapshot = launchPrefsFromState(state, 'opencode');
+    expect(snapshot).toEqual({
+      kind: 'opencode',
+      prefs: { autoApprove: true, terminalUi: true },
+    });
+    if (snapshot?.kind !== 'opencode') throw new Error('expected the OpenCode bucket');
+
+    const restored = applyLaunchPrefs(INITIAL_WIZARD_STATE, {
+      ...NEVER_LAUNCHED,
+      opencode: snapshot.prefs,
+    });
+    expect(restored.opencode).toEqual({ autoApprove: true, terminalUi: true });
+    expect({ ...restored, opencode: INITIAL_WIZARD_STATE.opencode }).toEqual(
+      INITIAL_WIZARD_STATE,
+    );
+    // Auto-approve never leaks into another agent's "skip permissions".
+    expect(launchPrefsFromState(state, 'claude')?.prefs).toMatchObject({ skipPermissions: false });
   });
 
   it('leaves the per-session fields out of the snapshot', () => {

@@ -202,7 +202,8 @@ class TerminalSession:
         self._exit_reason: str | None = None
         # ``working`` / ``waiting`` / ``idle`` as Claude Code's hooks report it;
         # ``None`` until the first hook, and for good on a session without hooks
-        # (Codex, Antigravity, Terminal), whose activity the agent cannot see.
+        # (Codex, Antigravity, OpenCode, Terminal), whose activity the agent
+        # cannot see.
         self._activity: str | None = None
         # Decides which Claude Code hooks actually become an alert. ``Stop``
         # fires once per model turn — including every re-invocation a completing
@@ -366,7 +367,20 @@ class TerminalSession:
                 )
                 break
 
-        if self._state == SessionState.RUNNING:
+        if self._state == SessionState.RUNNING and self._config.exits_when_done:
+            self._state = SessionState.STOPPED
+            await self._event_queue.put(
+                SessionEvent("stopped", self._config.session_id, timestamp=time.time()),
+            )
+            logger.info("Session %s finished", self.session_id)
+            # ``stop()`` returns early on a stopped session: free here what it
+            # would have freed.
+            self.cancel_attention_window()
+            for task in (self._title_task, self._stall_task):
+                if task is not None:
+                    task.cancel()
+            await loop.run_in_executor(None, self._backend.close)
+        elif self._state == SessionState.RUNNING:
             self._state = SessionState.CRASHED
             await self._event_queue.put(
                 SessionEvent(
@@ -532,7 +546,7 @@ class TerminalSession:
         """
         self._attention_gate.mute()
         if self._status_gate is not None:
-            self._status_gate.cancel()
+            self._status_gate.on_input()
 
     def cancel_attention_window(self) -> None:
         """Drop every pending alert window outright: the session is stopping."""

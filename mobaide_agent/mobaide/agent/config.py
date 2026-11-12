@@ -103,6 +103,13 @@ class AgentConfig(BaseSettings):
         default=None, validation_alias="MOBAIDE_AGY_BIN",
     )
 
+    # Operator override pointing at the absolute path of the OpenCode CLI
+    # executable (``opencode.exe`` / ``opencode.cmd`` on Windows, ``opencode``
+    # on POSIX). Typed for the same reason as ``agy_bin``.
+    opencode_bin: str | None = Field(
+        default=None, validation_alias="MOBAIDE_OPENCODE_BIN",
+    )
+
     # Operator override for the command that starts the Claude Code ACP
     # adapter of chat sessions (one shell-style command line). Typed for the
     # same reason as ``claude_bin``: a .env line never reaches ``os.environ``.
@@ -116,6 +123,10 @@ class AgentConfig(BaseSettings):
     # The same for Antigravity, whose ACP server is ``agy acp``.
     acp_antigravity_command: str | None = Field(
         default=None, validation_alias="MOBAIDE_ACP_ANTIGRAVITY_COMMAND",
+    )
+    # The same for OpenCode, whose ACP server is ``opencode acp``.
+    acp_opencode_command: str | None = Field(
+        default=None, validation_alias="MOBAIDE_ACP_OPENCODE_COMMAND",
     )
 
     # The fake switch swaps the speech model for a tiny generated one and a
@@ -298,6 +309,8 @@ def _cmd_init_env(args: argparse.Namespace) -> int:
             overrides["MOBAIDE_CODEX_BIN"] = existing["MOBAIDE_CODEX_BIN"]
         if existing.get("MOBAIDE_AGY_BIN"):
             overrides["MOBAIDE_AGY_BIN"] = existing["MOBAIDE_AGY_BIN"]
+        if existing.get("MOBAIDE_OPENCODE_BIN"):
+            overrides["MOBAIDE_OPENCODE_BIN"] = existing["MOBAIDE_OPENCODE_BIN"]
 
     # An explicit --claude-bin / --codex-bin / --agy-bin from the installer
     # wins over a preserved existing value: a re-install where the operator just

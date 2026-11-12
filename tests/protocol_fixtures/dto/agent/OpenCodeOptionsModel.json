@@ -1,0 +1,20 @@
+{
+  "type": "OpenCodeOptionsModel",
+  "cases": [
+    {
+      "name": "full",
+      "wire": {
+        "auto_approve": true,
+        "connect": true,
+        "worktree": true,
+        "branch_name": "b",
+        "base_branch": "origin/main"
+      }
+    },
+    {
+      "name": "empty_defaults_materialize",
+      "wire": {},
+      "decoded_canonical": { "auto_approve": false, "connect": false, "worktree": false }
+    }
+  ]
+}

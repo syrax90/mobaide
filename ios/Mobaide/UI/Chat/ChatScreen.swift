@@ -23,6 +23,7 @@ struct ChatScreen: View {
     @State private var showSettings = false
     @State private var pickingConfig: ChatConfigOption?
     @State private var screenHeight: CGFloat = 0
+    @FocusState private var signInFieldFocused: Bool
 
     private let container: AppContainer
     private let sessionId: String
@@ -91,7 +92,9 @@ struct ChatScreen: View {
                     focusView: focusView
                 )
                     .overlay(alignment: .leading) { edgePanStrip }
-                dock
+                // The timeline gives up its height first; inside the dock,
+                // the request card's capped body gives way next.
+                dock.layoutPriority(1)
             }
             if !model.isLive && !model.sessionClosed {
                 ChatOverlayChip(text: "Reconnecting…")
@@ -303,28 +306,40 @@ struct ChatScreen: View {
                     model: model,
                     request: request,
                     moreWaiting: model.state.requests.count - 1,
-                    bodyCap: max(120, screenHeight * 0.3)
+                    bodyCap: max(120, screenHeight * 0.3),
+                    signInFieldFocused: $signInFieldFocused
                 )
                 .id(request.id)
-                .padding(EdgeInsets(top: 12, leading: 12, bottom: hasPlanOrQueue ? 0 : 4, trailing: 12))
+                .padding(EdgeInsets(top: signInTyping ? 4 : 12, leading: 12, bottom: hasPlanOrQueue && !signInTyping ? 0 : 4, trailing: 12))
             }
-            if hasPlanOrQueue {
-                ChatCappedScroll(maxHeight: planQueueCap) { planAndQueue }
+            // While the sign-in code is typed, the card alone stays above
+            // the keyboard: on a small phone there is no room for the rest.
+            if !signInTyping {
+                if hasPlanOrQueue {
+                    ChatCappedScroll(maxHeight: planQueueCap) { planAndQueue }
+                }
+                configChips
+                ChatComposer(
+                    model: model,
+                    voice: voice,
+                    onOpenTemplates: { showTemplates = true },
+                    onSaveTemplate: {
+                        templateName = ""
+                        showSaveTemplate = true
+                    },
+                    onExpand: { showFullScreenComposer = true }
+                )
             }
-            configChips
-            ChatComposer(
-                model: model,
-                voice: voice,
-                onOpenTemplates: { showTemplates = true },
-                onSaveTemplate: {
-                    templateName = ""
-                    showSaveTemplate = true
-                },
-                onExpand: { showFullScreenComposer = true }
-            )
         }
         .background(colors.surface)
         .overlay(alignment: .top) { PixelDivider() }
+    }
+
+    /// The focus flag alone could outlive the field, and the composer must
+    /// never stay hidden without a code field on screen.
+    private var signInTyping: Bool {
+        guard signInFieldFocused, case .signIn(let signIn) = model.state.requests.first else { return false }
+        return signIn.waiting && signIn.input != nil
     }
 
     private var hasPlanOrQueue: Bool {

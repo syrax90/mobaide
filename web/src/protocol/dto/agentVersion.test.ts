@@ -3,6 +3,7 @@ import {
   NO_GIT_CAPABILITIES,
   agentVersionSchema,
   cliAvailable,
+  cliKnown,
   cliModelDetails,
   cliModels,
   cliModelsPending,
@@ -63,6 +64,38 @@ describe('cliAvailable', () => {
   it('does not mistake an inherited object key for a cli entry', () => {
     // `cliId` reaches here from a URL search param.
     expect(cliAvailable(info({ cli: {} }), 'constructor')).toBeNull();
+  });
+});
+
+describe('cliKnown', () => {
+  it('is false only for an agent that lists its CLIs without this one', () => {
+    // An agent from before the CLI was supported would start a plain shell for it.
+    const older = info({ cli: { claude: { available: true }, codex: { available: false } } });
+
+    expect(cliKnown(older, 'opencode')).toBe(false);
+    expect(cliKnown(older, 'codex')).toBe(true);
+  });
+
+  it('knows a listed CLI whether or not it is installed', () => {
+    expect(cliKnown(info({ cli: { opencode: { available: false } } }), 'opencode')).toBe(true);
+    expect(cliKnown(info({ cli: { opencode: {} } }), 'opencode')).toBe(true);
+  });
+
+  const NO_LIST: [string, unknown][] = [
+    ['no probe at all', undefined],
+    ['no capabilities', {}],
+    ['an empty cli list', { cli: {} }],
+    ['a cli block that is not a map', { cli: ['claude'] }],
+  ];
+
+  it.each(NO_LIST)('reads %s as known, like an unknown availability', (_label, capabilities) => {
+    const probe = capabilities === undefined ? undefined : info(capabilities);
+
+    expect(cliKnown(probe, 'opencode')).toBe(true);
+  });
+
+  it('does not mistake an inherited object key for a cli entry', () => {
+    expect(cliKnown(info({ cli: { claude: { available: true } } }), 'constructor')).toBe(false);
   });
 });
 

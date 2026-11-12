@@ -32,6 +32,7 @@ from .models import (
     SessionState,
     session_to_wire_dict,
 )
+from .opencode_launcher import OpenCodeLauncher, OpenCodeOptions
 from .projects_store import ProjectsStore, safe_path_exists
 from .pty_backend import PtyBackend, create_pty_backend
 from .session import TerminalSession
@@ -58,6 +59,7 @@ class SessionManager:
         launcher: ClaudeLauncher | None = None,
         codex_launcher: CodexLauncher | None = None,
         antigravity_launcher: AntigravityLauncher | None = None,
+        opencode_launcher: OpenCodeLauncher | None = None,
         worktree_mgr: WorktreeManager | None = None,
         event_bus: Any | None = None,
         on_session_created: Callable[[TerminalSession], Awaitable[None] | None] | None = None,
@@ -72,11 +74,12 @@ class SessionManager:
         self._liveness_task: asyncio.Task[None] | None = None
         self._projects_store = projects_store
         # ``launcher`` keeps its historical name (the Claude launcher); the
-        # Codex and Antigravity launchers are siblings. Dispatch picks between
-        # them per session.
+        # Codex, Antigravity and OpenCode launchers are siblings. Dispatch
+        # picks between them per session.
         self._launcher = launcher
         self._codex_launcher = codex_launcher
         self._antigravity_launcher = antigravity_launcher
+        self._opencode_launcher = opencode_launcher
         self._worktree_mgr = worktree_mgr
         self._event_bus = event_bus
         self._on_session_created = on_session_created
@@ -117,8 +120,8 @@ class SessionManager:
         """Create, start, and register a new terminal session.
 
         Dispatch matrix on (``project_name``, managed-CLI options). A session is
-        "managed" when it carries ``claude_options``, ``codex_options``, or
-        ``antigravity_options`` — the entry layers normalise exactly one of them via
+        "managed" when it carries ``claude_options``, ``codex_options``,
+        ``antigravity_options`` or ``opencode_options`` — the entry layers normalise exactly one of them via
         ``resolve_spawn_args``, so a raw shell session (none set) keeps its
         caller-supplied argv:
 
@@ -135,12 +138,18 @@ class SessionManager:
         ``config.ui == "chat"`` takes the ACP path instead
         (:meth:`_create_chat_session`).
         """
+        if config.opencode_options is not None and config.opencode_options.connect:
+            # ``opencode auth login`` is an interactive terminal program that
+            # ends when the sign-in does.
+            config.ui = "terminal"
+            config.exits_when_done = True
         if config.ui == "chat":
             return await self._create_chat_session(config)
         managed = (
             config.claude_options is not None
             or config.codex_options is not None
             or config.antigravity_options is not None
+            or config.opencode_options is not None
         )
         if config.project_name is not None:
             if managed:
@@ -202,6 +211,7 @@ class SessionManager:
             config.claude_options
             or config.codex_options
             or config.antigravity_options
+            or config.opencode_options
         )
         if config.chat_resume_id and options is not None and getattr(options, "worktree", False):
             from dataclasses import replace
@@ -274,14 +284,22 @@ class SessionManager:
 
     def _launcher_and_options(
         self, config: SessionConfig,
-    ) -> tuple[CliLauncher, ClaudeOptions | CodexOptions | AntigravityOptions]:
+    ) -> tuple[
+        CliLauncher, ClaudeOptions | CodexOptions | AntigravityOptions | OpenCodeOptions
+    ]:
         """Pick the launcher + options for a managed session.
 
         ``resolve_spawn_args`` guarantees exactly one of ``claude_options`` /
-        ``codex_options`` / ``antigravity_options`` is set, so presence is the
-        discriminator. Raises if the requested CLI's launcher was not wired into
-        this manager.
+        ``codex_options`` / ``antigravity_options`` / ``opencode_options`` is
+        set, so presence is the discriminator. Raises if the requested CLI's
+        launcher was not wired into this manager.
         """
+        if config.opencode_options is not None:
+            if self._opencode_launcher is None:
+                raise ValueError(
+                    "opencode session requested but agent has no OpenCode launcher",
+                )
+            return self._opencode_launcher, config.opencode_options
         if config.antigravity_options is not None:
             if self._antigravity_launcher is None:
                 raise ValueError(
@@ -486,6 +504,11 @@ class SessionManager:
             snapshot = list(self._sessions.items())
         for sid, session in snapshot:
             if session.state == SessionState.RUNNING and not session.is_alive():
+                if getattr(getattr(session, "_config", None), "exits_when_done", False):
+                    # The exit is the normal end of that command. Its reader
+                    # ends the session once it has read the last output; a
+                    # state change here would cut that short.
+                    continue
                 runtime_seconds = None
                 try:
                     from datetime import UTC, datetime
@@ -510,14 +533,27 @@ class SessionManager:
                 dead_ids.append(sid)
 
         # Clean up STOPPED/CRASHED sessions
+        finished: list[str] = []
         async with self._lock:
             for sid in list(self._sessions):
-                if self._sessions[sid].state in (
-                    SessionState.STOPPED,
-                    SessionState.CRASHED,
-                ):
+                state = self._sessions[sid].state
+                if state in (SessionState.STOPPED, SessionState.CRASHED):
                     self._sessions.pop(sid, None)
                     logger.info("Cleaned up dead session: %s", sid)
+                    if state is SessionState.STOPPED:
+                        finished.append(sid)
+        # A session that ended on its own (``exits_when_done``) leaves like one
+        # the user stopped: its row goes from every client's list.
+        for sid in finished:
+            if self._on_session_removed is not None:
+                try:
+                    result = self._on_session_removed(sid)
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception:
+                    logger.exception("session_manager.on_removed_hook_failed")
+        if finished:
+            await self._publish_sessions_changed()
 
     async def shutdown(self) -> None:
         """Stop the liveness monitor and all sessions."""

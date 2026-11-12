@@ -21,6 +21,13 @@
         "text": "um fix the reduce her in the store",
         "kind": "antigravity"
       }
+    },
+    {
+      "name": "opencode_session",
+      "wire": {
+        "text": "uh add a retry to the fetch helper",
+        "kind": "opencode"
+      }
     }
   ]
 }

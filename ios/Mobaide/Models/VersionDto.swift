@@ -49,6 +49,14 @@ extension VersionInfoResponse {
         }
     }
 
+    /// False only when `capabilities.cli` lists other CLIs but not this one:
+    /// an agent that predates it. An absent or empty map reads as true, the
+    /// same "unknown" as `cliAvailable`'s nil.
+    func cliKnown(_ cliId: String) -> Bool {
+        guard let cli = capabilities["cli"]?.objectValue, !cli.isEmpty else { return true }
+        return cli[cliId] != nil
+    }
+
     func cliModels(_ cliId: String) -> [String]? {
         guard let models = capabilities["cli"]?[cliId]?["models"]?.arrayValue else { return nil }
         return models.compactMap { element in

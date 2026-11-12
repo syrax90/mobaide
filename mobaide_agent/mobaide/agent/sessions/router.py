@@ -105,6 +105,11 @@ async def create_session(
         if body.antigravity_options is not None
         else None
     )
+    opencode_options = (
+        body.opencode_options.to_options()
+        if body.opencode_options is not None
+        else None
+    )
     # Pre-validate user-supplied custom paths so the error surfaces as a
     # clean 400 from this layer rather than as a FileNotFoundError-mapped
     # 400 from the launcher or PtyBackend further down. Skipped when a
@@ -118,6 +123,7 @@ async def create_session(
         claude_options,
         codex_options,
         antigravity_options,
+        opencode_options,
     ) = resolve_spawn_args(
         body.cli,
         claude_options,
@@ -126,6 +132,7 @@ async def create_session(
         body.command,
         body.env,
         resolve_default_shell(),
+        opencode_options=opencode_options,
     )
     chat_error = chat_request_error(body.ui, kind, body.chat_resume_id, manager)
     if chat_error is not None:
@@ -141,6 +148,7 @@ async def create_session(
         claude_options=claude_options,
         codex_options=codex_options,
         antigravity_options=antigravity_options,
+        opencode_options=opencode_options,
         worktree=body.worktree,
         branch_name=body.branch_name,
         base_branch=body.base_branch,

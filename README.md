@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  Start, watch and steer <b>Claude Code</b>, <b>Codex CLI</b>, <b>Antigravity CLI</b> or your own agents<br>
+  Start, watch and steer <b>Claude Code</b>, <b>Codex CLI</b>, <b>Antigravity CLI</b>, <b>OpenCode</b> or your own agents<br>
   on your Windows, macOS or Linux computer, from your phone or browser.<br>
   Free. No public IP, port forwarding, VPN or SSH.
 </p>
@@ -43,9 +43,9 @@
 
 ## Features
 
-- **A chat view built for the phone.** Claude Code, Codex and Antigravity sessions open as a native chat: Markdown answers, one card per tool call with its diff, approval buttons, questions, plan progress, mode and model chips. It runs over the [Agent Client Protocol](https://agentclientprotocol.com), and it can continue a Claude Code, Codex or Antigravity session you started in a terminal on your computer. Codex chats stay in sync with a session open in a terminal.
-- **A real terminal, not a log tail.** Full two-way PTY, so TUIs behave: arrow keys, Ctrl-C, plan mode, approval prompts. A rolling buffer of recent output replays after a dropped connection. Claude Code, Codex and Antigravity sessions offer it under Advanced as Terminal UI; raw shells and custom agents always use it.
-- **Your agents, your options.** Launch Claude Code, Codex CLI or Antigravity CLI with their own model, effort, sandbox and approval settings. Open a raw shell, or define an agent from any command your shell can run.
+- **A chat view built for the phone.** Claude Code, Codex, Antigravity and OpenCode sessions open as a native chat: Markdown answers, one card per tool call with its diff, approval buttons, questions, plan progress, mode and model chips. It runs over the [Agent Client Protocol](https://agentclientprotocol.com), and it can continue a Claude Code, Codex, Antigravity or OpenCode session you started in a terminal on your computer. Codex chats stay in sync with a session open in a terminal.
+- **A real terminal, not a log tail.** Full two-way PTY, so TUIs behave: arrow keys, Ctrl-C, plan mode, approval prompts. A rolling buffer of recent output replays after a dropped connection. Claude Code, Codex, Antigravity and OpenCode sessions offer it under Advanced as Terminal UI; raw shells and custom agents always use it.
+- **Your agents, your options.** Launch Claude Code, Codex CLI or Antigravity CLI with their own model, effort, sandbox and approval settings, or OpenCode with the model you pick inside the session. Open a raw shell, or define an agent from any command your shell can run.
 - **Several sessions at once.** Keep a Claude Code run, a Codex review and a shell side by side, each with its own state.
 - **[Voice input](#voice-input).** Dictate prompts instead of thumb-typing them. Your own computer does the transcription, in 25 languages. Opt-in, and the audio is never stored.
 - **Git from your phone.** Read diffs, stage, commit, fetch, pull, push, rebase, resolve conflicts and manage branches. Git runs on your machine, with the credentials it already has.
@@ -111,7 +111,8 @@ The agent on your computer dials out to the relay, so it works behind any router
 │  iOS             ├───────►│ mobaide   │◄───────┤    │ PTY             │
 │  Web             │        │   .com    │ dials  │    ▼                 │
 │                  │        │           │  out   │  Claude Code, Codex, │
-└──────────────────┘        └───────────┘        │  Antigravity, shell  │
+└──────────────────┘        └───────────┘        │  Antigravity,        │
+                                                 │  OpenCode, shell     │
                                                  └──────────────────────┘
 ```
 
@@ -147,4 +148,4 @@ Mobaide is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE
 
 ---
 
-<sub>Developed by Pavel Timonin. Mobaide is an independent app and is not affiliated with or endorsed by Anthropic, OpenAI, Google, Apple, NVIDIA or Linear. "Claude" and "Claude Code" are trademarks of Anthropic. "Codex" is a trademark of OpenAI. "Antigravity" is a trademark of Google. NVIDIA is a trademark of NVIDIA Corporation. Google Play and the Google Play logo are trademarks of Google LLC. Apple and the Apple logo are trademarks of Apple Inc., registered in the U.S. and other countries; App Store is a service mark of Apple Inc. All other trademarks are the property of their respective owners.</sub>
+<sub>Developed by Pavel Timonin. Mobaide is an independent app and is not affiliated with or endorsed by Anthropic, OpenAI, Google, Apple, NVIDIA, Linear or the makers of OpenCode. "Claude" and "Claude Code" are trademarks of Anthropic. "Codex" is a trademark of OpenAI. "Antigravity" is a trademark of Google. NVIDIA is a trademark of NVIDIA Corporation. Google Play and the Google Play logo are trademarks of Google LLC. Apple and the Apple logo are trademarks of Apple Inc., registered in the U.S. and other countries; App Store is a service mark of Apple Inc. All other trademarks are the property of their respective owners.</sub>

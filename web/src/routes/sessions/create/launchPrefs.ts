@@ -101,6 +101,10 @@ export function applyLaunchPrefs(base: WizardState, prefs: LaunchPrefs): WizardS
             addDirsDraft: base.antigravity.addDirsDraft,
             terminalUi: antigravity.terminalUi,
           },
+    opencode:
+      prefs.opencode === null
+        ? base.opencode
+        : { autoApprove: prefs.opencode.autoApprove, terminalUi: prefs.opencode.terminalUi },
   };
 }
 
@@ -167,6 +171,14 @@ export function launchPrefsFromState(
           skipPermissions: state.antigravity.skipPermissions,
           sandbox: state.antigravity.sandbox,
           terminalUi: state.antigravity.terminalUi,
+        },
+      };
+    case 'opencode':
+      return {
+        kind: 'opencode',
+        prefs: {
+          autoApprove: state.opencode.autoApprove,
+          terminalUi: state.opencode.terminalUi,
         },
       };
     default:

@@ -67,7 +67,7 @@ State persists, so the next `up` reuses the same account, agent, and database �
 1. Ensures both packages are installed editable (Python 3.12+).
 2. Boots `python -m central_server` bound to `0.0.0.0:9000` with `MOBAIDE_ENV=test`: throwaway SQLite DB, in-process email sink (no SMTP), `EMAIL_VERIFICATION_REQUIRED=false`.
 3. Registers (or logs back into) the tester account and creates (or reuses) the agent over the real REST flow, exactly like the Android app would.
-4. Boots `python -m mobaide` in **production mode** — a **real PTY**, so SHELL sessions run a real shell and claude/codex/antigravity sessions run the real CLIs.
+4. Boots `python -m mobaide` in **production mode** — a **real PTY**, so SHELL sessions run a real shell and claude/codex/antigravity/opencode sessions run the real CLIs.
    - It is pointed at the local relay over `ws://127.0.0.1:9000` (`MOBAIDE_AGENT_ALLOW_INSECURE_WS=1`).
    - All agent state is isolated under a throwaway `MOBAIDE_AGENT_PREFIX`.
 5. Gates readiness on `/api/health` → `agents_online >= 1` (the same 4012-safe gate the automated harness uses).
@@ -210,7 +210,7 @@ The failure is asymmetric and confusing, which is why the script warns loudly ab
 **CLI sessions.**
 
 - SHELL sessions need nothing extra.
-- claude / codex / antigravity sessions need that CLI installed on the PC (on `PATH`, or via `MOBAIDE_CLAUDE_BIN` / `MOBAIDE_CODEX_BIN` / `MOBAIDE_AGY_BIN`, which the script deliberately inherits from your shell).
+- claude / codex / antigravity / opencode sessions need that CLI installed on the PC (on `PATH`, or via `MOBAIDE_CLAUDE_BIN` / `MOBAIDE_CODEX_BIN` / `MOBAIDE_AGY_BIN` / `MOBAIDE_OPENCODE_BIN`, which the script deliberately inherits from your shell).
 - A missing CLI fails only at session-create time with a `<cli>_cli_missing` marker.
 
 ## Troubleshooting

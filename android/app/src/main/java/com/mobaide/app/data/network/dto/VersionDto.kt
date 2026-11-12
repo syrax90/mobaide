@@ -45,6 +45,17 @@ fun VersionInfoResponse.cliAvailable(cliId: String): Boolean? = runCatching {
 }.getOrNull()
 
 /**
+ * Whether the agent's `capabilities.cli` map names [cliId] at all. `false` only
+ * when the map is present, non-empty and lacks the key — an agent that predates
+ * that CLI and would open a plain shell for it. A missing or empty map (an
+ * agent that predates the whole field) reads as `true`, [cliAvailable]'s
+ * "unknown is enabled" rule.
+ */
+fun VersionInfoResponse.cliKnown(cliId: String): Boolean = runCatching {
+    capabilities["cli"]?.jsonObject?.let { it.isEmpty() || cliId in it }
+}.getOrNull() ?: true
+
+/**
  * Per-CLI model list parsed from the agent's `capabilities.cli.<id>.models`
  * array (populated by the agent's startup enumeration probe, e.g. `agy models`).
  * Returns `null` when the key is absent — an older agent, a CLI without
