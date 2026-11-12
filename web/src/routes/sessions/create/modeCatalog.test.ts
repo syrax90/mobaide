@@ -42,7 +42,7 @@ const card = (list: ModeCard[], mode: string): ModeCard => {
 };
 
 describe('buildModeCards', () => {
-  it('offers the five built-ins in order, then the account’s custom types', () => {
+  it('offers the six built-ins in order, then the account’s custom types', () => {
     const list = cards({
       customTypes: [
         {
@@ -59,6 +59,7 @@ describe('buildModeCards', () => {
       'claude',
       'codex',
       'antigravity',
+      'opencode',
       'auto_scan',
       'shell',
       'custom_0123456789ab',
@@ -122,6 +123,41 @@ describe('buildModeCards', () => {
     expect(card(missingBoth, 'auto_scan').disabledReason).toBe(
       "Auto Scan needs the Claude CLI, which isn't installed on the agent.",
     );
+  });
+});
+
+describe('buildModeCards — OpenCode', () => {
+  it('asks for an agent update where the agent lists its CLIs without OpenCode', () => {
+    // That agent would open a plain shell for `cli: "opencode"`.
+    const list = cards({
+      capabilities: capabilities({ claude: { available: true }, codex: { available: true } }),
+    });
+
+    expect(card(list, 'opencode').enabled).toBe(false);
+    expect(card(list, 'opencode').disabledReason).toBe(
+      'Update Mobaide on your PC to use OpenCode.',
+    );
+    expect(card(list, 'claude').enabled).toBe(true);
+  });
+
+  it('says the CLI is missing where the agent knows OpenCode but did not find it', () => {
+    const list = cards({ capabilities: capabilities({ opencode: { available: false } }) });
+
+    expect(card(list, 'opencode').enabled).toBe(false);
+    expect(card(list, 'opencode').disabledReason).toBe(
+      'OpenCode CLI is not installed on the agent.',
+    );
+  });
+
+  it.each<[string, AgentVersionInfo | undefined]>([
+    ['the agent found the CLI', capabilities({ opencode: { available: true } })],
+    ['the probe is still out', undefined],
+    ['the agent reports no CLI list', capabilities({})],
+  ])('is launchable when %s', (_name, version) => {
+    const opencode = card(cards({ capabilities: version }), 'opencode');
+
+    expect(opencode.enabled).toBe(true);
+    expect(opencode.disabledReason).toBeUndefined();
   });
 });
 

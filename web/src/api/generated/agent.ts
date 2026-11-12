@@ -1459,6 +1459,7 @@ export interface components {
             env?: {
                 [key: string]: string;
             } | null;
+            opencode_options?: components["schemas"]["OpenCodeOptionsModel"] | null;
             /** Project Name */
             project_name?: string | null;
             /** Resolved Command */
@@ -2266,6 +2267,39 @@ export interface components {
             type: string;
         };
         /**
+         * OpenCodeOptionsModel
+         * @description Wire DTO for OpenCode CLI launch options (see :class:`OpenCodeOptions`).
+         *
+         *     ``auto_approve`` is OpenCode's ``--auto``: it accepts every permission
+         *     request that the user's OpenCode rules do not deny. ``initial_prompt`` is
+         *     the first message; it travels as one argv element, so its length is capped.
+         *     ``connect`` starts a terminal session that runs ``opencode auth login``
+         *     (sign in to a model provider) in place of an OpenCode session.
+         */
+        OpenCodeOptionsModel: {
+            /**
+             * Auto Approve
+             * @default false
+             */
+            auto_approve: boolean;
+            /** Base Branch */
+            base_branch?: string | null;
+            /** Branch Name */
+            branch_name?: string | null;
+            /**
+             * Connect
+             * @default false
+             */
+            connect: boolean;
+            /** Initial Prompt */
+            initial_prompt?: string | null;
+            /**
+             * Worktree
+             * @default false
+             */
+            worktree: boolean;
+        };
+        /**
          * ProjectReadModel
          * @description Client-safe view of a single project.
          */
@@ -2477,7 +2511,7 @@ export interface components {
              * @default claude
              * @enum {string}
              */
-            kind: "claude" | "codex" | "antigravity";
+            kind: "claude" | "codex" | "antigravity" | "opencode";
             /** Text */
             text: string;
         };

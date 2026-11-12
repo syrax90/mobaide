@@ -44,7 +44,7 @@ data class ChatResumeUiState(
 )
 
 /**
- * "Continue a session": the sessions the agent (Claude Code, Codex or Antigravity) stored on
+ * "Continue a session": the sessions the agent (Claude Code, Codex, Antigravity or OpenCode) stored on
  * the PC, newest first, one page at a time. Fetch-only; the first page can take a few seconds because
  * the agent starts its process to answer.
  */

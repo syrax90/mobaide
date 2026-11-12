@@ -75,6 +75,12 @@ export interface AntigravityLaunchPrefs {
   terminalUi: boolean;
 }
 
+/** Android `OpenCodeLaunchPrefs`, iOS `OpenCodeLaunchPrefs`. */
+export interface OpenCodeLaunchPrefs {
+  autoApprove: boolean;
+  terminalUi: boolean;
+}
+
 /**
  * The data half of the store. A `null` bucket means "never launched", which is
  * what keeps Auto Scan's `skipPermissions` default of `true` alive for a fresh
@@ -85,6 +91,7 @@ export interface LaunchPrefs {
   autoScan: ClaudeLaunchPrefs | null;
   codex: CodexLaunchPrefs | null;
   antigravity: AntigravityLaunchPrefs | null;
+  opencode: OpenCodeLaunchPrefs | null;
   lastProjectName: string | null;
 }
 
@@ -94,7 +101,8 @@ export type ClaudePrefsBucketId = 'claude' | 'autoScan';
 export type LaunchPrefsSnapshot =
   | { kind: ClaudePrefsBucketId; prefs: ClaudeLaunchPrefs }
   | { kind: 'codex'; prefs: CodexLaunchPrefs }
-  | { kind: 'antigravity'; prefs: AntigravityLaunchPrefs };
+  | { kind: 'antigravity'; prefs: AntigravityLaunchPrefs }
+  | { kind: 'opencode'; prefs: OpenCodeLaunchPrefs };
 
 interface LaunchPrefsState extends LaunchPrefs {
   setLaunchPrefs: (snapshot: LaunchPrefsSnapshot) => void;
@@ -102,7 +110,7 @@ interface LaunchPrefsState extends LaunchPrefs {
 }
 
 /*
- * The three constants below are the **mobile data-class defaults**, reached
+ * The constants below are the **mobile data-class defaults**, reached
  * only when a stored blob omits a key — Kotlin's `encodeDefaults` /
  * `ignoreUnknownKeys` and Swift's `decodeIfPresent ?? default`. They are
  * deliberately *not* the wizard's UI defaults, which `INITIAL_WIZARD_STATE` in
@@ -143,6 +151,11 @@ export const ANTIGRAVITY_PREFS_DEFAULTS: AntigravityLaunchPrefs = {
   model: null,
   skipPermissions: false,
   sandbox: false,
+  terminalUi: false,
+};
+
+export const OPENCODE_PREFS_DEFAULTS: OpenCodeLaunchPrefs = {
+  autoApprove: false,
   terminalUi: false,
 };
 
@@ -311,6 +324,14 @@ function sanitizeAntigravityPrefs(raw: unknown): AntigravityLaunchPrefs | null {
   return { model, skipPermissions, sandbox, terminalUi };
 }
 
+function sanitizeOpenCodePrefs(raw: unknown): OpenCodeLaunchPrefs | null {
+  if (!isRecord(raw)) return null;
+  const autoApprove = field(raw, 'autoApprove', OPENCODE_PREFS_DEFAULTS.autoApprove, isBoolean);
+  const terminalUi = field(raw, 'terminalUi', OPENCODE_PREFS_DEFAULTS.terminalUi, isBoolean);
+  if (autoApprove === undefined || terminalUi === undefined) return null;
+  return { autoApprove, terminalUi };
+}
+
 export const useLaunchPrefsStore = create<LaunchPrefsState>()(
   persist(
     (set) => ({
@@ -318,6 +339,7 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
       autoScan: null,
       codex: null,
       antigravity: null,
+      opencode: null,
       lastProjectName: null,
       setLaunchPrefs: (snapshot) => {
         switch (snapshot.kind) {
@@ -332,6 +354,9 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
             return;
           case 'antigravity':
             set({ antigravity: snapshot.prefs });
+            return;
+          case 'opencode':
+            set({ opencode: snapshot.prefs });
         }
       },
       setLastProjectName: (lastProjectName) => {
@@ -353,6 +378,7 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
           autoScan: sanitizeClaudePrefs(saved.autoScan),
           codex: sanitizeCodexPrefs(saved.codex),
           antigravity: sanitizeAntigravityPrefs(saved.antigravity),
+          opencode: sanitizeOpenCodePrefs(saved.opencode),
           lastProjectName:
             typeof lastProjectName === 'string' && lastProjectName !== ''
               ? lastProjectName
@@ -365,7 +391,7 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
 
 /** Non-reactive read, for the wizard's reducer initializer and prefill effect. */
 export function readLaunchPrefs(): LaunchPrefs {
-  const { claude, autoScan, codex, antigravity, lastProjectName } =
+  const { claude, autoScan, codex, antigravity, opencode, lastProjectName } =
     useLaunchPrefsStore.getState();
-  return { claude, autoScan, codex, antigravity, lastProjectName };
+  return { claude, autoScan, codex, antigravity, opencode, lastProjectName };
 }

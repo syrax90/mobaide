@@ -19,6 +19,8 @@ from collections.abc import Callable
 import pytest
 
 from mobaide.core.program_status import (
+    APP_TRAITS,
+    IDLE_AFTER_INPUT_GRACE_SECONDS,
     MAX_REPORT_BYTES,
     PROGRAM_STATUS_MIN_ALERT_SPACING_SECONDS,
     PROGRAM_STATUS_QUIET_SECONDS,
@@ -800,3 +802,160 @@ class TestGateLastApp:
         assert gate.last_app == "codex"
         gate.handle(_status(ProgramState.IDLE, app="antigravity"))
         assert gate.last_app == "antigravity"
+
+
+class TestGateIdleEndsTurn:
+    """OpenCode never reports ``done``: its root record goes ``working`` and
+    back to ``idle``, so that change is the end of its turn. Every other
+    program reports ``done``, and its ``idle`` must stay what it was: silent.
+    A turn that goes idle right after client input was stopped or answered by
+    a user who is at the terminal, and needs no "your move"."""
+
+    async def test_idle_after_working_alerts_after_the_quiet_window(
+        self, session, scheduler,
+    ) -> None:
+        gate = _gate(session)
+        gate.handle(_status(ProgramState.WORKING, app="opencode"))
+        gate.handle(_status(ProgramState.IDLE, app="opencode"))
+
+        assert session.alerts == []
+        assert [h.delay for h in scheduler.pending] == [PROGRAM_STATUS_QUIET_SECONDS]
+        assert scheduler.elapse() == 1
+        assert session.alerts == ["turn_finished"]
+
+    @pytest.mark.parametrize("app", ["codex", "antigravity", None])
+    async def test_idle_of_a_program_that_reports_done_stays_quiet(
+        self, session, scheduler, app,
+    ) -> None:
+        gate = _gate(session)
+        gate.handle(_status(ProgramState.WORKING, app=app))
+        gate.handle(_status(ProgramState.IDLE, app=app))
+
+        assert scheduler.handles == []
+        assert session.alerts == []
+
+    @pytest.mark.parametrize(
+        "before",
+        [
+            [],
+            [_status(ProgramState.IDLE, app="opencode")],
+            [
+                _status(ProgramState.WORKING, app="opencode"),
+                _status(ProgramState.BLOCKED, "permission", "opencode"),
+            ],
+        ],
+        ids=["at-start", "repeated-idle", "prompt-dismissed"],
+    )
+    async def test_idle_that_does_not_follow_working_stays_quiet(
+        self, session, scheduler, before,
+    ) -> None:
+        # OpenCode reports ``idle`` when it starts; that is no turn.
+        gate = _gate(session)
+        for status in before:
+            gate.handle(status)
+        gate.handle(_status(ProgramState.IDLE, app="opencode"))
+
+        assert scheduler.elapse() == 0
+        assert session.alerts == []
+
+    async def test_a_new_turn_inside_the_window_alerts_only_for_its_own_end(
+        self, session, scheduler,
+    ) -> None:
+        # A queued message starts the next turn within milliseconds.
+        gate = _gate(session)
+        gate.handle(_status(ProgramState.WORKING, app="opencode"))
+        gate.handle(_status(ProgramState.IDLE, app="opencode"))
+        gate.handle(_status(ProgramState.WORKING, app="opencode"))
+        assert scheduler.elapse() == 0
+        assert session.alerts == []
+
+        gate.handle(_status(ProgramState.IDLE, app="opencode"))
+        assert scheduler.elapse() == 1
+        assert session.alerts == ["turn_finished"]
+
+    @pytest.mark.parametrize(
+        ("since_input", "alerts"),
+        [
+            (0.0, []),
+            (IDLE_AFTER_INPUT_GRACE_SECONDS - 0.5, []),
+            (IDLE_AFTER_INPUT_GRACE_SECONDS, ["turn_finished"]),
+            (600.0, ["turn_finished"]),
+        ],
+        ids=["at-once", "inside-the-grace", "grace-over", "a-long-turn"],
+    )
+    async def test_idle_right_after_client_input_stays_quiet(
+        self, session, scheduler, clock, since_input, alerts,
+    ) -> None:
+        # Ctrl+C or Esc stops the turn; the prompt that started a long turn
+        # is input too, and that turn's end must still alert.
+        gate = _gate(session, clock=clock)
+        clock.now = 100.0
+        gate.handle(_status(ProgramState.WORKING, app="opencode"))
+        gate.on_input()
+        clock.now = 100.0 + since_input
+        gate.handle(_status(ProgramState.IDLE, app="opencode"))
+
+        scheduler.elapse()
+        assert session.alerts == alerts
+
+    async def test_client_input_drops_a_pending_finished_window(
+        self, session, scheduler,
+    ) -> None:
+        gate = _gate(session)
+        gate.handle(_status(ProgramState.WORKING, app="opencode"))
+        gate.handle(_status(ProgramState.IDLE, app="opencode"))
+        gate.on_input()
+
+        assert scheduler.elapse() == 0
+        assert session.alerts == []
+
+
+class TestGateBlockedSettle:
+    """With ``--auto`` OpenCode reports ``blocked`` for the few milliseconds
+    it takes to accept a request itself, so its ``blocked`` alerts only once
+    it has stood for a moment. A push for every tool call of an auto-approved
+    session would be an alert storm."""
+
+    async def test_a_request_opencode_accepts_itself_never_alerts(
+        self, session, scheduler,
+    ) -> None:
+        gate = _gate(session)
+        gate.handle(_status(ProgramState.WORKING, app="opencode"))
+        for _ in range(50):
+            gate.handle(_status(ProgramState.BLOCKED, "permission", "opencode"))
+            gate.handle(_status(ProgramState.WORKING, app="opencode"))
+
+        assert scheduler.elapse() == 0
+        assert session.alerts == []
+        assert session.permission_clears == 0
+
+    async def test_a_request_left_standing_alerts_after_the_settle_time(
+        self, session, scheduler,
+    ) -> None:
+        settle = APP_TRAITS["opencode"].blocked_settle_seconds
+        gate = _gate(session)
+        gate.handle(_status(ProgramState.WORKING, app="opencode"))
+        gate.handle(_status(ProgramState.BLOCKED, "permission", "opencode"))
+
+        assert session.alerts == []
+        assert 0 < settle < PROGRAM_STATUS_QUIET_SECONDS
+        assert [h.delay for h in scheduler.pending] == [settle]
+        assert scheduler.elapse() == 1
+        assert session.alerts == ["awaiting_permission"]
+
+    async def test_an_answered_request_drops_the_badge_and_the_turn_end_still_alerts(
+        self, session, scheduler, clock,
+    ) -> None:
+        gate = _gate(session, clock=clock)
+        gate.handle(_status(ProgramState.WORKING, app="opencode"))
+        gate.handle(_status(ProgramState.BLOCKED, "permission", "opencode"))
+        scheduler.elapse()
+        # Answered on the PC: no client input reaches this session.
+        clock.now = 30.0
+        gate.handle(_status(ProgramState.WORKING, app="opencode"))
+        assert session.permission_clears == 1
+
+        clock.now = 60.0
+        gate.handle(_status(ProgramState.IDLE, app="opencode"))
+        scheduler.elapse()
+        assert session.alerts == ["awaiting_permission", "turn_finished"]

@@ -20,7 +20,7 @@ import org.robolectric.annotation.Config
  * keys `Enter, ↑, ↓, ←, →, Ctrl+C, Esc, Tab, Backspace` plus the custom-
  * shortcut "…" trigger. `Mode`/`Rewind`/`Ctrl+O`/`Ctrl+R`/`Ctrl+L` carry
  * Claude-TUI meanings an arbitrary CLI may bind differently and must never
- * leak in; neither may the Codex/Antigravity-only keys. [SessionKind.Shell] is
+ * leak in; neither may the Codex/Antigravity/OpenCode-only keys. [SessionKind.Shell] is
  * the same case and renders the same neutral set.
  *
  * Mirrors [InputBarCodexTest]: Robolectric SDK 33, portrait qualifiers.
@@ -33,7 +33,8 @@ class InputBarDefaultKeysTest {
     val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     private val claudeOnlyKeys = listOf("Mode", "Rewind", "Ctrl+O", "Ctrl+R", "Ctrl+L")
-    private val otherCliKeys = listOf("Approve", "Reject", "Ctrl+K", "Ctrl+G", "Ctrl+D")
+    private val otherCliKeys =
+        listOf("Approve", "Reject", "Ctrl+K", "Ctrl+G", "Ctrl+D", "Ctrl+P")
 
     private fun openPanel(kind: SessionKind?) {
         composeRule.setContent {

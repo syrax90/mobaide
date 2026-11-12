@@ -37,7 +37,7 @@ struct CustomTypeDeletedPayload: Codable, Equatable, Sendable {
 /// The account's order of the create-session mode picker's cards — the body
 /// of `GET`/`PUT /api/session-mode-order` and of the
 /// `session_mode_order.updated` push. `order` lists mode ids top to bottom
-/// (`claude`, `codex`, `antigravity`, `auto_scan`, `shell`, `custom_<id>`);
+/// (`claude`, `codex`, `antigravity`, `opencode`, `auto_scan`, `shell`, `custom_<id>`);
 /// empty means the default order. `version` grows on every change, so an
 /// older snapshot is dropped.
 struct SessionModeOrderDto: Codable, Equatable, Sendable {

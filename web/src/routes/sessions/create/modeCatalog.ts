@@ -4,7 +4,11 @@
  * Copy is ported verbatim from `CreateSessionScreen.kt` / `.swift` so the three
  * clients read identically.
  */
-import { cliAvailable, type AgentVersionInfo } from '../../../protocol/dto/agentVersion';
+import {
+  cliAvailable,
+  cliKnown,
+  type AgentVersionInfo,
+} from '../../../protocol/dto/agentVersion';
 import type { ProjectSummary } from '../../../api/projectRepository';
 import type { CustomAgentType } from '../../../api/customAgentTypeRepository';
 import { BUILT_IN_MODES, type BuiltInMode, type WizardMode } from './wizardState';
@@ -27,6 +31,7 @@ const BUILT_IN_COPY: Readonly<Record<BuiltInMode, { title: string; subtitle: str
     title: 'Antigravity',
     subtitle: 'Configure and launch a Google Antigravity session.',
   },
+  opencode: { title: 'OpenCode', subtitle: 'Configure and launch an OpenCode session.' },
   auto_scan: {
     title: 'Auto Scan',
     subtitle: 'Scan Linear for matching issues and launch sessions.',
@@ -38,6 +43,7 @@ const MISSING_CLI: Readonly<Record<string, string>> = {
   claude: 'Claude CLI is not installed on the agent.',
   codex: 'Codex CLI is not installed on the agent.',
   antigravity: 'Antigravity CLI (agy) is not installed on the agent.',
+  opencode: 'OpenCode CLI is not installed on the agent.',
 };
 
 /**
@@ -64,6 +70,24 @@ export function buildModeCards(input: {
       case 'claude':
       case 'codex':
       case 'antigravity': {
+        const enabled = cliEnabled(input.capabilities, mode);
+        return {
+          mode,
+          ...copy,
+          enabled,
+          disabledReason: enabled ? undefined : MISSING_CLI[mode],
+        };
+      }
+      case 'opencode': {
+        // An agent from before OpenCode support would open a plain shell for it.
+        if (!cliKnown(input.capabilities, mode)) {
+          return {
+            mode,
+            ...copy,
+            enabled: false,
+            disabledReason: 'Update Mobaide on your PC to use OpenCode.',
+          };
+        }
         const enabled = cliEnabled(input.capabilities, mode);
         return {
           mode,

@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from mobaide.core.antigravity_launcher import AntigravityLauncher, AntigravityOptions
     from mobaide.core.claude_launcher import ClaudeLauncher, ClaudeOptions
     from mobaide.core.codex_launcher import CodexLauncher, CodexOptions
+    from mobaide.core.opencode_launcher import OpenCodeLauncher, OpenCodeOptions
 
 # ``resolve_before`` follows each release: dependencies resolve as they were
 # then, not to whatever a range matches on the day a PC first installs.
@@ -70,6 +71,7 @@ CLAUDE_ACP_BIN = CLAUDE_ADAPTER.bin_name
 CLAUDE_ACP_COMMAND_ENV = "MOBAIDE_ACP_CLAUDE_COMMAND"
 CODEX_ACP_COMMAND_ENV = "MOBAIDE_ACP_CODEX_COMMAND"
 ANTIGRAVITY_ACP_COMMAND_ENV = "MOBAIDE_ACP_ANTIGRAVITY_COMMAND"
+OPENCODE_ACP_COMMAND_ENV = "MOBAIDE_ACP_OPENCODE_COMMAND"
 REAL_IN_TEST_ENV = "MOBAIDE_ACP_REAL"
 AVAILABILITY_TTL = 30.0
 NODE_HINT = "The chat view needs Node.js 22 or later on the PC."
@@ -78,6 +80,16 @@ AGY_HINT = (
     "Run `agy update` on the PC, then try again."
 )
 AGY_PROBE_TIMEOUT = 10.0
+OPENCODE_HINT = (
+    "OpenCode is not installed on the PC. Install it from "
+    "https://opencode.ai/docs/, then try again."
+)
+# OpenCode has no account of its own to sign in to: a provider that refuses
+# its key is connected again in OpenCode itself.
+OPENCODE_SIGN_IN_HINT = (
+    "OpenCode could not sign in to the model provider. In New session, pick OpenCode "
+    "and use Connect a provider, or run `opencode auth login` on the PC. Then tap Restart."
+)
 # Test mode: while this file exists the fake agent is signed out, and its
 # fake login removes it.
 FAKE_SIGNED_OUT_ENV = "MOBAIDE_FAKE_ACP_SIGNED_OUT"
@@ -137,6 +149,12 @@ class ChatLaunchPlan:
     presence: ConversationPresence | None = None
     # How the chat can sign the agent in on this PC (see :mod:`.signin`).
     sign_in: list[SignInMethod] = field(default_factory=list)
+    # What to tell the user when the agent needs a sign-in that the chat
+    # cannot do; None gives the generic text.
+    sign_in_hint: str | None = None
+    # Accept each permission request without asking (the agent's own
+    # "auto-approve" switch, for an agent whose ACP server has none).
+    auto_approve: bool = False
 
 
 class ChatAgentSpec(Protocol):
@@ -853,6 +871,67 @@ class AntigravityChatSpec(_ChatSpecBase):
         return identity[0] if identity else None
 
 
+class OpenCodeChatSpec(_ChatSpecBase):
+    """OpenCode through the ACP server built into its CLI (``opencode acp``),
+    so chat and terminal sessions share the CLI version, providers, settings
+    and stored sessions.
+
+    ``opencode acp`` runs a server of its own, apart from the one OpenCode's
+    terminal UI uses: a session open in both is not kept in sync live.
+    OpenCode asks for no folder trust and starts without an account.
+    """
+
+    kind = "opencode"
+    display_name = "OpenCode"
+    command_env = OPENCODE_ACP_COMMAND_ENV
+    fake_flavor = "opencode"
+
+    def __init__(
+        self,
+        launcher: OpenCodeLauncher,
+        *,
+        command_override: str | None = None,
+        test_mode: bool = False,
+    ) -> None:
+        super().__init__(launcher, command_override=command_override, test_mode=test_mode)
+
+    def command(self) -> list[str] | None:
+        fixed = self._fixed_command()
+        if fixed is not None:
+            return fixed
+        try:
+            return shim_safe_argv(self._launcher.resolve_binary(), "acp")
+        except CliBinaryNotFoundError:
+            return None
+
+    def available(self) -> bool:
+        return self.command() is not None
+
+    def _argv(self) -> list[str]:
+        argv = self.command()
+        if argv is None:
+            raise ChatAgentUnavailableError(self.kind, OPENCODE_HINT)
+        return argv
+
+    async def catalog_plan(self) -> ChatLaunchPlan:
+        home = os.path.expanduser("~")
+        return ChatLaunchPlan(argv=self._argv(), env=dict(os.environ), cwd=home, process_cwd=home)
+
+    async def prepare(self, target: LaunchTarget, options: OpenCodeOptions) -> ChatLaunchPlan:
+        # Before the launcher can create a worktree.
+        argv = self._argv()
+        cwd = await self._launcher.resolve_cwd(target, options)
+        return ChatLaunchPlan(
+            argv=argv,
+            env=self._launcher.build_env(target),
+            cwd=cwd,
+            initial_prompt=options.initial_prompt or None,
+            process_cwd=os.path.expanduser("~"),
+            sign_in_hint=OPENCODE_SIGN_IN_HINT,
+            auto_approve=options.auto_approve,
+        )
+
+
 async def _known_argv(argv: list[str], ensure: Callable[[], list[str]] | None) -> list[str]:
     if ensure is None:
         return argv
@@ -1047,6 +1126,13 @@ def build_chat_agents(
             command_override=overrides.get("antigravity"),
             test_mode=test_mode,
             app_data_dir=antigravity_app_data_dir,
+        )
+    opencode_launcher = launchers.get("opencode")
+    if opencode_launcher is not None:
+        specs["opencode"] = OpenCodeChatSpec(
+            opencode_launcher,
+            command_override=overrides.get("opencode"),
+            test_mode=test_mode,
         )
     return specs
 

@@ -124,6 +124,26 @@ for line in sys.stdin:
 """
 
 
+# A paging agent: ``session/list`` answers AGENT_PAGES[cursor] (JSON, the
+# first page under the empty cursor).
+PAGED_AGENT = r"""
+import json, os, sys
+pages = json.loads(os.environ["AGENT_PAGES"])
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg or "method" not in msg:
+        continue
+    if msg["method"] == "initialize":
+        caps = {"loadSession": True, "sessionCapabilities": {"list": {}}}
+        reply = {"result": {"protocolVersion": 1, "agentCapabilities": caps}}
+    else:
+        reply = {"result": pages[(msg.get("params") or {}).get("cursor") or ""]}
+    reply.update({"jsonrpc": "2.0", "id": msg["id"]})
+    sys.stdout.write(json.dumps(reply) + "\n")
+    sys.stdout.flush()
+"""
+
+
 class FakePresence:
     """The conversations another app on the PC has open."""
 
@@ -327,6 +347,58 @@ class TestAllFoldersLister:
         assert page["next_cursor"] is None
 
 
+    @pytest.mark.parametrize("cwd", ["folder", None], ids=["one-folder", "all-folders"])
+    async def test_the_agent_s_own_work_folders_are_never_listed(self, tmp_path, cwd):
+        # A voice cleanup run leaves a stored session in its work folder.
+        work = tmp_path / "voice-cleanup"
+        work.mkdir()
+        rows = [
+            {"sessionId": "cleanup-1", "cwd": str(work), "title": "Voice-cleanup", "updatedAt": "2026-11-12T10:00:00Z"},
+            {"sessionId": "mine-1", "cwd": str(tmp_path), "title": "Mine", "updatedAt": "2026-11-12T09:00:00Z"},
+        ]
+        catalog = ChatCatalog({"antigravity": AllFoldersSpec(rows)}, hidden_folders=[work])
+        try:
+            page = await catalog.list_sessions(
+                "antigravity", cwd=str(work) if cwd else None, cursor=None
+            )
+        finally:
+            await catalog.close()
+
+        assert [r["session_id"] for r in page["sessions"]] == ([] if cwd else ["mine-1"])
+
+    async def test_hidden_rows_do_not_take_the_places_of_a_cut_page(self, tmp_path):
+        work = tmp_path / "voice-cleanup"
+        rows = [
+            {"sessionId": f"cleanup-{i}", "cwd": str(work), "updatedAt": f"2026-11-12T10:{i // 60:02}:{i % 60:02}Z"}
+            for i in range(catalog_mod.PAGE_MAX + 5)
+        ] + [{"sessionId": "mine-1", "cwd": str(tmp_path), "updatedAt": "2026-11-01T00:00:00Z"}]
+        catalog = ChatCatalog({"antigravity": AllFoldersSpec(rows)}, hidden_folders=[work])
+        try:
+            page = await catalog.list_sessions("antigravity", cwd=None, cursor=None)
+        finally:
+            await catalog.close()
+
+        assert [r["session_id"] for r in page["sessions"]] == ["mine-1"]
+
+    async def test_a_page_of_hidden_rows_alone_reads_on_to_the_next_page(self, tmp_path):
+        # Clients drop the cursor of an empty page, so the user's sessions
+        # behind a page of cleanup runs would be out of reach.
+        work = tmp_path / "voice-cleanup"
+        pages = {
+            "": {"sessions": [{"sessionId": "cleanup-1", "cwd": str(work)}], "nextCursor": "p2"},
+            "p2": {"sessions": [{"sessionId": "cleanup-2", "cwd": str(work)}], "nextCursor": "p3"},
+            "p3": {"sessions": [{"sessionId": "mine-1", "cwd": str(tmp_path)}], "nextCursor": "p4"},
+        }
+        spec = StubSpec([sys.executable, "-c", PAGED_AGENT], env={"AGENT_PAGES": json.dumps(pages)})
+        catalog = ChatCatalog({"claude": spec}, hidden_folders=[work])
+        try:
+            page = await catalog.list_sessions("claude", cwd=None, cursor=None)
+        finally:
+            await catalog.close()
+
+        assert [r["session_id"] for r in page["sessions"]] == ["mine-1"]
+        assert page["next_cursor"] == "p4"
+
     async def test_a_page_keeps_the_newest_rows(self, make_catalog, tmp_path):
         rows = [
             {"sessionId": f"s{i:03}", "cwd": str(tmp_path), "updatedAt": f"2026-11-09T00:{i // 60:02}:{i % 60:02}Z"}
@@ -513,6 +585,7 @@ class TestChatRest:
             "claude": {"resume": True, "live": False},
             "codex": {"resume": True, "live": False},
             "antigravity": {"resume": True, "live": False},
+            "opencode": {"resume": True, "live": False},
         }
 
     async def test_create_chat_session(self, client, auth_headers, tmp_path):
@@ -615,6 +688,30 @@ class TestChatRest:
         assert [(r["title"], r["open_elsewhere"]) for r in listed.json()["sessions"]] == [
             ("Refactor the login flow", False),
             ("Fix flaky upload test", False),
+        ]
+
+
+    async def test_opencode_chat_session_and_its_stored_sessions(
+        self, client, auth_headers, tmp_path
+    ):
+        body = {
+            "cli": "opencode",
+            "ui": "chat",
+            "cwd": str(tmp_path),
+            "opencode_options": {"auto_approve": True},
+        }
+
+        created = await client.post("/api/sessions", headers=auth_headers, json=body)
+        listed = await client.get(
+            f"/api/chat/opencode/sessions?cwd={tmp_path}", headers=auth_headers
+        )
+
+        assert created.status_code == 201, created.text
+        assert (created.json()["kind"], created.json()["ui"]) == ("opencode", "chat")
+        assert listed.status_code == 200
+        assert [r["title"] for r in listed.json()["sessions"]] == [
+            "Refactor the login flow",
+            "Fix flaky upload test",
         ]
 
 

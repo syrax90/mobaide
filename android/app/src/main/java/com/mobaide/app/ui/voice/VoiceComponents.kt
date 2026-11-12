@@ -654,9 +654,9 @@ object VoiceCleanupCopy {
 
     fun notice(agentName: String): String =
         "The session's AI agent on $agentName cleans up each transcript with its cheapest model: " +
-            "Claude Haiku for Claude Code, GPT Luna for Codex, Gemini Flash for Antigravity. It runs " +
-            "under your own account: the text goes to that agent's provider and counts toward your " +
-            "usage. Mobaide doesn't store it."
+            "Claude Haiku for Claude Code, GPT Luna for Codex, Gemini Flash for Antigravity; " +
+            "OpenCode uses its default model. It runs under your own account: the text goes to " +
+            "that agent's provider and counts toward your usage. Mobaide doesn't store it."
 }
 
 @Composable

@@ -726,6 +726,7 @@ The Android app never talks to the agent directly; it always goes through `centr
 - Codex CLI (optional — the second managed agent; install with `npm install -g @openai/codex`). Windows installs auto-detect `codex` the same way and pin `MOBAIDE_CODEX_BIN`; otherwise the agent probes the same npm-global locations on `PATH`. For a non-standard location set `MOBAIDE_CODEX_BIN=/absolute/path/to/codex` in `<prefix>/agent.env`.
 - Antigravity CLI (optional — the third managed agent; binary `agy`, a standalone install — **not** an npm package). Windows installs auto-detect `agy` from the installing user's `%USERPROFILE%\.local\bin` or the `Antigravity` program folders and pin `MOBAIDE_AGY_BIN`; otherwise the agent probes `~/.local/bin` and the standard install locations on `PATH`. For a non-standard location set `MOBAIDE_AGY_BIN=/absolute/path/to/agy` in `<prefix>/agent.env`.
   - Antigravity auth is host-side — pre-authenticate `agy` on the host via Google Sign-In; there is no API-key env var and no in-app login.
+- OpenCode (optional — the fourth managed agent; install script, npm, Homebrew or Bun). The agent looks for the binary in `MOBAIDE_OPENCODE_BIN`, then on `PATH`, then in `~/.opencode/bin/opencode`, npm-global, Homebrew and `~/.bun/bin` (Windows: `%USERPROFILE%\.opencode\bin\opencode.exe`, npm shims, Bun). The Windows installer does **not** auto-detect OpenCode (no `--opencode-bin`): set `MOBAIDE_OPENCODE_BIN` in `<prefix>\mobaide_agent\.env` for a non-standard location. OpenCode needs no account to start. Chat sessions run `opencode acp` (override with `MOBAIDE_ACP_OPENCODE_COMMAND`), with no Node.js.
 - A paired agent: `RELAY_AGENT_ID` + `RELAY_AGENT_TOKEN` issued by `central-server`. Pair from the Android app: **Settings → Agents → Pair new**, or via the admin REST API.
 
 ### Windows (conda — recommended for development)
@@ -1027,7 +1028,7 @@ The CLI works on the same files and lock as the running agent; the apps see the 
 
 **Privacy.** Audio is held in memory only, transcribed, and dropped; neither audio nor transcript text is logged or written to disk — logs carry only sizes, durations, timings and error codes.
 
-The one way the text leaves the PC is the opt-in transcript cleanup (web, Android and iOS; Claude Code, Codex and Antigravity sessions). The agent hands the transcript to the session's CLI on that computer, which sends it to Anthropic, OpenAI or Google under the user's own login. The agent still never logs or stores it (docs/voice-input.md, *Transcript cleanup*).
+The one way the text leaves the PC is the opt-in transcript cleanup (web, Android and iOS; Claude Code, Codex, Antigravity and OpenCode sessions). The agent hands the transcript to the session's CLI on that computer, which sends it to Anthropic, OpenAI, Google or the user's OpenCode model provider under the user's own login. The agent still never logs or stores it (docs/voice-input.md, *Transcript cleanup*).
 
 **Testing without the model.** `MOBAIDE_VOICE_FAKE=1` swaps in a tiny generated model and a deterministic engine under `<state prefix>/voice-fake/`. `tests/e2e/manual_stack.py up --fake-voice` sets it.
 
@@ -1223,6 +1224,10 @@ Common causes:
   - The agent returns HTTP 503 with an `antigravity_cli_missing` marker and a `searched_paths` list.
   - There is no pre-spawn auth probe: an unauthenticated `agy` simply shows its Google Sign-In prompt in the PTY. Pre-authenticate `agy` on the host before launching a session (there is no in-app login route).
   - The Windows installer auto-detects `agy` in `%USERPROFILE%\.local\bin` or the `Antigravity` program folders and writes `MOBAIDE_AGY_BIN`. If `agy` was installed after the agent, or lives elsewhere, re-run `irm https://get.mobaide.com/install.ps1 | iex` (it backfills `MOBAIDE_AGY_BIN` without touching pairing credentials), edit `<prefix>\mobaide_agent\.env` directly, or run the `set-env` verb as above with `--key MOBAIDE_AGY_BIN --value "C:\Users\<you>\.local\bin\agy.exe"`.
+- OpenCode not on the service's `PATH` (only relevant if you use the optional OpenCode agent).
+  - The agent returns HTTP 503 with an `opencode_cli_missing` marker and a `searched_paths` list.
+  - There is no pre-spawn auth probe. Sign in from the app (**Connect a provider** in New session), or on the PC with `opencode auth login`.
+  - Set `MOBAIDE_OPENCODE_BIN` in the agent's env file when the binary lives elsewhere. The Windows installer does not write it.
 
 #### Agent not showing as online in the Android app
 

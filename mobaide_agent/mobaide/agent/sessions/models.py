@@ -9,6 +9,7 @@ from mobaide.core.antigravity_launcher import AntigravityOptions, agy_model_name
 from mobaide.core.claude_launcher import ClaudeOptions
 from mobaide.core.codex_launcher import CodexOptions
 from mobaide.core.models import SessionInfo, session_to_wire_dict
+from mobaide.core.opencode_launcher import INITIAL_PROMPT_MAX, OpenCodeOptions
 
 
 class ClaudeOptionsModel(BaseModel):
@@ -130,6 +131,27 @@ class AntigravityOptionsModel(BaseModel):
         return AntigravityOptions(**data)
 
 
+class OpenCodeOptionsModel(BaseModel):
+    """Wire DTO for OpenCode CLI launch options (see :class:`OpenCodeOptions`).
+
+    ``auto_approve`` is OpenCode's ``--auto``: it accepts every permission
+    request that the user's OpenCode rules do not deny. ``initial_prompt`` is
+    the first message; it travels as one argv element, so its length is capped.
+    ``connect`` starts a terminal session that runs ``opencode auth login``
+    (sign in to a model provider) in place of an OpenCode session.
+    """
+
+    auto_approve: bool = False
+    initial_prompt: str | None = Field(default=None, max_length=INITIAL_PROMPT_MAX)
+    connect: bool = False
+    worktree: bool = False
+    branch_name: str | None = None
+    base_branch: str | None = None
+
+    def to_options(self) -> OpenCodeOptions:
+        return OpenCodeOptions(**self.model_dump())
+
+
 class CreateSessionRequest(BaseModel):
     command: list[str] | None = None
     cwd: str | None = None
@@ -139,7 +161,8 @@ class CreateSessionRequest(BaseModel):
     # When set, ``command``/``cwd``/``env`` are ignored and the matching
     # launcher builds them from the project + the CLI options block.
     project_name: str | None = None
-    # Which managed CLI to launch: "claude" | "codex" | "antigravity". Optional —
+    # Which managed CLI to launch: "claude" | "codex" | "antigravity" |
+    # "opencode". Optional —
     # when omitted the kind is inferred from whichever options block is present (a
     # legacy claude_options-only payload still resolves to Claude). Shell/Terminal
     # sessions leave this null and send no options block.
@@ -147,9 +170,10 @@ class CreateSessionRequest(BaseModel):
     claude_options: ClaudeOptionsModel | None = None
     codex_options: CodexOptionsModel | None = None
     antigravity_options: AntigravityOptionsModel | None = None
+    opencode_options: OpenCodeOptionsModel | None = None
     # Terminal-mode worktree: create a git worktree for a SHELL session
     # (no CLI options) anchored to a stored git project and spawn the shell
-    # inside it. Managed Claude/Codex/Antigravity sessions instead carry worktree
+    # inside it. Managed Claude/Codex/Antigravity/OpenCode sessions instead carry worktree
     # intent inside their own options block.
     worktree: bool = False
     branch_name: str | None = None

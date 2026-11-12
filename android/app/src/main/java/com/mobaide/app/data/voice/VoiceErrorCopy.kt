@@ -45,6 +45,7 @@ object VoiceErrorCopy {
         "claude" -> "Claude Code"
         "codex" -> "Codex"
         "antigravity" -> "Antigravity"
+        "opencode" -> "OpenCode"
         else -> "The session's AI agent"
     }
 
@@ -52,6 +53,7 @@ object VoiceErrorCopy {
         "claude" -> "claude update"
         "codex" -> "codex update"
         "antigravity" -> "agy update"
+        "opencode" -> "opencode upgrade"
         else -> null
     }
 

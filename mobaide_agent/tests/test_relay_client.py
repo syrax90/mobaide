@@ -3670,6 +3670,195 @@ class TestHandleProxyRequestAntigravity:
         assert resp["body"]["kind"] == "antigravity"
 
 
+class TestHandleCreateSessionOpenCode:
+    """The control-channel ``create_session`` path must support OpenCode:
+    parse ``opencode_options``, thread the ``cli`` discriminator into an
+    OPENCODE ``SessionConfig``, refuse a malformed block, and map a missing
+    ``opencode`` binary to its own ``opencode_cli_missing`` marker. No auth
+    case: OpenCode starts without an account.
+    """
+
+    async def test_create_session_forwards_opencode_options_and_kind(
+        self, client, mock_session_manager,
+    ):
+        """An explicit ``cli="opencode"`` plus an ``opencode_options`` block
+        must reach ``create_session`` as an OPENCODE ``SessionConfig`` carrying
+        the parsed :class:`OpenCodeOptions`. Otherwise the auto-approve choice
+        is silently dropped on the relay control path."""
+        from mobaide.core.models import SessionConfig
+        from mobaide.core.opencode_launcher import OpenCodeOptions
+
+        async def _capture(config: SessionConfig):
+            _capture.config = config  # type: ignore[attr-defined]
+            s = MagicMock()
+            s.session_id = "oc-sess"
+            s.pid = 7
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "oc-sess",
+            "cli": "opencode",
+            "opencode_options": {"auto_approve": True, "worktree": True},
+        }
+        payload = json.dumps(ctrl).encode()
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(payload, ws)
+
+        cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
+        assert cfg.kind is SessionKind.OPENCODE
+        assert cfg.claude_options is None
+        assert cfg.codex_options is None
+        assert cfg.antigravity_options is None
+        assert cfg.opencode_options == OpenCodeOptions(auto_approve=True, worktree=True)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_created"
+        assert resp["session_id"] == "oc-sess"
+        assert resp["pid"] == 7
+
+    @pytest.mark.parametrize(
+        "block",
+        [{"auto_approve": "sometimes"}, {"initial_prompt": "x" * 32_001}, ["--auto"]],
+        ids=["wrong-type", "prompt-over-the-cap", "not-an-object"],
+    )
+    async def test_invalid_opencode_options_fail_the_create(
+        self, client, mock_session_manager, block,
+    ):
+        """A malformed block answers ``session_create_failed`` and never
+        spawns: a session started with the defaults instead would ask for
+        permissions the user chose to skip, or run a truncated prompt."""
+        mock_session_manager.create_session = AsyncMock()
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "bad-opencode",
+            "cli": "opencode",
+            "opencode_options": block,
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_create_failed"
+        assert resp["session_id"] == "bad-opencode"
+        assert resp["error"].startswith("Invalid opencode_options:")
+        mock_session_manager.create_session.assert_not_awaited()
+
+    async def test_opencode_cli_missing_emits_opencode_cli_missing_discriminator(
+        self, client, mock_session_manager,
+    ):
+        """``OpenCodeBinaryNotFoundError`` from the spawn path must map to
+        ``session_create_failed`` with ``opencode_cli_missing: true`` (not
+        another CLI's marker) and the OpenCode install hint. Most PCs have no
+        ``opencode``, so this is the failure a user meets first."""
+        from mobaide.core.opencode_launcher import OpenCodeBinaryNotFoundError
+
+        mock_session_manager.create_session = AsyncMock(
+            side_effect=OpenCodeBinaryNotFoundError(searched_paths=["PATH:opencode"]),
+        )
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "no-opencode-sess",
+            "cli": "opencode",
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_create_failed"
+        assert resp["session_id"] == "no-opencode-sess"
+        assert resp["opencode_cli_missing"] is True
+        assert "claude_cli_missing" not in resp
+        assert "https://opencode.ai/docs/" in resp["error"]
+
+
+class TestHandleProxyRequestOpenCode:
+    """``POST /api/sessions`` proxied through the central relay
+    (``proxy_request`` control frame) must thread OpenCode the same way the
+    direct HTTP router does, and map a missing ``opencode`` binary to status
+    503 with an ``opencode_cli_missing`` body marker.
+    """
+
+    async def test_proxy_post_sessions_threads_opencode_options(
+        self, client, mock_session_manager,
+    ):
+        from mobaide.core.models import SessionConfig, SessionInfo
+        from mobaide.core.opencode_launcher import OpenCodeOptions
+
+        captured: dict[str, SessionConfig] = {}
+
+        async def _capture(config: SessionConfig):
+            captured["config"] = config
+            s = MagicMock()
+            s.session_id = "proxy-oc"
+            s.pid = 11
+            s.to_info = MagicMock(
+                return_value=SessionInfo(
+                    session_id="proxy-oc",
+                    state=SessionState.RUNNING,
+                    created_at=datetime(2026, 6, 1, 9, 0, 0, tzinfo=timezone.utc),
+                    pid=11,
+                    command=["opencode"],
+                    cwd=None,
+                    kind=config.kind,
+                ),
+            )
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+
+        ws = AsyncMock()
+        body = {
+            "cli": "opencode",
+            "opencode_options": {"auto_approve": True, "base_branch": "origin/main"},
+        }
+
+        with patch.object(client, "_bridge_session"):
+            result = await client._dispatch_proxy("POST", "/api/sessions", body, None, ws)
+
+        cfg = captured["config"]
+        assert cfg.kind is SessionKind.OPENCODE
+        assert cfg.claude_options is None
+        assert cfg.opencode_options == OpenCodeOptions(
+            auto_approve=True, base_branch="origin/main",
+        )
+        assert result["status"] == 201
+        assert result["body"]["kind"] == "opencode"
+
+    async def test_proxy_opencode_cli_missing_returns_503_with_discriminator(
+        self, client, mock_session_manager,
+    ):
+        from mobaide.core.opencode_launcher import OpenCodeBinaryNotFoundError
+
+        mock_session_manager.create_session = AsyncMock(
+            side_effect=OpenCodeBinaryNotFoundError(searched_paths=["PATH:opencode"]),
+        )
+        ws = AsyncMock()
+        ctrl = {
+            "type": "proxy_request",
+            "request_id": "req-opencode-missing",
+            "method": "POST",
+            "path": "/api/sessions",
+            "body": {"cli": "opencode", "opencode_options": {}},
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "proxy_response"
+        assert resp["request_id"] == "req-opencode-missing"
+        assert resp["status"] == 503
+        assert resp["body"]["opencode_cli_missing"] is True
+        assert "claude_cli_missing" not in resp["body"]
+        assert resp["body"]["searched_paths"] == ["PATH:opencode"]
+
+
 CUSTOM_KIND = "custom_0123456789ab"
 
 

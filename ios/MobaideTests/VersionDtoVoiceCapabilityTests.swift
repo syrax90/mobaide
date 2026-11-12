@@ -73,6 +73,9 @@ final class VersionDtoVoiceCapabilityTests: XCTestCase {
             name: "voice_capability"
         )
 
-        XCTAssertEqual(version.voiceCapability, capability(kinds: ["claude", "codex", "antigravity"]))
+        XCTAssertEqual(
+            version.voiceCapability, capability(kinds: ["claude", "codex", "antigravity", "opencode"])
+        )
+        XCTAssertEqual(version.voiceCapability?.cleansUp(for: .opencode), true)
     }
 }

@@ -31,6 +31,7 @@ async def test_get_version(client) -> None:
             "claude": {"available": True},
             "codex": {"available": True},
             "antigravity": {"available": True},
+            "opencode": {"available": True},
         },
         "git": {
             "changes": True,
@@ -53,18 +54,29 @@ async def test_get_version(client) -> None:
             "max_seconds": 120,
             "max_chunk_bytes": 65536,
             "cleanup": True,
-            "cleanup_kinds": ["claude", "codex", "antigravity"],
+            "cleanup_kinds": ["claude", "codex", "antigravity", "opencode"],
         },
         "fs": {"dirs": True, "windows_paths": sys.platform == "win32"},
         "chat": {
             "claude": {"resume": True, "live": False},
             "codex": {"resume": True, "live": sys.platform != "win32"},
+            "opencode": {"resume": True, "live": False},
         },
     }
     # The signed manifest body now travels inline over the relay WebSocket
     # — it is not exposed via this REST surface.
     assert "manifest_url" not in body
     assert "manifest_signature" not in body
+
+
+async def test_every_advertised_cleanup_kind_has_a_cli(app, client) -> None:
+    """A kind listed in ``capabilities.voice.cleanup_kinds`` with no CLI
+    behind it would make clients offer a cleanup that can only answer
+    ``cleanup_unavailable``."""
+    response = await client.get("/api/version")
+    advertised = response.json()["capabilities"]["voice"]["cleanup_kinds"]
+
+    assert set(app.state.voice._cleaner._clis) == set(advertised)
 
 
 async def test_get_version_claude_missing_reports_unavailable(
@@ -86,6 +98,7 @@ async def test_get_version_claude_missing_reports_unavailable(
     assert cli["claude"] == {"available": False}
     assert cli["codex"] == {"available": True}
     assert cli["antigravity"] == {"available": True}
+    assert cli["opencode"] == {"available": True}
 
 
 async def test_get_version_all_clis_missing_still_returns_200(
@@ -117,6 +130,7 @@ async def test_get_version_all_clis_missing_still_returns_200(
         "claude": {"available": False},
         "codex": {"available": False},
         "antigravity": {"available": False},
+        "opencode": {"available": True},
     }
 
 

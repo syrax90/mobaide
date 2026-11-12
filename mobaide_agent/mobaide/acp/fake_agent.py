@@ -1,6 +1,6 @@
 """A scripted ACP agent for tests and for UI checks on a local stack.
 
-Run with ``python -m mobaide.acp.fake_agent [--flavor codex|antigravity]``.
+Run with ``python -m mobaide.acp.fake_agent [--flavor codex|antigravity|opencode]``.
 ``MOBAIDE_ENV=test`` makes the chat sessions use it instead of a real agent,
 so every chat UI state can be reached without an account or network. The
 flavor picks the config options and names of the agent it stands in for. The
@@ -74,6 +74,15 @@ AGY_MODELS = [
     {"value": "gemini-3.8-flash", "name": "Gemini 3.8 Flash"},
     {"value": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6 (Thinking)"},
 ]
+OPENCODE_MODES = [
+    {"value": "build", "name": "Build", "description": "The default agent. Executes tools based on configured permissions."},
+    {"value": "plan", "name": "Plan", "description": "Read-only agent for exploring the codebase and planning work before implementation."},
+]
+OPENCODE_MODELS = [
+    {"value": "opencode/big-pickle", "name": "opencode/Big Pickle"},
+    {"value": "anthropic/claude-sonnet-5-5", "name": "anthropic/Claude Sonnet 5.5"},
+]
+OPENCODE_EFFORTS = [{"value": v, "name": v.capitalize()} for v in ("default", "low", "high")]
 SIGNED_OUT_ENV = "MOBAIDE_FAKE_ACP_SIGNED_OUT"
 AUTH_REQUIRED = -32000
 
@@ -124,6 +133,7 @@ class FakeAgent:
         self.loop = loop
         self.codex = flavor == "codex"
         self.agy = flavor == "antigravity"
+        self.opencode = flavor == "opencode"
         self.steers: dict[str, list[str]] = {}
         self.write_lock = threading.Lock()
         self.next_id = 1000
@@ -162,6 +172,16 @@ class FakeAgent:
             if s["model"] != "gemini-3.8-flash":
                 options.pop(1)
             return options
+        if self.opencode:
+            options = [
+                {"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": s["model"], "options": OPENCODE_MODELS},
+                {"id": "effort", "name": "Effort", "category": "thought_level", "type": "select", "currentValue": s["effort"], "options": OPENCODE_EFFORTS},
+                {"id": "mode", "name": "Session Mode", "category": "mode", "type": "select", "currentValue": s["mode"], "options": OPENCODE_MODES},
+            ]
+            # Like OpenCode: only a model with variants has the effort option.
+            if s["model"] == "opencode/big-pickle":
+                options.pop(1)
+            return options
         if self.codex:
             return [
                 {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": s["mode"], "options": CODEX_MODES},
@@ -195,6 +215,10 @@ class FakeAgent:
             )
         if self.agy:
             self.sessions[sid].update({"model": "gemini-3.8-flash", "thought_level": "high"})
+        if self.opencode:
+            self.sessions[sid].update(
+                {"mode": "build", "model": "opencode/big-pickle", "effort": "default"}
+            )
         return sid
 
     def models_block(self, sid: str) -> dict[str, Any]:
@@ -210,6 +234,8 @@ class FakeAgent:
             return ("model", "thought_level", "mode")
         if self.codex:
             return ("mode", "collaboration_mode", "model", "reasoning_effort", "fast-mode")
+        if self.opencode:
+            return ("model", "effort", "mode")
         return ("mode", "model", "effort", "fast")
 
     def commands(self, sid: str) -> None:
@@ -220,6 +246,12 @@ class FakeAgent:
                 {"name": "plan", "description": "Plan carefully before executing a task."},
                 {"name": "browser", "description": "Invoke a browser agent for web tasks."},
                 {"name": "learn", "description": "Reflect on recent successes or corrections to capture reusable skills or rules."},
+            ]
+        elif self.opencode:
+            available = [
+                {"name": "compact", "description": "Compact the session"},
+                {"name": "init", "description": "Create or update AGENTS.md"},
+                {"name": "review", "description": "Review changes [commit|branch|pr], defaults to uncommitted"},
             ]
         elif self.codex:
             available = [
@@ -273,6 +305,17 @@ class FakeAgent:
                         "sessionCapabilities": {"resume": {}, "close": {}, "load": {}, "list": {}, "additionalDirectories": {}},
                     },
                     "agentInfo": {"name": "Antigravity ACP Server", "version": "1.5.3"},
+                    "authMethods": [],
+                }
+            if self.opencode:
+                return {
+                    "protocolVersion": 1,
+                    "agentCapabilities": {
+                        "loadSession": True,
+                        "promptCapabilities": {"image": True, "embeddedContext": True},
+                        "sessionCapabilities": {"additionalDirectories": {}, "close": {}, "delete": {}, "fork": {}, "list": {}, "resume": {}},
+                    },
+                    "agentInfo": {"name": "OpenCode", "version": "2.2.5"},
                     "authMethods": [],
                 }
             info = (

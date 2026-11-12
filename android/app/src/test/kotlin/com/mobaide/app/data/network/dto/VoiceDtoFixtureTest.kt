@@ -162,7 +162,7 @@ class VoiceDtoFixtureTest {
                 maxSeconds = 120,
                 maxChunkBytes = 65536,
                 cleanup = true,
-                cleanupKinds = listOf("claude", "codex", "antigravity"),
+                cleanupKinds = listOf("claude", "codex", "antigravity", "opencode"),
             ),
             cases.getValue("voice_capability").wire.voiceCapability(),
         )

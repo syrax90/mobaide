@@ -21,6 +21,7 @@ enum AttentionContent {
         case .claude: return fallbackLabel
         case .codex: return "Codex session"
         case .antigravity: return "Antigravity session"
+        case .opencode: return "OpenCode session"
         case .autoScan: return "Auto Scan session"
         case .shell: return "Terminal session"
         case .custom:
