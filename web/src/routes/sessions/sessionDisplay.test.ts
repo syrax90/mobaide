@@ -4,6 +4,7 @@ import {
   attentionChip,
   canStopSession,
   customTypeNameMap,
+  isSessionWaiting,
   isSessionWorking,
   nearestOpenSession,
   sessionDialogLabel,
@@ -164,6 +165,22 @@ describe('isSessionWorking', () => {
   );
 });
 
+describe('isSessionWaiting', () => {
+  it('is waiting only for a running session parked on background work', () => {
+    expect(isSessionWaiting(session({ activity: 'waiting' }))).toBe(true);
+    expect(isSessionWaiting(session({ activity: 'working' }))).toBe(false);
+    expect(isSessionWaiting(session({ activity: 'idle' }))).toBe(false);
+    expect(isSessionWaiting(session({ state: 'crashed', activity: 'waiting' }))).toBe(false);
+  });
+
+  it.each(['awaiting_permission', 'awaiting_os_permission'])(
+    'yields to %s: the session is blocked on the user',
+    (attention) => {
+      expect(isSessionWaiting(session({ activity: 'waiting', attention }))).toBe(false);
+    },
+  );
+});
+
 describe('sessionStatusChip', () => {
   it('shows Working over a standing Ready from an earlier turn', () => {
     expect(
@@ -179,6 +196,20 @@ describe('sessionStatusChip', () => {
       sessionStatusChip(session({ activity: 'working', attention: 'awaiting_permission' })),
     ).toEqual({ text: 'Needs permission', tone: 'permission' });
     expect(sessionStatusChip(session({ activity: 'idle' }))).toBeNull();
+  });
+
+  it('shows Background over a standing Ready while background work is in flight', () => {
+    // "Ready" here told the user it was their move on a session that was
+    // about to resume by itself.
+    expect(
+      sessionStatusChip(session({ activity: 'waiting', attention: 'turn_finished' })),
+    ).toEqual({ text: 'Background', tone: 'waiting' });
+  });
+
+  it('shows Needs permission over Background', () => {
+    expect(
+      sessionStatusChip(session({ activity: 'waiting', attention: 'awaiting_permission' })),
+    ).toEqual({ text: 'Needs permission', tone: 'permission' });
   });
 });
 

@@ -14,8 +14,8 @@ Security: the agent binds ``0.0.0.0``, so this endpoint is guarded by a loopback
 source check **and** the per-agent token. It carries no auth dependency on
 purpose — the only intended caller is the local ``claude`` child process, which
 cannot present a user JWT. Handlers stay non-blocking (look-up + in-memory
-enqueue, then 200) so a ``Stop`` hook — which blocks Claude on a non-zero/late
-response — never stalls the CLI.
+enqueue, then 200) so a ``Stop`` or ``PreToolUse`` hook — which blocks Claude
+until it is answered — never stalls the CLI.
 """
 from __future__ import annotations
 
@@ -24,7 +24,11 @@ from typing import Any
 
 from fastapi import APIRouter, Request, Response, status
 
-from mobaide.core.attention_gate import HookKind, resolve_hook_kind
+from mobaide.core.attention_gate import (
+    HookKind,
+    resolve_hook_kind,
+    summarize_hook_payload,
+)
 from mobaide.core.hook_settings import remove_session_hooks
 
 from ..logging import get_logger
@@ -74,13 +78,22 @@ async def receive_hook(
         return Response(status_code=status.HTTP_200_OK)
 
     session.on_claude_hook(kind, body)
+    summary = summarize_hook_payload(body)
     if kind is HookKind.END:
         remove_session_hooks(session_id, request.app.state.config.port)
         logger.info(
             "hook.session_ended",
             session_id=session_id,
             reason=str(body.get("reason") or "other"),
+            **summary,
+        )
+    elif kind is HookKind.TOOL:
+        # One per tool call: too frequent for the info log.
+        logger.debug(
+            "hook.received", session_id=session_id, hook=kind.value, **summary,
         )
     else:
-        logger.info("hook.received", session_id=session_id, hook=kind.value)
+        logger.info(
+            "hook.received", session_id=session_id, hook=kind.value, **summary,
+        )
     return Response(status_code=status.HTTP_200_OK)

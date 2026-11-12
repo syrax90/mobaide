@@ -37,7 +37,10 @@ export const sessionResponseSchema = z.looseObject({
   exit_reason: optionalWireString(),
   /** `chat` for a structured chat session; absent or anything else is the terminal. */
   ui: optionalWireString(),
-  /** `working` while the agent is mid-turn, `idle` between turns; absent when unknown. */
+  /**
+   * `working` while the agent is mid-turn, `waiting` while it is parked on
+   * background work, `idle` between turns; absent when unknown.
+   */
   activity: optionalWireString(),
 });
 

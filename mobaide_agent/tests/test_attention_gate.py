@@ -26,6 +26,7 @@ from mobaide.core.attention_gate import (
     AttentionGate,
     HookKind,
     resolve_hook_kind,
+    summarize_hook_payload,
 )
 
 
@@ -274,23 +275,6 @@ class TestTurnDedupe:
 
 
 class TestIdleBackstop:
-    async def test_idle_alerts_after_a_suppressed_stop(
-        self, session, scheduler,
-    ) -> None:
-        # Claude Code raises ``idle_prompt`` after 60 s of real idleness, the
-        # only signal left when a task is wedged in ``running`` or the CLI is
-        # too old to report ``background_tasks`` at all.
-        gate = _gate(session)
-        gate.handle(
-            HookKind.STOP,
-            {"prompt_id": "p1", "background_tasks": [{"status": "running"}]},
-        )
-
-        gate.handle(HookKind.IDLE, {})
-
-        assert session.reasons == ["turn_finished"]
-        assert scheduler.pending == []
-
     async def test_idle_does_not_double_alert_an_alerted_turn(
         self, session, scheduler,
     ) -> None:
@@ -300,6 +284,33 @@ class TestIdleBackstop:
         session.user_responded()
 
         gate.handle(HookKind.IDLE, {"prompt_id": "p1"})
+
+        assert session.reasons == ["turn_finished"]
+
+    async def test_idle_with_a_rotated_prompt_id_does_not_alert_again(
+        self, session, scheduler,
+    ) -> None:
+        # ``idle_prompt`` can carry a newer ``prompt_id`` than the ``Stop`` that
+        # ended the turn, so the dedupe key alone lets it through.
+        gate = _gate(session)
+        gate.handle(HookKind.STOP, {"prompt_id": "p1"})
+        scheduler.elapse()
+        session.user_responded()
+
+        gate.handle(HookKind.IDLE, {"prompt_id": "p2"})
+
+        assert session.reasons == ["turn_finished"]
+
+    async def test_idle_alerts_after_a_muted_window(self, session, scheduler) -> None:
+        # A scroll or a focus report muted the window, so the user saw no
+        # alert for this turn; the 60 s backstop must still deliver it.
+        gate = _gate(session)
+        gate.handle(HookKind.STOP, {"prompt_id": "p1"})
+        gate.mute()
+        scheduler.elapse()
+        assert session.reasons == []
+
+        gate.handle(HookKind.IDLE, {"prompt_id": "p2"})
 
         assert session.reasons == ["turn_finished"]
 
@@ -415,22 +426,6 @@ class TestActivity:
 
         assert session.activity == ["working", "idle"]
 
-    @pytest.mark.parametrize(
-        "payload",
-        [
-            {"prompt_id": "p1", "background_tasks": [{"status": "running"}]},
-            {"prompt_id": "p1", "session_crons": [{"id": "c1"}]},
-        ],
-    )
-    async def test_stop_with_work_in_flight_stays_working(
-        self, session, scheduler, payload,
-    ) -> None:
-        gate = _gate(session)
-        gate.handle(HookKind.STOP, payload)
-
-        assert scheduler.elapse() == 0
-        assert session.activity == ["working"]
-
     async def test_a_withheld_alert_still_turns_idle(self, session, scheduler) -> None:
         # The badge from the previous turn is still up, so this turn's alert is
         # withheld — the indicator must stop anyway.
@@ -494,10 +489,10 @@ class TestMute:
         assert session.reasons == ["turn_finished"]
 
 
-class TestProvisionalIdle:
+class TestIdleWhileWorkInFlight:
     """An ``idle_prompt`` while the last ``Stop`` still saw background work is
-    provisional: it alerts, but leaves the turn's dedupe key free so the
-    ``Stop`` that really ends the turn can still show "Ready"."""
+    not an alert: the row keeps the activity that ``Stop`` gave it, and the
+    ``Stop`` that really ends the turn still shows "Ready" once."""
 
     @staticmethod
     def _stop_with_background(gate: AttentionGate, prompt_id: str = "p1") -> None:
@@ -506,47 +501,31 @@ class TestProvisionalIdle:
             {"prompt_id": prompt_id, "background_tasks": [{"status": "running"}]},
         )
 
-    async def test_the_final_stop_alerts_after_a_provisional_idle(
-        self, session, scheduler,
-    ) -> None:
-        # The reported bug: subagents still running, ``idle_prompt`` alerts
-        # early, the user looks, and the real end of the turn stayed silent.
-        gate = _gate(session)
-        self._stop_with_background(gate)
-        gate.handle(HookKind.IDLE, {"prompt_id": "p1"})
-        session.user_responded()
-
-        gate.handle(HookKind.STOP, {"prompt_id": "p1"})
-        scheduler.elapse()
-
-        assert session.reasons == ["turn_finished", "turn_finished"]
-
-    async def test_provisional_idle_alerts_once_per_turn(
-        self, session, scheduler,
-    ) -> None:
-        # A long-lived background shell keeps every ``Stop`` "in flight", so
-        # each idle stretch would otherwise become a fresh alert.
-        gate = _gate(session)
-        self._stop_with_background(gate)
-        gate.handle(HookKind.IDLE, {"prompt_id": "p1"})
-        session.user_responded()
-
-        self._stop_with_background(gate)
-        gate.handle(HookKind.IDLE, {"prompt_id": "p1"})
-
-        assert session.reasons == ["turn_finished"]
-
-    async def test_the_final_stop_is_withheld_while_the_badge_is_still_up(
+    async def test_the_final_stop_alerts_after_an_idle_that_waited(
         self, session, scheduler,
     ) -> None:
         gate = _gate(session)
         self._stop_with_background(gate)
         gate.handle(HookKind.IDLE, {"prompt_id": "p1"})
+        assert session.reasons == []
 
         gate.handle(HookKind.STOP, {"prompt_id": "p1"})
         scheduler.elapse()
 
         assert session.reasons == ["turn_finished"]
+
+    async def test_repeated_idles_with_work_in_flight_never_alert(
+        self, session, scheduler,
+    ) -> None:
+        gate = _gate(session)
+        self._stop_with_background(gate)
+        gate.handle(HookKind.IDLE, {"prompt_id": "p1"})
+        self._stop_with_background(gate)
+        gate.handle(HookKind.IDLE, {"prompt_id": "p1"})
+
+        assert session.reasons == []
+        assert session.activity[-1] == "working"
+        assert scheduler.pending == []
 
     async def test_idle_after_a_clean_stop_is_final(self, session, scheduler) -> None:
         # The background work finished before this ``Stop``, so the idle alert
@@ -698,3 +677,453 @@ class TestResolveHookKind:
         # A session spawned by the previous agent has no ``hook`` param in its
         # URLs and must keep working for the rest of its life.
         assert resolve_hook_kind("", event_name) is kind
+
+
+def _task(task_id: str, task_type: str, status: str = "running") -> dict[str, str]:
+    return {"id": task_id, "type": task_type, "status": status}
+
+
+def _stop(prompt_id: str, *tasks: dict[str, str]) -> dict[str, object]:
+    return {"prompt_id": prompt_id, "background_tasks": list(tasks)}
+
+
+class TestParkedOnBackgroundWork:
+    """A ``Stop`` that lists in-flight work is not the end of the turn, and what
+    it lists decides the indicator: an agent at work keeps the session
+    ``working``, a shell, monitor or wakeup the session merely sits on makes it
+    ``waiting``. Neither arms the window that leads to "Ready"."""
+
+    @pytest.mark.parametrize(
+        ("payload", "activity"),
+        [
+            (_stop("p1", _task("t1", "shell")), "waiting"),
+            (_stop("p1", _task("t1", "monitor")), "waiting"),
+            (_stop("p1", _task("t1", "subagent", "paused")), "waiting"),
+            ({"prompt_id": "p1", "session_crons": [{"id": "c1"}]}, "waiting"),
+            (_stop("p1", _task("t1", "subagent")), "working"),
+            (_stop("p1", _task("t1", "shell"), _task("t2", "subagent")), "working"),
+            # A type this agent does not know yet, or none at all: calling an
+            # agent at work "parked" is the worse mistake.
+            (_stop("p1", _task("t1", "not_invented_yet")), "working"),
+            ({"background_tasks": [{"id": "t1", "status": "running"}]}, "working"),
+        ],
+    )
+    async def test_stop_reports_what_is_still_in_flight(
+        self, session, scheduler, payload, activity,
+    ) -> None:
+        gate = _gate(session)
+        gate.handle(HookKind.STOP, payload)
+
+        assert scheduler.pending == []
+        assert session.activity == [activity]
+        assert session.calls == []
+
+
+class TestToolHeartbeat:
+    """``PreToolUse`` proves work is going on. From the main agent that is
+    always true; from a sub-agent only while the last ``Stop`` still listed
+    something in flight."""
+
+    async def test_main_agent_call_cancels_an_armed_window(
+        self, session, scheduler,
+    ) -> None:
+        # A ``!`` command the model answers starts a turn that no
+        # ``UserPromptSubmit`` announces. Without the heartbeat the window the
+        # previous ``Stop`` armed says "Ready" while the agent works.
+        gate = _gate(session)
+        gate.handle(HookKind.STOP, {"prompt_id": "p1"})
+
+        gate.handle(HookKind.TOOL, {"prompt_id": "p1"})
+
+        assert scheduler.elapse() == 0
+        assert session.calls == []
+        assert session.activity == ["working"]
+
+        gate.handle(HookKind.STOP, {"prompt_id": "p1"})
+
+        assert scheduler.elapse() == 1
+        assert session.reasons == ["turn_finished"]
+
+    async def test_sub_agent_call_with_nothing_in_flight_is_ignored(
+        self, session, scheduler,
+    ) -> None:
+        # One of the CLI's own helper agents, running after the turn. No
+        # ``Stop`` follows it, so a session it pulled back to ``working`` would
+        # stay there, and a window it cancelled would never say "Ready".
+        gate = _gate(session)
+        gate.handle(HookKind.STOP, {"prompt_id": "p1"})
+
+        gate.handle(HookKind.TOOL, {"prompt_id": "p1", "agent_id": "a1"})
+
+        assert session.activity == []
+        assert scheduler.elapse() == 1
+        assert session.reasons == ["turn_finished"]
+
+        gate.handle(HookKind.TOOL, {"prompt_id": "p1", "agent_id": "a1"})
+
+        assert session.activity == ["idle"]
+
+
+class TestLongLivedTasks:
+    """A dev server never completes, so every ``Stop`` after it starts lists it.
+    The turn that started it ends ``waiting``; once the user types the next
+    prompt it no longer counts, or the session would never say "Ready" again."""
+
+    @staticmethod
+    def _park_on_a_shell(gate: AttentionGate) -> None:
+        gate.handle(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1", "prompt": "serve"})
+        gate.handle(HookKind.STOP, _stop("p1", _task("t1", "shell")))
+
+    @pytest.mark.parametrize(
+        ("prompt", "ready"),
+        [
+            ({"prompt": "now fix the bug"}, True),
+            # An older CLI that sends no prompt text.
+            ({}, True),
+            # Written by the CLI itself: the shell reporting, a sub-agent
+            # handing back. The session is still inside the turn that parked.
+            ({"prompt": "<task-notification>\n"}, False),
+            ({"prompt": "<agent-message from="}, False),
+            # A collapsed paste is the user's own input: the apps send every
+            # multi-line composer prompt as one.
+            ({"prompt": '<pasted_content id="1">\nfix\n</pasted_content id="1">'}, True),
+            # ``source`` outranks the look of the text, in both directions.
+            ({"source": "user", "prompt": "<task-notification>\n"}, True),
+            ({"source": "task", "prompt": "now fix the bug"}, False),
+        ],
+    )
+    async def test_only_a_typed_prompt_makes_a_parked_shell_long_lived(
+        self, session, scheduler, prompt, ready,
+    ) -> None:
+        gate = _gate(session)
+        self._park_on_a_shell(gate)
+        assert session.activity[-1] == "waiting"
+
+        gate.handle(HookKind.PROMPT_SUBMIT, {"prompt_id": "p2", **prompt})
+        gate.handle(HookKind.STOP, _stop("p2", _task("t1", "shell")))
+
+        assert scheduler.elapse() == (1 if ready else 0)
+        assert session.reasons == (["turn_finished"] if ready else [])
+        assert session.activity[-1] == ("idle" if ready else "waiting")
+
+    async def test_a_scheduled_wakeup_is_not_a_typed_prompt(
+        self, session, scheduler,
+    ) -> None:
+        # A wakeup submits plain text, exactly like a typed prompt. Read as
+        # typed, it marked the running shell long-lived and showed "Ready"
+        # while the session was still parked on it.
+        gate = _gate(session)
+        gate.handle(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1", "prompt": "serve"})
+        gate.handle(
+            HookKind.STOP,
+            {**_stop("p1", _task("t1", "shell")), "session_crons": [{"id": "c1"}]},
+        )
+
+        gate.handle(HookKind.PROMPT_SUBMIT, {"prompt_id": "p2", "prompt": "check"})
+        gate.handle(HookKind.STOP, _stop("p2", _task("t1", "shell")))
+
+        assert scheduler.elapse() == 0
+        assert session.calls == []
+        assert session.activity[-1] == "waiting"
+
+    async def test_a_shell_started_after_the_baseline_still_parks_the_session(
+        self, session, scheduler,
+    ) -> None:
+        gate = _gate(session)
+        self._park_on_a_shell(gate)
+
+        gate.handle(HookKind.PROMPT_SUBMIT, {"prompt_id": "p2", "prompt": "build"})
+        gate.handle(
+            HookKind.STOP, _stop("p2", _task("t1", "shell"), _task("t2", "shell")),
+        )
+
+        assert scheduler.elapse() == 0
+        assert session.calls == []
+        assert session.activity[-1] == "waiting"
+
+
+class TestMalformedActivityFields:
+    @pytest.mark.parametrize(
+        ("kind", "payload", "activity"),
+        [
+            # Unhashable where a set lookup would hash it: ``type`` against the
+            # passive types, ``id`` against the long-lived ids.
+            (
+                HookKind.STOP,
+                {"background_tasks": [{"status": "running", "type": ["shell"]}]},
+                "working",
+            ),
+            (
+                HookKind.STOP,
+                {
+                    "background_tasks": [
+                        {"status": "running", "type": "shell", "id": ["t1"]},
+                    ],
+                },
+                "waiting",
+            ),
+            (
+                HookKind.STOP,
+                {"background_tasks": [{"status": "paused", "type": {}, "id": 7}]},
+                "waiting",
+            ),
+            (HookKind.PROMPT_SUBMIT, {"prompt": 42, "source": ["user"]}, "working"),
+            # An ``agent_id`` the gate cannot read is not a sub-agent.
+            (HookKind.TOOL, {"agent_id": ["a1"]}, "working"),
+            (HookKind.TOOL, {"agent_id": ""}, "working"),
+        ],
+    )
+    async def test_unreadable_field_never_raises(
+        self, session, scheduler, kind, payload, activity,
+    ) -> None:
+        # ``Stop`` and ``PreToolUse`` both hold Claude until the hook answers.
+        gate = _gate(session)
+        gate.handle(kind, payload)
+
+        assert session.activity == [activity]
+        assert session.calls == []
+
+
+_PROMPT = HookKind.PROMPT_SUBMIT
+_TOOL = HookKind.TOOL
+_STOP = HookKind.STOP
+_IDLE = HookKind.IDLE
+_END = HookKind.END
+
+_SUBAGENT_1 = _task("t1", "subagent")
+_EXIT = {"reason": "prompt_input_exit"}
+
+
+def _typed(prompt_id: str) -> dict[str, str]:
+    return {"prompt_id": prompt_id, "prompt": "do the task"}
+
+
+def _task_notification(prompt_id: str) -> dict[str, str]:
+    return {"prompt_id": prompt_id, "prompt": "<task-notification>\n"}
+
+
+def _agent_message(prompt_id: str) -> dict[str, str]:
+    return {"prompt_id": prompt_id, "prompt": "<agent-message from="}
+
+
+def _tool(prompt_id: str, agent_id: str | None = None) -> dict[str, str]:
+    payload = {"prompt_id": prompt_id}
+    if agent_id is not None:
+        payload["agent_id"] = agent_id
+    return payload
+
+
+# Hook sequences recorded from Claude Code 2.1.322, cut to the fields the gate
+# reads. Row: seconds since start, hook, payload, then the resulting activity
+# and every alert so far. ``SubagentStart``/``SubagentStop``/``PostToolUse`` are omitted.
+
+# The main agent waits on a sub-agent, which waits on its own background shell.
+# From 7.9 s the only task listed is that shell, and the sub-agent is not listed
+# as running, so the ``idle_prompt`` at 67.9 s arrives 28 s before work resumes.
+_WAITS_ON_A_SUB_AGENT_THAT_WAITS_ON_A_SHELL = [
+    (0.0, _PROMPT, _typed("p1"), "working", []),
+    (2.1, _TOOL, _tool("p1"), "working", []),
+    (3.1, _STOP, _stop("p1", _SUBAGENT_1), "working", []),
+    (3.8, _TOOL, _tool("p1", "a1"), "working", []),
+    (6.9, _PROMPT, _task_notification("p2"), "working", []),
+    (7.9, _STOP, _stop("p2", _task("t2", "shell")), "waiting", []),
+    (67.9, _IDLE, {"prompt_id": "p2"}, "waiting", []),
+    (95.7, _TOOL, _tool("p2", "a1"), "working", []),
+    (96.3, _PROMPT, _agent_message("p3"), "working", []),
+    (97.4, _STOP, _stop("p3"), "working", []),
+    (157.4, _IDLE, {"prompt_id": "p4"}, "idle", ["turn_finished"]),
+    (217.2, _END, _EXIT, "idle", ["turn_finished", "ended"]),
+]
+
+# The main agent waits on its own background shell for 99 s.
+_WAITS_ON_ITS_OWN_SHELL = [
+    (0.0, _PROMPT, _typed("p1"), "working", []),
+    (1.5, _TOOL, _tool("p1"), "working", []),
+    (2.9, _STOP, _stop("p1", _task("t1", "shell")), "waiting", []),
+    (62.9, _IDLE, {"prompt_id": "p1"}, "waiting", []),
+    (102.1, _PROMPT, _task_notification("p2"), "working", []),
+    (103.7, _TOOL, _tool("p2"), "working", []),
+    (124.9, _STOP, _stop("p2"), "working", []),
+    (184.9, _IDLE, {"prompt_id": "p2"}, "idle", ["turn_finished"]),
+    (192.0, _END, _EXIT, "idle", ["turn_finished", "ended"]),
+]
+
+# A sub-agent starts a shell and hands back, the shell's notification wakes the
+# session twice, and the sub-agent finishes 42 s later.
+_SUB_AGENT_THEN_ITS_SHELL = [
+    (0.0, _PROMPT, _typed("p1"), "working", []),
+    (1.8, _TOOL, _tool("p1"), "working", []),
+    (2.9, _STOP, _stop("p1", _SUBAGENT_1), "working", []),
+    (3.5, _TOOL, _tool("p1", "a1"), "working", []),
+    (5.4, _TOOL, _tool("p1", "a1"), "working", []),
+    (5.7, _PROMPT, _agent_message("p2"), "working", []),
+    (6.8, _STOP, _stop("p2", _task("t2", "shell")), "waiting", []),
+    (6.8, _PROMPT, _task_notification("p3"), "working", []),
+    (7.9, _STOP, _stop("p3", _task("t2", "shell")), "waiting", []),
+    (49.9, _TOOL, _tool("p3", "a1"), "working", []),
+    (52.0, _PROMPT, _task_notification("p4"), "working", []),
+    (53.0, _STOP, _stop("p4"), "working", []),
+    (113.0, _IDLE, {"prompt_id": "p4"}, "idle", ["turn_finished"]),
+    (122.1, _END, _EXIT, "idle", ["turn_finished", "ended"]),
+]
+
+# The same shape in a session that was already at "Ready" from an earlier turn
+# when the user typed.
+_SUB_AGENT_THEN_ITS_SHELL_AFTER_AN_EARLIER_TURN = [
+    (0.0, _STOP, _stop("p1"), None, []),
+    (25.5, _PROMPT, _typed("p2"), "working", ["turn_finished"]),
+    (27.2, _TOOL, _tool("p2"), "working", ["turn_finished"]),
+    (29.7, _STOP, _stop("p2", _SUBAGENT_1), "working", ["turn_finished"]),
+    (30.5, _TOOL, _tool("p2", "a1"), "working", ["turn_finished"]),
+    (31.7, _TOOL, _tool("p2", "a1"), "working", ["turn_finished"]),
+    (36.0, _PROMPT, _task_notification("p3"), "working", ["turn_finished"]),
+    (37.3, _STOP, _stop("p3", _task("t2", "shell")), "waiting", ["turn_finished"]),
+    (57.3, _TOOL, _tool("p3", "a1"), "working", ["turn_finished"]),
+    (58.1, _PROMPT, _agent_message("p4"), "working", ["turn_finished"]),
+    (59.4, _STOP, _stop("p4"), "working", ["turn_finished"]),
+    (119.5, _IDLE, {"prompt_id": "p5"}, "idle", ["turn_finished"] * 2),
+    (127.7, _END, _EXIT, "idle", ["turn_finished", "turn_finished", "ended"]),
+]
+
+# Two sub-agents; one leaves a monitor behind that outlives the recording. The
+# session never reaches "Ready": it is still parked on that monitor at the end.
+_ORPHAN_MONITOR_LEFT_BY_A_SUB_AGENT = [
+    (0.0, _PROMPT, _typed("p1"), "working", []),
+    (1.6, _TOOL, _tool("p1"), "working", []),
+    (2.2, _TOOL, _tool("p1"), "working", []),
+    (3.4, _STOP, _stop("p1", _SUBAGENT_1, _task("t2", "subagent")), "working", []),
+    (3.7, _TOOL, _tool("p1", "a1"), "working", []),
+    (5.8, _TOOL, _tool("p1", "a2"), "working", []),
+    (7.2, _TOOL, _tool("p1", "a2"), "working", []),
+    (9.4, _TOOL, _tool("p1", "a2"), "working", []),
+    (10.5, _TOOL, _tool("p1", "a2"), "working", []),
+    (11.5, _PROMPT, _agent_message("p2"), "working", []),
+    (
+        12.5,
+        _STOP,
+        _stop("p2", _SUBAGENT_1, _task("t3", "shell"), _task("t4", "shell")),
+        "working",
+        [],
+    ),
+    (12.5, _PROMPT, _task_notification("p3"), "working", []),
+    (
+        13.6,
+        _STOP,
+        _stop("p3", _SUBAGENT_1, _task("t3", "shell"), _task("t4", "shell")),
+        "working",
+        [],
+    ),
+    (25.2, _TOOL, _tool("p3", "a1"), "working", []),
+    (25.7, _PROMPT, _agent_message("p4"), "working", []),
+    (
+        26.9,
+        _STOP,
+        _stop("p4", _task("t3", "shell"), _task("t4", "shell")),
+        "waiting",
+        [],
+    ),
+    (57.2, _PROMPT, _task_notification("p5"), "working", []),
+    (58.2, _STOP, _stop("p5", _task("t4", "shell")), "waiting", []),
+    (112.2, _END, _EXIT, "idle", ["ended"]),
+]
+
+
+class TestRecordedSequences:
+    """The bug these pin: a session showing "Ready", and pushing it, while a
+    sub-agent or a background shell was still going to resume it."""
+
+    @staticmethod
+    def _replay(
+        session: _Session, scheduler: _Scheduler, hooks: list[tuple],
+    ) -> list[tuple[str | None, list[str]]]:
+        """Feed ``(seconds, kind, payload)`` rows to a gate on their own clock.
+
+        A quiet window runs out when the recorded gap after it was armed is at
+        least as long as the window. A ``UserPromptSubmit`` also drops the
+        badge, as ``TerminalSession.on_claude_hook`` does.
+        """
+        gate = _gate(session)
+        armed_at: list[float] = []
+        seen = []
+        for at, kind, payload in hooks:
+            for handle, armed in zip(scheduler.handles, armed_at, strict=True):
+                if handle in scheduler.pending and armed + handle.delay <= at:
+                    handle.fired = True
+                    handle.callback()
+            gate.handle(kind, payload)
+            if kind is HookKind.PROMPT_SUBMIT:
+                session.user_responded()
+            armed_at += [at] * (len(scheduler.handles) - len(armed_at))
+            seen.append(
+                (session.activity[-1] if session.activity else None, session.reasons),
+            )
+        return seen
+
+    @pytest.mark.parametrize(
+        "rows",
+        [
+            pytest.param(_WAITS_ON_A_SUB_AGENT_THAT_WAITS_ON_A_SHELL, id="s5"),
+            pytest.param(_WAITS_ON_ITS_OWN_SHELL, id="s3"),
+            pytest.param(_SUB_AGENT_THEN_ITS_SHELL, id="s2"),
+            pytest.param(_SUB_AGENT_THEN_ITS_SHELL_AFTER_AN_EARLIER_TURN, id="s4"),
+            pytest.param(_ORPHAN_MONITOR_LEFT_BY_A_SUB_AGENT, id="s1"),
+        ],
+    )
+    async def test_activity_and_alerts_follow_the_recording(
+        self, session, scheduler, rows,
+    ) -> None:
+        seen = self._replay(
+            session, scheduler, [(at, kind, payload) for at, kind, payload, *_ in rows],
+        )
+
+        assert seen == [(activity, alerts) for *_, activity, alerts in rows]
+
+
+class TestSummarizeHookPayload:
+    """The summary goes to the agent log on every hook. A task's command and
+    description, and the prompt, are the user's work and must stay out of it."""
+
+    def test_summary_keeps_only_what_the_gate_decides_on(self) -> None:
+        payload = {
+            "prompt_id": "0123456789abcdef",
+            "prompt": "<task-notification>PRIVATE-PROMPT",
+            "agent_id": "a1",
+            "last_assistant_message": "PRIVATE-REPLY",
+            "background_tasks": [
+                {
+                    "id": "t1",
+                    "type": "shell",
+                    "status": "running",
+                    "command": "PRIVATE-COMMAND",
+                    "description": "PRIVATE-DESCRIPTION",
+                },
+                {"id": "t2", "type": "subagent", "status": "completed"},
+            ],
+            "session_crons": [{"id": "c1", "prompt": "PRIVATE-CRON"}],
+        }
+
+        assert summarize_hook_payload(payload) == {
+            "prompt_id": "01234567",
+            "subagent": True,
+            "cli_prompt": True,
+            "tasks": "shell:running,subagent:completed",
+            "crons": 1,
+        }
+
+    @pytest.mark.parametrize(
+        ("payload", "summary"),
+        [
+            (
+                {"background_tasks": [{"type": "x" * 500, "status": {"a": 1}}] * 20},
+                {"tasks": ",".join(["x" * 24 + ":?"] * 8), "tasks_total": 20},
+            ),
+            ({"background_tasks": [None, 7, {"type": None}]}, {"tasks": "?:?"}),
+            ({"prompt_id": 42, "background_tasks": "running", "session_crons": 5}, {}),
+        ],
+    )
+    def test_summary_is_bounded_and_survives_any_payload(
+        self, payload, summary,
+    ) -> None:
+        # It runs inside the handler that answers a blocking hook, on a body
+        # the agent does not control.
+        assert summarize_hook_payload(payload) == summary

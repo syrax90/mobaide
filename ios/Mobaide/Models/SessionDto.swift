@@ -69,8 +69,9 @@ struct SessionResponse: Codable, Equatable, Sendable {
     let exit_reason: String?
     /// `"chat"` or `"terminal"`; absent or any other value is the terminal.
     let ui: String?
-    /// `"working"` while the agent is mid-turn, `"idle"` between turns; nil
-    /// when the agent cannot tell (Codex, Antigravity, OpenCode, Copilot and Terminal PTY sessions).
+    /// `"working"` while the agent is mid-turn, `"waiting"` while it is parked
+    /// on background work, `"idle"` between turns; nil when the agent cannot
+    /// tell (Codex, Antigravity, OpenCode, Copilot and Terminal PTY sessions).
     let activity: String?
 
     var isChat: Bool { ui == "chat" }

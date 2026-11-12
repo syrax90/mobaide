@@ -127,4 +127,38 @@ class SessionDisplayTest {
         )
         assertNull(sessionStatusChip(session(activity = "idle")))
     }
+
+    @Test
+    fun waiting_onlyForARunningSessionParkedOnBackgroundWork() {
+        assertTrue(isSessionWaiting(session(activity = "waiting")))
+        assertFalse(isSessionWaiting(session(activity = "working")))
+        assertFalse(isSessionWaiting(session(activity = "idle")))
+        assertFalse(
+            "a crashed session is parked on nothing, whatever its last activity",
+            isSessionWaiting(session(state = "crashed", activity = "waiting")),
+        )
+        listOf("awaiting_permission", "awaiting_os_permission").forEach { attention ->
+            assertFalse(
+                "$attention: the session is blocked on the user",
+                isSessionWaiting(session(activity = "waiting", attention = attention)),
+            )
+        }
+    }
+
+    @Test
+    fun statusChip_showsBackgroundOverAStandingReady_whileBackgroundWorkIsInFlight() {
+        assertEquals(
+            "Ready here told the user it was their move on a session about to resume by itself",
+            SessionAttention("Background", AttentionTone.Muted),
+            sessionStatusChip(session(activity = "waiting", attention = "turn_finished")),
+        )
+    }
+
+    @Test
+    fun statusChip_showsNeedsPermissionOverBackground() {
+        assertEquals(
+            SessionAttention("Needs permission", AttentionTone.Warning),
+            sessionStatusChip(session(activity = "waiting", attention = "awaiting_permission")),
+        )
+    }
 }

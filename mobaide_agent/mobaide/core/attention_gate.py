@@ -21,8 +21,9 @@ window plus a time cooldown:
     Scheduled wakeups (``CronCreate``, ``ScheduleWakeup``, ``/loop``) that will
     re-drive this session later.
 ``prompt_id``
-    Correlates a user prompt with every event until the next prompt, which makes
-    it a free per-turn dedupe key.
+    Rotates on every ``UserPromptSubmit`` — a typed prompt, but also the
+    ``<task-notification>`` or sub-agent hand-back that wakes the session — so
+    it is a free dedupe key for one model turn.
 
 ``stop_hook_active`` is deliberately ignored. It marks the stop that follows a
 continuation an earlier ``Stop`` hook forced, and the CLI advises hooks to let
@@ -32,27 +33,50 @@ loop) just yields another ``Stop``, which re-arms the window; a continuation
 longer than the window still alerts early and dedupes the real end.
 
 State machine, one instance per session. Besides alerts, the gate reports the
-session's ``activity`` (``working`` / ``idle``), which the clients render as a
-persistent "agent is working" indicator independent of whether an alert fired:
+session's ``activity``, which the clients render as a persistent indicator
+independent of whether an alert fired:
+
+``working``
+    The main agent is mid-turn, or a background agent is running.
+``waiting``
+    The main agent is parked and only passive background work is in flight: a
+    shell, a monitor, a scheduled wakeup. The session will normally resume by
+    itself, so this is neither "working" nor "your move".
+``idle``
+    Nothing is in flight. Only this state may alert ``turn_finished``.
+
+The last ``Stop`` payload is the authority on which of the three applies:
 
 * ``prompt_submit`` — resets the turn so the next stop can alert again;
-  activity ``working``.
-* ``stop`` — when the payload says work continues (background work in
-  flight, a scheduled wakeup), cancel any pending window and stay ``working``;
-  otherwise (re)arm the quiet window.
+  activity ``working``. A prompt the user typed also marks every background
+  task parked at that moment as long-lived (see below). A task notification,
+  a sub-agent hand-back and a scheduled wakeup are not typed.
+* ``tool`` (``PreToolUse``) — a heartbeat. A main-agent call proves a turn is
+  live even when no ``UserPromptSubmit`` announced it (a ``!`` command the
+  model answers), so it cancels a pending window; activity ``working``. A
+  sub-agent call counts only while the last ``Stop`` listed in-flight work: a
+  sub-agent that resumes after its own background shell ends raises no
+  main-level hook until it hands back. A heartbeat never forgets the turn's
+  dedupe key: a ``/goal`` loop stops and continues many times in one turn, and
+  each continuation would otherwise alert again.
+* ``stop`` — a running background agent keeps the session ``working``;
+  passive work alone makes it ``waiting``. Either cancels any pending window.
+  With nothing in flight, (re)arm the quiet window.
 * window elapses — activity ``idle``, then alert ``turn_finished`` unless the
   session died, another attention reason was raised meanwhile, the turn already
   alerted, or a keystroke muted the window.
-* ``idle`` (``Notification``/``idle_prompt``) — an independent backstop that
-  alerts immediately and sets activity ``idle``. Claude Code raises it after
-  60 s of genuine idleness, so it covers what the payload-driven path suppresses
-  wrongly: a task wedged in ``running``, a long-lived background shell (a dev
-  server never completes, so every ``Stop`` sees it in flight), or a CLI too old
-  to send ``background_tasks``. When the last ``Stop`` still saw background work
-  the alert is *provisional*: it does not consume the turn's dedupe key, so the
-  ``Stop`` that really ends the turn — after that work wakes the session — can
-  still alert. Older CLIs raise ``idle_prompt`` while background agents run;
-  without the provisional rule that early alert muted the real one.
+* ``idle`` (``Notification``/``idle_prompt``) — Claude Code raises it 60 s
+  after the main agent stops, and a running shell or monitor does not delay it.
+  So it means "done" only when the last ``Stop`` listed nothing in flight:
+  then it alerts at once, which covers a turn that ended without a ``Stop``
+  (an interrupt) and a CLI too old to send ``background_tasks``. Otherwise
+  the session keeps the activity that ``Stop`` gave it and never turns
+  ``idle``: a sub-agent parked on its own background shell is not listed as
+  running, and alerting here told the user the session was done minutes before
+  it resumed. It also stays silent once the quiet window has alerted for the
+  turn. Its ``prompt_id`` can differ from the ``Stop``'s, so the dedupe key
+  would not stop a second alert for a turn the user has already seen and
+  dismissed. A muted window does not count: it showed the user nothing.
 * ``permission`` — always alerts immediately. Being blocked on the user is never
   debounced. Activity is left alone: the turn resumes once the user answers.
 * ``end`` — cancels the window *before* alerting, so a pending ``turn_finished``
@@ -61,6 +85,13 @@ persistent "agent is working" indicator independent of whether an alert fired:
   leaves the PTY running at an idle prompt.
 * a user keystroke (``mute``) — the pending window still elapses into ``idle``,
   but raises no alert: the user is plainly present.
+
+Long-lived tasks. A dev server never completes, so every ``Stop`` after it
+starts lists it, and a session that ran one would never alert again. A passive
+task still in flight when the user types the next prompt is therefore treated
+as long-lived and stops counting as in-flight work. The turn that started it
+still ends ``waiting``: nothing in the payload tells a dev server from a build
+the session will resume after.
 """
 from __future__ import annotations
 
@@ -88,6 +119,25 @@ ATTENTION_TURN_COOLDOWN_SECONDS = 120.0
 # list, so a task left ``failed``/``killed`` cannot suppress alerts forever.
 ATTENTION_ACTIVE_TASK_STATUSES = frozenset({"pending", "running", "paused"})
 
+# ``background_tasks[].type`` values that compute nothing by themselves: the
+# session is parked on them. Every other type (``subagent``, ``workflow``,
+# ``teammate``, a type this agent does not know yet) is an agent at work.
+ATTENTION_PASSIVE_TASK_TYPES = frozenset({"shell", "monitor"})
+
+# CLI-written ``UserPromptSubmit`` prompts start with a tag (``<task-notification>``,
+# ``<agent-message …>``). Matching any tag errs safe: a typed ``<`` prompt only
+# delays long-lived marking by one prompt. Used only when ``source`` is absent.
+_CLI_PROMPT_PREFIX = "<"
+
+# The one tag that marks the user's own input: the CLI wraps a collapsed paste
+# in it, and the apps send every multi-line composer prompt as a paste.
+_PASTE_PROMPT_PREFIX = "<pasted_content"
+
+# Bounds for the per-hook log summary: enough to diagnose a wrong state from
+# the log, never an unbounded echo of a payload.
+_SUMMARY_MAX_TASKS = 8
+_SUMMARY_MAX_FIELD_CHARS = 24
+
 # Attention reasons a "your move" alert must not overwrite: it is either already
 # on screen or terminal. The prompt-blocking reasons are deliberately absent — a
 # ``Stop`` or ``idle_prompt`` arriving proves the prompt was answered (on the
@@ -111,6 +161,7 @@ class HookKind(enum.Enum):
     IDLE = "idle"
     STOP = "stop"
     PROMPT_SUBMIT = "prompt_submit"
+    TOOL = "tool"
     END = "end"
 
 
@@ -136,24 +187,120 @@ def resolve_hook_kind(hook: str, hook_event_name: str) -> HookKind | None:
     return LEGACY_EVENT_TO_KIND.get(hook_event_name)
 
 
-def _has_active_background_work(payload: Mapping[str, Any]) -> bool:
-    """Whether the payload shows work that will wake the session on its own."""
-    crons = payload.get("session_crons")
-    if isinstance(crons, (list, tuple)) and crons:
-        return True
+def _active_tasks(payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """The payload's background tasks that are still in flight."""
     tasks = payload.get("background_tasks")
     if not isinstance(tasks, (list, tuple)):
-        return False
+        return []
     # ``status`` must be checked for str-ness before the membership test: set
     # lookup hashes the left operand, so a JSON array or object there would
     # raise ``TypeError`` out of a handler that must never 500 — this one
     # answers Claude Code's blocking ``Stop`` hook.
-    return any(
-        isinstance(task, Mapping)
+    return [
+        task
+        for task in tasks
+        if isinstance(task, Mapping)
         and isinstance(task.get("status"), str)
         and task["status"] in ATTENTION_ACTIVE_TASK_STATUSES
-        for task in tasks
+    ]
+
+
+def _is_passive(task: Mapping[str, Any]) -> bool:
+    """Whether an in-flight task is something the session is parked on."""
+    if task["status"] == "paused":
+        return True
+    task_type = task.get("type")
+    return isinstance(task_type, str) and task_type in ATTENTION_PASSIVE_TASK_TYPES
+
+
+def _passive_task_ids(payload: Mapping[str, Any]) -> frozenset[str]:
+    return frozenset(
+        task["id"]
+        for task in _active_tasks(payload)
+        if _is_passive(task) and isinstance(task.get("id"), str)
     )
+
+
+def _in_flight_activity(
+    payload: Mapping[str, Any], long_lived_ids: frozenset[str],
+) -> str | None:
+    """The activity a ``Stop`` payload implies, or ``None`` with nothing in flight."""
+    waiting = _has_crons(payload)
+    for task in _active_tasks(payload):
+        if not _is_passive(task):
+            return "working"
+        task_id = task.get("id")
+        if not isinstance(task_id, str) or task_id not in long_lived_ids:
+            waiting = True
+    return "waiting" if waiting else None
+
+
+def _has_crons(payload: Mapping[str, Any]) -> bool:
+    crons = payload.get("session_crons")
+    return isinstance(crons, (list, tuple)) and bool(crons)
+
+
+def _is_cli_prompt(payload: Mapping[str, Any]) -> bool:
+    prompt = payload.get("prompt")
+    if not isinstance(prompt, str):
+        return False
+    text = prompt.lstrip()
+    return text.startswith(_CLI_PROMPT_PREFIX) and not text.startswith(
+        _PASTE_PROMPT_PREFIX,
+    )
+
+
+def _is_user_prompt(payload: Mapping[str, Any], *, wakeup_pending: bool) -> bool:
+    """Whether the user typed this ``UserPromptSubmit``, not the CLI itself.
+
+    A scheduled wakeup submits its prompt as plain text, exactly like a typed
+    one, so while the last ``Stop`` listed a wakeup no prompt counts as typed.
+    """
+    source = payload.get("source")
+    if isinstance(source, str) and source:
+        return source == "user"
+    return not wakeup_pending and not _is_cli_prompt(payload)
+
+
+def _is_subagent_call(payload: Mapping[str, Any]) -> bool:
+    agent_id = payload.get("agent_id")
+    return isinstance(agent_id, str) and bool(agent_id)
+
+
+def _clip(value: Any) -> str:
+    return value[:_SUMMARY_MAX_FIELD_CHARS] if isinstance(value, str) else "?"
+
+
+def summarize_hook_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """The payload fields the gate decides on, bounded and safe to log.
+
+    Task types and statuses only: a task's ``command`` and ``description``, and
+    the prompt text, are the user's work and stay out of the log.
+    """
+    summary: dict[str, Any] = {}
+    prompt_id = _prompt_id(payload)
+    if prompt_id is not None:
+        summary["prompt_id"] = prompt_id[:8]
+    if _is_subagent_call(payload):
+        summary["subagent"] = True
+    if _is_cli_prompt(payload):
+        summary["cli_prompt"] = True
+    source = payload.get("source")
+    if isinstance(source, str) and source:
+        summary["source"] = _clip(source)
+    tasks = payload.get("background_tasks")
+    if isinstance(tasks, (list, tuple)):
+        summary["tasks"] = ",".join(
+            f"{_clip(task.get('type'))}:{_clip(task.get('status'))}"
+            for task in tasks[:_SUMMARY_MAX_TASKS]
+            if isinstance(task, Mapping)
+        )
+        if len(tasks) > _SUMMARY_MAX_TASKS:
+            summary["tasks_total"] = len(tasks)
+    crons = payload.get("session_crons")
+    if isinstance(crons, (list, tuple)) and crons:
+        summary["crons"] = len(crons)
+    return summary
 
 
 def _prompt_id(payload: Mapping[str, Any]) -> str | None:
@@ -172,8 +319,8 @@ class AttentionGate:
     suppressed hook leaves the session's public attention untouched, which
     matters because clients re-post notifications for any session carrying an
     attention value in a full-state snapshot. ``on_activity`` receives every
-    ``working`` / ``idle`` transition the hooks imply, alerted or not; repeats
-    are expected and the receiver dedupes them.
+    ``working`` / ``waiting`` / ``idle`` transition the hooks imply, alerted or
+    not; repeats are expected and the receiver dedupes them.
 
     Timing uses ``loop.call_later`` rather than a sleeping task: cancelling a
     task after its sleep has already resumed still runs the body, since there is
@@ -200,9 +347,12 @@ class AttentionGate:
         self._armed_prompt_id: str | None = None
         self._muted = False
         self._alerted_prompt_id: str | None = None
-        self._provisional_prompt_id: str | None = None
         self._alerted_at: float | None = None
-        self._background_pending = False
+        self._parked_activity: str | None = None
+        self._settled = False
+        self._wakeup_pending = False
+        self._passive_ids: frozenset[str] = frozenset()
+        self._long_lived_ids: frozenset[str] = frozenset()
 
     def handle(self, kind: HookKind, payload: Mapping[str, Any]) -> None:
         """Apply one hook to the gate. Never raises on a malformed payload."""
@@ -211,15 +361,21 @@ class AttentionGate:
             self._on_alert("awaiting_permission", None)
         elif kind is HookKind.IDLE:
             self.cancel()
+            if self._parked_activity is not None:
+                self._on_activity(self._parked_activity)
+                return
             self._on_activity("idle")
-            self._alert_turn(
-                _prompt_id(payload), provisional=self._background_pending,
-            )
+            if not self._settled:
+                self._alert_turn(_prompt_id(payload))
         elif kind is HookKind.STOP:
             self._on_stop(payload)
         elif kind is HookKind.PROMPT_SUBMIT:
+            if _is_user_prompt(payload, wakeup_pending=self._wakeup_pending):
+                self._long_lived_ids = self._passive_ids
             self.reset_turn()
             self._on_activity("working")
+        elif kind is HookKind.TOOL:
+            self._on_tool(payload)
         elif kind is HookKind.END:
             self.reset_turn()
             self._on_activity("idle")
@@ -247,18 +403,32 @@ class AttentionGate:
         """Cancel the window and forget this turn, so the next stop can alert."""
         self.cancel()
         self._alerted_prompt_id = None
-        self._provisional_prompt_id = None
         self._alerted_at = None
-        self._background_pending = False
+        self._parked_activity = None
+        self._settled = False
 
     def _on_stop(self, payload: Mapping[str, Any]) -> None:
-        if _has_active_background_work(payload):
-            self._background_pending = True
+        self._settled = False
+        self._wakeup_pending = _has_crons(payload)
+        self._passive_ids = _passive_task_ids(payload)
+        self._parked_activity = _in_flight_activity(payload, self._long_lived_ids)
+        if self._parked_activity is not None:
             self.cancel()
-            self._on_activity("working")
+            self._on_activity(self._parked_activity)
             return
-        self._background_pending = False
         self._arm(_prompt_id(payload))
+
+    def _on_tool(self, payload: Mapping[str, Any]) -> None:
+        if _is_subagent_call(payload):
+            # With nothing in flight this is one of the CLI's own helper agents
+            # running after the turn; it must not pull a finished session back
+            # to ``working``, because no ``Stop`` would follow to end it.
+            if self._parked_activity is not None:
+                self._on_activity("working")
+            return
+        self.cancel()
+        self._settled = False
+        self._on_activity("working")
 
     def _arm(self, prompt_id: str | None) -> None:
         self.cancel()
@@ -281,11 +451,12 @@ class AttentionGate:
         muted = self._muted
         self._armed_prompt_id = None
         self._muted = False
+        self._settled = not muted
         self._on_activity("idle")
         if not muted:
             self._alert_turn(prompt_id)
 
-    def _alert_turn(self, prompt_id: str | None, *, provisional: bool = False) -> None:
+    def _alert_turn(self, prompt_id: str | None) -> None:
         # The session-state check is what covers a session reaped without
         # ``stop()`` (the liveness poller removes crashed sessions from the
         # registry directly), so cancellation alone cannot be relied on.
@@ -296,15 +467,7 @@ class AttentionGate:
         if prompt_id is not None:
             if prompt_id == self._alerted_prompt_id:
                 return
-            if provisional:
-                # One provisional alert per turn: a background watcher that
-                # re-wakes the session must not turn every idle stretch into a
-                # fresh alert.
-                if prompt_id == self._provisional_prompt_id:
-                    return
-                self._provisional_prompt_id = prompt_id
-            else:
-                self._alerted_prompt_id = prompt_id
+            self._alerted_prompt_id = prompt_id
         elif (
             self._alerted_at is not None
             and time.monotonic() - self._alerted_at < ATTENTION_TURN_COOLDOWN_SECONDS

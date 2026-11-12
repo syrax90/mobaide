@@ -166,7 +166,9 @@ class SessionInfo:
     exit_reason: str | None = None
     # ``"terminal"`` (PTY) or ``"chat"`` (ACP); clients pick the screen by it.
     ui: str = "terminal"
-    # Whether the agent is mid-turn: ``working`` | ``idle`` | ``None``. Unlike
+    # What the agent is doing: ``working`` (mid-turn, or a background agent
+    # runs) | ``waiting`` (parked on a background shell, monitor or scheduled
+    # wakeup; Claude Code terminal sessions only) | ``idle`` | ``None``. Unlike
     # ``attention`` (a one-shot alert the user clears by answering) this is
     # always current, so a list can show which sessions are still busy. Only a
     # running session with a source for it reports a value: Claude Code hooks
