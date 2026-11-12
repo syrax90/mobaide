@@ -190,7 +190,7 @@ function Get-ElevatedInstallCommand {
         'MOBAIDE_AGENT_INSTALL_URL', 'MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL',
         'MOBAIDE_AGENT_SKIP_INSTALL_QR', 'MOBAIDE_AGENT_SKIP_PYTHON_INSTALL',
         'MOBAIDE_AGENT_CLAUDE_BIN_HINT', 'MOBAIDE_AGENT_CODEX_BIN_HINT',
-        'MOBAIDE_AGENT_AGY_BIN_HINT'
+        'MOBAIDE_AGENT_AGY_BIN_HINT', 'MOBAIDE_AGENT_COPILOT_BIN_HINT'
     )
     $envStmts = foreach ($name in $passthrough) {
         $val = [Environment]::GetEnvironmentVariable($name, 'Process')
@@ -240,6 +240,12 @@ function Assert-AdminOrElevate {
     $agyBin = Find-AgyBinary
     if ($agyBin) {
         $env:MOBAIDE_AGENT_AGY_BIN_HINT = $agyBin
+    }
+    # GitHub Copilot CLI counterpart, carried across the UAC boundary via
+    # MOBAIDE_AGENT_COPILOT_BIN_HINT in the same way.
+    $copilotBin = Find-CopilotBinary
+    if ($copilotBin) {
+        $env:MOBAIDE_AGENT_COPILOT_BIN_HINT = $copilotBin
     }
     $cmd = Get-ElevatedInstallCommand
     $psArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-Command', $cmd)
@@ -428,6 +434,69 @@ function Find-AgyBinary {
         }
     }
     return $null
+}
+
+# Optional GitHub Copilot CLI counterpart of Find-CodexBinary. The check is
+# "is the copilot command available": PATH first, then the two places its
+# installers use, the npm-global folder (npm install -g @github/copilot) and
+# the WinGet link folder (winget install GitHub.Copilot). Only a real
+# executable counts: a PowerShell alias or function named copilot has no path
+# the agent could start. Returns the absolute copilot path, or $null if not
+# found. A miss is not warned: Copilot is optional.
+function Find-CopilotBinary {
+    foreach ($name in @('copilot.exe', 'copilot.cmd', 'copilot')) {
+        $hit = Get-Command $name -ErrorAction SilentlyContinue
+        if (-not $hit) { continue }
+        if ($hit.CommandType -ne 'Application') { continue }
+        if ($hit.Source -like "*\WindowsApps\*") { continue }
+        return $hit.Source
+    }
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if ($env:APPDATA) {
+        $candidates.Add((Join-Path $env:APPDATA 'npm\copilot.cmd'))
+    }
+    if ($env:LOCALAPPDATA) {
+        $candidates.Add((Join-Path $env:LOCALAPPDATA 'npm\copilot.cmd'))
+    }
+    if ($env:USERPROFILE) {
+        $candidates.Add((Join-Path $env:USERPROFILE 'AppData\Roaming\npm\copilot.cmd'))
+    }
+    $candidates.Add('C:\ProgramData\npm\copilot.cmd')
+    if ($env:ProgramFiles) {
+        $candidates.Add((Join-Path $env:ProgramFiles 'nodejs\copilot.cmd'))
+    }
+    if ($env:LOCALAPPDATA) {
+        $candidates.Add((Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links\copilot.exe'))
+    }
+    foreach ($c in $candidates) {
+        if (Test-Path -LiteralPath $c) {
+            return (Resolve-Path -LiteralPath $c).ProviderPath
+        }
+    }
+    return $null
+}
+
+# Write MOBAIDE_COPILOT_BIN into an existing agent .env unless the operator
+# already set it. It uses set-env, not an init-env argument: set-env takes any
+# key, so this installer also works with an agent release that is older than
+# Copilot support (an unknown init-env argument would fail the install).
+function Set-CopilotBinIfMissing {
+    param(
+        [Parameter(Mandatory=$true)] [string] $EnvFile,
+        [Parameter(Mandatory=$true)] [string] $ReleasePython,
+        [Parameter(Mandatory=$true)] [string] $CopilotBin
+    )
+    $existing = Read-EnvValue -Path $EnvFile -Key 'MOBAIDE_COPILOT_BIN'
+    if ($existing) {
+        Write-Info "MOBAIDE_COPILOT_BIN already set in $EnvFile; leaving as-is."
+        return
+    }
+    Write-Info "Writing MOBAIDE_COPILOT_BIN=$CopilotBin into $EnvFile"
+    & $ReleasePython -m mobaide.agent.config set-env --prefix $Script:Prefix `
+        --key MOBAIDE_COPILOT_BIN --value $CopilotBin
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "set-env failed (exit $LASTEXITCODE); edit $EnvFile manually and restart $Script:ServiceName."
+    }
 }
 
 # Both auto-install paths (winget and python.org) edit the persistent PATH
@@ -1058,6 +1127,16 @@ absolute path in $Script:Prefix\mobaide_agent\.env and restart:
         Write-Info "Antigravity CLI (agy) not detected; leaving MOBAIDE_AGY_BIN unset (set it in $Script:Prefix\mobaide_agent\.env if you use Antigravity)."
     }
 
+    # GitHub Copilot CLI counterpart (optional managed agent): the same
+    # hint-then-probe discovery and the same soft Info-on-miss.
+    $copilotBin = $env:MOBAIDE_AGENT_COPILOT_BIN_HINT
+    if (-not $copilotBin) { $copilotBin = Find-CopilotBinary }
+    if ($copilotBin) {
+        Write-Info "Detected GitHub Copilot CLI at $copilotBin"
+    } else {
+        Write-Info "GitHub Copilot CLI not detected; leaving MOBAIDE_COPILOT_BIN unset (set it in $Script:Prefix\mobaide_agent\.env if you use GitHub Copilot)."
+    }
+
     $envFile = Join-Path (Join-Path $Script:Prefix "mobaide_agent") ".env"
     $envExists = Test-Path -LiteralPath $envFile
 
@@ -1069,6 +1148,9 @@ absolute path in $Script:Prefix\mobaide_agent\.env and restart:
         if ($agyBin) { $extraArgs += @('--agy-bin', $agyBin) }
         & $releasePython -m mobaide.agent.config init-env --prefix $Script:Prefix @extraArgs
         if ($LASTEXITCODE -ne 0) { Write-Fail "init-env failed (exit $LASTEXITCODE)" }
+        if ($copilotBin) {
+            Set-CopilotBinIfMissing -EnvFile $envFile -ReleasePython $releasePython -CopilotBin $copilotBin
+        }
         return
     }
 
@@ -1077,7 +1159,8 @@ absolute path in $Script:Prefix\mobaide_agent\.env and restart:
     # MOBAIDE_AGY_BIN only if not already set — an operator's manual edit
     # always wins. This implements the "Surgical set-env only" policy. Each
     # CLI is backfilled independently: a missing Claude path must not skip
-    # the Codex or Antigravity backfill (and vice versa).
+    # the Codex or Antigravity backfill (and vice versa). MOBAIDE_COPILOT_BIN
+    # follows the same rule through Set-CopilotBinIfMissing.
     Write-Info "Existing $envFile preserved (re-install)."
     if ($claudeBin) {
         $existingClaudeBin = Read-EnvValue -Path $envFile -Key 'MOBAIDE_CLAUDE_BIN'
@@ -1117,6 +1200,9 @@ absolute path in $Script:Prefix\mobaide_agent\.env and restart:
                 Write-Warn "set-env failed (exit $LASTEXITCODE); edit $envFile manually and restart $Script:ServiceName."
             }
         }
+    }
+    if ($copilotBin) {
+        Set-CopilotBinIfMissing -EnvFile $envFile -ReleasePython $releasePython -CopilotBin $copilotBin
     }
 }
 
