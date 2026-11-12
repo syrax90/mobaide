@@ -61,6 +61,19 @@ export function cliAvailable(info: AgentVersionInfo | undefined, cliId: string):
 }
 
 /**
+ * Whether the agent knows this CLI at all. `false` only when the probe answered
+ * with a list of CLIs that does not name it: an agent from before the CLI was
+ * supported, which would start something else for it. An absent probe, or one
+ * with no CLI list, reads as known.
+ */
+export function cliKnown(info: AgentVersionInfo | undefined, cliId: string): boolean {
+  if (info === undefined) return true;
+  const cli = info.capabilities.cli;
+  if (typeof cli !== 'object' || cli === null || Array.isArray(cli)) return true;
+  return Object.keys(cli).length === 0 || Object.hasOwn(cli, cliId);
+}
+
+/**
  * The models the agent advertises for a CLI, or `null` to use the client's
  * hardcoded list.
  *

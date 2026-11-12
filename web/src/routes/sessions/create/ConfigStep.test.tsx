@@ -9,6 +9,7 @@ import {
   type WizardAction,
   type WizardMode,
   type WizardState,
+  wizardReducer,
 } from './wizardState';
 
 const gitProject: ProjectSummary = {
@@ -175,6 +176,48 @@ describe('ConfigStep — Antigravity chat view', () => {
     ).toBeInTheDocument();
   });
 
+});
+
+describe('ConfigStep — GitHub Copilot', () => {
+  it('writes the allow-all and Terminal UI toggles to the Copilot bucket only', () => {
+    const actions = renderStep('copilot');
+
+    const allowAll = screen.getByLabelText(/^Allow all tools, paths and URLs/);
+    expect(allowAll).not.toBeChecked();
+    fireEvent.click(allowAll);
+    fireEvent.click(screen.getByLabelText('Terminal UI'));
+
+    const next = actions.reduce(wizardReducer, STATE);
+    expect(next.copilot).toEqual({ allowAll: true, terminalUi: true });
+    expect({ ...next, copilot: STATE.copilot }).toEqual(STATE);
+  });
+
+  it('holds Terminal UI on where the PC has no Copilot chat', () => {
+    renderStep('copilot', STATE, versionWithChat({ claude: { resume: true } }));
+
+    const toggle = screen.getByLabelText('Terminal UI');
+    expect(toggle).toBeChecked();
+    expect(toggle).toBeDisabled();
+  });
+
+  it('offers to continue a Copilot session only where the PC can resume one', () => {
+    renderStep(
+      'copilot',
+      STATE,
+      versionWithChat({ copilot: { resume: true, live: false } }),
+      () => undefined,
+    );
+    expect(screen.getByRole('button', { name: 'Continue a session…' })).toBeEnabled();
+    cleanup();
+
+    renderStep(
+      'copilot',
+      { ...STATE, copilot: { ...STATE.copilot, terminalUi: true } },
+      versionWithChat({ copilot: { resume: true, live: false } }),
+      () => undefined,
+    );
+    expect(screen.queryByText('Continue a session…')).not.toBeInTheDocument();
+  });
 });
 
 describe('ConfigStep — worktree base branch', () => {

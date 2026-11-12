@@ -23,6 +23,7 @@ from mobaide.core import (
     AntigravityLauncher,
     ClaudeLauncher,
     CodexLauncher,
+    CopilotLauncher,
     FakePtyBackend,
     ProjectsStore,
     SessionManager,
@@ -793,6 +794,13 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         agy_bin_override=config.agy_bin,
         worktree_mgr=worktree_mgr,
     )
+    # GitHub Copilot CLI launcher — sibling of Antigravity: no hooks and no
+    # auth probe (its login prompt renders in the PTY when needed, and a chat
+    # session offers the sign-in). Binary resolves lazily.
+    app.state.copilot_launcher = CopilotLauncher(
+        copilot_bin_override=config.copilot_bin,
+        worktree_mgr=worktree_mgr,
+    )
     # Registry keyed by CLI name. SessionManager picks a launcher per session;
     # the Auto Scan scanner stays Claude-only. build_cli_capabilities reads this
     # registry, so a new entry auto-surfaces in /api/version capabilities.
@@ -800,6 +808,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         "claude": app.state.claude_launcher,
         "codex": app.state.codex_launcher,
         "antigravity": app.state.antigravity_launcher,
+        "copilot": app.state.copilot_launcher,
     }
     # Agents that can also run in the structured chat UI (over ACP), and the
     # lister of their stored sessions (continue a session started elsewhere).
@@ -810,6 +819,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             "claude": config.acp_claude_command,
             "codex": config.acp_codex_command,
             "antigravity": config.acp_antigravity_command,
+            "copilot": config.acp_copilot_command,
         },
         adapters_dir=state_prefix(test_mode=config.is_test_mode) / "acp-adapters",
     )
@@ -858,6 +868,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         launcher=app.state.claude_launcher,
         codex_launcher=app.state.codex_launcher,
         antigravity_launcher=app.state.antigravity_launcher,
+        copilot_launcher=app.state.copilot_launcher,
         worktree_mgr=worktree_mgr,
         event_bus=app.state.event_bus,
         on_session_created=_on_session_created,

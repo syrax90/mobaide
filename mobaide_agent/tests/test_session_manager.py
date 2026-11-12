@@ -8,6 +8,7 @@ import pytest
 from mobaide.core.antigravity_launcher import AntigravityOptions
 from mobaide.core.claude_launcher import AdHocLaunch, ClaudeOptions, LaunchSpec
 from mobaide.core.codex_launcher import CodexOptions
+from mobaide.core.copilot_launcher import CopilotOptions
 from mobaide.core.models import SessionConfig, SessionKind, SessionState
 from mobaide.core.pty_backend import FakePtyBackend
 from mobaide.core.session_manager import MaxSessionsError, SessionManager
@@ -407,6 +408,88 @@ class TestAntigravityLaunchBranching:
             assert isinstance(
                 antigravity_launcher.build.await_args.args[0], AdHocLaunch,
             )
+        finally:
+            await mgr.shutdown()
+
+
+@pytest.mark.timeout(20)
+class TestCopilotLaunchBranching:
+    """``create_session`` routes a ``copilot_options`` session to the Copilot
+    launcher (not the Claude one), and raises a clear error when no Copilot
+    launcher is wired.
+    """
+
+    async def test_project_copilot_options_invokes_copilot_launcher(
+        self, tmp_path,
+    ) -> None:
+        project = MagicMock()
+        project.name = "proj"
+        project.path = str(tmp_path)
+        store = MagicMock()
+        store.get = MagicMock(return_value=project)
+
+        claude_launcher = MagicMock()
+        claude_launcher.build = AsyncMock()
+        copilot_launcher = MagicMock()
+        # A real spawnable command, so the PTY start succeeds on a host
+        # without ``copilot``; the argv is covered by ``test_copilot_launcher``.
+        copilot_launcher.build = AsyncMock(
+            return_value=LaunchSpec(
+                argv=default_shell(),
+                cwd=str(tmp_path),
+                env={"X": "Y"},
+            ),
+        )
+        options = CopilotOptions(allow_all=True)
+
+        mgr = SessionManager(
+            projects_store=store,
+            launcher=claude_launcher,
+            copilot_launcher=copilot_launcher,
+        )
+        try:
+            config = SessionConfig(
+                session_id="copilot-sess",
+                command=default_shell(),
+                rows=24, cols=80, scrollback_size=50,
+                project_name="proj",
+                copilot_options=options,
+                kind=SessionKind.COPILOT,
+            )
+            await mgr.create_session(config)
+
+            copilot_launcher.build.assert_awaited_once()
+            claude_launcher.build.assert_not_awaited()
+            assert config.env == {"X": "Y"}
+            call = copilot_launcher.build.await_args
+            assert call.args[0] is project
+            assert call.args[1] is options
+            assert mgr.list_sessions()[0].kind == SessionKind.COPILOT
+        finally:
+            await mgr.shutdown()
+
+    async def test_copilot_session_without_a_copilot_launcher_is_refused(
+        self, tmp_path,
+    ) -> None:
+        """Without the check the session would start the caller's fallback
+        command (a plain shell) under the Copilot kind."""
+        claude_launcher = MagicMock()
+        claude_launcher.build = AsyncMock()
+        mgr = SessionManager(launcher=claude_launcher)
+        try:
+            config = SessionConfig(
+                session_id="copilot-unwired",
+                command=default_shell(),
+                cwd=str(tmp_path),
+                rows=24, cols=80, scrollback_size=50,
+                copilot_options=CopilotOptions(),
+                kind=SessionKind.COPILOT,
+            )
+            with pytest.raises(ValueError, match="Copilot launcher"):
+                await mgr.create_session(config)
+
+            claude_launcher.build.assert_not_awaited()
+            assert mgr.list_sessions() == []
         finally:
             await mgr.shutdown()
 

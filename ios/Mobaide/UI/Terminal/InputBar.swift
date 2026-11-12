@@ -69,6 +69,10 @@ struct TerminalControlKey: Identifiable {
         case .antigravity: return antigravityKeys
         case nil, .custom, .shell: return defaultKeys
         case .claude, .autoScan: return claudeKeys
+        // The Copilot TUI binds the Claude keys the same way: Shift+Tab switches
+        // the mode, Esc-Esc rewinds, Ctrl+O expands the timeline, Ctrl+R searches
+        // the history and Ctrl+L clears the screen.
+        case .copilot: return claudeKeys
         }
     }
 }

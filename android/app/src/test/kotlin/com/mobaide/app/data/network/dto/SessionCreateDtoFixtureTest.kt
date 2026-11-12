@@ -13,7 +13,7 @@ import org.junit.Test
 
 /**
  * The Android arm of the session-create golden fixtures: every case of the
- * three CLI options blocks and the create request decodes, and the `full`
+ * four CLI options blocks and the create request decodes, and the `full`
  * cases carry `base_branch` both ways.
  */
 class SessionCreateDtoFixtureTest {
@@ -30,6 +30,8 @@ class SessionCreateDtoFixtureTest {
 
     // RestApi's decoder and encoder configuration.
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
+
+    private val allKeysJson = Json { encodeDefaults = true }
 
     private fun fixture(type: String): Fixture {
         val loaded: Fixture = ProtocolFixtures.load("dto/agent/$type.json")
@@ -72,6 +74,44 @@ class SessionCreateDtoFixtureTest {
         assertEquals("origin/main", full.base_branch)
         assertBaseBranchEncodes(AntigravityOptionsModel.serializer(), full, "origin/main")
         decoded.filterKeys { it != "full" }.values.forEach { assertNull(it.base_branch) }
+    }
+
+    @Test
+    fun copilotOptions_fullCarriesBaseBranch_andEncodesTheServerKeys() {
+        val decoded = fixture("CopilotOptionsModel").decodeAll(CopilotOptionsModel.serializer())
+        val full = decoded.getValue("full")
+        assertTrue(full.allow_all)
+        assertTrue(full.worktree)
+        assertEquals("b", full.branch_name)
+        assertEquals("origin/main", full.base_branch)
+        assertBaseBranchEncodes(CopilotOptionsModel.serializer(), full, "origin/main")
+        val encoded = allKeysJson.encodeToJsonElement(CopilotOptionsModel.serializer(), full) as JsonObject
+        assertEquals(setOf("allow_all", "worktree", "branch_name", "base_branch"), encoded.keys)
+        val defaults = decoded.getValue("empty_defaults_materialize")
+        // `allow_all` must default off.
+        assertEquals(CopilotOptionsModel(allow_all = false, worktree = false), defaults)
+    }
+
+    @Test
+    fun createSessionRequest_copilotLaunchCarriesTheCopilotBlock() {
+        val decoded = fixture("CreateSessionRequest").decodeAll(CreateSessionRequest.serializer())
+        val launch = decoded.getValue("copilot_launch")
+        assertEquals("copilot", launch.cli)
+        assertEquals(SessionResponse.UI_CHAT, launch.ui)
+        assertEquals(
+            CopilotOptionsModel(
+                allow_all = true,
+                worktree = true,
+                branch_name = "feature/x",
+                base_branch = "origin/main",
+            ),
+            launch.copilot_options,
+        )
+        assertNull(launch.claude_options)
+        val encoded = json.encodeToJsonElement(CreateSessionRequest.serializer(), launch) as JsonObject
+        assertEquals("copilot", encoded["cli"]?.jsonPrimitive?.content)
+        assertTrue("copilot_options" in encoded)
+        assertTrue("antigravity_options" !in encoded)
     }
 
     @Test

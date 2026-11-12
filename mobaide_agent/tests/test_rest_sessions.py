@@ -490,6 +490,83 @@ class TestCreateSessionAntigravity:
         assert not captured
 
 
+class TestCreateSessionCopilot:
+    """``POST /api/sessions`` with ``cli="copilot"`` threads ``copilot_options``
+    through to a COPILOT session. No 409 auth case: Copilot has no sign-in
+    probe, so a terminal session that is not signed in shows Copilot's own
+    login prompt.
+    """
+
+    async def test_cli_copilot_threads_options_and_kind(
+        self, app, client, auth_headers,
+    ):
+        """The router must build a COPILOT ``SessionConfig`` that carries the
+        parsed ``copilot_options`` and no other options block, and report
+        ``kind`` as ``"copilot"`` on the wire. ``create_session`` is captured,
+        so the test does not need a real ``copilot`` binary."""
+        from datetime import datetime, timezone
+
+        from mobaide.core.copilot_launcher import CopilotOptions
+        from mobaide.core.models import (
+            SessionInfo,
+            SessionKind,
+            SessionState,
+        )
+
+        captured: dict = {}
+
+        class _FakeSession:
+            def __init__(self, config):
+                self.session_id = config.session_id
+                self._config = config
+
+            def to_info(self):
+                return SessionInfo(
+                    session_id=self.session_id,
+                    state=SessionState.RUNNING,
+                    created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    pid=123,
+                    command=self._config.command,
+                    cwd=self._config.cwd,
+                    kind=self._config.kind,
+                )
+
+        async def _capture(config):
+            captured["config"] = config
+            return _FakeSession(config)
+
+        app.state.session_manager.create_session = _capture
+
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={
+                "cli": "copilot",
+                "copilot_options": {
+                    "allow_all": True,
+                    "worktree": True,
+                    "branch_name": "feature/x",
+                    "base_branch": "origin/dev",
+                },
+            },
+        )
+
+        assert resp.status_code == 201
+        assert resp.json()["kind"] == "copilot"
+
+        cfg = captured["config"]
+        assert cfg.kind is SessionKind.COPILOT
+        assert cfg.claude_options is None
+        assert cfg.codex_options is None
+        assert cfg.antigravity_options is None
+        assert cfg.copilot_options == CopilotOptions(
+            allow_all=True,
+            worktree=True,
+            branch_name="feature/x",
+            base_branch="origin/dev",
+        )
+
+
 class TestCreateSessionAdHoc:
     """``POST /api/sessions`` with ``project_name=None`` and a
     user-supplied ``cwd``: the new ad-hoc (custom-path) launch path.

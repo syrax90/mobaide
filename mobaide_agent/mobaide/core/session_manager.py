@@ -25,6 +25,7 @@ from .claude_launcher import (
 )
 from .cli_launcher import CliLauncher
 from .codex_launcher import CodexLauncher, CodexOptions
+from .copilot_launcher import CopilotLauncher, CopilotOptions
 from .models import (
     SessionConfig,
     SessionInfo,
@@ -58,6 +59,7 @@ class SessionManager:
         launcher: ClaudeLauncher | None = None,
         codex_launcher: CodexLauncher | None = None,
         antigravity_launcher: AntigravityLauncher | None = None,
+        copilot_launcher: CopilotLauncher | None = None,
         worktree_mgr: WorktreeManager | None = None,
         event_bus: Any | None = None,
         on_session_created: Callable[[TerminalSession], Awaitable[None] | None] | None = None,
@@ -72,11 +74,12 @@ class SessionManager:
         self._liveness_task: asyncio.Task[None] | None = None
         self._projects_store = projects_store
         # ``launcher`` keeps its historical name (the Claude launcher); the
-        # Codex and Antigravity launchers are siblings. Dispatch picks between
-        # them per session.
+        # Codex, Antigravity and Copilot launchers are siblings. Dispatch picks
+        # between them per session.
         self._launcher = launcher
         self._codex_launcher = codex_launcher
         self._antigravity_launcher = antigravity_launcher
+        self._copilot_launcher = copilot_launcher
         self._worktree_mgr = worktree_mgr
         self._event_bus = event_bus
         self._on_session_created = on_session_created
@@ -117,8 +120,8 @@ class SessionManager:
         """Create, start, and register a new terminal session.
 
         Dispatch matrix on (``project_name``, managed-CLI options). A session is
-        "managed" when it carries ``claude_options``, ``codex_options``, or
-        ``antigravity_options`` — the entry layers normalise exactly one of them via
+        "managed" when it carries ``claude_options``, ``codex_options``,
+        ``antigravity_options`` or ``copilot_options`` — the entry layers normalise exactly one of them via
         ``resolve_spawn_args``, so a raw shell session (none set) keeps its
         caller-supplied argv:
 
@@ -141,6 +144,7 @@ class SessionManager:
             config.claude_options is not None
             or config.codex_options is not None
             or config.antigravity_options is not None
+            or config.copilot_options is not None
         )
         if config.project_name is not None:
             if managed:
@@ -202,6 +206,7 @@ class SessionManager:
             config.claude_options
             or config.codex_options
             or config.antigravity_options
+            or config.copilot_options
         )
         if config.chat_resume_id and options is not None and getattr(options, "worktree", False):
             from dataclasses import replace
@@ -274,14 +279,22 @@ class SessionManager:
 
     def _launcher_and_options(
         self, config: SessionConfig,
-    ) -> tuple[CliLauncher, ClaudeOptions | CodexOptions | AntigravityOptions]:
+    ) -> tuple[
+        CliLauncher, ClaudeOptions | CodexOptions | AntigravityOptions | CopilotOptions
+    ]:
         """Pick the launcher + options for a managed session.
 
         ``resolve_spawn_args`` guarantees exactly one of ``claude_options`` /
-        ``codex_options`` / ``antigravity_options`` is set, so presence is the
-        discriminator. Raises if the requested CLI's launcher was not wired into
-        this manager.
+        ``codex_options`` / ``antigravity_options`` / ``copilot_options`` is
+        set, so presence is the discriminator. Raises if the requested CLI's
+        launcher was not wired into this manager.
         """
+        if config.copilot_options is not None:
+            if self._copilot_launcher is None:
+                raise ValueError(
+                    "copilot session requested but agent has no Copilot launcher",
+                )
+            return self._copilot_launcher, config.copilot_options
         if config.antigravity_options is not None:
             if self._antigravity_launcher is None:
                 raise ValueError(

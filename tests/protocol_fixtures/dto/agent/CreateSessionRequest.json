@@ -76,6 +76,34 @@
         "ui": "chat",
         "chat_resume_id": "7d5de896-463a-4ea9-98b4-c24e3e20398d"
       }
+    },
+    {
+      "name": "copilot_launch",
+      "wire": {
+        "project_name": "proj",
+        "cli": "copilot",
+        "copilot_options": {
+          "allow_all": true,
+          "worktree": true,
+          "branch_name": "feature/x",
+          "base_branch": "origin/main"
+        },
+        "ui": "chat"
+      },
+      "decoded_canonical": {
+        "project_name": "proj",
+        "cli": "copilot",
+        "copilot_options": {
+          "allow_all": true,
+          "worktree": true,
+          "branch_name": "feature/x",
+          "base_branch": "origin/main"
+        },
+        "rows": 24,
+        "cols": 80,
+        "worktree": false,
+        "ui": "chat"
+      }
     }
   ]
 }

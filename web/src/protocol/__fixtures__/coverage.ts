@@ -100,6 +100,7 @@ export const COVERED_FIXTURES: readonly string[] = [
   'dto/agent/ChatStoredSessionsResponse.json',
   'dto/agent/ClaudeOptionsModel.json',
   'dto/agent/CodexOptionsModel.json',
+  'dto/agent/CopilotOptionsModel.json',
   'dto/agent/CreateSessionRequest.json',
   'dto/agent/GitJobResponse.json',
   'dto/agent/ProjectInfo.json',

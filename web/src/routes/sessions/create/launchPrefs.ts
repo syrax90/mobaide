@@ -101,6 +101,10 @@ export function applyLaunchPrefs(base: WizardState, prefs: LaunchPrefs): WizardS
             addDirsDraft: base.antigravity.addDirsDraft,
             terminalUi: antigravity.terminalUi,
           },
+    copilot:
+      prefs.copilot === null
+        ? base.copilot
+        : { allowAll: prefs.copilot.allowAll, terminalUi: prefs.copilot.terminalUi },
   };
 }
 
@@ -167,6 +171,14 @@ export function launchPrefsFromState(
           skipPermissions: state.antigravity.skipPermissions,
           sandbox: state.antigravity.sandbox,
           terminalUi: state.antigravity.terminalUi,
+        },
+      };
+    case 'copilot':
+      return {
+        kind: 'copilot',
+        prefs: {
+          allowAll: state.copilot.allowAll,
+          terminalUi: state.copilot.terminalUi,
         },
       };
     default:

@@ -39,6 +39,8 @@ const ANTIGRAVITY_BLOB = {
   terminalUi: true,
 };
 
+const COPILOT_BLOB = { allowAll: true, terminalUi: true };
+
 const CLAUDE_DEFAULTS = {
   model: null,
   effort: 'high',
@@ -67,6 +69,7 @@ beforeEach(() => {
     autoScan: null,
     codex: null,
     antigravity: null,
+    copilot: null,
     lastProjectName: null,
   });
   window.localStorage.clear();
@@ -180,6 +183,18 @@ describe('hydration', () => {
     });
   });
 
+  it('restores the Copilot bucket, defaults a missing key and voids a wrong-typed one', async () => {
+    expect((await rehydrateWith({ copilot: COPILOT_BLOB })).copilot).toEqual(COPILOT_BLOB);
+    expect((await rehydrateWith({ copilot: { allowAll: true } })).copilot).toEqual({
+      allowAll: true,
+      terminalUi: false,
+    });
+    // A hand-edited value must never turn "allow all" on.
+    expect((await rehydrateWith({ copilot: { ...COPILOT_BLOB, allowAll: 'yes' } })).copilot).toBeNull();
+    expect((await rehydrateWith({ copilot: [COPILOT_BLOB] })).copilot).toBeNull();
+    expect((await rehydrateWith({ claude: CLAUDE_BLOB })).copilot).toBeNull();
+  });
+
   it('rejects a bucket that is not a plain object', async () => {
     expect((await rehydrateWith({ claude: [CLAUDE_BLOB] })).claude).toBeNull();
     expect((await rehydrateWith({ claude: 'sonnet' })).claude).toBeNull();
@@ -210,6 +225,7 @@ describe('hydration', () => {
       autoScan: null,
       codex: null,
       antigravity: null,
+      copilot: null,
       lastProjectName: null,
     });
     useLaunchPrefsStore.getState().setLastProjectName('mobaide');
@@ -238,6 +254,22 @@ describe('writes', () => {
     expect(prefs.autoScan).toEqual({ ...CLAUDE_DEFAULTS, skipPermissions: false });
     expect(prefs.codex).toEqual({ ...CODEX_BLOB, reasoningEffort: null });
     expect(prefs.claude).toBeNull();
+  });
+});
+
+describe('Copilot writes', () => {
+  it('files the Copilot snapshot under its own slot and reads it back', async () => {
+    useLaunchPrefsStore.getState().setLaunchPrefs({ kind: 'copilot', prefs: COPILOT_BLOB });
+    const written = window.localStorage.getItem(STORAGE_KEY);
+
+    useLaunchPrefsStore.setState({ copilot: null });
+    window.localStorage.setItem(STORAGE_KEY, written ?? '');
+    await useLaunchPrefsStore.persist.rehydrate();
+
+    const prefs = readLaunchPrefs();
+    expect(prefs.copilot).toEqual(COPILOT_BLOB);
+    expect(prefs.claude).toBeNull();
+    expect(prefs.antigravity).toBeNull();
   });
 });
 

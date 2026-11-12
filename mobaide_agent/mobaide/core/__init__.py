@@ -16,6 +16,11 @@ from .codex_launcher import (
     CodexLauncher,
     CodexOptions,
 )
+from .copilot_launcher import (
+    CopilotBinaryNotFoundError,
+    CopilotLauncher,
+    CopilotOptions,
+)
 from .models import SessionConfig, SessionEvent, SessionInfo, SessionKind, SessionState
 from .projects_config import AutoScanFilter, ProjectConfig
 from .projects_store import (
@@ -53,6 +58,9 @@ __all__ = [
     "AntigravityLauncher",
     "AntigravityOptions",
     "AntigravityBinaryNotFoundError",
+    "CopilotLauncher",
+    "CopilotOptions",
+    "CopilotBinaryNotFoundError",
     "LaunchSpec",
     "AutoScanFilter",
     "ProjectConfig",

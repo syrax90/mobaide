@@ -167,6 +167,7 @@ enum SessionDisplay {
         case .claude: return "Claude Code"
         case .codex: return "Codex"
         case .antigravity: return "Antigravity"
+        case .copilot: return "GitHub Copilot"
         case .autoScan: return "Auto Scan"
         case .shell: return "Terminal"
         case .custom(let raw):
@@ -221,7 +222,7 @@ enum SessionDisplay {
 
     /// Whether the agent is mid-turn, so the row shows the spinner and the
     /// "Working" chip. `activity` is nil where the agent cannot see it (a Codex,
-    /// Antigravity or Terminal PTY session, or an older agent): those rows keep
+    /// Antigravity, Copilot or Terminal PTY session, or an older agent): those rows keep
     /// the plain status square. A pending permission prompt wins — the turn is
     /// blocked on the user, not working.
     static func isWorking(_ session: SessionResponse) -> Bool {

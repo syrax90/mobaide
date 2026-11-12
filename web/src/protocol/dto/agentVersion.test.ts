@@ -3,6 +3,7 @@ import {
   NO_GIT_CAPABILITIES,
   agentVersionSchema,
   cliAvailable,
+  cliKnown,
   cliModelDetails,
   cliModels,
   cliModelsPending,
@@ -63,6 +64,37 @@ describe('cliAvailable', () => {
   it('does not mistake an inherited object key for a cli entry', () => {
     // `cliId` reaches here from a URL search param.
     expect(cliAvailable(info({ cli: {} }), 'constructor')).toBeNull();
+  });
+});
+
+describe('cliKnown', () => {
+  it('is false only for an agent that lists its CLIs without this one', () => {
+    // Such an agent predates the CLI and would open a plain shell for it.
+    const older = info({ cli: { claude: { available: true }, codex: { available: false } } });
+
+    expect(cliKnown(older, 'copilot')).toBe(false);
+    expect(cliKnown(older, 'codex')).toBe(true);
+  });
+
+  it('counts a CLI the agent lists as not installed as known', () => {
+    expect(cliKnown(info({ cli: { copilot: { available: false } } }), 'copilot')).toBe(true);
+  });
+
+  const UNKNOWN: [string, unknown][] = [
+    ['no probe at all', undefined],
+    ['no capabilities', {}],
+    ['an empty cli map', { cli: {} }],
+    ['a cli block that is not a map', { cli: ['claude'] }],
+  ];
+
+  it.each(UNKNOWN)('reads %s as known, so the card stays usable', (_label, capabilities) => {
+    const probe = capabilities === undefined ? undefined : info(capabilities);
+
+    expect(cliKnown(probe, 'copilot')).toBe(true);
+  });
+
+  it('does not mistake an inherited object key for a cli entry', () => {
+    expect(cliKnown(info({ cli: { claude: { available: true } } }), 'constructor')).toBe(false);
   });
 });
 

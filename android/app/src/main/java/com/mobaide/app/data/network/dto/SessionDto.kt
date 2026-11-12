@@ -20,6 +20,7 @@ sealed interface SessionKind {
     data object Claude : SessionKind
     data object Codex : SessionKind
     data object Antigravity : SessionKind
+    data object Copilot : SessionKind
     data object AutoScan : SessionKind
     data object Shell : SessionKind
 
@@ -39,6 +40,7 @@ val SessionKind.wireName: String
         SessionKind.Claude -> "claude"
         SessionKind.Codex -> "codex"
         SessionKind.Antigravity -> "antigravity"
+        SessionKind.Copilot -> "copilot"
         SessionKind.AutoScan -> "auto_scan"
         SessionKind.Shell -> "shell"
         is SessionKind.Custom -> raw
@@ -62,6 +64,7 @@ object SessionKindSerializer : KSerializer<SessionKind> {
         "claude" to SessionKind.Claude,
         "codex" to SessionKind.Codex,
         "antigravity" to SessionKind.Antigravity,
+        "copilot" to SessionKind.Copilot,
         "auto_scan" to SessionKind.AutoScan,
         "shell" to SessionKind.Shell,
     )
@@ -125,7 +128,7 @@ data class CreateSessionRequest(
     val cols: Int = 80,
     // When set, command/cwd/env are ignored; the server derives them from the named project.
     val project_name: String? = null,
-    // Which managed CLI to launch: "claude" | "codex" | "antigravity", or "custom_<12hex>"
+    // Which managed CLI to launch: "claude" | "codex" | "antigravity" | "copilot", or "custom_<12hex>"
     // for an account-scoped custom agent type (proto-v7; the relay resolves the stored
     // command — the client never sends it). Null for Terminal/shell sessions; when null
     // the server infers the kind from whichever options block is present.
@@ -133,6 +136,7 @@ data class CreateSessionRequest(
     val claude_options: ClaudeOptionsModel? = null,
     val codex_options: CodexOptionsModel? = null,
     val antigravity_options: AntigravityOptionsModel? = null,
+    val copilot_options: CopilotOptionsModel? = null,
     // Terminal-mode worktree: create a git worktree for a shell session (no CLI options)
     // on a stored git project and spawn the shell inside it. Managed Claude/Codex sessions
     // instead carry worktree intent inside their own options block.

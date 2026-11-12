@@ -7,7 +7,7 @@ import { openSessionKind, optionalWireNumber, optionalWireString } from '../wire
 
 /**
  * `kind` is an open string since proto-v7 — `claude` / `codex` / `antigravity` /
- * `gemini` / `auto_scan` / `shell` / `custom_<12hex>` / anything a newer server
+ * `copilot` / `gemini` / `auto_scan` / `shell` / `custom_<12hex>` / anything a newer server
  * invents. Never narrowed to a union: coercing an unknown kind would silently
  * mislabel a session.
  */

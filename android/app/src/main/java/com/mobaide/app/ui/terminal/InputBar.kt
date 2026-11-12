@@ -199,6 +199,10 @@ private fun controlKeysFor(kind: SessionKind?): List<ControlKey> = when (kind) {
     // meanings a shell binds differently or not at all.
     null, is SessionKind.Custom, SessionKind.Shell -> DEFAULT_CONTROL_KEYS
     SessionKind.Claude, SessionKind.AutoScan -> CLAUDE_CONTROL_KEYS
+    // The Copilot TUI binds the Claude keys the same way: Shift+Tab switches the
+    // mode, Esc-Esc rewinds, Ctrl+O expands the timeline, Ctrl+R searches the
+    // history and Ctrl+L clears the screen.
+    SessionKind.Copilot -> CLAUDE_CONTROL_KEYS
 }
 
 @Composable

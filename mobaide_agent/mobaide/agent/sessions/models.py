@@ -8,6 +8,7 @@ from mobaide.acp.wire import CHAT_RESUME_ID_MAX, CHAT_RESUME_ID_PATTERN
 from mobaide.core.antigravity_launcher import AntigravityOptions, agy_model_name
 from mobaide.core.claude_launcher import ClaudeOptions
 from mobaide.core.codex_launcher import CodexOptions
+from mobaide.core.copilot_launcher import CopilotOptions
 from mobaide.core.models import SessionInfo, session_to_wire_dict
 
 
@@ -130,6 +131,22 @@ class AntigravityOptionsModel(BaseModel):
         return AntigravityOptions(**data)
 
 
+class CopilotOptionsModel(BaseModel):
+    """Wire DTO for GitHub Copilot CLI launch options (see :class:`CopilotOptions`).
+
+    ``allow_all`` is Copilot's ``--allow-all``: it runs tools and uses paths
+    and URLs without asking.
+    """
+
+    allow_all: bool = False
+    worktree: bool = False
+    branch_name: str | None = None
+    base_branch: str | None = None
+
+    def to_options(self) -> CopilotOptions:
+        return CopilotOptions(**self.model_dump())
+
+
 class CreateSessionRequest(BaseModel):
     command: list[str] | None = None
     cwd: str | None = None
@@ -139,7 +156,8 @@ class CreateSessionRequest(BaseModel):
     # When set, ``command``/``cwd``/``env`` are ignored and the matching
     # launcher builds them from the project + the CLI options block.
     project_name: str | None = None
-    # Which managed CLI to launch: "claude" | "codex" | "antigravity". Optional —
+    # Which managed CLI to launch: "claude" | "codex" | "antigravity" |
+    # "copilot". Optional —
     # when omitted the kind is inferred from whichever options block is present (a
     # legacy claude_options-only payload still resolves to Claude). Shell/Terminal
     # sessions leave this null and send no options block.
@@ -147,9 +165,10 @@ class CreateSessionRequest(BaseModel):
     claude_options: ClaudeOptionsModel | None = None
     codex_options: CodexOptionsModel | None = None
     antigravity_options: AntigravityOptionsModel | None = None
+    copilot_options: CopilotOptionsModel | None = None
     # Terminal-mode worktree: create a git worktree for a SHELL session
     # (no CLI options) anchored to a stored git project and spawn the shell
-    # inside it. Managed Claude/Codex/Antigravity sessions instead carry worktree
+    # inside it. Managed Claude/Codex/Antigravity/Copilot sessions instead carry worktree
     # intent inside their own options block.
     worktree: bool = False
     branch_name: str | None = None

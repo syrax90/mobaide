@@ -202,7 +202,7 @@ class TerminalSession:
         self._exit_reason: str | None = None
         # ``working`` / ``idle`` as Claude Code's hooks report it; ``None`` until
         # the first hook, and for good on a session without hooks (Codex,
-        # Antigravity, Terminal), whose activity the agent cannot see.
+        # Antigravity, Copilot, Terminal), whose activity the agent cannot see.
         self._activity: str | None = None
         # Decides which Claude Code hooks actually become an alert. ``Stop``
         # fires once per model turn — including every re-invocation a completing

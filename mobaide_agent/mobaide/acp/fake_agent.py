@@ -1,6 +1,6 @@
 """A scripted ACP agent for tests and for UI checks on a local stack.
 
-Run with ``python -m mobaide.acp.fake_agent [--flavor codex|antigravity]``.
+Run with ``python -m mobaide.acp.fake_agent [--flavor codex|antigravity|copilot]``.
 ``MOBAIDE_ENV=test`` makes the chat sessions use it instead of a real agent,
 so every chat UI state can be reached without an account or network. The
 flavor picks the config options and names of the agent it stands in for. The
@@ -8,7 +8,8 @@ prompt text picks the scenario:
 
 * ``tools`` — read, edit (with a diff) and execute tool calls (the Codex
   flavor streams the command output as terminal ``_meta``; the Antigravity
-  flavor reports it as one "Command exited with code N" text);
+  flavor reports it as one "Command exited with code N" text; the Copilot
+  flavor sends the output so far, then a last ``<shellId: …>`` line);
 * ``permission`` — a command that waits for approval;
 * ``question`` — a form with single choice, multiple choice and text;
 * ``plan`` — a plan that progresses step by step;
@@ -74,6 +75,16 @@ AGY_MODELS = [
     {"value": "gemini-3.8-flash", "name": "Gemini 3.8 Flash"},
     {"value": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6 (Thinking)"},
 ]
+COPILOT_MODE_PREFIX = "https://agentclientprotocol.com/protocol/session-modes#"
+COPILOT_MODES = [
+    {"value": COPILOT_MODE_PREFIX + "agent", "name": "Agent", "description": "Default agent mode for conversational interactions"},
+    {"value": COPILOT_MODE_PREFIX + "plan", "name": "Plan", "description": "Plan mode for creating and executing multi-step plans"},
+    {"value": COPILOT_MODE_PREFIX + "autopilot", "name": "Autopilot", "description": "Autonomous mode that enables allow-all and runs until task completion without user interaction (experimental)"},
+]
+COPILOT_ALLOW_ALL = [
+    {"value": "on", "name": "On", "description": "Automatically approve all tool, path, and URL requests"},
+    {"value": "off", "name": "Off", "description": "Require approval for tool, path, and URL requests"},
+]
 SIGNED_OUT_ENV = "MOBAIDE_FAKE_ACP_SIGNED_OUT"
 AUTH_REQUIRED = -32000
 
@@ -124,6 +135,7 @@ class FakeAgent:
         self.loop = loop
         self.codex = flavor == "codex"
         self.agy = flavor == "antigravity"
+        self.copilot = flavor == "copilot"
         self.steers: dict[str, list[str]] = {}
         self.write_lock = threading.Lock()
         self.next_id = 1000
@@ -162,6 +174,12 @@ class FakeAgent:
             if s["model"] != "gemini-3.8-flash":
                 options.pop(1)
             return options
+        if self.copilot:
+            # Like Copilot on a plan with one model: no model option.
+            return [
+                {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": s["mode"], "options": COPILOT_MODES},
+                {"id": "allow_all", "name": "Allow All", "category": "permissions", "type": "select", "currentValue": s["allow_all"], "options": COPILOT_ALLOW_ALL},
+            ]
         if self.codex:
             return [
                 {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": s["mode"], "options": CODEX_MODES},
@@ -195,6 +213,8 @@ class FakeAgent:
             )
         if self.agy:
             self.sessions[sid].update({"model": "gemini-3.8-flash", "thought_level": "high"})
+        if self.copilot:
+            self.sessions[sid].update({"mode": COPILOT_MODE_PREFIX + "agent", "allow_all": "off"})
         return sid
 
     def models_block(self, sid: str) -> dict[str, Any]:
@@ -210,6 +230,8 @@ class FakeAgent:
             return ("model", "thought_level", "mode")
         if self.codex:
             return ("mode", "collaboration_mode", "model", "reasoning_effort", "fast-mode")
+        if self.copilot:
+            return ("mode", "allow_all")
         return ("mode", "model", "effort", "fast")
 
     def commands(self, sid: str) -> None:
@@ -220,6 +242,13 @@ class FakeAgent:
                 {"name": "plan", "description": "Plan carefully before executing a task."},
                 {"name": "browser", "description": "Invoke a browser agent for web tasks."},
                 {"name": "learn", "description": "Reflect on recent successes or corrections to capture reusable skills or rules."},
+            ]
+        elif self.copilot:
+            available = [
+                {"name": "compact", "description": "Summarize conversation history to reduce context window usage. Optionally provide focus instructions.", "input": {"hint": "focus instructions"}},
+                {"name": "model", "description": "Select the AI model for this session (use 'auto' to let Copilot pick automatically).", "input": {"hint": "model"}},
+                {"name": "review", "description": "Run code review agent to analyze changes", "input": {"hint": "additional instructions"}},
+                {"name": "usage", "description": "Display session usage metrics and statistics"},
             ]
         elif self.codex:
             available = [
@@ -255,13 +284,15 @@ class FakeAgent:
             self.send({"jsonrpc": "2.0", "id": msg_id, "result": result})
 
     async def dispatch(self, method: str, params: dict[str, Any]) -> Any:
-        if method == "initialize" and signed_out() and not self.codex and not self.agy:
+        if method == "initialize" and signed_out() and not (self.codex or self.agy or self.copilot):
             # claude-agent-acp reports a missing login right after initialize.
             self.loop.call_later(0.05, lambda: self.send({
                 "jsonrpc": "2.0", "method": "_auth/status_update",
                 "params": {"authStatus": {"kind": "none", "label": "Not logged in"}},
             }))
-        if method in ("session/new", "session/load") and signed_out() and (self.codex or self.agy):
+        if method in ("session/new", "session/load") and signed_out() and (
+            self.codex or self.agy or self.copilot
+        ):
             raise _RpcError(AUTH_REQUIRED, "Authentication required")
         if method == "initialize":
             if self.agy:
@@ -273,6 +304,18 @@ class FakeAgent:
                         "sessionCapabilities": {"resume": {}, "close": {}, "load": {}, "list": {}, "additionalDirectories": {}},
                     },
                     "agentInfo": {"name": "Antigravity ACP Server", "version": "1.5.3"},
+                    "authMethods": [],
+                }
+            if self.copilot:
+                return {
+                    "protocolVersion": 1,
+                    "agentCapabilities": {
+                        "auth": {"logout": {}},
+                        "loadSession": True,
+                        "promptCapabilities": {"image": True, "audio": False, "embeddedContext": True},
+                        "sessionCapabilities": {"close": {}, "list": {}},
+                    },
+                    "agentInfo": {"name": "Copilot", "title": "Copilot", "version": "1.0.109"},
                     "authMethods": [],
                 }
             info = (
@@ -359,7 +402,7 @@ class FakeAgent:
         if method == "session/cancel":
             self.cancelled.add(str(params.get("sessionId")))
             return None
-        if method == "_session/steering" and not self.agy:
+        if method == "_session/steering" and not (self.agy or self.copilot):
             sid = params.get("sessionId")
             turn = self.turns.get(sid) if isinstance(sid, str) else None
             if turn is None or turn.done():
@@ -375,7 +418,9 @@ class FakeAgent:
         self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": "replay-edit", "title": "Edit login.py", "kind": "edit", "status": "completed",
                           "locations": [{"path": "/project/login.py", "line": 12}],
                           "content": [{"type": "diff", "path": "/project/login.py", "oldText": "if user:\n    login(user)\n", "newText": "if user is not None:\n    login(user)\n"}]})
-        self.update(sid, {"sessionUpdate": "session_info_update", "title": "Earlier session"})
+        if not self.copilot:
+            # Copilot replays a stored session without its title.
+            self.update(sid, {"sessionUpdate": "session_info_update", "title": "Earlier session"})
 
     def stopped(self, sid: str) -> bool:
         return sid in self.cancelled
@@ -446,6 +491,11 @@ class FakeAgent:
             # agy reports token counts in the prompt result only.
             return {"stopReason": "end_turn" if ok else "cancelled",
                     "usage": {"inputTokens": s["used"], "outputTokens": 120, "totalTokens": s["used"] + 120}}
+        if self.copilot:
+            # Copilot reports the context use, but no cost.
+            self.update(sid, {"sessionUpdate": "usage_update", "used": s["used"], "size": 128000})
+            return {"stopReason": "end_turn" if ok else "cancelled",
+                    "usage": {"inputTokens": s["used"], "outputTokens": 120, "totalTokens": s["used"] + 120}}
         self.update(sid, {"sessionUpdate": "usage_update", "used": s["used"], "size": 200000, "cost": {"amount": round(s["used"] / 1e6, 4), "currency": "USD"}})
         return {"stopReason": "end_turn" if ok else "cancelled"}
 
@@ -480,7 +530,24 @@ class FakeAgent:
         await asyncio.sleep(0.3)
         self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": edit, "status": "completed",
                           "content": [{"type": "diff", "path": path, "oldText": "def main():\n    print('hi')\n", "newText": "def main() -> None:\n    print('hello, world')\n    return None\n"}]})
-        if self.codex:
+        if self.copilot:
+            # Copilot keeps the tool ``pending`` while the command runs and
+            # sends the whole output so far in each update.
+            self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": run, "title": "Run the tests", "kind": "execute", "status": "pending",
+                              "rawInput": {"command": "pytest -q", "description": "Run the tests", "mode": "sync", "initial_wait": 30}})
+            output = ""
+            for chunk in ("....\n", "4 passed in 0.12s\n"):
+                await asyncio.sleep(0.3)
+                output += chunk
+                self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": run,
+                                  "content": [{"type": "content", "content": {"type": "text", "text": output}}]})
+            if self.stopped(sid):
+                return False
+            done = output + "<shellId: 0 completed with exit code 0>"
+            self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": run, "status": "completed",
+                              "content": [{"type": "content", "content": {"type": "text", "text": done}}],
+                              "rawOutput": {"content": done, "contents": [{"type": "shell_exit", "shellId": "0", "exitCode": 0, "cwd": cwd}]}})
+        elif self.codex:
             self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": run, "title": "pytest -q", "kind": "execute", "status": "in_progress",
                               "rawInput": {"command": "pytest -q", "cwd": cwd}, "content": [{"type": "terminal", "terminalId": run}]})
             for chunk in ("============ test session starts ============\n", "collected 4 items\n\n", "tests/test_app.py \x1b[32m....\x1b[0m"):
@@ -646,7 +713,11 @@ def fake_login(flavor: str, device: bool) -> int:
     """A login command shaped like the real ones: a sign-in page, then a
     pasted code (or, with ``device``, a one-time code to enter there)."""
     url = f"https://example.com/{flavor}/sign-in?state=fake"
-    if device:
+    if device and flavor == "copilot":
+        # The real ``copilot login --device-code`` prints one line.
+        print(f"To authenticate, visit {url} and enter code FAKE-1234\nWaiting for authorization...", flush=True)
+        time.sleep(3)
+    elif device:
         print("Follow these steps to sign in:\n")
         print(f"1. Open this link in your browser and sign in\n   {url}\n")
         print("2. Enter this one-time code (expires in 15 minutes)\n   FAKE-12345\n", flush=True)

@@ -123,6 +123,31 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-12: GitHub Copilot sessions
+
+Additive delta within proto-v7 (2026-11-12): **one session kind, one options block, two capability entries. No version bump; `central_server` is untouched.**
+
+GitHub Copilot CLI is a managed agent of kind `copilot`, for terminal and chat sessions.
+
+| Where | Change |
+|-------|--------|
+| `POST /api/sessions` and relay `create_session` | `cli: "copilot"` with `copilot_options` (`allow_all`, `worktree`, `branch_name`, `base_branch`). A missing binary answers `503` with `copilot_cli_missing`. |
+| `capabilities.cli` | A `copilot` entry. |
+| `capabilities.chat` | A `copilot` entry (`resume: true`, `live: false`). |
+| Session mode order | The id `copilot`. Default position: after `antigravity`. |
+
+* Binary: `MOBAIDE_COPILOT_BIN`, then PATH, then the npm fallback folders, then (on Windows) the WinGet link. `MOBAIDE_ACP_COPILOT_COMMAND` overrides the chat command.
+* Terminal sessions run `copilot [--allow-all]`. They raise attention from OSC 7501 reports (`app=copilot`; Copilot CLI 1.0.106 or later), with no hooks (see Delta 2026-11-10).
+* Chat sessions run the ACP server built into the CLI, `copilot --acp`. The process starts in the home folder and takes the session folder from `session/new`. `allow_all` sets the ACP config option `allow_all` to `on`; the chat shows it and the user can turn it off.
+* Mode values are Copilot's Agent, Plan and Autopilot. The model and reasoning-effort options appear only when the account's plan offers more than the Auto model.
+* Not live: no attach to a session open in Copilot's terminal UI. Continue uses `session/list` (kept to the requested folder) and `session/load`.
+* Folder trust: `copilot --acp` loads a folder's hooks and MCP servers without asking, so the PC agent asks in the chat. The record is `trustedFolders` in `$COPILOT_HOME/config.json` (default `~/.copilot/config.json`). A listed folder also covers the folders inside it. The home folder, a folder above it and a filesystem root are trusted for the session only.
+* Sign-in: the method `github` (see Delta 2026-11-11, sign-in from the chat). GitHub Enterprise `--host` sign-in is not offered.
+* Command output: a finished command becomes a `console` part with the exit code. Live command output is sent at most once per 0.3 s. The "Info: <path>" note Copilot sends after it creates a file is not shown.
+* A continued session whose replay has no title takes it from the agent's session list, for every agent with the list capability.
+* Not supported for Copilot: a model or effort picker in the wizard, and voice transcript cleanup (`capabilities.voice.cleanup_kinds` does not list `copilot`).
+* Test mode runs the fake agent with `--flavor copilot`.
+
 ### Delta 2026-11-11: sign-in from the chat
 
 Additive delta within proto-v7 (2026-11-11): **one chat request kind, one chat command. No version bump; `central_server` is untouched.**
@@ -134,6 +159,7 @@ A chat session can now sign its coding agent in on the PC. ACP agents report a m
 | Claude Code | `claude_ai`, `console` | `claude auth login --claudeai` / `--console`: prints the sign-in page, then reads the code that the page shows. With the browser on the PC it finishes alone. |
 | Codex | `chatgpt`, `api_key` | `codex login --device-auth`: prints the page and a one-time code to enter there. `api_key`: the value goes to `codex login --with-api-key` on stdin. |
 | Antigravity | `google` | `agy acp --login`: prints the Google sign-in page, then reads the code (or the address of the page the user lands on). |
+| GitHub Copilot | `github` | `copilot login --device-code`: prints GitHub's device page and a one-time code to enter there. |
 
 * When it is offered: `session/new`, `session/load` or a prompt fails with `authRequired`, or claude-agent-acp pushes `_auth/status_update` with `authStatus.kind: "none"`. A user message `/login` (no images) also opens it, unless a turn runs. The state `commands` list gains a `login` entry.
 * The request in `requests`: `{"id": "sign-in", "kind": "sign_in", "tool_call_id": null, "title", "text", "stage", "methods": [{id, name, description}], "url", "user_code", "input", "busy", "error"}`.
@@ -154,7 +180,7 @@ The session wire dict (`sessions.changed`, `session.updated`, the `/ws/sessions`
 |---------|--------|
 | Claude Code and Auto Scan terminal | The attention gate's hooks. `UserPromptSubmit` → `working`. A `Stop` that leaves work in flight (in-flight `background_tasks`, `session_crons`) → stays `working`. Otherwise `idle` when the gate's quiet window ends, even when the alert is muted or deduped. `idle_prompt` and `SessionEnd` → `idle`. `null` until the first hook. |
 | Chat (`ui: "chat"`), every kind | The timeline `status`: `running` → `working`, `ready` → `idle`, otherwise `null`. A turn another app on a shared host runs counts too. |
-| Codex, Antigravity, Terminal and custom terminal (PTY) sessions | Always `null`. Their OSC 7501 reports (Delta 2026-11-10) raise alerts but do not set `activity` yet. |
+| Codex, Antigravity, GitHub Copilot, Terminal and custom terminal (PTY) sessions | Always `null`. Their OSC 7501 reports (Delta 2026-11-10) raise alerts but do not set `activity` yet. |
 
 * Only a `running` session reports a value. Clients show a "Working" chip and an animated status square for `working`. A pending `awaiting_permission` or `awaiting_os_permission` outranks it, because the turn waits for the user.
 * Gate change in the same delta: an `idle_prompt` raised while the last `Stop` still saw background work is *provisional*. It alerts once but does not consume the turn's `prompt_id` dedupe key, so the `Stop` that really ends the turn can alert again. Older CLIs raise `idle_prompt` while background agents run, which used to mute the real end-of-turn alert.
@@ -168,7 +194,7 @@ Additive delta within proto-v7 (2026-11-10): **one attention reason, two optiona
 * New attention reason `turn_failed`. It appears on the session dict `attention`, the agent-bus `session.attention` event and the user-event `reason`. Older clients post nothing for an unknown reason.
 * Chat sessions raise `turn_failed` when the agent answers the user's own prompt with an RPC error. They do not raise it when the user pressed Stop, when the process died (that stays `ended`), or when a queued prompt starts next.
 * The slim `session.attention` user-event payload gains optional `kind` and `kind_label`. No `kind` (older agent) reads as a Claude session.
-* Terminal sessions of kind `codex`, `antigravity`, `shell` and `custom_*` have no Claude Code hooks. They raise attention from OSC 7501 program-status reports (Program Status Protocol rev 0.4, `ESC]7501;state=...[:kind=...][:app=...]`).
+* Terminal sessions of kind `codex`, `antigravity`, `copilot`, `shell` and `custom_*` have no Claude Code hooks. They raise attention from OSC 7501 program-status reports (Program Status Protocol rev 0.4, `ESC]7501;state=...[:kind=...][:app=...]`).
 * For these sessions the agent answers the support query `ESC]7501;?` and strips it from the replayed stream. For `agy` sessions it sets `AGY_CLI_OSC7501=on` and `AGY_CLI_OSC7501_MESSAGES=brief` unless the user set them.
 * Mapping: `blocked` (permission or question) gives `awaiting_permission` at once. `blocked` (auth) is ignored. `done` gives `turn_finished` and `error` gives `turn_failed`, both after a 1.5 s quiet window.
 * `working`, `idle`, `clear` and any client keystroke (except DEC 1004 focus reports) cancel a pending alert. `working`, `idle` and `clear` also drop a standing `awaiting_permission`.
@@ -365,7 +391,7 @@ Additive delta within proto-v7 (2026-11-04, drag-to-reorder in the new-session w
 | ``PUT /api/session-mode-order`` | ``{"order": [str]}`` | Full replace; same body as ``GET``. ``[]`` restores the default order. |
 
 * Dashboard/user JWT, non-admin.
-* Each id matches the shortcuts ``KIND_PATTERN`` (``^[a-z0-9_]{1,32}$``): ``claude``, ``codex``, ``antigravity``, ``auto_scan``, ``shell``, ``custom_<12hex>``. At most 64 ids, no duplicates → else ``422``. The server stores the ids opaquely and does not check them against the live custom types.
+* Each id matches the shortcuts ``KIND_PATTERN`` (``^[a-z0-9_]{1,32}$``): ``claude``, ``codex``, ``antigravity``, ``copilot``, ``auto_scan``, ``shell``, ``custom_<12hex>``. At most 64 ids, no duplicates → else ``422``. The server stores the ids opaquely and does not check them against the live custom types.
 * ``version`` grows by one on every change. A ``PUT`` of the stored order changes nothing and pushes nothing.
 * A change pushes the user event ``session_mode_order.updated`` with the same body to every user-events socket of the account. Clients keep the higher ``version`` of the cached and incoming snapshot, and reconcile with ``GET`` on every user-events connect.
 * Clients apply the list the same way: a card the list names is ranked by its place there; a card it does not name (a custom type created after the last save, a mode a newer client added) keeps its default place among the other unnamed cards, after the named ones; an id that names no card is skipped.

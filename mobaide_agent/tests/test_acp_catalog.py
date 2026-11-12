@@ -513,6 +513,7 @@ class TestChatRest:
             "claude": {"resume": True, "live": False},
             "codex": {"resume": True, "live": False},
             "antigravity": {"resume": True, "live": False},
+            "copilot": {"resume": True, "live": False},
         }
 
     async def test_create_chat_session(self, client, auth_headers, tmp_path):
@@ -616,6 +617,32 @@ class TestChatRest:
             ("Refactor the login flow", False),
             ("Fix flaky upload test", False),
         ]
+
+    async def test_copilot_chat_session_and_its_stored_sessions(
+        self, client, auth_headers, tmp_path
+    ):
+        body = {
+            "cli": "copilot",
+            "ui": "chat",
+            "cwd": str(tmp_path),
+            "copilot_options": {"allow_all": True},
+        }
+
+        created = await client.post("/api/sessions", headers=auth_headers, json=body)
+        listed = await client.get(
+            f"/api/chat/copilot/sessions?cwd={tmp_path}", headers=auth_headers
+        )
+        version = await client.get("/api/version", headers=auth_headers)
+
+        assert created.status_code == 201, created.text
+        assert created.json()["ui"] == "chat"
+        assert created.json()["kind"] == "copilot"
+        assert listed.status_code == 200
+        assert [(r["session_id"], r["cwd"]) for r in listed.json()["sessions"]] == [
+            ("external-1111", str(tmp_path)),
+            ("external-2222", str(tmp_path)),
+        ]
+        assert version.json()["capabilities"]["chat"]["copilot"] == {"resume": True, "live": False}
 
 
     async def test_list_needs_auth(self, client):

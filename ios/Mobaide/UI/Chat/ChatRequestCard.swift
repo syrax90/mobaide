@@ -443,39 +443,52 @@ private struct ChatSignInBody: View {
                             methodLine(method)
                         }
                     }
-                    if request.waiting, let url = request.url {
-                        Button {
-                            openURL(url)
-                        } label: {
-                            Label("Open sign-in page", systemImage: "arrow.up.right.square")
-                        }
-                        .buttonStyle(.pixelPrimaryBlock)
-                        .disabled(!model.isLive)
-                    }
-                    if request.waiting, let code = request.userCode {
-                        CopyableCodeBlock(label: "One-time code", code: code)
-                    }
-                    if let input {
-                        field(input)
-                    }
-                    if request.waiting, request.busy, input == nil {
-                        HStack(spacing: 8) {
-                            PixelLoadingBlock(width: 7, height: 13)
-                            Text(request.url == nil ? "Starting the sign-in…" : "Waiting for you to finish on the sign-in page…")
-                                .font(.footnote)
-                                .foregroundStyle(colors.textMuted)
-                        }
-                    }
-                    if let error = model.formErrors[request.id] ?? request.error, !error.isEmpty {
-                        Text(error)
-                            .font(.footnote)
-                            .foregroundStyle(colors.danger)
-                            .fixedSize(horizontal: false, vertical: true)
+                    if input != nil {
+                        steps
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            // A sign-in with nothing to type (a one-time code to enter on the
+            // page) keeps its page button and code in view, outside the
+            // capped scroll. One with a field scrolls, so the keyboard fits.
+            if input == nil {
+                steps
+            }
             buttons
+        }
+    }
+
+    @ViewBuilder
+    private var steps: some View {
+        if request.waiting, let url = request.url {
+            Button {
+                openURL(url)
+            } label: {
+                Label("Open sign-in page", systemImage: "arrow.up.right.square")
+            }
+            .buttonStyle(.pixelPrimaryBlock)
+            .disabled(!model.isLive)
+        }
+        if request.waiting, let code = request.userCode {
+            CopyableCodeBlock(label: "One-time code", code: code)
+        }
+        if let input {
+            field(input)
+        }
+        if request.waiting, request.busy, input == nil {
+            HStack(spacing: 8) {
+                PixelLoadingBlock(width: 7, height: 13)
+                Text(request.url == nil ? "Starting the sign-in…" : "Waiting for you to finish on the sign-in page…")
+                    .font(.footnote)
+                    .foregroundStyle(colors.textMuted)
+            }
+        }
+        if let error = model.formErrors[request.id] ?? request.error, !error.isEmpty {
+            Text(error)
+                .font(.footnote)
+                .foregroundStyle(colors.danger)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

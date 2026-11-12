@@ -1,0 +1,19 @@
+{
+  "type": "CopilotOptionsModel",
+  "cases": [
+    {
+      "name": "full",
+      "wire": {
+        "allow_all": true,
+        "worktree": true,
+        "branch_name": "b",
+        "base_branch": "origin/main"
+      }
+    },
+    {
+      "name": "empty_defaults_materialize",
+      "wire": {},
+      "decoded_canonical": { "allow_all": false, "worktree": false }
+    }
+  ]
+}

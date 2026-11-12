@@ -5,6 +5,7 @@ import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.local.AntigravityLaunchPrefs
 import com.mobaide.app.data.local.ClaudeLaunchPrefs
 import com.mobaide.app.data.local.CodexLaunchPrefs
+import com.mobaide.app.data.local.CopilotLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.RestApi
@@ -123,6 +124,8 @@ class CreateSessionViewModelTest {
         coEvery { prefs.setLastUsedCodexOptions(any()) } just Runs
         coEvery { prefs.getLastUsedAntigravityOptions() } returns null
         coEvery { prefs.setLastUsedAntigravityOptions(any()) } just Runs
+        coEvery { prefs.getLastUsedCopilotOptions() } returns null
+        coEvery { prefs.setLastUsedCopilotOptions(any()) } just Runs
         coEvery { prefs.getRecentCustomPaths(any()) } returns recentCustomPaths
         coEvery { prefs.addRecentCustomPath(any(), any()) } just Runs
         coEvery { prefs.removeRecentCustomPath(any(), any()) } just Runs
@@ -3465,6 +3468,238 @@ class CreateSessionViewModelTest {
         assertTrue(options.sandbox)
         assertFalse(options.skip_permissions)
         assertEquals(listOf("/a", "/b"), options.add_dirs)
+        assertFalse(options.worktree)
+        assertNull(options.branch_name)
+    }
+
+    // GitHub Copilot
+
+    private val copilotCli = """{"copilot":{"available":true}}"""
+
+    private fun TestScope.copilotSubmit(
+        fx: Fixture,
+        setUp: (CreateSessionViewModel) -> Unit = {},
+    ): Pair<CreateSessionRequest, CopilotLaunchPrefs> {
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-copilot", "starting", "2026-11-12T00:00:00Z")
+        val prefsSlot = slot<CopilotLaunchPrefs>()
+        coEvery { fx.prefs.setLastUsedCopilotOptions(capture(prefsSlot)) } just Runs
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCopilotMode()
+        setUp(vm)
+        vm.submitCopilot()
+        advanceUntilIdle()
+        return requestSlot.captured to prefsSlot.captured
+    }
+
+    @Test
+    fun submitCopilot_sendsCliCopilot_withOnlyItsOwnOptionsBlock_andOpensTheChatView() = runTest {
+        val fx = newFixture()
+
+        val (request, saved) = copilotSubmit(fx) { vm ->
+            assertEquals(CreateSessionStep.CopilotConfig, vm.uiState.value.step)
+            vm.setCopilotAllowAll(true)
+            vm.toggleWorktree(true)
+            vm.setBranchName("feature/x")
+        }
+
+        assertEquals("alpha", request.project_name)
+        assertEquals("copilot", request.cli)
+        assertEquals(SessionResponse.UI_CHAT, request.ui)
+        assertNull("Copilot must not send claude_options", request.claude_options)
+        assertNull("Copilot must not send codex_options", request.codex_options)
+        assertNull("Copilot must not send antigravity_options", request.antigravity_options)
+        val options = request.copilot_options
+        assertNotNull(options)
+        assertTrue(options!!.allow_all)
+        assertTrue("worktree must travel inside copilot_options", options.worktree)
+        assertEquals("feature/x", options.branch_name)
+        assertFalse(
+            "Copilot worktree travels in copilot_options, not the top-level request field",
+            request.worktree,
+        )
+        // The same choices are kept for the next Copilot launch, and no other agent's.
+        assertEquals(CopilotLaunchPrefs(allowAll = true, terminalUi = false), saved)
+        coVerify(exactly = 0) { fx.prefs.setLastUsedClaudeOptions(any()) }
+        coVerify(exactly = 0) { fx.prefs.setLastUsedCodexOptions(any()) }
+        coVerify(exactly = 0) { fx.prefs.setLastUsedAntigravityOptions(any()) }
+    }
+
+    @Test
+    fun submitCopilot_byDefault_doesNotAllowAll() = runTest {
+        val (request, saved) = copilotSubmit(newFixture())
+
+        assertFalse(request.copilot_options!!.allow_all)
+        assertFalse(request.copilot_options!!.worktree)
+        assertNull(request.copilot_options!!.branch_name)
+        assertFalse(saved.allowAll)
+    }
+
+    @Test
+    fun submitCopilot_withTerminalUi_opensTheTerminal_andRemembersTheChoice() = runTest {
+        val (request, saved) = copilotSubmit(newFixture()) { it.toggleCopilotTerminalUi(true) }
+
+        assertEquals("copilot", request.cli)
+        assertEquals(SessionResponse.UI_TERMINAL, request.ui)
+        assertTrue(saved.terminalUi)
+    }
+
+    @Test
+    fun submitCopilot_whereThePcHasNoCopilotChat_opensTheTerminal() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            chatVersion("""{"claude":{"resume":true}}""", cli = copilotCli)
+
+        val (request, _) = copilotSubmit(fx) { vm ->
+            vm.refreshCliAvailability()
+            advanceUntilIdle()
+            assertNotNull(vm.uiState.value.copilotChatUnavailableHint)
+            assertFalse(vm.uiState.value.copilotResumeAvailable)
+        }
+
+        assertEquals(SessionResponse.UI_TERMINAL, request.ui)
+    }
+
+    @Test
+    fun submitCopilot_customPath_sendsTheFolder_andNeverAWorktree() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-copilot-adhoc", "starting", "2026-11-12T00:00:00Z")
+
+        vm.selectCustomPath()
+        advanceUntilIdle()
+        vm.setCustomPathDraft(hostAbsolutePath)
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+        vm.confirmProject()
+        vm.selectCopilotMode()
+        vm.setCopilotAllowAll(true)
+        vm.submitCopilot()
+        advanceUntilIdle()
+
+        val request = requestSlot.captured
+        assertNull(request.project_name)
+        assertEquals(hostAbsolutePath, request.cwd)
+        assertEquals("copilot", request.cli)
+        val options = request.copilot_options
+        assertNotNull(options)
+        assertTrue(options!!.allow_all)
+        assertFalse(options.worktree)
+        assertNull(options.branch_name)
+        assertNull(options.base_branch)
+    }
+
+    @Test
+    fun copilotCard_isDisabled_forAnAgentFromBeforeCopilotSupport() = runTest {
+        // That agent lists its CLIs without Copilot, and would open a plain
+        // shell for `cli = "copilot"`.
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            versionResponse(claude = true, codex = true)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectProject("alpha")
+        vm.confirmProject()
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertFalse(s.copilotKnown)
+        assertFalse(s.isModeEnabled(CreateSessionMode.Copilot))
+        assertTrue("the agent's other CLIs stay usable", s.isModeEnabled(CreateSessionMode.Codex))
+
+        vm.selectCopilotMode()
+
+        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
+    }
+
+    @Test
+    fun copilotCard_staysEnabled_whenTheAgentReportsNoCliList() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertTrue(s.copilotKnown)
+        assertNull(s.copilotAvailable)
+        assertTrue(s.isModeEnabled(CreateSessionMode.Copilot))
+    }
+
+    @Test
+    fun copilotCard_isDisabled_whenTheAgentListsCopilotAsNotInstalled() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            chatVersion("{}", cli = """{"claude":{"available":true},"copilot":{"available":false}}""")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertTrue("a listed CLI is known, only not installed", s.copilotKnown)
+        assertEquals(false, s.copilotAvailable)
+        assertFalse(s.isModeEnabled(CreateSessionMode.Copilot))
+    }
+
+    @Test
+    fun init_restoresTheCopilotChoices() = runTest {
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedCopilotOptions() } returns
+            CopilotLaunchPrefs(allowAll = true, terminalUi = true)
+
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.copilotAllowAll)
+        assertTrue(vm.uiState.value.copilotTerminalUi)
+        assertFalse(vm.uiState.value.antigravityTerminalUi)
+        assertFalse(vm.uiState.value.skipPermissions)
+    }
+
+    @Test
+    fun resumeChatSession_copilot_sendsTheCopilotOptionsWithoutAWorktree() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-copilot-resumed", "starting", "2026-11-12T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCopilotMode()
+        vm.setCopilotAllowAll(true)
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+        vm.resumeChatSession("copilot", ChatStoredSession(session_id = "external-3333", cwd = "/p/alpha"))
+        advanceUntilIdle()
+
+        val request = requestSlot.captured
+        assertEquals("copilot", request.cli)
+        assertEquals("alpha", request.project_name)
+        assertNull(request.cwd)
+        assertEquals(SessionResponse.UI_CHAT, request.ui)
+        assertEquals("external-3333", request.chat_resume_id)
+        assertNull(request.claude_options)
+        assertNull(request.codex_options)
+        assertNull(request.antigravity_options)
+        val options = request.copilot_options
+        assertNotNull(options)
+        assertTrue(options!!.allow_all)
         assertFalse(options.worktree)
         assertNull(options.branch_name)
     }

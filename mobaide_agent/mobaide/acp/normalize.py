@@ -717,18 +717,38 @@ _COMMAND_RESULT = re.compile(
 )
 
 
+# GitHub Copilot ends the output of a finished command with this line.
+_SHELL_EXIT = re.compile(r"(?:\r?\n)?<shellId: \d{1,9} completed with exit code (-?\d{1,9})>\s*\Z")
+# That line is the end of the text: only this much of the tail is searched.
+_SHELL_EXIT_TAIL = 128
+
+
+def _command_result(text: str) -> tuple[str, int] | None:
+    """``(output, exit code)`` of a finished command, from the text an agent
+    reports it as; None for any other text."""
+    match = _COMMAND_RESULT.match(text)
+    if match is not None:
+        return match.group(2) or "", int(match.group(1))
+    match = _SHELL_EXIT.search(text, max(0, len(text) - _SHELL_EXIT_TAIL))
+    if match is not None:
+        return text[: match.start()], int(match.group(1))
+    return None
+
+
 def command_result_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Each ``Command exited with code N.\n\nCommand output:\n…`` text as
-    the ``console`` part other agents' command output gets (dropped when
-    the command printed nothing and succeeded)."""
+    """Each text that reports a finished command (Antigravity's ``Command
+    exited with code N.\n\nCommand output:\n…``, Copilot's output with a last
+    ``<shellId: N completed with exit code M>`` line) as the ``console`` part
+    other agents' command output gets (dropped when the command printed
+    nothing and succeeded)."""
     out: list[dict[str, Any]] = []
     for part in parts:
         text = part.get("text") if part.get("type") == "text" else None
-        match = _COMMAND_RESULT.match(text) if isinstance(text, str) else None
-        if match is None:
+        result = _command_result(text) if isinstance(text, str) else None
+        if result is None:
             out.append(part)
             continue
-        rendered = console_part(match.group(2) or "", live=False, exit_code=int(match.group(1)))
+        rendered = console_part(result[0], live=False, exit_code=result[1])
         if rendered is not None:
             if part.get("truncated"):
                 rendered["truncated"] = True
