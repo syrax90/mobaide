@@ -8,23 +8,32 @@ struct ChatCappedScroll<Content: View>: View {
     /// When set, content cut off by the cap fades into this colour, so the
     /// user can see that more is below.
     var fadeColor: Color? = nil
+    /// When set, the area shrinks below `maxHeight` (down to nothing) if the
+    /// parent offers less height, so that its siblings keep their full size.
+    var yields: Bool = false
     @ViewBuilder let content: () -> Content
 
     @State private var contentHeight: CGFloat = 0
+    @State private var shownHeight: CGFloat = 0
 
     var body: some View {
-        let overflows = contentHeight > maxHeight
+        let height = min(contentHeight, maxHeight)
+        // A yielding area is judged by its laid-out height, once measured.
+        let overflows = yields
+            ? shownHeight > 0 && contentHeight > shownHeight + 0.5
+            : contentHeight > maxHeight + 0.5
         ScrollView {
             content()
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
         }
         .scrollBounceBehavior(.basedOnSize)
         .scrollIndicatorsFlash(trigger: overflows)
-        .frame(height: min(contentHeight, maxHeight))
+        .frame(minHeight: yields ? 0 : height, idealHeight: height, maxHeight: height)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { shownHeight = $0 }
         .overlay(alignment: .bottom) {
             if overflows, let fadeColor {
                 LinearGradient(colors: [fadeColor.opacity(0), fadeColor], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 16)
+                    .frame(height: yields ? min(16, shownHeight) : 16)
                     .allowsHitTesting(false)
             }
         }
