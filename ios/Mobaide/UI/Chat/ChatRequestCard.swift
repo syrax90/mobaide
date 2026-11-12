@@ -485,10 +485,14 @@ private struct ChatSignInBody: View {
                 }
             }
             if let error = model.formErrors[request.id] ?? request.error, !error.isEmpty {
-                Text(error)
-                    .font(.footnote)
-                    .foregroundStyle(colors.danger)
-                    .fixedSize(horizontal: false, vertical: true)
+                // CLI output can be long; capped so the field stays in view.
+                ChatCappedScroll(maxHeight: 64, fadeColor: colors.bg2) {
+                    Text(error)
+                        .font(.footnote)
+                        .foregroundStyle(colors.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
             buttons
         }
