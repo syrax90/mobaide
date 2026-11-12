@@ -10,6 +10,7 @@ struct ChatRequestCard: View {
     let request: ChatPendingRequest
     let moreWaiting: Int
     let bodyCap: CGFloat
+    let signInFieldFocused: FocusState<Bool>.Binding
 
     @Environment(\.mobaideColors) private var colors
 
@@ -24,7 +25,7 @@ struct ChatRequestCard: View {
                     .id(form.id)
             case .signIn(let signIn):
                 // A new stage starts with an empty field.
-                ChatSignInBody(model: model, request: signIn, bodyCap: bodyCap)
+                ChatSignInBody(model: model, request: signIn, bodyCap: bodyCap, fieldFocused: signInFieldFocused)
                     .id("\(signIn.id):\(signIn.stage)")
             case .other(_, _, let title):
                 Text(title)
@@ -411,12 +412,14 @@ private struct ChatSignInBody: View {
     let model: ChatSessionModel
     let request: ChatPendingRequest.SignIn
     let bodyCap: CGFloat
+    /// Owned by the chat screen, which makes room for the keyboard while
+    /// the field has focus.
+    let fieldFocused: FocusState<Bool>.Binding
 
     @Environment(\.mobaideColors) private var colors
     @Environment(\.openURL) private var openURL
     @State private var value = ""
     @State private var revealed = false
-    @FocusState private var fieldFocused: Bool
 
     private var answering: String? { model.answering[request.id] }
     private var input: ChatPendingRequest.SignIn.Input? { request.waiting ? request.input : nil }
@@ -426,8 +429,11 @@ private struct ChatSignInBody: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ChatCappedScroll(maxHeight: bodyCap, fadeColor: colors.bg2) {
+        VStack(alignment: .leading, spacing: 0) {
+            // Only the instructions scroll, and they give up their height
+            // first: the page button, the code and the field stay in view.
+            // The gap below them is inside the scroll, so it goes with them.
+            ChatCappedScroll(maxHeight: bodyCap, fadeColor: colors.bg2, yields: true) {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(request.title)
                         .font(.body.weight(.semibold))
@@ -443,52 +449,52 @@ private struct ChatSignInBody: View {
                             methodLine(method)
                         }
                     }
-                    if input != nil {
-                        steps
-                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.bottom, 12)
             }
-            // A sign-in with nothing to type (a one-time code to enter on the
-            // page) keeps its page button and code in view, outside the
-            // capped scroll. One with a field scrolls, so the keyboard fits.
-            if input == nil {
-                steps
-            }
-            buttons
+            steps
         }
     }
 
-    @ViewBuilder
     private var steps: some View {
-        if request.waiting, let url = request.url {
-            Button {
-                openURL(url)
-            } label: {
-                Label("Open sign-in page", systemImage: "arrow.up.right.square")
+        VStack(alignment: .leading, spacing: 12) {
+            if request.waiting, let url = request.url {
+                Button {
+                    openURL(url)
+                } label: {
+                    Label("Open sign-in page", systemImage: "arrow.up.right.square")
+                }
+                .buttonStyle(.pixelPrimaryBlock)
+                .disabled(!model.isLive)
             }
-            .buttonStyle(.pixelPrimaryBlock)
-            .disabled(!model.isLive)
-        }
-        if request.waiting, let code = request.userCode {
-            CopyableCodeBlock(label: "One-time code", code: code)
-        }
-        if let input {
-            field(input)
-        }
-        if request.waiting, request.busy, input == nil {
-            HStack(spacing: 8) {
-                PixelLoadingBlock(width: 7, height: 13)
-                Text(request.url == nil ? "Starting the sign-in…" : "Waiting for you to finish on the sign-in page…")
-                    .font(.footnote)
-                    .foregroundStyle(colors.textMuted)
+            if request.waiting, let code = request.userCode {
+                CopyableCodeBlock(label: "One-time code", code: code)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-        }
-        if let error = model.formErrors[request.id] ?? request.error, !error.isEmpty {
-            Text(error)
-                .font(.footnote)
-                .foregroundStyle(colors.danger)
-                .fixedSize(horizontal: false, vertical: true)
+            if let input {
+                field(input)
+            }
+            if request.waiting, request.busy, input == nil {
+                HStack(spacing: 8) {
+                    PixelLoadingBlock(width: 7, height: 13)
+                    Text(request.url == nil ? "Starting the sign-in…" : "Waiting for you to finish on the sign-in page…")
+                        .font(.footnote)
+                        .foregroundStyle(colors.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if let error = model.formErrors[request.id] ?? request.error, !error.isEmpty {
+                // CLI output can be long; capped so the field stays in view.
+                ChatCappedScroll(maxHeight: 64, fadeColor: colors.bg2) {
+                    Text(error)
+                        .font(.footnote)
+                        .foregroundStyle(colors.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            buttons
         }
     }
 
@@ -515,17 +521,17 @@ private struct ChatSignInBody: View {
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(colors.text)
             if input.secret {
-                SecretTextField(text: $value, label: label, revealed: $revealed, enabled: enabled, isFocused: fieldFocused)
-                    .focused($fieldFocused)
+                SecretTextField(text: $value, label: label, revealed: $revealed, enabled: enabled, isFocused: fieldFocused.wrappedValue)
+                    .focused(fieldFocused)
                     .onSubmit(submit)
             } else {
                 TextField(label, text: $value)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .submitLabel(.done)
-                    .focused($fieldFocused)
+                    .focused(fieldFocused)
                     .onSubmit(submit)
-                    .pixelField(isFocused: fieldFocused)
+                    .pixelField(isFocused: fieldFocused.wrappedValue)
                     .disabled(!enabled)
                     .accessibilityLabel(label)
             }
