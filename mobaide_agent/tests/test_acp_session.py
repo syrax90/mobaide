@@ -35,12 +35,14 @@ from mobaide.acp import session as session_mod
 from mobaide.acp import signin
 from mobaide.acp.agents import (
     FAKE_SIGNED_OUT_ENV,
+    PI_SIGN_IN_PROMPT,
     ChatLaunchPlan,
     ConfigIntent,
     claude_sign_in_methods,
     codex_sign_in_methods,
     copilot_sign_in_methods,
     fake_agent_argv,
+    pi_sign_in_methods,
     resolve_antigravity_config,
 )
 from mobaide.acp.install import AdapterInstallError
@@ -1352,20 +1354,27 @@ class TestCrashAndRestart:
         message = "Could not set the read-only mode, so the session did not start"
         assert m.status == "error"
         assert m.state["error"].startswith(message)
+        [first] = m.of_type("error")
+
+        def failed_again(earlier: dict[str, Any]) -> bool:
+            return any(item["id"] != earlier["id"] for item in m.of_type("error"))
 
         assert (await m.command("restart"))["ok"] is True
-        await m.until(lambda: m.status == "ready" or len(m.texts("error")) == 2)
+        await m.until(lambda: m.status == "ready" or failed_again(first))
 
         assert m.status == "error"
         assert m.state["error"].startswith(message)
+        # Each start shows its own failure only, not the one before it.
+        [second] = m.of_type("error")
         refused = await m.command("prompt", text="hello")
         assert refused["error"] == "The agent is not running. Use Restart to start it again."
 
         refuse.unlink()
         assert (await m.command("restart"))["ok"] is True
-        await m.until(lambda: m.status == "ready" or len(m.texts("error")) == 3)
+        await m.until(lambda: m.status == "ready" or failed_again(second))
 
         assert m.status == "ready"
+        assert m.of_type("error") == []
         assert {o["id"]: o["value"] for o in m.state["config"]} == {"mode": "read-only"}
 
     async def test_a_restart_after_a_crash_keeps_the_sandbox_mode_required(
@@ -1463,6 +1472,34 @@ class TestAdapterInstall:
         await m.until(lambda: m.status == "ready")
 
         assert self.SETUP not in _notices(m)
+
+    async def test_each_start_shows_only_its_own_failure(self, open_chat):
+        """A start that fails before the agent runs must not leave its error
+        above the next try, nor above the chat once a try works."""
+        outcomes: list[BaseException | None] = [
+            AdapterInstallError("fail one"),
+            AdapterInstallError("fail two"),
+            None,
+        ]
+
+        def ensure() -> list[str]:
+            failure = outcomes.pop(0)
+            if failure is not None:
+                raise failure
+            return fake_agent_argv()
+
+        m = await open_chat(ensure_argv=ensure)
+        [first] = m.of_type("error")
+
+        assert (await m.command("restart"))["ok"] is True
+        await m.until(
+            lambda: m.status == "error" and [i["id"] for i in m.of_type("error")] not in ([], [first["id"]])
+        )
+        assert len(m.of_type("error")) == 1
+
+        assert (await m.command("restart"))["ok"] is True
+        await m.until(lambda: m.status == "ready")
+        assert m.of_type("error") == []
 
     @pytest.mark.parametrize(
         "failure",
@@ -2650,6 +2687,14 @@ class TestSignIn:
             "sign_in": copilot_sign_in_methods(None, os.environ, fake=True),
         }
 
+    @staticmethod
+    def _pi() -> dict[str, Any]:
+        return {
+            "argv": fake_agent_argv("pi"),
+            "sign_in": pi_sign_in_methods(None, os.environ, fake=True),
+            "sign_in_prompt": PI_SIGN_IN_PROMPT,
+        }
+
     async def _at_the_code_field(self, m: TimelineMirror) -> dict[str, Any]:
         started = await m.command("sign_in", action="start", method="claude_ai")
         assert started["ok"] is True
@@ -2872,6 +2917,28 @@ class TestSignIn:
         request = _sign_in(m)
         assert request["url"] == "https://example.com/copilot/sign-in?state=fake"
         assert request["user_code"] == "FAKE-1234"
+        assert (request["input"], request["busy"]) == (None, True)
+
+        await m.until(lambda: m.status == "ready" and self.SIGNED_IN in _notices(m))
+        assert not signed_out.exists()
+
+    async def test_a_pi_sign_in_offers_two_accounts_and_reads_the_page_and_the_code(
+        self, open_chat, signed_out
+    ):
+        """A Pi with no provider refuses ``session/new``. The card says what
+        the chat can sign in to; ``pi auth login openai-codex --no-browser``
+        prints the page and the code in one line."""
+        m = await open_chat(**self._pi())
+        await m.until(lambda: m.status == "error" and _sign_in(m) is not None)
+        assert m.state["error"] == self.NOT_SIGNED_IN
+        assert [x["id"] for x in _sign_in(m)["methods"]] == ["openai-codex", "anthropic"]
+        assert _sign_in(m)["text"] == PI_SIGN_IN_PROMPT
+
+        await m.command("sign_in", action="start", method="openai-codex")
+        await m.until(lambda: _sign_in(m)["url"] is not None)
+        request = _sign_in(m)
+        assert request["url"] == "https://example.com/pi/sign-in?state=fake"
+        assert request["user_code"] == "FAKE-12345"
         assert (request["input"], request["busy"]) == (None, True)
 
         await m.until(lambda: m.status == "ready" and self.SIGNED_IN in _notices(m))

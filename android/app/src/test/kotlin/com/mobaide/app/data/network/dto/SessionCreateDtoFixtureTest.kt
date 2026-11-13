@@ -168,6 +168,41 @@ class SessionCreateDtoFixtureTest {
     }
 
     @Test
+    fun piOptions_fullCarriesBaseBranch_andEncodesTheServerKeys() {
+        val decoded = fixture("PiOptionsModel").decodeAll(PiOptionsModel.serializer())
+        val full = decoded.getValue("full")
+        assertTrue(full.worktree)
+        assertEquals("b", full.branch_name)
+        assertEquals("origin/main", full.base_branch)
+        assertBaseBranchEncodes(PiOptionsModel.serializer(), full, "origin/main")
+        val encoded = allKeysJson.encodeToJsonElement(PiOptionsModel.serializer(), full) as JsonObject
+        assertEquals(setOf("worktree", "branch_name", "base_branch"), encoded.keys)
+        assertEquals(PiOptionsModel(worktree = false), decoded.getValue("empty_defaults_materialize"))
+    }
+
+    @Test
+    fun createSessionRequest_piLaunchCarriesThePiBlock() {
+        val decoded = fixture("CreateSessionRequest").decodeAll(CreateSessionRequest.serializer())
+        val launch = decoded.getValue("pi_launch")
+        assertEquals("pi", launch.cli)
+        assertEquals(SessionResponse.UI_CHAT, launch.ui)
+        assertEquals(
+            PiOptionsModel(
+                worktree = true,
+                branch_name = "feature/x",
+                base_branch = "origin/main",
+            ),
+            launch.pi_options,
+        )
+        assertNull(launch.claude_options)
+        assertNull(launch.copilot_options)
+        val encoded = json.encodeToJsonElement(CreateSessionRequest.serializer(), launch) as JsonObject
+        assertEquals("pi", encoded["cli"]?.jsonPrimitive?.content)
+        assertTrue("pi_options" in encoded)
+        assertTrue("copilot_options" !in encoded)
+    }
+
+    @Test
     fun createSessionRequest_fullCarriesTopLevelBaseBranch() {
         val decoded = fixture("CreateSessionRequest").decodeAll(CreateSessionRequest.serializer())
         val full = decoded.getValue("full")

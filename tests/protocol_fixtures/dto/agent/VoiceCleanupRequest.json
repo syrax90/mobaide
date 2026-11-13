@@ -35,6 +35,13 @@
         "text": "um open a pull request for the uh login fix",
         "kind": "copilot"
       }
+    },
+    {
+      "name": "pi_session",
+      "wire": {
+        "text": "um rename the uh helper to parse config",
+        "kind": "pi"
+      }
     }
   ]
 }

@@ -87,6 +87,11 @@ export interface CopilotLaunchPrefs {
   terminalUi: boolean;
 }
 
+/** Android `PiLaunchPrefs`, iOS `PiLaunchPrefs`. */
+export interface PiLaunchPrefs {
+  terminalUi: boolean;
+}
+
 /**
  * The data half of the store. A `null` bucket means "never launched", which is
  * what keeps Auto Scan's `skipPermissions` default of `true` alive for a fresh
@@ -99,6 +104,7 @@ export interface LaunchPrefs {
   antigravity: AntigravityLaunchPrefs | null;
   opencode: OpenCodeLaunchPrefs | null;
   copilot: CopilotLaunchPrefs | null;
+  pi: PiLaunchPrefs | null;
   lastProjectName: string | null;
 }
 
@@ -110,7 +116,8 @@ export type LaunchPrefsSnapshot =
   | { kind: 'codex'; prefs: CodexLaunchPrefs }
   | { kind: 'antigravity'; prefs: AntigravityLaunchPrefs }
   | { kind: 'opencode'; prefs: OpenCodeLaunchPrefs }
-  | { kind: 'copilot'; prefs: CopilotLaunchPrefs };
+  | { kind: 'copilot'; prefs: CopilotLaunchPrefs }
+  | { kind: 'pi'; prefs: PiLaunchPrefs };
 
 interface LaunchPrefsState extends LaunchPrefs {
   setLaunchPrefs: (snapshot: LaunchPrefsSnapshot) => void;
@@ -169,6 +176,10 @@ export const OPENCODE_PREFS_DEFAULTS: OpenCodeLaunchPrefs = {
 
 export const COPILOT_PREFS_DEFAULTS: CopilotLaunchPrefs = {
   allowAll: false,
+  terminalUi: false,
+};
+
+export const PI_PREFS_DEFAULTS: PiLaunchPrefs = {
   terminalUi: false,
 };
 
@@ -353,6 +364,13 @@ function sanitizeCopilotPrefs(raw: unknown): CopilotLaunchPrefs | null {
   return { allowAll, terminalUi };
 }
 
+function sanitizePiPrefs(raw: unknown): PiLaunchPrefs | null {
+  if (!isRecord(raw)) return null;
+  const terminalUi = field(raw, 'terminalUi', PI_PREFS_DEFAULTS.terminalUi, isBoolean);
+  if (terminalUi === undefined) return null;
+  return { terminalUi };
+}
+
 export const useLaunchPrefsStore = create<LaunchPrefsState>()(
   persist(
     (set) => ({
@@ -362,6 +380,7 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
       antigravity: null,
       opencode: null,
       copilot: null,
+      pi: null,
       lastProjectName: null,
       setLaunchPrefs: (snapshot) => {
         switch (snapshot.kind) {
@@ -382,6 +401,9 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
             return;
           case 'copilot':
             set({ copilot: snapshot.prefs });
+            return;
+          case 'pi':
+            set({ pi: snapshot.prefs });
         }
       },
       setLastProjectName: (lastProjectName) => {
@@ -405,6 +427,7 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
           antigravity: sanitizeAntigravityPrefs(saved.antigravity),
           opencode: sanitizeOpenCodePrefs(saved.opencode),
           copilot: sanitizeCopilotPrefs(saved.copilot),
+          pi: sanitizePiPrefs(saved.pi),
           lastProjectName:
             typeof lastProjectName === 'string' && lastProjectName !== ''
               ? lastProjectName
@@ -417,7 +440,7 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
 
 /** Non-reactive read, for the wizard's reducer initializer and prefill effect. */
 export function readLaunchPrefs(): LaunchPrefs {
-  const { claude, autoScan, codex, antigravity, opencode, copilot, lastProjectName } =
+  const { claude, autoScan, codex, antigravity, opencode, copilot, pi, lastProjectName } =
     useLaunchPrefsStore.getState();
-  return { claude, autoScan, codex, antigravity, opencode, copilot, lastProjectName };
+  return { claude, autoScan, codex, antigravity, opencode, copilot, pi, lastProjectName };
 }

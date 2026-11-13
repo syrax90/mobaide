@@ -191,7 +191,12 @@ def _key_method(login: FakeKeyLogin) -> SignInMethod:
 
 
 class Harness:
-    def __init__(self, methods: list[SignInMethod], pty: LoginPty | None = None) -> None:
+    def __init__(
+        self,
+        methods: list[SignInMethod],
+        pty: LoginPty | None = None,
+        choose_text: str | None = None,
+    ) -> None:
         self.pty = pty or LoginPty()
         self.changes = 0
         self.signed_in = 0
@@ -202,6 +207,7 @@ class Harness:
             on_change=self._changed,
             on_signed_in=self._done,
             backend_factory=lambda: self.pty,
+            choose_text=choose_text,
         )
 
     @property
@@ -259,6 +265,17 @@ class TestChoose:
             "error": None,
         }
         assert h.changes == 1
+
+    async def test_the_text_of_the_agent_shows_only_while_the_user_picks_a_method(self):
+        """An agent with several providers says what the chat can sign in to;
+        a login that runs has its own instructions."""
+        h = Harness([_paste_method()], choose_text="Sign in to one provider here.")
+
+        h.flow.offer()
+        assert h.public is not None and h.public["text"] == "Sign in to one provider here."
+
+        await h.at_prompt()
+        assert h.public["text"] == "Paste the code from the page."
 
     def test_without_methods_nothing_is_offered(self):
         h = Harness([])

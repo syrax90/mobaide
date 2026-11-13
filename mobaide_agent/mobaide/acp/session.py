@@ -215,10 +215,13 @@ class ChatSession:
             request_id="sign-in",
             on_change=self._publish_requests,
             on_signed_in=self._on_signed_in,
+            choose_text=plan.sign_in_prompt,
         )
         self._signed_in_notice = False
         # The last start failed for a missing login.
         self._start_auth_failed = False
+        # The error item of the last failed start; the next start drops it.
+        self._start_error_item: str | None = None
         # A sign-in finished while a turn or a restart ran.
         self._resume_pending = False
         # Messages the agent refused for a missing login: sent again once signed in.
@@ -511,6 +514,7 @@ class ChatSession:
         conn = self._conn
         assert conn is not None
         tl = self._timeline
+        self._drop_start_error()
         tl.patch_state(status="starting", error=None, urgent=True)
         try:
             init = await conn.request(
@@ -722,13 +726,21 @@ class ChatSession:
         if hold is not None:
             hold.release()
 
+    def _drop_start_error(self) -> None:
+        """A new start answers the last one's failure: without this, the old
+        error stays above a chat that works again."""
+        stale, self._start_error_item = self._start_error_item, None
+        if stale is not None:
+            self._timeline.remove(stale)
+
     def _fail_start(self, message: str) -> None:
         logger.warning("chat.start_failed session=%s: %s", self.session_id, message)
         self._reload_notice = False
         self._signed_in_notice = False
         if self._timeline.state.get("status") == "error":
             return
-        self._timeline.upsert({"id": self._next_id("err"), "type": "error", "text": message})
+        self._start_error_item = self._next_id("err")
+        self._timeline.upsert({"id": self._start_error_item, "type": "error", "text": message})
         self._timeline.patch_state(status="error", error=message, urgent=True)
 
     def _describe_rpc_error(self, exc: AcpRpcError, *, during_setup: bool = False) -> str:
@@ -1351,6 +1363,7 @@ class ChatSession:
             self._close_streaming_items()
             self._drop_consoles()
             self._timeline.patch_state(plan=[])
+        self._drop_start_error()
         self._timeline.patch_state(
             status="starting", error=None, requests=self._public_requests(), urgent=True
         )
@@ -1981,7 +1994,12 @@ class ChatSession:
         self._resolve_all_requests_cancelled()
         self._mark_running_tools("failed")
         if self._timeline.state.get("status") != "error":
-            self._timeline.upsert({"id": self._next_id("err"), "type": "error", "text": message})
+            item_id = self._next_id("err")
+            self._timeline.upsert({"id": item_id, "type": "error", "text": message})
+            if not self._ready.is_set():
+                # The agent died while it started: a failed start like any
+                # other. A crash in a running chat stays as its history.
+                self._start_error_item = item_id
         self._timeline.patch_state(status="error", error=message, urgent=True)
         if not self._cancel_forced:
             self._set_attention("ended", exit_reason="process_exited")

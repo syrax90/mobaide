@@ -22,6 +22,7 @@ sealed interface SessionKind {
     data object Antigravity : SessionKind
     data object OpenCode : SessionKind
     data object Copilot : SessionKind
+    data object Pi : SessionKind
     data object AutoScan : SessionKind
     data object Shell : SessionKind
 
@@ -43,6 +44,7 @@ val SessionKind.wireName: String
         SessionKind.Antigravity -> "antigravity"
         SessionKind.OpenCode -> "opencode"
         SessionKind.Copilot -> "copilot"
+        SessionKind.Pi -> "pi"
         SessionKind.AutoScan -> "auto_scan"
         SessionKind.Shell -> "shell"
         is SessionKind.Custom -> raw
@@ -68,6 +70,7 @@ object SessionKindSerializer : KSerializer<SessionKind> {
         "antigravity" to SessionKind.Antigravity,
         "opencode" to SessionKind.OpenCode,
         "copilot" to SessionKind.Copilot,
+        "pi" to SessionKind.Pi,
         "auto_scan" to SessionKind.AutoScan,
         "shell" to SessionKind.Shell,
     )
@@ -132,7 +135,7 @@ data class CreateSessionRequest(
     val cols: Int = 80,
     // When set, command/cwd/env are ignored; the server derives them from the named project.
     val project_name: String? = null,
-    // Which managed CLI to launch: "claude" | "codex" | "antigravity" | "opencode" | "copilot", or "custom_<12hex>"
+    // Which managed CLI to launch: "claude" | "codex" | "antigravity" | "opencode" | "copilot" | "pi", or "custom_<12hex>"
     // for an account-scoped custom agent type (proto-v7; the relay resolves the stored
     // command — the client never sends it). Null for Terminal/shell sessions; when null
     // the server infers the kind from whichever options block is present.
@@ -142,6 +145,7 @@ data class CreateSessionRequest(
     val antigravity_options: AntigravityOptionsModel? = null,
     val opencode_options: OpenCodeOptionsModel? = null,
     val copilot_options: CopilotOptionsModel? = null,
+    val pi_options: PiOptionsModel? = null,
     // Terminal-mode worktree: create a git worktree for a shell session (no CLI options)
     // on a stored git project and spawn the shell inside it. Managed Claude/Codex sessions
     // instead carry worktree intent inside their own options block.

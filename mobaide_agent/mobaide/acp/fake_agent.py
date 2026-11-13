@@ -1,6 +1,6 @@
 """A scripted ACP agent for tests and for UI checks on a local stack.
 
-Run with ``python -m mobaide.acp.fake_agent [--flavor codex|antigravity|opencode|copilot]``.
+Run with ``python -m mobaide.acp.fake_agent [--flavor codex|antigravity|opencode|copilot|pi]``.
 ``MOBAIDE_ENV=test`` makes the chat sessions use it instead of a real agent,
 so every chat UI state can be reached without an account or network. The
 flavor picks the config options and names of the agent it stands in for. The
@@ -9,7 +9,8 @@ prompt text picks the scenario:
 * ``tools`` — read, edit (with a diff) and execute tool calls (the Codex
   flavor streams the command output as terminal ``_meta``; the Antigravity
   flavor reports it as one "Command exited with code N" text; the Copilot
-  flavor sends the output so far, then a last ``<shellId: …>`` line);
+  flavor sends the output so far, then a last ``<shellId: …>`` line; the Pi
+  flavor sends the output so far as terminal ``_meta``);
 * ``permission`` — a command that waits for approval;
 * ``question`` — a form with single choice, multiple choice and text;
 * ``plan`` — a plan that progresses step by step;
@@ -94,6 +95,14 @@ COPILOT_ALLOW_ALL = [
     {"value": "on", "name": "On", "description": "Automatically approve all tool, path, and URL requests"},
     {"value": "off", "name": "Off", "description": "Require approval for tool, path, and URL requests"},
 ]
+PI_MODELS = [
+    {"value": "openai-codex/gpt-6.1-sol", "name": "GPT-6.1 Sol"},
+    {"value": "openai-codex/gpt-5.6-luna", "name": "GPT-5.6 Luna"},
+]
+PI_LEVELS = [
+    {"value": v, "name": n}
+    for v, n in (("off", "Off"), ("low", "Low"), ("medium", "Medium"), ("high", "High"), ("xhigh", "Extra high"))
+]
 SIGNED_OUT_ENV = "MOBAIDE_FAKE_ACP_SIGNED_OUT"
 AUTH_REQUIRED = -32000
 
@@ -146,6 +155,7 @@ class FakeAgent:
         self.agy = flavor == "antigravity"
         self.opencode = flavor == "opencode"
         self.copilot = flavor == "copilot"
+        self.pi = flavor == "pi"
         self.steers: dict[str, list[str]] = {}
         self.write_lock = threading.Lock()
         self.next_id = 1000
@@ -194,6 +204,12 @@ class FakeAgent:
             if s["model"] == "opencode/big-pickle":
                 options.pop(1)
             return options
+        if self.pi:
+            # Like Pi: a model and a thinking level, and no mode to pick.
+            return [
+                {"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": s["model"], "options": PI_MODELS},
+                {"id": "thought_level", "name": "Thinking", "category": "thought_level", "type": "select", "currentValue": s["thought_level"], "options": PI_LEVELS},
+            ]
         if self.copilot:
             # Like Copilot on a plan with one model: no model option.
             return [
@@ -239,6 +255,8 @@ class FakeAgent:
             )
         if self.copilot:
             self.sessions[sid].update({"mode": COPILOT_MODE_PREFIX + "agent", "allow_all": "off"})
+        if self.pi:
+            self.sessions[sid].update({"model": "openai-codex/gpt-6.1-sol", "thought_level": "medium"})
         return sid
 
     def models_block(self, sid: str) -> dict[str, Any]:
@@ -258,6 +276,8 @@ class FakeAgent:
             return ("model", "effort", "mode")
         if self.copilot:
             return ("mode", "allow_all")
+        if self.pi:
+            return ("model", "thought_level")
         return ("mode", "model", "effort", "fast")
 
     def commands(self, sid: str) -> None:
@@ -274,6 +294,11 @@ class FakeAgent:
                 {"name": "compact", "description": "Compact the session"},
                 {"name": "init", "description": "Create or update AGENTS.md"},
                 {"name": "review", "description": "Review changes [commit|branch|pr], defaults to uncommitted"},
+            ]
+        elif self.pi:
+            available = [
+                {"name": "compact", "description": "Summarize the conversation so far to free up context", "input": {"hint": "what the summary must keep (optional)"}},
+                {"name": "mcp", "description": "Manage MCP servers: sign in, reconnect, enable or disable, and change exposure"},
             ]
         elif self.copilot:
             available = [
@@ -316,14 +341,16 @@ class FakeAgent:
             self.send({"jsonrpc": "2.0", "id": msg_id, "result": result})
 
     async def dispatch(self, method: str, params: dict[str, Any]) -> Any:
-        if method == "initialize" and signed_out() and not (self.codex or self.agy or self.copilot):
+        if method == "initialize" and signed_out() and not (
+            self.codex or self.agy or self.copilot or self.pi
+        ):
             # claude-agent-acp reports a missing login right after initialize.
             self.loop.call_later(0.05, lambda: self.send({
                 "jsonrpc": "2.0", "method": "_auth/status_update",
                 "params": {"authStatus": {"kind": "none", "label": "Not logged in"}},
             }))
         if method in ("session/new", "session/load") and signed_out() and (
-            self.codex or self.agy or self.copilot
+            self.codex or self.agy or self.copilot or self.pi
         ):
             raise _RpcError(AUTH_REQUIRED, "Authentication required")
         if method == "initialize":
@@ -360,6 +387,18 @@ class FakeAgent:
                     },
                     "agentInfo": {"name": "Copilot", "title": "Copilot", "version": "1.0.109"},
                     "authMethods": [],
+                }
+            if self.pi:
+                return {
+                    "protocolVersion": 1,
+                    "agentCapabilities": {
+                        "loadSession": True,
+                        "promptCapabilities": {"image": True},
+                        "sessionCapabilities": {"list": {}, "close": {}},
+                    },
+                    "agentInfo": {"name": "pi", "title": "Pi", "version": "1.5.2"},
+                    "authMethods": [],
+                    "_meta": {"steering": {"supported": True}},
                 }
             info = (
                 {"name": "fake-codex-acp", "title": "Codex", "version": "1.0.0"}
@@ -534,6 +573,10 @@ class FakeAgent:
             # agy reports token counts in the prompt result only.
             return {"stopReason": "end_turn" if ok else "cancelled",
                     "usage": {"inputTokens": s["used"], "outputTokens": 120, "totalTokens": s["used"] + 120}}
+        if self.pi:
+            # The Pi bridge reports the context use, but no cost.
+            self.update(sid, {"sessionUpdate": "usage_update", "used": s["used"], "size": 500000})
+            return {"stopReason": "end_turn" if ok else "cancelled"}
         if self.copilot:
             # Copilot reports the context use, but no cost.
             self.update(sid, {"sessionUpdate": "usage_update", "used": s["used"], "size": 128000})
@@ -590,6 +633,20 @@ class FakeAgent:
             self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": run, "status": "completed",
                               "content": [{"type": "content", "content": {"type": "text", "text": done}}],
                               "rawOutput": {"content": done, "contents": [{"type": "shell_exit", "shellId": "0", "exitCode": 0, "cwd": cwd}]}})
+        elif self.pi:
+            # The Pi bridge sends the whole output so far as terminal ``_meta``.
+            self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": run, "title": "pytest -q", "kind": "execute", "status": "in_progress",
+                              "rawInput": {"command": "pytest -q", "timeout": 120}})
+            output = ""
+            for chunk in ("....\n", "4 passed in 0.12s\n"):
+                await asyncio.sleep(0.3)
+                output += chunk
+                self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": run,
+                                  "_meta": {"terminal_output": {"data": output}}})
+            if self.stopped(sid):
+                return False
+            self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": run, "status": "completed",
+                              "_meta": {"terminal_output": {"data": output}, "terminal_exit": {"exit_code": 0}}})
         elif self.codex:
             self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": run, "title": "pytest -q", "kind": "execute", "status": "in_progress",
                               "rawInput": {"command": "pytest -q", "cwd": cwd}, "content": [{"type": "terminal", "terminalId": run}]})
@@ -756,7 +813,12 @@ def fake_login(flavor: str, device: bool) -> int:
     """A login command shaped like the real ones: a sign-in page, then a
     pasted code (or, with ``device``, a one-time code to enter there)."""
     url = f"https://example.com/{flavor}/sign-in?state=fake"
-    if device and flavor == "copilot":
+    if device and flavor == "pi":
+        # The real ``pi auth login openai-codex --no-browser`` prints this.
+        print("Select OpenAI Codex login method: Device code login (headless)", flush=True)
+        print(f"Open {url} and enter code: FAKE-12345\nWaiting for authentication...", flush=True)
+        time.sleep(3)
+    elif device and flavor == "copilot":
         # The real ``copilot login --device-code`` prints one line.
         print(f"To authenticate, visit {url} and enter code FAKE-1234\nWaiting for authorization...", flush=True)
         time.sleep(3)

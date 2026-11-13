@@ -25,6 +25,7 @@ final class CreateSessionModel {
         case antigravity
         case opencode
         case copilot
+        case pi
         case autoScan
         case shell
         /// An account-scoped custom agent type, identified by its 12-hex id
@@ -36,7 +37,7 @@ final class CreateSessionModel {
         case custom(String)
 
         /// The static mode cards, in default order; custom-type cards follow.
-        static let builtIn: [Mode] = [.standard, .codex, .antigravity, .opencode, .copilot, .autoScan, .shell]
+        static let builtIn: [Mode] = [.standard, .codex, .antigravity, .opencode, .copilot, .pi, .autoScan, .shell]
 
         /// The id `/api/session-mode-order` stores for this card.
         var orderId: String {
@@ -46,6 +47,7 @@ final class CreateSessionModel {
             case .antigravity: return "antigravity"
             case .opencode: return "opencode"
             case .copilot: return "copilot"
+            case .pi: return "pi"
             case .autoScan: return "auto_scan"
             case .shell: return "shell"
             case .custom(let id): return "custom_\(id)"
@@ -157,6 +159,10 @@ final class CreateSessionModel {
     /// The probed agent predates Copilot: it would open a plain shell for
     /// `cli = "copilot"`, so the card is disabled instead.
     private(set) var copilotNeedsAgentUpdate = false
+    private(set) var piAvailable: Bool?
+    /// The probed agent predates Pi: it would open a plain shell for
+    /// `cli = "pi"`, so the card is disabled instead.
+    private(set) var piNeedsAgentUpdate = false
     private(set) var codexModels: [String] = codexModelsFallback
     private(set) var antigravityModels: [String] = antigravityModelsFallback
     /// Per-model Codex effort sets from `capabilities.cli.codex.model_details`;
@@ -267,6 +273,13 @@ final class CreateSessionModel {
     var copilotTerminalUI = false
     /// `capabilities.chat.copilot`; nil until the probe answers.
     private(set) var copilotChatCapability: ChatCapability?
+
+    // Pi
+    /// Off by default: a Pi session opens in the chat view whenever the
+    /// agent can run it.
+    var piTerminalUI = false
+    /// `capabilities.chat.pi`; nil until the probe answers.
+    private(set) var piChatCapability: ChatCapability?
 
     // Shared git options
     var worktree = false
@@ -399,6 +412,15 @@ final class CreateSessionModel {
         Self.chatUnavailableReason(copilotChatCapability, kind: "copilot")
     }
 
+    var piChatUnavailable: Bool { piChatCapability.map { !$0.isAvailable } ?? false }
+
+    /// The Pi session will open in the chat view.
+    var piUsesChat: Bool { !piTerminalUI && !piChatUnavailable }
+
+    var piChatUnavailableReason: String? {
+        Self.chatUnavailableReason(piChatCapability, kind: "pi")
+    }
+
     static func chatUnavailableReason(_ capability: ChatCapability?, kind: String = "claude") -> String? {
         switch capability {
         case .unsupportedAgent?: return "Update Mobaide on your PC to use the chat view."
@@ -408,6 +430,7 @@ final class CreateSessionModel {
                 return "The chat view needs a newer Antigravity CLI on your PC: run agy update there."
             case "opencode": return "The chat view is not available for OpenCode on your PC."
             case "copilot": return "The chat view is not available for GitHub Copilot on your PC."
+            case "pi": return "The chat view is not available for Pi on your PC."
             default: return "The chat view needs Node.js on your PC."
             }
         default: return nil
@@ -421,6 +444,7 @@ final class CreateSessionModel {
         case .antigravity: return "antigravity"
         case .opencode: return "opencode"
         case .copilot: return "copilot"
+        case .pi: return "pi"
         default: return "claude"
         }
     }
@@ -431,6 +455,7 @@ final class CreateSessionModel {
         case .antigravity: return antigravityChatCapability
         case .opencode: return opencodeChatCapability
         case .copilot: return copilotChatCapability
+        case .pi: return piChatCapability
         default: return chatCapability
         }
     }
@@ -446,6 +471,7 @@ final class CreateSessionModel {
         case .antigravity: return antigravityUsesChat && antigravityChatCapability?.canResume == true
         case .opencode: return opencodeUsesChat && opencodeChatCapability?.canResume == true
         case .copilot: return copilotUsesChat && copilotChatCapability?.canResume == true
+        case .pi: return piUsesChat && piChatCapability?.canResume == true
         default: return false
         }
     }
@@ -462,6 +488,7 @@ final class CreateSessionModel {
     var antigravityEnabled: Bool { antigravityAvailable != false }
     var opencodeEnabled: Bool { opencodeAvailable != false && !opencodeNeedsAgentUpdate }
     var copilotEnabled: Bool { copilotAvailable != false && !copilotNeedsAgentUpdate }
+    var piEnabled: Bool { piAvailable != false && !piNeedsAgentUpdate }
 
     /// Auto Scan additionally needs a Linear API key on the selected stored
     /// project — the agent scans Linear for that project's issues. A custom
@@ -485,6 +512,7 @@ final class CreateSessionModel {
         case .antigravity: return antigravityEnabled
         case .opencode: return opencodeEnabled
         case .copilot: return copilotEnabled
+        case .pi: return piEnabled
         // A running scan keeps the card tappable even when the launch gate
         // would refuse — tapping opens its monitor rather than the config step.
         case .autoScan: return autoScanEnabled || runningScan != nil
@@ -514,6 +542,10 @@ final class CreateSessionModel {
             if copilotNeedsAgentUpdate { return "Update Mobaide on your PC to use GitHub Copilot." }
             return copilotEnabled ? "Configure and launch a GitHub Copilot session."
                 : "GitHub Copilot CLI is not installed on the agent."
+        case .pi:
+            if piNeedsAgentUpdate { return "Update Mobaide on your PC to use Pi." }
+            return piEnabled ? "Configure and launch a Pi session."
+                : "Pi is not installed on the agent."
         case .autoScan:
             if let running = runningScan {
                 return "Already running for \(running.project_name) — tap to open the live monitor."
@@ -548,6 +580,7 @@ final class CreateSessionModel {
         case .antigravity: return "Antigravity"
         case .opencode: return "OpenCode"
         case .copilot: return "GitHub Copilot"
+        case .pi: return "Pi"
         case .autoScan: return "Auto Scan"
         case .shell: return "Terminal"
         case .custom(let id): return customType(id: id)?.name ?? "Terminal session"
@@ -713,12 +746,15 @@ final class CreateSessionModel {
         antigravityChatCapability = version.chatCapability("antigravity")
         opencodeChatCapability = version.chatCapability("opencode")
         copilotChatCapability = version.chatCapability("copilot")
+        piChatCapability = version.chatCapability("pi")
         codexAvailable = version.cliAvailable("codex")
         antigravityAvailable = version.cliAvailable("antigravity")
         opencodeAvailable = version.cliAvailable("opencode")
         opencodeNeedsAgentUpdate = !version.cliKnown("opencode")
         copilotAvailable = version.cliAvailable("copilot")
         copilotNeedsAgentUpdate = !version.cliKnown("copilot")
+        piAvailable = version.cliAvailable("pi")
+        piNeedsAgentUpdate = !version.cliKnown("pi")
         if let models = version.cliModels("codex"), !models.isEmpty { codexModels = models }
         if let models = version.cliModels("antigravity"), !models.isEmpty { antigravityModels = models }
         // Overwritten, never keep-last-known (unlike the model lists above): a
@@ -1480,6 +1516,14 @@ final class CreateSessionModel {
                 copilot_options: copilotOptions(worktree: effectiveWorktree, branchName: effectiveBranch, baseBranch: effectiveBase),
                 ui: copilotUsesChat ? "chat" : "terminal"
             )
+        case .pi:
+            return CreateSessionRequest(
+                cwd: cwd,
+                project_name: projectName,
+                cli: "pi",
+                pi_options: piOptions(worktree: effectiveWorktree, branchName: effectiveBranch, baseBranch: effectiveBase),
+                ui: piUsesChat ? "chat" : "terminal"
+            )
         case .shell:
             return CreateSessionRequest(
                 cwd: cwd,
@@ -1593,6 +1637,14 @@ final class CreateSessionModel {
         )
     }
 
+    private func piOptions(worktree: Bool, branchName: String?, baseBranch: String? = nil) -> PiOptionsModel {
+        PiOptionsModel(
+            worktree: worktree,
+            branch_name: branchName,
+            base_branch: baseBranch
+        )
+    }
+
     private func codexLaunchPrefs() -> CodexLaunchPrefs {
         CodexLaunchPrefs(
             model: codexModel,
@@ -1654,6 +1706,16 @@ final class CreateSessionModel {
                 project_name: projectName,
                 cli: "copilot",
                 copilot_options: copilotOptions(worktree: false, branchName: nil),
+                ui: "chat",
+                chat_resume_id: stored.session_id
+            )
+        }
+        if mode == .pi {
+            return CreateSessionRequest(
+                cwd: cwd,
+                project_name: projectName,
+                cli: "pi",
+                pi_options: piOptions(worktree: false, branchName: nil),
                 ui: "chat",
                 chat_resume_id: stored.session_id
             )
@@ -1789,6 +1851,8 @@ final class CreateSessionModel {
                 allowAll: copilotAllowAll,
                 terminalUI: copilotTerminalUI
             ))
+        case .pi:
+            preferencesStore.setLastUsedPiOptions(PiLaunchPrefs(terminalUI: piTerminalUI))
         // Auto Scan persists its own bucket from `startAutoScan`, which never
         // routes through `create()`.
         case .autoScan, .shell, .custom:
@@ -1844,6 +1908,9 @@ final class CreateSessionModel {
         if let copilot = preferencesStore.getLastUsedCopilotOptions() {
             copilotAllowAll = copilot.allowAll
             copilotTerminalUI = copilot.terminalUI
+        }
+        if let pi = preferencesStore.getLastUsedPiOptions() {
+            piTerminalUI = pi.terminalUI
         }
     }
 

@@ -1,7 +1,7 @@
 """Attention from the program-status reports a CLI writes to its terminal.
 
 Codex (0.163+), Antigravity ``agy`` (1.4+), OpenCode (2.0+), GitHub Copilot
-(1.0.106+) and Claude Code report what they are doing with OSC 7501 (the
+(1.0.106+), Pi and Claude Code report what they are doing with OSC 7501 (the
 Program Status Protocol)::
 
     ESC ] 7501 ; state=blocked:kind=permission:app=codex ST
@@ -13,10 +13,10 @@ hooks, no config file and no trust prompt — which is how every terminal sessio
 without Claude Code hooks raises attention. Claude sessions keep their hooks as
 the only source: a session never listens to both.
 
-Codex and Copilot write reports unconditionally. ``agy``, OpenCode and Claude
-Code first send the support query ``ESC ] 7501 ; ? ST`` and report only when
-the terminal answers, so :class:`ProgramStatusResponder` answers it for the
-sessions that listen.
+Codex and Copilot write reports unconditionally. ``agy``, OpenCode, Pi and
+Claude Code first send the support query ``ESC ] 7501 ; ? ST`` and report only
+when the terminal answers, so :class:`ProgramStatusResponder` answers it for
+the sessions that listen.
 
 OpenCode never reports ``done`` or ``error``: its root record is ``blocked``,
 ``working`` or ``idle``, so the end of a turn is its change from ``working``

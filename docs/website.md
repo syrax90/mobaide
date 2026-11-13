@@ -122,9 +122,9 @@ CLA-170), but the website must not repeat them:
 
 The worktree capability itself is broad and true, and the page says so: every
 session kind supports it — Claude Code, Codex CLI, Antigravity CLI, OpenCode,
-GitHub Copilot CLI, raw Terminal, and custom agent types.
+GitHub Copilot CLI, Pi, raw Terminal, and custom agent types.
 
-Spell the products **Claude Code**, **Codex CLI**, **Antigravity CLI**, **OpenCode**, **GitHub Copilot CLI**.
+Spell the products **Claude Code**, **Codex CLI**, **Antigravity CLI**, **OpenCode**, **GitHub Copilot CLI**, **Pi**.
 
 ## Response headers
 

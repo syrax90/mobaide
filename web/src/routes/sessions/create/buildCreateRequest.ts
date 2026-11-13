@@ -39,6 +39,7 @@ type CodexOptions = components['schemas']['CodexOptionsModel'];
 type AntigravityOptions = components['schemas']['AntigravityOptionsModel'];
 type OpenCodeOptions = components['schemas']['OpenCodeOptionsModel'];
 type CopilotOptions = components['schemas']['CopilotOptionsModel'];
+type PiOptions = components['schemas']['PiOptionsModel'];
 
 export interface BuildContext {
   state: WizardState;
@@ -70,14 +71,15 @@ export function claudeUsesChat(bucket: ClaudeBucket, chat: ChatSupport | undefin
 }
 
 /** The agent kinds whose sessions can open in the chat view. */
-export type ChatAgentKind = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'copilot';
+export type ChatAgentKind = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'copilot' | 'pi';
 
 export function chatAgentKind(mode: WizardMode | null): ChatAgentKind | null {
   return mode === 'claude' ||
     mode === 'codex' ||
     mode === 'antigravity' ||
     mode === 'opencode' ||
-    mode === 'copilot'
+    mode === 'copilot' ||
+    mode === 'pi'
     ? mode
     : null;
 }
@@ -95,6 +97,8 @@ export function terminalUiOf(state: WizardState, kind: ChatAgentKind): boolean {
       return state.opencode.terminalUi;
     case 'copilot':
       return state.copilot.terminalUi;
+    case 'pi':
+      return state.pi.terminalUi;
   }
 }
 
@@ -208,6 +212,18 @@ function copilotOptions(
   };
 }
 
+function piOptions(extras: {
+  worktree: boolean;
+  branchName: string | undefined;
+  baseBranch: string | null;
+}): PiOptions {
+  return {
+    worktree: extras.worktree,
+    branch_name: extras.branchName,
+    base_branch: extras.baseBranch,
+  };
+}
+
 /** `null` for `auto_scan`, which starts a scan rather than creating a session. */
 export function buildCreateRequest(context: BuildContext): CreateSessionRequest | null {
   const { state, mode } = context;
@@ -294,6 +310,20 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
     };
   }
 
+  if (mode === 'pi') {
+    return {
+      ...base,
+      cli: 'pi',
+      pi_options: piOptions({
+        worktree: place.worktree,
+        branchName: place.branchName,
+        baseBranch: place.baseBranch,
+      }),
+      worktree: false,
+      ui: usesChatView(state.pi.terminalUi, context.chat) ? 'chat' : 'terminal',
+    };
+  }
+
   // Terminal and custom agent types share plain-shell semantics: no options
   // block, worktree intent at the top level, and `command` omitted so the agent
   // picks the login shell (it discards client hints on this path regardless).
@@ -333,7 +363,9 @@ export function buildResumeRequest(
           ? { cli: 'opencode', opencode_options: opencodeOptions(state.opencode, noWorktree) }
           : kind === 'copilot'
             ? { cli: 'copilot', copilot_options: copilotOptions(state.copilot, noWorktree) }
-            : { cli: 'claude', claude_options: claudeOptions(state.claude, noWorktree) };
+            : kind === 'pi'
+              ? { cli: 'pi', pi_options: piOptions(noWorktree) }
+              : { cli: 'claude', claude_options: claudeOptions(state.claude, noWorktree) };
   return {
     project_name: sameFolder ? project.name : undefined,
     cwd: sameFolder ? undefined : stored.cwd,
