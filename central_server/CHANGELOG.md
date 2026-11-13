@@ -1,5 +1,13 @@
 # central_server Changelog
 
+## [0.2.26](https://github.com/syrax90/mobaide/compare/server-v0.2.25...server-v0.2.26) (2026-11-13)
+
+
+### Features
+
+* **agent,server,android,ios,web:** support GitHub Copilot CLI as a managed agent ([#870](https://github.com/syrax90/mobaide/issues/870)) ([bc37af4](https://github.com/syrax90/mobaide/commit/bc37af4e994114a10ce981338e208af92f94d5b9))
+* **agent,server,android,ios,web:** support OpenCode sessions in the chat and the terminal ([#868](https://github.com/syrax90/mobaide/issues/868)) ([8ddd476](https://github.com/syrax90/mobaide/commit/8ddd4766010575519f134a8ed94457ce67776609))
+
 ## [0.2.25](https://github.com/syrax90/mobaide/compare/server-v0.2.24...server-v0.2.25) (2026-11-11)
 
 

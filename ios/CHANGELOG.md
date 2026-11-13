@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.1.4](https://github.com/syrax90/mobaide/compare/ios-v1.1.3...ios-v1.1.4) (2026-11-13)
+
+
+### Features
+
+* **agent,server,android,ios,web:** support GitHub Copilot CLI as a managed agent ([#870](https://github.com/syrax90/mobaide/issues/870)) ([bc37af4](https://github.com/syrax90/mobaide/commit/bc37af4e994114a10ce981338e208af92f94d5b9))
+* **agent,server,android,ios,web:** support OpenCode sessions in the chat and the terminal ([#868](https://github.com/syrax90/mobaide/issues/868)) ([8ddd476](https://github.com/syrax90/mobaide/commit/8ddd4766010575519f134a8ed94457ce67776609))
+
+
+### Bug Fixes
+
+* **agent,android,ios,web:** stop showing Ready while a Claude Code session still runs ([#875](https://github.com/syrax90/mobaide/issues/875)) ([26b20ec](https://github.com/syrax90/mobaide/commit/26b20ec30d327c9b7e1f3b4b44eca5b22c96448d))
+* **android,ios:** hide the keyboard on a tap on the chat timeline ([#876](https://github.com/syrax90/mobaide/issues/876)) ([8d47b01](https://github.com/syrax90/mobaide/commit/8d47b01bfac8f4236d819b7f909125c6eaadbcd8))
+* **android,ios:** make Session info values copyable and confirm each copy ([#877](https://github.com/syrax90/mobaide/issues/877)) ([d22e245](https://github.com/syrax90/mobaide/commit/d22e245368df822e7579faf21d1aceb0f698deab))
+* **ios:** keep the sign-in code field visible above the keyboard ([#872](https://github.com/syrax90/mobaide/issues/872)) ([e4841b1](https://github.com/syrax90/mobaide/commit/e4841b14cec0046ef6f225e3185bdf79520740c8))
+
 ## [1.1.3](https://github.com/syrax90/mobaide/compare/ios-v1.1.2...ios-v1.1.3) (2026-11-11)
 
 

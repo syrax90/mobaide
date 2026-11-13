@@ -1,5 +1,18 @@
 # mobaide_agent Changelog
 
+## [0.3.29](https://github.com/syrax90/mobaide/compare/agent-v0.3.28...agent-v0.3.29) (2026-11-13)
+
+
+### Features
+
+* **agent,server,android,ios,web:** support GitHub Copilot CLI as a managed agent ([#870](https://github.com/syrax90/mobaide/issues/870)) ([bc37af4](https://github.com/syrax90/mobaide/commit/bc37af4e994114a10ce981338e208af92f94d5b9))
+* **agent,server,android,ios,web:** support OpenCode sessions in the chat and the terminal ([#868](https://github.com/syrax90/mobaide/issues/868)) ([8ddd476](https://github.com/syrax90/mobaide/commit/8ddd4766010575519f134a8ed94457ce67776609))
+
+
+### Bug Fixes
+
+* **agent,android,ios,web:** stop showing Ready while a Claude Code session still runs ([#875](https://github.com/syrax90/mobaide/issues/875)) ([26b20ec](https://github.com/syrax90/mobaide/commit/26b20ec30d327c9b7e1f3b4b44eca5b22c96448d))
+
 ## [0.3.28](https://github.com/syrax90/mobaide/compare/agent-v0.3.27...agent-v0.3.28) (2026-11-11)
 
 
