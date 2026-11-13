@@ -16,24 +16,35 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import com.mobaide.app.ui.common.pixel.pixelFrame
 import com.mobaide.app.ui.theme.chromeCaps
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.mobaide.app.ui.theme.MobaideTheme
+import com.mobaide.app.ui.theme.pixel
+import kotlinx.coroutines.delay
 
 /**
  * Surface-variant card that shows [code] in monospace with a copy button.
@@ -53,6 +64,13 @@ fun CopyableCodeBlock(
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
+    var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1_500)
+            copied = false
+        }
+    }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -88,18 +106,23 @@ fun CopyableCodeBlock(
                     )
                 }
             }
-            IconButton(onClick = {
-                context.copyToClipboard(label = label, text = code, isSensitive = isSensitive)
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                // Android 13+ shows its own clipboard chip; an in-app Toast
-                // would visually duplicate that confirmation.
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-                    Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
-                }
-            }) {
+            IconButton(
+                modifier = Modifier.semantics { if (copied) stateDescription = "Copied" },
+                onClick = {
+                    context.copyToClipboard(label = label, text = code, isSensitive = isSensitive)
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    copied = true
+                    // Android 13+ shows its own clipboard chip; an in-app Toast
+                    // would visually duplicate that confirmation.
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                        Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                    }
+                },
+            ) {
                 Icon(
-                    Icons.Default.ContentCopy,
+                    if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
                     contentDescription = "Copy $label",
+                    tint = if (copied) MaterialTheme.pixel.ok else LocalContentColor.current,
                     modifier = Modifier.size(20.dp),
                 )
             }

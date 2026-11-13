@@ -9,6 +9,7 @@ struct CopyableCodeBlock: View {
     var singleLine: Bool = true
 
     @Environment(\.mobaideColors) private var colors
+    @State private var copied = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 4) {
@@ -22,17 +23,27 @@ struct CopyableCodeBlock: View {
             Button {
                 Clipboard.copy(code, isSensitive: isSensitive)
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                copied = true
+                AccessibilityNotification.Announcement("Copied").post()
             } label: {
-                Image(systemName: "doc.on.doc")
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
                     .font(.system(size: 16))
-                    .foregroundStyle(colors.accent)
+                    .foregroundStyle(copied ? colors.ok : colors.accent)
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            // Above the value: a long one-line value is wider than its slot.
+            .zIndex(1)
             .accessibilityLabel("Copy \(label)")
+            .accessibilityValue(copied ? "Copied" : "")
         }
         .pixelCodePlate(insets: EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 0))
+        .task(id: copied) {
+            guard copied else { return }
+            try? await Task.sleep(for: .seconds(1.5))
+            copied = false
+        }
     }
 
     @ViewBuilder
@@ -51,6 +62,10 @@ struct CopyableCodeBlock: View {
                         .textSelection(.enabled)
                 }
             }
+            // The selectable text is as wide as the whole value; without the
+            // clip it reaches under the copy button and takes its taps.
+            .clipped()
+            .contentShape(Rectangle())
         } else {
             if isSensitive {
                 Text(code)
