@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import threading
+import time
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
@@ -491,3 +492,159 @@ class CopilotFolderTrust:
         mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
         atomic_write(path, header + json.dumps(data, indent=2, ensure_ascii=False) + "\n", mode=mode)
         return True
+
+
+# What makes Pi ask its trust question: these entries of a folder's ``.pi``,
+# or an ``.agents/skills`` folder in it or above it.
+_PI_TRUST_RESOURCES = (
+    "settings.json",
+    "mcp.json",
+    "extensions",
+    "skills",
+    "prompts",
+    "themes",
+    "SYSTEM.md",
+    "APPEND_SYSTEM.md",
+)
+# Pi holds this folder-lock while it rewrites its trust file, and takes one
+# older than this from a process that died.
+_PI_LOCK_STALE_SECONDS = 10.0
+_PI_LOCK_WAIT_SECONDS = 2.0
+
+
+def pi_agent_dir(env: Mapping[str, str] | None = None) -> Path:
+    """Where the Pi started with ``env`` keeps its settings and trust file."""
+    custom = (env if env is not None else os.environ).get("PI_CODING_AGENT_DIR")
+    if custom:
+        return Path(os.path.abspath(os.path.expanduser(custom)))
+    return Path.home() / ".pi" / "agent"
+
+
+class PiFolderTrust:
+    """Pi's own trust record: ``trust.json`` in its folder maps a real path
+    to ``true`` or ``false``, and the closest entry of a folder or its
+    parents decides.
+
+    Pi asks only for a folder with resources it would load (see
+    :data:`_PI_TRUST_RESOURCES`), and only while its ``defaultProjectTrust``
+    setting is ``ask``; without a terminal it skips them instead. So the chat
+    asks in exactly that case. A saved "do not trust" is a decision too: Pi
+    then starts without the folder's resources, and the chat does not ask
+    again.
+    """
+
+    prompt_title = "Trust this folder?"
+    prompt_text = (
+        "Pi will load this folder's settings, extensions, skills and MCP servers "
+        "(its .pi folder and .agents/skills). They can run commands on your PC. "
+        "Only trust a folder whose files you know. The trust also covers every "
+        "folder inside it."
+    )
+
+    def __init__(self, cwd: str, agent_dir: Path | None = None) -> None:
+        self._cwd = cwd
+        self._agent_dir = agent_dir or pi_agent_dir()
+
+    @property
+    def _trust_path(self) -> Path:
+        return self._agent_dir / "trust.json"
+
+    def _has_resources(self) -> bool:
+        folder = Path(os.path.realpath(self._cwd))
+        if any(os.path.lexists(folder / ".pi" / name) for name in _PI_TRUST_RESOURCES):
+            return True
+        # The user's own ``~/.agents/skills`` is theirs, not a project's.
+        own = Path(os.path.realpath(os.path.expanduser("~"))) / ".agents" / "skills"
+        for candidate in (folder, *folder.parents):
+            skills = candidate / ".agents" / "skills"
+            if skills != own and os.path.lexists(skills):
+                return True
+        return False
+
+    def _load(self) -> dict[str, Any]:
+        try:
+            data = json.loads(self._trust_path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _saved_decision(self) -> bool | None:
+        data = self._load()
+        folder = Path(os.path.realpath(self._cwd))
+        for candidate in (folder, *folder.parents):
+            for key, value in data.items():
+                if isinstance(value, bool) and _same_folder(key, str(candidate)):
+                    return value
+        return None
+
+    def _asks(self) -> bool:
+        try:
+            settings = json.loads(
+                (self._agent_dir / "settings.json").read_text(encoding="utf-8-sig")
+            )
+        except (OSError, ValueError):
+            return True
+        mode = settings.get("defaultProjectTrust") if isinstance(settings, dict) else None
+        return mode not in ("always", "never")
+
+    def is_trusted(self) -> bool:
+        """Whether Pi needs no answer for this folder: nothing in it to
+        trust, a saved decision, or a setting that decides for every folder."""
+        if not self._has_resources():
+            return True
+        return self._saved_decision() is not None or not self._asks()
+
+    def grant(self) -> bool:
+        """Save the trust as Pi's ``/trust`` does (atomic rewrite under Pi's
+        own lock)."""
+        with _config_lock(self._trust_path):
+            lock = Path(f"{self._trust_path}.lock")
+            self._agent_dir.mkdir(parents=True, exist_ok=True)
+            held = self._acquire(lock)
+            try:
+                self._grant_locked()
+            finally:
+                if held:
+                    try:
+                        lock.rmdir()
+                    except OSError:
+                        pass
+        return True
+
+    @staticmethod
+    def _acquire(lock: Path) -> bool:
+        deadline = time.monotonic() + _PI_LOCK_WAIT_SECONDS
+        while True:
+            try:
+                lock.mkdir()
+                return True
+            except FileExistsError:
+                try:
+                    stale = time.time() - lock.stat().st_mtime > _PI_LOCK_STALE_SECONDS
+                except OSError:
+                    # Gone again, or not a folder anyone can take.
+                    stale = False
+                if stale or time.monotonic() >= deadline:
+                    # A lock nobody refreshes, or one held too long to wait
+                    # for: the rewrite below is atomic either way.
+                    return False
+                time.sleep(0.05)
+
+    def _grant_locked(self) -> None:
+        path = self._trust_path
+        data: dict[str, Any] = {}
+        if path.exists():
+            # Never rewrite a file this code cannot read back whole.
+            loaded = json.loads(path.read_text(encoding="utf-8-sig"))
+            if not isinstance(loaded, dict):
+                raise ValueError(f"{path} is not a JSON object")
+            data = loaded
+        folder = os.path.realpath(self._cwd)
+        data = {key: value for key, value in data.items() if not _same_folder(key, folder)}
+        data[folder] = True
+        mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
+        atomic_write(
+            path,
+            json.dumps(dict(sorted(data.items())), indent=2, ensure_ascii=False) + "\n",
+            mode=mode,
+        )

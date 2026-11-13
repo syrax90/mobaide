@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from mobaide.acp import agents, codex_bridge
+from mobaide.acp import agents, codex_bridge, pi_bridge
 from mobaide.acp.agents import (
     CODEX_USER_CODE_PATTERN,
     COPILOT_USER_CODE_PATTERN,
@@ -29,6 +29,7 @@ from mobaide.acp.agents import (
     ConfigIntent,
     CopilotChatSpec,
     OpenCodeChatSpec,
+    PiChatSpec,
     antigravity_config_intents,
     antigravity_sign_in_methods,
     build_chat_agents,
@@ -40,10 +41,16 @@ from mobaide.acp.agents import (
     codex_sign_in_methods,
     copilot_sign_in_methods,
     fake_login_argv,
+    pi_sign_in_methods,
     resolve_antigravity_config,
 )
 from mobaide.acp.install import INSTALLED_MARKER
-from mobaide.acp.trust import AntigravityFolderTrust, CodexFolderTrust, CopilotFolderTrust
+from mobaide.acp.trust import (
+    AntigravityFolderTrust,
+    CodexFolderTrust,
+    CopilotFolderTrust,
+    PiFolderTrust,
+)
 from mobaide.core.antigravity_launcher import AntigravityBinaryNotFoundError, AntigravityOptions
 from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError, ClaudeOptions
 from mobaide.core.cli_launcher import AdHocLaunch, LaunchSpec
@@ -51,6 +58,7 @@ from mobaide.core import codex_auth
 from mobaide.core.codex_launcher import CodexBinaryNotFoundError, CodexOptions
 from mobaide.core.copilot_launcher import CopilotBinaryNotFoundError, CopilotOptions
 from mobaide.core.opencode_launcher import OpenCodeBinaryNotFoundError, OpenCodeOptions
+from mobaide.core.pi_launcher import PiBinaryNotFoundError, PiOptions
 from mobaide.core.projects_config import ProjectConfig
 from tests.conftest import skip_if_not_linux
 from tests.test_acp_install import fake_npm
@@ -145,6 +153,29 @@ class FakeCopilotLauncher:
         return {"PATH": "/usr/bin", "LAUNCHER": "1", **self.env}
 
 
+class FakePiLauncher:
+    """The three ``PiLauncher`` calls a chat spec makes."""
+
+    def __init__(
+        self, binary: str | None = "/opt/pi/bin/pi", env: dict[str, str] | None = None
+    ) -> None:
+        self.binary = binary
+        self.env = env or {}
+        self.resolved: list[tuple[object, PiOptions]] = []
+
+    def resolve_binary(self) -> str:
+        if self.binary is None:
+            raise PiBinaryNotFoundError(searched_paths=["PATH:pi"])
+        return self.binary
+
+    async def resolve_cwd(self, target, options) -> str:
+        self.resolved.append((target, options))
+        return target.path if isinstance(target, ProjectConfig) else target.cwd
+
+    def build_env(self, target) -> dict[str, str]:
+        return {"PATH": "/usr/bin", "LAUNCHER": "1", **self.env}
+
+
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     for name in (
@@ -152,6 +183,7 @@ def _clean_env(monkeypatch):
         agents.CODEX_ACP_COMMAND_ENV,
         agents.ANTIGRAVITY_ACP_COMMAND_ENV,
         agents.COPILOT_ACP_COMMAND_ENV,
+        agents.PI_ACP_COMMAND_ENV,
         agents.REAL_IN_TEST_ENV,
         "CLAUDE_CODE_EXECUTABLE",
         "CODEX_PATH",
@@ -1509,6 +1541,7 @@ class TestSignInMethods:
             codex_sign_in_methods,
             antigravity_sign_in_methods,
             copilot_sign_in_methods,
+            pi_sign_in_methods,
         ],
     )
     def test_no_binary_means_no_sign_in(self, build):
@@ -1607,3 +1640,150 @@ class TestSignInMethods:
         match = re.search(COPILOT_USER_CODE_PATTERN, text)
 
         assert (match.group(0) if match else None) == code
+
+    def test_pi_signs_in_to_chatgpt_with_a_code_and_to_claude_with_a_pasted_one(self):
+        """The two account logins that need only a browser on any device."""
+        chatgpt, claude = pi_sign_in_methods("/opt/pi/bin/pi", {"PI_CODING_AGENT_DIR": "/p"})
+
+        assert chatgpt.id == "openai-codex"
+        assert chatgpt.argv == ["/opt/pi/bin/pi", "auth", "login", "openai-codex", "--no-browser"]
+        assert chatgpt.user_code_pattern == CODEX_USER_CODE_PATTERN
+        assert chatgpt.reads_code is False
+        assert claude.id == "anthropic"
+        assert claude.argv == ["/opt/pi/bin/pi", "auth", "login", "anthropic", "--no-browser"]
+        assert claude.user_code_pattern is None
+        assert claude.reads_code is True
+        for method in (chatgpt, claude):
+            # The login writes to the Pi the session starts.
+            assert method.env == {"PI_CODING_AGENT_DIR": "/p"}
+            assert method.cwd == os.path.expanduser("~")
+            assert method.submit_secret is None
+
+    def test_the_fake_pi_login_is_the_fake_agent(self):
+        chatgpt, claude = pi_sign_in_methods(None, {}, fake=True)
+
+        assert chatgpt.argv == [*fake_login_argv("pi"), "--device"]
+        assert claude.argv == fake_login_argv("pi")
+
+
+class TestPiCommand:
+    def test_pi_runs_behind_the_bridge_of_the_agent(self):
+        """Pi has no ACP server: the bridge runs isolated, by file path."""
+        spec = PiChatSpec(FakePiLauncher())
+
+        assert spec.command() == [sys.executable, "-I", pi_bridge.__file__, "/opt/pi/bin/pi"]
+        assert os.path.isabs(spec.command()[2])
+        assert spec.available() is True
+        assert spec.uses_fake_agent() is False
+
+    def test_no_pi_is_unavailable(self):
+        spec = PiChatSpec(FakePiLauncher(binary=None))
+
+        assert spec.command() is None
+        assert spec.available() is False
+
+    def test_the_registry_gives_pi_its_command_override(self):
+        specs = build_chat_agents(
+            {"pi": FakePiLauncher(binary=None), "shell": object()},
+            command_overrides={"pi": "custom-pi-server --stdio"},
+        )
+
+        assert list(specs) == ["pi"]
+        assert specs["pi"].kind == "pi"
+        assert specs["pi"].command() == ["custom-pi-server", "--stdio"]
+
+
+def _pi_resources(project: Path) -> None:
+    """What makes Pi ask its trust question for a folder."""
+    (project / ".pi").mkdir()
+    (project / ".pi" / "settings.json").write_text("{}", encoding="utf-8")
+
+
+class TestPiPrepare:
+    async def test_plan_runs_in_home_and_opens_the_session_folder(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        project = tmp_path / "work" / "app"
+        project.mkdir(parents=True)
+        _pi_resources(project)
+        pi_dir = tmp_path / "pi-agent"
+        pi_dir.mkdir()
+        (pi_dir / "trust.json").write_text(
+            json.dumps({os.path.realpath(project): True}), encoding="utf-8"
+        )
+        launcher = FakePiLauncher(env={"PI_CODING_AGENT_DIR": str(pi_dir)})
+        options = PiOptions(worktree=True, branch_name="feature/x")
+
+        plan = await PiChatSpec(launcher).prepare(AdHocLaunch(cwd=str(project)), options)
+
+        assert plan.argv == [sys.executable, "-I", pi_bridge.__file__, "/opt/pi/bin/pi"]
+        # The folder goes to the bridge in ``session/new``; the bridge runs in home.
+        assert plan.cwd == str(project)
+        assert plan.process_cwd == str(home)
+        assert plan.env["LAUNCHER"] == "1"
+        assert launcher.resolved == [(AdHocLaunch(cwd=str(project)), options)]
+        # Pi takes no launch option: nothing to set, nothing to send.
+        assert plan.initial_config == []
+        assert plan.initial_prompt is None
+        assert plan.auto_approve is False
+        # The trust record is the one of the Pi the launch env points to.
+        assert isinstance(plan.trust, PiFolderTrust)
+        assert plan.trust.is_trusted() is True
+        assert [(m.id, m.argv) for m in plan.sign_in] == [
+            ("openai-codex", ["/opt/pi/bin/pi", "auth", "login", "openai-codex", "--no-browser"]),
+            ("anthropic", ["/opt/pi/bin/pi", "auth", "login", "anthropic", "--no-browser"]),
+        ]
+        assert plan.sign_in[0].env["PI_CODING_AGENT_DIR"] == str(pi_dir)
+        assert plan.sign_in_prompt == agents.PI_SIGN_IN_PROMPT
+
+    async def test_a_folder_with_resources_pi_has_no_decision_for_gets_the_trust_gate(
+        self, tmp_path
+    ):
+        """Without a terminal Pi skips a folder's own resources instead of
+        asking, so the chat must ask first."""
+        project = tmp_path / "work" / "app"
+        project.mkdir(parents=True)
+        _pi_resources(project)
+        launcher = FakePiLauncher(env={"PI_CODING_AGENT_DIR": str(tmp_path / "pi-agent")})
+
+        plan = await PiChatSpec(launcher).prepare(AdHocLaunch(cwd=str(project)), PiOptions())
+
+        assert isinstance(plan.trust, PiFolderTrust)
+        assert plan.trust.is_trusted() is False
+
+    async def test_no_pi_fails_before_the_launcher_runs(self, tmp_path):
+        launcher = FakePiLauncher(binary=None)
+        spec = PiChatSpec(launcher)
+
+        with pytest.raises(ChatAgentUnavailableError) as excinfo:
+            await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), PiOptions(worktree=True))
+
+        assert excinfo.value.kind == "pi"
+        assert "https://pi.dev/docs/latest/quickstart" in str(excinfo.value)
+        # The launcher would have made a worktree for a session that never starts.
+        assert launcher.resolved == []
+
+    async def test_fake_agent_has_no_trust_gate_and_fake_logins(self, tmp_path):
+        spec = PiChatSpec(FakePiLauncher(binary=None), test_mode=True)
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), PiOptions())
+
+        assert plan.argv[-2:] == ["--flavor", "pi"]
+        assert plan.trust is None
+        assert [m.argv for m in plan.sign_in] == [
+            [*fake_login_argv("pi"), "--device"],
+            fake_login_argv("pi"),
+        ]
+
+    async def test_catalog_plan_finds_the_node_next_to_an_npm_pi(self, bin_dir):
+        """An npm install of Pi is a Node script whose ``node`` sits next to
+        it; without that folder on ``PATH`` the bridge reports no version."""
+        spec = PiChatSpec(FakePiLauncher())
+
+        plan = await spec.catalog_plan()
+
+        assert plan.argv == [sys.executable, "-I", pi_bridge.__file__, "/opt/pi/bin/pi"]
+        assert plan.env["PATH"].split(os.pathsep) == ["/opt/pi/bin", str(bin_dir)]
+        assert plan.cwd == os.path.expanduser("~")

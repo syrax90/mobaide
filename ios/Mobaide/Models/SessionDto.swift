@@ -10,6 +10,7 @@ enum SessionKind: Hashable, Sendable, Codable {
     case antigravity
     case opencode
     case copilot
+    case pi
     case autoScan
     case shell
     /// Any kind string this build does not recognize, held verbatim.
@@ -22,6 +23,7 @@ enum SessionKind: Hashable, Sendable, Codable {
         case .antigravity: return "antigravity"
         case .opencode: return "opencode"
         case .copilot: return "copilot"
+        case .pi: return "pi"
         case .autoScan: return "auto_scan"
         case .shell: return "shell"
         case .custom(let raw): return raw
@@ -35,6 +37,7 @@ enum SessionKind: Hashable, Sendable, Codable {
         case "antigravity": self = .antigravity
         case "opencode": self = .opencode
         case "copilot": self = .copilot
+        case "pi": self = .pi
         case "auto_scan": self = .autoScan
         case "shell": self = .shell
         default: self = .custom(wire)
@@ -71,7 +74,7 @@ struct SessionResponse: Codable, Equatable, Sendable {
     let ui: String?
     /// `"working"` while the agent is mid-turn, `"waiting"` while it is parked
     /// on background work, `"idle"` between turns; nil when the agent cannot
-    /// tell (Codex, Antigravity, OpenCode, Copilot and Terminal PTY sessions).
+    /// tell (Codex, Antigravity, OpenCode, Copilot, Pi and Terminal PTY sessions).
     let activity: String?
 
     var isChat: Bool { ui == "chat" }
@@ -144,6 +147,7 @@ struct CreateSessionRequest: Codable, Equatable, Sendable {
     let antigravity_options: AntigravityOptionsModel?
     let opencode_options: OpenCodeOptionsModel?
     let copilot_options: CopilotOptionsModel?
+    let pi_options: PiOptionsModel?
     let worktree: Bool
     let branch_name: String?
     let ui: String?
@@ -163,6 +167,7 @@ struct CreateSessionRequest: Codable, Equatable, Sendable {
         antigravity_options: AntigravityOptionsModel? = nil,
         opencode_options: OpenCodeOptionsModel? = nil,
         copilot_options: CopilotOptionsModel? = nil,
+        pi_options: PiOptionsModel? = nil,
         worktree: Bool = false,
         branch_name: String? = nil,
         ui: String? = nil,
@@ -181,6 +186,7 @@ struct CreateSessionRequest: Codable, Equatable, Sendable {
         self.antigravity_options = antigravity_options
         self.opencode_options = opencode_options
         self.copilot_options = copilot_options
+        self.pi_options = pi_options
         self.worktree = worktree
         self.branch_name = branch_name
         self.ui = ui
@@ -204,6 +210,7 @@ extension CreateSessionRequest {
         antigravity_options = try container.decodeIfPresent(AntigravityOptionsModel.self, forKey: .antigravity_options)
         opencode_options = try container.decodeIfPresent(OpenCodeOptionsModel.self, forKey: .opencode_options)
         copilot_options = try container.decodeIfPresent(CopilotOptionsModel.self, forKey: .copilot_options)
+        pi_options = try container.decodeIfPresent(PiOptionsModel.self, forKey: .pi_options)
         worktree = try container.decodeIfPresent(Bool.self, forKey: .worktree) ?? false
         branch_name = try container.decodeIfPresent(String.self, forKey: .branch_name)
         ui = try container.decodeIfPresent(String.self, forKey: .ui)

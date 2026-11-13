@@ -6,7 +6,7 @@ Cross-platform (Windows / macOS / Linux). Reuses the automated harness recipe
 
 * central_server on 0.0.0.0:9000 in MOBAIDE_ENV=test (throwaway DB, in-process
   email sink, verification off) so a phone on the same LAN can reach it;
-* mobaide agent in REAL mode (real PTY; claude/codex/antigravity/opencode/copilot sessions work) with
+* mobaide agent in REAL mode (real PTY; claude/codex/antigravity/opencode/copilot/pi sessions work) with
   all state isolated under a throwaway MOBAIDE_AGENT_PREFIX;
 * a persisted account + agent (state.json) so the phone stays logged in across
   restarts;
@@ -2123,7 +2123,7 @@ def print_ready_banner(
         lines.append("  Sessions:           FAKE echo PTY (--fake-pty): terminals only "
                      "echo bytes back")
     else:
-        lines.append("  Sessions:           real PTY -- shell + claude/codex/antigravity/opencode/copilot "
+        lines.append("  Sessions:           real PTY -- shell + claude/codex/antigravity/opencode/copilot/pi "
                      "(CLIs resolve from PATH or MOBAIDE_*_BIN)")
     lines.append(f"  State dir:          {args.state_dir}")
     if android.synced:

@@ -935,6 +935,9 @@ the elevation re-launch re-fetches the installer from
      writes this key with `set-env` after `init-env`, not with an `init-env`
      argument, so it also works with an agent release that is older than
      Copilot support.
+   - The optional Pi CLI works the same way: `Find-PiBinary` (PATH,
+     `%USERPROFILE%\.pi\agent\bin\pi.cmd`, npm folders) →
+     `MOBAIDE_AGENT_PI_BIN_HINT` → `MOBAIDE_PI_BIN`, written with `set-env`.
    - Re-running never overwrites an already-paired `.env` (pass `--force` to
      regenerate; paired credentials are preserved regardless).
 8. Register the service:

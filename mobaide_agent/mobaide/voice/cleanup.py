@@ -1,7 +1,7 @@
 """Transcript cleanup: a hidden one-shot run of the session's own CLI on its
 cheapest model — ``claude -p`` on Haiku, ``codex exec`` on Luna, ``agy`` on
-Gemini Flash. OpenCode and GitHub Copilot name no cheapest model, so
-``opencode run`` and ``copilot`` use the user's default model.
+Gemini Flash. OpenCode, GitHub Copilot and Pi name no cheapest model, so
+``opencode run``, ``copilot`` and ``pi`` use the user's default model.
 
 The transcript goes on stdin, never in argv, because an npm ``.cmd`` shim on
 Windows is run through ``cmd /c`` and argv shows in process listings. Like
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 # The session kinds whose CLI can clean up a transcript; advertised as
 # ``capabilities.voice.cleanup_kinds``.
-CleanupKind = Literal["claude", "codex", "antigravity", "opencode", "copilot"]
+CleanupKind = Literal["claude", "codex", "antigravity", "opencode", "copilot", "pi"]
 CLEANUP_KINDS: tuple[str, ...] = get_args(CleanupKind)
 
 # Below the relay's 30 s proxy timeout, so the agent's own answer arrives.
@@ -48,6 +48,9 @@ MAX_CLEANUP_CHARS = 6000
 # Verbose and JSONL output carry every message, not just the answer.
 _MAX_OUTPUT_BYTES = 256 * 1024
 _MAX_MESSAGE_CHARS = 300
+# Pi's JSON mode writes one line per streamed token, each with the usage so
+# far, and the answer again in three closing events.
+_PI_MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 
 # Used when the CLI's model list is unknown (its startup listing failed).
 CODEX_CLEANUP_MODEL = "gpt-6-luna"
@@ -165,9 +168,10 @@ def _cli_env(binary: str) -> dict[str, str]:
 
 
 def _lines(stdout: bytes) -> list[dict]:
-    """The JSON objects of a JSONL stream; other lines are skipped."""
+    """The JSON objects of a JSONL stream; other lines are skipped. Split
+    at LF only: a JSON string can hold other Unicode line separators."""
     events = []
-    for line in stdout.decode("utf-8", errors="replace").splitlines():
+    for line in stdout.decode("utf-8", errors="replace").split("\n"):
         try:
             event = json.loads(line)
         except ValueError:
@@ -411,6 +415,54 @@ def parse_copilot_result(result: CmdResult, source: str) -> str:
     return _finish(answer, source, name)
 
 
+def parse_pi_result(result: CmdResult, source: str) -> str:
+    """The cleaned text from one ``pi --mode json`` run (JSONL events), or a
+    coded ``VoiceError``. A failed model request is an assistant message with
+    stop reason ``error`` at exit 0, so the last assistant message decides.
+    An empty answer keeps ``source``."""
+    name = "Pi"
+    if result.timed_out:
+        raise _timed_out(name)
+    stderr = result.stderr.decode("utf-8", errors="replace")
+    if result.rc != 0 and "Unknown option" in stderr:
+        raise _outdated(name, "pi update")
+    if result.rc != 0 and "No API key found" in stderr:
+        raise _failed(f"{name} has no model provider signed in on this computer; use /login in Pi there.")
+    if result.truncated:
+        raise _failed(f"{name} wrote more output than a cleanup can take.")
+    answer: str | None = None
+    stop: object = None
+    error: str | None = None
+    used_tool = False
+    for event in _lines(result.stdout):
+        kind = event.get("type")
+        message = event.get("message")
+        if isinstance(kind, str) and kind.startswith("tool_execution"):
+            used_tool = True
+        if kind != "message_end" or not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        content = message.get("content")
+        blocks = [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+        if any(b.get("type") == "toolCall" for b in blocks):
+            used_tool = True
+        stop = message.get("stopReason")
+        text = message.get("errorMessage")
+        error = text if isinstance(text, str) else None
+        answer = "".join(b["text"] for b in blocks if b.get("type") == "text" and isinstance(b.get("text"), str))
+    if used_tool:
+        raise _failed(f"{name} tried to use a tool instead of cleaning up the text.")
+    if result.rc != 0 or stop != "stop" or answer is None:
+        message_text = _short(error or stderr)
+        if not message_text:
+            message_text = (
+                f"{name} exited with code {result.rc}."
+                if result.rc != 0
+                else f"{name} stopped before it finished answering."
+            )
+        raise _failed(message_text)
+    return _finish(answer, source, name)
+
+
 def codex_cleanup_model(models: Sequence[str] | None) -> str:
     """Codex's cheapest model: the first Luna in its catalog (newest first),
     else the first ``-mini`` of older catalogs."""
@@ -442,6 +494,7 @@ class CleanupCommand:
     env: dict[str, str]
     stdin: bytes
     model: str
+    max_output_bytes: int = _MAX_OUTPUT_BYTES
 
 
 class CleanupCli:
@@ -695,6 +748,47 @@ class CopilotCleanup(CleanupCli):
         return parse_copilot_result(result, source)
 
 
+class PiCleanup(CleanupCli):
+    """Pi names no cheapest model, so the run uses the user's default one.
+    The prompt file replaces Pi's coding-agent prompt, and the run has no
+    tools, extensions, skills, MCP servers or project files. ``--no-session``
+    keeps it out of Pi's session history."""
+
+    name = "Pi"
+    files: ClassVar[Mapping[str, str]] = {_PROMPT_FILE: CLEANUP_PROMPT}
+
+    async def command(self, source: str) -> CleanupCommand:
+        binary = self.binary()
+        # Piped stdin is the prompt. The prompt file is found relative to the
+        # cwd, so no argument needs quoting (see ``ClaudeCleanup.command``).
+        argv = shim_safe_argv(
+            binary,
+            "--mode", "json",
+            "--no-session",
+            "--no-tools",
+            "--no-extensions",
+            "--no-skills",
+            "--no-prompt-templates",
+            "--no-context-files",
+            "--no-mcp",
+            "--no-themes",
+            "--no-approve",
+            "--offline",
+            "--thinking", "off",
+            "--system-prompt", _PROMPT_FILE,
+        )
+        return CleanupCommand(
+            argv=argv,
+            env=_cli_env(binary),
+            stdin=_wrap(source).encode(),
+            model="default",
+            max_output_bytes=_PI_MAX_OUTPUT_BYTES,
+        )
+
+    def parse(self, result: CmdResult, source: str) -> str:
+        return parse_pi_result(result, source)
+
+
 class TranscriptCleaner:
     """Runs cleanups, at most ``MAX_ACTIVE_CLEANUPS`` at a time, whatever
     their CLI. ``clis`` maps a session kind to its CLI; ``work_dir`` holds
@@ -797,7 +891,7 @@ class TranscriptCleaner:
                 command.argv,
                 cwd=str(self._work_dir),
                 timeout=timeout,
-                max_bytes=_MAX_OUTPUT_BYTES,
+                max_bytes=command.max_output_bytes,
                 env=command.env,
                 stdin=command.stdin,
                 handle=handle,

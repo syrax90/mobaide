@@ -44,7 +44,7 @@ data class ChatResumeUiState(
 )
 
 /**
- * "Continue a session": the sessions the agent (Claude Code, Codex, Antigravity, OpenCode or GitHub Copilot)
+ * "Continue a session": the sessions the agent (Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot or Pi)
  * stored on
  * the PC, newest first, one page at a time. Fetch-only; the first page can take a few seconds because
  * the agent starts its process to answer.

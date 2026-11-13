@@ -1484,6 +1484,7 @@ export interface components {
                 [key: string]: string;
             } | null;
             opencode_options?: components["schemas"]["OpenCodeOptionsModel"] | null;
+            pi_options?: components["schemas"]["PiOptionsModel"] | null;
             /** Project Name */
             project_name?: string | null;
             /** Resolved Command */
@@ -2324,6 +2325,21 @@ export interface components {
             worktree: boolean;
         };
         /**
+         * PiOptionsModel
+         * @description Wire DTO for Pi launch options (see :class:`PiOptions`).
+         */
+        PiOptionsModel: {
+            /** Base Branch */
+            base_branch?: string | null;
+            /** Branch Name */
+            branch_name?: string | null;
+            /**
+             * Worktree
+             * @default false
+             */
+            worktree: boolean;
+        };
+        /**
          * ProjectReadModel
          * @description Client-safe view of a single project.
          */
@@ -2535,7 +2551,7 @@ export interface components {
              * @default claude
              * @enum {string}
              */
-            kind: "claude" | "codex" | "antigravity" | "opencode" | "copilot";
+            kind: "claude" | "codex" | "antigravity" | "opencode" | "copilot" | "pi";
             /** Text */
             text: string;
         };

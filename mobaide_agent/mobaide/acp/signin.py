@@ -238,9 +238,12 @@ class SignInFlow:
         on_change: Callable[[], None],
         on_signed_in: Callable[[], None],
         backend_factory: Callable[[], PtyBackend] = create_pty_backend,
+        choose_text: str | None = None,
     ) -> None:
         self._methods = {m.id: m for m in methods}
         self._agent_title = agent_title
+        # Shown while the user picks a method; None gives the generic text.
+        self._choose_text = choose_text
         self._request_id = request_id
         self._on_change = on_change
         self._on_signed_in = on_signed_in
@@ -394,7 +397,8 @@ class SignInFlow:
             "title": f"Sign in to {self._agent_title}",
             "text": text
             if text is not None
-            else f"{self._agent_title} is not signed in on your PC. Sign in here to continue.",
+            else self._choose_text
+            or f"{self._agent_title} is not signed in on your PC. Sign in here to continue.",
             "stage": stage,
             "methods": [
                 {"id": m.id, "name": m.name, "description": m.description}

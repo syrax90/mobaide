@@ -24,6 +24,7 @@ from mobaide.core import (
     ClaudeLauncher,
     CodexLauncher,
     CopilotLauncher,
+    PiLauncher,
     FakePtyBackend,
     OpenCodeLauncher,
     ProjectsStore,
@@ -52,6 +53,7 @@ from mobaide.voice.cleanup import (
     ClaudeCleanup,
     CodexCleanup,
     CopilotCleanup,
+    PiCleanup,
     OpenCodeCleanup,
     TranscriptCleaner,
 )
@@ -831,6 +833,13 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         copilot_bin_override=config.copilot_bin,
         worktree_mgr=worktree_mgr,
     )
+    # Pi launcher — sibling of Antigravity: no hooks and no auth probe (Pi
+    # shows its own sign-in in the PTY when needed, and a chat session offers
+    # the sign-in). Binary resolves lazily.
+    app.state.pi_launcher = PiLauncher(
+        pi_bin_override=config.pi_bin,
+        worktree_mgr=worktree_mgr,
+    )
     # Registry keyed by CLI name. SessionManager picks a launcher per session;
     # the Auto Scan scanner stays Claude-only. build_cli_capabilities reads this
     # registry, so a new entry auto-surfaces in /api/version capabilities.
@@ -840,6 +849,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         "antigravity": app.state.antigravity_launcher,
         "opencode": app.state.opencode_launcher,
         "copilot": app.state.copilot_launcher,
+        "pi": app.state.pi_launcher,
     }
     # Agents that can also run in the structured chat UI (over ACP), and the
     # lister of their stored sessions (continue a session started elsewhere).
@@ -852,6 +862,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             "antigravity": config.acp_antigravity_command,
             "opencode": config.acp_opencode_command,
             "copilot": config.acp_copilot_command,
+            "pi": config.acp_pi_command,
         },
         adapters_dir=state_prefix(test_mode=config.is_test_mode) / "acp-adapters",
     )
@@ -887,6 +898,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 ),
                 "opencode": OpenCodeCleanup(app.state.opencode_launcher.resolve_binary),
                 "copilot": CopilotCleanup(app.state.copilot_launcher.resolve_binary),
+                "pi": PiCleanup(app.state.pi_launcher.resolve_binary),
             },
             work_dir=voice_cleanup_dir,
         ),
@@ -907,6 +919,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         antigravity_launcher=app.state.antigravity_launcher,
         opencode_launcher=app.state.opencode_launcher,
         copilot_launcher=app.state.copilot_launcher,
+        pi_launcher=app.state.pi_launcher,
         worktree_mgr=worktree_mgr,
         event_bus=app.state.event_bus,
         on_session_created=_on_session_created,
