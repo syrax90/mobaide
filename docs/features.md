@@ -29,7 +29,7 @@ Claude Code, Codex, Antigravity, OpenCode and GitHub Copilot sessions open in a 
 
 | Area | Behaviour |
 |---|---|
-| Timeline | Markdown answers, collapsible thinking, one compact card per tool call (icon by kind, status, `+N −M` for edits; tap for the diff, output and input). Conversation text uses the system font, not the pixel font. |
+| Timeline | Markdown answers, collapsible thinking, one compact card per tool call (icon by kind, status, `+N −M` for edits; tap for the diff, output and input). Conversation text uses the system font, not the pixel font. On Android and iOS, a tap on the timeline hides the keyboard; drags, long presses and row taps work as before. |
 | Focus view | On by default; toggle it in the chat's ⋯ menu (one setting per device or browser, for every chat). It shows your messages, the agent's final answer of each turn, approvals and questions, notices and errors. The thinking, tool calls and in-between messages of a run fold into one "N steps" row that shows the current step while the agent works; tap it to open the steps in place. |
 | Approvals | Permission prompts and multiple-choice questions appear as a card above the composer, with the agent's own options. The first answer from any device wins. |
 | Composer | Slash-command suggestions, image attachments (when the agent accepts images), voice input, prompt templates (inserted at the cursor), save as template, and a full-screen editor on Android and iOS. Messages sent while the agent works are queued. You can remove one, or tap **Send now** to steer the agent with it. |

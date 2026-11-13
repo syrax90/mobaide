@@ -11,6 +11,8 @@ struct ChatTimelineView: View {
     let model: ChatSessionModel
     let agentLabel: String
     var focusView = false
+    /// A tap on the timeline, like one outside the field in other chat apps.
+    var onTap: () -> Void = {}
 
     @Environment(\.mobaideColors) private var colors
     @State private var following = true
@@ -75,6 +77,8 @@ struct ChatTimelineView: View {
             .scrollContentBackground(.hidden)
             .environment(\.defaultMinListRowHeight, 1)
             .scrollDismissesKeyboard(.interactively)
+            // Simultaneous, so row buttons and text selection keep their taps.
+            .simultaneousGesture(TapGesture().onEnded { onTap() })
             .modifier(UserScrollPhase(
                 onStart: { tracker.setDriving(true) },
                 onEnd: { flung in userScrollEnded(flung: flung) }

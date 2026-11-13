@@ -75,6 +75,7 @@ import com.mobaide.app.data.chat.ChatRequest
 import com.mobaide.app.data.chat.ChatUsage
 import com.mobaide.app.data.chat.ChatStatus
 import com.mobaide.app.data.network.dto.SessionResponse
+import com.mobaide.app.ui.common.dismissKeyboardOnTap
 import com.mobaide.app.ui.common.pixel.PixelButton
 import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import com.mobaide.app.ui.common.pixel.PixelIconButton
@@ -359,28 +360,30 @@ fun ChatScreen(
                 Box(modifier = Modifier.weight(1f)) {
                     val agentName = ui.state.agent?.title ?: header.kindLabel
                     val status = ui.status
-                    when {
-                        !ui.loaded -> ChatLoadingState("Opening the session…")
-                        ui.items.isEmpty() && status == ChatStatus.STARTING ->
-                            ChatLoadingState(if (agentName.isBlank()) "Starting…" else "Starting $agentName…")
-                        ui.items.isEmpty() && status == ChatStatus.LOADING -> ChatLoadingState("Opening the session…")
-                        ui.items.isEmpty() && status == ChatStatus.ERROR -> ChatStartError(
-                            message = ui.state.error ?: "The agent stopped.",
-                            canRestart = ui.live && !ui.sessionClosed,
-                            restartEnabled = ui.canRestart,
-                            onRestart = viewModel::restart,
-                        )
-                        ui.items.isEmpty() && !ui.truncated -> ChatEmptyState(
-                            title = agentName,
-                            cwd = ui.state.cwd ?: header.cwd,
-                            hasCommands = ui.state.commands.isNotEmpty(),
-                        )
-                        else -> ChatTimeline(
-                            ui = ui,
-                            listState = listState,
-                            onRestart = viewModel::restart,
-                            focusView = focusView,
-                        )
+                    Box(modifier = Modifier.fillMaxSize().dismissKeyboardOnTap()) {
+                        when {
+                            !ui.loaded -> ChatLoadingState("Opening the session…")
+                            ui.items.isEmpty() && status == ChatStatus.STARTING ->
+                                ChatLoadingState(if (agentName.isBlank()) "Starting…" else "Starting $agentName…")
+                            ui.items.isEmpty() && status == ChatStatus.LOADING -> ChatLoadingState("Opening the session…")
+                            ui.items.isEmpty() && status == ChatStatus.ERROR -> ChatStartError(
+                                message = ui.state.error ?: "The agent stopped.",
+                                canRestart = ui.live && !ui.sessionClosed,
+                                restartEnabled = ui.canRestart,
+                                onRestart = viewModel::restart,
+                            )
+                            ui.items.isEmpty() && !ui.truncated -> ChatEmptyState(
+                                title = agentName,
+                                cwd = ui.state.cwd ?: header.cwd,
+                                hasCommands = ui.state.commands.isNotEmpty(),
+                            )
+                            else -> ChatTimeline(
+                                ui = ui,
+                                listState = listState,
+                                onRestart = viewModel::restart,
+                                focusView = focusView,
+                            )
+                        }
                     }
                     JumpToLatestFab(
                         visible = ui.items.isNotEmpty() && !atBottom,

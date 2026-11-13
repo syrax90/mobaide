@@ -89,7 +89,8 @@ struct ChatScreen: View {
                 ChatTimelineView(
                     model: model,
                     agentLabel: model.state.agent?.displayName ?? kindLabel,
-                    focusView: focusView
+                    focusView: focusView,
+                    onTap: hideKeyboard
                 )
                     .overlay(alignment: .leading) { edgePanStrip }
                 // The timeline gives up its height first; inside the dock,
