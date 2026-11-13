@@ -11,13 +11,12 @@ struct ChatTimelineView: View {
     let model: ChatSessionModel
     let agentLabel: String
     var focusView = false
-    /// A tap on the timeline, like one outside the field in other chat apps.
-    var onTap: () -> Void = {}
 
     @Environment(\.mobaideColors) private var colors
     @State private var following = true
     @State private var unseen = false
     @State private var tracker = ScrollTracker()
+    @State private var press = PressTracker()
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -77,8 +76,21 @@ struct ChatTimelineView: View {
             .scrollContentBackground(.hidden)
             .environment(\.defaultMinListRowHeight, 1)
             .scrollDismissesKeyboard(.interactively)
-            // Simultaneous, so row buttons and text selection keep their taps.
-            .simultaneousGesture(TapGesture().onEnded { onTap() })
+            // A tap hides the keyboard, as outside the field in other chat
+            // apps; a long press is a text selection and keeps it. Both are
+            // simultaneous, so row buttons and text selection keep their taps.
+            .simultaneousGesture(TapGesture().onEnded {
+                if press.heldLong {
+                    press.heldLong = false
+                } else {
+                    ChatKeyboard.hide()
+                }
+            })
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.5)
+                    .onChanged { _ in press.heldLong = false }
+                    .onEnded { _ in press.heldLong = true }
+            )
             .modifier(UserScrollPhase(
                 onStart: { tracker.setDriving(true) },
                 onEnd: { flung in userScrollEnded(flung: flung) }
@@ -270,6 +282,12 @@ private final class ScrollTracker {
     func coast(for seconds: TimeInterval) {
         drivenUntil = Date().addingTimeInterval(seconds)
     }
+}
+
+/// Whether the current touch was held past the long-press time. Reset at
+/// touch-down and by the tap it holds back, so it cannot swallow a later tap.
+private final class PressTracker {
+    var heldLong = false
 }
 
 /// Reports a user scroll: its start, and its end once any fling has stopped

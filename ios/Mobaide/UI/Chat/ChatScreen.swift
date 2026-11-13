@@ -89,8 +89,7 @@ struct ChatScreen: View {
                 ChatTimelineView(
                     model: model,
                     agentLabel: model.state.agent?.displayName ?? kindLabel,
-                    focusView: focusView,
-                    onTap: hideKeyboard
+                    focusView: focusView
                 )
                     .overlay(alignment: .leading) { edgePanStrip }
                 // The timeline gives up its height first; inside the dock,
@@ -438,7 +437,7 @@ struct ChatScreen: View {
     // MARK: - Actions
 
     private func hideKeyboard() {
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        ChatKeyboard.hide()
     }
 
     private var focusViewBinding: Binding<Bool> {
@@ -531,6 +530,13 @@ struct ChatScreen: View {
 
     private static func typeNames(_ types: [CustomAgentTypeDto]) -> [String: String] {
         Dictionary(types.map { ("custom_\($0.id)", $0.name) }, uniquingKeysWith: { _, last in last })
+    }
+}
+
+@MainActor
+enum ChatKeyboard {
+    static func hide() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 }
 
