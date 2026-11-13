@@ -627,6 +627,159 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertNil(request.copilot_options?.branch_name)
     }
 
+    // MARK: - Cursor
+
+    func testCursorRequestCarriesOnlyItsOwnOptionsBlock() async throws {
+        let model = await modelWithProjects(#"[{"name":"a","path":"/p","is_git":true}]"#)
+        model.selectStoredProject("a")
+        model.cursorForce = true
+        model.worktree = true
+        model.branchName = "feat"
+
+        let request = try XCTUnwrap(model.buildRequest(mode: .cursor))
+
+        XCTAssertEqual(request.cli, "cursor")
+        XCTAssertEqual(request.project_name, "a")
+        XCTAssertEqual(request.ui, "chat")
+        XCTAssertNil(request.claude_options)
+        XCTAssertNil(request.codex_options)
+        XCTAssertNil(request.antigravity_options)
+        XCTAssertNil(request.copilot_options)
+        XCTAssertEqual(request.cursor_options?.force, true)
+        XCTAssertEqual(request.cursor_options?.worktree, true, "the worktree rides inside cursor_options")
+        XCTAssertEqual(request.cursor_options?.branch_name, "feat")
+        XCTAssertEqual(request.worktree, false, "a managed CLI never uses the top-level worktree field")
+        XCTAssertNil(request.branch_name)
+    }
+
+    func testCursorCustomPathSendsTheFolderAndNeverAWorktree() throws {
+        let model = makeModel()
+        model.setCustomPath("/abs/path")
+        model.worktree = true
+        model.branchName = "feat"
+
+        let request = try XCTUnwrap(model.buildRequest(mode: .cursor))
+
+        XCTAssertEqual(request.cli, "cursor")
+        XCTAssertEqual(request.cwd, "/abs/path")
+        XCTAssertNil(request.project_name)
+        XCTAssertEqual(request.cursor_options?.force, false, "run-everything stays off until the user turns it on")
+        XCTAssertEqual(request.cursor_options?.worktree, false)
+        XCTAssertNil(request.cursor_options?.branch_name)
+    }
+
+    func testCreateSendsTheCursorWireKeysAndRemembersTheChoices() async throws {
+        StubURLProtocol.reset()
+        let prefs = isolatedPrefs()
+        let model = stubbedModel(prefs: prefs)
+        model.selection = .stored("a")
+        model.mode = .cursor
+        model.cursorForce = true
+        model.cursorTerminalUI = true
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"session_id":"s-new","state":"starting","created_at":"t"}"#
+        )
+
+        await model.create()
+
+        XCTAssertNil(model.error)
+        let body = try XCTUnwrap(try createBodies().last)
+        XCTAssertEqual(body["cli"] as? String, "cursor")
+        XCTAssertEqual(body["ui"] as? String, "terminal")
+        let options = try XCTUnwrap(body["cursor_options"] as? [String: Any])
+        XCTAssertEqual(options["force"] as? Bool, true)
+        XCTAssertEqual(options["worktree"] as? Bool, false)
+        XCTAssertNil(body["claude_options"])
+        XCTAssertNil(body["copilot_options"])
+        XCTAssertEqual(prefs.getLastUsedCursorOptions(), CursorLaunchPrefs(force: true, terminalUI: true))
+        XCTAssertNil(prefs.getLastUsedCopilotOptions(), "a Cursor launch writes no other agent's choices")
+
+        let next = stubbedModel(prefs: prefs)
+        XCTAssertTrue(next.cursorForce, "the next wizard starts from the remembered choices")
+        XCTAssertTrue(next.cursorTerminalUI)
+        XCTAssertFalse(next.copilotAllowAll)
+        XCTAssertFalse(next.copilotTerminalUI)
+    }
+
+    func testCursorCardIsOffForAnAgentFromBeforeCursorSupport() async {
+        // That agent lists its CLIs without Cursor, and would open a plain
+        // shell for `cli = "cursor"`.
+        let older = await modelWithCapabilities(
+            #"{"cli":{"claude":{"available":true},"codex":{"available":true}}}"#
+        )
+        XCTAssertFalse(older.isEnabled(.cursor))
+        XCTAssertTrue(older.isEnabled(.codex), "the agent's other CLIs stay usable")
+        older.selectMode(.cursor)
+        XCTAssertNil(older.mode, "a disabled card must not open the Cursor config step")
+
+        let notInstalled = await modelWithCapabilities(#"{"cli":{"cursor":{"available":false}}}"#)
+        XCTAssertFalse(notInstalled.isEnabled(.cursor))
+
+        let noCliList = await modelWithCapabilities("{}")
+        XCTAssertTrue(noCliList.isEnabled(.cursor), "an agent that reports no CLI list reads as unknown")
+
+        let installed = await modelWithCapabilities(#"{"cli":{"cursor":{"available":true}}}"#)
+        XCTAssertTrue(installed.isEnabled(.cursor))
+        installed.selectMode(.cursor)
+        XCTAssertEqual(installed.mode, .cursor)
+    }
+
+    func testCursorWithoutChatOnThePCOpensTheTerminalAndCannotContinue() async throws {
+        let model = await modelWithCapabilities(
+            #"{"cli":{"cursor":{"available":true}},"chat":{"claude":{"resume":true}}}"#
+        )
+        model.selection = .stored("a")
+        model.mode = .cursor
+
+        let request = try XCTUnwrap(model.buildRequest(mode: .cursor))
+
+        XCTAssertEqual(request.ui, "terminal")
+        XCTAssertNotNil(model.cursorChatUnavailableReason)
+        XCTAssertFalse(model.canContinueSession)
+    }
+
+    func testCursorContinueIsOfferedOnlyForTheChatView() async {
+        let model = await modelWithCapabilities(
+            #"{"cli":{"cursor":{"available":true}},"chat":{"cursor":{"resume":true,"live":false}}}"#
+        )
+        model.selection = .stored("a")
+        model.mode = .cursor
+
+        XCTAssertTrue(model.canContinueSession)
+        XCTAssertNil(model.cursorChatUnavailableReason)
+
+        model.cursorTerminalUI = true
+
+        XCTAssertFalse(model.canContinueSession)
+    }
+
+    func testCursorContinueRequestUsesTheCursorOptionsWithoutAWorktree() {
+        let model = makeModel()
+        model.mode = .cursor
+        model.selection = .stored("a")
+        model.cursorForce = true
+        model.worktree = true
+        model.branchName = "feat"
+        let stored = ChatStoredSession(
+            session_id: "external-4444", cwd: "/srv/other", title: nil, updated_at: nil, open_session_id: nil
+        )
+
+        let request = model.continueRequest(for: stored)
+
+        XCTAssertEqual(request.cli, "cursor")
+        XCTAssertEqual(request.ui, "chat")
+        XCTAssertEqual(request.chat_resume_id, "external-4444")
+        XCTAssertEqual(request.cwd, "/srv/other")
+        XCTAssertNil(request.project_name)
+        XCTAssertNil(request.claude_options)
+        XCTAssertNil(request.codex_options)
+        XCTAssertNil(request.antigravity_options)
+        XCTAssertEqual(request.cursor_options?.force, true)
+        XCTAssertEqual(request.cursor_options?.worktree, false)
+        XCTAssertNil(request.cursor_options?.branch_name)
+    }
+
     // MARK: - Codex continue after the Codex sign-in
 
     private let externalSession = ChatStoredSession(

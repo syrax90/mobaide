@@ -32,6 +32,7 @@ from mobaide.core.models import (
     SessionState,
 )
 
+from . import cursor_ext as cx
 from . import normalize as nz
 from .agents import ChatLaunchPlan, ConfigIntent
 from .install import INSTALL_POOL, PROBE_POOL, AdapterInstallError
@@ -113,6 +114,8 @@ class _QueuedPrompt:
     images: list[dict[str, str]]
     # A steer request for it is in flight: the queue must not send it too.
     steering: bool = False
+    # The agent mode to switch to before the message is sent.
+    mode: str | None = None
 
 
 @dataclass
@@ -199,6 +202,9 @@ class ChatSession:
         # The last busy report that came while the session was opening.
         self._busy_before_ready = False
         self._consoles: collections.OrderedDict[str, _Console] = collections.OrderedDict()
+        self._todos = cx.TodoList()
+        # Replayed Cursor plans whose text is already shown: tool call id → title.
+        self._stored_plans: dict[str, str] = {}
         # Running commands whose latest output waits for its next frame.
         self._output_touches: dict[str, asyncio.TimerHandle] = {}
         self._presence_hold: PresenceHold | None = None
@@ -512,12 +518,14 @@ class ChatSession:
         assert conn is not None
         tl = self._timeline
         tl.patch_state(status="starting", error=None, urgent=True)
+        self._todos.clear()
+        self._stored_plans.clear()
         try:
             init = await conn.request(
                 "initialize",
                 {
                     "protocolVersion": ACP_PROTOCOL_VERSION,
-                    "clientCapabilities": CLIENT_CAPABILITIES,
+                    "clientCapabilities": self._client_capabilities(),
                     "clientInfo": {"name": "mobaide", "title": "Mobaide", "version": __version__},
                 },
                 INITIALIZE_TIMEOUT,
@@ -630,6 +638,11 @@ class ChatSession:
                 self._sign_in.offer()
         except (AcpProcessError, TimeoutError, OSError) as exc:
             self._fail_start(str(exc) or "The agent did not respond")
+
+    def _client_capabilities(self) -> dict[str, Any]:
+        if not self._plan.client_meta:
+            return CLIENT_CAPABILITIES
+        return {**CLIENT_CAPABILITIES, "_meta": dict(self._plan.client_meta)}
 
     async def _ensure_trusted(self) -> bool:
         """Ask the user to trust the folder unless the agent already does."""
@@ -949,9 +962,11 @@ class ChatSession:
             return
         self._queue.remove(nxt)
         self._publish_queue()
-        self._start_prompt(nxt.text, nxt.images)
+        self._start_prompt(nxt.text, nxt.images, mode=nxt.mode)
 
-    def _start_prompt(self, text: str, images: list[dict[str, str]]) -> None:
+    def _start_prompt(
+        self, text: str, images: list[dict[str, str]], *, mode: str | None = None
+    ) -> None:
         self._close_streaming_items()
         user_item = {
             "id": self._next_id("u"),
@@ -969,11 +984,28 @@ class ChatSession:
         self._prompt_dispatched = False
         self._cancel_before_dispatch = False
         self._turn_task = asyncio.create_task(
-            self._run_turn(blocks, text, images), name=f"chat-turn-{self.session_id}"
+            self._run_turn(blocks, text, images, mode), name=f"chat-turn-{self.session_id}"
         )
 
+    async def _switch_mode(self, mode: str) -> None:
+        """Put the agent in ``mode`` for the message about to be sent."""
+        option = self._match_config(ConfigIntent(mode, category="mode"))
+        if option is None or option["type"] != "select" or option["value"] == mode:
+            return
+        refused = "Could not switch the mode, so the message was not sent."
+        if mode not in {value["value"] for value in option["options"]}:
+            raise ChatCommandError(refused)
+        try:
+            await self._set_config(option, mode)
+        except (AcpRpcError, TimeoutError):
+            raise ChatCommandError(refused) from None
+
     async def _run_turn(
-        self, blocks: list[dict[str, Any]], text: str, images: list[dict[str, str]]
+        self,
+        blocks: list[dict[str, Any]],
+        text: str,
+        images: list[dict[str, str]],
+        mode: str | None = None,
     ) -> None:
         tl = self._timeline
         stop_reason: str | None = None
@@ -997,14 +1029,20 @@ class ChatSession:
                 # Stopped before the prompt reached the agent: never send it.
                 stop_reason = "cancelled"
             else:
-                self._prompt_dispatched = True
-                result = await conn.request(
-                    "session/prompt", {"sessionId": self._acp_session_id, "prompt": blocks}
-                )
-                if isinstance(result, dict) and isinstance(result.get("stopReason"), str):
-                    stop_reason = result["stopReason"]
+                if mode is not None:
+                    await self._switch_mode(mode)
+                if self._cancel_before_dispatch:
+                    # Stopped while the mode was switching: never send it.
+                    stop_reason = "cancelled"
                 else:
-                    stop_reason = "end_turn"
+                    self._prompt_dispatched = True
+                    result = await conn.request(
+                        "session/prompt", {"sessionId": self._acp_session_id, "prompt": blocks}
+                    )
+                    if isinstance(result, dict) and isinstance(result.get("stopReason"), str):
+                        stop_reason = result["stopReason"]
+                    else:
+                        stop_reason = "end_turn"
         except asyncio.CancelledError:
             raise
         except ChatCommandError as exc:
@@ -1016,7 +1054,9 @@ class ChatSession:
             )
             if exc.code == ERR_AUTH_REQUIRED and self._sign_in.available:
                 auth_failed = True
-                self._auth_retry.append(_QueuedPrompt(self._next_id("q"), text, images))
+                self._auth_retry.append(
+                    _QueuedPrompt(self._next_id("q"), text, images, mode=mode)
+                )
                 del self._auth_retry[:-QUEUE_MAX]
                 self._sign_in.offer()
         except AcpProcessError as exc:
@@ -1032,7 +1072,7 @@ class ChatSession:
             self._ready.clear()
             tl.patch_state(status="starting", turn_started_at=None, cancelling=False, urgent=True)
             # Sent once the reloaded conversation is open (bootstrap drains the queue).
-            self._queue.insert(0, _QueuedPrompt(self._next_id("q"), text, images))
+            self._queue.insert(0, _QueuedPrompt(self._next_id("q"), text, images, mode=mode))
             self._publish_queue()
             self._reload_notice = True
             # A task of its own: the reload cancels a running turn, this one.
@@ -1485,6 +1525,10 @@ class ChatSession:
             elif isinstance(kind, str):
                 self._sign_in.withdraw()
             return
+        if method == cx.UPDATE_TODOS and isinstance(params, dict):
+            # Cursor documents it as a notification; today it is a request.
+            self._timeline.patch_state(plan=self._todos.apply(params))
+            return
         if method != "session/update" or not isinstance(params, dict):
             return
         sid = params.get("sessionId")
@@ -1509,6 +1553,8 @@ class ChatSession:
             self._append_user_chunk(update)
         elif kind in ("tool_call", "tool_call_update"):
             self._apply_tool_update(update, create=kind == "tool_call")
+            if tl.state.get("status") == "loading":
+                self._show_stored_plan(update)
         elif kind == "plan":
             tl.patch_state(plan=nz.plan_entries(update.get("entries")))
         elif kind == "available_commands_update":
@@ -1671,7 +1717,7 @@ class ChatSession:
         is_new = item is None
         if item is None:
             item = nz.new_tool_item(tool_id)
-        nz.merge_tool_update(item, update)
+        nz.merge_tool_update(item, update, markdown_titles=self._plan.markdown_titles)
         self._last_tool_id = tool_id
         deferred = self._apply_console(tool_id, item, update)
         self._current_agent_item = self._current_thought_item = self._current_user_item = None
@@ -1707,6 +1753,34 @@ class ChatSession:
                 if pending.tool_call_id == tool_id and not pending.future.done():
                     pending.future.set_result(self._cancel_outcome(pending))
                     self._drop_request(pending.key)
+
+    def _show_stored_plan(self, update: dict[str, Any]) -> None:
+        """In a replayed session, show a Cursor plan as it stood in the live
+        chat: its tool call by the plan's name, and its text as a message."""
+        tool_id = update.get("toolCallId")
+        if not isinstance(tool_id, str):
+            return
+        plan = cx.stored_plan(update.get("rawInput"))
+        title = self._stored_plans.get(tool_id)
+        if plan is None and title is None:
+            return
+        item = self._timeline.get(tool_id)
+        if item is None:
+            return
+        # A later update of the tool call can carry Cursor's own title again.
+        # The same path as a live title: one line, cut, no code marks.
+        renamed = dict(item)
+        nz.merge_tool_update(
+            renamed,
+            {"title": plan[0] if plan is not None else title, "kind": "think"},
+            markdown_titles=self._plan.markdown_titles,
+        )
+        if (renamed["title"], renamed["kind"]) != (item["title"], item["kind"]):
+            self._timeline.upsert(renamed)
+        if title is None and plan is not None:
+            self._stored_plans[tool_id] = plan[0]
+            self._append_message("agent", {"content": {"type": "text", "text": plan[1]}})
+            self._current_agent_item = None
 
     def _touch_output(self, tool_id: str) -> None:
         self._output_touches.pop(tool_id, None)
@@ -1858,9 +1932,62 @@ class ChatSession:
             return await self._permission_request(params)
         if method == "elicitation/create":
             return await self._elicitation_request(params)
+        if method.startswith(cx.PREFIX):
+            return await self._cursor_request(method, params)
         raise AcpRpcError(ERR_METHOD_NOT_FOUND, f"Method not found: {method}")
 
-    async def _permission_request(self, params: dict[str, Any]) -> Any:
+    async def _cursor_request(self, method: str, params: dict[str, Any]) -> Any:
+        """Cursor's own requests, shown as the chat's generic cards (see
+        :mod:`.cursor_ext`)."""
+        if method == cx.ASK_QUESTION:
+            return cx.question_outcome(await self._elicitation_request(cx.question_form(params)))
+        if method == cx.CREATE_PLAN:
+            # Cursor sends the plan's tasks itself; later updates merge by id.
+            self._todos.apply(cx.plan_todos(params), merge=False)
+            text = cx.plan_text(params)
+            if text:
+                # A message of its own: Cursor writes its progress over the
+                # content of the plan's tool call.
+                self._current_agent_item = None
+                self._append_message("agent", {"content": {"type": "text", "text": text}})
+                self._current_agent_item = None
+            mode = self._match_config(ConfigIntent(cx.PLAN_MODE, category="mode"))
+            # In Plan mode Cursor only stores an accepted plan: the card
+            # can also start the work, in Agent mode.
+            can_start = (
+                mode is not None
+                and mode["value"] == cx.PLAN_MODE
+                and any(value["value"] == cx.AGENT_MODE for value in mode["options"])
+            )
+            answer = await self._permission_request(
+                cx.plan_permission(params, can_start=can_start), decision=True
+            )
+            choice = cx.plan_choice(answer)
+            if choice == cx.PLAN_START:
+                # Next in the queue, where the user can see and remove it.
+                self._queue.insert(
+                    0,
+                    _QueuedPrompt(
+                        self._next_id("q"), cx.PLAN_START_PROMPT, [], mode=cx.AGENT_MODE
+                    ),
+                )
+                self._publish_queue()
+            elif choice != cx.PLAN_ACCEPT:
+                # The tasks of a plan that was not accepted are not a plan.
+                self._todos.clear()
+                self._timeline.patch_state(plan=[])
+            return cx.plan_outcome(choice)
+        if method == cx.UPDATE_TODOS:
+            self._timeline.patch_state(plan=self._todos.apply(params))
+            return {}
+        if method in cx.NOTICES:
+            return {}
+        # Cursor has its own fallback for a method the client does not know.
+        raise AcpRpcError(ERR_METHOD_NOT_FOUND, f"Method not found: {method}")
+
+    async def _permission_request(self, params: dict[str, Any], *, decision: bool = False) -> Any:
+        """``decision`` marks a choice that is the user's own (a plan to
+        accept), which "accept every request" must not make for them."""
         options = nz.permission_options(params.get("options"))
         raw_call = params.get("toolCall")
         tool_call: dict[str, Any] = raw_call if isinstance(raw_call, dict) else {}
@@ -1870,21 +1997,23 @@ class ChatSession:
             self._apply_tool_update(dict(tool_call), create=False)
         if not options:
             return {"outcome": {"outcome": "cancelled"}}
-        if self._plan.auto_approve:
+        if self._plan.auto_approve and not decision:
             allow = next((o for o in options if o["kind"] == "allow_once"), None)
             if allow is not None:
                 return {"outcome": {"outcome": "selected", "optionId": allow["id"]}}
         item = self._timeline.get(tool_id) if tool_id else None
         if item is None:
             item = nz.new_tool_item("preview")
-            nz.merge_tool_update(item, tool_call)
+            nz.merge_tool_update(item, tool_call, markdown_titles=self._plan.markdown_titles)
         public = {
             "kind": "permission",
             "tool_call_id": tool_id,
             "title": item["title"],
             "tool_kind": item["kind"],
             "subtitle": item.get("subtitle"),
-            "content": item["content"][:3],
+            # A decision has its text in the conversation; the tool call
+            # holds only the agent's progress notes.
+            "content": [] if decision else item["content"][:3],
             "options": options,
         }
         return await self._await_request("permission", public, tool_id)

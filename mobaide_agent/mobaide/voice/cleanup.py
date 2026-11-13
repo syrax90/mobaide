@@ -1,7 +1,8 @@
 """Transcript cleanup: a hidden one-shot run of the session's own CLI on its
 cheapest model — ``claude -p`` on Haiku, ``codex exec`` on Luna, ``agy`` on
-Gemini Flash. OpenCode and GitHub Copilot name no cheapest model, so
-``opencode run`` and ``copilot`` use the user's default model.
+Gemini Flash. OpenCode, GitHub Copilot and Cursor name no cheapest model, so
+``opencode run``, ``copilot`` and ``cursor-agent -p`` use the user's default
+model.
 
 The transcript goes on stdin, never in argv, because an npm ``.cmd`` shim on
 Windows is run through ``cmd /c`` and argv shows in process listings. Like
@@ -37,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 # The session kinds whose CLI can clean up a transcript; advertised as
 # ``capabilities.voice.cleanup_kinds``.
-CleanupKind = Literal["claude", "codex", "antigravity", "opencode", "copilot"]
+CleanupKind = Literal["claude", "codex", "antigravity", "opencode", "copilot", "cursor"]
 CLEANUP_KINDS: tuple[str, ...] = get_args(CleanupKind)
 
 # Below the relay's 30 s proxy timeout, so the agent's own answer arrives.
@@ -135,6 +136,29 @@ _COPILOT_UNSAFE_ENV = (
 # exists. That is its own input handling, not a tool, so no tool rule stops
 # it, and no option turns it off. An e-mail address is not a mention.
 _COPILOT_MENTION = re.compile(r"(?<![A-Za-z0-9])@[^\s@]")
+# Cursor has no option that turns its tools off. Its project settings file
+# can deny them: a deny rule wins over every allow rule of the user.
+_CURSOR_SETTINGS_FILE = ".cursor/cli.json"
+_CURSOR_SETTINGS = (
+    json.dumps(
+        {
+            "permissions": {
+                "allow": [],
+                "deny": [
+                    "Read(**)",
+                    "Read(/**)",
+                    "Write(**)",
+                    "Write(/**)",
+                    "Shell(*)",
+                    "WebFetch(*)",
+                    "Mcp(*:*)",
+                ],
+            }
+        },
+        indent=2,
+    )
+    + "\n"
+)
 _TAG = re.compile(r"<[\s/]*transcript\b[^<>]*>", re.IGNORECASE)
 
 
@@ -400,6 +424,55 @@ def parse_copilot_result(result: CmdResult, source: str) -> str:
     if used_tool:
         raise _failed(f"{name} tried to use a tool instead of cleaning up the text.")
     if result.rc != 0 or exit_code != 0 or answer is None:
+        message = _short(error or stderr)
+        if not message:
+            message = (
+                f"{name} exited with code {result.rc}."
+                if result.rc != 0
+                else f"{name} stopped before it finished answering."
+            )
+        raise _failed(message)
+    return _finish(answer, source, name)
+
+
+def parse_cursor_result(result: CmdResult, source: str) -> str:
+    """The cleaned text from one ``cursor-agent -p --output-format
+    stream-json`` run (JSONL events), or a coded ``VoiceError``. Only a run
+    whose ``result`` event reports success counts. An empty answer keeps
+    ``source``."""
+    name = "Cursor"
+    if result.timed_out:
+        raise _timed_out(name)
+    stderr = result.stderr.decode("utf-8", errors="replace")
+    if result.rc != 0 and "unknown option" in stderr:
+        raise _outdated(name, "cursor-agent update")
+    if result.rc != 0 and "Authentication required" in stderr:
+        raise _failed(f"{name} isn't signed in on this computer; run `cursor-agent login` there.")
+    answer: str | None = None
+    succeeded = False
+    error: str | None = None
+    used_tool = False
+    for event in _lines(result.stdout):
+        kind = event.get("type")
+        if kind == "tool_call":
+            used_tool = True
+        elif kind == "assistant":
+            message = event.get("message")
+            content = message.get("content") if isinstance(message, dict) else None
+            texts = [
+                part["text"]
+                for part in (content if isinstance(content, list) else [])
+                if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str)
+            ]
+            if texts:
+                answer = "".join(texts)
+        elif kind == "result":
+            succeeded = event.get("is_error") is False and event.get("subtype") == "success"
+            if not succeeded and isinstance(event.get("result"), str):
+                error = event["result"]
+    if used_tool:
+        raise _failed(f"{name} tried to use a tool instead of cleaning up the text.")
+    if result.rc != 0 or not succeeded or answer is None:
         message = _short(error or stderr)
         if not message:
             message = (
@@ -693,6 +766,35 @@ class CopilotCleanup(CleanupCli):
 
     def parse(self, result: CmdResult, source: str) -> str:
         return parse_copilot_result(result, source)
+
+
+class CursorCleanup(CleanupCli):
+    """``cursor-agent`` has no system-prompt option, so the rules go before
+    the transcript, in the one message on stdin. The run is in Ask mode,
+    which makes no changes, and the settings file in the work dir denies
+    every tool. The run is kept in Cursor's own chat history on the PC; no
+    flag turns that off."""
+
+    name = "Cursor"
+    files: ClassVar[Mapping[str, str]] = {_CURSOR_SETTINGS_FILE: _CURSOR_SETTINGS}
+
+    async def command(self, source: str) -> CleanupCommand:
+        binary = self.binary()
+        # Piped stdin is the prompt of a ``--print`` run. ``--trust`` covers
+        # the work dir only: a headless run does not start in a folder that
+        # Cursor does not trust yet.
+        argv = shim_safe_argv(
+            binary,
+            "--print",
+            "--output-format", "stream-json",
+            "--mode", "ask",
+            "--trust",
+        )
+        stdin = f"{CLEANUP_PROMPT}\n{_wrap(source)}".encode()
+        return CleanupCommand(argv=argv, env=_cli_env(binary), stdin=stdin, model="default")
+
+    def parse(self, result: CmdResult, source: str) -> str:
+        return parse_cursor_result(result, source)
 
 
 class TranscriptCleaner:

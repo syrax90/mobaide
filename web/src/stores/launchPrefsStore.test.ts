@@ -41,6 +41,8 @@ const ANTIGRAVITY_BLOB = {
 
 const COPILOT_BLOB = { allowAll: true, terminalUi: true };
 
+const CURSOR_BLOB = { force: true, terminalUi: true };
+
 const CLAUDE_DEFAULTS = {
   model: null,
   effort: 'high',
@@ -71,6 +73,7 @@ beforeEach(() => {
     antigravity: null,
     opencode: null,
     copilot: null,
+    cursor: null,
     lastProjectName: null,
   });
   window.localStorage.clear();
@@ -214,6 +217,21 @@ describe('hydration', () => {
     expect((await rehydrateWith({ claude: CLAUDE_BLOB })).copilot).toBeNull();
   });
 
+  it('restores the Cursor bucket, defaults a missing key and voids a wrong-typed one', async () => {
+    expect((await rehydrateWith({ cursor: CURSOR_BLOB })).cursor).toEqual(CURSOR_BLOB);
+    expect((await rehydrateWith({ cursor: { force: true } })).cursor).toEqual({
+      force: true,
+      terminalUi: false,
+    });
+    // A hand-edited value must never turn "run everything" on.
+    expect((await rehydrateWith({ cursor: { ...CURSOR_BLOB, force: 'yes' } })).cursor).toBeNull();
+    expect((await rehydrateWith({ cursor: { ...CURSOR_BLOB, terminalUi: 1 } })).cursor).toBeNull();
+    expect((await rehydrateWith({ cursor: [CURSOR_BLOB] })).cursor).toBeNull();
+    expect((await rehydrateWith({ claude: CLAUDE_BLOB })).cursor).toBeNull();
+    // The Copilot bucket never fills the Cursor one.
+    expect((await rehydrateWith({ copilot: COPILOT_BLOB })).cursor).toBeNull();
+  });
+
   it('rejects a bucket that is not a plain object', async () => {
     expect((await rehydrateWith({ claude: [CLAUDE_BLOB] })).claude).toBeNull();
     expect((await rehydrateWith({ claude: 'sonnet' })).claude).toBeNull();
@@ -246,6 +264,7 @@ describe('hydration', () => {
       antigravity: null,
       opencode: null,
       copilot: null,
+      cursor: null,
       lastProjectName: null,
     });
     useLaunchPrefsStore.getState().setLastProjectName('mobaide');
@@ -290,6 +309,22 @@ describe('Copilot writes', () => {
     expect(prefs.copilot).toEqual(COPILOT_BLOB);
     expect(prefs.claude).toBeNull();
     expect(prefs.antigravity).toBeNull();
+  });
+});
+
+describe('Cursor writes', () => {
+  it('files the Cursor snapshot under its own slot and reads it back', async () => {
+    useLaunchPrefsStore.getState().setLaunchPrefs({ kind: 'cursor', prefs: CURSOR_BLOB });
+    const written = window.localStorage.getItem(STORAGE_KEY);
+
+    useLaunchPrefsStore.setState({ cursor: null });
+    window.localStorage.setItem(STORAGE_KEY, written ?? '');
+    await useLaunchPrefsStore.persist.rehydrate();
+
+    const prefs = readLaunchPrefs();
+    expect(prefs.cursor).toEqual(CURSOR_BLOB);
+    expect(prefs.copilot).toBeNull();
+    expect(prefs.claude).toBeNull();
   });
 });
 

@@ -21,6 +21,7 @@ _KIND_FALLBACK_LABELS = {
     "antigravity": "Antigravity session",
     "opencode": "OpenCode session",
     "copilot": "GitHub Copilot session",
+    "cursor": "Cursor session",
     "auto_scan": "Auto Scan session",
     "shell": "Terminal session",
 }

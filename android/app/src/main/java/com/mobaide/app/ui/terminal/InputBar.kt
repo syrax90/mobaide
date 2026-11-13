@@ -201,6 +201,12 @@ private val DEFAULT_CONTROL_KEYS = orderedControlKeys(
 private val OPENCODE_CONTROL_KEYS =
     orderedControlKeys(listOf(ModeKey, CtrlPKey) + DEFAULT_CONTROL_KEYS)
 
+// Cursor = the shared keys plus Mode (Shift+Tab switches Agent/Plan/Ask), its approval
+// answers (bare 'y'/'n') and Ctrl+L (clear screen). Ctrl+O expands a folded block and
+// Ctrl+R opens the review of the changed files. It has no Rewind chord.
+private val CURSOR_CONTROL_KEYS =
+    orderedControlKeys(listOf(ModeKey, ApproveKey, RejectKey) + SHARED_KEYS + CtrlLKey)
+
 private fun controlKeysFor(kind: SessionKind?): List<ControlKey> = when (kind) {
     SessionKind.Codex -> CODEX_CONTROL_KEYS
     SessionKind.Antigravity -> ANTIGRAVITY_CONTROL_KEYS
@@ -215,6 +221,7 @@ private fun controlKeysFor(kind: SessionKind?): List<ControlKey> = when (kind) {
     // mode, Esc-Esc rewinds, Ctrl+O expands the timeline, Ctrl+R searches the
     // history and Ctrl+L clears the screen.
     SessionKind.Copilot -> CLAUDE_CONTROL_KEYS
+    SessionKind.Cursor -> CURSOR_CONTROL_KEYS
 }
 
 @Composable

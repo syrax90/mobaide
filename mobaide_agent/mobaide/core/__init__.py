@@ -21,6 +21,11 @@ from .copilot_launcher import (
     CopilotLauncher,
     CopilotOptions,
 )
+from .cursor_launcher import (
+    CursorBinaryNotFoundError,
+    CursorLauncher,
+    CursorOptions,
+)
 from .models import SessionConfig, SessionEvent, SessionInfo, SessionKind, SessionState
 from .opencode_launcher import (
     OpenCodeBinaryNotFoundError,
@@ -69,6 +74,9 @@ __all__ = [
     "CopilotLauncher",
     "CopilotOptions",
     "CopilotBinaryNotFoundError",
+    "CursorLauncher",
+    "CursorOptions",
+    "CursorBinaryNotFoundError",
     "LaunchSpec",
     "AutoScanFilter",
     "ProjectConfig",

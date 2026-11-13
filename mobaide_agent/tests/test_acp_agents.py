@@ -28,6 +28,7 @@ from mobaide.acp.agents import (
     CodexChatSpec,
     ConfigIntent,
     CopilotChatSpec,
+    CursorChatSpec,
     OpenCodeChatSpec,
     antigravity_config_intents,
     antigravity_sign_in_methods,
@@ -39,17 +40,25 @@ from mobaide.acp.agents import (
     codex_mode,
     codex_sign_in_methods,
     copilot_sign_in_methods,
+    cursor_sign_in_methods,
+    fake_agent_argv,
     fake_login_argv,
     resolve_antigravity_config,
 )
 from mobaide.acp.install import INSTALLED_MARKER
-from mobaide.acp.trust import AntigravityFolderTrust, CodexFolderTrust, CopilotFolderTrust
+from mobaide.acp.trust import (
+    AntigravityFolderTrust,
+    CodexFolderTrust,
+    CopilotFolderTrust,
+    CursorFolderTrust,
+)
 from mobaide.core.antigravity_launcher import AntigravityBinaryNotFoundError, AntigravityOptions
 from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError, ClaudeOptions
 from mobaide.core.cli_launcher import AdHocLaunch, LaunchSpec
 from mobaide.core import codex_auth
 from mobaide.core.codex_launcher import CodexBinaryNotFoundError, CodexOptions
 from mobaide.core.copilot_launcher import CopilotBinaryNotFoundError, CopilotOptions
+from mobaide.core.cursor_launcher import CursorBinaryNotFoundError, CursorOptions
 from mobaide.core.opencode_launcher import OpenCodeBinaryNotFoundError, OpenCodeOptions
 from mobaide.core.projects_config import ProjectConfig
 from tests.conftest import skip_if_not_linux
@@ -145,6 +154,29 @@ class FakeCopilotLauncher:
         return {"PATH": "/usr/bin", "LAUNCHER": "1", **self.env}
 
 
+class FakeCursorLauncher:
+    """The three ``CursorLauncher`` calls a chat spec makes."""
+
+    def __init__(
+        self, binary: str | None = "/opt/cursor/bin/cursor-agent", env: dict[str, str] | None = None
+    ) -> None:
+        self.binary = binary
+        self.env = env or {}
+        self.resolved: list[tuple[object, CursorOptions]] = []
+
+    def resolve_binary(self) -> str:
+        if self.binary is None:
+            raise CursorBinaryNotFoundError(searched_paths=["PATH:cursor-agent"])
+        return self.binary
+
+    async def resolve_cwd(self, target, options) -> str:
+        self.resolved.append((target, options))
+        return target.path if isinstance(target, ProjectConfig) else target.cwd
+
+    def build_env(self, target) -> dict[str, str]:
+        return {"PATH": "/usr/bin", "LAUNCHER": "1", **self.env}
+
+
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     for name in (
@@ -152,6 +184,7 @@ def _clean_env(monkeypatch):
         agents.CODEX_ACP_COMMAND_ENV,
         agents.ANTIGRAVITY_ACP_COMMAND_ENV,
         agents.COPILOT_ACP_COMMAND_ENV,
+        agents.CURSOR_ACP_COMMAND_ENV,
         agents.REAL_IN_TEST_ENV,
         "CLAUDE_CODE_EXECUTABLE",
         "CODEX_PATH",
@@ -1207,6 +1240,176 @@ class TestCopilotPrepare:
         assert plan.cwd == os.path.expanduser("~")
 
 
+class TestCursorCommand:
+    def test_cursor_runs_its_own_acp_server(self):
+        spec = CursorChatSpec(FakeCursorLauncher())
+
+        assert spec.command() == ["/opt/cursor/bin/cursor-agent", "acp"]
+        assert spec.available() is True
+        assert spec.uses_fake_agent() is False
+
+    def test_no_cursor_is_unavailable(self):
+        spec = CursorChatSpec(FakeCursorLauncher(binary=None))
+
+        assert spec.command() is None
+        assert spec.available() is False
+
+    def test_the_env_override_wins_over_the_installed_cursor(self, monkeypatch):
+        monkeypatch.setenv(agents.CURSOR_ACP_COMMAND_ENV, "cursor-nightly acp")
+
+        assert CursorChatSpec(FakeCursorLauncher()).command() == ["cursor-nightly", "acp"]
+
+    def test_test_mode_runs_the_fake_agent_in_its_cursor_flavor(self):
+        spec = CursorChatSpec(FakeCursorLauncher(), test_mode=True)
+
+        assert spec.command() == fake_agent_argv("cursor")
+        assert spec.uses_fake_agent() is True
+
+    def test_the_registry_gives_cursor_its_command_override(self):
+        specs = build_chat_agents(
+            {"cursor": FakeCursorLauncher(binary=None), "shell": object()},
+            command_overrides={"cursor": "cursor-dev acp"},
+        )
+
+        assert list(specs) == ["cursor"]
+        assert specs["cursor"].kind == "cursor"
+        assert specs["cursor"].display_name == "Cursor"
+        assert specs["cursor"].command() == ["cursor-dev", "acp"]
+
+
+class TestCursorPrepare:
+    async def test_plan_runs_the_server_in_the_session_folder(self, tmp_path):
+        """Cursor reads a folder's rules, hooks and MCP servers from its own
+        working directory, not from ``session/new``."""
+        project = tmp_path / "work" / "app"
+        project.mkdir(parents=True)
+        data_dir = tmp_path / "cursor-data"
+        launcher = FakeCursorLauncher(env={"CURSOR_DATA_DIR": str(data_dir)})
+        spec = CursorChatSpec(launcher)
+        options = CursorOptions()
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(project)), options)
+
+        assert plan.argv == ["/opt/cursor/bin/cursor-agent", "acp"]
+        assert plan.cwd == str(project)
+        assert plan.process_cwd == str(project)
+        assert plan.env["LAUNCHER"] == "1"
+        assert plan.initial_config == []
+        assert plan.initial_prompt is None
+        assert plan.auto_approve is False
+        assert plan.client_meta == {"parameterizedModelPicker": True}
+        # Cursor writes a tool title in Markdown: `pytest -q`, Edit `app.py`.
+        assert plan.markdown_titles is True
+        assert [(target.cwd, opts) for target, opts in launcher.resolved] == [
+            (str(project), options)
+        ]
+
+    async def test_force_is_a_flag_of_the_program_before_its_acp_command(self, tmp_path):
+        spec = CursorChatSpec(FakeCursorLauncher())
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), CursorOptions(force=True))
+
+        assert plan.argv == ["/opt/cursor/bin/cursor-agent", "--force", "acp"]
+        # Cursor's own flag does the work: the chat accepts nothing for the user.
+        assert plan.auto_approve is False
+
+    async def test_force_with_an_operator_command_makes_the_chat_accept_the_requests(
+        self, tmp_path
+    ):
+        """A command the operator set has no place for Cursor's flag."""
+        spec = CursorChatSpec(FakeCursorLauncher(), command_override="cursor-dev acp")
+
+        forced = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), CursorOptions(force=True))
+        asking = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), CursorOptions())
+
+        assert forced.argv == ["cursor-dev", "acp"]
+        assert forced.auto_approve is True
+        assert asking.argv == ["cursor-dev", "acp"]
+        assert asking.auto_approve is False
+
+    async def test_the_trust_record_is_the_one_of_the_cursor_the_launch_env_points_to(
+        self, tmp_path
+    ):
+        project = tmp_path / "work" / "app"
+        project.mkdir(parents=True)
+        data_dir = tmp_path / "cursor-data"
+        launcher = FakeCursorLauncher(env={"CURSOR_DATA_DIR": str(data_dir)})
+
+        plan = await CursorChatSpec(launcher).prepare(
+            AdHocLaunch(cwd=str(project)), CursorOptions()
+        )
+
+        # ``cursor-agent acp`` does not ask Cursor's trust question itself.
+        assert isinstance(plan.trust, CursorFolderTrust)
+        assert plan.trust.is_trusted() is False
+        assert plan.trust.grant() is True
+        (state_dir,) = (data_dir / "projects").iterdir()
+        assert (state_dir / ".workspace-trusted").is_file()
+        assert plan.trust.is_trusted() is True
+
+    async def test_sign_in_is_the_login_of_the_same_cursor(self, tmp_path):
+        launcher = FakeCursorLauncher(env={"CURSOR_DATA_DIR": str(tmp_path / "data")})
+
+        plan = await CursorChatSpec(launcher).prepare(
+            AdHocLaunch(cwd=str(tmp_path)), CursorOptions()
+        )
+
+        assert [(m.id, m.argv) for m in plan.sign_in] == [
+            ("cursor", ["/opt/cursor/bin/cursor-agent", "login"])
+        ]
+        assert plan.sign_in[0].env["CURSOR_DATA_DIR"] == str(tmp_path / "data")
+        assert plan.sign_in[0].env["NO_OPEN_BROWSER"] == "1"
+
+    async def test_no_cursor_fails_before_the_launcher_runs(self, tmp_path):
+        launcher = FakeCursorLauncher(binary=None)
+        spec = CursorChatSpec(launcher)
+
+        with pytest.raises(ChatAgentUnavailableError) as excinfo:
+            await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), CursorOptions(worktree=True))
+
+        assert excinfo.value.kind == "cursor"
+        assert "curl https://cursor.com/install -fsS | bash" in str(excinfo.value)
+        # The launcher would have made a worktree for a session that never starts.
+        assert launcher.resolved == []
+
+    async def test_fake_agent_has_no_trust_gate_and_a_fake_login(self, tmp_path):
+        spec = CursorChatSpec(FakeCursorLauncher(binary=None), test_mode=True)
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), CursorOptions())
+
+        assert plan.argv == fake_agent_argv("cursor")
+        assert plan.process_cwd == str(tmp_path)
+        assert plan.trust is None
+        assert plan.auto_approve is False
+        assert plan.client_meta == {"parameterizedModelPicker": True}
+        assert [m.argv for m in plan.sign_in] == [[*fake_login_argv("cursor"), "--device"]]
+        assert plan.sign_in[0].env["NO_OPEN_BROWSER"] == "1"
+
+    async def test_force_with_the_fake_agent_makes_the_chat_accept_the_requests(self, tmp_path):
+        spec = CursorChatSpec(FakeCursorLauncher(), test_mode=True)
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), CursorOptions(force=True))
+
+        assert plan.argv == fake_agent_argv("cursor")
+        assert plan.auto_approve is True
+
+    async def test_catalog_plan_runs_in_the_home_folder(self):
+        spec = CursorChatSpec(FakeCursorLauncher())
+
+        plan = await spec.catalog_plan()
+
+        assert plan.argv == ["/opt/cursor/bin/cursor-agent", "acp"]
+        assert plan.cwd == os.path.expanduser("~")
+        assert plan.process_cwd == os.path.expanduser("~")
+
+    async def test_catalog_plan_without_cursor_names_the_install_command(self):
+        with pytest.raises(ChatAgentUnavailableError) as excinfo:
+            await CursorChatSpec(FakeCursorLauncher(binary=None)).catalog_plan()
+
+        assert excinfo.value.kind == "cursor"
+        assert "cursor.com/install" in str(excinfo.value)
+
+
 def _agy_setup(*, available_models: bool = True) -> dict:
     """The ``session/new`` result of ``agy acp`` 1.5: ``model`` and
     ``thought_level`` options, and one ``availableModels`` entry per model and
@@ -1509,6 +1712,7 @@ class TestSignInMethods:
             codex_sign_in_methods,
             antigravity_sign_in_methods,
             copilot_sign_in_methods,
+            cursor_sign_in_methods,
         ],
     )
     def test_no_binary_means_no_sign_in(self, build):
@@ -1607,3 +1811,31 @@ class TestSignInMethods:
         match = re.search(COPILOT_USER_CODE_PATTERN, text)
 
         assert (match.group(0) if match else None) == code
+
+    def test_cursor_prints_a_sign_in_page_and_opens_no_browser_on_the_pc(self):
+        (method,) = cursor_sign_in_methods(
+            "/opt/cursor/bin/cursor-agent", {"CURSOR_DATA_DIR": "/c"}
+        )
+
+        assert method.id == "cursor"
+        assert method.name == "Cursor account"
+        assert method.argv == ["/opt/cursor/bin/cursor-agent", "login"]
+        assert method.env == {"CURSOR_DATA_DIR": "/c", "NO_OPEN_BROWSER": "1"}
+        assert method.cwd == os.path.expanduser("~")
+        # The page needs no code, and the login finishes alone.
+        assert method.user_code_pattern is None
+        assert method.reads_code is False
+        assert method.submit_secret is None
+
+    def test_cursor_does_not_change_the_env_it_was_given(self):
+        env = {"PATH": "/usr/bin"}
+
+        cursor_sign_in_methods("/opt/cursor/bin/cursor-agent", env)
+
+        assert env == {"PATH": "/usr/bin"}
+
+    def test_the_fake_cursor_login_needs_no_binary(self):
+        (method,) = cursor_sign_in_methods(None, {"PATH": "/usr/bin"}, fake=True)
+
+        assert method.argv == [*fake_login_argv("cursor"), "--device"]
+        assert method.env["NO_OPEN_BROWSER"] == "1"

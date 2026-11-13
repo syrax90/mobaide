@@ -90,6 +90,16 @@ class AttentionNotifierTest {
     }
 
     @Test
+    fun untitledCursorSession_isNamedAfterItsKind() {
+        notifier.notify(
+            session(attention = "turn_failed", title = " ", projectName = "", kind = SessionKind.Cursor),
+        )
+
+        val body = lastNotification().extras.getString(Notification.EXTRA_TEXT).orEmpty()
+        assertTrue(body, body.startsWith("Cursor session hit an error"))
+    }
+
+    @Test
     fun titleAndProject_stillWinOverTheKind() {
         notifier.notify(
             session(attention = "turn_failed", projectName = "mobaide", kind = SessionKind.Codex),

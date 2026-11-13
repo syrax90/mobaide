@@ -74,6 +74,7 @@ describe('cliKnown', () => {
 
     expect(cliKnown(older, 'opencode')).toBe(false);
     expect(cliKnown(older, 'copilot')).toBe(false);
+    expect(cliKnown(older, 'cursor')).toBe(false);
     expect(cliKnown(older, 'codex')).toBe(true);
   });
 
@@ -81,6 +82,7 @@ describe('cliKnown', () => {
     expect(cliKnown(info({ cli: { opencode: { available: false } } }), 'opencode')).toBe(true);
     expect(cliKnown(info({ cli: { opencode: {} } }), 'opencode')).toBe(true);
     expect(cliKnown(info({ cli: { copilot: { available: false } } }), 'copilot')).toBe(true);
+    expect(cliKnown(info({ cli: { cursor: { available: false } } }), 'cursor')).toBe(true);
   });
 
   const NO_LIST: [string, unknown][] = [
@@ -95,6 +97,7 @@ describe('cliKnown', () => {
 
     expect(cliKnown(probe, 'opencode')).toBe(true);
     expect(cliKnown(probe, 'copilot')).toBe(true);
+    expect(cliKnown(probe, 'cursor')).toBe(true);
   });
 
   it('does not mistake an inherited object key for a cli entry', () => {

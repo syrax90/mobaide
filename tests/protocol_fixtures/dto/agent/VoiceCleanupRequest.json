@@ -35,6 +35,13 @@
         "text": "um open a pull request for the uh login fix",
         "kind": "copilot"
       }
+    },
+    {
+      "name": "cursor_session",
+      "wire": {
+        "text": "uh rename the um session store to session cache",
+        "kind": "cursor"
+      }
     }
   ]
 }

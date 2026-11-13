@@ -1,6 +1,6 @@
 """A scripted ACP agent for tests and for UI checks on a local stack.
 
-Run with ``python -m mobaide.acp.fake_agent [--flavor codex|antigravity|opencode|copilot]``.
+Run with ``python -m mobaide.acp.fake_agent [--flavor codex|antigravity|opencode|copilot|cursor]``.
 ``MOBAIDE_ENV=test`` makes the chat sessions use it instead of a real agent,
 so every chat UI state can be reached without an account or network. The
 flavor picks the config options and names of the agent it stands in for. The
@@ -9,10 +9,16 @@ prompt text picks the scenario:
 * ``tools`` — read, edit (with a diff) and execute tool calls (the Codex
   flavor streams the command output as terminal ``_meta``; the Antigravity
   flavor reports it as one "Command exited with code N" text; the Copilot
-  flavor sends the output so far, then a last ``<shellId: …>`` line);
+  flavor sends the output so far, then a last ``<shellId: …>`` line; the
+  Cursor flavor sends it as ``rawOutput`` when the command ends, and also
+  creates a file);
 * ``permission`` — a command that waits for approval;
-* ``question`` — a form with single choice, multiple choice and text;
-* ``plan`` — a plan that progresses step by step;
+* ``question`` — a form with single choice, multiple choice and text (the
+  Cursor flavor asks with ``cursor/ask_question``);
+* ``plan`` — a plan that progresses step by step (the Cursor flavor asks to
+  accept it with ``cursor/create_plan``, then reports its tasks with
+  ``cursor/update_todos``; in Plan mode it stops after the accept, and the
+  prompt ``Implement the plan.`` does the work);
 * ``markdown`` — a long Markdown answer (headings, lists, code, table);
 * ``slow`` — a slow stream, to try Stop, the message queue and Send now
   (``_session/steering``);
@@ -26,8 +32,8 @@ While the file named by ``MOBAIDE_FAKE_ACP_SIGNED_OUT`` exists the agent is
 signed out: the Claude flavor pushes ``_auth/status_update`` and fails each
 prompt, the others fail ``session/new``. ``fake_agent.py login [--flavor F]
 [--device]`` is its login command: it prints a sign-in page and reads a code
-(any code but ``bad``), or with ``--device`` shows a one-time code and
-finishes alone; on success it removes that file.
+(any code but ``bad``), or with ``--device`` shows a one-time code (the Cursor
+flavor: only the page) and finishes alone; on success it removes that file.
 """
 from __future__ import annotations
 
@@ -94,6 +100,22 @@ COPILOT_ALLOW_ALL = [
     {"value": "on", "name": "On", "description": "Automatically approve all tool, path, and URL requests"},
     {"value": "off", "name": "Off", "description": "Require approval for tool, path, and URL requests"},
 ]
+CURSOR_MODES = [
+    {"value": "agent", "name": "Agent", "description": "Full agent capabilities with tool access"},
+    {"value": "plan", "name": "Plan", "description": "Read-only mode for planning and designing before implementation"},
+    {"value": "ask", "name": "Ask", "description": "Q&A mode - no edits or command execution"},
+]
+CURSOR_MODELS = [
+    {"value": "default", "name": "Auto"},
+    {"value": "composer-2.5", "name": "Composer 2.5"},
+    {"value": "claude-opus-5-5", "name": "Claude Opus 5.5"},
+]
+CURSOR_EFFORTS = [
+    {"value": "low", "name": "Low"},
+    {"value": "medium", "name": "Medium"},
+    {"value": "high", "name": "High"},
+]
+CURSOR_FAST = [{"value": "false", "name": "Off"}, {"value": "true", "name": "Fast"}]
 SIGNED_OUT_ENV = "MOBAIDE_FAKE_ACP_SIGNED_OUT"
 AUTH_REQUIRED = -32000
 
@@ -146,6 +168,7 @@ class FakeAgent:
         self.agy = flavor == "antigravity"
         self.opencode = flavor == "opencode"
         self.copilot = flavor == "copilot"
+        self.cursor = flavor == "cursor"
         self.steers: dict[str, list[str]] = {}
         self.write_lock = threading.Lock()
         self.next_id = 1000
@@ -200,6 +223,17 @@ class FakeAgent:
                 {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": s["mode"], "options": COPILOT_MODES},
                 {"id": "allow_all", "name": "Allow All", "category": "permissions", "type": "select", "currentValue": s["allow_all"], "options": COPILOT_ALLOW_ALL},
             ]
+        if self.cursor:
+            options = [
+                {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": s["mode"], "options": CURSOR_MODES},
+                {"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": s["model"], "options": CURSOR_MODELS},
+            ]
+            # Like Cursor: the settings of the picked model are options too.
+            if s["model"] == "claude-opus-5-5":
+                options.append({"id": "effort", "name": "Effort", "category": "thought_level", "type": "select", "currentValue": s["effort"], "options": CURSOR_EFFORTS})
+            if s["model"] != "default":
+                options.append({"id": "fast", "name": "Fast", "category": "model_config", "type": "select", "currentValue": s["fast"], "options": CURSOR_FAST})
+            return options
         if self.codex:
             return [
                 {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": s["mode"], "options": CODEX_MODES},
@@ -239,6 +273,8 @@ class FakeAgent:
             )
         if self.copilot:
             self.sessions[sid].update({"mode": COPILOT_MODE_PREFIX + "agent", "allow_all": "off"})
+        if self.cursor:
+            self.sessions[sid].update({"mode": "agent", "model": "default", "effort": "medium", "fast": "false"})
         return sid
 
     def models_block(self, sid: str) -> dict[str, Any]:
@@ -282,6 +318,12 @@ class FakeAgent:
                 {"name": "review", "description": "Run code review agent to analyze changes", "input": {"hint": "additional instructions"}},
                 {"name": "usage", "description": "Display session usage metrics and statistics"},
             ]
+        elif self.cursor:
+            available = [
+                {"name": "copy-request-id", "description": "Copy the last request ID to clipboard"},
+                {"name": "create-rule", "description": "Create Cursor rules for persistent AI guidance. (builtin skill)"},
+                {"name": "goal", "description": "Set a goal that Cursor will pursue to completion. (builtin skill)"},
+            ]
         elif self.codex:
             available = [
                 {"name": "plan", "description": "Turn plan mode on.", "input": None},
@@ -316,15 +358,20 @@ class FakeAgent:
             self.send({"jsonrpc": "2.0", "id": msg_id, "result": result})
 
     async def dispatch(self, method: str, params: dict[str, Any]) -> Any:
-        if method == "initialize" and signed_out() and not (self.codex or self.agy or self.copilot):
+        if method == "initialize" and signed_out() and not (
+            self.codex or self.agy or self.copilot or self.cursor
+        ):
             # claude-agent-acp reports a missing login right after initialize.
             self.loop.call_later(0.05, lambda: self.send({
                 "jsonrpc": "2.0", "method": "_auth/status_update",
                 "params": {"authStatus": {"kind": "none", "label": "Not logged in"}},
             }))
         if method in ("session/new", "session/load") and signed_out() and (
-            self.codex or self.agy or self.copilot
+            self.codex or self.agy or self.copilot or self.cursor
         ):
+            raise _RpcError(AUTH_REQUIRED, "Authentication required")
+        if method == "session/list" and signed_out() and self.cursor:
+            # Cursor lists its sessions only when it is signed in.
             raise _RpcError(AUTH_REQUIRED, "Authentication required")
         if method == "initialize":
             if self.agy:
@@ -360,6 +407,18 @@ class FakeAgent:
                     },
                     "agentInfo": {"name": "Copilot", "title": "Copilot", "version": "1.0.109"},
                     "authMethods": [],
+                }
+            if self.cursor:
+                # Cursor sends no ``agentInfo``.
+                return {
+                    "protocolVersion": 1,
+                    "agentCapabilities": {
+                        "loadSession": True,
+                        "mcpCapabilities": {"http": True, "sse": True},
+                        "promptCapabilities": {"audio": False, "embeddedContext": False, "image": True},
+                        "sessionCapabilities": {"list": {}},
+                    },
+                    "authMethods": [{"id": "cursor_login", "name": "Cursor Login"}],
                 }
             info = (
                 {"name": "fake-codex-acp", "title": "Codex", "version": "1.0.0"}
@@ -445,7 +504,7 @@ class FakeAgent:
         if method == "session/cancel":
             self.cancelled.add(str(params.get("sessionId")))
             return None
-        if method == "_session/steering" and not (self.agy or self.copilot):
+        if method == "_session/steering" and not (self.agy or self.copilot or self.cursor):
             sid = params.get("sessionId")
             turn = self.turns.get(sid) if isinstance(sid, str) else None
             if turn is None or turn.done():
@@ -461,6 +520,11 @@ class FakeAgent:
         self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": "replay-edit", "title": "Edit login.py", "kind": "edit", "status": "completed",
                           "locations": [{"path": "/project/login.py", "line": 12}],
                           "content": [{"type": "diff", "path": "/project/login.py", "oldText": "if user:\n    login(user)\n", "newText": "if user is not None:\n    login(user)\n"}]})
+        if self.cursor:
+            # Cursor replays a plan as its tool call only: the plan is in the
+            # input, and ``cursor/create_plan`` is not asked again.
+            self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": "replay-plan", "title": "Create Plan: Fix the login", "kind": "other", "status": "completed",
+                              "rawInput": {"_toolName": "createPlan", "name": "Fix the login", "plan": "## Steps\n\n1. Read the code\n2. Write the fix\n"}})
         if not self.copilot:
             # Copilot replays a stored session without its title.
             self.update(sid, {"sessionUpdate": "session_info_update", "title": "Earlier session"})
@@ -512,9 +576,11 @@ class FakeAgent:
         elif "permission" in lower:
             ok = await self.permission(sid)
         elif "question" in lower:
-            ok = await self.question(sid)
+            ok = await (self.cursor_question(sid) if self.cursor else self.question(sid))
+        elif self.cursor and lower.startswith("implement the plan"):
+            ok = await self.cursor_build(sid)
         elif "plan" in lower:
-            ok = await self.plan(sid)
+            ok = await (self.cursor_plan(sid) if self.cursor else self.plan(sid))
         elif "markdown" in lower:
             ok = await self.stream(sid, MARKDOWN, delay=0.01)
         elif "slow" in lower:
@@ -534,6 +600,9 @@ class FakeAgent:
             # agy reports token counts in the prompt result only.
             return {"stopReason": "end_turn" if ok else "cancelled",
                     "usage": {"inputTokens": s["used"], "outputTokens": 120, "totalTokens": s["used"] + 120}}
+        if self.cursor:
+            # Cursor reports no usage.
+            return {"stopReason": "end_turn" if ok else "cancelled"}
         if self.copilot:
             # Copilot reports the context use, but no cost.
             self.update(sid, {"sessionUpdate": "usage_update", "used": s["used"], "size": 128000})
@@ -573,7 +642,26 @@ class FakeAgent:
         await asyncio.sleep(0.3)
         self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": edit, "status": "completed",
                           "content": [{"type": "diff", "path": path, "oldText": "def main():\n    print('hi')\n", "newText": "def main() -> None:\n    print('hello, world')\n    return None\n"}]})
-        if self.copilot:
+        if self.cursor:
+            # Cursor names the tool first, then its input, and sends the
+            # output once, as ``rawOutput``. It builds the texts of a new
+            # file from a diff and keeps the diff's two file lines in them.
+            self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": run, "title": "Terminal", "kind": "execute", "status": "pending", "rawInput": {}})
+            self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": run, "title": "`pytest -q`", "rawInput": {"command": "pytest -q"}})
+            self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": run, "status": "in_progress"})
+            await asyncio.sleep(0.6)
+            if self.stopped(sid):
+                return False
+            self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": run, "status": "completed",
+                              "rawOutput": {"exitCode": 0, "stdout": "....\n4 passed in 0.12s\n", "stderr": ""}})
+            notes = os.path.join(cwd, "notes.txt")
+            create = self.tool_id("edit")
+            self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": create, "title": "Edit File", "kind": "edit", "status": "pending", "rawInput": {}})
+            self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": create, "title": f"Edit `{notes}`",
+                              "rawInput": {"path": notes}, "locations": [{"path": notes}]})
+            self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": create, "status": "completed",
+                              "content": [{"type": "diff", "path": notes, "oldText": "-- /dev/null", "newText": f"++ b/{notes}\nThe tests pass."}]})
+        elif self.copilot:
             # Copilot keeps the tool ``pending`` while the command runs and
             # sends the whole output so far in each update.
             self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": run, "title": "Run the tests", "kind": "execute", "status": "pending",
@@ -730,6 +818,64 @@ class FakeAgent:
         content = (result or {}).get("content") or {}
         return await self.stream(sid, f"Got it: {json.dumps(content, sort_keys=True)}")
 
+    async def cursor_question(self, sid: str) -> bool:
+        result = await self.call("cursor/ask_question", {
+            "toolCallId": self.tool_id("ask"),
+            "title": "How should I set up the project?",
+            "questions": [
+                {"id": "framework", "prompt": "Which framework?", "allowMultiple": False,
+                 "options": [{"id": "react", "label": "React"}, {"id": "vue", "label": "Vue"}]},
+                {"id": "extras", "prompt": "Which extras?", "allowMultiple": True,
+                 "options": [{"id": "lint", "label": "Linting"}, {"id": "tests", "label": "Tests"}]},
+            ],
+        })
+        outcome = (result or {}).get("outcome") or {}
+        if outcome.get("outcome") != "answered":
+            return await self.stream(sid, f"No problem — the questions were {outcome.get('outcome') or 'skipped'}.")
+        answers = {a["questionId"]: a["selectedOptionIds"] for a in outcome.get("answers") or []}
+        return await self.stream(sid, f"Got it: {json.dumps(answers, sort_keys=True)}")
+
+    async def cursor_plan(self, sid: str) -> bool:
+        steps = ["Read the code", "Write the fix", "Run the tests"]
+        todos = [{"id": f"step-{i}", "content": step, "status": "pending"} for i, step in enumerate(steps)]
+        tool = self.tool_id("plan")
+        self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": tool, "title": "Create Plan: Fix the login", "kind": "other", "status": "pending",
+                          "rawInput": {"_toolName": "createPlan", "name": "Fix the login"}})
+        self.update(sid, {"sessionUpdate": "plan", "entries": [{"content": t["content"], "priority": "medium", "status": "pending"} for t in todos]})
+        result = await self.call("cursor/create_plan", {
+            "toolCallId": tool,
+            "name": "Fix the login",
+            "overview": "The login handler fails for a user without a profile.",
+            "plan": "## Steps\n\n1. Read the code\n2. Write the fix\n3. Run the tests\n",
+            "todos": todos,
+        })
+        outcome = (result or {}).get("outcome") or {}
+        accepted = outcome.get("outcome") == "accepted"
+        self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": tool, "status": "completed" if accepted else "failed"})
+        if not accepted:
+            return await self.stream(sid, "OK, I dropped the plan.")
+        if self.sessions[sid]["mode"] == "plan":
+            # Like Cursor in Plan mode: it stores the accepted plan and stops.
+            self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": tool, "status": "completed",
+                              "content": [{"type": "content", "content": {"type": "text", "text": "Plan saved to file:///fake/plans/fix-the-login.plan.md"}}]})
+            return True
+        return await self.cursor_build(sid)
+
+    async def cursor_build(self, sid: str) -> bool:
+        """The work of the accepted plan, with its tasks reported one by one."""
+        steps = ["Read the code", "Write the fix", "Run the tests"]
+        for done in range(len(steps) + 1):
+            if self.stopped(sid):
+                return False
+            changed = [
+                {"id": f"step-{i}", "content": steps[i], "status": "completed" if i < done else "in_progress"}
+                for i in (done - 1, done)
+                if 0 <= i < len(steps)
+            ]
+            await self.call("cursor/update_todos", {"toolCallId": self.tool_id("todos"), "todos": changed, "merge": True})
+            await asyncio.sleep(0.5)
+        return await self.stream(sid, "All three steps are done.")
+
     async def plan(self, sid: str) -> bool:
         steps = ["Read the code", "Write the fix", "Run the tests"]
         for done in range(len(steps) + 1):
@@ -756,7 +902,13 @@ def fake_login(flavor: str, device: bool) -> int:
     """A login command shaped like the real ones: a sign-in page, then a
     pasted code (or, with ``device``, a one-time code to enter there)."""
     url = f"https://example.com/{flavor}/sign-in?state=fake"
-    if device and flavor == "copilot":
+    if device and flavor == "cursor":
+        # The real ``cursor-agent login`` prints these lines and waits.
+        print("Starting login process...\nAuthenticating with Cursor...\nWaiting for browser authentication...")
+        print(f"Open a browser and navigate to this link: {url}")
+        print("Press q to show a QR code to log in from another device.", flush=True)
+        time.sleep(3)
+    elif device and flavor == "copilot":
         # The real ``copilot login --device-code`` prints one line.
         print(f"To authenticate, visit {url} and enter code FAKE-1234\nWaiting for authorization...", flush=True)
         time.sleep(3)

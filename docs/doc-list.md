@@ -34,7 +34,7 @@ Every documentation file in this repository, grouped by topic. Read this first, 
 
 | File | What it covers |
 |---|---|
-| [voice-input.md](voice-input.md) | Voice input on Android, iOS and web: opt-in flow, per-platform module map, status → mic-button table, dictation rules, opt-in transcript cleanup through the session's CLI (Claude Haiku, Codex Luna, Gemini Flash, OpenCode's default model, GitHub Copilot's default model), permissions and privacy, release checklist. |
+| [voice-input.md](voice-input.md) | Voice input on Android, iOS and web: opt-in flow, per-platform module map, status → mic-button table, dictation rules, opt-in transcript cleanup through the session's CLI (Claude Haiku, Codex Luna, Gemini Flash, OpenCode's default model, GitHub Copilot's default model, Cursor's default model), permissions and privacy, release checklist. |
 | [qr-pairing.md](qr-pairing.md) | Agent pairing: QR flow and `MOBA1\|...` payload, printed pairing link, device-code direction, relay URL persistence, trust-key pinning, re-pair rules, operator runbook, troubleshooting. |
 
 ## Account workflows

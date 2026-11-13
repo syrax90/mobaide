@@ -266,6 +266,54 @@ describe('ConfigStep — GitHub Copilot', () => {
   });
 });
 
+describe('ConfigStep — Cursor', () => {
+  it('writes the run-everything and Terminal UI toggles to the Cursor bucket only', () => {
+    const actions = renderStep('cursor');
+
+    const force = screen.getByLabelText(/^Run everything without asking/);
+    expect(force).not.toBeChecked();
+    fireEvent.click(force);
+    fireEvent.click(screen.getByLabelText('Terminal UI'));
+
+    const next = actions.reduce(wizardReducer, STATE);
+    expect(next.cursor).toEqual({ force: true, terminalUi: true });
+    expect({ ...next, cursor: STATE.cursor }).toEqual(STATE);
+  });
+
+  it('offers no model control: Cursor picks its model inside the session', () => {
+    renderStep('cursor');
+
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument();
+  });
+
+  it('holds Terminal UI on where the PC has no Cursor chat', () => {
+    renderStep('cursor', STATE, versionWithChat({ claude: { resume: true } }));
+
+    const toggle = screen.getByLabelText('Terminal UI');
+    expect(toggle).toBeChecked();
+    expect(toggle).toBeDisabled();
+  });
+
+  it('offers to continue a Cursor session only where the PC can resume one', () => {
+    renderStep(
+      'cursor',
+      STATE,
+      versionWithChat({ cursor: { resume: true, live: false } }),
+      () => undefined,
+    );
+    expect(screen.getByRole('button', { name: 'Continue a session…' })).toBeEnabled();
+    cleanup();
+
+    renderStep(
+      'cursor',
+      { ...STATE, cursor: { ...STATE.cursor, terminalUi: true } },
+      versionWithChat({ cursor: { resume: true, live: false } }),
+      () => undefined,
+    );
+    expect(screen.queryByText('Continue a session…')).not.toBeInTheDocument();
+  });
+});
+
 describe('ConfigStep — worktree base branch', () => {
   const WORKTREE: WizardState = { ...STATE, git: { worktree: true, branchName: '' } };
   const CAPABLE: AgentVersionInfo = {

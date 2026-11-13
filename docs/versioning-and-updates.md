@@ -935,6 +935,10 @@ the elevation re-launch re-fetches the installer from
      writes this key with `set-env` after `init-env`, not with an `init-env`
      argument, so it also works with an agent release that is older than
      Copilot support.
+   - The optional Cursor CLI: `Find-CursorBinary` →
+     `MOBAIDE_AGENT_CURSOR_BIN_HINT` → `MOBAIDE_CURSOR_BIN` (`Set-CursorBinIfMissing`).
+     The installer writes this key with `set-env` after `init-env`, the same
+     way as Copilot.
    - Re-running never overwrites an already-paired `.env` (pass `--force` to
      regenerate; paired credentials are preserved regardless).
 8. Register the service:

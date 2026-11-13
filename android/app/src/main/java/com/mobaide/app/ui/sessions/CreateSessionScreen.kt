@@ -210,6 +210,7 @@ fun CreateSessionScreen(
                             CreateSessionStep.AntigravityConfig -> "Antigravity session"
                             CreateSessionStep.OpenCodeConfig -> "OpenCode session"
                             CreateSessionStep.CopilotConfig -> "Copilot session"
+                            CreateSessionStep.CursorConfig -> "Cursor session"
                             CreateSessionStep.AutoScanConfig -> "Auto Scan mode"
                             // TerminalConfig is shared between Terminal mode and
                             // custom agent types — title by the selected mode.
@@ -333,6 +334,13 @@ fun CreateSessionScreen(
                             viewModel = viewModel,
                             onContinueSession = { openResume("copilot", state.copilotChat) },
                         )
+                        CreateSessionStep.CursorConfig -> CursorConfigSection(
+                            state = state,
+                            showWorktreeToggle = state.selection is ProjectSelection.Stored &&
+                                storedProject?.is_git == true,
+                            viewModel = viewModel,
+                            onContinueSession = { openResume("cursor", state.cursorChat) },
+                        )
                         CreateSessionStep.AutoScanConfig -> AutoScanConfigSection(
                             state = state,
                             viewModel = viewModel,
@@ -354,6 +362,7 @@ fun CreateSessionScreen(
         CreateSessionStep.AntigravityConfig -> "antigravity"
         CreateSessionStep.OpenCodeConfig -> "opencode"
         CreateSessionStep.CopilotConfig -> "copilot"
+        CreateSessionStep.CursorConfig -> "cursor"
         else -> null
     }
     if (showResume && resumeKind != null) {
@@ -362,6 +371,7 @@ fun CreateSessionScreen(
             "antigravity" -> state.antigravityChat
             "opencode" -> state.opencodeChat
             "copilot" -> state.copilotChat
+            "cursor" -> state.cursorChat
             else -> state.claudeChat
         }
         LaunchedEffect(resumeKind) {
@@ -1149,6 +1159,7 @@ private fun builtInModeTitle(mode: CreateSessionMode): String = when (mode) {
     CreateSessionMode.Antigravity -> "Antigravity session"
     CreateSessionMode.OpenCode -> "OpenCode session"
     CreateSessionMode.Copilot -> "GitHub Copilot session"
+    CreateSessionMode.Cursor -> "Cursor session"
     CreateSessionMode.AutoScan -> "Auto Scan mode"
     CreateSessionMode.CustomShell -> "Terminal"
     is CreateSessionMode.Custom -> "Custom agent"
@@ -1196,6 +1207,14 @@ private fun BuiltInModeCard(
                 else -> "Configure and launch a GitHub Copilot session."
             },
             "mode_card_copilot",
+        )
+        CreateSessionMode.Cursor -> Pair(
+            when {
+                !state.cursorKnown -> "Update Mobaide on your PC to use Cursor."
+                !state.cursorEnabled -> "Cursor CLI is not installed on the agent."
+                else -> "Configure and launch a Cursor session."
+            },
+            "mode_card_cursor",
         )
         CreateSessionMode.AutoScan -> Pair(
             when {
@@ -1822,6 +1841,57 @@ private fun CopilotConfigSection(
     PixelButton(
         style = PixelButtonStyle.Primary,
         onClick = viewModel::submitCopilot,
+        enabled = state.selection !is ProjectSelection.None && !state.submitting,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (state.submitting) "Creating…" else "Create session")
+    }
+}
+
+@Composable
+private fun CursorConfigSection(
+    state: CreateSessionUiState,
+    showWorktreeToggle: Boolean,
+    viewModel: CreateSessionViewModel,
+    onContinueSession: () -> Unit,
+) {
+    if (state.cursorResumeAvailable) {
+        ContinueSessionCard(
+            subtitle = "Open a Cursor chat session stored on your PC. Sessions from Cursor’s terminal UI " +
+                "are not listed.",
+            onClick = onContinueSession,
+        )
+    }
+
+    Text("Permissions", style = MaterialTheme.typography.labelLarge)
+    ToggleRow(
+        label = "Run everything without asking (dangerous)",
+        checked = state.cursorForce,
+        onChange = viewModel::setCursorForce,
+    )
+    Text(
+        text = "When on, Cursor runs commands without asking, except commands that its settings deny.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    if (showWorktreeToggle) {
+        ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
+
+        if (state.worktree) WorktreeBranchFields(state, viewModel)
+    }
+
+    AdvancedSection {
+        TerminalUiToggle(
+            checked = state.cursorTerminalUi,
+            lockedHint = state.cursorChatUnavailableHint,
+            onChange = viewModel::toggleCursorTerminalUi,
+        )
+    }
+
+    PixelButton(
+        style = PixelButtonStyle.Primary,
+        onClick = viewModel::submitCursor,
         enabled = state.selection !is ProjectSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
     ) {

@@ -45,6 +45,7 @@ const CLEANUP_CLIS: Readonly<Record<string, { name: string; update: string }>> =
   antigravity: { name: 'Antigravity', update: 'agy update' },
   opencode: { name: 'OpenCode', update: 'opencode upgrade' },
   copilot: { name: 'GitHub Copilot', update: 'copilot update' },
+  cursor: { name: 'Cursor', update: 'cursor-agent update' },
 };
 
 /** Why a cleanup failed in a `kind` session; the transcript is shown as heard. */

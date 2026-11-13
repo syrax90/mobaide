@@ -100,6 +100,8 @@ enum FixtureRegistry {
         "CodexOptionsModel": runner(CodexOptionsModel.self),
         // CopilotOptionsModel.swift
         "CopilotOptionsModel": runner(CopilotOptionsModel.self),
+        // CursorOptionsModel.swift
+        "CursorOptionsModel": runner(CursorOptionsModel.self),
         // CustomAgentTypeDto.swift
         "CustomAgentTypeDto": runner(CustomAgentTypeDto.self),
         "CreateCustomAgentTypeRequest": runner(CreateCustomAgentTypeRequest.self),

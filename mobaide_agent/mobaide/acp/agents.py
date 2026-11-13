@@ -47,11 +47,13 @@ from .trust import (
     ClaudeFolderTrust,
     CodexFolderTrust,
     CopilotFolderTrust,
+    CursorFolderTrust,
     WorkspaceTrust,
     antigravity_settings_path,
     claude_config_path,
     codex_config_path,
     copilot_config_path,
+    cursor_projects_dir,
 )
 
 if TYPE_CHECKING:
@@ -59,6 +61,7 @@ if TYPE_CHECKING:
     from mobaide.core.claude_launcher import ClaudeLauncher, ClaudeOptions
     from mobaide.core.codex_launcher import CodexLauncher, CodexOptions
     from mobaide.core.copilot_launcher import CopilotLauncher, CopilotOptions
+    from mobaide.core.cursor_launcher import CursorLauncher, CursorOptions
     from mobaide.core.opencode_launcher import OpenCodeLauncher, OpenCodeOptions
 
 # ``resolve_before`` follows each release: dependencies resolve as they were
@@ -76,6 +79,7 @@ CODEX_ACP_COMMAND_ENV = "MOBAIDE_ACP_CODEX_COMMAND"
 ANTIGRAVITY_ACP_COMMAND_ENV = "MOBAIDE_ACP_ANTIGRAVITY_COMMAND"
 OPENCODE_ACP_COMMAND_ENV = "MOBAIDE_ACP_OPENCODE_COMMAND"
 COPILOT_ACP_COMMAND_ENV = "MOBAIDE_ACP_COPILOT_COMMAND"
+CURSOR_ACP_COMMAND_ENV = "MOBAIDE_ACP_CURSOR_COMMAND"
 REAL_IN_TEST_ENV = "MOBAIDE_ACP_REAL"
 AVAILABILITY_TTL = 30.0
 NODE_HINT = "The chat view needs Node.js 22 or later on the PC."
@@ -98,6 +102,11 @@ COPILOT_HINT = (
     "GitHub Copilot CLI is not installed on the PC. Install it with "
     "`npm install -g @github/copilot`, then try again."
 )
+CURSOR_HINT = (
+    "Cursor CLI is not installed on the PC. Install it with "
+    "`curl https://cursor.com/install -fsS | bash` (on Windows, in PowerShell: "
+    "`irm 'https://cursor.com/install?win32=true' | iex`), then try again."
+)
 # Test mode: while this file exists the fake agent is signed out, and its
 # fake login removes it.
 FAKE_SIGNED_OUT_ENV = "MOBAIDE_FAKE_ACP_SIGNED_OUT"
@@ -106,6 +115,12 @@ CODEX_USER_CODE_PATTERN = r"\b[A-Z0-9]{4}-[A-Z0-9]{4,6}\b"
 COPILOT_USER_CODE_PATTERN = r"\b[A-Z0-9]{4}-[A-Z0-9]{4}\b"
 # The config option of ``copilot --acp`` that turns its approval requests off.
 COPILOT_ALLOW_ALL_OPTION = "allow_all"
+# With this in the environment ``cursor-agent login`` prints the sign-in page
+# and does not open a browser on the PC.
+CURSOR_NO_BROWSER_ENV = "NO_OPEN_BROWSER"
+# Asks ``cursor-agent acp`` for a model list with plain names, and the
+# settings of the picked model (effort, context, speed) as separate options.
+CURSOR_CLIENT_META = {"parameterizedModelPicker": True}
 CODEX_BRIDGE_SCRIPT = os.path.abspath(codex_bridge.__file__)
 
 
@@ -167,6 +182,10 @@ class ChatLaunchPlan:
     # Accept each permission request without asking (the agent's own
     # "auto-approve" switch, for an agent whose ACP server has none).
     auto_approve: bool = False
+    # Extra ``clientCapabilities._meta`` keys for the agent's ``initialize``.
+    client_meta: Mapping[str, Any] = field(default_factory=dict)
+    # The agent writes its tool titles in Markdown (code spans).
+    markdown_titles: bool = False
 
 
 class ChatAgentSpec(Protocol):
@@ -246,6 +265,10 @@ AGY_SIGN_IN_TEXT = (
 COPILOT_SIGN_IN_TEXT = (
     "Open the sign-in page, sign in to GitHub and enter the code below. "
     "The chat continues when you are done."
+)
+CURSOR_SIGN_IN_TEXT = (
+    "Open the sign-in page and sign in to Cursor. You can do that on this "
+    "device. The chat continues when you are done."
 )
 
 
@@ -393,6 +416,31 @@ def copilot_sign_in_methods(
             env=dict(env),
             cwd=os.path.expanduser("~"),
             user_code_pattern=COPILOT_USER_CODE_PATTERN,
+        )
+    ]
+
+
+def cursor_sign_in_methods(
+    cursor_bin: str | None, env: Mapping[str, str], *, fake: bool = False
+) -> list[SignInMethod]:
+    """``cursor-agent login``: it prints the sign-in page, which works in a
+    browser on any device, then finishes alone."""
+    if cursor_bin is None and not fake:
+        return []
+    argv = (
+        [*fake_login_argv("cursor"), "--device"]
+        if fake
+        else shim_safe_argv(cursor_bin or "", "login")
+    )
+    return [
+        SignInMethod(
+            "cursor",
+            "Cursor account",
+            "The plan of your Cursor account",
+            CURSOR_SIGN_IN_TEXT,
+            argv=argv,
+            env={**env, CURSOR_NO_BROWSER_ENV: "1"},
+            cwd=os.path.expanduser("~"),
         )
     ]
 
@@ -1048,6 +1096,89 @@ class CopilotChatSpec(_ChatSpecBase):
         )
 
 
+class CursorChatSpec(_ChatSpecBase):
+    """Cursor through the ACP server built into its CLI (``cursor-agent
+    acp``), so chat and terminal sessions share the CLI version, login and
+    settings.
+
+    The server keeps its sessions apart from the ones of Cursor's terminal
+    UI: the chat lists and continues chat sessions only. It takes the
+    session folder from ``session/new`` but reads the folder's rules, hooks
+    and MCP servers from its own working directory, so each chat runs its own
+    server in the session folder. The server does not ask Cursor's trust
+    question, so the chat asks it first.
+    """
+
+    kind = "cursor"
+    display_name = "Cursor"
+    command_env = CURSOR_ACP_COMMAND_ENV
+    fake_flavor = "cursor"
+
+    def __init__(
+        self,
+        launcher: CursorLauncher,
+        *,
+        command_override: str | None = None,
+        test_mode: bool = False,
+    ) -> None:
+        super().__init__(launcher, command_override=command_override, test_mode=test_mode)
+
+    def _cursor_bin(self) -> str | None:
+        try:
+            return self._launcher.resolve_binary()
+        except CliBinaryNotFoundError:
+            return None
+
+    def _own_command(self, *, force: bool = False) -> list[str] | None:
+        cursor_bin = self._cursor_bin()
+        if cursor_bin is None:
+            return None
+        # ``--force`` is an option of the program, not of its ``acp`` command.
+        return shim_safe_argv(cursor_bin, *(["--force"] if force else []), "acp")
+
+    def command(self) -> list[str] | None:
+        fixed = self._fixed_command()
+        return fixed if fixed is not None else self._own_command()
+
+    def available(self) -> bool:
+        return self.command() is not None
+
+    def _argv(self) -> list[str]:
+        argv = self.command()
+        if argv is None:
+            raise ChatAgentUnavailableError(self.kind, CURSOR_HINT)
+        return argv
+
+    async def catalog_plan(self) -> ChatLaunchPlan:
+        home = os.path.expanduser("~")
+        return ChatLaunchPlan(argv=self._argv(), env=dict(os.environ), cwd=home, process_cwd=home)
+
+    async def prepare(self, target: LaunchTarget, options: CursorOptions) -> ChatLaunchPlan:
+        # Before the launcher can create a worktree.
+        argv = self._argv()
+        fixed = self._fixed_command() is not None
+        fake = argv == fake_agent_argv(self.fake_flavor)
+        if options.force and not fixed:
+            argv = self._own_command(force=True) or argv
+        cwd = await self._launcher.resolve_cwd(target, options)
+        env = self._launcher.build_env(target)
+        return ChatLaunchPlan(
+            argv=argv,
+            env=env,
+            cwd=cwd,
+            process_cwd=cwd,
+            trust=None if fake else CursorFolderTrust(cwd, projects_dir=cursor_projects_dir(env)),
+            sign_in=cursor_sign_in_methods(
+                None if fake else self._cursor_bin(), env, fake=fake
+            ),
+            # A command the operator set, or the fake agent, has no place
+            # for Cursor's own flag: the chat accepts the requests instead.
+            auto_approve=options.force and fixed,
+            client_meta=CURSOR_CLIENT_META,
+            markdown_titles=True,
+        )
+
+
 async def _known_argv(argv: list[str], ensure: Callable[[], list[str]] | None) -> list[str]:
     if ensure is None:
         return argv
@@ -1266,6 +1397,13 @@ def build_chat_agents(
         specs["copilot"] = CopilotChatSpec(
             copilot_launcher,
             command_override=overrides.get("copilot"),
+            test_mode=test_mode,
+        )
+    cursor_launcher = launchers.get("cursor")
+    if cursor_launcher is not None:
+        specs["cursor"] = CursorChatSpec(
+            cursor_launcher,
+            command_override=overrides.get("cursor"),
             test_mode=test_mode,
         )
     return specs

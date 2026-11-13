@@ -34,6 +34,7 @@ async def test_get_version(client) -> None:
             "antigravity": {"available": True},
             "opencode": {"available": True},
             "copilot": {"available": True},
+            "cursor": {"available": True},
         },
         "git": {
             "changes": True,
@@ -56,7 +57,7 @@ async def test_get_version(client) -> None:
             "max_seconds": 120,
             "max_chunk_bytes": 65536,
             "cleanup": True,
-            "cleanup_kinds": ["claude", "codex", "antigravity", "opencode", "copilot"],
+            "cleanup_kinds": ["claude", "codex", "antigravity", "opencode", "copilot", "cursor"],
         },
         "fs": {"dirs": True, "windows_paths": sys.platform == "win32"},
         "chat": {
@@ -64,6 +65,7 @@ async def test_get_version(client) -> None:
             "codex": {"resume": True, "live": sys.platform != "win32"},
             "opencode": {"resume": True, "live": False},
             "copilot": {"resume": True, "live": False},
+            "cursor": {"resume": True, "live": False},
         },
     }
     # The signed manifest body now travels inline over the relay WebSocket
@@ -115,7 +117,11 @@ async def test_get_version_all_clis_missing_still_returns_200(
         claude_launcher,
         codex_launcher,
         copilot_launcher,
+        cursor_launcher,
     )
+
+    def _cursor_raise(*_a, **_kw):
+        raise cursor_launcher.CursorBinaryNotFoundError(["PATH:cursor-agent"])
 
     def _claude_raise(*_a, **_kw):
         raise claude_launcher.ClaudeBinaryNotFoundError(["PATH:claude"])
@@ -131,6 +137,7 @@ async def test_get_version_all_clis_missing_still_returns_200(
 
     monkeypatch.setattr(claude_launcher, "_resolve_claude_binary", _claude_raise)
     monkeypatch.setattr(copilot_launcher, "_resolve_copilot_binary", _copilot_raise)
+    monkeypatch.setattr(cursor_launcher, "_resolve_cursor_binary", _cursor_raise)
     monkeypatch.setattr(codex_launcher, "_resolve_codex_binary", _codex_raise)
     monkeypatch.setattr(
         antigravity_launcher, "_resolve_agy_binary", _antigravity_raise
@@ -144,6 +151,7 @@ async def test_get_version_all_clis_missing_still_returns_200(
         "antigravity": {"available": False},
         "opencode": {"available": True},
         "copilot": {"available": False},
+        "cursor": {"available": False},
     }
 
 
@@ -288,4 +296,26 @@ async def test_get_version_lists_copilot_even_when_it_is_not_installed(
     assert response.status_code == 200
     cli = response.json()["capabilities"]["cli"]
     assert cli["copilot"] == {"available": False}
+    assert cli["claude"] == {"available": True}
+
+
+async def test_get_version_lists_cursor_even_when_it_is_not_installed(
+    client, monkeypatch
+) -> None:
+    """The clients read a ``capabilities.cli`` map without a ``cursor`` key as
+    an agent from before Cursor support, and ask the user to update
+    Mobaide on the PC. So the key must stay when the CLI is missing: only
+    ``available`` flips, as for the other CLIs."""
+    from mobaide.core import cursor_launcher
+
+    def _raise(*_a, **_kw):
+        raise cursor_launcher.CursorBinaryNotFoundError(["PATH:cursor-agent"])
+
+    monkeypatch.setattr(cursor_launcher, "_resolve_cursor_binary", _raise)
+
+    response = await client.get("/api/version")
+
+    assert response.status_code == 200
+    cli = response.json()["capabilities"]["cli"]
+    assert cli["cursor"] == {"available": False}
     assert cli["claude"] == {"available": True}

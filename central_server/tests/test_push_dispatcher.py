@@ -65,6 +65,7 @@ class TestAttentionContent:
             # An agent too old to send ``kind`` only alerted for Claude.
             (None, "Claude session"),
             ("codex", "Codex session"),
+            ("cursor", "Cursor session"),
             # A custom type's user-chosen name never goes to Apple.
             ("custom_0123456789ab", "Agent session"),
         ],

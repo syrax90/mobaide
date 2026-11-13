@@ -126,6 +126,24 @@ def _pin_copilot_binary(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _pin_cursor_binary(monkeypatch):
+    """Pin the Cursor resolver to the literal string ``"cursor-agent"`` for every test.
+
+    Parallel of :func:`_pin_copilot_binary`: a host with or without the Cursor
+    CLI must give the same launch argv and the same ``capabilities.cli.cursor``,
+    and no test may start the real CLI. Tests of the missing-binary path
+    re-patch ``cursor_launcher._resolve_cursor_binary`` to raise inside the
+    test body.
+    """
+    from mobaide.core import cursor_launcher
+
+    monkeypatch.setattr(
+        cursor_launcher, "_resolve_cursor_binary", lambda *_a, **_kw: "cursor-agent"
+    )
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _pin_model_enumeration(monkeypatch):
     """Pin the model-enumeration subprocess seams to canned failures.
 

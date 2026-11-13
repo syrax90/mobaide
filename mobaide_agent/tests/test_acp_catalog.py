@@ -102,6 +102,29 @@ def _mini(mode: str = "") -> StubSpec:
     return StubSpec([sys.executable, "-c", MINI_AGENT], env={"MINI_AGENT_MODE": mode})
 
 
+# Like ``cursor-agent acp``: reads its login once, when it starts. Signed out
+# (the file named by SIGNED_OUT_FILE exists at that moment), it refuses every
+# ``session/list`` with ACP's "authentication required" error.
+LOGIN_AT_START_AGENT = r"""
+import json, os, sys
+signed_out = os.path.exists(os.environ["SIGNED_OUT_FILE"])
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg or "method" not in msg:
+        continue
+    if msg["method"] == "initialize":
+        caps = {"loadSession": True, "sessionCapabilities": {"list": {}}}
+        reply = {"result": {"protocolVersion": 1, "agentCapabilities": caps}}
+    elif signed_out:
+        reply = {"error": {"code": -32000, "message": "Authentication required"}}
+    else:
+        reply = {"result": {"sessions": [{"sessionId": "s1", "cwd": "/p"}]}}
+    reply.update({"jsonrpc": "2.0", "id": msg["id"]})
+    sys.stdout.write(json.dumps(reply) + "\n")
+    sys.stdout.flush()
+"""
+
+
 # Like ``agy acp``: ``session/list`` answers the rows in AGENT_ROWS (JSON)
 # whatever ``cwd`` it is given, in the order given. AGENT_RESULT (JSON), when
 # set, is the whole answer instead.
@@ -306,6 +329,33 @@ class TestChatCatalog:
 
         assert excinfo.value.status == 502
         assert excinfo.value.detail.startswith("Could not start Stub Agent")
+
+    async def test_a_signed_out_agent_says_how_to_sign_in_and_is_started_again(
+        self, make_catalog, tmp_path
+    ):
+        """Cursor lists its sessions only when it is signed in, and a chat
+        session is the place where the user can sign in. The agent reads its
+        login when it starts: the request after a sign-in needs a new process."""
+        marker = tmp_path / "signed-out"
+        marker.write_text("", encoding="utf-8")
+        spec = StubSpec(
+            [sys.executable, "-c", LOGIN_AT_START_AGENT], env={"SIGNED_OUT_FILE": str(marker)}
+        )
+        catalog = make_catalog(spec)
+
+        with pytest.raises(ChatCatalogError) as excinfo:
+            await catalog.list_sessions("claude", cwd=None, cursor=None)
+
+        assert (excinfo.value.status, excinfo.value.detail) == (
+            502,
+            "Stub Agent is not signed in on the PC. Start a new chat session to sign in.",
+        )
+
+        marker.unlink()
+        page = await catalog.list_sessions("claude", cwd=None, cursor=None)
+
+        assert [r["session_id"] for r in page["sessions"]] == ["s1"]
+        assert spec.plans == 2
 
 
 class TestAllFoldersLister:
@@ -607,6 +657,7 @@ class TestChatRest:
             "antigravity": {"resume": True, "live": False},
             "opencode": {"resume": True, "live": False},
             "copilot": {"resume": True, "live": False},
+            "cursor": {"resume": True, "live": False},
         }
 
     async def test_create_chat_session(self, client, auth_headers, tmp_path):
@@ -760,6 +811,32 @@ class TestChatRest:
         ]
         assert version.json()["capabilities"]["chat"]["copilot"] == {"resume": True, "live": False}
 
+
+    async def test_cursor_chat_session_and_its_stored_sessions(
+        self, client, auth_headers, tmp_path
+    ):
+        body = {
+            "cli": "cursor",
+            "ui": "chat",
+            "cwd": str(tmp_path),
+            "cursor_options": {"force": True},
+        }
+
+        created = await client.post("/api/sessions", headers=auth_headers, json=body)
+        listed = await client.get(
+            f"/api/chat/cursor/sessions?cwd={tmp_path}", headers=auth_headers
+        )
+        version = await client.get("/api/version", headers=auth_headers)
+
+        assert created.status_code == 201, created.text
+        assert created.json()["ui"] == "chat"
+        assert created.json()["kind"] == "cursor"
+        assert listed.status_code == 200
+        assert [(r["session_id"], r["cwd"]) for r in listed.json()["sessions"]] == [
+            ("external-1111", str(tmp_path)),
+            ("external-2222", str(tmp_path)),
+        ]
+        assert version.json()["capabilities"]["chat"]["cursor"] == {"resume": True, "live": False}
 
     async def test_list_needs_auth(self, client):
         resp = await client.get("/api/chat/claude/sessions")

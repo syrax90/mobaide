@@ -8,7 +8,8 @@ signing in from the chat (``sign_in`` and ``/login``),
 turns that another app on the PC runs in a shared Codex session (a Stop it
 never answers, a turn already running when the chat opens), extra folders
 (``additionalDirectories``), the Antigravity model name resolved into the
-session's options, and Antigravity's "conversation already open" lock.
+session's options, Antigravity's "conversation already open" lock, and
+Cursor's own requests (questions, a plan to accept or to start, tasks).
 
 ``TimelineMirror`` keeps what a chat client keeps, applied from the
 session's ``'a'`` frames the way the clients do it: a new epoch or a gap
@@ -40,6 +41,7 @@ from mobaide.acp.agents import (
     claude_sign_in_methods,
     codex_sign_in_methods,
     copilot_sign_in_methods,
+    cursor_sign_in_methods,
     fake_agent_argv,
     resolve_antigravity_config,
 )
@@ -2156,6 +2158,779 @@ class TestContinuedSessionTitle:
         assert m.session.to_info().title == "Live title"
 
 
+# Sends the request in the prompt text (JSON ``{"method", "params"}``) to the
+# client, then answers with the client's reply: ``{"result": …}`` or ``{"error":
+# <code>}``. ``"updates"`` are sent first; ``"notify": true`` sends a
+# notification and answers ``{"notified": true}``.
+CLIENT_REQUEST_AGENT = r"""
+import json, sys
+pending = None
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+def update(body):
+    send({"method": "session/update", "params": {"sessionId": "asks", "update": body}})
+
+def end_turn(prompt_id, answer):
+    update({"sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": json.dumps(answer, sort_keys=True)}})
+    send({"id": prompt_id, "result": {"stopReason": "end_turn"}})
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method is None:
+        if msg.get("id") == 900 and pending is not None:
+            answer = {"error": msg["error"]["code"]} if "error" in msg else {"result": msg.get("result")}
+            end_turn(pending, answer)
+            pending = None
+        continue
+    if "id" not in msg:
+        continue
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentCapabilities": {}}
+    elif method == "session/new":
+        result = {"sessionId": "asks"}
+    elif method == "session/prompt":
+        request = json.loads(" ".join(block.get("text", "") for block in msg["params"]["prompt"]))
+        for body in request.get("updates") or []:
+            update(body)
+        call = {"method": request["method"], "params": request.get("params") or {}}
+        if request.get("notify"):
+            send(call)
+            end_turn(msg["id"], {"notified": True})
+            continue
+        pending = msg["id"]
+        send({"id": 900, **call})
+        continue
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+CLIENT_REQUEST_AGENT_ARGV = [sys.executable, "-c", CLIENT_REQUEST_AGENT]
+
+# Cursor in Plan mode that refuses ``session/set_config_option`` (modes ``agent``,
+# ``plan``). Prompt ``plan`` asks ``cursor/create_plan`` and ends the turn at the
+# answer; ``plan, then wait`` stays open until ``session/cancel``. Any other
+# prompt is echoed as ``sent: <text>``.
+PLAN_MODE_AGENT = r"""
+import json, sys
+pending = None
+wait = False
+MODE = {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": "plan",
+        "options": [{"value": "agent", "name": "Agent"}, {"value": "plan", "name": "Plan"}]}
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method is None:
+        if msg.get("id") == 900 and pending is not None and not wait:
+            send({"id": pending, "result": {"stopReason": "end_turn"}})
+            pending = None
+        continue
+    if method == "session/cancel":
+        if pending is not None:
+            send({"id": pending, "result": {"stopReason": "cancelled"}})
+            pending = None
+        continue
+    if "id" not in msg:
+        continue
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentCapabilities": {}}
+    elif method == "session/new":
+        result = {"sessionId": "plans", "configOptions": [MODE]}
+    elif method == "session/set_config_option":
+        send({"id": msg["id"], "error": {"code": -32603, "message": "The mode is locked"}})
+        continue
+    elif method == "session/prompt":
+        text = " ".join(block.get("text", "") for block in msg["params"]["prompt"])
+        if text.startswith("plan"):
+            pending, wait = msg["id"], text != "plan"
+            send({"id": 900, "method": "cursor/create_plan",
+                  "params": {"name": "Cache", "plan": "1. Write it"}})
+            continue
+        send({"method": "session/update", "params": {"sessionId": "plans", "update": {
+            "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "sent: " + text}}}})
+        result = {"stopReason": "end_turn"}
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+PLAN_MODE_AGENT_ARGV = [sys.executable, "-c", PLAN_MODE_AGENT]
+
+# Cursor in Plan mode with a slow mode change. Logs each method to argv[1]; while
+# argv[2] exists, ``session/set_config_option`` goes unanswered. Prompt ``plan``
+# asks ``cursor/create_plan`` and ends the turn at the answer; any other prompt
+# is echoed as ``sent: <text>``.
+SLOW_MODE_AGENT = r"""
+import json, os, sys, time
+log = open(sys.argv[1], "a", encoding="utf-8")
+hold = sys.argv[2]
+mode = "plan"
+pending = None
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+def config():
+    return [{"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": mode,
+             "options": [{"value": "agent", "name": "Agent"}, {"value": "plan", "name": "Plan"}]}]
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method is None:
+        if msg.get("id") == 900 and pending is not None:
+            send({"id": pending, "result": {"stopReason": "end_turn"}})
+            pending = None
+        continue
+    log.write(method + "\n")
+    log.flush()
+    if "id" not in msg:
+        continue
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentCapabilities": {}}
+    elif method == "session/new":
+        result = {"sessionId": "slow", "configOptions": config()}
+    elif method == "session/set_config_option":
+        while os.path.exists(hold):
+            time.sleep(0.02)
+        mode = msg["params"]["value"]
+        result = {"configOptions": config()}
+    elif method == "session/prompt":
+        text = " ".join(block.get("text", "") for block in msg["params"]["prompt"])
+        if text == "plan":
+            pending = msg["id"]
+            send({"id": 900, "method": "cursor/create_plan",
+                  "params": {"name": "Cache", "plan": "1. Write it"}})
+            continue
+        send({"method": "session/update", "params": {"sessionId": "slow", "update": {
+            "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "sent: " + text}}}})
+        result = {"stopReason": "end_turn"}
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+
+
+def _slow_mode_agent(log, hold) -> list[str]:
+    return [sys.executable, "-c", SLOW_MODE_AGENT, str(log), str(hold)]
+
+# Opens any stored session by replaying the session updates that argv[1]
+# holds as a JSON list.
+REPLAY_AGENT = r"""
+import json, sys
+updates = json.loads(sys.argv[1])
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg or "method" not in msg:
+        continue
+    if msg["method"] == "initialize":
+        result = {"protocolVersion": 1, "agentCapabilities": {"loadSession": True}}
+    elif msg["method"] == "session/load":
+        for body in updates:
+            send({"method": "session/update",
+                  "params": {"sessionId": msg["params"]["sessionId"], "update": body}})
+        result = {}
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+
+
+def _replay_agent(updates: list[dict[str, Any]]) -> list[str]:
+    return [sys.executable, "-c", REPLAY_AGENT, orjson.dumps(updates).decode()]
+
+
+class TestCursorChat:
+    """A chat on ``cursor-agent acp``, against the fake agent's Cursor flavor:
+    its command output in ``rawOutput``, and its own ``cursor/…`` requests as
+    the chat's form, permission request and plan. In Plan mode Cursor only
+    stores an accepted plan, so there the plan's card can also start the work."""
+
+    PLAN_TEXT = (
+        "The login handler fails for a user without a profile.\n\n"
+        "## Steps\n\n1. Read the code\n2. Write the fix\n3. Run the tests"
+    )
+    STEPS = ["Read the code", "Write the fix", "Run the tests"]
+
+    @staticmethod
+    async def _request(m: TimelineMirror, prompt: str) -> dict[str, Any]:
+        await m.command("prompt", text=prompt)
+        await m.until(lambda: bool(m.state.get("requests")))
+        return m.state["requests"][0]
+
+    @staticmethod
+    def _call(method: str, params: dict[str, Any], **fields: Any) -> str:
+        """A prompt for ``CLIENT_REQUEST_AGENT``."""
+        return orjson.dumps({"method": method, "params": params, **fields}).decode()
+
+    async def _answer_of(
+        self, m: TimelineMirror, method: str, params: dict[str, Any], **fields: Any
+    ) -> dict[str, Any]:
+        """What the chat answers to one request of ``CLIENT_REQUEST_AGENT``."""
+        await m.command("prompt", text=self._call(method, params, **fields))
+        await m.until(lambda: m.status == "ready" and bool(m.texts("agent")))
+        return orjson.loads(m.texts("agent")[-1])
+
+    def _plan(self, m: TimelineMirror) -> list[tuple[str, str]]:
+        return [(entry["content"], entry["status"]) for entry in m.state.get("plan") or []]
+
+    @staticmethod
+    def _mode(m: TimelineMirror) -> str | None:
+        return next((o["value"] for o in m.state.get("config") or [] if o["id"] == "mode"), None)
+
+    @staticmethod
+    def _ever_queued(m: TimelineMirror) -> list[str]:
+        """The text of each message that the queue state has shown."""
+        return [
+            queued["text"]
+            for frame in m.frames
+            if frame["t"] == "events"
+            for ev in frame["events"]
+            if ev["type"] == "state"
+            for queued in ev["patch"].get("queue") or []
+        ]
+
+    async def _open_in_plan_mode(self, open_chat, **plan_fields: Any) -> TimelineMirror:
+        m = await open_chat(argv=fake_agent_argv("cursor"), kind=SessionKind.CURSOR, **plan_fields)
+        await m.until(lambda: bool(m.state.get("config")))
+        assert (await m.command("set_config", config_id="mode", value="plan"))["ok"] is True
+        await m.until(lambda: self._mode(m) == "plan")
+        return m
+
+    async def test_bootstrap_reports_the_options_of_cursor(self, open_chat):
+        """Cursor sends no ``agentInfo``, and the settings of a model only
+        once that model is picked."""
+        m = await open_chat(argv=fake_agent_argv("cursor"), kind=SessionKind.CURSOR)
+
+        assert m.status == "ready"
+        await m.until(lambda: bool(m.state.get("config")))
+        assert {o["id"]: o["value"] for o in m.state["config"]} == {
+            "mode": "agent",
+            "model": "default",
+        }
+        assert m.session.to_info().kind is SessionKind.CURSOR
+
+    async def test_a_finished_command_shows_the_output_of_its_raw_output(self, open_chat, tmp_path):
+        m = await open_chat(argv=fake_agent_argv("cursor"), markdown_titles=True)
+
+        await m.command("prompt", text="tools")
+        await m.until(_turn_done(m, "Done: I updated `main()` and the tests pass."))
+
+        # Cursor writes the command as a Markdown code span.
+        run = next(t for t in m.of_type("tool") if t["kind"] == "execute")
+        assert run["title"] == "pytest -q"
+        assert run["status"] == "completed"
+        assert run["content"] == [
+            {"type": "text", "text": "```console\n....\n4 passed in 0.12s\n```"}
+        ]
+
+    async def test_a_new_file_is_a_diff_without_the_leaked_file_lines(self, open_chat, tmp_path):
+        m = await open_chat(argv=fake_agent_argv("cursor"), markdown_titles=True)
+
+        await m.command("prompt", text="tools")
+        await m.until(_turn_done(m, "Done: I updated `main()` and the tests pass."))
+
+        # The title names the file; its whole path is the subtitle.
+        notes = os.path.join(str(tmp_path), "notes.txt")
+        create = next(t for t in m.of_type("tool") if t["title"] == "Edit notes.txt")
+        assert (create["subtitle"], create["status"]) == (notes, "completed")
+        (diff,) = create["content"]
+        assert (diff["type"], diff["path"], diff["new_file"]) == ("diff", notes, True)
+        assert (diff["added"], diff["removed"]) == (1, 0)
+        assert "The tests pass." in diff["diff"]
+        assert "/dev/null" not in diff["diff"] and "++ b/" not in diff["diff"]
+
+    async def test_a_question_is_a_form_and_its_answer_goes_back_per_question(self, open_chat):
+        m = await open_chat(argv=fake_agent_argv("cursor"))
+        request = await self._request(m, "question")
+        await m.until(lambda: "awaiting_permission" in m.attention)
+
+        assert request["kind"] == "form"
+        assert request["title"] == "How should I set up the project?"
+        assert [(f["key"], f["title"], f["type"]) for f in request["fields"]] == [
+            ("framework", "Which framework?", "select"),
+            ("extras", "Which extras?", "multiselect"),
+        ]
+        assert [o["value"] for o in request["fields"][0]["options"]] == ["react", "vue"]
+
+        ok = await m.command(
+            "respond",
+            request_id=request["id"],
+            action="accept",
+            values={"framework": "vue", "extras": ["lint", "tests"]},
+        )
+        assert ok["ok"] is True
+        # Each answer is a list of option ids, also for a single choice.
+        await m.until(_turn_done(m, 'Got it: {"extras": ["lint", "tests"], "framework": ["vue"]}'))
+        assert m.state["requests"] == []
+
+    @pytest.mark.parametrize(
+        ("answer", "said"),
+        [
+            ({"action": "accept", "values": {}}, "skipped"),
+            ({"action": "decline"}, "skipped"),
+        ],
+        ids=["nothing-selected", "declined"],
+    )
+    async def test_a_question_nobody_answered_is_skipped(self, open_chat, answer, said):
+        m = await open_chat(argv=fake_agent_argv("cursor"))
+        request = await self._request(m, "question")
+
+        ok = await m.command("respond", request_id=request["id"], **answer)
+
+        assert ok["ok"] is True
+        await m.until(_turn_done(m, f"No problem — the questions were {said}."))
+
+    async def test_a_plan_is_a_message_and_a_request_to_accept_it(self, open_chat):
+        m = await open_chat(argv=fake_agent_argv("cursor"))
+        request = await self._request(m, "plan")
+        await m.until(lambda: "awaiting_permission" in m.attention)
+
+        assert request["kind"] == "permission"
+        assert request["title"] == "Plan: Fix the login"
+        assert [(o["id"], o["name"]) for o in request["options"]] == [
+            ("accept", "Accept plan"),
+            ("reject", "Reject plan"),
+        ]
+        # The plan stays in the chat after the answer: it is not in the card.
+        assert self.PLAN_TEXT in m.texts("agent")
+        assert self._plan(m) == [(step, "pending") for step in self.STEPS]
+
+        ok = await m.command("respond", request_id=request["id"], option_id="accept")
+        assert ok["ok"] is True
+        await m.until(_turn_done(m, "All three steps are done."))
+
+        assert m.items[request["tool_call_id"]]["status"] == "completed"
+        # Each ``cursor/update_todos`` named only the tasks that changed.
+        assert self._plan(m) == [(step, "completed") for step in self.STEPS]
+        assert self.PLAN_TEXT in m.texts("agent")
+        assert m.state["requests"] == []
+
+    async def test_a_plan_card_holds_no_text_and_the_plan_lists_the_tasks_of_its_phases(
+        self, open_chat
+    ):
+        m = await open_chat(argv=CLIENT_REQUEST_AGENT_ARGV)
+        # Cursor writes its progress over the content of the plan's tool call.
+        progress = {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "plan-1",
+            "title": "Create Plan",
+            "kind": "other",
+            "status": "pending",
+            "content": [{"type": "content", "content": {"type": "text", "text": "Reading the code"}}],
+            # The plan is in the tool's input too: only a replay shows it from there.
+            "rawInput": {
+                "_toolName": "createPlan",
+                "name": "Cache",
+                "overview": "Add a cache.",
+                "plan": "1. Write it\n2. Test it",
+            },
+        }
+        params = {
+            "toolCallId": "plan-1",
+            "name": "Cache",
+            "overview": "Add a cache.",
+            "plan": "1. Write it\n2. Test it",
+            "todos": [{"id": "a", "content": "Write the cache", "status": "pending"}],
+            "phases": [
+                {"name": "Checks", "todos": [{"id": "b", "content": "Run the tests", "status": "pending"}]},
+                {"name": "Ship", "todos": [{"id": "c", "content": "Open the PR", "status": "pending"}]},
+            ],
+        }
+
+        request = await self._request(m, self._call("cursor/create_plan", params, updates=[progress]))
+
+        assert (request["kind"], request["title"]) == ("permission", "Plan: Cache")
+        assert request["content"] == []
+        assert m.items["plan-1"]["content"] == [{"type": "text", "text": "Reading the code"}]
+        assert m.texts("agent") == ["Add a cache.\n\n1. Write it\n2. Test it"]
+
+        await m.command("respond", request_id=request["id"], option_id="accept")
+        await m.until(lambda: m.status == "ready" and len(m.texts("agent")) == 2)
+        assert orjson.loads(m.texts("agent")[-1]) == {"result": {"outcome": {"outcome": "accepted"}}}
+
+        # An update that names one task of a phase changes it in the plan's list.
+        merge = {"merge": True, "todos": [{"id": "b", "content": "", "status": "completed"}]}
+        await m.command("prompt", text=self._call("cursor/update_todos", merge))
+        expected = [
+            ("Write the cache", "pending"),
+            ("Run the tests", "completed"),
+            ("Open the PR", "pending"),
+        ]
+        await m.until(lambda: m.status == "ready" and self._plan(m) == expected)
+
+    async def test_a_long_plan_is_cut_in_its_message_with_the_chat_s_mark(self, open_chat):
+        m = await open_chat(argv=CLIENT_REQUEST_AGENT_ARGV)
+        steps = "1. First step\n" + "x" * 40_000 + "\n9. Last step"
+        params = {"name": "Big", "overview": "Add a cache.", "plan": steps}
+
+        request = await self._request(m, self._call("cursor/create_plan", params))
+
+        (shown,) = m.texts("agent")
+        assert shown.startswith("Add a cache.\n\n1. First step\n")
+        assert shown.endswith("\n9. Last step")
+        assert "characters not shown" in shown
+        assert len(shown) < 40_000
+
+        await m.command("respond", request_id=request["id"], option_id="reject")
+        await m.until(lambda: m.status == "ready" and m.state["requests"] == [])
+
+    async def test_a_rejected_plan_is_dropped(self, open_chat):
+        m = await open_chat(argv=fake_agent_argv("cursor"))
+        request = await self._request(m, "plan")
+
+        await m.command("respond", request_id=request["id"], option_id="reject")
+        await m.until(_turn_done(m, "OK, I dropped the plan."))
+
+        assert m.items[request["tool_call_id"]]["status"] == "failed"
+        # The tasks of a plan that was not accepted are not a plan.
+        assert self._plan(m) == []
+
+    async def test_a_plan_is_asked_also_when_the_chat_accepts_every_request(self, open_chat):
+        """Accepting a plan is the user's own choice, unlike a tool approval."""
+        m = await open_chat(argv=fake_agent_argv("cursor"), auto_approve=True)
+
+        await m.command("prompt", text="permission")
+        await m.until(_turn_done(m, "The build folder is gone."))
+        assert not _asked(m.frames)
+
+        request = await self._request(m, "plan")
+        assert [o["id"] for o in request["options"]] == ["accept", "reject"]
+        await m.until(lambda: "awaiting_permission" in m.attention)
+
+        await m.command("respond", request_id=request["id"], option_id="reject")
+        await m.until(_turn_done(m, "OK, I dropped the plan."))
+
+    async def test_cancel_answers_a_pending_plan(self, open_chat):
+        m = await open_chat(argv=fake_agent_argv("cursor"))
+        await self._request(m, "plan")
+
+        await m.command("cancel")
+        await m.until(lambda: m.status == "ready" and bool(m.of_type("turn_end")))
+
+        assert m.state["requests"] == []
+        assert m.attention[-1] is None
+        assert self._plan(m) == []
+
+    async def test_accept_and_start_in_plan_mode_does_the_work_in_agent_mode(self, open_chat):
+        m = await self._open_in_plan_mode(open_chat)
+        request = await self._request(m, "plan")
+
+        assert [o["id"] for o in request["options"]] == ["start", "accept", "reject"]
+
+        ok = await m.command("respond", request_id=request["id"], option_id="start")
+        assert ok["ok"] is True
+        await m.until(_turn_done(m, "All three steps are done."))
+
+        # The chat sent the next message itself, after the turn of the plan.
+        assert m.texts("user") == ["plan", "Implement the plan."]
+        assert self._mode(m) == "agent"
+        assert m.items[request["tool_call_id"]]["status"] == "completed"
+        assert self._plan(m) == [(step, "completed") for step in self.STEPS]
+        assert m.state["queue"] == []
+
+    async def test_accept_in_plan_mode_only_stores_the_plan(self, open_chat):
+        m = await self._open_in_plan_mode(open_chat)
+        request = await self._request(m, "plan")
+        tool_id = request["tool_call_id"]
+
+        await m.command("respond", request_id=request["id"], option_id="accept")
+        await m.until(lambda: m.status == "ready" and bool(m.items[tool_id]["content"]))
+
+        assert m.items[tool_id]["status"] == "completed"
+        assert m.texts("user") == ["plan"]
+        # A start message would be in the queue before the turn ends.
+        assert self._ever_queued(m) == []
+        assert self._mode(m) == "plan"
+        assert self._plan(m) == [(step, "pending") for step in self.STEPS]
+
+    async def test_the_start_message_waits_in_the_queue_where_it_can_be_removed(self, open_chat):
+        m = await open_chat(argv=PLAN_MODE_AGENT_ARGV, kind=SessionKind.CURSOR)
+        request = await self._request(m, "plan, then wait")
+
+        await m.command("respond", request_id=request["id"], option_id="start")
+        await m.until(lambda: bool(m.state.get("queue")))
+        (queued,) = m.state["queue"]
+        assert (queued["text"], queued["images"]) == ("Implement the plan.", 0)
+
+        assert (await m.command("dequeue", queue_id=queued["id"]))["ok"] is True
+        await m.command("cancel")
+        await m.until(lambda: m.status == "ready" and bool(m.of_type("turn_end")))
+
+        assert m.texts("user") == ["plan, then wait"]
+        assert m.state["queue"] == []
+        assert self._mode(m) == "plan"
+
+    async def test_a_mode_that_cannot_be_switched_stops_the_start_message(self, open_chat):
+        """In Plan mode Cursor would answer the message with another plan."""
+        m = await open_chat(argv=PLAN_MODE_AGENT_ARGV, kind=SessionKind.CURSOR)
+        request = await self._request(m, "plan")
+
+        await m.command("respond", request_id=request["id"], option_id="start")
+        await m.until(lambda: m.status == "ready" and bool(m.of_type("error")))
+
+        assert m.texts("error") == ["Could not switch the mode, so the message was not sent."]
+        assert m.texts("user") == ["plan", "Implement the plan."]
+        # The agent echoes each message it gets: only the plan is there.
+        assert m.texts("agent") == ["1. Write it"]
+        assert self._mode(m) == "plan"
+        assert m.state["queue"] == []
+
+        # The chat still works: the next message goes out as it is.
+        await m.command("prompt", text="hello")
+        await m.until(_turn_done(m, "sent: hello"))
+
+    async def test_a_stop_while_the_mode_switches_never_sends_the_start_message(
+        self, open_chat, tmp_path
+    ):
+        """The Stop finds no prompt at the agent to cancel, so the turn itself
+        must drop the message when the mode is switched at last."""
+        log, hold = tmp_path / "agent.log", tmp_path / "hold"
+        m = await open_chat(argv=_slow_mode_agent(log, hold), kind=SessionKind.CURSOR)
+        request = await self._request(m, "plan")
+        hold.touch()
+
+        await m.command("respond", request_id=request["id"], option_id="start")
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 10
+        while "session/set_config_option" not in _methods(log):
+            assert loop.time() < deadline, _methods(log)
+            await asyncio.sleep(0.02)
+        assert (await m.command("cancel"))["data"] == {"cancelled": True}
+        hold.unlink()
+        await m.until(lambda: m.status == "ready" and bool(m.of_type("turn_end")))
+
+        (end,) = m.of_type("turn_end")
+        assert (end["stop_reason"], end["text"]) == ("cancelled", "Stopped")
+        assert m.texts("user") == ["plan", "Implement the plan."]
+        assert m.state["cancelling"] is False
+        assert m.state["queue"] == []
+        # The switch itself went through before the turn saw the Stop.
+        assert self._mode(m) == "agent"
+
+        # The chat still works, and the stopped message never reached the agent.
+        await m.command("prompt", text="hello")
+        await m.until(_turn_done(m, "sent: hello"))
+        assert m.texts("agent") == ["1. Write it", "sent: hello"]
+        assert _methods(log).count("session/prompt") == 2
+
+    async def test_a_start_message_refused_for_the_sign_in_is_sent_in_agent_mode_later(
+        self, open_chat, tmp_path, monkeypatch
+    ):
+        """The message that goes out after the sign-in is still the start
+        message: it switches to Agent mode, whatever the mode is by then."""
+        marker = tmp_path / "signed-out"
+        monkeypatch.setenv(FAKE_SIGNED_OUT_ENV, str(marker))
+        m = await self._open_in_plan_mode(
+            open_chat, sign_in=cursor_sign_in_methods(None, os.environ, fake=True)
+        )
+        request = await self._request(m, "plan")
+        marker.write_text("", encoding="utf-8")
+
+        await m.command("respond", request_id=request["id"], option_id="start")
+        await m.until(lambda: m.status == "ready" and _sign_in(m) is not None)
+        assert self._mode(m) == "agent"
+        # The user goes back to Plan mode while the message waits.
+        assert (await m.command("set_config", config_id="mode", value="plan"))["ok"] is True
+        await m.until(lambda: self._mode(m) == "plan")
+        assert (await m.command("sign_in", action="start", method="cursor"))["ok"] is True
+        await m.until(_turn_done(m, "All three steps are done."))
+
+        assert not marker.exists()
+        assert self._mode(m) == "agent"
+        assert m.texts("user").count("Implement the plan.") == 1
+        assert m.state["queue"] == []
+
+    async def test_a_replayed_plan_is_shown_by_its_name_with_its_text(self, open_chat):
+        """Cursor replays a plan as its ``createPlan`` tool call only."""
+        m = await open_chat(
+            load_session_id="external-1111",
+            argv=fake_agent_argv("cursor"),
+            kind=SessionKind.CURSOR,
+        )
+        await m.until(lambda: m.state.get("title") == "Earlier session")
+
+        tool = m.items["replay-plan"]
+        assert (tool["title"], tool["kind"], tool["status"]) == (
+            "Plan: Fix the login",
+            "think",
+            "completed",
+        )
+        assert m.texts("agent") == [
+            "Sure — I read the handler and fixed the null check.",
+            "## Steps\n\n1. Read the code\n2. Write the fix",
+        ]
+        # The plan was answered in the stored session: nothing is asked again.
+        assert not _asked(m.frames)
+
+    async def test_a_replayed_plan_with_a_later_update_is_shown_once(self, open_chat):
+        raw_input = {"_toolName": "createPlan", "name": "Cache", "plan": "1. Write it"}
+        replay = [
+            {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "plan-1",
+                "title": "Create Plan: Cache",
+                "kind": "other",
+                "status": "pending",
+                "rawInput": raw_input,
+            },
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "plan-1",
+                "status": "completed",
+                "rawInput": raw_input,
+            },
+            {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "The plan is saved."},
+            },
+        ]
+
+        m = await open_chat(load_session_id="conv-1", argv=_replay_agent(replay))
+        await m.until(lambda: m.status == "ready")
+
+        tool = m.items["plan-1"]
+        assert (tool["title"], tool["kind"], tool["status"]) == ("Plan: Cache", "think", "completed")
+        assert m.texts("agent") == ["1. Write it", "The plan is saved."]
+
+    async def test_a_replayed_plan_with_a_long_name_has_a_title_of_one_cut_line(self, open_chat):
+        """The name of a stored plan is the agent's own text, so its title
+        goes the way of a live title."""
+        name = "Cache `get()`\nfor every user " + "x" * 300
+        replay = [
+            {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "plan-1",
+                "title": "Create Plan",
+                "kind": "other",
+                "status": "completed",
+                "rawInput": {"_toolName": "createPlan", "name": name, "plan": "1. Write it"},
+            },
+        ]
+
+        m = await open_chat(
+            load_session_id="conv-1", argv=_replay_agent(replay), markdown_titles=True
+        )
+        await m.until(lambda: m.status == "ready")
+
+        tool = m.items["plan-1"]
+        shown = ("Plan: Cache get() for every user " + "x" * 300)[:199] + "…"
+        assert (tool["title"], tool["kind"]) == (shown, "think")
+        assert m.texts("agent") == ["1. Write it"]
+
+    async def test_the_task_list_replaces_or_merges_by_id(self, open_chat):
+        m = await open_chat(argv=CLIENT_REQUEST_AGENT_ARGV)
+        first = [
+            {"id": "a", "content": "Read the code", "status": "in_progress"},
+            {"id": "b", "content": "Write the fix", "status": "pending"},
+        ]
+
+        assert await self._answer_of(m, "cursor/update_todos", {"todos": first}) == {"result": {}}
+        assert self._plan(m) == [("Read the code", "in_progress"), ("Write the fix", "pending")]
+
+        merged = [
+            {"id": "a", "content": "", "status": "completed"},
+            {"id": "b", "content": "", "status": "cancelled"},
+            {"id": "c", "content": "Run the tests", "status": "pending"},
+        ]
+        await self._answer_of(m, "cursor/update_todos", {"todos": merged, "merge": True})
+        assert self._plan(m) == [("Read the code", "completed"), ("Run the tests", "pending")]
+
+        replaced = [{"id": "z", "content": "Start over", "status": "pending"}]
+        await self._answer_of(m, "cursor/update_todos", {"todos": replaced})
+        assert self._plan(m) == [("Start over", "pending")]
+
+    async def test_a_task_list_sent_as_a_notification_updates_the_plan(self, open_chat):
+        """Cursor documents ``cursor/update_todos`` as a notification."""
+        m = await open_chat(argv=CLIENT_REQUEST_AGENT_ARGV)
+        todos = [
+            {"id": "a", "content": "Read the code", "status": "in_progress"},
+            {"id": "b", "content": "Write the fix", "status": "pending"},
+        ]
+
+        answer = await self._answer_of(m, "cursor/update_todos", {"todos": todos}, notify=True)
+
+        assert answer == {"notified": True}
+        assert self._plan(m) == [("Read the code", "in_progress"), ("Write the fix", "pending")]
+
+    @pytest.mark.parametrize(
+        ("method", "answer"),
+        [
+            ("cursor/task", {"result": {}}),
+            ("cursor/generate_image", {"result": {}}),
+            ("cursor/open_browser", {"error": -32601}),
+            ("other/ask_question", {"error": -32601}),
+        ],
+        ids=["task-notice", "image-notice", "unknown-cursor-method", "another-prefix"],
+    )
+    async def test_the_other_requests_need_no_card(self, open_chat, method, answer):
+        m = await open_chat(argv=CLIENT_REQUEST_AGENT_ARGV)
+
+        assert await self._answer_of(m, method, {"toolCallId": "t1"}) == answer
+
+        assert not _asked(m.frames)
+        assert m.of_type("tool") == []
+
+    async def test_a_question_with_nothing_to_pick_is_skipped_without_a_card(self, open_chat):
+        m = await open_chat(argv=CLIENT_REQUEST_AGENT_ARGV)
+        params = {"title": "Pick", "questions": [{"id": "q", "prompt": "Which?", "options": []}]}
+
+        answer = await self._answer_of(m, "cursor/ask_question", params)
+
+        assert answer["result"]["outcome"]["outcome"] == "skipped"
+        assert not _asked(m.frames)
+
+
+class TestClientCapabilities:
+    """``clientCapabilities`` of ``initialize``: the chat's own, plus the
+    ``_meta`` keys an agent's launch plan asks for (Cursor's model picker)."""
+
+    @staticmethod
+    def _capabilities(log) -> dict[str, Any]:
+        (params,) = _params_of(log, "initialize")
+        return params["clientCapabilities"]
+
+    async def test_the_meta_of_the_launch_plan_goes_to_initialize(self, open_chat, tmp_path):
+        log = tmp_path / "agent.log"
+
+        await open_chat(
+            load_session_id="conv-9",
+            argv=_stored_title_agent(log, "replayed"),
+            client_meta={"parameterizedModelPicker": True},
+        )
+
+        assert self._capabilities(log) == {
+            **session_mod.CLIENT_CAPABILITIES,
+            "_meta": {"parameterizedModelPicker": True},
+        }
+        assert "_meta" not in session_mod.CLIENT_CAPABILITIES
+
+    async def test_a_plan_without_meta_sends_the_capabilities_as_they_are(self, open_chat, tmp_path):
+        log = tmp_path / "agent.log"
+
+        await open_chat(load_session_id="conv-9", argv=_stored_title_agent(log, "replayed"))
+
+        assert self._capabilities(log) == session_mod.CLIENT_CAPABILITIES
+
+
 _NOTES_PATH = "/project/notes.md"
 _CREATED_NOTES = {
     "sessionUpdate": "tool_call",
@@ -2650,6 +3425,13 @@ class TestSignIn:
             "sign_in": copilot_sign_in_methods(None, os.environ, fake=True),
         }
 
+    @staticmethod
+    def _cursor() -> dict[str, Any]:
+        return {
+            "argv": fake_agent_argv("cursor"),
+            "sign_in": cursor_sign_in_methods(None, os.environ, fake=True),
+        }
+
     async def _at_the_code_field(self, m: TimelineMirror) -> dict[str, Any]:
         started = await m.command("sign_in", action="start", method="claude_ai")
         assert started["ok"] is True
@@ -2872,6 +3654,26 @@ class TestSignIn:
         request = _sign_in(m)
         assert request["url"] == "https://example.com/copilot/sign-in?state=fake"
         assert request["user_code"] == "FAKE-1234"
+        assert (request["input"], request["busy"]) == (None, True)
+
+        await m.until(lambda: m.status == "ready" and self.SIGNED_IN in _notices(m))
+        assert not signed_out.exists()
+
+    async def test_a_cursor_login_shows_only_the_page_and_finishes_alone(
+        self, open_chat, signed_out
+    ):
+        """``cursor-agent login`` prints a sign-in page and no code; Cursor
+        refuses ``session/new`` until the login is done."""
+        m = await open_chat(**self._cursor())
+        await m.until(lambda: m.status == "error" and _sign_in(m) is not None)
+        assert m.state["error"] == self.NOT_SIGNED_IN
+        assert [x["id"] for x in _sign_in(m)["methods"]] == ["cursor"]
+
+        await m.command("sign_in", action="start", method="cursor")
+        await m.until(lambda: _sign_in(m)["url"] is not None)
+        request = _sign_in(m)
+        assert request["url"] == "https://example.com/cursor/sign-in?state=fake"
+        assert request["user_code"] is None
         assert (request["input"], request["busy"]) == (None, True)
 
         await m.until(lambda: m.status == "ready" and self.SIGNED_IN in _notices(m))

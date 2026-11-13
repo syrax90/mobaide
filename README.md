@@ -2,12 +2,12 @@
 
 <p align="center">
   <a href="https://mobaide.com">
-    <img src="central_server/static/site/img/og.png" width="760" alt="Mobaide: run AI coding agents on your computer, from your phone. Claude Code, Codex CLI, Antigravity CLI, OpenCode, GitHub Copilot, plus any CLI AI agent.">
+    <img src="central_server/static/site/img/og.png" width="760" alt="Mobaide: run AI coding agents on your computer, from your phone. Claude Code, Codex CLI, Antigravity CLI, OpenCode, GitHub Copilot, Cursor, plus any agent.">
   </a>
 </p>
 
 <p align="center">
-  Start, watch and steer <b>Claude Code</b>, <b>Codex CLI</b>, <b>Antigravity CLI</b>, <b>OpenCode</b>, <b>GitHub Copilot CLI</b> or your own agents<br>
+  Start, watch and steer <b>Claude Code</b>, <b>Codex CLI</b>, <b>Antigravity CLI</b>, <b>OpenCode</b>, <b>GitHub Copilot CLI</b>, <b>Cursor CLI</b> or your own agents<br>
   on your Windows, macOS or Linux computer, from your phone or browser.<br>
   Free. No public IP, port forwarding, VPN or SSH.
 </p>
@@ -43,15 +43,15 @@
 
 ## Features
 
-- **A chat view built for the phone.** Claude Code, Codex, Antigravity, OpenCode and GitHub Copilot sessions open as a native chat: Markdown answers, one card per tool call with its diff, approval buttons, questions, plan progress, mode and model chips. It runs over the [Agent Client Protocol](https://agentclientprotocol.com), and it can continue a Claude Code, Codex, Antigravity, OpenCode or GitHub Copilot session you started in a terminal on your computer. Codex chats stay in sync with a session open in a terminal.
-- **A real terminal, not a log tail.** Full two-way PTY, so TUIs behave: arrow keys, Ctrl-C, plan mode, approval prompts. A rolling buffer of recent output replays after a dropped connection. Claude Code, Codex, Antigravity, OpenCode and GitHub Copilot sessions offer it under Advanced as Terminal UI; raw shells and custom agents always use it.
-- **Your agents, your options.** Launch Claude Code, Codex CLI or Antigravity CLI with their own model, effort, sandbox and approval settings, OpenCode with the model you pick inside the session, or GitHub Copilot CLI with its allow-all choice. Open a raw shell, or define an agent from any command your shell can run.
+- **A chat view built for the phone.** Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot and Cursor sessions open as a native chat: Markdown answers, one card per tool call with its diff, approval buttons, questions, plan progress, mode and model chips. It runs over the [Agent Client Protocol](https://agentclientprotocol.com), and it can continue a Claude Code, Codex, Antigravity, OpenCode or GitHub Copilot session you started in a terminal on your computer, or an earlier Cursor chat session. Codex chats stay in sync with a session open in a terminal.
+- **A real terminal, not a log tail.** Full two-way PTY, so TUIs behave: arrow keys, Ctrl-C, plan mode, approval prompts. A rolling buffer of recent output replays after a dropped connection. Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot and Cursor sessions offer it under Advanced as Terminal UI; raw shells and custom agents always use it.
+- **Your agents, your options.** Launch Claude Code, Codex CLI or Antigravity CLI with their own model, effort, sandbox and approval settings, OpenCode with the model you pick inside the session, GitHub Copilot CLI with its allow-all choice, or Cursor CLI with its run-everything choice. Open a raw shell, or define an agent from any command your shell can run.
 - **Several sessions at once.** Keep a Claude Code run, a Codex review and a shell side by side, each with its own state.
 - **[Voice input](#voice-input).** Dictate prompts instead of thumb-typing them. Your own computer does the transcription, in 25 languages. Opt-in, and the audio is never stored.
 - **Git from your phone.** Read diffs, stage, commit, fetch, pull, push, rebase, resolve conflicts and manage branches. Git runs on your machine, with the credentials it already has.
 - **Optional Git worktrees.** Start any session in its own worktree so parallel runs do not collide. Opt-in per launch, Git projects only.
 - **Auto Scan.** Watch [Linear](https://linear.app) for matching issues and launch a Claude Code session in a new worktree for each one.
-- **Notifications.** Get an alert when a session needs your approval, finishes a turn or ends.
+- **Notifications.** Get an alert when a session needs your approval, finishes a turn or ends. A Cursor session sends the first two from the chat view only.
 - **Prompt templates and shortcuts.** Save prompts and reuse them in any session. Build custom key chords as buttons on the mobile control bar. Both sync across your devices.
 - **Set up once.** The agent installs as an OS service, restarts itself if it dies, and updates itself from signed releases.
 
@@ -114,7 +114,7 @@ The agent on your computer dials out to the relay, so it works behind any router
 └──────────────────┘        └───────────┘        │  Antigravity,        │
                                                  │  OpenCode,           │
                                                  │  GitHub Copilot,     │
-                                                 │  shell               │
+                                                 │  Cursor, shell       │
                                                  └──────────────────────┘
 ```
 
@@ -150,4 +150,4 @@ Mobaide is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE
 
 ---
 
-<sub>Developed by Pavel Timonin. Mobaide is an independent app and is not affiliated with or endorsed by Anthropic, OpenAI, Google, GitHub, Apple, NVIDIA, Linear or the makers of OpenCode. "Claude" and "Claude Code" are trademarks of Anthropic. "Codex" is a trademark of OpenAI. "Antigravity" is a trademark of Google. "GitHub" and "GitHub Copilot" are trademarks of GitHub, Inc. NVIDIA is a trademark of NVIDIA Corporation. Google Play and the Google Play logo are trademarks of Google LLC. Apple and the Apple logo are trademarks of Apple Inc., registered in the U.S. and other countries; App Store is a service mark of Apple Inc. All other trademarks are the property of their respective owners.</sub>
+<sub>Developed by Pavel Timonin. Mobaide is an independent app and is not affiliated with or endorsed by Anthropic, OpenAI, Google, GitHub, Anysphere, Apple, NVIDIA, Linear or the makers of OpenCode. "Claude" and "Claude Code" are trademarks of Anthropic. "Codex" is a trademark of OpenAI. "Antigravity" is a trademark of Google. "GitHub" and "GitHub Copilot" are trademarks of GitHub, Inc. "Cursor" is a trademark of Anysphere, Inc. NVIDIA is a trademark of NVIDIA Corporation. Google Play and the Google Play logo are trademarks of Google LLC. Apple and the Apple logo are trademarks of Apple Inc., registered in the U.S. and other countries; App Store is a service mark of Apple Inc. All other trademarks are the property of their respective owners.</sub>

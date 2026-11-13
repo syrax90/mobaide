@@ -9,6 +9,7 @@ from mobaide.core.antigravity_launcher import AntigravityOptions
 from mobaide.core.claude_launcher import AdHocLaunch, ClaudeOptions, LaunchSpec
 from mobaide.core.codex_launcher import CodexOptions
 from mobaide.core.copilot_launcher import CopilotOptions
+from mobaide.core.cursor_launcher import CursorOptions
 from mobaide.core.models import SessionConfig, SessionKind, SessionState
 from mobaide.core.opencode_launcher import OpenCodeOptions
 from mobaide.core.pty_backend import FakePtyBackend
@@ -620,6 +621,92 @@ class TestCopilotLaunchBranching:
                 kind=SessionKind.COPILOT,
             )
             with pytest.raises(ValueError, match="Copilot launcher"):
+                await mgr.create_session(config)
+
+            claude_launcher.build.assert_not_awaited()
+            assert mgr.list_sessions() == []
+        finally:
+            await mgr.shutdown()
+
+
+@pytest.mark.timeout(20)
+class TestCursorLaunchBranching:
+    """``create_session`` routes a ``cursor_options`` session to the Cursor
+    launcher (not the Claude one), and raises a clear error when no Cursor
+    launcher is wired.
+    """
+
+    async def test_project_cursor_options_invokes_cursor_launcher(
+        self, tmp_path,
+    ) -> None:
+        project = MagicMock()
+        project.name = "proj"
+        project.path = str(tmp_path)
+        store = MagicMock()
+        store.get = MagicMock(return_value=project)
+
+        claude_launcher = MagicMock()
+        claude_launcher.build = AsyncMock()
+        copilot_launcher = MagicMock()
+        copilot_launcher.build = AsyncMock()
+        cursor_launcher = MagicMock()
+        # A real spawnable command, so the PTY start succeeds on a host
+        # without ``cursor-agent``; the argv is covered by ``test_cursor_launcher``.
+        cursor_launcher.build = AsyncMock(
+            return_value=LaunchSpec(
+                argv=default_shell(),
+                cwd=str(tmp_path),
+                env={"X": "Y"},
+            ),
+        )
+        options = CursorOptions(force=True)
+
+        mgr = SessionManager(
+            projects_store=store,
+            launcher=claude_launcher,
+            copilot_launcher=copilot_launcher,
+            cursor_launcher=cursor_launcher,
+        )
+        try:
+            config = SessionConfig(
+                session_id="cursor-sess",
+                command=default_shell(),
+                rows=24, cols=80, scrollback_size=50,
+                project_name="proj",
+                cursor_options=options,
+                kind=SessionKind.CURSOR,
+            )
+            await mgr.create_session(config)
+
+            cursor_launcher.build.assert_awaited_once()
+            claude_launcher.build.assert_not_awaited()
+            copilot_launcher.build.assert_not_awaited()
+            assert config.env == {"X": "Y"}
+            call = cursor_launcher.build.await_args
+            assert call.args[0] is project
+            assert call.args[1] is options
+            assert mgr.list_sessions()[0].kind == SessionKind.CURSOR
+        finally:
+            await mgr.shutdown()
+
+    async def test_cursor_session_without_a_cursor_launcher_is_refused(
+        self, tmp_path,
+    ) -> None:
+        """Without the check the session would start the caller's fallback
+        command (a plain shell) under the Cursor kind."""
+        claude_launcher = MagicMock()
+        claude_launcher.build = AsyncMock()
+        mgr = SessionManager(launcher=claude_launcher)
+        try:
+            config = SessionConfig(
+                session_id="cursor-unwired",
+                command=default_shell(),
+                cwd=str(tmp_path),
+                rows=24, cols=80, scrollback_size=50,
+                cursor_options=CursorOptions(),
+                kind=SessionKind.CURSOR,
+            )
+            with pytest.raises(ValueError, match="Cursor launcher"):
                 await mgr.create_session(config)
 
             claude_launcher.build.assert_not_awaited()
