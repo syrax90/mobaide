@@ -75,6 +75,26 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertNil(store.getLastUsedOpenCodeOptions())
     }
 
+    func testCursorOptionsRoundTripAndADamagedBlobNeverTurnsForceOn() {
+        XCTAssertNil(store.getLastUsedCursorOptions())
+
+        store.setLastUsedCursorOptions(CursorLaunchPrefs(force: true, terminalUI: true))
+        XCTAssertEqual(
+            store.getLastUsedCursorOptions(),
+            CursorLaunchPrefs(force: true, terminalUI: true)
+        )
+        XCTAssertNil(store.getLastUsedOpenCodeOptions(), "its own key, no other agent's")
+
+        defaults.set(#"{"terminalUI":true}"#, forKey: PreferencesStore.keyLastUsedCursorOptions)
+        XCTAssertEqual(
+            store.getLastUsedCursorOptions(),
+            CursorLaunchPrefs(force: false, terminalUI: true)
+        )
+
+        defaults.set(#"{"force":"yes"}"#, forKey: PreferencesStore.keyLastUsedCursorOptions)
+        XCTAssertNil(store.getLastUsedCursorOptions())
+    }
+
     func testCodexTerminalUIRoundTripsAndAnOlderBlobReadsAsOff() {
         store.setLastUsedCodexOptions(CodexLaunchPrefs(terminalUI: true))
         XCTAssertEqual(store.getLastUsedCodexOptions()?.terminalUI, true)

@@ -117,6 +117,13 @@ class AgentConfig(BaseSettings):
         default=None, validation_alias="MOBAIDE_COPILOT_BIN",
     )
 
+    # Operator override pointing at the absolute path of the Cursor CLI
+    # executable (``cursor-agent.exe`` / ``cursor-agent.cmd`` on Windows,
+    # ``cursor-agent`` on POSIX). Typed for the same reason as ``agy_bin``.
+    cursor_bin: str | None = Field(
+        default=None, validation_alias="MOBAIDE_CURSOR_BIN",
+    )
+
     # Operator override for the command that starts the Claude Code ACP
     # adapter of chat sessions (one shell-style command line). Typed for the
     # same reason as ``claude_bin``: a .env line never reaches ``os.environ``.
@@ -138,6 +145,10 @@ class AgentConfig(BaseSettings):
     # The same for GitHub Copilot, whose ACP server is ``copilot --acp``.
     acp_copilot_command: str | None = Field(
         default=None, validation_alias="MOBAIDE_ACP_COPILOT_COMMAND",
+    )
+    # The same for Cursor, whose ACP server is ``cursor-agent acp``.
+    acp_cursor_command: str | None = Field(
+        default=None, validation_alias="MOBAIDE_ACP_CURSOR_COMMAND",
     )
 
     # The fake switch swaps the speech model for a tiny generated one and a
@@ -324,6 +335,8 @@ def _cmd_init_env(args: argparse.Namespace) -> int:
             overrides["MOBAIDE_OPENCODE_BIN"] = existing["MOBAIDE_OPENCODE_BIN"]
         if existing.get("MOBAIDE_COPILOT_BIN"):
             overrides["MOBAIDE_COPILOT_BIN"] = existing["MOBAIDE_COPILOT_BIN"]
+        if existing.get("MOBAIDE_CURSOR_BIN"):
+            overrides["MOBAIDE_CURSOR_BIN"] = existing["MOBAIDE_CURSOR_BIN"]
 
     # An explicit --claude-bin / --codex-bin / --agy-bin from the installer
     # wins over a preserved existing value: a re-install where the operator just
@@ -357,8 +370,9 @@ def _cmd_set_env(args: argparse.Namespace) -> int:
     Used by ``install.ps1`` to surgically backfill ``MOBAIDE_CLAUDE_BIN``
     / ``MOBAIDE_CODEX_BIN`` / ``MOBAIDE_AGY_BIN`` on a re-install over an
     already-paired agent without touching ``JWT_SECRET_KEY`` /
-    ``RELAY_AGENT_TOKEN``, and to write ``MOBAIDE_COPILOT_BIN`` on every
-    install (``init-env`` has no argument for it).
+    ``RELAY_AGENT_TOKEN``, and to write ``MOBAIDE_COPILOT_BIN`` and
+    ``MOBAIDE_CURSOR_BIN`` on every install (``init-env`` has no argument for
+    them).
     ``init-env --force`` preserves those keys explicitly, but it's
     heavier — it rewrites every templated line. ``set-env`` is the
     smallest operation that achieves the same outcome for one key.
@@ -438,7 +452,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Set a single KEY=value in an existing .env (in-place; preserves "
             "all other keys). Used by install.ps1 to backfill "
             "MOBAIDE_CLAUDE_BIN / MOBAIDE_CODEX_BIN / MOBAIDE_AGY_BIN / "
-            "MOBAIDE_COPILOT_BIN."
+            "MOBAIDE_COPILOT_BIN / MOBAIDE_CURSOR_BIN."
         ),
     )
     set_env.add_argument(

@@ -800,6 +800,16 @@
               }
             ]
           },
+          "cursor_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CursorOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "cwd": {
             "anyOf": [
               {
@@ -895,6 +905,45 @@
           }
         },
         "title": "CreateSessionRequest",
+        "type": "object"
+      },
+      "CursorOptionsModel": {
+        "description": "Wire DTO for Cursor CLI launch options (see :class:`CursorOptions`).\n\n``force`` is Cursor's ``--force`` (\"Run Everything\"): it runs commands\nwithout asking, except the ones its settings deny.",
+        "properties": {
+          "base_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Branch"
+          },
+          "branch_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Name"
+          },
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          },
+          "worktree": {
+            "default": false,
+            "title": "Worktree",
+            "type": "boolean"
+          }
+        },
+        "title": "CursorOptionsModel",
         "type": "object"
       },
       "FsDirsResponse": {
@@ -3210,7 +3259,8 @@
               "codex",
               "antigravity",
               "opencode",
-              "copilot"
+              "copilot",
+              "cursor"
             ],
             "title": "Kind",
             "type": "string"

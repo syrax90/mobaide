@@ -79,6 +79,7 @@ const POPULATED: WizardState = {
   },
   opencode: { autoApprove: true, terminalUi: false },
   copilot: { allowAll: true, terminalUi: false },
+  cursor: { force: true, terminalUi: false },
   git: { worktree: true, branchName: 'feature/x' },
   autoScanPromptSeededFor: gitProject.name,
 };
@@ -95,6 +96,7 @@ const REQUEST_MODES = [
   'antigravity',
   'opencode',
   'copilot',
+  'cursor',
   'shell',
   CUSTOM,
 ] as const;
@@ -104,6 +106,7 @@ const OPTION_KEYS = [
   'antigravity_options',
   'opencode_options',
   'copilot_options',
+  'cursor_options',
 ] as const;
 
 const OWN_OPTIONS: Record<(typeof REQUEST_MODES)[number], (typeof OPTION_KEYS)[number] | null> =
@@ -113,6 +116,7 @@ const OWN_OPTIONS: Record<(typeof REQUEST_MODES)[number], (typeof OPTION_KEYS)[n
     antigravity: 'antigravity_options',
     opencode: 'opencode_options',
     copilot: 'copilot_options',
+    cursor: 'cursor_options',
     shell: null,
     [CUSTOM]: null,
   };
@@ -208,6 +212,11 @@ const COPILOT_BOOLEANS: Record<
   true
 > = { allow_all: true, worktree: true };
 
+const CURSOR_BOOLEANS: Record<
+  RequiredBooleans<components['schemas']['CursorOptionsModel']>,
+  true
+> = { force: true, worktree: true };
+
 const REQUEST_BOOLEANS: Record<RequiredBooleans<CreateSessionRequest>, true> = {
   worktree: true,
 };
@@ -251,6 +260,19 @@ describe('buildCreateRequest — every boolean explicit', () => {
     });
 
     expect(request.copilot_options?.allow_all).toBe(false);
+  });
+
+  it('declares every Cursor boolean', () => {
+    expectExplicitBooleans(build('cursor').cursor_options, CURSOR_BOOLEANS);
+  });
+
+  it('sends force: false for a default Cursor launch', () => {
+    const request = build('cursor', {
+      ...INITIAL_WIZARD_STATE,
+      selection: { kind: 'stored', name: gitProject.name },
+    });
+
+    expect(request.cursor_options?.force).toBe(false);
   });
 
   it('declares every Claude boolean on the Auto Scan request too', () => {
@@ -530,6 +552,47 @@ describe('Copilot — chat view', () => {
   });
 });
 
+describe('Cursor — chat view', () => {
+  const AVAILABLE: ChatSupport = { kind: 'available', resume: true, live: false };
+
+  it.each<[string, boolean, ChatSupport | undefined, 'chat' | 'terminal']>([
+    ['chat available', false, AVAILABLE, 'chat'],
+    ['probe still out', false, undefined, 'chat'],
+    ['Terminal UI on', true, AVAILABLE, 'terminal'],
+    ['no chat for Cursor on this PC', false, { kind: 'unavailable' }, 'terminal'],
+    ['agent predates chat', false, { kind: 'outdated' }, 'terminal'],
+  ])('%s', (_name, terminalUi, chat, ui) => {
+    const request = buildCreateRequest({
+      state: { ...POPULATED, cursor: { ...POPULATED.cursor, terminalUi } },
+      mode: 'cursor',
+      project: gitProject,
+      chat,
+    });
+
+    expect(request?.cli).toBe('cursor');
+    expect(request?.ui).toBe(ui);
+    expect(request?.worktree).toBe(false);
+    expect(request?.cursor_options).toEqual({
+      force: true,
+      worktree: true,
+      branch_name: 'feature/x',
+      base_branch: null,
+    });
+    expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
+  });
+
+  it('never carries the options of the Copilot bucket', () => {
+    const request = build('cursor', {
+      ...POPULATED,
+      cursor: { force: false, terminalUi: false },
+      copilot: { allowAll: true, terminalUi: true },
+    });
+
+    expect(request.cursor_options?.force).toBe(false);
+    expect('copilot_options' in request).toBe(false);
+  });
+});
+
 describe('buildResumeRequest', () => {
   const stored: ChatStoredSession = {
     session_id: 'external-2222',
@@ -657,6 +720,32 @@ describe('buildResumeRequest', () => {
     expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
   });
 
+  it('continues a Cursor session with the Cursor options and never a worktree', () => {
+    const request = buildResumeRequest(
+      { state: POPULATED, mode: 'cursor', project: gitProject },
+      'cursor',
+      stored,
+    );
+
+    expect(request).toMatchObject({
+      project_name: 'mobaide',
+      cli: 'cursor',
+      ui: 'chat',
+      chat_resume_id: 'external-2222',
+      worktree: false,
+    });
+    expect(request.cursor_options).toEqual({
+      force: true,
+      worktree: false,
+      branch_name: undefined,
+      base_branch: null,
+    });
+    expect('claude_options' in request).toBe(false);
+    expect('codex_options' in request).toBe(false);
+    expect('copilot_options' in request).toBe(false);
+    expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
+  });
+
   it('sends the recorded folder as cwd when it is not the selected project', () => {
     const request = buildResumeRequest(
       { state: POPULATED, mode: 'codex', project: gitProject },
@@ -731,7 +820,8 @@ describe('base_branch', () => {
     expect(withBase('antigravity').antigravity_options?.base_branch).toBe('origin/dev');
     expect(withBase('opencode').opencode_options?.base_branch).toBe('origin/dev');
     expect(withBase('copilot').copilot_options?.base_branch).toBe('origin/dev');
-    for (const mode of ['claude', 'codex', 'antigravity', 'opencode', 'copilot'] as const) {
+    expect(withBase('cursor').cursor_options?.base_branch).toBe('origin/dev');
+    for (const mode of ['claude', 'codex', 'antigravity', 'opencode', 'copilot', 'cursor'] as const) {
       expect('base_branch' in withBase(mode)).toBe(false);
     }
   });

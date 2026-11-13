@@ -16,6 +16,7 @@ const NEVER_LAUNCHED: LaunchPrefs = {
   antigravity: null,
   opencode: null,
   copilot: null,
+  cursor: null,
   lastProjectName: null,
 };
 
@@ -151,6 +152,7 @@ describe('applyLaunchPrefs', () => {
       antigravity: { model: null, skipPermissions: false, sandbox: true, terminalUi: false },
       opencode: null,
       copilot: null,
+      cursor: null,
       lastProjectName: 'mobaide',
     });
 
@@ -192,6 +194,52 @@ describe('the Copilot bucket', () => {
     expect(seeded.copilot).toEqual({ allowAll: true, terminalUi: true });
     expect(applyLaunchPrefs(INITIAL_WIZARD_STATE, NEVER_LAUNCHED).copilot).toEqual({
       allowAll: false,
+      terminalUi: false,
+    });
+  });
+});
+
+describe('the Cursor bucket', () => {
+  const dialled: WizardState = {
+    ...INITIAL_WIZARD_STATE,
+    cursor: { force: true, terminalUi: true },
+    git: { worktree: true, branchName: 'wip' },
+  };
+
+  it('is filed under its own kind, without the per-session git fields', () => {
+    expect(launchPrefsFromState(dialled, 'cursor')).toEqual({
+      kind: 'cursor',
+      prefs: { force: true, terminalUi: true },
+    });
+  });
+
+  it('is restored into Cursor only', () => {
+    const seeded = applyLaunchPrefs(INITIAL_WIZARD_STATE, {
+      ...NEVER_LAUNCHED,
+      cursor: { force: true, terminalUi: true },
+    });
+
+    expect(seeded.cursor).toEqual({ force: true, terminalUi: true });
+    expect(seeded.claude).toEqual(INITIAL_WIZARD_STATE.claude);
+    expect(seeded.copilot).toEqual(INITIAL_WIZARD_STATE.copilot);
+    expect(seeded.codex.terminalUi).toBe(false);
+  });
+
+  it('is not seeded from the saved Copilot bucket', () => {
+    const seeded = applyLaunchPrefs(INITIAL_WIZARD_STATE, {
+      ...NEVER_LAUNCHED,
+      copilot: { allowAll: true, terminalUi: true },
+    });
+
+    expect(seeded.cursor).toEqual({ force: false, terminalUi: false });
+  });
+
+  it('stays at the wizard defaults for a profile that never launched Cursor', () => {
+    const seeded = applyLaunchPrefs(dialled, NEVER_LAUNCHED);
+
+    expect(seeded.cursor).toEqual({ force: true, terminalUi: true });
+    expect(applyLaunchPrefs(INITIAL_WIZARD_STATE, NEVER_LAUNCHED).cursor).toEqual({
+      force: false,
       terminalUi: false,
     });
   });

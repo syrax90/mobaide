@@ -7,6 +7,7 @@ import com.mobaide.app.data.local.ClaudeLaunchPrefs
 import com.mobaide.app.data.local.CodexLaunchPrefs
 import com.mobaide.app.data.local.OpenCodeLaunchPrefs
 import com.mobaide.app.data.local.CopilotLaunchPrefs
+import com.mobaide.app.data.local.CursorLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.RestApi
@@ -130,6 +131,8 @@ class CreateSessionViewModelTest {
         coEvery { prefs.setLastUsedOpenCodeOptions(any()) } just Runs
         coEvery { prefs.getLastUsedCopilotOptions() } returns null
         coEvery { prefs.setLastUsedCopilotOptions(any()) } just Runs
+        coEvery { prefs.getLastUsedCursorOptions() } returns null
+        coEvery { prefs.setLastUsedCursorOptions(any()) } just Runs
         coEvery { prefs.getRecentCustomPaths(any()) } returns recentCustomPaths
         coEvery { prefs.addRecentCustomPath(any(), any()) } just Runs
         coEvery { prefs.removeRecentCustomPath(any(), any()) } just Runs
@@ -3984,6 +3987,274 @@ class CreateSessionViewModelTest {
         val options = request.copilot_options
         assertNotNull(options)
         assertTrue(options!!.allow_all)
+        assertFalse(options.worktree)
+        assertNull(options.branch_name)
+    }
+
+    // Cursor
+
+    private val cursorCli = """{"cursor":{"available":true}}"""
+
+    private fun TestScope.cursorSubmit(
+        fx: Fixture,
+        setUp: (CreateSessionViewModel) -> Unit = {},
+    ): Pair<CreateSessionRequest, CursorLaunchPrefs> {
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-cursor", "starting", "2026-11-13T00:00:00Z")
+        val prefsSlot = slot<CursorLaunchPrefs>()
+        coEvery { fx.prefs.setLastUsedCursorOptions(capture(prefsSlot)) } just Runs
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCursorMode()
+        setUp(vm)
+        vm.submitCursor()
+        advanceUntilIdle()
+        return requestSlot.captured to prefsSlot.captured
+    }
+
+    @Test
+    fun submitCursor_sendsCliCursor_withOnlyItsOwnOptionsBlock_andOpensTheChatView() = runTest {
+        val fx = newFixture()
+
+        val (request, saved) = cursorSubmit(fx) { vm ->
+            assertEquals(CreateSessionStep.CursorConfig, vm.uiState.value.step)
+            vm.setCursorForce(true)
+            vm.toggleWorktree(true)
+            vm.setBranchName("feature/x")
+        }
+
+        assertEquals("alpha", request.project_name)
+        assertEquals("cursor", request.cli)
+        assertEquals(SessionResponse.UI_CHAT, request.ui)
+        assertNull("Cursor must not send claude_options", request.claude_options)
+        assertNull("Cursor must not send codex_options", request.codex_options)
+        assertNull("Cursor must not send antigravity_options", request.antigravity_options)
+        assertNull("Cursor must not send copilot_options", request.copilot_options)
+        val options = request.cursor_options
+        assertNotNull(options)
+        assertTrue(options!!.force)
+        assertTrue("worktree must travel inside cursor_options", options.worktree)
+        assertEquals("feature/x", options.branch_name)
+        assertFalse(
+            "Cursor worktree travels in cursor_options, not the top-level request field",
+            request.worktree,
+        )
+        // The same choices are kept for the next Cursor launch, and no other agent's.
+        assertEquals(CursorLaunchPrefs(force = true, terminalUi = false), saved)
+        coVerify(exactly = 0) { fx.prefs.setLastUsedClaudeOptions(any()) }
+        coVerify(exactly = 0) { fx.prefs.setLastUsedCodexOptions(any()) }
+        coVerify(exactly = 0) { fx.prefs.setLastUsedCopilotOptions(any()) }
+    }
+
+    @Test
+    fun submitCursor_byDefault_doesNotRunEverything() = runTest {
+        val (request, saved) = cursorSubmit(newFixture())
+
+        assertFalse(request.cursor_options!!.force)
+        assertFalse(request.cursor_options!!.worktree)
+        assertNull(request.cursor_options!!.branch_name)
+        assertFalse(saved.force)
+    }
+
+    @Test
+    fun submitCursor_withTerminalUi_opensTheTerminal_andRemembersTheChoice() = runTest {
+        val (request, saved) = cursorSubmit(newFixture()) { it.toggleCursorTerminalUi(true) }
+
+        assertEquals("cursor", request.cli)
+        assertEquals(SessionResponse.UI_TERMINAL, request.ui)
+        assertTrue(saved.terminalUi)
+    }
+
+    @Test
+    fun submitCursor_whereThePcHasNoCursorChat_opensTheTerminal() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            chatVersion("""{"claude":{"resume":true}}""", cli = cursorCli)
+
+        val (request, _) = cursorSubmit(fx) { vm ->
+            vm.refreshCliAvailability()
+            advanceUntilIdle()
+            assertNotNull(vm.uiState.value.cursorChatUnavailableHint)
+            assertFalse(vm.uiState.value.cursorResumeAvailable)
+        }
+
+        assertEquals(SessionResponse.UI_TERMINAL, request.ui)
+    }
+
+    @Test
+    fun cursorResume_isOffered_onlyForAChatSessionOnAPcThatCanResumeOne() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            chatVersion("""{"cursor":{"resume":true,"live":false}}""", cli = cursorCli)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        assertNull(vm.uiState.value.cursorChatUnavailableHint)
+        assertTrue(vm.uiState.value.cursorResumeAvailable)
+
+        vm.toggleCursorTerminalUi(true)
+
+        assertFalse(vm.uiState.value.cursorResumeAvailable)
+    }
+
+    @Test
+    fun submitCursor_customPath_sendsTheFolder_andNeverAWorktree() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-cursor-adhoc", "starting", "2026-11-13T00:00:00Z")
+
+        vm.selectCustomPath()
+        advanceUntilIdle()
+        vm.setCustomPathDraft(hostAbsolutePath)
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+        vm.confirmProject()
+        vm.selectCursorMode()
+        vm.setCursorForce(true)
+        vm.submitCursor()
+        advanceUntilIdle()
+
+        val request = requestSlot.captured
+        assertNull(request.project_name)
+        assertEquals(hostAbsolutePath, request.cwd)
+        assertEquals("cursor", request.cli)
+        val options = request.cursor_options
+        assertNotNull(options)
+        assertTrue(options!!.force)
+        assertFalse(options.worktree)
+        assertNull(options.branch_name)
+        assertNull(options.base_branch)
+    }
+
+    @Test
+    fun cursorCard_isDisabled_forAnAgentFromBeforeCursorSupport() = runTest {
+        // That agent lists its CLIs without Cursor, and would open a plain
+        // shell for `cli = "cursor"`.
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            versionResponse(claude = true, codex = true)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectProject("alpha")
+        vm.confirmProject()
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertFalse(s.cursorKnown)
+        assertFalse(s.isModeEnabled(CreateSessionMode.Cursor))
+        assertTrue("the agent's other CLIs stay usable", s.isModeEnabled(CreateSessionMode.Codex))
+
+        vm.selectCursorMode()
+
+        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
+    }
+
+    @Test
+    fun cursorCard_staysEnabled_whenTheAgentReportsNoCliList() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertTrue(s.cursorKnown)
+        assertNull(s.cursorAvailable)
+        assertTrue(s.isModeEnabled(CreateSessionMode.Cursor))
+    }
+
+    @Test
+    fun cursorCard_isDisabled_whenTheAgentListsCursorAsNotInstalled() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            chatVersion("{}", cli = """{"claude":{"available":true},"cursor":{"available":false}}""")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertTrue("a listed CLI is known, only not installed", s.cursorKnown)
+        assertEquals(false, s.cursorAvailable)
+        assertFalse(s.isModeEnabled(CreateSessionMode.Cursor))
+    }
+
+    @Test
+    fun init_restoresTheCursorChoices() = runTest {
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedCursorOptions() } returns
+            CursorLaunchPrefs(force = true, terminalUi = true)
+
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.cursorForce)
+        assertTrue(vm.uiState.value.cursorTerminalUi)
+        assertFalse(vm.uiState.value.copilotAllowAll)
+        assertFalse(vm.uiState.value.copilotTerminalUi)
+        assertFalse(vm.uiState.value.skipPermissions)
+    }
+
+    @Test
+    fun back_fromTheCursorConfig_returnsToTheModePick() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCursorMode()
+        assertEquals(CreateSessionStep.CursorConfig, vm.uiState.value.step)
+
+        vm.goBack()
+
+        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
+    }
+
+    @Test
+    fun resumeChatSession_cursor_sendsTheCursorOptionsWithoutAWorktree() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-cursor-resumed", "starting", "2026-11-13T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCursorMode()
+        vm.setCursorForce(true)
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+        vm.resumeChatSession("cursor", ChatStoredSession(session_id = "external-4444", cwd = "/p/alpha"))
+        advanceUntilIdle()
+
+        val request = requestSlot.captured
+        assertEquals("cursor", request.cli)
+        assertEquals("alpha", request.project_name)
+        assertNull(request.cwd)
+        assertEquals(SessionResponse.UI_CHAT, request.ui)
+        assertEquals("external-4444", request.chat_resume_id)
+        assertNull(request.claude_options)
+        assertNull(request.codex_options)
+        assertNull(request.copilot_options)
+        val options = request.cursor_options
+        assertNotNull(options)
+        assertTrue(options!!.force)
         assertFalse(options.worktree)
         assertNull(options.branch_name)
     }

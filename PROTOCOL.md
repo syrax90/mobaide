@@ -176,6 +176,33 @@ GitHub Copilot CLI is a managed agent of kind `copilot`, for terminal and chat s
 * Not supported for Copilot: a model or effort picker in the wizard.
 * Test mode runs the fake agent with `--flavor copilot`.
 
+### Delta 2026-11-13: Cursor sessions
+
+Additive delta within proto-v7 (2026-11-13): **one session kind, one options block, three capability entries. No version bump; `central_server` is untouched.** An older agent does not list `cursor`, and the clients then disable the card with "Update Mobaide on your PC to use Cursor."
+
+Cursor CLI is a managed agent of kind `cursor`, for terminal and chat sessions.
+
+| Where | Change |
+|-------|--------|
+| `POST /api/sessions` and relay `create_session` | `cli: "cursor"` with `cursor_options` (`force`, `worktree`, `branch_name`, `base_branch`). A missing binary answers `503` with `cursor_cli_missing`. |
+| `capabilities.cli` | A `cursor` entry. |
+| `capabilities.chat` | A `cursor` entry. |
+| `capabilities.voice.cleanup_kinds` | The id `cursor`. |
+| Session mode order | The id `cursor`. Default position: after `copilot`. |
+
+* Binary: `cursor-agent`. `MOBAIDE_CURSOR_BIN`, then PATH, then `~/.local/bin`, then (on Windows) `%LOCALAPPDATA%\cursor-agent\cursor-agent.{exe,cmd}`. `MOBAIDE_ACP_CURSOR_COMMAND` overrides the chat command.
+* Terminal sessions run the Cursor TUI, `cursor-agent [--force]`. They raise no attention alert and set no `activity`: the Cursor TUI reports no state (no OSC 7501).
+* Chat sessions run the ACP server built into the CLI, `cursor-agent acp` (`cursor-agent --force acp` when `force` is set), with no adapter. The process starts in the session folder, because Cursor reads the folder's rules, hooks and MCP servers from its working directory. The client declares `parameterizedModelPicker` in `clientCapabilities._meta`.
+* Mode values are Cursor's Agent, Plan and Ask. The model and the picked model's settings (effort, context, fast) are config options.
+* Cursor's own requests: `cursor/ask_question` becomes a form request. `cursor/create_plan` becomes the plan text as an agent message plus a permission request, **Accept plan** or **Reject plan**, which is never auto-approved. `cursor/update_todos` becomes the timeline `plan`. A shell command outside Cursor's allowlist is a normal permission request (allow once, allow always, reject); file edits send none.
+* Not live: Continue uses `session/list` and `session/load`, and lists only Cursor chat sessions. A session started in Cursor's terminal UI is not listed.
+* Folder trust: `cursor-agent acp` reads the folder's rules, hooks and MCP servers, so the PC agent asks in the chat. The record is `<CURSOR_DATA_DIR or ~/.cursor>/projects/<folder slug>/.workspace-trusted`. A parent folder's record also covers the folders inside it, except the home folder, a folder above it, and a folder fewer than three levels deep.
+* Sign-in: the method `cursor` (see Delta 2026-11-11, sign-in from the chat).
+* Command output: a finished command becomes a `console` part with the exit code.
+* Voice transcript cleanup: `capabilities.voice.cleanup_kinds` lists `cursor`, and `POST /api/voice/cleanup` accepts `kind: "cursor"`. The run is `cursor-agent --print --output-format stream-json --mode ask --trust`, on Cursor's default model, in the `voice-cleanup` work folder with a `.cursor/cli.json` that denies every tool (docs/voice-input.md, *Transcript cleanup*).
+* Not supported for Cursor: a model picker in the wizard, "your turn" alerts for terminal sessions, continuing a session started in Cursor's terminal UI.
+* Test mode runs the fake agent with `--flavor cursor`.
+
 ### Delta 2026-11-11: sign-in from the chat
 
 Additive delta within proto-v7 (2026-11-11): **one chat request kind, one chat command. No version bump; `central_server` is untouched.**
@@ -188,6 +215,7 @@ A chat session can now sign its coding agent in on the PC. ACP agents report a m
 | Codex | `chatgpt`, `api_key` | `codex login --device-auth`: prints the page and a one-time code to enter there. `api_key`: the value goes to `codex login --with-api-key` on stdin. |
 | Antigravity | `google` | `agy acp --login`: prints the Google sign-in page, then reads the code (or the address of the page the user lands on). |
 | GitHub Copilot | `github` | `copilot login --device-code`: prints GitHub's device page and a one-time code to enter there. |
+| Cursor | `cursor` | `cursor-agent login`: prints a sign-in page that works on any device. No code to type; it finishes alone. |
 
 * When it is offered: `session/new`, `session/load` or a prompt fails with `authRequired`, or claude-agent-acp pushes `_auth/status_update` with `authStatus.kind: "none"`. A user message `/login` (no images) also opens it, unless a turn runs. The state `commands` list gains a `login` entry.
 * The request in `requests`: `{"id": "sign-in", "kind": "sign_in", "tool_call_id": null, "title", "text", "stage", "methods": [{id, name, description}], "url", "user_code", "input", "busy", "error"}`.
@@ -208,7 +236,7 @@ The session wire dict (`sessions.changed`, `session.updated`, the `/ws/sessions`
 |---------|--------|
 | Claude Code and Auto Scan terminal | The attention gate's hooks. `UserPromptSubmit` → `working`. A `Stop` that lists a running background agent → `working`. A `Stop` that lists only passive work (a background shell, a monitor, a scheduled wakeup) or `session_crons` → `waiting`. Otherwise `idle` when the gate's quiet window ends, even when the alert is muted or deduped. A `PreToolUse` heartbeat from the main agent → `working` and cancels a pending quiet window. A sub-agent tool call → `working` only while the last `Stop` listed in-flight work. `idle_prompt` re-reports the activity the last `Stop` implied, or `idle`. `SessionEnd` → `idle`. `null` until the first hook. |
 | Chat (`ui: "chat"`), every kind | The timeline `status`: `running` → `working`, `ready` → `idle`, otherwise `null`. A turn another app on a shared host runs counts too. |
-| Codex, Antigravity, OpenCode, GitHub Copilot, Terminal and custom terminal (PTY) sessions | Always `null`. Their OSC 7501 reports (Delta 2026-11-10) raise alerts but do not set `activity` yet. |
+| Codex, Antigravity, OpenCode, GitHub Copilot, Cursor, Terminal and custom terminal (PTY) sessions | Always `null`. Their OSC 7501 reports (Delta 2026-11-10) raise alerts but do not set `activity` yet. |
 
 * Only a `running` session reports a value. Clients show a "Working" chip and an animated status square for `working`, and a muted "Background" chip with the static square for `waiting`. A pending `awaiting_permission` or `awaiting_os_permission` outranks it, because the turn waits for the user.
 * Gate rule: an `idle_prompt` no longer raises `turn_finished` while the last `Stop` listed in-flight work. It also does not alert again once the quiet window already alerted for the turn. A passive task still in flight when the user types the next prompt stops counting as in-flight work. Task notifications, sub-agent hand-backs and scheduled wakeups are not typed prompts.
@@ -419,7 +447,7 @@ Additive delta within proto-v7 (2026-11-04, drag-to-reorder in the new-session w
 | ``PUT /api/session-mode-order`` | ``{"order": [str]}`` | Full replace; same body as ``GET``. ``[]`` restores the default order. |
 
 * Dashboard/user JWT, non-admin.
-* Each id matches the shortcuts ``KIND_PATTERN`` (``^[a-z0-9_]{1,32}$``): ``claude``, ``codex``, ``antigravity``, ``opencode``, ``copilot``, ``auto_scan``, ``shell``, ``custom_<12hex>``. At most 64 ids, no duplicates → else ``422``. The server stores the ids opaquely and does not check them against the live custom types.
+* Each id matches the shortcuts ``KIND_PATTERN`` (``^[a-z0-9_]{1,32}$``): ``claude``, ``codex``, ``antigravity``, ``opencode``, ``copilot``, ``cursor``, ``auto_scan``, ``shell``, ``custom_<12hex>``. At most 64 ids, no duplicates → else ``422``. The server stores the ids opaquely and does not check them against the live custom types.
 * ``version`` grows by one on every change. A ``PUT`` of the stored order changes nothing and pushes nothing.
 * A change pushes the user event ``session_mode_order.updated`` with the same body to every user-events socket of the account. Clients keep the higher ``version`` of the cached and incoming snapshot, and reconcile with ``GET`` on every user-events connect.
 * Clients apply the list the same way: a card the list names is ranked by its place there; a card it does not name (a custom type created after the last save, a mode a newer client added) keeps its default place among the other unnamed cards, after the named ones; an id that names no card is skipped.

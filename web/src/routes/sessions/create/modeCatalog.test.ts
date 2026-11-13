@@ -42,7 +42,7 @@ const card = (list: ModeCard[], mode: string): ModeCard => {
 };
 
 describe('buildModeCards', () => {
-  it('offers the seven built-ins in order, then the account’s custom types', () => {
+  it('offers the eight built-ins in order, then the account’s custom types', () => {
     const list = cards({
       customTypes: [
         {
@@ -61,6 +61,7 @@ describe('buildModeCards', () => {
       'antigravity',
       'opencode',
       'copilot',
+      'cursor',
       'auto_scan',
       'shell',
       'custom_0123456789ab',
@@ -121,6 +122,28 @@ describe('buildModeCards', () => {
     });
     expect(card(installed, 'copilot')).toMatchObject({ enabled: true, disabledReason: undefined });
     expect(card(cards({ capabilities: capabilities({}) }), 'copilot').enabled).toBe(true);
+  });
+
+  it('disables Cursor on an agent from before Cursor support', () => {
+    // That agent would open a plain shell for `cli: "cursor"`.
+    const older = cards({
+      capabilities: capabilities({ claude: { available: true }, copilot: { available: true } }),
+    });
+    const missing = cards({ capabilities: capabilities({ cursor: { available: false } }) });
+    const installed = cards({ capabilities: capabilities({ cursor: { available: true } }) });
+
+    expect(card(older, 'cursor')).toMatchObject({
+      title: 'Cursor',
+      enabled: false,
+      disabledReason: 'Update Mobaide on your PC to use Cursor.',
+    });
+    expect(card(older, 'copilot').enabled).toBe(true);
+    expect(card(missing, 'cursor')).toMatchObject({
+      enabled: false,
+      disabledReason: 'Cursor CLI is not installed on the agent.',
+    });
+    expect(card(installed, 'cursor')).toMatchObject({ enabled: true, disabledReason: undefined });
+    expect(card(cards({ capabilities: capabilities({}) }), 'cursor').enabled).toBe(true);
   });
 
   it('gates Auto Scan on both the Claude CLI and a Linear key', () => {

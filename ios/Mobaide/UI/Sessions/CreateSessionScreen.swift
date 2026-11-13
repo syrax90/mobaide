@@ -27,6 +27,7 @@ private struct CreateSessionContent: View {
     @State private var antigravityAdvancedExpanded = false
     @State private var opencodeAdvancedExpanded = false
     @State private var copilotAdvancedExpanded = false
+    @State private var cursorAdvancedExpanded = false
     @State private var autoScanAdvancedExpanded = false
     @State private var showContinueSession = false
     @State private var pendingContinue: ChatStoredSession?
@@ -423,6 +424,7 @@ private struct CreateSessionContent: View {
             case .antigravity: antigravityConfig
             case .opencode: opencodeConfig
             case .copilot: copilotConfig
+            case .cursor: cursorConfig
             case .custom(let id): customConfig(id)
             case .autoScan, .shell, .none: shellConfig
             }
@@ -441,6 +443,9 @@ private struct CreateSessionContent: View {
             }
             if model.mode == .copilot {
                 copilotAdvancedSection
+            }
+            if model.mode == .cursor {
+                cursorAdvancedSection
             }
             Section {
                 Button {
@@ -874,6 +879,37 @@ private struct CreateSessionContent: View {
                         set: { model.copilotTerminalUI = $0 }
                     ),
                     unavailableReason: model.copilotChatUnavailableReason
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var cursorConfig: some View {
+        @Bindable var model = model
+        Section(header: PixelSectionHeader("Cursor")) {
+            Toggle("Run everything without asking (dangerous)", isOn: $model.cursorForce)
+            Text("When on, Cursor runs commands without asking, except commands that its settings deny.")
+                .font(.footnote)
+                .foregroundStyle(colors.textMuted)
+        }
+        continueSessionSection(
+            agentName: "Cursor",
+            hint: "Open a Cursor chat session stored on your PC. Sessions from Cursor’s terminal UI are not listed."
+        )
+    }
+
+    /// Collapsed like the Codex one; rendered after the Worktree section.
+    @ViewBuilder
+    private var cursorAdvancedSection: some View {
+        Section {
+            DisclosureGroup("Advanced", isExpanded: $cursorAdvancedExpanded) {
+                terminalUIToggle(
+                    Binding(
+                        get: { model.cursorTerminalUI || model.cursorChatUnavailable },
+                        set: { model.cursorTerminalUI = $0 }
+                    ),
+                    unavailableReason: model.cursorChatUnavailableReason
                 )
             }
         }

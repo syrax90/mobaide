@@ -26,6 +26,7 @@ from .claude_launcher import (
 from .cli_launcher import CliLauncher
 from .codex_launcher import CodexLauncher, CodexOptions
 from .copilot_launcher import CopilotLauncher, CopilotOptions
+from .cursor_launcher import CursorLauncher, CursorOptions
 from .models import (
     SessionConfig,
     SessionInfo,
@@ -62,6 +63,7 @@ class SessionManager:
         antigravity_launcher: AntigravityLauncher | None = None,
         opencode_launcher: OpenCodeLauncher | None = None,
         copilot_launcher: CopilotLauncher | None = None,
+        cursor_launcher: CursorLauncher | None = None,
         worktree_mgr: WorktreeManager | None = None,
         event_bus: Any | None = None,
         on_session_created: Callable[[TerminalSession], Awaitable[None] | None] | None = None,
@@ -76,13 +78,14 @@ class SessionManager:
         self._liveness_task: asyncio.Task[None] | None = None
         self._projects_store = projects_store
         # ``launcher`` keeps its historical name (the Claude launcher); the
-        # Codex, Antigravity, OpenCode and Copilot launchers are siblings.
+        # Codex, Antigravity, OpenCode, Copilot and Cursor launchers are siblings.
         # Dispatch picks between them per session.
         self._launcher = launcher
         self._codex_launcher = codex_launcher
         self._antigravity_launcher = antigravity_launcher
         self._opencode_launcher = opencode_launcher
         self._copilot_launcher = copilot_launcher
+        self._cursor_launcher = cursor_launcher
         self._worktree_mgr = worktree_mgr
         self._event_bus = event_bus
         self._on_session_created = on_session_created
@@ -124,9 +127,10 @@ class SessionManager:
 
         Dispatch matrix on (``project_name``, managed-CLI options). A session is
         "managed" when it carries ``claude_options``, ``codex_options``,
-        ``antigravity_options``, ``opencode_options`` or ``copilot_options`` — the
-        entry layers normalise exactly one of them via ``resolve_spawn_args``, so
-        a raw shell session (none set) keeps its caller-supplied argv:
+        ``antigravity_options``, ``opencode_options``, ``copilot_options`` or
+        ``cursor_options`` — the entry layers normalise exactly one of them via
+        ``resolve_spawn_args``, so a raw shell session (none set) keeps its
+        caller-supplied argv:
 
         * stored project + managed → ``_apply_project_launch`` builds full
           argv/cwd/env via the matching launcher against ``ProjectsStore``.
@@ -154,6 +158,7 @@ class SessionManager:
             or config.antigravity_options is not None
             or config.opencode_options is not None
             or config.copilot_options is not None
+            or config.cursor_options is not None
         )
         if config.project_name is not None:
             if managed:
@@ -217,6 +222,7 @@ class SessionManager:
             or config.antigravity_options
             or config.opencode_options
             or config.copilot_options
+            or config.cursor_options
         )
         if config.chat_resume_id and options is not None and getattr(options, "worktree", False):
             from dataclasses import replace
@@ -295,14 +301,16 @@ class SessionManager:
         | CodexOptions
         | AntigravityOptions
         | OpenCodeOptions
-        | CopilotOptions,
+        | CopilotOptions
+        | CursorOptions,
     ]:
         """Pick the launcher + options for a managed session.
 
         ``resolve_spawn_args`` guarantees exactly one of ``claude_options`` /
         ``codex_options`` / ``antigravity_options`` / ``opencode_options`` /
-        ``copilot_options`` is set, so presence is the discriminator. Raises if
-        the requested CLI's launcher was not wired into this manager.
+        ``copilot_options`` / ``cursor_options`` is set, so presence is the
+        discriminator. Raises if the requested CLI's launcher was not wired into
+        this manager.
         """
         if config.opencode_options is not None:
             if self._opencode_launcher is None:
@@ -316,6 +324,12 @@ class SessionManager:
                     "copilot session requested but agent has no Copilot launcher",
                 )
             return self._copilot_launcher, config.copilot_options
+        if config.cursor_options is not None:
+            if self._cursor_launcher is None:
+                raise ValueError(
+                    "cursor session requested but agent has no Cursor launcher",
+                )
+            return self._cursor_launcher, config.cursor_options
         if config.antigravity_options is not None:
             if self._antigravity_launcher is None:
                 raise ValueError(

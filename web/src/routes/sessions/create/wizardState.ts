@@ -27,6 +27,7 @@ export const BUILT_IN_MODES = [
   'antigravity',
   'opencode',
   'copilot',
+  'cursor',
   'auto_scan',
   'shell',
 ] as const;
@@ -109,6 +110,13 @@ export interface CopilotBucket {
   terminalUi: boolean;
 }
 
+export interface CursorBucket {
+  /** Cursor's `--force` ("Run Everything"): run commands without asking. */
+  force: boolean;
+  /** The classic terminal instead of the chat view. */
+  terminalUi: boolean;
+}
+
 export interface GitBucket {
   worktree: boolean;
   branchName: string;
@@ -136,6 +144,7 @@ export interface WizardState {
   antigravity: AntigravityBucket;
   opencode: OpenCodeBucket;
   copilot: CopilotBucket;
+  cursor: CursorBucket;
   git: GitBucket;
   /**
    * The base branch the user picked by hand, if any. Not persisted: the agent
@@ -193,6 +202,7 @@ export const INITIAL_WIZARD_STATE: WizardState = {
   },
   opencode: { autoApprove: false, terminalUi: false },
   copilot: { allowAll: false, terminalUi: false },
+  cursor: { force: false, terminalUi: false },
   git: { worktree: false, branchName: '' },
   worktreeBasePick: null,
   autoScanPromptSeededFor: null,
@@ -365,6 +375,8 @@ export type WizardAction =
   | { type: 'setOpenCodeTerminalUi'; value: boolean }
   | { type: 'setCopilotAllowAll'; value: boolean }
   | { type: 'setCopilotTerminalUi'; value: boolean }
+  | { type: 'setCursorForce'; value: boolean }
+  | { type: 'setCursorTerminalUi'; value: boolean }
   | { type: 'setWorktree'; value: boolean }
   | { type: 'setBranchName'; value: string }
   | { type: 'setWorktreeBase'; pick: WorktreeBasePick }
@@ -585,6 +597,12 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
 
     case 'setCopilotTerminalUi':
       return { ...state, copilot: { ...state.copilot, terminalUi: action.value } };
+
+    case 'setCursorForce':
+      return { ...state, cursor: { ...state.cursor, force: action.value } };
+
+    case 'setCursorTerminalUi':
+      return { ...state, cursor: { ...state.cursor, terminalUi: action.value } };
 
     case 'setWorktree':
       return { ...state, git: { ...state.git, worktree: action.value } };

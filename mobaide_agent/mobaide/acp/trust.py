@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import tomllib
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -490,4 +492,94 @@ class CopilotFolderTrust:
         # Copilot keeps the file private to the user.
         mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
         atomic_write(path, header + json.dumps(data, indent=2, ensure_ascii=False) + "\n", mode=mode)
+        return True
+
+
+def cursor_projects_dir(env: Mapping[str, str] | None = None) -> Path:
+    """Where the Cursor CLI started with ``env`` keeps its per-folder state,
+    trust markers included."""
+    data_dir = ((env if env is not None else os.environ).get("CURSOR_DATA_DIR") or "").strip()
+    base = Path(data_dir).expanduser() if data_dir else Path.home() / ".cursor"
+    return base / "projects"
+
+
+_CURSOR_TRUST_MARKER = ".workspace-trusted"
+_CURSOR_SLUG_OTHER = re.compile(r"[^a-zA-Z0-9]")
+_CURSOR_SLUG_DASHES = re.compile(r"-+")
+
+
+def _cursor_slug(folder: str) -> str:
+    """The name of a folder's state directory, as the Cursor CLI derives it."""
+    return _CURSOR_SLUG_DASHES.sub("-", _CURSOR_SLUG_OTHER.sub("-", folder)).strip("-")
+
+
+def _cursor_covers_children(folder: Path) -> bool:
+    """Whether Cursor lets the trust of ``folder`` cover the folders inside
+    it: not for the home folder, a folder above it, or a folder fewer than
+    three levels deep."""
+    home = Path(os.path.expanduser("~"))
+    for broad in (home, Path(os.path.realpath(home))):
+        if folder == broad or folder in broad.parents:
+            return False
+    return len([part for part in folder.parts if part.strip("\\/")]) >= 3
+
+
+class CursorFolderTrust:
+    """The Cursor CLI's own trust record: a ``.workspace-trusted`` file in the
+    folder's state directory. The record of a parent folder also covers the
+    folders inside it."""
+
+    prompt_title = "Trust this folder?"
+
+    def __init__(self, cwd: str, projects_dir: Path | None = None) -> None:
+        self._cwd = cwd
+        self._projects_dir = projects_dir or cursor_projects_dir()
+
+    @property
+    def prompt_text(self) -> str:
+        text = (
+            "Cursor will use this folder's rules, hooks and MCP servers. "
+            "They can run commands on your PC. Only trust a folder whose files you know."
+        )
+        if _cursor_covers_children(Path(os.path.realpath(self._cwd))):
+            text += " The trust also covers every folder inside it."
+        return text
+
+    def _marker(self, folder: Path) -> Path:
+        return self._projects_dir / _cursor_slug(str(folder)) / _CURSOR_TRUST_MARKER
+
+    def _recorded(self, folder: Path) -> bool:
+        """Whether ``folder`` has a trust record. Two folders can share one
+        state directory, so a record that names another folder does not
+        count; one that names none does, as for the CLI."""
+        try:
+            data = json.loads(self._marker(folder).read_text(encoding="utf-8"))
+        except OSError:
+            return False
+        except ValueError:
+            return True
+        recorded = data.get("workspacePath") if isinstance(data, dict) else None
+        if not isinstance(recorded, str) or not recorded:
+            return True
+        return _same_folder(recorded, str(folder))
+
+    def is_trusted(self) -> bool:
+        folder = Path(os.path.realpath(self._cwd))
+        if self._recorded(folder):
+            return True
+        return any(
+            _cursor_covers_children(parent) and self._recorded(parent)
+            for parent in folder.parents
+        )
+
+    def grant(self) -> bool:
+        """Write the folder's trust record as the CLI does. Cursor records
+        every folder: the record of a broad folder covers only that folder."""
+        folder = Path(os.path.realpath(self._cwd))
+        marker = self._marker(folder)
+        record = {
+            "trustedAt": datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            "workspacePath": str(folder),
+        }
+        atomic_write(marker, json.dumps(record, indent=2), mode=0o644)
         return True

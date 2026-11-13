@@ -32,6 +32,7 @@ _CHAT_AGENT_ENV = {
     "MOBAIDE_ACP_ANTIGRAVITY_COMMAND": "",
     "MOBAIDE_ACP_OPENCODE_COMMAND": "",
     "MOBAIDE_ACP_COPILOT_COMMAND": "",
+    "MOBAIDE_ACP_CURSOR_COMMAND": "",
 }
 
 
@@ -188,6 +189,7 @@ def test_chat_session_over_the_relay(e2e_stack, spawn_agent, tmp_path):
         "antigravity": {"resume": True, "live": False},
         "opencode": {"resume": True, "live": False},
         "copilot": {"resume": True, "live": False},
+        "cursor": {"resume": True, "live": False},
     }
 
     stored_path = f"api/chat/claude/sessions?cwd={quote(cwd)}"

@@ -168,6 +168,45 @@ class SessionCreateDtoFixtureTest {
     }
 
     @Test
+    fun cursorOptions_fullCarriesBaseBranch_andEncodesTheServerKeys() {
+        val decoded = fixture("CursorOptionsModel").decodeAll(CursorOptionsModel.serializer())
+        val full = decoded.getValue("full")
+        assertTrue(full.force)
+        assertTrue(full.worktree)
+        assertEquals("b", full.branch_name)
+        assertEquals("origin/main", full.base_branch)
+        assertBaseBranchEncodes(CursorOptionsModel.serializer(), full, "origin/main")
+        val encoded = allKeysJson.encodeToJsonElement(CursorOptionsModel.serializer(), full) as JsonObject
+        assertEquals(setOf("force", "worktree", "branch_name", "base_branch"), encoded.keys)
+        val defaults = decoded.getValue("empty_defaults_materialize")
+        // `force` must default off.
+        assertEquals(CursorOptionsModel(force = false, worktree = false), defaults)
+    }
+
+    @Test
+    fun createSessionRequest_cursorLaunchCarriesTheCursorBlock() {
+        val decoded = fixture("CreateSessionRequest").decodeAll(CreateSessionRequest.serializer())
+        val launch = decoded.getValue("cursor_launch")
+        assertEquals("cursor", launch.cli)
+        assertEquals(SessionResponse.UI_CHAT, launch.ui)
+        assertEquals(
+            CursorOptionsModel(
+                force = true,
+                worktree = true,
+                branch_name = "feature/x",
+                base_branch = "origin/main",
+            ),
+            launch.cursor_options,
+        )
+        assertNull(launch.claude_options)
+        assertNull(launch.copilot_options)
+        val encoded = json.encodeToJsonElement(CreateSessionRequest.serializer(), launch) as JsonObject
+        assertEquals("cursor", encoded["cli"]?.jsonPrimitive?.content)
+        assertTrue("cursor_options" in encoded)
+        assertTrue("copilot_options" !in encoded)
+    }
+
+    @Test
     fun createSessionRequest_fullCarriesTopLevelBaseBranch() {
         val decoded = fixture("CreateSessionRequest").decodeAll(CreateSessionRequest.serializer())
         val full = decoded.getValue("full")

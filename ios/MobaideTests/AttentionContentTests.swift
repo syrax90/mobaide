@@ -10,6 +10,17 @@ final class AttentionContentTests: XCTestCase {
         XCTAssertEqual(AttentionContent.label(for: makeSessionResponse(title: "  ", projectName: "  ")), "Claude session")
     }
 
+    func testAnUntitledCursorSessionIsNamedAfterItsKind() {
+        let untitled = makeSessionResponse(title: " ", projectName: nil, kind: .cursor)
+
+        XCTAssertEqual(AttentionContent.label(for: untitled), "Cursor session")
+        XCTAssertEqual(
+            AttentionContent.label(for: makeSessionResponse(title: nil, projectName: "proj", kind: .cursor)),
+            "proj",
+            "the project still wins over the kind"
+        )
+    }
+
     func testUnknownAndNilAttentionProduceNoContent() {
         XCTAssertNil(AttentionContent.content(for: makeSessionResponse(attention: nil)))
         XCTAssertNil(AttentionContent.content(for: makeSessionResponse(attention: "some_future_reason")))

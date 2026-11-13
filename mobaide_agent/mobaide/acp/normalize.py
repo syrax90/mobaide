@@ -41,6 +41,9 @@ PERMISSION_OPTIONS_MAX = 8
 # Command output kept per tool call, and shown while it still runs.
 CONSOLE_KEEP_MAX = 128 * 1024
 CONSOLE_LIVE_MAX = 8 * 1024
+# Longest command that is parsed as shell words to tidy a title: the parse
+# costs the square of the length of one long word.
+SHELL_PARSE_MAX = 8 * 1024
 
 TOOL_KINDS = frozenset(
     {"read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"}
@@ -116,6 +119,8 @@ def unwrap_shell(command: str) -> str:
     Only a system shell is dropped: ``./bash -c "git status"`` runs a file
     from the project, and an approval card must show that.
     """
+    if len(command) > SHELL_PARSE_MAX:
+        return command
     try:
         parts = shlex.split(command)
     except ValueError:
@@ -133,11 +138,73 @@ def _unquote_title(title: str) -> str:
     """A title that is one quoted shell word, as some agents send a command."""
     if len(title) < 2 or title[0] != title[-1] or title[0] not in "\"'":
         return title
+    if len(title) > SHELL_PARSE_MAX:
+        return title
     try:
         parts = shlex.split(title)
     except ValueError:
         return title
     return parts[0] if len(parts) == 1 and parts[0].strip() else title
+
+
+# A Markdown code span on one line.
+_CODE_SPAN = re.compile(r"`([^`\n]+)`")
+# A backtick that no backslash stands before.
+_BARE_MARK = re.compile(r"(?<!\\)`")
+
+
+# An absolute path, POSIX or Windows, with a name after its last separator.
+_ABSOLUTE_PATH = re.compile(r"(?:/|[A-Za-z]:[\\/]|\\\\).*[\\/]([^\\/]+)[\\/]*\Z", re.DOTALL)
+# rawInput keys that hold the one file a tool works on.
+_PATH_KEYS = ("file_path", "filePath", "path", "notebook_path")
+
+
+def _item_paths(item: Mapping[str, Any], raw_input: Any) -> frozenset[str]:
+    """The files a tool call names outside its title: its locations and the
+    path of its input. The card shows them in full."""
+    paths = {loc["path"] for loc in item["locations"]}
+    if isinstance(raw_input, Mapping):
+        paths.update(v for key in _PATH_KEYS if isinstance(v := raw_input.get(key), str))
+    return frozenset(paths)
+
+
+def _without_code_marks(title: str) -> str:
+    """A Markdown title as the plain text the clients show: each code span
+    (``Edit `app.py```) without its marks."""
+    if "`" not in title:
+        return title
+    return _CODE_SPAN.sub(r"\1", title)
+
+
+def _with_short_paths(title: str, paths: frozenset[str]) -> str:
+    """``title`` with each of ``paths`` (the tool call's own files, when
+    absolute) as its last name only: a phone cuts a long title before the
+    file name, and the card holds the whole path. Any other path stays
+    whole."""
+    for path in sorted(paths, key=len, reverse=True):
+        match = _ABSOLUTE_PATH.match(path)
+        if match is None or path not in title:
+            continue
+        # Not the start of a longer path.
+        title = re.sub(re.escape(path) + r"(?![\w./\\-])", lambda _: match.group(1), title)
+    return title
+
+
+def _markdown_title(title: str, kind: str, paths: frozenset[str] = frozenset()) -> str:
+    """A title that an agent writes in Markdown (Cursor), as plain text.
+
+    Cursor writes a command as one code span around the whole title, with
+    a backslash before each backtick of the command. Only that exact form is
+    undone, so an approval card shows the command as it runs, or the title
+    as it came."""
+    if kind != "execute":
+        return _with_short_paths(_without_code_marks(title), paths)
+    if len(title) < 3 or title[0] != "`" or title[-1] != "`":
+        return title
+    body = title[1:-1]
+    if _BARE_MARK.search(body) is not None:
+        return title
+    return body.replace("\\`", "`")
 
 
 def subtitle_from_input(raw_input: Any) -> str | None:
@@ -207,6 +274,29 @@ def unified_diff(path: str, old_text: str | None, new_text: str) -> dict[str, An
     return part
 
 
+# The file lines of a unified diff, less their first mark.
+_OLD_FILE_LINE = re.compile(r"\A-- (?:a/[^\n]*|/dev/null)(?:\n|\Z)")
+_NEW_FILE_LINE = re.compile(r"\A\+\+ (?:b/[^\n]*|/dev/null)(?:\n|\Z)")
+
+
+def _without_file_lines(old_text: str | None, new_text: str) -> tuple[str | None, str]:
+    """A diff's two texts without the ``--- a/…`` and ``+++ b/…`` lines.
+
+    Cursor builds the texts of a new file from a unified diff and keeps those
+    two lines in them, each less its first mark. They are dropped only when
+    both texts start with one, and an old side of ``/dev/null`` alone is a
+    new file."""
+    if old_text is None:
+        return old_text, new_text
+    old_match = _OLD_FILE_LINE.match(old_text)
+    new_match = _NEW_FILE_LINE.match(new_text)
+    if old_match is None or new_match is None:
+        return old_text, new_text
+    old_rest = old_text[old_match.end():]
+    new_file = not old_rest and old_match.group(0).startswith("-- /dev/null")
+    return (None if new_file else old_rest), new_text[new_match.end():]
+
+
 def content_block_part(block: Any) -> dict[str, Any] | None:
     """One ACP ``ContentBlock`` as a chat content part."""
     if not isinstance(block, Mapping):
@@ -268,7 +358,12 @@ def tool_content_parts(content: Any) -> list[dict[str, Any]]:
             new_text = _str(entry.get("newText"))
             if new_text is None:
                 continue
-            part = unified_diff(path, _str(entry.get("oldText")), new_text)
+            old_text = _str(entry.get("oldText"))
+            if not new_text and old_text and old_text == path:
+                # Cursor reports a deleted file as its own path: no content.
+                continue
+            old_text, new_text = _without_file_lines(old_text, new_text)
+            part = unified_diff(path, old_text, new_text)
         elif kind == "terminal":
             term_id = _str(entry.get("terminalId"))
             part = {"type": "terminal", "terminal_id": term_id} if term_id else None
@@ -311,14 +406,14 @@ def new_tool_item(tool_call_id: str) -> dict[str, Any]:
     }
 
 
-def merge_tool_update(item: dict[str, Any], update: Mapping[str, Any]) -> None:
+def merge_tool_update(
+    item: dict[str, Any], update: Mapping[str, Any], *, markdown_titles: bool = False
+) -> None:
     """Apply a ``tool_call`` or ``tool_call_update`` payload to ``item``.
 
     Omitted fields keep their value; ``content`` and ``locations`` replace.
+    ``markdown_titles`` is for an agent that writes its titles in Markdown.
     """
-    title = _str(update.get("title"))
-    if title:
-        item["title"] = _one_line(_unquote_title(unwrap_shell(title.strip())), 200)
     kind = update.get("kind")
     if isinstance(kind, str):
         item["kind"] = kind if kind in TOOL_KINDS else "other"
@@ -335,11 +430,28 @@ def merge_tool_update(item: dict[str, Any], update: Mapping[str, Any]) -> None:
         locs = locations(update.get("locations"))
         if locs or isinstance(update.get("locations"), list):
             item["locations"] = locs
+    # After the kind, the input and the locations: a Markdown title is read
+    # with them.
+    title = _str(update.get("title"))
+    if title:
+        title = title.strip()
+        if markdown_titles:
+            title = _markdown_title(
+                title, item["kind"], _item_paths(item, update.get("rawInput"))
+            )
+        item["title"] = _one_line(_unquote_title(unwrap_shell(title)), 200)
     if "content" in update and update.get("content") is not None:
         item["content"] = tool_content_parts(update.get("content"))
         if item["kind"] == "execute":
             item["content"] = command_result_parts(item["content"])
     raw_output = update.get("rawOutput")
+    shell = _shell_result(raw_output) if item["kind"] == "execute" else None
+    if shell is not None and update.get("content") is None:
+        # The output takes the place of what stood there while the command
+        # waited (why it needed an approval).
+        rendered = console_part(shell[0], live=False, exit_code=shell[1])
+        item["content"] = [rendered] if rendered is not None else []
+    raw_output = _raw_error_text(raw_output)
     if (
         item.get("status") == "failed"
         and isinstance(raw_output, str)
@@ -353,6 +465,36 @@ def merge_tool_update(item: dict[str, Any], update: Mapping[str, Any]) -> None:
         item["content"] = [*item["content"], part][:TOOL_PARTS_MAX]
     if not item.get("subtitle") and item["locations"]:
         item["subtitle"] = _one_line(item["locations"][0]["path"])
+
+
+def _shell_result(raw_output: Any) -> tuple[str, int] | None:
+    """``(output, exit code)`` of a finished command that an agent reports as
+    ``rawOutput: {exitCode, stdout, stderr}`` (Cursor); None for any other
+    ``rawOutput``."""
+    if not isinstance(raw_output, Mapping):
+        return None
+    code = raw_output.get("exitCode")
+    stdout = raw_output.get("stdout")
+    stderr = raw_output.get("stderr")
+    if isinstance(code, bool) or not isinstance(code, int):
+        return None
+    if not isinstance(stdout, str) and not isinstance(stderr, str):
+        return None
+    # Cut before the join: the output is rendered once more after this.
+    texts = [
+        cap_text(text, CONSOLE_KEEP_MAX)[0].rstrip("\n")
+        for text in (stdout, stderr)
+        if isinstance(text, str) and text
+    ]
+    return "\n".join(texts), code
+
+
+def _raw_error_text(raw_output: Any) -> Any:
+    """The error text of a ``rawOutput``: the string itself, or the ``error``
+    string of a mapping (Cursor). Any other value is returned as it is."""
+    if isinstance(raw_output, Mapping) and isinstance(raw_output.get("error"), str):
+        return raw_output["error"]
+    return raw_output
 
 
 def config_options(raw: Any) -> list[dict[str, Any]]:

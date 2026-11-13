@@ -5,6 +5,7 @@ import { cleanupErrorCopy } from './voiceErrorCopy';
 describe('cleanupErrorCopy', () => {
   it.each([
     ['claude', 'Claude Code', 'claude update'],
+    ['cursor', 'Cursor', 'cursor-agent update'],
   ])('names the AI agent of a %s session and how to update it', (kind, name, update) => {
     expect(cleanupErrorCopy(VOICE_CODE.cleanupUnavailable, 'laptop', kind)).toBe(
       `${name} isn't installed on laptop.`,

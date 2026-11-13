@@ -1,11 +1,12 @@
 """Folder trust for chat sessions (``mobaide/acp/trust.py``): where the
-Claude Code, Codex, Antigravity and GitHub Copilot CLIs keep their trust
-records, which folders count as trusted, and how ``grant`` writes the record
-without losing the rest of the file."""
+Claude Code, Codex, Antigravity, GitHub Copilot and Cursor CLIs keep their
+trust records, which folders count as trusted, and how ``grant`` writes the
+record without losing the rest of the file."""
 from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import tomllib
 from pathlib import Path
@@ -17,9 +18,12 @@ from mobaide.acp.trust import (
     ClaudeFolderTrust,
     CodexFolderTrust,
     CopilotFolderTrust,
+    CursorFolderTrust,
+    _cursor_slug,
     claude_config_path,
     codex_config_path,
     copilot_config_path,
+    cursor_projects_dir,
     too_broad_to_record,
 )
 from tests.conftest import skip_if_not_linux
@@ -1105,3 +1109,249 @@ class TestCopilotGrant:
 
         assert not config.parent.exists()
         assert trust.prompt_text.endswith(f" {SESSION_ONLY}")
+
+
+CURSOR_COVERS_CHILDREN = "The trust also covers every folder inside it."
+
+
+def _cursor_marker(projects: Path, folder: Path | str) -> Path:
+    """Where the Cursor CLI keeps the trust record of ``folder``."""
+    return projects / _cursor_slug(os.path.realpath(folder)) / ".workspace-trusted"
+
+
+def _cursor_record(projects: Path, folder: Path | str, body: str | None = None) -> Path:
+    """Write the trust record of ``folder`` as the Cursor CLI does."""
+    marker = _cursor_marker(projects, folder)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    if body is None:
+        body = json.dumps(
+            {"trustedAt": "2026-11-01T10:00:00.000Z", "workspacePath": os.path.realpath(folder)},
+            indent=2,
+        )
+    marker.write_text(body, encoding="utf-8")
+    return marker
+
+
+def _cursor_trust(cwd: Path | str, projects: Path) -> CursorFolderTrust:
+    return CursorFolderTrust(str(cwd), projects_dir=projects)
+
+
+class TestCursorProjectsDir:
+    def test_the_data_dir_of_the_launch_env_wins_over_the_host_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CURSOR_DATA_DIR", str(tmp_path / "host"))
+
+        path = cursor_projects_dir({"CURSOR_DATA_DIR": str(tmp_path / "launch")})
+
+        assert path == tmp_path / "launch" / "projects"
+
+    def test_without_a_data_dir_it_is_in_the_home_folder(self, home):
+        assert cursor_projects_dir({}) == home / ".cursor" / "projects"
+
+    def test_a_blank_data_dir_is_no_data_dir(self, home):
+        assert cursor_projects_dir({"CURSOR_DATA_DIR": "  "}) == home / ".cursor" / "projects"
+
+    def test_no_env_means_the_host_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CURSOR_DATA_DIR", str(tmp_path / "host"))
+
+        assert cursor_projects_dir() == tmp_path / "host" / "projects"
+
+
+class TestCursorSlug:
+    @pytest.mark.parametrize(
+        ("folder", "slug"),
+        [
+            ("/Users/me/work/app", "Users-me-work-app"),
+            ("/Users/me/My Projects/app_v1.2", "Users-me-My-Projects-app-v1-2"),
+            ("/srv/a--b/.hidden/", "srv-a-b-hidden"),
+            ("C:\\Users\\me\\app", "C-Users-me-app"),
+            ("/home/дом/app", "home-app"),
+        ],
+        ids=["plain", "space-underscore-dot", "runs-and-edges", "windows", "non-ascii"],
+    )
+    def test_every_other_character_is_a_dash_and_dashes_do_not_repeat(self, folder, slug):
+        assert _cursor_slug(folder) == slug
+
+
+class TestCursorIsTrusted:
+    def test_a_folder_with_its_own_record(self, tmp_path):
+        project = _project(tmp_path)
+        projects = tmp_path / "cursor" / "projects"
+        _cursor_record(projects, project)
+
+        assert _cursor_trust(project, projects).is_trusted() is True
+
+    def test_no_record_is_untrusted(self, tmp_path):
+        project = _project(tmp_path)
+
+        assert _cursor_trust(project, tmp_path / "cursor" / "projects").is_trusted() is False
+
+    def test_the_record_of_a_parent_covers_its_children(self, tmp_path):
+        child = _project(tmp_path, "app", "src", "ui")
+        projects = tmp_path / "cursor" / "projects"
+        _cursor_record(projects, tmp_path / "work" / "app")
+
+        assert _cursor_trust(child, projects).is_trusted() is True
+
+    def test_the_record_of_a_child_or_a_sibling_covers_nothing_else(self, tmp_path):
+        project = _project(tmp_path, "app")
+        child = _project(tmp_path, "app", "src")
+        sibling = _project(tmp_path, "other")
+        projects = tmp_path / "cursor" / "projects"
+        _cursor_record(projects, child)
+        _cursor_record(projects, sibling)
+
+        assert _cursor_trust(project, projects).is_trusted() is False
+
+    @pytest.mark.parametrize("which", ["home", "above-home"])
+    def test_the_record_of_a_broad_folder_does_not_cover_its_children(self, home, tmp_path, which):
+        """Cursor trusts the home folder, or a folder above it, alone."""
+        broad = {"home": home, "above-home": tmp_path}[which]
+        project = home / "code" / "app"
+        project.mkdir(parents=True)
+        projects = tmp_path / "cursor" / "projects"
+        _cursor_record(projects, broad)
+
+        assert _cursor_trust(broad, projects).is_trusted() is True
+        assert _cursor_trust(project, projects).is_trusted() is False
+
+    @skip_if_not_linux
+    @pytest.mark.parametrize(
+        ("recorded", "trusted"),
+        [("/srv/team", False), ("/srv/team/app", True)],
+        ids=["two-levels", "three-levels"],
+    )
+    def test_a_parent_covers_its_children_from_three_levels_deep(self, tmp_path, recorded, trusted):
+        cwd = os.path.realpath("/srv/team/app/src")
+        parent = os.path.realpath(recorded)
+        if not cwd.startswith(parent + os.sep):
+            pytest.skip("this host links /srv to another folder")
+        projects = tmp_path / "cursor" / "projects"
+        _cursor_record(projects, parent)
+
+        assert _cursor_trust(cwd, projects).is_trusted() is trusted
+
+    def test_a_record_that_names_another_folder_does_not_count(self, tmp_path):
+        """Two folders can share one state directory: ``my app`` and
+        ``my-app`` have the same slug."""
+        project = _project(tmp_path, "my app")
+        other = _project(tmp_path, "my-app")
+        projects = tmp_path / "cursor" / "projects"
+        marker = _cursor_record(projects, other)
+
+        assert marker == _cursor_marker(projects, project)
+        assert _cursor_trust(other, projects).is_trusted() is True
+        assert _cursor_trust(project, projects).is_trusted() is False
+
+    def test_a_parent_record_that_names_another_folder_does_not_cover(self, tmp_path):
+        child = _project(tmp_path, "my app", "src")
+        other = _project(tmp_path, "my-app")
+        projects = tmp_path / "cursor" / "projects"
+        _cursor_record(projects, other)
+
+        assert _cursor_trust(child, projects).is_trusted() is False
+
+    @pytest.mark.parametrize(
+        "body",
+        ["", "{not json", "{}", '{"trustedAt": "2026-11-01T10:00:00.000Z"}', '{"workspacePath": ""}',
+         '{"workspacePath": 5}', '["a list"]'],
+        ids=["empty", "unreadable", "empty-object", "no-path", "blank-path", "path-not-text", "not-object"],
+    )
+    def test_a_record_that_names_no_folder_counts(self, tmp_path, body):
+        """The CLI takes the file itself as the record."""
+        project = _project(tmp_path)
+        projects = tmp_path / "cursor" / "projects"
+        _cursor_record(projects, project, body)
+
+        assert _cursor_trust(project, projects).is_trusted() is True
+
+    @skip_if_not_linux
+    def test_a_symlinked_folder_matches_its_real_path(self, tmp_path):
+        project = _project(tmp_path, "real")
+        link = tmp_path / "link"
+        link.symlink_to(project, target_is_directory=True)
+        projects = tmp_path / "cursor" / "projects"
+        _cursor_record(projects, project)
+
+        assert _cursor_trust(link, projects).is_trusted() is True
+
+
+class TestCursorGrant:
+    def test_writes_the_record_as_cursor_writes_it(self, tmp_path):
+        project = _project(tmp_path, "my app_v1.2")
+        projects = tmp_path / "cursor" / "projects"
+        trust = _cursor_trust(project, projects)
+
+        assert trust.grant() is True
+
+        (state_dir,) = projects.iterdir()
+        assert re.fullmatch(r"[A-Za-z0-9]+(-[A-Za-z0-9]+)*", state_dir.name)
+        assert state_dir.name.endswith("-work-my-app-v1-2")
+        marker = state_dir / ".workspace-trusted"
+        record = json.loads(marker.read_text(encoding="utf-8"))
+        assert list(record) == ["trustedAt", "workspacePath"]
+        assert record["workspacePath"] == os.path.realpath(project)
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", record["trustedAt"])
+        assert marker.read_text(encoding="utf-8") == json.dumps(record, indent=2)
+        assert trust.is_trusted() is True
+        if os.name != "nt":
+            assert stat.S_IMODE(marker.stat().st_mode) == 0o644
+
+    def test_the_new_record_covers_the_folders_inside(self, tmp_path):
+        project = _project(tmp_path, "app")
+        child = _project(tmp_path, "app", "src")
+        projects = tmp_path / "cursor" / "projects"
+
+        assert _cursor_trust(project, projects).grant() is True
+
+        assert _cursor_trust(child, projects).is_trusted() is True
+
+    def test_a_record_that_names_another_folder_is_replaced(self, tmp_path):
+        project = _project(tmp_path, "my app")
+        other = _project(tmp_path, "my-app")
+        projects = tmp_path / "cursor" / "projects"
+        marker = _cursor_record(projects, other)
+
+        assert _cursor_trust(project, projects).grant() is True
+
+        assert json.loads(marker.read_text(encoding="utf-8"))["workspacePath"] == (
+            os.path.realpath(project)
+        )
+        assert _cursor_trust(project, projects).is_trusted() is True
+
+    @skip_if_not_linux
+    def test_a_symlinked_folder_is_recorded_by_its_real_path(self, tmp_path):
+        project = _project(tmp_path, "real")
+        link = tmp_path / "link"
+        link.symlink_to(project, target_is_directory=True)
+        projects = tmp_path / "cursor" / "projects"
+
+        assert _cursor_trust(link, projects).grant() is True
+
+        record = json.loads(_cursor_marker(projects, project).read_text(encoding="utf-8"))
+        assert record["workspacePath"] == os.path.realpath(project)
+
+    @pytest.mark.parametrize("which", ["home", "above-home"])
+    def test_a_broad_folder_is_recorded_for_itself_only(self, home, tmp_path, which):
+        """Unlike the other CLIs, Cursor records every folder."""
+        broad = {"home": home, "above-home": tmp_path}[which]
+        project = home / "code" / "app"
+        project.mkdir(parents=True)
+        projects = tmp_path / "cursor" / "projects"
+        trust = _cursor_trust(broad, projects)
+
+        assert CURSOR_COVERS_CHILDREN not in trust.prompt_text
+        assert trust.grant() is True
+
+        assert trust.is_trusted() is True
+        assert _cursor_trust(project, projects).is_trusted() is False
+
+
+class TestCursorPrompt:
+    def test_the_prompt_says_when_the_trust_covers_the_folders_inside(self, home):
+        project = home / "code" / "app"
+        project.mkdir(parents=True)
+        trust = CursorFolderTrust(str(project), projects_dir=home / "projects")
+
+        assert trust.prompt_title == "Trust this folder?"
+        assert trust.prompt_text.endswith(f" {CURSOR_COVERS_CHILDREN}")
+        assert "rules, hooks and MCP servers" in trust.prompt_text

@@ -1477,6 +1477,7 @@ export interface components {
             /** Command */
             command?: string[] | null;
             copilot_options?: components["schemas"]["CopilotOptionsModel"] | null;
+            cursor_options?: components["schemas"]["CursorOptionsModel"] | null;
             /** Cwd */
             cwd?: string | null;
             /** Env */
@@ -1497,6 +1498,29 @@ export interface components {
             rows: number;
             /** Ui */
             ui?: ("terminal" | "chat") | null;
+            /**
+             * Worktree
+             * @default false
+             */
+            worktree: boolean;
+        };
+        /**
+         * CursorOptionsModel
+         * @description Wire DTO for Cursor CLI launch options (see :class:`CursorOptions`).
+         *
+         *     ``force`` is Cursor's ``--force`` ("Run Everything"): it runs commands
+         *     without asking, except the ones its settings deny.
+         */
+        CursorOptionsModel: {
+            /** Base Branch */
+            base_branch?: string | null;
+            /** Branch Name */
+            branch_name?: string | null;
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
             /**
              * Worktree
              * @default false
@@ -2535,7 +2559,7 @@ export interface components {
              * @default claude
              * @enum {string}
              */
-            kind: "claude" | "codex" | "antigravity" | "opencode" | "copilot";
+            kind: "claude" | "codex" | "antigravity" | "opencode" | "copilot" | "cursor";
             /** Text */
             text: string;
         };

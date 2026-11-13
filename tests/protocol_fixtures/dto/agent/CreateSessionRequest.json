@@ -122,6 +122,34 @@
         "worktree": false,
         "ui": "chat"
       }
+    },
+    {
+      "name": "cursor_launch",
+      "wire": {
+        "project_name": "proj",
+        "cli": "cursor",
+        "cursor_options": {
+          "force": true,
+          "worktree": true,
+          "branch_name": "feature/x",
+          "base_branch": "origin/main"
+        },
+        "ui": "chat"
+      },
+      "decoded_canonical": {
+        "project_name": "proj",
+        "cli": "cursor",
+        "cursor_options": {
+          "force": true,
+          "worktree": true,
+          "branch_name": "feature/x",
+          "base_branch": "origin/main"
+        },
+        "rows": 24,
+        "cols": 80,
+        "worktree": false,
+        "ui": "chat"
+      }
     }
   ]
 }
