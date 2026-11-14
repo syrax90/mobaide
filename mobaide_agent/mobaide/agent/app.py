@@ -786,15 +786,17 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     app.state.projects_store = projects_store
 
     # Worktree manager is always wired so Standard-mode sessions can create
-    # worktrees regardless of whether auto-scan is configured. Auto Scan
-    # conventions (``worktree_base``, ``branch_prefix``, ``main_branch``) come
-    # from AutoScanConfig when present; otherwise sensible defaults apply.
+    # worktrees regardless of whether auto-scan is configured. The worktree
+    # folders and Auto Scan conventions (``branch_prefix``, ``main_branch``)
+    # come from AutoScanConfig when present; otherwise sensible defaults apply.
     auto_scan_cfg = config.auto_scan_config or AutoScanConfig()
     prefix = auto_scan_cfg.branch_prefix or "feature/mobaide"
+    worktrees_dir = auto_scan_cfg.resolved_worktrees_dir(test_mode=config.is_test_mode)
     worktree_mgr = WorktreeManager(
-        worktree_base=auto_scan_cfg.worktree_base,
+        worktrees_dir=worktrees_dir,
         branch_prefix=prefix,
         main_branch=auto_scan_cfg.main_branch,
+        legacy_worktree_base=auto_scan_cfg.worktree_base,
     )
     app.state.worktree_manager = worktree_mgr
     # Per-agent secret baked into each session's hook URLs and re-checked by
@@ -967,6 +969,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         launcher=app.state.claude_launcher,
         event_bus=app.state.event_bus,
         rate_limiter=app.state.linear_rate_limiter,
+        worktrees_dir=worktrees_dir,
     )
 
     app.include_router(auth_router)

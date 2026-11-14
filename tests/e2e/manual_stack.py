@@ -166,6 +166,7 @@ SANITIZED_ENV_VARS = (
     "MOBAIDE_WEB_DEV_LOGIN_PASSWORD",
     "MOBAIDE_VOICE_FAKE",
     "MOBAIDE_VOICE_DIR",
+    "MOBAIDE_WORKTREES_DIR",
 )
 
 _DEPS: SimpleNamespace | None = None
@@ -877,6 +878,9 @@ def build_agent_env(
     # delete it) or fake voice behind the operator's back.
     env["MOBAIDE_VOICE_FAKE"] = "1" if getattr(args, "fake_voice", False) else "0"
     env["MOBAIDE_VOICE_DIR"] = ""
+    # A dev .env names the real ~/.mobaide/worktrees; keep the stack's
+    # worktrees in its throwaway prefix.
+    env["MOBAIDE_WORKTREES_DIR"] = str(agent_dir / "worktrees")
     return env
 
 

@@ -412,7 +412,11 @@ class TestStart:
         run_git_sync(repo, "tag", "release", "main~1")
         assert _oid(repo, "release") != _oid(repo, "refs/heads/release")
         items = await list_git_items(
-            repo, WorktreeManager(worktree_base=".worktrees", branch_prefix="auto"), remote=True
+            repo, WorktreeManager(
+                worktrees_dir=os.path.join(os.path.dirname(repo), "worktrees"),
+                legacy_worktree_base=".worktrees",
+                branch_prefix="auto",
+            ), remote=True
         )
         [listed] = [i.branch for i in items if i.branch not in ("main", "topic")]
 

@@ -1061,7 +1061,7 @@ This is the same trust model adopted by comparable per-user developer tools (cod
 
 #### Project paths outside `$HOME`
 
-`ReadWritePaths` only grants writes to the agent user's `$HOME` and the install prefix. A project pointing at e.g. `/srv/code/myrepo` or `/data/repos/foo` will fail with `OSError: [Errno 30] Read-only file system` at worktree creation, because `ProtectSystem=strict` mounts the rest of the OS hierarchy read-only. To support such projects, drop in an override that extends the writable list — keeping the rest of the hardening intact:
+`ReadWritePaths` only grants writes to the agent user's `$HOME` and the install prefix. A project pointing at e.g. `/srv/code/myrepo` or `/data/repos/foo` will fail with `OSError: [Errno 30] Read-only file system` at worktree creation, because `ProtectSystem=strict` mounts the rest of the OS hierarchy read-only. The same applies to a `MOBAIDE_WORKTREES_DIR` outside `$HOME`; the default `~/.mobaide/worktrees` is inside `$HOME` and needs no override. To support such projects, drop in an override that extends the writable list — keeping the rest of the hardening intact:
 
 ```bash
 sudo systemctl edit mobaide-agent.service

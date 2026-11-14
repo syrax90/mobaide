@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,7 @@ _TRUTHY = frozenset({"1", "true", "yes", "on"})
 class AutoScanConfig(BaseSettings):
     """Configuration for the Linear auto-scan engine.
 
-    Holds only the non-project settings (intervals, prompt, worktree base,
+    Holds only the non-project settings (intervals, prompt, worktree folders,
     Linear workflow state names). The list of projects eligible for auto-scan
     is read live from :class:`mobaide.core.projects_store.ProjectsStore`
     by :class:`mobaide.linear.scanner.AutoScanSessionManager` — adding
@@ -29,6 +30,14 @@ class AutoScanConfig(BaseSettings):
     available for auto-scan without a restart.
     """
 
+    # Folder that holds every worktree, one sub-folder per project. Empty
+    # means ``~/.mobaide/worktrees`` (``%USERPROFILE%\\.mobaide\\worktrees``
+    # on Windows); see :meth:`resolved_worktrees_dir`.
+    worktrees_dir: str | None = Field(
+        default=None, validation_alias="MOBAIDE_WORKTREES_DIR",
+    )
+    # Folder inside the project root where earlier agent versions put
+    # worktrees. New worktrees never go there; an old one is still reused.
     worktree_base: str = "mobaide_worktree"
     scan_interval_seconds: int = 300
     branch_prefix: str = ""
@@ -52,6 +61,40 @@ class AutoScanConfig(BaseSettings):
         # remain True.
         populate_by_name=True,
     )
+
+    @field_validator("worktrees_dir", mode="before")
+    @classmethod
+    def _empty_dir_to_none(cls, value: Any) -> Any:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    def resolved_worktrees_dir(self, test_mode: bool | None = None) -> str:
+        """Absolute folder that holds the worktrees of every project.
+
+        ``~`` and environment variables in a configured value are expanded,
+        and a relative value is taken from the home folder. With no value,
+        an absolute ``worktree_base`` is used, else ``~/.mobaide/worktrees``;
+        a ``MOBAIDE_ENV=test`` agent uses its disposable state folder instead,
+        so tests never write into the real home folder. ``test_mode`` comes
+        from the resolved agent config; ``None`` reads the process env.
+        """
+        if self.worktrees_dir is not None:
+            path = os.path.expanduser(os.path.expandvars(self.worktrees_dir.strip()))
+            if not os.path.isabs(path):
+                path = os.path.join(os.path.expanduser("~"), path)
+            return os.path.abspath(path)
+        legacy = self.worktree_base
+        if os.path.isabs(legacy):
+            # An operator who moved worktrees out of the project with an
+            # absolute WORKTREE_BASE before this setting existed keeps that
+            # folder.
+            return os.path.abspath(legacy)
+        from mobaide.agent.install_paths import is_test_mode, state_prefix
+
+        if is_test_mode() if test_mode is None else test_mode:
+            return str(state_prefix(test_mode=True) / "worktrees")
+        return str(Path.home() / ".mobaide" / "worktrees")
 
     @field_validator("auto_remove_worktrees", mode="before")
     @classmethod

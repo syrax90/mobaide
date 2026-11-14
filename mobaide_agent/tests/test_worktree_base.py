@@ -3,8 +3,11 @@ explicit ``base_branch``, the ``GET /worktree-bases`` listing and the
 per-project memory of the last choice."""
 from __future__ import annotations
 
+import atexit
 import os
+import shutil
 import subprocess
+import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -37,8 +40,14 @@ def _fresh_caches():
     reset_caches()
 
 
+_WORKTREES_DIR = tempfile.mkdtemp(prefix="mobaide-wt-test-")
+atexit.register(shutil.rmtree, _WORKTREES_DIR, ignore_errors=True)
+
+
 def _manager() -> WorktreeManager:
-    return WorktreeManager(worktree_base=".worktrees", branch_prefix="auto")
+    return WorktreeManager(
+        worktrees_dir=_WORKTREES_DIR, legacy_worktree_base=".worktrees", branch_prefix="auto"
+    )
 
 
 def _rev(repo: str, ref: str) -> str:

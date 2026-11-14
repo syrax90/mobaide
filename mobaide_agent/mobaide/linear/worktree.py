@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import re
 import subprocess
 import sys
+import threading
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
@@ -314,6 +316,85 @@ def _same_dir(a: str, b: str) -> bool:
         return False
 
 
+# Marks which repository owns a project folder under the worktrees folder, so
+# two repositories with the same folder name never share one.
+PROJECT_OWNER_FILE = ".mobaide-project"
+
+_UNSAFE_NAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+
+
+def _safe_dir_name(name: str) -> str:
+    """``name`` as one folder name that is valid on every OS."""
+    cleaned = _UNSAFE_NAME_CHARS.sub("_", name).rstrip(" .")
+    if not cleaned:
+        return "project"
+    if cleaned.split(".", 1)[0].upper() in _WINDOWS_RESERVED_NAMES:
+        return f"{cleaned}_"
+    return cleaned
+
+
+def _canonical_root(project_root: str) -> str:
+    return os.path.normcase(os.path.realpath(project_root))
+
+
+def _read_owner(folder: str) -> str | None:
+    """The owner recorded in ``folder``; ``None`` when there is none."""
+    try:
+        with open(
+            os.path.join(folder, PROJECT_OWNER_FILE),
+            encoding="utf-8", errors="surrogateescape",
+        ) as fh:
+            return fh.read().strip() or None
+    except OSError:
+        return None
+
+
+# Serializes claims of all repositories in this process; the per-repo locks
+# do not cover two repositories that want the same folder name.
+_claim_lock = threading.Lock()
+
+
+def _claim(folder: str, owner: str) -> bool:
+    """Make ``owner`` the owner of ``folder`` if nobody owns it yet.
+
+    The owner file is written in full beside ``folder`` and then hard-linked
+    into place. A link fails when the file already exists, so a claim never
+    overwrites another owner and nobody reads a half-written file.
+    """
+    marker = os.path.join(folder, PROJECT_OWNER_FILE)
+    tmp = os.path.join(
+        os.path.dirname(folder), f".{PROJECT_OWNER_FILE}-{uuid.uuid4().hex}.tmp",
+    )
+    with _claim_lock:
+        try:
+            os.makedirs(folder, exist_ok=True)
+            if any(entry != PROJECT_OWNER_FILE for entry in os.listdir(folder)):
+                return False
+            with open(tmp, "w", encoding="utf-8", errors="surrogateescape") as fh:
+                fh.write(owner + "\n")
+            try:
+                os.link(tmp, marker)
+            except FileExistsError:
+                pass
+            except OSError:
+                # A file system without hard links (FAT, some network shares).
+                if not os.path.exists(marker):
+                    os.replace(tmp, marker)
+        except OSError:
+            return False
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        return _read_owner(folder) == owner
+
+
 class WorktreeManager:
     """Create and manage git worktrees and local branches for a project.
 
@@ -327,11 +408,18 @@ class WorktreeManager:
 
     def __init__(
         self,
-        worktree_base: str,
+        *,
+        worktrees_dir: str,
         branch_prefix: str,
         main_branch: str = "main",
+        legacy_worktree_base: str | None = None,
     ) -> None:
-        self._worktree_base = worktree_base
+        """``worktrees_dir`` holds new worktrees at
+        ``<worktrees_dir>/<project folder name>/<slug>``.
+        ``legacy_worktree_base`` is the folder inside the project root where
+        earlier versions put worktrees; one found there is reused."""
+        self._worktrees_dir = worktrees_dir
+        self._legacy_worktree_base = legacy_worktree_base
         self._branch_prefix = branch_prefix
         self._main_branch = main_branch
         self._repo_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -342,6 +430,41 @@ class WorktreeManager:
         except OSError:
             key = project_root
         return self._repo_locks[key]
+
+    def project_worktrees_dir(self, project_root: str) -> str:
+        """The folder that holds the worktrees of ``project_root``.
+
+        Its name is the project folder name. When another repository already
+        owns that name, a short hash of the project path is appended.
+        """
+        owner = _canonical_root(project_root)
+        name = _safe_dir_name(os.path.basename(os.path.realpath(project_root)))
+        digest = hashlib.sha256(os.fsencode(owner)).hexdigest()[:8]
+        candidates = (name, f"{name}-{digest}")
+        for candidate in candidates:
+            folder = os.path.join(self._worktrees_dir, candidate)
+            current = _read_owner(folder)
+            if current == owner or (current is None and _claim(folder, owner)):
+                return folder
+        logger.warning(
+            "Could not claim worktree folder %s for %s, using it anyway",
+            candidates[-1], owner,
+        )
+        return os.path.join(self._worktrees_dir, candidates[-1])
+
+    def _legacy_worktree_dir(self, project_root: str, slug: str) -> str | None:
+        base = self._legacy_worktree_base
+        if not base:
+            return None
+        # An absolute base replaces the project root, as it did before.
+        path = os.path.join(project_root, base, slug)
+        # Only a linked worktree counts. When the old and the new folder are
+        # the same, ``<base>/<slug>`` can also be the folder of a project.
+        if not os.path.exists(os.path.join(path, ".git")) or os.path.exists(
+            os.path.join(path, PROJECT_OWNER_FILE)
+        ):
+            return None
+        return path
 
     async def _ref_resolves(self, project_root: str, ref: str) -> bool:
         rc, _, _ = await _run_git(
@@ -479,33 +602,36 @@ class WorktreeManager:
             branch_name = (
                 f"{self._branch_prefix}/{slug}" if self._branch_prefix else slug
             )
-        resolved_base = os.path.join(project_root, self._worktree_base)
-        wt_dir = os.path.join(resolved_base, slug)
-
         # Git refs cannot begin with '-'; reject early so a client-supplied
         # branch name can never be parsed as an option by ``git worktree add``
         # (defense-in-depth against argument injection).
         if branch_name.startswith("-"):
             raise WorktreeCreationError(
                 branch=branch_name,
-                path=wt_dir,
+                path=slug,
                 stderr="branch name must not start with '-'",
             )
         if base_branch is not None and base_branch.startswith("-"):
             raise WorktreeCreationError(
                 branch=branch_name,
-                path=wt_dir,
+                path=slug,
                 stderr="base branch must not start with '-'",
             )
 
-        os.makedirs(resolved_base, exist_ok=True)
+        legacy_dir = self._legacy_worktree_dir(project_root, slug)
+        if legacy_dir is not None:
+            logger.info("Reusing worktree %s from the earlier location", legacy_dir)
+            return WorktreeResult(path=legacy_dir, is_new=False, branch=branch_name)
+
+        project_dir = await asyncio.to_thread(self.project_worktrees_dir, project_root)
+        wt_dir = os.path.join(project_dir, slug)
 
         if os.path.exists(wt_dir):
             logger.warning("Worktree already exists at %s, reusing it", wt_dir)
             return WorktreeResult(path=wt_dir, is_new=False, branch=branch_name)
 
         # git refuses to check a branch out twice, so a branch already living in
-        # a worktree outside ``wt_dir`` (an earlier ``worktree_base``, or made by
+        # a worktree outside ``wt_dir`` (an earlier worktrees folder, or made by
         # hand) reopens it; a registration whose directory is gone is pruned.
         existing = await self._find_branch_worktree(project_root, branch_name)
         if existing is not None:

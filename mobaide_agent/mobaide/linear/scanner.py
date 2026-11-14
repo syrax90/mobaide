@@ -718,8 +718,10 @@ class AutoScanSessionManager:
         event_bus=None,
         rate_limiter: LinearRateLimiter | None = None,
         max_scans: int = 5,
+        worktrees_dir: str | None = None,
     ) -> None:
         self._config = config
+        self._worktrees_dir = worktrees_dir or config.resolved_worktrees_dir()
         self._session_manager = session_manager
         self._projects_store = projects_store
         self._launcher = launcher or ClaudeLauncher()
@@ -793,9 +795,10 @@ class AutoScanSessionManager:
             )
             prefix = self._config.branch_prefix or "feature/mobaide"
             worktree_mgr = WorktreeManager(
-                worktree_base=self._config.worktree_base,
+                worktrees_dir=self._worktrees_dir,
                 branch_prefix=prefix,
                 main_branch=self._config.main_branch,
+                legacy_worktree_base=self._config.worktree_base,
             )
             instance = AutoScanInstance(
                 project_name=project_name,

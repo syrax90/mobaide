@@ -9,6 +9,9 @@ call is made and no live poll task is spawned.
 
 from __future__ import annotations
 
+import atexit
+import shutil
+import tempfile
 from unittest.mock import AsyncMock
 
 import pytest
@@ -63,8 +66,13 @@ def _make_store(tmp_path, *, prompt: str | None = None) -> ProjectsStore:
     return store
 
 
+_WORKTREES_DIR = tempfile.mkdtemp(prefix="mobaide-wt-test-")
+atexit.register(shutil.rmtree, _WORKTREES_DIR, ignore_errors=True)
+
+
 def _make_manager(store: ProjectsStore, bus: _RecordingEventBus) -> AutoScanSessionManager:
     config = AutoScanConfig(
+        worktrees_dir=_WORKTREES_DIR,
         worktree_base="mobaide_worktree",
         scan_interval_seconds=1,
         branch_prefix="feature/mobaide",

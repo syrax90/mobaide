@@ -230,6 +230,7 @@ def e2e_stack(request, xprocess):
         # inherited MOBAIDE_VOICE_DIR must not point it at a real install.
         "MOBAIDE_VOICE_FAKE": "1",
         "MOBAIDE_VOICE_DIR": "",
+        "MOBAIDE_WORKTREES_DIR": str(agent_dir / "worktrees"),
         "LOG_FORMAT": "console",
         "LOG_LEVEL": "INFO",
         "PYTHONUNBUFFERED": "1",
@@ -277,6 +278,7 @@ def spawn_agent(request, xprocess, e2e_stack):
         env = {
             **os.environ,
             "MOBAIDE_ENV": "test",
+            "MOBAIDE_WORKTREES_DIR": str(prefix / "worktrees"),
             "JWT_SECRET_KEY": secrets.token_urlsafe(32),
             "HOST": "127.0.0.1",
             "PORT": str(agent_port),
