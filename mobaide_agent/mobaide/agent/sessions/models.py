@@ -9,6 +9,7 @@ from mobaide.core.antigravity_launcher import AntigravityOptions, agy_model_name
 from mobaide.core.claude_launcher import ClaudeOptions
 from mobaide.core.codex_launcher import CodexOptions
 from mobaide.core.copilot_launcher import CopilotOptions
+from mobaide.core.cursor_launcher import CursorOptions
 from mobaide.core.models import SessionInfo, session_to_wire_dict
 from mobaide.core.opencode_launcher import INITIAL_PROMPT_MAX, OpenCodeOptions
 from mobaide.core.pi_launcher import PiOptions
@@ -170,6 +171,22 @@ class CopilotOptionsModel(BaseModel):
         return CopilotOptions(**self.model_dump())
 
 
+class CursorOptionsModel(BaseModel):
+    """Wire DTO for Cursor CLI launch options (see :class:`CursorOptions`).
+
+    ``force`` is Cursor's ``--force`` ("Run Everything"): it runs commands
+    without asking, except the ones its settings deny.
+    """
+
+    force: bool = False
+    worktree: bool = False
+    branch_name: str | None = None
+    base_branch: str | None = None
+
+    def to_options(self) -> CursorOptions:
+        return CursorOptions(**self.model_dump())
+
+
 class PiOptionsModel(BaseModel):
     """Wire DTO for Pi launch options (see :class:`PiOptions`)."""
 
@@ -191,7 +208,7 @@ class CreateSessionRequest(BaseModel):
     # launcher builds them from the project + the CLI options block.
     project_name: str | None = None
     # Which managed CLI to launch: "claude" | "codex" | "antigravity" |
-    # "opencode" | "copilot" | "pi". Optional —
+    # "opencode" | "copilot" | "cursor" | "pi". Optional —
     # when omitted the kind is inferred from whichever options block is present (a
     # legacy claude_options-only payload still resolves to Claude). Shell/Terminal
     # sessions leave this null and send no options block.
@@ -201,11 +218,12 @@ class CreateSessionRequest(BaseModel):
     antigravity_options: AntigravityOptionsModel | None = None
     opencode_options: OpenCodeOptionsModel | None = None
     copilot_options: CopilotOptionsModel | None = None
+    cursor_options: CursorOptionsModel | None = None
     pi_options: PiOptionsModel | None = None
     # Terminal-mode worktree: create a git worktree for a SHELL session
     # (no CLI options) anchored to a stored git project and spawn the shell
-    # inside it. Managed Claude/Codex/Antigravity/OpenCode/Copilot/Pi sessions instead
-    # carry worktree
+    # inside it. Managed Claude/Codex/Antigravity/OpenCode/Copilot/Cursor/Pi sessions
+    # instead carry worktree
     # intent inside their own options block.
     worktree: bool = False
     branch_name: str | None = None

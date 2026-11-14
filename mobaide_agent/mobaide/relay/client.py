@@ -133,6 +133,7 @@ from mobaide.agent.sessions.models import (
     ClaudeOptionsModel,
     CodexOptionsModel,
     CopilotOptionsModel,
+    CursorOptionsModel,
     PiOptionsModel,
     CreateSessionRequest,
 )
@@ -1197,6 +1198,26 @@ class RelayClient:
                 await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
                 return
 
+        cursor_options = None
+        raw_cursor_options = ctrl.get("cursor_options")
+        if raw_cursor_options is not None:
+            try:
+                cursor_options = CursorOptionsModel.model_validate(
+                    raw_cursor_options
+                ).to_options()
+            except ValidationError as exc:
+                logger.warning(
+                    "relay.create_session_invalid_cursor_options session_id=%s: %s",
+                    session_id, exc,
+                )
+                resp = {
+                    "type": "session_create_failed",
+                    "session_id": session_id,
+                    "error": f"Invalid cursor_options: {exc}",
+                }
+                await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+                return
+
         pi_options = None
         raw_pi_options = ctrl.get("pi_options")
         if raw_pi_options is not None:
@@ -1243,6 +1264,7 @@ class RelayClient:
                 antigravity_options,
                 opencode_options,
                 copilot_options,
+                cursor_options,
                 pi_options,
             ) = resolve_spawn_args(
                 ctrl.get("cli"),
@@ -1255,6 +1277,7 @@ class RelayClient:
                 resolved_command=ctrl.get("resolved_command"),
                 opencode_options=opencode_options,
                 copilot_options=copilot_options,
+                cursor_options=cursor_options,
                 pi_options=pi_options,
             )
         except CustomCommandUnresolvedError as exc:
@@ -1300,6 +1323,7 @@ class RelayClient:
             antigravity_options=antigravity_options,
             opencode_options=opencode_options,
             copilot_options=copilot_options,
+            cursor_options=cursor_options,
             pi_options=pi_options,
             worktree=bool(ctrl.get("worktree", False)),
             branch_name=ctrl.get("branch_name"),
@@ -1688,6 +1712,11 @@ class RelayClient:
                 if parsed.copilot_options is not None
                 else None
             )
+            cursor_options = (
+                parsed.cursor_options.to_options()
+                if parsed.cursor_options is not None
+                else None
+            )
             pi_options = (
                 parsed.pi_options.to_options()
                 if parsed.pi_options is not None
@@ -1703,6 +1732,7 @@ class RelayClient:
                     antigravity_options,
                     opencode_options,
                     copilot_options,
+                    cursor_options,
                     pi_options,
                 ) = resolve_spawn_args(
                     parsed.cli,
@@ -1715,6 +1745,7 @@ class RelayClient:
                     resolved_command=parsed.resolved_command,
                     opencode_options=opencode_options,
                     copilot_options=copilot_options,
+                    cursor_options=cursor_options,
                     pi_options=pi_options,
                 )
             except CustomCommandUnresolvedError as exc:
@@ -1740,6 +1771,7 @@ class RelayClient:
                 antigravity_options=antigravity_options,
                 opencode_options=opencode_options,
                 copilot_options=copilot_options,
+                cursor_options=cursor_options,
                 pi_options=pi_options,
                 worktree=parsed.worktree,
                 branch_name=parsed.branch_name,

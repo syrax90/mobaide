@@ -47,6 +47,7 @@ object VoiceErrorCopy {
         "antigravity" -> "Antigravity"
         "opencode" -> "OpenCode"
         "copilot" -> "GitHub Copilot"
+        "cursor" -> "Cursor"
         "pi" -> "Pi"
         else -> "The session's AI agent"
     }
@@ -57,6 +58,7 @@ object VoiceErrorCopy {
         "antigravity" -> "agy update"
         "opencode" -> "opencode upgrade"
         "copilot" -> "copilot update"
+        "cursor" -> "cursor-agent update"
         "pi" -> "pi update"
         else -> null
     }

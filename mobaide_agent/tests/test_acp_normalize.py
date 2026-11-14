@@ -77,6 +77,15 @@ class TestUnwrapShell:
     def test_unwrap(self, command, unwrapped):
         assert nz.unwrap_shell(command) == unwrapped
 
+    def test_a_command_over_the_parse_bound_keeps_its_wrapper(self):
+        """The shell parse of one long word costs the square of its length."""
+        inner = "x" * (nz.SHELL_PARSE_MAX - len('/bin/zsh -lc ""'))
+        longest = f'/bin/zsh -lc "{inner}"'
+        too_long = f'/bin/zsh -lc "{inner}x"'
+
+        assert nz.unwrap_shell(longest) == inner
+        assert nz.unwrap_shell(too_long) == too_long
+
 
 class TestUnifiedDiff:
     def test_new_file_counts_every_line_as_added(self):
@@ -179,6 +188,86 @@ class TestToolContentParts:
         assert len(nz.tool_content_parts(entries)) == nz.TOOL_PARTS_MAX
 
 
+class TestCursorDiffParts:
+    """Cursor builds a diff's two texts from a unified diff and leaves its
+    file lines in them, each less its first mark."""
+
+    @staticmethod
+    def _part(old_text: str | None, new_text: str, path: str = "/p/app.py") -> dict:
+        entry = {"type": "diff", "path": path, "newText": new_text}
+        if old_text is not None:
+            entry["oldText"] = old_text
+        (part,) = nz.tool_content_parts([entry])
+        return part
+
+    @pytest.mark.parametrize("old_text", ["-- /dev/null", "-- /dev/null\n"], ids=["bare", "newline"])
+    def test_a_new_file_loses_its_file_lines(self, old_text):
+        part = self._part(old_text, "++ b/app.py\nimport os\nprint(os.name)\n")
+
+        assert part["new_file"] is True
+        assert (part["added"], part["removed"]) == (2, 0)
+        assert "b/app.py" not in part["diff"]
+        assert "/dev/null" not in part["diff"]
+
+    def test_a_changed_file_loses_its_file_lines(self):
+        part = self._part("-- a/app.py\nx = 1\ny = 2\n", "++ b/app.py\nx = 1\ny = 3\n")
+
+        assert part["new_file"] is False
+        assert (part["added"], part["removed"]) == (1, 1)
+        lines = part["diff"].splitlines()
+        assert "-y = 2" in lines and "+y = 3" in lines
+        assert not any("a/app.py" in line or "b/app.py" in line for line in lines)
+
+    def test_an_old_side_of_dev_null_with_text_after_it_is_a_changed_file(self):
+        part = self._part("-- /dev/null\nx = 1\n", "++ b/app.py\nx = 2\n")
+
+        assert part["new_file"] is False
+        assert (part["added"], part["removed"]) == (1, 1)
+
+    @pytest.mark.parametrize(
+        ("old_text", "new_text", "counts"),
+        [
+            ("-- a/users table\nselect 1;\n", "select 1;\n", (0, 1)),
+            ("x = 1\n", "++ b/app.py\nx = 1\n", (1, 0)),
+            ("-- note\nselect 1;\n", "++ note\nselect 1;\n", (1, 1)),
+            ("x\n-- a/app.py\n", "x\n++ b/app.py\n", (1, 1)),
+        ],
+        ids=["old-side-only", "new-side-only", "no-file-names", "not-the-first-line"],
+    )
+    def test_file_lines_go_only_when_both_texts_start_with_one(self, old_text, new_text, counts):
+        part = self._part(old_text, new_text, path="/p/q.sql")
+
+        assert (part["added"], part["removed"]) == counts
+        assert part["new_file"] is False
+
+    def test_a_new_file_reported_without_an_old_text_keeps_every_line(self):
+        part = self._part(None, "++ b/app.py\nx = 1\n")
+
+        assert part["new_file"] is True
+        assert part["added"] == 2
+
+    def test_a_deleted_file_reported_as_its_own_path_has_no_content(self):
+        parts = nz.tool_content_parts(
+            [
+                {"type": "diff", "path": "/p/gone.py", "oldText": "/p/gone.py", "newText": ""},
+                {"type": "content", "content": {"type": "text", "text": "Deleted"}},
+            ]
+        )
+
+        assert parts == [{"type": "text", "text": "Deleted"}]
+
+    @pytest.mark.parametrize(
+        ("old_text", "new_text"),
+        [("x = 1\n", ""), ("/p/gone.py", "/p/gone.py\n"), ("/p/other.py", "")],
+        ids=["emptied-file", "new-text-not-empty", "another-path"],
+    )
+    def test_any_other_diff_with_those_texts_is_kept(self, old_text, new_text):
+        part = self._part(old_text, new_text, path="/p/gone.py")
+
+        assert part["type"] == "diff"
+        assert part["path"] == "/p/gone.py"
+
+
 class TestMergeToolUpdate:
     def test_first_update_fills_the_item(self):
         item = nz.new_tool_item("call-1")
@@ -248,6 +337,21 @@ class TestMergeToolUpdate:
 
         assert item["title"] == shown
 
+    @pytest.mark.parametrize(
+        ("opening", "closing"),
+        [('/bin/zsh -lc "', '"'), ('"', '"')],
+        ids=["shell-wrapper", "double-quoted"],
+    )
+    def test_a_title_over_the_parse_bound_keeps_its_wrapper_or_quotes(self, opening, closing):
+        body = "x" * (nz.SHELL_PARSE_MAX - len(opening) - len(closing))
+        item = nz.new_tool_item("call-1")
+
+        nz.merge_tool_update(item, {"title": f"{opening}{body}{closing}"})
+        assert item["title"] == "x" * 199 + "…"
+
+        nz.merge_tool_update(item, {"title": f"{opening}{body}x{closing}"})
+        assert item["title"] == (opening + body)[:199] + "…"
+
     def test_an_antigravity_command_result_becomes_console_output(self):
         item = nz.new_tool_item("call-1")
         body = "Command exited with code 0.\n\nCommand output:\n....\r\n4 passed in 0.12s\r\n"
@@ -268,6 +372,411 @@ class TestMergeToolUpdate:
         )
 
         assert item["content"] == [{"type": "text", "text": body}]
+
+    @pytest.mark.parametrize(
+        ("kind", "title", "shown"),
+        [
+            ("edit", "Edit `app.py`", "Edit app.py"),
+            ("read", "Move `a.py` to `b.py`", "Move a.py to b.py"),
+            ("edit", "Read the user`s file", "Read the user`s file"),
+            ("edit", "Empty `` marks", "Empty `` marks"),
+            ("search", "Find `C:\\proj\\` `*.py`", "Find C:\\proj\\ *.py"),
+            ("execute", "`ls -la`", "ls -la"),
+            ("execute", "`echo \\`date\\``", "echo `date`"),
+            (
+                "execute",
+                '`git commit -m "fix \\\\`foo\\\\` handling"`',
+                'git commit -m "fix \\`foo\\` handling"',
+            ),
+            ("execute", "`echo foo\\`", "echo foo\\"),
+            ("execute", "`cat <<EOF\nhello\nEOF`", "cat <<EOF hello EOF"),
+            ("execute", "echo `id`", "echo `id`"),
+            ("execute", "`a` && `b`", "`a` && `b`"),
+            ("execute", "``", "``"),
+        ],
+        ids=[
+            "file", "two-spans", "one-backtick", "empty-span", "windows-path",
+            "command", "command-escaped-backtick", "command-backslash-before-backtick",
+            "command-ends-with-backslash", "command-of-many-lines",
+            "raw-command-substitution", "command-not-one-span", "command-of-two-marks",
+        ],
+    )
+    def test_a_markdown_title_is_shown_without_its_code_marks(self, kind, title, shown):
+        """Cursor writes a command as one code span around the whole title,
+        with a backslash before each backtick of the command and no other
+        escape: only that form is undone. In any other title each code span
+        loses its marks, and a backslash there is plain text."""
+        item = nz.new_tool_item("call-1")
+        nz.merge_tool_update(item, {"title": title, "kind": kind}, markdown_titles=True)
+
+        assert item["title"] == shown
+
+    @pytest.mark.parametrize(
+        ("kind", "title", "paths", "shown"),
+        [
+            ("edit", "Edit `/tmp/x/notes.txt`", ["/tmp/x/notes.txt"], "Edit notes.txt"),
+            ("edit", "Delete `C:\\Users\\me\\a.txt`", ["C:\\Users\\me\\a.txt"], "Delete a.txt"),
+            ("read", "Read `C:/Users/me/a.txt`", ["C:/Users/me/a.txt"], "Read a.txt"),
+            ("read", "Read `\\\\host\\share\\a.txt`", ["\\\\host\\share\\a.txt"], "Read a.txt"),
+            ("search", "Find `/abs/dir/` `**/*.py`", ["/abs/dir/"], "Find dir **/*.py"),
+            (
+                "edit",
+                "Move `/tmp/x/a.py` to `/tmp/y/b.py`",
+                ["/tmp/x/a.py", "/tmp/y/b.py"],
+                "Move a.py to b.py",
+            ),
+            (
+                "edit",
+                "Copy `/tmp/x/a.py` from `/tmp/y/a.py`",
+                ["/tmp/x/a.py"],
+                "Copy a.py from /tmp/y/a.py",
+            ),
+            ("edit", "Edit `src/app/main.py`", ["src/app/main.py"], "Edit src/app/main.py"),
+            ("search", "Find `/` `*.py`", ["/"], "Find / *.py"),
+            (
+                "execute",
+                "`/usr/local/bin/deploy`",
+                ["/usr/local/bin/deploy"],
+                "/usr/local/bin/deploy",
+            ),
+        ],
+        ids=[
+            "posix", "windows-drive", "windows-drive-forward-slashes", "unc", "folder",
+            "two-paths", "one-of-two-paths", "relative-path", "root", "command",
+        ],
+    )
+    def test_a_path_of_the_tool_call_in_a_markdown_title_keeps_only_its_last_name(
+        self, kind, title, paths, shown
+    ):
+        """A phone cuts a long title before the file name, and the subtitle
+        holds the whole path. Only an absolute path that the tool call names
+        as its location is cut. A command is never cut: the approval card
+        must show the program that will run."""
+        item = nz.new_tool_item("call-1")
+        update = {"title": title, "kind": kind, "locations": [{"path": p} for p in paths]}
+
+        nz.merge_tool_update(item, update, markdown_titles=True)
+
+        assert item["title"] == shown
+        assert item["subtitle"] == paths[0]
+
+    @pytest.mark.parametrize(
+        ("kind", "title", "shown"),
+        [
+            ("search", "Grep `/api/v1/users/{id}`", "Grep /api/v1/users/{id}"),
+            ("edit", "Move `/a/b/c.txt` to `/x/y/c.txt`", "Move /a/b/c.txt to /x/y/c.txt"),
+            ("other", "`/usr/local/bin/deploy --all`", "/usr/local/bin/deploy --all"),
+        ],
+        ids=["url-route", "paths-without-locations", "command-of-another-kind"],
+    )
+    def test_a_code_span_that_is_not_a_path_of_the_tool_call_stays_whole(
+        self, kind, title, shown
+    ):
+        """Nothing else on the card holds that text: a route, a pattern or a
+        command cut to its last name would say something else."""
+        item = nz.new_tool_item("call-1")
+
+        nz.merge_tool_update(item, {"title": title, "kind": kind}, markdown_titles=True)
+
+        assert item["title"] == shown
+
+    @pytest.mark.parametrize("key", ["file_path", "filePath", "path", "notebook_path"])
+    def test_a_path_that_only_the_input_names_is_cut_in_the_title(self, key):
+        """Cursor sends the file of an edit in ``rawInput`` before any
+        location."""
+        item = nz.new_tool_item("call-1")
+        update = {
+            "kind": "edit",
+            "title": "Edit `/tmp/x/notes.txt`",
+            "rawInput": {key: "/tmp/x/notes.txt"},
+        }
+
+        nz.merge_tool_update(item, update, markdown_titles=True)
+
+        assert (item["title"], item["subtitle"]) == ("Edit notes.txt", "/tmp/x/notes.txt")
+
+    def test_a_later_title_is_cut_by_the_location_the_tool_call_already_has(self):
+        """The title of a later update comes without the location again."""
+        item = nz.new_tool_item("call-1")
+        first = {"kind": "edit", "title": "Edit", "locations": [{"path": "/tmp/x/notes.txt"}]}
+        nz.merge_tool_update(item, first, markdown_titles=True)
+
+        nz.merge_tool_update(item, {"title": "Edit `/tmp/x/notes.txt`"}, markdown_titles=True)
+
+        assert (item["title"], item["subtitle"]) == ("Edit notes.txt", "/tmp/x/notes.txt")
+
+    @pytest.mark.parametrize(
+        ("title", "shown"),
+        [
+            ("Read /tmp/gop/ws-real/notes.txt", "Read notes.txt"),
+            ("Read /tmp/gop/ws-real/notes.txt (1 - 20)", "Read notes.txt (1 - 20)"),
+        ],
+        ids=["path", "path-and-line-range"],
+    )
+    def test_a_path_of_the_tool_call_without_code_marks_keeps_only_its_last_name(
+        self, title, shown
+    ):
+        """Cursor writes the file of a read as plain text, with the lines it
+        reads after it."""
+        path = "/tmp/gop/ws-real/notes.txt"
+        item = nz.new_tool_item("call-1")
+        update = {
+            "kind": "read",
+            "title": title,
+            "rawInput": {"path": path},
+            "locations": [{"path": path}],
+        }
+
+        nz.merge_tool_update(item, update, markdown_titles=True)
+
+        assert (item["title"], item["subtitle"]) == (shown, path)
+
+    @pytest.mark.parametrize(
+        ("title", "path"),
+        [
+            ("Read /a/b/c.txt", "/a/b"),
+            ("Read /a/b/c.txt", "/a/b/c"),
+            ("Read /a/b/cd.txt", "/a/b/c"),
+            ("Read /a/b/c-old", "/a/b/c"),
+            ("Read C:\\p\\a.txt", "C:\\p"),
+        ],
+        ids=["before-slash", "before-dot", "before-letter", "before-hyphen", "before-backslash"],
+    )
+    def test_a_path_of_the_tool_call_that_starts_a_longer_path_in_the_title_stays_whole(
+        self, title, path
+    ):
+        """The title names another file: its folder cut to one name would
+        point at a file that does not exist."""
+        item = nz.new_tool_item("call-1")
+        update = {"kind": "read", "title": title, "locations": [{"path": path}]}
+
+        nz.merge_tool_update(item, update, markdown_titles=True)
+
+        assert item["title"] == title
+
+    def test_a_path_in_code_marks_that_starts_a_longer_path_loses_only_its_marks(self):
+        item = nz.new_tool_item("call-1")
+        update = {"kind": "read", "title": "Read `/a/b/c.txt`", "locations": [{"path": "/a/b"}]}
+
+        nz.merge_tool_update(item, update, markdown_titles=True)
+
+        assert item["title"] == "Read /a/b/c.txt"
+
+    def test_a_path_of_the_tool_call_inside_a_command_stays_whole(self):
+        """The approval card must show the file the command works on."""
+        path = "/tmp/gop/ws-real/notes.txt"
+        item = nz.new_tool_item("call-1")
+        update = {"kind": "execute", "title": f"`cat {path}`", "locations": [{"path": path}]}
+
+        nz.merge_tool_update(item, update, markdown_titles=True)
+
+        assert item["title"] == "cat /tmp/gop/ws-real/notes.txt"
+
+    def test_a_windows_path_that_only_the_input_names_is_cut_in_the_title(self):
+        item = nz.new_tool_item("call-1")
+        update = {
+            "kind": "delete",
+            "title": "Delete `C:\\p\\a.txt`",
+            "rawInput": {"path": "C:\\p\\a.txt"},
+        }
+
+        nz.merge_tool_update(item, update, markdown_titles=True)
+
+        assert (item["title"], item["subtitle"]) == ("Delete a.txt", "C:\\p\\a.txt")
+
+    def test_a_path_in_a_title_of_an_agent_that_writes_no_markdown_stays_whole(self):
+        item = nz.new_tool_item("call-1")
+        update = {
+            "kind": "read",
+            "title": "Read /tmp/x/notes.txt",
+            "locations": [{"path": "/tmp/x/notes.txt"}],
+        }
+
+        nz.merge_tool_update(item, update)
+
+        assert item["title"] == "Read /tmp/x/notes.txt"
+
+    @pytest.mark.parametrize(
+        ("kind", "title"),
+        [("execute", "echo `whoami`"), ("execute", "`ls -la`"), ("edit", "Edit `app.py`")],
+        ids=["command-substitution", "whole-span", "file"],
+    )
+    def test_a_title_of_an_agent_that_writes_no_markdown_keeps_its_backticks(self, kind, title):
+        """The approval card must show the command that will run."""
+        item = nz.new_tool_item("call-1")
+        nz.merge_tool_update(item, {"kind": kind, "title": title})
+
+        assert item["title"] == title
+
+    def test_a_command_title_after_its_kind_is_unwrapped_as_a_command(self):
+        """Cursor names the tool first and sends the command in a later
+        update, without the kind."""
+        item = nz.new_tool_item("call-1")
+        nz.merge_tool_update(item, {"kind": "execute", "title": "Terminal"}, markdown_titles=True)
+
+        nz.merge_tool_update(item, {"title": "echo `id`"}, markdown_titles=True)
+
+        assert item["title"] == "echo `id`"
+
+    @pytest.mark.timeout(10)
+    @pytest.mark.parametrize(
+        ("kind", "shown"),
+        [("edit", "a\\" * 99 + "a…"), ("execute", "a`" * 99 + "a…")],
+        ids=["edit", "execute"],
+    )
+    def test_a_title_of_megabytes_of_code_marks_is_read_in_one_pass(self, kind, shown):
+        """A command title is one code span that ends with a backslash; in
+        any other title the marks pair up. Both results are far over the
+        shell parse bound, so no shell parse follows."""
+        hostile = "`" + "a\\`" * 1_500_000
+        item = nz.new_tool_item("call-1")
+
+        nz.merge_tool_update(item, {"kind": kind, "title": hostile}, markdown_titles=True)
+
+        assert item["title"] == shown
+
+    @pytest.mark.parametrize(
+        ("raw_output", "content"),
+        [
+            (
+                {"exitCode": 0, "stdout": "....\n4 passed in 0.12s\n", "stderr": ""},
+                [{"type": "text", "text": "```console\n....\n4 passed in 0.12s\n```"}],
+            ),
+            (
+                {"exitCode": 2, "stdout": "collected 1 item\n", "stderr": "boom\n"},
+                [{"type": "text", "text": "```console\ncollected 1 item\nboom\n```\nExit code 2"}],
+            ),
+            (
+                {"exitCode": 1, "stderr": "sh: nope: command not found\n"},
+                [{"type": "text", "text": "```console\nsh: nope: command not found\n```\nExit code 1"}],
+            ),
+            ({"exitCode": 0, "stdout": "", "stderr": ""}, []),
+            ({"exitCode": 3, "stdout": "", "stderr": ""}, [{"type": "text", "text": "Exit code 3"}]),
+        ],
+        ids=["output", "stdout-then-stderr", "stderr-only", "silent-success", "silent-failure"],
+    )
+    def test_a_cursor_command_result_becomes_console_output(self, raw_output, content):
+        """Cursor reports a finished command in ``rawOutput``, with no
+        ``content``; the output takes the place of what stood there before."""
+        item = nz.new_tool_item("call-1")
+        waiting = [{"type": "content", "content": {"type": "text", "text": "Not in the allowlist"}}]
+        nz.merge_tool_update(
+            item, {"kind": "execute", "title": "`pytest -q`", "status": "pending", "content": waiting}
+        )
+
+        nz.merge_tool_update(item, {"status": "completed", "rawOutput": raw_output})
+
+        assert item["content"] == content
+
+    def test_a_very_long_cursor_command_result_is_cut(self):
+        long = "o" * (3 * nz.CONSOLE_KEEP_MAX)
+        item = nz.new_tool_item("call-1")
+
+        nz.merge_tool_update(
+            item,
+            {
+                "kind": "execute",
+                "status": "completed",
+                "rawOutput": {"exitCode": 0, "stdout": f"first\n{long}", "stderr": f"{long}\nlast\n"},
+            },
+        )
+
+        (part,) = item["content"]
+        assert part["truncated"] is True
+        assert part["text"].startswith("```console\nfirst\n")
+        assert part["text"].endswith("\nlast\n```")
+        assert "characters not shown" in part["text"]
+        assert len(part["text"]) < nz.TEXT_PART_MAX + 200
+
+    @pytest.mark.parametrize(
+        "raw_output",
+        [
+            {"exitCode": True, "stdout": "ok"},
+            {"exitCode": "0", "stdout": "ok"},
+            {"stdout": "ok", "stderr": ""},
+            {"exitCode": 0},
+            {"exitCode": 0, "stdout": None, "stderr": 5},
+            "ok",
+            None,
+        ],
+        ids=["bool-code", "text-code", "no-code", "no-streams", "streams-not-text", "text", "none"],
+    )
+    def test_any_other_raw_output_of_a_command_keeps_the_content(self, raw_output):
+        item = nz.new_tool_item("call-1")
+        shown = [{"type": "content", "content": {"type": "text", "text": "Not in the allowlist"}}]
+        nz.merge_tool_update(item, {"kind": "execute", "content": shown})
+
+        nz.merge_tool_update(item, {"status": "completed", "rawOutput": raw_output})
+
+        assert item["content"] == [{"type": "text", "text": "Not in the allowlist"}]
+
+    def test_a_command_result_with_its_own_content_keeps_that_content(self):
+        item = nz.new_tool_item("call-1")
+        nz.merge_tool_update(
+            item,
+            {
+                "kind": "execute",
+                "status": "completed",
+                "rawOutput": {"exitCode": 0, "stdout": "raw\n", "stderr": ""},
+                "content": [{"type": "content", "content": {"type": "text", "text": "shown"}}],
+            },
+        )
+
+        assert item["content"] == [{"type": "text", "text": "shown"}]
+
+    def test_the_same_raw_output_of_a_tool_that_is_not_a_command_is_no_console(self):
+        item = nz.new_tool_item("call-1")
+        nz.merge_tool_update(
+            item,
+            {
+                "kind": "read",
+                "status": "completed",
+                "rawOutput": {"exitCode": 0, "stdout": "ok\n", "stderr": ""},
+            },
+        )
+
+        assert item["content"] == []
+
+    def test_a_failed_cursor_command_shows_its_output_once(self):
+        item = nz.new_tool_item("call-1")
+        nz.merge_tool_update(
+            item,
+            {
+                "kind": "execute",
+                "status": "failed",
+                "rawOutput": {"exitCode": 1, "stdout": "", "stderr": "boom\n"},
+            },
+        )
+
+        assert item["content"] == [{"type": "text", "text": "```console\nboom\n```\nExit code 1"}]
+
+    def test_a_failed_cursor_tool_shows_the_error_of_its_raw_output(self):
+        item = nz.new_tool_item("call-1")
+        nz.merge_tool_update(
+            item,
+            {"kind": "read", "status": "failed", "rawOutput": {"error": "File not found: /p/a.py"}},
+        )
+
+        assert item["content"] == [{"type": "text", "text": "File not found: /p/a.py"}]
+
+    @pytest.mark.parametrize(
+        "raw_output",
+        [{"error": {"code": 5}}, {"error": "  "}, {"message": "File not found"}],
+        ids=["error-not-text", "blank-error", "no-error-key"],
+    )
+    def test_a_failed_tool_without_an_error_text_shows_nothing(self, raw_output):
+        item = nz.new_tool_item("call-1")
+        nz.merge_tool_update(item, {"kind": "read", "status": "failed", "rawOutput": raw_output})
+
+        assert item["content"] == []
+
+    def test_the_error_of_a_tool_that_did_not_fail_is_not_shown(self):
+        item = nz.new_tool_item("call-1")
+        nz.merge_tool_update(
+            item, {"kind": "read", "status": "completed", "rawOutput": {"error": "ignored"}}
+        )
+
+        assert item["content"] == []
 
 
 class TestConfigOptions:

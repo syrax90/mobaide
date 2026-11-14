@@ -20,6 +20,7 @@ fun sessionKindLabel(
     SessionKind.Antigravity -> "Antigravity"
     SessionKind.OpenCode -> "OpenCode"
     SessionKind.Copilot -> "GitHub Copilot"
+    SessionKind.Cursor -> "Cursor"
     SessionKind.Pi -> "Pi"
     SessionKind.AutoScan -> "Auto Scan"
     SessionKind.Shell -> "Terminal"

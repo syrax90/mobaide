@@ -66,6 +66,7 @@ describe('attentionLabel', () => {
     [{ kind: '' }, 'Claude session'],
     [{ kind: 'claude' }, 'Claude session'],
     [{ kind: 'shell' }, 'Terminal session'],
+    [{ kind: 'cursor' }, 'Cursor session'],
     [{ kind: 'custom_0123456789ab', kind_label: 'My Linter' }, 'My Linter session'],
     [{ kind: 'custom_0123456789ab', kind_label: '  ' }, 'Agent session'],
     [{ kind: 'custom_0123456789ab' }, 'Agent session'],

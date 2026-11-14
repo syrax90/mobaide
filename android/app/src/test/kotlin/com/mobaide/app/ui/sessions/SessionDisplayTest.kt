@@ -53,6 +53,10 @@ class SessionDisplayTest {
             sessionHeaderLabel(session(kind = SessionKind.Codex), emptyMap()),
         )
         assertEquals(
+            "Cursor",
+            sessionHeaderLabel(session(kind = SessionKind.Cursor), emptyMap()),
+        )
+        assertEquals(
             "a whitespace-only OSC title is not a label",
             "Terminal",
             sessionHeaderLabel(session(title = "   ", kind = SessionKind.Shell), emptyMap()),

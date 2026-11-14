@@ -240,6 +240,55 @@ class TestRemoveVoiceFiles:
         assert _remaining(prefix) == {"bin", *_FOREIGN}
 
 
+def _make_cursor_cleanup_dir(prefix: Path) -> Path:
+    """The Cursor settings folder of the transcript cleanup: the copy of the
+    user's Cursor settings and the chat of the last run."""
+    folder = prefix / "voice-cleanup-cursor"
+    (folder / "chats" / "a1b2" / "last-run").mkdir(parents=True)
+    (folder / "chats" / "a1b2" / "last-run" / "store.db").write_bytes(b"history")
+    (folder / "cli-config.json").write_text(
+        '{"privacyCache": {"ghostMode": true}}', encoding="utf-8"
+    )
+    return folder
+
+
+class TestRemoveCursorCleanupDir:
+    def test_agent_deletes_it_where_the_root_helper_takes_over(
+        self, prefix, tmp_path, monkeypatch, commands
+    ):
+        # A helper written by an older install.sh does not list the folder.
+        helper = tmp_path / "mobaide-agent-uninstall.path"
+        helper.write_text("", encoding="utf-8")
+        monkeypatch.setattr(self_uninstall, "SYSTEMD_HELPER_PATH_UNIT", helper)
+        folder = _make_cursor_cleanup_dir(prefix)
+
+        uninstall(prefix, platform="linux")
+
+        assert not folder.exists()
+        # The rest of the install is still the helper's to delete.
+        assert (prefix / "run" / "uninstall-requested").is_file()
+        assert (prefix / "releases" / "0.9.0").is_dir()
+        assert (prefix / "notes.txt").exists()
+
+    def test_failure_does_not_stop_the_uninstall(
+        self, prefix, no_systemd_helper, monkeypatch, commands
+    ):
+        folder = _make_cursor_cleanup_dir(prefix)
+        remove_tree = self_uninstall.remove_tree
+
+        def boom(path: Path) -> bool:
+            if path == folder:
+                raise RuntimeError("cursor folder gone wrong")
+            return remove_tree(path)
+
+        monkeypatch.setattr(self_uninstall, "remove_tree", boom)
+
+        uninstall(prefix, platform="linux")
+
+        # The prefix entries still list the folder.
+        assert _remaining(prefix) == {"bin", *_FOREIGN}
+
+
 class TestInstallShHelper:
     def test_helper_deletes_exactly_the_prefix_entries(self):
         """The root helper ``install.sh`` writes repeats PREFIX_ENTRIES."""

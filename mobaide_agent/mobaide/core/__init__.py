@@ -21,6 +21,11 @@ from .copilot_launcher import (
     CopilotLauncher,
     CopilotOptions,
 )
+from .cursor_launcher import (
+    CursorBinaryNotFoundError,
+    CursorLauncher,
+    CursorOptions,
+)
 from .pi_launcher import (
     PiBinaryNotFoundError,
     PiLauncher,
@@ -74,6 +79,9 @@ __all__ = [
     "CopilotLauncher",
     "CopilotOptions",
     "CopilotBinaryNotFoundError",
+    "CursorLauncher",
+    "CursorOptions",
+    "CursorBinaryNotFoundError",
     "PiLauncher",
     "PiOptions",
     "PiBinaryNotFoundError",

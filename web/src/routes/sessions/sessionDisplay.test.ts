@@ -107,6 +107,7 @@ describe('sessionHeaderLabel', () => {
   it('falls back to the kind, never to an id', () => {
     // The header names one session; a truncated id would identify nothing.
     expect(sessionHeaderLabel(session({ kind: 'codex' }), names)).toBe('Codex');
+    expect(sessionHeaderLabel(session({ kind: 'cursor' }), names)).toBe('Cursor');
     expect(sessionHeaderLabel(session({ title: '', project_name: 'mobaide' }), names)).toBe(
       'Claude Code',
     );

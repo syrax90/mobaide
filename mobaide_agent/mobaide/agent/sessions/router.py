@@ -115,6 +115,11 @@ async def create_session(
         if body.copilot_options is not None
         else None
     )
+    cursor_options = (
+        body.cursor_options.to_options()
+        if body.cursor_options is not None
+        else None
+    )
     pi_options = (
         body.pi_options.to_options()
         if body.pi_options is not None
@@ -135,6 +140,7 @@ async def create_session(
         antigravity_options,
         opencode_options,
         copilot_options,
+        cursor_options,
         pi_options,
     ) = resolve_spawn_args(
         body.cli,
@@ -146,6 +152,7 @@ async def create_session(
         resolve_default_shell(),
         opencode_options=opencode_options,
         copilot_options=copilot_options,
+        cursor_options=cursor_options,
         pi_options=pi_options,
     )
     chat_error = chat_request_error(body.ui, kind, body.chat_resume_id, manager)
@@ -164,6 +171,7 @@ async def create_session(
         antigravity_options=antigravity_options,
         opencode_options=opencode_options,
         copilot_options=copilot_options,
+        cursor_options=cursor_options,
         pi_options=pi_options,
         worktree=body.worktree,
         branch_name=body.branch_name,

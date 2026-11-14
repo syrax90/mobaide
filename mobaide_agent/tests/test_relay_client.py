@@ -3998,6 +3998,202 @@ class TestHandleProxyRequestCopilot:
         assert resp["body"]["kind"] == "copilot"
 
 
+class TestHandleCreateSessionCursor:
+    """The control-channel ``create_session`` path must support Cursor:
+    parse ``cursor_options``, thread the ``cli`` discriminator into a CURSOR
+    ``SessionConfig``, and answer ``session_create_failed`` for a block it
+    cannot parse. No auth case: Cursor has no sign-in probe.
+    """
+
+    async def test_create_session_forwards_cursor_options_and_kind(
+        self, client, mock_session_manager,
+    ):
+        """An explicit ``cli="cursor"`` plus a ``cursor_options`` block must
+        reach ``create_session`` as a CURSOR ``SessionConfig`` that carries the
+        parsed :class:`CursorOptions` and no other options block. Otherwise
+        ``force`` and the worktree are dropped on the relay control path."""
+        from mobaide.core.cursor_launcher import CursorOptions
+        from mobaide.core.models import SessionConfig
+
+        async def _capture(config: SessionConfig):
+            _capture.config = config  # type: ignore[attr-defined]
+            s = MagicMock()
+            s.session_id = "cursor-sess"
+            s.pid = 7
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "cursor-sess",
+            "cli": "cursor",
+            "cursor_options": {
+                "force": True,
+                "worktree": True,
+                "branch_name": "feature/x",
+            },
+        }
+        payload = json.dumps(ctrl).encode()
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(payload, ws)
+
+        cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
+        assert cfg.kind is SessionKind.CURSOR
+        assert cfg.claude_options is None
+        assert cfg.codex_options is None
+        assert cfg.antigravity_options is None
+        assert cfg.opencode_options is None
+        assert cfg.copilot_options is None
+        assert cfg.cursor_options == CursorOptions(
+            force=True, worktree=True, branch_name="feature/x",
+        )
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_created"
+        assert resp["session_id"] == "cursor-sess"
+        assert resp["pid"] == 7
+
+    async def test_a_lone_cursor_options_block_infers_the_cursor_kind(
+        self, client, mock_session_manager,
+    ):
+        from mobaide.core.cursor_launcher import CursorOptions
+        from mobaide.core.models import SessionConfig
+
+        captured: dict[str, SessionConfig] = {}
+
+        async def _capture(config: SessionConfig):
+            captured["config"] = config
+            s = MagicMock()
+            s.session_id = "cursor-infer"
+            s.pid = 9
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+        ws = AsyncMock()
+        ctrl = {"type": "create_session", "session_id": "cursor-infer", "cursor_options": {}}
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        assert captured["config"].kind is SessionKind.CURSOR
+        assert captured["config"].cursor_options == CursorOptions()
+
+    @pytest.mark.parametrize(
+        "block",
+        [{"force": "sometimes"}, {"branch_name": ["feature/x"]}, ["--force"]],
+        ids=["wrong-type", "branch-not-text", "not-an-object"],
+    )
+    async def test_invalid_cursor_options_fail_the_create(
+        self, client, mock_session_manager, block,
+    ):
+        """A malformed block answers ``session_create_failed`` and never
+        spawns: a session started with the defaults instead would ask before
+        each command although the user chose to run everything."""
+        mock_session_manager.create_session = AsyncMock()
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "bad-cursor",
+            "cli": "cursor",
+            "cursor_options": block,
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_create_failed"
+        assert resp["session_id"] == "bad-cursor"
+        assert resp["error"].startswith("Invalid cursor_options:")
+        mock_session_manager.create_session.assert_not_awaited()
+
+
+class TestHandleProxyRequestCursor:
+    """``POST /api/sessions`` proxied through the central relay
+    (``proxy_request`` control frame) must thread Cursor the same way
+    the direct HTTP router does: this is the path the mobile and web clients
+    use.
+    """
+
+    async def test_proxy_post_sessions_threads_cursor_options(
+        self, client, mock_session_manager,
+    ):
+        """A proxied ``POST /api/sessions`` body with ``cli="cursor"`` builds a
+        CURSOR ``SessionConfig`` from ``cursor_options`` and returns a 201
+        ``proxy_response`` whose body reports ``kind == "cursor"``."""
+        from mobaide.core.cursor_launcher import CursorOptions
+        from mobaide.core.models import SessionConfig
+
+        captured: dict[str, SessionConfig] = {}
+
+        async def _capture(config: SessionConfig):
+            captured["config"] = config
+            s = MagicMock()
+            s.session_id = "proxy-cursor"
+            s.pid = 11
+            info = MagicMock()
+            info.session_id = "proxy-cursor"
+            info.state = SessionState.RUNNING
+            info.created_at = datetime(2026, 11, 12, 9, 0, 0, tzinfo=timezone.utc)
+            info.pid = 11
+            info.command = ["cursor-agent"]
+            info.cwd = None
+            info.title = None
+            info.project_name = None
+            info.kind = SessionKind.CURSOR
+            info.kind_label = None
+            info.attention = None
+            info.exit_reason = None
+            info.ui = "terminal"
+            info.activity = None
+            s.to_info = MagicMock(return_value=info)
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "proxy_request",
+            "request_id": "req-cursor",
+            "method": "POST",
+            "path": "/api/sessions",
+            "body": {
+                "cli": "cursor",
+                "cursor_options": {
+                    "force": True,
+                    "worktree": True,
+                    "branch_name": "feature/x",
+                    "base_branch": "origin/dev",
+                },
+            },
+        }
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        cfg = captured["config"]
+        assert cfg.kind is SessionKind.CURSOR
+        assert cfg.claude_options is None
+        assert cfg.codex_options is None
+        assert cfg.antigravity_options is None
+        assert cfg.opencode_options is None
+        assert cfg.copilot_options is None
+        assert cfg.cursor_options == CursorOptions(
+            force=True,
+            worktree=True,
+            branch_name="feature/x",
+            base_branch="origin/dev",
+        )
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "proxy_response"
+        assert resp["request_id"] == "req-cursor"
+        assert resp["status"] == 201
+        assert resp["body"]["kind"] == "cursor"
+
+
 CUSTOM_KIND = "custom_0123456789ab"
 
 

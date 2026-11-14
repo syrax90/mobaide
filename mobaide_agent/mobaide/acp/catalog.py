@@ -18,7 +18,13 @@ from mobaide import __version__
 
 from .agents import ChatAgentSpec, ChatAgentUnavailableError, ChatLaunchPlan
 from .install import PROBE_POOL, AdapterInstallError
-from .rpc import ERR_METHOD_NOT_FOUND, AcpConnection, AcpProcessError, AcpRpcError
+from .rpc import (
+    ERR_AUTH_REQUIRED,
+    ERR_METHOD_NOT_FOUND,
+    AcpConnection,
+    AcpProcessError,
+    AcpRpcError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +106,15 @@ class ChatCatalog:
                         break
                     params = {**params, "cursor": page["next_cursor"]}
             except AcpRpcError as exc:
+                if exc.code == ERR_AUTH_REQUIRED:
+                    # An agent can read its login only when it starts: the
+                    # next request must get a new process.
+                    await self._drop(kind)
+                    raise ChatCatalogError(
+                        502,
+                        f"{spec.display_name} is not signed in on the PC. "
+                        "Start a new chat session to sign in.",
+                    ) from None
                 raise ChatCatalogError(
                     400 if exc.code == -32602 else 502, exc.message
                 ) from None

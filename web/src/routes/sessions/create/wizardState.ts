@@ -27,6 +27,7 @@ export const BUILT_IN_MODES = [
   'antigravity',
   'opencode',
   'copilot',
+  'cursor',
   'pi',
   'auto_scan',
   'shell',
@@ -110,6 +111,13 @@ export interface CopilotBucket {
   terminalUi: boolean;
 }
 
+export interface CursorBucket {
+  /** Cursor's `--force` ("Run Everything"): run commands without asking. */
+  force: boolean;
+  /** The classic terminal instead of the chat view. */
+  terminalUi: boolean;
+}
+
 /** Pi has no approval mode to choose: it runs its tools without asking. */
 export interface PiBucket {
   /** The classic terminal instead of the chat view. */
@@ -143,6 +151,7 @@ export interface WizardState {
   antigravity: AntigravityBucket;
   opencode: OpenCodeBucket;
   copilot: CopilotBucket;
+  cursor: CursorBucket;
   pi: PiBucket;
   git: GitBucket;
   /**
@@ -201,6 +210,7 @@ export const INITIAL_WIZARD_STATE: WizardState = {
   },
   opencode: { autoApprove: false, terminalUi: false },
   copilot: { allowAll: false, terminalUi: false },
+  cursor: { force: false, terminalUi: false },
   pi: { terminalUi: false },
   git: { worktree: false, branchName: '' },
   worktreeBasePick: null,
@@ -374,6 +384,8 @@ export type WizardAction =
   | { type: 'setOpenCodeTerminalUi'; value: boolean }
   | { type: 'setCopilotAllowAll'; value: boolean }
   | { type: 'setCopilotTerminalUi'; value: boolean }
+  | { type: 'setCursorForce'; value: boolean }
+  | { type: 'setCursorTerminalUi'; value: boolean }
   | { type: 'setPiTerminalUi'; value: boolean }
   | { type: 'setWorktree'; value: boolean }
   | { type: 'setBranchName'; value: string }
@@ -595,6 +607,12 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
 
     case 'setCopilotTerminalUi':
       return { ...state, copilot: { ...state.copilot, terminalUi: action.value } };
+
+    case 'setCursorForce':
+      return { ...state, cursor: { ...state.cursor, force: action.value } };
+
+    case 'setCursorTerminalUi':
+      return { ...state, cursor: { ...state.cursor, terminalUi: action.value } };
 
     case 'setPiTerminalUi':
       return { ...state, pi: { ...state.pi, terminalUi: action.value } };

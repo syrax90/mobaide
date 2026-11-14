@@ -28,6 +28,7 @@ import {
   type CodexBucket,
   type OpenCodeBucket,
   type CopilotBucket,
+  type CursorBucket,
   type WizardMode,
   type WizardState,
 } from './wizardState';
@@ -39,6 +40,7 @@ type CodexOptions = components['schemas']['CodexOptionsModel'];
 type AntigravityOptions = components['schemas']['AntigravityOptionsModel'];
 type OpenCodeOptions = components['schemas']['OpenCodeOptionsModel'];
 type CopilotOptions = components['schemas']['CopilotOptionsModel'];
+type CursorOptions = components['schemas']['CursorOptionsModel'];
 type PiOptions = components['schemas']['PiOptionsModel'];
 
 export interface BuildContext {
@@ -71,7 +73,14 @@ export function claudeUsesChat(bucket: ClaudeBucket, chat: ChatSupport | undefin
 }
 
 /** The agent kinds whose sessions can open in the chat view. */
-export type ChatAgentKind = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'copilot' | 'pi';
+export type ChatAgentKind =
+  | 'claude'
+  | 'codex'
+  | 'antigravity'
+  | 'opencode'
+  | 'copilot'
+  | 'cursor'
+  | 'pi';
 
 export function chatAgentKind(mode: WizardMode | null): ChatAgentKind | null {
   return mode === 'claude' ||
@@ -79,6 +88,7 @@ export function chatAgentKind(mode: WizardMode | null): ChatAgentKind | null {
     mode === 'antigravity' ||
     mode === 'opencode' ||
     mode === 'copilot' ||
+    mode === 'cursor' ||
     mode === 'pi'
     ? mode
     : null;
@@ -97,6 +107,8 @@ export function terminalUiOf(state: WizardState, kind: ChatAgentKind): boolean {
       return state.opencode.terminalUi;
     case 'copilot':
       return state.copilot.terminalUi;
+    case 'cursor':
+      return state.cursor.terminalUi;
     case 'pi':
       return state.pi.terminalUi;
   }
@@ -212,6 +224,18 @@ function copilotOptions(
   };
 }
 
+function cursorOptions(
+  bucket: CursorBucket,
+  extras: { worktree: boolean; branchName: string | undefined; baseBranch: string | null },
+): CursorOptions {
+  return {
+    force: bucket.force,
+    worktree: extras.worktree,
+    branch_name: extras.branchName,
+    base_branch: extras.baseBranch,
+  };
+}
+
 function piOptions(extras: {
   worktree: boolean;
   branchName: string | undefined;
@@ -310,6 +334,20 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
     };
   }
 
+  if (mode === 'cursor') {
+    return {
+      ...base,
+      cli: 'cursor',
+      cursor_options: cursorOptions(state.cursor, {
+        worktree: place.worktree,
+        branchName: place.branchName,
+        baseBranch: place.baseBranch,
+      }),
+      worktree: false,
+      ui: usesChatView(state.cursor.terminalUi, context.chat) ? 'chat' : 'terminal',
+    };
+  }
+
   if (mode === 'pi') {
     return {
       ...base,
@@ -363,9 +401,11 @@ export function buildResumeRequest(
           ? { cli: 'opencode', opencode_options: opencodeOptions(state.opencode, noWorktree) }
           : kind === 'copilot'
             ? { cli: 'copilot', copilot_options: copilotOptions(state.copilot, noWorktree) }
-            : kind === 'pi'
-              ? { cli: 'pi', pi_options: piOptions(noWorktree) }
-              : { cli: 'claude', claude_options: claudeOptions(state.claude, noWorktree) };
+            : kind === 'cursor'
+              ? { cli: 'cursor', cursor_options: cursorOptions(state.cursor, noWorktree) }
+              : kind === 'pi'
+                ? { cli: 'pi', pi_options: piOptions(noWorktree) }
+                : { cli: 'claude', claude_options: claudeOptions(state.claude, noWorktree) };
   return {
     project_name: sameFolder ? project.name : undefined,
     cwd: sameFolder ? undefined : stored.cwd,

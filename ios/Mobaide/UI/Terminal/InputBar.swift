@@ -60,6 +60,11 @@ struct TerminalControlKey: Identifiable {
     /// two seconds, and the composer takes that key. Ctrl+O/Ctrl+R/Ctrl+L, Rewind
     /// and Approve/Reject are absent: the OpenCode TUI does not bind them that way.
     static let opencodeKeys: [TerminalControlKey] = ordered([mode, ctrlP] + defaultKeys)
+    /// Mode (Shift+Tab) switches Cursor between Agent, Plan and Ask; Approve and
+    /// Reject are its approval answers (bare `y` / `n`). Ctrl+O expands a folded
+    /// block, Ctrl+R opens the review of the changed files, Ctrl+L clears the
+    /// screen. It has no Rewind chord.
+    static let cursorKeys: [TerminalControlKey] = ordered([mode, approve, reject] + sharedTail + [ctrlL])
     /// Pi's own controls on top of the neutral set (Android `PI_CONTROL_KEYS`):
     /// Thinking (Shift+Tab cycles the thinking level), Ctrl+P (next model),
     /// Ctrl+L (model list) and Ctrl+O (expand tool output). Ctrl+R is absent:
@@ -88,6 +93,7 @@ struct TerminalControlKey: Identifiable {
         // the mode, Esc-Esc rewinds, Ctrl+O expands the timeline, Ctrl+R searches
         // the history and Ctrl+L clears the screen.
         case .copilot: return claudeKeys
+        case .cursor: return cursorKeys
         case .pi: return piKeys
         }
     }

@@ -728,6 +728,7 @@ The Android app never talks to the agent directly; it always goes through `centr
   - Antigravity auth is host-side — pre-authenticate `agy` on the host via Google Sign-In; there is no API-key env var and no in-app login.
 - OpenCode (optional — the fourth managed agent; install script, npm, Homebrew or Bun). The agent looks for the binary in `MOBAIDE_OPENCODE_BIN`, then on `PATH`, then in `~/.opencode/bin/opencode`, npm-global, Homebrew and `~/.bun/bin` (Windows: `%USERPROFILE%\.opencode\bin\opencode.exe`, npm shims, Bun). The Windows installer does **not** auto-detect OpenCode (no `--opencode-bin`): set `MOBAIDE_OPENCODE_BIN` in `<prefix>\mobaide_agent\.env` for a non-standard location. OpenCode needs no account to start. Chat sessions run `opencode acp` (override with `MOBAIDE_ACP_OPENCODE_COMMAND`), with no Node.js.
 - GitHub Copilot CLI (optional managed agent; binary `copilot`; install with `npm install -g @github/copilot`, or `winget install GitHub.Copilot` on Windows). The agent looks for the binary in `MOBAIDE_COPILOT_BIN`, then on `PATH`, then in the npm-global folders (Windows: also `%LOCALAPPDATA%\Microsoft\WinGet\Links\copilot.exe`). Windows installs auto-detect `copilot` the same way and pin `MOBAIDE_COPILOT_BIN`. Sign in with `copilot login` on the host, or from a chat session in the app. Chat sessions run `copilot --acp` (override with `MOBAIDE_ACP_COPILOT_COMMAND`), with no Node.js adapter.
+- Cursor CLI (optional managed agent; binary `cursor-agent`; install with `curl https://cursor.com/install -fsS | bash`, or `irm 'https://cursor.com/install?win32=true' | iex` in PowerShell on Windows). The agent looks for the binary in `MOBAIDE_CURSOR_BIN`, then on `PATH`, then in `~/.local/bin` (Windows: also `%LOCALAPPDATA%\cursor-agent\cursor-agent.exe` and `.cmd`). Windows installs auto-detect `cursor-agent` the same way and pin `MOBAIDE_CURSOR_BIN`. Sign in with `cursor-agent login` on the host, or from a chat session in the app. Chat sessions run `cursor-agent acp` (override with `MOBAIDE_ACP_CURSOR_COMMAND`), with no Node.js adapter.
 - Pi (optional managed agent; binary `pi`; installer and docs at https://pi.dev/docs/latest/quickstart). The agent looks for the binary in `MOBAIDE_PI_BIN`, then on `PATH`, then in `~/.pi/agent/bin` (Pi's own installer), then in the npm fallback folders. Windows installs auto-detect `pi` the same way and pin `MOBAIDE_PI_BIN`. Sign in from a chat session in the app (ChatGPT or Claude account), or on the PC with `/login` in Pi. Chat sessions run the agent's own bridge over `pi --mode rpc` (override with `MOBAIDE_ACP_PI_COMMAND`; the override must speak ACP), with no Node.js adapter. Pi runs its tools without asking.
 - A paired agent: `RELAY_AGENT_ID` + `RELAY_AGENT_TOKEN` issued by `central-server`. Pair from the Android app: **Settings → Agents → Pair new**, or via the admin REST API.
 
@@ -981,7 +982,7 @@ A helper process (`python -P -m mobaide.voice.worker`, same interpreter as the a
 - `models/<model-id>/` holds the model plus its `NOTICE` (CC BY 4.0 attribution: created by NVIDIA, int8 ONNX export by k2-fsa/sherpa-onnx).
 - `runtime/<sherpa-onnx-version>-<python tag>-<platform>/` holds the sherpa-onnx runtime, unpacked from hash-pinned PyPI wheels. A Python upgrade fetches a new runtime; the model stays.
 
-The opt-in transcript cleanup (docs/voice-input.md) keeps its small prompt and settings files in a sibling directory, `<state prefix>/voice-cleanup/`. It needs no download and does not depend on the model.
+The opt-in transcript cleanup (docs/voice-input.md) keeps its small prompt and settings files in a sibling directory, `<state prefix>/voice-cleanup/` (Cursor's cleanup also keeps its own config folder, `<state prefix>/voice-cleanup-cursor/`; uninstall removes both). It needs no download and does not depend on the model.
 
 `MOBAIDE_VOICE_DIR` overrides the location. A relative path is anchored under the state prefix. The CLI reads it from the agent's environment or `.env`, and `--voice-dir` overrides both.
 
@@ -1030,7 +1031,7 @@ The CLI works on the same files and lock as the running agent; the apps see the 
 
 **Privacy.** Audio is held in memory only, transcribed, and dropped; neither audio nor transcript text is logged or written to disk — logs carry only sizes, durations, timings and error codes.
 
-The one way the text leaves the PC is the opt-in transcript cleanup (web, Android and iOS; Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot and Pi sessions). The agent hands the transcript to the session's CLI on that computer, which sends it to Anthropic, OpenAI, Google, the user's OpenCode model provider, GitHub or Pi's model provider under the user's own login. The agent still never logs or stores it (docs/voice-input.md, *Transcript cleanup*).
+The one way the text leaves the PC is the opt-in transcript cleanup (web, Android and iOS; Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot, Cursor and Pi sessions). The agent hands the transcript to the session's CLI on that computer, which sends it to Anthropic, OpenAI, Google, the user's OpenCode model provider, GitHub, Cursor (Anysphere) or Pi's model provider under the user's own login. The agent still never logs or stores it (docs/voice-input.md, *Transcript cleanup*).
 
 **Testing without the model.** `MOBAIDE_VOICE_FAKE=1` swaps in a tiny generated model and a deterministic engine under `<state prefix>/voice-fake/`. `tests/e2e/manual_stack.py up --fake-voice` sets it.
 
@@ -1234,6 +1235,10 @@ Common causes:
   - The agent returns HTTP 503 with a `copilot_cli_missing` marker and a `searched_paths` list.
   - There is no pre-spawn auth probe. Sign in from a chat session in the app (the **Sign-in needed** card), or on the PC with `copilot login`.
   - The Windows installer checks that the `copilot` command is available (`PATH`, then the npm-global folders and the WinGet link) and writes `MOBAIDE_COPILOT_BIN`. If Copilot was installed after the agent, or lives elsewhere, re-run `irm https://get.mobaide.com/install.ps1 | iex` (it writes `MOBAIDE_COPILOT_BIN` without touching pairing credentials), or set `MOBAIDE_COPILOT_BIN` in `<prefix>\mobaide_agent\.env`.
+- Cursor CLI not on the service's `PATH` (only relevant if you use the optional Cursor agent).
+  - The agent returns HTTP 503 with a `cursor_cli_missing` marker and a `searched_paths` list.
+  - There is no pre-spawn auth probe. Sign in from a chat session in the app (the **Sign-in needed** card), or on the PC with `cursor-agent login`.
+  - The Windows installer checks that the `cursor-agent` command is available (`PATH`, then `%LOCALAPPDATA%\cursor-agent`) and writes `MOBAIDE_CURSOR_BIN`. If Cursor was installed after the agent, or lives elsewhere, re-run `irm https://get.mobaide.com/install.ps1 | iex` (it writes `MOBAIDE_CURSOR_BIN` without touching pairing credentials), or set `MOBAIDE_CURSOR_BIN` in `<prefix>\mobaide_agent\.env`.
 - Pi not on the service's `PATH` (only relevant if you use the optional Pi agent).
   - The agent returns HTTP 503 with a `pi_cli_missing` marker and a `searched_paths` list.
   - There is no pre-spawn auth probe. Sign in from a chat session in the app (the **Sign-in needed** card), or on the PC with `/login` in Pi.

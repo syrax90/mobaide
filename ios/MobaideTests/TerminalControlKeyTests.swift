@@ -36,6 +36,17 @@ final class TerminalControlKeyTests: XCTestCase {
         )
     }
 
+    func testCursorKindUsesTheSharedKeysPlusModeAndItsApprovalAnswers() {
+        // Cursor has no Rewind chord, and none of Antigravity's or OpenCode's keys.
+        XCTAssertEqual(
+            ids(TerminalControlKey.keys(for: .cursor)),
+            [
+                "enter", "up", "down", "left", "right", "ctrlC", "mode", "ctrlL", "esc",
+                "approve", "reject", "tab", "backspace", "ctrlO", "ctrlR",
+            ]
+        )
+    }
+
     // MARK: - Set composition (order is what the user sees + the fixed wire order)
 
     func testDefaultSetCompositionOmitsClaudeTUIKeys() {
@@ -86,5 +97,14 @@ final class TerminalControlKeyTests: XCTestCase {
         XCTAssertEqual(bytes("ctrlP", in: opencode), [0x10], "the command palette")
         XCTAssertEqual(bytes("mode", in: opencode), [0x1B, 0x5B, 0x5A], "Shift+Tab cycles the agent")
         XCTAssertEqual(bytes("backspace", in: opencode), [0x7F])
+    }
+    func testCursorControlBytes() {
+        let cursor = TerminalControlKey.cursorKeys
+        XCTAssertEqual(bytes("mode", in: cursor), [0x1B, 0x5B, 0x5A], "Shift+Tab switches Agent, Plan and Ask")
+        XCTAssertEqual(bytes("approve", in: cursor), [0x79], "a bare y, without Enter")
+        XCTAssertEqual(bytes("reject", in: cursor), [0x6E], "a bare n, without Enter")
+        XCTAssertEqual(bytes("ctrlL", in: cursor), [0x0C])
+        XCTAssertEqual(bytes("backspace", in: cursor), [0x7F])
+        XCTAssertNil(bytes("rewind", in: cursor))
     }
 }

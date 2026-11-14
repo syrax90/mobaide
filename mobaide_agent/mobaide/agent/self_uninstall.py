@@ -27,7 +27,9 @@ their account with the uninstall option. Removal runs in three steps:
 Voice input is stopped first and its model and runtime (~700 MB) deleted by
 the agent itself, before any of the above OS steps: root helpers written by
 an older ``install.sh`` do not list the voice dirs, and on Windows a running
-STT helper would hold its DLLs and model files open.
+STT helper would hold its DLLs and model files open. The Cursor settings
+folder of the transcript cleanup goes the same way: such a helper does not
+list it either, and it holds a copy of the user's Cursor settings.
 
 Only the known install entries are deleted, never the whole prefix:
 ``MOBAIDE_AGENT_PREFIX`` can point at a directory that holds other files.
@@ -57,6 +59,8 @@ logger = logging.getLogger(__name__)
 
 # The voice model and runtime (~700 MB); ``voice-fake`` holds a test install.
 VOICE_PREFIX_ENTRIES: tuple[str, ...] = ("voice", "voice-fake")
+# The Cursor settings folder of the transcript-cleanup runs.
+CURSOR_CLEANUP_ENTRY = "voice-cleanup-cursor"
 
 # Everything the installers, the launchers and the agent create directly
 # under the prefix. The root helper unit written by deploy/install.sh
@@ -83,6 +87,7 @@ PREFIX_ENTRIES: tuple[str, ...] = (
     *VOICE_PREFIX_ENTRIES,
     # The transcript-cleanup work dir: only its prompt file.
     "voice-cleanup",
+    CURSOR_CLEANUP_ENTRY,
 )
 
 # The `mobaide-agent` command a root install.sh puts on PATH, and the marker
@@ -205,6 +210,10 @@ def uninstall(
         remove_voice_files(prefix, voice_root)
     except Exception:
         logger.exception("agent.uninstall.voice_remove_failed prefix=%s", prefix)
+    try:
+        remove_tree(prefix / CURSOR_CLEANUP_ENTRY)
+    except Exception:
+        logger.exception("agent.uninstall.cursor_cleanup_remove_failed prefix=%s", prefix)
     if platform.startswith("linux"):
         _uninstall_linux(prefix)
     elif platform == "darwin":
