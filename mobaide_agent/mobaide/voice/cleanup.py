@@ -1,8 +1,8 @@
 """Transcript cleanup: a hidden one-shot run of the session's own CLI on its
 cheapest model — ``claude -p`` on Haiku, ``codex exec`` on Luna, ``agy`` on
-Gemini Flash. OpenCode, GitHub Copilot and Cursor name no cheapest model, so
-``opencode run``, ``copilot`` and ``cursor-agent -p`` use the user's default
-model.
+Gemini Flash. OpenCode and GitHub Copilot name no cheapest model, so
+``opencode run`` and ``copilot`` use the user's default model.
+``cursor-agent -p`` runs on Auto, Cursor's own default model.
 
 The transcript goes on stdin, never in argv, because an npm ``.cmd`` shim on
 Windows is run through ``cmd /c`` and argv shows in process listings. Like
@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -159,6 +160,16 @@ _CURSOR_SETTINGS = (
     )
     + "\n"
 )
+# Cursor saves the model of a run as the user's default model, and it stops a
+# run whose default model the user's plan does not include. So the run names
+# Auto, Cursor's own default model, which the Free plan includes, and keeps
+# its settings in its own folder.
+_CURSOR_MODEL = "auto"
+_CURSOR_CONFIG_ENV = "CURSOR_CONFIG_DIR"
+_CURSOR_CONFIG_FILE = "cli-config.json"
+_CURSOR_CHATS_DIR = "chats"
+# A run ends within ``CLEANUP_TIMEOUT_SECONDS``, so an older chat is over.
+_CURSOR_CHAT_KEEP_SECONDS = 3 * CLEANUP_TIMEOUT_SECONDS
 _TAG = re.compile(r"<[\s/]*transcript\b[^<>]*>", re.IGNORECASE)
 
 
@@ -186,6 +197,15 @@ def _cli_env(binary: str) -> dict[str, str]:
     env = os.environ.copy()
     prepend_path_dir(env, os.path.dirname(binary))
     return env
+
+
+def _cursor_config_dir(env: Mapping[str, str]) -> Path:
+    """Where the Cursor CLI started with ``env`` keeps the user's settings."""
+    own = (env.get(_CURSOR_CONFIG_ENV) or "").strip()
+    if own:
+        return Path(own)
+    xdg = (env.get("XDG_CONFIG_HOME") or "").strip()
+    return Path(xdg) / "cursor" if xdg else Path.home() / ".cursor"
 
 
 def _lines(stdout: bytes) -> list[dict]:
@@ -772,11 +792,21 @@ class CursorCleanup(CleanupCli):
     """``cursor-agent`` has no system-prompt option, so the rules go before
     the transcript, in the one message on stdin. The run is in Ask mode,
     which makes no changes, and the settings file in the work dir denies
-    every tool. The run is kept in Cursor's own chat history on the PC; no
-    flag turns that off."""
+    every tool.
+
+    The run's Cursor settings folder is ``profile_dir``, not the user's: the
+    user's default model and chat history stay as they are. The sign-in is
+    not in that folder, so the run is still the user's. ``profile_dir`` is
+    outside the work dir, so it is not a part of the project that Cursor
+    sees. It is one folder for all runs: Cursor's background worker outlives
+    a run and keeps the folder it started with."""
 
     name = "Cursor"
     files: ClassVar[Mapping[str, str]] = {_CURSOR_SETTINGS_FILE: _CURSOR_SETTINGS}
+
+    def __init__(self, resolve_binary: Callable[[], str], profile_dir: Path) -> None:
+        super().__init__(resolve_binary)
+        self._profile_dir = profile_dir
 
     async def command(self, source: str) -> CleanupCommand:
         binary = self.binary()
@@ -789,9 +819,41 @@ class CursorCleanup(CleanupCli):
             "--output-format", "stream-json",
             "--mode", "ask",
             "--trust",
+            "--model", _CURSOR_MODEL,
         )
+        env = _cli_env(binary)
+        try:
+            await asyncio.to_thread(self._prepare_profile, _cursor_config_dir(env))
+        # ``RuntimeError``: no home folder to look for the user's settings in.
+        except (OSError, RuntimeError) as exc:
+            raise _failed(_short(f"Couldn't start {self.name}: {exc}")) from exc
+        env[_CURSOR_CONFIG_ENV] = str(self._profile_dir)
         stdin = f"{CLEANUP_PROMPT}\n{_wrap(source)}".encode()
-        return CleanupCommand(argv=argv, env=_cli_env(binary), stdin=stdin, model="default")
+        return CleanupCommand(argv=argv, env=env, stdin=stdin, model=_CURSOR_MODEL)
+
+    def _prepare_profile(self, user_dir: Path) -> None:
+        """Copy the user's current settings (network, privacy) to the run's
+        folder, and drop the chats that earlier runs left there."""
+        self._profile_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            settings = (user_dir / _CURSOR_CONFIG_FILE).read_text(encoding="utf-8")
+            usable = isinstance(json.loads(settings), dict)
+        except (OSError, ValueError):
+            usable = False
+        if usable:
+            try:
+                atomic_write(self._profile_dir / _CURSOR_CONFIG_FILE, settings)
+            except OSError:
+                # Windows: another run has the file open. Its copy is recent.
+                pass
+        oldest = time.time() - _CURSOR_CHAT_KEEP_SECONDS
+        for chat in (self._profile_dir / _CURSOR_CHATS_DIR).glob("*/*"):
+            try:
+                finished = chat.stat().st_mtime < oldest
+            except OSError:
+                continue
+            if finished:
+                shutil.rmtree(chat, ignore_errors=True)
 
     def parse(self, result: CmdResult, source: str) -> str:
         return parse_cursor_result(result, source)

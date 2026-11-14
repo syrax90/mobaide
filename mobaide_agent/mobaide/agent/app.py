@@ -898,7 +898,10 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 ),
                 "opencode": OpenCodeCleanup(app.state.opencode_launcher.resolve_binary),
                 "copilot": CopilotCleanup(app.state.copilot_launcher.resolve_binary),
-                "cursor": CursorCleanup(app.state.cursor_launcher.resolve_binary),
+                "cursor": CursorCleanup(
+                    app.state.cursor_launcher.resolve_binary,
+                    profile_dir=voice_cleanup_dir.with_name("voice-cleanup-cursor"),
+                ),
             },
             work_dir=voice_cleanup_dir,
         ),

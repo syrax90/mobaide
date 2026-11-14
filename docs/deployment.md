@@ -981,7 +981,7 @@ A helper process (`python -P -m mobaide.voice.worker`, same interpreter as the a
 - `models/<model-id>/` holds the model plus its `NOTICE` (CC BY 4.0 attribution: created by NVIDIA, int8 ONNX export by k2-fsa/sherpa-onnx).
 - `runtime/<sherpa-onnx-version>-<python tag>-<platform>/` holds the sherpa-onnx runtime, unpacked from hash-pinned PyPI wheels. A Python upgrade fetches a new runtime; the model stays.
 
-The opt-in transcript cleanup (docs/voice-input.md) keeps its small prompt and settings files in a sibling directory, `<state prefix>/voice-cleanup/`. It needs no download and does not depend on the model.
+The opt-in transcript cleanup (docs/voice-input.md) keeps its small prompt and settings files in a sibling directory, `<state prefix>/voice-cleanup/` (Cursor's cleanup also keeps its own config folder, `<state prefix>/voice-cleanup-cursor/`; uninstall removes both). It needs no download and does not depend on the model.
 
 `MOBAIDE_VOICE_DIR` overrides the location. A relative path is anchored under the state prefix. The CLI reads it from the agent's environment or `.env`, and `--voice-dir` overrides both.
 

@@ -15,10 +15,12 @@ import logging
 import os
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import pytest
 
+from mobaide.agent.self_uninstall import PREFIX_ENTRIES
 from mobaide.core import cli_launcher
 from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError
 from mobaide.core.git_exec import CmdResult, ProcessHandle
@@ -1462,9 +1464,20 @@ class TestCursorCommand:
     def cursor_binary(self, tmp_path) -> str:
         return str(tmp_path / "bin" / "cursor-agent")
 
+    @pytest.fixture(autouse=True)
+    def _own_profile(self, tmp_path, monkeypatch):
+        """Pin the user's Cursor settings folder to an empty temporary one."""
+        user = tmp_path / "user-cursor"
+        user.mkdir()
+        monkeypatch.setenv("CURSOR_CONFIG_DIR", str(user))
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        self._profile_dir = tmp_path / "voice-cleanup-cursor"
+
     def _cleaner(self, run, work_dir, binary):
         return TranscriptCleaner(
-            clis={"cursor": CursorCleanup(lambda: binary)}, work_dir=work_dir, run=run
+            clis={"cursor": CursorCleanup(lambda: binary, self._profile_dir)},
+            work_dir=work_dir,
+            run=run,
         )
 
     async def test_runs_one_ask_mode_json_turn_with_the_rules_and_the_transcript_on_stdin(
@@ -1478,14 +1491,15 @@ class TestCursorCommand:
 
         assert cleaned == "Fix the bug, then run the tests."
         (call,) = run.calls
-        # No model flag: Cursor's default model. Ask mode makes no changes;
-        # ``--trust`` lets a headless run start in the work dir.
+        # ``auto`` is the model every plan includes. Ask mode makes no
+        # changes; ``--trust`` lets a headless run start in the work dir.
         assert call["argv"] == [
             cursor_binary,
             "--print",
             "--output-format", "stream-json",
             "--mode", "ask",
             "--trust",
+            "--model", "auto",
         ]
         # No system-prompt option: the rules go before the transcript.
         assert call["stdin"].decode("utf-8") == (
@@ -1558,7 +1572,7 @@ class TestCursorCommand:
 
         run = _Claude(_cursor_answer("Hi."))
         cleaner = TranscriptCleaner(
-            clis={"cursor": CursorCleanup(missing)}, work_dir=work_dir, run=run
+            clis={"cursor": CursorCleanup(missing, self._profile_dir)}, work_dir=work_dir, run=run
         )
 
         with pytest.raises(VoiceError) as excinfo:
@@ -1583,6 +1597,234 @@ class TestCursorCommand:
         line = subprocess.list2cmdline(argv)
         assert line.count('"') == 2
         assert line.startswith(f'cmd /c "{shim}" ')
+
+
+class _ReadsCursorProfile(_Claude):
+    """Also records the run's own Cursor settings folder as it is when the
+    CLI starts."""
+
+    def __call__(self, argv, **kwargs) -> CmdResult:
+        folder = Path(kwargs["env"]["CURSOR_CONFIG_DIR"])
+        copy = folder / "cli-config.json"
+        self.profile_existed = folder.is_dir()
+        self.user_settings = copy.read_text(encoding="utf-8") if copy.is_file() else None
+        return super().__call__(argv, **kwargs)
+
+
+def _tree(folder: Path) -> list[str]:
+    return sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*"))
+
+
+class TestCursorProfile:
+    """The run's Cursor settings folder: Cursor saves the model of a run as
+    the default model of the settings folder it runs with, so the run must
+    never get the user's folder."""
+
+    @pytest.fixture
+    def cursor_binary(self, tmp_path) -> str:
+        return str(tmp_path / "bin" / "cursor-agent")
+
+    @pytest.fixture
+    def profile_dir(self, tmp_path) -> Path:
+        return tmp_path / "voice-cleanup-cursor"
+
+    @pytest.fixture
+    def user_dir(self, tmp_path, monkeypatch) -> Path:
+        """The user's Cursor settings folder, with a model that the Free plan
+        does not include as the default."""
+        folder = tmp_path / "user" / ".cursor"
+        folder.mkdir(parents=True)
+        (folder / "cli-config.json").write_text(
+            '{"model": {"modelId": "gpt-5"}, "privacyCache": {"ghostMode": true}}', encoding="utf-8"
+        )
+        monkeypatch.setenv("CURSOR_CONFIG_DIR", str(folder))
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        return folder
+
+    def _cleaner(self, run, work_dir, binary, profile_dir):
+        return TranscriptCleaner(
+            clis={"cursor": CursorCleanup(lambda: binary, profile_dir)}, work_dir=work_dir, run=run
+        )
+
+    async def test_the_run_names_auto_and_gets_its_own_settings_folder_not_the_user_s(
+        self, work_dir, cursor_binary, profile_dir, user_dir
+    ):
+        run = _ReadsCursorProfile(_cursor_answer("Hi."))
+
+        await self._cleaner(run, work_dir, cursor_binary, profile_dir).clean("hi", "cursor")
+
+        (call,) = run.calls
+        # A default model outside the user's plan stops the run; the Free
+        # plan includes Auto.
+        assert call["argv"][call["argv"].index("--model") + 1] == "auto"
+        assert call["env"]["CURSOR_CONFIG_DIR"] == str(profile_dir)
+        assert run.profile_existed is True
+
+    async def test_the_user_s_settings_folder_is_left_as_it_is(
+        self, work_dir, cursor_binary, profile_dir, user_dir
+    ):
+        settings = user_dir / "cli-config.json"
+        chat = user_dir / "chats" / "a1b2" / "an-old-chat"
+        chat.mkdir(parents=True)
+        (chat / "store.db").write_bytes(b"history")
+        long_ago = time.time() - 10 * cleanup_module._CURSOR_CHAT_KEEP_SECONDS
+        os.utime(chat, (long_ago, long_ago))
+        before = (_tree(user_dir), settings.read_bytes(), settings.stat().st_mtime_ns)
+        run = _ReadsCursorProfile(_cursor_answer("Hi."))
+
+        await self._cleaner(run, work_dir, cursor_binary, profile_dir).clean("hi", "cursor")
+
+        assert (_tree(user_dir), settings.read_bytes(), settings.stat().st_mtime_ns) == before
+
+    @pytest.mark.parametrize(
+        ("variables", "expected"),
+        [
+            (("CURSOR_CONFIG_DIR", "XDG_CONFIG_HOME"), "own"),
+            (("XDG_CONFIG_HOME",), "xdg"),
+            ((), "home"),
+        ],
+    )
+    async def test_the_run_s_folder_gets_the_settings_of_the_folder_cursor_reads(
+        self, tmp_path, work_dir, cursor_binary, profile_dir, monkeypatch, variables, expected
+    ):
+        folders = {
+            "own": tmp_path / "own",
+            "xdg": tmp_path / "xdg" / "cursor",
+            "home": tmp_path / "home" / ".cursor",
+        }
+        for name, folder in folders.items():
+            folder.mkdir(parents=True)
+            (folder / "cli-config.json").write_text(json.dumps({"from": name}), encoding="utf-8")
+        values = {"CURSOR_CONFIG_DIR": str(tmp_path / "own"), "XDG_CONFIG_HOME": str(tmp_path / "xdg")}
+        for name, value in values.items():
+            if name in variables:
+                monkeypatch.setenv(name, value)
+            else:
+                monkeypatch.delenv(name, raising=False)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+        run = _ReadsCursorProfile(_cursor_answer("Hi."))
+
+        await self._cleaner(run, work_dir, cursor_binary, profile_dir).clean("hi", "cursor")
+
+        # The user's network and privacy settings hold for the run too.
+        assert json.loads(run.user_settings) == {"from": expected}
+        assert run.calls[0]["env"]["CURSOR_CONFIG_DIR"] == str(profile_dir)
+
+    async def test_each_run_takes_the_settings_the_user_has_then(
+        self, work_dir, cursor_binary, profile_dir, user_dir
+    ):
+        run = _ReadsCursorProfile(_cursor_answer("Hi."))
+        cleaner = self._cleaner(run, work_dir, cursor_binary, profile_dir)
+        await cleaner.clean("hi", "cursor")
+        (user_dir / "cli-config.json").write_text('{"network": {"useHttp1": true}}', encoding="utf-8")
+
+        await cleaner.clean("hi", "cursor")
+
+        assert json.loads(run.user_settings) == {"network": {"useHttp1": True}}
+
+    @pytest.mark.parametrize("content", [None, b"{not json", b"[]", b"\xff\xfe{}"])
+    async def test_a_missing_or_broken_settings_file_of_the_user_does_not_stop_the_run(
+        self, work_dir, cursor_binary, profile_dir, user_dir, content
+    ):
+        if content is None:
+            (user_dir / "cli-config.json").unlink()
+        else:
+            (user_dir / "cli-config.json").write_bytes(content)
+        run = _ReadsCursorProfile(_cursor_answer("Hi."))
+
+        cleaned = await self._cleaner(run, work_dir, cursor_binary, profile_dir).clean("hi", "cursor")
+
+        assert cleaned == "Hi."
+        assert run.profile_existed is True
+        assert run.user_settings is None
+
+    async def test_a_copy_that_cannot_be_written_keeps_the_last_one_and_the_run_starts(
+        self, work_dir, cursor_binary, profile_dir, user_dir, monkeypatch
+    ):
+        # Windows: another run's CLI has the copy open.
+        profile_dir.mkdir()
+        (profile_dir / "cli-config.json").write_text('{"last": true}', encoding="utf-8")
+
+        write = cleanup_module.atomic_write
+
+        def locked(path, content, **kwargs) -> None:
+            if path.parent == profile_dir:
+                raise PermissionError(13, "The process cannot access the file", str(path))
+            write(path, content, **kwargs)
+
+        monkeypatch.setattr(cleanup_module, "atomic_write", locked)
+        run = _ReadsCursorProfile(_cursor_answer("Hi."))
+
+        cleaned = await self._cleaner(run, work_dir, cursor_binary, profile_dir).clean("hi", "cursor")
+
+        assert cleaned == "Hi."
+        assert json.loads(run.user_settings) == {"last": True}
+
+    async def test_chats_of_finished_runs_are_removed_and_a_chat_of_a_running_one_is_kept(
+        self, work_dir, cursor_binary, profile_dir, user_dir
+    ):
+        now = time.time()
+        ages = {
+            "finished": cleanup_module._CURSOR_CHAT_KEEP_SECONDS + 60,
+            # Another run may still be this old.
+            "running": CLEANUP_TIMEOUT_SECONDS,
+        }
+        for name, age in ages.items():
+            chat = profile_dir / "chats" / "a1b2" / name
+            chat.mkdir(parents=True)
+            (chat / "store.db").write_bytes(b"history")
+            os.utime(chat, (now - age, now - age))
+        run = _ReadsCursorProfile(_cursor_answer("Hi."))
+
+        await self._cleaner(run, work_dir, cursor_binary, profile_dir).clean("hi", "cursor")
+
+        assert _tree(profile_dir / "chats") == ["a1b2", "a1b2/running", "a1b2/running/store.db"]
+
+    async def test_a_settings_folder_that_cannot_be_made_is_a_cleanup_failure_with_no_run(
+        self, tmp_path, work_dir, cursor_binary, user_dir
+    ):
+        blocker = tmp_path / "blocker"
+        blocker.write_text("a file, not a folder", encoding="utf-8")
+        run = _ReadsCursorProfile(_cursor_answer("Hi."))
+        cleaner = self._cleaner(run, work_dir, cursor_binary, blocker / "voice-cleanup-cursor")
+
+        with pytest.raises(VoiceError) as excinfo:
+            await cleaner.clean("hi", "cursor")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_failed")
+        assert excinfo.value.message.startswith("Couldn't start Cursor: ")
+        assert run.calls == []
+        assert not cleaner.busy()
+
+    async def test_no_home_folder_to_find_the_user_s_settings_in_is_a_cleanup_failure_with_no_run(
+        self, work_dir, cursor_binary, profile_dir, monkeypatch
+    ):
+        monkeypatch.delenv("CURSOR_CONFIG_DIR", raising=False)
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+
+        def no_home(cls) -> Path:
+            raise RuntimeError("Could not determine home directory.")
+
+        monkeypatch.setattr(Path, "home", classmethod(no_home))
+        run = _ReadsCursorProfile(_cursor_answer("Hi."))
+        cleaner = self._cleaner(run, work_dir, cursor_binary, profile_dir)
+
+        with pytest.raises(VoiceError) as excinfo:
+            await cleaner.clean("hi", "cursor")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_failed")
+        assert excinfo.value.message.startswith("Couldn't start Cursor: ")
+        assert run.calls == []
+        assert not cleaner.busy()
+
+    async def test_the_app_s_settings_folder_is_beside_the_work_dir_and_uninstall_removes_it(self, app):
+        cleaner = app.state.voice._cleaner
+        folder = cleaner._clis["cursor"]._profile_dir
+
+        # Inside the work dir it would be a part of the project Cursor sees.
+        assert folder.parent == cleaner._work_dir.parent
+        assert folder != cleaner._work_dir
+        assert {folder.name, cleaner._work_dir.name} <= set(PREFIX_ENTRIES)
 
 
 class TestKinds:
