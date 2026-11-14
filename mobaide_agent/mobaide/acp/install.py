@@ -181,8 +181,12 @@ class AdapterInstaller:
                 pass
             raise AdapterInstallError(f"Downloading {self.adapter.spec} took too long") from None
         if proc.returncode != 0:
-            tail = stderr.decode("utf-8", "replace").strip().splitlines()
-            hint = next((line for line in reversed(tail) if line.strip()), "")
+            lines = [line.strip() for line in stderr.decode("utf-8", "replace").splitlines()]
+            lines = [line for line in lines if line]
+            hint = lines[-1] if lines else ""
+            # cmd wraps "'x' is not recognized …" onto a second line that names nothing.
+            if len(lines) > 1 and hint.lower().startswith("operable program or batch file"):
+                hint = f"{lines[-2]} {hint}"
             raise AdapterInstallError(
                 f"Could not download {self.adapter.spec}"
                 + (f": {hint[:STDERR_HINT_MAX]}" if hint else "")

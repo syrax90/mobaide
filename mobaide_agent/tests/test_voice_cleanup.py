@@ -291,10 +291,10 @@ class TestCommand:
         await cleaner.clean("hello")
 
         argv = claude.calls[0]["argv"]
-        assert argv[:3] == ["cmd", "/c", shim]
+        assert argv[:4] == ["cmd", "/c", "@", shim]
         line = subprocess.list2cmdline(argv)
         assert line.count('"') == 2
-        assert line.startswith(f'cmd /c "{shim}" ')
+        assert line.startswith(f'cmd /c @ "{shim}" ')
 
     async def test_dictated_transcript_tags_cannot_close_the_wrapper(self, make_cleaner):
         claude = _Claude()
@@ -1334,7 +1334,7 @@ class TestOpenCodeCommand:
 
         line = subprocess.list2cmdline(run.calls[0]["argv"])
         assert line.count('"') == 2
-        assert line.startswith(f'cmd /c "{shim}" ')
+        assert line.startswith(f'cmd /c @ "{shim}" ')
 
 
 class TestCopilotCommand:
@@ -1447,10 +1447,10 @@ class TestCopilotCommand:
         await cleaner.clean("hello", "copilot")
 
         argv = run.calls[0]["argv"]
-        assert argv[:3] == ["cmd", "/c", shim]
+        assert argv[:4] == ["cmd", "/c", "@", shim]
         line = subprocess.list2cmdline(argv)
         assert line.count('"') == 2
-        assert line.startswith(f'cmd /c "{shim}" ')
+        assert line.startswith(f'cmd /c @ "{shim}" ')
 
 
 class _ReadsCursorSettings(_Claude):
@@ -2155,7 +2155,7 @@ class TestPiCommand:
         await cleaner.clean("hello", "pi")
 
         argv = run.calls[0]["argv"]
-        assert argv[:3] == ["cmd", "/c", shim]
+        assert argv[:4] == ["cmd", "/c", "@", shim]
         line = subprocess.list2cmdline(argv)
         assert line.count('"') == 2
-        assert line.startswith(f'cmd /c "{shim}" ')
+        assert line.startswith(f'cmd /c @ "{shim}" ')
