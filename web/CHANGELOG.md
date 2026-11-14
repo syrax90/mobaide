@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.25](https://github.com/syrax90/mobaide/compare/web-v0.1.24...web-v0.1.25) (2026-11-14)
+
+
+### Features
+
+* **agent,server,android,ios,web:** support Cursor CLI as a managed agent ([#878](https://github.com/syrax90/mobaide/issues/878)) ([5f6675a](https://github.com/syrax90/mobaide/commit/5f6675aa4a00b33540af54d8923524b7714be9ff))
+* **agent,server,android,ios,web:** support GitHub Copilot CLI as a managed agent ([#870](https://github.com/syrax90/mobaide/issues/870)) ([bc37af4](https://github.com/syrax90/mobaide/commit/bc37af4e994114a10ce981338e208af92f94d5b9))
+* **agent,server,android,ios,web:** support OpenCode sessions in the chat and the terminal ([#868](https://github.com/syrax90/mobaide/issues/868)) ([8ddd476](https://github.com/syrax90/mobaide/commit/8ddd4766010575519f134a8ed94457ce67776609))
+* **agent,server,android,ios,web:** support Pi as a managed agent ([#879](https://github.com/syrax90/mobaide/issues/879)) ([fd738e2](https://github.com/syrax90/mobaide/commit/fd738e2c9866fdf9d436a17c6ade3eb84554eb43))
+
+
+### Bug Fixes
+
+* **agent,android,ios,web:** stop showing Ready while a Claude Code session still runs ([#875](https://github.com/syrax90/mobaide/issues/875)) ([26b20ec](https://github.com/syrax90/mobaide/commit/26b20ec30d327c9b7e1f3b4b44eca5b22c96448d))
+
 ## [0.1.24](https://github.com/syrax90/mobaide/compare/web-v0.1.23...web-v0.1.24) (2026-11-11)
 
 
