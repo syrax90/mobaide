@@ -260,7 +260,7 @@ function ChatView({ model, session, headerLabel }: ChatViewProps) {
     ...(state.cwd !== null || session?.cwd !== undefined
       ? [{ label: 'Folder', value: state.cwd ?? session?.cwd ?? '' }]
       : []),
-    ...(state.acp_session_id !== null ? [{ label: 'ACP session ID', value: state.acp_session_id }] : []),
+    ...(state.acp_session_id !== null ? [{ label: 'Session ID', value: state.acp_session_id }] : []),
   ];
 
   const overlay = closed

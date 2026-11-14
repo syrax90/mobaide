@@ -24,7 +24,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * The folder path and ACP session id are wider than the dialog, so they must
+ * The folder path and session id are wider than the dialog, so they must
  * scroll in their own slot and leave each copy button its full size. NATIVE
  * graphics: LEGACY measures text too narrow to overflow the row.
  */
@@ -44,7 +44,7 @@ class ChatSessionInfoDialogTest {
     private val values = linkedMapOf(
         "Agent" to "Claude Code 0.12.3",
         "Folder" to cwd,
-        "ACP session ID" to acpSessionId,
+        "Session ID" to acpSessionId,
     )
 
     private fun setContent() {

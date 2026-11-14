@@ -655,7 +655,7 @@ struct ChatOverlayChip: View {
     }
 }
 
-/// Agent, folder and ACP session ID, each copyable and shown in full.
+/// Agent, folder and session ID, each copyable and shown in full.
 private struct ChatSessionInfoSheet: View {
     let agent: ChatAgentInfo?
     let cwd: String?
@@ -681,7 +681,7 @@ private struct ChatSessionInfoSheet: View {
                         CopyableCodeBlock(label: "Folder", code: cwd, singleLine: false)
                     }
                     if let acpSessionId {
-                        CopyableCodeBlock(label: "ACP session ID", code: acpSessionId, singleLine: false)
+                        CopyableCodeBlock(label: "Session ID", code: acpSessionId, singleLine: false)
                     }
                     if agentText == nil, cwd == nil, acpSessionId == nil {
                         PixelEmptyState("No details yet", systemImage: "info.circle")
