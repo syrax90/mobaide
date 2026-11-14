@@ -16,6 +16,7 @@ const NEVER_LAUNCHED: LaunchPrefs = {
   antigravity: null,
   opencode: null,
   copilot: null,
+  pi: null,
   lastProjectName: null,
 };
 
@@ -151,6 +152,7 @@ describe('applyLaunchPrefs', () => {
       antigravity: { model: null, skipPermissions: false, sandbox: true, terminalUi: false },
       opencode: null,
       copilot: null,
+      pi: null,
       lastProjectName: 'mobaide',
     });
 
@@ -329,6 +331,35 @@ describe('launchPrefsFromState', () => {
 
     expect(restored.claude.focusMode).toBe(false);
     expect(restored.autoScan.focusMode).toBe(false);
+  });
+});
+
+describe('the Pi bucket', () => {
+  const dialled: WizardState = {
+    ...INITIAL_WIZARD_STATE,
+    pi: { terminalUi: true },
+    git: { worktree: true, branchName: 'wip' },
+  };
+
+  it('is filed under its own kind, without the per-session git fields', () => {
+    expect(launchPrefsFromState(dialled, 'pi')).toEqual({
+      kind: 'pi',
+      prefs: { terminalUi: true },
+    });
+  });
+
+  it('is restored into Pi only', () => {
+    const seeded = applyLaunchPrefs(INITIAL_WIZARD_STATE, {
+      ...NEVER_LAUNCHED,
+      pi: { terminalUi: true },
+    });
+
+    expect(seeded.pi).toEqual({ terminalUi: true });
+    expect({ ...seeded, pi: INITIAL_WIZARD_STATE.pi }).toEqual(INITIAL_WIZARD_STATE);
+  });
+
+  it('keeps what the wizard holds for a profile that never launched Pi', () => {
+    expect(applyLaunchPrefs(dialled, NEVER_LAUNCHED).pi).toEqual({ terminalUi: true });
   });
 });
 

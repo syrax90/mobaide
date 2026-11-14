@@ -868,3 +868,79 @@ class TestHealth:
         assert data["status"] == "ok"
         assert "sessions" in data
         assert "max_sessions" in data
+
+
+class TestCreateSessionPi:
+    """``POST /api/sessions`` with ``cli="pi"`` threads ``pi_options`` through
+    to a PI session. No 409 auth case: Pi has no sign-in probe, so a terminal
+    session with no provider signed in shows Pi's own login.
+    """
+
+    async def test_cli_pi_threads_options_and_kind(
+        self, app, client, auth_headers,
+    ):
+        """The router must build a PI ``SessionConfig`` that carries the parsed
+        ``pi_options`` and no other options block, and report ``kind`` as
+        ``"pi"`` on the wire. ``create_session`` is captured, so the test does
+        not need a real ``pi`` binary."""
+        from datetime import datetime, timezone
+
+        from mobaide.core.models import (
+            SessionInfo,
+            SessionKind,
+            SessionState,
+        )
+        from mobaide.core.pi_launcher import PiOptions
+
+        captured: dict = {}
+
+        class _FakeSession:
+            def __init__(self, config):
+                self.session_id = config.session_id
+                self._config = config
+
+            def to_info(self):
+                return SessionInfo(
+                    session_id=self.session_id,
+                    state=SessionState.RUNNING,
+                    created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    pid=123,
+                    command=self._config.command,
+                    cwd=self._config.cwd,
+                    kind=self._config.kind,
+                )
+
+        async def _capture(config):
+            captured["config"] = config
+            return _FakeSession(config)
+
+        app.state.session_manager.create_session = _capture
+
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={
+                "cli": "pi",
+                "pi_options": {
+                    "worktree": True,
+                    "branch_name": "feature/x",
+                    "base_branch": "origin/dev",
+                },
+            },
+        )
+
+        assert resp.status_code == 201
+        assert resp.json()["kind"] == "pi"
+
+        cfg = captured["config"]
+        assert cfg.kind is SessionKind.PI
+        assert cfg.claude_options is None
+        assert cfg.codex_options is None
+        assert cfg.antigravity_options is None
+        assert cfg.opencode_options is None
+        assert cfg.copilot_options is None
+        assert cfg.pi_options == PiOptions(
+            worktree=True,
+            branch_name="feature/x",
+            base_branch="origin/dev",
+        )

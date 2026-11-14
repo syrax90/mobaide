@@ -18,6 +18,8 @@ export function terminalUiHint(chat: ChatSupport, agent: ChatAgentKind = 'claude
         return 'The chat view is not available for OpenCode on your PC.';
       case 'copilot':
         return 'The chat view is not available for GitHub Copilot on your PC.';
+      case 'pi':
+        return 'The chat view is not available for Pi on your PC.';
       default:
         return 'The chat view needs Node.js on your PC.';
     }

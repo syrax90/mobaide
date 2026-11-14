@@ -109,6 +109,10 @@ export function applyLaunchPrefs(base: WizardState, prefs: LaunchPrefs): WizardS
       prefs.copilot === null
         ? base.copilot
         : { allowAll: prefs.copilot.allowAll, terminalUi: prefs.copilot.terminalUi },
+    pi:
+      prefs.pi === null
+        ? base.pi
+        : { terminalUi: prefs.pi.terminalUi },
   };
 }
 
@@ -192,6 +196,11 @@ export function launchPrefsFromState(
           allowAll: state.copilot.allowAll,
           terminalUi: state.copilot.terminalUi,
         },
+      };
+    case 'pi':
+      return {
+        kind: 'pi',
+        prefs: { terminalUi: state.pi.terminalUi },
       };
     default:
       return null;

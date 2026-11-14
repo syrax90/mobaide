@@ -21,6 +21,7 @@ import {
   copilotOptionsSchema,
   createSessionRequestSchema,
   opencodeOptionsSchema,
+  piOptionsSchema,
 } from './dto/sessionCreate';
 import {
   customAgentTypeSchema,
@@ -46,6 +47,7 @@ const REGISTRY: Readonly<Record<string, z.ZodType>> = {
   AntigravityOptionsModel: antigravityOptionsSchema,
   OpenCodeOptionsModel: opencodeOptionsSchema,
   CopilotOptionsModel: copilotOptionsSchema,
+  PiOptionsModel: piOptionsSchema,
   VersionInfoResponse: agentVersionSchema,
   CreateCustomAgentTypeRequest: createCustomAgentTypeRequestSchema,
   ProjectInfo: projectInfoSchema,

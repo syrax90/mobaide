@@ -11,6 +11,7 @@ from mobaide.core.codex_launcher import CodexOptions
 from mobaide.core.copilot_launcher import CopilotOptions
 from mobaide.core.models import SessionConfig, SessionKind, SessionState
 from mobaide.core.opencode_launcher import OpenCodeOptions
+from mobaide.core.pi_launcher import PiOptions
 from mobaide.core.pty_backend import FakePtyBackend
 from mobaide.core.session_manager import MaxSessionsError, SessionManager
 from mobaide.linear.worktree import WorktreeResult
@@ -1100,5 +1101,87 @@ class TestLivenessFinishedCommand:
 
             assert mgr.list_sessions() == []
             assert removed == []
+        finally:
+            await mgr.shutdown()
+
+
+@pytest.mark.timeout(20)
+class TestPiLaunchBranching:
+    """``create_session`` routes a ``pi_options`` session to the Pi launcher
+    (not the Claude one), and raises a clear error when no Pi launcher is
+    wired.
+    """
+
+    async def test_project_pi_options_invokes_pi_launcher(
+        self, tmp_path,
+    ) -> None:
+        project = MagicMock()
+        project.name = "proj"
+        project.path = str(tmp_path)
+        store = MagicMock()
+        store.get = MagicMock(return_value=project)
+
+        claude_launcher = MagicMock()
+        claude_launcher.build = AsyncMock()
+        pi_launcher = MagicMock()
+        # A real spawnable command, so the PTY start succeeds on a host
+        # without ``pi``; the argv is covered by ``test_pi_launcher``.
+        pi_launcher.build = AsyncMock(
+            return_value=LaunchSpec(
+                argv=default_shell(),
+                cwd=str(tmp_path),
+                env={"X": "Y"},
+            ),
+        )
+        options = PiOptions(worktree=True)
+
+        mgr = SessionManager(
+            projects_store=store,
+            launcher=claude_launcher,
+            pi_launcher=pi_launcher,
+        )
+        try:
+            config = SessionConfig(
+                session_id="pi-sess",
+                command=default_shell(),
+                rows=24, cols=80, scrollback_size=50,
+                project_name="proj",
+                pi_options=options,
+                kind=SessionKind.PI,
+            )
+            await mgr.create_session(config)
+
+            pi_launcher.build.assert_awaited_once()
+            claude_launcher.build.assert_not_awaited()
+            assert config.env == {"X": "Y"}
+            call = pi_launcher.build.await_args
+            assert call.args[0] is project
+            assert call.args[1] is options
+            assert mgr.list_sessions()[0].kind == SessionKind.PI
+        finally:
+            await mgr.shutdown()
+
+    async def test_pi_session_without_a_pi_launcher_is_refused(
+        self, tmp_path,
+    ) -> None:
+        """Without the check the session would start the caller's fallback
+        command (a plain shell) under the Pi kind."""
+        claude_launcher = MagicMock()
+        claude_launcher.build = AsyncMock()
+        mgr = SessionManager(launcher=claude_launcher)
+        try:
+            config = SessionConfig(
+                session_id="pi-unwired",
+                command=default_shell(),
+                cwd=str(tmp_path),
+                rows=24, cols=80, scrollback_size=50,
+                pi_options=PiOptions(),
+                kind=SessionKind.PI,
+            )
+            with pytest.raises(ValueError, match="Pi launcher"):
+                await mgr.create_session(config)
+
+            claude_launcher.build.assert_not_awaited()
+            assert mgr.list_sessions() == []
         finally:
             await mgr.shutdown()

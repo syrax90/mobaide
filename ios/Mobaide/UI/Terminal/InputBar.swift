@@ -25,6 +25,8 @@ struct TerminalControlKey: Identifiable {
     static let ctrlL = TerminalControlKey(id: "ctrlL", label: "Ctrl+L", bytes: [0x0C])
     static let mode = TerminalControlKey(id: "mode", label: "Mode", bytes: [0x1B, 0x5B, 0x5A])
     static let rewind = TerminalControlKey(id: "rewind", label: "Rewind", bytes: [0x1B, 0x1B])
+    /// Pi binds Shift+Tab to its thinking level, not to a mode.
+    static let thinking = TerminalControlKey(id: "thinking", label: "Thinking", bytes: [0x1B, 0x5B, 0x5A])
     static let approve = TerminalControlKey(id: "approve", label: "Approve", bytes: [0x79])
     static let reject = TerminalControlKey(id: "reject", label: "Reject", bytes: [0x6E])
     static let ctrlK = TerminalControlKey(id: "ctrlK", label: "Ctrl+K", bytes: [0x0B])
@@ -36,7 +38,7 @@ struct TerminalControlKey: Identifiable {
     /// Each kind renders only the subset it supports, filtered from this single list, so the
     /// button order stays consistent across kinds — only which buttons appear differs.
     static let controlKeyOrder: [TerminalControlKey] = [
-        enter, up, down, left, right, ctrlC, mode, ctrlL, esc,
+        enter, up, down, left, right, ctrlC, mode, thinking, ctrlL, esc,
         approve, reject, ctrlK, ctrlG, ctrlD, ctrlP, rewind, tab, backspace, ctrlO, ctrlR,
     ]
 
@@ -58,6 +60,12 @@ struct TerminalControlKey: Identifiable {
     /// two seconds, and the composer takes that key. Ctrl+O/Ctrl+R/Ctrl+L, Rewind
     /// and Approve/Reject are absent: the OpenCode TUI does not bind them that way.
     static let opencodeKeys: [TerminalControlKey] = ordered([mode, ctrlP] + defaultKeys)
+    /// Pi's own controls on top of the neutral set (Android `PI_CONTROL_KEYS`):
+    /// Thinking (Shift+Tab cycles the thinking level), Ctrl+P (next model),
+    /// Ctrl+L (model list) and Ctrl+O (expand tool output). Ctrl+R is absent:
+    /// Pi does not bind it. Rewind is absent too: Pi reads its two Esc bytes,
+    /// sent together, as one other key; two taps on Esc open Pi's session tree.
+    static let piKeys: [TerminalControlKey] = ordered([thinking, ctrlP, ctrlL, ctrlO] + defaultKeys)
     /// Kind-neutral minimal set for custom agent types and the not-yet-resolved
     /// state (Android `DEFAULT_CONTROL_KEYS`): nav + the universal
     /// interrupt/erase keys only. Ctrl+O/Ctrl+R/Ctrl+L are deliberately absent —
@@ -80,6 +88,7 @@ struct TerminalControlKey: Identifiable {
         // the mode, Esc-Esc rewinds, Ctrl+O expands the timeline, Ctrl+R searches
         // the history and Ctrl+L clears the screen.
         case .copilot: return claudeKeys
+        case .pi: return piKeys
         }
     }
 }

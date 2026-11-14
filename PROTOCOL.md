@@ -123,6 +123,45 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-13: Pi sessions
+
+Additive delta within proto-v7 (2026-11-13): **one session kind, one options block, two capability entries, one push label. No version bump; `central_server` gained only the "Pi session" push label.**
+
+The Pi coding agent (`pi`, pi.dev) is a managed agent of kind `pi`, for terminal and chat sessions.
+
+| Where | Change |
+|-------|--------|
+| `POST /api/sessions` and relay `create_session` | `cli: "pi"` with `pi_options` (`worktree`, `branch_name`, `base_branch`). A missing binary answers `503` with `pi_cli_missing`. |
+| `capabilities.cli` | A `pi` entry. |
+| `capabilities.chat` | A `pi` entry (`resume: true`, `live: false`). |
+| Session mode order | The id `pi`. Default position: after `copilot`. |
+
+* Binary: `MOBAIDE_PI_BIN`, then PATH, then the folder of Pi's own installer (`~/.pi/agent/bin`), then the npm fallback folders. `MOBAIDE_ACP_PI_COMMAND` overrides the chat command; it must speak ACP.
+* `pi_options` has no approval switch: Pi runs its tools without asking, in the terminal and in the chat. The model and the thinking level are picked inside the session.
+* Terminal sessions run `pi`. They raise attention from OSC 7501 reports (`app=pi`), with no hooks (see Delta 2026-11-10). Pi sends the support query first; the agent answers it.
+* Chat sessions: Pi has no ACP server. The PC agent runs its own bridge (`mobaide/acp/pi_bridge.py`), which speaks ACP to the chat session and Pi's RPC mode (`pi --mode rpc`, JSON lines) to one `pi` process per session, started in the session folder.
+
+| Pi RPC | Chat |
+|--------|------|
+| `get_available_models`, `set_model` | Config option `model` (`provider/id`; the models of every signed-in provider, grouped by provider). |
+| `get_available_thinking_levels`, `set_thinking_level` | Config option `thought_level`, when the model has more than one level. |
+| `prompt`, `abort`, `agent_settled` | `session/prompt`, `session/cancel`, the stop reason. |
+| `steer` | `_session/steering` ("Send now" for a queued message). |
+| Message and tool events | `agent`, `thought` and `tool` items. `bash` output is a `console` part with the exit code; `edit` and `write` carry a diff. |
+| `compact`, compaction events | The command `/compact [what to keep]` and a `compaction` item. |
+| `get_commands` | The `commands` list (extension commands, prompt templates, skills). Pi's built-in terminal commands (`/model`, `/settings`, …) are not listed: RPC mode does not run them. |
+| `extension_ui_request` | `confirm`, and `select` with at most 4 short options: a `permission` request with one button per option. A longer `select`, `input` and `editor`: a `form` request. `notify`: a `notice` item. |
+| Session files (`~/.pi/agent/sessions`) | `session/list` and `session/load`: the same sessions that `pi --resume` lists. Pi stores a session with its first message, so a `session/load` of a session with no file (a Restart before the first message) starts it again under the same id (`--session-id`). |
+
+* Not live: a session open in Pi's terminal UI and in the chat is not kept in sync.
+* Usage: the context use of the last answer. No cost: Pi computes it from list prices, also for subscription logins.
+* Folder trust: without a terminal Pi skips a folder's own resources instead of asking. So the PC agent asks in the chat when the folder has resources that Pi protects (`.pi/settings.json`, `.pi/mcp.json`, `.pi/extensions`, `.pi/skills`, `.pi/prompts`, `.pi/themes`, `.pi/SYSTEM.md`, `.pi/APPEND_SYSTEM.md`, or `.agents/skills` in the folder or above it), Pi's `defaultProjectTrust` setting is `ask`, and `trust.json` in Pi's folder holds no decision for the folder or a parent. `trust` writes `true` for the real path, as Pi's `/trust` does. A saved "do not trust" is kept: the session starts and Pi skips the resources.
+* Sign-in: the methods `openai-codex` and `anthropic` (see Delta 2026-11-11, sign-in from the chat). It is offered when no provider has credentials (`get_available_models` is empty) or Pi refuses a prompt for a missing key or a login it could not renew. Other providers and API keys are set up in Pi itself (`/login`).
+* Voice transcript cleanup: `capabilities.voice.cleanup_kinds` lists `pi`, and `POST /api/voice/cleanup` accepts `kind: "pi"`. The run is `pi --mode json --no-session --no-tools --no-extensions --no-skills --no-prompt-templates --no-context-files --no-mcp --no-themes --no-approve --offline --thinking off --system-prompt cleanup-prompt.md`, on Pi's default model, with the transcript on stdin (docs/voice-input.md, *Transcript cleanup*). Nothing is stored in Pi's session history.
+* The sign-in request `text` can come from the agent's launch plan: Pi's says where to set up the other providers.
+* Not supported for Pi: a model or thinking-level picker in the wizard.
+* Test mode runs the fake agent with `--flavor pi`.
+
 ### Delta 2026-11-12: OpenCode sessions
 
 Additive delta within proto-v7 (2026-11-12): **one session kind, one create-options block, two capability entries, one push label. No version bump (`PROTOCOL_VERSION` is unchanged).** `central_server` gained only the "OpenCode session" push label.
@@ -188,6 +227,7 @@ A chat session can now sign its coding agent in on the PC. ACP agents report a m
 | Codex | `chatgpt`, `api_key` | `codex login --device-auth`: prints the page and a one-time code to enter there. `api_key`: the value goes to `codex login --with-api-key` on stdin. |
 | Antigravity | `google` | `agy acp --login`: prints the Google sign-in page, then reads the code (or the address of the page the user lands on). |
 | GitHub Copilot | `github` | `copilot login --device-code`: prints GitHub's device page and a one-time code to enter there. |
+| Pi | `openai-codex`, `anthropic` | `pi auth login <provider> --no-browser`: ChatGPT prints a device page and a one-time code to enter there; Claude prints the sign-in page, then reads the code that the page shows. |
 
 * When it is offered: `session/new`, `session/load` or a prompt fails with `authRequired`, or claude-agent-acp pushes `_auth/status_update` with `authStatus.kind: "none"`. A user message `/login` (no images) also opens it, unless a turn runs. The state `commands` list gains a `login` entry.
 * The request in `requests`: `{"id": "sign-in", "kind": "sign_in", "tool_call_id": null, "title", "text", "stage", "methods": [{id, name, description}], "url", "user_code", "input", "busy", "error"}`.
@@ -208,7 +248,7 @@ The session wire dict (`sessions.changed`, `session.updated`, the `/ws/sessions`
 |---------|--------|
 | Claude Code and Auto Scan terminal | The attention gate's hooks. `UserPromptSubmit` → `working`. A `Stop` that lists a running background agent → `working`. A `Stop` that lists only passive work (a background shell, a monitor, a scheduled wakeup) or `session_crons` → `waiting`. Otherwise `idle` when the gate's quiet window ends, even when the alert is muted or deduped. A `PreToolUse` heartbeat from the main agent → `working` and cancels a pending quiet window. A sub-agent tool call → `working` only while the last `Stop` listed in-flight work. `idle_prompt` re-reports the activity the last `Stop` implied, or `idle`. `SessionEnd` → `idle`. `null` until the first hook. |
 | Chat (`ui: "chat"`), every kind | The timeline `status`: `running` → `working`, `ready` → `idle`, otherwise `null`. A turn another app on a shared host runs counts too. |
-| Codex, Antigravity, OpenCode, GitHub Copilot, Terminal and custom terminal (PTY) sessions | Always `null`. Their OSC 7501 reports (Delta 2026-11-10) raise alerts but do not set `activity` yet. |
+| Codex, Antigravity, OpenCode, GitHub Copilot, Pi, Terminal and custom terminal (PTY) sessions | Always `null`. Their OSC 7501 reports (Delta 2026-11-10) raise alerts but do not set `activity` yet. |
 
 * Only a `running` session reports a value. Clients show a "Working" chip and an animated status square for `working`, and a muted "Background" chip with the static square for `waiting`. A pending `awaiting_permission` or `awaiting_os_permission` outranks it, because the turn waits for the user.
 * Gate rule: an `idle_prompt` no longer raises `turn_finished` while the last `Stop` listed in-flight work. It also does not alert again once the quiet window already alerted for the turn. A passive task still in flight when the user types the next prompt stops counting as in-flight work. Task notifications, sub-agent hand-backs and scheduled wakeups are not typed prompts.
@@ -222,7 +262,7 @@ Additive delta within proto-v7 (2026-11-10): **one attention reason, two optiona
 * New attention reason `turn_failed`. It appears on the session dict `attention`, the agent-bus `session.attention` event and the user-event `reason`. Older clients post nothing for an unknown reason.
 * Chat sessions raise `turn_failed` when the agent answers the user's own prompt with an RPC error. They do not raise it when the user pressed Stop, when the process died (that stays `ended`), or when a queued prompt starts next.
 * The slim `session.attention` user-event payload gains optional `kind` and `kind_label`. No `kind` (older agent) reads as a Claude session.
-* Terminal sessions of kind `codex`, `antigravity`, `opencode`, `copilot`, `shell` and `custom_*` have no Claude Code hooks. They raise attention from OSC 7501 program-status reports (Program Status Protocol rev 0.4, `ESC]7501;state=...[:kind=...][:app=...]`).
+* Terminal sessions of kind `codex`, `antigravity`, `opencode`, `copilot`, `pi`, `shell` and `custom_*` have no Claude Code hooks. They raise attention from OSC 7501 program-status reports (Program Status Protocol rev 0.4, `ESC]7501;state=...[:kind=...][:app=...]`).
 * For these sessions the agent answers the support query `ESC]7501;?` and strips it from the replayed stream. For `agy` sessions it sets `AGY_CLI_OSC7501=on` and `AGY_CLI_OSC7501_MESSAGES=brief` unless the user set them.
 * Mapping: `blocked` (permission or question) gives `awaiting_permission` at once. `blocked` (auth) is ignored. `done` gives `turn_finished` and `error` gives `turn_failed`, both after a 1.5 s quiet window.
 * `working`, `idle`, `clear` and any client keystroke (except DEC 1004 focus reports) cancel a pending alert. `working`, `idle` and `clear` also drop a standing `awaiting_permission`.
@@ -419,7 +459,7 @@ Additive delta within proto-v7 (2026-11-04, drag-to-reorder in the new-session w
 | ``PUT /api/session-mode-order`` | ``{"order": [str]}`` | Full replace; same body as ``GET``. ``[]`` restores the default order. |
 
 * Dashboard/user JWT, non-admin.
-* Each id matches the shortcuts ``KIND_PATTERN`` (``^[a-z0-9_]{1,32}$``): ``claude``, ``codex``, ``antigravity``, ``opencode``, ``copilot``, ``auto_scan``, ``shell``, ``custom_<12hex>``. At most 64 ids, no duplicates → else ``422``. The server stores the ids opaquely and does not check them against the live custom types.
+* Each id matches the shortcuts ``KIND_PATTERN`` (``^[a-z0-9_]{1,32}$``): ``claude``, ``codex``, ``antigravity``, ``opencode``, ``copilot``, ``pi``, ``auto_scan``, ``shell``, ``custom_<12hex>``. At most 64 ids, no duplicates → else ``422``. The server stores the ids opaquely and does not check them against the live custom types.
 * ``version`` grows by one on every change. A ``PUT`` of the stored order changes nothing and pushes nothing.
 * A change pushes the user event ``session_mode_order.updated`` with the same body to every user-events socket of the account. Clients keep the higher ``version`` of the cached and incoming snapshot, and reconcile with ``GET`` on every user-events connect.
 * Clients apply the list the same way: a card the list names is ranked by its place there; a card it does not name (a custom type created after the last save, a mode a newer client added) keeps its default place among the other unnamed cards, after the named ones; an id that names no card is skipped.

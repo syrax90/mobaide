@@ -17,9 +17,11 @@ from mobaide.acp.trust import (
     ClaudeFolderTrust,
     CodexFolderTrust,
     CopilotFolderTrust,
+    PiFolderTrust,
     claude_config_path,
     codex_config_path,
     copilot_config_path,
+    pi_agent_dir,
     too_broad_to_record,
 )
 from tests.conftest import skip_if_not_linux
@@ -734,6 +736,19 @@ class TestConcurrentGrants:
 
         assert all(t.is_trusted() for t in trusts)
 
+    def test_pi_keeps_both_records(self, tmp_path, monkeypatch):
+        self._slow_writes(monkeypatch)
+        pi_dir = tmp_path / "pi-agent"
+        a, b = _project(tmp_path, "a"), _project(tmp_path, "b")
+        trusts = [PiFolderTrust(str(f), agent_dir=pi_dir) for f in (a, b)]
+
+        assert self._grant_both([t.grant for t in trusts]) == [True, True]
+
+        assert json.loads((pi_dir / "trust.json").read_text(encoding="utf-8")) == {
+            os.path.realpath(a): True,
+            os.path.realpath(b): True,
+        }
+
 
 def _agy_settings(path: Path, data: object) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -1105,3 +1120,247 @@ class TestCopilotGrant:
 
         assert not config.parent.exists()
         assert trust.prompt_text.endswith(f" {SESSION_ONLY}")
+
+
+def _pi_project(tmp_path: Path, *parts: str, resource: str = ".pi/settings.json") -> Path:
+    """A folder with something Pi would load from it, so Pi asks about it."""
+    folder = _project(tmp_path, *parts)
+    target = folder.joinpath(*resource.split("/"))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("{}", encoding="utf-8")
+    return folder
+
+
+def _pi_dir(tmp_path: Path, trust: object = None, settings: object = None) -> Path:
+    folder = tmp_path / "pi-agent"
+    folder.mkdir(exist_ok=True)
+    if trust is not None:
+        _write_config(folder / "trust.json", trust)
+    if settings is not None:
+        _write_config(folder / "settings.json", settings)
+    return folder
+
+
+def _pi_trust(cwd: Path | str, agent_dir: Path) -> PiFolderTrust:
+    return PiFolderTrust(str(cwd), agent_dir=agent_dir)
+
+
+def _pi_records(agent_dir: Path) -> dict:
+    return json.loads((agent_dir / "trust.json").read_text(encoding="utf-8"))
+
+
+class TestPiAgentDir:
+    def test_the_agent_dir_of_the_launch_env_wins_over_the_host_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "host"))
+
+        assert pi_agent_dir({"PI_CODING_AGENT_DIR": str(tmp_path / "launch")}) == tmp_path / "launch"
+
+    def test_without_an_agent_dir_it_is_in_the_home_folder(self, home):
+        assert pi_agent_dir({}) == home / ".pi" / "agent"
+
+
+class TestPiIsTrusted:
+    def test_a_folder_with_nothing_to_load_needs_no_answer(self, tmp_path):
+        """Pi asks no trust question for it, so the chat asks none."""
+        project = _project(tmp_path)
+        (project / ".pi" / "sessions").mkdir(parents=True)
+        (project / ".pi" / "notes.md").write_text("mine", encoding="utf-8")
+
+        assert _pi_trust(project, _pi_dir(tmp_path)).is_trusted() is True
+
+    @pytest.mark.parametrize(
+        "resource",
+        [
+            ".pi/settings.json",
+            ".pi/mcp.json",
+            ".pi/extensions/lint.ts",
+            ".pi/skills/review/SKILL.md",
+            ".pi/prompts/fix.md",
+            ".pi/themes/dark.json",
+            ".pi/SYSTEM.md",
+            ".pi/APPEND_SYSTEM.md",
+            ".agents/skills/review/SKILL.md",
+        ],
+    )
+    def test_a_folder_with_resources_and_no_decision_is_untrusted(self, tmp_path, resource):
+        project = _pi_project(tmp_path, resource=resource)
+
+        assert _pi_trust(project, _pi_dir(tmp_path)).is_trusted() is False
+
+    def test_skills_of_a_folder_above_count_too(self, tmp_path):
+        _pi_project(tmp_path, "repo", resource=".agents/skills/review/SKILL.md")
+        child = tmp_path / "work" / "repo" / "packages" / "app"
+        child.mkdir(parents=True)
+
+        assert _pi_trust(child, _pi_dir(tmp_path)).is_trusted() is False
+
+    def test_the_skills_of_the_user_are_no_resources_of_a_project(self, home, tmp_path):
+        """``~/.agents/skills`` is above every folder in the home folder."""
+        (home / ".agents" / "skills").mkdir(parents=True)
+        project = home / "work" / "app"
+        project.mkdir(parents=True)
+
+        assert _pi_trust(project, _pi_dir(tmp_path)).is_trusted() is True
+
+    @pytest.mark.parametrize("decision", [True, False], ids=["trusted", "not-trusted"])
+    def test_a_saved_decision_is_an_answer(self, tmp_path, decision):
+        """A saved "do not trust" too: Pi then starts without the folder's
+        resources, and the chat does not ask again."""
+        project = _pi_project(tmp_path)
+        pi_dir = _pi_dir(tmp_path, trust={os.path.realpath(project): decision})
+
+        assert _pi_trust(project, pi_dir).is_trusted() is True
+
+    def test_the_decision_for_a_parent_covers_its_children(self, tmp_path):
+        child = _pi_project(tmp_path, "app", "src")
+        pi_dir = _pi_dir(tmp_path, trust={os.path.realpath(tmp_path / "work" / "app"): True})
+
+        assert _pi_trust(child, pi_dir).is_trusted() is True
+
+    @pytest.mark.parametrize("listed", ["app/src", "ap"], ids=["child", "name-prefix"])
+    def test_a_decision_covers_nothing_outside_its_folder(self, tmp_path, listed):
+        project = _pi_project(tmp_path, "app")
+        other = tmp_path.joinpath("work", listed)
+        other.mkdir(parents=True)
+        pi_dir = _pi_dir(tmp_path, trust={os.path.realpath(other): True})
+
+        assert _pi_trust(project, pi_dir).is_trusted() is False
+
+    @pytest.mark.parametrize(
+        "body",
+        ['{"FOLDER": "true"}', '{"FOLDER": null}', '{"FOLDER": 1}', '["FOLDER"]', "{not json"],
+        ids=["string", "null", "number", "not-object", "unreadable"],
+    )
+    def test_anything_but_a_saved_true_or_false_is_no_decision(self, tmp_path, body):
+        project = _pi_project(tmp_path)
+        pi_dir = _pi_dir(tmp_path)
+        (pi_dir / "trust.json").write_text(
+            body.replace("FOLDER", os.path.realpath(project)), encoding="utf-8"
+        )
+
+        assert _pi_trust(project, pi_dir).is_trusted() is False
+
+    @pytest.mark.parametrize("mode", ["always", "never"])
+    def test_a_setting_that_decides_for_every_folder_needs_no_answer(self, tmp_path, mode):
+        project = _pi_project(tmp_path)
+        pi_dir = _pi_dir(tmp_path, settings={"defaultProjectTrust": mode})
+
+        assert _pi_trust(project, pi_dir).is_trusted() is True
+
+    @pytest.mark.parametrize(
+        "settings",
+        [{"defaultProjectTrust": "ask"}, {"theme": "dark"}, ["always"]],
+        ids=["ask", "not-set", "not-object"],
+    )
+    def test_a_pi_that_asks_leaves_the_folder_untrusted(self, tmp_path, settings):
+        project = _pi_project(tmp_path)
+        pi_dir = _pi_dir(tmp_path, settings=settings)
+
+        assert _pi_trust(project, pi_dir).is_trusted() is False
+
+    @skip_if_not_linux
+    def test_a_symlinked_folder_matches_its_real_path(self, tmp_path):
+        project = _pi_project(tmp_path, "real")
+        link = tmp_path / "link"
+        link.symlink_to(project, target_is_directory=True)
+        pi_dir = _pi_dir(tmp_path, trust={os.path.realpath(project): True})
+
+        assert _pi_trust(link, pi_dir).is_trusted() is True
+
+
+class TestPiGrant:
+    def test_creates_the_trust_file_and_frees_the_lock_of_pi(self, tmp_path):
+        project = _pi_project(tmp_path)
+        pi_dir = tmp_path / "pi-agent"
+        trust = _pi_trust(project, pi_dir)
+
+        assert trust.grant() is True
+
+        assert _pi_records(pi_dir) == {os.path.realpath(project): True}
+        assert trust.is_trusted() is True
+        # Pi could not write its trust file while the lock folder stays.
+        assert not (pi_dir / "trust.json.lock").exists()
+
+    def test_keeps_the_other_decisions_and_the_file_mode(self, tmp_path):
+        project = _pi_project(tmp_path, "new")
+        pi_dir = _pi_dir(tmp_path, trust={"/srv/old": True, "/srv/never": False})
+        (pi_dir / "trust.json").chmod(0o600)
+
+        assert _pi_trust(project, pi_dir).grant() is True
+
+        assert _pi_records(pi_dir) == {
+            "/srv/old": True,
+            "/srv/never": False,
+            os.path.realpath(project): True,
+        }
+        if os.name != "nt":
+            assert stat.S_IMODE((pi_dir / "trust.json").stat().st_mode) == 0o600
+
+    def test_a_saved_do_not_trust_becomes_trust(self, tmp_path):
+        project = _pi_project(tmp_path)
+        pi_dir = _pi_dir(tmp_path, trust={os.path.realpath(project): False})
+
+        assert _pi_trust(project, pi_dir).grant() is True
+
+        assert _pi_records(pi_dir) == {os.path.realpath(project): True}
+
+    @skip_if_not_linux
+    def test_a_symlinked_folder_is_recorded_by_its_real_path(self, tmp_path):
+        project = _pi_project(tmp_path, "real")
+        link = tmp_path / "link"
+        link.symlink_to(project, target_is_directory=True)
+        pi_dir = _pi_dir(tmp_path)
+
+        assert _pi_trust(link, pi_dir).grant() is True
+
+        assert _pi_records(pi_dir) == {os.path.realpath(project): True}
+
+    @pytest.mark.parametrize("body", ["{not json", '["a list"]'], ids=["unreadable", "not-object"])
+    def test_a_file_it_cannot_read_back_whole_is_never_rewritten(self, tmp_path, body):
+        pi_dir = _pi_dir(tmp_path)
+        (pi_dir / "trust.json").write_text(body, encoding="utf-8")
+
+        with pytest.raises(ValueError):
+            _pi_trust(_pi_project(tmp_path), pi_dir).grant()
+
+        assert (pi_dir / "trust.json").read_text(encoding="utf-8") == body
+        assert not (pi_dir / "trust.json.lock").exists()
+
+    @pytest.mark.parametrize("age", [0.0, 60.0], ids=["held-too-long", "left-by-a-dead-pi"])
+    def test_a_lock_it_cannot_take_stays_and_the_trust_is_still_saved(
+        self, tmp_path, monkeypatch, age
+    ):
+        """The rewrite is atomic either way, and the lock is not this
+        code's to remove."""
+        import mobaide.acp.trust as trust_module
+
+        monkeypatch.setattr(trust_module, "_PI_LOCK_WAIT_SECONDS", 0.0)
+        project = _pi_project(tmp_path)
+        pi_dir = _pi_dir(tmp_path, trust={"/srv/old": True})
+        lock = pi_dir / "trust.json.lock"
+        lock.mkdir()
+        held_since = lock.stat().st_mtime - age
+        os.utime(lock, (held_since, held_since))
+
+        assert _pi_trust(project, pi_dir).grant() is True
+
+        assert _pi_records(pi_dir) == {"/srv/old": True, os.path.realpath(project): True}
+        assert lock.is_dir()
+
+    @skip_if_not_linux
+    @pytest.mark.timeout(20)
+    def test_a_lock_path_nobody_can_take_gets_the_same_wait(self, tmp_path, monkeypatch):
+        """Here a link to nothing: it is in the way and has no age to read.
+        The grant must not try for ever."""
+        import mobaide.acp.trust as trust_module
+
+        monkeypatch.setattr(trust_module, "_PI_LOCK_WAIT_SECONDS", 0.0)
+        project = _pi_project(tmp_path)
+        pi_dir = _pi_dir(tmp_path, trust={"/srv/old": True})
+        lock = pi_dir / "trust.json.lock"
+        lock.symlink_to(pi_dir / "gone", target_is_directory=True)
+
+        assert _pi_trust(project, pi_dir).grant() is True
+
+        assert _pi_records(pi_dir) == {"/srv/old": True, os.path.realpath(project): True}
+        assert lock.is_symlink()

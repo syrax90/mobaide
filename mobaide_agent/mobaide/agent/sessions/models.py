@@ -11,6 +11,7 @@ from mobaide.core.codex_launcher import CodexOptions
 from mobaide.core.copilot_launcher import CopilotOptions
 from mobaide.core.models import SessionInfo, session_to_wire_dict
 from mobaide.core.opencode_launcher import INITIAL_PROMPT_MAX, OpenCodeOptions
+from mobaide.core.pi_launcher import PiOptions
 
 
 class ClaudeOptionsModel(BaseModel):
@@ -169,6 +170,17 @@ class CopilotOptionsModel(BaseModel):
         return CopilotOptions(**self.model_dump())
 
 
+class PiOptionsModel(BaseModel):
+    """Wire DTO for Pi launch options (see :class:`PiOptions`)."""
+
+    worktree: bool = False
+    branch_name: str | None = None
+    base_branch: str | None = None
+
+    def to_options(self) -> PiOptions:
+        return PiOptions(**self.model_dump())
+
+
 class CreateSessionRequest(BaseModel):
     command: list[str] | None = None
     cwd: str | None = None
@@ -179,7 +191,7 @@ class CreateSessionRequest(BaseModel):
     # launcher builds them from the project + the CLI options block.
     project_name: str | None = None
     # Which managed CLI to launch: "claude" | "codex" | "antigravity" |
-    # "opencode" | "copilot". Optional —
+    # "opencode" | "copilot" | "pi". Optional —
     # when omitted the kind is inferred from whichever options block is present (a
     # legacy claude_options-only payload still resolves to Claude). Shell/Terminal
     # sessions leave this null and send no options block.
@@ -189,9 +201,10 @@ class CreateSessionRequest(BaseModel):
     antigravity_options: AntigravityOptionsModel | None = None
     opencode_options: OpenCodeOptionsModel | None = None
     copilot_options: CopilotOptionsModel | None = None
+    pi_options: PiOptionsModel | None = None
     # Terminal-mode worktree: create a git worktree for a SHELL session
     # (no CLI options) anchored to a stored git project and spawn the shell
-    # inside it. Managed Claude/Codex/Antigravity/OpenCode/Copilot sessions instead
+    # inside it. Managed Claude/Codex/Antigravity/OpenCode/Copilot/Pi sessions instead
     # carry worktree
     # intent inside their own options block.
     worktree: bool = False

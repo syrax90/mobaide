@@ -4182,3 +4182,159 @@ class TestUnknownSessionNeverSpawnsShell:
 
         resolver.assert_not_called()
         mock_session_manager.create_session.assert_not_awaited()
+
+
+class TestHandleCreateSessionPi:
+    """The control-channel ``create_session`` path must support Pi: parse
+    ``pi_options``, thread the ``cli`` discriminator into a PI
+    ``SessionConfig``, and answer ``session_create_failed`` for a block it
+    cannot parse. No auth case: Pi has no sign-in probe.
+    """
+
+    async def test_create_session_forwards_pi_options_and_kind(
+        self, client, mock_session_manager,
+    ):
+        """An explicit ``cli="pi"`` plus a ``pi_options`` block must reach
+        ``create_session`` as a PI ``SessionConfig`` that carries the parsed
+        :class:`PiOptions` and no other options block. Otherwise the worktree
+        is dropped on the relay control path."""
+        from mobaide.core.models import SessionConfig
+        from mobaide.core.pi_launcher import PiOptions
+
+        async def _capture(config: SessionConfig):
+            _capture.config = config  # type: ignore[attr-defined]
+            s = MagicMock()
+            s.session_id = "pi-sess"
+            s.pid = 7
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "pi-sess",
+            "cli": "pi",
+            "pi_options": {
+                "worktree": True,
+                "branch_name": "feature/x",
+            },
+        }
+        payload = json.dumps(ctrl).encode()
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(payload, ws)
+
+        cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
+        assert cfg.kind is SessionKind.PI
+        assert cfg.claude_options is None
+        assert cfg.codex_options is None
+        assert cfg.antigravity_options is None
+        assert cfg.copilot_options is None
+        assert cfg.pi_options == PiOptions(worktree=True, branch_name="feature/x")
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_created"
+        assert resp["session_id"] == "pi-sess"
+        assert resp["pid"] == 7
+
+    async def test_create_session_with_a_pi_block_it_cannot_parse_fails_and_starts_nothing(
+        self, client, mock_session_manager,
+    ):
+        mock_session_manager.create_session = AsyncMock()
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "pi-bad",
+            "cli": "pi",
+            "pi_options": {"worktree": "not-a-bool"},
+        }
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        mock_session_manager.create_session.assert_not_awaited()
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_create_failed"
+        assert resp["session_id"] == "pi-bad"
+        assert resp["error"].startswith("Invalid pi_options")
+
+
+class TestHandleProxyRequestPi:
+    """``POST /api/sessions`` proxied through the central relay
+    (``proxy_request`` control frame) must thread Pi the same way the direct
+    HTTP router does: this is the path the mobile and web clients use.
+    """
+
+    async def test_proxy_post_sessions_threads_pi_options(
+        self, client, mock_session_manager,
+    ):
+        """A proxied ``POST /api/sessions`` body with ``cli="pi"`` builds a PI
+        ``SessionConfig`` from ``pi_options`` and returns a 201
+        ``proxy_response`` whose body reports ``kind == "pi"``."""
+        from mobaide.core.models import SessionConfig
+        from mobaide.core.pi_launcher import PiOptions
+
+        captured: dict[str, SessionConfig] = {}
+
+        async def _capture(config: SessionConfig):
+            captured["config"] = config
+            s = MagicMock()
+            s.session_id = "proxy-pi"
+            s.pid = 11
+            info = MagicMock()
+            info.session_id = "proxy-pi"
+            info.state = SessionState.RUNNING
+            info.created_at = datetime(2026, 11, 13, 9, 0, 0, tzinfo=timezone.utc)
+            info.pid = 11
+            info.command = ["pi"]
+            info.cwd = None
+            info.title = None
+            info.project_name = None
+            info.kind = SessionKind.PI
+            info.kind_label = None
+            info.attention = None
+            info.exit_reason = None
+            info.ui = "terminal"
+            info.activity = None
+            s.to_info = MagicMock(return_value=info)
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "proxy_request",
+            "request_id": "req-pi",
+            "method": "POST",
+            "path": "/api/sessions",
+            "body": {
+                "cli": "pi",
+                "pi_options": {
+                    "worktree": True,
+                    "branch_name": "feature/x",
+                    "base_branch": "origin/dev",
+                },
+            },
+        }
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        cfg = captured["config"]
+        assert cfg.kind is SessionKind.PI
+        assert cfg.claude_options is None
+        assert cfg.codex_options is None
+        assert cfg.antigravity_options is None
+        assert cfg.copilot_options is None
+        assert cfg.pi_options == PiOptions(
+            worktree=True,
+            branch_name="feature/x",
+            base_branch="origin/dev",
+        )
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "proxy_response"
+        assert resp["request_id"] == "req-pi"
+        assert resp["status"] == 201
+        assert resp["body"]["kind"] == "pi"

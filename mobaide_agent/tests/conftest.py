@@ -126,6 +126,21 @@ def _pin_copilot_binary(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _pin_pi_binary(monkeypatch):
+    """Pin the Pi resolver to the literal string ``"pi"`` for every test.
+
+    Parallel of :func:`_pin_copilot_binary`: a host with or without Pi must
+    give the same launch argv and the same ``capabilities.cli.pi``. Tests of
+    the missing-binary path re-patch ``pi_launcher._resolve_pi_binary`` to
+    raise inside the test body.
+    """
+    from mobaide.core import pi_launcher
+
+    monkeypatch.setattr(pi_launcher, "_resolve_pi_binary", lambda *_a, **_kw: "pi")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _pin_model_enumeration(monkeypatch):
     """Pin the model-enumeration subprocess seams to canned failures.
 

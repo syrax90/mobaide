@@ -627,6 +627,149 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertNil(request.copilot_options?.branch_name)
     }
 
+    // MARK: - Pi
+
+    func testPiRequestCarriesOnlyItsOwnOptionsBlock() async throws {
+        let model = await modelWithProjects(#"[{"name":"a","path":"/p","is_git":true}]"#)
+        model.selectStoredProject("a")
+        model.worktree = true
+        model.branchName = "feat"
+
+        let request = try XCTUnwrap(model.buildRequest(mode: .pi))
+
+        XCTAssertEqual(request.cli, "pi")
+        XCTAssertEqual(request.project_name, "a")
+        XCTAssertEqual(request.ui, "chat")
+        XCTAssertNil(request.claude_options)
+        XCTAssertNil(request.codex_options)
+        XCTAssertNil(request.antigravity_options)
+        XCTAssertNil(request.copilot_options)
+        XCTAssertEqual(request.pi_options?.worktree, true, "the worktree rides inside pi_options")
+        XCTAssertEqual(request.pi_options?.branch_name, "feat")
+        XCTAssertEqual(request.worktree, false, "a managed CLI never uses the top-level worktree field")
+        XCTAssertNil(request.branch_name)
+    }
+
+    func testPiCustomPathSendsTheFolderAndNeverAWorktree() throws {
+        let model = makeModel()
+        model.setCustomPath("/abs/path")
+        model.worktree = true
+        model.branchName = "feat"
+
+        let request = try XCTUnwrap(model.buildRequest(mode: .pi))
+
+        XCTAssertEqual(request.cli, "pi")
+        XCTAssertEqual(request.cwd, "/abs/path")
+        XCTAssertNil(request.project_name)
+        XCTAssertEqual(request.pi_options?.worktree, false)
+        XCTAssertNil(request.pi_options?.branch_name)
+    }
+
+    func testCreateSendsThePiWireKeysAndRemembersTheChoice() async throws {
+        StubURLProtocol.reset()
+        let prefs = isolatedPrefs()
+        let model = stubbedModel(prefs: prefs)
+        model.selection = .stored("a")
+        model.mode = .pi
+        model.piTerminalUI = true
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"session_id":"s-new","state":"starting","created_at":"t"}"#
+        )
+
+        await model.create()
+
+        XCTAssertNil(model.error)
+        let body = try XCTUnwrap(try createBodies().last)
+        XCTAssertEqual(body["cli"] as? String, "pi")
+        XCTAssertEqual(body["ui"] as? String, "terminal")
+        let options = try XCTUnwrap(body["pi_options"] as? [String: Any])
+        XCTAssertEqual(options["worktree"] as? Bool, false)
+        XCTAssertNil(body["claude_options"])
+        XCTAssertNil(body["copilot_options"])
+        XCTAssertEqual(prefs.getLastUsedPiOptions(), PiLaunchPrefs(terminalUI: true))
+        XCTAssertNil(prefs.getLastUsedCopilotOptions(), "a Pi launch writes no other agent's choices")
+
+        let next = stubbedModel(prefs: prefs)
+        XCTAssertTrue(next.piTerminalUI, "the next wizard starts from the remembered choice")
+        XCTAssertFalse(next.copilotTerminalUI)
+    }
+
+    func testPiCardIsOffForAnAgentFromBeforePiSupport() async {
+        // That agent lists its CLIs without Pi, and would open a plain shell
+        // for `cli = "pi"`.
+        let older = await modelWithCapabilities(
+            #"{"cli":{"claude":{"available":true},"copilot":{"available":true}}}"#
+        )
+        XCTAssertFalse(older.isEnabled(.pi))
+        XCTAssertTrue(older.isEnabled(.copilot), "the agent's other CLIs stay usable")
+        older.selectMode(.pi)
+        XCTAssertNil(older.mode, "a disabled card must not open the Pi config step")
+
+        let notInstalled = await modelWithCapabilities(#"{"cli":{"pi":{"available":false}}}"#)
+        XCTAssertFalse(notInstalled.isEnabled(.pi))
+
+        let noCliList = await modelWithCapabilities("{}")
+        XCTAssertTrue(noCliList.isEnabled(.pi), "an agent that reports no CLI list reads as unknown")
+
+        let installed = await modelWithCapabilities(#"{"cli":{"pi":{"available":true}}}"#)
+        XCTAssertTrue(installed.isEnabled(.pi))
+        installed.selectMode(.pi)
+        XCTAssertEqual(installed.mode, .pi)
+    }
+
+    func testPiWithoutChatOnThePCOpensTheTerminalAndCannotContinue() async throws {
+        let model = await modelWithCapabilities(
+            #"{"cli":{"pi":{"available":true}},"chat":{"claude":{"resume":true}}}"#
+        )
+        model.selection = .stored("a")
+        model.mode = .pi
+
+        let request = try XCTUnwrap(model.buildRequest(mode: .pi))
+
+        XCTAssertEqual(request.ui, "terminal")
+        XCTAssertNotNil(model.piChatUnavailableReason)
+        XCTAssertFalse(model.canContinueSession)
+    }
+
+    func testPiContinueIsOfferedOnlyForTheChatView() async {
+        let model = await modelWithCapabilities(
+            #"{"cli":{"pi":{"available":true}},"chat":{"pi":{"resume":true,"live":false}}}"#
+        )
+        model.selection = .stored("a")
+        model.mode = .pi
+
+        XCTAssertTrue(model.canContinueSession)
+        XCTAssertNil(model.piChatUnavailableReason)
+
+        model.piTerminalUI = true
+
+        XCTAssertFalse(model.canContinueSession)
+    }
+
+    func testPiContinueRequestUsesThePiOptionsWithoutAWorktree() {
+        let model = makeModel()
+        model.mode = .pi
+        model.selection = .stored("a")
+        model.worktree = true
+        model.branchName = "feat"
+        let stored = ChatStoredSession(
+            session_id: "external-4444", cwd: "/srv/other", title: nil, updated_at: nil, open_session_id: nil
+        )
+
+        let request = model.continueRequest(for: stored)
+
+        XCTAssertEqual(request.cli, "pi")
+        XCTAssertEqual(request.ui, "chat")
+        XCTAssertEqual(request.chat_resume_id, "external-4444")
+        XCTAssertEqual(request.cwd, "/srv/other")
+        XCTAssertNil(request.project_name)
+        XCTAssertNil(request.claude_options)
+        XCTAssertNil(request.copilot_options)
+        XCTAssertEqual(request.pi_options?.worktree, false)
+        XCTAssertNil(request.pi_options?.branch_name)
+    }
+
     // MARK: - Codex continue after the Codex sign-in
 
     private let externalSession = ChatStoredSession(

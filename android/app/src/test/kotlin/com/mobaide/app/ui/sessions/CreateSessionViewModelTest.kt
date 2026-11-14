@@ -7,6 +7,7 @@ import com.mobaide.app.data.local.ClaudeLaunchPrefs
 import com.mobaide.app.data.local.CodexLaunchPrefs
 import com.mobaide.app.data.local.OpenCodeLaunchPrefs
 import com.mobaide.app.data.local.CopilotLaunchPrefs
+import com.mobaide.app.data.local.PiLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.RestApi
@@ -130,6 +131,8 @@ class CreateSessionViewModelTest {
         coEvery { prefs.setLastUsedOpenCodeOptions(any()) } just Runs
         coEvery { prefs.getLastUsedCopilotOptions() } returns null
         coEvery { prefs.setLastUsedCopilotOptions(any()) } just Runs
+        coEvery { prefs.getLastUsedPiOptions() } returns null
+        coEvery { prefs.setLastUsedPiOptions(any()) } just Runs
         coEvery { prefs.getRecentCustomPaths(any()) } returns recentCustomPaths
         coEvery { prefs.addRecentCustomPath(any(), any()) } just Runs
         coEvery { prefs.removeRecentCustomPath(any(), any()) } just Runs
@@ -3985,6 +3988,206 @@ class CreateSessionViewModelTest {
         assertNotNull(options)
         assertTrue(options!!.allow_all)
         assertFalse(options.worktree)
+        assertNull(options.branch_name)
+    }
+
+    // Pi
+
+    private val piCli = """{"pi":{"available":true}}"""
+
+    private fun TestScope.piSubmit(
+        fx: Fixture,
+        setUp: (CreateSessionViewModel) -> Unit = {},
+    ): Pair<CreateSessionRequest, PiLaunchPrefs> {
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-pi", "starting", "2026-11-13T00:00:00Z")
+        val prefsSlot = slot<PiLaunchPrefs>()
+        coEvery { fx.prefs.setLastUsedPiOptions(capture(prefsSlot)) } just Runs
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectPiMode()
+        setUp(vm)
+        vm.submitPi()
+        advanceUntilIdle()
+        return requestSlot.captured to prefsSlot.captured
+    }
+
+    @Test
+    fun submitPi_sendsCliPi_withOnlyItsOwnOptionsBlock_andOpensTheChatView() = runTest {
+        val fx = newFixture()
+
+        val (request, saved) = piSubmit(fx) { vm ->
+            assertEquals(CreateSessionStep.PiConfig, vm.uiState.value.step)
+            vm.toggleWorktree(true)
+            vm.setBranchName("feature/x")
+        }
+
+        assertEquals("alpha", request.project_name)
+        assertEquals("pi", request.cli)
+        assertEquals(SessionResponse.UI_CHAT, request.ui)
+        assertNull("Pi must not send claude_options", request.claude_options)
+        assertNull("Pi must not send codex_options", request.codex_options)
+        assertNull("Pi must not send antigravity_options", request.antigravity_options)
+        assertNull("Pi must not send opencode_options", request.opencode_options)
+        assertNull("Pi must not send copilot_options", request.copilot_options)
+        val options = request.pi_options
+        assertNotNull(options)
+        assertTrue("worktree must travel inside pi_options", options!!.worktree)
+        assertEquals("feature/x", options.branch_name)
+        assertFalse(
+            "Pi worktree travels in pi_options, not the top-level request field",
+            request.worktree,
+        )
+        // The choice is kept for the next Pi launch, and no other agent's.
+        assertEquals(PiLaunchPrefs(terminalUi = false), saved)
+        coVerify(exactly = 0) { fx.prefs.setLastUsedClaudeOptions(any()) }
+        coVerify(exactly = 0) { fx.prefs.setLastUsedCopilotOptions(any()) }
+    }
+
+    @Test
+    fun submitPi_withTerminalUi_opensTheTerminal_andRemembersTheChoice() = runTest {
+        val (request, saved) = piSubmit(newFixture()) { it.togglePiTerminalUi(true) }
+
+        assertEquals("pi", request.cli)
+        assertEquals(SessionResponse.UI_TERMINAL, request.ui)
+        assertFalse(request.pi_options!!.worktree)
+        assertNull(request.pi_options!!.branch_name)
+        assertTrue(saved.terminalUi)
+    }
+
+    @Test
+    fun submitPi_whereThePcHasNoPiChat_opensTheTerminal() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            chatVersion("""{"claude":{"resume":true}}""", cli = piCli)
+
+        val (request, _) = piSubmit(fx) { vm ->
+            vm.refreshCliAvailability()
+            advanceUntilIdle()
+            assertNotNull(vm.uiState.value.piChatUnavailableHint)
+            assertFalse(vm.uiState.value.piResumeAvailable)
+        }
+
+        assertEquals(SessionResponse.UI_TERMINAL, request.ui)
+    }
+
+    @Test
+    fun submitPi_customPath_sendsTheFolder_andNeverAWorktree() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-pi-adhoc", "starting", "2026-11-13T00:00:00Z")
+
+        vm.selectCustomPath()
+        advanceUntilIdle()
+        vm.setCustomPathDraft(hostAbsolutePath)
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+        vm.confirmProject()
+        vm.selectPiMode()
+        vm.submitPi()
+        advanceUntilIdle()
+
+        val request = requestSlot.captured
+        assertNull(request.project_name)
+        assertEquals(hostAbsolutePath, request.cwd)
+        assertEquals("pi", request.cli)
+        val options = request.pi_options
+        assertNotNull(options)
+        assertFalse(options!!.worktree)
+        assertNull(options.branch_name)
+        assertNull(options.base_branch)
+    }
+
+    @Test
+    fun piCard_isDisabled_forAnAgentFromBeforePiSupport() = runTest {
+        // That agent lists its CLIs without Pi, and would open a plain shell
+        // for `cli = "pi"`.
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            versionResponse(claude = true, codex = true)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectProject("alpha")
+        vm.confirmProject()
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertFalse(s.piKnown)
+        assertFalse(s.isModeEnabled(CreateSessionMode.Pi))
+        assertTrue("the agent's other CLIs stay usable", s.isModeEnabled(CreateSessionMode.Codex))
+
+        vm.selectPiMode()
+
+        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
+    }
+
+    @Test
+    fun piCard_isDisabled_whenTheAgentListsPiAsNotInstalled() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            chatVersion("{}", cli = """{"claude":{"available":true},"pi":{"available":false}}""")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertTrue("a listed CLI is known, only not installed", s.piKnown)
+        assertEquals(false, s.piAvailable)
+        assertFalse(s.isModeEnabled(CreateSessionMode.Pi))
+    }
+
+    @Test
+    fun init_restoresThePiChoice_andNoOtherAgents() = runTest {
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedPiOptions() } returns PiLaunchPrefs(terminalUi = true)
+
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.piTerminalUi)
+        assertFalse(vm.uiState.value.copilotTerminalUi)
+        assertFalse(vm.uiState.value.antigravityTerminalUi)
+    }
+
+    @Test
+    fun resumeChatSession_pi_sendsThePiOptionsWithoutAWorktree() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-pi-resumed", "starting", "2026-11-13T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectPiMode()
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+        vm.resumeChatSession("pi", ChatStoredSession(session_id = "external-4444", cwd = "/p/alpha"))
+        advanceUntilIdle()
+
+        val request = requestSlot.captured
+        assertEquals("pi", request.cli)
+        assertEquals("alpha", request.project_name)
+        assertNull(request.cwd)
+        assertEquals(SessionResponse.UI_CHAT, request.ui)
+        assertEquals("external-4444", request.chat_resume_id)
+        assertNull(request.claude_options)
+        assertNull(request.copilot_options)
+        val options = request.pi_options
+        assertNotNull(options)
+        assertFalse(options!!.worktree)
         assertNull(options.branch_name)
     }
 

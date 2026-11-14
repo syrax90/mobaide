@@ -16,7 +16,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Voice input — dictate to Claude Code, Codex CLI and Antigravity CLI | Mobaide</title>
-<meta name="description" content="Dictate prompts to Claude Code, Codex CLI, Antigravity CLI, OpenCode and GitHub Copilot CLI from your phone or browser. Your own computer turns the audio into text with an open speech model — 25 languages, nothing stored, nothing sent until you send it.">
+<meta name="description" content="Dictate prompts to Claude Code, Codex CLI, Antigravity CLI, OpenCode, GitHub Copilot CLI and Pi from your phone or browser. Your own computer turns the audio into text with an open speech model — 25 languages, nothing stored, nothing sent until you send it.">
 <link rel="canonical" href="{{ site_origin }}/voice-input">
 <meta name="theme-color" content="#121212">
 
@@ -84,8 +84,8 @@
       </div>
       <p class="cta-note">
         Free and opt-in. In the Android and iOS apps and in the browser, for
-        Claude Code, Codex CLI, Antigravity CLI, OpenCode, GitHub Copilot CLI, a
-        raw terminal or your own agent types.
+        Claude Code, Codex CLI, Antigravity CLI, OpenCode, GitHub Copilot CLI,
+        Pi, a raw terminal or your own agent types.
       </p>
     </div>
 
@@ -274,7 +274,7 @@
         <p>
           The transcript is plain text in the command field, so it works for
           Claude Code, Codex CLI, Antigravity CLI, OpenCode, GitHub Copilot CLI,
-          a raw terminal and your own agent types alike.
+          Pi, a raw terminal and your own agent types alike.
         </p>
       </article>
 
@@ -407,7 +407,7 @@
       <li><span class="px-bullet"></span>The relay routes it in memory and keeps neither the audio nor the text.</li>
       <li><span class="px-bullet"></span>Your agent holds the audio in memory until the text is ready, then drops it. It never logs or saves the audio or the text.</li>
       <li><span class="px-bullet"></span>No third-party speech service is involved. The only extra downloads are the model and its runtime, once, from the Mobaide download mirror (Hugging Face as a fallback) and PyPI.</li>
-      <li><span class="px-bullet"></span>Transcript cleanup is optional and off until you turn it on. When it is on, your agent hands each transcript to the session's own AI agent on your computer, which cleans it up with its cheapest model under your own account — Claude Code uses Claude Haiku, Codex uses GPT Luna and Antigravity uses Gemini Flash; OpenCode and GitHub Copilot use their default model. The text then goes to that agent's provider, like the prompts you send, and counts toward your usage. Mobaide still stores none of it.</li>
+      <li><span class="px-bullet"></span>Transcript cleanup is optional and off until you turn it on. When it is on, your agent hands each transcript to the session's own AI agent on your computer, which cleans it up with its cheapest model under your own account — Claude Code uses Claude Haiku, Codex uses GPT Luna and Antigravity uses Gemini Flash; OpenCode, GitHub Copilot and Pi use their default model. The text then goes to that agent's provider, like the prompts you send, and counts toward your usage. Mobaide still stores none of it.</li>
     </ul>
     <p class="fineprint">
       The <a href="/privacy.html">privacy policy</a> describes voice input in
@@ -446,7 +446,7 @@
           filler words and false starts and fixes punctuation and technical
           terms before the text appears. It uses your own AI agent with its
           cheapest model — Claude Haiku in Claude Code, GPT Luna in Codex,
-          Gemini Flash in Antigravity; OpenCode and GitHub Copilot use their
+          Gemini Flash in Antigravity; OpenCode, GitHub Copilot and Pi use their
           default model — under your account, so the text goes to
           that agent's provider and counts toward your usage. The app tells you
           this before you turn it on. If a cleanup fails, you get the text as

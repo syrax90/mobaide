@@ -102,6 +102,8 @@ private val TabKey = ControlKey("Tab", byteArrayOf(0x09))
 private val BackspaceKey = ControlKey("Backspace", byteArrayOf(0x7f), Icons.Filled.Backspace)
 private val ModeKey = ControlKey("Mode", byteArrayOf(0x1b, '['.code.toByte(), 'Z'.code.toByte()))
 private val RewindKey = ControlKey("Rewind", byteArrayOf(0x1b, 0x1b))
+// Pi binds Shift+Tab to its thinking level, not to a mode.
+private val ThinkingKey = ControlKey("Thinking", byteArrayOf(0x1b, '['.code.toByte(), 'Z'.code.toByte()))
 private val EnterKey = ControlKey("Enter", byteArrayOf(0x0d))
 private val CtrlCKey = ControlKey("Ctrl+C", byteArrayOf(0x03))
 private val UpKey = ControlKey("↑", byteArrayOf(0x1b, '['.code.toByte(), 'A'.code.toByte()), Icons.Filled.KeyboardArrowUp)
@@ -138,6 +140,7 @@ private val CONTROL_KEY_ORDER = listOf(
     UpKey, DownKey, LeftKey, RightKey,
     CtrlCKey,
     ModeKey,
+    ThinkingKey,
     CtrlLKey,
     EscKey,
     ApproveKey, RejectKey,
@@ -201,6 +204,14 @@ private val DEFAULT_CONTROL_KEYS = orderedControlKeys(
 private val OPENCODE_CONTROL_KEYS =
     orderedControlKeys(listOf(ModeKey, CtrlPKey) + DEFAULT_CONTROL_KEYS)
 
+// Pi = the neutral set plus its own controls: Thinking (Shift+Tab cycles the thinking
+// level), Ctrl+P (next model), Ctrl+L (model list) and Ctrl+O (expand tool output).
+// Ctrl+R is absent: Pi does not bind it. Rewind is absent too: Pi reads its two Esc
+// bytes, sent together, as one other key; two taps on Esc open Pi's session tree.
+private val PI_CONTROL_KEYS = orderedControlKeys(
+    listOf(ThinkingKey, CtrlPKey, CtrlLKey, CtrlOKey) + DEFAULT_CONTROL_KEYS,
+)
+
 private fun controlKeysFor(kind: SessionKind?): List<ControlKey> = when (kind) {
     SessionKind.Codex -> CODEX_CONTROL_KEYS
     SessionKind.Antigravity -> ANTIGRAVITY_CONTROL_KEYS
@@ -215,6 +226,7 @@ private fun controlKeysFor(kind: SessionKind?): List<ControlKey> = when (kind) {
     // mode, Esc-Esc rewinds, Ctrl+O expands the timeline, Ctrl+R searches the
     // history and Ctrl+L clears the screen.
     SessionKind.Copilot -> CLAUDE_CONTROL_KEYS
+    SessionKind.Pi -> PI_CONTROL_KEYS
 }
 
 @Composable

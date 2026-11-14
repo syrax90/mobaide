@@ -37,7 +37,7 @@ from mobaide.core.cli_launcher import (
 )
 from mobaide.core.projects_config import ProjectConfig
 
-from . import codex_bridge
+from . import codex_bridge, pi_bridge
 from . import normalize as nz
 from .install import INSTALL_POOL, PROBE_POOL, AdapterInstaller, NpmAdapter
 from .presence import ConversationPresence, default_app_data_dir
@@ -47,11 +47,13 @@ from .trust import (
     ClaudeFolderTrust,
     CodexFolderTrust,
     CopilotFolderTrust,
+    PiFolderTrust,
     WorkspaceTrust,
     antigravity_settings_path,
     claude_config_path,
     codex_config_path,
     copilot_config_path,
+    pi_agent_dir,
 )
 
 if TYPE_CHECKING:
@@ -60,6 +62,7 @@ if TYPE_CHECKING:
     from mobaide.core.codex_launcher import CodexLauncher, CodexOptions
     from mobaide.core.copilot_launcher import CopilotLauncher, CopilotOptions
     from mobaide.core.opencode_launcher import OpenCodeLauncher, OpenCodeOptions
+    from mobaide.core.pi_launcher import PiLauncher, PiOptions
 
 # ``resolve_before`` follows each release: dependencies resolve as they were
 # then, not to whatever a range matches on the day a PC first installs.
@@ -76,6 +79,7 @@ CODEX_ACP_COMMAND_ENV = "MOBAIDE_ACP_CODEX_COMMAND"
 ANTIGRAVITY_ACP_COMMAND_ENV = "MOBAIDE_ACP_ANTIGRAVITY_COMMAND"
 OPENCODE_ACP_COMMAND_ENV = "MOBAIDE_ACP_OPENCODE_COMMAND"
 COPILOT_ACP_COMMAND_ENV = "MOBAIDE_ACP_COPILOT_COMMAND"
+PI_ACP_COMMAND_ENV = "MOBAIDE_ACP_PI_COMMAND"
 REAL_IN_TEST_ENV = "MOBAIDE_ACP_REAL"
 AVAILABILITY_TTL = 30.0
 NODE_HINT = "The chat view needs Node.js 22 or later on the PC."
@@ -98,6 +102,15 @@ COPILOT_HINT = (
     "GitHub Copilot CLI is not installed on the PC. Install it with "
     "`npm install -g @github/copilot`, then try again."
 )
+PI_HINT = (
+    "Pi is not installed on the PC. Install it from "
+    "https://pi.dev/docs/latest/quickstart, then try again."
+)
+# Pi works with many model providers; the chat can sign in to two of them.
+PI_SIGN_IN_PROMPT = (
+    "Pi has no model provider to use on your PC. Sign in to one here. For another "
+    "provider or an API key, run Pi on the PC and use /login there."
+)
 # Test mode: while this file exists the fake agent is signed out, and its
 # fake login removes it.
 FAKE_SIGNED_OUT_ENV = "MOBAIDE_FAKE_ACP_SIGNED_OUT"
@@ -107,6 +120,7 @@ COPILOT_USER_CODE_PATTERN = r"\b[A-Z0-9]{4}-[A-Z0-9]{4}\b"
 # The config option of ``copilot --acp`` that turns its approval requests off.
 COPILOT_ALLOW_ALL_OPTION = "allow_all"
 CODEX_BRIDGE_SCRIPT = os.path.abspath(codex_bridge.__file__)
+PI_BRIDGE_SCRIPT = os.path.abspath(pi_bridge.__file__)
 
 
 class ChatAgentUnavailableError(RuntimeError):
@@ -164,6 +178,9 @@ class ChatLaunchPlan:
     # What to tell the user when the agent needs a sign-in that the chat
     # cannot do; None gives the generic text.
     sign_in_hint: str | None = None
+    # What the sign-in card says while the user picks a method; None gives
+    # the generic text.
+    sign_in_prompt: str | None = None
     # Accept each permission request without asking (the agent's own
     # "auto-approve" switch, for an agent whose ACP server has none).
     auto_approve: bool = False
@@ -394,6 +411,46 @@ def copilot_sign_in_methods(
             cwd=os.path.expanduser("~"),
             user_code_pattern=COPILOT_USER_CODE_PATTERN,
         )
+    ]
+
+
+def pi_sign_in_methods(
+    pi_bin: str | None, env: Mapping[str, str], *, fake: bool = False
+) -> list[SignInMethod]:
+    """``pi auth login <provider> --no-browser`` for the two account logins
+    that need nothing but a browser on any device: ChatGPT prints a device
+    page and a one-time code, Claude prints a sign-in page and reads the code
+    that page shows. Every other provider is set up in Pi itself."""
+    if pi_bin is None and not fake:
+        return []
+    home = os.path.expanduser("~")
+
+    def login(provider: str, *fake_args: str) -> list[str]:
+        if fake:
+            return [*fake_login_argv("pi"), *fake_args]
+        return shim_safe_argv(pi_bin or "", "auth", "login", provider, "--no-browser")
+
+    return [
+        SignInMethod(
+            "openai-codex",
+            "ChatGPT account",
+            "Plus, Pro, Business or Enterprise plan",
+            CODEX_SIGN_IN_TEXT,
+            argv=login("openai-codex", "--device"),
+            env=dict(env),
+            cwd=home,
+            user_code_pattern=CODEX_USER_CODE_PATTERN,
+        ),
+        SignInMethod(
+            "anthropic",
+            "Claude account",
+            "Pro or Max plan",
+            CLAUDE_SIGN_IN_TEXT,
+            argv=login("anthropic"),
+            env=dict(env),
+            cwd=home,
+            reads_code=True,
+        ),
     ]
 
 
@@ -1048,6 +1105,83 @@ class CopilotChatSpec(_ChatSpecBase):
         )
 
 
+class PiChatSpec(_ChatSpecBase):
+    """Pi through Mobaide's own bridge to its RPC mode (:mod:`.pi_bridge`):
+    Pi has no ACP server. The bridge runs the host's ``pi``, so chat and
+    terminal sessions share the CLI version, providers, settings, extensions
+    and stored sessions.
+
+    Pi works in its process folder, so the bridge starts one ``pi`` per
+    session there. Without a terminal Pi skips a folder's own resources
+    instead of asking whether to trust them, so the chat asks first.
+    """
+
+    kind = "pi"
+    display_name = "Pi"
+    command_env = PI_ACP_COMMAND_ENV
+    fake_flavor = "pi"
+
+    def __init__(
+        self,
+        launcher: PiLauncher,
+        *,
+        command_override: str | None = None,
+        test_mode: bool = False,
+    ) -> None:
+        super().__init__(launcher, command_override=command_override, test_mode=test_mode)
+
+    def _pi_bin(self) -> str | None:
+        try:
+            return self._launcher.resolve_binary()
+        except CliBinaryNotFoundError:
+            return None
+
+    def command(self) -> list[str] | None:
+        fixed = self._fixed_command()
+        if fixed is not None:
+            return fixed
+        pi_bin = self._pi_bin()
+        if not pi_bin:
+            return None
+        # By file path and isolated, like the Codex bridge: the bridge needs
+        # only the standard library.
+        return [sys.executable, "-I", PI_BRIDGE_SCRIPT, *shim_safe_argv(pi_bin)]
+
+    def available(self) -> bool:
+        return self.command() is not None
+
+    def _argv(self) -> list[str]:
+        argv = self.command()
+        if argv is None:
+            raise ChatAgentUnavailableError(self.kind, PI_HINT)
+        return argv
+
+    async def catalog_plan(self) -> ChatLaunchPlan:
+        home = os.path.expanduser("~")
+        env = dict(os.environ)
+        # An npm install of Pi is a Node script: ``node`` sits next to it.
+        pi_bin = self._pi_bin()
+        if pi_bin:
+            prepend_path_dir(env, os.path.dirname(pi_bin))
+        return ChatLaunchPlan(argv=self._argv(), env=env, cwd=home, process_cwd=home)
+
+    async def prepare(self, target: LaunchTarget, options: PiOptions) -> ChatLaunchPlan:
+        # Before the launcher can create a worktree.
+        argv = self._argv()
+        fake = argv == fake_agent_argv(self.fake_flavor)
+        cwd = await self._launcher.resolve_cwd(target, options)
+        env = self._launcher.build_env(target)
+        return ChatLaunchPlan(
+            argv=argv,
+            env=env,
+            cwd=cwd,
+            process_cwd=os.path.expanduser("~"),
+            trust=None if fake else PiFolderTrust(cwd, agent_dir=pi_agent_dir(env)),
+            sign_in=pi_sign_in_methods(None if fake else self._pi_bin(), env, fake=fake),
+            sign_in_prompt=PI_SIGN_IN_PROMPT,
+        )
+
+
 async def _known_argv(argv: list[str], ensure: Callable[[], list[str]] | None) -> list[str]:
     if ensure is None:
         return argv
@@ -1266,6 +1400,13 @@ def build_chat_agents(
         specs["copilot"] = CopilotChatSpec(
             copilot_launcher,
             command_override=overrides.get("copilot"),
+            test_mode=test_mode,
+        )
+    pi_launcher = launchers.get("pi")
+    if pi_launcher is not None:
+        specs["pi"] = PiChatSpec(
+            pi_launcher,
+            command_override=overrides.get("pi"),
             test_mode=test_mode,
         )
     return specs

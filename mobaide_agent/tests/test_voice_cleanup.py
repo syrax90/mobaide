@@ -35,6 +35,7 @@ from mobaide.voice.cleanup import (
     CodexCleanup,
     CopilotCleanup,
     OpenCodeCleanup,
+    PiCleanup,
     TranscriptCleaner,
     antigravity_cleanup_model,
     codex_cleanup_model,
@@ -43,6 +44,7 @@ from mobaide.voice.cleanup import (
     parse_codex_result,
     parse_copilot_result,
     parse_opencode_result,
+    parse_pi_result,
 )
 from mobaide.voice.errors import VoiceError
 
@@ -1435,3 +1437,199 @@ class TestKinds:
         (message,) = [r.getMessage() for r in caplog.records]
         assert message.startswith("voice.cleanup_done kind=codex model=gpt-6-luna ")
         assert "zanzibar" not in message.lower()
+
+
+def _pi_message(*content: dict, stop: str = "stop", **extra: object) -> dict:
+    return {
+        "type": "message_end",
+        "message": {"role": "assistant", "content": list(content), "stopReason": stop, **extra},
+    }
+
+
+def _pi_answer(text: str) -> CmdResult:
+    """What ``pi --mode json`` prints for a finished run."""
+    return _jsonl(
+        {"type": "session", "version": 3, "id": "s1"},
+        {"type": "message_end", "message": {"role": "user", "content": "<transcript>"}},
+        _pi_message({"type": "text", "text": text}),
+        {"type": "agent_end"},
+    )
+
+
+class TestParsePiResult:
+    def test_answer_is_the_text_of_the_last_assistant_message(self):
+        result = _jsonl(
+            _pi_message({"type": "text", "text": "First."}),
+            _pi_message(
+                {"type": "thinking", "thinking": "Remove the fillers."},
+                {"type": "text", "text": "Fix the bug.\n"},
+            ),
+        )
+
+        assert parse_pi_result(result, "um fix the bug") == "Fix the bug."
+
+    def test_empty_answer_keeps_the_transcript(self):
+        assert parse_pi_result(_pi_answer("\n"), "um uh") == "um uh"
+
+    @pytest.mark.parametrize(
+        "event",
+        [
+            _pi_message({"type": "toolCall", "id": "t1", "name": "read", "arguments": {}}, stop="toolUse"),
+            {"type": "tool_execution_start", "toolCallId": "t1", "toolName": "read"},
+        ],
+        ids=["tool-call", "tool-start"],
+    )
+    def test_a_tool_event_discards_the_run_whatever_it_answers_later(self, event):
+        result = _jsonl(event, _pi_message({"type": "text", "text": "The folder is empty."}))
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_pi_result(result, "list the files")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_failed")
+        assert "tool" in excinfo.value.message
+
+    def test_a_failed_model_request_fails_with_its_error_though_pi_exits_with_zero(self):
+        result = _jsonl(_pi_message(stop="error", errorMessage="429 You have no quota."))
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_pi_result(result, "text")
+
+        assert (excinfo.value.code, excinfo.value.message) == (
+            "cleanup_failed",
+            "429 You have no quota.",
+        )
+
+    @pytest.mark.parametrize(
+        ("result", "message"),
+        [
+            # The stream stopped (a crash, or output past the cap) before the message ended.
+            (
+                _jsonl({"type": "message_update", "assistantMessageEvent": {"delta": "Half a sente"}}),
+                "Pi stopped before it finished answering.",
+            ),
+            (
+                _jsonl(_pi_message({"type": "text", "text": "Half a sente"}, stop="length")),
+                "Pi stopped before it finished answering.",
+            ),
+            (
+                CmdResult(rc=1, stdout=_pi_answer("Fix the bug.").stdout, stderr=b"Segmentation fault\n"),
+                "Segmentation fault",
+            ),
+            (
+                CmdResult(rc=1, stdout=_pi_answer("Fix the bug.").stdout, stderr=b""),
+                "Pi exited with code 1.",
+            ),
+        ],
+        ids=["no-message-end", "cut-at-the-limit", "process-exit-code", "exit-code-without-a-reason"],
+    )
+    def test_answer_from_a_run_that_did_not_end_cleanly_is_not_a_cleanup(self, result, message):
+        with pytest.raises(VoiceError) as excinfo:
+            parse_pi_result(result, "um fix the bug")
+
+        assert (excinfo.value.code, excinfo.value.message) == ("cleanup_failed", message)
+
+    def test_timeout_wins_over_whatever_was_printed(self):
+        result = CmdResult(rc=-9, stdout=_pi_answer("Half.").stdout, stderr=b"", timed_out=True)
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_pi_result(result, "text")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_timeout")
+
+    def test_output_past_the_limit_fails_with_that_reason(self):
+        """The run is killed at the limit: without the reason it would read
+        as a Pi that crashed."""
+        cut = _pi_answer("Fix the bug.").stdout[:-40]
+        result = CmdResult(rc=-9, stdout=cut, stderr=b"", truncated=True)
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_pi_result(result, "um fix the bug")
+
+        assert (excinfo.value.status, excinfo.value.code, excinfo.value.message) == (
+            503,
+            "cleanup_failed",
+            "Pi wrote more output than a cleanup can take.",
+        )
+
+    def test_unknown_option_on_a_failed_run_means_the_cli_is_too_old(self):
+        result = CmdResult(rc=1, stdout=b"", stderr=b"Error: Unknown option: --no-approve\n")
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_pi_result(result, "text")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_outdated")
+        assert "pi update" in excinfo.value.message
+
+    def test_a_pi_with_no_provider_signed_in_fails_with_the_way_to_sign_in(self):
+        result = CmdResult(rc=1, stdout=b"", stderr=b"Error: No API key found for anthropic.\n")
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_pi_result(result, "text")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_failed")
+        assert "/login" in excinfo.value.message
+
+
+class TestPiCommand:
+    @pytest.fixture
+    def pi_binary(self, tmp_path) -> str:
+        return str(tmp_path / "bin" / "pi")
+
+    def _cleaner(self, run, work_dir, binary):
+        return TranscriptCleaner(clis={"pi": PiCleanup(lambda: binary)}, work_dir=work_dir, run=run)
+
+    async def test_runs_one_bare_json_turn_with_the_rules_as_its_system_prompt(
+        self, work_dir, pi_binary
+    ):
+        run = _Claude(_pi_answer("Fix the bug, then run the tests."))
+
+        cleaned = await self._cleaner(run, work_dir, pi_binary).clean(
+            "um fix the bug uh then run the tests", "pi"
+        )
+
+        assert cleaned == "Fix the bug, then run the tests."
+        (call,) = run.calls
+        # No model flag: Pi's default model. Nothing of the user's Pi or of a
+        # project loads, and the run stays out of Pi's session history.
+        assert call["argv"] == [
+            pi_binary,
+            "--mode", "json",
+            "--no-session",
+            "--no-tools",
+            "--no-extensions",
+            "--no-skills",
+            "--no-prompt-templates",
+            "--no-context-files",
+            "--no-mcp",
+            "--no-themes",
+            "--no-approve",
+            "--offline",
+            "--thinking", "off",
+            "--system-prompt", PROMPT_FILE,
+        ]
+        # The dictated text is on stdin only, never in argv.
+        assert call["stdin"].decode("utf-8") == (
+            "<transcript>\num fix the bug uh then run the tests\n</transcript>"
+        )
+        assert call["cwd"] == str(work_dir)
+        assert (work_dir / PROMPT_FILE).read_text(encoding="utf-8") == CLEANUP_PROMPT
+        assert CLEANUP_TIMEOUT_SECONDS - 1 < call["timeout"] <= CLEANUP_TIMEOUT_SECONDS
+        # Pi's JSON mode writes a line per token: its run gets a larger limit.
+        assert call["max_bytes"] == 4 * 1024 * 1024
+        assert call["env"]["PATH"].split(os.pathsep)[0] == os.path.dirname(pi_binary)
+
+    async def test_npm_shim_in_a_spaced_path_gets_a_command_line_with_one_quoted_token(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(cli_launcher.sys, "platform", "win32")
+        shim = r"C:\Users\Jane Doe\AppData\Roaming\npm\pi.cmd"
+        run = _Claude(_pi_answer("Hello."))
+        cleaner = self._cleaner(run, tmp_path / "Jane Doe" / "voice-cleanup", shim)
+
+        await cleaner.clean("hello", "pi")
+
+        argv = run.calls[0]["argv"]
+        assert argv[:3] == ["cmd", "/c", shim]
+        line = subprocess.list2cmdline(argv)
+        assert line.count('"') == 2
+        assert line.startswith(f'cmd /c "{shim}" ')

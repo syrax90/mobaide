@@ -23,7 +23,7 @@ async def test_get_version(client) -> None:
     # capabilities.cli now reports per-CLI binary availability so the Android
     # mode-picker can gray out a CLI that isn't installed. The autouse
     # _pin_claude_binary / _pin_codex_binary / _pin_antigravity_binary /
-    # _pin_opencode_binary / _pin_copilot_binary fixtures make all five resolve,
+    # _pin_opencode_binary / _pin_copilot_binary / _pin_pi_binary fixtures make all six resolve,
     # so all report available. The entries stay bare
     # {"available": bool} because the ASGITransport fixtures never run the app
     # lifespan, so the model-cache warm task never fires.
@@ -34,6 +34,7 @@ async def test_get_version(client) -> None:
             "antigravity": {"available": True},
             "opencode": {"available": True},
             "copilot": {"available": True},
+            "pi": {"available": True},
         },
         "git": {
             "changes": True,
@@ -56,7 +57,7 @@ async def test_get_version(client) -> None:
             "max_seconds": 120,
             "max_chunk_bytes": 65536,
             "cleanup": True,
-            "cleanup_kinds": ["claude", "codex", "antigravity", "opencode", "copilot"],
+            "cleanup_kinds": ["claude", "codex", "antigravity", "opencode", "copilot", "pi"],
         },
         "fs": {"dirs": True, "windows_paths": sys.platform == "win32"},
         "chat": {
@@ -64,6 +65,7 @@ async def test_get_version(client) -> None:
             "codex": {"resume": True, "live": sys.platform != "win32"},
             "opencode": {"resume": True, "live": False},
             "copilot": {"resume": True, "live": False},
+            "pi": {"resume": True, "live": False},
         },
     }
     # The signed manifest body now travels inline over the relay WebSocket
@@ -115,6 +117,7 @@ async def test_get_version_all_clis_missing_still_returns_200(
         claude_launcher,
         codex_launcher,
         copilot_launcher,
+        pi_launcher,
     )
 
     def _claude_raise(*_a, **_kw):
@@ -129,8 +132,12 @@ async def test_get_version_all_clis_missing_still_returns_200(
     def _copilot_raise(*_a, **_kw):
         raise copilot_launcher.CopilotBinaryNotFoundError(["PATH:copilot"])
 
+    def _pi_raise(*_a, **_kw):
+        raise pi_launcher.PiBinaryNotFoundError(["PATH:pi"])
+
     monkeypatch.setattr(claude_launcher, "_resolve_claude_binary", _claude_raise)
     monkeypatch.setattr(copilot_launcher, "_resolve_copilot_binary", _copilot_raise)
+    monkeypatch.setattr(pi_launcher, "_resolve_pi_binary", _pi_raise)
     monkeypatch.setattr(codex_launcher, "_resolve_codex_binary", _codex_raise)
     monkeypatch.setattr(
         antigravity_launcher, "_resolve_agy_binary", _antigravity_raise
@@ -144,6 +151,7 @@ async def test_get_version_all_clis_missing_still_returns_200(
         "antigravity": {"available": False},
         "opencode": {"available": True},
         "copilot": {"available": False},
+        "pi": {"available": False},
     }
 
 

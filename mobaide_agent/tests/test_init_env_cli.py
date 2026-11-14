@@ -278,3 +278,41 @@ class TestInitEnvCopilotBin:
         assert text.count("MOBAIDE_COPILOT_BIN=") == 1
         assert parse_env_file(target)["MOBAIDE_COPILOT_BIN"] == "/opt/gh/bin/copilot"
         assert AgentConfig.from_env(env_file=target).copilot_bin == "/opt/gh/bin/copilot"
+
+
+class TestInitEnvPiBin:
+    """``MOBAIDE_PI_BIN`` has no ``init-env`` flag: the Windows installer
+    writes it with ``set-env`` (other users set it by hand) when Pi is not on
+    the agent's PATH. A re-install runs ``init-env --force``, which rewrites
+    every templated line, so it must carry the value over, and the agent must
+    read it back.
+    """
+
+    def test_force_preserves_existing_pi_bin_and_the_agent_reads_it(
+        self, tmp_path, monkeypatch
+    ):
+        from mobaide.agent.config import AgentConfig
+
+        for var in (
+            "JWT_SECRET_KEY",
+            "MOBAIDE_PI_BIN",
+            "RELAY_SERVER_URL",
+            "RELAY_AGENT_ID",
+            "RELAY_AGENT_TOKEN",
+            "PROJECTS",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        _run(["init-env", "--prefix", str(tmp_path)])
+        _run([
+            "set-env", "--prefix", str(tmp_path),
+            "--key", "MOBAIDE_PI_BIN", "--value", "/opt/pi/bin/pi",
+        ])
+
+        rc = _run(["init-env", "--prefix", str(tmp_path), "--force"])
+
+        assert rc == 0
+        target = env_path_for_prefix(tmp_path)
+        text = target.read_text(encoding="utf-8")
+        assert text.count("MOBAIDE_PI_BIN=") == 1
+        assert parse_env_file(target)["MOBAIDE_PI_BIN"] == "/opt/pi/bin/pi"
+        assert AgentConfig.from_env(env_file=target).pi_bin == "/opt/pi/bin/pi"

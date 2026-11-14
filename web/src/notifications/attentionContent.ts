@@ -25,6 +25,7 @@ const KIND_FALLBACK_LABELS: Readonly<Record<string, string>> = {
   antigravity: 'Antigravity session',
   opencode: 'OpenCode session',
   copilot: 'GitHub Copilot session',
+  pi: 'Pi session',
   auto_scan: 'Auto Scan session',
   shell: 'Terminal session',
 };

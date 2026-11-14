@@ -1,7 +1,8 @@
 /**
  * Outbound create-session wire shapes, pinned by
  * `tests/protocol_fixtures/dto/agent/{CreateSessionRequest,ClaudeOptionsModel,
- * CodexOptionsModel,AntigravityOptionsModel,OpenCodeOptionsModel,CopilotOptionsModel}.json`.
+ * CodexOptionsModel,AntigravityOptionsModel,OpenCodeOptionsModel,CopilotOptionsModel,
+ * PiOptionsModel}.json`.
  *
  * **These are `z.strictObject`, deliberately breaking the `looseObject` rule in
  * `../wireSchema`.** That rule protects *inbound* data, where an unknown key is
@@ -128,6 +129,12 @@ export const copilotOptionsSchema = z.strictObject({
   base_branch: optionalWireString(),
 });
 
+export const piOptionsSchema = z.strictObject({
+  worktree: z.boolean().default(false),
+  branch_name: optionalWireString(),
+  base_branch: optionalWireString(),
+});
+
 export const createSessionRequestSchema = z.strictObject({
   command: z.array(z.string()).nullish().transform((value) => value ?? undefined),
   cwd: optionalWireString(),
@@ -150,6 +157,7 @@ export const createSessionRequestSchema = z.strictObject({
     .transform((value) => value ?? undefined),
   opencode_options: opencodeOptionsSchema.nullish().transform((value) => value ?? undefined),
   copilot_options: copilotOptionsSchema.nullish().transform((value) => value ?? undefined),
+  pi_options: piOptionsSchema.nullish().transform((value) => value ?? undefined),
   /** Terminal/custom worktree intent. Managed CLIs carry theirs inside their options block. */
   worktree: z.boolean().default(false),
   branch_name: optionalWireString(),
@@ -172,4 +180,5 @@ export type CodexOptionsWire = z.infer<typeof codexOptionsSchema>;
 export type AntigravityOptionsWire = z.infer<typeof antigravityOptionsSchema>;
 export type OpenCodeOptionsWire = z.infer<typeof opencodeOptionsSchema>;
 export type CopilotOptionsWire = z.infer<typeof copilotOptionsSchema>;
+export type PiOptionsWire = z.infer<typeof piOptionsSchema>;
 export type CreateSessionRequestWire = z.infer<typeof createSessionRequestSchema>;

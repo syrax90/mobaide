@@ -10,7 +10,7 @@ export function cleanupNoticeText(agentName: string): string {
   return (
     `The session’s AI agent on ${agentName} cleans up each transcript with its cheapest ` +
     'model: Claude Haiku for Claude Code, GPT Luna for Codex, Gemini Flash for Antigravity; ' +
-    'OpenCode uses its default model; GitHub Copilot uses its default model. ' +
+    'OpenCode, GitHub Copilot and Pi use their default model. ' +
     'It runs under your own account: the text goes to that agent’s provider and counts toward ' +
     'your usage. Mobaide doesn’t store it.'
   );
