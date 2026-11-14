@@ -40,10 +40,15 @@ def shim_safe_argv(cli_bin: str, *args: str) -> list[str]:
     ``cmd /c`` (a shim is not directly CreateProcess-able). Shared by the Codex
     auth/login probes and the per-CLI model-enumeration probes; secrets are
     never passed as argv elements.
+
+    The ``@`` keeps the line from starting with a quote: ``cmd /c`` drops the
+    first and last quote of such a line when it holds more than two quotes or
+    the quoted path holds ``&()@^|<>``, so a shim under ``C:\\Program Files``
+    given one more quoted argument would run as ``C:\\Program``.
     """
     base = [cli_bin, *args]
     if sys.platform == "win32" and cli_bin.lower().endswith((".cmd", ".bat")):
-        return ["cmd", "/c", *base]
+        return ["cmd", "/c", "@", *base]
     return base
 
 

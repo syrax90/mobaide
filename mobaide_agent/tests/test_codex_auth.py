@@ -194,7 +194,6 @@ async def test_login_windows_cmd_shim_wrapped_via_cmd_c(monkeypatch):
     )
 
     argv = captured["argv"]
-    assert argv[:2] == ["cmd", "/c"]
-    assert argv[2:] == [r"C:\npm\codex.cmd", "login", "--with-api-key"]
+    assert argv == ["cmd", "/c", "@", r"C:\npm\codex.cmd", "login", "--with-api-key"]
     assert all(api_key not in str(arg) for arg in argv)
     assert captured["kwargs"]["input"] == api_key.encode() + b"\n"
