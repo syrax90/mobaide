@@ -194,9 +194,10 @@ class TestParseWorktreePorcelain:
 
 
 @pytest.fixture
-def manager() -> WorktreeManager:
+def manager(tmp_path) -> WorktreeManager:
     return WorktreeManager(
-        worktree_base="mobaide_worktree",
+        worktrees_dir=str(tmp_path / "worktrees"),
+        legacy_worktree_base="mobaide_worktree",
         branch_prefix="feature/mobaide",
         main_branch="main",
     )

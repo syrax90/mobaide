@@ -107,9 +107,10 @@ class TestCreateStandardWorktree:
 
 class TestWorktreeManager:
     @pytest.fixture
-    def manager(self):
+    def manager(self, tmp_path):
         return WorktreeManager(
-            worktree_base="mobaide_worktree",
+            worktrees_dir=str(tmp_path / "worktrees"),
+            legacy_worktree_base="mobaide_worktree",
             branch_prefix="feature/mobaide",
             main_branch="main",
         )
@@ -120,6 +121,8 @@ class TestWorktreeManager:
         os.makedirs(project_root)
         wt_dir = os.path.join(project_root, "mobaide_worktree", "cla-8-test")
         os.makedirs(wt_dir)
+        with open(os.path.join(wt_dir, ".git"), "w") as f:
+            f.write("gitdir: /nonexistent\n")
 
         result = await manager.create_worktree("cla-8-test", project_root)
         assert result is not None
@@ -309,20 +312,32 @@ class TestCreateWorktreeReopensBranchWorktree:
     def repo(self, tmp_path):
         return init_repo(str(tmp_path / "project"))
 
+    @pytest.fixture
+    def worktrees_dir(self, tmp_path):
+        return str(tmp_path / "worktrees")
+
+    @pytest.fixture
+    def _manager(self, worktrees_dir):
+        def make(legacy_base: str = "claude_worktree") -> WorktreeManager:
+            return self._build(worktrees_dir, legacy_base)
+
+        return make
+
     @staticmethod
-    def _manager(worktree_base: str = "claude_worktree") -> WorktreeManager:
+    def _build(worktrees_dir: str, legacy_base: str) -> WorktreeManager:
         return WorktreeManager(
-            worktree_base=worktree_base,
+            worktrees_dir=worktrees_dir,
+            legacy_worktree_base=legacy_base,
             branch_prefix="feature/mobaide",
             main_branch="main",
         )
 
-    async def test_reuses_worktree_created_under_another_base(self, repo):
-        first = await self._manager("mobaide_worktree").create_worktree(
+    async def test_reuses_worktree_created_under_another_base(self, repo, _manager):
+        first = await _manager("mobaide_worktree").create_worktree(
             "claude-session-56a3f247", repo, branch_name="claude-session-56a3f247",
         )
 
-        result = await self._manager("claude_worktree").create_worktree(
+        result = await _manager("claude_worktree").create_worktree(
             "claude-session-56a3f247", repo, branch_name="claude-session-56a3f247",
         )
 
@@ -333,30 +348,35 @@ class TestCreateWorktreeReopensBranchWorktree:
             os.path.join(repo, "claude_worktree", "claude-session-56a3f247")
         )
 
-    async def test_prunes_deleted_worktree_and_checks_branch_out_again(self, repo):
+    async def test_prunes_deleted_worktree_and_checks_branch_out_again(
+        self, repo, _manager, worktrees_dir
+    ):
         stale = os.path.join(repo, "old", "topic")
         run_git_sync(repo, "worktree", "add", "-q", "-b", "topic", stale)
         shutil.rmtree(stale)
 
-        result = await self._manager().create_worktree(
+        result = await _manager().create_worktree(
             "topic", repo, branch_name="topic",
         )
 
         assert result.is_new is True
-        assert result.path == os.path.join(repo, "claude_worktree", "topic")
+        assert result.path == os.path.join(
+            _manager().project_worktrees_dir(repo), "topic"
+        )
+        assert os.path.commonpath([result.path, worktrees_dir]) == worktrees_dir
         head = subprocess.run(
             ["git", "symbolic-ref", "--short", "HEAD"],
             cwd=result.path, capture_output=True, text=True, check=True,
         )
         assert head.stdout.strip() == "topic"
 
-    async def test_branch_checked_out_in_project_root_still_fails(self, repo):
+    async def test_branch_checked_out_in_project_root_still_fails(self, repo, _manager):
         with pytest.raises(WorktreeCreationError, match="already used by worktree"):
-            await self._manager().create_worktree("main", repo, branch_name="main")
+            await _manager().create_worktree("main", repo, branch_name="main")
 
-    async def test_project_registered_at_linked_worktree_is_not_reused(self, repo):
+    async def test_project_registered_at_linked_worktree_is_not_reused(self, repo, _manager):
         linked = os.path.join(repo, "linked")
         run_git_sync(repo, "worktree", "add", "-q", "-b", "topic", linked)
 
         with pytest.raises(WorktreeCreationError, match="already used by worktree"):
-            await self._manager().create_worktree("topic", linked, branch_name="topic")
+            await _manager().create_worktree("topic", linked, branch_name="topic")

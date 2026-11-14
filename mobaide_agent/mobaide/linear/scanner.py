@@ -793,9 +793,10 @@ class AutoScanSessionManager:
             )
             prefix = self._config.branch_prefix or "feature/mobaide"
             worktree_mgr = WorktreeManager(
-                worktree_base=self._config.worktree_base,
+                worktrees_dir=self._config.resolved_worktrees_dir(),
                 branch_prefix=prefix,
                 main_branch=self._config.main_branch,
+                legacy_worktree_base=self._config.worktree_base,
             )
             instance = AutoScanInstance(
                 project_name=project_name,

@@ -29,6 +29,7 @@ from mobaide.linear.scanner import AutoScanInstance
 
 def _make_config(tmp_path, *, auto_remove_worktrees: bool = True) -> AutoScanConfig:
     return AutoScanConfig(
+        worktrees_dir=str(tmp_path / "worktrees"),
         worktree_base="mobaide_worktree",
         scan_interval_seconds=1,
         branch_prefix="feature/mobaide",
@@ -644,6 +645,7 @@ class TestProcessIssueForwardsClientOptions:
             auto_scan_prompt="PROJECT SAVED PROMPT",
         )
         config = AutoScanConfig(
+            worktrees_dir=str(tmp_path / "worktrees"),
             worktree_base="mobaide_worktree",
             scan_interval_seconds=1,
             branch_prefix="feature/mobaide",

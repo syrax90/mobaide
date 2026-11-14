@@ -210,6 +210,7 @@ When "Create worktree" is on for a git project, the config page shows a "Base br
 - **Memory.** The agent remembers the last base branch for each project. Every client and device preselects it the next time. A pick of "Default branch" clears it. If that branch is gone, the picker selects the default.
 - **Fresh start.** For a remote base, the agent fetches that remote before it creates the worktree.
 - **Older agents.** Clients hide the picker without `capabilities.git.worktree_base`.
+- **Location.** New worktrees go to `<MOBAIDE_WORKTREES_DIR>/<project folder name>/<slug>`, outside the project, so no `.gitignore` entry is needed. The default is `~/.mobaide/worktrees` (`%USERPROFILE%\.mobaide\worktrees` on Windows). `~` and environment variables are expanded, and a relative path starts at the home folder. A project sub-folder holds a `.mobaide-project` file that names its repo; a second repo with the same folder name gets `<name>-<8 hex>`. A linked worktree that already exists at `<project>/<WORKTREE_BASE>/<slug>` (default `mobaide_worktree`) is still reopened, but new ones never go there. Uninstall does not delete the worktrees folder. Chats for GitHub Copilot and Cursor ask for folder trust once for each new worktree, because trust on the project folder does not cover a folder outside it.
 
 Wire details are in PROTOCOL.md, *Delta 2026-11-09: worktree base branch*.
 

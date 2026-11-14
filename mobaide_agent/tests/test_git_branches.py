@@ -5,9 +5,12 @@ successful mutation publishes."""
 from __future__ import annotations
 
 import asyncio
+import atexit
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 import types
 
 import pytest
@@ -89,8 +92,14 @@ def _changed(repo_dir: str, project_name: str) -> tuple[str, dict]:
     )
 
 
+_WORKTREES_DIR = tempfile.mkdtemp(prefix="mobaide-wt-test-")
+atexit.register(shutil.rmtree, _WORKTREES_DIR, ignore_errors=True)
+
+
 def _manager() -> WorktreeManager:
-    return WorktreeManager(worktree_base=".worktrees", branch_prefix="auto")
+    return WorktreeManager(
+        worktrees_dir=_WORKTREES_DIR, legacy_worktree_base=".worktrees", branch_prefix="auto"
+    )
 
 
 def _git_out(repo_dir: str, *args: str) -> str:
