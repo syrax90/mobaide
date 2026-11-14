@@ -64,6 +64,16 @@ class TestResolvedWorktreesDir:
         assert resolved == str(state_prefix(test_mode=True) / "worktrees")
         assert not resolved.startswith(home)
 
+    def test_explicit_test_mode_ignores_the_process_env(self, home, monkeypatch):
+        monkeypatch.delenv("MOBAIDE_ENV", raising=False)
+        monkeypatch.delenv("MOBAIDE_AGENT_PREFIX", raising=False)
+        from mobaide.agent.install_paths import state_prefix
+
+        resolved = AutoScanConfig.from_env().resolved_worktrees_dir(test_mode=True)
+
+        assert resolved == str(state_prefix(test_mode=True) / "worktrees")
+        assert not resolved.startswith(home)
+
     @pytest.mark.parametrize("value", ["", "   "])
     def test_blank_env_value_means_default(self, home, monkeypatch, value):
         monkeypatch.delenv("MOBAIDE_ENV", raising=False)

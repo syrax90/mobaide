@@ -791,8 +791,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     # come from AutoScanConfig when present; otherwise sensible defaults apply.
     auto_scan_cfg = config.auto_scan_config or AutoScanConfig()
     prefix = auto_scan_cfg.branch_prefix or "feature/mobaide"
+    worktrees_dir = auto_scan_cfg.resolved_worktrees_dir(test_mode=config.is_test_mode)
     worktree_mgr = WorktreeManager(
-        worktrees_dir=auto_scan_cfg.resolved_worktrees_dir(),
+        worktrees_dir=worktrees_dir,
         branch_prefix=prefix,
         main_branch=auto_scan_cfg.main_branch,
         legacy_worktree_base=auto_scan_cfg.worktree_base,
@@ -968,6 +969,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         launcher=app.state.claude_launcher,
         event_bus=app.state.event_bus,
         rate_limiter=app.state.linear_rate_limiter,
+        worktrees_dir=worktrees_dir,
     )
 
     app.include_router(auth_router)

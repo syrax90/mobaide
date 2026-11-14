@@ -69,14 +69,15 @@ class AutoScanConfig(BaseSettings):
             return None
         return value
 
-    def resolved_worktrees_dir(self) -> str:
+    def resolved_worktrees_dir(self, test_mode: bool | None = None) -> str:
         """Absolute folder that holds the worktrees of every project.
 
         ``~`` and environment variables in a configured value are expanded,
         and a relative value is taken from the home folder. With no value,
         an absolute ``worktree_base`` is used, else ``~/.mobaide/worktrees``;
         a ``MOBAIDE_ENV=test`` agent uses its disposable state folder instead,
-        so tests never write into the real home folder.
+        so tests never write into the real home folder. ``test_mode`` comes
+        from the resolved agent config; ``None`` reads the process env.
         """
         if self.worktrees_dir is not None:
             path = os.path.expanduser(os.path.expandvars(self.worktrees_dir.strip()))
@@ -91,7 +92,7 @@ class AutoScanConfig(BaseSettings):
             return os.path.abspath(legacy)
         from mobaide.agent.install_paths import is_test_mode, state_prefix
 
-        if is_test_mode():
+        if is_test_mode() if test_mode is None else test_mode:
             return str(state_prefix(test_mode=True) / "worktrees")
         return str(Path.home() / ".mobaide" / "worktrees")
 
