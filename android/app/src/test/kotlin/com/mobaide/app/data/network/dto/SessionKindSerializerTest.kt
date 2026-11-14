@@ -30,6 +30,7 @@ class SessionKindSerializerTest {
         "opencode" to SessionKind.OpenCode,
         "copilot" to SessionKind.Copilot,
         "cursor" to SessionKind.Cursor,
+        "pi" to SessionKind.Pi,
         "auto_scan" to SessionKind.AutoScan,
         "shell" to SessionKind.Shell,
     )

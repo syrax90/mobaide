@@ -28,6 +28,7 @@ private struct CreateSessionContent: View {
     @State private var opencodeAdvancedExpanded = false
     @State private var copilotAdvancedExpanded = false
     @State private var cursorAdvancedExpanded = false
+    @State private var piAdvancedExpanded = false
     @State private var autoScanAdvancedExpanded = false
     @State private var showContinueSession = false
     @State private var pendingContinue: ChatStoredSession?
@@ -425,6 +426,7 @@ private struct CreateSessionContent: View {
             case .opencode: opencodeConfig
             case .copilot: copilotConfig
             case .cursor: cursorConfig
+            case .pi: piConfig
             case .custom(let id): customConfig(id)
             case .autoScan, .shell, .none: shellConfig
             }
@@ -446,6 +448,9 @@ private struct CreateSessionContent: View {
             }
             if model.mode == .cursor {
                 cursorAdvancedSection
+            }
+            if model.mode == .pi {
+                piAdvancedSection
             }
             Section {
                 Button {
@@ -879,6 +884,37 @@ private struct CreateSessionContent: View {
                         set: { model.copilotTerminalUI = $0 }
                     ),
                     unavailableReason: model.copilotChatUnavailableReason
+                )
+            }
+        }
+    }
+
+    /// Pi has no option to set at launch: say what a user of the other agents
+    /// would look for here.
+    @ViewBuilder
+    private var piConfig: some View {
+        Section(header: PixelSectionHeader("Pi")) {
+            Text(
+                "Pi runs commands and edits files without asking. "
+                    + "Pick the model and the thinking level inside the session."
+            )
+            .font(.footnote)
+            .foregroundStyle(colors.textMuted)
+        }
+        continueSessionSection(agentName: "Pi")
+    }
+
+    /// Collapsed like the Codex one; rendered after the Worktree section.
+    @ViewBuilder
+    private var piAdvancedSection: some View {
+        Section {
+            DisclosureGroup("Advanced", isExpanded: $piAdvancedExpanded) {
+                terminalUIToggle(
+                    Binding(
+                        get: { model.piTerminalUI || model.piChatUnavailable },
+                        set: { model.piTerminalUI = $0 }
+                    ),
+                    unavailableReason: model.piChatUnavailableReason
                 )
             }
         }

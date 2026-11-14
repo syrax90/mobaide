@@ -97,6 +97,7 @@ class AttentionNotifier @Inject constructor(
         SessionKind.OpenCode -> "OpenCode session"
         SessionKind.Copilot -> "GitHub Copilot session"
         SessionKind.Cursor -> "Cursor session"
+        SessionKind.Pi -> "Pi session"
         SessionKind.AutoScan -> "Auto Scan session"
         SessionKind.Shell -> "Terminal session"
         is SessionKind.Custom -> session.kind_label?.takeIf { it.isNotBlank() }

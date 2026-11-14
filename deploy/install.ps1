@@ -191,7 +191,7 @@ function Get-ElevatedInstallCommand {
         'MOBAIDE_AGENT_SKIP_INSTALL_QR', 'MOBAIDE_AGENT_SKIP_PYTHON_INSTALL',
         'MOBAIDE_AGENT_CLAUDE_BIN_HINT', 'MOBAIDE_AGENT_CODEX_BIN_HINT',
         'MOBAIDE_AGENT_AGY_BIN_HINT', 'MOBAIDE_AGENT_COPILOT_BIN_HINT',
-        'MOBAIDE_AGENT_CURSOR_BIN_HINT'
+        'MOBAIDE_AGENT_CURSOR_BIN_HINT', 'MOBAIDE_AGENT_PI_BIN_HINT'
     )
     $envStmts = foreach ($name in $passthrough) {
         $val = [Environment]::GetEnvironmentVariable($name, 'Process')
@@ -253,6 +253,12 @@ function Assert-AdminOrElevate {
     $cursorBin = Find-CursorBinary
     if ($cursorBin) {
         $env:MOBAIDE_AGENT_CURSOR_BIN_HINT = $cursorBin
+    }
+    # Pi counterpart, carried across the UAC boundary via
+    # MOBAIDE_AGENT_PI_BIN_HINT in the same way.
+    $piBin = Find-PiBinary
+    if ($piBin) {
+        $env:MOBAIDE_AGENT_PI_BIN_HINT = $piBin
     }
     $cmd = Get-ElevatedInstallCommand
     $psArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-Command', $cmd)
@@ -552,6 +558,69 @@ function Set-CursorBinIfMissing {
     Write-Info "Writing MOBAIDE_CURSOR_BIN=$CursorBin into $EnvFile"
     & $ReleasePython -m mobaide.agent.config set-env --prefix $Script:Prefix `
         --key MOBAIDE_CURSOR_BIN --value $CursorBin
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "set-env failed (exit $LASTEXITCODE); edit $EnvFile manually and restart $Script:ServiceName."
+    }
+}
+
+# Optional Pi coding agent counterpart of Find-CodexBinary. The check is "is
+# the pi command available": PATH first, then the two places its installers
+# use, the folder of Pi's own installer (%USERPROFILE%\.pi\agent\bin) and the
+# npm-global folder (npm install -g @earendil-works/pi-coding-agent). Only a
+# real executable counts: a PowerShell alias or function named pi has no path
+# the agent could start, and pi.ps1 is a script, not a program. Returns the
+# absolute pi path, or $null if not found. A miss is not warned: Pi is optional.
+function Find-PiBinary {
+    foreach ($name in @('pi.cmd', 'pi.exe')) {
+        $hit = Get-Command $name -ErrorAction SilentlyContinue
+        if (-not $hit) { continue }
+        if ($hit.CommandType -ne 'Application') { continue }
+        if ($hit.Source -like "*\WindowsApps\*") { continue }
+        return $hit.Source
+    }
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if ($env:USERPROFILE) {
+        $candidates.Add((Join-Path $env:USERPROFILE '.pi\agent\bin\pi.cmd'))
+    }
+    if ($env:APPDATA) {
+        $candidates.Add((Join-Path $env:APPDATA 'npm\pi.cmd'))
+    }
+    if ($env:LOCALAPPDATA) {
+        $candidates.Add((Join-Path $env:LOCALAPPDATA 'npm\pi.cmd'))
+    }
+    if ($env:USERPROFILE) {
+        $candidates.Add((Join-Path $env:USERPROFILE 'AppData\Roaming\npm\pi.cmd'))
+    }
+    $candidates.Add('C:\ProgramData\npm\pi.cmd')
+    if ($env:ProgramFiles) {
+        $candidates.Add((Join-Path $env:ProgramFiles 'nodejs\pi.cmd'))
+    }
+    foreach ($c in $candidates) {
+        if (Test-Path -LiteralPath $c) {
+            return (Resolve-Path -LiteralPath $c).ProviderPath
+        }
+    }
+    return $null
+}
+
+# Write MOBAIDE_PI_BIN into an existing agent .env unless the operator
+# already set it. It uses set-env, not an init-env argument: set-env takes any
+# key, so this installer also works with an agent release that is older than
+# Pi support (an unknown init-env argument would fail the install).
+function Set-PiBinIfMissing {
+    param(
+        [Parameter(Mandatory=$true)] [string] $EnvFile,
+        [Parameter(Mandatory=$true)] [string] $ReleasePython,
+        [Parameter(Mandatory=$true)] [string] $PiBin
+    )
+    $existing = Read-EnvValue -Path $EnvFile -Key 'MOBAIDE_PI_BIN'
+    if ($existing) {
+        Write-Info "MOBAIDE_PI_BIN already set in $EnvFile; leaving as-is."
+        return
+    }
+    Write-Info "Writing MOBAIDE_PI_BIN=$PiBin into $EnvFile"
+    & $ReleasePython -m mobaide.agent.config set-env --prefix $Script:Prefix `
+        --key MOBAIDE_PI_BIN --value $PiBin
     if ($LASTEXITCODE -ne 0) {
         Write-Warn "set-env failed (exit $LASTEXITCODE); edit $EnvFile manually and restart $Script:ServiceName."
     }
@@ -1205,6 +1274,16 @@ absolute path in $Script:Prefix\mobaide_agent\.env and restart:
         Write-Info "Cursor CLI not detected; leaving MOBAIDE_CURSOR_BIN unset (set it in $Script:Prefix\mobaide_agent\.env if you use Cursor)."
     }
 
+    # Pi counterpart (optional managed agent): the same
+    # hint-then-probe discovery and the same soft Info-on-miss.
+    $piBin = $env:MOBAIDE_AGENT_PI_BIN_HINT
+    if (-not $piBin) { $piBin = Find-PiBinary }
+    if ($piBin) {
+        Write-Info "Detected Pi at $piBin"
+    } else {
+        Write-Info "Pi not detected; leaving MOBAIDE_PI_BIN unset (set it in $Script:Prefix\mobaide_agent\.env if you use Pi)."
+    }
+
     $envFile = Join-Path (Join-Path $Script:Prefix "mobaide_agent") ".env"
     $envExists = Test-Path -LiteralPath $envFile
 
@@ -1222,6 +1301,9 @@ absolute path in $Script:Prefix\mobaide_agent\.env and restart:
         if ($cursorBin) {
             Set-CursorBinIfMissing -EnvFile $envFile -ReleasePython $releasePython -CursorBin $cursorBin
         }
+        if ($piBin) {
+            Set-PiBinIfMissing -EnvFile $envFile -ReleasePython $releasePython -PiBin $piBin
+        }
         return
     }
 
@@ -1231,8 +1313,8 @@ absolute path in $Script:Prefix\mobaide_agent\.env and restart:
     # always wins. This implements the "Surgical set-env only" policy. Each
     # CLI is backfilled independently: a missing Claude path must not skip
     # the Codex or Antigravity backfill (and vice versa). MOBAIDE_COPILOT_BIN
-    # and MOBAIDE_CURSOR_BIN follow the same rule through Set-CopilotBinIfMissing
-    # and Set-CursorBinIfMissing.
+    # MOBAIDE_CURSOR_BIN and MOBAIDE_PI_BIN follow the same rule through
+    # Set-CopilotBinIfMissing, Set-CursorBinIfMissing and Set-PiBinIfMissing.
     Write-Info "Existing $envFile preserved (re-install)."
     if ($claudeBin) {
         $existingClaudeBin = Read-EnvValue -Path $envFile -Key 'MOBAIDE_CLAUDE_BIN'
@@ -1278,6 +1360,9 @@ absolute path in $Script:Prefix\mobaide_agent\.env and restart:
     }
     if ($cursorBin) {
         Set-CursorBinIfMissing -EnvFile $envFile -ReleasePython $releasePython -CursorBin $cursorBin
+    }
+    if ($piBin) {
+        Set-PiBinIfMissing -EnvFile $envFile -ReleasePython $releasePython -PiBin $piBin
     }
 }
 

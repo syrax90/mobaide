@@ -26,6 +26,11 @@ from .cursor_launcher import (
     CursorLauncher,
     CursorOptions,
 )
+from .pi_launcher import (
+    PiBinaryNotFoundError,
+    PiLauncher,
+    PiOptions,
+)
 from .models import SessionConfig, SessionEvent, SessionInfo, SessionKind, SessionState
 from .opencode_launcher import (
     OpenCodeBinaryNotFoundError,
@@ -77,6 +82,9 @@ __all__ = [
     "CursorLauncher",
     "CursorOptions",
     "CursorBinaryNotFoundError",
+    "PiLauncher",
+    "PiOptions",
+    "PiBinaryNotFoundError",
     "LaunchSpec",
     "AutoScanFilter",
     "ProjectConfig",

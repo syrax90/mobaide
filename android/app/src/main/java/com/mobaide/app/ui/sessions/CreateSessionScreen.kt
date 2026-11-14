@@ -211,6 +211,7 @@ fun CreateSessionScreen(
                             CreateSessionStep.OpenCodeConfig -> "OpenCode session"
                             CreateSessionStep.CopilotConfig -> "Copilot session"
                             CreateSessionStep.CursorConfig -> "Cursor session"
+                            CreateSessionStep.PiConfig -> "Pi session"
                             CreateSessionStep.AutoScanConfig -> "Auto Scan mode"
                             // TerminalConfig is shared between Terminal mode and
                             // custom agent types — title by the selected mode.
@@ -341,6 +342,13 @@ fun CreateSessionScreen(
                             viewModel = viewModel,
                             onContinueSession = { openResume("cursor", state.cursorChat) },
                         )
+                        CreateSessionStep.PiConfig -> PiConfigSection(
+                            state = state,
+                            showWorktreeToggle = state.selection is ProjectSelection.Stored &&
+                                storedProject?.is_git == true,
+                            viewModel = viewModel,
+                            onContinueSession = { openResume("pi", state.piChat) },
+                        )
                         CreateSessionStep.AutoScanConfig -> AutoScanConfigSection(
                             state = state,
                             viewModel = viewModel,
@@ -363,6 +371,7 @@ fun CreateSessionScreen(
         CreateSessionStep.OpenCodeConfig -> "opencode"
         CreateSessionStep.CopilotConfig -> "copilot"
         CreateSessionStep.CursorConfig -> "cursor"
+        CreateSessionStep.PiConfig -> "pi"
         else -> null
     }
     if (showResume && resumeKind != null) {
@@ -372,6 +381,7 @@ fun CreateSessionScreen(
             "opencode" -> state.opencodeChat
             "copilot" -> state.copilotChat
             "cursor" -> state.cursorChat
+            "pi" -> state.piChat
             else -> state.claudeChat
         }
         LaunchedEffect(resumeKind) {
@@ -1160,6 +1170,7 @@ private fun builtInModeTitle(mode: CreateSessionMode): String = when (mode) {
     CreateSessionMode.OpenCode -> "OpenCode session"
     CreateSessionMode.Copilot -> "GitHub Copilot session"
     CreateSessionMode.Cursor -> "Cursor session"
+    CreateSessionMode.Pi -> "Pi session"
     CreateSessionMode.AutoScan -> "Auto Scan mode"
     CreateSessionMode.CustomShell -> "Terminal"
     is CreateSessionMode.Custom -> "Custom agent"
@@ -1215,6 +1226,14 @@ private fun BuiltInModeCard(
                 else -> "Configure and launch a Cursor session."
             },
             "mode_card_cursor",
+        )
+        CreateSessionMode.Pi -> Pair(
+            when {
+                !state.piKnown -> "Update Mobaide on your PC to use Pi."
+                !state.piEnabled -> "Pi is not installed on the agent."
+                else -> "Configure and launch a Pi session."
+            },
+            "mode_card_pi",
         )
         CreateSessionMode.AutoScan -> Pair(
             when {
@@ -1892,6 +1911,54 @@ private fun CursorConfigSection(
     PixelButton(
         style = PixelButtonStyle.Primary,
         onClick = viewModel::submitCursor,
+        enabled = state.selection !is ProjectSelection.None && !state.submitting,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (state.submitting) "Creating…" else "Create session")
+    }
+}
+
+@Composable
+private fun PiConfigSection(
+    state: CreateSessionUiState,
+    showWorktreeToggle: Boolean,
+    viewModel: CreateSessionViewModel,
+    onContinueSession: () -> Unit,
+) {
+    if (state.piResumeAvailable) {
+        ContinueSessionCard(
+            subtitle = "Open a Pi session started on your PC, for example in a terminal.",
+            onClick = onContinueSession,
+        )
+    }
+
+    // Pi has no option to set at launch: say what a user of the other agents
+    // would look for here.
+    Text("Permissions", style = MaterialTheme.typography.labelLarge)
+    Text(
+        text = "Pi runs commands and edits files without asking. " +
+            "Pick the model and the thinking level inside the session.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    if (showWorktreeToggle) {
+        ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
+
+        if (state.worktree) WorktreeBranchFields(state, viewModel)
+    }
+
+    AdvancedSection {
+        TerminalUiToggle(
+            checked = state.piTerminalUi,
+            lockedHint = state.piChatUnavailableHint,
+            onChange = viewModel::togglePiTerminalUi,
+        )
+    }
+
+    PixelButton(
+        style = PixelButtonStyle.Primary,
+        onClick = viewModel::submitPi,
         enabled = state.selection !is ProjectSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
     ) {

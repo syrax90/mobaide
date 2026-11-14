@@ -132,6 +132,7 @@ const NO_PREFS: LaunchPrefs = {
   opencode: null,
   copilot: null,
   cursor: null,
+  pi: null,
   lastProjectName: null,
 };
 

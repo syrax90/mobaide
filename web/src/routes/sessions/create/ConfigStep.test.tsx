@@ -224,6 +224,41 @@ describe('ConfigStep — OpenCode', () => {
   });
 });
 
+describe('ConfigStep — Pi', () => {
+  it('writes the Terminal UI toggle to the Pi bucket only', () => {
+    const actions = renderStep('pi');
+
+    fireEvent.click(screen.getByLabelText('Terminal UI'));
+
+    const next = actions.reduce(wizardReducer, STATE);
+    expect(next.pi).toEqual({ terminalUi: true });
+    expect({ ...next, pi: STATE.pi }).toEqual(STATE);
+  });
+
+  it('holds Terminal UI on where the PC has no Pi chat', () => {
+    renderStep('pi', STATE, versionWithChat({ copilot: { resume: true } }));
+
+    const toggle = screen.getByLabelText('Terminal UI');
+    expect(toggle).toBeChecked();
+    expect(toggle).toBeDisabled();
+  });
+
+  it('offers to continue a Pi session only where the PC can resume one', () => {
+    const resumes = versionWithChat({ pi: { resume: true, live: false } });
+
+    renderStep('pi', STATE, resumes, () => undefined);
+    expect(screen.getByRole('button', { name: 'Continue a session…' })).toBeEnabled();
+    cleanup();
+
+    renderStep('pi', { ...STATE, pi: { terminalUi: true } }, resumes, () => undefined);
+    expect(screen.queryByText('Continue a session…')).not.toBeInTheDocument();
+    cleanup();
+
+    renderStep('pi', STATE, versionWithChat({ pi: { resume: false, live: false } }), () => undefined);
+    expect(screen.queryByText('Continue a session…')).not.toBeInTheDocument();
+  });
+});
+
 describe('ConfigStep — GitHub Copilot', () => {
   it('writes the allow-all and Terminal UI toggles to the Copilot bucket only', () => {
     const actions = renderStep('copilot');

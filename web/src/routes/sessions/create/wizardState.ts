@@ -28,6 +28,7 @@ export const BUILT_IN_MODES = [
   'opencode',
   'copilot',
   'cursor',
+  'pi',
   'auto_scan',
   'shell',
 ] as const;
@@ -117,6 +118,12 @@ export interface CursorBucket {
   terminalUi: boolean;
 }
 
+/** Pi has no approval mode to choose: it runs its tools without asking. */
+export interface PiBucket {
+  /** The classic terminal instead of the chat view. */
+  terminalUi: boolean;
+}
+
 export interface GitBucket {
   worktree: boolean;
   branchName: string;
@@ -145,6 +152,7 @@ export interface WizardState {
   opencode: OpenCodeBucket;
   copilot: CopilotBucket;
   cursor: CursorBucket;
+  pi: PiBucket;
   git: GitBucket;
   /**
    * The base branch the user picked by hand, if any. Not persisted: the agent
@@ -203,6 +211,7 @@ export const INITIAL_WIZARD_STATE: WizardState = {
   opencode: { autoApprove: false, terminalUi: false },
   copilot: { allowAll: false, terminalUi: false },
   cursor: { force: false, terminalUi: false },
+  pi: { terminalUi: false },
   git: { worktree: false, branchName: '' },
   worktreeBasePick: null,
   autoScanPromptSeededFor: null,
@@ -377,6 +386,7 @@ export type WizardAction =
   | { type: 'setCopilotTerminalUi'; value: boolean }
   | { type: 'setCursorForce'; value: boolean }
   | { type: 'setCursorTerminalUi'; value: boolean }
+  | { type: 'setPiTerminalUi'; value: boolean }
   | { type: 'setWorktree'; value: boolean }
   | { type: 'setBranchName'; value: string }
   | { type: 'setWorktreeBase'; pick: WorktreeBasePick }
@@ -603,6 +613,9 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
 
     case 'setCursorTerminalUi':
       return { ...state, cursor: { ...state.cursor, terminalUi: action.value } };
+
+    case 'setPiTerminalUi':
+      return { ...state, pi: { ...state.pi, terminalUi: action.value } };
 
     case 'setWorktree':
       return { ...state, git: { ...state.git, worktree: action.value } };

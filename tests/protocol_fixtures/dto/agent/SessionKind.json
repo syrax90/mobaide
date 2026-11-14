@@ -6,6 +6,7 @@
     { "name": "antigravity", "wire": "antigravity" },
     { "name": "copilot", "wire": "copilot" },
     { "name": "cursor", "wire": "cursor" },
+    { "name": "pi", "wire": "pi" },
     { "name": "auto_scan", "wire": "auto_scan" },
     { "name": "shell", "wire": "shell" },
     { "name": "custom_type", "wire": "custom_ab12cd34ef56" },

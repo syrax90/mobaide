@@ -658,6 +658,7 @@ class TestChatRest:
             "opencode": {"resume": True, "live": False},
             "copilot": {"resume": True, "live": False},
             "cursor": {"resume": True, "live": False},
+            "pi": {"resume": True, "live": False},
         }
 
     async def test_create_chat_session(self, client, auth_headers, tmp_path):

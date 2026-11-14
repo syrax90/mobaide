@@ -27,7 +27,7 @@
 <meta property="og:site_name" content="Mobaide">
 <meta property="og:url" content="{{ site_origin }}/">
 <meta property="og:title" content="Mobaide — run AI coding agents on your computer, from your phone">
-<meta property="og:description" content="A native chat for Claude Code, Codex CLI, Antigravity CLI, OpenCode, GitHub Copilot CLI and Cursor CLI, and a real terminal for your own agents, all running on your own machine. Free, and nothing to open on your network.">
+<meta property="og:description" content="A native chat for Claude Code, Codex CLI, Antigravity CLI, OpenCode, GitHub Copilot CLI, Cursor CLI and Pi, and a real terminal for your own agents, all running on your own machine. Free, and nothing to open on your network.">
 <meta property="og:image" content="{{ site_origin }}/static/site/img/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -36,7 +36,7 @@
 
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Mobaide — run AI coding agents on your computer, from your phone">
-<meta name="twitter:description" content="A native chat for Claude Code, Codex CLI, Antigravity CLI, OpenCode, GitHub Copilot CLI and Cursor CLI, and a real terminal for your own agents, all running on your own machine. Free, and nothing to open on your network.">
+<meta name="twitter:description" content="A native chat for Claude Code, Codex CLI, Antigravity CLI, OpenCode, GitHub Copilot CLI, Cursor CLI and Pi, and a real terminal for your own agents, all running on your own machine. Free, and nothing to open on your network.">
 <meta name="twitter:image" content="{{ site_origin }}/static/site/img/og.png">
 
 <link rel="icon" href="/static/site/img/favicon.ico" sizes="16x16 32x32 48x48">
@@ -61,7 +61,7 @@
   "url": "{{ site_origin }}/",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "Android, iOS",
-  "description": "Mobaide puts AI coding agents running on your own Windows, macOS or Linux computer in your phone: a native chat for Claude Code, Codex CLI, Antigravity CLI, OpenCode, GitHub Copilot CLI and Cursor CLI, and a real terminal for custom agent types and raw shells. No public IP, port forwarding, VPN or SSH.",
+  "description": "Mobaide puts AI coding agents running on your own Windows, macOS or Linux computer in your phone: a native chat for Claude Code, Codex CLI, Antigravity CLI, OpenCode, GitHub Copilot CLI, Cursor CLI and Pi, and a real terminal for custom agent types and raw shells. No public IP, port forwarding, VPN or SSH.",
   "image": "{{ site_origin }}/static/site/img/og.png",
   "downloadUrl": [
     "https://play.google.com/store/apps/details?id=com.mobaide.app",
@@ -113,7 +113,7 @@
         the phone. Start, watch and steer
         <strong>Claude Code</strong>, <strong>Codex CLI</strong>,
         <strong>Antigravity CLI</strong>, <strong>OpenCode</strong>,
-        <strong>GitHub Copilot CLI</strong>, <strong>Cursor CLI</strong> or
+        <strong>GitHub Copilot CLI</strong>, <strong>Cursor CLI</strong>, <strong>Pi</strong> or
         agents you define yourself on your own Windows, macOS or Linux machine —
         with nothing to open on your network.
       </p>
@@ -223,9 +223,9 @@
         <h3>Start an agent</h3>
         <p>
           Pick a project, pick what to run — Claude Code, Codex CLI, Antigravity
-          CLI, OpenCode, GitHub Copilot CLI, Cursor CLI, a raw shell, or one of
+          CLI, OpenCode, GitHub Copilot CLI, Cursor CLI, Pi, a raw shell, or one of
           your own agent types. Claude Code, Codex, Antigravity, OpenCode, GitHub
-          Copilot and Cursor open as a chat; shells and your own types open in a
+          Copilot, Cursor and Pi open as a chat; shells and your own types open in a
           terminal.
         </p>
       </li>
@@ -245,12 +245,12 @@
         </div>
         <h3>A chat built for the phone</h3>
         {# Facts from docs/features.md "Chat Sessions". The chat is the default
-           for the six built-ins only; custom types and Terminal stay a PTY,
+           for the seven built-ins only; custom types and Terminal stay a PTY,
            and the built-ins keep a Terminal UI toggle under Advanced. Cursor
            lists its chat sessions only, not the ones of its terminal UI. #}
         <p>
-          Claude Code, Codex CLI, Antigravity CLI, OpenCode, GitHub Copilot CLI
-          and Cursor CLI sessions open as a native chat: Markdown answers, one
+          Claude Code, Codex CLI, Antigravity CLI, OpenCode, GitHub Copilot CLI,
+          Cursor CLI and Pi sessions open as a native chat: Markdown answers, one
           card per tool call with its diff, approval buttons, questions and plan
           progress. Continue a session you started in a terminal on your
           computer — with Cursor, an earlier chat session.
@@ -298,7 +298,8 @@
           whether it may act without asking; you change its mode inside the
           session. Cursor CLI starts with one choice as well, whether it may run
           commands without asking; you pick its mode and model inside the
-          session.
+          session. Pi starts with its own settings; you pick its model and
+          thinking level inside the session.
         </p>
       </article>
 
@@ -326,7 +327,7 @@
         <p>
           Start any session in its own dedicated Git worktree, so parallel runs
           never collide: Claude Code, Codex, Antigravity, OpenCode, GitHub
-          Copilot, Cursor, a raw terminal, and your own custom types all support
+          Copilot, Cursor, Pi, a raw terminal, and your own custom types all support
           it. <strong>Opt-in per launch, and Git projects only</strong> — a
           non-Git project just runs in the project root.
         </p>
@@ -407,6 +408,7 @@
       <li class="chip">OpenCode</li>
       <li class="chip">GitHub Copilot CLI</li>
       <li class="chip">Cursor CLI</li>
+      <li class="chip">Pi</li>
       <li class="chip">Terminal</li>
       <li class="chip">Auto Scan</li>
       <li class="chip chip-brand">Your own types — up to 20</li>
@@ -620,7 +622,7 @@
         <p>
           Yes. There is no subscription and no paywalled feature — the app and
           the agent are free. You bring your own Claude Code, Codex, Antigravity,
-          OpenCode, GitHub Copilot or Cursor access and run the agent on hardware
+          OpenCode, GitHub Copilot, Cursor or Pi access and run the agent on hardware
           you already own.
         </p>
       </details>

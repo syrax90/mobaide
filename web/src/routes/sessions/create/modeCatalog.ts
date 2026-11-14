@@ -40,6 +40,10 @@ const BUILT_IN_COPY: Readonly<Record<BuiltInMode, { title: string; subtitle: str
     title: 'Cursor',
     subtitle: 'Configure and launch a Cursor session.',
   },
+  pi: {
+    title: 'Pi',
+    subtitle: 'Configure and launch a Pi session.',
+  },
   auto_scan: {
     title: 'Auto Scan',
     subtitle: 'Scan Linear for matching issues and launch sessions.',
@@ -54,6 +58,7 @@ const MISSING_CLI: Readonly<Record<string, string>> = {
   opencode: 'OpenCode CLI is not installed on the agent.',
   copilot: 'GitHub Copilot CLI is not installed on the agent.',
   cursor: 'Cursor CLI is not installed on the agent.',
+  pi: 'Pi is not installed on the agent.',
 };
 
 /**
@@ -132,6 +137,24 @@ export function buildModeCards(input: {
             ...copy,
             enabled: false,
             disabledReason: 'Update Mobaide on your PC to use Cursor.',
+          };
+        }
+        const enabled = cliEnabled(input.capabilities, mode);
+        return {
+          mode,
+          ...copy,
+          enabled,
+          disabledReason: enabled ? undefined : MISSING_CLI[mode],
+        };
+      }
+      case 'pi': {
+        // An agent from before Pi support would open a plain shell for it.
+        if (!cliKnown(input.capabilities, mode)) {
+          return {
+            mode,
+            ...copy,
+            enabled: false,
+            disabledReason: 'Update Mobaide on your PC to use Pi.',
           };
         }
         const enabled = cliEnabled(input.capabilities, mode);

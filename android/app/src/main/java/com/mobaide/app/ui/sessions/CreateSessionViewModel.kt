@@ -10,6 +10,7 @@ import com.mobaide.app.data.local.CodexLaunchPrefs
 import com.mobaide.app.data.local.OpenCodeLaunchPrefs
 import com.mobaide.app.data.local.CopilotLaunchPrefs
 import com.mobaide.app.data.local.CursorLaunchPrefs
+import com.mobaide.app.data.local.PiLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.AntigravityOptionsModel
@@ -23,6 +24,7 @@ import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.data.network.dto.OpenCodeOptionsModel
 import com.mobaide.app.data.network.dto.CopilotOptionsModel
 import com.mobaide.app.data.network.dto.CursorOptionsModel
+import com.mobaide.app.data.network.dto.PiOptionsModel
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.WorktreeBasesResponse
@@ -67,7 +69,7 @@ import java.nio.file.InvalidPathException
 import java.nio.file.Paths
 import javax.inject.Inject
 
-enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig, CodexConfig, AntigravityConfig, OpenCodeConfig, CopilotConfig, CursorConfig, AutoScanConfig, TerminalConfig }
+enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig, CodexConfig, AntigravityConfig, OpenCodeConfig, CopilotConfig, CursorConfig, PiConfig, AutoScanConfig, TerminalConfig }
 
 /**
  * Mode-picker selection. The built-in modes are singletons; [Custom] carries
@@ -81,6 +83,7 @@ sealed interface CreateSessionMode {
     data object OpenCode : CreateSessionMode
     data object Copilot : CreateSessionMode
     data object Cursor : CreateSessionMode
+    data object Pi : CreateSessionMode
     data object AutoScan : CreateSessionMode
     data object CustomShell : CreateSessionMode
     data class Custom(val typeId: String) : CreateSessionMode
@@ -95,6 +98,7 @@ val CreateSessionMode.orderId: String
         CreateSessionMode.OpenCode -> "opencode"
         CreateSessionMode.Copilot -> "copilot"
         CreateSessionMode.Cursor -> "cursor"
+        CreateSessionMode.Pi -> "pi"
         CreateSessionMode.AutoScan -> "auto_scan"
         CreateSessionMode.CustomShell -> "shell"
         is CreateSessionMode.Custom -> "custom_$typeId"
@@ -108,6 +112,7 @@ val BUILT_IN_MODES: List<CreateSessionMode> = listOf(
     CreateSessionMode.OpenCode,
     CreateSessionMode.Copilot,
     CreateSessionMode.Cursor,
+    CreateSessionMode.Pi,
     CreateSessionMode.AutoScan,
     CreateSessionMode.CustomShell,
 )
@@ -192,6 +197,10 @@ data class CreateSessionUiState(
     // false = the agent lists its CLIs but not Cursor: it predates the kind
     // and would open a plain shell for it.
     val cursorKnown: Boolean = true,
+    val piAvailable: Boolean? = null,
+    // false = the agent lists its CLIs but not Pi: it predates the kind
+    // and would open a plain shell for it.
+    val piKnown: Boolean = true,
     val cliAvailabilityLoading: Boolean = false,
     // Per-CLI model lists from the agent's capabilities (capabilities.cli.<id>
     // .models), captured alongside the availability flags. null/empty = agent
@@ -271,6 +280,10 @@ data class CreateSessionUiState(
     val cursorTerminalUi: Boolean = false,
     // capabilities.chat for Cursor from the ModePick probe; null = not probed yet.
     val cursorChat: ChatSupport? = null,
+    // Pi: start the classic terminal instead of the chat view.
+    val piTerminalUi: Boolean = false,
+    // capabilities.chat for Pi from the ModePick probe; null = not probed yet.
+    val piChat: ChatSupport? = null,
     val initialPrompt: String = "",
     val worktree: Boolean = false,
     val branchName: String = "",
@@ -381,6 +394,7 @@ fun chatUnavailableHint(chat: ChatSupport?, kind: String = "claude"): String? = 
         "opencode" -> "The chat view is not available for OpenCode on your PC."
         "copilot" -> "The chat view is not available for GitHub Copilot on your PC."
         "cursor" -> "The chat view is not available for Cursor on your PC."
+        "pi" -> "The chat view is not available for Pi on your PC."
         else -> "The chat view needs Node.js on your PC."
     }
     else -> null
@@ -436,6 +450,15 @@ val CreateSessionUiState.cursorChatUnavailableHint: String?
 
 val CreateSessionUiState.cursorResumeAvailable: Boolean
     get() = cursorUsesChat && (cursorChat as? ChatSupport.Available)?.resume == true
+
+val CreateSessionUiState.piUsesChat: Boolean
+    get() = usesChat(piTerminalUi, piChat)
+
+val CreateSessionUiState.piChatUnavailableHint: String?
+    get() = chatUnavailableHint(piChat, "pi")
+
+val CreateSessionUiState.piResumeAvailable: Boolean
+    get() = piUsesChat && (piChat as? ChatSupport.Available)?.resume == true
 
 /** The folder "This folder" lists: the selected project's path, or the custom path. */
 val CreateSessionUiState.selectedFolder: String?
@@ -509,6 +532,11 @@ private fun CreateSessionUiState.toCursorLaunchPrefs() = CursorLaunchPrefs(
     terminalUi = cursorTerminalUi,
 )
 
+/** Snapshot of the Pi launch controls for persistence / re-defaulting. */
+private fun CreateSessionUiState.toPiLaunchPrefs() = PiLaunchPrefs(
+    terminalUi = piTerminalUi,
+)
+
 /**
  * Mode-picker gate. Only an explicit `false` from the agent disables a card;
  * `null` (unknown / not-yet-probed / probe failed) stays optimistically enabled
@@ -520,6 +548,7 @@ val CreateSessionUiState.antigravityEnabled: Boolean get() = antigravityAvailabl
 val CreateSessionUiState.opencodeEnabled: Boolean get() = opencodeAvailable != false && opencodeKnown
 val CreateSessionUiState.copilotEnabled: Boolean get() = copilotAvailable != false && copilotKnown
 val CreateSessionUiState.cursorEnabled: Boolean get() = cursorAvailable != false && cursorKnown
+val CreateSessionUiState.piEnabled: Boolean get() = piAvailable != false && piKnown
 
 /**
  * Auto Scan additionally needs a Linear API key on the selected stored project
@@ -543,6 +572,7 @@ fun CreateSessionUiState.isModeEnabled(mode: CreateSessionMode): Boolean = when 
     CreateSessionMode.OpenCode -> opencodeEnabled
     CreateSessionMode.Copilot -> copilotEnabled
     CreateSessionMode.Cursor -> cursorEnabled
+    CreateSessionMode.Pi -> piEnabled
     CreateSessionMode.CustomShell -> true
     is CreateSessionMode.Custom -> true
 }
@@ -677,6 +707,10 @@ class CreateSessionViewModel @Inject constructor(
                         cursorTerminalUi = saved.terminalUi,
                     )
                 }
+            }
+            // Same pre-fill for the Pi launch controls.
+            preferencesStore.getLastUsedPiOptions()?.let { saved ->
+                _uiState.update { it.copy(piTerminalUi = saved.terminalUi) }
             }
         }
 
@@ -1057,6 +1091,7 @@ class CreateSessionViewModel @Inject constructor(
                         opencodeChat = version.chatSupport("opencode"),
                         copilotChat = version.chatSupport("copilot"),
                         cursorChat = version.chatSupport("cursor"),
+                        piChat = version.chatSupport("pi"),
                         codexAvailable = version.cliAvailable("codex"),
                         antigravityAvailable = version.cliAvailable("antigravity"),
                         opencodeAvailable = version.cliAvailable("opencode"),
@@ -1065,6 +1100,8 @@ class CreateSessionViewModel @Inject constructor(
                         copilotKnown = version.cliKnown("copilot"),
                         cursorAvailable = version.cliAvailable("cursor"),
                         cursorKnown = version.cliKnown("cursor"),
+                        piAvailable = version.cliAvailable("pi"),
+                        piKnown = version.cliKnown("pi"),
                         codexModels = version.cliModels("codex"),
                         antigravityModels = version.cliModels("antigravity"),
                         codexModelDetails = codexDetails,
@@ -1122,6 +1159,7 @@ class CreateSessionViewModel @Inject constructor(
             CreateSessionMode.OpenCode -> selectOpenCodeMode()
             CreateSessionMode.Copilot -> selectCopilotMode()
             CreateSessionMode.Cursor -> selectCursorMode()
+            CreateSessionMode.Pi -> selectPiMode()
             CreateSessionMode.AutoScan -> selectAutoScanMode()
             CreateSessionMode.CustomShell -> selectTerminalMode()
             is CreateSessionMode.Custom -> selectCustomAgentMode(mode.typeId)
@@ -1150,6 +1188,10 @@ class CreateSessionViewModel @Inject constructor(
 
     fun selectCursorMode() = _uiState.update {
         if (it.cursorEnabled) it.copy(step = CreateSessionStep.CursorConfig) else it
+    }
+
+    fun selectPiMode() = _uiState.update {
+        if (it.piEnabled) it.copy(step = CreateSessionStep.PiConfig) else it
     }
 
     /**
@@ -1265,6 +1307,7 @@ class CreateSessionViewModel @Inject constructor(
             CreateSessionStep.OpenCodeConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.CopilotConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.CursorConfig -> it.copy(step = CreateSessionStep.ModePick)
+            CreateSessionStep.PiConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.AutoScanConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.TerminalConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.ModePick -> it.copy(
@@ -1289,6 +1332,8 @@ class CreateSessionViewModel @Inject constructor(
     fun toggleCopilotTerminalUi(v: Boolean) = _uiState.update { it.copy(copilotTerminalUi = v) }
 
     fun toggleCursorTerminalUi(v: Boolean) = _uiState.update { it.copy(cursorTerminalUi = v) }
+
+    fun togglePiTerminalUi(v: Boolean) = _uiState.update { it.copy(piTerminalUi = v) }
     fun setClaudeModel(v: String?) = _uiState.update {
         // Clamp the effort if the new model doesn't support the current level
         // (e.g. xhigh/max → high when switching to haiku, the only capped model).
@@ -1522,7 +1567,7 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     /**
-     * Continue a stored Claude Code, Codex, Antigravity, OpenCode, Copilot or Cursor session ([kind])
+     * Continue a stored Claude Code, Codex, Antigravity, OpenCode, Copilot, Cursor or Pi session ([kind])
      * in a new chat session: the agent's current options without a worktree, in the
      * selected project when its folder is the row's folder, otherwise in the
      * row's folder.
@@ -1560,6 +1605,11 @@ class CreateSessionViewModel @Inject constructor(
             base.copy(
                 cli = "cursor",
                 cursor_options = state.cursorOptions(worktree = false, branchName = null),
+            )
+        } else if (kind == "pi") {
+            base.copy(
+                cli = "pi",
+                pi_options = piOptions(worktree = false, branchName = null),
             )
         } else {
             base.copy(
@@ -1641,6 +1691,16 @@ class CreateSessionViewModel @Inject constructor(
         baseBranch: String? = null,
     ) = CursorOptionsModel(
         force = cursorForce,
+        worktree = worktree,
+        branch_name = branchName,
+        base_branch = baseBranch,
+    )
+
+    private fun piOptions(
+        worktree: Boolean,
+        branchName: String?,
+        baseBranch: String? = null,
+    ) = PiOptionsModel(
         worktree = worktree,
         branch_name = branchName,
         base_branch = baseBranch,
@@ -1855,6 +1915,42 @@ class CreateSessionViewModel @Inject constructor(
                         cwd = sel.path,
                         cli = "cursor",
                         cursor_options = cursorOptions.copy(worktree = false, branch_name = null, base_branch = null),
+                        ui = ui,
+                    ),
+                )
+            }
+            ProjectSelection.None -> Unit
+        }
+    }
+
+    fun submitPi() {
+        val state = _uiState.value
+        if (state.submitting) return
+        val piOptions = piOptions(
+            worktree = state.worktree,
+            branchName = state.branchName.takeIf { it.isNotBlank() },
+            baseBranch = state.effectiveBaseBranch,
+        )
+        val ui = if (state.piUsesChat) SessionResponse.UI_CHAT else SessionResponse.UI_TERMINAL
+        when (val sel = state.selection) {
+            is ProjectSelection.Stored -> submitSession(
+                selection = sel,
+                request = CreateSessionRequest(
+                    project_name = sel.name,
+                    cli = "pi",
+                    pi_options = piOptions,
+                    ui = ui,
+                ),
+            )
+            is ProjectSelection.CustomPath -> {
+                if (sel.path.isBlank() || state.customPathError != null) return
+                submitSession(
+                    selection = sel,
+                    request = CreateSessionRequest(
+                        project_name = null,
+                        cwd = sel.path,
+                        cli = "pi",
+                        pi_options = piOptions.copy(worktree = false, branch_name = null, base_branch = null),
                         ui = ui,
                     ),
                 )
@@ -2123,6 +2219,7 @@ class CreateSessionViewModel @Inject constructor(
                 // is not a launch, so it stores nothing),
                 // Copilot submits carry copilot_options,
                 // Cursor submits carry cursor_options,
+                // Pi submits carry pi_options,
                 // shell submits carry none.
                 if (request.claude_options != null) {
                     preferencesStore.setLastUsedClaudeOptions(_uiState.value.toClaudeLaunchPrefs())
@@ -2141,6 +2238,9 @@ class CreateSessionViewModel @Inject constructor(
                 }
                 if (request.cursor_options != null) {
                     preferencesStore.setLastUsedCursorOptions(_uiState.value.toCursorLaunchPrefs())
+                }
+                if (request.pi_options != null) {
+                    preferencesStore.setLastUsedPiOptions(_uiState.value.toPiLaunchPrefs())
                 }
                 preferencesStore.setLastUsedSessionId(response.session_id)
                 _uiState.update { it.copy(submitting = false) }

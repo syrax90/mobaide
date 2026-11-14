@@ -42,6 +42,13 @@
         "text": "uh rename the um session store to session cache",
         "kind": "cursor"
       }
+    },
+    {
+      "name": "pi_session",
+      "wire": {
+        "text": "um rename the uh helper to parse config",
+        "kind": "pi"
+      }
     }
   ]
 }

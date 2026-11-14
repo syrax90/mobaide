@@ -845,6 +845,16 @@
               }
             ]
           },
+          "pi_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PiOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "project_name": {
             "anyOf": [
               {
@@ -2650,6 +2660,40 @@
         "title": "OpenCodeOptionsModel",
         "type": "object"
       },
+      "PiOptionsModel": {
+        "description": "Wire DTO for Pi launch options (see :class:`PiOptions`).",
+        "properties": {
+          "base_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Branch"
+          },
+          "branch_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Name"
+          },
+          "worktree": {
+            "default": false,
+            "title": "Worktree",
+            "type": "boolean"
+          }
+        },
+        "title": "PiOptionsModel",
+        "type": "object"
+      },
       "ProjectReadModel": {
         "description": "Client-safe view of a single project.",
         "properties": {
@@ -3260,7 +3304,8 @@
               "antigravity",
               "opencode",
               "copilot",
-              "cursor"
+              "cursor",
+              "pi"
             ],
             "title": "Kind",
             "type": "string"

@@ -80,6 +80,7 @@ const POPULATED: WizardState = {
   opencode: { autoApprove: true, terminalUi: false },
   copilot: { allowAll: true, terminalUi: false },
   cursor: { force: true, terminalUi: false },
+  pi: { terminalUi: false },
   git: { worktree: true, branchName: 'feature/x' },
   autoScanPromptSeededFor: gitProject.name,
 };
@@ -97,6 +98,7 @@ const REQUEST_MODES = [
   'opencode',
   'copilot',
   'cursor',
+  'pi',
   'shell',
   CUSTOM,
 ] as const;
@@ -107,6 +109,7 @@ const OPTION_KEYS = [
   'opencode_options',
   'copilot_options',
   'cursor_options',
+  'pi_options',
 ] as const;
 
 const OWN_OPTIONS: Record<(typeof REQUEST_MODES)[number], (typeof OPTION_KEYS)[number] | null> =
@@ -117,6 +120,7 @@ const OWN_OPTIONS: Record<(typeof REQUEST_MODES)[number], (typeof OPTION_KEYS)[n
     opencode: 'opencode_options',
     copilot: 'copilot_options',
     cursor: 'cursor_options',
+    pi: 'pi_options',
     shell: null,
     [CUSTOM]: null,
   };
@@ -217,6 +221,10 @@ const CURSOR_BOOLEANS: Record<
   true
 > = { force: true, worktree: true };
 
+const PI_BOOLEANS: Record<RequiredBooleans<components['schemas']['PiOptionsModel']>, true> = {
+  worktree: true,
+};
+
 const REQUEST_BOOLEANS: Record<RequiredBooleans<CreateSessionRequest>, true> = {
   worktree: true,
 };
@@ -251,6 +259,10 @@ describe('buildCreateRequest — every boolean explicit', () => {
 
   it('declares every Copilot boolean', () => {
     expectExplicitBooleans(build('copilot').copilot_options, COPILOT_BOOLEANS);
+  });
+
+  it('declares every Pi boolean', () => {
+    expectExplicitBooleans(build('pi').pi_options, PI_BOOLEANS);
   });
 
   it('sends allow_all: false for a default Copilot launch', () => {
@@ -593,6 +605,35 @@ describe('Cursor — chat view', () => {
   });
 });
 
+describe('Pi — chat view', () => {
+  const AVAILABLE: ChatSupport = { kind: 'available', resume: true, live: false };
+
+  it.each<[string, boolean, ChatSupport | undefined, 'chat' | 'terminal']>([
+    ['chat available', false, AVAILABLE, 'chat'],
+    ['probe still out', false, undefined, 'chat'],
+    ['Terminal UI on', true, AVAILABLE, 'terminal'],
+    ['no chat for Pi on this PC', false, { kind: 'unavailable' }, 'terminal'],
+    ['agent predates chat', false, { kind: 'outdated' }, 'terminal'],
+  ])('%s', (_name, terminalUi, chat, ui) => {
+    const request = buildCreateRequest({
+      state: { ...POPULATED, pi: { terminalUi } },
+      mode: 'pi',
+      project: gitProject,
+      chat,
+    });
+
+    expect(request?.cli).toBe('pi');
+    expect(request?.ui).toBe(ui);
+    expect(request?.worktree).toBe(false);
+    expect(request?.pi_options).toEqual({
+      worktree: true,
+      branch_name: 'feature/x',
+      base_branch: null,
+    });
+    expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
+  });
+});
+
 describe('buildResumeRequest', () => {
   const stored: ChatStoredSession = {
     session_id: 'external-2222',
@@ -691,6 +732,30 @@ describe('buildResumeRequest', () => {
       base_branch: null,
     });
     expect(OPTION_KEYS.filter((key) => key in request)).toEqual(['opencode_options']);
+    expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
+  });
+
+  it('continues a Pi session with the Pi options and never a worktree', () => {
+    const request = buildResumeRequest(
+      { state: POPULATED, mode: 'pi', project: gitProject },
+      'pi',
+      stored,
+    );
+
+    expect(request).toMatchObject({
+      project_name: 'mobaide',
+      cli: 'pi',
+      ui: 'chat',
+      chat_resume_id: 'external-2222',
+      worktree: false,
+    });
+    expect(request.pi_options).toEqual({
+      worktree: false,
+      branch_name: undefined,
+      base_branch: null,
+    });
+    expect('claude_options' in request).toBe(false);
+    expect('copilot_options' in request).toBe(false);
     expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
   });
 
@@ -821,7 +886,16 @@ describe('base_branch', () => {
     expect(withBase('opencode').opencode_options?.base_branch).toBe('origin/dev');
     expect(withBase('copilot').copilot_options?.base_branch).toBe('origin/dev');
     expect(withBase('cursor').cursor_options?.base_branch).toBe('origin/dev');
-    for (const mode of ['claude', 'codex', 'antigravity', 'opencode', 'copilot', 'cursor'] as const) {
+    expect(withBase('pi').pi_options?.base_branch).toBe('origin/dev');
+    for (const mode of [
+      'claude',
+      'codex',
+      'antigravity',
+      'opencode',
+      'copilot',
+      'cursor',
+      'pi',
+    ] as const) {
       expect('base_branch' in withBase(mode)).toBe(false);
     }
   });

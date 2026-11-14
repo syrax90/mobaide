@@ -437,7 +437,7 @@ struct ChatScreen: View {
     // MARK: - Actions
 
     private func hideKeyboard() {
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        ChatKeyboard.hide()
     }
 
     private var focusViewBinding: Binding<Bool> {
@@ -530,6 +530,13 @@ struct ChatScreen: View {
 
     private static func typeNames(_ types: [CustomAgentTypeDto]) -> [String: String] {
         Dictionary(types.map { ("custom_\($0.id)", $0.name) }, uniquingKeysWith: { _, last in last })
+    }
+}
+
+@MainActor
+enum ChatKeyboard {
+    static func hide() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 }
 
@@ -648,7 +655,7 @@ struct ChatOverlayChip: View {
     }
 }
 
-/// Agent, folder and ACP session ID, each copyable.
+/// Agent, folder and ACP session ID, each copyable and shown in full.
 private struct ChatSessionInfoSheet: View {
     let agent: ChatAgentInfo?
     let cwd: String?
@@ -668,13 +675,13 @@ private struct ChatSessionInfoSheet: View {
             ScrollView {
                 VStack(spacing: 12) {
                     if let agentText {
-                        CopyableCodeBlock(label: "Agent", code: agentText)
+                        CopyableCodeBlock(label: "Agent", code: agentText, singleLine: false)
                     }
                     if let cwd {
-                        CopyableCodeBlock(label: "Folder", code: cwd)
+                        CopyableCodeBlock(label: "Folder", code: cwd, singleLine: false)
                     }
                     if let acpSessionId {
-                        CopyableCodeBlock(label: "ACP session ID", code: acpSessionId)
+                        CopyableCodeBlock(label: "ACP session ID", code: acpSessionId, singleLine: false)
                     }
                     if agentText == nil, cwd == nil, acpSessionId == nil {
                         PixelEmptyState("No details yet", systemImage: "info.circle")

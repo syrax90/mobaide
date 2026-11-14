@@ -939,6 +939,9 @@ the elevation re-launch re-fetches the installer from
      `MOBAIDE_AGENT_CURSOR_BIN_HINT` → `MOBAIDE_CURSOR_BIN` (`Set-CursorBinIfMissing`).
      The installer writes this key with `set-env` after `init-env`, the same
      way as Copilot.
+   - The optional Pi CLI works the same way: `Find-PiBinary` (PATH,
+     `%USERPROFILE%\.pi\agent\bin\pi.cmd`, npm folders) →
+     `MOBAIDE_AGENT_PI_BIN_HINT` → `MOBAIDE_PI_BIN`, written with `set-env`.
    - Re-running never overwrites an already-paired `.env` (pass `--force` to
      regenerate; paired credentials are preserved regardless).
 8. Register the service:

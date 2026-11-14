@@ -42,7 +42,7 @@ const card = (list: ModeCard[], mode: string): ModeCard => {
 };
 
 describe('buildModeCards', () => {
-  it('offers the eight built-ins in order, then the account’s custom types', () => {
+  it('offers the nine built-ins in order, then the account’s custom types', () => {
     const list = cards({
       customTypes: [
         {
@@ -62,6 +62,7 @@ describe('buildModeCards', () => {
       'opencode',
       'copilot',
       'cursor',
+      'pi',
       'auto_scan',
       'shell',
       'custom_0123456789ab',
@@ -144,6 +145,22 @@ describe('buildModeCards', () => {
     });
     expect(card(installed, 'cursor')).toMatchObject({ enabled: true, disabledReason: undefined });
     expect(card(cards({ capabilities: capabilities({}) }), 'cursor').enabled).toBe(true);
+  });
+
+  it('disables Pi on an agent from before Pi support', () => {
+    // That agent would open a plain shell for `cli: "pi"`.
+    const older = cards({
+      capabilities: capabilities({ claude: { available: true }, copilot: { available: true } }),
+    });
+    const missing = cards({ capabilities: capabilities({ pi: { available: false } }) });
+    const installed = cards({ capabilities: capabilities({ pi: { available: true } }) });
+
+    expect(card(older, 'pi').enabled).toBe(false);
+    expect(card(older, 'copilot').enabled).toBe(true);
+    expect(card(missing, 'pi').enabled).toBe(false);
+    expect(card(missing, 'pi').disabledReason).not.toBe(card(older, 'pi').disabledReason);
+    expect(card(installed, 'pi')).toMatchObject({ enabled: true, disabledReason: undefined });
+    expect(card(cards({ capabilities: capabilities({}) }), 'pi').enabled).toBe(true);
   });
 
   it('gates Auto Scan on both the Claude CLI and a Linear key', () => {

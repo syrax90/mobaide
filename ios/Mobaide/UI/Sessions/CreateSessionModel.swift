@@ -26,6 +26,7 @@ final class CreateSessionModel {
         case opencode
         case copilot
         case cursor
+        case pi
         case autoScan
         case shell
         /// An account-scoped custom agent type, identified by its 12-hex id
@@ -37,7 +38,7 @@ final class CreateSessionModel {
         case custom(String)
 
         /// The static mode cards, in default order; custom-type cards follow.
-        static let builtIn: [Mode] = [.standard, .codex, .antigravity, .opencode, .copilot, .cursor, .autoScan, .shell]
+        static let builtIn: [Mode] = [.standard, .codex, .antigravity, .opencode, .copilot, .cursor, .pi, .autoScan, .shell]
 
         /// The id `/api/session-mode-order` stores for this card.
         var orderId: String {
@@ -48,6 +49,7 @@ final class CreateSessionModel {
             case .opencode: return "opencode"
             case .copilot: return "copilot"
             case .cursor: return "cursor"
+            case .pi: return "pi"
             case .autoScan: return "auto_scan"
             case .shell: return "shell"
             case .custom(let id): return "custom_\(id)"
@@ -163,6 +165,10 @@ final class CreateSessionModel {
     /// The probed agent predates Cursor: it would open a plain shell for
     /// `cli = "cursor"`, so the card is disabled instead.
     private(set) var cursorNeedsAgentUpdate = false
+    private(set) var piAvailable: Bool?
+    /// The probed agent predates Pi: it would open a plain shell for
+    /// `cli = "pi"`, so the card is disabled instead.
+    private(set) var piNeedsAgentUpdate = false
     private(set) var codexModels: [String] = codexModelsFallback
     private(set) var antigravityModels: [String] = antigravityModelsFallback
     /// Per-model Codex effort sets from `capabilities.cli.codex.model_details`;
@@ -281,6 +287,13 @@ final class CreateSessionModel {
     var cursorTerminalUI = false
     /// `capabilities.chat.cursor`; nil until the probe answers.
     private(set) var cursorChatCapability: ChatCapability?
+
+    // Pi
+    /// Off by default: a Pi session opens in the chat view whenever the
+    /// agent can run it.
+    var piTerminalUI = false
+    /// `capabilities.chat.pi`; nil until the probe answers.
+    private(set) var piChatCapability: ChatCapability?
 
     // Shared git options
     var worktree = false
@@ -422,6 +435,15 @@ final class CreateSessionModel {
         Self.chatUnavailableReason(cursorChatCapability, kind: "cursor")
     }
 
+    var piChatUnavailable: Bool { piChatCapability.map { !$0.isAvailable } ?? false }
+
+    /// The Pi session will open in the chat view.
+    var piUsesChat: Bool { !piTerminalUI && !piChatUnavailable }
+
+    var piChatUnavailableReason: String? {
+        Self.chatUnavailableReason(piChatCapability, kind: "pi")
+    }
+
     static func chatUnavailableReason(_ capability: ChatCapability?, kind: String = "claude") -> String? {
         switch capability {
         case .unsupportedAgent?: return "Update Mobaide on your PC to use the chat view."
@@ -432,6 +454,7 @@ final class CreateSessionModel {
             case "opencode": return "The chat view is not available for OpenCode on your PC."
             case "copilot": return "The chat view is not available for GitHub Copilot on your PC."
             case "cursor": return "The chat view is not available for Cursor on your PC."
+            case "pi": return "The chat view is not available for Pi on your PC."
             default: return "The chat view needs Node.js on your PC."
             }
         default: return nil
@@ -446,6 +469,7 @@ final class CreateSessionModel {
         case .opencode: return "opencode"
         case .copilot: return "copilot"
         case .cursor: return "cursor"
+        case .pi: return "pi"
         default: return "claude"
         }
     }
@@ -457,6 +481,7 @@ final class CreateSessionModel {
         case .opencode: return opencodeChatCapability
         case .copilot: return copilotChatCapability
         case .cursor: return cursorChatCapability
+        case .pi: return piChatCapability
         default: return chatCapability
         }
     }
@@ -473,6 +498,7 @@ final class CreateSessionModel {
         case .opencode: return opencodeUsesChat && opencodeChatCapability?.canResume == true
         case .copilot: return copilotUsesChat && copilotChatCapability?.canResume == true
         case .cursor: return cursorUsesChat && cursorChatCapability?.canResume == true
+        case .pi: return piUsesChat && piChatCapability?.canResume == true
         default: return false
         }
     }
@@ -490,6 +516,7 @@ final class CreateSessionModel {
     var opencodeEnabled: Bool { opencodeAvailable != false && !opencodeNeedsAgentUpdate }
     var copilotEnabled: Bool { copilotAvailable != false && !copilotNeedsAgentUpdate }
     var cursorEnabled: Bool { cursorAvailable != false && !cursorNeedsAgentUpdate }
+    var piEnabled: Bool { piAvailable != false && !piNeedsAgentUpdate }
 
     /// Auto Scan additionally needs a Linear API key on the selected stored
     /// project — the agent scans Linear for that project's issues. A custom
@@ -514,6 +541,7 @@ final class CreateSessionModel {
         case .opencode: return opencodeEnabled
         case .copilot: return copilotEnabled
         case .cursor: return cursorEnabled
+        case .pi: return piEnabled
         // A running scan keeps the card tappable even when the launch gate
         // would refuse — tapping opens its monitor rather than the config step.
         case .autoScan: return autoScanEnabled || runningScan != nil
@@ -547,6 +575,10 @@ final class CreateSessionModel {
             if cursorNeedsAgentUpdate { return "Update Mobaide on your PC to use Cursor." }
             return cursorEnabled ? "Configure and launch a Cursor session."
                 : "Cursor CLI is not installed on the agent."
+        case .pi:
+            if piNeedsAgentUpdate { return "Update Mobaide on your PC to use Pi." }
+            return piEnabled ? "Configure and launch a Pi session."
+                : "Pi is not installed on the agent."
         case .autoScan:
             if let running = runningScan {
                 return "Already running for \(running.project_name) — tap to open the live monitor."
@@ -582,6 +614,7 @@ final class CreateSessionModel {
         case .opencode: return "OpenCode"
         case .copilot: return "GitHub Copilot"
         case .cursor: return "Cursor"
+        case .pi: return "Pi"
         case .autoScan: return "Auto Scan"
         case .shell: return "Terminal"
         case .custom(let id): return customType(id: id)?.name ?? "Terminal session"
@@ -748,6 +781,7 @@ final class CreateSessionModel {
         opencodeChatCapability = version.chatCapability("opencode")
         copilotChatCapability = version.chatCapability("copilot")
         cursorChatCapability = version.chatCapability("cursor")
+        piChatCapability = version.chatCapability("pi")
         codexAvailable = version.cliAvailable("codex")
         antigravityAvailable = version.cliAvailable("antigravity")
         opencodeAvailable = version.cliAvailable("opencode")
@@ -756,6 +790,8 @@ final class CreateSessionModel {
         copilotNeedsAgentUpdate = !version.cliKnown("copilot")
         cursorAvailable = version.cliAvailable("cursor")
         cursorNeedsAgentUpdate = !version.cliKnown("cursor")
+        piAvailable = version.cliAvailable("pi")
+        piNeedsAgentUpdate = !version.cliKnown("pi")
         if let models = version.cliModels("codex"), !models.isEmpty { codexModels = models }
         if let models = version.cliModels("antigravity"), !models.isEmpty { antigravityModels = models }
         // Overwritten, never keep-last-known (unlike the model lists above): a
@@ -1525,6 +1561,14 @@ final class CreateSessionModel {
                 cursor_options: cursorOptions(worktree: effectiveWorktree, branchName: effectiveBranch, baseBranch: effectiveBase),
                 ui: cursorUsesChat ? "chat" : "terminal"
             )
+        case .pi:
+            return CreateSessionRequest(
+                cwd: cwd,
+                project_name: projectName,
+                cli: "pi",
+                pi_options: piOptions(worktree: effectiveWorktree, branchName: effectiveBranch, baseBranch: effectiveBase),
+                ui: piUsesChat ? "chat" : "terminal"
+            )
         case .shell:
             return CreateSessionRequest(
                 cwd: cwd,
@@ -1647,6 +1691,14 @@ final class CreateSessionModel {
         )
     }
 
+    private func piOptions(worktree: Bool, branchName: String?, baseBranch: String? = nil) -> PiOptionsModel {
+        PiOptionsModel(
+            worktree: worktree,
+            branch_name: branchName,
+            base_branch: baseBranch
+        )
+    }
+
     private func codexLaunchPrefs() -> CodexLaunchPrefs {
         CodexLaunchPrefs(
             model: codexModel,
@@ -1718,6 +1770,16 @@ final class CreateSessionModel {
                 project_name: projectName,
                 cli: "cursor",
                 cursor_options: cursorOptions(worktree: false, branchName: nil),
+                ui: "chat",
+                chat_resume_id: stored.session_id
+            )
+        }
+        if mode == .pi {
+            return CreateSessionRequest(
+                cwd: cwd,
+                project_name: projectName,
+                cli: "pi",
+                pi_options: piOptions(worktree: false, branchName: nil),
                 ui: "chat",
                 chat_resume_id: stored.session_id
             )
@@ -1858,6 +1920,8 @@ final class CreateSessionModel {
                 force: cursorForce,
                 terminalUI: cursorTerminalUI
             ))
+        case .pi:
+            preferencesStore.setLastUsedPiOptions(PiLaunchPrefs(terminalUI: piTerminalUI))
         // Auto Scan persists its own bucket from `startAutoScan`, which never
         // routes through `create()`.
         case .autoScan, .shell, .custom:
@@ -1917,6 +1981,9 @@ final class CreateSessionModel {
         if let cursor = preferencesStore.getLastUsedCursorOptions() {
             cursorForce = cursor.force
             cursorTerminalUI = cursor.terminalUI
+        }
+        if let pi = preferencesStore.getLastUsedPiOptions() {
+            piTerminalUI = pi.terminalUI
         }
     }
 

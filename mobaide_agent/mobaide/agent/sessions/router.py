@@ -120,6 +120,11 @@ async def create_session(
         if body.cursor_options is not None
         else None
     )
+    pi_options = (
+        body.pi_options.to_options()
+        if body.pi_options is not None
+        else None
+    )
     # Pre-validate user-supplied custom paths so the error surfaces as a
     # clean 400 from this layer rather than as a FileNotFoundError-mapped
     # 400 from the launcher or PtyBackend further down. Skipped when a
@@ -136,6 +141,7 @@ async def create_session(
         opencode_options,
         copilot_options,
         cursor_options,
+        pi_options,
     ) = resolve_spawn_args(
         body.cli,
         claude_options,
@@ -147,6 +153,7 @@ async def create_session(
         opencode_options=opencode_options,
         copilot_options=copilot_options,
         cursor_options=cursor_options,
+        pi_options=pi_options,
     )
     chat_error = chat_request_error(body.ui, kind, body.chat_resume_id, manager)
     if chat_error is not None:
@@ -165,6 +172,7 @@ async def create_session(
         opencode_options=opencode_options,
         copilot_options=copilot_options,
         cursor_options=cursor_options,
+        pi_options=pi_options,
         worktree=body.worktree,
         branch_name=body.branch_name,
         base_branch=body.base_branch,

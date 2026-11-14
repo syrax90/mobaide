@@ -48,6 +48,7 @@ object VoiceErrorCopy {
         "opencode" -> "OpenCode"
         "copilot" -> "GitHub Copilot"
         "cursor" -> "Cursor"
+        "pi" -> "Pi"
         else -> "The session's AI agent"
     }
 
@@ -58,6 +59,7 @@ object VoiceErrorCopy {
         "opencode" -> "opencode upgrade"
         "copilot" -> "copilot update"
         "cursor" -> "cursor-agent update"
+        "pi" -> "pi update"
         else -> null
     }
 

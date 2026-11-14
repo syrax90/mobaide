@@ -124,6 +124,13 @@ class AgentConfig(BaseSettings):
         default=None, validation_alias="MOBAIDE_CURSOR_BIN",
     )
 
+    # Operator override pointing at the absolute path of the Pi coding agent
+    # executable (``pi.cmd`` on Windows, ``pi`` on POSIX). Typed for the same
+    # reason as ``agy_bin``.
+    pi_bin: str | None = Field(
+        default=None, validation_alias="MOBAIDE_PI_BIN",
+    )
+
     # Operator override for the command that starts the Claude Code ACP
     # adapter of chat sessions (one shell-style command line). Typed for the
     # same reason as ``claude_bin``: a .env line never reaches ``os.environ``.
@@ -149,6 +156,11 @@ class AgentConfig(BaseSettings):
     # The same for Cursor, whose ACP server is ``cursor-agent acp``.
     acp_cursor_command: str | None = Field(
         default=None, validation_alias="MOBAIDE_ACP_CURSOR_COMMAND",
+    )
+    # The same for Pi. Pi has no ACP server, so the default is the agent's
+    # own bridge to ``pi --mode rpc`` (``mobaide.acp.pi_bridge``).
+    acp_pi_command: str | None = Field(
+        default=None, validation_alias="MOBAIDE_ACP_PI_COMMAND",
     )
 
     # The fake switch swaps the speech model for a tiny generated one and a
@@ -337,6 +349,8 @@ def _cmd_init_env(args: argparse.Namespace) -> int:
             overrides["MOBAIDE_COPILOT_BIN"] = existing["MOBAIDE_COPILOT_BIN"]
         if existing.get("MOBAIDE_CURSOR_BIN"):
             overrides["MOBAIDE_CURSOR_BIN"] = existing["MOBAIDE_CURSOR_BIN"]
+        if existing.get("MOBAIDE_PI_BIN"):
+            overrides["MOBAIDE_PI_BIN"] = existing["MOBAIDE_PI_BIN"]
 
     # An explicit --claude-bin / --codex-bin / --agy-bin from the installer
     # wins over a preserved existing value: a re-install where the operator just

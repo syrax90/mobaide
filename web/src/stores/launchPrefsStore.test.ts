@@ -43,6 +43,8 @@ const COPILOT_BLOB = { allowAll: true, terminalUi: true };
 
 const CURSOR_BLOB = { force: true, terminalUi: true };
 
+const PI_BLOB = { terminalUi: true };
+
 const CLAUDE_DEFAULTS = {
   model: null,
   effort: 'high',
@@ -74,6 +76,7 @@ beforeEach(() => {
     opencode: null,
     copilot: null,
     cursor: null,
+    pi: null,
     lastProjectName: null,
   });
   window.localStorage.clear();
@@ -232,6 +235,14 @@ describe('hydration', () => {
     expect((await rehydrateWith({ copilot: COPILOT_BLOB })).cursor).toBeNull();
   });
 
+  it('restores the Pi bucket, defaults a missing key and voids a wrong-typed one', async () => {
+    expect((await rehydrateWith({ pi: PI_BLOB })).pi).toEqual(PI_BLOB);
+    expect((await rehydrateWith({ pi: {} })).pi).toEqual({ terminalUi: false });
+    expect((await rehydrateWith({ pi: { terminalUi: 'yes' } })).pi).toBeNull();
+    expect((await rehydrateWith({ pi: [PI_BLOB] })).pi).toBeNull();
+    expect((await rehydrateWith({ copilot: COPILOT_BLOB })).pi).toBeNull();
+  });
+
   it('rejects a bucket that is not a plain object', async () => {
     expect((await rehydrateWith({ claude: [CLAUDE_BLOB] })).claude).toBeNull();
     expect((await rehydrateWith({ claude: 'sonnet' })).claude).toBeNull();
@@ -265,6 +276,7 @@ describe('hydration', () => {
       opencode: null,
       copilot: null,
       cursor: null,
+      pi: null,
       lastProjectName: null,
     });
     useLaunchPrefsStore.getState().setLastProjectName('mobaide');
@@ -323,6 +335,22 @@ describe('Cursor writes', () => {
 
     const prefs = readLaunchPrefs();
     expect(prefs.cursor).toEqual(CURSOR_BLOB);
+    expect(prefs.copilot).toBeNull();
+    expect(prefs.claude).toBeNull();
+  });
+});
+
+describe('Pi writes', () => {
+  it('files the Pi snapshot under its own slot and reads it back', async () => {
+    useLaunchPrefsStore.getState().setLaunchPrefs({ kind: 'pi', prefs: PI_BLOB });
+    const written = window.localStorage.getItem(STORAGE_KEY);
+
+    useLaunchPrefsStore.setState({ pi: null });
+    window.localStorage.setItem(STORAGE_KEY, written ?? '');
+    await useLaunchPrefsStore.persist.rehydrate();
+
+    const prefs = readLaunchPrefs();
+    expect(prefs.pi).toEqual(PI_BLOB);
     expect(prefs.copilot).toBeNull();
     expect(prefs.claude).toBeNull();
   });

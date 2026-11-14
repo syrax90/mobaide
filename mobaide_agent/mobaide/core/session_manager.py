@@ -35,6 +35,7 @@ from .models import (
     session_to_wire_dict,
 )
 from .opencode_launcher import OpenCodeLauncher, OpenCodeOptions
+from .pi_launcher import PiLauncher, PiOptions
 from .projects_store import ProjectsStore, safe_path_exists
 from .pty_backend import PtyBackend, create_pty_backend
 from .session import TerminalSession
@@ -64,6 +65,7 @@ class SessionManager:
         opencode_launcher: OpenCodeLauncher | None = None,
         copilot_launcher: CopilotLauncher | None = None,
         cursor_launcher: CursorLauncher | None = None,
+        pi_launcher: PiLauncher | None = None,
         worktree_mgr: WorktreeManager | None = None,
         event_bus: Any | None = None,
         on_session_created: Callable[[TerminalSession], Awaitable[None] | None] | None = None,
@@ -78,7 +80,7 @@ class SessionManager:
         self._liveness_task: asyncio.Task[None] | None = None
         self._projects_store = projects_store
         # ``launcher`` keeps its historical name (the Claude launcher); the
-        # Codex, Antigravity, OpenCode, Copilot and Cursor launchers are siblings.
+        # Codex, Antigravity, OpenCode, Copilot, Cursor and Pi launchers are siblings.
         # Dispatch picks between them per session.
         self._launcher = launcher
         self._codex_launcher = codex_launcher
@@ -86,6 +88,7 @@ class SessionManager:
         self._opencode_launcher = opencode_launcher
         self._copilot_launcher = copilot_launcher
         self._cursor_launcher = cursor_launcher
+        self._pi_launcher = pi_launcher
         self._worktree_mgr = worktree_mgr
         self._event_bus = event_bus
         self._on_session_created = on_session_created
@@ -127,8 +130,8 @@ class SessionManager:
 
         Dispatch matrix on (``project_name``, managed-CLI options). A session is
         "managed" when it carries ``claude_options``, ``codex_options``,
-        ``antigravity_options``, ``opencode_options``, ``copilot_options`` or
-        ``cursor_options`` — the entry layers normalise exactly one of them via
+        ``antigravity_options``, ``opencode_options``, ``copilot_options``,
+        ``cursor_options`` or ``pi_options`` — the entry layers normalise exactly one of them via
         ``resolve_spawn_args``, so a raw shell session (none set) keeps its
         caller-supplied argv:
 
@@ -159,6 +162,7 @@ class SessionManager:
             or config.opencode_options is not None
             or config.copilot_options is not None
             or config.cursor_options is not None
+            or config.pi_options is not None
         )
         if config.project_name is not None:
             if managed:
@@ -223,6 +227,7 @@ class SessionManager:
             or config.opencode_options
             or config.copilot_options
             or config.cursor_options
+            or config.pi_options
         )
         if config.chat_resume_id and options is not None and getattr(options, "worktree", False):
             from dataclasses import replace
@@ -302,13 +307,14 @@ class SessionManager:
         | AntigravityOptions
         | OpenCodeOptions
         | CopilotOptions
-        | CursorOptions,
+        | CursorOptions
+        | PiOptions,
     ]:
         """Pick the launcher + options for a managed session.
 
         ``resolve_spawn_args`` guarantees exactly one of ``claude_options`` /
         ``codex_options`` / ``antigravity_options`` / ``opencode_options`` /
-        ``copilot_options`` / ``cursor_options`` is set, so presence is the
+        ``copilot_options`` / ``cursor_options`` / ``pi_options`` is set, so presence is the
         discriminator. Raises if the requested CLI's launcher was not wired into
         this manager.
         """
@@ -330,6 +336,12 @@ class SessionManager:
                     "cursor session requested but agent has no Cursor launcher",
                 )
             return self._cursor_launcher, config.cursor_options
+        if config.pi_options is not None:
+            if self._pi_launcher is None:
+                raise ValueError(
+                    "pi session requested but agent has no Pi launcher",
+                )
+            return self._pi_launcher, config.pi_options
         if config.antigravity_options is not None:
             if self._antigravity_launcher is None:
                 raise ValueError(

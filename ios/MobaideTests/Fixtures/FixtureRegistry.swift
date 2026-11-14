@@ -50,6 +50,8 @@ enum FixtureRegistry {
         "AntigravityOptionsModel": runner(AntigravityOptionsModel.self),
         // OpenCodeOptionsModel.swift
         "OpenCodeOptionsModel": runner(OpenCodeOptionsModel.self),
+        // PiOptionsModel.swift
+        "PiOptionsModel": runner(PiOptionsModel.self),
         // AuthDto.swift
         "TokenRequest": runner(TokenRequest.self),
         "TokenResponse": runner(TokenResponse.self),
