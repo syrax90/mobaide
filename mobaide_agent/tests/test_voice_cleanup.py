@@ -1595,10 +1595,10 @@ class TestCursorCommand:
         await cleaner.clean("hello", "cursor")
 
         argv = run.calls[0]["argv"]
-        assert argv[:3] == ["cmd", "/c", shim]
+        assert argv[:4] == ["cmd", "/c", "@", shim]
         line = subprocess.list2cmdline(argv)
         assert line.count('"') == 2
-        assert line.startswith(f'cmd /c "{shim}" ')
+        assert line.startswith(f'cmd /c @ "{shim}" ')
 
 
 class _ReadsCursorProfile(_Claude):
