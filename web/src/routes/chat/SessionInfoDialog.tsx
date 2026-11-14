@@ -43,7 +43,7 @@ function CopyRow({ row }: { row: InfoRow }) {
   );
 }
 
-/** Agent, folder and ACP session id — each copyable, the copy confirmed inline. */
+/** Agent, folder and session id — each copyable, the copy confirmed inline. */
 export function SessionInfoDialog({
   rows,
   onClose,

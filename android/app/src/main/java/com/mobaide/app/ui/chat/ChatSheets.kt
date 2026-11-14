@@ -273,7 +273,7 @@ fun ChatSessionInfoDialog(
                 val agentLine = listOfNotNull(agent?.title ?: agent?.name, agent?.version).joinToString(" ")
                 if (agentLine.isNotBlank()) CopyableCodeBlock(label = "Agent", code = agentLine, singleLine = false)
                 if (!cwd.isNullOrBlank()) CopyableCodeBlock(label = "Folder", code = cwd, singleLine = false)
-                if (!acpSessionId.isNullOrBlank()) CopyableCodeBlock(label = "ACP session ID", code = acpSessionId, singleLine = false)
+                if (!acpSessionId.isNullOrBlank()) CopyableCodeBlock(label = "Session ID", code = acpSessionId, singleLine = false)
                 if (agentLine.isBlank() && cwd.isNullOrBlank() && acpSessionId.isNullOrBlank()) {
                     Text("The agent has not reported its details yet.")
                 }
