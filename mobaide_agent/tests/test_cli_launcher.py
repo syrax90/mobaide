@@ -9,6 +9,7 @@ startup warm task), and the ``shim_safe_argv`` Windows-shim wrapper.
 """
 from __future__ import annotations
 
+import subprocess
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -307,9 +308,22 @@ class TestShimSafeArgv:
 
 
     @skip_if_not_windows
-    def test_cmd_shim_wrapped_on_windows(self):
-        argv = shim_safe_argv(r"C:\npm\codex.cmd", "debug", "models", "--json")
-        assert argv == ["cmd", "/c", r"C:\npm\codex.cmd", "debug", "models", "--json"]
+    def test_cmd_shim_in_a_spaced_folder_gets_a_spaced_argument(self, tmp_path):
+        """A shim under ``C:\\Program Files`` with one more quoted argument
+        made ``cmd /c`` drop the outer quotes and run ``C:\\Program``."""
+        folder = tmp_path / "Program Files (x86)"
+        folder.mkdir()
+        shim = folder / "npm.cmd"
+        shim.write_text("@echo off\r\necho [%~1] [%~2]\r\nexit /b 3\r\n", encoding="ascii")
+        spaced = str(tmp_path / "Mobaide Agent" / "acp-adapters")
+
+        proc = subprocess.run(
+            shim_safe_argv(str(shim), "install", spaced), capture_output=True, text=True,
+        )
+
+        assert proc.stderr == ""
+        assert proc.stdout.strip() == f"[install] [{spaced}]"
+        assert proc.returncode == 3
 
 
     @skip_if_not_linux
