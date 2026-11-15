@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from mobaide.agent._env_writer import atomic_write
 from mobaide.core.codex_auth import codex_login_with_api_key, sanitize_codex_output
 from mobaide.core.claude_launcher import CLAUDE_SESSION_PRESET_ENV
+from mobaide.core.hook_settings import HOOK_TOKEN_ENV
 from mobaide.core.cli_launcher import (
     WINDOWS_NO_WINDOW,
     CliBinaryNotFoundError,
@@ -203,6 +204,11 @@ class ChatLaunchPlan:
     client_meta: Mapping[str, Any] = field(default_factory=dict)
     # The agent writes its tool titles in Markdown (code spans).
     markdown_titles: bool = False
+    # Port of the agent's ``/internal/hook``, for an agent that runs Claude
+    # Code hooks (``env`` then carries the hook token). The hooks report what
+    # the ``session/prompt`` answer cannot: work a turn leaves behind, and
+    # turns the agent starts itself.
+    hook_port: int | None = None
 
 
 class ChatAgentSpec(Protocol):
@@ -711,6 +717,10 @@ class ClaudeChatSpec(_AdapterSpec):
         spec = await self._launcher.build(target, options, session_id=None)
         env = self._adapter_env(spec.env)
         argv, ensure = self._launch(env)
+        hook_endpoint = None if self.uses_fake_agent() else self._launcher.hook_endpoint
+        if hook_endpoint is not None:
+            # The CLI's hooks read the token from here (``chat_hook_settings``).
+            env[HOOK_TOKEN_ENV] = hook_endpoint[1]
         return ChatLaunchPlan(
             argv=argv,
             env=env,
@@ -730,6 +740,7 @@ class ClaudeChatSpec(_AdapterSpec):
             sign_in=claude_sign_in_methods(
                 self._claude_bin(), spec.env, fake=self.uses_fake_agent()
             ),
+            hook_port=hook_endpoint[0] if hook_endpoint is not None else None,
         )
 
     def _claude_bin(self) -> str | None:

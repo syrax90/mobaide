@@ -764,6 +764,94 @@ class TestToolHeartbeat:
         assert session.activity == ["idle"]
 
 
+class TestSettle:
+    """``settle`` is for an end no ``Stop`` reports (an interrupt, a failed
+    turn): whatever the last ``Stop`` armed or listed is over, with no alert."""
+
+    @pytest.mark.parametrize(
+        ("last_stop", "before"),
+        [
+            ({"prompt_id": "p1"}, []),
+            (_stop("p1", _task("t1", "subagent")), ["working"]),
+        ],
+        ids=["window-armed", "parked-on-a-sub-agent"],
+    )
+    async def test_settle_ends_the_turn_idle_without_an_alert(
+        self, session, scheduler, last_stop, before,
+    ) -> None:
+        gate = _gate(session)
+        gate.handle(HookKind.STOP, last_stop)
+
+        gate.settle()
+        # A call of the sub-agent that was stopped with the turn, still on its
+        # way: no ``Stop`` follows it, so it must not bring ``working`` back.
+        gate.handle(HookKind.TOOL, {"prompt_id": "p1", "agent_id": "a1"})
+
+        assert scheduler.elapse() == 0
+        assert session.calls == []
+        assert session.activity == [*before, "idle"]
+
+
+class TestStopLost:
+    """``stop_lost`` ends a turn that is known to be over but sent no ``Stop``
+    (a lost hook, a local command). It knows nothing new about background
+    work, and its end is certain."""
+
+    @pytest.mark.parametrize(
+        ("task_type", "activity"), [("subagent", "working"), ("shell", "waiting")],
+    )
+    async def test_work_the_last_stop_listed_still_stands(
+        self, session, scheduler, task_type, activity,
+    ) -> None:
+        gate = _gate(session)
+        gate.handle(HookKind.STOP, _stop("p1", _task("t1", task_type)))
+
+        gate.stop_lost()
+
+        assert scheduler.pending == []
+        assert session.calls == []
+        assert session.activity == [activity, activity]
+
+    async def test_the_alert_is_not_dropped_by_the_cooldown(
+        self, session, scheduler, clock,
+    ) -> None:
+        # With no ``prompt_id`` the gate dedupes by time, which is right for a
+        # ``Stop`` burst of one turn. This end is of a turn of its own.
+        gate = _gate(session)
+        gate.handle(HookKind.STOP, {"prompt_id": "p1"})
+        scheduler.elapse()
+        session.user_responded()
+        clock.advance(1)
+
+        gate.stop_lost()
+
+        assert session.reasons == ["turn_finished"]
+        assert scheduler.elapse() == 1
+        assert session.reasons == ["turn_finished", "turn_finished"]
+        assert session.activity[-1] == "idle"
+
+
+class TestNoteStop:
+    async def test_it_records_what_a_stop_listed_without_ending_the_turn(
+        self, session, scheduler,
+    ) -> None:
+        # The next prompt starts at once, so this ``Stop`` is no news. What it
+        # listed must still stand if that prompt fires no ``Stop`` of its own.
+        gate = _gate(session)
+        gate.handle(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1"})
+
+        gate.note_stop(_stop("p1", _task("t1", "shell")))
+
+        assert session.activity == ["working"]
+        assert scheduler.pending == []
+
+        gate.stop_lost()
+
+        assert session.activity == ["working", "waiting"]
+        assert scheduler.pending == []
+        assert session.calls == []
+
+
 class TestLongLivedTasks:
     """A dev server never completes, so every ``Stop`` after it starts lists it.
     The turn that started it ends ``waiting``; once the user types the next

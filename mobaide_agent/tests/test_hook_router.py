@@ -102,6 +102,27 @@ class TestHookGuards:
         )
         assert resp.status_code == 403
 
+    @pytest.mark.parametrize(
+        ("valid", "status", "routed"),
+        [(True, 200, [HookKind.STOP]), (False, 403, [])],
+        ids=["right-token", "wrong-token"],
+    )
+    async def test_token_in_the_header_is_checked_like_the_one_in_the_url(
+        self, app, client, valid, status, routed,
+    ):
+        # A chat session's hook URL carries no token (``chat_hook_settings``):
+        # the CLI sends it in this header.
+        sessions = _register(app, "s1")
+        token = _hook_token(app) if valid else "not-the-real-token"
+        resp = await client.post(
+            "/internal/hook",
+            params={"session_id": "s1", "hook": "stop"},
+            headers={"X-Mobaide-Hook-Token": token},
+            json={"hook_event_name": "Stop"},
+        )
+        assert resp.status_code == status
+        assert _kinds(sessions["s1"]) == routed
+
 
 class TestHookKindRouting:
     @pytest.mark.parametrize("kind", list(HookKind))

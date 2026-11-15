@@ -16,6 +16,7 @@ import collections
 import logging
 import os
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -24,6 +25,8 @@ import orjson
 
 from mobaide import __version__
 from mobaide.core.attention_dedupe import SharedTurnDedupe, real_cwd
+from mobaide.core.attention_gate import AttentionGate, HookKind, is_subagent_call
+from mobaide.core.hook_settings import chat_hook_settings
 from mobaide.core.models import (
     SessionConfig,
     SessionEvent,
@@ -79,6 +82,15 @@ ACP_PROTOCOL_VERSION = 1
 # Timeline status → the session row's ``activity``; the other statuses
 # (``starting``, ``loading``, ``error``, ``stopped``) are no turn at all.
 _ACTIVITY_BY_STATUS = {"running": "working", "ready": "idle"}
+# The hooks a chat session reads (see ``hook_settings.chat_hook_settings``).
+_TURN_HOOKS = frozenset(
+    {HookKind.PROMPT_SUBMIT, HookKind.TOOL, HookKind.STOP, HookKind.STOP_FAILURE}
+)
+# Quiet time after a ``Stop`` hook with nothing in flight before the session
+# reads idle and alerts. It absorbs a task notification that is already on its
+# way, which would start the next turn a moment later. Shorter than a terminal
+# session's window: the chat row shows "working" until it ends.
+CHAT_ATTENTION_QUIET_SECONDS = 2.0
 
 CLIENT_CAPABILITIES: dict[str, Any] = {
     "session": {
@@ -158,6 +170,33 @@ class ChatSession:
             maxsize=EVENT_QUEUE_MAXSIZE
         )
         self._activity: str | None = None
+        # Claude Code hooks report what the ``session/prompt`` answer cannot:
+        # the work a turn leaves behind (a workflow, a sub-agent, a shell) and
+        # the turns the agent starts by itself. None for an agent with no hooks.
+        self._gate: AttentionGate | None = None
+        if plan.hook_port is not None:
+            quiet = config.attention_quiet_seconds
+            self._gate = AttentionGate(
+                on_alert=self._on_gate_alert,
+                on_activity=self._on_gate_activity,
+                is_running=lambda: self._state == SessionState.RUNNING,
+                current_attention=lambda: self._attention,
+                quiet_seconds=CHAT_ATTENTION_QUIET_SECONDS if quiet is None else quiet,
+            )
+        # False until this agent process sends its first hook: a CLI that runs
+        # no hooks (an old one, a policy that blocks them) keeps the
+        # prompt-answer behaviour.
+        self._hooks_live = False
+        # What the gate last reported, while hooks are live.
+        self._gate_activity: str | None = None
+        # The last ``Stop`` hook of the prompt that runs now. The gate gets it
+        # at the prompt's answer: only the answer ends a turn this session sent
+        # (a ``Stop`` hook can force the turn to continue), so no "turn
+        # finished" alert may come while that turn still runs.
+        self._turn_stop: dict[str, Any] | None = None
+        # The agent started its next turn (a task notification that was
+        # already waiting) after that ``Stop`` and before the prompt's answer.
+        self._turn_reopened = False
         self._timeline = ChatTimeline(self._emit_frame, on_status=self._on_timeline_status)
         self._timeline.state["cwd"] = plan.cwd
         self._title: str | None = plan.title
@@ -197,8 +236,12 @@ class ChatSession:
         }
         self._initial_prompt: str | None = plan.initial_prompt
         self._steering = False
-        # A turn another client of a shared host started (see thread_busy).
+        # A turn this session did not start: another client of a shared host
+        # sent it (see thread_busy), or the agent started it by itself.
         self._external_turn = False
+        # That turn is the agent's own (a task notification, a scheduled
+        # wakeup): hooks report its start and end. Read only with _external_turn.
+        self._self_turn = False
         # The last busy report that came while the session was opening.
         self._busy_before_ready = False
         self._consoles: collections.OrderedDict[str, _Console] = collections.OrderedDict()
@@ -563,6 +606,11 @@ class ChatSession:
             if not await self._ensure_trusted():
                 return
             setup_params: dict[str, Any] = {"cwd": self._plan.cwd, "mcpServers": []}
+            if self._plan.hook_port is not None:
+                # claude-agent-acp hands these settings to the CLI as its
+                # ``--settings`` tier, for a new and for a loaded session.
+                settings = chat_hook_settings(self.session_id, self._plan.hook_port)
+                setup_params["_meta"] = {"claudeCode": {"options": {"settings": settings}}}
             if self._plan.additional_dirs and self._session_cap("additionalDirectories"):
                 setup_params["additionalDirectories"] = list(self._plan.additional_dirs)
             if self._plan.system_prompt_append and self._session_cap("systemPrompt"):
@@ -990,11 +1038,17 @@ class ChatSession:
         self._timeline.upsert(user_item)
         blocks = _prompt_blocks(text, images)
         self._clear_attention()
+        if self._gate is not None:
+            # The quiet window of the turn before must not alert during this
+            # one: its UserPromptSubmit hook comes a moment after the prompt.
+            self._gate.cancel()
         self._timeline.patch_state(
             status="running", turn_started_at=_now_iso(), cancelling=False, urgent=True
         )
         self._prompt_dispatched = False
         self._cancel_before_dispatch = False
+        self._turn_stop = None
+        self._turn_reopened = False
         self._turn_task = asyncio.create_task(
             self._run_turn(blocks, text, images, mode), name=f"chat-turn-{self.session_id}"
         )
@@ -1119,9 +1173,21 @@ class ChatSession:
                 self._set_attention("turn_finished")
             self._resume_if_pending()
             return
+        finished = not failed and stop_reason not in (None, "cancelled")
         if any(not q.steering for q in self._queue) and alive and not self._stopping:
+            if finished and self._gate is not None and self._turn_stop is not None:
+                # No alert between two prompts, but the gate must know what
+                # this turn left behind: the next one may fire no hook.
+                self._gate.note_stop(self._turn_stop)
             tl.patch_state(status="ready", turn_started_at=None, cancelling=False)
             self._start_next_prompt()
+            return
+        if finished and self._turn_reopened and alive and not self._stopping:
+            # The agent already runs its next turn, which its own Stop hook
+            # ends: the chat keeps showing a running turn, now the agent's own.
+            self._external_turn = True
+            self._self_turn = True
+            tl.patch_state(turn_started_at=_now_iso(), cancelling=False, urgent=True)
             return
         # An error answering the user's own Stop is not news to them.
         cancelling = bool(tl.state.get("cancelling"))
@@ -1134,9 +1200,19 @@ class ChatSession:
         if not alive or self._stopping:
             return
         if failed and not cancelling:
+            self._settle_gate()
             self._set_attention("turn_failed")
-        elif stop_reason not in (None, "cancelled"):
+        elif failed or stop_reason in (None, "cancelled"):
+            self._settle_gate()
+        elif self._gate is None or not self._hooks_live:
             self._set_attention("turn_finished")
+        elif self._turn_stop is not None:
+            # The Stop hook listed what the turn left behind: the gate alerts
+            # once none of it is in flight.
+            self._gate.handle(HookKind.STOP, self._turn_stop)
+        else:
+            # No Stop hook: it was lost, or the turn was a local command.
+            self._gate.stop_lost()
 
     async def _reload_conversation(self) -> None:
         """Open the conversation again in a new agent process (``session/load``)."""
@@ -1159,8 +1235,15 @@ class ChatSession:
                 return {"cancelled": False}
             conn.notify("session/cancel", {"sessionId": self._acp_session_id})
             self._resolve_all_requests_cancelled()
-            self._timeline.patch_state(cancelling=True, urgent=True)
-            self._arm_external_watchdog()
+            if self._self_turn:
+                # Nothing reports the end of an interrupted turn of the agent's
+                # own (no Stop hook, no prompt answer), so it ends here.
+                self._mark_running_tools("cancelled")
+                self._settle_gate()
+                self._on_agent_busy(False)
+            else:
+                self._timeline.patch_state(cancelling=True, urgent=True)
+                self._arm_external_watchdog()
             return {"cancelled": True}
         if not running:
             return {"cancelled": False}
@@ -1293,6 +1376,15 @@ class ChatSession:
             # Idle: the queue sends it as the next prompt anyway.
             self._start_queue_if_idle()
             return {"steered": False}
+        if self._external_turn and self._self_turn and not self._own_turn_running():
+            # The adapter steers only a turn it got as a prompt. But a prompt
+            # sent during a turn the agent started by itself joins that turn,
+            # so the message goes out as one: this session's turn takes over.
+            self._external_turn = False
+            self._queue.remove(queued)
+            self._publish_queue()
+            self._start_prompt(queued.text, queued.images, mode=queued.mode)
+            return {"steered": True}
         if not self._steering:
             raise ChatCommandError("This agent cannot take a message during a turn")
         conn = self._require_conn()
@@ -1618,9 +1710,10 @@ class ChatSession:
                 if item is not None:
                     tl.append_text(item["id"], part["text"])
 
-    def _on_agent_busy(self, busy: bool) -> None:
+    def _on_agent_busy(self, busy: bool, *, self_started: bool = False) -> None:
         """A turn this session did not start (another client of a shared
-        host): show it as running, and hold queued messages until it ends."""
+        host, or with ``self_started`` the agent itself): show it as running,
+        and hold queued messages until it ends."""
         if not self._ready.is_set():
             # Joining a session while another app's turn runs.
             self._busy_before_ready = busy
@@ -1630,16 +1723,18 @@ class ChatSession:
         tl = self._timeline
         if busy and not self._external_turn:
             self._external_turn = True
+            self._self_turn = self_started
             self._close_streaming_items()
-            tl.upsert(
-                {
-                    "id": self._next_id("n"),
-                    "type": "notice",
-                    "severity": "info",
-                    "title": "Message sent from another app on your PC",
-                    "text": "",
-                }
-            )
+            if not self_started:
+                tl.upsert(
+                    {
+                        "id": self._next_id("n"),
+                        "type": "notice",
+                        "severity": "info",
+                        "title": "Message sent from another app on your PC",
+                        "text": "",
+                    }
+                )
             tl.patch_state(status="running", turn_started_at=_now_iso(), cancelling=False, urgent=True)
         elif not busy and self._external_turn:
             self._external_turn = False
@@ -2144,11 +2239,104 @@ class ChatSession:
     def _on_timeline_status(self, status: Any) -> None:
         """Mirror a turn starting or ending (own or another app's) onto the
         session row, so the sessions list can show which chats are busy."""
-        activity = _ACTIVITY_BY_STATUS.get(status)
+        if status not in _ACTIVITY_BY_STATUS:
+            # No agent process to send hooks (starting, error, stopped): what
+            # the last one reported is void.
+            self._hooks_live = False
+            self._gate_activity = None
+            if self._gate is not None:
+                self._gate.reset_turn()
+        self._publish_activity()
+
+    def _publish_activity(self) -> None:
+        activity = _ACTIVITY_BY_STATUS.get(str(self._timeline.state.get("status")))
+        if activity == "idle" and self._gate_activity is not None:
+            # No turn runs, and the hooks know what the last one left behind.
+            activity = self._gate_activity
         if activity == self._activity:
             return
         self._activity = activity
         self._put_event(SessionEvent("activity", self.session_id))
+
+    def on_claude_hook(self, kind: HookKind, payload: Mapping[str, Any]) -> None:
+        """Apply one Claude Code hook (see ``ChatLaunchPlan.hook_port``).
+
+        The ``session/prompt`` answer ends a turn for the chat screen. The
+        hooks add what it cannot say: the work a turn left behind, which keeps
+        the session ``working`` or ``waiting`` and holds the "turn finished"
+        alert back, and the turns the agent starts by itself, which the chat
+        shows as running and which the user can stop.
+        """
+        gate = self._gate
+        if gate is None or kind not in _TURN_HOOKS:
+            return
+        if (
+            not self._ready.is_set()
+            or self._stopping
+            or self._timeline.state.get("status") not in _ACTIVITY_BY_STATUS
+        ):
+            # A hook of an agent process that is closing, gone or not open yet.
+            return
+        own_turn = self._own_turn_running()
+        self_turn = self._external_turn and self._self_turn
+        if kind is HookKind.STOP_FAILURE:
+            if own_turn:
+                # The prompt answer reports the failure of a turn the user
+                # sent. A turn that began after its Stop has ended here too.
+                self._turn_reopened = False
+            elif self_turn:
+                self._fail_self_turn()
+            return
+        if (
+            kind is HookKind.TOOL
+            and not own_turn
+            and not self_turn
+            and not is_subagent_call(payload)
+        ):
+            # A call that was on its way when its turn was interrupted. No
+            # Stop hook follows an interrupt, so it must not revive the turn.
+            return
+        self._hooks_live = True
+        if kind is HookKind.PROMPT_SUBMIT:
+            if self._attention in ("turn_finished", "turn_failed"):
+                # The agent works again, and this turn alerts at its own end.
+                self._clear_attention()
+            if own_turn and self._turn_stop is not None:
+                # A turn began after the Stop of the prompt that still waits
+                # for its answer. That Stop no longer ends anything.
+                self._turn_stop = None
+                self._turn_reopened = True
+            # No-op for a prompt this session sent: its own turn runs.
+            self._on_agent_busy(True, self_started=True)
+        elif kind is HookKind.STOP and own_turn:
+            self._turn_stop = dict(payload)
+            self._turn_reopened = False
+            return
+        gate.handle(kind, payload)
+        if kind is HookKind.STOP and self_turn:
+            self._on_agent_busy(False)
+
+    def _fail_self_turn(self) -> None:
+        """A turn the agent started by itself ended on an error (a rate
+        limit, a lost login): the user has to act, as after a failed prompt."""
+        self._settle_gate()
+        if not any(not q.steering for q in self._queue):
+            # Otherwise the next queued message starts now and reports its own end.
+            self._set_attention("turn_failed")
+        self._on_agent_busy(False)
+
+    def _on_gate_activity(self, activity: str) -> None:
+        self._gate_activity = activity
+        self._publish_activity()
+
+    def _on_gate_alert(self, attention: str, _exit_reason: str | None) -> None:
+        self._set_attention(attention)
+
+    def _settle_gate(self) -> None:
+        """Nothing is in flight any more and no "turn finished" alert is due:
+        the turn was stopped or failed, which no ``Stop`` hook reports."""
+        if self._gate is not None and self._hooks_live:
+            self._gate.settle()
 
     def _set_attention(self, attention: str, exit_reason: str | None = None) -> None:
         changed = attention != self._attention or (
