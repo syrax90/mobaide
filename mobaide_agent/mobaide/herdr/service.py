@@ -53,6 +53,8 @@ DONE_QUIET_SECONDS = 3.0
 
 # How long a pane open waits for a server whose link just dropped.
 REOPEN_WAIT_SECONDS = 4.0
+# Discovery retries in that wait while the server is not found yet.
+REOPEN_RETRY_SECONDS = 0.5
 
 EVENT_CHANGED = "herdr.changed"
 EVENT_ATTENTION = "herdr.attention"
@@ -120,6 +122,8 @@ class HerdrService:
         self._releases: dict[str, asyncio.Future[Any]] = {}
         # Set on every change of a link; see ``_link_after_restart``.
         self._change_seen = asyncio.Event()
+        # Loop time at which each server's link dropped, until a new one comes.
+        self._lost_at: dict[str, float] = {}
 
     def agent_choices(self) -> list[AgentChoice]:
         return self._agents
@@ -144,6 +148,7 @@ class HerdrService:
         self._alerts.clear()
         self._links.clear()
         self._link_tasks.clear()
+        self._lost_at.clear()
 
     async def _discover_loop(self) -> None:
         while True:
@@ -166,6 +171,7 @@ class HerdrService:
                     continue
                 link = factory(self._changed)
                 self._links[server_id] = link
+                self._lost_at.pop(server_id, None)
                 self._link_tasks[server_id] = asyncio.create_task(
                     self._run_link(link), name=f"herdr-link-{server_id}"
                 )
@@ -197,6 +203,7 @@ class HerdrService:
             if self._links.get(link.server_id) is link:
                 self._links.pop(link.server_id, None)
                 self._link_tasks.pop(link.server_id, None)
+                self._lost_at[link.server_id] = asyncio.get_running_loop().time()
             for session in list(self._pane_sessions.values()):
                 if session.server_id == link.server_id:
                     session.end()
@@ -262,9 +269,16 @@ class HerdrService:
                     continue
                 if state == alerts.seen:
                     continue
+                seen_turn = alerts.seen[1] if alerts.seen is not None else None
                 alerts.seen = state
-                if pane.status == "working":
+                # A turn can run and end between two reads, so its ``working``
+                # is never seen. The gate takes a repeated ``done`` as the old
+                # turn and the old alert still stands: replay the work first.
+                new_turn = seen_turn is not None and pane.turn not in (None, seen_turn)
+                if pane.status == "working" or new_turn:
                     alerts.clear()
+                if new_turn and pane.status != "working":
+                    alerts.gate.handle(_STATUS_TO_PROGRAM["working"])
                 report = _STATUS_TO_PROGRAM.get(pane.status or "")
                 if report is not None:
                     alerts.gate.handle(report)
@@ -354,18 +368,25 @@ class HerdrService:
         A pane view ends the moment its link drops, and the client asks for
         the pane again at once. The link is back only after a discovery pass
         and its first read, so an immediate answer would call a pane closed
-        that is only between two links.
+        that is only between two links. A server that restarts can also be
+        missing from the first pass, so discovery runs again until the wait
+        ends for a server whose link dropped a moment ago. An unknown server
+        is refused at once.
         """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + REOPEN_WAIT_SECONDS
         link = self._links.get(server_id)
         if link is None:
-            try:
-                await self._discover_once()
-            except Exception:
-                logger.exception("herdr.discover_failed")
+            await self._discover_quietly()
             link = self._links.get(server_id)
-        if link is not None and link.state() is None:
+        while link is None and self._lost_recently(server_id) and loop.time() < deadline:
+            await asyncio.sleep(min(REOPEN_RETRY_SECONDS, deadline - loop.time()))
+            await self._discover_quietly()
+            link = self._links.get(server_id)
+        remaining = deadline - loop.time()
+        if link is not None and link.state() is None and remaining > 0:
             try:
-                async with asyncio.timeout(REOPEN_WAIT_SECONDS):
+                async with asyncio.timeout(remaining):
                     # Each link reports its first read through ``_changed``.
                     while link.state() is None and self._links.get(server_id) is link:
                         self._change_seen.clear()
@@ -373,6 +394,19 @@ class HerdrService:
             except TimeoutError:
                 pass
         return self._link(server_id)
+
+    async def _discover_quietly(self) -> None:
+        try:
+            await self._discover_once()
+        except Exception:
+            logger.exception("herdr.discover_failed")
+
+    def _lost_recently(self, server_id: str) -> bool:
+        lost_at = self._lost_at.get(server_id)
+        return (
+            lost_at is not None
+            and asyncio.get_running_loop().time() - lost_at < REOPEN_WAIT_SECONDS
+        )
 
     async def set_control(
         self,

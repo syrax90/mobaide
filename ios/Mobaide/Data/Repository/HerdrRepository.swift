@@ -53,6 +53,8 @@ final class HerdrRepository {
     private var subscription: Task<Void, Never>?
     private var recheckTask: Task<Void, Never>?
     private var recheckPending = false
+    /// Counts the pushed states, so a REST read can tell it is older.
+    private var pushes = 0
 
     init(agentAPI: AgentAPI, agentEventBus: AgentEventBus, connectedAgentId: @escaping () -> String?) {
         self.agentAPI = agentAPI
@@ -75,7 +77,7 @@ final class HerdrRepository {
             for await event in stream {
                 switch event {
                 case .herdrChanged(let snapshot):
-                    await self?.set(snapshot)
+                    await self?.setPushed(snapshot)
                 case .sessionsChanged:
                     // `herdr.changed` arrives only while the agent has the
                     // dashboard, so a held state is re-checked on each sessions
@@ -114,6 +116,11 @@ final class HerdrRepository {
         if !version.herdrCapability, currentSnapshot != nil { set(nil) }
     }
 
+    private func setPushed(_ snapshot: HerdrSnapshot) {
+        pushes &+= 1
+        set(snapshot)
+    }
+
     private func set(_ snapshot: HerdrSnapshot?) {
         loadedAgentId = connectedAgentId()
         currentSnapshot = snapshot
@@ -135,7 +142,9 @@ final class HerdrRepository {
             set(nil)
             return
         }
-        if let snapshot = try? await agentAPI.getHerdr() {
+        let pushesBefore = pushes
+        // A `herdr.changed` that came during the read is newer than its answer.
+        if let snapshot = try? await agentAPI.getHerdr(), pushes == pushesBefore {
             set(snapshot)
         }
     }

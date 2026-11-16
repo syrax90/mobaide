@@ -13,11 +13,13 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -158,6 +160,29 @@ class HerdrRepositoryTest {
 
         eventFlow.emit(AgentEvent.HerdrChanged(snapshot("core:default")))
         onWallTime { repo.snapshot.first { it == snapshot("core:default") } }
+    }
+
+    @Test
+    fun refresh_whoseReadIsOvertakenByAPush_keepsThePushedState() = runTest {
+        // A pane closed during the read leaves on the push. The older REST
+        // answer must not bring it back.
+        coEvery { restApi.getAgentVersion() } returns version("""{"herdr":{"dashboard":true}}""")
+        val readStarted = CompletableDeferred<Unit>()
+        val answer = CompletableDeferred<HerdrSnapshot>()
+        coEvery { restApi.getHerdr() } coAnswers {
+            readStarted.complete(Unit)
+            answer.await()
+        }
+        val repo = subscribedRepository()
+
+        val refreshing = launch { repo.refresh() }
+        readStarted.await()
+        eventFlow.emit(AgentEvent.HerdrChanged(snapshot("core:default")))
+        onWallTime { repo.snapshot.first { it == snapshot("core:default") } }
+        answer.complete(snapshot("tui:default"))
+        refreshing.join()
+
+        assertEquals(snapshot("core:default"), repo.snapshot.value)
     }
 
     @Test

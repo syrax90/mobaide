@@ -143,7 +143,9 @@ class TestSnapshot:
             seen.service.snapshot().model_dump(mode="json")
         ]
 
-    async def test_a_stopped_server_leaves_the_state(self, seen) -> None:
+    async def test_a_stopped_server_leaves_the_state(self, seen, monkeypatch) -> None:
+        # Without the wait for a server that restarts: the refusal comes at once.
+        monkeypatch.setattr(service_module, "REOPEN_WAIT_SECONDS", 0.0)
         seen.link.stop_server()
         await settle()
         seen.flush()
@@ -188,6 +190,22 @@ class TestAlerts:
         assert seen.events(EVENT_ATTENTION) == []
         assert seen.scheduler.elapse(DONE_QUIET_SECONDS) == 1
         assert [a["reason"] for a in seen.events(EVENT_ATTENTION)] == [reason]
+
+    async def test_a_turn_that_ran_between_two_reads_alerts_again(self, seen) -> None:
+        # The ``working`` of turn 2 fell between two reads: only the new
+        # ``turn`` tells it apart from the turn that already alerted.
+        seen.set_status("done", turn=1)
+        seen.scheduler.elapse(DONE_QUIET_SECONDS)
+        seen.set_status("done", turn=2)
+
+        # Alerts of one pane keep a minimum spacing, so the second one waits.
+        waiting = [h for h in seen.scheduler.handles if not (h.cancelled or h.fired)
+                   and h.delay not in (PUBLISH_DEBOUNCE_SECONDS, DISCOVER_SECONDS)]
+        assert len(waiting) == 1
+        waiting[0].callback(*waiting[0].args)
+        assert [a["reason"] for a in seen.events(EVENT_ATTENTION)] == [
+            "turn_finished", "turn_finished",
+        ]
 
     async def test_new_work_inside_the_window_cancels_the_alert(self, seen) -> None:
         # Herdr reads the state off the screen and can say ``done`` while the
@@ -331,6 +349,23 @@ class TestPaneSessions:
         assert await asyncio.wait_for(opening, 5) == session_id
         assert seen.backend.link is not seen.link
         assert (await seen.manager.get_session(session_id)).is_alive()
+
+    async def test_a_pane_opens_when_its_restarting_server_is_found_late(self, seen) -> None:
+        # The first discovery pass after the drop does not find the server
+        # yet: the open must try again, not call the pane closed.
+        session_id = await seen.service.open_pane(SERVER_ID, AGENT_PANE)
+        seen.link.stop_server()
+        await settle()
+
+        opening = asyncio.ensure_future(seen.service.open_pane(SERVER_ID, AGENT_PANE))
+        await settle()
+        assert not opening.done()
+
+        seen.backend.restart()
+        assert seen.scheduler.elapse(service_module.REOPEN_RETRY_SECONDS) == 1
+
+        assert await asyncio.wait_for(opening, 5) == session_id
+        assert seen.backend.link is not seen.link
 
     async def test_an_outdated_server_opens_no_pane(self, seen) -> None:
         seen.link.server_state = "outdated"

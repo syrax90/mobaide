@@ -116,7 +116,7 @@ Lifetime:
 - The agent ends a pane session that nobody watched for 30 minutes, and one whose server restarted.
 - The client then gets a `stopped` state frame. It asks for the pane again once and attaches again.
 - A pane that is closed answers `pane_not_found`. The client leaves the screen.
-- When the link to a herdr server drops, its pane views end at once. The open call waits up to 4 seconds for the new link, so the view comes back.
+- When the link to a herdr server drops, its pane views end at once. The open call waits up to 4 seconds for the new link, so the view comes back. In that time it looks for the server again every 0.5 seconds. A server that was never seen gets an answer at once.
 
 "History" reads the last 1000 lines of the pane as text (`GET /api/herdr/pane/text`). The live view shows only the screen.
 
@@ -131,6 +131,7 @@ Lifetime:
 | `idle` | Idle | none |
 
 - The agent times alerts with the same gate as session alerts. A `done` must hold for 3 seconds, because herdr can report it while an agent only paused.
+- A new `turn` is a new finished turn, also when the agent never read `working` in between. A short turn can start and end between two reads.
 - A client shows no alert for the pane that is on screen.
 - A tapped alert opens the dashboard, which opens the pane.
 - A `done` pane whose `turn` the device has already seen shows as Idle. Opening the pane, or "Mark as seen", stores the turn.

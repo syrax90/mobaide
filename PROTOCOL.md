@@ -171,7 +171,7 @@ Herdr is a workspace manager for coding agents. The agent attaches to the herdr 
 
 * `placement` is `workspace` (a new workspace; on herdr-core a new terminal), `tab` (needs `workspace_id`), `split_right` or `split_down` (need `pane_id`). `target` is `workspace`, `tab` or `pane`. `cwd` must be an absolute folder that exists.
 * `agent_error` is a message for the user. It is set when the pane was made and its `agent` did not start. The client shows it and opens the pane; it does not create again.
-* `POST /api/herdr/pane/open` waits up to 4 s for a server whose link to the agent just dropped, so a pane view that ended with that link opens again.
+* `POST /api/herdr/pane/open` waits up to 4 s for a server whose link to the agent just dropped, so a pane view that ended with that link opens again. It looks for the server again every 0.5 s in that time, also while the server is not found yet.
 * No route reaches a herdr method outside this table. Server stop, config reload, plugins and layout apply are not reachable.
 * The relay runs these routes aside from its tunnel reader, as it does for voice.
 

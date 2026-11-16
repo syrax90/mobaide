@@ -240,6 +240,32 @@ final class HerdrRepositoryTests: XCTestCase {
         XCTAssertEqual(repository.currentSnapshot, Self.newerState)
     }
 
+    func testARefreshWhoseReadIsOvertakenByAPushKeepsThePushedState() async throws {
+        // A pane closed during the read leaves on the push. The older REST
+        // answer must not bring it back.
+        let (repository, connection) = try await makeConnectedStack()
+        StubURLProtocol.enqueue(status: 200, body: Self.withDashboard)
+        StubURLProtocol.enqueue(status: 200, body: Self.oneServer)
+        // Holds the `/api/herdr` read on the loading thread.
+        let gate = DispatchSemaphore(value: 0)
+        StubURLProtocol.onRequest = { request in
+            guard request.url?.path == "/api/herdr" else { return }
+            StubURLProtocol.onRequest = nil
+            gate.wait()
+        }
+
+        let refreshing = Task { await repository.refresh() }
+        await waitUntil { StubURLProtocol.requests.count == 2 }
+        connection.emit(.text(Self.newerHerdrChanged))
+        let pushed = await waitFor(repository) { $0 == Self.newerState }
+        XCTAssertEqual(pushed, Self.newerState)
+
+        gate.signal()
+        await refreshing.value
+
+        XCTAssertEqual(repository.currentSnapshot, Self.newerState)
+    }
+
     func testABurstOfSessionsChangedRunsOneCheckAtATimeAndDoesNotHoldBackTheState() async throws {
         StubURLProtocol.enqueue(status: 200, body: Self.withDashboard)
         StubURLProtocol.enqueue(status: 200, body: Self.oneServer)

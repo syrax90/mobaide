@@ -52,11 +52,19 @@ class HerdrRepository(
     /** The agent the current [snapshot] belongs to. */
     private var loadedAgentId: String? = null
 
+    /** Counts the pushed states; guarded by [pushLock]. */
+    private var pushes = 0L
+    private val pushLock = Any()
+
     init {
         scope.launch {
             eventBus.stream<AgentEvent.HerdrChanged>().collect { event ->
-                loadedAgentId = tokenStore.getAgentId()
-                _snapshot.value = event.snapshot
+                val agentId = tokenStore.getAgentId()
+                synchronized(pushLock) {
+                    pushes++
+                    loadedAgentId = agentId
+                    _snapshot.value = event.snapshot
+                }
             }
         }
         scope.launch {
@@ -102,7 +110,13 @@ class HerdrRepository(
             _snapshot.value = null
             return
         }
-        runCatching { restApi.getHerdr() }.onSuccess { _snapshot.value = it }
+        val pushesBefore = synchronized(pushLock) { pushes }
+        runCatching { restApi.getHerdr() }.onSuccess { read ->
+            synchronized(pushLock) {
+                // A `herdr.changed` that came during the read is newer than its answer.
+                if (pushes == pushesBefore) _snapshot.value = read
+            }
+        }
     }
 
     suspend fun openPane(serverId: String, paneId: String): String =
