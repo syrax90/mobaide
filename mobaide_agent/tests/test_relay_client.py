@@ -4210,6 +4210,166 @@ class TestHandleProxyRequestCursor:
         assert resp["body"]["kind"] == "cursor"
 
 
+class TestHandleCreateSessionJunie:
+    """The control-channel ``create_session`` path must support Junie: parse
+    ``junie_options``, thread the ``cli`` discriminator into a JUNIE
+    ``SessionConfig``, and answer ``session_create_failed`` for a block it
+    cannot parse. No auth case: Junie has no sign-in probe.
+    """
+
+    async def test_create_session_forwards_junie_options_and_kind(
+        self, client, mock_session_manager,
+    ):
+        """Otherwise Plan mode, Brave mode and the worktree are dropped on
+        the relay control path."""
+        from mobaide.core.junie_launcher import JunieOptions
+        from mobaide.core.models import SessionConfig
+
+        captured: dict[str, SessionConfig] = {}
+
+        async def _capture(config: SessionConfig):
+            captured["config"] = config
+            s = MagicMock()
+            s.session_id = "junie-sess"
+            s.pid = 7
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "junie-sess",
+            "cli": "junie",
+            "junie_options": {
+                "plan_mode": True,
+                "brave": True,
+                "worktree": True,
+                "branch_name": "feature/x",
+            },
+        }
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        cfg = captured["config"]
+        assert cfg.kind is SessionKind.JUNIE
+        assert cfg.claude_options is None
+        assert cfg.cursor_options is None
+        assert cfg.pi_options is None
+        assert cfg.junie_options == JunieOptions(
+            plan_mode=True, brave=True, worktree=True, branch_name="feature/x",
+        )
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_created"
+        assert resp["session_id"] == "junie-sess"
+
+    @pytest.mark.parametrize(
+        "block",
+        [{"plan_mode": "sometimes"}, ["--brave"]],
+        ids=["wrong-type", "not-an-object"],
+    )
+    async def test_invalid_junie_options_fail_the_create(
+        self, client, mock_session_manager, block,
+    ):
+        """A malformed block answers ``session_create_failed`` and never
+        spawns: a session started with the defaults instead could change
+        files although the user asked for Plan mode."""
+        mock_session_manager.create_session = AsyncMock()
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "bad-junie",
+            "cli": "junie",
+            "junie_options": block,
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_create_failed"
+        assert resp["session_id"] == "bad-junie"
+        assert resp["error"].startswith("Invalid junie_options:")
+        mock_session_manager.create_session.assert_not_awaited()
+
+
+class TestHandleProxyRequestJunie:
+    """``POST /api/sessions`` proxied through the central relay
+    (``proxy_request`` control frame) must thread Junie the same way the
+    direct HTTP router does: this is the path the mobile and web clients use.
+    """
+
+    async def test_proxy_post_sessions_threads_junie_options(
+        self, client, mock_session_manager,
+    ):
+        from mobaide.core.junie_launcher import JunieOptions
+        from mobaide.core.models import SessionConfig
+
+        captured: dict[str, SessionConfig] = {}
+
+        async def _capture(config: SessionConfig):
+            captured["config"] = config
+            s = MagicMock()
+            s.session_id = "proxy-junie"
+            s.pid = 11
+            info = MagicMock()
+            info.session_id = "proxy-junie"
+            info.state = SessionState.RUNNING
+            info.created_at = datetime(2026, 11, 16, 9, 0, 0, tzinfo=timezone.utc)
+            info.pid = 11
+            info.command = ["junie"]
+            info.cwd = None
+            info.title = None
+            info.project_name = None
+            info.kind = SessionKind.JUNIE
+            info.kind_label = None
+            info.attention = None
+            info.exit_reason = None
+            info.ui = "terminal"
+            info.activity = None
+            s.to_info = MagicMock(return_value=info)
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+        ws = AsyncMock()
+        ctrl = {
+            "type": "proxy_request",
+            "request_id": "req-junie",
+            "method": "POST",
+            "path": "/api/sessions",
+            "body": {
+                "cli": "junie",
+                "junie_options": {
+                    "plan_mode": True,
+                    "brave": True,
+                    "worktree": True,
+                    "branch_name": "feature/x",
+                    "base_branch": "origin/dev",
+                },
+            },
+        }
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        cfg = captured["config"]
+        assert cfg.kind is SessionKind.JUNIE
+        assert cfg.claude_options is None
+        assert cfg.cursor_options is None
+        assert cfg.pi_options is None
+        assert cfg.junie_options == JunieOptions(
+            plan_mode=True,
+            brave=True,
+            worktree=True,
+            branch_name="feature/x",
+            base_branch="origin/dev",
+        )
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "proxy_response"
+        assert resp["request_id"] == "req-junie"
+        assert resp["status"] == 201
+        assert resp["body"]["kind"] == "junie"
+
+
 CUSTOM_KIND = "custom_0123456789ab"
 
 

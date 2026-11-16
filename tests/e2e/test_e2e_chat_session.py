@@ -33,6 +33,7 @@ _CHAT_AGENT_ENV = {
     "MOBAIDE_ACP_OPENCODE_COMMAND": "",
     "MOBAIDE_ACP_COPILOT_COMMAND": "",
     "MOBAIDE_ACP_CURSOR_COMMAND": "",
+    "MOBAIDE_ACP_JUNIE_COMMAND": "",
     "MOBAIDE_ACP_PI_COMMAND": "",
 }
 
@@ -191,6 +192,7 @@ def test_chat_session_over_the_relay(e2e_stack, spawn_agent, tmp_path):
         "opencode": {"resume": True, "live": False},
         "copilot": {"resume": True, "live": False},
         "cursor": {"resume": True, "live": False},
+        "junie": {"resume": True, "live": False},
         "pi": {"resume": True, "live": False},
     }
 

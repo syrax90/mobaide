@@ -696,10 +696,15 @@ class TestMergeToolUpdate:
             {"stdout": "ok", "stderr": ""},
             {"exitCode": 0},
             {"exitCode": 0, "stdout": None, "stderr": 5},
+            {"output": "partial"},
+            {"exitCode": 0, "output": None},
             "ok",
             None,
         ],
-        ids=["bool-code", "text-code", "no-code", "no-streams", "streams-not-text", "text", "none"],
+        ids=[
+            "bool-code", "text-code", "no-code", "no-streams", "streams-not-text",
+            "output-still-running", "output-not-text", "text", "none",
+        ],
     )
     def test_any_other_raw_output_of_a_command_keeps_the_content(self, raw_output):
         item = nz.new_tool_item("call-1")
@@ -723,6 +728,31 @@ class TestMergeToolUpdate:
         )
 
         assert item["content"] == [{"type": "text", "text": "shown"}]
+
+    @pytest.mark.parametrize(
+        ("exit_code", "tail"),
+        [(0, ""), (2, "\nExit code 2")],
+        ids=["success", "failure"],
+    )
+    def test_a_junie_command_result_replaces_the_shortened_copy(self, exit_code, tail):
+        """Junie sends a shortened copy of the output as ``content`` and the
+        whole output as ``rawOutput.output``."""
+        whole = "collected 4 items\n\ntests/test_app.py ....\n4 passed in 0.12s"
+        short = [{"type": "content", "content": {"type": "text", "text": "collected 4 items\n...\n4 passed in 0.12s"}}]
+        item = nz.new_tool_item("call-1")
+        nz.merge_tool_update(
+            item,
+            {"kind": "execute", "status": "in_progress", "content": short, "rawOutput": {"output": whole}},
+        )
+        running = item["content"]
+
+        nz.merge_tool_update(
+            item,
+            {"status": "completed", "content": short, "rawOutput": {"output": whole, "exitCode": exit_code}},
+        )
+
+        assert running == [{"type": "text", "text": "collected 4 items\n...\n4 passed in 0.12s"}]
+        assert item["content"] == [{"type": "text", "text": f"```console\n{whole}\n```{tail}"}]
 
     def test_the_same_raw_output_of_a_tool_that_is_not_a_command_is_no_console(self):
         item = nz.new_tool_item("call-1")

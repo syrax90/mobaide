@@ -24,6 +24,7 @@ enum AttentionContent {
         case .opencode: return "OpenCode session"
         case .copilot: return "GitHub Copilot session"
         case .cursor: return "Cursor session"
+        case .junie: return "Junie session"
         case .pi: return "Pi session"
         case .autoScan: return "Auto Scan session"
         case .shell: return "Terminal session"

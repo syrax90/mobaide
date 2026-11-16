@@ -3,6 +3,7 @@ import {
   ANTIGRAVITY_PREFS_DEFAULTS,
   CLAUDE_PREFS_DEFAULTS,
   CODEX_PREFS_DEFAULTS,
+  JUNIE_PREFS_DEFAULTS,
   type ClaudeLaunchPrefs,
   type LaunchPrefs,
 } from '../../../stores/launchPrefsStore';
@@ -17,6 +18,7 @@ const NEVER_LAUNCHED: LaunchPrefs = {
   opencode: null,
   copilot: null,
   cursor: null,
+  junie: null,
   pi: null,
   lastWorkspaceName: null,
 };
@@ -154,6 +156,7 @@ describe('applyLaunchPrefs', () => {
       opencode: null,
       copilot: null,
       cursor: null,
+      junie: null,
       pi: null,
       lastWorkspaceName: 'mobaide',
     });
@@ -244,6 +247,41 @@ describe('the Cursor bucket', () => {
       force: false,
       terminalUi: false,
     });
+  });
+});
+
+describe('the Junie bucket', () => {
+  const dialled: WizardState = {
+    ...INITIAL_WIZARD_STATE,
+    junie: { planMode: true, brave: true, terminalUi: true },
+    git: { worktree: true, branchName: 'wip' },
+  };
+
+  it('is filed under its own kind, without the per-session git fields', () => {
+    expect(launchPrefsFromState(dialled, 'junie')).toEqual({
+      kind: 'junie',
+      prefs: { planMode: true, brave: true, terminalUi: true },
+    });
+  });
+
+  it('is restored into Junie only', () => {
+    const seeded = applyLaunchPrefs(INITIAL_WIZARD_STATE, {
+      ...NEVER_LAUNCHED,
+      junie: { planMode: true, brave: true, terminalUi: true },
+    });
+
+    expect(seeded.junie).toEqual({ planMode: true, brave: true, terminalUi: true });
+    expect(seeded.claude).toEqual(INITIAL_WIZARD_STATE.claude);
+    expect(seeded.cursor).toEqual(INITIAL_WIZARD_STATE.cursor);
+  });
+
+  it('is not seeded from the saved Cursor bucket', () => {
+    const seeded = applyLaunchPrefs(INITIAL_WIZARD_STATE, {
+      ...NEVER_LAUNCHED,
+      cursor: { force: true, terminalUi: true },
+    });
+
+    expect(seeded.junie).toEqual(INITIAL_WIZARD_STATE.junie);
   });
 });
 
@@ -426,6 +464,9 @@ describe('the two sets of defaults', () => {
     );
     expect(launchPrefsFromState(INITIAL_WIZARD_STATE, 'antigravity')?.prefs).toEqual(
       ANTIGRAVITY_PREFS_DEFAULTS,
+    );
+    expect(launchPrefsFromState(INITIAL_WIZARD_STATE, 'junie')?.prefs).toEqual(
+      JUNIE_PREFS_DEFAULTS,
     );
   });
 

@@ -20,6 +20,8 @@ export function terminalUiHint(chat: ChatSupport, agent: ChatAgentKind = 'claude
         return 'The chat view is not available for GitHub Copilot on your PC.';
       case 'cursor':
         return 'The chat view is not available for Cursor on your PC.';
+      case 'junie':
+        return 'The chat view is not available for Junie on your PC.';
       case 'pi':
         return 'The chat view is not available for Pi on your PC.';
       default:

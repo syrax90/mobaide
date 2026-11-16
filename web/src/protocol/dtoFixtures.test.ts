@@ -21,6 +21,7 @@ import {
   copilotOptionsSchema,
   createSessionRequestSchema,
   cursorOptionsSchema,
+  junieOptionsSchema,
   opencodeOptionsSchema,
   piOptionsSchema,
 } from './dto/sessionCreate';
@@ -49,6 +50,7 @@ const REGISTRY: Readonly<Record<string, z.ZodType>> = {
   OpenCodeOptionsModel: opencodeOptionsSchema,
   CopilotOptionsModel: copilotOptionsSchema,
   CursorOptionsModel: cursorOptionsSchema,
+  JunieOptionsModel: junieOptionsSchema,
   PiOptionsModel: piOptionsSchema,
   VersionInfoResponse: agentVersionSchema,
   CreateCustomAgentTypeRequest: createCustomAgentTypeRequestSchema,

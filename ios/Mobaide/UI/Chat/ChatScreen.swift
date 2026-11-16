@@ -395,7 +395,7 @@ struct ChatScreen: View {
         }
         var tone = PixelTone.muted
         if option.category == "mode", case .string(let raw) = value {
-            tone = ChatConfigCategory.modeTone(raw)
+            tone = ChatConfigCategory.modeTone(raw, name: current)
         }
         return ChatConfigChip(
             icon: ChatConfigCategory.icon(option),

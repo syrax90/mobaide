@@ -80,6 +80,7 @@ const POPULATED: WizardState = {
   opencode: { autoApprove: true, terminalUi: false },
   copilot: { allowAll: true, terminalUi: false },
   cursor: { force: true, terminalUi: false },
+  junie: { planMode: true, brave: true, terminalUi: false },
   pi: { terminalUi: false },
   git: { worktree: true, branchName: 'feature/x' },
   autoScanPromptSeededFor: gitWorkspace.name,
@@ -98,6 +99,7 @@ const REQUEST_MODES = [
   'opencode',
   'copilot',
   'cursor',
+  'junie',
   'pi',
   'shell',
   CUSTOM,
@@ -109,6 +111,7 @@ const OPTION_KEYS = [
   'opencode_options',
   'copilot_options',
   'cursor_options',
+  'junie_options',
   'pi_options',
 ] as const;
 
@@ -120,6 +123,7 @@ const OWN_OPTIONS: Record<(typeof REQUEST_MODES)[number], (typeof OPTION_KEYS)[n
     opencode: 'opencode_options',
     copilot: 'copilot_options',
     cursor: 'cursor_options',
+    junie: 'junie_options',
     pi: 'pi_options',
     shell: null,
     [CUSTOM]: null,
@@ -221,6 +225,11 @@ const CURSOR_BOOLEANS: Record<
   true
 > = { force: true, worktree: true };
 
+const JUNIE_BOOLEANS: Record<
+  RequiredBooleans<components['schemas']['JunieOptionsModel']>,
+  true
+> = { plan_mode: true, brave: true, worktree: true };
+
 const PI_BOOLEANS: Record<RequiredBooleans<components['schemas']['PiOptionsModel']>, true> = {
   worktree: true,
 };
@@ -285,6 +294,20 @@ describe('buildCreateRequest — every boolean explicit', () => {
     });
 
     expect(request.cursor_options?.force).toBe(false);
+  });
+
+  it('declares every Junie boolean', () => {
+    expectExplicitBooleans(build('junie').junie_options, JUNIE_BOOLEANS);
+  });
+
+  it('sends brave: false and plan_mode: false for a default Junie launch', () => {
+    const request = build('junie', {
+      ...INITIAL_WIZARD_STATE,
+      selection: { kind: 'stored', name: gitWorkspace.name },
+    });
+
+    expect(request.junie_options?.brave).toBe(false);
+    expect(request.junie_options?.plan_mode).toBe(false);
   });
 
   it('declares every Claude boolean on the Auto Scan request too', () => {
@@ -605,6 +628,48 @@ describe('Cursor — chat view', () => {
   });
 });
 
+describe('Junie — chat view', () => {
+  const AVAILABLE: ChatSupport = { kind: 'available', resume: true, live: false };
+
+  it.each<[string, boolean, ChatSupport | undefined, 'chat' | 'terminal']>([
+    ['chat available', false, AVAILABLE, 'chat'],
+    ['probe still out', false, undefined, 'chat'],
+    ['Terminal UI on', true, AVAILABLE, 'terminal'],
+    ['no chat for Junie on this PC', false, { kind: 'unavailable' }, 'terminal'],
+    ['agent predates chat', false, { kind: 'outdated' }, 'terminal'],
+  ])('%s', (_name, terminalUi, chat, ui) => {
+    const request = buildCreateRequest({
+      state: { ...POPULATED, junie: { ...POPULATED.junie, terminalUi } },
+      mode: 'junie',
+      workspace: gitWorkspace,
+      chat,
+    });
+
+    expect(request?.cli).toBe('junie');
+    expect(request?.ui).toBe(ui);
+    expect(request?.worktree).toBe(false);
+    expect(request?.junie_options).toEqual({
+      plan_mode: true,
+      brave: true,
+      worktree: true,
+      branch_name: 'feature/x',
+      base_branch: null,
+    });
+    expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
+  });
+
+  it('never carries the options of the Cursor bucket', () => {
+    const request = build('junie', {
+      ...POPULATED,
+      junie: { planMode: false, brave: false, terminalUi: false },
+      cursor: { force: true, terminalUi: true },
+    });
+
+    expect(request.junie_options?.brave).toBe(false);
+    expect('cursor_options' in request).toBe(false);
+  });
+});
+
 describe('Pi — chat view', () => {
   const AVAILABLE: ChatSupport = { kind: 'available', resume: true, live: false };
 
@@ -811,6 +876,32 @@ describe('buildResumeRequest', () => {
     expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
   });
 
+  it('continues a Junie session with the Junie options and never a worktree', () => {
+    const request = buildResumeRequest(
+      { state: POPULATED, mode: 'junie', workspace: gitWorkspace },
+      'junie',
+      stored,
+    );
+
+    expect(request).toMatchObject({
+      project_name: 'mobaide',
+      cli: 'junie',
+      ui: 'chat',
+      chat_resume_id: 'external-2222',
+      worktree: false,
+    });
+    expect(request.junie_options).toEqual({
+      plan_mode: true,
+      brave: true,
+      worktree: false,
+      branch_name: undefined,
+      base_branch: null,
+    });
+    expect('claude_options' in request).toBe(false);
+    expect('cursor_options' in request).toBe(false);
+    expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
+  });
+
   it('sends the recorded folder as cwd when it is not the selected workspace', () => {
     const request = buildResumeRequest(
       { state: POPULATED, mode: 'codex', workspace: gitWorkspace },
@@ -886,6 +977,7 @@ describe('base_branch', () => {
     expect(withBase('opencode').opencode_options?.base_branch).toBe('origin/dev');
     expect(withBase('copilot').copilot_options?.base_branch).toBe('origin/dev');
     expect(withBase('cursor').cursor_options?.base_branch).toBe('origin/dev');
+    expect(withBase('junie').junie_options?.base_branch).toBe('origin/dev');
     expect(withBase('pi').pi_options?.base_branch).toBe('origin/dev');
     for (const mode of [
       'claude',
@@ -894,6 +986,7 @@ describe('base_branch', () => {
       'opencode',
       'copilot',
       'cursor',
+      'junie',
       'pi',
     ] as const) {
       expect('base_branch' in withBase(mode)).toBe(false);

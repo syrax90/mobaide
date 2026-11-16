@@ -752,6 +752,85 @@ class TestCreateSessionCursor:
         )
 
 
+class TestCreateSessionJunie:
+    """``POST /api/sessions`` with ``cli="junie"`` threads ``junie_options``
+    through to a JUNIE session. No 409 auth case: Junie has no sign-in probe,
+    so a terminal session that is not signed in shows Junie's own welcome
+    screen.
+    """
+
+    async def test_cli_junie_threads_options_and_kind(
+        self, app, client, auth_headers,
+    ):
+        from datetime import datetime, timezone
+
+        from mobaide.core.junie_launcher import JunieOptions
+        from mobaide.core.models import (
+            SessionInfo,
+            SessionKind,
+            SessionState,
+        )
+
+        captured: dict = {}
+
+        class _FakeSession:
+            def __init__(self, config):
+                self.session_id = config.session_id
+                self._config = config
+
+            def to_info(self):
+                return SessionInfo(
+                    session_id=self.session_id,
+                    state=SessionState.RUNNING,
+                    created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    pid=123,
+                    command=self._config.command,
+                    cwd=self._config.cwd,
+                    kind=self._config.kind,
+                )
+
+        async def _capture(config):
+            captured["config"] = config
+            return _FakeSession(config)
+
+        app.state.session_manager.create_session = _capture
+
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={
+                "cli": "junie",
+                "junie_options": {
+                    "plan_mode": True,
+                    "brave": True,
+                    "worktree": True,
+                    "branch_name": "feature/x",
+                    "base_branch": "origin/dev",
+                },
+            },
+        )
+
+        assert resp.status_code == 201
+        assert resp.json()["kind"] == "junie"
+
+        cfg = captured["config"]
+        assert cfg.kind is SessionKind.JUNIE
+        assert cfg.claude_options is None
+        assert cfg.codex_options is None
+        assert cfg.antigravity_options is None
+        assert cfg.opencode_options is None
+        assert cfg.copilot_options is None
+        assert cfg.cursor_options is None
+        assert cfg.pi_options is None
+        assert cfg.junie_options == JunieOptions(
+            plan_mode=True,
+            brave=True,
+            worktree=True,
+            branch_name="feature/x",
+            base_branch="origin/dev",
+        )
+
+
 class TestCreateSessionAdHoc:
     """``POST /api/sessions`` with ``workspace_name=None`` and a
     user-supplied ``cwd``: the new ad-hoc (custom-path) launch path.

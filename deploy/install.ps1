@@ -191,7 +191,8 @@ function Get-ElevatedInstallCommand {
         'MOBAIDE_AGENT_SKIP_INSTALL_QR', 'MOBAIDE_AGENT_SKIP_PYTHON_INSTALL',
         'MOBAIDE_AGENT_CLAUDE_BIN_HINT', 'MOBAIDE_AGENT_CODEX_BIN_HINT',
         'MOBAIDE_AGENT_AGY_BIN_HINT', 'MOBAIDE_AGENT_COPILOT_BIN_HINT',
-        'MOBAIDE_AGENT_CURSOR_BIN_HINT', 'MOBAIDE_AGENT_PI_BIN_HINT'
+        'MOBAIDE_AGENT_CURSOR_BIN_HINT', 'MOBAIDE_AGENT_JUNIE_BIN_HINT',
+        'MOBAIDE_AGENT_PI_BIN_HINT'
     )
     $envStmts = foreach ($name in $passthrough) {
         $val = [Environment]::GetEnvironmentVariable($name, 'Process')
@@ -253,6 +254,12 @@ function Assert-AdminOrElevate {
     $cursorBin = Find-CursorBinary
     if ($cursorBin) {
         $env:MOBAIDE_AGENT_CURSOR_BIN_HINT = $cursorBin
+    }
+    # Junie CLI counterpart, carried across the UAC boundary via
+    # MOBAIDE_AGENT_JUNIE_BIN_HINT in the same way.
+    $junieBin = Find-JunieBinary
+    if ($junieBin) {
+        $env:MOBAIDE_AGENT_JUNIE_BIN_HINT = $junieBin
     }
     # Pi counterpart, carried across the UAC boundary via
     # MOBAIDE_AGENT_PI_BIN_HINT in the same way.
@@ -558,6 +565,56 @@ function Set-CursorBinIfMissing {
     Write-Info "Writing MOBAIDE_CURSOR_BIN=$CursorBin into $EnvFile"
     & $ReleasePython -m mobaide.agent.config set-env --prefix $Script:Prefix `
         --key MOBAIDE_CURSOR_BIN --value $CursorBin
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "set-env failed (exit $LASTEXITCODE); edit $EnvFile manually and restart $Script:ServiceName."
+    }
+}
+
+# Optional Junie CLI counterpart of Find-CodexBinary. The check is "is the
+# junie command available": PATH first, then the folder that Junie's install
+# script uses (%USERPROFILE%\.local\bin, which holds its junie.bat launcher).
+# Only a real executable counts: a PowerShell alias or function has no path the
+# agent could start. Returns the absolute junie path, or $null if not found. A
+# miss is not warned: Junie is optional.
+function Find-JunieBinary {
+    foreach ($name in @('junie.bat', 'junie.cmd', 'junie.exe', 'junie')) {
+        $hit = Get-Command $name -ErrorAction SilentlyContinue
+        if (-not $hit) { continue }
+        if ($hit.CommandType -ne 'Application') { continue }
+        if ($hit.Source -like "*\WindowsApps\*") { continue }
+        return $hit.Source
+    }
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if ($env:USERPROFILE) {
+        $candidates.Add((Join-Path $env:USERPROFILE '.local\bin\junie.bat'))
+        $candidates.Add((Join-Path $env:USERPROFILE '.local\bin\junie.cmd'))
+    }
+    foreach ($c in $candidates) {
+        if (Test-Path -LiteralPath $c) {
+            return (Resolve-Path -LiteralPath $c).ProviderPath
+        }
+    }
+    return $null
+}
+
+# Write MOBAIDE_JUNIE_BIN into an existing agent .env unless the operator
+# already set it. It uses set-env, not an init-env argument: set-env takes any
+# key, so this installer also works with an agent release that is older than
+# Junie support (an unknown init-env argument would fail the install).
+function Set-JunieBinIfMissing {
+    param(
+        [Parameter(Mandatory=$true)] [string] $EnvFile,
+        [Parameter(Mandatory=$true)] [string] $ReleasePython,
+        [Parameter(Mandatory=$true)] [string] $JunieBin
+    )
+    $existing = Read-EnvValue -Path $EnvFile -Key 'MOBAIDE_JUNIE_BIN'
+    if ($existing) {
+        Write-Info "MOBAIDE_JUNIE_BIN already set in $EnvFile; leaving as-is."
+        return
+    }
+    Write-Info "Writing MOBAIDE_JUNIE_BIN=$JunieBin into $EnvFile"
+    & $ReleasePython -m mobaide.agent.config set-env --prefix $Script:Prefix `
+        --key MOBAIDE_JUNIE_BIN --value $JunieBin
     if ($LASTEXITCODE -ne 0) {
         Write-Warn "set-env failed (exit $LASTEXITCODE); edit $EnvFile manually and restart $Script:ServiceName."
     }
@@ -1274,6 +1331,16 @@ absolute path in $Script:Prefix\mobaide_agent\.env and restart:
         Write-Info "Cursor CLI not detected; leaving MOBAIDE_CURSOR_BIN unset (set it in $Script:Prefix\mobaide_agent\.env if you use Cursor)."
     }
 
+    # Junie CLI counterpart (optional managed agent): the same
+    # hint-then-probe discovery and the same soft Info-on-miss.
+    $junieBin = $env:MOBAIDE_AGENT_JUNIE_BIN_HINT
+    if (-not $junieBin) { $junieBin = Find-JunieBinary }
+    if ($junieBin) {
+        Write-Info "Detected Junie CLI at $junieBin"
+    } else {
+        Write-Info "Junie CLI not detected; leaving MOBAIDE_JUNIE_BIN unset (set it in $Script:Prefix\mobaide_agent\.env if you use Junie)."
+    }
+
     # Pi counterpart (optional managed agent): the same
     # hint-then-probe discovery and the same soft Info-on-miss.
     $piBin = $env:MOBAIDE_AGENT_PI_BIN_HINT
@@ -1301,6 +1368,9 @@ absolute path in $Script:Prefix\mobaide_agent\.env and restart:
         if ($cursorBin) {
             Set-CursorBinIfMissing -EnvFile $envFile -ReleasePython $releasePython -CursorBin $cursorBin
         }
+        if ($junieBin) {
+            Set-JunieBinIfMissing -EnvFile $envFile -ReleasePython $releasePython -JunieBin $junieBin
+        }
         if ($piBin) {
             Set-PiBinIfMissing -EnvFile $envFile -ReleasePython $releasePython -PiBin $piBin
         }
@@ -1313,8 +1383,9 @@ absolute path in $Script:Prefix\mobaide_agent\.env and restart:
     # always wins. This implements the "Surgical set-env only" policy. Each
     # CLI is backfilled independently: a missing Claude path must not skip
     # the Codex or Antigravity backfill (and vice versa). MOBAIDE_COPILOT_BIN
-    # MOBAIDE_CURSOR_BIN and MOBAIDE_PI_BIN follow the same rule through
-    # Set-CopilotBinIfMissing, Set-CursorBinIfMissing and Set-PiBinIfMissing.
+    # MOBAIDE_CURSOR_BIN, MOBAIDE_JUNIE_BIN and MOBAIDE_PI_BIN follow the same
+    # rule through Set-CopilotBinIfMissing, Set-CursorBinIfMissing,
+    # Set-JunieBinIfMissing and Set-PiBinIfMissing.
     Write-Info "Existing $envFile preserved (re-install)."
     if ($claudeBin) {
         $existingClaudeBin = Read-EnvValue -Path $envFile -Key 'MOBAIDE_CLAUDE_BIN'
@@ -1360,6 +1431,9 @@ absolute path in $Script:Prefix\mobaide_agent\.env and restart:
     }
     if ($cursorBin) {
         Set-CursorBinIfMissing -EnvFile $envFile -ReleasePython $releasePython -CursorBin $cursorBin
+    }
+    if ($junieBin) {
+        Set-JunieBinIfMissing -EnvFile $envFile -ReleasePython $releasePython -JunieBin $junieBin
     }
     if ($piBin) {
         Set-PiBinIfMissing -EnvFile $envFile -ReleasePython $releasePython -PiBin $piBin

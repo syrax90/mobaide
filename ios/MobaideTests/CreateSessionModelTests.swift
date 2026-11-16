@@ -780,6 +780,138 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertNil(request.cursor_options?.branch_name)
     }
 
+    // MARK: - Junie
+
+    func testJunieRequestCarriesOnlyItsOwnOptionsBlock() async throws {
+        let model = await modelWithWorkspaces(#"[{"name":"a","path":"/p","is_git":true}]"#)
+        model.selectStoredWorkspace("a")
+        model.juniePlanMode = true
+        model.junieBrave = true
+        model.worktree = true
+        model.branchName = "feat"
+
+        let request = try XCTUnwrap(model.buildRequest(mode: .junie))
+
+        XCTAssertEqual(request.cli, "junie")
+        XCTAssertEqual(request.workspace_name, "a")
+        XCTAssertEqual(request.ui, "chat")
+        XCTAssertNil(request.claude_options)
+        XCTAssertNil(request.cursor_options)
+        XCTAssertNil(request.pi_options)
+        XCTAssertEqual(request.junie_options?.plan_mode, true)
+        XCTAssertEqual(request.junie_options?.brave, true)
+        XCTAssertEqual(request.junie_options?.worktree, true, "the worktree rides inside junie_options")
+        XCTAssertEqual(request.junie_options?.branch_name, "feat")
+        XCTAssertEqual(request.worktree, false, "a managed CLI never uses the top-level worktree field")
+        XCTAssertNil(request.branch_name)
+    }
+
+    func testJunieCustomPathSendsTheFolderAndNeverAWorktree() throws {
+        let model = makeModel()
+        model.setCustomPath("/abs/path")
+        model.worktree = true
+        model.branchName = "feat"
+
+        let request = try XCTUnwrap(model.buildRequest(mode: .junie))
+
+        XCTAssertEqual(request.cli, "junie")
+        XCTAssertEqual(request.cwd, "/abs/path")
+        XCTAssertNil(request.workspace_name)
+        XCTAssertEqual(request.junie_options?.brave, false, "Brave mode stays off until the user turns it on")
+        XCTAssertEqual(request.junie_options?.plan_mode, false)
+        XCTAssertEqual(request.junie_options?.worktree, false)
+        XCTAssertNil(request.junie_options?.branch_name)
+    }
+
+    func testCreateSendsTheJunieWireKeysAndRemembersTheChoices() async throws {
+        StubURLProtocol.reset()
+        let prefs = isolatedPrefs()
+        let model = stubbedModel(prefs: prefs)
+        model.selection = .stored("a")
+        model.mode = .junie
+        model.juniePlanMode = true
+        model.junieBrave = true
+        model.junieTerminalUI = true
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"session_id":"s-new","state":"starting","created_at":"t"}"#
+        )
+
+        await model.create()
+
+        XCTAssertNil(model.error)
+        let body = try XCTUnwrap(try createBodies().last)
+        XCTAssertEqual(body["cli"] as? String, "junie")
+        XCTAssertEqual(body["ui"] as? String, "terminal")
+        let options = try XCTUnwrap(body["junie_options"] as? [String: Any])
+        XCTAssertEqual(options["plan_mode"] as? Bool, true)
+        XCTAssertEqual(options["brave"] as? Bool, true)
+        XCTAssertEqual(options["worktree"] as? Bool, false)
+        XCTAssertNil(body["claude_options"])
+        XCTAssertNil(body["cursor_options"])
+        XCTAssertEqual(
+            prefs.getLastUsedJunieOptions(),
+            JunieLaunchPrefs(planMode: true, brave: true, terminalUI: true)
+        )
+        XCTAssertNil(prefs.getLastUsedCursorOptions(), "a Junie launch writes no other agent's choices")
+
+        let next = stubbedModel(prefs: prefs)
+        XCTAssertTrue(next.juniePlanMode, "the next wizard starts from the remembered choices")
+        XCTAssertTrue(next.junieBrave)
+        XCTAssertTrue(next.junieTerminalUI)
+        XCTAssertFalse(next.cursorForce)
+    }
+
+    func testJunieCardIsOffForAnAgentFromBeforeJunieSupport() async {
+        // That agent lists its CLIs without Junie, and would open a plain
+        // shell for `cli = "junie"`.
+        let older = await modelWithCapabilities(
+            #"{"cli":{"claude":{"available":true},"cursor":{"available":true}}}"#
+        )
+        XCTAssertFalse(older.isEnabled(.junie))
+        XCTAssertTrue(older.isEnabled(.cursor), "the agent's other CLIs stay usable")
+        older.selectMode(.junie)
+        XCTAssertNil(older.mode, "a disabled card must not open the Junie config step")
+
+        let notInstalled = await modelWithCapabilities(#"{"cli":{"junie":{"available":false}}}"#)
+        XCTAssertFalse(notInstalled.isEnabled(.junie))
+
+        let noCliList = await modelWithCapabilities("{}")
+        XCTAssertTrue(noCliList.isEnabled(.junie), "an agent that reports no CLI list reads as unknown")
+
+        let installed = await modelWithCapabilities(#"{"cli":{"junie":{"available":true}}}"#)
+        XCTAssertTrue(installed.isEnabled(.junie))
+        installed.selectMode(.junie)
+        XCTAssertEqual(installed.mode, .junie)
+    }
+
+    func testJunieContinueRequestUsesTheJunieOptionsWithoutAWorktree() {
+        let model = makeModel()
+        model.mode = .junie
+        model.selection = .stored("a")
+        model.juniePlanMode = true
+        model.junieBrave = true
+        model.worktree = true
+        model.branchName = "feat"
+        let stored = ChatStoredSession(
+            session_id: "external-5555", cwd: "/srv/other", title: nil, updated_at: nil, open_session_id: nil
+        )
+
+        let request = model.continueRequest(for: stored)
+
+        XCTAssertEqual(request.cli, "junie")
+        XCTAssertEqual(request.ui, "chat")
+        XCTAssertEqual(request.chat_resume_id, "external-5555")
+        XCTAssertEqual(request.cwd, "/srv/other")
+        XCTAssertNil(request.workspace_name)
+        XCTAssertNil(request.claude_options)
+        XCTAssertNil(request.cursor_options)
+        XCTAssertEqual(request.junie_options?.plan_mode, true)
+        XCTAssertEqual(request.junie_options?.brave, true)
+        XCTAssertEqual(request.junie_options?.worktree, false)
+        XCTAssertNil(request.junie_options?.branch_name)
+    }
+
     // MARK: - Pi
 
     func testPiRequestCarriesOnlyItsOwnOptionsBlock() async throws {

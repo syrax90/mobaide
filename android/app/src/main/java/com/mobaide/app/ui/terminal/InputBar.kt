@@ -210,6 +210,13 @@ private val OPENCODE_CONTROL_KEYS =
 private val CURSOR_CONTROL_KEYS =
     orderedControlKeys(listOf(ModeKey, ApproveKey, RejectKey) + SHARED_KEYS + CtrlLKey)
 
+// Junie = the shared keys plus Mode (Shift+Tab toggles Plan mode) and Ctrl+P (opens the
+// plan). Ctrl+O opens the session log and Ctrl+R searches past prompts. Approvals are a
+// list picked with the arrows and Enter, so there are no 'y'/'n' keys; Esc-Esc only
+// clears the input, so there is no Rewind; Ctrl+L is not bound.
+private val JUNIE_CONTROL_KEYS =
+    orderedControlKeys(listOf(ModeKey, CtrlPKey) + SHARED_KEYS)
+
 // Pi = the neutral set plus its own controls: Thinking (Shift+Tab cycles the thinking
 // level), Ctrl+P (next model), Ctrl+L (model list) and Ctrl+O (expand tool output).
 // Ctrl+R is absent: Pi does not bind it. Rewind is absent too: Pi reads its two Esc
@@ -233,6 +240,7 @@ private fun controlKeysFor(kind: SessionKind?): List<ControlKey> = when (kind) {
     // history and Ctrl+L clears the screen.
     SessionKind.Copilot -> CLAUDE_CONTROL_KEYS
     SessionKind.Cursor -> CURSOR_CONTROL_KEYS
+    SessionKind.Junie -> JUNIE_CONTROL_KEYS
     SessionKind.Pi -> PI_CONTROL_KEYS
 }
 

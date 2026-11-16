@@ -75,6 +75,9 @@ def _make_install(prefix: Path) -> Path:
     (prefix / "current_version").write_text("0.9.0", encoding="utf-8")
     (prefix / ".boot_journal").write_text("", encoding="utf-8")
     (prefix / "users.json").write_text("[]", encoding="utf-8")
+    (prefix / "junie-trusted-folders.json").write_text(
+        '{"folders": ["/home/me/app"]}', encoding="utf-8"
+    )
     _make_voice_root(prefix / "voice")
     (prefix / "notes.txt").write_text("mine", encoding="utf-8")
     (prefix / "backups").mkdir()
@@ -294,8 +297,12 @@ class TestInstallShHelper:
         """The root helper ``install.sh`` writes repeats PREFIX_ENTRIES."""
         text = (_REPO_ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
         start = text.index("rm -rf --one-file-system -- ")
-        end = text.index("\n", text.index("projects.json", start))
-        words = text[start:end].replace("\\\\", " ").split()
+        command: list[str] = []
+        for line in text[start:].splitlines():
+            command.append(line)
+            if not line.rstrip().endswith("\\\\"):
+                break
+        words = " ".join(command).replace("\\\\", " ").split()
 
         assert words[:3] == ["rm", "-rf", "--one-file-system"]
         assert tuple(words[4:]) == PREFIX_ENTRIES

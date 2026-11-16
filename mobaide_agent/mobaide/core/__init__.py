@@ -26,6 +26,11 @@ from .cursor_launcher import (
     CursorLauncher,
     CursorOptions,
 )
+from .junie_launcher import (
+    JunieBinaryNotFoundError,
+    JunieLauncher,
+    JunieOptions,
+)
 from .pi_launcher import (
     PiBinaryNotFoundError,
     PiLauncher,
@@ -82,6 +87,9 @@ __all__ = [
     "CursorLauncher",
     "CursorOptions",
     "CursorBinaryNotFoundError",
+    "JunieLauncher",
+    "JunieOptions",
+    "JunieBinaryNotFoundError",
     "PiLauncher",
     "PiOptions",
     "PiBinaryNotFoundError",

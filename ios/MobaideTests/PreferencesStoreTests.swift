@@ -95,6 +95,26 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertNil(store.getLastUsedCursorOptions())
     }
 
+    func testJunieOptionsRoundTripAndADamagedBlobNeverTurnsBraveOn() {
+        XCTAssertNil(store.getLastUsedJunieOptions())
+
+        store.setLastUsedJunieOptions(JunieLaunchPrefs(planMode: true, brave: true, terminalUI: true))
+        XCTAssertEqual(
+            store.getLastUsedJunieOptions(),
+            JunieLaunchPrefs(planMode: true, brave: true, terminalUI: true)
+        )
+        XCTAssertNil(store.getLastUsedCursorOptions(), "its own key, no other agent's")
+
+        defaults.set(#"{"planMode":true}"#, forKey: PreferencesStore.keyLastUsedJunieOptions)
+        XCTAssertEqual(
+            store.getLastUsedJunieOptions(),
+            JunieLaunchPrefs(planMode: true, brave: false, terminalUI: false)
+        )
+
+        defaults.set(#"{"brave":"yes"}"#, forKey: PreferencesStore.keyLastUsedJunieOptions)
+        XCTAssertNil(store.getLastUsedJunieOptions())
+    }
+
     func testCodexTerminalUIRoundTripsAndAnOlderBlobReadsAsOff() {
         store.setLastUsedCodexOptions(CodexLaunchPrefs(terminalUI: true))
         XCTAssertEqual(store.getLastUsedCodexOptions()?.terminalUI, true)

@@ -38,6 +38,9 @@ from mobaide.acp import session as session_mod
 from mobaide.acp import signin
 from mobaide.acp.agents import (
     FAKE_SIGNED_OUT_ENV,
+    JUNIE_BRAVE_OPTION,
+    JUNIE_ERROR_HINTS,
+    JUNIE_PLAN_REVIEW_PREFIX,
     PI_SIGN_IN_PROMPT,
     ChatLaunchPlan,
     ConfigIntent,
@@ -1329,6 +1332,63 @@ class TestCrashAndRestart:
         values = {o["id"]: o["value"] for o in m.state["config"]}
         assert values == {"mode": "default", "model": "fast", "effort": "low", "fast": False}
 
+    @pytest.mark.parametrize(
+        ("flavor", "kind", "launch", "picked"),
+        [
+            (None, SessionKind.CLAUDE, ConfigIntent("plan", category="mode", required=True), "acceptEdits"),
+            ("junie", SessionKind.JUNIE, ConfigIntent("plan", option_id="mode", required=True), "goal"),
+        ],
+        ids=["by-category", "by-option-id"],
+    )
+    async def test_restart_keeps_the_mode_the_user_picked_over_the_required_launch_mode(
+        self, open_chat, flavor, kind, launch, picked
+    ):
+        """Plan mode must be in place when the chat starts. Once the user
+        picks another mode, a Restart restores that pick, not Plan mode."""
+        m = await open_chat(argv=fake_agent_argv(flavor), kind=kind, initial_config=[launch])
+
+        def mode() -> Any:
+            return {o["id"]: o["value"] for o in m.state.get("config") or []}.get("mode")
+
+        await m.until(lambda: mode() == "plan")
+        assert (await m.command("set_config", config_id="mode", value=picked))["ok"] is True
+        await m.until(lambda: mode() == picked)
+        await m.command("prompt", text="crash now")
+        await m.until(lambda: m.status == "error")
+
+        assert (await m.command("restart"))["ok"] is True
+        await m.until(lambda: m.status == "ready" and m.state.get("title") == "Earlier session")
+
+        assert mode() == picked
+
+    async def test_a_restart_does_not_set_again_an_option_the_agent_saves_itself(
+        self, open_chat
+    ):
+        """Junie saves Brave mode for all of its sessions, and a new process
+        reads the saved value. Set again, a stale value would be saved. The
+        fake agent starts each session at "brave-auto": a set shows there."""
+        m = await open_chat(
+            argv=fake_agent_argv("junie"),
+            kind=SessionKind.JUNIE,
+            initial_config=[ConfigIntent("plan", option_id="mode", required=True)],
+            restore_skip_option_ids=(JUNIE_BRAVE_OPTION,),
+        )
+        set_brave = await m.command("set_config", config_id=JUNIE_BRAVE_OPTION, value="on")
+        assert set_brave["ok"] is True
+        assert (await m.command("set_config", config_id="effort", value="low"))["ok"] is True
+        await m.command("prompt", text="crash now")
+        await m.until(lambda: m.status == "error")
+
+        assert (await m.command("restart"))["ok"] is True
+        await m.until(lambda: m.status == "ready" and m.state.get("title") == "Earlier session")
+
+        assert {o["id"]: o["value"] for o in m.state["config"]} == {
+            "mode": "plan",
+            "model": "v1:7:jetbrains-ai:claude-sonnet-5-5",
+            "effort": "low",
+            JUNIE_BRAVE_OPTION: "brave-auto",
+        }
+
     async def test_initial_prompt_is_sent_once(self, open_chat):
         """A restart that opens a new session (no ``session/load``) must not
         send the wizard's first prompt again."""
@@ -2090,6 +2150,115 @@ class TestCopilotChat:
             for p in ev["item"]["content"]
         ]
         assert not any("shellId" in text for text in sent), sent
+
+
+class TestJunieChat:
+    """A chat on ``junie --acp=true``, against the fake agent's Junie flavor."""
+
+    @staticmethod
+    def _config(m: TimelineMirror) -> dict[str, Any]:
+        return {o["id"]: o["value"] for o in m.state["config"]}
+
+    async def test_plan_mode_from_the_wizard_leaves_brave_mode_alone(self, open_chat):
+        """Junie's ``brave_mode`` option carries the category "mode"; Plan mode
+        is its uncategorized ``mode`` option."""
+        m = await open_chat(
+            argv=fake_agent_argv("junie"),
+            kind=SessionKind.JUNIE,
+            initial_config=[ConfigIntent("plan", option_id="mode", required=True)],
+        )
+
+        assert m.status == "ready"
+        await m.until(lambda: self._config(m).get("mode") == "plan")
+        assert self._config(m)["brave_mode"] == "brave-auto"
+
+    async def test_the_plan_review_is_asked_also_when_the_chat_accepts_every_request(
+        self, open_chat
+    ):
+        """Brave mode through an operator command accepts the tool approvals;
+        "Implement this plan?" stays the user's own choice."""
+        m = await open_chat(
+            argv=fake_agent_argv("junie"),
+            kind=SessionKind.JUNIE,
+            initial_config=[ConfigIntent("plan", option_id="mode", required=True)],
+            auto_approve=True,
+            decision_tool_prefixes=(JUNIE_PLAN_REVIEW_PREFIX,),
+        )
+        await m.until(lambda: self._config(m).get("mode") == "plan")
+
+        await m.command("prompt", text="permission")
+        await m.until(_turn_done(m, "The build folder is gone."))
+        assert not _asked(m.frames)
+
+        await m.command("prompt", text="plan")
+        await m.until(lambda: bool(m.state.get("requests")))
+        request = m.state["requests"][0]
+
+        assert [o["id"] for o in request["options"]] == [
+            "implement",
+            "spawn-agentic-team",
+            "revise",
+            "stop",
+        ]
+        # The plan is a message of its own.
+        assert request["content"] == []
+        await m.until(lambda: "awaiting_permission" in m.attention)
+
+        await m.command("respond", request_id=request["id"], option_id="stop")
+        await m.until(lambda: m.status == "ready" and m.state["requests"] == [])
+
+    async def test_the_plan_review_is_a_request_card_and_never_a_tool_card(self, open_chat):
+        """Junie sends tool call updates for its "Implement this plan?" request,
+        and after the work one more for a review id that no tool call
+        announced. The request card shows the review; no tool card repeats it."""
+        m = await open_chat(
+            argv=fake_agent_argv("junie"),
+            kind=SessionKind.JUNIE,
+            initial_config=[ConfigIntent("plan", option_id="mode", required=True)],
+            decision_tool_prefixes=(JUNIE_PLAN_REVIEW_PREFIX,),
+        )
+        await m.until(lambda: self._config(m).get("mode") == "plan")
+
+        await m.command("prompt", text="plan")
+        await m.until(lambda: bool(m.state.get("requests")))
+        request = m.state["requests"][0]
+        assert request["tool_call_id"].startswith(JUNIE_PLAN_REVIEW_PREFIX)
+        assert len(request["options"]) == 4
+
+        answer = await m.command("respond", request_id=request["id"], option_id="implement")
+        assert answer["ok"] is True
+        await m.until(_turn_done(m, "The login handler now checks for a missing user."))
+
+        assert self._config(m)["mode"] == "default"
+        sent = {
+            item["id"]
+            for f in m.frames
+            for item in (
+                f["items"]
+                if f["t"] == "snapshot"
+                else [ev["item"] for ev in f.get("events", []) if ev["type"] == "item"]
+            )
+        }
+        assert {i for i in sent if i.startswith(JUNIE_PLAN_REVIEW_PREFIX)} == set()
+
+    async def test_no_model_for_the_chat_shows_what_to_do(self, open_chat):
+        m = await open_chat(
+            argv=fake_agent_argv("junie"), kind=SessionKind.JUNIE, error_hints=JUNIE_ERROR_HINTS
+        )
+
+        await m.command("prompt", text="nomodel")
+        await m.until(lambda: m.status == "ready" and bool(m.of_type("error")))
+
+        assert m.texts("error") == [JUNIE_ERROR_HINTS["model_not_available"]]
+        assert m.session.pid is not None
+
+    async def test_an_error_without_a_hint_shows_the_agent_s_message(self, open_chat):
+        m = await open_chat(argv=fake_agent_argv("junie"), kind=SessionKind.JUNIE)
+
+        await m.command("prompt", text="nomodel")
+        await m.until(lambda: m.status == "ready" and bool(m.of_type("error")))
+
+        assert m.texts("error") == ["No models are currently available for submission"]
 
 
 # Opens the stored session ``conv-9`` and lists it second, as "Fix the login

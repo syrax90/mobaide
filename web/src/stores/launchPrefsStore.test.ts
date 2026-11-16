@@ -43,6 +43,8 @@ const COPILOT_BLOB = { allowAll: true, terminalUi: true };
 
 const CURSOR_BLOB = { force: true, terminalUi: true };
 
+const JUNIE_BLOB = { planMode: true, brave: true, terminalUi: true };
+
 const PI_BLOB = { terminalUi: true };
 
 const CLAUDE_DEFAULTS = {
@@ -76,6 +78,7 @@ beforeEach(() => {
     opencode: null,
     copilot: null,
     cursor: null,
+    junie: null,
     pi: null,
     lastWorkspaceName: null,
   });
@@ -235,6 +238,21 @@ describe('hydration', () => {
     expect((await rehydrateWith({ copilot: COPILOT_BLOB })).cursor).toBeNull();
   });
 
+  it('restores the Junie bucket, defaults a missing key and voids a wrong-typed one', async () => {
+    expect((await rehydrateWith({ junie: JUNIE_BLOB })).junie).toEqual(JUNIE_BLOB);
+    expect((await rehydrateWith({ junie: { planMode: true } })).junie).toEqual({
+      planMode: true,
+      brave: false,
+      terminalUi: false,
+    });
+    // A hand-edited value must never turn Brave mode on.
+    expect((await rehydrateWith({ junie: { ...JUNIE_BLOB, brave: 'yes' } })).junie).toBeNull();
+    expect((await rehydrateWith({ junie: { ...JUNIE_BLOB, planMode: 1 } })).junie).toBeNull();
+    expect((await rehydrateWith({ junie: [JUNIE_BLOB] })).junie).toBeNull();
+    // The Cursor bucket never fills the Junie one.
+    expect((await rehydrateWith({ cursor: CURSOR_BLOB })).junie).toBeNull();
+  });
+
   it('restores the Pi bucket, defaults a missing key and voids a wrong-typed one', async () => {
     expect((await rehydrateWith({ pi: PI_BLOB })).pi).toEqual(PI_BLOB);
     expect((await rehydrateWith({ pi: {} })).pi).toEqual({ terminalUi: false });
@@ -286,6 +304,7 @@ describe('hydration', () => {
       opencode: null,
       copilot: null,
       cursor: null,
+      junie: null,
       pi: null,
       lastWorkspaceName: null,
     });
@@ -346,6 +365,22 @@ describe('Cursor writes', () => {
     const prefs = readLaunchPrefs();
     expect(prefs.cursor).toEqual(CURSOR_BLOB);
     expect(prefs.copilot).toBeNull();
+    expect(prefs.claude).toBeNull();
+  });
+});
+
+describe('Junie writes', () => {
+  it('files the Junie snapshot under its own slot and reads it back', async () => {
+    useLaunchPrefsStore.getState().setLaunchPrefs({ kind: 'junie', prefs: JUNIE_BLOB });
+    const written = window.localStorage.getItem(STORAGE_KEY);
+
+    useLaunchPrefsStore.setState({ junie: null });
+    window.localStorage.setItem(STORAGE_KEY, written ?? '');
+    await useLaunchPrefsStore.persist.rehydrate();
+
+    const prefs = readLaunchPrefs();
+    expect(prefs.junie).toEqual(JUNIE_BLOB);
+    expect(prefs.cursor).toBeNull();
     expect(prefs.claude).toBeNull();
   });
 });

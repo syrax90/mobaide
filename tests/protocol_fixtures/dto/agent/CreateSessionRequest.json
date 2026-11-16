@@ -152,6 +152,36 @@
       }
     },
     {
+      "name": "junie_launch",
+      "wire": {
+        "project_name": "proj",
+        "cli": "junie",
+        "junie_options": {
+          "plan_mode": true,
+          "brave": true,
+          "worktree": true,
+          "branch_name": "feature/x",
+          "base_branch": "origin/main"
+        },
+        "ui": "chat"
+      },
+      "decoded_canonical": {
+        "project_name": "proj",
+        "cli": "junie",
+        "junie_options": {
+          "plan_mode": true,
+          "brave": true,
+          "worktree": true,
+          "branch_name": "feature/x",
+          "base_branch": "origin/main"
+        },
+        "rows": 24,
+        "cols": 80,
+        "worktree": false,
+        "ui": "chat"
+      }
+    },
+    {
       "name": "pi_launch",
       "wire": {
         "project_name": "proj",

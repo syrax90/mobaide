@@ -25,6 +25,7 @@ from mobaide.core import (
     CodexLauncher,
     CopilotLauncher,
     CursorLauncher,
+    JunieLauncher,
     PiLauncher,
     FakePtyBackend,
     OpenCodeLauncher,
@@ -844,6 +845,13 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         cursor_bin_override=config.cursor_bin,
         worktree_mgr=worktree_mgr,
     )
+    # Junie CLI launcher — sibling of Cursor: no hooks and no auth probe
+    # (Junie's own sign-in screen renders in the PTY when needed). Binary
+    # resolves lazily.
+    app.state.junie_launcher = JunieLauncher(
+        junie_bin_override=config.junie_bin,
+        worktree_mgr=worktree_mgr,
+    )
     # Pi launcher — sibling of Antigravity: no hooks and no auth probe (Pi
     # shows its own sign-in in the PTY when needed, and a chat session offers
     # the sign-in). Binary resolves lazily.
@@ -861,6 +869,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         "opencode": app.state.opencode_launcher,
         "copilot": app.state.copilot_launcher,
         "cursor": app.state.cursor_launcher,
+        "junie": app.state.junie_launcher,
         "pi": app.state.pi_launcher,
     }
     # Agents that can also run in the structured chat UI (over ACP), and the
@@ -875,9 +884,11 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             "opencode": config.acp_opencode_command,
             "copilot": config.acp_copilot_command,
             "cursor": config.acp_cursor_command,
+            "junie": config.acp_junie_command,
             "pi": config.acp_pi_command,
         },
         adapters_dir=state_prefix(test_mode=config.is_test_mode) / "acp-adapters",
+        state_dir=state_prefix(test_mode=config.is_test_mode),
     )
     voice_cleanup_dir = state_prefix(test_mode=config.is_test_mode) / "voice-cleanup"
     app.state.chat_catalog = ChatCatalog(
@@ -937,6 +948,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         opencode_launcher=app.state.opencode_launcher,
         copilot_launcher=app.state.copilot_launcher,
         cursor_launcher=app.state.cursor_launcher,
+        junie_launcher=app.state.junie_launcher,
         pi_launcher=app.state.pi_launcher,
         worktree_mgr=worktree_mgr,
         event_bus=app.state.event_bus,

@@ -234,6 +234,11 @@ class ChatSession:
         self._required_categories = {
             i.category for i in plan.initial_config if i.required and i.category
         }
+        # The same for a launch value set by option id (Junie's ``mode``,
+        # which has no category).
+        self._required_option_ids = {
+            i.option_id for i in plan.initial_config if i.required and i.option_id
+        }
         self._initial_prompt: str | None = plan.initial_prompt
         self._steering = False
         # A turn this session did not start: another client of a shared host
@@ -812,6 +817,10 @@ class ChatSession:
                 f"{self._agent_title} is not signed in on the PC. Sign in there "
                 "(run it once in a terminal), then tap Restart."
             )
+        if isinstance(exc.data, dict):
+            hint = self._plan.error_hints.get(str(exc.data.get("reason")))
+            if hint:
+                return hint
         detail = exc.message
         if isinstance(exc.data, dict):
             extra = exc.data.get("details") or exc.data.get("message")
@@ -1466,17 +1475,25 @@ class ChatSession:
                     opt["value"],
                     option_id=opt["id"],
                     category=opt.get("category"),
-                    required=opt.get("category") in self._required_categories,
+                    required=(
+                        opt.get("category") in self._required_categories
+                        or opt["id"] in self._required_option_ids
+                    ),
                 )
                 for opt in self._timeline.state.get("config") or []
-                if isinstance(opt, dict) and "value" in opt
+                if isinstance(opt, dict)
+                and "value" in opt
+                and opt.get("id") not in self._plan.restore_skip_option_ids
             ]
             # A required option the agent no longer lists falls back to the
             # launch choice, which then fails closed if it cannot be applied.
-            covered = {i.category for i in restored if i.required}
+            covered_categories = {i.category for i in restored if i.required and i.category}
+            covered_ids = {i.option_id for i in restored if i.required and i.option_id}
             restored += [
                 i for i in self._plan.initial_config
-                if i.required and i.category not in covered
+                if i.required
+                and not (i.category and i.category in covered_categories)
+                and not (i.option_id and i.option_id in covered_ids)
             ]
             self._pending_config = restored
         if self._conn is not None:
@@ -1658,9 +1675,12 @@ class ChatSession:
         elif kind == "user_message_chunk":
             self._append_user_chunk(update)
         elif kind in ("tool_call", "tool_call_update"):
-            self._apply_tool_update(update, create=kind == "tool_call")
-            if tl.state.get("status") == "loading":
-                self._show_stored_plan(update)
+            # The agent's own record of a decision request: its request card
+            # shows it, so it never becomes a tool card of its own.
+            if not self._is_decision_tool(update.get("toolCallId")):
+                self._apply_tool_update(update, create=kind == "tool_call")
+                if tl.state.get("status") == "loading":
+                    self._show_stored_plan(update)
         elif kind == "plan":
             tl.patch_state(plan=nz.plan_entries(update.get("entries")))
         elif kind == "available_commands_update":
@@ -2038,7 +2058,7 @@ class ChatSession:
         if not isinstance(params, dict):
             raise AcpRpcError(-32602, "Invalid params")
         if method == "session/request_permission":
-            return await self._permission_request(params)
+            return await self._permission_request(params, decision=self._is_decision(params))
         if method == "elicitation/create":
             return await self._elicitation_request(params)
         if method.startswith(cx.PREFIX):
@@ -2094,6 +2114,15 @@ class ChatSession:
         # Cursor has its own fallback for a method the client does not know.
         raise AcpRpcError(ERR_METHOD_NOT_FOUND, f"Method not found: {method}")
 
+    def _is_decision_tool(self, tool_id: Any) -> bool:
+        """Whether the agent marks this tool call id as a request for the
+        user's own decision (see ``ChatLaunchPlan.decision_tool_prefixes``)."""
+        return isinstance(tool_id, str) and tool_id.startswith(self._plan.decision_tool_prefixes)
+
+    def _is_decision(self, params: dict[str, Any]) -> bool:
+        call = params.get("toolCall")
+        return self._is_decision_tool(call.get("toolCallId") if isinstance(call, dict) else None)
+
     async def _permission_request(self, params: dict[str, Any], *, decision: bool = False) -> Any:
         """``decision`` marks a choice that is the user's own (a plan to
         accept), which "accept every request" must not make for them."""
@@ -2102,7 +2131,7 @@ class ChatSession:
         tool_call: dict[str, Any] = raw_call if isinstance(raw_call, dict) else {}
         raw_tool_id = tool_call.get("toolCallId")
         tool_id = raw_tool_id if isinstance(raw_tool_id, str) else None
-        if tool_id:
+        if tool_id and not self._is_decision_tool(tool_id):
             self._apply_tool_update(dict(tool_call), create=False)
         if not options:
             return {"outcome": {"outcome": "cancelled"}}

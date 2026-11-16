@@ -1,6 +1,6 @@
 """Folder trust for chat sessions (``mobaide/acp/trust.py``): where the
-Claude Code, Codex, Antigravity, GitHub Copilot and Cursor CLIs keep their
-trust records, which folders count as trusted, and how ``grant`` writes the
+Claude Code, Codex, Antigravity, GitHub Copilot, Cursor and Junie CLIs keep
+their trust records, which folders count as trusted, and how ``grant`` writes the
 record without losing the rest of the file."""
 from __future__ import annotations
 
@@ -20,11 +20,13 @@ from mobaide.acp.trust import (
     CopilotFolderTrust,
     CursorFolderTrust,
     _cursor_slug,
+    JunieFolderTrust,
     PiFolderTrust,
     claude_config_path,
     codex_config_path,
     copilot_config_path,
     cursor_projects_dir,
+    junie_home,
     pi_agent_dir,
     too_broad_to_record,
 )
@@ -753,6 +755,19 @@ class TestConcurrentGrants:
             os.path.realpath(b): True,
         }
 
+    def test_junie_keeps_both_records(self, tmp_path, monkeypatch):
+        self._slow_writes(monkeypatch)
+        record = tmp_path / "junie-trusted-folders.json"
+        a, b = _project(tmp_path, "a"), _project(tmp_path, "b")
+        trusts = [
+            JunieFolderTrust(str(f), junie_dir=tmp_path / "junie", record_path=record)
+            for f in (a, b)
+        ]
+
+        assert self._grant_both([t.grant for t in trusts]) == [True, True]
+
+        assert all(t.is_trusted() for t in trusts)
+
 
 def _agy_settings(path: Path, data: object) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -1370,6 +1385,199 @@ class TestCursorPrompt:
         assert trust.prompt_title == "Trust this folder?"
         assert trust.prompt_text.endswith(f" {CURSOR_COVERS_CHILDREN}")
         assert "rules, hooks and MCP servers" in trust.prompt_text
+
+
+JUNIE_EXACT = "EXACT_PROJECT"
+JUNIE_RECURSIVE = "RECURSIVE_DIRECTORY"
+
+
+def _junie_marker(junie_dir: Path, folder: Path | str, kind: str, body: str | None = None) -> Path:
+    """Write one trust marker as the Junie CLI does (the chat does not check
+    its signature)."""
+    markers = junie_dir / "trust"
+    markers.mkdir(parents=True, exist_ok=True)
+    marker = markers / f"marker-{len(list(markers.iterdir()))}.json"
+    if body is None:
+        body = json.dumps(
+            {"path": os.path.realpath(folder), "kind": kind, "signature": "c2lnbmVk"}
+        )
+    marker.write_text(body, encoding="utf-8")
+    return marker
+
+
+def _junie_trust(cwd: Path | str, junie_dir: Path, record: Path | None = None) -> JunieFolderTrust:
+    return JunieFolderTrust(str(cwd), junie_dir=junie_dir, record_path=record)
+
+
+def _junie_record(record: Path) -> dict:
+    return json.loads(record.read_text(encoding="utf-8"))
+
+
+class TestJunieHome:
+    def test_the_junie_home_of_the_launch_env_wins_over_the_host_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("JUNIE_HOME", str(tmp_path / "host"))
+
+        assert junie_home({"JUNIE_HOME": str(tmp_path / "launch")}) == tmp_path / "launch"
+
+    def test_a_blank_junie_home_is_the_folder_in_home(self, home):
+        assert junie_home({"JUNIE_HOME": "  "}) == home / ".junie"
+
+
+class TestJunieIsTrusted:
+    def test_an_exact_marker_trusts_that_folder_alone(self, tmp_path):
+        project = _project(tmp_path, "app")
+        child = _project(tmp_path, "app", "src")
+        junie_dir = tmp_path / "junie"
+        _junie_marker(junie_dir, project, JUNIE_EXACT)
+
+        assert _junie_trust(project, junie_dir).is_trusted() is True
+        assert _junie_trust(child, junie_dir).is_trusted() is False
+
+    def test_a_recursive_marker_covers_the_folders_inside_and_nothing_else(self, tmp_path):
+        parent = _project(tmp_path, "team")
+        child = _project(tmp_path, "team", "app", "src")
+        sibling = _project(tmp_path, "other")
+        junie_dir = tmp_path / "junie"
+        _junie_marker(junie_dir, parent, JUNIE_RECURSIVE)
+
+        assert _junie_trust(parent, junie_dir).is_trusted() is True
+        assert _junie_trust(child, junie_dir).is_trusted() is True
+        assert _junie_trust(sibling, junie_dir).is_trusted() is False
+        assert _junie_trust(tmp_path / "work", junie_dir).is_trusted() is False
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "",
+            "{not json",
+            '["a list"]',
+            '{"kind": "EXACT_PROJECT"}',
+            '{"path": 5, "kind": "EXACT_PROJECT"}',
+            '{"path": "{folder}"}',
+            '{"path": "{folder}", "kind": "UNKNOWN_SCOPE"}',
+        ],
+        ids=["empty", "unreadable", "not-object", "no-path", "path-not-text", "no-kind", "other-kind"],
+    )
+    def test_a_marker_that_names_no_trusted_scope_counts_for_nothing(self, tmp_path, body):
+        project = _project(tmp_path)
+        junie_dir = tmp_path / "junie"
+        folder = json.dumps(os.path.realpath(project))[1:-1]
+        _junie_marker(junie_dir, project, JUNIE_EXACT, body.replace("{folder}", folder))
+
+        assert _junie_trust(project, junie_dir).is_trusted() is False
+
+    def test_a_marker_file_that_is_not_json_is_not_read(self, tmp_path):
+        project = _project(tmp_path)
+        junie_dir = tmp_path / "junie"
+        marker = _junie_marker(junie_dir, project, JUNIE_EXACT)
+        marker.rename(marker.with_suffix(".bak"))
+
+        assert _junie_trust(project, junie_dir).is_trusted() is False
+
+    @skip_if_not_linux
+    def test_a_symlinked_folder_matches_its_real_path(self, tmp_path):
+        project = _project(tmp_path, "real")
+        link = tmp_path / "link"
+        link.symlink_to(project, target_is_directory=True)
+        junie_dir = tmp_path / "junie"
+        _junie_marker(junie_dir, project, JUNIE_EXACT)
+
+        assert _junie_trust(link, junie_dir).is_trusted() is True
+
+
+class TestJunieGrant:
+    def test_records_the_folder_in_a_private_file_of_the_agent(self, tmp_path):
+        """Junie signs its own markers, so the chat keeps its answers apart."""
+        project = _project(tmp_path, "app")
+        junie_dir = tmp_path / "junie"
+        record = tmp_path / "state" / "junie-trusted-folders.json"
+        record.parent.mkdir()
+        trust = _junie_trust(project, junie_dir, record)
+
+        assert trust.is_trusted() is False
+        assert trust.grant() is True
+
+        assert _junie_record(record) == {"folders": [os.path.realpath(project)]}
+        assert trust.is_trusted() is True
+        assert not junie_dir.exists()
+        if os.name != "nt":
+            assert stat.S_IMODE(record.stat().st_mode) == 0o600
+
+    def test_a_recorded_folder_covers_only_itself(self, tmp_path):
+        project = _project(tmp_path, "app")
+        child = _project(tmp_path, "app", "src")
+        record = tmp_path / "junie-trusted-folders.json"
+
+        assert _junie_trust(project, tmp_path / "junie", record).grant() is True
+
+        assert _junie_trust(child, tmp_path / "junie", record).is_trusted() is False
+
+    def test_keeps_the_recorded_folders_and_records_each_once(self, tmp_path):
+        a, b = _project(tmp_path, "a"), _project(tmp_path, "b")
+        record = tmp_path / "junie-trusted-folders.json"
+
+        for folder in (a, b, a):
+            assert _junie_trust(folder, tmp_path / "junie", record).grant() is True
+
+        assert _junie_record(record) == {
+            "folders": [os.path.realpath(a), os.path.realpath(b)]
+        }
+
+    @skip_if_not_linux
+    def test_a_symlinked_folder_is_recorded_by_its_real_path(self, tmp_path):
+        project = _project(tmp_path, "real")
+        link = tmp_path / "link"
+        link.symlink_to(project, target_is_directory=True)
+        record = tmp_path / "junie-trusted-folders.json"
+
+        assert _junie_trust(link, tmp_path / "junie", record).grant() is True
+
+        assert _junie_record(record) == {"folders": [os.path.realpath(project)]}
+        assert _junie_trust(project, tmp_path / "junie", record).is_trusted() is True
+
+    def test_a_record_without_folders_is_an_empty_record(self, tmp_path):
+        project = _project(tmp_path)
+        record = tmp_path / "junie-trusted-folders.json"
+        record.write_text("{}", encoding="utf-8")
+
+        assert _junie_trust(project, tmp_path / "junie", record).grant() is True
+
+        assert _junie_record(record) == {"folders": [os.path.realpath(project)]}
+
+    @pytest.mark.parametrize(
+        "content",
+        ["{not json", '["a list"]', '{"folders": "/srv/x"}'],
+        ids=["unreadable", "not-object", "list-not-a-list"],
+    )
+    def test_a_record_it_cannot_read_back_whole_is_never_rewritten(self, tmp_path, content):
+        record = tmp_path / "junie-trusted-folders.json"
+        record.write_text(content, encoding="utf-8")
+
+        with pytest.raises(ValueError):
+            _junie_trust(_project(tmp_path), tmp_path / "junie", record).grant()
+
+        assert record.read_text(encoding="utf-8") == content
+
+    @pytest.mark.parametrize("which", ["no-record-file", "home", "above-home"])
+    def test_grant_writes_nothing_and_reports_session_only_trust(self, home, tmp_path, which):
+        folder = {"no-record-file": home / "code", "home": home, "above-home": tmp_path}[which]
+        folder.mkdir(exist_ok=True)
+        record = None if which == "no-record-file" else tmp_path / "junie-trusted-folders.json"
+        trust = _junie_trust(folder, tmp_path / "junie", record)
+
+        assert trust.prompt_text.endswith(f" {SESSION_ONLY}")
+        assert trust.grant() is False
+
+        assert not (tmp_path / "junie-trusted-folders.json").exists()
+        assert trust.is_trusted() is False
+
+    def test_a_folder_it_can_record_is_not_session_only(self, home, tmp_path):
+        project = home / "code" / "app"
+        project.mkdir(parents=True)
+        trust = _junie_trust(project, tmp_path / "junie", tmp_path / "junie-trusted-folders.json")
+
+        assert trust.prompt_title == "Trust this folder?"
+        assert SESSION_ONLY not in trust.prompt_text
 
 
 def _pi_project(tmp_path: Path, *parts: str, resource: str = ".pi/settings.json") -> Path:

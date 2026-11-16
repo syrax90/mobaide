@@ -49,6 +49,7 @@ from .trust import (
     CodexFolderTrust,
     CopilotFolderTrust,
     CursorFolderTrust,
+    JunieFolderTrust,
     PiFolderTrust,
     WorkspaceTrust,
     antigravity_settings_path,
@@ -56,6 +57,7 @@ from .trust import (
     codex_config_path,
     copilot_config_path,
     cursor_projects_dir,
+    junie_home,
     pi_agent_dir,
 )
 
@@ -65,6 +67,7 @@ if TYPE_CHECKING:
     from mobaide.core.codex_launcher import CodexLauncher, CodexOptions
     from mobaide.core.copilot_launcher import CopilotLauncher, CopilotOptions
     from mobaide.core.cursor_launcher import CursorLauncher, CursorOptions
+    from mobaide.core.junie_launcher import JunieLauncher, JunieOptions
     from mobaide.core.opencode_launcher import OpenCodeLauncher, OpenCodeOptions
     from mobaide.core.pi_launcher import PiLauncher, PiOptions
 
@@ -84,6 +87,7 @@ ANTIGRAVITY_ACP_COMMAND_ENV = "MOBAIDE_ACP_ANTIGRAVITY_COMMAND"
 OPENCODE_ACP_COMMAND_ENV = "MOBAIDE_ACP_OPENCODE_COMMAND"
 COPILOT_ACP_COMMAND_ENV = "MOBAIDE_ACP_COPILOT_COMMAND"
 CURSOR_ACP_COMMAND_ENV = "MOBAIDE_ACP_CURSOR_COMMAND"
+JUNIE_ACP_COMMAND_ENV = "MOBAIDE_ACP_JUNIE_COMMAND"
 PI_ACP_COMMAND_ENV = "MOBAIDE_ACP_PI_COMMAND"
 REAL_IN_TEST_ENV = "MOBAIDE_ACP_REAL"
 AVAILABILITY_TTL = 30.0
@@ -112,6 +116,37 @@ CURSOR_HINT = (
     "`curl https://cursor.com/install -fsS | bash` (on Windows, in PowerShell: "
     "`irm 'https://cursor.com/install?win32=true' | iex`), then try again."
 )
+JUNIE_HINT = (
+    "Junie is not installed on the PC. Install it with "
+    "`curl -fsSL https://junie.jetbrains.com/install.sh | bash` (on Windows, in "
+    "PowerShell: `iex (irm 'https://junie.jetbrains.com/install.ps1')`), then try again."
+)
+# Junie signs in only on its own welcome screen, in its terminal UI.
+JUNIE_SIGN_IN_HINT = (
+    "Junie is not signed in on your PC. In New session, pick Junie, open Advanced "
+    "and turn on Terminal UI. Sign in on Junie's welcome screen, then come back "
+    "and tap Restart, or start a new Junie session with Terminal UI off."
+)
+# What ``junie --acp=true`` answers a prompt with when no model can take it.
+JUNIE_ERROR_HINTS = {
+    "model_not_available": (
+        "Junie has no model for the chat view. The free Junie Lite model works "
+        "only in Junie's terminal UI and in JetBrains apps. To use the chat, sign "
+        "in to Junie with a JetBrains AI plan, a Junie API key or your own API key, "
+        "then start a new Junie session. Or start a Junie session with Terminal UI on "
+        "(New session, Junie, Advanced)."
+    ),
+}
+# The ``session/new`` config option of Junie's own modes (Default, Plan, Goal).
+JUNIE_MODE_OPTION = "mode"
+JUNIE_PLAN_MODE = "plan"
+# The tool call id prefix of Junie's "Implement this plan?" request.
+JUNIE_PLAN_REVIEW_PREFIX = "junie-plan-review:"
+# Junie's Brave mode option: a change is saved for every Junie session.
+JUNIE_BRAVE_OPTION = "brave_mode"
+# The file in the agent's state folder that keeps the folders trusted for
+# Junie chat sessions (see :class:`JunieFolderTrust`).
+JUNIE_TRUST_RECORD = "junie-trusted-folders.json"
 PI_HINT = (
     "Pi is not installed on the PC. Install it from "
     "https://pi.dev/docs/latest/quickstart, then try again."
@@ -204,6 +239,16 @@ class ChatLaunchPlan:
     client_meta: Mapping[str, Any] = field(default_factory=dict)
     # The agent writes its tool titles in Markdown (code spans).
     markdown_titles: bool = False
+    # What to tell the user instead of an agent error, by the error's
+    # ``data.reason``.
+    error_hints: Mapping[str, str] = field(default_factory=dict)
+    # Tool call id prefixes of permission requests that are the user's own
+    # decision (a plan to accept): never accepted by ``auto_approve``, and
+    # never shown as tool cards.
+    decision_tool_prefixes: tuple[str, ...] = ()
+    # Config options the agent saves as its own setting for every session: a
+    # Restart never re-applies them, as the new process reads the saved value.
+    restore_skip_option_ids: tuple[str, ...] = ()
     # Port of the agent's ``/internal/hook``, for an agent that runs Claude
     # Code hooks (``env`` then carries the hook token). The hooks report what
     # the ``session/prompt`` answer cannot: work a turn leaves behind, and
@@ -219,6 +264,8 @@ class ChatAgentSpec(Protocol):
     live_sessions: bool
     # ``session/list`` ignores its ``cwd`` filter: the catalog filters.
     lists_all_folders: bool
+    # ``session/list`` matches its ``cwd`` filter to the exact real path.
+    lists_real_folder: bool
 
     def available(self) -> bool: ...
 
@@ -551,6 +598,7 @@ class _ChatSpecBase:
     supports_resume = True
     live_sessions = False
     lists_all_folders = False
+    lists_real_folder = False
     command_env = ""
     fake_flavor: str | None = None
 
@@ -1247,6 +1295,93 @@ class CursorChatSpec(_ChatSpecBase):
         )
 
 
+class JunieChatSpec(_ChatSpecBase):
+    """Junie through the ACP server built into its CLI (``junie --acp=true``).
+
+    Chat and terminal sessions share the CLI's login, settings and stored sessions.
+    The server loads a folder's MCP servers and skills without Junie's trust
+    question, so the chat asks first. Launch-time Brave mode is ``--brave``, for that process only.
+    """
+
+    kind = "junie"
+    display_name = "Junie"
+    command_env = JUNIE_ACP_COMMAND_ENV
+    fake_flavor = "junie"
+    lists_real_folder = True
+
+    def __init__(
+        self,
+        launcher: JunieLauncher,
+        *,
+        command_override: str | None = None,
+        test_mode: bool = False,
+        trust_record: Path | None = None,
+    ) -> None:
+        super().__init__(launcher, command_override=command_override, test_mode=test_mode)
+        self._trust_record = trust_record
+
+    def _junie_bin(self) -> str | None:
+        try:
+            return self._launcher.resolve_binary()
+        except CliBinaryNotFoundError:
+            return None
+
+    def _own_command(self, *, brave: bool = False) -> list[str] | None:
+        junie_bin = self._junie_bin()
+        if junie_bin is None:
+            return None
+        return shim_safe_argv(junie_bin, "--acp=true", *(["--brave"] if brave else []))
+
+    def command(self) -> list[str] | None:
+        fixed = self._fixed_command()
+        return fixed if fixed is not None else self._own_command()
+
+    def available(self) -> bool:
+        return self.command() is not None
+
+    def _argv(self) -> list[str]:
+        argv = self.command()
+        if argv is None:
+            raise ChatAgentUnavailableError(self.kind, JUNIE_HINT)
+        return argv
+
+    async def catalog_plan(self) -> ChatLaunchPlan:
+        home = os.path.expanduser("~")
+        return ChatLaunchPlan(argv=self._argv(), env=dict(os.environ), cwd=home, process_cwd=home)
+
+    async def prepare(self, target: LaunchTarget, options: JunieOptions) -> ChatLaunchPlan:
+        # Before the launcher can create a worktree.
+        argv = self._argv()
+        fixed = self._fixed_command() is not None
+        fake = argv == fake_agent_argv(self.fake_flavor)
+        if options.brave and not fixed:
+            argv = self._own_command(brave=True) or argv
+        cwd = await self._launcher.resolve_cwd(target, options)
+        env = self._launcher.build_env(target)
+        return ChatLaunchPlan(
+            argv=argv,
+            env=env,
+            cwd=cwd,
+            initial_config=junie_config_intents(options),
+            process_cwd=os.path.expanduser("~"),
+            trust=(
+                None
+                if fake
+                else JunieFolderTrust(
+                    cwd, junie_dir=junie_home(env), record_path=self._trust_record
+                )
+            ),
+            sign_in_hint=JUNIE_SIGN_IN_HINT,
+            # A command the operator set, or the fake agent, has no place for
+            # Junie's own flag: the chat accepts the requests instead.
+            auto_approve=options.brave and fixed,
+            error_hints=JUNIE_ERROR_HINTS,
+            # Junie's own Brave mode still asks before it implements a plan.
+            decision_tool_prefixes=(JUNIE_PLAN_REVIEW_PREFIX,),
+            restore_skip_option_ids=(JUNIE_BRAVE_OPTION,),
+        )
+
+
 class PiChatSpec(_ChatSpecBase):
     """Pi through Mobaide's own bridge to its RPC mode (:mod:`.pi_bridge`):
     Pi has no ACP server. The bridge runs the host's ``pi``, so chat and
@@ -1397,6 +1532,19 @@ def copilot_config_intents(options: CopilotOptions) -> list[ConfigIntent]:
     return [ConfigIntent("on", option_id=COPILOT_ALLOW_ALL_OPTION)]
 
 
+def junie_config_intents(options: JunieOptions) -> list[ConfigIntent]:
+    """Map the Junie create-session options onto ACP config values.
+
+    Plan mode is Junie's ``mode`` option, not a flag: ``--plan`` applies only
+    to its terminal UI. Its ``brave_mode`` option would change Junie's saved
+    setting for every later session, so Brave mode goes in as ``--brave``.
+    """
+    if not options.plan_mode:
+        return []
+    # Plan mode restricts what the agent may do: never start without it.
+    return [ConfigIntent(JUNIE_PLAN_MODE, option_id=JUNIE_MODE_OPTION, required=True)]
+
+
 # Longer than any model name; bounds the work on a client-sent value.
 MODEL_NAME_MAX = 200
 
@@ -1503,12 +1651,15 @@ def build_chat_agents(
     command_overrides: Mapping[str, str | None] | None = None,
     adapters_dir: Path | None = None,
     antigravity_app_data_dir: Path | None = None,
+    state_dir: Path | None = None,
 ) -> dict[str, ChatAgentSpec]:
     """The chat-capable agents of this host, keyed by session kind.
 
     ``test_mode`` (``MOBAIDE_ENV=test``) runs the scripted fake agent instead
     of the real one unless ``MOBAIDE_ACP_REAL=1``. ``adapters_dir`` holds the
     pinned adapter installs; without it only an adapter on PATH can run.
+    ``state_dir`` keeps the agent's own records (the folders trusted for
+    Junie); without it such trust lasts for one session.
     """
     overrides = command_overrides or {}
     specs: dict[str, ChatAgentSpec] = {}
@@ -1550,6 +1701,14 @@ def build_chat_agents(
             cursor_launcher,
             command_override=overrides.get("cursor"),
             test_mode=test_mode,
+        )
+    junie_launcher = launchers.get("junie")
+    if junie_launcher is not None:
+        specs["junie"] = JunieChatSpec(
+            junie_launcher,
+            command_override=overrides.get("junie"),
+            test_mode=test_mode,
+            trust_record=state_dir / JUNIE_TRUST_RECORD if state_dir is not None else None,
         )
     pi_launcher = launchers.get("pi")
     if pi_launcher is not None:

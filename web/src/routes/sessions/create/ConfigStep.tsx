@@ -17,6 +17,7 @@ import { CodexOptionsPanel } from './panels/CodexOptionsPanel';
 import { OpenCodeOptionsPanel } from './panels/OpenCodeOptionsPanel';
 import { CopilotOptionsPanel } from './panels/CopilotOptionsPanel';
 import { CursorOptionsPanel } from './panels/CursorOptionsPanel';
+import { JunieOptionsPanel } from './panels/JunieOptionsPanel';
 import { PiOptionsPanel } from './panels/PiOptionsPanel';
 import type { BaseBranchStatus } from './panels/BaseBranchPicker';
 import { WorktreeSection } from './panels/WorktreeSection';
@@ -76,6 +77,8 @@ export function modeTitle(
       return 'GitHub Copilot session';
     case 'cursor':
       return 'Cursor session';
+    case 'junie':
+      return 'Junie session';
     case 'pi':
       return 'Pi session';
     case 'auto_scan':
@@ -101,6 +104,8 @@ function continueHint(kind: ChatAgentKind | null): string {
       return 'Open a GitHub Copilot session started on your PC, for example in a terminal.';
     case 'cursor':
       return 'Open a Cursor chat session stored on your PC. Sessions from Cursor’s terminal UI are not listed.';
+    case 'junie':
+      return 'Open a Junie session stored on your PC, also one you started in Junie’s terminal UI.';
     case 'pi':
       return 'Open a Pi session started on your PC, for example in a terminal.';
     default:
@@ -231,6 +236,9 @@ export function ConfigStep({
       )}
       {mode === 'cursor' && (
         <CursorOptionsPanel bucket={state.cursor} chat={chat} dispatch={dispatch} />
+      )}
+      {mode === 'junie' && (
+        <JunieOptionsPanel bucket={state.junie} chat={chat} dispatch={dispatch} />
       )}
       {mode === 'pi' && (
         <PiOptionsPanel bucket={state.pi} chat={chat} dispatch={dispatch} />

@@ -8,6 +8,7 @@ import com.mobaide.app.data.local.CodexLaunchPrefs
 import com.mobaide.app.data.local.OpenCodeLaunchPrefs
 import com.mobaide.app.data.local.CopilotLaunchPrefs
 import com.mobaide.app.data.local.CursorLaunchPrefs
+import com.mobaide.app.data.local.JunieLaunchPrefs
 import com.mobaide.app.data.local.PiLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
@@ -134,6 +135,8 @@ class CreateSessionViewModelTest {
         coEvery { prefs.setLastUsedCopilotOptions(any()) } just Runs
         coEvery { prefs.getLastUsedCursorOptions() } returns null
         coEvery { prefs.setLastUsedCursorOptions(any()) } just Runs
+        coEvery { prefs.getLastUsedJunieOptions() } returns null
+        coEvery { prefs.setLastUsedJunieOptions(any()) } just Runs
         coEvery { prefs.getLastUsedPiOptions() } returns null
         coEvery { prefs.setLastUsedPiOptions(any()) } just Runs
         coEvery { prefs.getRecentCustomPaths(any()) } returns recentCustomPaths
@@ -4258,6 +4261,208 @@ class CreateSessionViewModelTest {
         val options = request.cursor_options
         assertNotNull(options)
         assertTrue(options!!.force)
+        assertFalse(options.worktree)
+        assertNull(options.branch_name)
+    }
+
+    // Junie
+
+    private fun TestScope.junieSubmit(
+        fx: Fixture,
+        setUp: (CreateSessionViewModel) -> Unit = {},
+    ): Pair<CreateSessionRequest, JunieLaunchPrefs> {
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-junie", "starting", "2026-11-16T00:00:00Z")
+        val prefsSlot = slot<JunieLaunchPrefs>()
+        coEvery { fx.prefs.setLastUsedJunieOptions(capture(prefsSlot)) } just Runs
+
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
+        vm.selectJunieMode()
+        setUp(vm)
+        vm.submitJunie()
+        advanceUntilIdle()
+        return requestSlot.captured to prefsSlot.captured
+    }
+
+    @Test
+    fun submitJunie_sendsCliJunie_withOnlyItsOwnOptionsBlock_andOpensTheChatView() = runTest {
+        val fx = newFixture()
+
+        val (request, saved) = junieSubmit(fx) { vm ->
+            assertEquals(CreateSessionStep.JunieConfig, vm.uiState.value.step)
+            vm.setJuniePlanMode(true)
+            vm.setJunieBrave(true)
+            vm.toggleWorktree(true)
+            vm.setBranchName("feature/x")
+        }
+
+        assertEquals("alpha", request.workspace_name)
+        assertEquals("junie", request.cli)
+        assertEquals(SessionResponse.UI_CHAT, request.ui)
+        assertNull("Junie must not send claude_options", request.claude_options)
+        assertNull("Junie must not send cursor_options", request.cursor_options)
+        assertNull("Junie must not send pi_options", request.pi_options)
+        val options = request.junie_options
+        assertNotNull(options)
+        assertTrue(options!!.plan_mode)
+        assertTrue(options.brave)
+        assertTrue("worktree must travel inside junie_options", options.worktree)
+        assertEquals("feature/x", options.branch_name)
+        assertFalse(
+            "Junie worktree travels in junie_options, not the top-level request field",
+            request.worktree,
+        )
+        // The same choices are kept for the next Junie launch, and no other agent's.
+        assertEquals(JunieLaunchPrefs(planMode = true, brave = true, terminalUi = false), saved)
+        coVerify(exactly = 0) { fx.prefs.setLastUsedClaudeOptions(any()) }
+        coVerify(exactly = 0) { fx.prefs.setLastUsedCursorOptions(any()) }
+    }
+
+    @Test
+    fun submitJunie_byDefault_isNeitherBraveNorInPlanMode() = runTest {
+        val (request, saved) = junieSubmit(newFixture())
+
+        assertFalse(request.junie_options!!.brave)
+        assertFalse(request.junie_options!!.plan_mode)
+        assertFalse(request.junie_options!!.worktree)
+        assertEquals(JunieLaunchPrefs(), saved)
+    }
+
+    @Test
+    fun submitJunie_withTerminalUi_opensTheTerminal_andRemembersTheChoice() = runTest {
+        val (request, saved) = junieSubmit(newFixture()) { it.toggleJunieTerminalUi(true) }
+
+        assertEquals("junie", request.cli)
+        assertEquals(SessionResponse.UI_TERMINAL, request.ui)
+        assertTrue(saved.terminalUi)
+    }
+
+    @Test
+    fun submitJunie_customPath_sendsTheFolder_andNeverAWorktree() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-junie-adhoc", "starting", "2026-11-16T00:00:00Z")
+
+        vm.selectCustomPath()
+        advanceUntilIdle()
+        vm.setCustomPathDraft(hostAbsolutePath)
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+        vm.confirmWorkspace()
+        vm.selectJunieMode()
+        vm.setJunieBrave(true)
+        vm.submitJunie()
+        advanceUntilIdle()
+
+        val request = requestSlot.captured
+        assertNull(request.workspace_name)
+        assertEquals(hostAbsolutePath, request.cwd)
+        assertEquals("junie", request.cli)
+        val options = request.junie_options
+        assertNotNull(options)
+        assertTrue(options!!.brave)
+        assertFalse(options.worktree)
+        assertNull(options.branch_name)
+        assertNull(options.base_branch)
+    }
+
+    @Test
+    fun junieCard_isDisabled_forAnAgentFromBeforeJunieSupport() = runTest {
+        // That agent lists its CLIs without Junie, and would open a plain
+        // shell for `cli = "junie"`.
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            versionResponse(claude = true, codex = true)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertFalse(s.junieKnown)
+        assertFalse(s.isModeEnabled(CreateSessionMode.Junie))
+        assertTrue("the agent's other CLIs stay usable", s.isModeEnabled(CreateSessionMode.Codex))
+
+        vm.selectJunieMode()
+
+        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
+    }
+
+    @Test
+    fun junieCard_isDisabled_whenTheAgentListsJunieAsNotInstalled() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            chatVersion("{}", cli = """{"claude":{"available":true},"junie":{"available":false}}""")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertTrue("a listed CLI is known, only not installed", s.junieKnown)
+        assertEquals(false, s.junieAvailable)
+        assertFalse(s.isModeEnabled(CreateSessionMode.Junie))
+    }
+
+    @Test
+    fun init_restoresTheJunieChoices() = runTest {
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedJunieOptions() } returns
+            JunieLaunchPrefs(planMode = true, brave = true, terminalUi = true)
+
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.juniePlanMode)
+        assertTrue(vm.uiState.value.junieBrave)
+        assertTrue(vm.uiState.value.junieTerminalUi)
+        assertFalse(vm.uiState.value.cursorForce)
+        assertFalse(vm.uiState.value.autoScanPlanMode)
+        assertFalse(vm.uiState.value.skipPermissions)
+    }
+
+    @Test
+    fun resumeChatSession_junie_sendsTheJunieOptionsWithoutAWorktree() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-junie-resumed", "starting", "2026-11-16T00:00:00Z")
+
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
+        vm.selectJunieMode()
+        vm.setJuniePlanMode(true)
+        vm.setJunieBrave(true)
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+        vm.resumeChatSession("junie", ChatStoredSession(session_id = "external-5555", cwd = "/p/alpha"))
+        advanceUntilIdle()
+
+        val request = requestSlot.captured
+        assertEquals("junie", request.cli)
+        assertEquals("alpha", request.workspace_name)
+        assertNull(request.cwd)
+        assertEquals(SessionResponse.UI_CHAT, request.ui)
+        assertEquals("external-5555", request.chat_resume_id)
+        assertNull(request.claude_options)
+        assertNull(request.cursor_options)
+        val options = request.junie_options
+        assertNotNull(options)
+        assertTrue(options!!.plan_mode)
+        assertTrue(options.brave)
         assertFalse(options.worktree)
         assertNull(options.branch_name)
     }

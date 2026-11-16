@@ -84,6 +84,9 @@ PREFIX_ENTRIES: tuple[str, ...] = (
     "projects.json",
     # The pinned ACP adapters of chat sessions (mobaide/acp/install.py).
     "acp-adapters",
+    # The folders trusted for Junie chat sessions (JUNIE_TRUST_RECORD in
+    # mobaide/acp/agents.py).
+    "junie-trusted-folders.json",
     *VOICE_PREFIX_ENTRIES,
     # The transcript-cleanup work dir: only its prompt file.
     "voice-cleanup",

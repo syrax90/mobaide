@@ -446,9 +446,9 @@ def merge_tool_update(
             item["content"] = command_result_parts(item["content"])
     raw_output = update.get("rawOutput")
     shell = _shell_result(raw_output) if item["kind"] == "execute" else None
-    if shell is not None and update.get("content") is None:
+    if shell is not None and (update.get("content") is None or _whole_output(raw_output)):
         # The output takes the place of what stood there while the command
-        # waited (why it needed an approval).
+        # waited (why it needed an approval), or of a shortened copy of it.
         rendered = console_part(shell[0], live=False, exit_code=shell[1])
         item["content"] = [rendered] if rendered is not None else []
     raw_output = _raw_error_text(raw_output)
@@ -467,23 +467,33 @@ def merge_tool_update(
         item["subtitle"] = _one_line(item["locations"][0]["path"])
 
 
+def _whole_output(raw_output: Any) -> bool:
+    """Whether a ``rawOutput`` carries the whole output of a command in
+    ``output`` (Junie, which puts a shortened copy in ``content``)."""
+    return isinstance(raw_output, Mapping) and isinstance(raw_output.get("output"), str)
+
+
 def _shell_result(raw_output: Any) -> tuple[str, int] | None:
     """``(output, exit code)`` of a finished command that an agent reports as
-    ``rawOutput: {exitCode, stdout, stderr}`` (Cursor); None for any other
+    ``rawOutput: {exitCode, stdout, stderr}`` (Cursor) or
+    ``rawOutput: {output, exitCode}`` (Junie); None for any other
     ``rawOutput``."""
     if not isinstance(raw_output, Mapping):
         return None
     code = raw_output.get("exitCode")
-    stdout = raw_output.get("stdout")
-    stderr = raw_output.get("stderr")
     if isinstance(code, bool) or not isinstance(code, int):
         return None
-    if not isinstance(stdout, str) and not isinstance(stderr, str):
+    streams = (
+        (raw_output["output"],)
+        if _whole_output(raw_output)
+        else (raw_output.get("stdout"), raw_output.get("stderr"))
+    )
+    if not any(isinstance(text, str) for text in streams):
         return None
     # Cut before the join: the output is rendered once more after this.
     texts = [
         cap_text(text, CONSOLE_KEEP_MAX)[0].rstrip("\n")
-        for text in (stdout, stderr)
+        for text in streams
         if isinstance(text, str) and text
     ]
     return "\n".join(texts), code

@@ -22,6 +22,7 @@ _KIND_FALLBACK_LABELS = {
     "opencode": "OpenCode session",
     "copilot": "GitHub Copilot session",
     "cursor": "Cursor session",
+    "junie": "Junie session",
     "pi": "Pi session",
     "auto_scan": "Auto Scan session",
     "shell": "Terminal session",

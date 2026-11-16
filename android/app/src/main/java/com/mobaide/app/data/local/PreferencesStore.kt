@@ -32,6 +32,7 @@ class PreferencesStore(private val context: Context) {
     private val keyLastOpenCodeOptions = stringPreferencesKey("last_used_opencode_options")
     private val keyLastCopilotOptions = stringPreferencesKey("last_used_copilot_options")
     private val keyLastCursorOptions = stringPreferencesKey("last_used_cursor_options")
+    private val keyLastJunieOptions = stringPreferencesKey("last_used_junie_options")
     private val keyLastPiOptions = stringPreferencesKey("last_used_pi_options")
     private val keyLastAutoScanOptions = stringPreferencesKey("last_used_auto_scan_options")
     private val keyTerminalDisplayMode = stringPreferencesKey("terminal_display_mode")
@@ -243,6 +244,19 @@ class PreferencesStore(private val context: Context) {
     suspend fun setLastUsedCursorOptions(prefs: CursorLaunchPrefs) {
         val payload = cacheJson.encodeToString(CursorLaunchPrefs.serializer(), prefs)
         context.dataStore.edit { it[keyLastCursorOptions] = payload }
+    }
+
+    suspend fun getLastUsedJunieOptions(): JunieLaunchPrefs? {
+        val raw = context.dataStore.data.map { it[keyLastJunieOptions] }.first()
+            ?: return null
+        return runCatching {
+            cacheJson.decodeFromString(JunieLaunchPrefs.serializer(), raw)
+        }.getOrNull()
+    }
+
+    suspend fun setLastUsedJunieOptions(prefs: JunieLaunchPrefs) {
+        val payload = cacheJson.encodeToString(JunieLaunchPrefs.serializer(), prefs)
+        context.dataStore.edit { it[keyLastJunieOptions] = payload }
     }
 
     suspend fun getLastUsedPiOptions(): PiLaunchPrefs? {

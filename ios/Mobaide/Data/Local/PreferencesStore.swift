@@ -15,6 +15,7 @@ struct PreferencesStore: @unchecked Sendable {
     static let keyLastUsedOpenCodeOptions = "last_used_opencode_options"
     static let keyLastUsedCopilotOptions = "last_used_copilot_options"
     static let keyLastUsedCursorOptions = "last_used_cursor_options"
+    static let keyLastUsedJunieOptions = "last_used_junie_options"
     static let keyLastUsedPiOptions = "last_used_pi_options"
     static let keyTerminalDisplayMode = "terminal_display_mode"
     static let keyTerminalStaticColumns = "terminal_static_columns"
@@ -125,6 +126,14 @@ struct PreferencesStore: @unchecked Sendable {
 
     func setLastUsedCursorOptions(_ prefs: CursorLaunchPrefs) {
         encodeBlob(prefs, forKey: Self.keyLastUsedCursorOptions)
+    }
+
+    func getLastUsedJunieOptions() -> JunieLaunchPrefs? {
+        decodeBlob(forKey: Self.keyLastUsedJunieOptions)
+    }
+
+    func setLastUsedJunieOptions(_ prefs: JunieLaunchPrefs) {
+        encodeBlob(prefs, forKey: Self.keyLastUsedJunieOptions)
     }
 
     func getLastUsedPiOptions() -> PiLaunchPrefs? {
