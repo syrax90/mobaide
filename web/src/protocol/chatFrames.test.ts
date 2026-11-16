@@ -246,6 +246,24 @@ describe('chat frame golden fixtures', () => {
     ]);
   });
 
+  it('keeps the background work until a patch clears it', () => {
+    let timeline = applySnapshot(INITIAL_CHAT_TIMELINE, decodeServer('snapshot_full') as SnapshotFrame).timeline;
+    for (const name of ['events_batch', 'events_remove', 'events_sign_in']) {
+      timeline = applyEvents(timeline, decodeServer(name) as EventsFrame).timeline;
+    }
+    expect(timeline.state.background).toBe('working');
+
+    const { timeline: cleared, sync } = applyEvents(
+      timeline,
+      decodeServer('events_background_cleared') as EventsFrame,
+    );
+
+    expect(sync).toBeUndefined();
+    expect(cleared.seq).toBe(51);
+    expect(cleared.state.status).toBe('running');
+    expect(cleared.state.background).toBeNull();
+  });
+
   it('decodes results', () => {
     expect(decodeServer('result_ok')).toEqual({
       t: 'result',

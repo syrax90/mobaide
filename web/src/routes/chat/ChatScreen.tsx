@@ -5,6 +5,7 @@ import { acquireChat, releaseChat, useChatStore } from '../../chat/chatStore';
 import type { ChatSessionModel } from '../../chat/chatModel';
 import { chatStatusLine, type StatusLine } from '../../chat/chatFormat';
 import { imageFilesFrom } from '../../chat/chatImages';
+import type { ChatState } from '../../chat/chatWire';
 import { MenuButton, type MenuGroup } from '../../components/MenuButton';
 import { useFullscreen } from '../../lib/useFullscreen';
 import { isChatSession, type SessionResponse } from '../../protocol/dto/session';
@@ -92,11 +93,12 @@ function useNow(active: boolean): number {
   return now;
 }
 
-function dotTone(line: StatusLine, status: string, live: boolean, closed: boolean): string {
+function dotTone(line: StatusLine, state: ChatState, live: boolean, closed: boolean): string {
   if (closed || !live) return 'muted';
   if (line.tone === 'danger') return 'danger';
-  if (line.tone === 'accent' || status === 'running') return 'accent';
-  if (status === 'starting' || status === 'loading') return 'pending';
+  const { status, background } = state;
+  if (line.tone === 'accent' || status === 'running' || background === 'working') return 'accent';
+  if (status === 'starting' || status === 'loading' || background === 'waiting') return 'pending';
   return 'ok';
 }
 
@@ -114,7 +116,7 @@ function HeaderStatus({ model, title }: { model: ChatSessionModel; title: string
   return (
     <>
       <span
-        className={`chat-dot chat-dot-${dotTone(line, state.status, live, closed)}`}
+        className={`chat-dot chat-dot-${dotTone(line, state, live, closed)}`}
         aria-hidden="true"
       />
       <div className="chat-title-block">

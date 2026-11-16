@@ -594,6 +594,7 @@ struct ChatStatePatch: Sendable, Decodable {
     var turnStartedAt: String??
     var cancelling: Bool?
     var steering: Bool?
+    var background: ChatBackgroundWork??
 
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: ChatKey.self)
@@ -622,6 +623,9 @@ struct ChatStatePatch: Sendable, Decodable {
         turnStartedAt = nullable(String.self, "turn_started_at")
         if c.has("cancelling") { cancelling = c.bool("cancelling") ?? false }
         if c.has("steering") { steering = c.bool("steering") ?? false }
+        if c.has("background") {
+            background = .some(c.string("background").flatMap(ChatBackgroundWork.init(rawValue:)))
+        }
     }
 }
 
@@ -643,6 +647,8 @@ struct ChatState: Equatable, Sendable {
     var cancelling = false
     /// The agent takes a message during a running turn ("Send now").
     var steering = false
+    /// Set while the turn has ended but its work still runs.
+    var background: ChatBackgroundWork?
 
     mutating func apply(_ patch: ChatStatePatch) {
         if let value = patch.status { status = value }
@@ -661,6 +667,7 @@ struct ChatState: Equatable, Sendable {
         if let value = patch.turnStartedAt { turnStartedAt = value }
         if let value = patch.cancelling { cancelling = value }
         if let value = patch.steering { steering = value }
+        if let value = patch.background { background = value }
     }
 
     /// Unknown statuses read as `ready`.
@@ -669,4 +676,12 @@ struct ChatState: Equatable, Sendable {
 
 enum ChatPhase: String, Sendable {
     case starting, loading, ready, running, error, stopped
+}
+
+/// Work a finished turn left running. An unknown value reads as none.
+enum ChatBackgroundWork: String, Sendable {
+    /// A workflow or a sub-agent.
+    case working
+    /// Only a background shell, a monitor or a scheduled wakeup.
+    case waiting
 }

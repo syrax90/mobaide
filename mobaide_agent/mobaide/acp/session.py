@@ -1191,28 +1191,29 @@ class ChatSession:
             return
         # An error answering the user's own Stop is not news to them.
         cancelling = bool(tl.state.get("cancelling"))
-        tl.patch_state(
-            status="ready" if alive else "error",
-            turn_started_at=None,
-            cancelling=False,
-            urgent=True,
-        )
-        if not alive or self._stopping:
-            return
-        if failed and not cancelling:
-            self._settle_gate()
-            self._set_attention("turn_failed")
-        elif failed or stop_reason in (None, "cancelled"):
-            self._settle_gate()
-        elif self._gate is None or not self._hooks_live:
-            self._set_attention("turn_finished")
-        elif self._turn_stop is not None:
-            # The Stop hook listed what the turn left behind: the gate alerts
-            # once none of it is in flight.
-            self._gate.handle(HookKind.STOP, self._turn_stop)
-        else:
-            # No Stop hook: it was lost, or the turn was a local command.
-            self._gate.stop_lost()
+        tl.patch_state(status="ready" if alive else "error", turn_started_at=None, cancelling=False)
+        # One frame: the turn's end and the work it left in flight (which the
+        # gate reads from its Stop below), so the header never shows "Ready"
+        # in between.
+        try:
+            if not alive or self._stopping:
+                return
+            if failed and not cancelling:
+                self._settle_gate()
+                self._set_attention("turn_failed")
+            elif failed or stop_reason in (None, "cancelled"):
+                self._settle_gate()
+            elif self._gate is None or not self._hooks_live:
+                self._set_attention("turn_finished")
+            elif self._turn_stop is not None:
+                # The Stop hook listed what the turn left behind: the gate
+                # alerts once none of it is in flight.
+                self._gate.handle(HookKind.STOP, self._turn_stop)
+            else:
+                # No Stop hook: it was lost, or the turn was a local command.
+                self._gate.stop_lost()
+        finally:
+            tl.flush()
 
     async def _reload_conversation(self) -> None:
         """Open the conversation again in a new agent process (``session/load``)."""
@@ -2250,9 +2251,17 @@ class ChatSession:
 
     def _publish_activity(self) -> None:
         activity = _ACTIVITY_BY_STATUS.get(str(self._timeline.state.get("status")))
+        background: str | None = None
         if activity == "idle" and self._gate_activity is not None:
             # No turn runs, and the hooks know what the last one left behind.
             activity = self._gate_activity
+            parked = self._gate is not None and self._gate.parked_activity is not None
+            if parked and activity in ("working", "waiting"):
+                # Work the turn left in flight. Not the quiet window after a
+                # turn that left nothing: the chat header shows "Ready" then.
+                background = activity
+        if self._timeline.state.get("background") != background:
+            self._timeline.patch_state(background=background)
         if activity == self._activity:
             return
         self._activity = activity

@@ -284,6 +284,24 @@ class ChatFramesFixtureTest {
     }
 
     @Test
+    fun backgroundWork_staysUntilAPatchClearsIt() {
+        val reducer = loaded().apply {
+            apply(batch())
+            apply(server("events_remove") as ChatFrame.Events)
+            apply(server("events_sign_in") as ChatFrame.Events)
+        }
+        assertEquals(ChatBackgroundWork.WORKING, reducer.timeline!!.state.background)
+
+        val reduction = reducer.apply(server("events_background_cleared") as ChatFrame.Events)
+
+        assertNull(reduction.sync)
+        val timeline = reducer.timeline!!
+        assertEquals(51L, timeline.seq)
+        assertEquals(ChatStatus.RUNNING, timeline.state.status)
+        assertNull(timeline.state.background)
+    }
+
+    @Test
     fun results_decode() {
         assertEquals(
             ChatFrame.Result(

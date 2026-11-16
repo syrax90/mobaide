@@ -4048,6 +4048,18 @@ def _background(task_type: str, status: str = "running") -> dict[str, Any]:
     return {"background_tasks": [{"id": "t1", "type": task_type, "status": status}]}
 
 
+def _status_patch(m: TimelineMirror, status: str) -> dict[str, Any]:
+    """The last state patch that set ``status``: what a client got with it."""
+    patches = [
+        ev["patch"]
+        for frame in m.frames
+        if frame["t"] == "events"
+        for ev in frame["events"]
+        if ev["type"] == "state" and ev["patch"].get("status") == status
+    ]
+    return patches[-1]
+
+
 class TestClaudeHooks:
     """A Claude chat with a hook port reads Claude Code's hooks, which the
     ``/internal/hook`` router hands to ``on_claude_hook``. The prompt answer
@@ -4116,6 +4128,63 @@ class TestClaudeHooks:
         assert info.activity == activity
         assert info.attention is None
         assert gate_windows.pending == 0
+
+    @pytest.mark.parametrize(
+        ("left_behind", "background"), [("workflow", "working"), ("shell", "waiting")]
+    )
+    async def test_the_chat_shows_the_work_a_turn_leaves_behind_until_the_next_turn(
+        self, open_chat, gate_windows, tmp_path, left_behind, background
+    ):
+        """The turn's end and the work it left come in one patch, so the chat
+        never shows "Ready" in between. The work does not hold the next
+        message back. A turn that leaves nothing shows "Ready" at once, while
+        the session row still reads ``working`` for the quiet window."""
+        release = tmp_path / "release"
+        m = await open_chat(argv=_held_turn_agent(release), hook_port=HOOK_PORT)
+        await self._turn(
+            m,
+            release,
+            (HookKind.PROMPT_SUBMIT, {"prompt_id": "p1", "prompt": "work"}),
+            (HookKind.STOP, {"prompt_id": "p1", **_background(left_behind)}),
+        )
+
+        assert _status_patch(m, "ready")["background"] == background
+
+        release.unlink()
+        sent = await m.command("prompt", text="more")
+        await m.until(lambda: m.status == "running")
+
+        assert sent["data"] == {"queued": False, "queue_id": None}
+        assert m.state["background"] is None
+
+        m.session.on_claude_hook(HookKind.PROMPT_SUBMIT, {"prompt_id": "p2", "prompt": "more"})
+        m.session.on_claude_hook(
+            HookKind.STOP, {"prompt_id": "p2", **_background(left_behind, "completed")}
+        )
+        release.touch()
+        await m.until(lambda: m.status == "ready")
+
+        assert m.session.to_info().activity == "working"
+        assert m.state["background"] is None
+        assert gate_windows.elapse() == 1
+        await m.until(lambda: "turn_finished" in m.attention)
+        assert m.state["background"] is None
+
+    async def test_a_turn_the_agent_starts_by_itself_shows_its_work_with_its_end(
+        self, open_chat, gate_windows
+    ):
+        """That end is sent at once, and the work it left must come with it."""
+        m = await open_chat(argv=MINI_AGENT_ARGV, hook_port=HOOK_PORT)
+        await self._agent_starts_a_turn(m)
+        m.session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1", **_background("subagent")})
+        await m.until(lambda: m.status == "ready")
+
+        assert _status_patch(m, "ready")["background"] == "working"
+
+        # The sub-agent reports back in a turn the agent starts by itself.
+        await self._agent_starts_a_turn(m, "p2")
+
+        assert m.state["background"] is None
 
     @pytest.mark.parametrize("stop_hook", [True, False], ids=["stop-hook", "stop-hook-lost"])
     async def test_a_finished_turn_alerts_after_the_quiet_window(

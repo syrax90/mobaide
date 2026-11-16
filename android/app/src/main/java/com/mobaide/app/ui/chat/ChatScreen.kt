@@ -693,6 +693,7 @@ private fun ChatTopBar(
                             ChatStatusTone.Muted -> MaterialTheme.colorScheme.onSurfaceVariant
                         },
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         // Announces state changes only, not every tick of the elapsed time.
                         modifier = Modifier.semantics {
                             contentDescription = statusLine.text.substringBefore(" · ")

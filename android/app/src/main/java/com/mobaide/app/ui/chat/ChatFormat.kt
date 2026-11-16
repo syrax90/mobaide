@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.core.net.toUri
+import com.mobaide.app.data.chat.ChatBackgroundWork
 import com.mobaide.app.data.chat.ChatCost
 import com.mobaide.app.data.chat.ChatState
 import com.mobaide.app.data.chat.ChatStatus
@@ -40,6 +41,9 @@ fun chatStatusLine(live: Boolean, state: ChatState, nowMs: Long): ChatStatusLine
     }
     state.status == ChatStatus.ERROR -> ChatStatusLine("Stopped", ChatStatusTone.Danger)
     state.status == ChatStatus.STOPPED -> ChatStatusLine("Session closed", ChatStatusTone.Muted)
+    // The turn ended but left work running; the composer still takes a message.
+    state.background == ChatBackgroundWork.WORKING -> ChatStatusLine("Working in background", ChatStatusTone.Muted)
+    state.background == ChatBackgroundWork.WAITING -> ChatStatusLine("Background task", ChatStatusTone.Muted)
     else -> ChatStatusLine("Ready", ChatStatusTone.Muted)
 }
 

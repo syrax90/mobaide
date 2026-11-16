@@ -42,10 +42,14 @@ export type ToolKind = (typeof TOOL_KINDS)[number];
 const TOOL_STATUSES = ['pending', 'in_progress', 'completed', 'failed', 'cancelled'] as const;
 export type ToolStatus = (typeof TOOL_STATUSES)[number];
 
-function oneOf<T extends string>(values: readonly T[], fallback: T) {
+/** Work a finished turn left running: a workflow or a sub-agent, or only a shell, a monitor or a wakeup. */
+const BACKGROUND_WORK = ['working', 'waiting'] as const;
+export type BackgroundWork = (typeof BACKGROUND_WORK)[number];
+
+function oneOf<T extends string, F extends T | null>(values: readonly T[], fallback: F) {
   return z
     .unknown()
-    .transform((value): T =>
+    .transform((value): T | F =>
       typeof value === 'string' && (values as readonly string[]).includes(value)
         ? (value as T)
         : fallback,
@@ -330,6 +334,7 @@ const STATE_FIELDS = {
   turn_started_at: nullableText,
   cancelling: flag,
   steering: flag,
+  background: oneOf(BACKGROUND_WORK, null),
 };
 
 type StateFields = typeof STATE_FIELDS;
@@ -352,6 +357,7 @@ export const INITIAL_CHAT_STATE: ChatState = {
   turn_started_at: null,
   cancelling: false,
   steering: false,
+  background: null,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {

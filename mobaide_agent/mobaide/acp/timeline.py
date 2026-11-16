@@ -85,6 +85,7 @@ def default_state() -> dict[str, Any]:
         "turn_started_at": None,
         "cancelling": False,
         "steering": False,
+        "background": None,
     }
 
 
@@ -192,13 +193,15 @@ class ChatTimeline:
                 changed = True
             self.state[key] = value
             self._state_patch[key] = value
+        status = self.state.get("status")
+        if self._on_status is not None and status != status_before:
+            # Before the flush: what the listener patches in reply rides in
+            # the same frame as the status.
+            self._on_status(status)
         if changed:
             self._schedule(urgent)
         elif urgent and (self._touched or self._state_patch):
             self.flush()
-        status = self.state.get("status")
-        if self._on_status is not None and status != status_before:
-            self._on_status(status)
 
     def snapshot_frame(self) -> bytes:
         self.flush()

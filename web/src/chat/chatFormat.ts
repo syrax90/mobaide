@@ -1,4 +1,4 @@
-import type { ChatState } from './chatWire';
+import type { BackgroundWork, ChatState } from './chatWire';
 
 /** "12s", "3m 05s", "1h 02m". */
 export function formatElapsed(ms: number): string {
@@ -82,5 +82,12 @@ export function chatStatusLine(
     };
   }
   if (state.status === 'error') return { text: 'Stopped', tone: 'danger' };
+  if (state.background !== null) return { text: BACKGROUND_TEXT[state.background], tone: 'muted' };
   return { text: 'Ready', tone: 'muted' };
 }
+
+/** The turn ended but left work running; the composer still takes a message. */
+const BACKGROUND_TEXT: Record<BackgroundWork, string> = {
+  working: 'Working in background',
+  waiting: 'Background task',
+};

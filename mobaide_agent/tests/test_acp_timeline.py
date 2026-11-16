@@ -322,6 +322,22 @@ class TestStatusCallback:
 
         assert statuses == ["running"]
 
+    async def test_what_the_listener_patches_goes_out_in_the_frame_of_the_status(self):
+        """A chat session answers a turn's end with the work the turn left
+        running. Sent apart, the client would show "Ready" in between."""
+
+        def on_status(status):
+            if status == "ready":
+                tl.patch_state(background="working")
+
+        tl, frames = _make(flush_interval=NEVER, on_status=on_status)
+        tl.patch_state(status="ready", turn_started_at=None, urgent=True)
+
+        assert len(frames) == 1
+        assert [e["patch"] for e in frames[0]["events"]] == [
+            {"status": "ready", "turn_started_at": None, "background": "working"}
+        ]
+
 
 def _ids(items: list[dict]) -> list[str]:
     return [item["id"] for item in items]

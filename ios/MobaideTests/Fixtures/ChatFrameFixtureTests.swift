@@ -297,6 +297,21 @@ final class ChatFrameFixtureTests: XCTestCase {
         XCTAssertEqual(waiting.error, "That code did not work. Try again.")
     }
 
+    func testBackgroundWorkStaysUntilAPatchClearsIt() throws {
+        var timeline = try loaded()
+        for name in ["events_batch", "events_remove", "events_sign_in"] {
+            _ = timeline.apply(try server(name))
+        }
+        XCTAssertEqual(timeline.state.background, .working)
+
+        let result = timeline.apply(try server("events_background_cleared"))
+
+        XCTAssertNil(result.sync)
+        XCTAssertEqual(timeline.seq, 51)
+        XCTAssertEqual(timeline.state.status, "running")
+        XCTAssertNil(timeline.state.background)
+    }
+
     func testResultsDecode() throws {
         guard case .result(let ok) = try server("result_ok") else { return XCTFail("result_ok is not a result") }
         XCTAssertEqual(ok, ChatResultFrame(

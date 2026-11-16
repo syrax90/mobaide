@@ -23,6 +23,16 @@ object ChatStatus {
     fun normalize(raw: String?): String = if (raw in KNOWN) raw!! else READY
 }
 
+/** Work a finished turn left running; null when nothing runs (or for an unknown value). */
+object ChatBackgroundWork {
+    // A workflow or a sub-agent.
+    const val WORKING = "working"
+    // Only a background shell, a monitor or a scheduled wakeup.
+    const val WAITING = "waiting"
+
+    fun normalize(raw: String?): String? = raw?.takeIf { it == WORKING || it == WAITING }
+}
+
 @Immutable
 data class ChatAgentInfo(val name: String?, val title: String?, val version: String?)
 
@@ -265,6 +275,8 @@ data class ChatState(
     val cancelling: Boolean = false,
     // The agent takes a message during a running turn ("Send now" on queued messages).
     val steering: Boolean = false,
+    // A [ChatBackgroundWork] value while the turn has ended but its work still runs.
+    val background: String? = null,
 )
 
 /** Lenient decoding of the agent's JSON: a malformed field never drops its whole frame. */
@@ -313,6 +325,7 @@ internal object ChatJson {
         turnStartedAt = obj.str("turn_started_at"),
         cancelling = obj.bool("cancelling") == true,
         steering = obj.bool("steering") == true,
+        background = ChatBackgroundWork.normalize(obj.str("background")),
     )
 
     private fun configOption(obj: JsonObject): ChatConfigOption? {
