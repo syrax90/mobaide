@@ -123,6 +123,21 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-15: Claude chat follows background work
+
+Agent-side delta within proto-v7 (2026-11-15): **no wire change, no version bump. No client change: every value below already exists.**
+
+Before, a Claude chat session took its `activity` and its `turn_finished` alert from the `session/prompt` answer alone. `claude-agent-acp` answers a prompt while a workflow, a background shell or a monitor still runs, and a turn that Claude Code starts by itself (a task notification, a scheduled wakeup) has no prompt. So the session read `idle` and alerted "Ready" while work was in flight, and the real end raised nothing.
+
+* The agent passes Claude Code hook settings in `session/new` and `session/load` (`_meta.claudeCode.options.settings`): `Stop`, `StopFailure`, `UserPromptSubmit` and `PreToolUse` `http` hooks to `POST /internal/hook`. No `Notification` and no `SessionEnd` hook: the adapter reports a permission request and the agent's exit.
+* The adapter gives the settings to the CLI as a process argument, so the hook URLs carry no token. Each hook sends the per-agent token in the `X-Mobaide-Hook-Token` header, which the CLI fills from `MOBAIDE_HOOK_TOKEN` in its environment. `POST /internal/hook` accepts the token from the query or from this header.
+* `activity`: `working` while the timeline `status` is `running`. Otherwise the attention gate's value from the last `Stop` payload, as for a Claude terminal session: `working` (a running workflow or sub-agent), `waiting` (only a shell, a monitor or a scheduled wakeup), or `idle` when the quiet window ends.
+* `turn_finished`: the gate raises it, 2 s after a `Stop` that lists nothing in flight (a terminal session waits 8 s). The `Stop` of the user's own prompt reaches the gate at the prompt's answer, so no alert comes while that turn runs.
+* A turn Claude Code starts by itself shows on the chat screen as a running turn: `status: "running"` from its `UserPromptSubmit` hook to its `Stop` hook, with no "Message sent from another app" notice. Messages sent meanwhile wait in the queue, and `cancel` stops the turn. `steer` on a queued message during such a turn sends it at once as a `session/prompt`, because the adapter steers only a turn it got as a prompt; Claude Code adds it to the running turn, the result is `{steered: true}`, and the turn becomes this session's own. `StopFailure` in such a turn raises `turn_failed`.
+* A stopped or failed turn fires no `Stop`. The agent then sets `idle` itself, with no `turn_finished`.
+* Fallback: until the first hook of an agent process arrives, the session works as before (the prompt answer raises `turn_finished` at once). This covers a CLI that runs no hooks and a policy that blocks them.
+* Other chat kinds are unchanged.
+
 ### Delta 2026-11-13: Pi sessions
 
 Additive delta within proto-v7 (2026-11-13): **one session kind, one options block, two capability entries, one push label. No version bump; `central_server` gained only the "Pi session" push label.**
@@ -275,7 +290,7 @@ The session wire dict (`sessions.changed`, `session.updated`, the `/ws/sessions`
 | Session | Source |
 |---------|--------|
 | Claude Code and Auto Scan terminal | The attention gate's hooks. `UserPromptSubmit` → `working`. A `Stop` that lists a running background agent → `working`. A `Stop` that lists only passive work (a background shell, a monitor, a scheduled wakeup) or `session_crons` → `waiting`. Otherwise `idle` when the gate's quiet window ends, even when the alert is muted or deduped. A `PreToolUse` heartbeat from the main agent → `working` and cancels a pending quiet window. A sub-agent tool call → `working` only while the last `Stop` listed in-flight work. `idle_prompt` re-reports the activity the last `Stop` implied, or `idle`. `SessionEnd` → `idle`. `null` until the first hook. |
-| Chat (`ui: "chat"`), every kind | The timeline `status`: `running` → `working`, `ready` → `idle`, otherwise `null`. A turn another app on a shared host runs counts too. |
+| Chat (`ui: "chat"`), every kind | The timeline `status`: `running` → `working`, `ready` → `idle`, otherwise `null`. A turn another app on a shared host runs counts too. A Claude chat adds the hooks of Delta 2026-11-15 (`waiting`, and `working` while `ready`). |
 | Codex, Antigravity, OpenCode, GitHub Copilot, Cursor, Pi, Terminal and custom terminal (PTY) sessions | Always `null`. Their OSC 7501 reports (Delta 2026-11-10) raise alerts but do not set `activity` yet. |
 
 * Only a `running` session reports a value. Clients show a "Working" chip and an animated status square for `working`, and a muted "Background" chip with the static square for `waiting`. A pending `awaiting_permission` or `awaiting_os_permission` outranks it, because the turn waits for the user.
@@ -455,7 +470,7 @@ Chat sessions use the same `/ws/session/{id}` and `CH_SESSION_IO` channel. Two f
 * State keys: `status`, `error`, `agent`, `title`, `cwd`, `acp_session_id`, `config`, `commands`, `usage`, `plan`, `requests`, `queue`, `prompt_caps`, `turn_started_at`, `cancelling`.
 * Item types: `user`, `agent`, `thought`, `tool`, `notice`, `compaction`, `turn_end`, `error`. Tool content parts: `text`, `diff` (a unified diff the agent computes), `image`, `link`, `resource`, `terminal`.
 * Bounds: text parts 32 KB, message texts 256 KB, diffs 48 KB / 1 200 lines, a snapshot ~2 MB (`truncated` marks dropped older items).
-* Attention works as for terminal sessions: a pending request raises `awaiting_permission`, a finished turn `turn_finished`, an agent exit `ended` (`exit_reason: process_exited`). An RPC error on the user's own prompt raises `turn_failed` (not after Stop, not on process death, not when a queued prompt starts next).
+* Attention works as for terminal sessions: a pending request raises `awaiting_permission`, a finished turn `turn_finished`, an agent exit `ended` (`exit_reason: process_exited`). A Claude chat raises `turn_finished` from Claude Code hooks (Delta 2026-11-15). An RPC error on the user's own prompt raises `turn_failed` (not after Stop, not on process death, not when a queued prompt starts next).
 
 #### ACP use
 

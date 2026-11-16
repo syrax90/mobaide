@@ -149,6 +149,40 @@ class TestWriteSessionHooksExtra:
         assert set(_registrations(doc)) == set(EXPECTED_REGISTRATIONS)
 
 
+class TestChatHookSettings:
+    def test_registers_only_the_turn_hooks_for_the_session(self, tmp_path):
+        # The ACP adapter reports a permission request and the agent's exit
+        # itself, so ``Notification`` and ``SessionEnd`` must stay out: the
+        # session reads neither. Each URL carries the session and its own kind,
+        # as in a terminal session's file, and nothing is written to disk.
+        doc = hook_settings.chat_hook_settings("a&b=c d", port=9100)
+
+        registrations = _registrations(doc)
+        assert {key: _query(hook)["hook"] for key, hook in registrations.items()} == {
+            ("Stop", "*"): ["stop"],
+            ("StopFailure", "*"): ["stop_failure"],
+            ("UserPromptSubmit", "*"): ["prompt_submit"],
+            ("PreToolUse", "*"): ["tool"],
+        }
+        for hook in registrations.values():
+            parts = urlsplit(hook["url"])
+            assert (parts.hostname, parts.port, parts.path) == ("127.0.0.1", 9100, "/internal/hook")
+            assert parse_qs(parts.query)["session_id"] == ["a&b=c d"]
+        assert list(tmp_path.iterdir()) == []
+
+    def test_the_token_is_a_header_the_cli_fills_from_its_environment(self):
+        # The adapter hands the object to the CLI as a ``--settings`` argument,
+        # which every local user can read: a token in the URL, as in a terminal
+        # session's file, would be public. The CLI expands ``$VAR`` in a header
+        # only for a variable the hook lists in ``allowedEnvVars``.
+        doc = hook_settings.chat_hook_settings("sid-1", port=9100)
+
+        for hook in _registrations(doc).values():
+            assert "token" not in _query(hook)
+            assert hook["headers"] == {"X-Mobaide-Hook-Token": "$MOBAIDE_HOOK_TOKEN"}
+            assert hook["allowedEnvVars"] == ["MOBAIDE_HOOK_TOKEN"]
+
+
 class TestRemoveSessionHooks:
     def test_removes_existing_file(self):
         path = hook_settings.write_session_hooks("sid-1", port=9001, token="tok")
