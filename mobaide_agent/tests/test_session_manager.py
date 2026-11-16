@@ -1272,3 +1272,79 @@ class TestPiLaunchBranching:
             assert mgr.list_sessions() == []
         finally:
             await mgr.shutdown()
+
+
+class _ExternalSession:
+    """Stands in for a view of a process the agent does not own (a herdr
+    pane): the manager reads ``external`` and calls ``stop``."""
+
+    external = True
+
+    def __init__(self, session_id: str) -> None:
+        self.session_id = session_id
+        self.stopped = False
+
+    async def stop(self, force: bool = False) -> None:
+        self.stopped = True
+
+
+class TestReleaseExternalSession:
+    """An external session can come back under the id it had. The removed
+    hook ends the fanout of that id, so a release that was asked for the old
+    object must do nothing to the new one."""
+
+    async def test_a_release_of_a_replaced_session_leaves_the_new_one(self) -> None:
+        removed: list[str] = []
+        mgr = SessionManager(on_session_removed=removed.append)
+        old, new = _ExternalSession("pane"), _ExternalSession("pane")
+        await mgr.adopt_session(new)
+        try:
+            await mgr.release_session("pane", old)
+
+            assert await mgr.get_session("pane") is new
+            assert (old.stopped, new.stopped, removed) == (False, False, [])
+        finally:
+            await mgr.shutdown()
+
+    @pytest.mark.parametrize("by_object", [True, False], ids=["its-object", "id-only"])
+    async def test_a_release_of_the_current_session_detaches_and_forgets_it(
+        self, by_object
+    ) -> None:
+        removed: list[str] = []
+        mgr = SessionManager(on_session_removed=removed.append)
+        session = _ExternalSession("pane")
+        await mgr.adopt_session(session)
+        try:
+            await mgr.release_session("pane", *([session] if by_object else []))
+
+            assert await mgr.get_session("pane") is None
+            assert (session.stopped, removed) == (True, ["pane"])
+        finally:
+            await mgr.shutdown()
+
+
+class TestStopExternalSession:
+    """An external session ends only through ``release_session``, which its
+    owner keeps in step with its own bookkeeping. To ``stop_session`` (a
+    client's session ``DELETE``) its id is an unknown one."""
+
+    async def test_stop_session_refuses_an_external_session_and_leaves_it(self) -> None:
+        published: list[list[str]] = []
+
+        class _Bus:
+            def publish(self, topic, payload):
+                if topic == "sessions.changed":
+                    published.append([s["session_id"] for s in payload["sessions"]])
+
+        removed: list[str] = []
+        mgr = SessionManager(event_bus=_Bus(), on_session_removed=removed.append)
+        session = _ExternalSession("pane")
+        await mgr.adopt_session(session)
+        try:
+            with pytest.raises(KeyError):
+                await mgr.stop_session("pane")
+
+            assert await mgr.get_session("pane") is session
+            assert (session.stopped, removed, published) == (False, [], [])
+        finally:
+            await mgr.shutdown()

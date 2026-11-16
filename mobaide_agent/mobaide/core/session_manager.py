@@ -52,6 +52,10 @@ class MaxSessionsError(RuntimeError):
     """Raised when the session limit has been reached."""
 
 
+def _is_external(session: Any) -> bool:
+    return getattr(session, "external", False) is True
+
+
 class SessionManager:
     """Manages multiple TerminalSession instances with liveness monitoring."""
 
@@ -172,7 +176,7 @@ class SessionManager:
         elif managed:
             await self._apply_adhoc_launch(config)
         async with self._lock:
-            if len(self._sessions) >= self._max_sessions:
+            if self._owned_count() >= self._max_sessions:
                 raise MaxSessionsError(
                     f"Maximum session limit ({self._max_sessions}) reached",
                 )
@@ -257,7 +261,7 @@ class SessionManager:
                 existing = self.find_chat_session(kind, config.chat_resume_id)
                 if existing is not None:
                     return existing
-            if len(self._sessions) >= self._max_sessions:
+            if self._owned_count() >= self._max_sessions:
                 raise MaxSessionsError(
                     f"Maximum session limit ({self._max_sessions}) reached",
                 )
@@ -475,16 +479,89 @@ class SessionManager:
         return self._sessions.get(session_id)
 
     def list_sessions(self) -> list[SessionInfo]:
-        """Return lightweight DTOs for all sessions."""
-        return [s.to_info() for s in self._sessions.values()]
+        """Return lightweight DTOs for the sessions this agent owns.
+
+        External sessions (see :meth:`adopt_session`) are left out, so they
+        are in no session list, do not hold back an agent update and are not
+        part of ``sessions.changed``.
+        """
+        return [
+            s.to_info() for s in self._sessions.values() if not _is_external(s)
+        ]
+
+    def external_sessions(self) -> list[Any]:
+        return [s for s in self._sessions.values() if _is_external(s)]
+
+    def _owned_count(self) -> int:
+        return sum(1 for s in self._sessions.values() if not _is_external(s))
+
+    async def adopt_session(self, session: Any) -> None:
+        """Register a started session that shows a process this agent does
+        not own (a herdr pane).
+
+        Such a session is reachable by id like any other, so clients use the
+        normal session socket. It does not count for ``max_sessions``.
+        ``stop_session`` refuses it as an unknown id; its owner ends it
+        through ``release_session``, which only detaches.
+        """
+        async with self._lock:
+            if session.session_id in self._sessions:
+                raise ValueError(
+                    f"Session with id '{session.session_id}' already exists",
+                )
+            self._sessions[session.session_id] = session
+        if self._on_session_created is not None:
+            try:
+                result = self._on_session_created(session)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                logger.exception("session_manager.on_created_hook_failed")
+
+    async def release_session(self, session_id: str, session: Any = None) -> None:
+        """Detach and forget an external session. A missing id is not an error.
+
+        With ``session``, only that object is released: an external session
+        can come back under the same id, and a release that was asked for the
+        old one must not take the new one away.
+        """
+        async with self._lock:
+            current = self._sessions.get(session_id)
+            if current is None or not _is_external(current):
+                return
+            if session is not None and current is not session:
+                return
+            session = current
+            del self._sessions[session_id]
+        await session.stop()
+        # One loop turn: the hook ends the session's fanout, and its readers
+        # must get the ``stopped`` event first.
+        await asyncio.sleep(0)
+        await self._run_removed_hook(session_id)
+
+    async def _run_removed_hook(self, session_id: str) -> None:
+        if self._on_session_removed is None:
+            return
+        try:
+            result = self._on_session_removed(session_id)
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception:
+            logger.exception("session_manager.on_removed_hook_failed")
 
     @log_call(name="session_manager.stop_session", log_args=("session_id", "force"))
     async def stop_session(self, session_id: str, force: bool = False) -> None:
-        """Stop and remove a session."""
+        """Stop and remove a session.
+
+        An external session is not one of this manager's to stop: its owner
+        ends it through ``release_session``, which is in step with the owner's
+        own bookkeeping. To a caller it does not exist here, as in the list.
+        """
         async with self._lock:
-            session = self._sessions.pop(session_id, None)
-        if session is None:
-            raise KeyError(f"Session '{session_id}' not found")
+            session = self._sessions.get(session_id)
+            if session is None or _is_external(session):
+                raise KeyError(f"Session '{session_id}' not found")
+            del self._sessions[session_id]
         await session.stop(force=force)
         logger.info("session.removed", session_id=session_id)
         audit_event(
@@ -494,13 +571,7 @@ class SessionManager:
             force=force,
             via="session_manager",
         )
-        if self._on_session_removed is not None:
-            try:
-                result = self._on_session_removed(session_id)
-                if asyncio.iscoroutine(result):
-                    await result
-            except Exception:
-                logger.exception("session_manager.on_removed_hook_failed")
+        await self._run_removed_hook(session_id)
         await self._publish_sessions_changed()
 
     async def stop_all(self) -> None:
@@ -545,6 +616,9 @@ class SessionManager:
         async with self._lock:
             snapshot = list(self._sessions.items())
         for sid, session in snapshot:
+            if _is_external(session):
+                # No process of ours to watch; the session ends itself.
+                continue
             if session.state == SessionState.RUNNING and not session.is_alive():
                 if getattr(getattr(session, "_config", None), "exits_when_done", False):
                     # The exit is the normal end of that command. Its reader
@@ -576,24 +650,22 @@ class SessionManager:
 
         # Clean up STOPPED/CRASHED sessions
         finished: list[str] = []
+        detached: list[str] = []
         async with self._lock:
             for sid in list(self._sessions):
-                state = self._sessions[sid].state
+                session = self._sessions[sid]
+                state = session.state
                 if state in (SessionState.STOPPED, SessionState.CRASHED):
                     self._sessions.pop(sid, None)
                     logger.info("Cleaned up dead session: %s", sid)
-                    if state is SessionState.STOPPED:
+                    if _is_external(session):
+                        detached.append(sid)
+                    elif state is SessionState.STOPPED:
                         finished.append(sid)
         # A session that ended on its own (``exits_when_done``) leaves like one
         # the user stopped: its row goes from every client's list.
-        for sid in finished:
-            if self._on_session_removed is not None:
-                try:
-                    result = self._on_session_removed(sid)
-                    if asyncio.iscoroutine(result):
-                        await result
-                except Exception:
-                    logger.exception("session_manager.on_removed_hook_failed")
+        for sid in finished + detached:
+            await self._run_removed_hook(sid)
         if finished:
             await self._publish_sessions_changed()
 

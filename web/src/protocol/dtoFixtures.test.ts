@@ -12,6 +12,7 @@ import { chatStoredSessionsResponseSchema } from './dto/chatSessions';
 import { createCustomAgentTypeRequestSchema } from './dto/customAgentTypes';
 import { busyByResponseSchema, busyHolderSchema } from './dto/gitConflict';
 import { gitJobSchema } from './dto/gitJob';
+import { herdrAttentionSchema, herdrSnapshotSchema } from './dto/herdr';
 import { autoScanFilterSchema, projectInfoSchema } from './dto/projects';
 import { sessionKindSchema, sessionResponseSchema } from './dto/session';
 import {
@@ -59,6 +60,8 @@ const REGISTRY: Readonly<Record<string, z.ZodType>> = {
   BusyByResponse: busyByResponseSchema,
   BusyHolder: busyHolderSchema,
   GitJobResponse: gitJobSchema,
+  HerdrAttention: herdrAttentionSchema,
+  HerdrSnapshot: herdrSnapshotSchema,
   TemplateDto: templateSchema,
   TemplateDeletedPayload: templateDeletedSchema,
   CustomAgentTypeDto: customAgentTypeSchema,

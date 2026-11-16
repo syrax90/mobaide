@@ -13,6 +13,8 @@ object Routes {
     const val SETTINGS = "settings"
     const val SUPPORT = "support"
     const val AUTO_SCAN_DETAIL = "auto_scan_detail/{projectName}"
+    const val HERDR = "herdr?server={server}&pane={pane}"
+    const val HERDR_PANE = "herdr_pane/{sessionId}?herdrServer={herdrServer}&herdrPane={herdrPane}"
     const val CONNECTIONS = "connections"
     const val PROJECTS = "projects"
     const val GIT_MANAGEMENT = "git/{projectName}"
@@ -33,6 +35,15 @@ object Routes {
     fun sessionDetail(sessionId: String, stoppedSessionId: String? = null) =
         if (stoppedSessionId == null) "session_detail/$sessionId"
         else "session_detail/$sessionId?stopped=${Uri.encode(stoppedSessionId)}"
+    /** The Herdr dashboard. With both ids it opens that pane at once (a tapped alert). */
+    fun herdr(serverId: String? = null, paneId: String? = null) =
+        if (serverId == null || paneId == null) "herdr"
+        else "herdr?server=${Uri.encode(serverId)}&pane=${Uri.encode(paneId)}"
+
+    // Query args for the pane ids: a pane id carries `:` and can carry `/`.
+    fun herdrPane(sessionId: String, serverId: String, paneId: String) =
+        "herdr_pane/$sessionId?herdrServer=${Uri.encode(serverId)}&herdrPane=${Uri.encode(paneId)}"
+
     fun autoScanDetail(projectName: String) =
         "auto_scan_detail/${Uri.encode(projectName)}"
     fun verifyEmail(email: String) = "verify_email/${Uri.encode(email)}"

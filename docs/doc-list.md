@@ -35,6 +35,7 @@ Every documentation file in this repository, grouped by topic. Read this first, 
 | File | What it covers |
 |---|---|
 | [voice-input.md](voice-input.md) | Voice input on Android, iOS and web: opt-in flow, per-platform module map, status → mic-button table, dictation rules, opt-in transcript cleanup through the session's CLI (Claude Haiku, Codex Luna, Gemini Flash, OpenCode's default model, GitHub Copilot's default model, Cursor's Auto model, Pi's default model), permissions and privacy, release checklist. |
+| [herdr-support.md](herdr-support.md) | Umbrella doc for Herdr support (Herdr TUI and herdr-core) on agent, relay and the three clients: decisions, safety rules, the watch/control pane view, alerts and per-device "seen", configuration, file map, `--fake-herdr` / `--herdr` testing, upstream facts, limits. Read this first for that topic. |
 | [qr-pairing.md](qr-pairing.md) | Agent pairing: QR flow and `MOBA1\|...` payload, printed pairing link, device-code direction, relay URL persistence, trust-key pinning, re-pair rules, operator runbook, troubleshooting. |
 
 ## Account workflows

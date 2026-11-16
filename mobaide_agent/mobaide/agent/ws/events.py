@@ -65,6 +65,15 @@ async def events_ws(websocket: WebSocket) -> None:
         except Exception:
             logger.exception("events_ws.voice_snapshot_failed")
 
+    herdr = getattr(websocket.app.state, "herdr", None)
+    if herdr is not None:
+        try:
+            await websocket.send_json(
+                {"type": "herdr.changed", "payload": herdr.snapshot().model_dump(mode="json")}
+            )
+        except Exception:
+            logger.exception("events_ws.herdr_snapshot_failed")
+
     q = bus.subscribe()
     try:
         while True:

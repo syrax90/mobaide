@@ -90,6 +90,26 @@ class TestListAttachedSessions:
         routing.unregister_mobile("agent-1", "session_io:s1", client)
         assert routing.list_attached_sessions("agent-1") == []
 
+    def test_counts_the_mobiles_of_each_session(self, routing: RoutingTable):
+        """A Herdr pane session counts its viewers to know when its stream
+        can stop. A new tunnel starts that count from zero, so the replayed
+        attach must say how many mobiles each session has."""
+        routing.register_agent("agent-1", _mock_ws())
+        phone = MobileClient(device_id="dev-1", websocket=_mock_ws())
+        tablet = MobileClient(device_id="dev-2", websocket=_mock_ws())
+        routing.register_mobile("agent-1", "session_io:pane", phone)
+        routing.register_mobile("agent-1", "session_io:pane", tablet)
+        routing.register_mobile(
+            "agent-1", "session_io:s2",
+            MobileClient(device_id="dev-1", websocket=_mock_ws()),
+        )
+
+        assert routing.attached_session_counts("agent-1") == {"pane": 2, "s2": 1}
+
+        routing.unregister_mobile("agent-1", "session_io:pane", phone)
+
+        assert routing.attached_session_counts("agent-1") == {"pane": 1, "s2": 1}
+
 
 class TestTryEnqueueControl:
     """``try_enqueue_control`` is the shared wire-format helper used by

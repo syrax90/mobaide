@@ -1,4 +1,5 @@
-"""Presence-gated APNs dispatch for ``session.attention`` user-events.
+"""Presence-gated APNs dispatch for the attention user-events
+(``session.attention`` and ``herdr.attention``).
 
 Presence is per device, not per account. Gating on the account instead would
 let one awake client mute the notification for every other device the user
@@ -8,6 +9,7 @@ stall the agent WebSocket reader.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from collections.abc import Collection
 from pathlib import Path
@@ -21,6 +23,28 @@ if TYPE_CHECKING:
     from ..db.database import Database
 
 logger = logging.getLogger(__name__)
+
+
+def _push_target(payload: dict) -> tuple[str, dict[str, str]]:
+    """``(thread id, custom payload)`` for an attention payload.
+
+    A session alert opens by ``session_id``. A herdr alert opens by server and
+    pane; its thread id is a digest, because APNs limits a collapse id to 64
+    bytes and pane ids have no fixed length.
+    """
+    agent_id = str(payload.get("agent_id", ""))
+    if "pane_id" in payload:
+        server_id, pane_id = str(payload["server_id"]), str(payload["pane_id"])
+        digest = hashlib.sha256(
+            f"{agent_id}\0{server_id}\0{pane_id}".encode()
+        ).hexdigest()
+        return f"herdr-{digest[:32]}", {
+            "herdr_server_id": server_id,
+            "herdr_pane_id": pane_id,
+            "agent_id": agent_id,
+        }
+    session_id = str(payload["session_id"])
+    return session_id, {"session_id": session_id, "agent_id": agent_id}
 
 
 class PushDispatcher:
@@ -95,13 +119,12 @@ class PushDispatcher:
             payload.get("title"),
             payload.get("project_name"),
             payload.get("exit_reason"),
-            payload.get("kind"),
+            "herdr" if "pane_id" in payload else payload.get("kind"),
         )
         if content is None:
             return
         title, body = content
-        session_id = payload["session_id"]
-        agent_id = str(payload.get("agent_id", ""))
+        thread_id, data = _push_target(payload)
         try:
             targets = await self._db.list_push_targets(user_id)
         except Exception:
@@ -116,8 +139,8 @@ class PushDispatcher:
                     token=row["push_token"],
                     title=title,
                     body=body,
-                    session_id=session_id,
-                    agent_id=agent_id,
+                    thread_id=thread_id,
+                    data=data,
                     environment=environment,
                 )
             except Exception:

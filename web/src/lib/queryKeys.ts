@@ -108,6 +108,17 @@ export const queryKeys = {
   sessionGitConflict: (agentId: string, sessionId: string, path: string) =>
     ['agent', agentId, 'session-git-conflict', sessionId, path] as const,
   autoscan: (agentId: string) => ['agent', agentId, 'autoscan'] as const,
+  /**
+   * The Herdr servers on the agent's computer. Written by `herdr.changed` (a
+   * full snapshot, sent again on every events-channel connect).
+   */
+  herdr: (agentId: string) => ['agent', agentId, 'herdr'] as const,
+  /** The live view of one pane: the session id the agent answers an open with. */
+  herdrPaneOpen: (agentId: string, serverId: string, paneId: string) =>
+    ['agent', agentId, 'herdr-open', serverId, paneId] as const,
+  /** One read of a pane's earlier output. */
+  herdrPaneText: (agentId: string, serverId: string, paneId: string) =>
+    ['agent', agentId, 'herdr-text', serverId, paneId] as const,
   /** Which CLIs the agent has installed, and the models each advertises. */
   agentCapabilities: (agentId: string) => ['agent', agentId, 'capabilities'] as const,
   /**

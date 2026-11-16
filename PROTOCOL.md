@@ -123,6 +123,81 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-15: Herdr dashboard
+
+Additive delta within proto-v7 (2026-11-15): **one capability key, eight REST routes, two agent events, one user-event kind and one block in the session state frame. No version bump.** `central_server` changes in one place: it accepts the `herdr.attention` user event and sends its push.
+
+Herdr is a workspace manager for coding agents. The agent attaches to the herdr servers that run on its computer (Herdr TUI 0.9.2 or later, and herdr-core) and shows them as a dashboard. It never starts or stops a herdr server. The records below are Mobaide's own: a client never sees a herdr method name, and both herdr products use the same records. Design, limits and file map: [docs/herdr-support.md](docs/herdr-support.md).
+
+**Capability.** `GET /api/version` carries `capabilities.herdr = {"dashboard": true}` when the agent has the dashboard. A client shows no Herdr UI without it. An agent with `MOBAIDE_HERDR_ENABLED=0` sends no `herdr` key.
+
+**Snapshot.** `GET /api/herdr` and the agent event `herdr.changed` both carry the full state. The agent sends `herdr.changed` on each change and once when a client opens the events socket.
+
+```json
+{"servers": [{
+  "server_id": "tui:default", "product": "tui", "name": "default", "version": "0.9.5",
+  "state": "ready", "message": null,
+  "features": {"new_workspace": true, "new_tab": true, "split": true, "rename": true,
+               "close_group": true, "close_pane": true, "control": true, "type_in_watch": true,
+               "agents": [{"id": "claude", "label": "Claude Code"}]},
+  "workspaces": [{"workspace_id": "w1", "label": "mobaide", "tabs": [{
+    "tab_id": "w1:t1", "label": "main", "width": 174, "height": 49,
+    "panes": [{"pane_id": "w1:p1", "title": "api refactor", "agent": "claude",
+               "status": "working", "turn": 12, "cwd": "/home/me/mobaide",
+               "agent_session_id": null,
+               "rect": {"x": 0, "y": 0, "width": 87, "height": 49}}]}]}]}]}
+```
+
+* `product` is `tui` (Herdr TUI) or `core` (herdr-core). `state` is `ready` or `outdated`. An `outdated` server has a `message` for the user and no workspaces.
+* `features` says what the server can do. A client hides the action of a `false` flag. herdr-core has no workspaces or tabs of its own: its tree comes from the labels the Herdr desktop app sets, and terminals without labels are in one "Terminals" group.
+* A pane with `agent: null` is a plain terminal and has `status: null`. `agent` is a Mobaide kind id when the agent is one Mobaide knows (`claude`, `codex`, `antigravity`, `opencode`, `copilot`, `cursor`, `pi`), else herdr's own name.
+* `status` is `working`, `blocked`, `done`, `failed`, `idle` or `unknown`. It is herdr's reading of the agent and can be wrong. It is a free string: a client shows an unknown value without a chip.
+* `turn` changes each time the agent finishes a turn. A client stores the `turn` it showed, per device, and treats a `done` pane with that same `turn` as seen (`idle`). Mobaide does not mark panes as seen in herdr, because that call moves the view of a user at the desktop.
+* `rect`, `width` and `height` are in terminal cells and can be `null`.
+* Ids are opaque strings. A pane id can change when the pane moves to another workspace, and it is valid for one server only.
+
+**Routes.** Ids travel in the body or the query, never in the path (a pane id can contain `/` and `:`). Errors answer `{"detail": {"code", "message"}}`; `code` is an open vocabulary (`pane_not_found`, `server_not_found`, `server_outdated`, `not_supported`, `invalid_folder`, `herdr_refused`, `server_unreachable`, `herdr_unavailable`, `herdr_busy`, `pane_not_open`).
+
+| Route | Body or query | Answer |
+|-------|---------------|--------|
+| `GET /api/herdr` | | The snapshot |
+| `POST /api/herdr/pane/open` | `{server_id, pane_id}` | `{session_id}`: the terminal session that shows the pane |
+| `POST /api/herdr/pane/control` | `{server_id, pane_id, control, client_id}` | `{ok}`. Takes or releases control of an open pane, as the client `client_id` |
+| `GET /api/herdr/pane/text` | `server_id`, `pane_id`, `lines` (1–1000, default 300) | `{text, truncated}`: the last lines of the pane as plain text |
+| `POST /api/herdr/pane/agent` | `{server_id, pane_id, agent}` | `{ok}`. Starts an agent from `features.agents` in a pane |
+| `POST /api/herdr/terminals` | `{server_id, placement, workspace_id?, pane_id?, cwd?, label?, agent?}` | `{pane_id, agent_error?}` of the new pane |
+| `POST /api/herdr/rename` | `{server_id, target, id, label}` | `{ok}` |
+| `POST /api/herdr/close` | `{server_id, target, id}` | `{ok}`. Herdr closes at once; the client asks first |
+
+* `placement` is `workspace` (a new workspace; on herdr-core a new terminal), `tab` (needs `workspace_id`), `split_right` or `split_down` (need `pane_id`). `target` is `workspace`, `tab` or `pane`. `cwd` must be an absolute folder that exists.
+* `agent_error` is a message for the user. It is set when the pane was made and its `agent` did not start. The client shows it and opens the pane; it does not create again.
+* `POST /api/herdr/pane/open` waits up to 4 s for a server whose link to the agent just dropped, so a pane view that ended with that link opens again. It looks for the server again every 0.5 s in that time, also while the server is not found yet.
+* No route reaches a herdr method outside this table. Server stop, config reload, plugins and layout apply are not reachable.
+* The relay runs these routes aside from its tunnel reader, as it does for voice.
+
+**Pane session.** `POST /api/herdr/pane/open` returns a normal terminal session id; the client opens the usual session socket with it. The session differs in three ways:
+
+* It is not in `sessions.changed` or `GET /api/sessions`, it does not count for the session limit, and it does not hold back an agent update.
+* No route stops it: `DELETE /api/sessions/{id}` answers 404 for it, as for an id that is not in the list. It ends (`stopped` state frame) when the pane closes or the herdr server goes away; the agent's own end of a view only detaches from the pane. The id is stable for a pane: a client that gets `stopped` calls `open` again once.
+* Its stream runs only while a client is attached, and control ends when the last client detaches.
+
+Its state frame (`s`) carries a `pane` block: `{"status": "running", "pane": {"mode": "watch", "cols": 84, "rows": 47}}`. The agent sends a new state frame when the block changes.
+
+* The stream is always drawn for the grid `cols` × `rows`, which is the real size of the pane. A client sets its terminal to that grid, fits it to its screen (zoom and pan) and sends no size, unless it is the controller.
+* `mode: "watch"` (the default): no client owns the size. The agent ignores `r` frames, and the pane is never resized. Input frames still reach the pane: `m` sends one message with Enter, `i` types raw bytes. With `features.type_in_watch: false` (herdr-core) only keys that herdr-core can name arrive from `i` frames (letters, digits, some punctuation, Enter, Esc, Tab, arrows, Ctrl and Alt chords).
+* `mode: "control"` (after `POST /api/herdr/pane/control` with `control: true`): the block is `{"mode": "control", "controller": "<client_id>", "cols": 60, "rows": 30}`. The client whose `client_id` equals `controller` uses its own grid and sends `r` frames as for any session; they resize the real pane, also for a user at the desktop. Every other client keeps the dictated grid, which is now the controller's, and sends no `r` frame. The agent cannot tell which client an `r` frame is from, so this rule is the client's: a pane view sends no `r` frame until a state frame on its current socket names it as `controller`, and it forgets that on each new socket.
+* A `client_id` is an opaque string of at most 64 characters, one for one app process or browser tab. One controller per pane: a second "take" moves control to that client. `control: false` has an effect only from the controller. Control needs one attached client (`pane_not_open` otherwise).
+* All clients of one pane share one stream. The replay after `b` starts with a full repaint.
+* The agent counts the clients of a pane session to know when its stream can stop. Each `mobile_session_attach` and `mobile_session_detach` from the relay, also the attach it replays after a tunnel reconnect, carries `count`: the number of clients on that session after the event. The agent sets its count to that number. Without `count` (an older relay) the agent adds or removes one client per message, and an older agent ignores the key.
+* An older client never gets a pane session id, because only the Herdr UI asks for one.
+
+**Alerts.** The one-time agent event `herdr.attention` has the payload `{server_id, pane_id, reason, title, agent?}`. `reason` uses the session vocabulary: `awaiting_permission` (the agent is `blocked`), `turn_finished` (`done`) or `turn_failed` (`failed`).
+
+* The state an agent has when the agent service first sees it does not alert. A `done` waits 3 s, a new `working` cancels it, and the alerts of one pane are at least 5 s apart. Input from a Mobaide client cancels a pending alert.
+* The agent also sends it on `CH_CONTROL` as `{"type": "user_event", "kind": "herdr.attention", "payload": {...}}`. The server checks the four required strings (each at most 200 characters), stamps `agent_id`, sends it on `/ws/user-events` and pushes it to the devices without a live socket.
+* The APNs payload has `herdr_server_id`, `herdr_pane_id` and `agent_id` in place of `session_id`. Its text is the session text with the pane title as the label. A client posts nothing while the user looks at that pane, and removes the alert when the pane leaves `blocked`, `done` and `failed`.
+* An older server drops the unknown kind; an older client ignores the unknown event.
+
 ### Delta 2026-11-15: Claude chat follows background work
 
 Agent-side delta within proto-v7 (2026-11-15): **no wire change, no version bump. No client change: every value below already exists.**
@@ -1395,7 +1470,7 @@ New user-event kind ``session.attention`` — payload ``{"session_id", "reason",
 
 New agent→server ``CH_CONTROL`` message ``{"type": "user_event", "kind": "session.attention", "payload": {…}}``, sent by the agent alongside (not instead of) the existing opaque ``CH_EVENTS`` ``session.attention`` publication, on attention **set** only.
 
-The server validates the kind against an allowlist (only ``session.attention``), broadcasts it via the user-events channel, and hands it to the push dispatcher along with the devices that channel already reaches. Back-compat: an old server WARN-counts the unknown control type and drops it; an old agent simply never sends it (no pushes, previous behaviour).
+The server validates the kind against an allowlist (``session.attention``, and since 2026-11-15 ``herdr.attention``), broadcasts it via the user-events channel, and hands it to the push dispatcher along with the devices that channel already reaches. Back-compat: an old server WARN-counts the unknown control type and drops it; an old agent simply never sends it (no pushes, previous behaviour).
 
 #### Per-device presence gating
 

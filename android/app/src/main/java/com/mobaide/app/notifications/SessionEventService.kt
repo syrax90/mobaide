@@ -52,6 +52,7 @@ class SessionEventService : Service() {
             started = true
             startForeground(NOTIFICATION_ID, buildPersistentNotification())
             observeAttention()
+            observeHerdrAttention()
             observeAuth()
         }
         // NOT sticky: a system-killed process is the documented "may miss
@@ -79,6 +80,43 @@ class SessionEventService : Service() {
                 if (event.session.attention == null) {
                     notifier.cancel(event.session.session_id)
                 }
+            }
+        }
+    }
+
+    /** The same two halves for agents in Herdr panes: post on the one-shot
+     *  event, dismiss when the pane no longer needs the user. */
+    private fun observeHerdrAttention() {
+        scope.launch {
+            agentEventBus.stream<AgentEvent.HerdrAttentionRaised>().collect { event ->
+                val attention = event.attention
+                val notify = shouldNotify(
+                    appForeground = isAppForeground(),
+                    visibleSessionId = foregroundSessionTracker.visibleHerdrPane.value,
+                    eventSessionId = herdrPaneKey(attention.server_id, attention.pane_id),
+                )
+                if (notify) notifier.notifyHerdr(attention)
+            }
+        }
+        scope.launch {
+            // The whole state arrives on every change. Only a pane that left
+            // the three statuses has an alert to dismiss; the first state
+            // after a start dismisses for every quiet pane once.
+            var needy: Set<String>? = null
+            agentEventBus.stream<AgentEvent.HerdrChanged>().collect { event ->
+                val before = needy
+                val now = mutableSetOf<String>()
+                for (server in event.snapshot.servers) {
+                    for (workspace in server.workspaces) for (tab in workspace.tabs) for (pane in tab.panes) {
+                        val key = herdrPaneKey(server.server_id, pane.pane_id)
+                        if (pane.status in HERDR_NEEDS_USER) {
+                            now += key
+                        } else if (before == null || key in before) {
+                            notifier.cancelHerdr(server.server_id, pane.pane_id)
+                        }
+                    }
+                }
+                needy = now
             }
         }
     }
@@ -122,6 +160,9 @@ class SessionEventService : Service() {
 
     companion object {
         private const val NOTIFICATION_ID = 1001
+
+        /** The pane statuses that still want the user: their alert stays up. */
+        private val HERDR_NEEDS_USER = setOf("blocked", "done", "failed")
 
         /**
          * Pure suppression rule: notify unless the app is in the foreground AND

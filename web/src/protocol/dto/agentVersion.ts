@@ -257,6 +257,19 @@ export function voiceCleanupKinds(info: AgentVersionInfo | undefined): readonly 
   return kinds.filter((kind): kind is string => typeof kind === 'string');
 }
 
+/**
+ * `capabilities.herdr.dashboard`: the agent has the Herdr dashboard. Explicit
+ * `true` only, so an older agent shows no Herdr UI at all.
+ */
+export function herdrCapability(info: AgentVersionInfo | undefined): boolean {
+  if (info === undefined) return false;
+  const herdr = info.capabilities.herdr;
+  if (typeof herdr !== 'object' || herdr === null) return false;
+  return (
+    Object.hasOwn(herdr, 'dashboard') && (herdr as Record<string, unknown>).dashboard === true
+  );
+}
+
 /** `capabilities.fs.<key>`, with `gitCapability`'s explicit-`true` rule. */
 export function fsCapability(info: AgentVersionInfo | undefined, key: string): boolean {
   if (info === undefined) return false;

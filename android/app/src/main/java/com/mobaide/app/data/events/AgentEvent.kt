@@ -3,6 +3,8 @@ package com.mobaide.app.data.events
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.network.dto.AutoScanListResponse
 import com.mobaide.app.data.network.dto.GitJobResponse
+import com.mobaide.app.data.network.dto.HerdrAttention
+import com.mobaide.app.data.network.dto.HerdrSnapshot
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.TemplateDto
@@ -98,6 +100,13 @@ sealed class AgentEvent {
     /** The agent's whole voice input status: on every state change, throttled
      *  to two a second while a download runs, and on every connect. */
     data class VoiceChanged(val status: VoiceStatusResponse) : AgentEvent()
+
+    /** The agent's whole Herdr state: on every change and on every connect. */
+    data class HerdrChanged(val snapshot: HerdrSnapshot) : AgentEvent()
+
+    /** One-shot trigger: an agent in a Herdr pane needs the user. The
+     *  foreground service turns it into a system notification. */
+    data class HerdrAttentionRaised(val attention: HerdrAttention) : AgentEvent()
 
     /** Pushed by the server's user-scoped channel when any of the user's
      *  agents transitions between online and offline. */

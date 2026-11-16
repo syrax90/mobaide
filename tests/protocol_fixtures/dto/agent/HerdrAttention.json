@@ -1,0 +1,42 @@
+{
+  "type": "HerdrAttention",
+  "cases": [
+    {
+      "name": "blocked_from_user_events",
+      "wire": {
+        "server_id": "tui:default",
+        "pane_id": "w1:p1",
+        "reason": "awaiting_permission",
+        "title": "api refactor",
+        "agent": "claude",
+        "agent_id": "agent-1"
+      }
+    },
+    {
+      "name": "done_from_agent_events",
+      "wire": {
+        "server_id": "core:default",
+        "pane_id": "box/t3",
+        "reason": "turn_finished",
+        "title": "reviewer"
+      }
+    },
+    {
+      "name": "explicit_nulls",
+      "wire": {
+        "server_id": "tui:default",
+        "pane_id": "w1:p1",
+        "reason": "turn_failed",
+        "title": "api refactor",
+        "agent": null,
+        "agent_id": null
+      },
+      "decoded_canonical": {
+        "server_id": "tui:default",
+        "pane_id": "w1:p1",
+        "reason": "turn_failed",
+        "title": "api refactor"
+      }
+    }
+  ]
+}

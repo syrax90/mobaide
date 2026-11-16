@@ -22,6 +22,7 @@ import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.DeviceRepository
 import com.mobaide.app.data.repository.GitRepository
+import com.mobaide.app.data.repository.HerdrRepository
 import com.mobaide.app.data.repository.LinearMetadataRepository
 import com.mobaide.app.data.repository.PathSuggestionRepository
 import com.mobaide.app.data.repository.ProjectsRepository
@@ -118,6 +119,16 @@ object RepositoryModule {
         autoScanWsClient: AutoScanWsClient,
     ): AutoScanRepository {
         return AutoScanRepository(restApi, eventBus, autoScanWsClient)
+    }
+
+    @Provides
+    @Singleton
+    fun provideHerdrRepository(
+        restApi: RestApi,
+        eventBus: AgentEventBus,
+        tokenStore: TokenStore,
+    ): HerdrRepository {
+        return HerdrRepository(restApi, eventBus, tokenStore)
     }
 
     @Provides

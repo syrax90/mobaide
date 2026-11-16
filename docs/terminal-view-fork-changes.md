@@ -316,6 +316,15 @@ The existing `mTouchToWindowOffsetX` parent-move compensation in `moveTo` is wha
 
 **Why.** Selection could not reach off-screen text: in Static display mode nothing panned the host horizontally during a handle drag, and the upstream vertical step ran only on `ACTION_MOVE`, so a finger held still at an edge stopped scrolling. iOS parity: `TerminalSelectionController.updateAutoscroll` / `TerminalSelection.autoscrollColumns`.
 
+### 2026-11-15: `TerminalView.java::updateSize` (forced rows)
+
+- **File:method:** `terminal-view/.../TerminalView.java::updateSize` (+ new `mForcedRows`, `setForcedRows`, `getForcedRows`, `getRendererTextSize`, `getHeightForRows`)
+- **Upstream link:** [upstream](https://github.com/termux/termux-app/blob/master/terminal-view/src/main/java/com/termux/view/TerminalView.java)
+
+**What changed.** `updateSize` takes the row count from `mForcedRows` when it is above zero, the way it already takes the column count from `mForcedColumns` (CLA-49). Three getters expose what the app needs to size the view for a given grid.
+
+**Why.** A Herdr pane in watch mode is drawn for the real grid of the pane, which the agent sends. The frames address cells by absolute position, so the emulator must have exactly that grid whatever the view height is. `TerminalSurfaceView.applyGrid` sets both forced values, picks a text size that fits the columns and the rows to the screen and sets the view height from `getHeightForRows`.
+
 ### App-side note on the OSC 52 clipboard sink
 
 **CLA-63 note (app-side behavior, not a fork edit):** The app now implements the previously-no-op clipboard sink (`TerminalSessionCallback.onCopyTextToClipboard` in `android/app/.../ui/terminal/TerminalSurfaceView.kt`).

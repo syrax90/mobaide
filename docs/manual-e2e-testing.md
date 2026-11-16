@@ -190,6 +190,8 @@ The failure is asymmetric and confusing, which is why the script warns loudly ab
 | `up --fresh` | wipe state first: new secret, account, agent, empty DB |
 | `up --fake-pty [--smoke]` | echo-backend infra check (no shells/CLIs needed) |
 | `up --fake-voice` | voice input against a tiny generated model with deterministic `fake transcript <n> ms` results (`MOBAIDE_VOICE_FAKE=1`), so the enable → dictate flows need no 670 MB download |
+| `up --fake-herdr` | a scripted herdr server, so the Herdr dashboard needs no herdr install |
+| `up --herdr` | attach to the real herdr servers of this machine. To stay away from your own, set `MOBAIDE_HERDR_CONFIG_DIR` and `XDG_STATE_HOME` to isolated folders. See [herdr-support.md](herdr-support.md) |
 | `up --install-app` | build + install the app for every client that was synced |
 | `android --install-app` | also run `gradlew :app:installDebug` |
 | `ios --install-app [--simulator NAME_OR_UDID]` | also run `xcodebuild` + `xcrun simctl install`, then launch the app signed in; boots and shows a simulator when needed (uninstalling first when the URL changed) |

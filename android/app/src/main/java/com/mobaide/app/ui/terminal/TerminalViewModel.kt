@@ -141,10 +141,38 @@ class TerminalViewModel @Inject constructor(
     val sessionId: String = savedStateHandle["sessionId"]
         ?: throw IllegalArgumentException("sessionId required")
 
+    /**
+     * This terminal shows a Herdr pane, not a session. A pane view is never in
+     * the session list, so the "missing from the list means gone" rule below
+     * does not apply to it; its end arrives as a `stopped` state frame.
+     */
+    private val isHerdrPane: Boolean = savedStateHandle.get<String>(ARG_HERDR_PANE) != null
+
+    private val _paneState = MutableStateFlow<TerminalPaneState?>(null)
+
+    /** The `pane` block of the last state frame; null for a session. */
+    val paneState: StateFlow<TerminalPaneState?> = _paneState.asStateFlow()
+
     private var connection: WebSocketConnection? = null
 
     private var lastResizeRows = -1
     private var lastResizeCols = -1
+
+    /** The grid the view last measured, sent or not. */
+    private var measuredRows = -1
+    private var measuredCols = -1
+
+    /**
+     * A Herdr pane's size belongs to the pane, or to the one client that
+     * controls it. This is true only after a state frame on the current
+     * socket named this client as the controller: what an earlier socket said
+     * can be out of date, and a size sent on it would resize a pane that
+     * another device controls now.
+     */
+    private var paneSizeAllowed = false
+
+    /** Whether a size may go out: always for a session, and for a pane this client controls. */
+    private val ownsSize: Boolean get() = !isHerdrPane || paneSizeAllowed
     private var resizeJob: Job? = null
 
     /** Buffered channel for outgoing PTY frames — consumed by a single IO coroutine to
@@ -419,6 +447,7 @@ class TerminalViewModel @Inject constructor(
                 sessionRepository.observeSessionsSynced(),
             ) { sessions, synced -> sessions to synced }
                 .collect { (sessions, synced) ->
+                    if (isHerdrPane) return@collect
                     if (sessions.any { it.session_id == sessionId }) {
                         everSeenAlive = true
                     } else if (synced && !everSeenAlive && !sessionEndedEmitted) {
@@ -456,6 +485,7 @@ class TerminalViewModel @Inject constructor(
                     is WsEvent.Connected -> {
                         _isConnected.value = true
                         ownReplayPending = true
+                        paneSizeAllowed = false
                         enterLiveState()
                     }
                     is WsEvent.Disconnected -> {
@@ -523,6 +553,18 @@ class TerminalViewModel @Inject constructor(
                 // exists, independent of when its list snapshot lands.
                 if (status == "running" || status == "starting") {
                     everSeenAlive = true
+                }
+                val pane = TerminalPaneState.parse(decoded.json)
+                val allowedBefore = paneSizeAllowed
+                paneSizeAllowed = pane?.isControl == true
+                _paneState.value = pane
+                // This client became the controller, or is told so again on a
+                // new socket: the pane gets the grid this view has now. A
+                // layout pass that follows sends the next one.
+                if (isHerdrPane && paneSizeAllowed && !allowedBefore) {
+                    lastResizeRows = measuredRows
+                    lastResizeCols = measuredCols
+                    resendCachedSize()
                 }
                 _sessionState.value = status
             }
@@ -746,6 +788,8 @@ class TerminalViewModel @Inject constructor(
      * or agent-spawned (Auto Scan) PTY. Mirrors iOS TerminalSessionModel.resendCachedSize().
      */
     private fun resendCachedSize() {
+        // A Herdr pane this client does not control keeps its size: nothing is sent.
+        if (!ownsSize) return
         if (lastResizeRows <= 0 || lastResizeCols <= 0) return
         sendChannel.trySend(TerminalProtocol.encodeResize(lastResizeRows, lastResizeCols))
     }
@@ -1171,6 +1215,11 @@ class TerminalViewModel @Inject constructor(
     }
 
     fun resize(rows: Int, cols: Int) {
+        measuredRows = rows
+        measuredCols = cols
+        // The grid of a pane this client does not control is not its own size:
+        // it is neither sent nor cached as sent.
+        if (!ownsSize) return
         if (rows == lastResizeRows && cols == lastResizeCols) return
         lastResizeRows = rows
         lastResizeCols = cols
@@ -1194,14 +1243,26 @@ class TerminalViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Drop the socket and attach again, so the agent sends a fresh handshake.
+     * For a Herdr pane whose view the agent ended and then made again under
+     * the same session id: the open socket still belongs to the ended one.
+     */
+    fun reattach() {
+        connection?.forceReconnect()
+    }
+
     override fun onCleared() {
         super.onCleared()
         sendChannel.close()
         connection?.disconnect()
     }
 
-    private companion object {
-        const val MAX_UNREAD_DISPLAY = 9999
+    companion object {
+        /** Nav argument that marks the terminal of a Herdr pane; its value is the pane id. */
+        const val ARG_HERDR_PANE = "herdrPane"
+
+        private const val MAX_UNREAD_DISPLAY = 9999
 
         /**
          * Local emulator transcript size in rows. Sized to comfortably hold
@@ -1211,7 +1272,7 @@ class TerminalViewModel @Inject constructor(
          * of 50_000 — lifting this further is cheap (rows are allocated
          * lazily) if very long sessions become common.
          */
-        const val TRANSCRIPT_ROWS = 10_000
+        private const val TRANSCRIPT_ROWS = 10_000
 
         /**
          * `ESC [ H` (cursor home) + `ESC [ 2 J` (erase entire display) +
@@ -1221,7 +1282,7 @@ class TerminalViewModel @Inject constructor(
          * the emulator on every replay-marker frame to drop any stale local
          * content before the server's ring buffer is replayed.
          */
-        val CLEAR_BEFORE_REPLAY: ByteArray = byteArrayOf(
+        private val CLEAR_BEFORE_REPLAY: ByteArray = byteArrayOf(
             0x1b, '['.code.toByte(), 'H'.code.toByte(),
             0x1b, '['.code.toByte(), '2'.code.toByte(), 'J'.code.toByte(),
             0x1b, '['.code.toByte(), '3'.code.toByte(), 'J'.code.toByte(),

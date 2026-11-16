@@ -8,17 +8,21 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.mobaide.app.data.events.AgentEventBus
+import com.mobaide.app.data.local.HerdrSeenStore
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.dto.AutoScanListResponse
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
+import com.mobaide.app.data.network.dto.HerdrSnapshot
 import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.repository.AgentUpdateRepository
 import com.mobaide.app.data.repository.AgentVersionMonitor
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
+import com.mobaide.app.data.repository.HerdrRepository
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.review.ReviewPromptCoordinator
+import com.mobaide.app.ui.herdr.HerdrCardViewModel
 import com.mobaide.app.ui.sessions.panel.STOP_SESSION_DIALOG_FORCE_TAG
 import com.mobaide.app.ui.sessions.panel.STOP_SESSION_DIALOG_STOP_TAG
 import com.mobaide.app.ui.theme.MobaideTheme
@@ -96,7 +100,18 @@ class SessionListScreenTest {
         )
     }
 
+    /** An agent without a herdr server: the screen shows no Herdr card. The
+     *  screen's default is `hiltViewModel()`, which a plain activity cannot serve. */
+    private fun newHerdrViewModel(): HerdrCardViewModel {
+        val repository = mockk<HerdrRepository>(relaxed = true)
+        every { repository.snapshot } returns MutableStateFlow<HerdrSnapshot?>(null)
+        val seenStore = mockk<HerdrSeenStore>()
+        every { seenStore.seen } returns MutableStateFlow(emptyMap())
+        return HerdrCardViewModel(repository, seenStore)
+    }
+
     private fun setScreen() {
+        val herdrVm = newHerdrViewModel()
         val vm = newViewModel(
             listOf(
                 session("s1", project = "app", kind = SessionKind.Claude),
@@ -110,6 +125,7 @@ class SessionListScreenTest {
                     onSessionClick = {},
                     onCreateClick = {},
                     onSettingsClick = {},
+                    herdrViewModel = herdrVm,
                 )
             }
         }

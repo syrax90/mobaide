@@ -348,6 +348,18 @@ Users can revoke any device with a confirmation dialog. Revocation cuts the devi
 
 The central server exposes `GET /api/devices` and `DELETE /api/devices/{device_id}`.
 
+## Herdr Workspaces
+
+While a Herdr server runs on the agent's computer, the session list shows a "Herdr workspaces" card on Android, iOS and web. It supports Herdr TUI (`herdr`, 0.9.2 or newer) and herdr-core (`hc`).
+
+- **Dashboard.** Workspaces, tabs and panes, with the status of each agent: Needs you, Failed, Done, Working, Idle. "Seen" is kept per device.
+- **Alerts.** A `herdr.attention` event (and an APNs push on iOS) when an agent needs you. A tap opens that pane.
+- **Actions.** New workspace, new tab, split, start an agent, rename, close (with a confirmation).
+- **Pane view.** Watch mode shows the pane at its real size. Control mode belongs to one client and resizes the real pane. History reads the pane text.
+- **Settings.** `MOBAIDE_HERDR_ENABLED`, `MOBAIDE_HERDR_BIN`, `MOBAIDE_HERDR_CONFIG_DIR`. The agent only attaches: it never starts or stops a herdr server. Off by default on Windows.
+
+Details: [herdr-support.md](herdr-support.md).
+
 ## Session Notifications
 
 The apps raise a notification whenever an agent session needs attention. This covers chat sessions and every terminal session kind. Tapping it opens the relevant session.

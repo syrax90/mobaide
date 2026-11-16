@@ -37,8 +37,16 @@ enum AttentionContent {
     /// is absent/unrecognized — in which case no notification is posted
     /// (parity with `AttentionNotifier` returning null).
     static func content(for session: SessionResponse) -> (title: String, body: String)? {
-        let label = label(for: session)
-        switch session.attention {
+        content(reason: session.attention, label: label(for: session), exitReason: session.exit_reason)
+    }
+
+    /// Title/body of an alert for `reason`, with `label` as the name of what
+    /// needs the user; nil for a reason this build does not know. One table
+    /// for sessions and Herdr panes, as on the relay and the web client.
+    static func content(
+        reason: String?, label: String, exitReason: String? = nil
+    ) -> (title: String, body: String)? {
+        switch reason {
         case "awaiting_permission":
             return ("Permission needed", "\(label) is waiting for your approval")
         case "awaiting_os_permission":
@@ -51,7 +59,7 @@ enum AttentionContent {
         case "turn_failed":
             return ("Turn failed", "\(label) hit an error — tap to see what happened")
         case "ended":
-            let suffix = session.exit_reason.flatMap { $0.isBlank ? nil : " (\($0))" } ?? ""
+            let suffix = exitReason.flatMap { $0.isBlank ? nil : " (\($0))" } ?? ""
             return ("Session ended\(suffix)", label)
         default:
             return nil
@@ -62,5 +70,11 @@ enum AttentionContent {
     /// the foreground reconcile works from, in snapshot order.
     static func attentionSessions(in sessions: [SessionResponse]) -> [SessionResponse] {
         sessions.filter { content(for: $0) != nil }
+    }
+
+    /// Title/body of a Herdr alert: the session copy with the pane title as
+    /// the label. Nil for a reason this build does not know.
+    static func content(for attention: HerdrAttention) -> (title: String, body: String)? {
+        content(reason: attention.reason, label: attention.title.isBlank ? "Herdr agent" : attention.title)
     }
 }

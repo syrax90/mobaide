@@ -36,6 +36,8 @@ final class AppContainer {
     let voiceRepository: VoiceRepository
     let pathSuggestionRepository: PathSuggestionRepository
     let autoScanRepository: AutoScanRepository
+    let herdrRepository: HerdrRepository
+    let herdrSeenStore: HerdrSeenStore
     let agentRepository: AgentRepository
     let templatesRepository: TemplatesRepository
     let shortcutsRepository: ShortcutsRepository
@@ -266,6 +268,12 @@ final class AppContainer {
             agentEventBus: agentEventBus,
             wsClient: autoScanWsClient
         )
+        self.herdrRepository = HerdrRepository(
+            agentAPI: agentAPI,
+            agentEventBus: agentEventBus,
+            connectedAgentId: { [tokenStore] in tokenStore.getAgentId() }
+        )
+        self.herdrSeenStore = HerdrSeenStore()
         self.router = Router()
         self.authStateModel = AuthStateModel(initial: initialState)
 
@@ -294,7 +302,11 @@ final class AppContainer {
             tracker: foregroundSessionTracker,
             onTap: { [deepLinkCoordinator] sessionId, agentId in
                 deepLinkCoordinator.handleTap(sessionId: sessionId, agentId: agentId)
-            }
+            },
+            onHerdrTap: { [deepLinkCoordinator] serverId, paneId, agentId in
+                deepLinkCoordinator.handleHerdrTap(serverId: serverId, paneId: paneId, agentId: agentId)
+            },
+            connectedAgentId: { [tokenStore] in tokenStore.getAgentId() }
         )
         self.notificationService = notificationService
         let attentionCoordinator = AttentionCoordinator(
@@ -376,6 +388,7 @@ final class AppContainer {
         projectsRepository.start()
         voiceRepository.start()
         autoScanRepository.start()
+        herdrRepository.start()
         attentionCoordinator.start()
         deepLinkCoordinator.start()
         pushRegistrationCoordinator.start()

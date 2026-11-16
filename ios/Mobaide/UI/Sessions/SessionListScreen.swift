@@ -15,6 +15,7 @@ struct SessionListScreen: View {
 
 private struct SessionListContent: View {
     @State private var model: SessionListModel
+    @State private var herdr: HerdrCardModel
     @State private var toast: ToastMessage?
     @State private var pendingKill: SessionResponse?
 
@@ -31,6 +32,10 @@ private struct SessionListContent: View {
             autoScanRepository: container.autoScanRepository,
             customAgentTypesRepository: container.customAgentTypesRepository
         ))
+        _herdr = State(initialValue: HerdrCardModel(
+            repository: container.herdrRepository,
+            seenStore: container.herdrSeenStore
+        ))
     }
 
     var body: some View {
@@ -46,7 +51,10 @@ private struct SessionListContent: View {
                     }
                 }
             }
-            .refreshable { await model.refresh() }
+            .refreshable {
+                await model.refresh()
+                await herdr.refresh()
+            }
             .confirmationDialog(
                 "Stop session?",
                 isPresented: killPresented,
@@ -69,6 +77,8 @@ private struct SessionListContent: View {
             .task { await model.observeConnection() }
             .task { await model.observeScans() }
             .task { await model.observeCustomTypes() }
+            .task { await herdr.observe() }
+            .task { await herdr.refresh() }
             .task { await reviewPrompt.sessionListShown() }
             .task {
                 for await id in model.autoResumeEvents() {
@@ -93,7 +103,7 @@ private struct SessionListContent: View {
 
     @ViewBuilder
     private var content: some View {
-        if model.sessions.isEmpty, model.activeScans.isEmpty {
+        if model.sessions.isEmpty, model.activeScans.isEmpty, !herdr.isVisible {
             if model.isReconnecting {
                 LoadingIndicator()
                     .pixelScreenBackground()
@@ -119,6 +129,18 @@ private struct SessionListContent: View {
                         }
                     }
                 }
+                if herdr.isVisible {
+                    Section(header: PixelSectionHeader("Herdr")) {
+                        Button {
+                            router.navigate(to: .herdr())
+                        } label: {
+                            HerdrCard(summary: herdr.summary, status: herdr.status)
+                        }
+                        .buttonStyle(.plain)
+                        .pixelCard()
+                        .pixelListRow()
+                    }
+                }
                 Section {
                     ForEach(model.sessions, id: \.session_id) { session in
                         Button {
@@ -134,7 +156,7 @@ private struct SessionListContent: View {
                         .pixelListRow()
                     }
                 } header: {
-                    if !model.activeScans.isEmpty, !model.sessions.isEmpty {
+                    if !model.activeScans.isEmpty || herdr.isVisible, !model.sessions.isEmpty {
                         PixelSectionHeader("Sessions")
                     }
                 }

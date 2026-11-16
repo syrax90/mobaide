@@ -25,6 +25,8 @@ _KIND_FALLBACK_LABELS = {
     "pi": "Pi session",
     "auto_scan": "Auto Scan session",
     "shell": "Terminal session",
+    # An agent in a herdr pane (``herdr.attention``).
+    "herdr": "Herdr agent",
 }
 
 

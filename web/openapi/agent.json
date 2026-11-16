@@ -2566,6 +2566,645 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HerdrAgentKind": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "HerdrAgentKind",
+        "type": "object"
+      },
+      "HerdrCloseRequest": {
+        "properties": {
+          "id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "server_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Server Id",
+            "type": "string"
+          },
+          "target": {
+            "enum": [
+              "workspace",
+              "tab",
+              "pane"
+            ],
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "server_id",
+          "target",
+          "id"
+        ],
+        "title": "HerdrCloseRequest",
+        "type": "object"
+      },
+      "HerdrControlRequest": {
+        "properties": {
+          "client_id": {
+            "default": "",
+            "maxLength": 64,
+            "title": "Client Id",
+            "type": "string"
+          },
+          "control": {
+            "title": "Control",
+            "type": "boolean"
+          },
+          "pane_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Pane Id",
+            "type": "string"
+          },
+          "server_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Server Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "server_id",
+          "pane_id",
+          "control"
+        ],
+        "title": "HerdrControlRequest",
+        "type": "object"
+      },
+      "HerdrCreateRequest": {
+        "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent"
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cwd"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "pane_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pane Id"
+          },
+          "placement": {
+            "enum": [
+              "workspace",
+              "tab",
+              "split_right",
+              "split_down"
+            ],
+            "title": "Placement",
+            "type": "string"
+          },
+          "server_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Server Id",
+            "type": "string"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          }
+        },
+        "required": [
+          "server_id",
+          "placement"
+        ],
+        "title": "HerdrCreateRequest",
+        "type": "object"
+      },
+      "HerdrCreateResponse": {
+        "properties": {
+          "agent_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Error"
+          },
+          "pane_id": {
+            "title": "Pane Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pane_id"
+        ],
+        "title": "HerdrCreateResponse",
+        "type": "object"
+      },
+      "HerdrFeatures": {
+        "description": "What this server can do. A client hides the action of a ``False`` flag.",
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/HerdrAgentKind"
+            },
+            "title": "Agents",
+            "type": "array"
+          },
+          "close_group": {
+            "default": false,
+            "title": "Close Group",
+            "type": "boolean"
+          },
+          "close_pane": {
+            "default": false,
+            "title": "Close Pane",
+            "type": "boolean"
+          },
+          "control": {
+            "default": false,
+            "title": "Control",
+            "type": "boolean"
+          },
+          "new_tab": {
+            "default": false,
+            "title": "New Tab",
+            "type": "boolean"
+          },
+          "new_workspace": {
+            "default": false,
+            "title": "New Workspace",
+            "type": "boolean"
+          },
+          "rename": {
+            "default": false,
+            "title": "Rename",
+            "type": "boolean"
+          },
+          "split": {
+            "default": false,
+            "title": "Split",
+            "type": "boolean"
+          },
+          "type_in_watch": {
+            "default": false,
+            "title": "Type In Watch",
+            "type": "boolean"
+          }
+        },
+        "title": "HerdrFeatures",
+        "type": "object"
+      },
+      "HerdrOkResponse": {
+        "properties": {
+          "ok": {
+            "default": true,
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "title": "HerdrOkResponse",
+        "type": "object"
+      },
+      "HerdrOpenPaneResponse": {
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "HerdrOpenPaneResponse",
+        "type": "object"
+      },
+      "HerdrPane": {
+        "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent"
+          },
+          "agent_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Session Id"
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cwd"
+          },
+          "pane_id": {
+            "title": "Pane Id",
+            "type": "string"
+          },
+          "rect": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HerdrRect"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "turn": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn"
+          }
+        },
+        "required": [
+          "pane_id",
+          "title"
+        ],
+        "title": "HerdrPane",
+        "type": "object"
+      },
+      "HerdrPaneTarget": {
+        "properties": {
+          "pane_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Pane Id",
+            "type": "string"
+          },
+          "server_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Server Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "server_id",
+          "pane_id"
+        ],
+        "title": "HerdrPaneTarget",
+        "type": "object"
+      },
+      "HerdrPaneTextResponse": {
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "HerdrPaneTextResponse",
+        "type": "object"
+      },
+      "HerdrRect": {
+        "description": "Position of a pane in its tab, in terminal cells.",
+        "properties": {
+          "height": {
+            "title": "Height",
+            "type": "integer"
+          },
+          "width": {
+            "title": "Width",
+            "type": "integer"
+          },
+          "x": {
+            "title": "X",
+            "type": "integer"
+          },
+          "y": {
+            "title": "Y",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "title": "HerdrRect",
+        "type": "object"
+      },
+      "HerdrRenameRequest": {
+        "properties": {
+          "id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
+            "title": "Label",
+            "type": "string"
+          },
+          "server_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Server Id",
+            "type": "string"
+          },
+          "target": {
+            "enum": [
+              "workspace",
+              "tab",
+              "pane"
+            ],
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "server_id",
+          "target",
+          "id",
+          "label"
+        ],
+        "title": "HerdrRenameRequest",
+        "type": "object"
+      },
+      "HerdrServer": {
+        "properties": {
+          "features": {
+            "$ref": "#/components/schemas/HerdrFeatures"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "product": {
+            "title": "Product",
+            "type": "string"
+          },
+          "server_id": {
+            "title": "Server Id",
+            "type": "string"
+          },
+          "state": {
+            "default": "ready",
+            "title": "State",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "workspaces": {
+            "items": {
+              "$ref": "#/components/schemas/HerdrWorkspace"
+            },
+            "title": "Workspaces",
+            "type": "array"
+          }
+        },
+        "required": [
+          "server_id",
+          "product",
+          "name"
+        ],
+        "title": "HerdrServer",
+        "type": "object"
+      },
+      "HerdrSnapshot": {
+        "description": "Payload of ``GET /api/herdr`` and of the ``herdr.changed`` event.",
+        "properties": {
+          "servers": {
+            "items": {
+              "$ref": "#/components/schemas/HerdrServer"
+            },
+            "title": "Servers",
+            "type": "array"
+          }
+        },
+        "title": "HerdrSnapshot",
+        "type": "object"
+      },
+      "HerdrStartAgentRequest": {
+        "properties": {
+          "agent": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Agent",
+            "type": "string"
+          },
+          "pane_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Pane Id",
+            "type": "string"
+          },
+          "server_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Server Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "server_id",
+          "pane_id",
+          "agent"
+        ],
+        "title": "HerdrStartAgentRequest",
+        "type": "object"
+      },
+      "HerdrTab": {
+        "properties": {
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "panes": {
+            "items": {
+              "$ref": "#/components/schemas/HerdrPane"
+            },
+            "title": "Panes",
+            "type": "array"
+          },
+          "tab_id": {
+            "title": "Tab Id",
+            "type": "string"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          }
+        },
+        "required": [
+          "tab_id",
+          "label"
+        ],
+        "title": "HerdrTab",
+        "type": "object"
+      },
+      "HerdrWorkspace": {
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "tabs": {
+            "items": {
+              "$ref": "#/components/schemas/HerdrTab"
+            },
+            "title": "Tabs",
+            "type": "array"
+          },
+          "workspace_id": {
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace_id",
+          "label"
+        ],
+        "title": "HerdrWorkspace",
+        "type": "object"
+      },
       "LinearLabelModel": {
         "description": "Linear label discovered via the per-project API key.",
         "properties": {
@@ -4331,6 +4970,340 @@
         "summary": "Health",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/api/herdr": {
+      "get": {
+        "operationId": "herdr_snapshot_api_herdr_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HerdrSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Herdr Snapshot",
+        "tags": [
+          "herdr"
+        ]
+      }
+    },
+    "/api/herdr/close": {
+      "post": {
+        "operationId": "herdr_close_api_herdr_close_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HerdrCloseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HerdrOkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Herdr Close",
+        "tags": [
+          "herdr"
+        ]
+      }
+    },
+    "/api/herdr/pane/agent": {
+      "post": {
+        "operationId": "herdr_start_agent_api_herdr_pane_agent_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HerdrStartAgentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HerdrOkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Herdr Start Agent",
+        "tags": [
+          "herdr"
+        ]
+      }
+    },
+    "/api/herdr/pane/control": {
+      "post": {
+        "operationId": "herdr_pane_control_api_herdr_pane_control_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HerdrControlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HerdrOkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Herdr Pane Control",
+        "tags": [
+          "herdr"
+        ]
+      }
+    },
+    "/api/herdr/pane/open": {
+      "post": {
+        "operationId": "herdr_open_pane_api_herdr_pane_open_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HerdrPaneTarget"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HerdrOpenPaneResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Herdr Open Pane",
+        "tags": [
+          "herdr"
+        ]
+      }
+    },
+    "/api/herdr/pane/text": {
+      "get": {
+        "operationId": "herdr_pane_text_api_herdr_pane_text_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pane_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Pane Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lines",
+            "required": false,
+            "schema": {
+              "default": 300,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Lines",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HerdrPaneTextResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Herdr Pane Text",
+        "tags": [
+          "herdr"
+        ]
+      }
+    },
+    "/api/herdr/rename": {
+      "post": {
+        "operationId": "herdr_rename_api_herdr_rename_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HerdrRenameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HerdrOkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Herdr Rename",
+        "tags": [
+          "herdr"
+        ]
+      }
+    },
+    "/api/herdr/terminals": {
+      "post": {
+        "operationId": "herdr_create_api_herdr_terminals_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HerdrCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HerdrCreateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Herdr Create",
+        "tags": [
+          "herdr"
         ]
       }
     },

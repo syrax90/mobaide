@@ -145,6 +145,12 @@ from mobaide.linear.scanner import (
     AutoScanCapacityReached,
 )
 from mobaide.linear.worktree import WorktreeCreationError
+from mobaide.herdr import errors as herdr_errors
+from mobaide.herdr.dispatch import HERDR_PATH_PREFIX, dispatch_herdr
+from mobaide.herdr.models import HERDR_CAPABILITIES
+from mobaide.herdr.pane_session import PANE_EVENT
+from mobaide.herdr.service import EVENT_ATTENTION as HERDR_ATTENTION_EVENT
+from mobaide.herdr.service import HerdrService
 from mobaide.voice.errors import VoiceError
 from mobaide.voice.errors import http_error_for as voice_http_error_for
 from mobaide.voice.models import (
@@ -238,6 +244,9 @@ def _build_relay_ssl_context(
 _VOICE_PATH_PREFIX = "/api/voice/"
 MAX_VOICE_PROXY_TASKS = 32
 MAX_CHAT_PROXY_TASKS = 8
+# Herdr requests also run aside: each one is a new connection to a herdr
+# server, and a server that hangs must not stall the tunnel.
+MAX_HERDR_PROXY_TASKS = 16
 _VOICE_ROUTE = re.compile(r"^/api/voice/(status|install|install/cancel|model|dictations|cleanup|cleanup/settings)$")
 _VOICE_DICTATION_ROUTE = re.compile(r"^/api/voice/dictations/([^/]+)(?:/(audio|finish))?$")
 
@@ -366,11 +375,39 @@ def _validate_adhoc_cwd_or_error(cwd: str) -> str | None:
     return None
 
 
-def _state_frame(status: str, pid: int | None = None) -> bytes:
+def _state_frame(status: str, pid: int | None = None, session: Any = None) -> bytes:
     payload: dict[str, object] = {"status": status}
     if pid is not None:
         payload["pid"] = pid
+    extras = getattr(session, "wire_state_extras", None)
+    if extras is not None:
+        payload.update(extras())
     return FRAME_STATE + json.dumps(payload).encode("utf-8")
+
+
+# The relay's limit for one field of a ``herdr.attention`` user event
+# (``central_server`` ``relay/agent_ws.py::_HERDR_FIELD_MAX_CHARS``).
+HERDR_DISPLAY_MAX_CHARS = 200
+
+
+def _herdr_attention_user_event(payload: object) -> dict[str, object] | None:
+    """The CH_CONTROL ``user_event`` for a ``herdr.attention`` bus event, so
+    the central server can push it to devices without a live socket."""
+    if not isinstance(payload, dict):
+        return None
+    slim: dict[str, object] = {}
+    for key in ("server_id", "pane_id", "reason", "title"):
+        value = payload.get(key)
+        if not isinstance(value, str) or not value:
+            return None
+        slim[key] = value
+    # The relay drops an event with a longer display field, and a pane title
+    # can be a terminal title of any length. The ids are never cut.
+    slim["title"] = str(slim["title"])[:HERDR_DISPLAY_MAX_CHARS]
+    agent = payload.get("agent")
+    if isinstance(agent, str) and agent:
+        slim["agent"] = agent[:HERDR_DISPLAY_MAX_CHARS]
+    return {"type": "user_event", "kind": HERDR_ATTENTION_EVENT, "payload": slim}
 
 
 def _attention_user_event(payload: object) -> dict[str, object] | None:
@@ -449,6 +486,8 @@ class RelayClient:
 
         # Session bridge state: session_id -> bridge pump task.
         self._bridges: dict[str, asyncio.Task] = {}
+        # The fanout each bridge reads; see ``_bridge_session``.
+        self._bridge_fanouts: dict[str, Any] = {}
 
         # Inbound PTY-frame dispatch: session_id -> (queue, consumer task).
         # CH_SESSION_IO frames must not be awaited inline in the tunnel
@@ -476,6 +515,7 @@ class RelayClient:
         # In-flight ``/api/chat/{kind}/sessions`` listings, run aside for the
         # same reason (the first one starts the agent process).
         self._chat_proxy_tasks: set[asyncio.Task] = set()
+        self._herdr_proxy_tasks: set[asyncio.Task] = set()
 
         # Latest manifest pointer received from central_server (auth_ok or a
         # mid-connection ``agent_manifest_update`` control frame). Consumed by
@@ -515,7 +555,11 @@ class RelayClient:
         """Gracefully shut down the relay client."""
         self._stopping = True
         self._cancel_all_subtasks()
-        for task in [*self._voice_proxy_tasks, *self._chat_proxy_tasks]:
+        for task in [
+            *self._voice_proxy_tasks,
+            *self._chat_proxy_tasks,
+            *self._herdr_proxy_tasks,
+        ]:
             task.cancel()
         if self._task and not self._task.done():
             self._task.cancel()
@@ -634,6 +678,10 @@ class RelayClient:
                 self._watch_session_changes(ws), name="relay-session-watch"
             )
 
+            # After a reconnect the server says how many clients each session
+            # has, so the count of relay viewers starts from zero on each
+            # tunnel.
+            self._reset_external_viewers()
             await self._bridge_existing_sessions(ws)
 
             try:
@@ -641,6 +689,25 @@ class RelayClient:
             finally:
                 self._cancel_all_subtasks()
                 self._ws = None
+                self._reset_external_viewers()
+
+    @staticmethod
+    def _count_relay_viewers(session: Any, ctrl: dict, step: Any) -> None:
+        """Take the viewer count of an attach or detach message. The relay
+        sends the number of its clients on the session; a relay that sends
+        none (an older one) gets one step per message."""
+        count = ctrl.get("count")
+        set_count = getattr(session, "set_relay_viewers", None)
+        if isinstance(count, int) and not isinstance(count, bool) and set_count is not None:
+            set_count(count)
+        else:
+            step(relay=True)
+
+    def _reset_external_viewers(self) -> None:
+        for session in self._session_manager.external_sessions():
+            reset = getattr(session, "reset_relay_viewers", None)
+            if reset is not None:
+                reset()
 
     def set_manifest_update_callback(self, callback: Any) -> None:
         """Register an async callback fired with (manifest_body, signature_b64,
@@ -832,6 +899,8 @@ class RelayClient:
                 self._spawn_voice_proxy(ctrl)
             elif match_chat_sessions_route(path) is not None:
                 self._spawn_chat_proxy(ctrl)
+            elif path.startswith(HERDR_PATH_PREFIX):
+                self._spawn_herdr_proxy(ctrl)
             else:
                 await self._handle_proxy_request(ctrl, ws)
 
@@ -845,7 +914,7 @@ class RelayClient:
             await self._handle_mobile_attach(ctrl, ws)
 
         elif msg_type == "mobile_session_detach":
-            self._handle_mobile_detach(ctrl)
+            await self._handle_mobile_detach(ctrl)
 
         elif msg_type == "request_events_snapshot":
             await self._handle_request_events_snapshot(ws)
@@ -899,7 +968,13 @@ class RelayClient:
             )
             await self._send_stopped_frame(session_id, ws, "mobile_attach")
             return
+        # An external session is not in ``sessions.changed``, which is what
+        # bridges the others; its bridge starts with its first viewer.
+        self._bridge_session(session, ws)
         await self._send_session_handshake(session_id, session, ws)
+        attached = getattr(session, "viewer_attached", None)
+        if attached is not None:
+            self._count_relay_viewers(session, ctrl, attached)
 
     async def _handle_request_events_snapshot(
         self, ws: ClientConnection
@@ -948,6 +1023,13 @@ class RelayClient:
             except Exception:
                 logger.exception("relay.events_snapshot.voice_publish_failed")
 
+        herdr = getattr(self._app_state, "herdr", None)
+        if isinstance(herdr, HerdrService):
+            try:
+                herdr.publish_snapshot()
+            except Exception:
+                logger.exception("relay.events_snapshot.herdr_publish_failed")
+
         try:
             await ws.send(
                 encode(
@@ -960,19 +1042,22 @@ class RelayClient:
                 exc_info=True,
             )
 
-    def _handle_mobile_detach(self, ctrl: dict) -> None:
-        """Record that a mobile detached from a session.
+    async def _handle_mobile_detach(self, ctrl: dict) -> None:
+        """A mobile detached from a session.
 
-        Present for protocol symmetry with ``mobile_session_attach`` so the
-        central server can notify the agent when a mobile goes away; the
-        agent currently has no per-mobile state to unwind, so this is a
-        debug log. Left as a named method so a future per-device routing
-        change has an obvious hook.
+        Only an external session counts its viewers: its stream runs while
+        one is attached. Every other session has no per-mobile state.
         """
         session_id = ctrl.get("session_id", "")
         logger.debug(
             "relay.mobile_detach session_id=%s", session_id,
         )
+        if not session_id:
+            return
+        session = await self._session_manager.get_session(session_id)
+        detached = getattr(session, "viewer_detached", None)
+        if detached is not None:
+            self._count_relay_viewers(session, ctrl, detached)
 
     async def _handle_open_autoscan(
         self, ctrl: dict, ws: ClientConnection
@@ -1623,6 +1708,11 @@ class RelayClient:
                         "chat": await asyncio.to_thread(
                             build_chat_capabilities,
                             getattr(self._app_state, "chat_agents", None) or {},
+                        ),
+                        **(
+                            {"herdr": HERDR_CAPABILITIES}
+                            if getattr(self._app_state, "herdr", None) is not None
+                            else {}
                         ),
                     },
                     "latest_agent_version": (manifest or {}).get("version"),
@@ -2417,6 +2507,35 @@ class RelayClient:
         self._chat_proxy_tasks.add(task)
         task.add_done_callback(self._chat_proxy_tasks.discard)
 
+    def _spawn_herdr_proxy(self, ctrl: dict) -> None:
+        if len(self._herdr_proxy_tasks) >= MAX_HERDR_PROXY_TASKS:
+            coro = self._send_proxy_result(
+                ctrl,
+                # Coded, as every other Herdr refusal is.
+                {"status": 503, "body": {"detail": herdr_errors.busy().detail()}},
+            )
+        else:
+            coro = self._run_herdr_proxy(ctrl)
+        task = asyncio.create_task(coro, name="relay-herdr-proxy")
+        self._herdr_proxy_tasks.add(task)
+        task.add_done_callback(self._herdr_proxy_tasks.discard)
+
+    async def _run_herdr_proxy(self, ctrl: dict) -> None:
+        method = str(ctrl.get("method", "GET")).upper()
+        path = str(ctrl.get("path", ""))
+        try:
+            result = await dispatch_herdr(
+                getattr(self._app_state, "herdr", None),
+                method,
+                path,
+                ctrl.get("body"),
+                ctrl.get("query"),
+            )
+        except Exception as exc:
+            logger.warning("relay.proxy_request_failed path=%s: %s", path, exc)
+            result = {"status": 500, "body": {"detail": str(exc)}}
+        await self._send_proxy_result(ctrl, result)
+
     async def _run_chat_proxy(self, ctrl: dict) -> None:
         method = str(ctrl.get("method", "GET")).upper()
         path = str(ctrl.get("path", ""))
@@ -2791,7 +2910,7 @@ class RelayClient:
         """
         try:
             status = _STATE_MAP.get(session.state, "running")
-            state = _state_frame(status, session.pid)
+            state = _state_frame(status, session.pid, session)
             await ws.send(encode(CH_SESSION_IO, session_id, state))
 
             await ws.send(encode(CH_SESSION_IO, session_id, FRAME_REPLAY))
@@ -2843,12 +2962,19 @@ class RelayClient:
     def _bridge_session(self, session: Any, ws: ClientConnection) -> None:
         """Subscribe to a session's fanout and forward output as envelopes."""
         sid = session.session_id
-        if sid in self._bridges:
-            return
 
         from mobaide.agent.ws.session_io import ensure_fanout
 
         fanout = ensure_fanout(self._app_state, session)
+        current = self._bridges.get(sid)
+        if current is not None:
+            if not current.done() and self._bridge_fanouts.get(sid) is fanout:
+                return
+            # A Herdr pane session comes back under the same id with a new
+            # fanout. The bridge of the ended one reads a dead fanout: it must
+            # not stand in for the new one.
+            current.cancel()
+
         consumer_queue = fanout.subscribe()
 
         task = asyncio.create_task(
@@ -2856,6 +2982,7 @@ class RelayClient:
             name=f"relay-bridge-{sid}",
         )
         self._bridges[sid] = task
+        self._bridge_fanouts[sid] = fanout
 
     async def _session_output_pump(
         self,
@@ -2892,10 +3019,30 @@ class RelayClient:
                         )
                         pid = session.pid if session else None
                         state = _state_frame(
-                            _EVENT_TO_STATUS[event.event_type], pid
+                            _EVENT_TO_STATUS[event.event_type], pid, session
                         )
                         envelope = encode(CH_SESSION_IO, session_id, state)
                         await ws.send(envelope)
+                        if event.event_type == "stopped" and (
+                            session is None
+                            or getattr(session, "external", False)
+                        ):
+                            # No ``sessions.changed`` follows the end of an
+                            # external session to take this bridge down.
+                            break
+                    elif event.event_type == PANE_EVENT:
+                        session = await self._session_manager.get_session(
+                            session_id
+                        )
+                        if session is not None:
+                            state = _state_frame(
+                                _STATE_MAP.get(session.state, "running"),
+                                session.pid,
+                                session,
+                            )
+                            await ws.send(
+                                encode(CH_SESSION_IO, session_id, state)
+                            )
                 except Exception as exc:
                     logger.debug(
                         "relay.bridge_send_error session_id=%s: %s",
@@ -2907,7 +3054,10 @@ class RelayClient:
             pass
         finally:
             fanout.unsubscribe(queue)
-            self._bridges.pop(session_id, None)
+            # Only its own entry: a newer bridge may already stand under the id.
+            if self._bridges.get(session_id) is asyncio.current_task():
+                self._bridges.pop(session_id, None)
+                self._bridge_fanouts.pop(session_id, None)
 
     async def _watch_session_changes(self, ws: ClientConnection) -> None:
         """Watch EventBus for new/removed sessions and auto-bridge."""
@@ -2919,6 +3069,11 @@ class RelayClient:
                     continue
                 sessions = event.payload.get("sessions", [])
                 current_ids = {s["session_id"] for s in sessions}
+                # External sessions are in no list; they keep their bridges.
+                current_ids.update(
+                    s.session_id
+                    for s in self._session_manager.external_sessions()
+                )
 
                 for s in sessions:
                     sid = s["session_id"]
@@ -2930,6 +3085,7 @@ class RelayClient:
                 for sid in list(self._bridges):
                     if sid not in current_ids:
                         task = self._bridges.pop(sid, None)
+                        self._bridge_fanouts.pop(sid, None)
                         if task and not task.done():
                             task.cancel()
 
@@ -2981,10 +3137,14 @@ class RelayClient:
                 await ws.send(encode(CH_EVENTS, "", payload))
                 if event.type == "session.attention":
                     ctrl = _attention_user_event(event.payload)
-                    if ctrl is not None:
-                        await ws.send(
-                            encode(CH_CONTROL, "", orjson.dumps(ctrl))
-                        )
+                elif event.type == HERDR_ATTENTION_EVENT:
+                    ctrl = _herdr_attention_user_event(event.payload)
+                else:
+                    ctrl = None
+                if ctrl is not None:
+                    await ws.send(
+                        encode(CH_CONTROL, "", orjson.dumps(ctrl))
+                    )
         except asyncio.CancelledError:
             pass
         finally:
@@ -3020,6 +3180,7 @@ class RelayClient:
             if not task.done():
                 task.cancel()
         self._bridges.clear()
+        self._bridge_fanouts.clear()
         for task in list(self._input_pumps.values()):
             if not task.done():
                 task.cancel()

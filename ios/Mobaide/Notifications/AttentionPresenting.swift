@@ -25,4 +25,15 @@ protocol AttentionPresenting: Sendable {
     func requestAuthorization()
     /// Drop every delivered/pending notification (cross-account teardown).
     func removeAll()
+    /// Post the alert of an agent in a Herdr pane; false when nothing was shown.
+    @discardableResult
+    func postHerdr(_ attention: HerdrAttention) async -> Bool
+    /// Remove the alert of a Herdr pane that no longer needs the user.
+    func removeHerdr(serverId: String, paneId: String)
+}
+
+extension AttentionPresenting {
+    @discardableResult
+    func postHerdr(_ attention: HerdrAttention) async -> Bool { false }
+    func removeHerdr(serverId: String, paneId: String) {}
 }

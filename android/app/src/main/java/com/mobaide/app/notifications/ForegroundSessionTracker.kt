@@ -45,6 +45,19 @@ class ForegroundSessionTracker @Inject constructor() {
         _visibleSessionId.compareAndSet(sessionId, null)
     }
 
+    private val _visibleHerdrPane = MutableStateFlow<String?>(null)
+
+    /** The Herdr pane on screen, as a [herdrPaneKey]; its own alerts are suppressed. */
+    val visibleHerdrPane: StateFlow<String?> = _visibleHerdrPane.asStateFlow()
+
+    fun setVisibleHerdrPane(key: String) {
+        _visibleHerdrPane.value = key
+    }
+
+    fun clearVisibleHerdrPane(key: String) {
+        _visibleHerdrPane.compareAndSet(key, null)
+    }
+
     fun holdWatch(sessionId: String) {
         _watchHolds.update { holds -> holds + (sessionId to (holds[sessionId] ?: 0) + 1) }
     }
@@ -58,3 +71,6 @@ class ForegroundSessionTracker @Inject constructor() {
 
     fun isHeld(sessionId: String): Boolean = (_watchHolds.value[sessionId] ?: 0) > 0
 }
+
+/** The identity of one Herdr pane for alerts: its server and its pane id. */
+fun herdrPaneKey(serverId: String, paneId: String): String = "$serverId\u0000$paneId"

@@ -13,6 +13,7 @@ import {
 } from '../../realtime';
 import { useLastSessionStore } from '../../stores/lastSessionStore';
 import { AutoScanSection } from '../autoscan/AutoScanSection';
+import { HerdrSection } from '../herdr/HerdrSection';
 import { SessionCard } from './SessionCard';
 import { StopSessionDialog } from './StopSessionDialog';
 import { customTypeNameMap, sessionDialogLabel, sessionKindLabel } from './sessionDisplay';
@@ -71,6 +72,7 @@ export function SessionList({ agentId, online }: SessionListProps) {
           agent-events channel this component already opened, so it costs one
           REST seed and nothing else. */}
       <AutoScanSection agentId={agentId} online={online} />
+      <HerdrSection agentId={agentId} online={online} />
 
       <div className="sessions-toolbar">
         <Link className="button button-primary" to={newSessionPath(agentId)}>

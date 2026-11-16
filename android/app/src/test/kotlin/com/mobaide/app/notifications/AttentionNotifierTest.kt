@@ -5,6 +5,8 @@ import android.app.Application
 import android.app.Notification
 import android.app.NotificationManager
 import androidx.test.core.app.ApplicationProvider
+import com.mobaide.app.MainActivity
+import com.mobaide.app.data.network.dto.HerdrAttention
 import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
 import org.junit.Assert.assertEquals
@@ -114,6 +116,79 @@ class AttentionNotifierTest {
         // Unknown reasons fall through to a null content pair → no post, so a
         // future server-side reason can't crash the client.
         notifier.notify(session(attention = "some_future_reason"))
+        assertTrue(shadowOf(manager).allNotifications.isEmpty())
+    }
+
+    private fun herdrAttention(
+        paneId: String = "w1:p1",
+        reason: String = "awaiting_permission",
+        title: String = "api refactor",
+    ) = HerdrAttention(server_id = "tui:default", pane_id = paneId, reason = reason, title = title)
+
+    @Test
+    fun herdrAlert_tapCarriesTheServerAndThePane() {
+        // A pane has no session: the tap must name the pane, or it opens nothing.
+        notifier.notifyHerdr(herdrAttention(paneId = "box/t3"))
+
+        val posted = lastNotification()
+        val tap = shadowOf(posted.contentIntent).savedIntent
+        assertEquals("tui:default", tap.getStringExtra(MainActivity.EXTRA_HERDR_SERVER_ID))
+        assertEquals("box/t3", tap.getStringExtra(MainActivity.EXTRA_HERDR_PANE_ID))
+        assertEquals(null, tap.getStringExtra(MainActivity.EXTRA_SESSION_ID))
+        assertEquals(
+            "api refactor is waiting for your approval",
+            posted.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
+    @Test
+    fun herdrAlerts_ofTwoPanes_standSideBySide_andCancelRemovesOnlyItsOwn() {
+        notifier.notifyHerdr(herdrAttention(paneId = "w1:p1"))
+        notifier.notifyHerdr(herdrAttention(paneId = "w1:p2", title = "landing page"))
+        assertEquals(2, shadowOf(manager).allNotifications.size)
+
+        notifier.cancelHerdr("tui:default", "w1:p1")
+
+        val left = shadowOf(manager).allNotifications.single()
+        assertEquals(
+            "landing page is waiting for your approval",
+            left.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
+    @Test
+    fun herdrAlert_forAPaneWithoutATitle_usesTheLabelOfThePush() {
+        // The server names an untitled pane "Herdr agent" in its push.
+        notifier.notifyHerdr(herdrAttention(reason = "turn_failed", title = " "))
+
+        val body = lastNotification().extras.getString(Notification.EXTRA_TEXT).orEmpty()
+        assertTrue(body, body.startsWith("Herdr agent hit an error"))
+    }
+
+    @Test
+    fun herdrAlert_readsAsTheSessionAlertOfTheSameReason() {
+        // One text table for sessions and panes: a reason must not read one
+        // way for a session and another way for the same agent in a pane.
+        fun posted(post: () -> Unit): Pair<String?, String?> {
+            manager.cancelAll()
+            post()
+            val extras = shadowOf(manager).allNotifications.single().extras
+            return extras.getString(Notification.EXTRA_TITLE) to extras.getString(Notification.EXTRA_TEXT)
+        }
+
+        for (reason in listOf("awaiting_permission", "turn_finished", "turn_failed")) {
+            val forSession = posted { notifier.notify(session(attention = reason, title = "api refactor")) }
+            val forPane = posted { notifier.notifyHerdr(herdrAttention(reason = reason, title = "api refactor")) }
+
+            assertEquals(reason, forSession, forPane)
+            assertTrue(reason, forPane.second.orEmpty().startsWith("api refactor "))
+        }
+    }
+
+    @Test
+    fun herdrAlert_unknownReason_postsNothing() {
+        notifier.notifyHerdr(herdrAttention(reason = "some_future_reason"))
+
         assertTrue(shadowOf(manager).allNotifications.isEmpty())
     }
 

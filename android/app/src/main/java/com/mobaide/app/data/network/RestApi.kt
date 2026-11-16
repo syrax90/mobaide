@@ -32,6 +32,16 @@ import com.mobaide.app.data.network.dto.GitPushRequest
 import com.mobaide.app.data.network.dto.GitRebaseRequest
 import com.mobaide.app.data.network.dto.GitRebaseResponse
 import com.mobaide.app.data.network.dto.GitStatusResponse
+import com.mobaide.app.data.network.dto.HerdrCloseRequest
+import com.mobaide.app.data.network.dto.HerdrControlRequest
+import com.mobaide.app.data.network.dto.HerdrCreateRequest
+import com.mobaide.app.data.network.dto.HerdrCreateResponse
+import com.mobaide.app.data.network.dto.HerdrOpenPaneResponse
+import com.mobaide.app.data.network.dto.HerdrPaneTarget
+import com.mobaide.app.data.network.dto.HerdrPaneTextResponse
+import com.mobaide.app.data.network.dto.HerdrRenameRequest
+import com.mobaide.app.data.network.dto.HerdrSnapshot
+import com.mobaide.app.data.network.dto.HerdrStartAgentRequest
 import com.mobaide.app.data.network.dto.LinearLabelDto
 import com.mobaide.app.data.network.dto.LinearStateDto
 import com.mobaide.app.data.network.dto.ProjectInfo
@@ -556,6 +566,63 @@ class RestApi(
             .build()
         return execute(request)
     }
+
+    suspend fun getHerdr(): HerdrSnapshot {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/herdr")
+            .get()
+            .build()
+        return execute(request)
+    }
+
+    suspend fun openHerdrPane(serverId: String, paneId: String): HerdrOpenPaneResponse =
+        execute(herdrPost("pane/open", json.encodeToString(HerdrPaneTarget(serverId, paneId))))
+
+    suspend fun setHerdrControl(serverId: String, paneId: String, control: Boolean, clientId: String) {
+        executeRaw(
+            herdrPost(
+                "pane/control",
+                json.encodeToString(HerdrControlRequest(serverId, paneId, control, clientId)),
+            ),
+        )
+    }
+
+    suspend fun getHerdrPaneText(serverId: String, paneId: String, lines: Int): HerdrPaneTextResponse {
+        // Query parameters, not path segments: a pane id carries `:` and `/`.
+        val url = baseUrl().toHttpUrl().newBuilder()
+            .addPathSegments("api/herdr/pane/text")
+            .addQueryParameter("server_id", serverId)
+            .addQueryParameter("pane_id", paneId)
+            .addQueryParameter("lines", lines.toString())
+            .build()
+        return execute(Request.Builder().url(url).get().build())
+    }
+
+    suspend fun createHerdrTerminal(body: HerdrCreateRequest): HerdrCreateResponse =
+        execute(herdrPost("terminals", jsonForUpdate.encodeToString(body)))
+
+    suspend fun startHerdrAgent(serverId: String, paneId: String, agent: String) {
+        executeRaw(
+            herdrPost(
+                "pane/agent",
+                json.encodeToString(HerdrStartAgentRequest(serverId, paneId, agent)),
+            ),
+        )
+    }
+
+    suspend fun renameHerdrItem(body: HerdrRenameRequest) {
+        executeRaw(herdrPost("rename", json.encodeToString(body)))
+    }
+
+    suspend fun closeHerdrItem(body: HerdrCloseRequest) {
+        executeRaw(herdrPost("close", json.encodeToString(body)))
+    }
+
+    private fun herdrPost(route: String, body: String): Request =
+        Request.Builder()
+            .url("${baseUrl()}/api/herdr/$route")
+            .post(body.toRequestBody(jsonMediaType))
+            .build()
 
     private suspend inline fun <reified T> execute(request: Request): T =
         withContext(Dispatchers.IO) {

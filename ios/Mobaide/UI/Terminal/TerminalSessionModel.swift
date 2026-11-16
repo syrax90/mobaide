@@ -71,6 +71,21 @@ final class TerminalSessionModel {
     private(set) var sessionStatus: String? {
         didSet { syncReviewMeter() }
     }
+    /// The `pane` block of the last state frame; nil for a session that is not
+    /// a Herdr pane.
+    private(set) var paneState: TerminalPaneState?
+    /// The session is the view of a Herdr pane. Set by the pane screen when it
+    /// makes the model, and by the first `pane` block in any case.
+    var isHerdrPane = false
+    /// A Herdr pane's size belongs to the pane, or to the one client that
+    /// controls it. This is true only after a state frame on the current
+    /// socket named this client as the controller: what an earlier socket said
+    /// can be out of date, and a size sent on it would resize a pane that
+    /// another device controls now.
+    private var paneSizeAllowed = false
+    /// Whether a size may go out: always for a session, and for a pane this
+    /// client controls.
+    private var ownsSize: Bool { !isHerdrPane || paneSizeAllowed }
     /// Once the session is known to exist, it is never treated as missing again:
     /// a session ending or being removed while the user is reading it must leave
     /// the output on screen, not eject them.
@@ -297,6 +312,7 @@ final class TerminalSessionModel {
         switch event {
         case .connected:
             ownReplayPending = true
+            paneSizeAllowed = false
             resendCachedSize()
         case .binary(let data):
             handleBinary(data)
@@ -327,6 +343,7 @@ final class TerminalSessionModel {
                 terminalView.feedTrackingSynchronizedOutput(Array(bytes)[...])
             }
         case .state(let json):
+            applyPaneState(TerminalPaneState.parse(json))
             sessionStatus = Self.parseStatus(json) ?? sessionStatus
             // The agent answering with a live PTY is proof the session exists,
             // independent of when its list snapshot lands.
@@ -519,6 +536,9 @@ final class TerminalSessionModel {
     /// layout pass; this only drives the `r` frame. (Keyboard show/hide never
     /// reaches here — the screen pans instead of resizing.)
     func resize(rows: Int, cols: Int) {
+        // The grid of a pane this client does not control is not its own
+        // size: it is neither sent nor cached as sent.
+        guard ownsSize else { return }
         let r = max(1, rows)
         let c = max(1, cols)
         guard r != lastResizeRows || c != lastResizeCols else { return }
@@ -566,8 +586,40 @@ final class TerminalSessionModel {
     /// left at 24 rows with the bottom of a taller device grid blank. Re-sending
     /// the same size is idempotent.
     private func resendCachedSize() {
+        // A Herdr pane this client does not control keeps its size: nothing is sent.
+        guard ownsSize else { return }
         guard lastResizeRows > 0, lastResizeCols > 0 else { return }
         enqueue(.resize(rows: UInt16(clamping: lastResizeRows), cols: UInt16(clamping: lastResizeCols)))
+    }
+
+    /// Take the `pane` block of a state frame. The size gate is written
+    /// before the view gets the grid: the view's resize calls back into
+    /// `resize`, which must already see who owns the size.
+    private func applyPaneState(_ pane: TerminalPaneState?) {
+        if pane != nil { isHerdrPane = true }
+        let allowedBefore = paneSizeAllowed
+        paneSizeAllowed = pane?.isControl == true
+        if pane != paneState {
+            paneState = pane
+            terminalView.remoteGrid = pane?.grid
+        }
+        // This client became the controller, or is told so again on a new
+        // socket: the pane gets the grid this view has now. A layout pass
+        // reports a size only when the grid changed.
+        if isHerdrPane, paneSizeAllowed, !allowedBefore {
+            let terminal = terminalView.getTerminal()
+            lastResizeRows = max(1, terminal.rows)
+            lastResizeCols = max(1, terminal.cols)
+            resendCachedSize()
+        }
+    }
+
+    /// Attach again to the same session id. The agent makes a Herdr pane's
+    /// view again under that id, and the open socket still belongs to the
+    /// ended one.
+    func reattach() {
+        guard !isTornDown, let core else { return }
+        Task { await core.forceReconnect() }
     }
 
     // MARK: - Follow mode

@@ -212,8 +212,8 @@ async def agent_tunnel(websocket: WebSocket) -> None:
     # session so the new agent re-sends the PTY handshake (state/replay/ring)
     # and those mobiles don't get stuck on a grayed-out keyboard waiting
     # for a state frame that will never arrive.
-    for sid in routing.list_attached_sessions(agent_id):
-        _enqueue_attach(conn, sid)
+    for sid, count in routing.attached_session_counts(agent_id).items():
+        _enqueue_attach(conn, sid, count)
 
     reader_task = asyncio.create_task(
         _reader(websocket, agent_id, routing),
@@ -426,10 +426,46 @@ async def _handle_control_json(
 # User-event kinds an agent may relay to the owner's user-scoped clients.
 # Everything else is dropped: a compromised or outdated agent must not be
 # able to forge server-originated kinds (agent.status_changed, template.*).
-_AGENT_USER_EVENT_KINDS = frozenset({"session.attention"})
+_SESSION_ATTENTION = "session.attention"
+# An agent in a herdr pane needs the user. Addressed by herdr server and pane,
+# not by a session: the pane has no session until a client opens it.
+_HERDR_ATTENTION = "herdr.attention"
+_AGENT_USER_EVENT_KINDS = frozenset({_SESSION_ATTENTION, _HERDR_ATTENTION})
 
 # Optional attention payload fields relayed verbatim when present.
 _ATTENTION_OPTIONAL_FIELDS = ("title", "project_name", "exit_reason", "kind", "kind_label")
+_HERDR_ATTENTION_REQUIRED_FIELDS = ("server_id", "pane_id", "reason", "title")
+# Pane and server ids come from herdr and have no fixed length.
+_HERDR_FIELD_MAX_CHARS = 200
+
+
+def _session_attention_payload(raw: dict) -> dict | None:
+    session_id = raw.get("session_id")
+    reason = raw.get("reason")
+    if (
+        not isinstance(session_id, str) or not session_id
+        or not isinstance(reason, str) or not reason
+    ):
+        return None
+    payload: dict = {"session_id": session_id, "reason": reason}
+    for field in _ATTENTION_OPTIONAL_FIELDS:
+        value = raw.get(field)
+        if isinstance(value, str):
+            payload[field] = value
+    return payload
+
+
+def _herdr_attention_payload(raw: dict) -> dict | None:
+    payload: dict = {}
+    for field in _HERDR_ATTENTION_REQUIRED_FIELDS:
+        value = raw.get(field)
+        if not isinstance(value, str) or not value or len(value) > _HERDR_FIELD_MAX_CHARS:
+            return None
+        payload[field] = value
+    agent = raw.get("agent")
+    if isinstance(agent, str) and 0 < len(agent) <= _HERDR_FIELD_MAX_CHARS:
+        payload["agent"] = agent
+    return payload
 
 
 def _handle_user_event(websocket, agent_id, ctrl, routing) -> None:
@@ -444,12 +480,12 @@ def _handle_user_event(websocket, agent_id, ctrl, routing) -> None:
             agent_id, kind, "unsupported_kind_or_payload",
         )
         return
-    session_id = raw.get("session_id")
-    reason = raw.get("reason")
-    if (
-        not isinstance(session_id, str) or not session_id
-        or not isinstance(reason, str) or not reason
-    ):
+    payload = (
+        _herdr_attention_payload(raw)
+        if kind == _HERDR_ATTENTION
+        else _session_attention_payload(raw)
+    )
+    if payload is None:
         logger.warning(
             "agent_tunnel.user_event_dropped agent_id=%s kind=%s reason=%s",
             agent_id, kind, "malformed_payload",
@@ -464,11 +500,6 @@ def _handle_user_event(websocket, agent_id, ctrl, routing) -> None:
         )
         return
 
-    payload: dict = {"session_id": session_id, "reason": reason}
-    for field in _ATTENTION_OPTIONAL_FIELDS:
-        value = raw.get(field)
-        if isinstance(value, str):
-            payload[field] = value
     # Stamped from the authenticated tunnel — an agent-supplied agent_id is
     # never trusted.
     payload["agent_id"] = agent_id
@@ -521,16 +552,19 @@ def _try_enqueue(client: MobileClient, payload: bytes, *, binary: bool) -> None:
         record_send_queue_drop("agent_to_mobile")
 
 
-def _enqueue_attach(conn, session_id: str) -> None:
+def _enqueue_attach(conn, session_id: str, count: int) -> None:
     """Queue a ``mobile_session_attach`` CH_CONTROL frame for the agent.
 
     Used on agent reconnect to replay attach for every mobile that was
-    already registered before the tunnel died. Best-effort: logs on a
-    full queue and otherwise drops silently (the caller already resolved
-    ``conn`` from routing, so ``None`` cannot occur here).
+    already registered before the tunnel died. One frame stands for all
+    ``count`` mobiles of the session: the handshake it asks for reaches each
+    of them. Best-effort: logs on a full queue and otherwise drops silently
+    (the caller already resolved ``conn`` from routing, so ``None`` cannot
+    occur here).
     """
     if not try_enqueue_control(
-        conn, {"type": "mobile_session_attach", "session_id": session_id}
+        conn,
+        {"type": "mobile_session_attach", "session_id": session_id, "count": count},
     ):
         logger.warning(
             "agent_tunnel.attach_replay_drop agent=%s session=%s — agent queue full",

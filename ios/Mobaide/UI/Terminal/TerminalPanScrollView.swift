@@ -1,3 +1,4 @@
+import CoreText
 import SwiftUI
 import UIKit
 
@@ -21,6 +22,16 @@ final class TerminalPanScrollView: UIScrollView {
 
     /// Test seam: overrides the caret-derived anchor (production nil).
     var caretAnchorBottomOverride: CGFloat?
+
+    /// What the last font fit of a dictated grid was computed for; the search
+    /// measures text, so it runs again only when one of these changes.
+    private var remoteFit: (grid: TerminalGrid, viewport: CGSize, fontSize: CGFloat)?
+
+    /// A fixed column count can be wider than the viewport: Static mode, and a
+    /// watched Herdr pane.
+    private var pansHorizontally: Bool {
+        displayConfig.mode == .static || terminalView.remoteGrid != nil
+    }
 
     var displayConfig: TerminalDisplayConfig {
         didSet {
@@ -79,6 +90,15 @@ final class TerminalPanScrollView: UIScrollView {
         guard terminalView.superview === self else { return }
         guard viewport.width > 0, viewport.height > 0 else { return }
 
+        if let grid = terminalView.remoteGrid {
+            layoutRemoteGrid(grid, viewport: viewport)
+            return
+        }
+        remoteFit = nil
+        if terminalView.font.pointSize != MobaideTerminalView.baseFontSize {
+            terminalView.font = MobaideTerminalView.terminalFont(ofSize: MobaideTerminalView.baseFontSize)
+        }
+
         let targetWidth: CGFloat
         switch displayConfig.mode {
         case .full:
@@ -93,7 +113,71 @@ final class TerminalPanScrollView: UIScrollView {
         // Keyboard counter-pan moves only the frame ORIGIN — SwiftTerm resizes
         // solely from a bounds-size change, so this can never emit an `r` frame.
         let dy = currentCounterPan(boxHeight: viewport.height)
-        let targetFrame = CGRect(x: 0, y: dy, width: targetWidth, height: viewport.height)
+        applyTerminalFrame(CGRect(x: 0, y: dy, width: targetWidth, height: viewport.height))
+        let targetContent = CGSize(width: targetWidth, height: viewport.height)
+        if contentSize != targetContent {
+            contentSize = targetContent
+        }
+    }
+
+    /// Slack added to a dictated grid's extent, in cells. SwiftTerm derives its
+    /// grid as `Int(extent / cell)`, and an extent of exactly `cells * cell`
+    /// can land one cell short after rounding.
+    private static let remoteExtentSlack: CGFloat = 0.25
+
+    /// SwiftTerm's cell for a terminal font of `fontSize`, computed as SwiftTerm
+    /// computes it: the advance of "W" and the line height, each rounded up to
+    /// a pixel.
+    static func remoteCellSize(fontSize: CGFloat, scale: CGFloat) -> CGSize {
+        let font = MobaideTerminalView.terminalFont(ofSize: fontSize)
+        let width = ("W" as NSString).size(withAttributes: [.font: font]).width
+        let ctFont = font as CTFont
+        let height = ceil(CTFontGetAscent(ctFont) + CTFontGetDescent(ctFont) + CTFontGetLeading(ctFont))
+        let snap = { (value: CGFloat) in max(1, ceil(value * scale) / scale) }
+        return CGSize(width: snap(width), height: snap(height))
+    }
+
+    /// The largest text size, down to the minimum, at which the grid fits the
+    /// viewport in both directions.
+    static func remoteFontSize(grid: TerminalGrid, viewport: CGSize, scale: CGFloat) -> CGFloat {
+        var size = MobaideTerminalView.baseFontSize
+        while size > MobaideTerminalView.minRemoteFontSize {
+            let cell = remoteCellSize(fontSize: size, scale: scale)
+            let fitsWidth = (CGFloat(grid.cols) + remoteExtentSlack) * cell.width <= viewport.width
+            let fitsHeight = (CGFloat(grid.rows) + remoteExtentSlack) * cell.height <= viewport.height
+            if fitsWidth, fitsHeight { break }
+            size -= 0.5
+        }
+        return size
+    }
+
+    /// Show the grid of a watched Herdr pane. The text shrinks until the
+    /// columns and the rows fit the viewport. A pane that is still wider pans
+    /// here; one that is still taller is anchored to its bottom, where a
+    /// program has its input line.
+    private func layoutRemoteGrid(_ grid: TerminalGrid, viewport: CGSize) {
+        if remoteFit?.grid != grid || remoteFit?.viewport != viewport {
+            let scale = window?.screen.scale ?? UIScreen.main.scale
+            let size = Self.remoteFontSize(grid: grid, viewport: viewport, scale: scale)
+            remoteFit = (grid, viewport, size)
+        }
+        if let size = remoteFit?.fontSize, terminalView.font.pointSize != size {
+            terminalView.font = MobaideTerminalView.terminalFont(ofSize: size)
+        }
+        let cell = terminalView.cellSize
+        let width = (CGFloat(grid.cols) + Self.remoteExtentSlack) * cell.width
+        let height = (CGFloat(grid.rows) + Self.remoteExtentSlack) * cell.height
+        let rest = min(0, viewport.height - height)
+        // The caret anchor is in the terminal's own space, which starts at `rest`.
+        let dy = currentCounterPan(boxHeight: viewport.height - rest)
+        applyTerminalFrame(CGRect(x: 0, y: rest + dy, width: width, height: height))
+        let targetContent = CGSize(width: max(width, viewport.width), height: viewport.height)
+        if contentSize != targetContent {
+            contentSize = targetContent
+        }
+    }
+
+    private func applyTerminalFrame(_ targetFrame: CGRect) {
         if terminalView.frame != targetFrame {
             let originMoved = terminalView.frame.origin != targetFrame.origin
             terminalView.frame = targetFrame
@@ -108,10 +192,6 @@ final class TerminalPanScrollView: UIScrollView {
                     terminalView.selectionController.refresh()
                 }
             }
-        }
-        let targetContent = CGSize(width: targetWidth, height: viewport.height)
-        if contentSize != targetContent {
-            contentSize = targetContent
         }
     }
 
@@ -150,7 +230,7 @@ final class TerminalPanScrollView: UIScrollView {
     func revealCursorIfArmed() {
         let reveal = terminalView.cursorReveal
         guard reveal.isArmed,
-              displayConfig.mode == .static,
+              pansHorizontally,
               terminalView.superview === self,
               !isDragging, !isDecelerating,
               !terminalView.isTouchActive, terminalView.flingTask == nil,
@@ -220,7 +300,7 @@ final class TerminalPanScrollView: UIScrollView {
     /// Full mode has no horizontal overflow and never arbitrates, so the outer
     /// claims nothing there.
     func wouldClaimHorizontalPan(velocity: CGPoint, translation: CGPoint) -> Bool {
-        guard displayConfig.mode == .static else { return false }
+        guard pansHorizontally else { return false }
         return Self.shouldClaimHorizontalPan(
             velocity: velocity,
             translation: translation,
@@ -231,7 +311,7 @@ final class TerminalPanScrollView: UIScrollView {
     /// The same split answered for this view's own pan, where a stationary touch
     /// must still catch an in-flight fling.
     func claimsHorizontalPan() -> Bool {
-        guard displayConfig.mode == .static else { return false }
+        guard pansHorizontally else { return false }
         return Self.shouldClaimHorizontalPan(
             velocity: panGestureRecognizer.velocity(in: self),
             translation: panGestureRecognizer.translation(in: self),
@@ -259,7 +339,7 @@ final class TerminalPanScrollView: UIScrollView {
         if gestureRecognizer === panGestureRecognizer, terminalView.isSelectionActive {
             return false
         }
-        if displayConfig.mode == .static,
+        if pansHorizontally,
            gestureRecognizer === panGestureRecognizer,
            !claimsHorizontalPan() {
             return false

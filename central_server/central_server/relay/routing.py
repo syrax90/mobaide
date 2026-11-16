@@ -314,19 +314,26 @@ class RoutingTable:
         return result
 
     def list_attached_sessions(self, agent_id: str) -> list[str]:
-        """Session ids with at least one mobile attached on ``session_io:*``.
+        """Session ids with at least one mobile attached on ``session_io:*``."""
+        return list(self.attached_session_counts(agent_id))
+
+    def attached_session_counts(self, agent_id: str) -> dict[str, int]:
+        """How many mobiles are attached to each session of ``agent_id``.
 
         Used on agent reconnect to replay ``mobile_session_attach`` control
-        frames so the agent re-sends the PTY handshake and the mobile's
+        frames, so the agent re-sends the PTY handshake and the mobile's
         keyboard is unblocked without waiting for another first-input frame.
+        The count is for a Herdr pane session: the agent counts its viewers
+        to know when its stream can stop, and a new tunnel starts that count
+        from zero.
         """
         channels = self._mobile_clients.get(agent_id, {})
         prefix = "session_io:"
-        return [
-            key[len(prefix) :]
+        return {
+            key[len(prefix) :]: len(clients)
             for key, clients in channels.items()
             if key.startswith(prefix) and clients
-        ]
+        }
 
     def register_user_client(self, user_id: str, client: UserClient) -> None:
         clients = self._user_clients.setdefault(user_id, set())

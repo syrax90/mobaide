@@ -63,6 +63,8 @@ public final class TerminalView extends View {
      * default auto-fit behavior. See docs/terminal-view-fork-changes.md.
      */
     private int mForcedColumns = 0;
+    /** Herdr pane view: a row count the remote side dictates; {@code 0} derives it from the view height. */
+    private int mForcedRows = 0;
 
     private TextSelectionCursorController mTextSelectionCursorController;
 
@@ -780,6 +782,30 @@ public final class TerminalView extends View {
     /** CLA-49 */
     public int getForcedColumns() { return mForcedColumns; }
 
+    /**
+     * Herdr pane view: override the height-derived row count in {@link #updateSize()}.
+     * Pass {@code rows > 0} to draw a grid whose size the remote side dictates, or
+     * {@code 0} to restore the default {@code viewHeight / lineSpacing} behavior.
+     */
+    public void setForcedRows(int rows) {
+        if (mForcedRows != rows) {
+            mForcedRows = rows;
+            updateSize();
+        }
+    }
+
+    public int getForcedRows() { return mForcedRows; }
+
+    /** Text size in pixels of the active renderer. {@code 0} until the renderer is created. */
+    public int getRendererTextSize() {
+        return mRenderer == null ? 0 : mRenderer.mTextSize;
+    }
+
+    /** The view height that shows exactly {@code rows} rows with the active renderer. */
+    public int getHeightForRows(int rows) {
+        return mRenderer == null ? 0 : rows * mRenderer.mFontLineSpacing + mRenderer.mFontLineSpacingAndAscent;
+    }
+
     /** CLA-49: glyph width in pixels from the active renderer. {@code 0} until the renderer is created. */
     public float getRendererFontWidth() {
         return mRenderer == null ? 0f : mRenderer.mFontWidth;
@@ -1296,7 +1322,9 @@ public final class TerminalView extends View {
         int newColumns = (mForcedColumns > 0)
             ? Math.max(4, mForcedColumns)
             : Math.max(4, (int) (viewWidth / mRenderer.mFontWidth));
-        int newRows = Math.max(4, (viewHeight - mRenderer.mFontLineSpacingAndAscent) / mRenderer.mFontLineSpacing);
+        int newRows = (mForcedRows > 0)
+            ? Math.max(4, mForcedRows)
+            : Math.max(4, (viewHeight - mRenderer.mFontLineSpacingAndAscent) / mRenderer.mFontLineSpacing);
 
         if (mEmulator == null || (newColumns != mEmulator.mColumns || newRows != mEmulator.mRows)) {
             mTermSession.updateSize(newColumns, newRows, (int) mRenderer.getFontWidth(), mRenderer.getFontLineSpacing());

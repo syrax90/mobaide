@@ -49,6 +49,9 @@ from mobaide.relay.envelope import (
     MIN_CLIENT_PROTOCOL_VERSION,
     SUPPORTED_PROTOCOL_VERSIONS,
 )
+from mobaide.herdr.models import HERDR_CAPABILITIES
+from mobaide.herdr.router import router as herdr_router
+from mobaide.herdr.service import build_herdr_service
 from mobaide.voice.cleanup import (
     AntigravityCleanup,
     ClaudeCleanup,
@@ -607,6 +610,8 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         # for the restart; start no voice work in a process that is stopping.
         if not restart_requested():
             await app.state.voice.start()
+            if app.state.herdr is not None:
+                await app.state.herdr.start()
         yield
         logger.info("agent.shutting_down")
         models_warmup = getattr(app.state, "cli_models_warmup", None)
@@ -641,6 +646,8 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         if relay_client is not None:
             await relay_client.stop()
         await app.state.voice.shutdown()
+        if app.state.herdr is not None:
+            await app.state.herdr.shutdown()
         autoscan_mgr = getattr(app.state, "autoscan_manager", None)
         if autoscan_mgr is not None:
             await autoscan_mgr.shutdown()
@@ -947,6 +954,15 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         backend_factory=FakePtyBackend if config.is_test_mode else create_pty_backend,
         chat_agents=app.state.chat_agents,
     )
+    # Attaches to the herdr servers the user runs; ``None`` when switched off.
+    app.state.herdr = build_herdr_service(
+        config.herdr_mode,
+        publish=app.state.event_bus.publish,
+        session_manager=app.state.session_manager,
+        cli_launchers=app.state.cli_launchers,
+        herdr_bin=config.herdr_bin,
+        herdr_config_dir=config.herdr_config_dir,
+    )
     app.state.jwt_service = JwtService(
         secret_key=config.jwt_secret_key,
         algorithm=config.jwt_algorithm,
@@ -988,6 +1004,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     app.include_router(autoscan_ws_router)
     app.include_router(updater_router)
     app.include_router(voice_router)
+    app.include_router(herdr_router)
 
     # Health endpoint (no auth)
     @app.get("/api/health", tags=["health"])
@@ -1041,6 +1058,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 "chat": await asyncio.to_thread(
                     build_chat_capabilities, app.state.chat_agents
                 ),
+                **({"herdr": HERDR_CAPABILITIES} if app.state.herdr is not None else {}),
             },
             "latest_agent_version": (manifest or {}).get("version"),
         }

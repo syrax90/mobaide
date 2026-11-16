@@ -152,6 +152,49 @@ describe('SessionIoChannel', () => {
 
     expect(seams.sockets[0]?.sent).toEqual([]);
   });
+
+  it('holds the size of a pane view until its current socket is told it controls the pane', async () => {
+    // A Herdr pane belongs to a user at the desktop. A size from a view that
+    // only watches, or that controlled the pane on an earlier socket, would
+    // resize that user's pane to this browser's grid.
+    const seams = testSeams();
+    const io = new SessionIoChannel('a1', 's1', seams.overrides);
+    io.gateSize();
+    io.setSize(40, 120);
+
+    io.channel.connect();
+    await settle();
+    const first = seams.sockets[0];
+    first?.accept();
+    io.allowSize(false);
+    io.setSize(41, 120);
+    expect(first?.sent).toEqual([]);
+
+    // Becoming the controller sends the measured grid at once.
+    io.allowSize(true);
+    io.setSize(42, 120);
+    expect(first?.sent.map(byteFrame)).toEqual([
+      [0x72, 0, 41, 0, 120],
+      [0x72, 0, 42, 0, 120],
+    ]);
+
+    first?.serverClose(1006);
+    seams.runReconnect();
+    await settle();
+    const second = seams.sockets[1];
+    second?.accept();
+    io.setSize(43, 120);
+    // What the earlier socket said can be out of date: control ends when the
+    // last viewer leaves, and this view was gone for a moment.
+    expect(second?.sent).toEqual([]);
+
+    io.allowSize(true);
+    expect(second?.sent.map(byteFrame)).toEqual([[0x72, 0, 43, 0, 120]]);
+
+    io.allowSize(false);
+    io.setSize(44, 120);
+    expect(second?.sent).toHaveLength(1);
+  });
 });
 
 describe('AutoScanChannel', () => {

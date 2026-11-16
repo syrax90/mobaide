@@ -11,6 +11,8 @@ final class FakeAttentionPresenter: AttentionPresenting, @unchecked Sendable {
     private var removeAllStorage = 0
     private var deliveredStorage: Set<String>
     private var postSucceedsFlag: Bool
+    private var postedHerdrStorage: [HerdrAttention] = []
+    private var removedHerdrStorage: [String] = []
 
     init(delivered: Set<String> = [], postSucceeds: Bool = true) {
         deliveredStorage = delivered
@@ -22,6 +24,9 @@ final class FakeAttentionPresenter: AttentionPresenting, @unchecked Sendable {
     var removed: [String] { lock.withLock { removedStorage } }
     var authRequestCount: Int { lock.withLock { authRequestStorage } }
     var removeAllCount: Int { lock.withLock { removeAllStorage } }
+    var postedHerdr: [HerdrAttention] { lock.withLock { postedHerdrStorage } }
+    /// Pane ids whose Herdr alert was removed, in call order.
+    var removedHerdrPanes: [String] { lock.withLock { removedHerdrStorage } }
 
     /// Overwrite the reported delivered set (used to simulate a live post
     /// interleaving during `reconcile()`'s snapshot await).
@@ -57,6 +62,17 @@ final class FakeAttentionPresenter: AttentionPresenting, @unchecked Sendable {
 
     func removeAll() {
         lock.withLock { removeAllStorage += 1 }
+    }
+
+    func postHerdr(_ attention: HerdrAttention) async -> Bool {
+        lock.withLock {
+            postedHerdrStorage.append(attention)
+            return postSucceedsFlag
+        }
+    }
+
+    func removeHerdr(serverId: String, paneId: String) {
+        lock.withLock { removedHerdrStorage.append(paneId) }
     }
 }
 
