@@ -5,7 +5,9 @@ file (see :mod:`mobaide.core.hook_settings`) whose ``http`` hooks POST here. The
 ``session_id``, a per-agent ``token`` and the gate-facing ``hook`` kind are query
 params baked into the hook URL at spawn, so every hook routes to exactly the
 right :class:`TerminalSession` even under concurrent sessions sharing a cwd, and
-classifies without the handler having to parse the body.
+classifies without the handler having to parse the body. A Claude chat session
+(:class:`ChatSession`) gets the same hooks through its ACP adapter; its hooks
+send the token in a header instead of the URL.
 
 Routing is all this layer does — whether a hook becomes a user-visible alert is
 :mod:`mobaide.core.attention_gate`'s decision.
@@ -29,7 +31,7 @@ from mobaide.core.attention_gate import (
     resolve_hook_kind,
     summarize_hook_payload,
 )
-from mobaide.core.hook_settings import remove_session_hooks
+from mobaide.core.hook_settings import HOOK_TOKEN_HEADER, remove_session_hooks
 
 from ..logging import get_logger
 
@@ -52,6 +54,8 @@ async def receive_hook(
     if client is None or client.host not in _LOOPBACK_HOSTS:
         return Response(status_code=status.HTTP_403_FORBIDDEN)
     expected = getattr(request.app.state, "hook_token", None)
+    # A chat session's hooks send the token in a header (``chat_hook_settings``).
+    token = token or request.headers.get(HOOK_TOKEN_HEADER, "")
     # Short-circuit on an unset token so the digest call never sees None, then
     # constant-time compare (repo convention for secret comparison). Compare as
     # bytes so a non-ASCII token query param fails closed instead of raising.

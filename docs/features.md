@@ -77,7 +77,7 @@ A Settings toggle chooses between two modes:
 
 Run and switch between up to 32 concurrent sessions on one agent. 32 is the default `max_sessions`, which is configurable.
 
-A running session that is mid-turn shows an animated accent square and a "Working" chip in the session list and sessions panel. A muted "Background" chip shows while the main agent is parked and only passive background work runs (a background shell, a monitor, a scheduled wakeup). "Needs permission" outranks both, and they outrank "Ready". The agent reports this as the session's `activity` (`working`, `waiting` or `idle`) for Claude and Auto Scan terminal sessions, and `working` or `idle` for chat sessions. Codex, Antigravity, OpenCode, GitHub Copilot, Cursor terminal, Pi, Terminal and custom terminal sessions show no Working state.
+A running session that is mid-turn shows an animated accent square and a "Working" chip in the session list and sessions panel. A muted "Background" chip shows while the main agent is parked and only passive background work runs (a background shell, a monitor, a scheduled wakeup). "Needs permission" outranks both, and they outrank "Ready". The agent reports this as the session's `activity` (`working`, `waiting` or `idle`) for Claude and Auto Scan terminal sessions and for Claude chat sessions, and `working` or `idle` for the other chat sessions. Codex, Antigravity, OpenCode, GitHub Copilot, Cursor terminal, Pi, Terminal and custom terminal sessions show no Working state.
 
 ## Managed CLI agents
 
@@ -374,7 +374,11 @@ The apps raise a notification whenever an agent session needs attention. This co
 
 - **Source.** One source per session, so nothing alerts twice.
   - Claude and Auto Scan terminal sessions: Claude Code hooks post to the agent's local `POST /internal/hook` endpoint.
-  - Chat sessions: the agent raises the reason from the turn result. An RPC error on your own prompt gives `turn_failed`.
+  - Claude chat sessions: the same Claude Code hooks, passed through the chat adapter.
+    - "Ready" comes 2 s after the turn ends, and only when no background work is left (a workflow, a sub-agent, a shell).
+    - A turn that Claude starts by itself (after a background task ends) shows as running in the chat. You can stop it, and **Send now** puts a queued message into it.
+    - Without hooks (an old CLI, a policy that blocks them), the turn result raises the reason, as for the other chat sessions.
+  - Other chat sessions: the agent raises the reason from the turn result. An RPC error on your own prompt gives `turn_failed`.
   - Codex, Antigravity, OpenCode, GitHub Copilot, Pi, Terminal and custom terminal sessions: the CLI writes OSC 7501 program-status reports. The agent maps them to reasons after a 1.5 s quiet window, and one session alerts at most every 5 s.
   - Cursor terminal sessions raise no "your turn" alert and show no activity state, because Cursor's terminal UI does not report its state. Cursor chat sessions raise the alerts.
   - OpenCode 2 reports only `idle`, `working` and `blocked`. A `working` to `idle` change is the turn end (`turn_finished` after the quiet window), unless client input arrived within 2 s before it (an interrupt). `blocked` alerts (`awaiting_permission`) only after it stands 0.5 s, because with `--auto` OpenCode reports `blocked` for about 10 ms per request. OpenCode raises no `turn_failed`. OpenCode 1.x reports nothing, so it has no terminal alerts.

@@ -34,7 +34,7 @@ from .cli_launcher import (
 # Re-exported (explicit ``as`` alias) only so ``test_claude_resolver`` can
 # reference ``claude_launcher._nvm_version_key`` directly.
 from .cli_launcher import _nvm_version_key as _nvm_version_key
-from .hook_settings import remove_session_hooks, write_session_hooks
+from .hook_settings import HOOK_TOKEN_ENV, remove_session_hooks, write_session_hooks
 from .projects_config import ProjectConfig
 from .projects_store import safe_path_exists
 
@@ -181,6 +181,13 @@ class ClaudeLauncher:
         # endpoint.
         self._hook_port = hook_port
         self._hook_token = hook_token
+
+    @property
+    def hook_endpoint(self) -> tuple[int, str] | None:
+        """``(port, token)`` of the agent's ``/internal/hook``, when it has one."""
+        if self._hook_port is None or not self._hook_token:
+            return None
+        return self._hook_port, self._hook_token
 
     def _resolve_binary(self) -> str:
         if self._resolved_binary is None:
@@ -334,7 +341,7 @@ class ClaudeLauncher:
         if session_id and self._hook_port is not None and self._hook_token:
             env["MOBAIDE_SESSION_ID"] = session_id
             env["MOBAIDE_HOOK_URL"] = f"http://127.0.0.1:{self._hook_port}/internal/hook"
-            env["MOBAIDE_HOOK_TOKEN"] = self._hook_token
+            env[HOOK_TOKEN_ENV] = self._hook_token
         is_project = isinstance(target, ProjectConfig)
         if is_project and target.linear_api_key:
             env["LINEAR_API_KEY"] = target.linear_api_key

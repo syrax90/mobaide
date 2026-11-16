@@ -86,6 +86,19 @@ The last ``Stop`` payload is the authority on which of the three applies:
 * a user keystroke (``mute``) — the pending window still elapses into ``idle``,
   but raises no alert: the user is plainly present.
 
+A chat session (``mobaide.acp.session``) drives three more entries, for ends
+and starts that its ACP connection knows better than any hook:
+
+* ``settle`` — an end no hook reports (an interrupt fires no ``Stop``, a failed
+  turn fires ``StopFailure``): the turn resets, activity ``idle``, no alert.
+* ``stop_lost`` — a turn that is over but sent no ``Stop``. Work the last
+  ``Stop`` listed still stands, so the session keeps that activity. With
+  nothing parked the quiet window starts, and the time cooldown does not apply.
+* ``note_stop`` — a ``Stop`` whose turn is followed by the next prompt at
+  once: only what it listed is recorded.
+
+``stop_failure`` is ignored here; only a chat session reads it.
+
 Long-lived tasks. A dev server never completes, so every ``Stop`` after it
 starts lists it, and a session that ran one would never alert again. A passive
 task still in flight when the user types the next prompt is therefore treated
@@ -163,6 +176,10 @@ class HookKind(enum.Enum):
     PROMPT_SUBMIT = "prompt_submit"
     TOOL = "tool"
     END = "end"
+    # ``StopFailure``: a turn that ended on an API error fires it instead of
+    # ``Stop``. Only a chat session registers it and reads it; the gate itself
+    # ignores it.
+    STOP_FAILURE = "stop_failure"
 
 
 # Fallback for a settings file written before the agent was upgraded: its hook
@@ -262,7 +279,8 @@ def _is_user_prompt(payload: Mapping[str, Any], *, wakeup_pending: bool) -> bool
     return not wakeup_pending and not _is_cli_prompt(payload)
 
 
-def _is_subagent_call(payload: Mapping[str, Any]) -> bool:
+def is_subagent_call(payload: Mapping[str, Any]) -> bool:
+    """Whether a ``PreToolUse`` payload is a sub-agent's call, not the main agent's."""
     agent_id = payload.get("agent_id")
     return isinstance(agent_id, str) and bool(agent_id)
 
@@ -281,7 +299,7 @@ def summarize_hook_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     prompt_id = _prompt_id(payload)
     if prompt_id is not None:
         summary["prompt_id"] = prompt_id[:8]
-    if _is_subagent_call(payload):
+    if is_subagent_call(payload):
         summary["subagent"] = True
     if _is_cli_prompt(payload):
         summary["cli_prompt"] = True
@@ -407,11 +425,42 @@ class AttentionGate:
         self._parked_activity = None
         self._settled = False
 
-    def _on_stop(self, payload: Mapping[str, Any]) -> None:
+    def settle(self) -> None:
+        """Nothing is in flight any more, and no alert is due for it.
+
+        For an end no hook reports: an interrupt fires no ``Stop``, and a
+        failed turn fires ``StopFailure``.
+        """
+        self.reset_turn()
+        self._on_activity("idle")
+
+    def stop_lost(self) -> None:
+        """End a turn that is known to be over but sent no ``Stop`` hook.
+
+        Such a turn said nothing about background work, so what the last
+        ``Stop`` listed still stands. With nothing parked, the quiet window
+        starts; the time cooldown does not apply, because this end is certain.
+        """
+        if self._parked_activity is not None:
+            self._on_activity(self._parked_activity)
+            return
         self._settled = False
+        self._alerted_at = None
+        self._arm(None)
+
+    def note_stop(self, payload: Mapping[str, Any]) -> None:
+        """Record what a ``Stop`` listed, without ending the turn.
+
+        For a turn whose end is no news because the next prompt starts at
+        once: no activity change, no quiet window, no alert.
+        """
         self._wakeup_pending = _has_crons(payload)
         self._passive_ids = _passive_task_ids(payload)
         self._parked_activity = _in_flight_activity(payload, self._long_lived_ids)
+
+    def _on_stop(self, payload: Mapping[str, Any]) -> None:
+        self._settled = False
+        self.note_stop(payload)
         if self._parked_activity is not None:
             self.cancel()
             self._on_activity(self._parked_activity)
@@ -419,7 +468,7 @@ class AttentionGate:
         self._arm(_prompt_id(payload))
 
     def _on_tool(self, payload: Mapping[str, Any]) -> None:
-        if _is_subagent_call(payload):
+        if is_subagent_call(payload):
             # With nothing in flight this is one of the CLI's own helper agents
             # running after the turn; it must not pull a finished session back
             # to ``working``, because no ``Stop`` would follow to end it.

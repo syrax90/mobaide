@@ -23,6 +23,9 @@ external binary, so they behave identically on Windows and POSIX (unlike a
 ``command``+``curl`` hook, which PowerShell would mangle by aliasing ``curl`` to
 ``Invoke-WebRequest``).
 
+A chat session gets the same kind of hooks as a settings object, with no file:
+see :func:`chat_hook_settings`.
+
 Files live under a per-port temp directory so two agents on one host don't sweep
 each other's files. They are removed on ``SessionEnd`` and swept on startup;
 crash orphans are cleared at the next boot.
@@ -50,7 +53,13 @@ _HOOK_TIMEOUT_SECONDS = 5
 # nothing, so it gets less patience than the hooks that carry an alert.
 _HEARTBEAT_TIMEOUT_SECONDS = 2
 
-# The hook *events* this file may ever register.
+# Where a chat session's hooks carry the per-agent token: the CLI fills the
+# header from the environment variable (see ``chat_hook_settings``).
+HOOK_TOKEN_ENV = "MOBAIDE_HOOK_TOKEN"
+HOOK_TOKEN_HEADER = "X-Mobaide-Hook-Token"
+
+# The hook *events* a terminal session's ``--settings`` file may ever register.
+# (A chat session's settings object has its own rule: see ``chat_hook_settings``.)
 #
 # Claude Code strips an unrecognised ``hooks.<Event>`` key with a validation
 # *warning*, and its startup path raises a blocking "invalid settings" dialog for
@@ -78,14 +87,17 @@ def _settings_path(port: int, session_id: str) -> Path:
     return _hooks_dir(port) / f"{session_id}.json"
 
 
+def _hook_url(session_id: str, port: int, kind: HookKind) -> str:
+    return (
+        f"http://127.0.0.1:{port}/internal/hook"
+        f"?session_id={quote(session_id, safe='')}"
+        f"&hook={kind.value}"
+    )
+
+
 def _build_settings(session_id: str, port: int, token: str) -> dict:
     def hook(kind: HookKind, timeout: int = _HOOK_TIMEOUT_SECONDS) -> dict:
-        url = (
-            f"http://127.0.0.1:{port}/internal/hook"
-            f"?session_id={quote(session_id, safe='')}"
-            f"&token={quote(token, safe='')}"
-            f"&hook={kind.value}"
-        )
+        url = f"{_hook_url(session_id, port, kind)}&token={quote(token, safe='')}"
         return {"type": "http", "url": url, "timeout": timeout}
 
     return {
@@ -105,6 +117,42 @@ def _build_settings(session_id: str, port: int, token: str) -> dict:
                 },
             ],
             "SessionEnd": [{"matcher": "*", "hooks": [hook(HookKind.END)]}],
+        },
+    }
+
+
+def chat_hook_settings(session_id: str, port: int) -> dict:
+    """The hook settings of a chat session, as a settings object.
+
+    The adapter hands the object to the CLI as a ``--settings`` argument, which
+    every local user can read, so the token is not in the hook URL: each hook
+    sends it in a header the CLI fills from ``HOOK_TOKEN_ENV``. A CLI that may
+    not read that variable sends no valid token, and the session works as one
+    with no hooks. ``StopFailure`` is newer than ``REGISTERED_HOOK_EVENTS`` but
+    safe here: with no terminal, an unknown event is dropped and no dialog blocks.
+    """
+    def hook(kind: HookKind, timeout: int = _HOOK_TIMEOUT_SECONDS) -> dict:
+        return {
+            "type": "http",
+            "url": _hook_url(session_id, port, kind),
+            "timeout": timeout,
+            "headers": {HOOK_TOKEN_HEADER: f"${HOOK_TOKEN_ENV}"},
+            "allowedEnvVars": [HOOK_TOKEN_ENV],
+        }
+
+    return {
+        "hooks": {
+            "Stop": [{"matcher": "*", "hooks": [hook(HookKind.STOP)]}],
+            "StopFailure": [{"matcher": "*", "hooks": [hook(HookKind.STOP_FAILURE)]}],
+            "UserPromptSubmit": [
+                {"matcher": "*", "hooks": [hook(HookKind.PROMPT_SUBMIT)]},
+            ],
+            "PreToolUse": [
+                {
+                    "matcher": "*",
+                    "hooks": [hook(HookKind.TOOL, _HEARTBEAT_TIMEOUT_SECONDS)],
+                },
+            ],
         },
     }
 

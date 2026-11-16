@@ -70,13 +70,17 @@ from tests.test_acp_install import fake_npm
 
 
 class FakeLauncher:
-    """The two ``ClaudeLauncher`` calls a chat spec makes."""
+    """What a chat spec uses of a ``ClaudeLauncher``: two calls and its hook endpoint."""
 
     def __init__(
-        self, binary: str | None = "/opt/claude/bin/claude", env: dict[str, str] | None = None
+        self,
+        binary: str | None = "/opt/claude/bin/claude",
+        env: dict[str, str] | None = None,
+        hook_endpoint: tuple[int, str] | None = None,
     ) -> None:
         self.binary = binary
         self.env = env or {}
+        self.hook_endpoint = hook_endpoint
         self.built: list[tuple[object, ClaudeOptions, str | None]] = []
 
     def resolve_binary(self) -> str:
@@ -456,6 +460,25 @@ class TestPrepare:
         plan = await spec.prepare(AdHocLaunch(cwd="/work"), ClaudeOptions())
 
         assert plan.trust is None
+
+    @pytest.mark.parametrize(
+        ("spec_fields", "port", "token"),
+        [({"command_override": "adapter"}, 9001, "tok-1"), ({"test_mode": True}, None, None)],
+        ids=["adapter", "fake-agent"],
+    )
+    async def test_plan_carries_the_hook_port_and_the_token_only_in_the_env(
+        self, bin_dir, spec_fields, port, token
+    ):
+        # The CLI's hooks read the token from its environment: every local
+        # user can read a process's arguments. The fake agent runs no Claude
+        # Code, so nothing would send its hooks.
+        spec = ClaudeChatSpec(FakeLauncher(hook_endpoint=(9001, "tok-1")), **spec_fields)
+
+        plan = await spec.prepare(AdHocLaunch(cwd="/work"), ClaudeOptions())
+
+        assert plan.hook_port == port
+        assert plan.env.get("MOBAIDE_HOOK_TOKEN") == token
+        assert not any("tok-1" in arg for arg in plan.argv)
 
     async def test_catalog_plan_runs_in_home_with_the_claude_preset(self, bin_dir):
         spec = ClaudeChatSpec(FakeLauncher(), command_override="adapter")

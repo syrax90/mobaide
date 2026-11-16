@@ -8,8 +8,10 @@ signing in from the chat (``sign_in`` and ``/login``),
 turns that another app on the PC runs in a shared Codex session (a Stop it
 never answers, a turn already running when the chat opens), extra folders
 (``additionalDirectories``), the Antigravity model name resolved into the
-session's options, Antigravity's "conversation already open" lock, and
-Cursor's own requests (questions, a plan to accept or to start, tasks).
+session's options, Antigravity's "conversation already open" lock,
+Cursor's own requests (questions, a plan to accept or to start, tasks), and
+Claude Code's hooks in a Claude chat (work a turn leaves behind, turns the
+agent starts by itself).
 
 ``TimelineMirror`` keeps what a chat client keeps, applied from the
 session's ``'a'`` frames the way the clients do it: a new epoch or a gap
@@ -51,6 +53,8 @@ from mobaide.acp.install import AdapterInstallError
 from mobaide.acp.presence import ConversationPresence
 from mobaide.acp.session import ChatSession
 from mobaide.core.attention_dedupe import SharedTurnDedupe, real_cwd
+from mobaide.core.attention_gate import AttentionGate, HookKind
+from mobaide.core.hook_settings import chat_hook_settings
 from mobaide.core.models import SessionConfig, SessionKind, SessionState
 
 pytestmark = pytest.mark.timeout(60)
@@ -3930,3 +3934,597 @@ class TestSignIn:
         assert m.session.pid != old_pid
         assert m.texts("user") == ["hello"]
         assert m.texts("error") == []
+
+
+# Every prompt streams "Working" and is answered (``end_turn``) only once the
+# file named by argv[1] exists. Advertises steering and answers it as
+# claude-agent-acp does with no prompt of its own in flight (``promptRequired``).
+HELD_TURN_AGENT = r"""
+import json, os, sys, time
+release = sys.argv[1]
+options = dict(arg.split("=", 1) for arg in sys.argv[2:])
+after_answer = options.get("after_answer")
+log = open(options["log"], "a", encoding="utf-8") if "log" in options else None
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+def chunk(text):
+    send({"method": "session/update", "params": {"sessionId": "held", "update": {
+        "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}}})
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg or "method" not in msg:
+        continue
+    method = msg["method"]
+    if log is not None:
+        log.write(method + "\n")
+        log.flush()
+    if method == "initialize":
+        result = {"protocolVersion": 1, "_meta": {"steering": {"supported": True}}, "agentCapabilities": {}}
+    elif method == "session/new":
+        result = {"sessionId": "held"}
+    elif method == "_session/steering":
+        result = {"outcome": "promptRequired"}
+    elif method == "session/prompt":
+        chunk("Working")
+        while not os.path.exists(release):
+            time.sleep(0.02)
+        send({"id": msg["id"], "result": {"stopReason": "end_turn"}})
+        if after_answer:
+            chunk(after_answer)
+        continue
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+
+
+def _held_turn_agent(release, **options: Any) -> list[str]:
+    return [
+        sys.executable,
+        "-c",
+        HELD_TURN_AGENT,
+        str(release),
+        *(f"{name}={value}" for name, value in options.items()),
+    ]
+
+
+class _GateWindow:
+    def __init__(self, callback: Callable[[], None]) -> None:
+        self.callback = callback
+        self.done = False
+
+    def cancel(self) -> None:
+        self.done = True
+
+
+class GateWindows:
+    """The quiet windows the sessions' attention gates arm with
+    ``loop.call_later``. One elapses only on ``elapse()``; every other timer
+    of the loop runs as usual."""
+
+    def __init__(self, call_later: Callable[..., Any]) -> None:
+        self._call_later = call_later
+        self._windows: list[_GateWindow] = []
+
+    def call_later(self, delay: float, callback: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        if not isinstance(getattr(callback, "__self__", None), AttentionGate):
+            return self._call_later(delay, callback, *args, **kwargs)
+        window = _GateWindow(callback)
+        self._windows.append(window)
+        return window
+
+    @property
+    def pending(self) -> int:
+        return sum(1 for window in self._windows if not window.done)
+
+    def elapse(self) -> int:
+        """Run every armed window; return how many were still armed."""
+        due = [window for window in self._windows if not window.done]
+        for window in due:
+            window.done = True
+            window.callback()
+        return len(due)
+
+
+@pytest.fixture
+async def gate_windows(monkeypatch) -> GateWindows:
+    loop = asyncio.get_running_loop()
+    windows = GateWindows(loop.call_later)
+    monkeypatch.setattr(loop, "call_later", windows.call_later)
+    return windows
+
+
+HOOK_PORT = 9100
+# What the CLI submits by itself when background work reports back.
+TASK_NOTIFICATION = "<task-notification>\n"
+
+
+def _background(task_type: str, status: str = "running") -> dict[str, Any]:
+    return {"background_tasks": [{"id": "t1", "type": task_type, "status": status}]}
+
+
+class TestClaudeHooks:
+    """A Claude chat with a hook port reads Claude Code's hooks, which the
+    ``/internal/hook`` router hands to ``on_claude_hook``. The prompt answer
+    still ends a turn on the chat screen; the hooks decide when the session
+    reads idle and alerts, and they show a turn the agent starts by itself."""
+
+    async def _turn(
+        self, m: TimelineMirror, release: Path, *hooks: tuple[HookKind, dict[str, Any]]
+    ) -> None:
+        """One turn the user sends; ``hooks`` arrive before the prompt is answered."""
+        await m.command("prompt", text="work")
+        await m.until(lambda: "Working" in m.texts("agent"))
+        for kind, payload in hooks:
+            m.session.on_claude_hook(kind, payload)
+        release.touch()
+        await m.until(lambda: m.status == "ready")
+
+    async def _agent_starts_a_turn(self, m: TimelineMirror, prompt_id: str = "p1") -> None:
+        m.session.on_claude_hook(
+            HookKind.PROMPT_SUBMIT, {"prompt_id": prompt_id, "prompt": TASK_NOTIFICATION}
+        )
+        await m.until(lambda: m.status == "running")
+
+    @pytest.mark.parametrize(
+        ("load_session_id", "port"),
+        [(None, HOOK_PORT), ("conv-9", HOOK_PORT), (None, None)],
+        ids=["new", "load", "no-hook-port"],
+    )
+    async def test_hook_settings_go_to_the_agent_with_the_session(
+        self, open_chat, tmp_path, load_session_id, port
+    ):
+        """The URLs carry the Mobaide session id (the router finds the
+        session by it), not the agent's conversation id."""
+        log = tmp_path / "agent.log"
+
+        m = await open_chat(
+            load_session_id=load_session_id,
+            argv=_params_agent(log, advertises_dirs=False),
+            hook_port=port,
+        )
+
+        assert m.status == "ready"
+        expected = None
+        if port is not None:
+            settings = chat_hook_settings(m.session.session_id, port)
+            expected = {"claudeCode": {"options": {"settings": settings}}}
+        assert _setup_params(log).get("_meta") == expected
+
+    @pytest.mark.parametrize(
+        ("left_behind", "activity"), [("workflow", "working"), ("shell", "waiting")]
+    )
+    async def test_work_a_turn_leaves_behind_holds_ready_back(
+        self, open_chat, gate_windows, tmp_path, left_behind, activity
+    ):
+        release = tmp_path / "release"
+        m = await open_chat(argv=_held_turn_agent(release), hook_port=HOOK_PORT)
+
+        await self._turn(
+            m,
+            release,
+            (HookKind.PROMPT_SUBMIT, {"prompt_id": "p1", "prompt": "work"}),
+            (HookKind.STOP, {"prompt_id": "p1", **_background(left_behind)}),
+        )
+
+        info = m.session.to_info()
+        assert info.activity == activity
+        assert info.attention is None
+        assert gate_windows.pending == 0
+
+    @pytest.mark.parametrize("stop_hook", [True, False], ids=["stop-hook", "stop-hook-lost"])
+    async def test_a_finished_turn_alerts_after_the_quiet_window(
+        self, open_chat, gate_windows, tmp_path, stop_hook
+    ):
+        """The window absorbs a task notification that is already on its way.
+        A turn whose ``Stop`` hook was lost ends the same way."""
+        release = tmp_path / "release"
+        m = await open_chat(argv=_held_turn_agent(release), hook_port=HOOK_PORT)
+        hooks = [(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1", "prompt": "work"})]
+        if stop_hook:
+            hooks.append((HookKind.STOP, {"prompt_id": "p1", "background_tasks": []}))
+
+        await self._turn(m, release, *hooks)
+
+        info = m.session.to_info()
+        assert (info.activity, info.attention) == ("working", None)
+        assert gate_windows.elapse() == 1
+        await m.until(lambda: "turn_finished" in m.attention)
+        assert m.session.to_info().activity == "idle"
+
+    async def test_a_stop_hook_waits_for_the_prompt_answer(
+        self, open_chat, gate_windows, tmp_path
+    ):
+        """The answer can come long after the ``Stop`` hook. Until it does the
+        chat shows the turn as running, so "turn finished" would be wrong."""
+        release = tmp_path / "release"
+        m = await open_chat(argv=_held_turn_agent(release), hook_port=HOOK_PORT)
+        await m.command("prompt", text="work")
+        await m.until(lambda: "Working" in m.texts("agent"))
+        m.session.on_claude_hook(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1", "prompt": "work"})
+        m.session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1", "background_tasks": []})
+
+        gate_windows.elapse()
+
+        info = m.session.to_info()
+        assert (info.activity, info.attention) == ("working", None)
+        assert m.status == "running"
+
+        release.touch()
+        await m.until(lambda: m.status == "ready")
+        assert m.session.to_info().attention is None
+        assert gate_windows.elapse() == 1
+        await m.until(lambda: "turn_finished" in m.attention)
+        assert m.attention == ["turn_finished"]
+
+    async def _next_turn_begins_before_the_answer(
+        self, m: TimelineMirror, release: Path
+    ) -> None:
+        """A task notification that already waited starts the agent's next
+        turn before the prompt of the turn before is answered."""
+        await m.command("prompt", text="work")
+        await m.until(lambda: "Working" in m.texts("agent"))
+        m.session.on_claude_hook(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1", "prompt": "work"})
+        m.session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1", "background_tasks": []})
+        m.session.on_claude_hook(
+            HookKind.PROMPT_SUBMIT, {"prompt_id": "p2", "prompt": TASK_NOTIFICATION}
+        )
+        release.touch()
+        # The agent sends this text after the answer.
+        await m.until(lambda: any("Next turn" in text for text in m.texts("agent")))
+
+    @pytest.mark.parametrize("ended_by", ["stop-hook", "the-user"])
+    async def test_a_turn_that_begins_before_the_answer_takes_the_chat_over(
+        self, open_chat, gate_windows, tmp_path, ended_by
+    ):
+        """The ``Stop`` of the answered prompt ends nothing any more: the
+        chat stays running, as the agent's own turn, until that turn ends."""
+        release = tmp_path / "release"
+        m = await open_chat(
+            argv=_held_turn_agent(release, after_answer="Next turn"), hook_port=HOOK_PORT
+        )
+
+        await self._next_turn_begins_before_the_answer(m, release)
+
+        info = m.session.to_info()
+        assert m.session.timeline.state["status"] == "running"
+        assert (info.activity, info.attention) == ("working", None)
+        assert gate_windows.pending == 0
+
+        if ended_by == "the-user":
+            cancelled = await m.command("cancel")
+            await m.until(lambda: m.status == "ready" and m.state["cancelling"] is False)
+
+            assert cancelled["data"] == {"cancelled": True}
+            info = m.session.to_info()
+            assert (info.activity, info.attention) == ("idle", None)
+            assert gate_windows.pending == 0
+        else:
+            m.session.on_claude_hook(HookKind.STOP, {"prompt_id": "p2", "background_tasks": []})
+            await m.until(lambda: m.status == "ready")
+
+            assert m.session.to_info().attention is None
+            assert gate_windows.elapse() == 1
+            await m.until(lambda: "turn_finished" in m.attention)
+            assert m.session.to_info().activity == "idle"
+            assert m.attention == ["turn_finished"]
+
+    async def test_a_sub_agent_that_hands_back_before_the_answer_ends_the_turn_once(
+        self, open_chat, gate_windows, tmp_path
+    ):
+        """The prompt is held open across the hand-back: the second ``Stop``
+        is the one that counts, and the prompt answer ends the turn as usual."""
+        release = tmp_path / "release"
+        m = await open_chat(argv=_held_turn_agent(release), hook_port=HOOK_PORT)
+
+        await self._turn(
+            m,
+            release,
+            (HookKind.PROMPT_SUBMIT, {"prompt_id": "p1", "prompt": "work"}),
+            (HookKind.STOP, {"prompt_id": "p1", **_background("subagent")}),
+            (HookKind.PROMPT_SUBMIT, {"prompt_id": "p2", "prompt": "<agent-message from="}),
+            (HookKind.STOP, {"prompt_id": "p2", **_background("subagent", "completed")}),
+        )
+
+        assert m.session.to_info().attention is None
+        assert gate_windows.elapse() == 1
+        await m.until(lambda: "turn_finished" in m.attention)
+        assert m.session.to_info().activity == "idle"
+        assert m.attention == ["turn_finished"]
+
+    async def test_a_hand_back_that_fails_before_the_answer_leaves_no_running_turn(
+        self, open_chat, gate_windows, tmp_path
+    ):
+        """The hand-back cycle hit an API error, so no ``Stop`` follows its
+        ``UserPromptSubmit``. The prompt answer must still end the turn: a
+        chat that waits for that ``Stop`` would hold every new message."""
+        release = tmp_path / "release"
+        m = await open_chat(argv=_held_turn_agent(release), hook_port=HOOK_PORT)
+
+        await self._turn(
+            m,
+            release,
+            (HookKind.PROMPT_SUBMIT, {"prompt_id": "p1", "prompt": "work"}),
+            (HookKind.STOP, {"prompt_id": "p1", **_background("subagent")}),
+            (HookKind.PROMPT_SUBMIT, {"prompt_id": "p2", "prompt": "<agent-message from="}),
+            (HookKind.STOP_FAILURE, {"prompt_id": "p2"}),
+        )
+
+        assert m.state["turn_started_at"] is None
+        assert m.session.to_info().attention is None
+        assert gate_windows.elapse() == 1
+        await m.until(lambda: "turn_finished" in m.attention)
+        assert m.session.to_info().activity == "idle"
+        assert m.attention == ["turn_finished"]
+
+        sent = await m.command("prompt", text="next")
+        await m.until(lambda: m.status == "ready" and m.texts("agent").count("Working") == 2)
+
+        assert sent["data"] == {"queued": False, "queue_id": None}
+        assert m.texts("user") == ["work", "next"]
+
+    async def test_work_left_behind_survives_a_queued_turn_with_no_hooks(
+        self, open_chat, gate_windows, tmp_path
+    ):
+        """No alert comes between two prompts, but the workflow the first one
+        left behind still runs when the second one, a local command, ends."""
+        release = tmp_path / "release"
+        m = await open_chat(argv=_held_turn_agent(release), hook_port=HOOK_PORT)
+        await m.command("prompt", text="work")
+        await m.until(lambda: "Working" in m.texts("agent"))
+        queued = await m.command("prompt", text="second")
+        assert queued["data"]["queued"] is True
+        m.session.on_claude_hook(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1", "prompt": "work"})
+        m.session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1", **_background("workflow")})
+
+        release.touch()
+        await m.until(
+            lambda: m.status == "ready" and m.texts("agent").count("Working") == 2
+        )
+
+        assert m.texts("user") == ["work", "second"]
+        info = m.session.to_info()
+        assert (info.activity, info.attention) == ("working", None)
+        assert gate_windows.pending == 0
+        assert "turn_finished" not in m.attention
+
+    async def test_a_turn_with_no_hooks_keeps_the_work_left_behind(
+        self, open_chat, gate_windows
+    ):
+        """A local slash command runs no hook. It says nothing about the
+        workflow the turn before left behind, so that one still runs."""
+        m = await open_chat(argv=MINI_AGENT_ARGV, hook_port=HOOK_PORT)
+        await self._agent_starts_a_turn(m)
+        m.session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1", **_background("workflow")})
+        await m.until(lambda: m.status == "ready")
+
+        await m.command("prompt", text="hello")
+        await m.until(_turn_done(m, "echo hello"))
+
+        info = m.session.to_info()
+        assert (info.activity, info.attention) == ("working", None)
+        assert gate_windows.pending == 0
+
+    async def test_a_hook_after_the_agent_process_exited_changes_nothing(
+        self, open_chat, gate_windows
+    ):
+        """A hook that was on its way when the process died must not show a
+        running turn in a chat that waits for Restart."""
+        m = await open_chat(hook_port=HOOK_PORT)
+        await m.command("prompt", text="crash now")
+        await m.until(lambda: m.status == "error")
+
+        m.session.on_claude_hook(
+            HookKind.PROMPT_SUBMIT, {"prompt_id": "p1", "prompt": TASK_NOTIFICATION}
+        )
+        m.session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1"})
+        refused = await m.command("prompt", text="hello?")
+
+        assert refused["error"] == "The agent is not running. Use Restart to start it again."
+        assert m.status == "error"
+        info = m.session.to_info()
+        assert (info.activity, info.attention) == (None, "ended")
+        assert gate_windows.pending == 0
+
+    async def test_the_next_prompt_ends_the_quiet_window_of_the_turn_before(
+        self, open_chat, gate_windows, tmp_path
+    ):
+        """The user answers inside the window, and the ``UserPromptSubmit``
+        hook of the new prompt is not there yet (or was lost): the turn before
+        must not say "turn finished" while this one runs."""
+        release = tmp_path / "release"
+        m = await open_chat(argv=_held_turn_agent(release), hook_port=HOOK_PORT)
+        await self._turn(
+            m,
+            release,
+            (HookKind.PROMPT_SUBMIT, {"prompt_id": "p1", "prompt": "work"}),
+            (HookKind.STOP, {"prompt_id": "p1", "background_tasks": []}),
+        )
+        assert gate_windows.pending == 1
+
+        release.unlink()
+        await m.command("prompt", text="work")
+        await m.until(lambda: m.status == "running")
+        gate_windows.elapse()
+
+        info = m.session.to_info()
+        assert (info.activity, info.attention) == ("working", None)
+
+        # The new turn still alerts at its own end, once.
+        release.touch()
+        await m.until(lambda: m.status == "ready")
+        assert gate_windows.elapse() == 1
+        await m.until(lambda: "turn_finished" in m.attention)
+        assert m.attention == ["turn_finished"]
+
+    async def test_a_cli_that_sends_no_hooks_alerts_when_the_prompt_is_answered(
+        self, open_chat, gate_windows
+    ):
+        m = await open_chat(hook_port=HOOK_PORT)
+
+        await m.command("prompt", text="hello")
+        await m.until(_turn_done(m, "You said: hello"))
+
+        info = m.session.to_info()
+        assert (info.activity, info.attention) == ("idle", "turn_finished")
+        assert gate_windows.pending == 0
+
+    async def test_a_turn_the_agent_starts_by_itself_runs_and_alerts_at_its_end(
+        self, open_chat, gate_windows, tmp_path
+    ):
+        """The reported bug: the turn left a workflow behind, the chat said
+        Ready at once, and nothing told the user when the work really ended."""
+        release = tmp_path / "release"
+        m = await open_chat(argv=_held_turn_agent(release), hook_port=HOOK_PORT)
+        await self._turn(
+            m,
+            release,
+            (HookKind.PROMPT_SUBMIT, {"prompt_id": "p1", "prompt": "work"}),
+            (HookKind.STOP, {"prompt_id": "p1", **_background("workflow")}),
+        )
+
+        await self._agent_starts_a_turn(m, "p2")
+
+        assert m.state["turn_started_at"] is not None
+        assert _notices(m) == []
+        assert m.session.to_info().activity == "working"
+
+        m.session.on_claude_hook(
+            HookKind.STOP, {"prompt_id": "p2", **_background("workflow", "completed")}
+        )
+        await m.until(lambda: m.status == "ready")
+
+        assert m.state["turn_started_at"] is None
+        assert m.session.to_info().attention is None
+        assert gate_windows.elapse() == 1
+        await m.until(lambda: "turn_finished" in m.attention)
+        assert m.session.to_info().activity == "idle"
+        assert m.attention == ["turn_finished"]
+
+        # The agent wakes once more: the alert of the turn before is void.
+        await self._agent_starts_a_turn(m, "p3")
+
+        assert m.session.to_info().attention is None
+
+    @pytest.mark.parametrize("end", [HookKind.STOP, HookKind.STOP_FAILURE], ids=["stop", "failure"])
+    async def test_a_message_sent_during_the_agents_own_turn_waits_for_its_end(
+        self, open_chat, gate_windows, end
+    ):
+        """After a failure too: the message that starts now reports its own end."""
+        m = await open_chat(argv=MINI_AGENT_ARGV, hook_port=HOOK_PORT)
+        await self._agent_starts_a_turn(m)
+        queued = await m.command("prompt", text="hello")
+        assert queued["data"]["queued"] is True
+        assert m.texts("user") == []
+
+        m.session.on_claude_hook(end, {"prompt_id": "p1"})
+        await m.until(_turn_done(m, "echo hello"))
+
+        assert m.texts("user") == ["hello"]
+        assert m.state["queue"] == []
+        assert m.session.to_info().attention is None
+        assert gate_windows.elapse() == 1
+        await m.until(lambda: "turn_finished" in m.attention)
+        assert "turn_failed" not in m.attention
+
+    async def test_send_now_during_the_agents_own_turn_sends_the_message_as_a_prompt(
+        self, open_chat, gate_windows, tmp_path
+    ):
+        """The adapter steers only a turn it got as a prompt, so
+        ``_session/steering`` would do nothing here. A prompt sent now joins
+        the turn the agent runs, and this session's turn takes it over."""
+        release = tmp_path / "release"
+        log = tmp_path / "agent.log"
+        m = await open_chat(argv=_held_turn_agent(release, log=log), hook_port=HOOK_PORT)
+        assert m.state["steering"] is True
+        await self._agent_starts_a_turn(m)
+        queued = await m.command("prompt", text="also check the README")
+        assert queued["data"]["queued"] is True
+
+        steered = await m.command("steer", queue_id=queued["data"]["queue_id"])
+        await m.until(lambda: "Working" in m.texts("agent"))
+
+        assert steered["data"] == {"steered": True}
+        assert m.state["queue"] == []
+        assert m.texts("user") == ["also check the README"]
+        assert m.status == "running"
+        sent = [x for x in _methods(log) if x in ("session/prompt", "_session/steering")]
+        assert sent == ["session/prompt"]
+
+        m.session.on_claude_hook(
+            HookKind.PROMPT_SUBMIT, {"prompt_id": "p2", "prompt": "also check the README"}
+        )
+        m.session.on_claude_hook(HookKind.STOP, {"prompt_id": "p2", "background_tasks": []})
+        release.touch()
+        await m.until(lambda: m.status == "ready")
+
+        assert m.session.to_info().attention is None
+        assert gate_windows.elapse() == 1
+        await m.until(lambda: "turn_finished" in m.attention)
+        assert m.session.to_info().activity == "idle"
+        assert m.attention == ["turn_finished"]
+
+    async def test_a_failed_turn_of_the_agents_own_alerts_turn_failed(
+        self, open_chat, gate_windows
+    ):
+        m = await open_chat(argv=MINI_AGENT_ARGV, hook_port=HOOK_PORT)
+        await self._agent_starts_a_turn(m)
+
+        m.session.on_claude_hook(HookKind.STOP_FAILURE, {"prompt_id": "p1"})
+        await m.until(lambda: m.status == "ready")
+
+        info = m.session.to_info()
+        assert (info.activity, info.attention) == ("idle", "turn_failed")
+        assert gate_windows.pending == 0
+
+    @pytest.mark.parametrize("own_turn", [True, False], ids=["sent-by-the-user", "started-by-the-agent"])
+    async def test_a_stopped_turn_reads_idle_and_a_late_tool_call_does_not_revive_it(
+        self, open_chat, gate_windows, tmp_path, own_turn
+    ):
+        """An interrupt fires no ``Stop`` hook, and no prompt answer ends a
+        turn the agent started: the user's Stop has to end both."""
+        log = tmp_path / "agent.log"
+        m = await open_chat(argv=_logging_agent(log), hook_port=HOOK_PORT)
+        if own_turn:
+            await m.command("prompt", text="work")
+            await m.until(lambda: "Working" in m.texts("agent"))
+        await self._agent_starts_a_turn(m)
+        m.session.on_claude_hook(HookKind.TOOL, {"prompt_id": "p1"})
+
+        cancelled = await m.command("cancel")
+        await m.until(lambda: m.status == "ready" and m.state["cancelling"] is False)
+        # A tool call that was on its way when the turn was stopped.
+        m.session.on_claude_hook(HookKind.TOOL, {"prompt_id": "p1"})
+
+        assert cancelled["data"] == {"cancelled": True}
+        info = m.session.to_info()
+        assert (info.activity, info.attention) == ("idle", None)
+        assert gate_windows.pending == 0
+        await m.session.stop()
+        assert "session/cancel" in _methods(log)
+
+    async def test_a_restart_forgets_what_the_old_agent_process_reported(
+        self, open_chat, gate_windows
+    ):
+        m = await open_chat(hook_port=HOOK_PORT)
+        await self._agent_starts_a_turn(m)
+        m.session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1", **_background("workflow")})
+        await m.until(lambda: m.status == "ready")
+        assert m.session.to_info().activity == "working"
+
+        await m.command("prompt", text="crash now")
+        await m.until(lambda: m.status == "error")
+        assert (await m.command("restart"))["ok"] is True
+        await m.until(lambda: m.status == "ready")
+
+        assert m.session.to_info().activity == "idle"
+        # The new process has sent no hook yet, so the prompt answer alerts.
+        await m.command("prompt", text="hello")
+        await m.until(_turn_done(m, "You said: hello"))
+        assert m.session.to_info().attention == "turn_finished"
+        assert gate_windows.pending == 0
