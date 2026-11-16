@@ -411,6 +411,56 @@ struct AgentAPI: Sendable {
         try await execute(method: "POST", url: "\(try await base())/api/autoscan/run-now", body: RunNowRequest(project_name: projectName))
     }
 
+    // MARK: - Herdr
+
+    func getHerdr() async throws -> HerdrSnapshot {
+        try await execute(method: "GET", url: "\(try await base())/api/herdr")
+    }
+
+    func openHerdrPane(serverId: String, paneId: String) async throws -> HerdrOpenPaneResponse {
+        try await execute(
+            method: "POST",
+            url: "\(try await base())/api/herdr/pane/open",
+            body: HerdrPaneTarget(server_id: serverId, pane_id: paneId)
+        )
+    }
+
+    func setHerdrControl(serverId: String, paneId: String, control: Bool, clientId: String) async throws {
+        try await executeRaw(
+            method: "POST",
+            url: "\(try await base())/api/herdr/pane/control",
+            body: HerdrControlRequest(
+                server_id: serverId, pane_id: paneId, control: control, client_id: clientId
+            )
+        )
+    }
+
+    /// The ids travel in the query: a pane id carries `:` and can carry `/`.
+    func getHerdrPaneText(serverId: String, paneId: String, lines: Int) async throws -> HerdrPaneTextResponse {
+        let query = "server_id=\(Self.encodeQueryValue(serverId))&pane_id=\(Self.encodeQueryValue(paneId))&lines=\(lines)"
+        return try await execute(method: "GET", url: "\(try await base())/api/herdr/pane/text?\(query)")
+    }
+
+    func createHerdrTerminal(_ request: HerdrCreateRequest) async throws -> HerdrCreateResponse {
+        try await execute(method: "POST", url: "\(try await base())/api/herdr/terminals", body: request)
+    }
+
+    func startHerdrAgent(serverId: String, paneId: String, agent: String) async throws {
+        try await executeRaw(
+            method: "POST",
+            url: "\(try await base())/api/herdr/pane/agent",
+            body: HerdrStartAgentRequest(server_id: serverId, pane_id: paneId, agent: agent)
+        )
+    }
+
+    func renameHerdrItem(_ request: HerdrRenameRequest) async throws {
+        try await executeRaw(method: "POST", url: "\(try await base())/api/herdr/rename", body: request)
+    }
+
+    func closeHerdrItem(_ request: HerdrCloseRequest) async throws {
+        try await executeRaw(method: "POST", url: "\(try await base())/api/herdr/close", body: request)
+    }
+
     // MARK: - Plumbing
 
     /// Java `URLEncoder.encode(name, "UTF-8").replace("+", "%20")` parity:

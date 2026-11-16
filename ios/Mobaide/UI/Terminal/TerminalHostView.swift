@@ -85,12 +85,43 @@ final class MobaideTerminalView: TerminalView {
         super.pressesBegan(presses, with: event)
     }
 
+    /// The size of the terminal text, and the smallest a watched Herdr pane
+    /// shrinks to before it pans instead.
+    static let baseFontSize: CGFloat = 13
+    static let minRemoteFontSize: CGFloat = 7
+
+    static func terminalFont(ofSize size: CGFloat) -> UIFont {
+        UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
+    }
+
+    /// The grid of a watched Herdr pane, or nil when this client owns the size.
+    ///
+    /// The frames of a pane address cells by absolute position, so the emulator
+    /// must have exactly the pane's grid before the next bytes are fed. The
+    /// emulator is therefore resized here, at once, and the host then gives the
+    /// view the font and the frame that show that grid.
+    var remoteGrid: TerminalGrid? {
+        didSet {
+            guard remoteGrid != oldValue else { return }
+            if let grid = remoteGrid {
+                let terminal = getTerminal()
+                if terminal.cols != grid.cols || terminal.rows != grid.rows {
+                    resize(cols: grid.cols, rows: grid.rows)
+                }
+            }
+            if let host = superview {
+                host.setNeedsLayout()
+                host.layoutIfNeeded()
+            }
+        }
+    }
+
     func configureAppearance() {
         nativeBackgroundColor = UIColor(MobaideColors.terminalBackground)
         nativeForegroundColor = UIColor(MobaideColors.terminalForeground)
         backgroundColor = UIColor(MobaideColors.terminalBackground)
         caretColor = UIColor(MobaideColors.terminalCursor)
-        font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        font = Self.terminalFont(ofSize: Self.baseFontSize)
         // Drop SwiftTerm's `TerminalAccessory` (sticky-Ctrl bar) installed by
         // its `setup()`. The property is settable-public (not overridable), and
         // the accessory is installed exactly once at init, so a one-time nil

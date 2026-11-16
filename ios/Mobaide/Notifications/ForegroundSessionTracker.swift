@@ -19,6 +19,7 @@ import os
 final class ForegroundSessionTracker: Sendable {
     private struct State {
         var visible: String?
+        var visibleHerdrPane: String?
         var holds: [String: Int] = [:]
     }
 
@@ -41,6 +42,28 @@ final class ForegroundSessionTracker: Sendable {
                 state.visible = nil
             }
         }
+    }
+
+    /// The Herdr pane on screen, as a `herdrPaneKey`; its own alerts are suppressed.
+    var visibleHerdrPane: String? {
+        state.withLock { $0.visibleHerdrPane }
+    }
+
+    func setVisibleHerdrPane(_ key: String) {
+        state.withLock { $0.visibleHerdrPane = key }
+    }
+
+    func clearVisibleHerdrPane(_ key: String) {
+        state.withLock { state in
+            if state.visibleHerdrPane == key {
+                state.visibleHerdrPane = nil
+            }
+        }
+    }
+
+    /// The identity of one Herdr pane for alerts: its server and its pane id.
+    static func herdrPaneKey(serverId: String, paneId: String) -> String {
+        "\(serverId)\u{0}\(paneId)"
     }
 
     func holdWatch(_ sessionId: String) {

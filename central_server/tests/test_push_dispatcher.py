@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from central_server.push.content import attention_content
-from central_server.push.dispatcher import PushDispatcher
+from central_server.push.dispatcher import PushDispatcher, _push_target
 from central_server.push.sender import PushResult
 
 
@@ -81,15 +81,15 @@ class FakeSender:
     sent: list[dict] = field(default_factory=list)
     closed: bool = False
 
-    async def send(self, *, token, title, body, session_id, agent_id,
+    async def send(self, *, token, title, body, thread_id, data,
                    environment) -> PushResult:
         self.sent.append(
             {
                 "token": token,
                 "title": title,
                 "body": body,
-                "session_id": session_id,
-                "agent_id": agent_id,
+                "thread_id": thread_id,
+                "data": dict(data),
                 "environment": environment,
             }
         )
@@ -110,6 +110,46 @@ def _attention_payload(**overrides) -> dict:
     }
     payload.update(overrides)
     return payload
+
+
+def _herdr_payload(**overrides) -> dict:
+    payload = {
+        "server_id": "tui:default",
+        "pane_id": "w1:p1",
+        "reason": "awaiting_permission",
+        "title": "api refactor",
+        "agent": "claude",
+        "agent_id": "agent-1",
+    }
+    payload.update(overrides)
+    return payload
+
+
+class TestPushTarget:
+    def test_herdr_thread_id_fits_the_apns_collapse_limit(self):
+        # APNs rejects a collapse id over 64 bytes; a pane id has no fixed
+        # length, so the id is a digest and never the pane id itself.
+        thread_id, _ = _push_target(_herdr_payload(pane_id="p" * 200))
+
+        assert thread_id.startswith("herdr-")
+        assert len(thread_id.encode()) <= 64
+        assert thread_id == _push_target(_herdr_payload(pane_id="p" * 200))[0]
+
+    @pytest.mark.parametrize(
+        "other",
+        [
+            {"pane_id": "w1:p2"},
+            {"server_id": "tui:other"},
+            {"agent_id": "agent-2"},
+        ],
+        ids=["pane", "server", "agent"],
+    )
+    def test_herdr_thread_id_is_one_per_pane(self, other):
+        # Alerts of different panes must not collapse into one notification.
+        assert (
+            _push_target(_herdr_payload(**other))[0]
+            != _push_target(_herdr_payload())[0]
+        )
 
 
 async def _register_device(db, user_id, device_id, token=None, env="sandbox"):
@@ -143,8 +183,8 @@ class TestPushDispatcher:
         first = sender.sent[0]
         assert first["title"] == "Permission needed"
         assert first["body"] == "Fix the bug is waiting for your approval"
-        assert first["session_id"] == "s1"
-        assert first["agent_id"] == "agent-1"
+        assert first["thread_id"] == "s1"
+        assert first["data"] == {"session_id": "s1", "agent_id": "agent-1"}
 
     async def test_device_environment_wins_over_default(self, db, user_id):
         await _register_device(
@@ -232,6 +272,29 @@ class TestPushDispatcher:
         assert [(s["title"], s["body"]) for s in sender.sent] == [
             ("Turn failed", f"{label} hit an error — tap to see what happened"),
         ]
+
+    async def test_herdr_alert_opens_by_server_and_pane(self, db, user_id):
+        # A pane has no session until a client opens it, so the app opens the
+        # alert from the herdr keys and must never see a ``session_id``.
+        await _register_device(db, user_id, "dev-1", token="tok-1")
+        sender = FakeSender()
+        dispatcher = PushDispatcher(db, sender)
+
+        await dispatcher._send_attention(
+            user_id, _herdr_payload(), frozenset()
+        )
+
+        (sent,) = sender.sent
+        assert (sent["title"], sent["body"]) == (
+            "Permission needed",
+            "api refactor is waiting for your approval",
+        )
+        assert sent["data"] == {
+            "herdr_server_id": "tui:default",
+            "herdr_pane_id": "w1:p1",
+            "agent_id": "agent-1",
+        }
+        assert sent["thread_id"] == _push_target(_herdr_payload())[0]
 
     async def test_excluded_device_is_skipped_and_the_rest_still_push(
         self, db, user_id

@@ -8,6 +8,8 @@ import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.network.dto.AutoScanListResponse
 import com.mobaide.app.data.network.dto.GitJobResponse
+import com.mobaide.app.data.network.dto.HerdrAttention
+import com.mobaide.app.data.network.dto.HerdrSnapshot
 import com.mobaide.app.data.network.dto.VoiceStatusResponse
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -175,6 +177,12 @@ class AgentEventBus @Inject constructor(
                 )
                 "voice.changed" -> AgentEvent.VoiceChanged(
                     json.decodeFromJsonElement(VoiceStatusResponse.serializer(), payload)
+                )
+                "herdr.changed" -> AgentEvent.HerdrChanged(
+                    json.decodeFromJsonElement(HerdrSnapshot.serializer(), payload)
+                )
+                "herdr.attention" -> AgentEvent.HerdrAttentionRaised(
+                    json.decodeFromJsonElement(HerdrAttention.serializer(), payload)
                 )
                 "autoscan.status" -> AgentEvent.AutoScanStatus(
                     json.decodeFromJsonElement(AutoScanInstanceDto.serializer(), payload)

@@ -199,6 +199,24 @@ def _pin_voice_state_prefix(monkeypatch, tmp_path_factory):
     )
     yield
 
+@pytest.fixture(autouse=True)
+def _pin_herdr_discovery(monkeypatch, tmp_path_factory):
+    """Pin the Herdr backends' socket folders to an empty temp dir for every test.
+
+    Without this pin a test outside test mode would attach to the herdr
+    servers of the developer who runs the suite. Tests of the real lookups
+    capture the functions at import time.
+    """
+    from mobaide.herdr import core as herdr_core
+    from mobaide.herdr import tui as herdr_tui
+
+    empty = str(tmp_path_factory.mktemp("herdr"))
+    monkeypatch.setattr(herdr_tui, "config_dir", lambda *_: empty)
+    monkeypatch.setattr(herdr_core, "state_home", lambda: empty)
+    monkeypatch.setattr(herdr_tui, "installed_binaries", lambda *_: [])
+    yield
+
+
 TEST_JWT_SECRET = "test-secret-key-for-jwt-signing-do-not-use-in-prod"
 TEST_USERNAME = "testuser"
 TEST_PASSWORD = "testpass123"
@@ -425,6 +443,8 @@ def mock_session_manager():
     mgr = AsyncMock()
     mgr.list_sessions.return_value = []
     mgr.get_session.return_value = None
+    # Sync in ``SessionManager``: the relay reads it without ``await``.
+    mgr.external_sessions = MagicMock(return_value=[])
     return mgr
 
 
@@ -458,4 +478,7 @@ def mock_app_state():
     state = MagicMock()
     state.fanouts = {}
     state.autoscan_manager = MagicMock(name="autoscan_manager")
+    # No Herdr dashboard unless a test wires one in: a ``MagicMock`` attribute
+    # would read as a service and add ``capabilities.herdr``.
+    state.herdr = None
     return state

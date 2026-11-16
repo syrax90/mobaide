@@ -1,7 +1,7 @@
 """Tests for the aioapns-backed APNs sender (CLA-106).
 
 Covers the NotificationRequest wire shape (aps alert, collapse-id ==
-thread-id == session_id), the result mapping that decides token cleanup
+thread-id, custom payload keys), the result mapping that decides token cleanup
 (410 / Unregistered / BadDeviceToken), transport-error containment, lazy
 per-environment client caching, and pool shutdown. The dispatcher tests
 exercise everything above the ``ApnsSending`` seam with a FakeSender;
@@ -49,8 +49,8 @@ async def _send(sender: AioapnsSender, **overrides) -> PushResult:
         token="tok-1",
         title="Permission needed",
         body="Fix the bug is waiting for your approval",
-        session_id="s1",
-        agent_id="agent-1",
+        thread_id="s1",
+        data={"session_id": "s1", "agent_id": "agent-1"},
         environment="sandbox",
     )
     kwargs.update(overrides)
@@ -132,6 +132,23 @@ class TestNotificationRequestShape:
             "session_id": "s1",
             "agent_id": "agent-1",
         }
+
+    async def test_herdr_request_carries_the_pane_keys_and_no_session_id(self):
+        sender = _sender()
+        client = FakeApnsClient()
+        sender._clients["sandbox"] = client
+        data = {
+            "herdr_server_id": "tui:default",
+            "herdr_pane_id": "w1:p1",
+            "agent_id": "agent-1",
+        }
+
+        await _send(sender, thread_id="herdr-abc", data=data)
+
+        (request,) = client.requests
+        assert request.collapse_key == "herdr-abc"
+        assert request.message["aps"]["thread-id"] == "herdr-abc"
+        assert {k: v for k, v in request.message.items() if k != "aps"} == data
 
 
 class TestClientLifecycle:

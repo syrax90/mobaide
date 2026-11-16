@@ -16,10 +16,13 @@ import { terminalPath } from '../routes/sessions/terminalPath';
 export type NotificationPermissionState = 'granted' | 'denied' | 'default' | 'unsupported';
 
 export interface AttentionPost {
+  /** The alert's identity: a session id, or a Herdr pane tag. */
   sessionId: string;
   agentId?: string;
   title: string;
   body: string;
+  /** Where a click goes when the alert is not for a session (a Herdr pane). */
+  path?: string;
 }
 
 /**
@@ -101,7 +104,9 @@ export function postAttentionNotification(post: AttentionPost): boolean {
   shown.onclick = () => {
     window.focus();
     shown.close();
-    if (post.agentId !== undefined && post.agentId !== '') {
+    if (post.path !== undefined) {
+      navigate?.(post.path);
+    } else if (post.agentId !== undefined && post.agentId !== '') {
       navigate?.(terminalPath(post.agentId, post.sessionId));
     }
   };

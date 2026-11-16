@@ -230,6 +230,9 @@ def e2e_stack(request, xprocess):
         # inherited MOBAIDE_VOICE_DIR must not point it at a real install.
         "MOBAIDE_VOICE_FAKE": "1",
         "MOBAIDE_VOICE_DIR": "",
+        # One scripted herdr server; never the developer's real ones.
+        "MOBAIDE_HERDR_FAKE": "1",
+        "MOBAIDE_HERDR_ENABLED": "",
         "MOBAIDE_WORKTREES_DIR": str(agent_dir / "worktrees"),
         "LOG_FORMAT": "console",
         "LOG_LEVEL": "INFO",

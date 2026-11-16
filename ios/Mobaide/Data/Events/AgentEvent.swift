@@ -23,6 +23,10 @@ enum AgentEvent: Equatable, Sendable {
     case autoScanStatus(AutoScanInstanceDto)
     case autoScanListChanged(AutoScanListResponse)
     case autoScanEvent(projectName: String, seq: Int64, ts: String, payload: ScanProgressPayload)
+    /// The agent's whole Herdr state: on every change and on every connect.
+    case herdrChanged(HerdrSnapshot)
+    /// One-shot trigger: an agent in a Herdr pane needs the user.
+    case herdrAttention(HerdrAttention)
     case agentStatusChanged(agentId: String, online: Bool)
     case templateCreated(TemplateDto)
     case templateUpdated(TemplateDto)
@@ -106,6 +110,10 @@ enum AgentEnvelopeDemux {
             return decode(AutoScanListResponse.self, from: envelope).map { .autoScanListChanged($0) }
         case "autoscan.event":
             return demuxAutoScanEvent(envelope)
+        case "herdr.changed":
+            return decode(HerdrSnapshot.self, from: envelope).map { .herdrChanged($0) }
+        case "herdr.attention":
+            return decode(HerdrAttention.self, from: envelope).map { .herdrAttention($0) }
         default:
             return .unknownEnvelopeType(type: envelope.type, raw: text)
         }

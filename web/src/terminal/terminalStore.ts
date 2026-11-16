@@ -64,6 +64,8 @@ function touch(key: string, order: readonly string[]): string[] {
 export function acquireTerminal(
   agentId: string,
   sessionId: string,
+  /** See `TerminalSessionModelOptions.paneView`. Read only when the model is made. */
+  paneView = false,
 ): TerminalSessionModel {
   const key = sessionChannelName(agentId, sessionId);
   const { models, order } = useTerminalStore.getState();
@@ -74,6 +76,7 @@ export function acquireTerminal(
   }
 
   const model = new TerminalSessionModel(agentId, sessionId, {
+    paneView,
     onDispose: () => {
       forgetTerminal(key);
     },

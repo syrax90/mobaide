@@ -1,7 +1,10 @@
 package com.mobaide.app.ui.terminal
 
 import android.graphics.Typeface
+import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.view.ViewTreeObserver
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.layout.fillMaxSize
@@ -59,9 +62,14 @@ fun TerminalSurfaceView(
     requestKeyboard: Boolean = false,
     onKeyboardHandled: () -> Unit = {},
     pasteFromClipboardEnabled: Boolean = false,
+    /** The grid a watched Herdr pane dictates; null when this client owns the size. */
+    remoteGrid: TerminalGrid? = null,
     modifier: Modifier = Modifier,
 ) {
     val client = remember { TerminalViewClientImpl() }
+    val remoteFit = remember { RemoteGridFit() }
+    val currentRemoteGrid by rememberUpdatedState(remoteGrid)
+    val currentDisplayConfig by rememberUpdatedState(displayConfig)
     val terminalViewRef = remember { mutableStateOf<TerminalView?>(null) }
 
     // The cursor-anchor reporter feeds imeCursorCounterPan (keyboard cursor-follow).
@@ -125,6 +133,10 @@ fun TerminalSurfaceView(
 
     val layoutListener = remember(session) {
         ViewTreeObserver.OnGlobalLayoutListener {
+            // A dictated grid depends on the viewport, which this pass may have changed.
+            if (currentRemoteGrid != null) {
+                terminalViewRef.value?.applyGrid(currentDisplayConfig, currentRemoteGrid, remoteFit)
+            }
             val emu = session.emulator
             if (emu != null) onResize(emu.mRows, emu.mColumns)
             // Layout passes reflow the grid (composer toggle, display-config change,
@@ -209,7 +221,7 @@ fun TerminalSurfaceView(
                 // Replayed sessions carry content before the first live frame.
                 reportCursorAnchor(view)
             }
-            view.applyDisplayConfig(isStatic, staticCols)
+            view.applyGrid(displayConfig, remoteGrid, remoteFit)
             if (followMode && view.topRow != 0) {
                 // Bypasses onScreenUpdated, so re-anchor for the new topRow here.
                 view.topRow = 0
@@ -227,6 +239,95 @@ fun TerminalSurfaceView(
 
 /** Rows of slack under the cursor row included in the reported anchor — see the reporter above. */
 private const val CURSOR_ANCHOR_SLACK_ROWS = 2
+
+/** Text size, in pixels, of a terminal that owns its grid. */
+private const val BASE_TEXT_SIZE = 36
+
+/** The smallest text a watched Herdr pane shrinks to before it pans instead. */
+private const val MIN_REMOTE_TEXT_SIZE = 19
+
+/**
+ * What the last fit of a dictated grid was computed for. The text size is
+ * searched again only when one of these changes: recomputing it from the
+ * current size on every layout pass can flip between two sizes forever.
+ */
+private class RemoteGridFit {
+    var viewportWidth = 0
+    var viewportHeight = 0
+    var cols = 0
+    var rows = 0
+}
+
+/**
+ * Apply the grid of a watched Herdr pane, or hand the size back to
+ * [applyDisplayConfig] when [remote] is null.
+ *
+ * The frames of a pane address cells by absolute position, so the emulator must
+ * have exactly the pane's grid. The text shrinks down to [MIN_REMOTE_TEXT_SIZE]
+ * to fit; a pane still wider pans, one still taller is anchored to its bottom.
+ */
+private fun TerminalView.applyGrid(
+    displayConfig: TerminalDisplayConfig,
+    remote: TerminalGrid?,
+    fit: RemoteGridFit,
+) {
+    val isStatic = displayConfig.mode == TerminalDisplayMode.Static
+    if (remote == null) {
+        if (forcedRows != 0) {
+            fit.viewportWidth = 0
+            fit.viewportHeight = 0
+            fit.cols = 0
+            fit.rows = 0
+            setForcedRows(0)
+            if (rendererTextSize != BASE_TEXT_SIZE) setTextSize(BASE_TEXT_SIZE)
+            (layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+                lp.height = ViewGroup.LayoutParams.MATCH_PARENT
+                lp.gravity = Gravity.TOP or Gravity.START
+                layoutParams = lp
+            }
+        }
+        applyDisplayConfig(isStatic, displayConfig.staticColumns)
+        return
+    }
+    val host = parent as? View ?: return
+    // Not laid out yet: the global-layout listener calls again.
+    if (host.width <= 0 || host.height <= 0 || rendererFontWidth <= 0f) return
+    // The grid first: with it forced, a change of the text size below does
+    // not resize the emulator at each step.
+    if (forcedColumns != remote.cols) setForcedColumns(remote.cols)
+    if (forcedRows != remote.rows) setForcedRows(remote.rows)
+    if (
+        fit.viewportWidth != host.width || fit.viewportHeight != host.height ||
+        fit.cols != remote.cols || fit.rows != remote.rows
+    ) {
+        fit.viewportWidth = host.width
+        fit.viewportHeight = host.height
+        fit.cols = remote.cols
+        fit.rows = remote.rows
+        val gridHeight = getHeightForRows(remote.rows).coerceAtLeast(1)
+        val byWidth = rendererTextSize * host.width / (remote.cols * rendererFontWidth)
+        val byHeight = rendererTextSize * host.height.toFloat() / gridHeight
+        val estimate = minOf(byWidth, byHeight).toInt().coerceIn(MIN_REMOTE_TEXT_SIZE, BASE_TEXT_SIZE)
+        if (estimate != rendererTextSize) setTextSize(estimate)
+        // Glyph size is not exactly linear in the text size: step down to a true fit.
+        while (
+            rendererTextSize > MIN_REMOTE_TEXT_SIZE &&
+            (remote.cols * rendererFontWidth > host.width || getHeightForRows(remote.rows) > host.height)
+        ) {
+            setTextSize(rendererTextSize - 1)
+        }
+    }
+    val lp = layoutParams as? FrameLayout.LayoutParams ?: return
+    val width = kotlin.math.ceil(remote.cols * rendererFontWidth).toInt().coerceAtLeast(1)
+    val height = getHeightForRows(remote.rows)
+    val gravity = (if (height > host.height) Gravity.BOTTOM else Gravity.TOP) or Gravity.START
+    if (lp.width != width || lp.height != height || lp.gravity != gravity) {
+        lp.width = width
+        lp.height = height
+        lp.gravity = gravity
+        layoutParams = lp
+    }
+}
 
 /** Push the requested display mode into the [TerminalView] without churning when nothing changed. */
 private fun TerminalView.applyDisplayConfig(isStatic: Boolean, staticCols: Int) {

@@ -63,6 +63,18 @@ def _ctrl(**overrides) -> dict:
     return ctrl
 
 
+def _herdr_ctrl(**payload_overrides) -> dict:
+    payload = {
+        "server_id": "tui:default",
+        "pane_id": "w1:p1",
+        "reason": "awaiting_permission",
+        "title": "api refactor",
+        "agent": "claude",
+    }
+    payload.update(payload_overrides)
+    return {"type": "user_event", "kind": "herdr.attention", "payload": payload}
+
+
 @pytest.fixture
 def routing() -> RoutingTable:
     table = RoutingTable()
@@ -222,6 +234,94 @@ class TestHandleUserEvent:
         dispatcher = _make_dispatcher()
 
         _handle_user_event(_make_ws(dispatcher), AGENT_ID, _ctrl(), routing)
+
+        dispatcher.schedule_attention.assert_not_called()
+
+
+class TestHerdrAttention:
+    def test_broadcasts_and_pushes_with_stamped_agent_id(self, routing):
+        client = _make_user_client()
+        routing.register_user_client(OWNER, client)
+        dispatcher = _make_dispatcher()
+        ctrl = _herdr_ctrl(agent_id="spoofed-agent", session_id="s-forged")
+
+        _handle_user_event(_make_ws(dispatcher), AGENT_ID, ctrl, routing)
+
+        expected = {
+            "server_id": "tui:default",
+            "pane_id": "w1:p1",
+            "reason": "awaiting_permission",
+            "title": "api refactor",
+            "agent": "claude",
+            "agent_id": AGENT_ID,
+        }
+        envelope = json.loads(client.send_queue.get_nowait())
+        assert envelope["type"] == "herdr.attention"
+        # Only the known fields travel: a forged ``session_id`` would make the
+        # push open a session instead of the pane.
+        assert envelope["payload"] == expected
+        user_id, pushed = dispatcher.schedule_attention.call_args[0]
+        assert (user_id, pushed) == (OWNER, expected)
+
+    def test_agent_is_optional(self, routing):
+        client = _make_user_client()
+        routing.register_user_client(OWNER, client)
+        ctrl = _herdr_ctrl()
+        del ctrl["payload"]["agent"]
+
+        _handle_user_event(
+            _make_ws(_make_dispatcher()), AGENT_ID, ctrl, routing
+        )
+
+        payload = json.loads(client.send_queue.get_nowait())["payload"]
+        assert "agent" not in payload
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"server_id": ""},
+            {"pane_id": None},
+            {"reason": 7},
+            {"title": ""},
+            {"pane_id": "p" * 201},
+            {"title": "t" * 201},
+        ],
+        ids=[
+            "empty-server", "no-pane", "non-string-reason", "empty-title",
+            "long-pane", "long-title",
+        ],
+    )
+    def test_malformed_or_oversized_payload_is_dropped(self, routing, overrides):
+        client = _make_user_client()
+        routing.register_user_client(OWNER, client)
+        dispatcher = _make_dispatcher()
+
+        _handle_user_event(
+            _make_ws(dispatcher), AGENT_ID, _herdr_ctrl(**overrides), routing
+        )
+
+        assert client.send_queue.empty()
+        dispatcher.schedule_attention.assert_not_called()
+
+    def test_field_at_the_length_limit_is_relayed(self, routing):
+        client = _make_user_client()
+        routing.register_user_client(OWNER, client)
+
+        _handle_user_event(
+            _make_ws(_make_dispatcher()),
+            AGENT_ID,
+            _herdr_ctrl(pane_id="p" * 200),
+            routing,
+        )
+
+        payload = json.loads(client.send_queue.get_nowait())["payload"]
+        assert payload["pane_id"] == "p" * 200
+
+    def test_session_payload_under_the_herdr_kind_is_dropped(self, routing):
+        dispatcher = _make_dispatcher()
+        ctrl = _ctrl(kind="herdr.attention")
+
+        _handle_user_event(_make_ws(dispatcher), AGENT_ID, ctrl, routing)
 
         dispatcher.schedule_attention.assert_not_called()
 

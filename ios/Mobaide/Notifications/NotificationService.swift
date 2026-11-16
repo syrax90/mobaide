@@ -1,3 +1,4 @@
+import CryptoKit
 import UserNotifications
 import os
 
@@ -23,6 +24,10 @@ final class NotificationService: NSObject, @MainActor UNUserNotificationCenterDe
     private let tracker: ForegroundSessionTracker
     private let center: UNUserNotificationCenter
     private let onTap: @MainActor @Sendable (String, String?) -> Void
+    /// A tapped Herdr alert: server id, pane id, and the agent that raised it.
+    private let onHerdrTap: @MainActor @Sendable (String, String, String?) -> Void
+    /// The connected agent: a locally posted alert is by construction its own.
+    private let connectedAgentId: @Sendable () -> String?
 
     /// Single-flight slot for an in-flight `requestAuthorization`, so the
     /// coordinator's fire-and-forget request and a racing inline request from
@@ -43,11 +48,56 @@ final class NotificationService: NSObject, @MainActor UNUserNotificationCenterDe
     init(
         tracker: ForegroundSessionTracker,
         center: UNUserNotificationCenter = .current(),
-        onTap: @escaping @MainActor @Sendable (String, String?) -> Void
+        onTap: @escaping @MainActor @Sendable (String, String?) -> Void,
+        onHerdrTap: @escaping @MainActor @Sendable (String, String, String?) -> Void = { _, _, _ in },
+        connectedAgentId: @escaping @Sendable () -> String? = { nil }
     ) {
         self.tracker = tracker
         self.center = center
         self.onTap = onTap
+        self.onHerdrTap = onHerdrTap
+        self.connectedAgentId = connectedAgentId
+    }
+
+    /// Identifier prefix of every Herdr alert, local or remote. Keeps them
+    /// apart from session alerts, whose identifier is a session id.
+    static let herdrIdentifierPrefix = "herdr-"
+
+    /// The identifier of one pane's alert. It is the relay's APNs collapse id
+    /// (`central_server` `push/dispatcher.py::_push_target`), byte for byte, so
+    /// a local alert and a push for the same pane replace each other and one
+    /// removal clears both.
+    static func herdrIdentifier(agentId: String = "", serverId: String, paneId: String) -> String {
+        let digest = SHA256.hash(data: Data("\(agentId)\u{0}\(serverId)\u{0}\(paneId)".utf8))
+        let hex = digest.map { String(format: "%02x", $0) }.joined()
+        return herdrIdentifierPrefix + hex.prefix(32)
+    }
+
+    /// The pane a Herdr alert names, or nil for a session alert. A local alert
+    /// and the relay's APNs payload carry the same two keys.
+    static func herdrPane(from userInfo: [AnyHashable: Any]) -> (serverId: String, paneId: String)? {
+        guard
+            let serverId = userInfo["herdr_server_id"] as? String, !serverId.isBlank,
+            let paneId = userInfo["herdr_pane_id"] as? String, !paneId.isBlank
+        else { return nil }
+        return (serverId, paneId)
+    }
+
+    static func makeRequest(for attention: HerdrAttention, agentId: String = "") -> UNNotificationRequest? {
+        guard let content = AttentionContent.content(for: attention) else { return nil }
+        let identifier = herdrIdentifier(
+            agentId: agentId, serverId: attention.server_id, paneId: attention.pane_id
+        )
+        let notification = UNMutableNotificationContent()
+        notification.title = content.title
+        notification.body = content.body
+        notification.sound = .default
+        notification.threadIdentifier = identifier
+        notification.userInfo = [
+            "herdr_server_id": attention.server_id,
+            "herdr_pane_id": attention.pane_id,
+        ]
+        return UNNotificationRequest(identifier: identifier, content: notification, trigger: nil)
     }
 
     /// Session id carried by a notification. Locally-posted alerts use the
@@ -90,6 +140,11 @@ final class NotificationService: NSObject, @MainActor UNUserNotificationCenterDe
     @discardableResult
     func post(_ session: SessionResponse) async -> Bool {
         guard let request = Self.makeRequest(for: session) else { return false }
+        return await add(request)
+    }
+
+    /// Hand one alert to Notification Center; false when it was not shown.
+    private func add(_ request: UNNotificationRequest) async -> Bool {
         // `isAuthorized()` can suspend for as long as the user takes to answer
         // the permission prompt. An agent-scoped teardown (logout, agent
         // switch/takeover) landing in that window runs `removeAll()`, but does
@@ -111,14 +166,34 @@ final class NotificationService: NSObject, @MainActor UNUserNotificationCenterDe
         center.removePendingNotificationRequests(withIdentifiers: [sessionId])
     }
 
+    @discardableResult
+    func postHerdr(_ attention: HerdrAttention) async -> Bool {
+        guard let request = Self.makeRequest(for: attention, agentId: connectedAgentId() ?? "") else {
+            return false
+        }
+        return await add(request)
+    }
+
+    func removeHerdr(serverId: String, paneId: String) {
+        remove(sessionId: Self.herdrIdentifier(
+            agentId: connectedAgentId() ?? "", serverId: serverId, paneId: paneId
+        ))
+    }
+
     func removeAll() {
         teardownEpoch.withLock { $0 &+= 1 }
         center.removeAllDeliveredNotifications()
         center.removeAllPendingNotificationRequests()
     }
 
+    /// Herdr alerts are left out: the session reconcile removes every
+    /// delivered id that no session's attention explains.
     func deliveredSessionIds() async -> Set<String> {
-        Set(await center.deliveredNotifications().map { $0.request.identifier })
+        Set(
+            await center.deliveredNotifications()
+                .map { $0.request.identifier }
+                .filter { !$0.hasPrefix(Self.herdrIdentifierPrefix) }
+        )
     }
 
     func requestAuthorization() {
@@ -223,14 +298,21 @@ final class NotificationService: NSObject, @MainActor UNUserNotificationCenterDe
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        let suppress = AttentionSuppression.shouldSuppress(
-            appActive: true,
-            visibleSessionId: tracker.visibleSessionId,
-            eventSessionId: Self.sessionId(
-                from: notification.request.content.userInfo,
-                identifier: notification.request.identifier
+        let userInfo = notification.request.content.userInfo
+        let suppress: Bool
+        if let pane = Self.herdrPane(from: userInfo) {
+            suppress = AttentionSuppression.shouldSuppress(
+                appActive: true,
+                visibleSessionId: tracker.visibleHerdrPane,
+                eventSessionId: ForegroundSessionTracker.herdrPaneKey(serverId: pane.serverId, paneId: pane.paneId)
             )
-        )
+        } else {
+            suppress = AttentionSuppression.shouldSuppress(
+                appActive: true,
+                visibleSessionId: tracker.visibleSessionId,
+                eventSessionId: Self.sessionId(from: userInfo, identifier: notification.request.identifier)
+            )
+        }
         return suppress ? [] : [.banner, .sound, .list]
     }
 
@@ -244,6 +326,10 @@ final class NotificationService: NSObject, @MainActor UNUserNotificationCenterDe
         didReceive response: UNNotificationResponse
     ) async {
         let userInfo = response.notification.request.content.userInfo
+        if let pane = Self.herdrPane(from: userInfo) {
+            onHerdrTap(pane.serverId, pane.paneId, Self.agentId(from: userInfo))
+            return
+        }
         onTap(
             Self.sessionId(
                 from: userInfo,

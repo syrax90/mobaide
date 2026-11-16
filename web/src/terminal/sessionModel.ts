@@ -29,7 +29,10 @@ import {
 } from '../protocol/terminalCodec';
 import {
   decodeTerminalState,
+  isPaneController,
   isSessionRunning,
+  remoteGrid,
+  type TerminalGrid,
   type TerminalState,
 } from '../protocol/dto/terminalState';
 import { writeClipboardText } from '../lib/clipboard';
@@ -78,6 +81,10 @@ import { terminalTheme } from './terminalTheme';
 
 /** Matches Android's and iOS's 100 ms resize debounce. */
 const RESIZE_DEBOUNCE_MS = 100;
+
+const FONT_SIZE = 13;
+/** The smallest font a watched Herdr pane shrinks to before it scrolls instead. */
+const MIN_REMOTE_FONT_SIZE = 7;
 
 /**
  * Rows kept above the viewport. The requirement bar is Termux's 10,000; the
@@ -141,6 +148,12 @@ export interface TerminalSessionModelOptions {
   scheduler?: Scheduler;
   /** Injected in tests so the model runs without a real socket. */
   channel?: SessionIoChannel;
+  /**
+   * The session is the view of a Herdr pane. Its size belongs to the pane, or
+   * to the one client that controls it, so this model sends its own only while
+   * the agent names it as the controller.
+   */
+  paneView?: boolean;
   /** Injected so a test can drive the suspend grace without a fake clock. */
   now?: () => number;
   /**
@@ -204,6 +217,9 @@ export class TerminalSessionModel {
 
   private lastRows = 0;
   private lastCols = 0;
+  /** The grid a Herdr pane dictates in watch mode; null when this client owns the size. */
+  private remoteGrid: TerminalGrid | null = null;
+  private readonly paneView: boolean;
   private cancelResize: (() => void) | null = null;
 
   /** When the session stopped being read, or null while it is being read. */
@@ -242,7 +258,7 @@ export class TerminalSessionModel {
       cursorBlink: true,
       fontFamily:
         'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
-      fontSize: 13,
+      fontSize: FONT_SIZE,
       // Left at xterm's default `true`: it scrolls to the tail on *genuine*
       // user input only, which is what keeps a program's own `ESC[6n` reply
       // from un-pausing a scrolled-up viewport. Both mobile clients had to
@@ -260,6 +276,8 @@ export class TerminalSessionModel {
     this.track(installOsc52Policy(this.term, () => this.isParsingReplay()));
 
     this.io = options.channel ?? new SessionIoChannel(agentId, sessionId);
+    this.paneView = options.paneView ?? false;
+    if (this.paneView) this.io.gateSize();
     this.wireTerminal();
     this.wireChannel();
     this.wireWatchGate();
@@ -324,6 +342,10 @@ export class TerminalSessionModel {
 
   private fitNow(): void {
     if (!this.opened) return;
+    if (this.remoteGrid !== null) {
+      this.fitRemoteGrid(this.remoteGrid);
+      return;
+    }
     try {
       this.fit.fit();
     } catch {
@@ -340,6 +362,50 @@ export class TerminalSessionModel {
     // session another client already resized, that would leave the PTY on the
     // other client's grid. `pushSize` dedupes, so calling it every tick is free.
     this.pushSize(this.term.rows, this.term.cols);
+  }
+
+  /**
+   * Switch between the agent's grid (a Herdr pane in watch mode) and this
+   * client's own. Called for every state frame; a repeat of the same grid is a
+   * no-op.
+   */
+  private applyRemoteGrid(next: TerminalGrid | null): void {
+    const previous = this.remoteGrid;
+    if (previous?.cols === next?.cols && previous?.rows === next?.rows) return;
+    this.remoteGrid = next;
+    this.host.classList.toggle('terminal-host-remote', next !== null);
+    if (next === null) {
+      // This client owns the size again (control was taken): back to the
+      // normal font, and the dedupe is cleared so the next fit sends the grid.
+      if (this.term.options.fontSize !== FONT_SIZE) this.term.options.fontSize = FONT_SIZE;
+      this.lastRows = 0;
+      this.lastCols = 0;
+    }
+    this.fitNow();
+  }
+
+  /**
+   * Draw the pane's real grid. The font shrinks, down to
+   * `MIN_REMOTE_FONT_SIZE`, until the columns fit the width; a pane that is
+   * still wider or taller than the stage scrolls inside it. Nothing is sent to
+   * the agent: in watch mode the pane keeps its size.
+   */
+  private fitRemoteGrid(grid: TerminalGrid): void {
+    let proposed: ReturnType<FitAddon['proposeDimensions']>;
+    try {
+      proposed = this.fit.proposeDimensions();
+    } catch {
+      proposed = undefined;
+    }
+    if (proposed !== undefined && proposed.cols > 0) {
+      const current = this.term.options.fontSize ?? FONT_SIZE;
+      const wanted = Math.floor((current * proposed.cols) / grid.cols);
+      const next = Math.max(MIN_REMOTE_FONT_SIZE, Math.min(FONT_SIZE, wanted));
+      if (next !== current) this.term.options.fontSize = next;
+    }
+    if (this.term.cols !== grid.cols || this.term.rows !== grid.rows) {
+      this.term.resize(grid.cols, grid.rows);
+    }
   }
 
   private wireTerminal(): void {
@@ -365,7 +431,9 @@ export class TerminalSessionModel {
         // rather than read the shift as output the user missed.
         this.rebaseline = true;
         this.sampleFollow();
-        this.pushSize(rows, cols);
+        // A dictated grid is not this client's size and must not be cached
+        // as one: it would be sent the moment control is taken.
+        if (this.remoteGrid === null) this.pushSize(rows, cols);
       }),
     );
     this.track(
@@ -666,9 +734,15 @@ export class TerminalSessionModel {
           if (this.replay.inReplay) this.writeReplay(effect.payload);
           else this.writeLive(effect.payload);
           break;
-        case 'state':
-          this.state.setState({ status: decodeTerminalState(effect.json) });
+        case 'state': {
+          const status = decodeTerminalState(effect.json);
+          this.state.setState({ status });
+          // Before the grid: taking control resets the size cache there, and
+          // the size it then measures must be allowed out.
+          if (this.paneView) this.io.allowSize(isPaneController(status));
+          this.applyRemoteGrid(remoteGrid(status));
           break;
+        }
         case 'replayFinished':
           this.replayEndSeen = true;
           // The replay is sunk cost already paid. Charging it would make the
@@ -784,8 +858,12 @@ export class TerminalSessionModel {
     }, RESIZE_DEBOUNCE_MS);
   }
 
-  /** Re-deliver the cached grid. The client is the sole size authority. */
+  /**
+   * Re-deliver the cached grid. The client is the sole size authority, except
+   * for a Herdr pane in watch mode, whose grid the agent dictates.
+   */
   private assertSize(): void {
+    if (this.remoteGrid !== null) return;
     if (this.lastRows <= 0 || this.lastCols <= 0) return;
     this.io.setSize(this.lastRows, this.lastCols);
   }
@@ -952,6 +1030,19 @@ export class TerminalSessionModel {
     // suspended again.
     this.resume();
     this.io.channel.connect();
+  }
+
+  /**
+   * Drop the socket and attach again, so the agent sends a fresh handshake.
+   *
+   * For a Herdr pane whose view the agent ended and then made again under the
+   * same session id: the open socket still belongs to the ended one.
+   */
+  reattach(): void {
+    if (this.disposed) return;
+    this.resume();
+    this.io.channel.connect();
+    this.io.channel.forceReconnect();
   }
 
   /**

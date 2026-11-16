@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
 import { MenuButton } from '../../components/MenuButton';
 import { writeClipboardText } from '../../lib/clipboard';
@@ -121,14 +121,29 @@ type TemplatePanel =
   | { kind: 'picker'; selection: string }
   | { kind: 'editor'; initialBody: string };
 
+/**
+ * What changes when the terminal shows a Herdr pane instead of a session: the
+ * pane is not in the session list, so the sessions panel is off and "back"
+ * goes to the Herdr dashboard.
+ */
+export interface TerminalPaneChrome {
+  backTo: string;
+  backLabel: string;
+  /** Pane controls for the bar: the mode switch and the history. */
+  controls: ReactNode;
+  /** One line under the bar that says what the current mode does. */
+  notice: string | null;
+}
+
 interface TerminalViewProps {
   model: TerminalSessionModel;
   headerLabel: string;
   /** The session's own row, once the list has synced; `cwd` gates the git menu. */
   session: SessionResponse | undefined;
+  pane?: TerminalPaneChrome;
 }
 
-function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
+export function TerminalView({ model, headerLabel, session, pane }: TerminalViewProps) {
   const view = model.state();
   const passCtrlV = useTerminalPrefsStore((state) => state.passCtrlVToTerminal);
   const setPassCtrlV = useTerminalPrefsStore((state) => state.setPassCtrlVToTerminal);
@@ -224,12 +239,12 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
       {/* Beside `.terminal-page`, never inside it: that one is a column, and a
           child there would stack under the grid. `.app-main` lays the two out
           in a row, and the narrower stage refits the grid once. */}
-      {sessionsRail}
+      {pane === undefined && sessionsRail}
       <section className={`terminal-page${handOff !== null ? ' terminal-page-arriving' : ''}`}>
         <header className="terminal-bar">
-          {sessionsToggle}
-          <Link to="/" className="terminal-back">
-            ← Sessions
+          {pane === undefined && sessionsToggle}
+          <Link to={pane?.backTo ?? '/'} className="terminal-back">
+            ← {pane?.backLabel ?? 'Sessions'}
           </Link>
           <span
             className={`terminal-state terminal-state-${view.status?.status ?? 'unknown'}`}
@@ -238,6 +253,7 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
           </span>
           {headerLabel !== '' && <span className="terminal-title">{headerLabel}</span>}
           <span className="terminal-bar-spacer" />
+          {pane?.controls}
           <label className="terminal-toggle" title="Pass Ctrl+V to terminal">
             <input
               type="checkbox"
@@ -306,6 +322,12 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
             </MenuButton>
           )}
         </header>
+
+        {pane !== undefined && pane.notice !== null && (
+          <p className="terminal-pane-notice" role="status">
+            {pane.notice}
+          </p>
+        )}
 
         <div className="terminal-stage">
           <TerminalSurface model={model} id={surfaceId} />

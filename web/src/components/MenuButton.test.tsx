@@ -221,6 +221,64 @@ describe('MenuButton opening', () => {
   });
 });
 
+describe('MenuButton placement', () => {
+  /** jsdom computes no layout, so the two boxes the menu measures are stated. */
+  const stubBox = (node: Element, top: number, bottom: number): void => {
+    vi.spyOn(node, 'getBoundingClientRect').mockReturnValue({
+      top,
+      bottom,
+      height: bottom - top,
+      left: 900,
+      right: 940,
+      width: 40,
+      x: 900,
+      y: top,
+      toJSON: () => ({}),
+    });
+  };
+
+  /** Open a menu `menuHeight` tall under a trigger 30 px tall whose top is at `triggerTop`. */
+  const openAt = (triggerTop: number, menuHeight = 200): HTMLElement => {
+    const { container } = renderMenu();
+    const menu = container.querySelector<HTMLElement>('[role="menu"]');
+    if (menu === null) throw new Error('no menu');
+    const triggerBottom = triggerTop + 30;
+    stubBox(trigger(), triggerTop, triggerBottom);
+    stubBox(menu, triggerBottom + 4, triggerBottom + 4 + menuHeight);
+    fireEvent.click(trigger());
+    return menu;
+  };
+
+  it('opens above its trigger when the window bottom would cut it and there is more room above', () => {
+    // A row menu at the end of a long list: below, its last items are out of
+    // the window and no scroll reaches them.
+    const triggerTop = window.innerHeight - 60;
+
+    const menu = openAt(triggerTop);
+
+    expect(menu.style.bottom).toBe('64px');
+    expect(menu.style.top).toBe('');
+    // Still under the trigger's right edge.
+    expect(menu.style.right).toBe(`${String(window.innerWidth - 940)}px`);
+    expect(menuItem('Changes…')).toHaveFocus();
+  });
+
+  it('stays below its trigger when it fits there', () => {
+    const menu = openAt(100);
+
+    expect(menu.style.top).toBe('134px');
+    expect(menu.style.bottom).toBe('');
+  });
+
+  it('stays below a trigger with less room above it, though the window cuts it', () => {
+    // Above, more of the menu would be out of the window than below.
+    const menu = openAt(120, window.innerHeight);
+
+    expect(menu.style.top).toBe('154px');
+    expect(menu.style.bottom).toBe('');
+  });
+});
+
 describe('MenuButton key walk', () => {
   it('wraps with the arrows and jumps with Home and End, consuming each key', () => {
     renderMenu();

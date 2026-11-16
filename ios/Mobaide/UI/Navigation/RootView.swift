@@ -96,6 +96,10 @@ struct RootView: View {
             SupportScreen()
         case .autoScanDetail(let projectName):
             AutoScanDetailScreen(projectName: projectName)
+        case .herdr(let openServer, let openPane):
+            HerdrScreen(openServer: openServer, openPane: openPane)
+        case .herdrPane(let sessionId, let serverId, let paneId):
+            HerdrPaneScreen(sessionId: sessionId, serverId: serverId, paneId: paneId)
         case .connections:
             ConnectionsScreen()
         case .projects:

@@ -166,6 +166,8 @@ SANITIZED_ENV_VARS = (
     "MOBAIDE_WEB_DEV_LOGIN_PASSWORD",
     "MOBAIDE_VOICE_FAKE",
     "MOBAIDE_VOICE_DIR",
+    "MOBAIDE_HERDR_ENABLED",
+    "MOBAIDE_HERDR_FAKE",
     "MOBAIDE_WORKTREES_DIR",
 )
 
@@ -878,6 +880,10 @@ def build_agent_env(
     # delete it) or fake voice behind the operator's back.
     env["MOBAIDE_VOICE_FAKE"] = "1" if getattr(args, "fake_voice", False) else "0"
     env["MOBAIDE_VOICE_DIR"] = ""
+    # The Herdr dashboard is off unless asked for: the stack must not show
+    # the operator's own herdr servers by accident.
+    env["MOBAIDE_HERDR_FAKE"] = "1" if getattr(args, "fake_herdr", False) else "0"
+    env["MOBAIDE_HERDR_ENABLED"] = "1" if getattr(args, "herdr", False) else "0"
     # A dev .env names the real ~/.mobaide/worktrees; keep the stack's
     # worktrees in its throwaway prefix.
     env["MOBAIDE_WORKTREES_DIR"] = str(agent_dir / "worktrees")
@@ -2894,6 +2900,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="run voice input with MOBAIDE_VOICE_FAKE=1: a tiny "
                          "generated model and a deterministic transcript, so "
                          "enable/dictate flows need no 670 MB download")
+    up.add_argument("--fake-herdr", action="store_true",
+                    help="show a Herdr dashboard from one scripted server "
+                         "(MOBAIDE_HERDR_FAKE=1); no herdr install is needed")
+    up.add_argument("--herdr", action="store_true",
+                    help="attach to the real herdr servers that run on this "
+                         "machine (MOBAIDE_HERDR_ENABLED=1)")
     up.add_argument("--fresh", action="store_true",
                     help="wipe the state dir first: new secret, account, agent, DB")
     up.add_argument("--email", default=None, help=f"account email (default {DEFAULT_EMAIL})")

@@ -15,6 +15,12 @@ final class AttentionCoordinator {
     private let snapshot: @Sendable () async throws -> [SessionResponse]
     private let seen: AttentionSeenStore
 
+    /// The pane statuses that still want the user: their alert stays up.
+    private static let herdrNeedsUser: Set<String> = ["blocked", "done", "failed"]
+
+    /// The panes that needed the user in the last Herdr state; nil before the first.
+    private var herdrNeedy: Set<String>?
+
     private var eventSubscription: Task<Void, Never>?
     private var authSubscription: Task<Void, Never>?
     private var reconcileTask: Task<Void, Never>?
@@ -67,6 +73,28 @@ final class AttentionCoordinator {
         case .sessionUpdated(let session) where session.attention == nil:
             presenter.remove(sessionId: session.session_id)
             seen.forget(sessionId: session.session_id)
+        case .herdrAttention(let attention):
+            if let latest = latestAuthState, latest != .fullyConnected { return }
+            await presenter.postHerdr(attention)
+        case .herdrChanged(let snapshot):
+            // The whole state arrives on every change. Only a pane that left
+            // blocked, done and failed has an alert to remove; the first state
+            // after a start removes for every quiet pane once.
+            let before = herdrNeedy
+            var now: Set<String> = []
+            for server in snapshot.servers {
+                for pane in server.workspaces.flatMap(\.tabs).flatMap(\.panes) {
+                    let key = ForegroundSessionTracker.herdrPaneKey(
+                        serverId: server.server_id, paneId: pane.pane_id
+                    )
+                    if Self.herdrNeedsUser.contains(pane.status ?? "") {
+                        now.insert(key)
+                    } else if before?.contains(key) ?? true {
+                        presenter.removeHerdr(serverId: server.server_id, paneId: pane.pane_id)
+                    }
+                }
+            }
+            herdrNeedy = now
         default:
             break
         }
@@ -92,6 +120,7 @@ final class AttentionCoordinator {
         latestAuthState = state
         switch state {
         case .fullyConnected:
+            if previous != .fullyConnected { forgetHerdrState() }
             if !didRequestAuthorization {
                 didRequestAuthorization = true
                 // Synchronous: started in this same loop turn, so a teardown
@@ -112,6 +141,14 @@ final class AttentionCoordinator {
                 if state == .unauthenticated { seen.clearAll() }
             }
         }
+    }
+
+    /// Forget which panes needed the user. Called when the app comes back
+    /// from the background and when the agent connection comes back: Herdr
+    /// states were missed meanwhile, and a push alert for a pane that went
+    /// quiet in that time is removed only by the "first state" pass.
+    func forgetHerdrState() {
+        herdrNeedy = nil
     }
 
     /// Called when the user grants notification authorization, from whichever

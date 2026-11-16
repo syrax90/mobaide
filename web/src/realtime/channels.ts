@@ -165,6 +165,13 @@ export class SessionIoChannel {
   readonly channel: WebSocketChannel;
   private rows = 0;
   private cols = 0;
+  /**
+   * Set for the view of a Herdr pane. Such a view sends its size only while
+   * the agent names this client as the pane's controller, and that has to be
+   * said again on each socket: what an earlier socket said can be out of date.
+   */
+  private sizeGated = false;
+  private sizeAllowed = true;
 
   constructor(agentId: string, sessionId: string, overrides: ChannelOverrides = {}) {
     this.channel = new WebSocketChannel({
@@ -173,6 +180,7 @@ export class SessionIoChannel {
       binary: true,
       buildUrl: sessionSocketUrl(agentId, sessionId),
       onOpen: () => {
+        this.sizeAllowed = !this.sizeGated;
         this.resendCachedSize();
       },
       onStateChange: publishState,
@@ -195,8 +203,25 @@ export class SessionIoChannel {
     this.resendCachedSize();
   }
 
+  /** Make this the channel of a Herdr pane view: no size goes out until {@link allowSize}. */
+  gateSize(): void {
+    this.sizeGated = true;
+    this.sizeAllowed = false;
+  }
+
+  /**
+   * The last state frame says whether this client controls the pane. Becoming
+   * the controller sends the cached grid at once.
+   */
+  allowSize(allowed: boolean): void {
+    if (!this.sizeGated || allowed === this.sizeAllowed) return;
+    this.sizeAllowed = allowed;
+    if (allowed) this.resendCachedSize();
+  }
+
   /** Re-push the last measured grid. No-op before the first measurement. */
   private resendCachedSize(): void {
+    if (!this.sizeAllowed) return;
     if (this.rows <= 0 || this.cols <= 0) return;
     this.send({ kind: 'resize', rows: this.rows, cols: this.cols });
   }

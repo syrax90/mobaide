@@ -74,6 +74,14 @@ final class DeepLinkCoordinator {
         stash(.sessionDetail(sessionId: sessionId), agentId: agentId.flatMap { $0.isBlank ? nil : $0 })
     }
 
+    /// A tapped Herdr alert: the dashboard opens and opens that pane. A pane
+    /// has no session until the agent is asked for one, so the route cannot be
+    /// a session's.
+    func handleHerdrTap(serverId: String, paneId: String, agentId: String?) {
+        guard !serverId.isBlank, !paneId.isBlank else { return }
+        stash(.herdr(openServer: serverId, openPane: paneId), agentId: agentId.flatMap { $0.isBlank ? nil : $0 })
+    }
+
     /// The sessions drawer's agent switch: connect to `agentId` and land on
     /// its sessions list.
     func openSessions(ofAgent agentId: String) {

@@ -29,6 +29,7 @@ const KIND_FALLBACK_LABELS: Readonly<Record<string, string>> = {
   pi: 'Pi session',
   auto_scan: 'Auto Scan session',
   shell: 'Terminal session',
+  herdr: 'Herdr agent',
 };
 
 export interface AttentionSource {

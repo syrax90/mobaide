@@ -18,6 +18,11 @@ enum Route: Hashable, Sendable {
     case settings
     case support
     case autoScanDetail(projectName: String)
+    /// The Herdr dashboard. With both ids it opens that pane at once (a
+    /// tapped alert).
+    case herdr(openServer: String? = nil, openPane: String? = nil)
+    /// One Herdr pane, live: the terminal on the pane's session.
+    case herdrPane(sessionId: String, serverId: String, paneId: String)
     case connections
     case projects
     case gitManagement(projectName: String)

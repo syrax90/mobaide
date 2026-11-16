@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -110,6 +111,26 @@ export function MenuButton({
     hide();
     trigger.current?.focus();
   };
+
+  // A menu that opens below a trigger near the window's bottom would be cut
+  // there, with no scroll that reaches its last items (a row menu at the end
+  // of a long list). Measured once it is open, before the first paint: it
+  // flips above the trigger when that side has more room.
+  useLayoutEffect(() => {
+    if (!open || placement !== 'below') return;
+    const menu = menuRef.current?.getBoundingClientRect();
+    const rect = trigger.current?.getBoundingClientRect();
+    if (menu === undefined || rect === undefined) return;
+    const roomBelow = window.innerHeight - rect.bottom;
+    if (menu.bottom > window.innerHeight && rect.top > roomBelow) {
+      setPosition({
+        bottom: window.innerHeight - rect.top + 4,
+        right: Math.max(0, window.innerWidth - rect.right),
+      });
+    }
+    // `trigger` is a ref: its identity is stable for the life of the menu.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, placement]);
 
   useEffect(() => {
     if (!open) return;

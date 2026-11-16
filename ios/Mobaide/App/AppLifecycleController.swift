@@ -50,6 +50,9 @@ final class AppLifecycleController {
             // teardown cancels this reconcile too — otherwise a slow snapshot
             // could re-post the previous agent's alerts after removeAll().
             coordinator.reconcileCancellable()
+            // Herdr states were missed while suspended: the state that follows
+            // the reconnect removes the alert of every pane that is quiet now.
+            coordinator.forgetHerdrState()
             Task { [agentEventBus] in await agentEventBus.forceReconnect() }
         default:
             break

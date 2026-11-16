@@ -744,3 +744,103 @@ class AgentEventBusVoiceTest {
         }
     """.trimIndent()
 }
+
+/** `herdr.changed` and `herdr.attention`: the Herdr dashboard state and its alert. */
+class AgentEventBusHerdrTest {
+
+    private fun newBus(): Pair<AgentEventBus, MutableSharedFlow<WsEvent>> {
+        val connEvents = MutableSharedFlow<WsEvent>(replay = 0, extraBufferCapacity = 64)
+        val conn = mockk<WebSocketConnection>(relaxed = true)
+        every { conn.events } returns connEvents
+        val wsm = mockk<WebSocketManager>()
+        every { wsm.createConnection("ws/events") } returns conn
+        val sessionManager = mockk<SessionManager>(relaxed = true)
+        every { sessionManager.authState } returns
+            MutableStateFlow<SessionManager.AuthState>(SessionManager.AuthState.FullyConnected)
+        every { sessionManager.isLoggedIn() } returns true
+        return AgentEventBus(wsm, sessionManager) to connEvents
+    }
+
+    @Test
+    fun message_herdrChanged_carriesTheWholeTree() = runTest {
+        val (bus, connEvents) = newBus()
+        bus.start()
+
+        bus.events.test {
+            connEvents.emit(WsEvent.Message(HERDR_CHANGED))
+            val changed = awaitItem() as AgentEvent.HerdrChanged
+            val server = changed.snapshot.servers.single()
+            val pane = server.workspaces.single().tabs.single().panes.single()
+            assertEquals("tui:default", server.server_id)
+            assertTrue(server.features.control)
+            assertFalse(server.features.new_tab)
+            assertEquals("w1:p1", pane.pane_id)
+            assertEquals("done", pane.status)
+            assertEquals(12L, pane.turn)
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        bus.stop()
+    }
+
+    @Test
+    fun message_herdrAttention_carriesThePaneAndTheReason() = runTest {
+        val (bus, connEvents) = newBus()
+        bus.start()
+
+        bus.events.test {
+            connEvents.emit(
+                WsEvent.Message(
+                    """{"type":"herdr.attention","payload":{"server_id":"core:default","pane_id":"box/t3",""" +
+                        """"reason":"turn_finished","title":"reviewer","agent":null}}""",
+                ),
+            )
+            val raised = awaitItem() as AgentEvent.HerdrAttentionRaised
+            assertEquals("core:default", raised.attention.server_id)
+            assertEquals("box/t3", raised.attention.pane_id)
+            assertEquals("turn_finished", raised.attention.reason)
+            assertEquals("reviewer", raised.attention.title)
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        bus.stop()
+    }
+
+    @Test
+    fun message_herdrChangedItCannotDecode_isDropped_andTheNextOneArrives() = runTest {
+        val (bus, connEvents) = newBus()
+        bus.start()
+
+        bus.events.test {
+            connEvents.emit(WsEvent.Message("""{"type":"herdr.changed","payload":{"servers":[{"name":"no id"}]}}"""))
+            connEvents.emit(WsEvent.Message("""{"type":"herdr.changed","payload":{"servers":[]}}"""))
+            val changed = awaitItem() as AgentEvent.HerdrChanged
+            assertTrue(changed.snapshot.servers.isEmpty())
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        bus.stop()
+    }
+
+    private companion object {
+        val HERDR_CHANGED = """
+            {
+              "type": "herdr.changed",
+              "payload": {
+                "servers": [{
+                  "server_id": "tui:default", "product": "tui", "name": "default", "version": "0.9.5",
+                  "state": "ready", "message": null,
+                  "features": {"control": true, "agents": [{"id": "claude", "label": "Claude Code"}],
+                               "added_later": true},
+                  "workspaces": [{"workspace_id": "w1", "label": "mobaide", "tabs": [{
+                    "tab_id": "w1:t1", "label": "main", "width": 174, "height": 49,
+                    "panes": [{"pane_id": "w1:p1", "title": "api refactor", "agent": "claude",
+                               "status": "done", "turn": 12, "cwd": null, "agent_session_id": null,
+                               "rect": null}]
+                  }]}]
+                }]
+              }
+            }
+        """.trimIndent()
+    }
+}

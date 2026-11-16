@@ -48,7 +48,11 @@ import com.mobaide.app.ui.sessions.SessionListScreen
 import com.mobaide.app.ui.settings.SettingsScreen
 import com.mobaide.app.ui.support.SupportScreen
 import com.mobaide.app.ui.templates.TemplatesScreen
+import com.mobaide.app.ui.herdr.HerdrPaneRoute
+import com.mobaide.app.ui.herdr.HerdrPaneViewModel
+import com.mobaide.app.ui.herdr.HerdrScreen
 import com.mobaide.app.ui.terminal.TerminalScreen
+import com.mobaide.app.ui.terminal.TerminalViewModel
 import com.mobaide.app.data.network.dto.GitDiffResponse
 import com.mobaide.app.ui.terminal.git.GitChangesScreen
 import com.mobaide.app.ui.terminal.git.GitConflictScreen
@@ -62,11 +66,15 @@ fun AppNavigation(
     agentSwitchCoordinator: AgentSwitchCoordinator,
     deepLinkSessionId: StateFlow<String?> = MutableStateFlow<String?>(null),
     onDeepLinkConsumed: () -> Unit = {},
+    /** A tapped Herdr alert: the server id and the pane id to open. */
+    deepLinkHerdrPane: StateFlow<Pair<String, String>?> = MutableStateFlow<Pair<String, String>?>(null),
+    onHerdrDeepLinkConsumed: () -> Unit = {},
     onImmediateUpdate: () -> Unit = {},
 ) {
     val navController = rememberNavController()
     val authState by sessionManager.authState.collectAsStateWithLifecycle()
     val deepLink by deepLinkSessionId.collectAsStateWithLifecycle()
+    val herdrDeepLink by deepLinkHerdrPane.collectAsStateWithLifecycle()
 
     // IncompatibleServer collapses the entire navigation graph onto the
     // upgrade screen. The user must update the app (via the Play Store deep
@@ -118,6 +126,21 @@ fun AppNavigation(
                 launchSingleTop = true
             }
             onDeepLinkConsumed()
+        }
+    }
+
+    // A tapped Herdr alert opens the dashboard, which opens the pane: a pane
+    // has no session until the agent is asked for one.
+    LaunchedEffect(herdrDeepLink, authState) {
+        val (serverId, paneId) = herdrDeepLink ?: return@LaunchedEffect
+        if (authState == SessionManager.AuthState.FullyConnected) {
+            navController.navigate(Routes.herdr(serverId, paneId)) {
+                // A dashboard that is already open is replaced, with the pane
+                // that may be on it. `launchSingleTop` would keep its
+                // ViewModel, which reads the pane to open only when it is made.
+                popUpTo(Routes.HERDR) { inclusive = true }
+            }
+            onHerdrDeepLinkConsumed()
         }
     }
 
@@ -257,7 +280,36 @@ fun AppNavigation(
                     navController.navigate(Routes.autoScanDetail(projectName))
                 },
                 onBack = { navController.popBackStack() },
+                onHerdrClick = { navController.navigate(Routes.herdr()) },
             )
+        }
+
+        composable(
+            route = Routes.HERDR,
+            arguments = listOf(
+                navArgument("server") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("pane") { type = NavType.StringType; nullable = true; defaultValue = null },
+            ),
+        ) {
+            HerdrScreen(
+                onBack = { navController.popBackStack() },
+                onOpenPane = { sessionId, serverId, paneId ->
+                    navController.navigate(Routes.herdrPane(sessionId, serverId, paneId)) {
+                        launchSingleTop = true
+                    }
+                },
+            )
+        }
+
+        composable(
+            route = Routes.HERDR_PANE,
+            arguments = listOf(
+                navArgument("sessionId") { type = NavType.StringType },
+                navArgument(HerdrPaneViewModel.ARG_SERVER) { type = NavType.StringType },
+                navArgument(TerminalViewModel.ARG_HERDR_PANE) { type = NavType.StringType },
+            ),
+        ) {
+            HerdrPaneRoute(onBack = { navController.popBackStack() })
         }
 
         composable(Routes.PROJECTS) {

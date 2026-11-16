@@ -6,6 +6,7 @@ import {
   type FakeSocket,
 } from '../realtime/__testing__/fakeSocket';
 import { WS_CLOSE } from '../protocol/closeCodes';
+import { PANE_CLIENT_ID } from '../protocol/paneClientId';
 import { encodeTerminalFrame, TERMINAL_FRAME_TYPE } from '../protocol/terminalCodec';
 import { useToastStore } from '../stores/toastStore';
 import { recordingClipboard } from '../test/clipboardStub';
@@ -52,7 +53,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function harness(): Promise<Harness> {
+async function harness(options: { paneView?: boolean } = {}): Promise<Harness> {
   const { sockets, socketFactory } = recordingSocketFactory();
   // Two clocks: the channel's drives reconnect backoff, the model's drives the
   // resize debounce. Sharing one would make "which timer fired" ambiguous.
@@ -66,6 +67,7 @@ async function harness(): Promise<Harness> {
   const model = new TerminalSessionModel('a1', 's1', {
     scheduler: modelTimers.scheduler,
     channel,
+    ...options,
   });
   live.push(model);
 
@@ -251,6 +253,149 @@ describe('TerminalSessionModel grid size', () => {
     replay(TERMINAL_FRAME_TYPE.replayEnd);
 
     expect(resizesOnNext()).toBe(beforeEnd + 1);
+  });
+});
+
+describe('TerminalSessionModel dictated grid', () => {
+  // A Herdr pane in watch mode: the agent names the grid, and a size from this
+  // client would resize the pane under a user at the desktop.
+  const paneFrame = (pane: Record<string, unknown>): Uint8Array =>
+    frameOf(TERMINAL_FRAME_TYPE.state, JSON.stringify({ status: 'running', pane }));
+  const watch = paneFrame({ mode: 'watch', cols: 84, rows: 47 });
+  const control = paneFrame({ mode: 'control' });
+
+  it('sends no size while the agent dictates the grid', async () => {
+    const { model, pendingResizes, resizeFrames, deliver, deliverFrame } = await harness();
+    deliverFrame(watch);
+
+    model.term.resize(120, 40);
+    deliver(TERMINAL_FRAME_TYPE.replayStart);
+    deliver(TERMINAL_FRAME_TYPE.replayEnd);
+
+    expect(pendingResizes()).toBe(0);
+    expect(resizeFrames()).toEqual([]);
+  });
+
+  it('does not re-assert a grid it sent before the pane went back to watch', async () => {
+    const { model, flushResize, resizeFrames, deliver, deliverFrame } = await harness();
+    deliverFrame(control);
+    model.term.resize(120, 40);
+    flushResize();
+    expect(resizeFrames()).toEqual([resizeFrame(40, 120)]);
+
+    deliverFrame(watch);
+    deliver(TERMINAL_FRAME_TYPE.replayStart);
+    deliver(TERMINAL_FRAME_TYPE.replayEnd);
+
+    expect(resizeFrames()).toEqual([resizeFrame(40, 120)]);
+  });
+
+  it('sends its own grid again once control is taken', async () => {
+    const { model, flushResize, resizeFrames, deliverFrame } = await harness();
+    model.term.resize(120, 40);
+    flushResize();
+    deliverFrame(watch);
+    model.term.resize(84, 47);
+    const beforeControl = resizeFrames().length;
+
+    deliverFrame(control);
+    model.term.resize(120, 40);
+    flushResize();
+
+    // The same grid as before the watch span, and it must still go out: the
+    // pane was not at this client's size in between.
+    expect(resizeFrames().slice(beforeControl)).toEqual([resizeFrame(40, 120)]);
+  });
+
+  it('never sends the dictated grid as its own after control is taken', async () => {
+    const { model, pendingResizes, resizeFrames, deliverFrame } = await harness();
+    deliverFrame(watch);
+    model.term.resize(84, 47);
+
+    deliverFrame(control);
+
+    expect(pendingResizes()).toBe(0);
+    expect(resizeFrames()).toEqual([]);
+  });
+
+  it('reattaches on a new socket', async () => {
+    // The agent ended the pane view and made it again under the same id: the
+    // open socket still belongs to the ended one.
+    const { model, socket, sockets } = await harness();
+
+    model.reattach();
+    await settle();
+
+    expect(socket.clientCloses).toHaveLength(1);
+    expect(sockets).toHaveLength(2);
+  });
+});
+
+describe('TerminalSessionModel pane view size', () => {
+  // The view of a Herdr pane. Its size may reach the agent only while a state
+  // frame on the current socket names this tab as the pane's controller: the
+  // pane belongs to a user at the desktop, and any other `r` frame resizes it
+  // under that user.
+  const paneFrame = (pane: Record<string, unknown>): Uint8Array =>
+    frameOf(TERMINAL_FRAME_TYPE.state, JSON.stringify({ status: 'running', pane }));
+  const watch = paneFrame({ mode: 'watch', cols: 84, rows: 47 });
+  const controlledBy = (controller: string): Uint8Array =>
+    paneFrame({ mode: 'control', controller, cols: 84, rows: 47 });
+  const resizesOn = (socket: FakeSocket): number[][] =>
+    socket.sent
+      .filter(
+        (frame): frame is Uint8Array =>
+          frame instanceof Uint8Array && frame[0] === TERMINAL_FRAME_TYPE.resize,
+      )
+      .map((frame) => [...frame]);
+
+  it('sends no size until a state frame names this tab the controller', async () => {
+    const { model, flushResize, resizeFrames, deliver, deliverFrame } = await harness({
+      paneView: true,
+    });
+
+    // Measured before any state frame, and through both re-assert points of
+    // the handshake: a normal session sends its grid at each of them.
+    model.term.resize(120, 40);
+    flushResize();
+    deliver(TERMINAL_FRAME_TYPE.replayStart);
+    deliver(TERMINAL_FRAME_TYPE.replayEnd);
+    expect(resizeFrames()).toEqual([]);
+
+    deliverFrame(watch);
+    deliverFrame(controlledBy('another-tab'));
+    deliver(TERMINAL_FRAME_TYPE.replayStart);
+    deliver(TERMINAL_FRAME_TYPE.replayEnd);
+    expect(resizeFrames()).toEqual([]);
+
+    deliverFrame(controlledBy(PANE_CLIENT_ID));
+
+    expect(resizeFrames()).toEqual([resizeFrame(40, 120)]);
+  });
+
+  it('sends no size after a reconnect until the new socket names it the controller', async () => {
+    // Control ends when the last viewer leaves, so a view that comes back is
+    // a watcher until the agent says otherwise. The state it kept from the
+    // old socket still says "controller".
+    const { model, socket, flushResize, deliverFrame, reconnect } = await harness({
+      paneView: true,
+    });
+    deliverFrame(controlledBy(PANE_CLIENT_ID));
+    model.term.resize(120, 40);
+    flushResize();
+    expect(resizesOn(socket)).toEqual([resizeFrame(40, 120)]);
+
+    socket.serverClose(1006);
+    const next = await reconnect();
+    model.term.resize(100, 30);
+    flushResize();
+    next.deliver(Uint8Array.from([TERMINAL_FRAME_TYPE.replayStart]).buffer);
+    next.deliver(Uint8Array.from([TERMINAL_FRAME_TYPE.replayEnd]).buffer);
+    expect(resizesOn(next)).toEqual([]);
+
+    next.deliver(controlledBy(PANE_CLIENT_ID).buffer);
+
+    expect(resizesOn(next)).toEqual([resizeFrame(30, 100)]);
   });
 });
 

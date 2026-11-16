@@ -152,7 +152,9 @@ private struct StopHandOff: Equatable {
     let nextId: String
 }
 
-private struct TerminalScreenContent: View {
+/// The terminal on one session. `pane` is set when that session is the live
+/// view of a Herdr pane (`HerdrPaneScreen`).
+struct TerminalScreenContent: View {
     @State private var model: TerminalSessionModel
     @State private var keyboard = TerminalKeyboardObserver()
     @State private var showTemplates = false
@@ -199,6 +201,7 @@ private struct TerminalScreenContent: View {
     /// Set when this terminal is the target of a stop hand-off.
     private let stoppedSessionId: String?
     private let onSwitchAfterStop: (_ next: String, _ stopped: String) -> Void
+    private let pane: TerminalPaneChrome?
 
     @Environment(Router.self) private var router
     @Environment(DeepLinkCoordinator.self) private var deepLink
@@ -211,16 +214,19 @@ private struct TerminalScreenContent: View {
         container: AppContainer,
         sessionId: String,
         stoppedSessionId: String?,
-        onSwitchAfterStop: @escaping (_ next: String, _ stopped: String) -> Void
+        onSwitchAfterStop: @escaping (_ next: String, _ stopped: String) -> Void,
+        pane: TerminalPaneChrome? = nil,
+        paneKind: SessionKind? = nil
     ) {
+        self.pane = pane
         let session = container.sessionRepository.currentSessions.first { $0.session_id == sessionId }
         _model = State(initialValue: container.terminalSessionStore.model(
             id: sessionId,
-            kind: session?.kind ?? .claude,
+            kind: session?.kind ?? paneKind ?? .claude,
             // nil when the session row is not loaded yet (cold-start deep
             // link): the model resolves the true kind itself rather than
             // trusting the `.claude` render fallback above.
-            resolvedKind: session?.kind,
+            resolvedKind: session?.kind ?? paneKind,
             initialStatus: session?.state
         ))
         _sessionRow = State(initialValue: session)
@@ -246,7 +252,8 @@ private struct TerminalScreenContent: View {
 
     /// Empty only until the row resolves from either source below.
     private var headerLabel: String {
-        sessionRow.map { SessionDisplay.headerLabel($0, customTypeNames: customTypeNames) } ?? ""
+        if let pane { return pane.title }
+        return sessionRow.map { SessionDisplay.headerLabel($0, customTypeNames: customTypeNames) } ?? ""
     }
 
     /// One-shot seed for a cold-start deep link (notification tap), whose
@@ -259,7 +266,8 @@ private struct TerminalScreenContent: View {
     /// response on this cold-start path could disconnect a session created
     /// meanwhile (same reasoning as `AppContainer`'s kind resolver).
     private func seedSessionRow() async {
-        guard sessionRow == nil else { return }
+        // A Herdr pane is in no session list.
+        guard pane == nil, sessionRow == nil else { return }
         let list = try? await agentAPI.listSessions()
         // Re-checked after the await: a snapshot that landed while the request
         // was in flight is newer than the response, and the title is mutable.
@@ -276,6 +284,8 @@ private struct TerminalScreenContent: View {
     /// session is gone. Both the list and the synced flag can settle in either
     /// order, so both feed the same one-shot decision in the model.
     private func checkSessionStillExists() {
+        // A Herdr pane is never listed; its end arrives as a `stopped` state.
+        guard pane == nil else { return }
         let isListed = sessionRepository.currentSessions.contains { $0.session_id == sessionId }
         guard model.noteSessionSnapshot(
             isListed: isListed,
@@ -349,12 +359,15 @@ private struct TerminalScreenContent: View {
     var body: some View {
         ZStack(alignment: .top) {
             VStack(spacing: 0) {
+                if let notice = pane?.notice {
+                    paneNotice(notice)
+                }
                 ZStack(alignment: .top) {
                     TerminalHostView(
                         model: model,
                         displayConfig: displayStore.config,
                         keyboardTransition: keyboard.transition,
-                        onDrawerEdgePan: handleDrawerEdgePan
+                        onDrawerEdgePan: drawerEdgePanHandler
                     )
                     jumpToBottomButton
                     selectionToolbar
@@ -383,69 +396,16 @@ private struct TerminalScreenContent: View {
             // not move with the keyboard. It is dismissed on open instead,
             // because `.ignoresSafeArea(.keyboard)` would let it cover the
             // panel's lower rows.
-            SideDrawer(isOpen: $drawerOpen, dragTranslation: drawerDrag) {
-                SessionsPanel(
-                    model: panel,
-                    currentSessionId: handOff?.nextId ?? sessionId,
-                    departingSessionId: handOff?.stoppedId ?? stoppedSessionId,
-                    switchingAgentId: deepLink.isSwitchingAgent ? deepLink.pendingAgentId : nil,
-                    onSelectSession: { id in
-                        drawerOpen = false
-                        router.replaceLast(with: .sessionDetail(sessionId: id))
-                    },
-                    onStopSession: { pendingStop = $0 },
-                    onCreateSession: {
-                        drawerOpen = false
-                        router.navigate(to: .createSession)
-                    },
-                    onSelectAgent: { agent in
-                        deepLink.openSessions(ofAgent: agent.agent_id)
-                    },
-                    onClose: { drawerOpen = false }
-                )
-            }
+            sessionsDrawer
         }
         .clipped()
         .ignoresSafeArea(.keyboard, edges: .bottom)
-        // The left edge is the drawer's; the back button still pops.
-        .background(InteractivePopGestureDisabler())
+        // The left edge is the drawer's; the back button still pops. A Herdr
+        // pane has no drawer and keeps the swipe back.
+        .background { popGestureGuard }
         .navigationTitle(headerLabel)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    openDrawer()
-                } label: {
-                    Image(systemName: "sidebar.left")
-                }
-                .accessibilityLabel("Sessions")
-                .accessibilityIdentifier("terminal-sessions-button")
-            }
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                PixelStatusSquare(tone: SessionDisplay.stateTone(model.sessionStatus ?? ""), size: 10)
-                    .accessibilityLabel(model.sessionStatus ?? "unknown")
-                // Session-scoped git needs a directory to run in, and the row
-                // is nil until it loads (cold-start deep link), so the menu
-                // appears once the cwd is known. Fixed order: a top-bar `Menu`
-                // otherwise renders its sections bottom-up. Branches… links to
-                // the project's Git screen, so it also needs a project-backed
-                // session.
-                if sessionRow?.cwd != nil {
-                    Menu {
-                        SessionGitMenuItems(
-                            sessionId: sessionId,
-                            projectName: sessionRow?.project_name,
-                            capabilities: gitCapabilities,
-                            navigate: { router.navigate(to: $0) }
-                        )
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                    .menuOrder(.fixed)
-                    .accessibilityLabel("More options")
-                }
-            }
-        }
+        .toolbar { terminalToolbar }
         .sheet(isPresented: $showTemplates) {
             TemplatesPickerSheet(model: model)
         }
@@ -581,9 +541,129 @@ private struct TerminalScreenContent: View {
         }
     }
 
+    /// The sessions drawer; a Herdr pane has none.
+    @ViewBuilder
+    private var sessionsDrawer: some View {
+        if pane == nil {
+            SideDrawer(isOpen: $drawerOpen, dragTranslation: drawerDrag) {
+                SessionsPanel(
+                    model: panel,
+                    currentSessionId: handOff?.nextId ?? sessionId,
+                    departingSessionId: handOff?.stoppedId ?? stoppedSessionId,
+                    switchingAgentId: deepLink.isSwitchingAgent ? deepLink.pendingAgentId : nil,
+                    onSelectSession: { id in
+                        drawerOpen = false
+                        router.replaceLast(with: .sessionDetail(sessionId: id))
+                    },
+                    onStopSession: { pendingStop = $0 },
+                    onCreateSession: {
+                        drawerOpen = false
+                        router.navigate(to: .createSession)
+                    },
+                    onSelectAgent: { agent in
+                        deepLink.openSessions(ofAgent: agent.agent_id)
+                    },
+                    onClose: { drawerOpen = false }
+                )
+            }
+        }
+    }
+
     private func openDrawer() {
         drawerDrag = nil
         drawerOpen = true
+    }
+
+    @ToolbarContentBuilder
+    private var terminalToolbar: some ToolbarContent {
+        if pane == nil {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    openDrawer()
+                } label: {
+                    Image(systemName: "sidebar.left")
+                }
+                .accessibilityLabel("Sessions")
+                .accessibilityIdentifier("terminal-sessions-button")
+            }
+        }
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            PixelStatusSquare(tone: SessionDisplay.stateTone(model.sessionStatus ?? ""), size: 10)
+                .accessibilityLabel(model.sessionStatus ?? "unknown")
+            // After the status square, where the session terminal has its menu.
+            paneActions
+            // Session-scoped git needs a directory to run in, and the row
+            // is nil until it loads (cold-start deep link), so the menu
+            // appears once the cwd is known. Fixed order: a top-bar `Menu`
+            // otherwise renders its sections bottom-up. Branches… links to
+            // the project's Git screen, so it also needs a project-backed
+            // session.
+            if sessionRow?.cwd != nil {
+                Menu {
+                    SessionGitMenuItems(
+                        sessionId: sessionId,
+                        projectName: sessionRow?.project_name,
+                        capabilities: gitCapabilities,
+                        navigate: { router.navigate(to: $0) }
+                    )
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuOrder(.fixed)
+                .accessibilityLabel("More options")
+            }
+        }
+    }
+
+    /// A Herdr pane has no drawer, so no edge pan either.
+    private var drawerEdgePanHandler: ((DrawerEdgePan) -> Void)? {
+        pane == nil ? { handleDrawerEdgePan($0) } : nil
+    }
+
+    @ViewBuilder
+    private var popGestureGuard: some View {
+        if pane == nil { InteractivePopGestureDisabler() }
+    }
+
+    /// The actions of a Herdr pane: the watch/control switch, the history. One
+    /// menu, as the session terminal has: two buttons in the bar leave about
+    /// five characters for the pane's title on a phone.
+    @ViewBuilder
+    private var paneActions: some View {
+        if let pane {
+            Menu {
+                if pane.canControl {
+                    Button(action: pane.onToggleControl) {
+                        Label(
+                            pane.controlling ? "Release control" : "Take control",
+                            systemImage: pane.controlling ? "hand.raised.slash" : "hand.raised"
+                        )
+                    }
+                    .disabled(pane.controlBusy || !model.isRunning)
+                    .accessibilityIdentifier("terminal-pane-control")
+                }
+                Button(action: pane.onOpenHistory) {
+                    Label("History", systemImage: "clock.arrow.circlepath")
+                }
+                .accessibilityIdentifier("terminal-pane-history")
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuOrder(.fixed)
+            .accessibilityLabel("Pane actions")
+            .accessibilityIdentifier("terminal-pane-menu")
+        }
+    }
+
+    /// Says what typing does in the pane's current mode.
+    private func paneNotice(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(colors.textMuted)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+            .background(colors.surface)
+            .accessibilityIdentifier("terminal-pane-notice")
     }
 
     private func handleDrawerEdgePan(_ pan: DrawerEdgePan) {

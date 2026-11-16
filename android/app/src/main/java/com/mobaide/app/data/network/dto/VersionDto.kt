@@ -182,6 +182,16 @@ fun VersionInfoResponse.voiceCapability(): VoiceCapability? = runCatching {
     )
 }.getOrNull()
 
+/**
+ * `capabilities.herdr.dashboard`: the agent has the Herdr dashboard. An explicit
+ * JSON `true` only, so an older agent shows no Herdr UI at all.
+ */
+fun VersionInfoResponse.herdrCapability(): Boolean = runCatching {
+    capabilities["herdr"]?.jsonObject
+        ?.get("dashboard")?.jsonPrimitive
+        ?.let { !it.isString && it.booleanOrNull == true }
+}.getOrNull() == true
+
 /** `capabilities.fs.<key>`, with [gitCapability]'s explicit-JSON-`true` rule. */
 fun VersionInfoResponse.fsCapability(key: String): Boolean = runCatching {
     capabilities["fs"]?.jsonObject

@@ -90,6 +90,7 @@ class MainActivity : ComponentActivity() {
 
     /** Session id from a tapped notification; consumed by [AppNavigation]. */
     private val deepLinkSessionId = MutableStateFlow<String?>(null)
+    private val deepLinkHerdrPane = MutableStateFlow<Pair<String, String>?>(null)
 
     private val requestNotificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -210,6 +211,8 @@ class MainActivity : ComponentActivity() {
                     agentSwitchCoordinator = agentSwitchCoordinator,
                     deepLinkSessionId = deepLinkSessionId,
                     onDeepLinkConsumed = { deepLinkSessionId.value = null },
+                    deepLinkHerdrPane = deepLinkHerdrPane,
+                    onHerdrDeepLinkConsumed = { deepLinkHerdrPane.value = null },
                     onImmediateUpdate = {
                         lifecycleScope.launch {
                             inAppUpdateManager.requestImmediateUpdate(this@MainActivity)
@@ -247,6 +250,13 @@ class MainActivity : ComponentActivity() {
             // Clear so a config-change / re-create doesn't re-navigate.
             intent.removeExtra(EXTRA_SESSION_ID)
         }
+        val herdrServer = intent?.getStringExtra(EXTRA_HERDR_SERVER_ID)?.takeIf { it.isNotBlank() }
+        val herdrPane = intent?.getStringExtra(EXTRA_HERDR_PANE_ID)?.takeIf { it.isNotBlank() }
+        if (herdrServer != null && herdrPane != null) {
+            deepLinkHerdrPane.value = herdrServer to herdrPane
+            intent.removeExtra(EXTRA_HERDR_SERVER_ID)
+            intent.removeExtra(EXTRA_HERDR_PANE_ID)
+        }
     }
 
     /**
@@ -281,6 +291,10 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_SESSION_ID = "com.mobaide.app.EXTRA_SESSION_ID"
+
+        /** A tapped Herdr alert names its pane with these two. */
+        const val EXTRA_HERDR_SERVER_ID = "com.mobaide.app.EXTRA_HERDR_SERVER_ID"
+        const val EXTRA_HERDR_PANE_ID = "com.mobaide.app.EXTRA_HERDR_PANE_ID"
 
         /** Normal reads finish in single-digit ms; far below the ~5s ANR bar. */
         private const val THEME_LOAD_TIMEOUT_MS = 500L

@@ -15,6 +15,7 @@ from mobaide.acp.wire import (
     is_chat_session,
 )
 from mobaide.core.models import SessionEvent, SessionState
+from mobaide.herdr.pane_session import PANE_EVENT
 from mobaide.relay.envelope import (
     PROTOCOL_VERSION,
     SUPPORTED_PROTOCOL_VERSIONS,
@@ -59,10 +60,14 @@ _EVENT_TO_STATUS = {
 }
 
 
-def _state_frame(status: str, pid: int | None = None) -> bytes:
+def _state_frame(status: str, pid: int | None = None, session=None) -> bytes:
     payload: dict[str, object] = {"status": status}
     if pid is not None:
         payload["pid"] = pid
+    # A herdr pane view adds its ``pane`` block (mode and grid).
+    extras = getattr(session, "wire_state_extras", None)
+    if extras is not None:
+        payload.update(extras())
     return FRAME_STATE + json.dumps(payload).encode("utf-8")
 
 
@@ -134,7 +139,9 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
         await websocket.close(code=4004, reason="Session not found")
         return
 
-    await websocket.send_bytes(_state_frame(_STATE_MAP[session.state], session.pid))
+    await websocket.send_bytes(
+        _state_frame(_STATE_MAP[session.state], session.pid, session)
+    )
 
     # Chunked replay handshake (protocol v3+):
     #   FRAME_REPLAY → N × FRAME_OUTPUT(chunk) → FRAME_REPLAY_END
@@ -159,8 +166,18 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
         await websocket.send_bytes(FRAME_OUTPUT)
     await websocket.send_bytes(FRAME_REPLAY_END)
 
+    if await manager.get_session(session_id) is not session:
+        # Released during the handshake (a Herdr pane view can end at any
+        # time). A fanout made now would stay under the id and be handed to
+        # the session that comes back under it.
+        await websocket.close(code=4004, reason="Session not found")
+        return
     fanout = ensure_fanout(websocket.app.state, session)
     consumer_queue = fanout.subscribe()
+    # An external session (a herdr pane view) streams only while watched.
+    viewer_attached = getattr(session, "viewer_attached", None)
+    if viewer_attached is not None:
+        viewer_attached()
 
     # Aggregated counters — emitted on disconnect, never per message.
     counters = {"bytes_in": 0, "bytes_out": 0, "msg_count": 0}
@@ -228,7 +245,13 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
                     await websocket.send_bytes(FRAME_CHAT + event.data)
                 elif event.event_type in _EVENT_TO_STATUS:
                     await websocket.send_bytes(
-                        _state_frame(_EVENT_TO_STATUS[event.event_type], session.pid),
+                        _state_frame(
+                            _EVENT_TO_STATUS[event.event_type], session.pid, session
+                        ),
+                    )
+                elif event.event_type == PANE_EVENT:
+                    await websocket.send_bytes(
+                        _state_frame(_STATE_MAP[session.state], session.pid, session),
                     )
         except WebSocketDisconnect:
             pass
@@ -248,6 +271,9 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
     finally:
         # Unsubscribe but do NOT kill the session — it stays alive for reconnect
         fanout.unsubscribe(consumer_queue)
+        viewer_detached = getattr(session, "viewer_detached", None)
+        if viewer_detached is not None:
+            viewer_detached()
         log_ws_disconnect(
             channel,
             session_id=session_id,

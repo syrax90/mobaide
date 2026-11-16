@@ -48,11 +48,14 @@ import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.ui.sessions.panel.StopSessionDialog
 import com.mobaide.app.ui.autoscan.AutoScanCard
+import com.mobaide.app.ui.herdr.HerdrCard
+import com.mobaide.app.ui.herdr.HerdrCardViewModel
 import com.mobaide.app.ui.update.AgentOutdatedBanner
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -65,8 +68,11 @@ fun SessionListScreen(
     onProjectsClick: () -> Unit = {},
     onAutoScanClick: (String) -> Unit = {},
     onBack: (() -> Unit)? = null,
+    herdrViewModel: HerdrCardViewModel = hiltViewModel(),
+    onHerdrClick: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val herdr by herdrViewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var stopTarget by remember { mutableStateOf<SessionResponse?>(null) }
 
@@ -137,7 +143,10 @@ fun SessionListScreen(
             }
             PullToRefreshBox(
                 isRefreshing = uiState.isReconnecting,
-                onRefresh = viewModel::refresh,
+                onRefresh = {
+                    viewModel.refresh()
+                    herdrViewModel.refresh()
+                },
                 modifier = Modifier.fillMaxSize(),
             ) {
                 LazyColumn(
@@ -160,6 +169,19 @@ fun SessionListScreen(
                         onStop = viewModel::stopAutoScan,
                         onClick = onAutoScanClick,
                     )
+                }
+
+                herdr?.let { card ->
+                    item(key = "herdr-heading") {
+                        Text(
+                            text = "Herdr",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    item(key = "herdr-card") {
+                        HerdrCard(summary = card.summary, status = card.status, onClick = onHerdrClick)
+                    }
                 }
 
                 if (uiState.sessions.isNotEmpty()) {

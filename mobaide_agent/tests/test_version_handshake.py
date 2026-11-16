@@ -70,6 +70,8 @@ async def test_get_version(client) -> None:
             "cursor": {"resume": True, "live": False},
             "pi": {"resume": True, "live": False},
         },
+        # The default config is not test mode, so the Herdr dashboard is on.
+        "herdr": {"dashboard": True},
     }
     # The signed manifest body now travels inline over the relay WebSocket
     # — it is not exposed via this REST surface.

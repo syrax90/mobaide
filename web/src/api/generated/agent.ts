@@ -250,6 +250,142 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/herdr": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Herdr Snapshot */
+        get: operations["herdr_snapshot_api_herdr_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/herdr/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Herdr Close */
+        post: operations["herdr_close_api_herdr_close_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/herdr/pane/agent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Herdr Start Agent */
+        post: operations["herdr_start_agent_api_herdr_pane_agent_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/herdr/pane/control": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Herdr Pane Control */
+        post: operations["herdr_pane_control_api_herdr_pane_control_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/herdr/pane/open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Herdr Open Pane */
+        post: operations["herdr_open_pane_api_herdr_pane_open_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/herdr/pane/text": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Herdr Pane Text */
+        get: operations["herdr_pane_text_api_herdr_pane_text_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/herdr/rename": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Herdr Rename */
+        post: operations["herdr_rename_api_herdr_rename_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/herdr/terminals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Herdr Create */
+        post: operations["herdr_create_api_herdr_terminals_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects": {
         parameters: {
             query?: never;
@@ -2285,6 +2421,250 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** HerdrAgentKind */
+        HerdrAgentKind: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+        };
+        /** HerdrCloseRequest */
+        HerdrCloseRequest: {
+            /** Id */
+            id: string;
+            /** Server Id */
+            server_id: string;
+            /**
+             * Target
+             * @enum {string}
+             */
+            target: "workspace" | "tab" | "pane";
+        };
+        /** HerdrControlRequest */
+        HerdrControlRequest: {
+            /**
+             * Client Id
+             * @default
+             */
+            client_id: string;
+            /** Control */
+            control: boolean;
+            /** Pane Id */
+            pane_id: string;
+            /** Server Id */
+            server_id: string;
+        };
+        /** HerdrCreateRequest */
+        HerdrCreateRequest: {
+            /** Agent */
+            agent?: string | null;
+            /** Cwd */
+            cwd?: string | null;
+            /** Label */
+            label?: string | null;
+            /** Pane Id */
+            pane_id?: string | null;
+            /**
+             * Placement
+             * @enum {string}
+             */
+            placement: "workspace" | "tab" | "split_right" | "split_down";
+            /** Server Id */
+            server_id: string;
+            /** Workspace Id */
+            workspace_id?: string | null;
+        };
+        /** HerdrCreateResponse */
+        HerdrCreateResponse: {
+            /** Agent Error */
+            agent_error?: string | null;
+            /** Pane Id */
+            pane_id: string;
+        };
+        /**
+         * HerdrFeatures
+         * @description What this server can do. A client hides the action of a ``False`` flag.
+         */
+        HerdrFeatures: {
+            /** Agents */
+            agents?: components["schemas"]["HerdrAgentKind"][];
+            /**
+             * Close Group
+             * @default false
+             */
+            close_group: boolean;
+            /**
+             * Close Pane
+             * @default false
+             */
+            close_pane: boolean;
+            /**
+             * Control
+             * @default false
+             */
+            control: boolean;
+            /**
+             * New Tab
+             * @default false
+             */
+            new_tab: boolean;
+            /**
+             * New Workspace
+             * @default false
+             */
+            new_workspace: boolean;
+            /**
+             * Rename
+             * @default false
+             */
+            rename: boolean;
+            /**
+             * Split
+             * @default false
+             */
+            split: boolean;
+            /**
+             * Type In Watch
+             * @default false
+             */
+            type_in_watch: boolean;
+        };
+        /** HerdrOkResponse */
+        HerdrOkResponse: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+        };
+        /** HerdrOpenPaneResponse */
+        HerdrOpenPaneResponse: {
+            /** Session Id */
+            session_id: string;
+        };
+        /** HerdrPane */
+        HerdrPane: {
+            /** Agent */
+            agent?: string | null;
+            /** Agent Session Id */
+            agent_session_id?: string | null;
+            /** Cwd */
+            cwd?: string | null;
+            /** Pane Id */
+            pane_id: string;
+            rect?: components["schemas"]["HerdrRect"] | null;
+            /** Status */
+            status?: string | null;
+            /** Title */
+            title: string;
+            /** Turn */
+            turn?: number | null;
+        };
+        /** HerdrPaneTarget */
+        HerdrPaneTarget: {
+            /** Pane Id */
+            pane_id: string;
+            /** Server Id */
+            server_id: string;
+        };
+        /** HerdrPaneTextResponse */
+        HerdrPaneTextResponse: {
+            /** Text */
+            text: string;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
+        /**
+         * HerdrRect
+         * @description Position of a pane in its tab, in terminal cells.
+         */
+        HerdrRect: {
+            /** Height */
+            height: number;
+            /** Width */
+            width: number;
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+        };
+        /** HerdrRenameRequest */
+        HerdrRenameRequest: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Server Id */
+            server_id: string;
+            /**
+             * Target
+             * @enum {string}
+             */
+            target: "workspace" | "tab" | "pane";
+        };
+        /** HerdrServer */
+        HerdrServer: {
+            features?: components["schemas"]["HerdrFeatures"];
+            /** Message */
+            message?: string | null;
+            /** Name */
+            name: string;
+            /** Product */
+            product: string;
+            /** Server Id */
+            server_id: string;
+            /**
+             * State
+             * @default ready
+             */
+            state: string;
+            /** Version */
+            version?: string | null;
+            /** Workspaces */
+            workspaces?: components["schemas"]["HerdrWorkspace"][];
+        };
+        /**
+         * HerdrSnapshot
+         * @description Payload of ``GET /api/herdr`` and of the ``herdr.changed`` event.
+         */
+        HerdrSnapshot: {
+            /** Servers */
+            servers?: components["schemas"]["HerdrServer"][];
+        };
+        /** HerdrStartAgentRequest */
+        HerdrStartAgentRequest: {
+            /** Agent */
+            agent: string;
+            /** Pane Id */
+            pane_id: string;
+            /** Server Id */
+            server_id: string;
+        };
+        /** HerdrTab */
+        HerdrTab: {
+            /** Height */
+            height?: number | null;
+            /** Label */
+            label: string;
+            /** Panes */
+            panes?: components["schemas"]["HerdrPane"][];
+            /** Tab Id */
+            tab_id: string;
+            /** Width */
+            width?: number | null;
+        };
+        /** HerdrWorkspace */
+        HerdrWorkspace: {
+            /** Label */
+            label: string;
+            /** Tabs */
+            tabs?: components["schemas"]["HerdrTab"][];
+            /** Workspace Id */
+            workspace_id: string;
+        };
         /**
          * LinearLabelModel
          * @description Linear label discovered via the per-project API key.
@@ -3168,6 +3548,257 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    herdr_snapshot_api_herdr_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HerdrSnapshot"];
+                };
+            };
+        };
+    };
+    herdr_close_api_herdr_close_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HerdrCloseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HerdrOkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    herdr_start_agent_api_herdr_pane_agent_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HerdrStartAgentRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HerdrOkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    herdr_pane_control_api_herdr_pane_control_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HerdrControlRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HerdrOkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    herdr_open_pane_api_herdr_pane_open_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HerdrPaneTarget"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HerdrOpenPaneResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    herdr_pane_text_api_herdr_pane_text_get: {
+        parameters: {
+            query: {
+                server_id: string;
+                pane_id: string;
+                lines?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HerdrPaneTextResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    herdr_rename_api_herdr_rename_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HerdrRenameRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HerdrOkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    herdr_create_api_herdr_terminals_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HerdrCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HerdrCreateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -57,8 +57,12 @@ def _send_session_lifecycle(
     conn = routing.get_agent(agent_id)
     if conn is None:
         return
+    # The number of mobiles on the session after this event. The agent takes
+    # it as the count of a Herdr pane's viewers; a step per event would go
+    # wrong when a detach and an attach of two sockets cross.
+    count = len(routing.get_mobile_clients(agent_id, f"session_io:{session_id}"))
     if not try_enqueue_control(
-        conn, {"type": event, "session_id": session_id}
+        conn, {"type": event, "session_id": session_id, "count": count}
     ):
         logger.warning(
             "relay.session_lifecycle.drop agent=%s session=%s event=%s — agent queue full",

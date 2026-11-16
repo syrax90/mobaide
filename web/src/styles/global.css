@@ -6502,3 +6502,135 @@ body:has(dialog[open]) {
   font-size: 0.8rem;
 }
 /* endregion */
+
+/* region: herdr dashboard */
+.herdr-server {
+  margin-bottom: 1.5rem;
+}
+
+.herdr-server-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.herdr-server-head .autoscan-section-title {
+  margin: 0;
+}
+
+/* A version number is not a heading word: no caps, no tracking. */
+.herdr-server-version {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.herdr-workspace {
+  margin-bottom: 1rem;
+}
+
+.herdr-tab {
+  margin-bottom: 0.5rem;
+}
+
+.herdr-group-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  /* Room for the menu button's hard shadow above the first card. */
+  margin-bottom: 0.6rem;
+}
+
+.herdr-group-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.herdr-group-head-tab .herdr-group-title {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.herdr-agent-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0 1rem;
+}
+
+/* Both classes, as `.dialog.template-picker` does: `.dialog` is declared above
+   and would otherwise win on source order. */
+.dialog.herdr-history {
+  width: min(60rem, calc(100vw - 32px));
+}
+
+/* A form has no gap rule of its own: without this the reason of a failed
+   action touches the buttons under it. */
+.herdr-dialog-error {
+  margin-bottom: 0.75rem;
+}
+
+.herdr-history-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.herdr-history-head h2 {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.herdr-history-text {
+  max-height: 65vh;
+  overflow: auto;
+  padding: 0.75rem;
+  background: var(--surface);
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  white-space: pre;
+}
+
+.herdr-history-text:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A flex sibling of the stage, above it: its height is constant while a pane is
+   in one mode, so it never changes the grid under a selection. */
+.terminal-pane-notice {
+  flex: none;
+  padding: 4px 12px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+/*
+ * A watched Herdr pane keeps the pane's own grid, which can be wider or taller
+ * than the stage even at the smallest font. The host then scrolls: xterm sizes
+ * its screen in pixels and does not clip it itself.
+ */
+.terminal-host.terminal-host-remote {
+  overflow: auto;
+  /* Ends where the scrollbar track starts: a pane wider than the stage scrolls
+     here, and its last columns must not end up under that opaque track. */
+  right: var(--terminal-scrollbar-width);
+  /* The grid is usually smaller than the stage here. The rest of the stage
+     takes the grid's own background (fixed dark, see terminalTheme.ts), so
+     the pane does not float on the page colour. */
+  background: #12141a;
+}
+/* endregion */

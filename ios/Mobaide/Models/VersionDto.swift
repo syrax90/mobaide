@@ -147,6 +147,13 @@ extension VersionInfoResponse {
         return false
     }
 
+    /// `capabilities.herdr.dashboard`: the agent has the Herdr dashboard. An
+    /// explicit `true` only, so an older agent shows no Herdr UI at all.
+    var herdrCapability: Bool {
+        if case .bool(true)? = capabilities["herdr"]?["dashboard"] { return true }
+        return false
+    }
+
     /// `capabilities.fs.<key>`, with `gitCapability`'s explicit-`true` rule.
     func fsCapability(_ key: String) -> Bool {
         if case .bool(true)? = capabilities["fs"]?[key] { return true }

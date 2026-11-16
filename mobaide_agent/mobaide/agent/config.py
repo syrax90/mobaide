@@ -170,6 +170,18 @@ class AgentConfig(BaseSettings):
     voice_fake: bool = Field(default=False, validation_alias="MOBAIDE_VOICE_FAKE")
     voice_dir: str | None = Field(default=None, validation_alias="MOBAIDE_VOICE_DIR")
 
+    # Herdr dashboard. Unset means on, except in test mode (a disposable agent
+    # must not find the developer's herdr servers) and on Windows (the named-pipe
+    # transport is untested there; ``1`` turns it on).
+    herdr_enabled: bool | None = Field(default=None, validation_alias="MOBAIDE_HERDR_ENABLED")
+    herdr_fake: bool = Field(default=False, validation_alias="MOBAIDE_HERDR_FAKE")
+    # Typed fields, not ``os.environ`` reads: pydantic-settings reads ``.env``
+    # and does not export it, and only the Linux service exports it itself.
+    herdr_bin: str | None = Field(default=None, validation_alias="MOBAIDE_HERDR_BIN")
+    herdr_config_dir: str | None = Field(
+        default=None, validation_alias="MOBAIDE_HERDR_CONFIG_DIR"
+    )
+
     auto_scan_config: AutoScanConfig | None = Field(default=None, exclude=True)
     relay_config: RelayConfig | None = Field(default=None, exclude=True)
 
@@ -187,14 +199,27 @@ class AgentConfig(BaseSettings):
         populate_by_name=True,
     )
 
-    @field_validator("audit_log_path", "voice_dir", mode="before")
+    @field_validator(
+        "audit_log_path", "voice_dir", "herdr_bin", "herdr_config_dir", mode="before"
+    )
     @classmethod
     def _empty_audit_path_to_none(cls, value: Any) -> Any:
         if value == "" or value is None:
             return None
         return value
 
-    @field_validator("log_sample_ws", "enable_api_docs", "voice_fake", mode="before")
+    @field_validator("herdr_enabled", mode="before")
+    @classmethod
+    def _parse_optional_bool(cls, value: Any) -> bool | None:
+        if value is None or isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in _TRUTHY if value.strip() else None
+        return None
+
+    @field_validator(
+        "log_sample_ws", "enable_api_docs", "voice_fake", "herdr_fake", mode="before"
+    )
     @classmethod
     def _parse_env_bool(cls, value: Any) -> bool:
         if isinstance(value, bool):
@@ -256,6 +281,16 @@ class AgentConfig(BaseSettings):
         literal ``test`` opts in — ``TEST``/``staging``/``""`` stay production.
         """
         return self.env == "test"
+
+    @property
+    def herdr_mode(self) -> str:
+        """``fake`` | ``real`` | ``off`` for the Herdr dashboard."""
+        if self.herdr_fake:
+            return "fake"
+        enabled = self.herdr_enabled
+        if enabled is None:
+            enabled = not self.is_test_mode and sys.platform != "win32"
+        return "real" if enabled else "off"
 
     @classmethod
     def from_env(cls, env_file: Path | None = None) -> "AgentConfig":

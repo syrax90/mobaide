@@ -206,6 +206,41 @@ class TestSessionLifecycleSignals:
 
             assert attach_sids == {"s1", "s2"}
 
+    async def test_agent_reconnect_replay_carries_the_viewer_count(
+        self, app, registered_agent
+    ):
+        """Two mobiles on one Herdr pane session and an agent bounce: the
+        replay is one ``mobile_session_attach`` with ``count: 2``. The agent
+        starts its viewer count from zero on a new tunnel; with a count of
+        one, the first mobile that leaves would stop the stream of the other.
+        """
+        agent_id, raw_token = registered_agent
+        from central_server.relay.routing import MobileClient
+        for device_id in ("dev-1", "dev-2"):
+            app.state.routing.register_mobile(
+                agent_id, "session_io:herdr-pane",
+                MobileClient(device_id=device_id, websocket=_mock_agent_ws()),
+            )
+
+        tc = TestClient(app)
+        with tc.websocket_connect("/ws/agent-tunnel") as ws:
+            ws.send_text(json.dumps({
+                "type": "auth",
+                "agent_id": agent_id,
+                "token": raw_token,
+                "protocol_version": PROTOCOL_VERSION,
+            }))
+            assert json.loads(ws.receive_text())["type"] == "auth_ok"
+
+            channel, _sid, payload = decode(ws.receive_bytes())
+
+        assert channel == CH_CONTROL
+        assert json.loads(payload) == {
+            "type": "mobile_session_attach",
+            "session_id": "herdr-pane",
+            "count": 2,
+        }
+
 
 class TestSendSessionLifecycleHelper:
     """Unit-level guards for ``mobile_ws._send_session_lifecycle``.
@@ -243,6 +278,47 @@ class TestSendSessionLifecycleHelper:
         assert conn.send_queue.qsize() == 1
         assert conn.send_queue.get_nowait() == b"already-full"
 
+    def test_attach_and_detach_carry_the_clients_left_on_the_session(self):
+        """Every lifecycle message says how many mobiles are on the session
+        after the event. The agent takes that number as the viewer count of
+        a Herdr pane: with a step per message, a detach that arrives after
+        the attach of the socket that replaced it takes a viewer too many.
+        Mobiles on another session or channel are not counted.
+        """
+        from central_server.relay.mobile_ws import _send_session_lifecycle
+        from central_server.relay.routing import MobileClient, RoutingTable
+
+        routing = RoutingTable()
+        conn = routing.register_agent("agent-1", _mock_agent_ws())
+        first = MobileClient(device_id="dev-1", websocket=_mock_agent_ws())
+        second = MobileClient(device_id="dev-2", websocket=_mock_agent_ws())
+        routing.register_mobile(
+            "agent-1", "session_io:other",
+            MobileClient(device_id="dev-3", websocket=_mock_agent_ws()),
+        )
+        routing.register_mobile(
+            "agent-1", "events",
+            MobileClient(device_id="dev-1", websocket=_mock_agent_ws()),
+        )
+
+        # The order of ``relay_session_io``: register, then attach;
+        # unregister, then detach.
+        routing.register_mobile("agent-1", "session_io:s1", first)
+        _send_session_lifecycle(routing, "agent-1", "s1", "mobile_session_attach")
+        routing.register_mobile("agent-1", "session_io:s1", second)
+        _send_session_lifecycle(routing, "agent-1", "s1", "mobile_session_attach")
+        routing.unregister_mobile("agent-1", "session_io:s1", first)
+        _send_session_lifecycle(routing, "agent-1", "s1", "mobile_session_detach")
+        routing.unregister_mobile("agent-1", "session_io:s1", second)
+        _send_session_lifecycle(routing, "agent-1", "s1", "mobile_session_detach")
+
+        assert _drain_control_msgs(conn) == [
+            {"type": "mobile_session_attach", "session_id": "s1", "count": 1},
+            {"type": "mobile_session_attach", "session_id": "s1", "count": 2},
+            {"type": "mobile_session_detach", "session_id": "s1", "count": 1},
+            {"type": "mobile_session_detach", "session_id": "s1", "count": 0},
+        ]
+
 
 class TestEnqueueAttachHelper:
     """Unit-level guard for ``agent_ws._enqueue_attach``.
@@ -266,7 +342,7 @@ class TestEnqueueAttachHelper:
         conn.send_queue = _asyncio.Queue(maxsize=1)
         conn.send_queue.put_nowait(b"already-full")
 
-        _enqueue_attach(conn, "s1")
+        _enqueue_attach(conn, "s1", 1)
 
         assert conn.send_queue.qsize() == 1
         assert conn.send_queue.get_nowait() == b"already-full"

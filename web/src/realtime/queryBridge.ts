@@ -57,6 +57,7 @@ import { applyProjectsSnapshot } from './projectsCache';
 import { applySessionsSnapshot, applySessionUpsert } from './sessionCache';
 import { applySessionGitJobEvent } from './sessionGitJobCache';
 import { applySessionModeOrderEvent } from './sessionModeOrderCache';
+import { applyHerdrSnapshot } from './herdrCache';
 import { applyVoiceSnapshot } from './voiceCache';
 import { markSessionsSnapshotApplied } from './sessionsSyncStore';
 import {
@@ -333,6 +334,15 @@ export function applyAgentEventEnvelope(
         kind: 'patched',
         type: envelope.type,
         keys: [queryKeys.voiceStatus(agentId)],
+      };
+    }
+    case 'herdr.changed': {
+      const outcome = applyHerdrSnapshot(client, agentId, envelope.payload);
+      if (outcome === 'dropped') return { kind: 'dropped' };
+      return {
+        kind: 'patched',
+        type: envelope.type,
+        keys: [queryKeys.herdr(agentId)],
       };
     }
     default:

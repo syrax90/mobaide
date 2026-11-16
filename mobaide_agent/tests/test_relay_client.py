@@ -91,6 +91,33 @@ def _mock_iter_ring_chunks(ring: bytes, chunk_size: int | None = None):
     return factory
 
 
+@pytest.fixture
+async def pty_session_mock(client, mock_app_state):
+    """Factory for a mocked PTY session that a mobile attaches to.
+
+    An attach also starts the session's bridge, which reads ``event_queue``;
+    an ``AsyncMock`` queue would answer at once, forever. A PTY session also
+    has none of the pane-session hooks, which ``AsyncMock`` would invent.
+    """
+
+    def make(session_id: str, pid: int, ring: bytes) -> AsyncMock:
+        session = AsyncMock()
+        session.session_id = session_id
+        session.state = SessionState.RUNNING
+        session.pid = pid
+        session.event_queue = asyncio.Queue()
+        session.iter_ring_chunks = MagicMock(side_effect=_mock_iter_ring_chunks(ring))
+        del session.wire_state_extras
+        del session.viewer_attached
+        del session.viewer_detached
+        return session
+
+    yield make
+    client._cancel_all_subtasks()
+    for fanout in list(mock_app_state.fanouts.values()):
+        fanout.stop()
+
+
 # -- _state_frame helper -------------------------------------------------------
 
 
@@ -324,15 +351,9 @@ class TestHandleMobileAttach:
     """
 
     async def test_attach_sends_full_handshake_in_order(
-        self, client, mock_session_manager
+        self, client, mock_session_manager, pty_session_mock
     ):
-        mock_session = AsyncMock()
-        mock_session.session_id = "s1"
-        mock_session.state = SessionState.RUNNING
-        mock_session.pid = 42
-        mock_session.iter_ring_chunks = MagicMock(
-            side_effect=_mock_iter_ring_chunks(b"hello world"),
-        )
+        mock_session = pty_session_mock("s1", 42, b"hello world")
         mock_session_manager.get_session = AsyncMock(return_value=mock_session)
 
         ws = AsyncMock()
@@ -365,7 +386,7 @@ class TestHandleMobileAttach:
         assert decoded[3][2] == FRAME_REPLAY_END
 
     async def test_attach_sends_multi_chunk_handshake_when_ring_exceeds_chunk_size(
-        self, client, mock_session_manager,
+        self, client, mock_session_manager, pty_session_mock,
     ):
         """Relay-mirror chunking parity with the direct WS handshake: when
         the session's ring exceeds ``REPLAY_CHUNK_BYTES`` the attach handler
@@ -384,13 +405,7 @@ class TestHandleMobileAttach:
         # so a misorder or head-trim would not pass the byte-equal check.
         ring = bytes((i & 0xFF) for i in range(REPLAY_CHUNK_BYTES + 1))
 
-        mock_session = AsyncMock()
-        mock_session.session_id = "s-multi"
-        mock_session.state = SessionState.RUNNING
-        mock_session.pid = 99
-        mock_session.iter_ring_chunks = MagicMock(
-            side_effect=_mock_iter_ring_chunks(ring),
-        )
+        mock_session = pty_session_mock("s-multi", 99, ring)
         mock_session_manager.get_session = AsyncMock(return_value=mock_session)
 
         ws = AsyncMock()
@@ -451,20 +466,14 @@ class TestHandleMobileAttach:
         assert state == {"status": "stopped"}
 
     async def test_attach_is_repeatable_no_idempotency_cache(
-        self, client, mock_session_manager
+        self, client, mock_session_manager, pty_session_mock
     ):
         """Regression guard for the bug this fix addresses: the old
         ``_handshake_sent`` cache silently skipped the handshake on a
         mobile reattach, leaving the keyboard grayed out. The new path
         must send a fresh handshake for every attach.
         """
-        mock_session = AsyncMock()
-        mock_session.session_id = "s1"
-        mock_session.state = SessionState.RUNNING
-        mock_session.pid = 42
-        mock_session.iter_ring_chunks = MagicMock(
-            side_effect=_mock_iter_ring_chunks(b""),
-        )
+        mock_session = pty_session_mock("s1", 42, b"")
         mock_session_manager.get_session = AsyncMock(return_value=mock_session)
 
         ws = AsyncMock()

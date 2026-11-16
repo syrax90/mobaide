@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
@@ -26,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Circle
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.Badge
@@ -42,6 +44,7 @@ import com.mobaide.app.ui.theme.PxDarkSurface
 import com.mobaide.app.ui.theme.PxDarkText
 import com.mobaide.app.ui.theme.chromeCaps
 import com.mobaide.app.data.network.dto.SessionResponse
+import com.mobaide.app.ui.common.pixel.PixelButton
 import com.mobaide.app.ui.common.pixel.PixelFab
 import com.mobaide.app.ui.common.pixel.PixelIconButton
 import com.mobaide.app.ui.common.pixel.PixelStatusDot
@@ -80,6 +83,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
 import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -92,6 +96,7 @@ import androidx.lifecycle.withResumed
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.ui.theme.TerminalBackground
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -105,6 +110,28 @@ private const val SHEET_SNACKBAR_TIMEOUT_MS = 130_000L
 
 /** The terminal's fade-out before a stop hand-off, and the next one's fade-in. */
 private const val STOP_HAND_OFF_FADE_MS = 250
+
+/**
+ * What changes when the terminal shows a Herdr pane instead of a session. A
+ * pane is not in the session list, so the sessions drawer and the git menu are
+ * off, and the top bar gets the pane's own actions.
+ */
+class TerminalPaneChrome(
+    val title: String,
+    /** One line above the terminal that says what the current mode does. */
+    val notice: String?,
+    /** The server can give control of a pane: the mode switch is shown. */
+    val canControl: Boolean,
+    val controlling: Boolean,
+    /** A mode change is on its way: the switch is disabled. */
+    val controlBusy: Boolean,
+    val onToggleControl: () -> Unit,
+    val onOpenHistory: () -> Unit,
+)
+
+const val TERMINAL_PANE_CONTROL_TAG = "terminal_pane_control"
+const val TERMINAL_PANE_HISTORY_TAG = "terminal_pane_history"
+const val TERMINAL_PANE_NOTICE_TAG = "terminal_pane_notice"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -126,8 +153,13 @@ fun TerminalScreen(
     onOpenGitSync: () -> Unit = {},
     onOpenGitBranches: (projectName: String) -> Unit = {},
     onOpenGitRebase: () -> Unit = {},
+    /** Set when this terminal shows a Herdr pane. */
+    pane: TerminalPaneChrome? = null,
+    /** Messages of the pane's own actions, shown in this screen's snackbar. */
+    paneMessages: Flow<String>? = null,
 ) {
     val sessionState by viewModel.sessionState.collectAsStateWithLifecycle()
+    val paneState by viewModel.paneState.collectAsStateWithLifecycle()
     val sessionCwd by viewModel.sessionCwd.collectAsStateWithLifecycle()
     val sessionProjectName by viewModel.sessionProjectName.collectAsStateWithLifecycle()
     val gitCommitAvailable by viewModel.gitCommitAvailable.collectAsStateWithLifecycle()
@@ -176,6 +208,10 @@ fun TerminalScreen(
 
     LaunchedEffect(viewModel) {
         viewModel.sessionEnded.collect { onSessionEnded() }
+    }
+
+    LaunchedEffect(paneMessages) {
+        paneMessages?.collect { message -> snackbarHostState.showSnackbar(message) }
     }
 
     val voice = rememberVoiceComposerSlots(
@@ -327,7 +363,7 @@ fun TerminalScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = headerLabel,
+                                text = pane?.title ?: headerLabel,
                                 style = MaterialTheme.typography.titleMedium.copy(
                                     fontFamily = ChromeFontFamily,
                                 ),
@@ -344,16 +380,34 @@ fun TerminalScreen(
                                     contentDescription = "Back",
                                 )
                             }
-                            PixelIconButton(
-                                imageVector = Icons.Default.Menu,
-                                contentDescription = "Sessions",
-                                onClick = openDrawer,
-                                compact = true,
-                            )
+                            if (pane == null) {
+                                PixelIconButton(
+                                    imageVector = Icons.Default.Menu,
+                                    contentDescription = "Sessions",
+                                    onClick = openDrawer,
+                                    compact = true,
+                                )
+                            }
                         }
                     },
                     actions = {
-                        if (sessionCwd != null) {
+                        if (pane != null) {
+                            if (pane.canControl) {
+                                PixelButton(
+                                    text = if (pane.controlling) "Release" else "Take control",
+                                    onClick = pane.onToggleControl,
+                                    enabled = !pane.controlBusy && sessionState == "running",
+                                    compact = true,
+                                    modifier = Modifier.testTag(TERMINAL_PANE_CONTROL_TAG),
+                                )
+                            }
+                            PixelIconButton(
+                                imageVector = Icons.Default.History,
+                                contentDescription = "History",
+                                onClick = pane.onOpenHistory,
+                                modifier = Modifier.testTag(TERMINAL_PANE_HISTORY_TAG),
+                            )
+                        } else if (sessionCwd != null) {
                             val branchesProject = sessionProjectName
                             TerminalOverflowMenu(
                                 onOpenGitChanges = onOpenGitChanges,
@@ -392,7 +446,7 @@ fun TerminalScreen(
                     .padding(padding)
                     .clipToBounds()
                     .graphicsLayer { alpha = terminalAlpha.value }
-                    .edgeSwipeToOpen(enabled = !drawerState.isOpen, onOpen = openDrawer),
+                    .edgeSwipeToOpen(enabled = pane == null && !drawerState.isOpen, onOpen = openDrawer),
             ) {
                 Column(
                     modifier = Modifier
@@ -404,6 +458,18 @@ fun TerminalScreen(
                         // row visible. See imeFloatingPan / imeCursorCounterPan.
                         .imeFloatingPan(WindowInsets.ime, WindowInsets.systemBars),
                 ) {
+                    pane?.notice?.let { notice ->
+                        Text(
+                            text = notice,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                                .testTag(TERMINAL_PANE_NOTICE_TAG),
+                        )
+                    }
                     Box(modifier = Modifier.weight(1f)) {
                         // clipToBounds: the counter-pan shifts the surface down by up to the
                         // pan amount; the overhang must not paint over the InputBar below.
@@ -442,6 +508,7 @@ fun TerminalScreen(
                                 // Deliberately independent of composerVisible: pasting into the
                                 // terminal is valid whether or not the composer is on screen.
                                 pasteFromClipboardEnabled = sessionInputActive,
+                                remoteGrid = paneState?.grid,
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .imeCursorCounterPan(WindowInsets.ime, WindowInsets.systemBars) {

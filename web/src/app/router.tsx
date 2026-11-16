@@ -8,6 +8,7 @@ import { ResetPassword } from '../routes/auth/ResetPassword';
 import { VerifyEmail } from '../routes/auth/VerifyEmail';
 import { Agents } from '../routes/agents/Agents';
 import { AutoScanDetailScreen } from '../routes/autoscan/AutoScanDetailScreen';
+import { HerdrScreen } from '../routes/herdr/HerdrScreen';
 import { Pair } from '../routes/pair/Pair';
 import { PairHost } from '../routes/pair/PairHost';
 import { SettingsScreen } from '../routes/settings/SettingsScreen';
@@ -89,8 +90,18 @@ export const router = createBrowserRouter([
                 path: 'agents/:agentId/autoscan/:projectName',
                 element: <AutoScanDetailScreen />,
               },
+              { path: 'agents/:agentId/herdr', element: <HerdrScreen /> },
               {
-                // The only lazy route. xterm.js and its WebGL addon are ~740 KB
+                // Lazy for the terminal's reason below: this screen draws a
+                // pane with the same emulator.
+                path: 'agents/:agentId/herdr/pane',
+                lazy: async () => {
+                  const { HerdrPaneScreen } = await import('../routes/herdr/HerdrPaneScreen');
+                  return { Component: HerdrPaneScreen };
+                },
+              },
+              {
+                // The first lazy route. xterm.js and its WebGL addon are ~740 KB
                 // raw, which is more than the rest of the SPA put together —
                 // eager-loading them would put the whole emulator on the
                 // critical path of the sign-in screen. `SessionRoute` then picks

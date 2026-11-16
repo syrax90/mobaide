@@ -20,6 +20,10 @@ import {
   dismissResolvedAttention,
   handleAttentionEvent,
 } from '../notifications/attentionNotifications';
+import {
+  dismissResolvedHerdrAttention,
+  handleHerdrAttentionEvent,
+} from '../notifications/herdrAttention';
 import { decodeEventEnvelope } from '../protocol/dto/envelope';
 import { createAgentEventsChannel, createUserEventsChannel } from './channels';
 import { useConnectionStore } from './connectionStore';
@@ -82,6 +86,7 @@ export function startUserEvents(client: QueryClient): WebSocketChannel {
         // After the cache routing, so the sessions list has at least been marked
         // stale before an alert points the user at it.
         handleAttentionEvent(envelope);
+        handleHerdrAttentionEvent(envelope);
         break;
       }
       case 'tokenRejected':
@@ -169,6 +174,7 @@ export function connectAgentEvents(
         // carries the full session row, so only this channel can tell that an
         // attention has been answered.
         dismissResolvedAttention(envelope);
+        dismissResolvedHerdrAttention(agentId, envelope);
         break;
       }
       default:

@@ -8,6 +8,7 @@ never sign per-request.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -36,8 +37,8 @@ class ApnsSending(Protocol):
         token: str,
         title: str,
         body: str,
-        session_id: str,
-        agent_id: str,
+        thread_id: str,
+        data: Mapping[str, str],
         environment: str,
     ) -> PushResult: ...
 
@@ -83,10 +84,12 @@ class AioapnsSender:
         token: str,
         title: str,
         body: str,
-        session_id: str,
-        agent_id: str,
+        thread_id: str,
+        data: Mapping[str, str],
         environment: str,
     ) -> PushResult:
+        """``thread_id`` groups and collapses the alerts of one target;
+        ``data`` is the custom payload the app opens that target from."""
         from aioapns import NotificationRequest, PushType
 
         request = NotificationRequest(
@@ -95,12 +98,11 @@ class AioapnsSender:
                 "aps": {
                     "alert": {"title": title, "body": body},
                     "sound": "default",
-                    "thread-id": session_id,
+                    "thread-id": thread_id,
                 },
-                "session_id": session_id,
-                "agent_id": agent_id,
+                **data,
             },
-            collapse_key=session_id,
+            collapse_key=thread_id,
             push_type=PushType.ALERT,
         )
         try:
