@@ -1032,7 +1032,7 @@ The CLI works on the same files and lock as the running agent; the apps see the 
 
 **Privacy.** Audio is held in memory only, transcribed, and dropped; neither audio nor transcript text is logged or written to disk — logs carry only sizes, durations, timings and error codes.
 
-The one way the text leaves the PC is the opt-in transcript cleanup (web, Android and iOS; Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot, Cursor and Pi sessions). The agent hands the transcript to the session's CLI on that computer, which sends it to Anthropic, OpenAI, Google, the user's OpenCode model provider, GitHub, Cursor (Anysphere) or Pi's model provider under the user's own login. The agent still never logs or stores it (docs/voice-input.md, *Transcript cleanup*).
+The one way the text leaves the PC is the opt-in transcript cleanup (web, Android and iOS; Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot, Cursor, Junie and Pi sessions). The agent hands the transcript to the session's CLI on that computer, which sends it to Anthropic, OpenAI, Google, the user's OpenCode model provider, GitHub, Cursor (Anysphere), JetBrains or Pi's model provider under the user's own login. The agent still never logs or stores it (docs/voice-input.md, *Transcript cleanup*).
 
 **Testing without the model.** `MOBAIDE_VOICE_FAKE=1` swaps in a tiny generated model and a deterministic engine under `<state prefix>/voice-fake/`. `tests/e2e/manual_stack.py up --fake-voice` sets it.
 

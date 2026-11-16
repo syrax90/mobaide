@@ -2,7 +2,8 @@
 cheapest model — ``claude -p`` on Haiku, ``codex exec`` on Luna, ``agy`` on
 Gemini Flash. OpenCode, GitHub Copilot and Pi name no cheapest model, so
 ``opencode run``, ``copilot`` and ``pi`` use the user's default model.
-``cursor-agent -p`` runs on Auto, Cursor's own default model.
+``cursor-agent -p`` runs on Auto, Cursor's own default model, and ``junie``
+on Junie Lite, JetBrains' free model.
 
 The transcript goes on stdin, never in argv, because an npm ``.cmd`` shim on
 Windows is run through ``cmd /c`` and argv shows in process listings. Like
@@ -39,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 # The session kinds whose CLI can clean up a transcript; advertised as
 # ``capabilities.voice.cleanup_kinds``.
-CleanupKind = Literal["claude", "codex", "antigravity", "opencode", "copilot", "cursor", "pi"]
+CleanupKind = Literal["claude", "codex", "antigravity", "opencode", "copilot", "cursor", "junie", "pi"]
 CLEANUP_KINDS: tuple[str, ...] = get_args(CleanupKind)
 
 # Below the relay's 30 s proxy timeout, so the agent's own answer arrives.
@@ -173,6 +174,75 @@ _CURSOR_CONFIG_FILE = "cli-config.json"
 _CURSOR_CHATS_DIR = "chats"
 # A run ends within ``CLEANUP_TIMEOUT_SECONDS``, so an older chat is over.
 _CURSOR_CHAT_KEEP_SECONDS = 3 * CLEANUP_TIMEOUT_SECONDS
+# Junie Lite is free, and it is the only model of a Lite-only account.
+_JUNIE_MODEL = "junie-lite"
+# The tool that ends a run. Junie always keeps it, whatever the list names.
+_JUNIE_TOOLS = "submit"
+# A Junie task ends only with a call of ``submit``, whose description asks for
+# a Markdown report of the changes. Junie Lite then wrapped the text in such a
+# report, or answered in plain text, which Junie refuses until the run fails.
+_OUTPUT_RULE = "Output only the cleaned text: no preamble, quotes, tags, or notes."
+_JUNIE_OUTPUT_RULE = (
+    "This is not a coding task: there is no project to read and nothing to change or run. "
+    "Reply with exactly one call of the submit tool and nothing else. Its solution_summary is "
+    "the cleaned text alone: no preamble, quotes, tags, notes, lists, headings, Markdown, or "
+    "description of your edits. These rules override the format rules of the submit tool. "
+    "If the submit is rejected because no files were changed, call submit again at once with "
+    "the same cleaned text: changing no file is correct here."
+)
+_JUNIE_PROMPT = CLEANUP_PROMPT.replace(_OUTPUT_RULE, _JUNIE_OUTPUT_RULE)
+# A folder that does not exist: no extension of the user's (with its hooks,
+# skills or MCP servers) is loaded.
+_JUNIE_NO_EXTENSIONS = "junie-extensions"
+# Variables of the user's own Junie work. Junie reads each as the value of an
+# option the run does not set: they add config (with hooks), MCP servers,
+# skills, agents, commands or models, move the run to another folder or
+# session, or change its task, prompt, input or output.
+_JUNIE_DROPPED_ENV = (
+    "JUNIE_CONFIG_LOCATION",
+    "JUNIE_PROXY_CONFIG",
+    "JUNIE_MCP_LOCATIONS",
+    "JUNIE_SKILL_LOCATIONS",
+    "JUNIE_AGENT_LOCATIONS",
+    "JUNIE_COMMAND_LOCATIONS",
+    "JUNIE_MODEL_LOCATIONS",
+    "JUNIE_PROJECT",
+    "JUNIE_SESSION_ID",
+    "JUNIE_TASK",
+    "JUNIE_PROMPT",
+    "JUNIE_GOAL_MODE",
+    "JUNIE_SYSTEM_PROMPT",
+    "JUNIE_IDE_GUIDELINES",
+    "JUNIE_GUIDELINES_FILENAME",
+    "JUNIE_JSON_OUTPUT_FILE",
+    "JUNIE_INPUT_FORMAT",
+    "JUNIE_EFFORT",
+    "JUNIE_LLM_PROVIDER",
+)
+# Junie's JVM writes piped stdout in the system code page (ANSI on Windows,
+# ASCII under a C locale), which turns non-ASCII text into "?". Appended to
+# the user's own value, so their JVM options stay.
+_JUNIE_UTF8_JVM_OPTIONS = "-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8"
+# Stderr lines that are never the reason for a failure: Junie's banner, which
+# names the log file in the user's home folder, and the JVM's notes about
+# option variables, which repeat the user's own JVM options.
+_JUNIE_STDERR_NOISE = re.compile(
+    r"^(?:Junie .*\(pid=\d+\): log file: .*"
+    r"|(?:NOTE: )?Picked up (?:JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS): .*)$",
+    re.MULTILINE,
+)
+_JUNIE_SIGNED_OUT = "Cannot find authorization"
+_JUNIE_GAVE_UP = "Failed to pass user review"
+# Signs that an answer reports on the cleanup instead of being the cleaned
+# text: Markdown headings, list items or bold, or the word "transcript". Each
+# counts only when the dictated text does not have it too. Bold needs a
+# closing pair, so code such as ``**kwargs`` or ``**/*.py`` is no sign.
+_JUNIE_REPORT_SIGNS = (
+    re.compile(r"^#{1,6} ", re.MULTILINE),
+    re.compile(r"^[^\S\n]*[-*•] ", re.MULTILINE),
+    re.compile(r"\*\*(?=\S)[^*\n]*?\S\*\*"),
+    re.compile(r"\btranscript\b", re.IGNORECASE),
+)
 _TAG = re.compile(r"<[\s/]*transcript\b[^<>]*>", re.IGNORECASE)
 
 
@@ -505,6 +575,46 @@ def parse_cursor_result(result: CmdResult, source: str) -> str:
                 else f"{name} stopped before it finished answering."
             )
         raise _failed(message)
+    return _finish(answer, source, name)
+
+
+def parse_junie_result(result: CmdResult, source: str) -> str:
+    """The cleaned text from one ``junie --output-format json`` run, or a coded
+    ``VoiceError``. Junie reports a failed task as ``errors`` in the JSON, at
+    exit code 0 when it is not signed in. An empty answer keeps ``source``."""
+    name = "Junie"
+    if result.timed_out:
+        raise _timed_out(name)
+    stderr = _JUNIE_STDERR_NOISE.sub("", result.stderr.decode("utf-8", errors="replace")).strip()
+    if result.rc != 0 and "no such option" in stderr:
+        raise _outdated(name, "junie update")
+    payload = next(reversed(_lines(result.stdout)), None)
+    if payload is None:
+        raise _failed(_short(stderr) or f"{name} exited with code {result.rc}.")
+    errors = payload.get("errors")
+    if isinstance(errors, list) and errors:
+        message = next((e for e in errors if isinstance(e, str) and e.strip()), "")
+        if _JUNIE_SIGNED_OUT in message:
+            raise _failed(f"{name} isn't signed in on this computer; run `junie` there and sign in.")
+        if _JUNIE_GAVE_UP in message:
+            raise _failed(f"{name} stopped before it returned the cleaned text.")
+        raise _failed(_short(message) or f"{name} reported an error.")
+    if payload.get("changes"):
+        raise _failed(f"{name} tried to use a tool instead of cleaning up the text.")
+    answer = payload.get("result")
+    if result.rc != 0 or not isinstance(answer, str):
+        message = _short(stderr)
+        if not message:
+            message = (
+                f"{name} exited with code {result.rc}."
+                if result.rc != 0
+                else f"{name} stopped before it finished answering."
+            )
+        raise _failed(message)
+    # Tags are removed by ``_finish``; the word in them is no report.
+    text = _strip_tags(answer)
+    if any(sign.search(text) and not sign.search(source) for sign in _JUNIE_REPORT_SIGNS):
+        raise _failed(f"{name} described its edits instead of returning the cleaned text.")
     return _finish(answer, source, name)
 
 
@@ -910,6 +1020,44 @@ class CursorCleanup(CleanupCli):
 
     def parse(self, result: CmdResult, source: str) -> str:
         return parse_cursor_result(result, source)
+
+
+class JunieCleanup(CleanupCli):
+    """``junie`` runs a task as a coding agent, and no option replaces its system prompt.
+    So the rules go before the transcript, in the task on stdin: with the transcript alone
+    as the task, Junie Lite tried to carry it out. ``--allowed-tools`` leaves only
+    ``submit``, so the model can run nothing.
+
+    The user's global guidelines (``~/.junie/AGENTS.md``) still apply, and Junie keeps the
+    run in its session history; no option turns either off."""
+
+    name = "Junie"
+
+    async def command(self, source: str) -> CleanupCommand:
+        binary = self.binary()
+        # Piped stdin is the task of a non-interactive run.
+        argv = shim_safe_argv(
+            binary,
+            "--output-format", "json",
+            "--model", _JUNIE_MODEL,
+            f"--allowed-tools={_JUNIE_TOOLS}",
+            "--skip-update-check",
+            "--config-default-locations=false",
+            "--mcp-default-locations=false",
+            "--skill-default-locations=false",
+            "--agent-default-location=false",
+            "--command-default-location=false",
+            f"--extensions-default-location={_JUNIE_NO_EXTENSIONS}",
+        )
+        env = _cli_env(binary)
+        for name in _JUNIE_DROPPED_ENV:
+            env.pop(name, None)
+        env["JAVA_TOOL_OPTIONS"] = f"{env.get('JAVA_TOOL_OPTIONS', '')} {_JUNIE_UTF8_JVM_OPTIONS}".strip()
+        stdin = f"{_JUNIE_PROMPT}\n{_wrap(source)}".encode()
+        return CleanupCommand(argv=argv, env=env, stdin=stdin, model=_JUNIE_MODEL)
+
+    def parse(self, result: CmdResult, source: str) -> str:
+        return parse_junie_result(result, source)
 
 
 class PiCleanup(CleanupCli):

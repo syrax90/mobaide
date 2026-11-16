@@ -37,6 +37,7 @@ from mobaide.voice.cleanup import (
     CodexCleanup,
     CopilotCleanup,
     CursorCleanup,
+    JunieCleanup,
     OpenCodeCleanup,
     PiCleanup,
     TranscriptCleaner,
@@ -47,6 +48,7 @@ from mobaide.voice.cleanup import (
     parse_codex_result,
     parse_copilot_result,
     parse_cursor_result,
+    parse_junie_result,
     parse_opencode_result,
     parse_pi_result,
 )
@@ -2159,3 +2161,385 @@ class TestPiCommand:
         line = subprocess.list2cmdline(argv)
         assert line.count('"') == 2
         assert line.startswith(f'cmd /c @ "{shim}" ')
+
+
+# Junie prints this first on stderr; it names a log file in the user's home.
+JUNIE_BANNER = (
+    b"Junie 26.11.1 (4020.10) (pid=4242): log file: /home/jane/.junie/logs/log-261116.log\n"
+)
+# The JVM prints this before the banner, as the run sets JAVA_TOOL_OPTIONS.
+JUNIE_JVM_NOTE = b"Picked up JAVA_TOOL_OPTIONS: -Xss4m -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8\n"
+JUNIE_USAGE = [
+    {
+        "model": "junie-lite",
+        "calls": 6,
+        "cost": 0.0,
+        "inputTokens": 40,
+        "cacheInputTokens": 0,
+        "cacheCreateTokens": 0,
+        "outputTokens": 20,
+    }
+]
+
+
+def _junie_answer(text: str) -> CmdResult:
+    """What ``junie --output-format json`` prints for a finished task."""
+    return _json(
+        {
+            "sessionId": "session-261116-204456-ieyl",
+            "taskName": "Probe task",
+            "result": text,
+            "changes": [],
+            "llmUsage": JUNIE_USAGE,
+        },
+        stderr=JUNIE_BANNER,
+    )
+
+
+class TestParseJunieResult:
+    def test_answer_is_the_result_of_the_task(self):
+        result = _junie_answer("Delete the build folder, and run the tests.\n")
+
+        assert parse_junie_result(result, "uh delete the build folder and um run the tests") == (
+            "Delete the build folder, and run the tests."
+        )
+
+    @pytest.mark.parametrize(
+        ("result", "message"),
+        [
+            # Signed out, Junie still exits with code 0.
+            (
+                _json(
+                    {"errors": ["Cannot find authorization. Please authenticate before running Junie."]},
+                    stderr=JUNIE_BANNER,
+                ),
+                "Junie isn't signed in on this computer; run `junie` there and sign in.",
+            ),
+            # Junie refuses an answer that is not a ``submit`` call, then gives up.
+            (
+                _json(
+                    {
+                        "sessionId": "session-x",
+                        "errors": [
+                            "Failed to pass user review after 6 attempts",
+                            "Failed to build 'issue.md.junie_standalone'",
+                        ],
+                        "taskName": "Probe task",
+                        "llmUsage": JUNIE_USAGE,
+                    },
+                    rc=1,
+                    stderr=JUNIE_BANNER,
+                ),
+                "Junie stopped before it returned the cleaned text.",
+            ),
+            (
+                _json(
+                    {"errors": ["You have used up your AI quota."], "result": "Fix the bug."},
+                    rc=1,
+                    stderr=JUNIE_BANNER,
+                ),
+                "You have used up your AI quota.",
+            ),
+        ],
+        ids=["signed-out", "gave-up", "other-error"],
+    )
+    def test_a_task_with_errors_fails_with_its_first_error_whatever_the_exit_code(self, result, message):
+        with pytest.raises(VoiceError) as excinfo:
+            parse_junie_result(result, "um fix the bug")
+
+        assert (excinfo.value.status, excinfo.value.code, excinfo.value.message) == (
+            503,
+            "cleanup_failed",
+            message,
+        )
+
+    def test_a_change_discards_the_task_whatever_it_answers(self):
+        result = _json(
+            {
+                "sessionId": "session-x",
+                "taskName": "Probe task",
+                "result": "The folder is empty.",
+                "changes": [{"path": "README.md"}],
+                "llmUsage": JUNIE_USAGE,
+            },
+            stderr=JUNIE_BANNER,
+        )
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_junie_result(result, "list the files")
+
+        assert (excinfo.value.code, excinfo.value.message) == (
+            "cleanup_failed",
+            "Junie tried to use a tool instead of cleaning up the text.",
+        )
+
+    @pytest.mark.parametrize(
+        ("answer", "source"),
+        [
+            ("## Summary\nRemoved the fillers.\n\n## Result\nFix the bug.", "um fix the bug"),
+            (
+                "- Removed the fillers.\n- Fixed the punctuation.",
+                "um create a readme file in the root that uh explains how to install the project",
+            ),
+            (
+                "**Cleaned text:**\n\nCreate a README file in the root that explains how to install the project.",
+                "um create a readme file in the root that uh explains how to install the project",
+            ),
+            (
+                "Cleaned the speech-to-text transcript by removing fillers and fixing punctuation.",
+                "um create a readme file in the root that uh explains how to install the project",
+            ),
+            # Each sign counts on its own: "transcript" in the dictated text
+            # does not excuse a list the answer adds.
+            ("- Fix the transcript parser.", "um fix the transcript parser"),
+        ],
+        ids=["heading", "list-item", "bold-preamble", "transcript-word", "other-sign-than-the-source-has"],
+    )
+    def test_a_report_of_the_edits_is_not_the_cleaned_text(self, answer, source):
+        # The ``submit`` tool asks for a Markdown report of the changes, and
+        # Junie Lite turns to one after its refusal of a submit that changed no file.
+        with pytest.raises(VoiceError) as excinfo:
+            parse_junie_result(_junie_answer(answer), source)
+
+        assert (excinfo.value.code, excinfo.value.message) == (
+            "cleanup_failed",
+            "Junie described its edits instead of returning the cleaned text.",
+        )
+
+    @pytest.mark.parametrize(
+        ("answer", "source"),
+        [
+            ("Close issue #42.", "close issue number 42"),
+            ("# Plan\nFix the bug.", "# Plan\num fix the bug"),
+            ("Check that 2 * 3 is 6.", "check that two times three is six"),
+            ("Check that -1 - 2 is -3.", "check that minus one minus two is minus three"),
+            ("Fix the transcript parser.", "um fix the transcript parser"),
+            ("Pass **kwargs to the handler.", "pass star star kwargs to the handler"),
+            ("Glob **/*.py files.", "glob star star slash star dot py files"),
+            ("Call f(*args, **kwargs, **opts).", "call f with star args star star kwargs star star opts"),
+        ],
+        ids=[
+            "hash-inside-a-line",
+            "heading-already-in-the-text",
+            "star-inside-a-line",
+            "dash-inside-a-line",
+            "transcript-already-in-the-text",
+            "double-star-without-a-pair",
+            "double-star-of-a-glob",
+            "double-stars-that-close-no-bold",
+        ],
+    )
+    def test_a_sign_that_adds_no_report_keeps_the_answer(self, answer, source):
+        assert parse_junie_result(_junie_answer(answer), source) == answer
+
+    def test_echoed_transcript_tags_are_no_report(self):
+        result = _junie_answer("<transcript>\nCan you fix the login?\n</transcript>")
+
+        assert parse_junie_result(result, "can you fix the login") == "Can you fix the login?"
+
+    @pytest.mark.timeout(10)
+    def test_a_long_run_of_blank_lines_is_scanned_at_once(self):
+        result = _junie_answer("\n" * 100_000 + "Fix it.")
+
+        assert parse_junie_result(result, "fix it") == "Fix it."
+
+    @pytest.mark.parametrize(
+        ("result", "message"),
+        [
+            (
+                CmdResult(
+                    rc=1, stdout=_junie_answer("Fix the bug.").stdout, stderr=JUNIE_BANNER + b"Segmentation fault\n"
+                ),
+                "Segmentation fault",
+            ),
+            (
+                CmdResult(rc=1, stdout=_junie_answer("Fix the bug.").stdout, stderr=JUNIE_BANNER),
+                "Junie exited with code 1.",
+            ),
+            (
+                CmdResult(rc=1, stdout=b"", stderr=JUNIE_BANNER + b"java.lang.OutOfMemoryError: Java heap space\n"),
+                "java.lang.OutOfMemoryError: Java heap space",
+            ),
+            (CmdResult(rc=137, stdout=b"", stderr=JUNIE_BANNER), "Junie exited with code 137."),
+            (
+                CmdResult(
+                    rc=1,
+                    stdout=b"",
+                    stderr=JUNIE_JVM_NOTE + JUNIE_BANNER + b"java.lang.OutOfMemoryError: Java heap space\n",
+                ),
+                "java.lang.OutOfMemoryError: Java heap space",
+            ),
+            (CmdResult(rc=1, stdout=b"", stderr=JUNIE_JVM_NOTE + JUNIE_BANNER), "Junie exited with code 1."),
+            (
+                CmdResult(
+                    rc=1,
+                    stdout=b"",
+                    stderr=b"NOTE: Picked up JDK_JAVA_OPTIONS: -Xmx2g\n"
+                    + JUNIE_JVM_NOTE
+                    + b"Picked up _JAVA_OPTIONS: -Dhttps.proxyPassword=hunter2\n"
+                    + JUNIE_BANNER,
+                ),
+                "Junie exited with code 1.",
+            ),
+        ],
+        ids=[
+            "exit-code-with-a-reason",
+            "exit-code-without-a-reason",
+            "no-json-with-a-reason",
+            "no-json-without-a-reason",
+            "jvm-note-with-a-reason",
+            "jvm-note-without-a-reason",
+            "user-jvm-notes-without-a-reason",
+        ],
+    )
+    def test_answer_from_a_run_that_did_not_end_cleanly_is_not_a_cleanup(self, result, message):
+        """The banner names a file in the user's home folder, and the JVM notes
+        only echo JVM options, which can hold a proxy password: neither is
+        ever the reason."""
+        with pytest.raises(VoiceError) as excinfo:
+            parse_junie_result(result, "um fix the bug")
+
+        assert (excinfo.value.code, excinfo.value.message) == ("cleanup_failed", message)
+
+    def test_a_task_without_a_text_result_is_not_a_cleanup(self):
+        result = _json(
+            {"sessionId": "session-x", "taskName": "Probe task", "changes": [], "llmUsage": JUNIE_USAGE},
+            stderr=JUNIE_BANNER,
+        )
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_junie_result(result, "um fix the bug")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_failed")
+
+    def test_timeout_wins_over_whatever_was_printed(self):
+        result = CmdResult(rc=-9, stdout=_junie_answer("Half.").stdout, stderr=JUNIE_BANNER, timed_out=True)
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_junie_result(result, "text")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_timeout")
+
+    def test_unknown_option_on_a_failed_run_means_the_cli_is_too_old(self):
+        result = CmdResult(
+            rc=1,
+            stdout=b"",
+            stderr=JUNIE_BANNER
+            + b"no such option --skill-default-locations. (Possible options: --model, --output-format)\n",
+        )
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_junie_result(result, "text")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_outdated")
+        assert "junie update" in excinfo.value.message
+
+
+class TestJunieCommand:
+    @pytest.fixture
+    def junie_binary(self, tmp_path) -> str:
+        return str(tmp_path / "bin" / "junie")
+
+    def _cleaner(self, run, work_dir, binary):
+        return TranscriptCleaner(clis={"junie": JunieCleanup(lambda: binary)}, work_dir=work_dir, run=run)
+
+    async def test_runs_one_submit_only_json_task_on_junie_lite_with_the_rules_and_the_transcript_on_stdin(
+        self, work_dir, junie_binary
+    ):
+        run = _Claude(_junie_answer("Fix the bug, then run the tests."))
+
+        cleaned = await self._cleaner(run, work_dir, junie_binary).clean(
+            "um fix the bug uh then run the tests", "junie"
+        )
+
+        assert cleaned == "Fix the bug, then run the tests."
+        (call,) = run.calls
+        # Only ``submit`` is left, so the model can run nothing. None of the
+        # user's config, MCP servers, skills, agents, commands or extensions loads.
+        assert call["argv"] == [
+            junie_binary,
+            "--output-format", "json",
+            "--model", "junie-lite",
+            "--allowed-tools=submit",
+            "--skip-update-check",
+            "--config-default-locations=false",
+            "--mcp-default-locations=false",
+            "--skill-default-locations=false",
+            "--agent-default-location=false",
+            "--command-default-location=false",
+            "--extensions-default-location=junie-extensions",
+        ]
+        # No system-prompt option: the rules go before the transcript.
+        rules, transcript = call["stdin"].decode("utf-8").rsplit("\n<transcript>\n", 1)
+        assert transcript == "um fix the bug uh then run the tests\n</transcript>"
+        # A Junie task ends only with a ``submit`` call: that rule takes the
+        # place of the shared output rule, and the other rules stay.
+        assert cleanup_module._JUNIE_OUTPUT_RULE in rules
+        assert cleanup_module._OUTPUT_RULE not in rules
+        assert rules.replace(cleanup_module._JUNIE_OUTPUT_RULE, cleanup_module._OUTPUT_RULE) == CLEANUP_PROMPT
+        # Junie Lite refuses, once per run, a submit that changed no file.
+        assert "call submit again at once with the same cleaned text" in rules
+        assert call["cwd"] == str(work_dir)
+        # The extensions folder is relative to the cwd: it must not exist.
+        assert list(work_dir.iterdir()) == []
+        assert CLEANUP_TIMEOUT_SECONDS - 1 < call["timeout"] <= CLEANUP_TIMEOUT_SECONDS
+        assert call["max_bytes"] == _MAX_OUTPUT_BYTES
+        assert call["env"]["PATH"].split(os.pathsep)[0] == os.path.dirname(junie_binary)
+
+    async def test_the_user_s_config_session_and_task_variables_do_not_reach_the_run(
+        self, work_dir, junie_binary, tmp_path, monkeypatch
+    ):
+        # Config can hold hooks (inline proxy config too, with default
+        # locations off); a session, project, task or output file would
+        # change what the run does; Junie Lite has no effort levels.
+        unsafe = {
+            "JUNIE_CONFIG_LOCATION": str(tmp_path / "more-junie-config"),
+            "JUNIE_PROXY_CONFIG": '{"hooks": {"SessionStart": [{"command": "touch pwned"}]}}',
+            "JUNIE_MCP_LOCATIONS": str(tmp_path / "mcp"),
+            "JUNIE_SKILL_LOCATIONS": str(tmp_path / "skills"),
+            "JUNIE_SESSION_ID": "session-of-the-user",
+            "JUNIE_PROJECT": str(tmp_path / "project"),
+            "JUNIE_TASK": "delete the repo",
+            "JUNIE_JSON_OUTPUT_FILE": str(tmp_path / "out.json"),
+            "JUNIE_INPUT_FORMAT": "stream-json",
+            "JUNIE_EFFORT": "high",
+        }
+        # Another home signs Junie out; the statistics choice is the user's.
+        kept = {
+            "JUNIE_HOME": str(tmp_path / "junie-home"),
+            "JUNIE_API_KEY": "key-of-the-user",
+            "JUNIE_AUTH_LICENSE": "license-of-the-user",
+            "JUNIE_SHARE_ANONYMOUS_STATISTICS": "false",
+        }
+        for name, value in {**unsafe, **kept}.items():
+            monkeypatch.setenv(name, value)
+        run = _Claude(_junie_answer("Hi."))
+
+        await self._cleaner(run, work_dir, junie_binary).clean("hi", "junie")
+
+        env = run.calls[0]["env"]
+        assert not set(unsafe) & set(env)
+        assert {name: env.get(name) for name in kept} == kept
+
+    @pytest.mark.parametrize(
+        ("own", "expected"),
+        [
+            (None, "-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8"),
+            ("-Xss4m", "-Xss4m -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8"),
+        ],
+        ids=["no-own-options", "own-options"],
+    )
+    async def test_the_jvm_writes_utf_8_and_keeps_the_user_s_own_options(
+        self, work_dir, junie_binary, monkeypatch, own, expected
+    ):
+        # Piped, the JVM writes the system code page: "?" for each non-ASCII
+        # letter on Windows or under a C locale.
+        if own is None:
+            monkeypatch.delenv("JAVA_TOOL_OPTIONS", raising=False)
+        else:
+            monkeypatch.setenv("JAVA_TOOL_OPTIONS", own)
+        run = _Claude(_junie_answer("Hi."))
+
+        await self._cleaner(run, work_dir, junie_binary).clean("hi", "junie")
+
+        assert run.calls[0]["env"]["JAVA_TOOL_OPTIONS"] == expected

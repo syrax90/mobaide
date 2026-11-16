@@ -127,7 +127,7 @@ A fixture edit must therefore satisfy both arms — and note that Swift's ``Coda
 
 ### Delta 2026-11-16: Junie sessions
 
-Additive delta within proto-v7 (2026-11-16): **one session kind, one options block, two capability entries, one push label. No version bump; `central_server` gained only the "Junie session" push label.** An older agent does not list `junie`, and the clients then disable the card with "Update Mobaide on your PC to use Junie."
+Additive delta within proto-v7 (2026-11-16): **one session kind, one options block, three capability entries, one push label. No version bump; `central_server` gained only the "Junie session" push label.** An older agent does not list `junie`, and the clients then disable the card with "Update Mobaide on your PC to use Junie."
 
 Junie CLI (`junie`, JetBrains) is a managed agent of kind `junie`, for terminal and chat sessions.
 
@@ -136,6 +136,7 @@ Junie CLI (`junie`, JetBrains) is a managed agent of kind `junie`, for terminal 
 | `POST /api/sessions` and relay `create_session` | `cli: "junie"` with `junie_options` (`plan_mode`, `brave`, `worktree`, `branch_name`, `base_branch`). A missing binary answers `503` with `junie_cli_missing`. |
 | `capabilities.cli` | A `junie` entry. |
 | `capabilities.chat` | A `junie` entry (`resume: true`, `live: false`). |
+| `capabilities.voice.cleanup_kinds` | The id `junie`. |
 | Session mode order | The id `junie`. Default position: after `cursor`. |
 
 * Binary: `MOBAIDE_JUNIE_BIN`, then PATH, then `~/.local/bin/junie` (on Windows `%USERPROFILE%\.local\bin\junie.bat`), where Junie's install script puts its launcher. `MOBAIDE_ACP_JUNIE_COMMAND` overrides the chat command.
@@ -150,7 +151,8 @@ Junie CLI (`junie`, JetBrains) is a managed agent of kind `junie`, for terminal 
 * Folder trust: over ACP Junie loads the folder's MCP servers, skills, commands and settings without its trust question, so the PC agent asks in the chat. Junie signs its own trust markers (`<JUNIE_HOME or ~/.junie>/trust/*.json`) with a key in the system keychain, so the PC agent only reads them: a folder trusted in Junie's TUI, or inside a folder trusted with "Trust all projects in …", needs no question. A trust given in the chat is kept in `junie-trusted-folders.json` in the agent's state folder, for that folder only.
 * Sign-in: none from the chat. Junie signs in only on the welcome screen of its TUI, so a chat that is not signed in (`-32000` on `session/new`) says to sign in from a Junie terminal session, then Restart.
 * No model: Junie offers its free Junie Lite model only in its TUI and in JetBrains apps. A prompt that no model can take answers `-32002` with `data.reason` `model_not_available`; the chat shows an error item that says how to get a model.
-* Not supported for Junie: a model or effort picker in the wizard (`junie list-models` lists every model, also those the account cannot use), sign-in from the chat, voice transcript cleanup (Junie cannot run without its shell tool), "your turn" alerts for terminal sessions.
+* Voice transcript cleanup: `capabilities.voice.cleanup_kinds` lists `junie`, and `POST /api/voice/cleanup` accepts `kind: "junie"`. The run is `junie --output-format json --model junie-lite --allowed-tools=submit --skip-update-check --config-default-locations=false --mcp-default-locations=false --skill-default-locations=false --agent-default-location=false --command-default-location=false --extensions-default-location=junie-extensions` (docs/voice-input.md, *Transcript cleanup*), with the user's `config.json`, MCP servers, skills, custom agents, commands and extensions turned off; the run's environment drops the `JUNIE_*` variables that would add them back or move the run to another folder or session, and `JAVA_TOOL_OPTIONS` gets `-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8`, because Junie's JVM writes piped output in the system code page. It runs on Junie Lite, JetBrains' free model, the only model of a Lite-only account. `--allowed-tools` leaves only `submit`, the tool that ends a run, so the model can run no command. The rules and the transcript are the task, on stdin: with the transcript alone as the task, Junie Lite tried to carry it out. An answer that reports on the cleanup (Markdown headings, list items, bold, or the word "transcript" when the dictated text has none) is a `cleanup_failed`. For Junie Lite, Junie refuses once per run a `submit` that changed no file when it judges the task to need code changes, so dictated orders to create documentation or config files (a README, `.gitignore`, a license file) fail after 7–13 s and keep the text as heard. The user's `~/.junie/AGENTS.md` still applies, and Junie keeps each run in its session history; the chat's session list hides the `voice-cleanup` work folder.
+* Not supported for Junie: a model or effort picker in the wizard (`junie list-models` lists every model, also those the account cannot use), sign-in from the chat, "your turn" alerts for terminal sessions.
 * Test mode runs the fake agent with `--flavor junie`.
 
 ### Delta 2026-11-16: chat state `background`
