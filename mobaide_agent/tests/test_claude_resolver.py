@@ -20,7 +20,7 @@ from mobaide.core.claude_launcher import (
     ClaudeLauncher,
     ClaudeOptions,
 )
-from mobaide.core.projects_config import ProjectConfig
+from mobaide.core.workspaces_config import WorkspaceConfig
 
 _REAL_RESOLVER = claude_launcher._resolve_claude_binary
 
@@ -167,9 +167,9 @@ async def test_build_uses_resolved_absolute_path(monkeypatch, tmp_path):
         "_resolve_claude_binary",
         lambda *_a, **_kw: "/abs/path/to/claude",
     )
-    project = ProjectConfig(name="test", path=str(tmp_path))
+    workspace = WorkspaceConfig(name="test", path=str(tmp_path))
 
-    spec = await ClaudeLauncher().build(project, ClaudeOptions())
+    spec = await ClaudeLauncher().build(workspace, ClaudeOptions())
 
     assert spec.argv[0] == "/abs/path/to/claude"
 
@@ -181,9 +181,9 @@ async def test_build_env_prepends_resolver_dir_to_path(monkeypatch, tmp_path):
         claude_launcher, "_resolve_claude_binary",
         lambda *_a, **_kw: f"{resolved_dir}/claude",
     )
-    project = ProjectConfig(name="test", path=str(tmp_path))
+    workspace = WorkspaceConfig(name="test", path=str(tmp_path))
 
-    spec = await ClaudeLauncher().build(project, ClaudeOptions())
+    spec = await ClaudeLauncher().build(workspace, ClaudeOptions())
 
     parts = spec.env["PATH"].split(os.pathsep)
     assert resolved_dir in parts
@@ -203,10 +203,10 @@ async def test_launcher_passes_override_to_resolver(monkeypatch, tmp_path):
         return "/abs/path/to/claude"
 
     monkeypatch.setattr(claude_launcher, "_resolve_claude_binary", _capture)
-    project = ProjectConfig(name="test", path=str(tmp_path))
+    workspace = WorkspaceConfig(name="test", path=str(tmp_path))
 
     launcher = ClaudeLauncher(claude_bin_override="/my/explicit/claude")
-    await launcher.build(project, ClaudeOptions())
+    await launcher.build(workspace, ClaudeOptions())
 
     assert captured["override"] == "/my/explicit/claude"
 
@@ -223,11 +223,11 @@ async def test_launcher_caches_resolution_per_instance(monkeypatch, tmp_path):
         return "/abs/path/to/claude"
 
     monkeypatch.setattr(claude_launcher, "_resolve_claude_binary", _counting)
-    project = ProjectConfig(name="test", path=str(tmp_path))
+    workspace = WorkspaceConfig(name="test", path=str(tmp_path))
 
     launcher = ClaudeLauncher()
-    await launcher.build(project, ClaudeOptions())
-    await launcher.build(project, ClaudeOptions())
+    await launcher.build(workspace, ClaudeOptions())
+    await launcher.build(workspace, ClaudeOptions())
 
     assert call_count["n"] == 1
 
@@ -273,14 +273,14 @@ async def test_build_raises_before_creating_worktree_when_binary_missing(
     git_dir = tmp_path / ".git"
     git_dir.mkdir()
 
-    project = ProjectConfig(name="test", path=str(tmp_path))
+    workspace = WorkspaceConfig(name="test", path=str(tmp_path))
     options = ClaudeOptions(worktree=True, identifier="CLA-1", title="t")
 
     worktree_mgr = AsyncMock()
     launcher = ClaudeLauncher(worktree_mgr=worktree_mgr)
 
     with pytest.raises(ClaudeBinaryNotFoundError):
-        await launcher.build(project, options)
+        await launcher.build(workspace, options)
 
     worktree_mgr.create_worktree.assert_not_awaited()
 

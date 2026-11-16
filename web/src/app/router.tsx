@@ -1,4 +1,4 @@
-import { createBrowserRouter } from 'react-router';
+import { Navigate, createBrowserRouter, useLocation, useParams } from 'react-router';
 import { Account } from '../routes/account/Account';
 import { Devices } from '../routes/account/Devices';
 import { ForgotPassword } from '../routes/auth/ForgotPassword';
@@ -11,8 +11,8 @@ import { AutoScanDetailScreen } from '../routes/autoscan/AutoScanDetailScreen';
 import { Pair } from '../routes/pair/Pair';
 import { PairHost } from '../routes/pair/PairHost';
 import { SettingsScreen } from '../routes/settings/SettingsScreen';
-import { ProjectsScreen } from '../routes/projects/ProjectsScreen';
-import { GitScreen } from '../routes/projects/git/GitScreen';
+import { WorkspacesScreen } from '../routes/workspaces/WorkspacesScreen';
+import { GitScreen } from '../routes/workspaces/git/GitScreen';
 import { TemplatesScreen } from '../routes/templates/TemplatesScreen';
 import { SessionsScreen } from '../routes/sessions/SessionsScreen';
 import { NewSession } from '../routes/sessions/create/NewSession';
@@ -20,6 +20,17 @@ import { AuthLayout } from './AuthLayout';
 import { RootLayout } from './RootLayout';
 import { RouteError } from './RouteError';
 import { RequireAnonymous, RequireAuth, requireAuthMiddleware } from './guards';
+
+/** Sends a pre-rename `/projects…` bookmark to its `/workspaces…` route. */
+function LegacyWorkspacesRedirect() {
+  const { agentId, workspaceName } = useParams();
+  const { search, hash } = useLocation();
+  const pathname =
+    agentId !== undefined && workspaceName !== undefined
+      ? `/agents/${encodeURIComponent(agentId)}/workspaces/${encodeURIComponent(workspaceName)}/git`
+      : '/workspaces';
+  return <Navigate to={{ pathname, search, hash }} replace />;
+}
 
 export const router = createBrowserRouter([
   {
@@ -69,24 +80,29 @@ export const router = createBrowserRouter([
               // URL to rescue before sign-in, and minting a code needs a
               // session anyway.
               { path: 'agents/pair', element: <PairHost /> },
-              { path: 'projects', element: <ProjectsScreen /> },
+              { path: 'workspaces', element: <WorkspacesScreen /> },
+              { path: 'projects', element: <LegacyWorkspacesRedirect /> },
               { path: 'templates', element: <TemplatesScreen /> },
-              // Agent- and project-scoped, so both ids ride in the path: a git
+              // Agent- and workspace-scoped, so both ids ride in the path: a git
               // list is only meaningful for one repo on one host, and the
               // selected-agent store would make a shared link resolve elsewhere.
               {
-                path: 'agents/:agentId/projects/:projectName/git',
+                path: 'agents/:agentId/workspaces/:workspaceName/git',
                 element: <GitScreen />,
+              },
+              {
+                path: 'agents/:agentId/projects/:workspaceName/git',
+                element: <LegacyWorkspacesRedirect />,
               },
               // Not `sessions/new`: keeping it off the terminal route's path
               // means correctness never rests on react-router ranking a static
               // segment above `:sessionId`.
               { path: 'agents/:agentId/new-session', element: <NewSession /> },
-              // Agent- and project-scoped for the same reason the git route is:
-              // a scan is one project on one host, and the selected-agent store
+              // Agent- and workspace-scoped for the same reason the git route is:
+              // a scan is one workspace on one host, and the selected-agent store
               // would make a shared link resolve elsewhere.
               {
-                path: 'agents/:agentId/autoscan/:projectName',
+                path: 'agents/:agentId/autoscan/:workspaceName',
                 element: <AutoScanDetailScreen />,
               },
               {

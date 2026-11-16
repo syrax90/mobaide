@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from mobaide.core.projects_config import AutoScanFilter
+from mobaide.core.workspaces_config import AutoScanFilter
 from mobaide.linear.client import LinearApiClient, _build_issue_filter
 from mobaide.linear.models import IssueState, LinearIssue
 

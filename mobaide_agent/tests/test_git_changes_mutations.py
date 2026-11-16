@@ -55,11 +55,11 @@ class FakeEventBus:
         self.published.append((event_type, payload))
 
 
-def _changed(repo_dir: str, project_name: str) -> tuple[str, dict]:
+def _changed(repo_dir: str, workspace_name: str) -> tuple[str, dict]:
     return (
         "git.changed",
         {
-            "project_name": project_name,
+            "project_name": workspace_name,
             "toplevel": norm_path(repo_dir),
             "common_dir": norm_path(repo_dir) + "/.git",
         },
@@ -135,30 +135,30 @@ def _make_many_conflicts(repo_dir: str, count: int) -> None:
     run_git_sync(repo_dir, "merge", "other", check=False)
 
 
-async def _stage(cwd, paths, project_name=None, event_bus=None):
+async def _stage(cwd, paths, workspace_name=None, event_bus=None):
     return await stage_session_paths(
-        cwd=cwd, paths=paths, project_name=project_name, event_bus=event_bus
+        cwd=cwd, paths=paths, workspace_name=workspace_name, event_bus=event_bus
     )
 
 
-async def _unstage(cwd, paths, project_name=None, event_bus=None):
+async def _unstage(cwd, paths, workspace_name=None, event_bus=None):
     return await unstage_session_paths(
-        cwd=cwd, paths=paths, project_name=project_name, event_bus=event_bus
+        cwd=cwd, paths=paths, workspace_name=workspace_name, event_bus=event_bus
     )
 
 
-async def _discard(cwd, paths, scope, project_name=None, event_bus=None):
+async def _discard(cwd, paths, scope, workspace_name=None, event_bus=None):
     return await discard_session_paths(
-        cwd=cwd, paths=paths, scope=scope, project_name=project_name, event_bus=event_bus
+        cwd=cwd, paths=paths, scope=scope, workspace_name=workspace_name, event_bus=event_bus
     )
 
 
-async def _commit(cwd, message, *, amend=False, no_verify=False, project_name=None,
+async def _commit(cwd, message, *, amend=False, no_verify=False, workspace_name=None,
                   event_bus=None):
     return await commit_session(
         cwd=cwd,
         request=GitCommitRequest(message=message, amend=amend, no_verify=no_verify),
-        project_name=project_name,
+        workspace_name=workspace_name,
         event_bus=event_bus,
     )
 
@@ -177,16 +177,16 @@ class TestStage:
             ("staged", "README.md"), ("staged", "keep.txt"), ("staged", "new.txt")]
 
     @pytest.mark.parametrize(
-        ("project_name", "published_as"), [("proj", "proj"), (None, "")]
+        ("workspace_name", "published_as"), [("proj", "proj"), (None, "")]
     )
     async def test_stages_only_the_named_paths_and_publishes_git_changed(
-        self, repo, project_name, published_as
+        self, repo, workspace_name, published_as
     ):
         write_file(repo, "a.txt", b"a\n")
         write_file(repo, "b.txt", b"b\n")
         bus = FakeEventBus()
 
-        await _stage(repo, ["a.txt"], project_name=project_name, event_bus=bus)
+        await _stage(repo, ["a.txt"], workspace_name=workspace_name, event_bus=bus)
 
         assert await _entries(repo) == [("staged", "a.txt"), ("untracked", "b.txt")]
         assert bus.published == [_changed(repo, published_as)]
@@ -266,7 +266,7 @@ class TestMarkResolved:
         bus = FakeEventBus()
 
         with pytest.raises(GitRefusedError) as info:
-            await _stage(repo, ["a.txt", "keep.txt"], project_name="proj", event_bus=bus)
+            await _stage(repo, ["a.txt", "keep.txt"], workspace_name="proj", event_bus=bus)
 
         assert (info.value.code, info.value.message) == ("conflict_markers", "keep.txt")
         assert await _entries(repo) == [("conflicts", "keep.txt"), ("untracked", "a.txt")]
@@ -277,7 +277,7 @@ class TestMarkResolved:
         write_file(repo, "keep.txt", b"one\nBOTH\nthree\n")
         bus = FakeEventBus()
 
-        resp = await _stage(repo, ["keep.txt"], project_name="proj", event_bus=bus)
+        resp = await _stage(repo, ["keep.txt"], workspace_name="proj", event_bus=bus)
 
         assert resp.model_dump() == {"ok": True}
         assert await _entries(repo) == [("staged", "keep.txt")]
@@ -374,7 +374,7 @@ class TestUnstage:
         run_git_sync(repo, "add", "keep.txt")
         bus = FakeEventBus()
 
-        await _unstage(repo, ["keep.txt"], project_name="proj", event_bus=bus)
+        await _unstage(repo, ["keep.txt"], workspace_name="proj", event_bus=bus)
 
         assert await _entries(repo) == [("unstaged", "keep.txt")]
         assert _read(repo, "keep.txt") == b"one\nTWO\nthree\n"
@@ -425,7 +425,7 @@ class TestDiscard:
         write_file(repo, "keep.txt", b"one\nSTAGED\nWORKTREE\n")
         bus = FakeEventBus()
 
-        await _discard(repo, ["keep.txt"], "unstaged", project_name="proj", event_bus=bus)
+        await _discard(repo, ["keep.txt"], "unstaged", workspace_name="proj", event_bus=bus)
 
         assert _read(repo, "keep.txt") == b"one\nSTAGED\nthree\n"
         assert await _entries(repo) == [("staged", "keep.txt")]
@@ -560,7 +560,7 @@ class TestCommit:
         run_git_sync(repo, "add", "a.txt")
         bus = FakeEventBus()
 
-        resp = await _commit(repo, "Add a\n\nBecause.", project_name="proj", event_bus=bus)
+        resp = await _commit(repo, "Add a\n\nBecause.", workspace_name="proj", event_bus=bus)
 
         head = (await get_session_commit_context(cwd=repo)).head
         assert (resp.oid, resp.short_oid, resp.subject) == (head.oid, head.short_oid, "Add a")

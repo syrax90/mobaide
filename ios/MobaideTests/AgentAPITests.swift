@@ -116,21 +116,21 @@ final class AgentAPITests: XCTestCase {
         XCTAssertEqual(urls[1], "http://agent.example.com/api/sessions/s1?force=true")
     }
 
-    func testProjectNamePathSegmentEncoding() async throws {
+    func testWorkspaceNamePathSegmentEncoding() async throws {
         StubURLProtocol.enqueue(status: 200, body: #"{"name":"p","path":"/x"}"#)
-        _ = try await makeAPI().updateProject(currentName: "My Project/α", update: ProjectUpdate(conda_env: "ml"))
+        _ = try await makeAPI().updateWorkspace(currentName: "My Workspace/α", update: WorkspaceUpdate(conda_env: "ml"))
 
         let request = try XCTUnwrap(StubURLProtocol.requests.first)
         XCTAssertEqual(request.httpMethod, "PUT")
         XCTAssertEqual(
             request.url?.absoluteString,
-            "http://agent.example.com/api/projects/My%20Project%2F%CE%B1"
+            "http://agent.example.com/api/projects/My%20Workspace%2F%CE%B1"
         )
     }
 
-    func testCreateProjectAlwaysSerializesDefaultFlags() async throws {
+    func testCreateWorkspaceAlwaysSerializesDefaultFlags() async throws {
         StubURLProtocol.enqueue(status: 200, body: #"{"name":"p","path":"/x"}"#)
-        _ = try await makeAPI().createProject(ProjectWrite(name: "p", path: "/x"))
+        _ = try await makeAPI().createWorkspace(WorkspaceWrite(name: "p", path: "/x"))
 
         let body = try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[0])
         XCTAssertEqual(body, ["name": "p", "path": "/x", "default_flags": [:]])
@@ -138,13 +138,13 @@ final class AgentAPITests: XCTestCase {
 
     func testGitItemsAlwaysAskForTheRemoteRows() async throws {
         StubURLProtocol.enqueue(status: 200, body: #"{"items":[]}"#)
-        _ = try await makeAPI().getGitItems(projectName: "My Project")
+        _ = try await makeAPI().getGitItems(workspaceName: "My Workspace")
 
         let request = try XCTUnwrap(StubURLProtocol.requests.first)
         XCTAssertEqual(request.httpMethod, "GET")
         XCTAssertEqual(
             request.url?.absoluteString,
-            "http://agent.example.com/api/projects/My%20Project/git/items?remote=true"
+            "http://agent.example.com/api/projects/My%20Workspace/git/items?remote=true"
         )
     }
 
@@ -166,7 +166,7 @@ final class AgentAPITests: XCTestCase {
     func testGitItemsDeleteUsesColonSuffixPost() async throws {
         StubURLProtocol.enqueue(status: 200, body: #"{"results":[]}"#)
         _ = try await makeAPI().deleteGitItems(
-            projectName: "proj",
+            workspaceName: "proj",
             request: GitDeleteRequest(items: [GitDeleteItem(kind: "branch_only", branch: "b")])
         )
 

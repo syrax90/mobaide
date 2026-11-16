@@ -561,7 +561,7 @@ class GitChangesUiStateRebaseTest {
 
     @Test
     fun rebaseTargets_leaveOutTheSessionsOwnBranchByName_notTheRootsCurrentRow() {
-        // A linked-worktree session on `topic`: the project root has `main` checked out.
+        // A linked-worktree session on `topic`: the workspace root has `main` checked out.
         val items = listOf(
             item(GitItem.KIND_BRANCH_ONLY, "main", isCurrent = true),
             item(GitItem.KIND_BRANCH_WITH_WORKTREE, "topic"),

@@ -7,7 +7,7 @@ follow, ``POST .../git/rebase`` plus ``.../rebase/continue|skip|abort``
 drive a rebase, and ``GET .../git/conflict`` plus
 ``POST .../git/conflict/resolve|take|restore`` resolve a conflicted file.
 
-The directory is the session's own spawn cwd (project root or linked
+The directory is the session's own spawn cwd (workspace root or linked
 worktree) — clients never send a path to run in. For the reads, repo
 *conditions* are 200 answers with ``unavailable_reason``; a mutation on such
 a repo is a ``409`` refusal instead, because there is no partial answer to
@@ -74,7 +74,7 @@ router = APIRouter(
 async def _session_target(
     request: Request, session_id: str
 ) -> tuple[str | None, str | None]:
-    """``(cwd, project_name)`` of the session, 404 when it does not exist."""
+    """``(cwd, workspace_name)`` of the session, 404 when it does not exist."""
     manager = getattr(request.app.state, "session_manager", None)
     session = await manager.get_session(session_id) if manager else None
     if session is None:
@@ -145,12 +145,12 @@ async def session_git_diff(
 async def session_git_stage(
     session_id: str, request: Request, body: GitPathsRequest
 ) -> GitMutationResponse:
-    cwd, project_name = await _session_target(request, session_id)
+    cwd, workspace_name = await _session_target(request, session_id)
     try:
         return await stage_session_paths(
             cwd=cwd,
             paths=body.paths,
-            project_name=project_name,
+            workspace_name=workspace_name,
             event_bus=_event_bus(request),
         )
     except Exception as exc:
@@ -162,12 +162,12 @@ async def session_git_stage(
 async def session_git_unstage(
     session_id: str, request: Request, body: GitPathsRequest
 ) -> GitMutationResponse:
-    cwd, project_name = await _session_target(request, session_id)
+    cwd, workspace_name = await _session_target(request, session_id)
     try:
         return await unstage_session_paths(
             cwd=cwd,
             paths=body.paths,
-            project_name=project_name,
+            workspace_name=workspace_name,
             event_bus=_event_bus(request),
         )
     except Exception as exc:
@@ -179,13 +179,13 @@ async def session_git_unstage(
 async def session_git_discard(
     session_id: str, request: Request, body: GitDiscardRequest
 ) -> GitMutationResponse:
-    cwd, project_name = await _session_target(request, session_id)
+    cwd, workspace_name = await _session_target(request, session_id)
     try:
         return await discard_session_paths(
             cwd=cwd,
             paths=body.paths,
             scope=body.scope,
-            project_name=project_name,
+            workspace_name=workspace_name,
             event_bus=_event_bus(request),
         )
     except Exception as exc:
@@ -209,12 +209,12 @@ async def session_git_commit_context(
 async def session_git_commit(
     session_id: str, request: Request, body: GitCommitRequest
 ) -> GitCommitResponse:
-    cwd, project_name = await _session_target(request, session_id)
+    cwd, workspace_name = await _session_target(request, session_id)
     try:
         return await commit_session(
             cwd=cwd,
             request=body,
-            project_name=project_name,
+            workspace_name=workspace_name,
             event_bus=_event_bus(request),
         )
     except Exception as exc:
@@ -224,13 +224,13 @@ async def session_git_commit(
 
 @router.post("/fetch", response_model=GitJobResponse)
 async def session_git_fetch(session_id: str, request: Request) -> GitJobResponse:
-    cwd, project_name = await _session_target(request, session_id)
+    cwd, workspace_name = await _session_target(request, session_id)
     try:
         return await job_registry.start(
             "fetch",
             cwd=cwd,
             session_id=session_id,
-            project_name=project_name,
+            workspace_name=workspace_name,
             event_bus=_event_bus(request),
         )
     except Exception as exc:
@@ -242,13 +242,13 @@ async def session_git_fetch(session_id: str, request: Request) -> GitJobResponse
 async def session_git_pull(
     session_id: str, request: Request, body: GitPullRequest | None = None
 ) -> GitJobResponse:
-    cwd, project_name = await _session_target(request, session_id)
+    cwd, workspace_name = await _session_target(request, session_id)
     try:
         return await job_registry.start(
             "pull",
             cwd=cwd,
             session_id=session_id,
-            project_name=project_name,
+            workspace_name=workspace_name,
             event_bus=_event_bus(request),
             pull_mode=(body or GitPullRequest()).mode,
         )
@@ -261,13 +261,13 @@ async def session_git_pull(
 async def session_git_push(
     session_id: str, request: Request, body: GitPushRequest | None = None
 ) -> GitJobResponse:
-    cwd, project_name = await _session_target(request, session_id)
+    cwd, workspace_name = await _session_target(request, session_id)
     try:
         return await job_registry.start(
             "push",
             cwd=cwd,
             session_id=session_id,
-            project_name=project_name,
+            workspace_name=workspace_name,
             event_bus=_event_bus(request),
             force=(body or GitPushRequest()).force,
         )
@@ -280,12 +280,12 @@ async def session_git_push(
 async def session_git_rebase(
     session_id: str, request: Request, body: GitRebaseRequest
 ) -> GitRebaseResponse:
-    cwd, project_name = await _session_target(request, session_id)
+    cwd, workspace_name = await _session_target(request, session_id)
     try:
         return await start_session_rebase(
             cwd=cwd,
             onto=body.onto,
-            project_name=project_name,
+            workspace_name=workspace_name,
             event_bus=_event_bus(request),
         )
     except Exception as exc:
@@ -297,10 +297,10 @@ async def session_git_rebase(
 async def session_git_rebase_continue(
     session_id: str, request: Request
 ) -> GitRebaseResponse:
-    cwd, project_name = await _session_target(request, session_id)
+    cwd, workspace_name = await _session_target(request, session_id)
     try:
         return await continue_session_rebase(
-            cwd=cwd, project_name=project_name, event_bus=_event_bus(request)
+            cwd=cwd, workspace_name=workspace_name, event_bus=_event_bus(request)
         )
     except Exception as exc:
         _raise_mapped(exc)
@@ -311,10 +311,10 @@ async def session_git_rebase_continue(
 async def session_git_rebase_skip(
     session_id: str, request: Request
 ) -> GitRebaseResponse:
-    cwd, project_name = await _session_target(request, session_id)
+    cwd, workspace_name = await _session_target(request, session_id)
     try:
         return await skip_session_rebase(
-            cwd=cwd, project_name=project_name, event_bus=_event_bus(request)
+            cwd=cwd, workspace_name=workspace_name, event_bus=_event_bus(request)
         )
     except Exception as exc:
         _raise_mapped(exc)
@@ -325,10 +325,10 @@ async def session_git_rebase_skip(
 async def session_git_rebase_abort(
     session_id: str, request: Request
 ) -> GitRebaseResponse:
-    cwd, project_name = await _session_target(request, session_id)
+    cwd, workspace_name = await _session_target(request, session_id)
     try:
         return await abort_session_rebase(
-            cwd=cwd, project_name=project_name, event_bus=_event_bus(request)
+            cwd=cwd, workspace_name=workspace_name, event_bus=_event_bus(request)
         )
     except Exception as exc:
         _raise_mapped(exc)
@@ -351,12 +351,12 @@ async def session_git_conflict(
 async def session_git_conflict_resolve(
     session_id: str, request: Request, body: GitConflictResolveRequest
 ) -> GitMutationResponse:
-    cwd, project_name = await _session_target(request, session_id)
+    cwd, workspace_name = await _session_target(request, session_id)
     try:
         return await resolve_session_conflict(
             cwd=cwd,
             request=body,
-            project_name=project_name,
+            workspace_name=workspace_name,
             event_bus=_event_bus(request),
         )
     except Exception as exc:
@@ -368,12 +368,12 @@ async def session_git_conflict_resolve(
 async def session_git_conflict_take(
     session_id: str, request: Request, body: GitConflictTakeRequest
 ) -> GitMutationResponse:
-    cwd, project_name = await _session_target(request, session_id)
+    cwd, workspace_name = await _session_target(request, session_id)
     try:
         return await take_session_conflict(
             cwd=cwd,
             request=body,
-            project_name=project_name,
+            workspace_name=workspace_name,
             event_bus=_event_bus(request),
         )
     except Exception as exc:
@@ -385,12 +385,12 @@ async def session_git_conflict_take(
 async def session_git_conflict_restore(
     session_id: str, request: Request, body: GitConflictRestoreRequest
 ) -> GitMutationResponse:
-    cwd, project_name = await _session_target(request, session_id)
+    cwd, workspace_name = await _session_target(request, session_id)
     try:
         return await restore_session_conflict(
             cwd=cwd,
             request=body,
-            project_name=project_name,
+            workspace_name=workspace_name,
             event_bus=_event_bus(request),
         )
     except Exception as exc:

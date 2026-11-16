@@ -3,8 +3,8 @@
 Sibling of :mod:`claude_launcher`, sharing the CLI-agnostic primitives in
 :mod:`cli_launcher`. Codex is thinner than Claude: no attention hooks (its
 terminal sessions get attention from the OSC 7501 status reports the TUI writes,
-see :mod:`program_status`) and no Linear-MCP / ``.mcp.json`` project files. It
-does support git worktrees on stored projects, resolved the same way Claude's
+see :mod:`program_status`) and no Linear-MCP / ``.mcp.json`` workspace files. It
+does support git worktrees on stored workspaces, resolved the same way Claude's
 Standard mode does (``create_standard_worktree``). Flags are verified against
 ``developers.openai.com/codex/cli/reference``.
 """
@@ -33,7 +33,7 @@ from .cli_launcher import (
     windows_npm_fallbacks,
 )
 from .codex_auth import codex_auth_present
-from .projects_config import ProjectConfig
+from .workspaces_config import WorkspaceConfig
 
 if TYPE_CHECKING:
     from mobaide.linear.worktree import WorktreeManager
@@ -231,7 +231,7 @@ class CodexOptions:
     reasoning_effort: str | None = "high"
     full_auto: bool = False
     initial_prompt: str | None = None
-    # Worktree intent for a stored git project, resolved by ``_resolve_cwd``
+    # Worktree intent for a stored git workspace, resolved by ``_resolve_cwd``
     # exactly like Claude's Standard mode; ignored for ad-hoc launches.
     worktree: bool = False
     branch_name: str | None = None
@@ -372,7 +372,7 @@ class CodexLauncher:
         return argv
 
     async def _resolve_cwd(self, target: LaunchTarget, options: CodexOptions) -> str:
-        # A project session runs in the project root, or — when worktree=True — in
+        # A workspace session runs in the workspace root, or — when worktree=True — in
         # a freshly created git worktree (the same Standard-mode resolution Claude
         # uses); an ad-hoc session always runs in its bare cwd. Shared guards live
         # in cli_launcher so the per-CLI modules stay thin.
@@ -390,7 +390,7 @@ class CodexLauncher:
         env.setdefault("TERM", "xterm-256color")
         env["PYTHONIOENCODING"] = "utf-8"
 
-        if isinstance(target, ProjectConfig) and target.conda_env:
+        if isinstance(target, WorkspaceConfig) and target.conda_env:
             conda_bin = conda_env_bin(target.conda_env)
             if conda_bin:
                 sep = os.pathsep

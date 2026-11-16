@@ -428,13 +428,13 @@ private struct TerminalScreenContent: View {
                 // is nil until it loads (cold-start deep link), so the menu
                 // appears once the cwd is known. Fixed order: a top-bar `Menu`
                 // otherwise renders its sections bottom-up. Branches… links to
-                // the project's Git screen, so it also needs a project-backed
+                // the workspace's Git screen, so it also needs a workspace-backed
                 // session.
                 if sessionRow?.cwd != nil {
                     Menu {
                         SessionGitMenuItems(
                             sessionId: sessionId,
-                            projectName: sessionRow?.project_name,
+                            workspaceName: sessionRow?.workspace_name,
                             capabilities: gitCapabilities,
                             navigate: { router.navigate(to: $0) }
                         )

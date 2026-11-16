@@ -15,7 +15,7 @@ struct AutoScanCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     PixelStatusSquare(tone: AutoScanDisplay.statusTone(scan.status))
-                    Text(scan.project_name)
+                    Text(scan.workspace_name)
                         .font(.body.weight(.semibold))
                         .foregroundStyle(colors.text)
                     Spacer()

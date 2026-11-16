@@ -7,6 +7,7 @@ in _connect_loop, and _send_heartbeat.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import struct
 import sys
@@ -50,6 +51,12 @@ from mobaide.core import (
     CodexBinaryNotFoundError,
 )
 from mobaide.core.models import SessionKind, SessionState
+
+
+def _assert_real_signature(fn, await_args) -> None:
+    """Fail if a mocked call would raise TypeError against the real handler."""
+    inspect.signature(fn).bind(*await_args.args, **await_args.kwargs)
+
 
 
 # ``relay_config``, ``mock_session_manager``, ``mock_event_bus``,
@@ -254,7 +261,7 @@ class TestHandleControl:
     ):
         """When the launcher raises ``WorktreeCreationError``, the relay must
         respond with ``session_create_failed`` carrying the git stderr so the
-        mobile client sees the real cause instead of a silent project-root
+        mobile client sees the real cause instead of a silent workspace-root
         fallback."""
         from mobaide.linear.worktree import WorktreeCreationError
 
@@ -580,32 +587,32 @@ class TestHandleRequestEventsSnapshot:
             ],
         }
 
-    async def test_publishes_projects_changed_on_event_bus(
+    async def test_publishes_workspaces_changed_on_event_bus(
         self, client, mock_session_manager, mock_event_bus, mock_app_state
     ):
-        """When ``app_state.projects_store`` is present, the handler must also
-        republish the projects snapshot so a mobile whose only recent event
-        is on the projects stream still rebuilds its local store on
+        """When ``app_state.workspaces_store`` is present, the handler must also
+        republish the workspaces snapshot so a mobile whose only recent event
+        is on the workspaces stream still rebuilds its local store on
         reconnect.
         """
         mock_session_manager.list_sessions = MagicMock(return_value=[])
-        projects_store = MagicMock()
-        projects_store.list_public = MagicMock(
+        workspaces_store = MagicMock()
+        workspaces_store.list_public = MagicMock(
             return_value=[{"name": "proj-a", "path": "/p/a"}]
         )
-        mock_app_state.projects_store = projects_store
+        mock_app_state.workspaces_store = workspaces_store
 
         ws = AsyncMock()
         payload = json.dumps({"type": "request_events_snapshot"}).encode()
 
         await client._handle_control(payload, ws)
 
-        projects_calls = [
+        workspaces_calls = [
             c for c in mock_event_bus.publish.call_args_list
             if c[0][0] == "projects.changed"
         ]
-        assert len(projects_calls) == 1
-        assert projects_calls[0][0][1] == {
+        assert len(workspaces_calls) == 1
+        assert workspaces_calls[0][0][1] == {
             "projects": [{"name": "proj-a", "path": "/p/a"}],
         }
 
@@ -722,7 +729,7 @@ class TestHandleCreateSessionPathErrors:
         self, client, mock_session_manager
     ):
         """``FileNotFoundError`` with a Windows-backslash ``filename``: the
-        response ``error`` must equal ``"Project path not found: <raw>"``
+        response ``error`` must equal ``"Workspace path not found: <raw>"``
         with a single layer of escaping on the wire, proving the handler
         used ``f"{exc.filename}"`` — not ``str(exc)`` which would embed
         ``repr(filename)`` and produce the 4-backslash symptom.
@@ -745,7 +752,7 @@ class TestHandleCreateSessionPathErrors:
         assert resp["type"] == "session_create_failed"
         assert resp["session_id"] == "bad-path-sess"
         # After JSON parsing, the raw backslash string is recovered verbatim.
-        assert resp["error"] == r"Project path not found: D:\raw\backslash\dir"
+        assert resp["error"] == r"Workspace path not found: D:\raw\backslash\dir"
 
         # On-the-wire JSON source: one literal backslash must encode as
         # ``\\`` (2 characters). ``repr(filename)`` + JSON would produce
@@ -788,7 +795,7 @@ class TestHandleCreateSessionPathErrors:
         """``ClaudeBinaryNotFoundError`` from the spawn path must be mapped
         to ``session_create_failed`` with ``claude_cli_missing: true`` so
         the mobile client can render an "install Claude CLI" affordance
-        instead of the generic "project path not found" toast."""
+        instead of the generic "workspace path not found" toast."""
         mock_session_manager.create_session = AsyncMock(
             side_effect=ClaudeBinaryNotFoundError(
                 searched_paths=["PATH:claude", "/home/test/.npm-global/bin/claude"]
@@ -878,7 +885,7 @@ class TestHandleProxyRequestPathErrors:
         assert resp["request_id"] == "req-1"
         assert resp["status"] == 400
         assert resp["body"]["detail"] == (
-            r"Project path not found: D:\raw\ghost\dir"
+            r"Workspace path not found: D:\raw\ghost\dir"
         )
 
         # Wire-form guard: exactly one layer of backslash escaping.
@@ -1648,7 +1655,7 @@ class TestAttentionUserEvent:
         }
 
     def test_carries_a_custom_kind_and_its_label(self):
-        # A push for a session with neither a title nor a project is named
+        # A push for a session with neither a title nor a workspace is named
         # after its kind ("My Linter session"), so the label must travel too.
         session = _attention_session_wire(
             attention="turn_failed",
@@ -1890,10 +1897,10 @@ class TestProxyAutoscanStart:
         assert isinstance(result["body"]["detail"], list)
         mgr.start.assert_not_awaited()
 
-    async def test_missing_project_name_returns_422(
+    async def test_missing_workspace_name_returns_422(
         self, client, mock_app_state,
     ):
-        """``project_name`` is required — an empty body yields 422."""
+        """``workspace_name`` is required — an empty body yields 422."""
         mgr = mock_app_state.autoscan_manager
         mgr.start = AsyncMock()
 
@@ -1940,11 +1947,11 @@ class TestProxyAutoscanStart:
         assert "at cap" in result["body"]["detail"]
 
     async def test_value_error_returns_404(self, client, mock_app_state):
-        """``ValueError`` (unknown project) must surface as 404 — previously
+        """``ValueError`` (unknown workspace) must surface as 404 — previously
         collapsed to 409, making it indistinguishable from the real
         ``AutoScanAlreadyRunning`` conflict case."""
         mgr = mock_app_state.autoscan_manager
-        mgr.start = AsyncMock(side_effect=ValueError("unknown project"))
+        mgr.start = AsyncMock(side_effect=ValueError("unknown workspace"))
 
         ws = AsyncMock()
         result = await client._dispatch_proxy(
@@ -1952,7 +1959,7 @@ class TestProxyAutoscanStart:
         )
 
         assert result["status"] == 404
-        assert "unknown project" in result["body"]["detail"]
+        assert "unknown workspace" in result["body"]["detail"]
 
 
 class TestProxyCreateSessionClaudeOptions:
@@ -2104,7 +2111,7 @@ class TestProxyCreateSessionClaudeOptions:
 
 class TestHandleCreateSessionAdHocPathValidation:
     """When a control-channel ``create_session`` frame arrives with
-    ``project_name=None`` and a user-supplied ``cwd``, the relay runs
+    ``workspace_name=None`` and a user-supplied ``cwd``, the relay runs
     the same pre-validation as the FastAPI router. Invalid paths
     short-circuit with ``session_create_failed`` instead of reaching
     ``SessionManager.create_session`` (which would otherwise surface a
@@ -2130,10 +2137,10 @@ class TestHandleCreateSessionAdHocPathValidation:
         assert str(missing) in resp["error"]
         mock_session_manager.create_session.assert_not_awaited()
 
-    async def test_validation_skipped_when_project_name_set(
+    async def test_validation_skipped_when_workspace_name_set(
         self, client, mock_session_manager,
     ):
-        """``project_name`` set ⇒ server derives cwd from the project;
+        """``workspace_name`` set ⇒ server derives cwd from the workspace;
         the ad-hoc validator must not fire. A relative ``cwd`` here must
         NOT short-circuit — it is simply ignored, and the request flows
         through to ``create_session`` normally (which the mock accepts)."""
@@ -2204,11 +2211,11 @@ class TestDispatchProxyAdHocPathValidation:
         assert "relative/path" in result["body"]["detail"]
         mock_session_manager.create_session.assert_not_awaited()
 
-    async def test_validation_skipped_when_project_name_set(
+    async def test_validation_skipped_when_workspace_name_set(
         self, client, mock_session_manager,
     ):
-        """A bad ``cwd`` accompanied by a ``project_name`` must NOT
-        trigger the 400 — the server derives cwd from the project. Pins
+        """A bad ``cwd`` accompanied by a ``workspace_name`` must NOT
+        trigger the 400 — the server derives cwd from the workspace. Pins
         the same invariant tested on the router side."""
         from mobaide.core.models import SessionState
         from datetime import datetime, timezone
@@ -2219,7 +2226,7 @@ class TestDispatchProxyAdHocPathValidation:
         fake_info.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
         fake_info.pid = 7
         fake_info.command = ["/bin/bash"]
-        fake_info.cwd = "/some/project/path"
+        fake_info.cwd = "/some/workspace/path"
 
         fake_session = MagicMock()
         fake_session.to_info.return_value = fake_info
@@ -2241,7 +2248,7 @@ class TestDispatchProxyAdHocPathValidation:
     async def test_valid_adhoc_cwd_returns_201(
         self, client, mock_session_manager, tmp_path,
     ):
-        """Happy path: ``project_name=None`` + valid absolute cwd +
+        """Happy path: ``workspace_name=None`` + valid absolute cwd +
         ``claude_options`` → 201 via the ad-hoc Claude launch path."""
         from mobaide.core.models import SessionState
         from datetime import datetime, timezone
@@ -2279,20 +2286,20 @@ class TestProxyGitItems:
     404s on every Git button tap.
 
     These tests lock down the relay-path contract: shape parity with the
-    direct HTTP path, project-resolution semantics (404 / 400), Pydantic
+    direct HTTP path, workspace-resolution semantics (404 / 400), Pydantic
     422 on malformed bodies, and — most importantly — the nested
     ``detail.busy_by`` shape on 409 responses, which the mobile
     busy-conflict dialog parses.
     """
 
-    def _make_project(self, tmp_path, name="proj", with_git=True):
+    def _make_workspace(self, tmp_path, name="proj", with_git=True):
         from unittest.mock import MagicMock
         if with_git:
             (tmp_path / ".git").mkdir(exist_ok=True)
-        project = MagicMock()
-        project.name = name
-        project.path = str(tmp_path)
-        return project
+        workspace = MagicMock()
+        workspace.name = name
+        workspace.path = str(tmp_path)
+        return workspace
 
     async def test_get_items_happy_path(
         self, client, mock_app_state, tmp_path,
@@ -2302,9 +2309,9 @@ class TestProxyGitItems:
         it matches the FastAPI router's response byte-for-byte."""
         from mobaide.agent.git.models import GitItemRead
 
-        project = self._make_project(tmp_path, name="proj")
-        mock_app_state.projects_store = MagicMock()
-        mock_app_state.projects_store.get = MagicMock(return_value=project)
+        workspace = self._make_workspace(tmp_path, name="proj")
+        mock_app_state.workspaces_store = MagicMock()
+        mock_app_state.workspaces_store.get = MagicMock(return_value=workspace)
         mock_app_state.worktree_manager = MagicMock()
 
         items = [GitItemRead(kind="branch_only", branch="main")]
@@ -2332,9 +2339,9 @@ class TestProxyGitItems:
             GitDeleteResultItem,
         )
 
-        project = self._make_project(tmp_path, name="proj")
-        mock_app_state.projects_store = MagicMock()
-        mock_app_state.projects_store.get = MagicMock(return_value=project)
+        workspace = self._make_workspace(tmp_path, name="proj")
+        mock_app_state.workspaces_store = MagicMock()
+        mock_app_state.workspaces_store.get = MagicMock(return_value=workspace)
         mock_app_state.worktree_manager = MagicMock()
         mock_app_state.session_manager = MagicMock()
         mock_app_state.event_bus = MagicMock()
@@ -2361,7 +2368,10 @@ class TestProxyGitItems:
         mock_delete.assert_awaited_once()
         await_args = mock_delete.await_args
         assert await_args is not None
-        assert await_args.kwargs["project_name"] == "proj"
+        from mobaide.agent.git.service import delete_git_items
+
+        _assert_real_signature(delete_git_items, await_args)
+        assert await_args.kwargs["workspace_name"] == "proj"
         assert await_args.kwargs["actor"] is None
 
     async def test_post_delete_busy_returns_409_with_nested_detail(
@@ -2377,9 +2387,9 @@ class TestProxyGitItems:
         from mobaide.agent.git.models import BusyHolder
         from mobaide.agent.git.service import GitItemBusyError
 
-        project = self._make_project(tmp_path, name="proj")
-        mock_app_state.projects_store = MagicMock()
-        mock_app_state.projects_store.get = MagicMock(return_value=project)
+        workspace = self._make_workspace(tmp_path, name="proj")
+        mock_app_state.workspaces_store = MagicMock()
+        mock_app_state.workspaces_store.get = MagicMock(return_value=workspace)
         mock_app_state.worktree_manager = MagicMock()
         mock_app_state.session_manager = MagicMock()
         mock_app_state.event_bus = MagicMock()
@@ -2416,12 +2426,12 @@ class TestProxyGitItems:
         # Negative assertion: must NOT be at top level.
         assert "busy_by" not in result["body"]
 
-    async def test_url_decoded_space_in_project_name(
+    async def test_url_decoded_space_in_workspace_name(
         self, client, mock_app_state, tmp_path,
     ):
         """The central server's ``{path:path}`` route URL-decodes path
         params before forwarding through the relay envelope, so a
-        project named ``Mobaide Project`` arrives at ``_dispatch_proxy``
+        workspace named ``Mobaide Workspace`` arrives at ``_dispatch_proxy``
         with a literal space (the symptom in the original bug report).
         The regex ``[^/]+`` accepts spaces, and the captured name must
         be passed *as-is* to ``store.get`` (do NOT call
@@ -2429,9 +2439,9 @@ class TestProxyGitItems:
         bytes inside names)."""
         from mobaide.agent.git.models import GitItemRead
 
-        project = self._make_project(tmp_path, name="Mobaide Project")
-        mock_app_state.projects_store = MagicMock()
-        mock_app_state.projects_store.get = MagicMock(return_value=project)
+        workspace = self._make_workspace(tmp_path, name="Mobaide Workspace")
+        mock_app_state.workspaces_store = MagicMock()
+        mock_app_state.workspaces_store.get = MagicMock(return_value=workspace)
         mock_app_state.worktree_manager = MagicMock()
 
         ws = AsyncMock()
@@ -2442,13 +2452,13 @@ class TestProxyGitItems:
         ):
             result = await client._dispatch_proxy(
                 "GET",
-                "/api/projects/Mobaide Project/git/items",
+                "/api/projects/Mobaide Workspace/git/items",
                 None, None, ws,
             )
 
         assert result["status"] == 200
-        mock_app_state.projects_store.get.assert_called_once_with(
-            "Mobaide Project",
+        mock_app_state.workspaces_store.get.assert_called_once_with(
+            "Mobaide Workspace",
         )
 
 
@@ -2460,12 +2470,12 @@ class TestProxyWorktreeBases:
         from mobaide.agent.git.models import WorktreeBaseRef, WorktreeBasesResponse
 
         (tmp_path / ".git").mkdir()
-        project = MagicMock()
-        project.name = "proj"
-        project.path = str(tmp_path)
-        mock_app_state.projects_store = MagicMock()
-        mock_app_state.projects_store.get = MagicMock(return_value=project)
-        mock_app_state.projects_store.get_last_worktree_base = MagicMock(
+        workspace = MagicMock()
+        workspace.name = "proj"
+        workspace.path = str(tmp_path)
+        mock_app_state.workspaces_store = MagicMock()
+        mock_app_state.workspaces_store.get = MagicMock(return_value=workspace)
+        mock_app_state.workspaces_store.get_last_worktree_base = MagicMock(
             return_value="origin/dev",
         )
         mock_app_state.worktree_manager = MagicMock()
@@ -2487,19 +2497,19 @@ class TestProxyWorktreeBases:
 
 
 class TestProxyGitBranches:
-    """Relay parity for the project-git routes added next to
+    """Relay parity for the workspace-git routes added next to
     ``TestProxyGitItems``: the ``?remote`` flag reaches the service parsed,
     ``POST /branches`` and ``POST /checkout`` answer the FastAPI router's
     bodies byte-for-byte — the busy 409 nested under ``detail`` and the coded
     refusals in the session-git ``{detail: {code, message}}`` shape."""
 
-    def _wire_project(self, mock_app_state, tmp_path, name="proj"):
+    def _wire_workspace(self, mock_app_state, tmp_path, name="proj"):
         (tmp_path / ".git").mkdir(exist_ok=True)
-        project = MagicMock()
-        project.name = name
-        project.path = str(tmp_path)
-        mock_app_state.projects_store = MagicMock()
-        mock_app_state.projects_store.get = MagicMock(return_value=project)
+        workspace = MagicMock()
+        workspace.name = name
+        workspace.path = str(tmp_path)
+        mock_app_state.workspaces_store = MagicMock()
+        mock_app_state.workspaces_store.get = MagicMock(return_value=workspace)
         mock_app_state.worktree_manager = MagicMock()
         mock_app_state.session_manager = MagicMock()
         mock_app_state.event_bus = MagicMock()
@@ -2511,7 +2521,7 @@ class TestProxyGitBranches:
     async def test_get_items_forwards_the_parsed_remote_flag(
         self, client, mock_app_state, tmp_path, query, expected,
     ):
-        self._wire_project(mock_app_state, tmp_path)
+        self._wire_workspace(mock_app_state, tmp_path)
         ws = AsyncMock()
         with patch(
             "mobaide.relay.client.list_git_items",
@@ -2529,7 +2539,7 @@ class TestProxyGitBranches:
     async def test_get_items_rejects_a_non_boolean_remote_flag_with_422(
         self, client, mock_app_state, tmp_path,
     ):
-        self._wire_project(mock_app_state, tmp_path)
+        self._wire_workspace(mock_app_state, tmp_path)
         ws = AsyncMock()
         with patch(
             "mobaide.relay.client.list_git_items",
@@ -2546,7 +2556,7 @@ class TestProxyGitBranches:
     async def test_post_branches_happy_path(self, client, mock_app_state, tmp_path):
         from mobaide.agent.git.models import GitBranchCreateRequest, GitBranchResponse
 
-        self._wire_project(mock_app_state, tmp_path)
+        self._wire_workspace(mock_app_state, tmp_path)
         ws = AsyncMock()
         with patch(
             "mobaide.relay.client.create_branch",
@@ -2570,12 +2580,15 @@ class TestProxyGitBranches:
         assert await_args.args == (
             GitBranchCreateRequest(name="x", start_point="origin/main", checkout=True),
         )
-        assert await_args.kwargs["project_name"] == "proj"
-        assert await_args.kwargs["project_root"] == str(tmp_path)
+        from mobaide.agent.git.service import create_branch
+
+        _assert_real_signature(create_branch, await_args)
+        assert await_args.kwargs["workspace_name"] == "proj"
+        assert await_args.kwargs["workspace_root"] == str(tmp_path)
         assert await_args.kwargs["actor"] is None
 
     async def test_post_branches_malformed_returns_422(self, client, mock_app_state, tmp_path):
-        self._wire_project(mock_app_state, tmp_path)
+        self._wire_workspace(mock_app_state, tmp_path)
         ws = AsyncMock()
         with patch(
             "mobaide.relay.client.create_branch", new=AsyncMock(),
@@ -2591,7 +2604,7 @@ class TestProxyGitBranches:
     async def test_post_checkout_happy_path(self, client, mock_app_state, tmp_path):
         from mobaide.agent.git.models import GitBranchResponse, GitCheckoutRequest
 
-        self._wire_project(mock_app_state, tmp_path)
+        self._wire_workspace(mock_app_state, tmp_path)
         ws = AsyncMock()
         with patch(
             "mobaide.relay.client.checkout_ref",
@@ -2614,7 +2627,10 @@ class TestProxyGitBranches:
         await_args = mock_checkout.await_args
         assert await_args is not None
         assert await_args.args == (GitCheckoutRequest(ref="origin/feature/x"),)
-        assert await_args.kwargs["project_name"] == "proj"
+        from mobaide.agent.git.service import checkout_ref
+
+        _assert_real_signature(checkout_ref, await_args)
+        assert await_args.kwargs["workspace_name"] == "proj"
 
     async def test_post_checkout_busy_returns_409_with_nested_detail(
         self, client, mock_app_state, tmp_path,
@@ -2622,7 +2638,7 @@ class TestProxyGitBranches:
         from mobaide.agent.git.models import BusyHolder
         from mobaide.agent.git.service import GitItemBusyError
 
-        self._wire_project(mock_app_state, tmp_path)
+        self._wire_workspace(mock_app_state, tmp_path)
         busy_by = [BusyHolder(kind="session", session_id="s1", cwd=str(tmp_path))]
         ws = AsyncMock()
         with patch(
@@ -2653,7 +2669,7 @@ class TestProxyGitBranches:
     async def test_post_checkout_coded_refusals_match_the_router_shape(
         self, client, mock_app_state, tmp_path, exc, status, detail,
     ):
-        self._wire_project(mock_app_state, tmp_path)
+        self._wire_workspace(mock_app_state, tmp_path)
         ws = AsyncMock()
         with patch(
             "mobaide.relay.client.checkout_ref", new=AsyncMock(side_effect=exc),
@@ -2665,11 +2681,11 @@ class TestProxyGitBranches:
         assert result["status"] == status
         assert result["body"] == {"detail": detail}
 
-    async def test_unknown_project_and_non_git_project_apply_to_the_new_routes(
+    async def test_unknown_workspace_and_non_git_workspace_apply_to_the_new_routes(
         self, client, mock_app_state, tmp_path,
     ):
-        mock_app_state.projects_store = MagicMock()
-        mock_app_state.projects_store.get = MagicMock(return_value=None)
+        mock_app_state.workspaces_store = MagicMock()
+        mock_app_state.workspaces_store.get = MagicMock(return_value=None)
         mock_app_state.worktree_manager = MagicMock()
         ws = AsyncMock()
 
@@ -2680,11 +2696,11 @@ class TestProxyGitBranches:
         assert missing["status"] == 404
         assert "not found" in missing["body"]["detail"]
 
-        project = MagicMock()
-        project.name = "plain"
-        project.path = str(tmp_path / "plain")
+        workspace = MagicMock()
+        workspace.name = "plain"
+        workspace.path = str(tmp_path / "plain")
         (tmp_path / "plain").mkdir()
-        mock_app_state.projects_store.get = MagicMock(return_value=project)
+        mock_app_state.workspaces_store.get = MagicMock(return_value=workspace)
 
         plain = await client._dispatch_proxy(
             "POST", "/api/projects/plain/git/branches", {"name": "x"}, None, ws,
@@ -2702,23 +2718,23 @@ class TestProxyLinearDiscoveryRelayParity:
     would surface as ``404 "Unknown proxy route"`` on every edit-sheet
     open — the identical regression class a prior git-router gap exposed.
 
-    These tests pin the relay-path contract: project-resolution semantics
+    These tests pin the relay-path contract: workspace-resolution semantics
     (404 / 400), upstream Linear failure mapping (502), and a happy-path
-    that confirms the discovery client was actually called with the project's
+    that confirms the discovery client was actually called with the workspace's
     stored API key.
     """
 
-    def _make_project(self, name="proj", api_key: str | None = "lin_secret"):
-        project = MagicMock()
-        project.name = name
-        project.linear_api_key = api_key
-        return project
+    def _make_workspace(self, name="proj", api_key: str | None = "lin_secret"):
+        workspace = MagicMock()
+        workspace.name = name
+        workspace.linear_api_key = api_key
+        return workspace
 
-    async def test_labels_unknown_project_returns_404(
+    async def test_labels_unknown_workspace_returns_404(
         self, client, mock_app_state,
     ):
-        mock_app_state.projects_store = MagicMock()
-        mock_app_state.projects_store.get = MagicMock(return_value=None)
+        mock_app_state.workspaces_store = MagicMock()
+        mock_app_state.workspaces_store.get = MagicMock(return_value=None)
 
         ws = AsyncMock()
         result = await client._dispatch_proxy(
@@ -2731,9 +2747,9 @@ class TestProxyLinearDiscoveryRelayParity:
     async def test_labels_no_api_key_returns_400(
         self, client, mock_app_state,
     ):
-        project = self._make_project(api_key=None)
-        mock_app_state.projects_store = MagicMock()
-        mock_app_state.projects_store.get = MagicMock(return_value=project)
+        workspace = self._make_workspace(api_key=None)
+        mock_app_state.workspaces_store = MagicMock()
+        mock_app_state.workspaces_store.get = MagicMock(return_value=workspace)
 
         ws = AsyncMock()
         result = await client._dispatch_proxy(
@@ -2746,9 +2762,9 @@ class TestProxyLinearDiscoveryRelayParity:
     async def test_labels_happy_path_uses_stored_api_key(
         self, client, mock_app_state,
     ):
-        project = self._make_project(api_key="lin_test_key")
-        mock_app_state.projects_store = MagicMock()
-        mock_app_state.projects_store.get = MagicMock(return_value=project)
+        workspace = self._make_workspace(api_key="lin_test_key")
+        mock_app_state.workspaces_store = MagicMock()
+        mock_app_state.workspaces_store.get = MagicMock(return_value=workspace)
 
         captured = {}
 
@@ -2772,9 +2788,9 @@ class TestProxyLinearDiscoveryRelayParity:
     async def test_states_happy_path_returns_workflow_states(
         self, client, mock_app_state,
     ):
-        project = self._make_project()
-        mock_app_state.projects_store = MagicMock()
-        mock_app_state.projects_store.get = MagicMock(return_value=project)
+        workspace = self._make_workspace()
+        mock_app_state.workspaces_store = MagicMock()
+        mock_app_state.workspaces_store.get = MagicMock(return_value=workspace)
 
         class _Stub:
             def __init__(self, *args, **kwargs):
@@ -2799,9 +2815,9 @@ class TestProxyLinearDiscoveryRelayParity:
     async def test_labels_upstream_failure_returns_502(
         self, client, mock_app_state,
     ):
-        project = self._make_project()
-        mock_app_state.projects_store = MagicMock()
-        mock_app_state.projects_store.get = MagicMock(return_value=project)
+        workspace = self._make_workspace()
+        mock_app_state.workspaces_store = MagicMock()
+        mock_app_state.workspaces_store.get = MagicMock(return_value=workspace)
 
         class _Boom:
             def __init__(self, *args, **kwargs):
@@ -2827,14 +2843,14 @@ class TestProxySessionsWireShape:
     """Regression guards for the wire-shape consolidation: both
     ``GET /api/sessions`` and ``POST /api/sessions`` proxy responses must
     be built through :func:`session_to_wire_dict` so the 8-field canonical
-    wire shape (including ``title`` and ``project_name``) is present.
+    wire shape (including ``title`` and ``workspace_name``) is present.
 
     Without these assertions a future developer could revert the call site
     back to an inline 6-field dict literal, silently dropping the new
     fields the Android client relies on to render friendly session labels.
     """
 
-    async def test_get_sessions_body_carries_title_and_project_name(
+    async def test_get_sessions_body_carries_title_and_workspace_name(
         self, client, mock_session_manager,
     ):
         """``GET /api/sessions`` must return a list of canonical wire dicts."""
@@ -2887,7 +2903,7 @@ class TestProxySessionsWireShape:
         # The two new fields the Android list UI depends on.
         assert a["title"] == "* Refactoring parser"
         assert a["project_name"] == "alpha"
-        # Untitled session: title/project_name carried explicitly as None.
+        # Untitled session: title/workspace_name carried explicitly as None.
         assert b["title"] is None
         assert b["project_name"] is None
 
@@ -2903,7 +2919,7 @@ class TestProxySessionsWireShape:
         assert a["cwd"] == "/work/a"
         assert a["created_at"].startswith("2026-05-19T12:00:00")
 
-    async def test_post_sessions_body_carries_title_and_project_name(
+    async def test_post_sessions_body_carries_title_and_workspace_name(
         self, client, mock_session_manager,
     ):
         """``POST /api/sessions`` 201 body must be a canonical wire dict."""

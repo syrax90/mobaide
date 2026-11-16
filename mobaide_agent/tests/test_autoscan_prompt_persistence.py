@@ -1,8 +1,8 @@
 """Tests for ``AutoScanSessionManager.start`` persisting the applied Auto
-Scan prompt onto the project record (the single choke point that covers both
+Scan prompt onto the workspace record (the single choke point that covers both
 the direct-HTTP and central-relay transports).
 
-Uses a real ``ProjectsStore`` so the prompt genuinely round-trips to disk;
+Uses a real ``WorkspacesStore`` so the prompt genuinely round-trips to disk;
 ``AutoScanInstance.start`` is stubbed to a no-op so no Linear ``get_viewer``
 call is made and no live poll task is spawned.
 """
@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from mobaide.core import ProjectRecord, ProjectsStore, SessionManager
+from mobaide.core import WorkspaceRecord, WorkspacesStore, SessionManager
 from mobaide.core.claude_launcher import ClaudeOptions
 from mobaide.linear.config import AutoScanConfig
 from mobaide.linear.scanner import AutoScanInstance, AutoScanSessionManager
@@ -52,11 +52,11 @@ def _no_op_instance_start(monkeypatch):
     monkeypatch.setattr(AutoScanInstance, "start", _noop)
 
 
-def _make_store(tmp_path, *, prompt: str | None = None) -> ProjectsStore:
-    store = ProjectsStore(str(tmp_path / "projects.json"))
+def _make_store(tmp_path, *, prompt: str | None = None) -> WorkspacesStore:
+    store = WorkspacesStore(str(tmp_path / "projects.json"))
     store.load()
     store.create(
-        ProjectRecord(
+        WorkspaceRecord(
             name="alpha",
             path=str(tmp_path / "repo"),
             linear_api_key="lin_api_test",
@@ -70,7 +70,7 @@ _WORKTREES_DIR = tempfile.mkdtemp(prefix="mobaide-wt-test-")
 atexit.register(shutil.rmtree, _WORKTREES_DIR, ignore_errors=True)
 
 
-def _make_manager(store: ProjectsStore, bus: _RecordingEventBus) -> AutoScanSessionManager:
+def _make_manager(store: WorkspacesStore, bus: _RecordingEventBus) -> AutoScanSessionManager:
     config = AutoScanConfig(
         worktrees_dir=_WORKTREES_DIR,
         worktree_base="mobaide_worktree",
@@ -83,14 +83,14 @@ def _make_manager(store: ProjectsStore, bus: _RecordingEventBus) -> AutoScanSess
     return AutoScanSessionManager(
         config=config,
         session_manager=AsyncMock(spec=SessionManager),
-        projects_store=store,
+        workspaces_store=store,
         event_bus=bus,
     )
 
 
 class TestStartPersistsAppliedPrompt:
     @pytest.mark.asyncio
-    async def test_custom_prompt_is_saved_and_publishes_projects_changed(
+    async def test_custom_prompt_is_saved_and_publishes_workspaces_changed(
         self, tmp_path,
     ):
         store = _make_store(tmp_path, prompt=None)
@@ -112,8 +112,8 @@ class TestStartPersistsAppliedPrompt:
         assert "projects.changed" in bus.topics()
         payload = bus.payload_for("projects.changed")
         assert isinstance(payload, dict)
-        projects = payload["projects"]
-        by_name = {p["name"]: p for p in projects}
+        workspaces = payload["projects"]
+        by_name = {p["name"]: p for p in workspaces}
         assert by_name["alpha"]["auto_scan_prompt"] == "custom scan prompt"
 
     @pytest.mark.asyncio
@@ -135,7 +135,7 @@ class TestStartPersistsAppliedPrompt:
 
     @pytest.mark.asyncio
     async def test_blank_prompt_keeps_saved_prompt(self, tmp_path):
-        # A blank initial_prompt expresses no prompt intent: the project's saved
+        # A blank initial_prompt expresses no prompt intent: the workspace's saved
         # prompt is preserved (not clobbered), and no projects.changed fires.
         store = _make_store(tmp_path, prompt="previously saved")
         bus = _RecordingEventBus()
@@ -210,7 +210,7 @@ class TestStartPersistsAppliedPrompt:
     @pytest.mark.asyncio
     async def test_rejected_start_does_not_rewrite_saved_prompt(self, tmp_path):
         # The prompt save runs AFTER the already-running gate, under the lock,
-        # so a second start for the same project must not touch the record.
+        # so a second start for the same workspace must not touch the record.
         store = _make_store(tmp_path, prompt="first prompt")
         bus = _RecordingEventBus()
         mgr = _make_manager(store, bus)

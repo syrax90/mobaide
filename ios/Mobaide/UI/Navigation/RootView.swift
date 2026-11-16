@@ -88,20 +88,20 @@ struct RootView: View {
             SessionDetailScreen(sessionId: sessionId)
         case .createSession:
             CreateSessionScreen()
-        case .createAutoScan(let projectName):
-            CreateSessionScreen(autoScanProject: projectName)
+        case .createAutoScan(let workspaceName):
+            CreateSessionScreen(autoScanWorkspace: workspaceName)
         case .settings:
             SettingsScreen()
         case .support:
             SupportScreen()
-        case .autoScanDetail(let projectName):
-            AutoScanDetailScreen(projectName: projectName)
+        case .autoScanDetail(let workspaceName):
+            AutoScanDetailScreen(workspaceName: workspaceName)
         case .connections:
             ConnectionsScreen()
-        case .projects:
-            ProjectsScreen()
-        case .gitManagement(let projectName):
-            GitScreen(projectName: projectName)
+        case .workspaces:
+            WorkspacesScreen()
+        case .gitManagement(let workspaceName):
+            GitScreen(workspaceName: workspaceName)
         case .sessionGitChanges(let sessionId, let commit, let sync, let rebase):
             GitChangesScreen(sessionId: sessionId, openCommit: commit, openSync: sync, openRebase: rebase)
         case .sessionGitDiff(let sessionId, let path, let scope, let origPath):

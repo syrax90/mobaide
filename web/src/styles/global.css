@@ -2191,7 +2191,7 @@ input[type='radio']:checked {
   gap: 0.5rem;
 }
 
-.project-list,
+.workspace-list,
 .mode-list {
   list-style: none;
   padding: 0;
@@ -2201,7 +2201,7 @@ input[type='radio']:checked {
   gap: 0.5rem;
 }
 
-.project-row,
+.workspace-row,
 .mode-card {
   display: flex;
   flex-direction: column;
@@ -2219,35 +2219,35 @@ input[type='radio']:checked {
   transition: box-shadow 120ms linear, background 120ms linear;
 }
 
-.project-row:hover,
+.workspace-row:hover,
 .mode-card:hover {
   box-shadow: inset 0 0 0 2px var(--rule);
 }
 
-.project-row-selected,
-.project-row-selected:hover {
+.workspace-row-selected,
+.workspace-row-selected:hover {
   background: var(--surface);
   box-shadow: inset 0 0 0 2px var(--brand-2);
 }
 
-.project-name,
+.workspace-name,
 .mode-title {
   font-weight: 600;
 }
 
-.project-path,
+.workspace-path,
 .mode-subtitle {
   font-size: 0.8rem;
   color: var(--text-muted);
 }
 
-.project-badges {
+.workspace-badges {
   display: flex;
   gap: 0.35rem;
   margin-top: 0.2rem;
 }
 
-.project-badge {
+.workspace-badge {
   padding: 1px 6px;
   background: var(--surface);
   color: var(--text-muted);
@@ -2258,7 +2258,7 @@ input[type='radio']:checked {
   letter-spacing: 0.08em;
 }
 
-.project-badge-warning {
+.workspace-badge-warning {
   color: var(--warning);
   box-shadow: inset 0 0 0 2px var(--warning);
 }
@@ -2298,7 +2298,7 @@ input[type='radio']:checked {
 
 /*
  * Drag-to-reorder rows in the wizard (`useDragReorder`). The handle sits left
- * of the card, as on the Projects screen; a spacer keeps fixed rows aligned.
+ * of the card, as on the Workspaces screen; a spacer keeps fixed rows aligned.
  */
 .sortable-item {
   display: flex;
@@ -2353,7 +2353,7 @@ input[type='radio']:checked {
   color: var(--text);
 }
 
-[data-dragging='true'] .project-row,
+[data-dragging='true'] .workspace-row,
 [data-dragging='true'] .mode-card {
   background: var(--surface);
   box-shadow:
@@ -2512,7 +2512,7 @@ body.sortable-dragging * {
   text-overflow: ellipsis;
 }
 
-.base-branch-option .project-badge {
+.base-branch-option .workspace-badge {
   flex: none;
   color: inherit;
   background: transparent;
@@ -2934,7 +2934,7 @@ body.sortable-dragging * {
 }
 /* endregion */
 
-/* region projects, git & templates (WEB-09) */
+/* region workspaces, git & templates (WEB-09) */
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -2947,7 +2947,7 @@ body.sortable-dragging * {
   border: 0;
 }
 
-.project-card-list,
+.workspace-card-list,
 .git-list {
   list-style: none;
   padding: 0;
@@ -2957,7 +2957,7 @@ body.sortable-dragging * {
   gap: 0.5rem;
 }
 
-.project-card,
+.workspace-card,
 .git-row {
   display: flex;
   align-items: center;
@@ -2967,13 +2967,13 @@ body.sortable-dragging * {
   box-shadow: inset 0 0 0 2px var(--surface-2);
 }
 
-.project-drag-handle {
+.workspace-drag-handle {
   cursor: grab;
   color: var(--text-muted);
   user-select: none;
 }
 
-.project-card-main {
+.workspace-card-main {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -2988,12 +2988,12 @@ body.sortable-dragging * {
   cursor: pointer;
 }
 
-.project-path-warning {
+.workspace-path-warning {
   color: var(--danger);
   margin-right: 0.3rem;
 }
 
-.project-card-actions {
+.workspace-card-actions {
   display: flex;
   align-items: center;
   gap: 0.35rem;
@@ -6451,7 +6451,7 @@ body:has(dialog[open]) {
 
 /* endregion */
 
-/* region Project Git: remote branches section */
+/* region Workspace Git: remote branches section */
 .git-remote-section {
   margin-top: 1rem;
 }
@@ -6461,7 +6461,7 @@ body:has(dialog[open]) {
 }
 /* endregion */
 
-/* region Project Git: branch folder tree */
+/* region Workspace Git: branch folder tree */
 .git-tree-row {
   margin-inline-start: calc(var(--git-depth, 0) * 16px);
 }

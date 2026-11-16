@@ -12,7 +12,7 @@ enum AutoScanFrame: Equatable, Sendable {
 
 /// A decoded autoscan progress event (Android `AutoScanWsClient.ParsedEvent`).
 struct ParsedScanEvent: Equatable, Sendable {
-    let projectName: String
+    let workspaceName: String
     let seq: Int64
     let ts: String
     let type: String
@@ -27,8 +27,8 @@ struct ParsedScanEvent: Equatable, Sendable {
 /// program order. `WebSocketCore.disconnect()` does not finish `core.events`,
 /// so cancelling the task — not merely disconnecting — is what unblocks the loop.
 ///
-/// **The `resume_from_seq` fix (vs Android).** The per-project wire cursor
-/// `lastSeqByProject` is seeded from `resumeFromSeq` and advanced on every
+/// **The `resume_from_seq` fix (vs Android).** The per-workspace wire cursor
+/// `lastSeqByWorkspace` is seeded from `resumeFromSeq` and advanced on every
 /// inbound event — snapshot-buffered **and** live. The subscribe frame is
 /// rebuilt from that **live** cursor on **every** `.connected` (the socket
 /// auto-reconnects and re-emits `.connected`), so a reconnect resumes from the
@@ -95,7 +95,7 @@ struct AutoScanWsClient: Sendable {
 
     private static func sendSubscribe(core: WebSocketCore, subscribe: [String], cursor: [String: Int64]) async {
         var resume: [String: Any] = [:]
-        for (project, seq) in cursor { resume[project] = NSNumber(value: seq) }
+        for (workspace, seq) in cursor { resume[workspace] = NSNumber(value: seq) }
         let config: [String: Any] = ["subscribe": subscribe, "resume_from_seq": resume]
         guard
             let data = try? JSONSerialization.data(withJSONObject: config),
@@ -125,20 +125,20 @@ struct AutoScanWsClient: Sendable {
             let scans = decodeScans(data["scans"])
             var events: [String: [ParsedScanEvent]] = [:]
             if let raw = data["events"] as? [String: Any] {
-                for (project, value) in raw {
+                for (workspace, value) in raw {
                     guard let dicts = value as? [[String: Any]] else { continue }
-                    let parsed = dicts.compactMap { parseEvent(projectName: project, dict: $0, cursor: &cursor) }
-                    if !parsed.isEmpty { events[project] = parsed }
+                    let parsed = dicts.compactMap { parseEvent(workspaceName: workspace, dict: $0, cursor: &cursor) }
+                    if !parsed.isEmpty { events[workspace] = parsed }
                 }
             }
             return .snapshot(scans: scans, events: events)
         case "caught_up":
             return .caughtUp
         case "event":
-            let projectName = object["project_name"] as? String ?? ""
+            let workspaceName = object["project_name"] as? String ?? ""
             guard
                 let dict = object["event"] as? [String: Any],
-                let parsed = parseEvent(projectName: projectName, dict: dict, cursor: &cursor)
+                let parsed = parseEvent(workspaceName: workspaceName, dict: dict, cursor: &cursor)
             else { return nil }
             return .event(parsed)
         default:
@@ -147,16 +147,16 @@ struct AutoScanWsClient: Sendable {
     }
 
     private static func parseEvent(
-        projectName: String, dict: [String: Any], cursor: inout [String: Int64]
+        workspaceName: String, dict: [String: Any], cursor: inout [String: Int64]
     ) -> ParsedScanEvent? {
         let seq = (dict["seq"] as? NSNumber)?.int64Value ?? 0
-        let last = cursor[projectName] ?? 0
+        let last = cursor[workspaceName] ?? 0
         guard seq > last else { return nil }
-        cursor[projectName] = seq
+        cursor[workspaceName] = seq
         let type = dict["type"] as? String ?? ""
         let payload = dict["payload"] as? [String: Any] ?? [:]
         return ParsedScanEvent(
-            projectName: projectName,
+            workspaceName: workspaceName,
             seq: seq,
             ts: dict["ts"] as? String ?? "",
             type: type,

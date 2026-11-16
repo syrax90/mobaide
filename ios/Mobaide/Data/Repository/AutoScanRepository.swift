@@ -58,7 +58,7 @@ final class AutoScanRepository {
         case .autoScanListChanged(let list):
             setList(list)
         case .autoScanStatus(let instance):
-            let updated = currentList.scans.map { $0.project_name == instance.project_name ? instance : $0 }
+            let updated = currentList.scans.map { $0.workspace_name == instance.workspace_name ? instance : $0 }
             setScans(updated)
         default:
             break
@@ -72,58 +72,58 @@ final class AutoScanRepository {
         return list
     }
 
-    func observeDetailFrames(project: String, resume: [String: Int64] = [:]) -> AsyncStream<AutoScanFrame> {
-        wsClient.connect(subscribe: [project], resumeFromSeq: resume)
+    func observeDetailFrames(workspace: String, resume: [String: Int64] = [:]) -> AsyncStream<AutoScanFrame> {
+        wsClient.connect(subscribe: [workspace], resumeFromSeq: resume)
     }
 
     // MARK: - Optimistic mutations (rolled back on failure)
 
-    func startScan(projectName: String, claudeOptions: ClaudeOptionsModel? = nil) async throws {
+    func startScan(workspaceName: String, claudeOptions: ClaudeOptionsModel? = nil) async throws {
         let previous = currentList
-        if !currentList.scans.contains(where: { $0.project_name == projectName }) {
+        if !currentList.scans.contains(where: { $0.workspace_name == workspaceName }) {
             let now = Date().timeIntervalSince1970
             let placeholder = AutoScanInstanceDto(
-                project_name: projectName, status: "starting", started_at: now, last_activity_at: now
+                workspace_name: workspaceName, status: "starting", started_at: now, last_activity_at: now
             )
             setScans(currentList.scans + [placeholder])
         }
         do {
-            try await agentAPI.startAutoScan(projectName: projectName, claudeOptions: claudeOptions)
+            try await agentAPI.startAutoScan(workspaceName: workspaceName, claudeOptions: claudeOptions)
         } catch let error as APIError where error.code == 409 {
-            rollback(previous, message: "Auto scan is already running for \(projectName).")
-            throw AutoScanStartError.alreadyRunning(projectName: projectName)
+            rollback(previous, message: "Auto scan is already running for \(workspaceName).")
+            throw AutoScanStartError.alreadyRunning(workspaceName: workspaceName)
         } catch let error as APIError where error.code == 429 {
             rollback(previous, message: "Auto scan capacity reached (max \(previous.max_scans)).")
             throw AutoScanStartError.capacity(maxScans: previous.max_scans)
         } catch {
-            rollback(previous, message: "Failed to start auto scan for \(projectName).")
+            rollback(previous, message: "Failed to start auto scan for \(workspaceName).")
             throw error
         }
     }
 
-    func stopScan(projectName: String) async throws {
+    func stopScan(workspaceName: String) async throws {
         let previous = currentList
-        setScans(currentList.scans.filter { $0.project_name != projectName })
+        setScans(currentList.scans.filter { $0.workspace_name != workspaceName })
         do {
-            try await agentAPI.stopAutoScan(projectName: projectName)
+            try await agentAPI.stopAutoScan(workspaceName: workspaceName)
         } catch {
-            rollback(previous, message: "Failed to stop auto scan for \(projectName).")
+            rollback(previous, message: "Failed to stop auto scan for \(workspaceName).")
             throw error
         }
     }
 
     @discardableResult
-    func runNow(projectName: String) async throws -> RunNowResponse {
+    func runNow(workspaceName: String) async throws -> RunNowResponse {
         let previous = currentList
-        setScans(currentList.scans.map { $0.project_name == projectName ? $0.replacingNextScanAt(nil) : $0 })
+        setScans(currentList.scans.map { $0.workspace_name == workspaceName ? $0.replacingNextScanAt(nil) : $0 })
         do {
-            let response = try await agentAPI.runAutoScanNow(projectName: projectName)
+            let response = try await agentAPI.runAutoScanNow(workspaceName: workspaceName)
             setScans(currentList.scans.map {
-                $0.project_name == projectName ? $0.replacingNextScanAt(response.next_scan_at) : $0
+                $0.workspace_name == workspaceName ? $0.replacingNextScanAt(response.next_scan_at) : $0
             })
             return response
         } catch {
-            rollback(previous, message: "Failed to run auto scan now for \(projectName).")
+            rollback(previous, message: "Failed to run auto scan now for \(workspaceName).")
             throw error
         }
     }
@@ -144,7 +144,7 @@ final class AutoScanRepository {
                 scans: scans,
                 capacity: currentList.capacity,
                 max_scans: currentList.max_scans,
-                available_projects: currentList.available_projects,
+                available_workspaces: currentList.available_workspaces,
                 auto_scan_prompt: currentList.auto_scan_prompt
             )
         )
@@ -154,7 +154,7 @@ final class AutoScanRepository {
 private extension AutoScanInstanceDto {
     func replacingNextScanAt(_ nextScanAt: String?) -> AutoScanInstanceDto {
         AutoScanInstanceDto(
-            project_name: project_name,
+            workspace_name: workspace_name,
             status: status,
             started_at: started_at,
             last_activity_at: last_activity_at,

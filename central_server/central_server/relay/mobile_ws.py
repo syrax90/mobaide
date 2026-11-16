@@ -69,7 +69,7 @@ def _send_session_lifecycle(
 
 
 def _request_events_snapshot(routing: RoutingTable, agent_id: str) -> None:
-    """Ask the agent to republish the current sessions / projects snapshots.
+    """Ask the agent to republish the current sessions / workspaces snapshots.
 
     The agent forwards only live ``event_bus`` updates to mobiles on the
     ``events`` channel, so a mobile that connects after the last state

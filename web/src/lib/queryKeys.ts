@@ -41,37 +41,37 @@ export const queryKeys = {
 
   agent: (agentId: string) => ['agent', agentId] as const,
   sessions: (agentId: string) => ['agent', agentId, 'sessions'] as const,
-  projects: (agentId: string) => ['agent', agentId, 'projects'] as const,
+  workspaces: (agentId: string) => ['agent', agentId, 'workspaces'] as const,
   /**
-   * One project's branches and worktrees. The prefix `['agent', id, 'git']`
-   * invalidates every project's list at once, which is what a reconnect needs:
+   * One workspace's branches and worktrees. The prefix `['agent', id, 'git']`
+   * invalidates every workspace's list at once, which is what a reconnect needs:
    * `git.changed` only fires on a change, so a socket that was down leaves each
    * cached list unverifiable.
    */
-  gitItems: (agentId: string, projectName: string) =>
-    ['agent', agentId, 'git', projectName] as const,
+  gitItems: (agentId: string, workspaceName: string) =>
+    ['agent', agentId, 'git', workspaceName] as const,
   gitItemsRoot: (agentId: string) => ['agent', agentId, 'git'] as const,
   /**
    * The New Session base-branch list. Nested under `gitItems` on purpose: the
    * same `git.changed` and reconnect invalidations keep it current.
    */
-  worktreeBases: (agentId: string, projectName: string) =>
-    ['agent', agentId, 'git', projectName, 'worktree-bases'] as const,
+  worktreeBases: (agentId: string, workspaceName: string) =>
+    ['agent', agentId, 'git', workspaceName, 'worktree-bases'] as const,
   /**
-   * Linear labels and states for one project's Auto Scan filter.
+   * Linear labels and states for one workspace's Auto Scan filter.
    *
-   * Deliberately **not** nested under `projects`: query keys match by prefix, so
-   * a key like `['agent', id, 'projects', name, 'linear']` would make every
-   * project-list invalidation re-hit the rate-limited Linear API.
+   * Deliberately **not** nested under `workspaces`: query keys match by prefix, so
+   * a key like `['agent', id, 'workspaces', name, 'linear']` would make every
+   * workspace-list invalidation re-hit the rate-limited Linear API.
    */
-  linearMetadata: (agentId: string, projectName: string) =>
-    ['agent', agentId, 'linear', projectName] as const,
+  linearMetadata: (agentId: string, workspaceName: string) =>
+    ['agent', agentId, 'linear', workspaceName] as const,
   /**
    * The in-session git Changes viewer: one session's working-tree status and
    * its per-file diffs.
    *
    * Its own segment, not `gitItems`' `['agent', id, 'git', …]`: a session id in
-   * the slot a project name occupies would prefix-collide, and the project
+   * the slot a workspace name occupies would prefix-collide, and the workspace
    * lists' reconnect sweep and `git.changed` invalidations would refetch every
    * open viewer's poll.
    */

@@ -1,5 +1,6 @@
 package com.mobaide.app.data.network.dto
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
@@ -58,7 +59,7 @@ data class GitItem(
     fun isDeletable(deleteRemote: Boolean): Boolean =
         !is_current && (kind != KIND_REMOTE_BRANCH || deleteRemote)
 
-    /** *Remove worktree* keeps the branch: a worktree-backed row other than the project root's checkout. */
+    /** *Remove worktree* keeps the branch: a worktree-backed row other than the workspace root's checkout. */
     val canRemoveWorktree: Boolean
         get() = !is_current && kind == KIND_BRANCH_WITH_WORKTREE && !worktree_path.isNullOrEmpty()
 
@@ -128,7 +129,8 @@ data class GitDeleteResponse(val results: List<GitDeleteResultItem>)
 data class BusyHolder(
     val kind: String,
     val session_id: String? = null,
-    val project_name: String? = null,
+    @SerialName("project_name")
+    val workspace_name: String? = null,
     val cwd: String? = null,
     val worktree_path: String? = null,
 )

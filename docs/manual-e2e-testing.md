@@ -197,7 +197,7 @@ The failure is asymmetric and confusing, which is why the script warns loudly ab
 | `up --emulator [AVD]` | boot (or reuse) an Android emulator, default AVD `Mobaide-E2E`, created once if missing; shut down on stop when this run booted it (`--keep-emulator` leaves it running) |
 | `android --emulator --install-app` | boot/reuse the emulator, install the debug app on it and launch it (the emulator stays up; this command has no teardown) |
 | `stop` | gracefully stop the running `up` from another shell (any OS; the only graceful stop on Windows); reaps a hard-killed run's leftovers |
-| `up --projects <paths>` | seed the agent's project list with real directories |
+| `up --projects <paths>` | seed the agent's workspace list with real directories |
 | `up --keep-android` / `--keep-ios` | on stop, leave the test URL in place (default: restore it) |
 | `up --no-android` / `--no-ios` | skip that client's file sync entirely |
 | `up --ios` | sync the iOS override off macOS too (default: macOS only) |

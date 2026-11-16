@@ -65,7 +65,7 @@
         "type": "object"
       },
       "AutoScanFilterModel": {
-        "description": "Per-project Linear filter for Auto Scan Mode.\n\nMirrors :class:`mobaide.core.projects_config.AutoScanFilter`. Validation:\n\n* ``state_names`` and ``label_names`` must each contain at least one\n  non-empty string. An empty list would silently match every issue,\n  which is almost certainly not what the user wants \u2014 better to fail\n  loud at the API boundary.\n* ``active_state``, ``done_state``, ``removal_label`` must be non-empty.",
+        "description": "Per-workspace Linear filter for Auto Scan Mode.\n\nMirrors :class:`mobaide.core.workspaces_config.AutoScanFilter`. Validation:\n\n* ``state_names`` and ``label_names`` must each contain at least one\n  non-empty string. An empty list would silently match every issue,\n  which is almost certainly not what the user wants \u2014 better to fail\n  loud at the API boundary.\n* ``active_state``, ``done_state``, ``removal_label`` must be non-empty.",
         "properties": {
           "active_state": {
             "default": "In Progress",
@@ -984,7 +984,7 @@
         "type": "object"
       },
       "GitBranchCreateRequest": {
-        "description": "``POST /branches``: create ``name`` at ``start_point`` (``HEAD`` of the\nproject root when omitted); ``checkout`` switches the project root to\nit in the same call and is subject to the checkout refusals; ``force``\nskips the busy-holder refusal after the user confirmed it.",
+        "description": "``POST /branches``: create ``name`` at ``start_point`` (``HEAD`` of the\nworkspace root when omitted); ``checkout`` switches the workspace root to\nit in the same call and is subject to the checkout refusals; ``force``\nskips the busy-holder refusal after the user confirmed it.",
         "properties": {
           "checkout": {
             "default": false,
@@ -1019,7 +1019,7 @@
         "type": "object"
       },
       "GitBranchResponse": {
-        "description": "Outcome of ``POST /branches`` and ``POST /checkout``: the local\nbranch touched, whether the project root now has it checked out and\nwhether the call created it.",
+        "description": "Outcome of ``POST /branches`` and ``POST /checkout``: the local\nbranch touched, whether the workspace root now has it checked out and\nwhether the call created it.",
         "properties": {
           "branch": {
             "title": "Branch",
@@ -2567,7 +2567,7 @@
         "type": "object"
       },
       "LinearLabelModel": {
-        "description": "Linear label discovered via the per-project API key.",
+        "description": "Linear label discovered via the per-workspace API key.",
         "properties": {
           "color": {
             "default": "",
@@ -2586,7 +2586,7 @@
         "type": "object"
       },
       "LinearStateModel": {
-        "description": "Linear workflow state discovered via the per-project API key.\n\n``type`` is one of Linear's documented state types (``backlog`` /\n``unstarted`` / ``started`` / ``completed`` / ``canceled`` / ``triage``).\nEmpty when the schema didn't include it (defensive \u2014 should not happen).",
+        "description": "Linear workflow state discovered via the per-workspace API key.\n\n``type`` is one of Linear's documented state types (``backlog`` /\n``unstarted`` / ``started`` / ``completed`` / ``canceled`` / ``triage``).\nEmpty when the schema didn't include it (defensive \u2014 should not happen).",
         "properties": {
           "name": {
             "title": "Name",
@@ -2692,257 +2692,6 @@
           }
         },
         "title": "PiOptionsModel",
-        "type": "object"
-      },
-      "ProjectReadModel": {
-        "description": "Client-safe view of a single project.",
-        "properties": {
-          "auto_scan_filter": {
-            "$ref": "#/components/schemas/AutoScanFilterModel"
-          },
-          "auto_scan_prompt": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Auto Scan Prompt"
-          },
-          "conda_env": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Conda Env"
-          },
-          "default_flags": {
-            "additionalProperties": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "boolean"
-                }
-              ]
-            },
-            "title": "Default Flags",
-            "type": "object"
-          },
-          "has_linear_key": {
-            "title": "Has Linear Key",
-            "type": "boolean"
-          },
-          "is_git": {
-            "title": "Is Git",
-            "type": "boolean"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "order": {
-            "title": "Order",
-            "type": "integer"
-          },
-          "path": {
-            "title": "Path",
-            "type": "string"
-          },
-          "path_exists": {
-            "title": "Path Exists",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "name",
-          "path",
-          "order",
-          "has_linear_key",
-          "is_git",
-          "path_exists"
-        ],
-        "title": "ProjectReadModel",
-        "type": "object"
-      },
-      "ProjectUpdateModel": {
-        "description": "Request body for ``PUT /api/projects/{name}``.\n\nThree-state semantics for ``linear_api_key`` and ``conda_env`` follow the\nGitHub/Stripe convention:\n\n* field omitted / ``null`` \u2192 keep the existing value,\n* empty string \u2192 clear (store ``None``),\n* non-empty string \u2192 replace.\n\nFor ``default_flags``: ``null``/omitted keeps, a dict replaces the whole\nmap. Use ``{}`` to clear all flags.\n\nFor ``auto_scan_filter``: ``null``/omitted keeps; a model replaces\nwholesale (no field-level merge \u2014 the whole filter is one logical unit).",
-        "properties": {
-          "auto_scan_filter": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AutoScanFilterModel"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "conda_env": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Conda Env"
-          },
-          "default_flags": {
-            "anyOf": [
-              {
-                "additionalProperties": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "integer"
-                    },
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "boolean"
-                    }
-                  ]
-                },
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Default Flags"
-          },
-          "linear_api_key": {
-            "anyOf": [
-              {
-                "format": "password",
-                "type": "string",
-                "writeOnly": true
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Linear Api Key"
-          },
-          "name": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Name"
-          },
-          "path": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Path"
-          }
-        },
-        "title": "ProjectUpdateModel",
-        "type": "object"
-      },
-      "ProjectWriteModel": {
-        "description": "Request body for ``POST /api/projects``.",
-        "properties": {
-          "auto_scan_filter": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AutoScanFilterModel"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "conda_env": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Conda Env"
-          },
-          "default_flags": {
-            "additionalProperties": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "boolean"
-                }
-              ]
-            },
-            "title": "Default Flags",
-            "type": "object"
-          },
-          "linear_api_key": {
-            "anyOf": [
-              {
-                "format": "password",
-                "type": "string",
-                "writeOnly": true
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Linear Api Key"
-          },
-          "name": {
-            "minLength": 1,
-            "title": "Name",
-            "type": "string"
-          },
-          "path": {
-            "minLength": 1,
-            "title": "Path",
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "path"
-        ],
-        "title": "ProjectWriteModel",
         "type": "object"
       },
       "RefreshRequest": {
@@ -3728,6 +3477,257 @@
         "title": "VoiceStatusResponse",
         "type": "object"
       },
+      "WorkspaceReadModel": {
+        "description": "Client-safe view of a single workspace.",
+        "properties": {
+          "auto_scan_filter": {
+            "$ref": "#/components/schemas/AutoScanFilterModel"
+          },
+          "auto_scan_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Scan Prompt"
+          },
+          "conda_env": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conda Env"
+          },
+          "default_flags": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "title": "Default Flags",
+            "type": "object"
+          },
+          "has_linear_key": {
+            "title": "Has Linear Key",
+            "type": "boolean"
+          },
+          "is_git": {
+            "title": "Is Git",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "order": {
+            "title": "Order",
+            "type": "integer"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "path_exists": {
+            "title": "Path Exists",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "order",
+          "has_linear_key",
+          "is_git",
+          "path_exists"
+        ],
+        "title": "WorkspaceReadModel",
+        "type": "object"
+      },
+      "WorkspaceUpdateModel": {
+        "description": "Request body for ``PUT /api/projects/{name}``.\n\nThree-state semantics for ``linear_api_key`` and ``conda_env`` follow the\nGitHub/Stripe convention:\n\n* field omitted / ``null`` \u2192 keep the existing value,\n* empty string \u2192 clear (store ``None``),\n* non-empty string \u2192 replace.\n\nFor ``default_flags``: ``null``/omitted keeps, a dict replaces the whole\nmap. Use ``{}`` to clear all flags.\n\nFor ``auto_scan_filter``: ``null``/omitted keeps; a model replaces\nwholesale (no field-level merge \u2014 the whole filter is one logical unit).",
+        "properties": {
+          "auto_scan_filter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AutoScanFilterModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "conda_env": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conda Env"
+          },
+          "default_flags": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Flags"
+          },
+          "linear_api_key": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Linear Api Key"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          }
+        },
+        "title": "WorkspaceUpdateModel",
+        "type": "object"
+      },
+      "WorkspaceWriteModel": {
+        "description": "Request body for ``POST /api/projects``.",
+        "properties": {
+          "auto_scan_filter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AutoScanFilterModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "conda_env": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conda Env"
+          },
+          "default_flags": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "title": "Default Flags",
+            "type": "object"
+          },
+          "linear_api_key": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Linear Api Key"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "path"
+        ],
+        "title": "WorkspaceWriteModel",
+        "type": "object"
+      },
       "WorktreeBaseRef": {
         "description": "One branch a new worktree can start from. ``ref`` is what the client\nsends back as ``base_branch``: a local branch name, or\n``<remote>/<name>`` for a remote-tracking branch.",
         "properties": {
@@ -3774,7 +3774,7 @@
         "type": "object"
       },
       "WorktreeBasesResponse": {
-        "description": "``GET /worktree-bases``: the base-branch picker of the New Session\nscreen. ``default`` is the repository's default branch (``origin/HEAD``\nfirst) and ``last_used`` the base of the last worktree created in this\nproject; both are ``null`` or a ``ref`` present in ``refs``. Clients\npreselect ``last_used``, then ``default``.",
+        "description": "``GET /worktree-bases``: the base-branch picker of the New Session\nscreen. ``default`` is the repository's default branch (``origin/HEAD``\nfirst) and ``last_used`` the base of the last worktree created in this\nworkspace; both are ``null`` or a ``ref`` present in ``refs``. Clients\npreselect ``last_used``, then ``default``.",
         "properties": {
           "default": {
             "anyOf": [
@@ -3997,7 +3997,7 @@
     },
     "/api/autoscan/start": {
       "post": {
-        "description": "Start an auto scan for a project. 409 if already running, 429 if at cap.",
+        "description": "Start an auto scan for a workspace. 409 if already running, 429 if at cap.",
         "operationId": "start_scan_api_autoscan_start_post",
         "requestBody": {
           "content": {
@@ -4336,17 +4336,17 @@
     },
     "/api/projects": {
       "get": {
-        "description": "Return all configured projects (no secrets).",
-        "operationId": "list_projects_endpoint_api_projects_get",
+        "description": "Return all configured workspaces (no secrets).",
+        "operationId": "list_workspaces_endpoint_api_projects_get",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/ProjectReadModel"
+                    "$ref": "#/components/schemas/WorkspaceReadModel"
                   },
-                  "title": "Response List Projects Endpoint Api Projects Get",
+                  "title": "Response List Workspaces Endpoint Api Projects Get",
                   "type": "array"
                 }
               }
@@ -4354,19 +4354,19 @@
             "description": "Successful Response"
           }
         },
-        "summary": "List Projects Endpoint",
+        "summary": "List Workspaces Endpoint",
         "tags": [
-          "projects"
+          "workspaces"
         ]
       },
       "post": {
-        "description": "Create a new project. Returns 409 if the name is already taken.",
-        "operationId": "create_project_endpoint_api_projects_post",
+        "description": "Create a new workspace. Returns 409 if the name is already taken.",
+        "operationId": "create_workspace_endpoint_api_projects_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ProjectWriteModel"
+                "$ref": "#/components/schemas/WorkspaceWriteModel"
               }
             }
           },
@@ -4377,7 +4377,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProjectReadModel"
+                  "$ref": "#/components/schemas/WorkspaceReadModel"
                 }
               }
             },
@@ -4394,16 +4394,16 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Create Project Endpoint",
+        "summary": "Create Workspace Endpoint",
         "tags": [
-          "projects"
+          "workspaces"
         ]
       }
     },
     "/api/projects/order": {
       "patch": {
-        "description": "Atomically replace project ordering. 400 on set mismatch.",
-        "operationId": "reorder_projects_endpoint_api_projects_order_patch",
+        "description": "Atomically replace workspace ordering. 400 on set mismatch.",
+        "operationId": "reorder_workspaces_endpoint_api_projects_order_patch",
         "requestBody": {
           "content": {
             "application/json": {
@@ -4420,9 +4420,9 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/ProjectReadModel"
+                    "$ref": "#/components/schemas/WorkspaceReadModel"
                   },
-                  "title": "Response Reorder Projects Endpoint Api Projects Order Patch",
+                  "title": "Response Reorder Workspaces Endpoint Api Projects Order Patch",
                   "type": "array"
                 }
               }
@@ -4440,16 +4440,16 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Reorder Projects Endpoint",
+        "summary": "Reorder Workspaces Endpoint",
         "tags": [
-          "projects"
+          "workspaces"
         ]
       }
     },
     "/api/projects/{name}": {
       "delete": {
-        "description": "Remove a project. 404 if unknown, 409 if a scan is active for it.",
-        "operationId": "delete_project_endpoint_api_projects__name__delete",
+        "description": "Remove a workspace. 404 if unknown, 409 if a scan is active for it.",
+        "operationId": "delete_workspace_endpoint_api_projects__name__delete",
         "parameters": [
           {
             "in": "path",
@@ -4476,14 +4476,14 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Delete Project Endpoint",
+        "summary": "Delete Workspace Endpoint",
         "tags": [
-          "projects"
+          "workspaces"
         ]
       },
       "put": {
-        "description": "Update a project. Supports rename via ``body.name``.\n\n* 404 if ``name`` is unknown.\n* 409 if renaming while an auto-scan is active for the old name, or if\n  the new name collides with another existing project.",
-        "operationId": "update_project_endpoint_api_projects__name__put",
+        "description": "Update a workspace. Supports rename via ``body.name``.\n\n* 404 if ``name`` is unknown.\n* 409 if renaming while an auto-scan is active for the old name, or if\n  the new name collides with another existing workspace.",
+        "operationId": "update_workspace_endpoint_api_projects__name__put",
         "parameters": [
           {
             "in": "path",
@@ -4499,7 +4499,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ProjectUpdateModel"
+                "$ref": "#/components/schemas/WorkspaceUpdateModel"
               }
             }
           },
@@ -4510,7 +4510,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProjectReadModel"
+                  "$ref": "#/components/schemas/WorkspaceReadModel"
                 }
               }
             },
@@ -4527,15 +4527,15 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Update Project Endpoint",
+        "summary": "Update Workspace Endpoint",
         "tags": [
-          "projects"
+          "workspaces"
         ]
       }
     },
     "/api/projects/{name}/git/branches": {
       "post": {
-        "description": "Create a branch in the project's repository.\n\n``400 bad_branch_name`` for a name git would refuse, ``409 exists`` /\n``unknown_start_point`` for the obvious conflicts; with ``checkout``\nthe refusals of ``POST /checkout`` apply as well.",
+        "description": "Create a branch in the workspace's repository.\n\n``400 bad_branch_name`` for a name git would refuse, ``409 exists`` /\n``unknown_start_point`` for the obvious conflicts; with ``checkout``\nthe refusals of ``POST /checkout`` apply as well.",
         "operationId": "create_branch_endpoint_api_projects__name__git_branches_post",
         "parameters": [
           {
@@ -4588,7 +4588,7 @@
     },
     "/api/projects/{name}/git/checkout": {
       "post": {
-        "description": "Check ``ref`` out in the project root.\n\nReturns 409 with ``{busy_by: [...]}`` while a session or auto-scan work\nitem runs in the project root (a linked worktree's session does not\ncount) unless ``force`` is set, and a coded 409 \u2014 ``dirty``, ``checked_out_elsewhere``,\n``operation_in_progress``, ``job_running`` \u2014 for the states git or the\nagent refuse to switch in; ``404 ref_not_found`` for a ref that is\nneither a local nor a remote-tracking branch.",
+        "description": "Check ``ref`` out in the workspace root.\n\nReturns 409 with ``{busy_by: [...]}`` while a session or auto-scan work\nitem runs in the workspace root (a linked worktree's session does not\ncount) unless ``force`` is set, and a coded 409 \u2014 ``dirty``, ``checked_out_elsewhere``,\n``operation_in_progress``, ``job_running`` \u2014 for the states git or the\nagent refuse to switch in; ``404 ref_not_found`` for a ref that is\nneither a local nor a remote-tracking branch.",
         "operationId": "checkout_endpoint_api_projects__name__git_checkout_post",
         "parameters": [
           {
@@ -4790,7 +4790,7 @@
     },
     "/api/projects/{name}/linear/labels": {
       "get": {
-        "description": "Return labels visible to the project's Linear API key, deduped by name.\n\nUsed by the Android project form to populate the multi-select chip\ngroup for trigger labels and the dropdown for the removal label.\n\n* 404 if the project is unknown.\n* 400 if the project has no Linear API key.\n* 502 if the upstream Linear API call fails.",
+        "description": "Return labels visible to the workspace's Linear API key, deduped by name.\n\nUsed by the Android workspace form to populate the multi-select chip\ngroup for trigger labels and the dropdown for the removal label.\n\n* 404 if the workspace is unknown.\n* 400 if the workspace has no Linear API key.\n* 502 if the upstream Linear API call fails.",
         "operationId": "list_linear_labels_api_projects__name__linear_labels_get",
         "parameters": [
           {
@@ -4831,13 +4831,13 @@
         },
         "summary": "List Linear Labels",
         "tags": [
-          "projects"
+          "workspaces"
         ]
       }
     },
     "/api/projects/{name}/linear/states": {
       "get": {
-        "description": "Return workflow states visible to the project's Linear API key.\n\nUsed by the Android project form to populate the multi-select chip\ngroup for trigger states and the dropdowns for active / done states.\n\n* 404 if the project is unknown.\n* 400 if the project has no Linear API key.\n* 502 if the upstream Linear API call fails.",
+        "description": "Return workflow states visible to the workspace's Linear API key.\n\nUsed by the Android workspace form to populate the multi-select chip\ngroup for trigger states and the dropdowns for active / done states.\n\n* 404 if the workspace is unknown.\n* 400 if the workspace has no Linear API key.\n* 502 if the upstream Linear API call fails.",
         "operationId": "list_linear_states_api_projects__name__linear_states_get",
         "parameters": [
           {
@@ -4878,7 +4878,7 @@
         },
         "summary": "List Linear States",
         "tags": [
-          "projects"
+          "workspaces"
         ]
       }
     },

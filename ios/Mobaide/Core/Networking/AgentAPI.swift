@@ -91,63 +91,63 @@ struct AgentAPI: Sendable {
         try await execute(method: "GET", url: "\(try await base())/api/sessions/\(sessionId)/scrollback?lines=\(lines)")
     }
 
-    func getProjects() async throws -> [ProjectInfo] {
+    func getWorkspaces() async throws -> [WorkspaceInfo] {
         try await execute(method: "GET", url: "\(try await base())/api/projects")
     }
 
-    func createProject(_ project: ProjectWrite) async throws -> ProjectInfo {
-        try await execute(method: "POST", url: "\(try await base())/api/projects", body: project)
+    func createWorkspace(_ workspace: WorkspaceWrite) async throws -> WorkspaceInfo {
+        try await execute(method: "POST", url: "\(try await base())/api/projects", body: workspace)
     }
 
-    func updateProject(currentName: String, update: ProjectUpdate) async throws -> ProjectInfo {
+    func updateWorkspace(currentName: String, update: WorkspaceUpdate) async throws -> WorkspaceInfo {
         let name = Self.encodePathSegment(currentName)
         return try await execute(method: "PUT", url: "\(try await base())/api/projects/\(name)", body: update)
     }
 
-    func deleteProject(name: String) async throws {
+    func deleteWorkspace(name: String) async throws {
         let encoded = Self.encodePathSegment(name)
         try await executeRaw(method: "DELETE", url: "\(try await base())/api/projects/\(encoded)")
     }
 
-    func reorderProjects(_ order: ProjectOrderRequest) async throws -> [ProjectInfo] {
+    func reorderWorkspaces(_ order: WorkspaceOrderRequest) async throws -> [WorkspaceInfo] {
         try await execute(method: "PATCH", url: "\(try await base())/api/projects/order", body: order)
     }
 
-    func getLinearLabels(projectName: String) async throws -> [LinearLabelDto] {
-        let name = Self.encodePathSegment(projectName)
+    func getLinearLabels(workspaceName: String) async throws -> [LinearLabelDto] {
+        let name = Self.encodePathSegment(workspaceName)
         return try await execute(method: "GET", url: "\(try await base())/api/projects/\(name)/linear/labels")
     }
 
-    func getLinearStates(projectName: String) async throws -> [LinearStateDto] {
-        let name = Self.encodePathSegment(projectName)
+    func getLinearStates(workspaceName: String) async throws -> [LinearStateDto] {
+        let name = Self.encodePathSegment(workspaceName)
         return try await execute(method: "GET", url: "\(try await base())/api/projects/\(name)/linear/states")
     }
 
     /// Always asks for the remote-tracking rows: the flag shields *older
     /// clients* from a kind they would offer for delete, and an older agent
     /// ignores it.
-    func getGitItems(projectName: String) async throws -> GitItemsResponse {
-        let name = Self.encodePathSegment(projectName)
+    func getGitItems(workspaceName: String) async throws -> GitItemsResponse {
+        let name = Self.encodePathSegment(workspaceName)
         return try await execute(method: "GET", url: "\(try await base())/api/projects/\(name)/git/items?remote=true")
     }
 
-    func getWorktreeBases(projectName: String) async throws -> WorktreeBasesResponse {
-        let name = Self.encodePathSegment(projectName)
+    func getWorktreeBases(workspaceName: String) async throws -> WorktreeBasesResponse {
+        let name = Self.encodePathSegment(workspaceName)
         return try await execute(method: "GET", url: "\(try await base())/api/projects/\(name)/git/worktree-bases")
     }
 
-    func createGitBranch(projectName: String, request: GitBranchCreateRequest) async throws -> GitBranchResponse {
-        let name = Self.encodePathSegment(projectName)
+    func createGitBranch(workspaceName: String, request: GitBranchCreateRequest) async throws -> GitBranchResponse {
+        let name = Self.encodePathSegment(workspaceName)
         return try await execute(method: "POST", url: "\(try await base())/api/projects/\(name)/git/branches", body: request)
     }
 
-    func checkoutGitRef(projectName: String, request: GitCheckoutRequest) async throws -> GitBranchResponse {
-        let name = Self.encodePathSegment(projectName)
+    func checkoutGitRef(workspaceName: String, request: GitCheckoutRequest) async throws -> GitBranchResponse {
+        let name = Self.encodePathSegment(workspaceName)
         return try await execute(method: "POST", url: "\(try await base())/api/projects/\(name)/git/checkout", body: request)
     }
 
-    func deleteGitItems(projectName: String, request: GitDeleteRequest) async throws -> GitDeleteResponse {
-        let name = Self.encodePathSegment(projectName)
+    func deleteGitItems(workspaceName: String, request: GitDeleteRequest) async throws -> GitDeleteResponse {
+        let name = Self.encodePathSegment(workspaceName)
         return try await execute(method: "POST", url: "\(try await base())/api/projects/\(name)/git/items:delete", body: request)
     }
 
@@ -395,20 +395,20 @@ struct AgentAPI: Sendable {
         try await execute(method: "GET", url: "\(try await base())/api/autoscan/list")
     }
 
-    func startAutoScan(projectName: String, claudeOptions: ClaudeOptionsModel? = nil) async throws {
+    func startAutoScan(workspaceName: String, claudeOptions: ClaudeOptionsModel? = nil) async throws {
         try await executeRaw(
             method: "POST",
             url: "\(try await base())/api/autoscan/start",
-            body: StartScanRequest(project_name: projectName, claude_options: claudeOptions)
+            body: StartScanRequest(workspace_name: workspaceName, claude_options: claudeOptions)
         )
     }
 
-    func stopAutoScan(projectName: String) async throws {
-        try await executeRaw(method: "POST", url: "\(try await base())/api/autoscan/stop", body: StopScanRequest(project_name: projectName))
+    func stopAutoScan(workspaceName: String) async throws {
+        try await executeRaw(method: "POST", url: "\(try await base())/api/autoscan/stop", body: StopScanRequest(workspace_name: workspaceName))
     }
 
-    func runAutoScanNow(projectName: String) async throws -> RunNowResponse {
-        try await execute(method: "POST", url: "\(try await base())/api/autoscan/run-now", body: RunNowRequest(project_name: projectName))
+    func runAutoScanNow(workspaceName: String) async throws -> RunNowResponse {
+        try await execute(method: "POST", url: "\(try await base())/api/autoscan/run-now", body: RunNowRequest(workspace_name: workspaceName))
     }
 
     // MARK: - Plumbing

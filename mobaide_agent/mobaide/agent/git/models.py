@@ -139,7 +139,7 @@ class BusyByResponse(BaseModel):
 
 class GitBranchCreateRequest(BaseModel):
     """``POST /branches``: create ``name`` at ``start_point`` (``HEAD`` of the
-    project root when omitted); ``checkout`` switches the project root to
+    workspace root when omitted); ``checkout`` switches the workspace root to
     it in the same call and is subject to the checkout refusals; ``force``
     skips the busy-holder refusal after the user confirmed it."""
 
@@ -162,7 +162,7 @@ class GitCheckoutRequest(BaseModel):
 
 class GitBranchResponse(BaseModel):
     """Outcome of ``POST /branches`` and ``POST /checkout``: the local
-    branch touched, whether the project root now has it checked out and
+    branch touched, whether the workspace root now has it checked out and
     whether the call created it."""
 
     branch: str
@@ -185,7 +185,7 @@ class WorktreeBasesResponse(BaseModel):
     """``GET /worktree-bases``: the base-branch picker of the New Session
     screen. ``default`` is the repository's default branch (``origin/HEAD``
     first) and ``last_used`` the base of the last worktree created in this
-    project; both are ``null`` or a ``ref`` present in ``refs``. Clients
+    workspace; both are ``null`` or a ``ref`` present in ``refs``. Clients
     preselect ``last_used``, then ``default``."""
 
     default: str | None

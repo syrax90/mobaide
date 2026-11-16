@@ -538,7 +538,7 @@ async def resolve_session_conflict(
     *,
     cwd: str | None,
     request: GitConflictResolveRequest,
-    project_name: str | None,
+    workspace_name: str | None,
     event_bus: Any | None,
 ) -> GitMutationResponse:
     """Write the user's text over the conflicted file and, unless it is a
@@ -570,7 +570,7 @@ async def resolve_session_conflict(
                 )
         finally:
             # the file is already rewritten, whatever ``add`` answers
-            _publish(event_bus, project_name, repo)
+            _publish(event_bus, workspace_name, repo)
     return GitMutationResponse()
 
 
@@ -649,7 +649,7 @@ async def take_session_conflict(
     *,
     cwd: str | None,
     request: GitConflictTakeRequest,
-    project_name: str | None,
+    workspace_name: str | None,
     event_bus: Any | None,
 ) -> GitMutationResponse:
     """Make the path look like one side and mark it resolved. Which command
@@ -692,7 +692,7 @@ async def take_session_conflict(
                     fallback="git rm failed",
                 )
         finally:
-            _publish(event_bus, project_name, repo)
+            _publish(event_bus, workspace_name, repo)
     return GitMutationResponse()
 
 
@@ -713,7 +713,7 @@ async def restore_session_conflict(
     *,
     cwd: str | None,
     request: GitConflictRestoreRequest,
-    project_name: str | None,
+    workspace_name: str | None,
     event_bus: Any | None,
 ) -> GitMutationResponse:
     """``git checkout --merge`` for one path: rebuilds the markers of a file
@@ -746,5 +746,5 @@ async def restore_session_conflict(
                 ours, theirs = await _side_labels(toplevel, state, rebase_dir, deadline)
                 await asyncio.to_thread(_relabel_markers, toplevel, rel, ours, theirs)
         finally:
-            _publish(event_bus, project_name, repo)
+            _publish(event_bus, workspace_name, repo)
     return GitMutationResponse()

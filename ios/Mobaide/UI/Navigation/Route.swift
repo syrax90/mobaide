@@ -12,15 +12,15 @@ enum Route: Hashable, Sendable {
     case sessionDetail(sessionId: String)
     case createSession
     /// The create-session wizard opened straight on Auto Scan config for one
-    /// stored project (the Projects screen shortcut). iOS-only — Android has
+    /// stored workspace (the Workspaces screen shortcut). iOS-only — Android has
     /// no equivalent entry point.
-    case createAutoScan(projectName: String)
+    case createAutoScan(workspaceName: String)
     case settings
     case support
-    case autoScanDetail(projectName: String)
+    case autoScanDetail(workspaceName: String)
     case connections
-    case projects
-    case gitManagement(projectName: String)
+    case workspaces
+    case gitManagement(workspaceName: String)
     /// The terminal's `⋯ → Git → Changes…` child screens, scoped to a session
     /// (Android `SESSION_GIT_CHANGES` / `SESSION_GIT_DIFF`).
     /// `commit` presents the commit sheet over the list on arrival (the

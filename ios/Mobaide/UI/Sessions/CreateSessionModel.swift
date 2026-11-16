@@ -14,7 +14,7 @@ import Observation
 @Observable
 final class CreateSessionModel {
     enum Step: Equatable {
-        case projectSelect
+        case workspaceSelect
         case modePick
         case config
     }
@@ -81,7 +81,7 @@ final class CreateSessionModel {
         }
     }
 
-    /// The base-branch list for the selected stored project.
+    /// The base-branch list for the selected stored workspace.
     enum WorktreeBasesState: Equatable {
         case idle
         case loading
@@ -89,7 +89,7 @@ final class CreateSessionModel {
         case failed
     }
 
-    enum ProjectSelection: Equatable {
+    enum WorkspaceSelection: Equatable {
         case none
         case stored(String)
         case customPath(String)
@@ -112,12 +112,12 @@ final class CreateSessionModel {
     static let codexSandboxes = ["read-only", "workspace-write", "danger-full-access"]
     static let codexApprovals = ["untrusted", "on-request", "never"]
 
-    private(set) var step: Step = .projectSelect
-    private(set) var projects: [ProjectInfo] = []
+    private(set) var step: Step = .workspaceSelect
+    private(set) var workspaces: [WorkspaceInfo] = []
     private(set) var submitting = false
     var error: String?
 
-    var selection: ProjectSelection = .none {
+    var selection: WorkspaceSelection = .none {
         didSet {
             if Self.storedName(selection) != Self.storedName(oldValue) { resetWorktreeBases() }
         }
@@ -133,10 +133,10 @@ final class CreateSessionModel {
     private(set) var customTypes: [CustomAgentTypeDto] = []
     /// The account's mode-picker order (mode ids); empty = default order.
     private(set) var modeOrder: [String] = []
-    /// The project order a save in flight carries, so a late answer to an
+    /// The workspace order a save in flight carries, so a late answer to an
     /// earlier save cannot overwrite a newer drop.
-    private var pendingProjectOrder: [String]?
-    private var projectOrderSaveTail: Task<Void, Never>?
+    private var pendingWorkspaceOrder: [String]?
+    private var workspaceOrderSaveTail: Task<Void, Never>?
     var typeEditorTarget: CustomTypeEditorTarget? {
         didSet { if typeEditorTarget != oldValue { typeEditorError = nil } }
     }
@@ -248,8 +248,8 @@ final class CreateSessionModel {
     var autoScanInitialPrompt = ""
     private(set) var autoScanStarting = false
     private(set) var activeScans: [AutoScanInstanceDto] = []
-    /// Stored-project name the initial prompt was last seeded for, so
-    /// re-entering the step keeps in-flight edits and only a project change
+    /// Stored-workspace name the initial prompt was last seeded for, so
+    /// re-entering the step keeps in-flight edits and only a workspace change
     /// re-seeds (Android `autoScanConfigInitializedFor`).
     private var autoScanPromptSeededFor: String?
 
@@ -303,7 +303,7 @@ final class CreateSessionModel {
     private(set) var worktreeBaseSupported = false
     private(set) var worktreeBases: WorktreeBasesState = .idle
     /// The chosen start point; nil means the agent's default. Not persisted:
-    /// the agent keeps the project's last base (`last_used`) for every device.
+    /// the agent keeps the workspace's last base (`last_used`) for every device.
     private(set) var baseBranch: String?
     /// Set once the user picks, so a later list load does not overwrite it.
     private var baseBranchPicked = false
@@ -323,29 +323,29 @@ final class CreateSessionModel {
     private let tokenStore: TokenStore
     private let customAgentTypesRepository: CustomAgentTypesRepository
     private let autoScanRepository: AutoScanRepository
-    /// The agent's live project list (`projects.changed`), so an order saved
+    /// The agent's live workspace list (`projects.changed`), so an order saved
     /// on another device shows while the wizard is open. Optional so a model
     /// built without it keeps the one-shot `load()` snapshot.
-    private let projectsRepository: ProjectsRepository?
+    private let workspacesRepository: WorkspacesRepository?
     private let navBroadcaster = Broadcaster<String>(replay: .none)
-    /// Carries a project name to the Auto Scan monitor. Separate from
+    /// Carries a workspace name to the Auto Scan monitor. Separate from
     /// `navBroadcaster` (which carries a session id) because the two lead to
-    /// different routes. `.latestClearable` because the Projects-shortcut
+    /// different routes. `.latestClearable` because the Workspaces-shortcut
     /// preset emits from inside `load()`, which can run before the screen's
     /// nav task subscribes — a non-replaying stream would drop it (the
     /// `SessionListModel` auto-resume pattern); the screen clears the cache
     /// once it has navigated.
     private let autoScanNavBroadcaster = Broadcaster<String>(replay: .latestClearable)
-    /// Stored project the wizard should open directly in Auto Scan config
-    /// (the Projects screen shortcut); applied once `load()` resolves it.
-    private let autoScanProjectPreset: String?
+    /// Stored workspace the wizard should open directly in Auto Scan config
+    /// (the Workspaces screen shortcut); applied once `load()` resolves it.
+    private let autoScanWorkspacePreset: String?
     private var didApplyAutoScanPreset = false
 
-    /// Projects created inline via the New Session "Create new project…" flow,
-    /// retained so a late initial `load()` (a still-pending `getProjects`) cannot
+    /// Workspaces created inline via the New Session "Create new workspace…" flow,
+    /// retained so a late initial `load()` (a still-pending `getWorkspaces`) cannot
     /// clobber the just-created selection — and its Git options — with a snapshot
     /// that predates the create.
-    private var locallyCreatedProjects: [ProjectInfo] = []
+    private var locallyCreatedWorkspaces: [WorkspaceInfo] = []
 
     init(
         agentAPI: AgentAPI,
@@ -354,8 +354,8 @@ final class CreateSessionModel {
         tokenStore: TokenStore,
         customAgentTypesRepository: CustomAgentTypesRepository,
         autoScanRepository: AutoScanRepository,
-        projectsRepository: ProjectsRepository? = nil,
-        autoScanProject: String? = nil
+        workspacesRepository: WorkspacesRepository? = nil,
+        autoScanWorkspace: String? = nil
     ) {
         self.agentAPI = agentAPI
         self.sessionRepository = sessionRepository
@@ -363,8 +363,8 @@ final class CreateSessionModel {
         self.tokenStore = tokenStore
         self.customAgentTypesRepository = customAgentTypesRepository
         self.autoScanRepository = autoScanRepository
-        self.projectsRepository = projectsRepository
-        self.autoScanProjectPreset = autoScanProject
+        self.workspacesRepository = workspacesRepository
+        self.autoScanWorkspacePreset = autoScanWorkspace
         self.customTypes = customAgentTypesRepository.currentTypes
         self.modeOrder = customAgentTypesRepository.currentModeOrder
         self.activeScans = autoScanRepository.currentScans
@@ -375,7 +375,7 @@ final class CreateSessionModel {
 
     func autoScanNavEvents() -> AsyncStream<String> { autoScanNavBroadcaster.subscribe() }
 
-    /// Called by the screen once it has consumed the project name and
+    /// Called by the screen once it has consumed the workspace name and
     /// navigated, so the cached id is not replayed.
     func clearAutoScanNav() { autoScanNavBroadcaster.clearReplay() }
 
@@ -503,10 +503,10 @@ final class CreateSessionModel {
         }
     }
 
-    /// The folder "This folder" lists: the selected project or the custom path.
+    /// The folder "This folder" lists: the selected workspace or the custom path.
     var continueFolder: String? {
         switch selection {
-        case .stored: return selectedProject?.path
+        case .stored: return selectedWorkspace?.path
         case .customPath(let path): return path.isEmpty ? nil : path
         case .none: return nil
         }
@@ -519,18 +519,18 @@ final class CreateSessionModel {
     var piEnabled: Bool { piAvailable != false && !piNeedsAgentUpdate }
 
     /// Auto Scan additionally needs a Linear API key on the selected stored
-    /// project — the agent scans Linear for that project's issues. A custom
+    /// workspace — the agent scans Linear for that workspace's issues. A custom
     /// path or no selection can never satisfy it (Android `autoScanEnabled`).
     var autoScanEnabled: Bool {
-        claudeEnabled && selectedProject?.has_linear_key == true
+        claudeEnabled && selectedWorkspace?.has_linear_key == true
     }
 
-    /// The scan already running for the selected stored project, if any. Auto
-    /// Scan is one-per-project, so this turns a guaranteed 409 into a route to
+    /// The scan already running for the selected stored workspace, if any. Auto
+    /// Scan is one-per-workspace, so this turns a guaranteed 409 into a route to
     /// the live monitor.
     var runningScan: AutoScanInstanceDto? {
         guard case .stored(let name) = selection else { return nil }
-        return activeScans.first { $0.project_name == name }
+        return activeScans.first { $0.workspace_name == name }
     }
 
     func isEnabled(_ mode: Mode) -> Bool {
@@ -581,13 +581,13 @@ final class CreateSessionModel {
                 : "Pi is not installed on the agent."
         case .autoScan:
             if let running = runningScan {
-                return "Already running for \(running.project_name) — tap to open the live monitor."
+                return "Already running for \(running.workspace_name) — tap to open the live monitor."
             }
             if !claudeEnabled {
                 return "Auto Scan needs the Claude CLI, which isn't installed on the agent."
             }
             if !autoScanEnabled {
-                return "Auto Scan needs a Linear API key for this project."
+                return "Auto Scan needs a Linear API key for this workspace."
             }
             return "Scan Linear for matching issues and launch sessions."
         case .shell:
@@ -695,23 +695,23 @@ final class CreateSessionModel {
 
     func load() async {
         do {
-            var fetched = try await agentAPI.getProjects()
+            var fetched = try await agentAPI.getWorkspaces()
             // A create can land while this initial fetch is still in flight;
-            // re-add any inline-created project the snapshot predates so it is
+            // re-add any inline-created workspace the snapshot predates so it is
             // not dropped (the fetched entry wins when both are present).
-            for created in locallyCreatedProjects where !fetched.contains(where: { $0.name == created.name }) {
+            for created in locallyCreatedWorkspaces where !fetched.contains(where: { $0.name == created.name }) {
                 fetched.append(created)
             }
-            self.projects = fetched
-            applyProjectPrefill()
-            if autoScanProjectPreset != nil {
+            self.workspaces = fetched
+            applyWorkspacePrefill()
+            if autoScanWorkspacePreset != nil {
                 // The preset chooses between the config step and the live
                 // monitor from `runningScan`, and it applies exactly once — so
                 // the scan list has to be warm *before* it runs. `init` seeds
                 // it from a repository cache that is empty on a cold start, and
                 // the sibling `observeScans()` task refreshes concurrently with
                 // no ordering guarantee. Without this the shortcut lands in the
-                // config step for an already-scanning project, recoverable only
+                // config step for an already-scanning workspace, recoverable only
                 // by a start that 409s — and not even that when the Claude CLI
                 // is missing, since the Start button is then disabled.
                 activeScans = await autoScanRepository.refresh().scans
@@ -745,23 +745,23 @@ final class CreateSessionModel {
         }
     }
 
-    /// Projects-screen shortcut: drop straight into the Auto Scan config step
-    /// for `autoScanProjectPreset`. Runs once, after `load()` has the project
+    /// Workspaces-screen shortcut: drop straight into the Auto Scan config step
+    /// for `autoScanWorkspacePreset`. Runs once, after `load()` has the workspace
     /// (its `has_linear_key` is the launch gate). An already-running scan
-    /// routes to the monitor instead; a project that lost its Linear key falls
+    /// routes to the monitor instead; a workspace that lost its Linear key falls
     /// back to the mode picker rather than a dead end.
     /// Returns whether the config step was entered.
     @discardableResult
     private func applyAutoScanPreset() -> Bool {
-        guard !didApplyAutoScanPreset, let name = autoScanProjectPreset else { return false }
-        guard projects.contains(where: { $0.name == name }) else { return false }
+        guard !didApplyAutoScanPreset, let name = autoScanWorkspacePreset else { return false }
+        guard workspaces.contains(where: { $0.name == name }) else { return false }
         didApplyAutoScanPreset = true
         selection = .stored(name)
         if let running = runningScan {
-            autoScanNavBroadcaster.emit(running.project_name)
+            autoScanNavBroadcaster.emit(running.workspace_name)
             return false
         }
-        guard selectedProject?.has_linear_key == true else {
+        guard selectedWorkspace?.has_linear_key == true else {
             step = .modePick
             return false
         }
@@ -909,36 +909,36 @@ final class CreateSessionModel {
         }
     }
 
-    /// Save the agent's project order after a drag (every client shows it).
+    /// Save the agent's workspace order after a drag (every client shows it).
     /// Saves run one at a time, in the order the user made them.
-    func moveProjects(fromOffsets source: IndexSet, toOffset destination: Int) {
-        let before = projects.map(\.name)
-        projects.move(fromOffsets: source, toOffset: destination)
-        let names = projects.map(\.name)
+    func moveWorkspaces(fromOffsets source: IndexSet, toOffset destination: Int) {
+        let before = workspaces.map(\.name)
+        workspaces.move(fromOffsets: source, toOffset: destination)
+        let names = workspaces.map(\.name)
         guard names != before else { return }
-        pendingProjectOrder = names
-        let previous = projectOrderSaveTail
+        pendingWorkspaceOrder = names
+        let previous = workspaceOrderSaveTail
         let agentAPI = self.agentAPI
         let save = Task { @MainActor [weak self] in
             await previous?.value
             do {
-                let saved = try await agentAPI.reorderProjects(ProjectOrderRequest(names: names))
-                self?.projectOrderSaved(names, saved)
+                let saved = try await agentAPI.reorderWorkspaces(WorkspaceOrderRequest(names: names))
+                self?.workspaceOrderSaved(names, saved)
             } catch {
-                self?.projectOrderFailed(names)
+                self?.workspaceOrderFailed(names)
             }
         }
-        projectOrderSaveTail = Task { await save.value }
+        workspaceOrderSaveTail = Task { await save.value }
     }
 
-    private func projectOrderSaved(_ names: [String], _ saved: [ProjectInfo]) {
+    private func workspaceOrderSaved(_ names: [String], _ saved: [WorkspaceInfo]) {
         // Take the confirmed `order` values even while a newer drop is
         // pending, so a later failure reverts to what the agent holds.
         let confirmed = Dictionary(saved.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
-        projects = projects.map { confirmed[$0.name] ?? $0 }
-        guard pendingProjectOrder == names else { return }
-        pendingProjectOrder = nil
-        applyServerProjects(saved)
+        workspaces = workspaces.map { confirmed[$0.name] ?? $0 }
+        guard pendingWorkspaceOrder == names else { return }
+        pendingWorkspaceOrder = nil
+        applyServerWorkspaces(saved)
     }
 
     /// Mirrors the repository's push-driven list into the wizard. The value the
@@ -946,61 +946,61 @@ final class CreateSessionModel {
     /// repository is not purged on sign-out), and `load()` fetches the list
     /// itself. Every push after it is applied. The repository seeds its stream
     /// with `[]`, so the first element is always that replay.
-    func observeProjects() async {
-        guard let projectsRepository else { return }
+    func observeWorkspaces() async {
+        guard let workspacesRepository else { return }
         var isReplay = true
-        for await list in projectsRepository.projects() {
+        for await list in workspacesRepository.workspaces() {
             defer { isReplay = false }
             if isReplay { continue }
-            applyServerProjects(list)
+            applyServerWorkspaces(list)
         }
     }
 
-    /// Show a server list: projects created inline are kept, and a drop whose
+    /// Show a server list: workspaces created inline are kept, and a drop whose
     /// save is still in flight keeps its order until the server matches it.
-    private func applyServerProjects(_ list: [ProjectInfo]) {
+    private func applyServerWorkspaces(_ list: [WorkspaceInfo]) {
         var merged = list
-        for created in locallyCreatedProjects where !merged.contains(where: { $0.name == created.name }) {
+        for created in locallyCreatedWorkspaces where !merged.contains(where: { $0.name == created.name }) {
             merged.append(created)
         }
         merged.sort { $0.order < $1.order }
-        if let pending = pendingProjectOrder {
+        if let pending = pendingWorkspaceOrder {
             if merged.map(\.name) == pending {
-                pendingProjectOrder = nil
+                pendingWorkspaceOrder = nil
             } else {
                 let rank = Dictionary(pending.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
                 merged.sort { (rank[$0.name] ?? Int.max) < (rank[$1.name] ?? Int.max) }
             }
         }
-        projects = merged
+        workspaces = merged
     }
 
     /// A local move never touches `order`, so sorting by it restores the
     /// server's order.
-    private func projectOrderFailed(_ names: [String]) {
-        guard pendingProjectOrder == names else { return }
-        pendingProjectOrder = nil
-        projects.sort { $0.order < $1.order }
+    private func workspaceOrderFailed(_ names: [String]) {
+        guard pendingWorkspaceOrder == names else { return }
+        pendingWorkspaceOrder = nil
+        workspaces.sort { $0.order < $1.order }
         error = "Reorder failed — reverted."
     }
 
     // MARK: - Worktree base branch
 
     /// The Base branch row shows for a session-creating mode, a stored git
-    /// project with the worktree on, and an agent that supports it.
+    /// workspace with the worktree on, and an agent that supports it.
     var showsBaseBranchPicker: Bool {
         guard worktreeBaseSupported, showsGitOptions, worktree else { return false }
         return mode != .autoScan
     }
 
-    /// The `.task(id:)` key that loads the list: the project name while the
+    /// The `.task(id:)` key that loads the list: the workspace name while the
     /// row is visible, else nil.
     var worktreeBasesLoadKey: String? {
         showsBaseBranchPicker ? Self.storedName(selection) : nil
     }
 
-    /// Fetches the list once per project; `force` retries after a failure.
-    /// A reply for a project that is no longer selected is dropped.
+    /// Fetches the list once per workspace; `force` retries after a failure.
+    /// A reply for a workspace that is no longer selected is dropped.
     func loadWorktreeBases(force: Bool = false) async {
         guard showsBaseBranchPicker, let name = Self.storedName(selection) else { return }
         if !force, worktreeBasesLoadedFor == name { return }
@@ -1009,7 +1009,7 @@ final class CreateSessionModel {
         let generation = worktreeBasesGeneration
         worktreeBases = .loading
         do {
-            let response = try await agentAPI.getWorktreeBases(projectName: name)
+            let response = try await agentAPI.getWorktreeBases(workspaceName: name)
             guard generation == worktreeBasesGeneration else { return }
             worktreeBases = .loaded(response)
             if !baseBranchPicked { baseBranch = response.preselected }
@@ -1045,14 +1045,14 @@ final class CreateSessionModel {
         baseBranchPicked = false
     }
 
-    private static func storedName(_ selection: ProjectSelection) -> String? {
+    private static func storedName(_ selection: WorkspaceSelection) -> String? {
         if case .stored(let name) = selection { return name }
         return nil
     }
 
     // MARK: - Navigation between steps
 
-    var canContinueProject: Bool {
+    var canContinueWorkspace: Bool {
         switch selection {
         case .stored: return true
         case .customPath: return !customPathDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && customPathError == nil
@@ -1060,34 +1060,34 @@ final class CreateSessionModel {
         }
     }
 
-    func selectStoredProject(_ name: String) {
+    func selectStoredWorkspace(_ name: String) {
         selection = .stored(name)
         customPathError = nil
     }
 
-    /// Called after `ProjectFormSheet` reports a successful create (New Session
-    /// inline "Create new project…"). Mirrors Android `onProjectCreated`: selects
-    /// the returned project and gates worktree/branch off its own `is_git`. The
-    /// project is merged into this wizard's `projects` at once, so
-    /// `selectedProject`/`showsGitOptions` resolve before the `projects.changed`
-    /// echo reaches `observeProjects()`.
-    func onProjectCreated(_ project: ProjectInfo) {
-        Self.upsert(project, into: &projects)
-        Self.upsert(project, into: &locallyCreatedProjects)
-        selection = .stored(project.name)
+    /// Called after `WorkspaceFormSheet` reports a successful create (New Session
+    /// inline "Create new workspace…"). Mirrors Android `onWorkspaceCreated`: selects
+    /// the returned workspace and gates worktree/branch off its own `is_git`. The
+    /// workspace is merged into this wizard's `workspaces` at once, so
+    /// `selectedWorkspace`/`showsGitOptions` resolve before the `projects.changed`
+    /// echo reaches `observeWorkspaces()`.
+    func onWorkspaceCreated(_ workspace: WorkspaceInfo) {
+        Self.upsert(workspace, into: &workspaces)
+        Self.upsert(workspace, into: &locallyCreatedWorkspaces)
+        selection = .stored(workspace.name)
         customPathDraft = ""
         customPathError = nil
-        if !project.is_git {
+        if !workspace.is_git {
             worktree = false
             branchName = ""
         }
     }
 
-    private static func upsert(_ project: ProjectInfo, into list: inout [ProjectInfo]) {
-        if let index = list.firstIndex(where: { $0.name == project.name }) {
-            list[index] = project
+    private static func upsert(_ workspace: WorkspaceInfo, into list: inout [WorkspaceInfo]) {
+        if let index = list.firstIndex(where: { $0.name == workspace.name }) {
+            list[index] = workspace
         } else {
-            list.append(project)
+            list.append(workspace)
         }
     }
 
@@ -1144,7 +1144,7 @@ final class CreateSessionModel {
         )
     }
 
-    func continueFromProject() {
+    func continueFromWorkspace() {
         if case .customPath = selection {
             customPathError = Self.validateCustomPath(customPathDraft)
             guard customPathError == nil else { return }
@@ -1155,9 +1155,9 @@ final class CreateSessionModel {
     func selectMode(_ mode: Mode) {
         guard isEnabled(mode) else { return }
         if mode == .autoScan {
-            // One scan per project: an existing one is opened, not reconfigured.
+            // One scan per workspace: an existing one is opened, not reconfigured.
             if let running = runningScan {
-                autoScanNavBroadcaster.emit(running.project_name)
+                autoScanNavBroadcaster.emit(running.workspace_name)
                 return
             }
             seedAutoScanPrompt()
@@ -1166,18 +1166,18 @@ final class CreateSessionModel {
         step = .config
     }
 
-    /// Per-project saved prompt → the agent-wide default (Android
-    /// `selectAutoScanMode`). Re-seeds only when the selected project changed,
+    /// Per-workspace saved prompt → the agent-wide default (Android
+    /// `selectAutoScanMode`). Re-seeds only when the selected workspace changed,
     /// so returning to the step does not discard the user's edits.
     ///
     /// Latches `autoScanPromptSeededFor` only once a source actually resolved.
     /// The agent-wide default rides in on the scan-list refresh, so reaching
-    /// this step before that lands would otherwise mark the project seeded with
+    /// this step before that lands would otherwise mark the workspace seeded with
     /// an empty prompt and strand it that way for the rest of the wizard's
     /// life — `observeScans()` re-attempts the seed once the refresh returns.
     private func seedAutoScanPrompt() {
         guard case .stored(let name) = selection, autoScanPromptSeededFor != name else { return }
-        guard let prompt = projects.first(where: { $0.name == name })?.auto_scan_prompt
+        guard let prompt = workspaces.first(where: { $0.name == name })?.auto_scan_prompt
             ?? autoScanRepository.autoScanPrompt
         else { return }
         autoScanPromptSeededFor = name
@@ -1187,8 +1187,8 @@ final class CreateSessionModel {
     func back() {
         switch step {
         case .config: step = .modePick
-        case .modePick: step = .projectSelect
-        case .projectSelect: break
+        case .modePick: step = .workspaceSelect
+        case .workspaceSelect: break
         }
     }
 
@@ -1260,7 +1260,7 @@ final class CreateSessionModel {
             // The type was deleted between rendering the card and the launch —
             // refresh so the stale card disappears. Keyed on the relay's exact
             // detail string, not the status alone: a 404 from a concurrently
-            // deleted project must fall through to the generic message.
+            // deleted workspace must fall through to the generic message.
             submitting = false
             self.error = "This agent type was deleted"
             await refreshCustomTypes()
@@ -1422,18 +1422,18 @@ final class CreateSessionModel {
     /// this does **not** create a session — the scanner spawns its own,
     /// one per matching Linear issue.
     func startAutoScan() async {
-        guard case .stored(let projectName) = selection, !autoScanStarting else { return }
+        guard case .stored(let workspaceName) = selection, !autoScanStarting else { return }
         autoScanStarting = true
         error = nil
         do {
             try await autoScanRepository.startScan(
-                projectName: projectName,
+                workspaceName: workspaceName,
                 claudeOptions: autoScanClaudeOptions()
             )
-            preferencesStore.setLastUsedProjectName(projectName)
+            preferencesStore.setLastUsedWorkspaceName(workspaceName)
             preferencesStore.setLastUsedAutoScanOptions(autoScanLaunchPrefs())
             autoScanStarting = false
-            autoScanNavBroadcaster.emit(projectName)
+            autoScanNavBroadcaster.emit(workspaceName)
         } catch AutoScanStartError.alreadyRunning(let running) {
             // Started elsewhere while the step was open — resolve it the same
             // way the mode card does, by opening the monitor.
@@ -1489,21 +1489,21 @@ final class CreateSessionModel {
     /// `nil` for `.autoScan`, which starts a scan instead of creating a
     /// session — every other mode maps onto a request.
     func buildRequest(mode: Mode) -> CreateSessionRequest? {
-        let projectName: String?
+        let workspaceName: String?
         let cwd: String?
         switch selection {
         case .stored(let name):
-            projectName = name
+            workspaceName = name
             cwd = nil
         case .customPath(let path):
-            projectName = nil
+            workspaceName = nil
             cwd = path
         case .none:
-            projectName = nil
+            workspaceName = nil
             cwd = nil
         }
-        // Worktree/branch apply only to a stored git project (`showsGitOptions`);
-        // a non-git project or a custom path must not leak a stale toggle whose
+        // Worktree/branch apply only to a stored git workspace (`showsGitOptions`);
+        // a non-git workspace or a custom path must not leak a stale toggle whose
         // UI is hidden and therefore unclearable.
         let gitEligible = showsGitOptions
         let effectiveWorktree = gitEligible ? worktree : false
@@ -1517,14 +1517,14 @@ final class CreateSessionModel {
         case .standard:
             return CreateSessionRequest(
                 cwd: cwd,
-                project_name: projectName,
+                workspace_name: workspaceName,
                 claude_options: claudeOptions(worktree: effectiveWorktree, branchName: effectiveBranch, baseBranch: effectiveBase),
                 ui: claudeUsesChat ? "chat" : "terminal"
             )
         case .codex:
             return CreateSessionRequest(
                 cwd: cwd,
-                project_name: projectName,
+                workspace_name: workspaceName,
                 cli: "codex",
                 codex_options: codexOptions(worktree: effectiveWorktree, branchName: effectiveBranch, baseBranch: effectiveBase),
                 ui: codexUsesChat ? "chat" : "terminal"
@@ -1532,7 +1532,7 @@ final class CreateSessionModel {
         case .antigravity:
             return CreateSessionRequest(
                 cwd: cwd,
-                project_name: projectName,
+                workspace_name: workspaceName,
                 cli: "antigravity",
                 antigravity_options: antigravityOptions(worktree: effectiveWorktree, branchName: effectiveBranch, baseBranch: effectiveBase),
                 ui: antigravityUsesChat ? "chat" : "terminal"
@@ -1540,7 +1540,7 @@ final class CreateSessionModel {
         case .opencode:
             return CreateSessionRequest(
                 cwd: cwd,
-                project_name: projectName,
+                workspace_name: workspaceName,
                 cli: "opencode",
                 opencode_options: opencodeOptions(worktree: effectiveWorktree, branchName: effectiveBranch, baseBranch: effectiveBase),
                 ui: opencodeUsesChat ? "chat" : "terminal"
@@ -1548,7 +1548,7 @@ final class CreateSessionModel {
         case .copilot:
             return CreateSessionRequest(
                 cwd: cwd,
-                project_name: projectName,
+                workspace_name: workspaceName,
                 cli: "copilot",
                 copilot_options: copilotOptions(worktree: effectiveWorktree, branchName: effectiveBranch, baseBranch: effectiveBase),
                 ui: copilotUsesChat ? "chat" : "terminal"
@@ -1556,7 +1556,7 @@ final class CreateSessionModel {
         case .cursor:
             return CreateSessionRequest(
                 cwd: cwd,
-                project_name: projectName,
+                workspace_name: workspaceName,
                 cli: "cursor",
                 cursor_options: cursorOptions(worktree: effectiveWorktree, branchName: effectiveBranch, baseBranch: effectiveBase),
                 ui: cursorUsesChat ? "chat" : "terminal"
@@ -1564,7 +1564,7 @@ final class CreateSessionModel {
         case .pi:
             return CreateSessionRequest(
                 cwd: cwd,
-                project_name: projectName,
+                workspace_name: workspaceName,
                 cli: "pi",
                 pi_options: piOptions(worktree: effectiveWorktree, branchName: effectiveBranch, baseBranch: effectiveBase),
                 ui: piUsesChat ? "chat" : "terminal"
@@ -1572,7 +1572,7 @@ final class CreateSessionModel {
         case .shell:
             return CreateSessionRequest(
                 cwd: cwd,
-                project_name: projectName,
+                workspace_name: workspaceName,
                 worktree: effectiveWorktree,
                 branch_name: effectiveBranch,
                 base_branch: effectiveBase
@@ -1583,7 +1583,7 @@ final class CreateSessionModel {
             // command server-side; the client never sends it.
             return CreateSessionRequest(
                 cwd: cwd,
-                project_name: projectName,
+                workspace_name: workspaceName,
                 cli: "custom_\(id)",
                 worktree: effectiveWorktree,
                 branch_name: effectiveBranch,
@@ -1643,24 +1643,24 @@ final class CreateSessionModel {
         )
     }
 
-    /// The request of `connectOpenCodeProvider()`; nil until a project or a
+    /// The request of `connectOpenCodeProvider()`; nil until a workspace or a
     /// folder is selected. No wizard option applies to a sign-in.
     func connectRequest() -> CreateSessionRequest? {
-        let projectName: String?
+        let workspaceName: String?
         let cwd: String?
         switch selection {
         case .stored(let name):
-            projectName = name
+            workspaceName = name
             cwd = nil
         case .customPath(let path):
-            projectName = nil
+            workspaceName = nil
             cwd = path
         case .none:
             return nil
         }
         return CreateSessionRequest(
             cwd: cwd,
-            project_name: projectName,
+            workspace_name: workspaceName,
             cli: "opencode",
             opencode_options: OpenCodeOptionsModel(
                 auto_approve: false,
@@ -1714,20 +1714,20 @@ final class CreateSessionModel {
 
     /// Continues a stored conversation in a new chat session with the current
     /// options of its agent (never in a worktree). It runs in the selected
-    /// project when that is the conversation's folder, otherwise in its folder
+    /// workspace when that is the conversation's folder, otherwise in its folder
     /// alone.
     func continueRequest(for stored: ChatStoredSession) -> CreateSessionRequest {
         let folder = stored.cwd ?? continueFolder
-        var projectName: String?
-        if case .stored(let name) = selection, let path = selectedProject?.path, let folder,
+        var workspaceName: String?
+        if case .stored(let name) = selection, let path = selectedWorkspace?.path, let folder,
            Self.samePath(path, folder) {
-            projectName = name
+            workspaceName = name
         }
-        let cwd = projectName == nil ? folder : nil
+        let cwd = workspaceName == nil ? folder : nil
         if mode == .codex {
             return CreateSessionRequest(
                 cwd: cwd,
-                project_name: projectName,
+                workspace_name: workspaceName,
                 cli: "codex",
                 codex_options: codexOptions(worktree: false, branchName: nil),
                 ui: "chat",
@@ -1737,7 +1737,7 @@ final class CreateSessionModel {
         if mode == .antigravity {
             return CreateSessionRequest(
                 cwd: cwd,
-                project_name: projectName,
+                workspace_name: workspaceName,
                 cli: "antigravity",
                 antigravity_options: antigravityOptions(worktree: false, branchName: nil),
                 ui: "chat",
@@ -1747,7 +1747,7 @@ final class CreateSessionModel {
         if mode == .opencode {
             return CreateSessionRequest(
                 cwd: cwd,
-                project_name: projectName,
+                workspace_name: workspaceName,
                 cli: "opencode",
                 opencode_options: opencodeOptions(worktree: false, branchName: nil),
                 ui: "chat",
@@ -1757,7 +1757,7 @@ final class CreateSessionModel {
         if mode == .copilot {
             return CreateSessionRequest(
                 cwd: cwd,
-                project_name: projectName,
+                workspace_name: workspaceName,
                 cli: "copilot",
                 copilot_options: copilotOptions(worktree: false, branchName: nil),
                 ui: "chat",
@@ -1767,7 +1767,7 @@ final class CreateSessionModel {
         if mode == .cursor {
             return CreateSessionRequest(
                 cwd: cwd,
-                project_name: projectName,
+                workspace_name: workspaceName,
                 cli: "cursor",
                 cursor_options: cursorOptions(worktree: false, branchName: nil),
                 ui: "chat",
@@ -1777,7 +1777,7 @@ final class CreateSessionModel {
         if mode == .pi {
             return CreateSessionRequest(
                 cwd: cwd,
-                project_name: projectName,
+                workspace_name: workspaceName,
                 cli: "pi",
                 pi_options: piOptions(worktree: false, branchName: nil),
                 ui: "chat",
@@ -1786,7 +1786,7 @@ final class CreateSessionModel {
         }
         return CreateSessionRequest(
             cwd: cwd,
-            project_name: projectName,
+            workspace_name: workspaceName,
             cli: "claude",
             claude_options: claudeOptions(worktree: false, branchName: nil),
             ui: "chat",
@@ -1866,7 +1866,7 @@ final class CreateSessionModel {
     }
 
     private func persistLastUsed(
-        selection: ProjectSelection,
+        selection: WorkspaceSelection,
         scopeKey: String?,
         mode: Mode,
         savesLaunchPrefs: Bool,
@@ -1874,11 +1874,11 @@ final class CreateSessionModel {
     ) {
         switch selection {
         case .stored(let name):
-            preferencesStore.setLastUsedProjectName(name)
+            preferencesStore.setLastUsedWorkspaceName(name)
         case .customPath(let path):
             // An ad-hoc directory is remembered as a per-agent recent and
-            // deliberately never as the last-used project, so reopening the wizard
-            // still defaults to the last real project. Re-validated because
+            // deliberately never as the last-used workspace, so reopening the wizard
+            // still defaults to the last real workspace. Re-validated because
             // `setCustomPath` assigns `selection` even when the draft is invalid.
             if let scopeKey, Self.validateCustomPath(path) == nil {
                 preferencesStore.addRecentCustomPath(agentKey: scopeKey, path: path)
@@ -1987,22 +1987,22 @@ final class CreateSessionModel {
         }
     }
 
-    private func applyProjectPrefill() {
+    private func applyWorkspacePrefill() {
         guard case .none = selection,
-              let lastName = preferencesStore.getLastUsedProjectName(),
-              projects.contains(where: { $0.name == lastName })
+              let lastName = preferencesStore.getLastUsedWorkspaceName(),
+              workspaces.contains(where: { $0.name == lastName })
         else { return }
         selection = .stored(lastName)
     }
 
-    var selectedProject: ProjectInfo? {
+    var selectedWorkspace: WorkspaceInfo? {
         guard case .stored(let name) = selection else { return nil }
-        return projects.first { $0.name == name }
+        return workspaces.first { $0.name == name }
     }
 
-    /// Worktree/branch fields apply only to a stored git project.
+    /// Worktree/branch fields apply only to a stored git workspace.
     var showsGitOptions: Bool {
-        selectedProject?.is_git == true
+        selectedWorkspace?.is_git == true
     }
 
     static func parseAddDirs(_ input: String) -> [String] {
@@ -2040,7 +2040,7 @@ enum CodexAutonomyPreset: CaseIterable {
 
     var subtitle: String {
         switch self {
-        case .readOnly: return "Reads the project; asks before any change."
+        case .readOnly: return "Reads the workspace; asks before any change."
         case .auto: return "Edits within the workspace; asks before risky actions."
         case .fullAccess: return "No sandbox or approval prompts (--yolo)."
         }

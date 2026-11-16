@@ -6,12 +6,12 @@ import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.RestApi
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
-import com.mobaide.app.data.network.dto.ProjectInfo
+import com.mobaide.app.data.network.dto.WorkspaceInfo
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.GitRepository
 import com.mobaide.app.data.repository.PathSuggestionRepository
-import com.mobaide.app.data.repository.ProjectsRepository
+import com.mobaide.app.data.repository.WorkspacesRepository
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.Runs
@@ -31,13 +31,13 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * Reordering in [CreateSessionViewModel]: the project rows save the agent's
- * own project order (`PATCH /api/projects/order`) and the mode cards save the
+ * Reordering in [CreateSessionViewModel]: the workspace rows save the agent's
+ * own workspace order (`PATCH /api/projects/order`) and the mode cards save the
  * account's mode order through [CustomAgentTypesRepository]. Both show a move
  * at once; a failed save reverts and says so. Also pins [orderModes], the rule
  * shared with iOS `orderModes(_:by:)` and web `applyModeOrder`.
  *
- * Collaborators are MockK as in [CreateSessionViewModelTest]. The projects
+ * Collaborators are MockK as in [CreateSessionViewModelTest]. The workspaces
  * fake answers a PATCH with the agent's re-sorted list, and the mode-order fake
  * shows a saved order at once, as the real repository does.
  */
@@ -47,11 +47,11 @@ class CreateSessionViewModelReorderTest {
     @get:Rule
     val mainDispatcherRule = MainDispatcherRule()
 
-    private fun project(name: String, order: Int): ProjectInfo =
-        ProjectInfo(name = name, path = "/p/$name", is_git = true, order = order)
+    private fun workspace(name: String, order: Int): WorkspaceInfo =
+        WorkspaceInfo(name = name, path = "/p/$name", is_git = true, order = order)
 
-    private fun projects(vararg names: String): List<ProjectInfo> =
-        names.mapIndexed { index, name -> project(name, index) }
+    private fun workspaces(vararg names: String): List<WorkspaceInfo> =
+        names.mapIndexed { index, name -> workspace(name, index) }
 
     private fun customType(id: String): CustomAgentTypeDto = CustomAgentTypeDto(
         id = id,
@@ -69,40 +69,40 @@ class CreateSessionViewModelReorderTest {
         }
 
     private class Fixture(
-        val projectsRepo: ProjectsRepository,
-        val projectsFlow: MutableStateFlow<List<ProjectInfo>>,
+        val workspacesRepo: WorkspacesRepository,
+        val workspacesFlow: MutableStateFlow<List<WorkspaceInfo>>,
         val customTypesRepo: CustomAgentTypesRepository,
         val customTypesFlow: MutableStateFlow<List<CustomAgentTypeDto>>,
         val modeOrderFlow: MutableStateFlow<List<String>>,
         /** Every name list PATCHed, in the order the agent received them. */
-        val projectSaves: MutableList<List<String>>,
+        val workspaceSaves: MutableList<List<String>>,
         /** Every mode id list PUT, in call order. */
         val modeSaves: MutableList<List<String>>,
         val vm: CreateSessionViewModel,
     )
 
     private fun newFixture(
-        initialProjects: List<ProjectInfo> = projects("alpha", "beta", "gamma"),
+        initialWorkspaces: List<WorkspaceInfo> = workspaces("alpha", "beta", "gamma"),
         customTypes: List<CustomAgentTypeDto> = emptyList(),
         modeOrder: List<String> = emptyList(),
     ): Fixture {
-        val projectsRepo = mockk<ProjectsRepository>(relaxed = true)
+        val workspacesRepo = mockk<WorkspacesRepository>(relaxed = true)
         val sessionRepo = mockk<SessionRepository>(relaxed = true)
         val autoScanRepo = mockk<AutoScanRepository>(relaxed = true)
         val prefs = mockk<PreferencesStore>(relaxed = true)
         val tokenStore = mockk<TokenStore>(relaxed = true)
-        val projectsFlow = MutableStateFlow(initialProjects)
-        val projectSaves = mutableListOf<List<String>>()
+        val workspacesFlow = MutableStateFlow(initialWorkspaces)
+        val workspaceSaves = mutableListOf<List<String>>()
         val modeSaves = mutableListOf<List<String>>()
 
-        every { projectsRepo.observeProjects() } returns projectsFlow
-        coEvery { projectsRepo.listProjects() } returns initialProjects
-        coEvery { projectsRepo.reorderProjects(any()) } coAnswers {
+        every { workspacesRepo.observeWorkspaces() } returns workspacesFlow
+        coEvery { workspacesRepo.listWorkspaces() } returns initialWorkspaces
+        coEvery { workspacesRepo.reorderWorkspaces(any()) } coAnswers {
             val names = firstArg<List<String>>()
-            projectSaves += names
-            names.mapIndexed { index, name -> project(name, index) }
+            workspaceSaves += names
+            names.mapIndexed { index, name -> workspace(name, index) }
         }
-        coEvery { prefs.getLastUsedProjectName() } returns null
+        coEvery { prefs.getLastUsedWorkspaceName() } returns null
         coEvery { prefs.getLastUsedClaudeOptions() } returns null
         coEvery { prefs.getLastUsedAutoScanOptions() } returns null
         coEvery { prefs.getLastUsedCodexOptions() } returns null
@@ -127,20 +127,20 @@ class CreateSessionViewModelReorderTest {
 
         val restApi = mockk<RestApi>()
         val vm = CreateSessionViewModel(
-            projectsRepo, sessionRepo, autoScanRepo, prefs, tokenStore, customTypesRepo,
+            workspacesRepo, sessionRepo, autoScanRepo, prefs, tokenStore, customTypesRepo,
             PathSuggestionRepository(restApi, tokenStore),
             mockk<GitRepository>(relaxed = true) {
                 every { changed } returns MutableSharedFlow()
             },
         )
         return Fixture(
-            projectsRepo, projectsFlow, customTypesRepo, customTypesFlow, modeOrderFlow,
-            projectSaves, modeSaves, vm,
+            workspacesRepo, workspacesFlow, customTypesRepo, customTypesFlow, modeOrderFlow,
+            workspaceSaves, modeSaves, vm,
         )
     }
 
-    private val Fixture.projectNames: List<String>
-        get() = vm.uiState.value.projects.map { it.name }
+    private val Fixture.workspaceNames: List<String>
+        get() = vm.uiState.value.workspaces.map { it.name }
 
     private val Fixture.modeIds: List<String>
         get() = vm.uiState.value.orderedModes.map { it.orderId }
@@ -257,91 +257,91 @@ class CreateSessionViewModelReorderTest {
 
 
     @Test
-    fun moveProject_showsTheMoveAtOnce_andSavesTheWholeNameList() = runTest {
+    fun moveWorkspace_showsTheMoveAtOnce_andSavesTheWholeNameList() = runTest {
         val f = newFixture()
         advanceUntilIdle()
 
-        f.vm.moveProject(0, 2)
-        assertEquals(listOf("beta", "gamma", "alpha"), f.projectNames)
+        f.vm.moveWorkspace(0, 2)
+        assertEquals(listOf("beta", "gamma", "alpha"), f.workspaceNames)
 
         advanceUntilIdle()
-        assertEquals(listOf(listOf("beta", "gamma", "alpha")), f.projectSaves)
-        assertEquals(listOf("beta", "gamma", "alpha"), f.projectNames)
+        assertEquals(listOf(listOf("beta", "gamma", "alpha")), f.workspaceSaves)
+        assertEquals(listOf("beta", "gamma", "alpha"), f.workspaceNames)
     }
 
     @Test
-    fun moveProject_failure_revertsToTheAgentOrder_andSaysSo() = runTest {
+    fun moveWorkspace_failure_revertsToTheAgentOrder_andSaysSo() = runTest {
         val f = newFixture()
         advanceUntilIdle()
-        coEvery { f.projectsRepo.reorderProjects(any()) } throws ApiException(503, "")
+        coEvery { f.workspacesRepo.reorderWorkspaces(any()) } throws ApiException(503, "")
 
         f.vm.transientMessages.test {
-            f.vm.moveProject(2, 0)
-            assertEquals(listOf("gamma", "alpha", "beta"), f.projectNames)
+            f.vm.moveWorkspace(2, 0)
+            assertEquals(listOf("gamma", "alpha", "beta"), f.workspaceNames)
 
             advanceUntilIdle()
             assertEquals("Reorder failed — reverted.", awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
-        assertEquals(listOf("alpha", "beta", "gamma"), f.projectNames)
+        assertEquals(listOf("alpha", "beta", "gamma"), f.workspaceNames)
     }
 
     @Test
-    fun moveProject_anUnrelatedPushWhileSaving_doesNotSnapTheRowsBack() = runTest {
+    fun moveWorkspace_anUnrelatedPushWhileSaving_doesNotSnapTheRowsBack() = runTest {
         val f = newFixture()
         advanceUntilIdle()
-        val answer = CompletableDeferred<List<ProjectInfo>>()
-        coEvery { f.projectsRepo.reorderProjects(any()) } coAnswers { answer.await() }
+        val answer = CompletableDeferred<List<WorkspaceInfo>>()
+        coEvery { f.workspacesRepo.reorderWorkspaces(any()) } coAnswers { answer.await() }
 
-        f.vm.moveProject(0, 1)
+        f.vm.moveWorkspace(0, 1)
         advanceUntilIdle()
 
         // `projects.changed` from another device, still in the old order.
-        f.projectsFlow.value = projects("alpha", "beta", "gamma").map {
+        f.workspacesFlow.value = workspaces("alpha", "beta", "gamma").map {
             if (it.name == "gamma") it.copy(has_linear_key = true) else it
         }
         advanceUntilIdle()
-        assertEquals(listOf("beta", "alpha", "gamma"), f.projectNames)
+        assertEquals(listOf("beta", "alpha", "gamma"), f.workspaceNames)
 
-        answer.complete(projects("beta", "alpha", "gamma"))
+        answer.complete(workspaces("beta", "alpha", "gamma"))
         advanceUntilIdle()
-        assertEquals(listOf("beta", "alpha", "gamma"), f.projectNames)
+        assertEquals(listOf("beta", "alpha", "gamma"), f.workspaceNames)
     }
 
     @Test
-    fun moveProject_twoQuickDrops_saveInOrder_andTheFirstAnswerKeepsTheSecondDrop() = runTest {
+    fun moveWorkspace_twoQuickDrops_saveInOrder_andTheFirstAnswerKeepsTheSecondDrop() = runTest {
         val f = newFixture()
         advanceUntilIdle()
-        val firstAnswer = CompletableDeferred<List<ProjectInfo>>()
+        val firstAnswer = CompletableDeferred<List<WorkspaceInfo>>()
         val sent = mutableListOf<List<String>>()
-        coEvery { f.projectsRepo.reorderProjects(any()) } coAnswers {
+        coEvery { f.workspacesRepo.reorderWorkspaces(any()) } coAnswers {
             val names = firstArg<List<String>>()
             sent += names
-            if (sent.size == 1) firstAnswer.await() else projects(*names.toTypedArray())
+            if (sent.size == 1) firstAnswer.await() else workspaces(*names.toTypedArray())
         }
 
-        f.vm.moveProject(0, 1)
+        f.vm.moveWorkspace(0, 1)
         advanceUntilIdle()
-        f.vm.moveProject(2, 0)
+        f.vm.moveWorkspace(2, 0)
         advanceUntilIdle()
 
         assertEquals(listOf(listOf("beta", "alpha", "gamma")), sent)
-        assertEquals(listOf("gamma", "beta", "alpha"), f.projectNames)
+        assertEquals(listOf("gamma", "beta", "alpha"), f.workspaceNames)
 
-        firstAnswer.complete(projects("beta", "alpha", "gamma"))
+        firstAnswer.complete(workspaces("beta", "alpha", "gamma"))
         advanceUntilIdle()
 
         assertEquals(
             listOf(listOf("beta", "alpha", "gamma"), listOf("gamma", "beta", "alpha")),
             sent,
         )
-        assertEquals(listOf("gamma", "beta", "alpha"), f.projectNames)
+        assertEquals(listOf("gamma", "beta", "alpha"), f.workspaceNames)
     }
 
 
     @Test
     fun selectCustomPath_again_keepsTheTypedDraft() = runTest {
-        // The "Custom path…" row stays on screen beside the project list, so
+        // The "Custom path…" row stays on screen beside the workspace list, so
         // a second tap must not wipe a path the user has typed.
         val f = newFixture()
         advanceUntilIdle()
@@ -354,6 +354,6 @@ class CreateSessionViewModelReorderTest {
 
         val s = f.vm.uiState.value
         assertEquals(hostAbsolutePath, s.customPathDraft)
-        assertEquals(ProjectSelection.CustomPath(hostAbsolutePath), s.selection)
+        assertEquals(WorkspaceSelection.CustomPath(hostAbsolutePath), s.selection)
     }
 }

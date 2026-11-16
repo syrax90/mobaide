@@ -318,8 +318,8 @@ export class AutoScanChannel {
   }
 
   /** Replace the subscription set; the server treats each frame as a full replace. */
-  setSubscribe(projects: readonly string[]): void {
-    this.subscribe = [...projects];
+  setSubscribe(workspaces: readonly string[]): void {
+    this.subscribe = [...workspaces];
     this.channel.send(buildSubscribeMessage(this.subscribe, this.cursor));
   }
 

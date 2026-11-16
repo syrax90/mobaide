@@ -11,8 +11,8 @@ interface WorktreeSectionProps {
 }
 
 /**
- * Only rendered for a stored git project — a one-off path has no repository to
- * branch from, and a non-git project has nothing to worktree.
+ * Only rendered for a stored git workspace — a one-off path has no repository to
+ * branch from, and a non-git workspace has nothing to worktree.
  */
 export function WorktreeSection({ git, dispatch, baseBranch }: WorktreeSectionProps) {
   return (

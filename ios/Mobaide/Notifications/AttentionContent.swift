@@ -10,7 +10,7 @@ enum AttentionContent {
     /// session's kind ("Codex session", …).
     static func label(for session: SessionResponse) -> String {
         if let title = session.title, !title.isBlank { return title }
-        if let projectName = session.project_name, !projectName.isBlank { return projectName }
+        if let workspaceName = session.workspace_name, !workspaceName.isBlank { return workspaceName }
         return kindFallbackLabel(session)
     }
 

@@ -286,7 +286,7 @@ final class SessionRepositoryTests: XCTestCase {
         let agentAPI = AgentAPI(baseURL: { "http://agent.example.com" }, tokens: FakeAgentTokens(token: AgentToken(value: "tok")), client: client)
         let repo = SessionRepository(agentAPI: agentAPI, agentEventBus: bus, terminalSessionStore: TerminalTestSupport.store(harness))
 
-        let response = try await repo.createSession(CreateSessionRequest(project_name: "p", cli: "codex"))
+        let response = try await repo.createSession(CreateSessionRequest(workspace_name: "p", cli: "codex"))
 
         XCTAssertEqual(response.kind, .codex)
         XCTAssertTrue(

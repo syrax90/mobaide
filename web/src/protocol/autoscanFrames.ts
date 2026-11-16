@@ -24,7 +24,7 @@
 import { parseWireJson, stringifyWire, toWireSeq } from './wireJson';
 
 export interface AutoScanEvent {
-  projectName: string;
+  workspaceName: string;
   seq: bigint;
   ts: string;
   /** Open string: `phase` | `issue` | `worktree` | `session` | `log` | anything newer. */
@@ -42,21 +42,21 @@ export type AutoScanFrame =
   | { kind: 'caughtUp' }
   | { kind: 'event'; event: AutoScanEvent };
 
-/** Per-project high-water mark of the sequence numbers already delivered. */
+/** Per-workspace high-water mark of the sequence numbers already delivered. */
 export class AutoScanCursor {
   private readonly marks = new Map<string, bigint>();
 
   constructor(initial: Readonly<Record<string, bigint>> = {}) {
-    for (const [project, seq] of Object.entries(initial)) {
-      this.marks.set(project, seq);
+    for (const [workspace, seq] of Object.entries(initial)) {
+      this.marks.set(workspace, seq);
     }
   }
 
   /** Accept and record `seq`, or reject it as already-delivered. */
-  admit(projectName: string, seq: bigint): boolean {
-    const last = this.marks.get(projectName) ?? 0n;
+  admit(workspaceName: string, seq: bigint): boolean {
+    const last = this.marks.get(workspaceName) ?? 0n;
     if (seq <= last) return false;
-    this.marks.set(projectName, seq);
+    this.marks.set(workspaceName, seq);
     return true;
   }
 
@@ -93,14 +93,14 @@ function asString(value: unknown): string {
 }
 
 function parseEvent(
-  projectName: string,
+  workspaceName: string,
   raw: Record<string, unknown>,
   cursor: AutoScanCursor,
 ): AutoScanEvent | null {
   const seq = toWireSeq(raw.seq);
-  if (!cursor.admit(projectName, seq)) return null;
+  if (!cursor.admit(workspaceName, seq)) return null;
   return {
-    projectName,
+    workspaceName,
     seq,
     ts: asString(raw.ts),
     type: asString(raw.type),
@@ -138,24 +138,24 @@ export function decodeAutoScanFrame(
       const scans = Array.isArray(data.scans) ? (data.scans as unknown[]) : [];
       const rawEvents = asRecord(data.events) ?? {};
       const entries: [string, AutoScanEvent[]][] = [];
-      for (const [projectName, list] of Object.entries(rawEvents)) {
+      for (const [workspaceName, list] of Object.entries(rawEvents)) {
         if (!Array.isArray(list)) continue;
         const parsedEvents: AutoScanEvent[] = [];
         for (const item of list as unknown[]) {
           const record = asRecord(item);
           if (record === null) continue;
-          const event = parseEvent(projectName, record, cursor);
+          const event = parseEvent(workspaceName, record, cursor);
           if (event !== null) parsedEvents.push(event);
         }
-        // A project whose buffered events all deduped away is omitted rather
+        // A workspace whose buffered events all deduped away is omitted rather
         // than reported as empty, so consumers cannot mistake replay for a
         // genuine "no activity" snapshot.
-        if (parsedEvents.length > 0) entries.push([projectName, parsedEvents]);
+        if (parsedEvents.length > 0) entries.push([workspaceName, parsedEvents]);
       }
-      // `Object.fromEntries`, not `events[projectName] = …`: project names come
+      // `Object.fromEntries`, not `events[workspaceName] = …`: workspace names come
       // off the wire, and `JSON.parse` yields `__proto__` as an *own* key, so a
       // member assignment would invoke `Object.prototype`'s `__proto__` setter
-      // — re-parenting the accumulator and dropping that project's events after
+      // — re-parenting the accumulator and dropping that workspace's events after
       // the cursor had already advanced past them, which a resume can never
       // recover. `fromEntries` uses CreateDataProperty and cannot reach a setter.
       return { kind: 'snapshot', scans, events: Object.fromEntries(entries) };

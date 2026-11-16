@@ -43,7 +43,7 @@ class CodexOptionsModelTest {
         val encoded = encodeJson.encodeToString(
             CreateSessionRequest.serializer(),
             CreateSessionRequest(
-                project_name = "alpha",
+                workspace_name = "alpha",
                 cli = "codex",
                 codex_options = CodexOptionsModel(sandbox = "read-only"),
             ),

@@ -7,7 +7,7 @@ import {
 } from '../../../protocol/dto/agentVersion';
 import type { WorktreeBases } from '../../../api/gitRepository';
 import { customSessionTypeId } from '../../../protocol/wireSchema';
-import type { ProjectSummary } from '../../../api/projectRepository';
+import type { WorkspaceSummary } from '../../../api/workspaceRepository';
 import type { CustomAgentType } from '../../../api/customAgentTypeRepository';
 import { AntigravityOptionsPanel } from './panels/AntigravityOptionsPanel';
 import { AutoScanOptionsPanel } from './panels/AutoScanOptionsPanel';
@@ -25,7 +25,7 @@ import { effectiveWorktreeBase } from './worktreeBase';
 import {
   addDirsError,
   isCustomMode,
-  type ProjectSelection,
+  type WorkspaceSelection,
   type WizardAction,
   type WizardMode,
   type WizardState,
@@ -42,8 +42,8 @@ interface ConfigStepProps {
   mode: WizardMode;
   state: WizardState;
   /** From the URL, not the reducer — the reducer's copy does not survive a remount. */
-  selection: ProjectSelection;
-  project: ProjectSummary | null;
+  selection: WorkspaceSelection;
+  workspace: WorkspaceSummary | null;
   capabilities: AgentVersionInfo | undefined;
   customTypes: readonly CustomAgentType[];
   /** Absent until the wizard has a list query to show (tests, older callers). */
@@ -112,7 +112,7 @@ export function ConfigStep({
   mode,
   state,
   selection,
-  project,
+  workspace,
   capabilities,
   customTypes,
   worktreeBases,
@@ -128,23 +128,23 @@ export function ConfigStep({
   const chat = chatSupport(capabilities, chatKind ?? 'claude');
   const usesChat = chatKind !== null && usesChatView(terminalUiOf(state, chatKind), chat);
   const canResume = usesChat && chat.kind === 'available' && chat.resume;
-  // A worktree needs a stored git project; a one-off path has no repo to branch.
+  // A worktree needs a stored git workspace; a one-off path has no repo to branch.
   const showsGitOptions =
-    selection.kind === 'stored' && project?.is_git === true && mode !== 'auto_scan';
+    selection.kind === 'stored' && workspace?.is_git === true && mode !== 'auto_scan';
 
   // Behind the capability: an older agent ignores `base_branch` and has no list route.
   const baseBranch =
-    showsGitOptions && project !== null && gitCapability(capabilities, 'worktree_base')
+    showsGitOptions && workspace !== null && gitCapability(capabilities, 'worktree_base')
       ? {
           status: worktreeBases?.status ?? 'loading',
           bases: worktreeBases?.bases,
           value: effectiveWorktreeBase(
             state.worktreeBasePick,
-            project.name,
+            workspace.name,
             worktreeBases?.status === 'ready' ? worktreeBases.bases : undefined,
           ),
           onChange: (ref: string | null) => {
-            dispatch({ type: 'setWorktreeBase', pick: { projectName: project.name, ref } });
+            dispatch({ type: 'setWorktreeBase', pick: { workspaceName: workspace.name, ref } });
           },
           onRetry: () => {
             worktreeBases?.retry();

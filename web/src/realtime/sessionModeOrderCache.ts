@@ -2,7 +2,7 @@
  * The account's mode-picker order, written straight into the query cache.
  *
  * `session_mode_order.updated` carries the whole order, so it is written (the
- * `projectsCache.ts` rule) rather than invalidated. The PUT response carries
+ * `workspacesCache.ts` rule) rather than invalidated. The PUT response carries
  * the same body. Both go through `writeSessionModeOrder`, which keeps the
  * newer of the cached and the incoming value by `version`: a push and the
  * response to the same save can land in either order.

@@ -1,5 +1,5 @@
 """Per-user worktrees folder: the ``MOBAIDE_WORKTREES_DIR`` setting, the
-per-project folder under it, and reuse of worktrees in the legacy in-project
+per-workspace folder under it, and reuse of worktrees in the legacy in-workspace
 folder."""
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import pytest
 
 from mobaide.linear.config import AutoScanConfig
 from mobaide.linear.worktree import (
-    PROJECT_OWNER_FILE,
+    WORKSPACE_OWNER_FILE,
     WorktreeCreationError,
     WorktreeManager,
     _claim,
@@ -136,25 +136,25 @@ class TestSafeDirName:
         assert _safe_dir_name(name) == expected
 
 
-class TestProjectWorktreesDir:
-    def test_named_after_project_and_claimed(self, tmp_path):
+class TestWorkspaceWorktreesDir:
+    def test_named_after_workspace_and_claimed(self, tmp_path):
         root = tmp_path / "repos" / "app"
         root.mkdir(parents=True)
         wt = str(tmp_path / "wt")
 
-        folder = _manager(wt).project_worktrees_dir(str(root))
+        folder = _manager(wt).workspace_worktrees_dir(str(root))
 
         assert folder == os.path.join(wt, "app")
-        with open(os.path.join(folder, PROJECT_OWNER_FILE), encoding="utf-8") as fh:
+        with open(os.path.join(folder, WORKSPACE_OWNER_FILE), encoding="utf-8") as fh:
             assert fh.read().strip() == _owner(str(root))
 
-    def test_same_project_gets_the_same_folder(self, tmp_path):
+    def test_same_workspace_gets_the_same_folder(self, tmp_path):
         root = tmp_path / "app"
         root.mkdir()
         wt = str(tmp_path / "wt")
 
-        first = _manager(wt).project_worktrees_dir(str(root))
-        second = _manager(wt).project_worktrees_dir(str(root))
+        first = _manager(wt).workspace_worktrees_dir(str(root))
+        second = _manager(wt).workspace_worktrees_dir(str(root))
 
         assert first == second
 
@@ -166,14 +166,14 @@ class TestProjectWorktreesDir:
         wt = str(tmp_path / "wt")
         mgr = _manager(wt)
 
-        folder_a = mgr.project_worktrees_dir(str(a))
-        folder_b = mgr.project_worktrees_dir(str(b))
+        folder_a = mgr.workspace_worktrees_dir(str(a))
+        folder_b = mgr.workspace_worktrees_dir(str(b))
 
         digest = hashlib.sha256(_owner(str(b)).encode("utf-8")).hexdigest()[:8]
         assert folder_a == os.path.join(wt, "app")
         assert folder_b == os.path.join(wt, f"app-{digest}")
-        assert mgr.project_worktrees_dir(str(b)) == folder_b
-        assert mgr.project_worktrees_dir(str(a)) == folder_a
+        assert mgr.workspace_worktrees_dir(str(b)) == folder_b
+        assert mgr.workspace_worktrees_dir(str(a)) == folder_a
 
     def test_unowned_non_empty_folder_is_not_claimed(self, tmp_path):
         root = tmp_path / "app"
@@ -182,10 +182,21 @@ class TestProjectWorktreesDir:
         (wt / "app").mkdir(parents=True)
         (wt / "app" / "stray.txt").write_text("x")
 
-        folder = _manager(str(wt)).project_worktrees_dir(str(root))
+        folder = _manager(str(wt)).workspace_worktrees_dir(str(root))
 
         assert folder != str(wt / "app")
-        assert not (wt / "app" / PROJECT_OWNER_FILE).exists()
+        assert not (wt / "app" / WORKSPACE_OWNER_FILE).exists()
+
+    def test_folder_from_older_agent_is_reused(self, tmp_path):
+        root = tmp_path / "app"
+        root.mkdir()
+        wt = tmp_path / "wt"
+        (wt / "app" / "slug").mkdir(parents=True)
+        (wt / "app" / ".mobaide-project").write_text(_owner(str(root)) + "\n")
+
+        folder = _manager(str(wt)).workspace_worktrees_dir(str(root))
+
+        assert folder == str(wt / "app")
 
     def test_empty_unowned_folder_is_claimed(self, tmp_path):
         root = tmp_path / "app"
@@ -193,7 +204,7 @@ class TestProjectWorktreesDir:
         wt = tmp_path / "wt"
         (wt / "app").mkdir(parents=True)
 
-        folder = _manager(str(wt)).project_worktrees_dir(str(root))
+        folder = _manager(str(wt)).workspace_worktrees_dir(str(root))
 
         assert folder == str(wt / "app")
 
@@ -212,10 +223,10 @@ class TestProjectWorktreesDir:
         assert _claim(folder, "first-owner") is True
         assert _claim(folder, "second-owner") is False
 
-        marker = wt / "app" / PROJECT_OWNER_FILE
+        marker = wt / "app" / WORKSPACE_OWNER_FILE
         assert marker.read_text().strip() == "first-owner"
         assert sorted(p.name for p in wt.iterdir()) == ["app"]
-        assert sorted(p.name for p in (wt / "app").iterdir()) == [PROJECT_OWNER_FILE]
+        assert sorted(p.name for p in (wt / "app").iterdir()) == [WORKSPACE_OWNER_FILE]
 
     @posix_only
     def test_symlinked_root_shares_the_folder(self, tmp_path):
@@ -226,7 +237,7 @@ class TestProjectWorktreesDir:
         wt = str(tmp_path / "wt")
         mgr = _manager(wt)
 
-        assert mgr.project_worktrees_dir(str(link)) == mgr.project_worktrees_dir(str(root))
+        assert mgr.workspace_worktrees_dir(str(link)) == mgr.workspace_worktrees_dir(str(root))
 
 
 @requires_git
@@ -249,7 +260,7 @@ class TestCreateWorktreeLocation:
         )
         assert head.stdout.strip() == "topic"
 
-    async def test_legacy_in_project_worktree_is_reused(self, repo, tmp_path):
+    async def test_legacy_in_workspace_worktree_is_reused(self, repo, tmp_path):
         legacy_path = os.path.join(repo, "mobaide_worktree", "topic")
         subprocess.run(
             ["git", "worktree", "add", "-q", "-b", "topic", legacy_path],
@@ -289,7 +300,7 @@ class TestCreateWorktreeLocation:
                 "x", repo, branch_name="-x",
             )
 
-    async def test_slug_equal_to_project_folder_does_not_reuse_container(
+    async def test_slug_equal_to_workspace_folder_does_not_reuse_container(
         self, tmp_path,
     ):
         wts = str(tmp_path / "wts")

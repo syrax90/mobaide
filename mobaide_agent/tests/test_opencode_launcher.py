@@ -15,7 +15,7 @@ from mobaide.core.opencode_launcher import (
     OpenCodeLauncher,
     OpenCodeOptions,
 )
-from mobaide.core.projects_config import ProjectConfig
+from mobaide.core.workspaces_config import WorkspaceConfig
 from tests.conftest import skip_if_not_linux
 
 # Captured before the autouse ``_pin_opencode_binary`` fixture swaps it, so
@@ -23,8 +23,8 @@ from tests.conftest import skip_if_not_linux
 _REAL_OPENCODE_RESOLVER = opencode_launcher._resolve_opencode_binary
 
 
-def _make_project(path: str) -> ProjectConfig:
-    return ProjectConfig(name="test", path=path)
+def _make_workspace(path: str) -> WorkspaceConfig:
+    return WorkspaceConfig(name="test", path=path)
 
 
 def _missing_binary(*_a, **_kw):
@@ -39,7 +39,7 @@ async def test_argv_default_is_bare_opencode(tmp_path: Path):
     """Default options launch a bare ``opencode``: no ``--auto`` (OpenCode asks
     before it acts) and no ``--prompt``."""
     spec = await OpenCodeLauncher().build(
-        _make_project(str(tmp_path)), OpenCodeOptions(),
+        _make_workspace(str(tmp_path)), OpenCodeOptions(),
     )
     assert spec.argv == ["opencode"]
 
@@ -47,7 +47,7 @@ async def test_argv_default_is_bare_opencode(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_argv_auto_approve_adds_the_auto_flag(tmp_path: Path):
     spec = await OpenCodeLauncher().build(
-        _make_project(str(tmp_path)), OpenCodeOptions(auto_approve=True),
+        _make_workspace(str(tmp_path)), OpenCodeOptions(auto_approve=True),
     )
     assert spec.argv == ["opencode", "--auto"]
 
@@ -65,7 +65,7 @@ async def test_argv_prompt_is_one_element_that_can_never_read_as_a_flag(
     ``--prompt=<text>`` element, so a prompt that is (or starts with) a flag
     cannot turn on ``--auto`` for a session the user created without it."""
     spec = await OpenCodeLauncher().build(
-        _make_project(str(tmp_path)), OpenCodeOptions(initial_prompt=prompt),
+        _make_workspace(str(tmp_path)), OpenCodeOptions(initial_prompt=prompt),
     )
     assert spec.argv == ["opencode", f"--prompt={prompt}"]
 
@@ -76,7 +76,7 @@ async def test_argv_no_prompt_adds_no_prompt_flag(tmp_path: Path, prompt):
     """An empty first message must not reach OpenCode as ``--prompt=``, which
     would send an empty turn."""
     spec = await OpenCodeLauncher().build(
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         OpenCodeOptions(auto_approve=True, initial_prompt=prompt),
     )
     assert spec.argv == ["opencode", "--auto"]
@@ -87,7 +87,7 @@ async def test_argv_connect_runs_the_provider_sign_in_and_nothing_else(tmp_path:
     """A sign-in is not an agent session: neither ``--auto`` nor the first
     message may reach ``opencode auth login``."""
     spec = await OpenCodeLauncher().build(
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         OpenCodeOptions(connect=True, auto_approve=True, initial_prompt="fix the bug"),
     )
     assert spec.argv == ["opencode", "auth", "login"]
@@ -108,14 +108,14 @@ def test_options_cap_the_prompt_length():
 @pytest.mark.asyncio
 async def test_env_adds_no_claude_specific_vars(tmp_path: Path, monkeypatch):
     """OpenCode copies the inherited env but ADDS none of Claude's hook
-    plumbing and — even for a project carrying a Linear key — no injected
+    plumbing and — even for a workspace carrying a Linear key — no injected
     ``LINEAR_API_KEY``."""
     for key in (
         "ENABLE_PROMPT_CACHING_1H", "MOBAIDE_SESSION_ID",
         "MOBAIDE_HOOK_URL", "MOBAIDE_HOOK_TOKEN", "LINEAR_API_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
-    proj = ProjectConfig(name="t", path=str(tmp_path), linear_api_key="lin_secret")
+    proj = WorkspaceConfig(name="t", path=str(tmp_path), linear_api_key="lin_secret")
     spec = await OpenCodeLauncher().build(proj, OpenCodeOptions(), session_id="s-1")
     assert "MOBAIDE_SESSION_ID" not in spec.env
     assert "MOBAIDE_HOOK_TOKEN" not in spec.env
@@ -130,7 +130,7 @@ async def test_env_prepends_binary_dir_to_path(tmp_path: Path, monkeypatch):
         lambda *_a, **_k: os.path.join("/opt", "oc", "bin", "opencode"),
     )
     spec = await OpenCodeLauncher().build(
-        _make_project(str(tmp_path)), OpenCodeOptions(),
+        _make_workspace(str(tmp_path)), OpenCodeOptions(),
     )
     assert spec.env["PATH"].split(os.pathsep)[0] == os.path.join("/opt", "oc", "bin")
 
@@ -150,13 +150,13 @@ async def test_terminal_env_turns_the_shared_tab_set_off(
 ):
     """OpenCode's status report covers every tab of a folder, and all TUIs in
     one folder share the tab set: with tabs on, a request waiting in one
-    terminal session alerts in every other session of the project."""
+    terminal session alerts in every other session of the workspace."""
     if own is None:
         monkeypatch.delenv("OPENCODE_CLI_CONFIG_CONTENT", raising=False)
     else:
         monkeypatch.setenv("OPENCODE_CLI_CONFIG_CONTENT", own)
     spec = await OpenCodeLauncher().build(
-        _make_project(str(tmp_path)), OpenCodeOptions(),
+        _make_workspace(str(tmp_path)), OpenCodeOptions(),
     )
     assert json.loads(spec.env["OPENCODE_CLI_CONFIG_CONTENT"]) == expected
 
@@ -165,7 +165,7 @@ async def test_terminal_env_turns_the_shared_tab_set_off(
 async def test_terminal_env_leaves_unreadable_tui_settings_alone(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("OPENCODE_CLI_CONFIG_CONTENT", "{not json")
     spec = await OpenCodeLauncher().build(
-        _make_project(str(tmp_path)), OpenCodeOptions(),
+        _make_workspace(str(tmp_path)), OpenCodeOptions(),
     )
     assert spec.env["OPENCODE_CLI_CONFIG_CONTENT"] == "{not json"
 
@@ -174,11 +174,11 @@ async def test_terminal_env_leaves_unreadable_tui_settings_alone(tmp_path: Path,
 async def test_env_pwd_is_the_session_folder_not_the_agent_s_own(tmp_path: Path, monkeypatch):
     """OpenCode takes its folder from ``PWD`` when it is set, and the agent's
     inherited ``PWD`` is the folder the agent was started in. For a worktree
-    session it must be the worktree, not the project root."""
+    session it must be the worktree, not the workspace root."""
     monkeypatch.setenv("PWD", str(tmp_path / "agent-start-folder"))
     (tmp_path / ".git").mkdir()
     spec = await OpenCodeLauncher(worktree_mgr=_RecordingWorktreeMgr()).build(  # type: ignore[arg-type]
-        _make_project(str(tmp_path)), OpenCodeOptions(worktree=True, branch_name="feature/x"),
+        _make_workspace(str(tmp_path)), OpenCodeOptions(worktree=True, branch_name="feature/x"),
     )
     assert spec.cwd != str(tmp_path)
     assert spec.env["PWD"] == spec.cwd
@@ -206,25 +206,25 @@ class _RecordingWorktreeMgr:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    async def create_worktree(self, slug, project_root, *, branch_name=None, base_branch=None):
+    async def create_worktree(self, slug, workspace_root, *, branch_name=None, base_branch=None):
         from mobaide.linear.worktree import WorktreeResult
 
         self.calls.append(
             {"slug": slug, "branch_name": branch_name, "base_branch": base_branch}
         )
-        wt = Path(project_root) / "wt" / slug
+        wt = Path(workspace_root) / "wt" / slug
         wt.mkdir(parents=True, exist_ok=True)
         return WorktreeResult(path=str(wt), is_new=True, branch=branch_name or slug)
 
 
 @pytest.mark.asyncio
-async def test_cwd_worktree_on_git_project_resolves_to_worktree(tmp_path: Path):
-    """worktree=True on a git project resolves cwd to the created worktree (not
-    the project root) and hands the user's branch and base to the manager."""
+async def test_cwd_worktree_on_git_workspace_resolves_to_worktree(tmp_path: Path):
+    """worktree=True on a git workspace resolves cwd to the created worktree (not
+    the workspace root) and hands the user's branch and base to the manager."""
     (tmp_path / ".git").mkdir()
     mgr = _RecordingWorktreeMgr()
     spec = await OpenCodeLauncher(worktree_mgr=mgr).build(  # type: ignore[arg-type]
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         OpenCodeOptions(worktree=True, branch_name="feature/x", base_branch="origin/main"),
     )
     assert len(mgr.calls) == 1
@@ -241,7 +241,7 @@ async def test_cwd_worktree_blank_branch_uses_opencode_prefix(tmp_path: Path):
     (tmp_path / ".git").mkdir()
     mgr = _RecordingWorktreeMgr()
     await OpenCodeLauncher(worktree_mgr=mgr).build(  # type: ignore[arg-type]
-        _make_project(str(tmp_path)), OpenCodeOptions(worktree=True),
+        _make_workspace(str(tmp_path)), OpenCodeOptions(worktree=True),
     )
     branch = mgr.calls[0]["branch_name"]
     assert isinstance(branch, str)
@@ -250,7 +250,7 @@ async def test_cwd_worktree_blank_branch_uses_opencode_prefix(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_cwd_adhoc_worktree_is_ignored(tmp_path: Path):
-    """Ad-hoc launches have no git/project context, so worktree=True is ignored
+    """Ad-hoc launches have no git/workspace context, so worktree=True is ignored
     and the bare cwd is used."""
     mgr = _RecordingWorktreeMgr()
     spec = await OpenCodeLauncher(worktree_mgr=mgr).build(  # type: ignore[arg-type]
@@ -262,12 +262,12 @@ async def test_cwd_adhoc_worktree_is_ignored(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_cwd_connect_never_creates_a_worktree(tmp_path: Path):
-    """A sign-in changes nothing in the project: a ``worktree`` flag that
+    """A sign-in changes nothing in the workspace: a ``worktree`` flag that
     arrives with ``connect`` must not leave a branch and a folder behind."""
     (tmp_path / ".git").mkdir()
     mgr = _RecordingWorktreeMgr()
     spec = await OpenCodeLauncher(worktree_mgr=mgr).build(  # type: ignore[arg-type]
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         OpenCodeOptions(connect=True, worktree=True, branch_name="feature/x"),
     )
     assert mgr.calls == []
@@ -285,7 +285,7 @@ async def test_build_propagates_binary_not_found(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(opencode_launcher, "_resolve_opencode_binary", _missing_binary)
     with pytest.raises(OpenCodeBinaryNotFoundError) as exc_info:
         await OpenCodeLauncher().build(
-            _make_project(str(tmp_path)), OpenCodeOptions(),
+            _make_workspace(str(tmp_path)), OpenCodeOptions(),
         )
     assert exc_info.value.cli_name == "opencode"
 
@@ -300,7 +300,7 @@ async def test_launcher_forwards_override_to_resolver(tmp_path: Path, monkeypatc
 
     monkeypatch.setattr(opencode_launcher, "_resolve_opencode_binary", _capture)
     await OpenCodeLauncher(opencode_bin_override="/my/opencode").build(
-        _make_project(str(tmp_path)), OpenCodeOptions(),
+        _make_workspace(str(tmp_path)), OpenCodeOptions(),
     )
     assert captured["override"] == "/my/opencode"
 

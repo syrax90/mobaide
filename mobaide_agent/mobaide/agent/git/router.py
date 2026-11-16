@@ -1,14 +1,14 @@
 """HTTP endpoints for the in-app git management screen.
 
 Five endpoints, all nested under ``/api/projects/{name}/git`` and protected
-by the same JWT auth dependency as the projects router:
+by the same JWT auth dependency as the workspaces router:
 
 * ``GET /items`` — list local branches and worktrees as a unified array,
   plus the remote-tracking branches with ``?remote=true``.
 * ``POST /items:delete`` — batch-delete branches and/or worktrees.
 * ``POST /branches`` — create a branch, optionally checking it out.
 * ``POST /checkout`` — check a local or remote-tracking branch out in the
-  project root.
+  workspace root.
 * ``GET /worktree-bases`` — the branches a new session's worktree can start
   from, with the default and the last-used one.
 
@@ -23,7 +23,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from mobaide.core.projects_store import safe_path_exists
+from mobaide.core.workspaces_store import safe_path_exists
 
 from ..auth.dependencies import get_current_user
 from .changes_service import http_error_for
@@ -54,11 +54,11 @@ router = APIRouter(
 
 
 def _store(request: Request):
-    store = getattr(request.app.state, "projects_store", None)
+    store = getattr(request.app.state, "workspaces_store", None)
     if store is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="projects store not configured",
+            detail="workspaces store not configured",
         )
     return store
 
@@ -89,25 +89,25 @@ def _actor(request: Request) -> str | None:
     return getattr(request.state, "username", None)
 
 
-def _resolve_project(request: Request, name: str) -> tuple[str, str]:
-    """Look up ``name`` in the projects store and assert it is git-backed.
+def _resolve_workspace(request: Request, name: str) -> tuple[str, str]:
+    """Look up ``name`` in the workspaces store and assert it is git-backed.
 
-    Returns ``(project_name, project_root)``. Raises 404 / 400 otherwise.
+    Returns ``(workspace_name, workspace_root)``. Raises 404 / 400 otherwise.
     """
     store = _store(request)
-    project = store.get(name)
-    if project is None:
+    workspace = store.get(name)
+    if workspace is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Project '{name}' not found",
+            detail=f"Workspace '{name}' not found",
         )
-    project_root = project.path
-    if not safe_path_exists(Path(project_root) / ".git"):
+    workspace_root = workspace.path
+    if not safe_path_exists(Path(workspace_root) / ".git"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Project '{name}' is not a git repository",
+            detail=f"Workspace '{name}' is not a git repository",
         )
-    return project.name, project_root
+    return workspace.name, workspace_root
 
 
 def _raise_mapped(exc: Exception) -> None:
@@ -132,10 +132,10 @@ async def list_git_items_endpoint(
 ) -> GitItemsResponse:
     """Return the unified list of local branches and worktrees, with the
     remote-tracking branches appended when ``remote`` is set."""
-    _, project_root = _resolve_project(request, name)
+    _, workspace_root = _resolve_workspace(request, name)
     manager = _worktree_manager(request)
     try:
-        items = await list_git_items(project_root, manager, remote=remote)
+        items = await list_git_items(workspace_root, manager, remote=remote)
     except Exception as exc:
         _raise_mapped(exc)
         raise
@@ -157,13 +157,13 @@ async def delete_git_items_endpoint(
     worktree, etc.) are returned in the 200 body so the user can act on
     each row independently.
     """
-    project_name, project_root = _resolve_project(request, name)
+    workspace_name, workspace_root = _resolve_workspace(request, name)
     manager = _worktree_manager(request)
     try:
         return await delete_git_items(
             body,
-            project_name=project_name,
-            project_root=project_root,
+            workspace_name=workspace_name,
+            workspace_root=workspace_root,
             manager=manager,
             session_manager=_session_manager(request),
             autoscan_manager=_autoscan_manager(request),
@@ -181,19 +181,19 @@ async def create_branch_endpoint(
     body: GitBranchCreateRequest,
     request: Request,
 ) -> GitBranchResponse:
-    """Create a branch in the project's repository.
+    """Create a branch in the workspace's repository.
 
     ``400 bad_branch_name`` for a name git would refuse, ``409 exists`` /
     ``unknown_start_point`` for the obvious conflicts; with ``checkout``
     the refusals of ``POST /checkout`` apply as well.
     """
-    project_name, project_root = _resolve_project(request, name)
+    workspace_name, workspace_root = _resolve_workspace(request, name)
     manager = _worktree_manager(request)
     try:
         return await create_branch(
             body,
-            project_name=project_name,
-            project_root=project_root,
+            workspace_name=workspace_name,
+            workspace_root=workspace_root,
             manager=manager,
             session_manager=_session_manager(request),
             autoscan_manager=_autoscan_manager(request),
@@ -214,22 +214,22 @@ async def checkout_endpoint(
     body: GitCheckoutRequest,
     request: Request,
 ) -> GitBranchResponse:
-    """Check ``ref`` out in the project root.
+    """Check ``ref`` out in the workspace root.
 
     Returns 409 with ``{busy_by: [...]}`` while a session or auto-scan work
-    item runs in the project root (a linked worktree's session does not
+    item runs in the workspace root (a linked worktree's session does not
     count) unless ``force`` is set, and a coded 409 — ``dirty``, ``checked_out_elsewhere``,
     ``operation_in_progress``, ``job_running`` — for the states git or the
     agent refuse to switch in; ``404 ref_not_found`` for a ref that is
     neither a local nor a remote-tracking branch.
     """
-    project_name, project_root = _resolve_project(request, name)
+    workspace_name, workspace_root = _resolve_workspace(request, name)
     manager = _worktree_manager(request)
     try:
         return await checkout_ref(
             body,
-            project_name=project_name,
-            project_root=project_root,
+            workspace_name=workspace_name,
+            workspace_root=workspace_root,
             manager=manager,
             session_manager=_session_manager(request),
             autoscan_manager=_autoscan_manager(request),
@@ -250,13 +250,13 @@ async def list_worktree_bases_endpoint(
     request: Request,
 ) -> WorktreeBasesResponse:
     """Return the base branches a new session's worktree can start from."""
-    project_name, project_root = _resolve_project(request, name)
+    workspace_name, workspace_root = _resolve_workspace(request, name)
     manager = _worktree_manager(request)
     try:
         return await list_worktree_bases(
-            project_root,
+            workspace_root,
             manager,
-            last_used=_store(request).get_last_worktree_base(project_name),
+            last_used=_store(request).get_last_worktree_base(workspace_name),
         )
     except Exception as exc:
         _raise_mapped(exc)

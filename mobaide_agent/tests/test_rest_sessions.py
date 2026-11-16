@@ -55,20 +55,20 @@ class TestCreateSession:
         assert "relay" in resp.json()["detail"].lower()
 
 
-class TestCreateSessionProjectPathErrors:
-    async def test_nonexistent_project_path_returns_400_with_clean_detail(
+class TestCreateSessionWorkspacePathErrors:
+    async def test_nonexistent_workspace_path_returns_400_with_clean_detail(
         self, client, auth_headers, tmp_path,
     ):
-        """A project whose path does not exist must fail the session-create
+        """A workspace whose path does not exist must fail the session-create
         request with 400 and a readable, unescaped path in the detail.
 
-        Regression guard for the reconcile-project-path-format issue: the
+        Regression guard for the reconcile-workspace-path-format issue: the
         old code let ``OSError`` propagate to Starlette's default 500, and
         the mobile client rendered the path as ``D:\\\\ML\\\\...`` (four
         backslashes per separator) because ``OSError.__str__`` embeds
         ``repr(filename)`` and the JSON body added another escape layer.
 
-        The project is seeded through ``POST /api/projects`` — the same
+        The workspace is seeded through ``POST /api/projects`` — the same
         ingest boundary a real mobile client uses — so the path is
         normalized to POSIX form before it reaches the launcher.
         """
@@ -89,7 +89,7 @@ class TestCreateSessionProjectPathErrors:
 
         assert resp.status_code == 400
         detail = resp.json()["detail"]
-        assert "Project path not found" in detail
+        assert "Workspace path not found" in detail
         # The path must appear only in POSIX form, never as a ``repr``-
         # escaped string with doubled backslashes. We check the raw
         # response bytes so a future regression that re-introduces
@@ -143,13 +143,13 @@ class TestCreateSessionProjectPathErrors:
         errors, no resolvable start point, broken git binary),
         ``WorktreeCreationError`` must surface as HTTP 400 with the branch
         name and git stderr interpolated directly into ``detail`` — not a
-        500 from Starlette, and not a silent fallback to project root that
+        500 from Starlette, and not a silent fallback to workspace root that
         the user would never see.
 
         This test pins the router's ``except WorktreeCreationError`` branch:
         the failure bubbles from ``SessionManager.create_session`` through
         ``router.create_session`` and lands as a clean readable 400. It is
-        distinct from the ``OSError`` branches (which test project-path
+        distinct from the ``OSError`` branches (which test workspace-path
         existence) and the ``FileNotFoundError`` branches (which test the
         cwd-existence gate) — prior to this test nothing exercised the
         worktree-creation failure edge at the HTTP boundary.
@@ -226,7 +226,7 @@ class TestCreateSessionProjectPathErrors:
         # After JSON parsing, the filename in the detail is the raw string
         # with single backslashes — exactly what the mobile client should
         # render to the user, no extra escape layer.
-        assert detail == r"Project path not found: D:\raw\backslash\dir"
+        assert detail == r"Workspace path not found: D:\raw\backslash\dir"
 
         # And the raw wire payload must NOT contain the 4-backslash
         # sequence that ``str(FileNotFoundError)`` would emit via
@@ -243,9 +243,9 @@ class TestCreateSessionProjectPathErrors:
         self, app, client, auth_headers,
     ):
         """When the Claude CLI is not installed (or not on PATH), the router
-        must distinguish that from a missing project path: it returns 503
+        must distinguish that from a missing workspace path: it returns 503
         Service Unavailable with a detail starting ``Claude CLI not found:``
-        — never the misleading 400 ``Project path not found: claude``."""
+        — never the misleading 400 ``Workspace path not found: claude``."""
         async def _raise_cli_missing(*args, **kwargs):
             raise ClaudeBinaryNotFoundError(
                 searched_paths=[
@@ -753,20 +753,20 @@ class TestCreateSessionCursor:
 
 
 class TestCreateSessionAdHoc:
-    """``POST /api/sessions`` with ``project_name=None`` and a
+    """``POST /api/sessions`` with ``workspace_name=None`` and a
     user-supplied ``cwd``: the new ad-hoc (custom-path) launch path.
 
     The router's :func:`_validate_adhoc_cwd` rejects empty / non-absolute /
     non-existent / non-directory paths with a clean 400 _before_ the
     request reaches ``ClaudeLauncher``. Sessions are still creatable when
     the cwd is a valid absolute directory (both Terminal and Claude
-    modes), and the projects store stays untouched throughout.
+    modes), and the workspaces store stays untouched throughout.
     """
 
     async def test_terminal_mode_with_valid_cwd_returns_201(
         self, client, auth_headers, tmp_path,
     ):
-        """``project_name=None``, ``cwd=<existing dir>``, no
+        """``workspace_name=None``, ``cwd=<existing dir>``, no
         ``claude_options`` → raw Terminal session at the chosen cwd.
         Pre-existing behavior, but worth pinning as a regression guard:
         the new ad-hoc validation must not break this path."""
@@ -842,20 +842,20 @@ class TestCreateSessionAdHoc:
         assert "not a directory" in detail
         assert str(a_file) in detail
 
-    async def test_adhoc_validation_skipped_when_project_name_set(
+    async def test_adhoc_validation_skipped_when_workspace_name_set(
         self, client, auth_headers, tmp_path,
     ):
-        """When ``project_name`` is set the server derives ``cwd`` from
-        the project — any supplied ``body.cwd`` is ignored, so the
+        """When ``workspace_name`` is set the server derives ``cwd`` from
+        the workspace — any supplied ``body.cwd`` is ignored, so the
         ad-hoc validator must NOT run. Concretely: a relative ``cwd``
-        alongside a valid ``project_name`` must NOT trip the
+        alongside a valid ``workspace_name`` must NOT trip the
         "absolute path" 400."""
-        real_project = tmp_path / "prj"
-        real_project.mkdir()
+        real_workspace = tmp_path / "prj"
+        real_workspace.mkdir()
         create = await client.post(
             "/api/projects",
             headers=auth_headers,
-            json={"name": "good-proj", "path": str(real_project)},
+            json={"name": "good-proj", "path": str(real_workspace)},
         )
         assert create.status_code == 201
 
@@ -865,38 +865,38 @@ class TestCreateSessionAdHoc:
             json={
                 "project_name": "good-proj",
                 # Intentionally a relative path. The validator must be
-                # skipped because ``project_name`` is present; the server
-                # derives cwd from the project record instead.
+                # skipped because ``workspace_name`` is present; the server
+                # derives cwd from the workspace record instead.
                 "cwd": "ignored/relative/path",
             },
         )
         assert resp.status_code == 201, (
-            f"adhoc validator must not run when project_name is set; "
+            f"adhoc validator must not run when workspace_name is set; "
             f"got {resp.status_code}: {resp.text}"
         )
 
-    async def test_adhoc_launch_does_not_create_project_in_store(
+    async def test_adhoc_launch_does_not_create_workspace_in_store(
         self, app, client, auth_headers, tmp_path,
     ):
         """Beyond a clean 201, the ad-hoc path must NOT silently create
-        a ``ProjectConfig`` in ``ProjectsStore`` keyed by the custom
+        a ``WorkspaceConfig`` in ``WorkspacesStore`` keyed by the custom
         cwd — the whole point of the ad-hoc path is "run once, don't save"."""
-        before_count = len(app.state.projects_store)
-        before_names = sorted(app.state.projects_store.list_public(), key=lambda p: p["name"])
+        before_count = len(app.state.workspaces_store)
+        before_names = sorted(app.state.workspaces_store.list_public(), key=lambda p: p["name"])
         resp = await client.post(
             "/api/sessions",
             headers=auth_headers,
             json={"cwd": str(tmp_path)},
         )
         assert resp.status_code == 201
-        after_count = len(app.state.projects_store)
-        after_names = sorted(app.state.projects_store.list_public(), key=lambda p: p["name"])
+        after_count = len(app.state.workspaces_store)
+        after_names = sorted(app.state.workspaces_store.list_public(), key=lambda p: p["name"])
         assert after_count == before_count, (
-            "ad-hoc launches must never mutate ProjectsStore — "
+            "ad-hoc launches must never mutate WorkspacesStore — "
             f"len changed from {before_count} to {after_count}"
         )
         assert after_names == before_names, (
-            "ad-hoc launches must never add an entry to ProjectsStore"
+            "ad-hoc launches must never add an entry to WorkspacesStore"
         )
 
 

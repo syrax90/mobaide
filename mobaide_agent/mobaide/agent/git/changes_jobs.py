@@ -293,7 +293,7 @@ class GitJob:
     session_id: str
     op: GitJobOp
     repo: ResolvedRepo
-    project_name: str
+    workspace_name: str
     event_bus: Any | None
     pull_mode: GitPullMode = "ff_only"
     force: bool = False
@@ -378,7 +378,7 @@ class GitJob:
         self._publish("git.job.done")
         _publish_git_changed(
             self.event_bus,
-            self.project_name,
+            self.workspace_name,
             toplevel=self.repo.toplevel,
             common_dir=self.repo.common_dir,
         )
@@ -414,7 +414,7 @@ class GitJobRegistry:
         *,
         cwd: str | None,
         session_id: str,
-        project_name: str | None,
+        workspace_name: str | None,
         event_bus: Any | None,
         pull_mode: GitPullMode = "ff_only",
         force: bool = False,
@@ -430,7 +430,7 @@ class GitJobRegistry:
             session_id=session_id,
             op=op,
             repo=repo,
-            project_name=project_name or "",
+            workspace_name=workspace_name or "",
             event_bus=event_bus,
             pull_mode=pull_mode,
             force=force,

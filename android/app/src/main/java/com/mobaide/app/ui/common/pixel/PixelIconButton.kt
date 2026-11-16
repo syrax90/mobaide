@@ -156,7 +156,7 @@ private fun PixelIconButtonPreviewContent() {
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        PixelIconButton(Icons.Default.Folder, "Projects", onClick = {})
+        PixelIconButton(Icons.Default.Folder, "Workspaces", onClick = {})
         PixelIconButton(Icons.Default.Settings, "Settings", onClick = {})
         PixelIconButton(Icons.Outlined.Keyboard, "Hide keys", onClick = {}, selected = true, compact = true)
         PixelIconButton(Icons.AutoMirrored.Filled.Send, "Send", onClick = {}, compact = true)

@@ -25,35 +25,35 @@ class TestAttentionContent:
             (
                 "awaiting_permission",
                 "Permission needed",
-                "My project is waiting for your approval",
+                "My workspace is waiting for your approval",
             ),
             (
                 "awaiting_os_permission",
                 "Action needed on your Mac",
-                "My project is paused — your Mac is asking to allow file "
+                "My workspace is paused — your Mac is asking to allow file "
                 "access. Approve it on the Mac to continue.",
             ),
             (
                 "turn_finished",
                 "Your move",
-                "My project finished its turn — tap to continue",
+                "My workspace finished its turn — tap to continue",
             ),
             (
                 "turn_failed",
                 "Turn failed",
-                "My project hit an error — tap to see what happened",
+                "My workspace hit an error — tap to see what happened",
             ),
         ],
     )
     def test_reason_strings_match_client_notifiers(
         self, reason, expected_title, expected_body
     ):
-        content = attention_content(reason, "My project", None, None)
+        content = attention_content(reason, "My workspace", None, None)
         assert content == (expected_title, expected_body)
 
     def test_ended_includes_exit_reason_suffix(self):
-        content = attention_content("ended", "My project", None, "exit code 1")
-        assert content == ("Session ended (exit code 1)", "My project")
+        content = attention_content("ended", "My workspace", None, "exit code 1")
+        assert content == ("Session ended (exit code 1)", "My workspace")
 
     @pytest.mark.parametrize("reason", [None, "", "something_new"])
     def test_unknown_or_absent_reason_returns_none(self, reason):

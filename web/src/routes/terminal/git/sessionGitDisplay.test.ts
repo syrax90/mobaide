@@ -959,7 +959,7 @@ describe('rebaseTargets', () => {
     ]);
   });
 
-  it("leaves out the session's own branch by name, not the project root's is_current row", () => {
+  it("leaves out the session's own branch by name, not the workspace root's is_current row", () => {
     // A linked-worktree session on `topic`: the root has `main` checked out.
     const items = [
       gitItem({ branch: 'main', is_current: true }),

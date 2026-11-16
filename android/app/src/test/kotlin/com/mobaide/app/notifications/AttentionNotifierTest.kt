@@ -38,7 +38,7 @@ class AttentionNotifierTest {
     private fun session(
         attention: String?,
         title: String? = null,
-        projectName: String? = null,
+        workspaceName: String? = null,
         exitReason: String? = null,
         kind: SessionKind = SessionKind.Claude,
         kindLabel: String? = null,
@@ -47,7 +47,7 @@ class AttentionNotifierTest {
         state = "running",
         created_at = "2026-04-11T10:00:00Z",
         title = title,
-        project_name = projectName,
+        workspace_name = workspaceName,
         kind = kind,
         kind_label = kindLabel,
         attention = attention,
@@ -72,7 +72,7 @@ class AttentionNotifierTest {
     @Test
     fun awaitingOsPermission_blankLabelsFallBackToDefault() {
         notifier.notify(
-            session(attention = "awaiting_os_permission", title = "  ", projectName = ""),
+            session(attention = "awaiting_os_permission", title = "  ", workspaceName = ""),
         )
 
         val body = lastNotification().extras.getString(Notification.EXTRA_TEXT).orEmpty()
@@ -92,7 +92,7 @@ class AttentionNotifierTest {
     @Test
     fun untitledCursorSession_isNamedAfterItsKind() {
         notifier.notify(
-            session(attention = "turn_failed", title = " ", projectName = "", kind = SessionKind.Cursor),
+            session(attention = "turn_failed", title = " ", workspaceName = "", kind = SessionKind.Cursor),
         )
 
         val body = lastNotification().extras.getString(Notification.EXTRA_TEXT).orEmpty()
@@ -100,9 +100,9 @@ class AttentionNotifierTest {
     }
 
     @Test
-    fun titleAndProject_stillWinOverTheKind() {
+    fun titleAndWorkspace_stillWinOverTheKind() {
         notifier.notify(
-            session(attention = "turn_failed", projectName = "mobaide", kind = SessionKind.Codex),
+            session(attention = "turn_failed", workspaceName = "mobaide", kind = SessionKind.Codex),
         )
 
         val body = lastNotification().extras.getString(Notification.EXTRA_TEXT).orEmpty()

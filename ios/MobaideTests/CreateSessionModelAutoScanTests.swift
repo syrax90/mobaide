@@ -3,15 +3,15 @@ import XCTest
 
 /// Auto Scan half of the create-session wizard: the launch gate, the mode
 /// card's reasons, prompt seeding, the options block that reaches
-/// `/api/autoscan/start`, its own prefs bucket, and the Projects shortcut.
+/// `/api/autoscan/start`, its own prefs bucket, and the Workspaces shortcut.
 @MainActor
 final class CreateSessionModelAutoScanTests: XCTestCase {
     /// `linear` is launchable, `plain` has no Linear key, `seeded` carries its
     /// own Auto Scan prompt.
-    private let projectsJSON = """
+    private let workspacesJSON = """
     [{"name":"linear","path":"/l","has_linear_key":true,"is_git":true},
      {"name":"plain","path":"/p","has_linear_key":false,"is_git":true},
-     {"name":"seeded","path":"/s","has_linear_key":true,"is_git":true,"auto_scan_prompt":"per-project prompt"}]
+     {"name":"seeded","path":"/s","has_linear_key":true,"is_git":true,"auto_scan_prompt":"per-workspace prompt"}]
     """
 
     private func idleWsClient() -> AutoScanWsClient {
@@ -50,7 +50,7 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
     private func makeModel(
         autoScanRepo: AutoScanRepository,
         prefs: PreferencesStore? = nil,
-        autoScanProject: String? = nil
+        autoScanWorkspace: String? = nil
     ) -> CreateSessionModel {
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
         let bus = makeBus(harness)
@@ -69,7 +69,7 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
                 userIdentityStore: harness.userIdentityStore
             ),
             autoScanRepository: autoScanRepo,
-            autoScanProject: autoScanProject
+            autoScanWorkspace: autoScanWorkspace
         )
     }
 
@@ -102,20 +102,20 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
     private func loadedModel(
         autoScanRepo: AutoScanRepository,
         prefs: PreferencesStore? = nil,
-        autoScanProject: String? = nil
+        autoScanWorkspace: String? = nil
     ) async -> CreateSessionModel {
-        StubURLProtocol.enqueue(status: 200, body: projectsJSON)
-        if autoScanProject != nil {
+        StubURLProtocol.enqueue(status: 200, body: workspacesJSON)
+        if autoScanWorkspace != nil {
             StubURLProtocol.enqueue(
                 status: 200,
                 body: listJSON(
-                    scans: autoScanRepo.currentScans.map(\.project_name),
+                    scans: autoScanRepo.currentScans.map(\.workspace_name),
                     prompt: autoScanRepo.autoScanPrompt,
                     maxScans: 5
                 )
             )
         }
-        let model = makeModel(autoScanRepo: autoScanRepo, prefs: prefs, autoScanProject: autoScanProject)
+        let model = makeModel(autoScanRepo: autoScanRepo, prefs: prefs, autoScanWorkspace: autoScanWorkspace)
         await model.load()
         return model
     }
@@ -129,21 +129,21 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
 
     // MARK: - Launch gate
 
-    func testAutoScanGateNeedsALinearKeyedStoredProject() async {
+    func testAutoScanGateNeedsALinearKeyedStoredWorkspace() async {
         StubURLProtocol.reset()
         let model = await loadedModel(autoScanRepo: makeAutoScanRepo())
 
         XCTAssertFalse(model.autoScanEnabled, "nothing is selected yet")
 
-        model.selectStoredProject("plain")
+        model.selectStoredWorkspace("plain")
         XCTAssertFalse(model.autoScanEnabled)
         XCTAssertFalse(model.isEnabled(.autoScan))
-        XCTAssertEqual(model.reason(for: .autoScan), "Auto Scan needs a Linear API key for this project.")
+        XCTAssertEqual(model.reason(for: .autoScan), "Auto Scan needs a Linear API key for this workspace.")
 
         model.setCustomPath("/abs/path")
-        XCTAssertFalse(model.autoScanEnabled, "a custom path has no stored project to carry a Linear key")
+        XCTAssertFalse(model.autoScanEnabled, "a custom path has no stored workspace to carry a Linear key")
 
-        model.selectStoredProject("linear")
+        model.selectStoredWorkspace("linear")
         XCTAssertTrue(model.autoScanEnabled)
         XCTAssertTrue(model.isEnabled(.autoScan))
         XCTAssertEqual(model.reason(for: .autoScan), "Scan Linear for matching issues and launch sessions.")
@@ -152,7 +152,7 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
     func testAutoScanGateReportsAMissingClaudeCliAheadOfTheLinearKey() async {
         StubURLProtocol.reset()
         let model = await loadedModel(autoScanRepo: makeAutoScanRepo())
-        model.selectStoredProject("plain")
+        model.selectStoredWorkspace("plain")
         StubURLProtocol.enqueue(status: 200, body: versionJSON(claudeAvailable: false))
 
         await model.refreshCliAvailability()
@@ -171,7 +171,7 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         let repo = makeAutoScanRepo()
         await seedList(repo, scans: ["plain"])
         let model = await loadedModel(autoScanRepo: repo)
-        model.selectStoredProject("plain")
+        model.selectStoredWorkspace("plain")
         StubURLProtocol.enqueue(status: 200, body: versionJSON(claudeAvailable: false))
         await model.refreshCliAvailability()
 
@@ -184,7 +184,7 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         StubURLProtocol.reset()
         let repo = makeAutoScanRepo()
         let model = await loadedModel(autoScanRepo: repo)
-        model.selectStoredProject("linear")
+        model.selectStoredWorkspace("linear")
         XCTAssertNil(model.runningScan)
 
         StubURLProtocol.enqueue(status: 200, body: listJSON(scans: ["linear"], prompt: nil, maxScans: 5))
@@ -192,7 +192,7 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         defer { observe.cancel() }
 
         await waitUntil { model.runningScan != nil }
-        XCTAssertEqual(model.runningScan?.project_name, "linear")
+        XCTAssertEqual(model.runningScan?.workspace_name, "linear")
     }
 
     // MARK: - Mode selection and prompt seeding
@@ -202,8 +202,8 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         let repo = makeAutoScanRepo()
         await seedList(repo, scans: ["linear"])
         let model = await loadedModel(autoScanRepo: repo)
-        model.selectStoredProject("linear")
-        model.continueFromProject()
+        model.selectStoredWorkspace("linear")
+        model.continueFromWorkspace()
         let nav = StreamCollector(model.autoScanNavEvents())
 
         model.selectMode(.autoScan)
@@ -214,28 +214,28 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         XCTAssertNil(model.mode)
     }
 
-    func testAutoScanPromptPrefersTheProjectPromptThenTheAgentDefault() async {
+    func testAutoScanPromptPrefersTheWorkspacePromptThenTheAgentDefault() async {
         StubURLProtocol.reset()
         let repo = makeAutoScanRepo()
         await seedList(repo, prompt: "agent-wide prompt")
         let model = await loadedModel(autoScanRepo: repo)
 
-        model.selectStoredProject("seeded")
+        model.selectStoredWorkspace("seeded")
         model.selectMode(.autoScan)
         XCTAssertEqual(model.step, .config)
-        XCTAssertEqual(model.autoScanInitialPrompt, "per-project prompt")
+        XCTAssertEqual(model.autoScanInitialPrompt, "per-workspace prompt")
 
         model.back()
-        model.selectStoredProject("linear")
+        model.selectStoredWorkspace("linear")
         model.selectMode(.autoScan)
         XCTAssertEqual(
             model.autoScanInitialPrompt, "agent-wide prompt",
-            "a project without its own prompt re-seeds from the agent-wide default"
+            "a workspace without its own prompt re-seeds from the agent-wide default"
         )
     }
 
     /// The agent-wide default rides in on `observeScans()`'s refresh, which
-    /// races the user. Reaching the step first must not latch the project as
+    /// races the user. Reaching the step first must not latch the workspace as
     /// seeded with an empty prompt: nothing would re-seed it, and the wizard
     /// would hide the prompt the scan actually runs with for its whole life.
     func testAutoScanPromptPicksUpAnAgentDefaultThatLandsAfterTheStep() async {
@@ -243,11 +243,11 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         let repo = makeAutoScanRepo()
         XCTAssertNil(repo.autoScanPrompt, "a cold repository is the whole point — do not seed this one")
         let model = await loadedModel(autoScanRepo: repo)
-        model.selectStoredProject("linear")
+        model.selectStoredWorkspace("linear")
 
         model.selectMode(.autoScan)
         XCTAssertEqual(model.step, .config)
-        XCTAssertEqual(model.autoScanInitialPrompt, "", "no project prompt, and the agent default has not arrived")
+        XCTAssertEqual(model.autoScanInitialPrompt, "", "no workspace prompt, and the agent default has not arrived")
 
         StubURLProtocol.enqueue(status: 200, body: listJSON(scans: [], prompt: "agent-wide prompt", maxScans: 5))
         let observe = Task { await model.observeScans() }
@@ -263,7 +263,7 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
     func testALateAgentDefaultLeavesAnInFlightPromptEditAlone() async {
         StubURLProtocol.reset()
         let model = await loadedModel(autoScanRepo: makeAutoScanRepo())
-        model.selectStoredProject("linear")
+        model.selectStoredWorkspace("linear")
         model.selectMode(.autoScan)
         model.autoScanInitialPrompt = "hand-written"
 
@@ -352,7 +352,7 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         StubURLProtocol.reset()
         let prefs = isolatedPrefs()
         let model = await loadedModel(autoScanRepo: makeAutoScanRepo(), prefs: prefs)
-        model.selectStoredProject("linear")
+        model.selectStoredWorkspace("linear")
         model.autoScanClaudeDebug = true
         StubURLProtocol.enqueue(status: 200, body: "{}")
 
@@ -376,7 +376,7 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         let prefs = isolatedPrefs()
         prefs.setLastUsedClaudeOptions(ClaudeLaunchPrefs(model: "sonnet", effort: "low"))
         let model = await loadedModel(autoScanRepo: makeAutoScanRepo(), prefs: prefs)
-        model.selectStoredProject("linear")
+        model.selectStoredWorkspace("linear")
         model.autoScanClaudeModel = "opus"
         model.autoScanPlanMode = true
         let nav = StreamCollector(model.autoScanNavEvents())
@@ -400,7 +400,7 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         XCTAssertEqual(body["claude_options"]?["skip_permissions"]?.boolValue, true)
         XCTAssertEqual(body["claude_options"]?["model"]?.stringValue, "opus")
 
-        XCTAssertEqual(prefs.getLastUsedProjectName(), "linear")
+        XCTAssertEqual(prefs.getLastUsedWorkspaceName(), "linear")
         let savedAutoScan = prefs.getLastUsedAutoScanOptions()
         XCTAssertEqual(savedAutoScan?.model, "opus")
         XCTAssertEqual(savedAutoScan?.planMode, true)
@@ -413,7 +413,7 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
     func testStartAutoScanConflictOpensTheMonitorRatherThanErroring() async throws {
         StubURLProtocol.reset()
         let model = await loadedModel(autoScanRepo: makeAutoScanRepo())
-        model.selectStoredProject("linear")
+        model.selectStoredWorkspace("linear")
         let nav = StreamCollector(model.autoScanNavEvents())
         StubURLProtocol.enqueue(status: 409, body: "{}")
 
@@ -448,32 +448,32 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         XCTAssertEqual(model.claudeEffort, "low")
     }
 
-    // MARK: - Projects-screen shortcut
+    // MARK: - Workspaces-screen shortcut
 
-    func testProjectsShortcutPresetOpensTheAutoScanConfigStep() async {
+    func testWorkspacesShortcutPresetOpensTheAutoScanConfigStep() async {
         StubURLProtocol.reset()
         let repo = makeAutoScanRepo()
         await seedList(repo, prompt: "agent-wide prompt")
-        let model = await loadedModel(autoScanRepo: repo, autoScanProject: "seeded")
+        let model = await loadedModel(autoScanRepo: repo, autoScanWorkspace: "seeded")
 
         XCTAssertEqual(model.selection, .stored("seeded"))
         XCTAssertEqual(model.mode, .autoScan)
         XCTAssertEqual(model.step, .config)
-        XCTAssertEqual(model.autoScanInitialPrompt, "per-project prompt")
+        XCTAssertEqual(model.autoScanInitialPrompt, "per-workspace prompt")
     }
 
     /// The preset applies exactly once, off `runningScan`, so a repository
     /// nobody warmed — no `refresh()`, no bus frame, empty at `init` — has to be
     /// filled inside `load()`. Otherwise the shortcut drops an already-scanning
-    /// project into the config step, whose only exit is a start that 409s — and
+    /// workspace into the config step, whose only exit is a start that 409s — and
     /// not even that when the Claude CLI is missing and Start is disabled.
-    func testProjectsShortcutPresetResolvesARunningScanFromAColdRepository() async throws {
+    func testWorkspacesShortcutPresetResolvesARunningScanFromAColdRepository() async throws {
         StubURLProtocol.reset()
         let repo = makeAutoScanRepo()
         XCTAssertTrue(repo.currentScans.isEmpty, "cold cache is the whole point — do not seed this repository")
-        StubURLProtocol.enqueue(status: 200, body: projectsJSON)
+        StubURLProtocol.enqueue(status: 200, body: workspacesJSON)
         StubURLProtocol.enqueue(status: 200, body: listJSON(scans: ["linear"], prompt: nil, maxScans: 5))
-        let model = makeModel(autoScanRepo: repo, autoScanProject: "linear")
+        let model = makeModel(autoScanRepo: repo, autoScanWorkspace: "linear")
 
         await model.load()
 

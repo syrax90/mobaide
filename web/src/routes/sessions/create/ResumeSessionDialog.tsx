@@ -15,7 +15,7 @@ interface ResumeSessionDialogProps {
   kind: ChatAgentKind;
   /** Sessions stay in sync with the agent's own apps on the PC (`capabilities.chat.<kind>.live`). */
   live: boolean;
-  /** The selected project's or typed folder's path; `null` offers only All folders. */
+  /** The selected workspace's or typed folder's path; `null` offers only All folders. */
   folder: string | null;
   /** The stored session being opened right now. */
   opening: string | null;

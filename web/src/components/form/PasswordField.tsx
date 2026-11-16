@@ -10,7 +10,7 @@ interface BasePasswordFieldProps {
   disabled?: boolean;
   /**
    * What the reveal button calls the secret. Defaults to "password"; the
-   * project form passes "key", which is what both mobile clients' content
+   * workspace form passes "key", which is what both mobile clients' content
    * descriptions say for the same field.
    */
   secretNoun?: string;

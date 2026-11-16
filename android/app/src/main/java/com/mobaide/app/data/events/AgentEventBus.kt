@@ -159,11 +159,11 @@ class AgentEventBus @Inject constructor(
                 "session.attention" -> AgentEvent.SessionAttention(
                     json.decodeFromJsonElement(SessionUpdatedPayload.serializer(), payload).session
                 )
-                "projects.changed" -> AgentEvent.ProjectsChanged(
-                    json.decodeFromJsonElement(ProjectsChangedPayload.serializer(), payload).projects
+                "projects.changed" -> AgentEvent.WorkspacesChanged(
+                    json.decodeFromJsonElement(WorkspacesChangedPayload.serializer(), payload).workspaces
                 )
                 "git.changed" -> AgentEvent.GitChanged(
-                    projectName = payload["project_name"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    workspaceName = payload["project_name"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                     toplevel = payload["toplevel"]?.jsonPrimitive?.contentOrNull,
                     commonDir = payload["common_dir"]?.jsonPrimitive?.contentOrNull,
                 )
@@ -183,7 +183,7 @@ class AgentEventBus @Inject constructor(
                     json.decodeFromJsonElement(AutoScanListResponse.serializer(), payload)
                 )
                 "autoscan.event" -> {
-                    val projectName = payload["project_name"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    val workspaceName = payload["project_name"]?.jsonPrimitive?.contentOrNull.orEmpty()
                     val evt = payload["event"] as? JsonObject
                     if (evt == null) null else {
                         val seq = evt["seq"]?.jsonPrimitive?.long ?: 0L
@@ -191,7 +191,7 @@ class AgentEventBus @Inject constructor(
                         val type = evt["type"]?.jsonPrimitive?.contentOrNull.orEmpty()
                         val pl = evt["payload"] as? JsonObject ?: JsonObject(emptyMap())
                         AgentEvent.AutoScanEvent(
-                            projectName = projectName,
+                            workspaceName = workspaceName,
                             seq = seq,
                             ts = ts,
                             payload = ScanPayloadParser.parse(type, pl),

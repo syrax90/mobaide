@@ -4,7 +4,7 @@
  * iOS gates its fixture suite in both directions: every fixture file must map to
  * a registered type, and every registered type must have a fixture
  * (`MobaideTests/Fixtures/DTOFixtureTests.swift`). The web client cannot claim
- * all 80 DTOs at WEB-04 — most of them describe surfaces (git, projects,
+ * all 80 DTOs at WEB-04 — most of them describe surfaces (git, workspaces,
  * auto-scan, session create) that later milestones build — so the gate is
  * expressed as an explicit split instead of a silent subset.
  *
@@ -38,9 +38,9 @@ const OWNER = {
    * below. `agent.status_changed`, the one pairing-adjacent WebSocket payload,
    * already has its Zod mirror in `dto/userEvents.ts`.
    *
-   * WEB-09 moved the project-write, project-order, git and template-write DTOs
+   * WEB-09 moved the workspace-write, workspace-order, git and template-write DTOs
    * here on the same test. They are request and response bodies only: the shapes
-   * that also travel over a socket (`ProjectInfo`) or that no schema documents
+   * that also travel over a socket (`WorkspaceInfo`) or that no schema documents
    * at all (the `busy_by` 409) are the ones that got Zod mirrors instead.
    *
    * WEB-10 moved the Auto Scan request bodies and the Linear filter-picker
@@ -50,7 +50,7 @@ const OWNER = {
    * `GitPullRequest` / `GitPushRequest` follow them here; `GitJobResponse`
    * rides `git.job.progress` / `git.job.done` and keeps its mirror. #677's
    * `GitBranchCreateRequest` / `GitCheckoutRequest` / `GitBranchResponse` are
-   * plain REST bodies of the project Git screen and follow the same call, as
+   * plain REST bodies of the workspace Git screen and follow the same call, as
    * do #678's `GitRebaseRequest` / `GitRebaseResponse` from the Changes panel
    * and the conflict resolver's `GitConflictResponse` and its three
    * `GitConflict*Request` bodies. `FsDirsResponse`, the folder listing behind

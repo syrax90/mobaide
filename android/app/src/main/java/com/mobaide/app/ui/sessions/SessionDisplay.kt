@@ -43,12 +43,12 @@ fun sessionHeaderLabel(
 
 /**
  * A card's headline: the live title, otherwise
- * `kind · project` — with several sessions of one kind open, the bare kind
- * identifies nothing — falling back to a truncated id for a project-less one.
+ * `kind · workspace` — with several sessions of one kind open, the bare kind
+ * identifies nothing — falling back to a truncated id for a workspace-less one.
  */
 fun sessionTitle(session: SessionResponse, kindLabel: String): String =
     session.title?.takeIf { it.isNotBlank() }
-        ?: "$kindLabel · ${session.project_name ?: session.session_id.take(8)}"
+        ?: "$kindLabel · ${session.workspace_name ?: session.session_id.take(8)}"
 
 /** The status-dot colour for a session's `state`. */
 fun PixelColors.sessionStateColor(state: String): Color = when (state) {

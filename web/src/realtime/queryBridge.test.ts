@@ -175,19 +175,19 @@ describe('applyAgentEvent', () => {
     // `sessions.changed`, `projects.changed` and both Auto Scan list events are
     // patched straight into the cache (setQueryData, not invalidateQueries) —
     // each is a complete snapshot, so there is no delta that could drift.
-    // `git.changed` is the one pointer left, scoped to the project it names.
+    // `git.changed` is the one pointer left, scoped to the workspace it names.
     applyAgentEvent(client, 'a1', frame('sessions.changed', {}));
-    const projectsOutcome = applyAgentEvent(
+    const workspacesOutcome = applyAgentEvent(
       client,
       'a1',
       frame('projects.changed', { projects: [{ name: 'p1', path: '/srv/p1' }] }),
     );
     applyAgentEvent(client, 'a1', frame('git.changed', { project_name: 'alpha' }));
 
-    expect(projectsOutcome).toEqual({
+    expect(workspacesOutcome).toEqual({
       kind: 'patched',
       type: 'projects.changed',
-      keys: [['agent', 'a1', 'projects']],
+      keys: [['agent', 'a1', 'workspaces']],
     });
     expect(invalidated).toEqual([['agent', 'a1', 'git', 'alpha']]);
   });
@@ -271,7 +271,7 @@ describe('applyAgentEvent', () => {
 describe('applyAgentEvent git.changed', () => {
   // Android `GitRepository.matchesSession`, read off the query cache: a viewer
   // with no repo answer yet always refreshes; otherwise the event has to name
-  // its session's project, or its resolved toplevel / common dir. Every match
+  // its session's workspace, or its resolved toplevel / common dir. Every match
   // is the viewer's `sessionGit` prefix, so an open diff is re-read with the
   // list rather than left describing a tree that has moved.
   const gitStatus = (over: Partial<SessionGitStatus> = {}): SessionGitStatus => ({
@@ -293,19 +293,19 @@ describe('applyAgentEvent git.changed', () => {
     ...over,
   });
 
-  const sessionRow = (sessionId: string, projectName: string): SessionResponse =>
+  const sessionRow = (sessionId: string, workspaceName: string): SessionResponse =>
     sessionResponseSchema.parse({
       session_id: sessionId,
       state: 'running',
       created_at: '2026-08-04T10:00:00Z',
-      project_name: projectName,
+      project_name: workspaceName,
     });
 
   const viewer = (sessionId: string, status: SessionGitStatus): void => {
     client.setQueryData(queryKeys.sessionGitStatus('a1', sessionId), status);
   };
 
-  const projectKey = ['agent', 'a1', 'git', 'p1'];
+  const workspaceKey = ['agent', 'a1', 'git', 'p1'];
   const viewerKey = (sessionId: string): QueryKey => ['agent', 'a1', 'session-git', sessionId];
 
   it('refreshes a viewer that has no repo answer yet, whatever the event names', () => {
@@ -323,12 +323,12 @@ describe('applyAgentEvent git.changed', () => {
     expect(outcome).toEqual({
       kind: 'invalidated',
       type: 'git.changed',
-      keys: [projectKey, viewerKey('s1'), viewerKey('s2')],
+      keys: [workspaceKey, viewerKey('s1'), viewerKey('s2')],
     });
-    expect(invalidated).toEqual([projectKey, viewerKey('s1'), viewerKey('s2')]);
+    expect(invalidated).toEqual([workspaceKey, viewerKey('s1'), viewerKey('s2')]);
   });
 
-  it("matches a viewer by the project's resolved toplevel", () => {
+  it("matches a viewer by the workspace's resolved toplevel", () => {
     viewer('s1', gitStatus());
 
     applyAgentEvent(
@@ -337,10 +337,10 @@ describe('applyAgentEvent git.changed', () => {
       frame('git.changed', { project_name: 'p1', toplevel: '/srv/p1' }),
     );
 
-    expect(invalidated).toEqual([projectKey, viewerKey('s1')]);
+    expect(invalidated).toEqual([workspaceKey, viewerKey('s1')]);
   });
 
-  it('matches a linked worktree by the common dir it shares with its project', () => {
+  it('matches a linked worktree by the common dir it shares with its workspace', () => {
     viewer(
       's1',
       gitStatus({
@@ -365,16 +365,16 @@ describe('applyAgentEvent git.changed', () => {
       }),
     );
 
-    expect(invalidated).toEqual([projectKey, viewerKey('s1')]);
+    expect(invalidated).toEqual([workspaceKey, viewerKey('s1')]);
   });
 
-  it("matches by the session row's project name when the event carries no paths", () => {
+  it("matches by the session row's workspace name when the event carries no paths", () => {
     client.setQueryData(queryKeys.sessions('a1'), [sessionRow('s1', 'p1')]);
     viewer('s1', gitStatus({ repo: { ...gitStatus().repo!, toplevel: '/elsewhere' } }));
 
     applyAgentEvent(client, 'a1', frame('git.changed', { project_name: 'p1' }));
 
-    expect(invalidated).toEqual([projectKey, viewerKey('s1')]);
+    expect(invalidated).toEqual([workspaceKey, viewerKey('s1')]);
   });
 
   it('leaves a viewer on another repository alone', () => {
@@ -396,8 +396,8 @@ describe('applyAgentEvent git.changed', () => {
       }),
     );
 
-    expect(outcome).toEqual({ kind: 'invalidated', type: 'git.changed', keys: [projectKey] });
-    expect(invalidated).toEqual([projectKey]);
+    expect(outcome).toEqual({ kind: 'invalidated', type: 'git.changed', keys: [workspaceKey] });
+    expect(invalidated).toEqual([workspaceKey]);
   });
 
   it('does not let a null path on the wire match anything', () => {
@@ -424,10 +424,10 @@ describe('applyAgentEvent git.changed', () => {
 
     applyAgentEvent(client, 'a1', frame('git.changed', { project_name: 'p1' }));
 
-    expect(invalidated).toEqual([projectKey]);
+    expect(invalidated).toEqual([workspaceKey]);
   });
 
-  it('drops a git.changed that names no project', () => {
+  it('drops a git.changed that names no workspace', () => {
     viewer('s1', gitStatus({ repo: null }));
 
     const outcome = applyAgentEvent(client, 'a1', frame('git.changed', { toplevel: '/srv/p1' }));
@@ -453,7 +453,7 @@ describe('refresh on connect', () => {
   });
 
   it('reconciles the REST-backed lists of the reconnected agent', () => {
-    // Sessions and projects are deliberately excluded: the agent re-pushes an
+    // Sessions and workspaces are deliberately excluded: the agent re-pushes an
     // authoritative snapshot of both on every connect (the relay's
     // `request_events_snapshot`), so an extra REST GET here would only race
     // it — and a slow response landing afterwards would roll a list backwards.

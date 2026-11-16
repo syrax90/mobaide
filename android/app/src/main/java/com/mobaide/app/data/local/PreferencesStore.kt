@@ -24,7 +24,7 @@ private val Context.dataStore by preferencesDataStore(name = "mobaide_prefs")
 
 class PreferencesStore(private val context: Context) {
 
-    private val keyLastProject = stringPreferencesKey("last_used_project_name")
+    private val keyLastWorkspace = stringPreferencesKey("last_used_project_name")
     private val keyLastSession = stringPreferencesKey("last_used_session_id")
     private val keyLastClaudeOptions = stringPreferencesKey("last_used_claude_options")
     private val keyLastCodexOptions = stringPreferencesKey("last_used_codex_options")
@@ -53,11 +53,11 @@ class PreferencesStore(private val context: Context) {
     private val labelListSerializer = ListSerializer(LinearLabelDto.serializer())
     private val stateListSerializer = ListSerializer(LinearStateDto.serializer())
 
-    private fun keyLinearLabels(projectName: String) =
-        stringPreferencesKey("linear_labels::$projectName")
+    private fun keyLinearLabels(workspaceName: String) =
+        stringPreferencesKey("linear_labels::$workspaceName")
 
-    private fun keyLinearStates(projectName: String) =
-        stringPreferencesKey("linear_states::$projectName")
+    private fun keyLinearStates(workspaceName: String) =
+        stringPreferencesKey("linear_states::$workspaceName")
 
     private fun keyRecentCustomPaths(agentKey: String) =
         stringPreferencesKey("$RECENT_CUSTOM_PATHS_PREFIX$agentKey")
@@ -70,8 +70,8 @@ class PreferencesStore(private val context: Context) {
 
     private val stringListSerializer = ListSerializer(String.serializer())
 
-    val lastUsedProjectName: Flow<String?> =
-        context.dataStore.data.map { it[keyLastProject] }
+    val lastUsedWorkspaceName: Flow<String?> =
+        context.dataStore.data.map { it[keyLastWorkspace] }
     val lastUsedSessionId: Flow<String?> =
         context.dataStore.data.map { it[keyLastSession] }
 
@@ -134,15 +134,15 @@ class PreferencesStore(private val context: Context) {
                 .coerceIn(TERMINAL_STATIC_COLUMNS_MIN, TERMINAL_STATIC_COLUMNS_MAX)
         }
 
-    suspend fun getLastUsedProjectName(): String? =
-        context.dataStore.data.map { it[keyLastProject] }.first()
+    suspend fun getLastUsedWorkspaceName(): String? =
+        context.dataStore.data.map { it[keyLastWorkspace] }.first()
 
     suspend fun getLastUsedSessionId(): String? =
         context.dataStore.data.map { it[keyLastSession] }.first()
 
-    suspend fun setLastUsedProjectName(name: String?) {
+    suspend fun setLastUsedWorkspaceName(name: String?) {
         context.dataStore.edit { prefs ->
-            if (name == null) prefs.remove(keyLastProject) else prefs[keyLastProject] = name
+            if (name == null) prefs.remove(keyLastWorkspace) else prefs[keyLastWorkspace] = name
         }
     }
 
@@ -303,33 +303,33 @@ class PreferencesStore(private val context: Context) {
         }
     }
 
-    suspend fun getCachedLinearLabels(projectName: String): List<LinearLabelDto> {
-        val raw = context.dataStore.data.map { it[keyLinearLabels(projectName)] }.first()
+    suspend fun getCachedLinearLabels(workspaceName: String): List<LinearLabelDto> {
+        val raw = context.dataStore.data.map { it[keyLinearLabels(workspaceName)] }.first()
             ?: return emptyList()
         return runCatching {
             cacheJson.decodeFromString(labelListSerializer, raw)
         }.getOrDefault(emptyList())
     }
 
-    suspend fun getCachedLinearStates(projectName: String): List<LinearStateDto> {
-        val raw = context.dataStore.data.map { it[keyLinearStates(projectName)] }.first()
+    suspend fun getCachedLinearStates(workspaceName: String): List<LinearStateDto> {
+        val raw = context.dataStore.data.map { it[keyLinearStates(workspaceName)] }.first()
             ?: return emptyList()
         return runCatching {
             cacheJson.decodeFromString(stateListSerializer, raw)
         }.getOrDefault(emptyList())
     }
 
-    suspend fun setCachedLinearLabels(projectName: String, labels: List<LinearLabelDto>) {
+    suspend fun setCachedLinearLabels(workspaceName: String, labels: List<LinearLabelDto>) {
         val payload = cacheJson.encodeToString(labelListSerializer, labels)
         context.dataStore.edit { prefs ->
-            prefs[keyLinearLabels(projectName)] = payload
+            prefs[keyLinearLabels(workspaceName)] = payload
         }
     }
 
-    suspend fun setCachedLinearStates(projectName: String, states: List<LinearStateDto>) {
+    suspend fun setCachedLinearStates(workspaceName: String, states: List<LinearStateDto>) {
         val payload = cacheJson.encodeToString(stateListSerializer, states)
         context.dataStore.edit { prefs ->
-            prefs[keyLinearStates(projectName)] = payload
+            prefs[keyLinearStates(workspaceName)] = payload
         }
     }
 
@@ -374,7 +374,7 @@ class PreferencesStore(private val context: Context) {
             val remaining = existing.filter { it != path && it != trimmed }
             // Drop the key outright once emptied rather than parking an "[]" blob
             // under an agent URL that may never come back (mirrors iOS, and the
-            // remove-don't-blank precedent of setLastUsedProjectName above).
+            // remove-don't-blank precedent of setLastUsedWorkspaceName above).
             if (remaining.isEmpty()) prefs.remove(key)
             else prefs[key] = cacheJson.encodeToString(stringListSerializer, remaining)
         }

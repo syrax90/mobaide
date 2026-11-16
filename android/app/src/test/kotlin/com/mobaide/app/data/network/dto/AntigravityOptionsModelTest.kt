@@ -44,7 +44,7 @@ class AntigravityOptionsModelTest {
         val encoded = encodeJson.encodeToString(
             CreateSessionRequest.serializer(),
             CreateSessionRequest(
-                project_name = "alpha",
+                workspace_name = "alpha",
                 cli = "antigravity",
                 antigravity_options = AntigravityOptionsModel(skip_permissions = true),
             ),

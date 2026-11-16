@@ -65,7 +65,7 @@ struct SessionResponse: Codable, Equatable, Sendable {
     let command: [String]
     let cwd: String?
     let title: String?
-    let project_name: String?
+    let workspace_name: String?
     let kind: SessionKind
     /// Display-name snapshot of a custom agent type at session-creation time
     /// (proto-v7); nil for built-in kinds. Survives rename/delete of the type,
@@ -82,6 +82,23 @@ struct SessionResponse: Codable, Equatable, Sendable {
 
     var isChat: Bool { ui == "chat" }
 
+    private enum CodingKeys: String, CodingKey {
+        case session_id
+        case state
+        case created_at
+        case pid
+        case command
+        case cwd
+        case title
+        case workspace_name = "project_name"
+        case kind
+        case kind_label
+        case attention
+        case exit_reason
+        case ui
+        case activity
+    }
+
     init(
         session_id: String,
         state: String,
@@ -90,7 +107,7 @@ struct SessionResponse: Codable, Equatable, Sendable {
         command: [String],
         cwd: String?,
         title: String?,
-        project_name: String?,
+        workspace_name: String?,
         kind: SessionKind,
         kind_label: String? = nil,
         attention: String?,
@@ -105,7 +122,7 @@ struct SessionResponse: Codable, Equatable, Sendable {
         self.command = command
         self.cwd = cwd
         self.title = title
-        self.project_name = project_name
+        self.workspace_name = workspace_name
         self.kind = kind
         self.kind_label = kind_label
         self.attention = attention
@@ -125,7 +142,7 @@ extension SessionResponse {
         command = try container.decodeIfPresent([String].self, forKey: .command) ?? []
         cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
         title = try container.decodeIfPresent(String.self, forKey: .title)
-        project_name = try container.decodeIfPresent(String.self, forKey: .project_name)
+        workspace_name = try container.decodeIfPresent(String.self, forKey: .workspace_name)
         // Explicit-null/absent kind still falls back to the property default
         // (Kotlin `coerceInputValues` parity); unknown strings are preserved.
         kind = try container.decodeIfPresent(SessionKind.self, forKey: .kind) ?? .claude
@@ -143,7 +160,7 @@ struct CreateSessionRequest: Codable, Equatable, Sendable {
     let env: [String: String]?
     let rows: Int
     let cols: Int
-    let project_name: String?
+    let workspace_name: String?
     let cli: String?
     let claude_options: ClaudeOptionsModel?
     let codex_options: CodexOptionsModel?
@@ -158,13 +175,35 @@ struct CreateSessionRequest: Codable, Equatable, Sendable {
     let chat_resume_id: String?
     let base_branch: String?
 
+    private enum CodingKeys: String, CodingKey {
+        case command
+        case cwd
+        case env
+        case rows
+        case cols
+        case workspace_name = "project_name"
+        case cli
+        case claude_options
+        case codex_options
+        case antigravity_options
+        case opencode_options
+        case copilot_options
+        case cursor_options
+        case pi_options
+        case worktree
+        case branch_name
+        case ui
+        case chat_resume_id
+        case base_branch
+    }
+
     init(
         command: [String]? = nil,
         cwd: String? = nil,
         env: [String: String]? = nil,
         rows: Int = 24,
         cols: Int = 80,
-        project_name: String? = nil,
+        workspace_name: String? = nil,
         cli: String? = nil,
         claude_options: ClaudeOptionsModel? = nil,
         codex_options: CodexOptionsModel? = nil,
@@ -184,7 +223,7 @@ struct CreateSessionRequest: Codable, Equatable, Sendable {
         self.env = env
         self.rows = rows
         self.cols = cols
-        self.project_name = project_name
+        self.workspace_name = workspace_name
         self.cli = cli
         self.claude_options = claude_options
         self.codex_options = codex_options
@@ -209,7 +248,7 @@ extension CreateSessionRequest {
         env = try container.decodeIfPresent([String: String].self, forKey: .env)
         rows = try container.decodeIfPresent(Int.self, forKey: .rows) ?? 24
         cols = try container.decodeIfPresent(Int.self, forKey: .cols) ?? 80
-        project_name = try container.decodeIfPresent(String.self, forKey: .project_name)
+        workspace_name = try container.decodeIfPresent(String.self, forKey: .workspace_name)
         cli = try container.decodeIfPresent(String.self, forKey: .cli)
         claude_options = try container.decodeIfPresent(ClaudeOptionsModel.self, forKey: .claude_options)
         codex_options = try container.decodeIfPresent(CodexOptionsModel.self, forKey: .codex_options)

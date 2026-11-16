@@ -15,7 +15,7 @@ migration:
 The dispatcher is reachable from three CLI verbs (``fetch-trust-key``,
 ``pair-qr --wait``, ``re-pair``) so a silent regression here strands
 post-pair restarts for every Windows operator. The tests stub
-``_run_with_timeout`` at the module level (the project's existing pattern
+``_run_with_timeout`` at the module level (the workspace's existing pattern
 for testing subprocess-backed CLI helpers — see ``test_main.py`` and
 ``test_fetch_trust_key.py``) so the test suite runs on Linux / macOS
 CI hosts that have no ``schtasks.exe`` or ``sc.exe`` on PATH.

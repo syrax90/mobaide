@@ -26,11 +26,11 @@ enum DetailConnection: String, Equatable, Sendable {
     case connecting, replaying, connected, disconnected
 }
 
-/// Per-project autoscan detail state (Android `AutoScanDetailViewModel`). It
+/// Per-workspace autoscan detail state (Android `AutoScanDetailViewModel`). It
 /// reduces the dedicated-channel frame stream into UI state.
 ///
 /// **Idempotency invariant.** Events arrive strictly monotonically in `seq` per
-/// project over one socket, so the reduction cursor `lastSeq` skips `seq <=
+/// workspace over one socket, so the reduction cursor `lastSeq` skips `seq <=
 /// lastSeq`: reconnect replays and snapshot/live overlaps are no-ops, and
 /// replaying the same stream twice yields identical state. (Android instead
 /// applied every event unconditionally — the duplicate-log bug.)
@@ -45,7 +45,7 @@ final class AutoScanDetailModel {
     static let logRingMax = 2000
     private static let recentIssuesMax = 50
 
-    let projectName: String
+    let workspaceName: String
 
     private(set) var instance: AutoScanInstanceDto?
     private(set) var nextScanAt: String?
@@ -62,8 +62,8 @@ final class AutoScanDetailModel {
     private var lastSeq: Int64 = 0
     private var nextLogId: Int64 = 0
 
-    init(projectName: String, repository: AutoScanRepository) {
-        self.projectName = projectName
+    init(workspaceName: String, repository: AutoScanRepository) {
+        self.workspaceName = workspaceName
         self.repository = repository
         self.phases = Dictionary(uniqueKeysWithValues: Self.phaseOrder.map { ($0, PhaseState()) })
     }
@@ -79,20 +79,20 @@ final class AutoScanDetailModel {
     /// Consumes the detail frame stream until cancelled (the screen's `.task`
     /// cancels it on disappear, which disconnects the socket).
     func run() async {
-        let resume = lastSeq > 0 ? [projectName: lastSeq] : [:]
-        let stream = repository.observeDetailFrames(project: projectName, resume: resume)
+        let resume = lastSeq > 0 ? [workspaceName: lastSeq] : [:]
+        let stream = repository.observeDetailFrames(workspace: workspaceName, resume: resume)
         for await frame in stream {
             await handle(frame)
         }
     }
 
     func runNow() async {
-        guard let response = try? await repository.runNow(projectName: projectName) else { return }
+        guard let response = try? await repository.runNow(workspaceName: workspaceName) else { return }
         nextScanAt = response.next_scan_at
     }
 
     func stopScan() async {
-        try? await repository.stopScan(projectName: projectName)
+        try? await repository.stopScan(workspaceName: workspaceName)
     }
 
     func setPaused(_ paused: Bool) {
@@ -114,18 +114,18 @@ final class AutoScanDetailModel {
         case .connected:
             connection = .connecting
         case .snapshot(let scans, let events):
-            let match = scans.first { $0.project_name == projectName }
+            let match = scans.first { $0.workspace_name == workspaceName }
             instance = match
             nextScanAt = match?.next_scan_at
             if let cycle = match?.cycle_number { cycleNumber = cycle }
             connection = .replaying
-            for event in events[projectName] ?? [] {
+            for event in events[workspaceName] ?? [] {
                 await reduceEvent(event)
             }
         case .caughtUp:
             connection = .connected
         case .event(let event):
-            guard event.projectName == projectName else { return }
+            guard event.workspaceName == workspaceName else { return }
             await reduceEvent(event)
         case .disconnected:
             connection = .disconnected

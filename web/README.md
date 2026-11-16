@@ -140,7 +140,7 @@ wizard.
   **true** on wire absence, so every boolean is sent explicitly and the
   request is re-parsed through a strict schema before it goes out.
 - The wizard opens on the options each kind was last **successfully** launched
-  with, and pre-selects the last project.
+  with, and pre-selects the last workspace.
   - These are written only after a launch succeeds, from values pinned before
     the request goes out — the option controls stay live while it is in flight.
   - Worktree/branch, Antigravity `add_dirs` and the Auto Scan prompt are

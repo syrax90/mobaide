@@ -4,7 +4,7 @@
  * The payload is the agent's whole `VoiceStatusResponse` — the same body
  * `GET /api/voice/status` answers — published on every state change, throttled
  * to two a second while a download runs, and again on every events-channel
- * connect. A snapshot, so it is written (the `projectsCache.ts` rule) rather
+ * connect. A snapshot, so it is written (the `workspacesCache.ts` rule) rather
  * than invalidated: an invalidation per progress frame would be a `/proxy`
  * GET per frame.
  */

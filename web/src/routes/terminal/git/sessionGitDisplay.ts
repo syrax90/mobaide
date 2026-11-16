@@ -903,8 +903,8 @@ export interface RebaseTarget {
 
 /**
  * The rebase sheet's picker: local branches, then remote-tracking ones, each
- * A→Z, from the project Git screen's rows. The session's own branch is left out by name
- * — the rows' `is_current` is the project root's checkout, which for a session
+ * A→Z, from the workspace Git screen's rows. The session's own branch is left out by name
+ * — the rows' `is_current` is the workspace root's checkout, which for a session
  * in a linked worktree is usually the very branch it wants to rebase onto.
  */
 export function rebaseTargets(

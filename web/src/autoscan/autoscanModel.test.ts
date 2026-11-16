@@ -12,15 +12,15 @@ import {
   type DetailFrame,
 } from './autoscanModel';
 
-const PROJECT = 'proj-a';
+const WORKSPACE = 'proj-a';
 
 function event(
   seq: bigint,
   type: string,
   payload: Record<string, unknown>,
-  projectName = PROJECT,
+  workspaceName = WORKSPACE,
 ): AutoScanEvent {
-  return { projectName, seq, ts: '2026-07-08T12:00:00Z', type, payload };
+  return { workspaceName, seq, ts: '2026-07-08T12:00:00Z', type, payload };
 }
 
 function frame(scanEvent: AutoScanEvent): DetailFrame {
@@ -31,7 +31,7 @@ function texts(state: AutoScanDetailState): string[] {
   return state.logLines.map((line) => line.text);
 }
 
-function drive(frames: readonly DetailFrame[], from = initialAutoScanDetailState(PROJECT)) {
+function drive(frames: readonly DetailFrame[], from = initialAutoScanDetailState(WORKSPACE)) {
   return frames.reduce(reduceAutoScanFrame, from);
 }
 
@@ -87,7 +87,7 @@ describe('reduction cursor', () => {
     expect(texts(state)).toEqual(['five', 'six']);
   });
 
-  it('ignores events for another project on the shared channel', () => {
+  it('ignores events for another workspace on the shared channel', () => {
     const state = drive([frame(event(1n, 'log', { line: 'elsewhere' }, 'proj-b'))]);
     expect(state.logLines).toHaveLength(0);
     expect(state.lastSeq).toBe(0n);
@@ -104,7 +104,7 @@ describe('reduction cursor', () => {
     ]);
     expect(texts(state)).toEqual(['first', 'second']);
     expect(state.lastSeq).toBe(high + 1n);
-    expect(resumeFromState(state)).toEqual({ [PROJECT]: high + 1n });
+    expect(resumeFromState(state)).toEqual({ [WORKSPACE]: high + 1n });
   });
 });
 
@@ -120,7 +120,7 @@ describe('snapshot', () => {
         [
           { project_name: 'other', status: 'idle', started_at: 1, last_activity_at: 1 },
           {
-            project_name: PROJECT,
+            project_name: WORKSPACE,
             status: 'scanning',
             started_at: 1751800000.5,
             last_activity_at: 1751800005.5,
@@ -128,7 +128,7 @@ describe('snapshot', () => {
             next_scan_at: '2026-07-08T12:05:00Z',
           },
         ],
-        { [PROJECT]: [event(1n, 'log', { line: 'buffered' })] },
+        { [WORKSPACE]: [event(1n, 'log', { line: 'buffered' })] },
       ),
     ]);
 
@@ -149,7 +149,7 @@ describe('snapshot', () => {
     const resynced = reduceAutoScanFrame(
       live,
       snapshot([], {
-        [PROJECT]: [
+        [WORKSPACE]: [
           event(9n, 'log', { line: 'nine' }),
           event(10n, 'log', { line: 'ten' }),
           event(11n, 'log', { line: 'eleven' }),
@@ -163,18 +163,18 @@ describe('snapshot', () => {
   });
 
   it('skips a scan row that fails its schema', () => {
-    const state = drive([snapshot([{ project_name: PROJECT }, null, 7])]);
+    const state = drive([snapshot([{ project_name: WORKSPACE }, null, 7])]);
     expect(state.instance).toBeUndefined();
   });
 
-  it('clears the instance once a snapshot stops carrying the project', () => {
+  it('clears the instance once a snapshot stops carrying the workspace', () => {
     // A stopped scan drops out of `scans`. Holding the last row would leave the
     // screen rendering "Scanning" and a frozen count for the rest of its life,
     // with the connection-state fallback permanently shadowed.
     const running = drive([
       snapshot([
         {
-          project_name: PROJECT,
+          project_name: WORKSPACE,
           status: 'scanning',
           started_at: 1,
           last_activity_at: 1,
@@ -195,7 +195,7 @@ describe('snapshot', () => {
   });
 
   it('does not read buffered events off the prototype chain', () => {
-    // `projectName` is a URL path segment. `events['__proto__']` and friends
+    // `workspaceName` is a URL path segment. `events['__proto__']` and friends
     // resolve to a *non-nullish* inherited value, so `?? []` never fires and the
     // `for…of` would throw out of a React render — taking the whole app down via
     // the router's root error boundary.
@@ -209,8 +209,8 @@ describe('snapshot', () => {
     }
   });
 
-  it('still replays buffered events for a project literally named __proto__', () => {
-    // Hardening must not silently drop a project the agent really reported —
+  it('still replays buffered events for a workspace literally named __proto__', () => {
+    // Hardening must not silently drop a workspace the agent really reported —
     // `autoscanFrames.ts` goes out of its way to keep that key.
     const state = initialAutoScanDetailState('__proto__');
     const replayed = reduceAutoScanFrame(state, {
@@ -350,7 +350,7 @@ describe('log lines', () => {
     const frames = Array.from({ length: overflow }, (_, index) =>
       frame(event(BigInt(index + 1), 'log', { line: `line-${String(index)}` })),
     );
-    const state = reduceAutoScanFrames(initialAutoScanDetailState(PROJECT), frames);
+    const state = reduceAutoScanFrames(initialAutoScanDetailState(WORKSPACE), frames);
 
     expect(state.logLines).toHaveLength(LOG_RING_MAX);
     expect(state.logLines[0]?.text).toBe('line-5');
@@ -372,7 +372,7 @@ describe('log lines', () => {
 
 describe('connection state', () => {
   it('walks connecting → replaying → connected and back on a drop', () => {
-    let state = initialAutoScanDetailState(PROJECT);
+    let state = initialAutoScanDetailState(WORKSPACE);
     expect(state.connection).toBe('connecting');
 
     state = reduceAutoScanFrame(state, { kind: 'connected' });

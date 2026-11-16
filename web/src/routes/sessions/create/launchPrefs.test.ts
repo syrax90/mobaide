@@ -18,7 +18,7 @@ const NEVER_LAUNCHED: LaunchPrefs = {
   copilot: null,
   cursor: null,
   pi: null,
-  lastProjectName: null,
+  lastWorkspaceName: null,
 };
 
 const claudePrefs = (over: Partial<ClaudeLaunchPrefs> = {}): ClaudeLaunchPrefs => ({
@@ -141,7 +141,7 @@ describe('applyLaunchPrefs', () => {
   it('restores nothing into the per-session fields', () => {
     const base: WizardState = {
       ...INITIAL_WIZARD_STATE,
-      autoScan: { ...INITIAL_WIZARD_STATE.autoScan, initialPrompt: 'seeded from the project' },
+      autoScan: { ...INITIAL_WIZARD_STATE.autoScan, initialPrompt: 'seeded from the workspace' },
       antigravity: { ...INITIAL_WIZARD_STATE.antigravity, addDirsDraft: '/extra' },
       git: { worktree: true, branchName: 'wip' },
     };
@@ -155,10 +155,10 @@ describe('applyLaunchPrefs', () => {
       copilot: null,
       cursor: null,
       pi: null,
-      lastProjectName: 'mobaide',
+      lastWorkspaceName: 'mobaide',
     });
 
-    expect(seeded.autoScan.initialPrompt).toBe('seeded from the project');
+    expect(seeded.autoScan.initialPrompt).toBe('seeded from the workspace');
     expect(seeded.antigravity.addDirsDraft).toBe('/extra');
     expect(seeded.git).toEqual({ worktree: true, branchName: 'wip' });
   });

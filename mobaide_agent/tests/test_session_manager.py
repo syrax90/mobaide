@@ -139,19 +139,19 @@ class TestSessionManager:
 
 
 @pytest.mark.timeout(20)
-class TestProjectAwareLaunchBranching:
+class TestWorkspaceAwareLaunchBranching:
     """``create_session`` splits on ``claude_options`` when
-    ``project_name`` is set. With claude_options → ``_apply_project_launch``
-    overwrites command/cwd/env. Without claude_options → ``_resolve_project_cwd``
+    ``workspace_name`` is set. With claude_options → ``_apply_workspace_launch``
+    overwrites command/cwd/env. Without claude_options → ``_resolve_workspace_cwd``
     only sets cwd, leaving the caller-supplied shell argv intact.
     """
 
     async def test_claude_options_present_invokes_launcher(self, tmp_path) -> None:
-        project = MagicMock()
-        project.name = "proj"
-        project.path = str(tmp_path)
+        workspace = MagicMock()
+        workspace.name = "proj"
+        workspace.path = str(tmp_path)
         store = MagicMock()
-        store.get = MagicMock(return_value=project)
+        store.get = MagicMock(return_value=workspace)
 
         launcher = MagicMock()
         launcher.build = AsyncMock(
@@ -162,7 +162,7 @@ class TestProjectAwareLaunchBranching:
             ),
         )
 
-        mgr = SessionManager(projects_store=store, launcher=launcher, backend_factory=FakePtyBackend)
+        mgr = SessionManager(workspaces_store=store, launcher=launcher, backend_factory=FakePtyBackend)
         try:
             config = SessionConfig(
                 session_id="claude-sess",
@@ -181,16 +181,16 @@ class TestProjectAwareLaunchBranching:
             await mgr.shutdown()
 
     async def test_no_claude_options_only_resolves_cwd(self, tmp_path) -> None:
-        project = MagicMock()
-        project.name = "proj"
-        project.path = str(tmp_path)
+        workspace = MagicMock()
+        workspace.name = "proj"
+        workspace.path = str(tmp_path)
         store = MagicMock()
-        store.get = MagicMock(return_value=project)
+        store.get = MagicMock(return_value=workspace)
 
         launcher = MagicMock()
         launcher.build = AsyncMock()
 
-        mgr = SessionManager(projects_store=store, launcher=launcher)
+        mgr = SessionManager(workspaces_store=store, launcher=launcher)
         try:
             shell_argv = default_shell()
             config = SessionConfig(
@@ -211,10 +211,10 @@ class TestProjectAwareLaunchBranching:
         finally:
             await mgr.shutdown()
 
-    async def test_no_claude_options_unknown_project_raises_keyerror(self) -> None:
+    async def test_no_claude_options_unknown_workspace_raises_keyerror(self) -> None:
         store = MagicMock()
         store.get = MagicMock(return_value=None)
-        mgr = SessionManager(projects_store=store, launcher=MagicMock())
+        mgr = SessionManager(workspaces_store=store, launcher=MagicMock())
         try:
             config = SessionConfig(
                 session_id="missing",
@@ -234,16 +234,16 @@ class TestProjectAwareLaunchBranching:
 @pytest.mark.timeout(20)
 class TestCodexLaunchBranching:
     """``create_session`` routes a ``codex_options`` session to the Codex
-    launcher (not the Claude one), for both project and ad-hoc targets, and
+    launcher (not the Claude one), for both workspace and ad-hoc targets, and
     raises a clear error when no Codex launcher is wired.
     """
 
-    async def test_project_codex_options_invokes_codex_launcher(self, tmp_path) -> None:
-        project = MagicMock()
-        project.name = "proj"
-        project.path = str(tmp_path)
+    async def test_workspace_codex_options_invokes_codex_launcher(self, tmp_path) -> None:
+        workspace = MagicMock()
+        workspace.name = "proj"
+        workspace.path = str(tmp_path)
         store = MagicMock()
-        store.get = MagicMock(return_value=project)
+        store.get = MagicMock(return_value=workspace)
 
         claude_launcher = MagicMock()
         claude_launcher.build = AsyncMock()
@@ -261,7 +261,7 @@ class TestCodexLaunchBranching:
         )
 
         mgr = SessionManager(
-            projects_store=store,
+            workspaces_store=store,
             launcher=claude_launcher,
             codex_launcher=codex_launcher,
         )
@@ -279,9 +279,9 @@ class TestCodexLaunchBranching:
             codex_launcher.build.assert_awaited_once()
             claude_launcher.build.assert_not_awaited()
             assert config.env == {"X": "Y"}
-            # The Codex launcher received the project target + a CodexOptions.
+            # The Codex launcher received the workspace target + a CodexOptions.
             call = codex_launcher.build.await_args
-            assert call.args[0] is project
+            assert call.args[0] is workspace
             assert isinstance(call.args[1], CodexOptions)
             assert mgr.list_sessions()[0].kind == SessionKind.CODEX
         finally:
@@ -298,7 +298,7 @@ class TestCodexLaunchBranching:
         )
 
         mgr = SessionManager(
-            projects_store=store,
+            workspaces_store=store,
             launcher=MagicMock(),
             codex_launcher=codex_launcher,
         )
@@ -323,19 +323,19 @@ class TestCodexLaunchBranching:
 @pytest.mark.timeout(20)
 class TestAntigravityLaunchBranching:
     """``create_session`` routes an ``antigravity_options`` session to the
-    Antigravity launcher (not the Claude or Codex one), for both project and
+    Antigravity launcher (not the Claude or Codex one), for both workspace and
     ad-hoc targets, and raises a clear error when no Antigravity launcher is
     wired.
     """
 
-    async def test_project_antigravity_options_invokes_antigravity_launcher(
+    async def test_workspace_antigravity_options_invokes_antigravity_launcher(
         self, tmp_path,
     ) -> None:
-        project = MagicMock()
-        project.name = "proj"
-        project.path = str(tmp_path)
+        workspace = MagicMock()
+        workspace.name = "proj"
+        workspace.path = str(tmp_path)
         store = MagicMock()
-        store.get = MagicMock(return_value=project)
+        store.get = MagicMock(return_value=workspace)
 
         claude_launcher = MagicMock()
         claude_launcher.build = AsyncMock()
@@ -353,7 +353,7 @@ class TestAntigravityLaunchBranching:
         )
 
         mgr = SessionManager(
-            projects_store=store,
+            workspaces_store=store,
             launcher=claude_launcher,
             antigravity_launcher=antigravity_launcher,
         )
@@ -371,10 +371,10 @@ class TestAntigravityLaunchBranching:
             antigravity_launcher.build.assert_awaited_once()
             claude_launcher.build.assert_not_awaited()
             assert config.env == {"X": "Y"}
-            # The Antigravity launcher received the project target + an
+            # The Antigravity launcher received the workspace target + an
             # AntigravityOptions.
             call = antigravity_launcher.build.await_args
-            assert call.args[0] is project
+            assert call.args[0] is workspace
             assert isinstance(call.args[1], AntigravityOptions)
             assert mgr.list_sessions()[0].kind == SessionKind.ANTIGRAVITY
         finally:
@@ -391,7 +391,7 @@ class TestAntigravityLaunchBranching:
         )
 
         mgr = SessionManager(
-            projects_store=store,
+            workspaces_store=store,
             launcher=MagicMock(),
             antigravity_launcher=antigravity_launcher,
         )
@@ -422,14 +422,14 @@ class TestOpenCodeLaunchBranching:
     OpenCode launcher is wired.
     """
 
-    async def test_project_opencode_options_invokes_opencode_launcher(
+    async def test_workspace_opencode_options_invokes_opencode_launcher(
         self, tmp_path,
     ) -> None:
-        project = MagicMock()
-        project.name = "proj"
-        project.path = str(tmp_path)
+        workspace = MagicMock()
+        workspace.name = "proj"
+        workspace.path = str(tmp_path)
         store = MagicMock()
-        store.get = MagicMock(return_value=project)
+        store.get = MagicMock(return_value=workspace)
 
         claude_launcher = MagicMock()
         claude_launcher.build = AsyncMock()
@@ -449,7 +449,7 @@ class TestOpenCodeLaunchBranching:
         options = OpenCodeOptions(auto_approve=True)
 
         mgr = SessionManager(
-            projects_store=store,
+            workspaces_store=store,
             launcher=claude_launcher,
             antigravity_launcher=antigravity_launcher,
             opencode_launcher=opencode_launcher,
@@ -469,7 +469,7 @@ class TestOpenCodeLaunchBranching:
             claude_launcher.build.assert_not_awaited()
             antigravity_launcher.build.assert_not_awaited()
             call = opencode_launcher.build.await_args
-            assert call.args[0] is project
+            assert call.args[0] is workspace
             assert call.args[1] is options
             assert config.env == {"X": "Y"}
             assert mgr.list_sessions()[0].kind == SessionKind.OPENCODE
@@ -481,7 +481,7 @@ class TestOpenCodeLaunchBranching:
     ) -> None:
         claude_launcher = MagicMock()
         claude_launcher.build = AsyncMock()
-        mgr = SessionManager(projects_store=MagicMock(), launcher=claude_launcher)
+        mgr = SessionManager(workspaces_store=MagicMock(), launcher=claude_launcher)
         try:
             config = SessionConfig(
                 session_id="opencode-unwired",
@@ -555,14 +555,14 @@ class TestCopilotLaunchBranching:
     launcher is wired.
     """
 
-    async def test_project_copilot_options_invokes_copilot_launcher(
+    async def test_workspace_copilot_options_invokes_copilot_launcher(
         self, tmp_path,
     ) -> None:
-        project = MagicMock()
-        project.name = "proj"
-        project.path = str(tmp_path)
+        workspace = MagicMock()
+        workspace.name = "proj"
+        workspace.path = str(tmp_path)
         store = MagicMock()
-        store.get = MagicMock(return_value=project)
+        store.get = MagicMock(return_value=workspace)
 
         claude_launcher = MagicMock()
         claude_launcher.build = AsyncMock()
@@ -579,7 +579,7 @@ class TestCopilotLaunchBranching:
         options = CopilotOptions(allow_all=True)
 
         mgr = SessionManager(
-            projects_store=store,
+            workspaces_store=store,
             launcher=claude_launcher,
             copilot_launcher=copilot_launcher,
         )
@@ -598,7 +598,7 @@ class TestCopilotLaunchBranching:
             claude_launcher.build.assert_not_awaited()
             assert config.env == {"X": "Y"}
             call = copilot_launcher.build.await_args
-            assert call.args[0] is project
+            assert call.args[0] is workspace
             assert call.args[1] is options
             assert mgr.list_sessions()[0].kind == SessionKind.COPILOT
         finally:
@@ -637,14 +637,14 @@ class TestCursorLaunchBranching:
     launcher is wired.
     """
 
-    async def test_project_cursor_options_invokes_cursor_launcher(
+    async def test_workspace_cursor_options_invokes_cursor_launcher(
         self, tmp_path,
     ) -> None:
-        project = MagicMock()
-        project.name = "proj"
-        project.path = str(tmp_path)
+        workspace = MagicMock()
+        workspace.name = "proj"
+        workspace.path = str(tmp_path)
         store = MagicMock()
-        store.get = MagicMock(return_value=project)
+        store.get = MagicMock(return_value=workspace)
 
         claude_launcher = MagicMock()
         claude_launcher.build = AsyncMock()
@@ -663,7 +663,7 @@ class TestCursorLaunchBranching:
         options = CursorOptions(force=True)
 
         mgr = SessionManager(
-            projects_store=store,
+            workspaces_store=store,
             launcher=claude_launcher,
             copilot_launcher=copilot_launcher,
             cursor_launcher=cursor_launcher,
@@ -684,7 +684,7 @@ class TestCursorLaunchBranching:
             copilot_launcher.build.assert_not_awaited()
             assert config.env == {"X": "Y"}
             call = cursor_launcher.build.await_args
-            assert call.args[0] is project
+            assert call.args[0] is workspace
             assert call.args[1] is options
             assert mgr.list_sessions()[0].kind == SessionKind.CURSOR
         finally:
@@ -719,15 +719,15 @@ class TestCursorLaunchBranching:
 @pytest.mark.timeout(20)
 class TestAdHocClaudeLaunchBranching:
     """``create_session`` dispatches to ``_apply_adhoc_launch`` when
-    ``project_name is None`` AND ``claude_options is not None``. The
-    launcher receives an :class:`AdHocLaunch` target, and the projects
+    ``workspace_name is None`` AND ``claude_options is not None``. The
+    launcher receives an :class:`AdHocLaunch` target, and the workspaces
     store must never be consulted — a custom-path session is by
-    definition not a project."""
+    definition not a workspace."""
 
     async def test_adhoc_dispatch_invokes_launcher_with_adhoc_target(
         self, tmp_path,
     ) -> None:
-        """Happy path: ``project_name=None`` plus ``claude_options`` routes
+        """Happy path: ``workspace_name=None`` plus ``claude_options`` routes
         through ``_apply_adhoc_launch``. The target passed to ``launcher.build``
         is an :class:`AdHocLaunch` carrying ``config.cwd``; ``config.command``,
         ``config.cwd``, and ``config.env`` are overwritten by ``LaunchSpec``."""
@@ -743,7 +743,7 @@ class TestAdHocClaudeLaunchBranching:
             ),
         )
 
-        mgr = SessionManager(projects_store=store, launcher=launcher, backend_factory=FakePtyBackend)
+        mgr = SessionManager(workspaces_store=store, launcher=launcher, backend_factory=FakePtyBackend)
         try:
             config = SessionConfig(
                 session_id="adhoc-sess",
@@ -796,12 +796,12 @@ class TestAdHocClaudeLaunchBranching:
         finally:
             await mgr.shutdown()
 
-    async def test_no_project_no_claude_options_skips_both_branches(
+    async def test_no_workspace_no_claude_options_skips_both_branches(
         self, tmp_path,
     ) -> None:
-        """When both ``project_name`` and ``claude_options`` are ``None``,
+        """When both ``workspace_name`` and ``claude_options`` are ``None``,
         the dispatch matrix falls through to the raw Terminal path — no
-        launcher build, no project lookup, ``config.command/cwd/env``
+        launcher build, no workspace lookup, ``config.command/cwd/env``
         survive as caller-supplied. Pins the dispatch matrix's else-arm
         so a future refactor that adds an accidental side-effect on the
         bare-cwd Terminal path is caught."""
@@ -810,7 +810,7 @@ class TestAdHocClaudeLaunchBranching:
         launcher = MagicMock()
         launcher.build = AsyncMock()
 
-        mgr = SessionManager(projects_store=store, launcher=launcher)
+        mgr = SessionManager(workspaces_store=store, launcher=launcher)
         try:
             shell_argv = default_shell()
             config = SessionConfig(
@@ -833,42 +833,42 @@ class TestAdHocClaudeLaunchBranching:
 
 @pytest.mark.timeout(20)
 class TestTerminalWorktreeResolution:
-    """Terminal mode (``claude_options=None`` + ``project_name`` set) creates a
+    """Terminal mode (``claude_options=None`` + ``workspace_name`` set) creates a
     real git worktree when ``config.worktree`` is requested, mirroring
     ``ClaudeLauncher``'s Standard-mode guards while keeping the session
     ``SessionKind.SHELL``. ``safe_path_exists`` runs the real ``Path.exists``,
-    so the git-project cases materialise a ``.git`` entry under ``tmp_path``;
+    so the git-workspace cases materialise a ``.git`` entry under ``tmp_path``;
     the ``WorktreeManager`` is an ``AsyncMock`` so no real ``git`` runs.
     """
 
     @staticmethod
-    def _store_for(project_name: str, project_path: str) -> MagicMock:
-        project = MagicMock()
-        project.name = project_name
-        project.path = project_path
+    def _store_for(workspace_name: str, workspace_path: str) -> MagicMock:
+        workspace = MagicMock()
+        workspace.name = workspace_name
+        workspace.path = workspace_path
         store = MagicMock()
-        store.get = MagicMock(return_value=project)
+        store.get = MagicMock(return_value=workspace)
         return store
 
     @staticmethod
-    def _shell_config(session_id: str, project_name: str, **kwargs) -> SessionConfig:
+    def _shell_config(session_id: str, workspace_name: str, **kwargs) -> SessionConfig:
         return SessionConfig(
             session_id=session_id,
             command=default_shell(),
             rows=24,
             cols=80,
             scrollback_size=50,
-            project_name=project_name,
+            project_name=workspace_name,
             claude_options=None,
             kind=SessionKind.SHELL,
             **kwargs,
         )
 
-    async def test_worktree_on_git_project_resolves_cwd_to_worktree(
+    async def test_worktree_on_git_workspace_resolves_cwd_to_worktree(
         self, tmp_path,
     ) -> None:
-        """``worktree=True`` over a git project resolves ``config.cwd`` to the
-        worktree path the manager returns — not the project root — and the
+        """``worktree=True`` over a git workspace resolves ``config.cwd`` to the
+        worktree path the manager returns — not the workspace root — and the
         session stays ``SHELL``. The launcher is never consulted."""
         (tmp_path / ".git").mkdir()
         store = self._store_for("proj", str(tmp_path))
@@ -888,7 +888,7 @@ class TestTerminalWorktreeResolution:
         launcher.build = AsyncMock()
 
         mgr = SessionManager(
-            projects_store=store, launcher=launcher, worktree_mgr=worktree_mgr,
+            workspaces_store=store, launcher=launcher, worktree_mgr=worktree_mgr,
         )
         try:
             config = self._shell_config(
@@ -898,8 +898,8 @@ class TestTerminalWorktreeResolution:
 
             worktree_mgr.create_worktree.assert_awaited_once()
             call = worktree_mgr.create_worktree.await_args
-            # create_standard_worktree(mgr, project_root, branch) ->
-            # mgr.create_worktree(slug, project_root, branch_name=branch)
+            # create_standard_worktree(mgr, workspace_root, branch) ->
+            # mgr.create_worktree(slug, workspace_root, branch_name=branch)
             assert call.args[0] == "feature-x"  # convert_to_worktree_slug("", "feature/x")
             assert call.args[1] == str(tmp_path)
             assert call.kwargs["branch_name"] == "feature/x"
@@ -910,7 +910,7 @@ class TestTerminalWorktreeResolution:
         finally:
             await mgr.shutdown()
 
-    async def test_worktree_on_git_project_blank_branch_uses_terminal_prefix(
+    async def test_worktree_on_git_workspace_blank_branch_uses_terminal_prefix(
         self, tmp_path,
     ) -> None:
         """A blank/``None`` ``branch_name`` falls back to a unique
@@ -927,7 +927,7 @@ class TestTerminalWorktreeResolution:
         )
 
         mgr = SessionManager(
-            projects_store=store, launcher=MagicMock(), worktree_mgr=worktree_mgr,
+            workspaces_store=store, launcher=MagicMock(), worktree_mgr=worktree_mgr,
         )
         try:
             config = self._shell_config(
@@ -943,11 +943,11 @@ class TestTerminalWorktreeResolution:
         finally:
             await mgr.shutdown()
 
-    async def test_worktree_on_non_git_project_falls_back_to_project_root(
+    async def test_worktree_on_non_git_workspace_falls_back_to_workspace_root(
         self, tmp_path,
     ) -> None:
-        """``worktree=True`` for a project with no ``.git`` is downgraded to the
-        project root (stale-client guard) and the ``WorktreeManager`` is never
+        """``worktree=True`` for a workspace with no ``.git`` is downgraded to the
+        workspace root (stale-client guard) and the ``WorktreeManager`` is never
         invoked."""
         # No ``.git`` is created under tmp_path -> safe_path_exists is False.
         store = self._store_for("proj", str(tmp_path))
@@ -955,7 +955,7 @@ class TestTerminalWorktreeResolution:
         worktree_mgr = AsyncMock()
 
         mgr = SessionManager(
-            projects_store=store, launcher=MagicMock(), worktree_mgr=worktree_mgr,
+            workspaces_store=store, launcher=MagicMock(), worktree_mgr=worktree_mgr,
         )
         try:
             config = self._shell_config("wt-nongit", "proj", worktree=True)
@@ -966,17 +966,17 @@ class TestTerminalWorktreeResolution:
         finally:
             await mgr.shutdown()
 
-    async def test_worktree_false_resolves_project_root_without_manager(
+    async def test_worktree_false_resolves_workspace_root_without_manager(
         self, tmp_path,
     ) -> None:
         """Regression companion to ``test_no_claude_options_only_resolves_cwd``:
-        with ``worktree`` defaulted ``False``, even a git project resolves to
-        the project root and never touches the (here ``None``) manager."""
+        with ``worktree`` defaulted ``False``, even a git workspace resolves to
+        the workspace root and never touches the (here ``None``) manager."""
         (tmp_path / ".git").mkdir()
         store = self._store_for("proj", str(tmp_path))
 
         mgr = SessionManager(
-            projects_store=store, launcher=MagicMock(), worktree_mgr=None,
+            workspaces_store=store, launcher=MagicMock(), worktree_mgr=None,
         )
         try:
             config = self._shell_config("wt-off", "proj")  # worktree defaults False
@@ -1199,14 +1199,14 @@ class TestPiLaunchBranching:
     wired.
     """
 
-    async def test_project_pi_options_invokes_pi_launcher(
+    async def test_workspace_pi_options_invokes_pi_launcher(
         self, tmp_path,
     ) -> None:
-        project = MagicMock()
-        project.name = "proj"
-        project.path = str(tmp_path)
+        workspace = MagicMock()
+        workspace.name = "proj"
+        workspace.path = str(tmp_path)
         store = MagicMock()
-        store.get = MagicMock(return_value=project)
+        store.get = MagicMock(return_value=workspace)
 
         claude_launcher = MagicMock()
         claude_launcher.build = AsyncMock()
@@ -1223,7 +1223,7 @@ class TestPiLaunchBranching:
         options = PiOptions(worktree=True)
 
         mgr = SessionManager(
-            projects_store=store,
+            workspaces_store=store,
             launcher=claude_launcher,
             pi_launcher=pi_launcher,
         )
@@ -1242,7 +1242,7 @@ class TestPiLaunchBranching:
             claude_launcher.build.assert_not_awaited()
             assert config.env == {"X": "Y"}
             call = pi_launcher.build.await_args
-            assert call.args[0] is project
+            assert call.args[0] is workspace
             assert call.args[1] is options
             assert mgr.list_sessions()[0].kind == SessionKind.PI
         finally:

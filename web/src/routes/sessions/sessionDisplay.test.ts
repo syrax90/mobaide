@@ -55,7 +55,7 @@ describe('sessionTitle', () => {
     );
   });
 
-  it('falls back to the kind and the project, then to a short id', () => {
+  it('falls back to the kind and the workspace, then to a short id', () => {
     expect(sessionTitle(session({ project_name: 'mobaide' }), 'Claude Code')).toBe(
       'Claude Code · mobaide',
     );
@@ -72,7 +72,7 @@ describe('sessionTitle', () => {
 });
 
 describe('sessionDialogLabel', () => {
-  it('falls back to the kind and the project, so two of a kind stay apart', () => {
+  it('falls back to the kind and the workspace, so two of a kind stay apart', () => {
     expect(sessionDialogLabel(session({ kind: 'codex', project_name: 'mobaide' }), names)).toBe(
       'Codex · mobaide',
     );
@@ -81,11 +81,11 @@ describe('sessionDialogLabel', () => {
     ).toBe('My Linter · mobaide');
   });
 
-  it('falls back to the bare kind when there is no project either', () => {
+  it('falls back to the bare kind when there is no workspace either', () => {
     expect(sessionDialogLabel(session({ kind: 'shell' }), names)).toBe('Terminal');
   });
 
-  it('treats a blank title or project as absent', () => {
+  it('treats a blank title or workspace as absent', () => {
     expect(sessionDialogLabel(session({ title: '   ', project_name: 'mobaide' }), names)).toBe(
       'Claude Code · mobaide',
     );

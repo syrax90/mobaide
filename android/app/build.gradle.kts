@@ -250,7 +250,7 @@ dependencies {
     // Security
     implementation(libs.androidx.security.crypto)
 
-    // DataStore (last-used project / session persistence)
+    // DataStore (last-used workspace / session persistence)
     implementation(libs.androidx.datastore.preferences)
 
     // Google Credential Manager (Sign-In with Google)

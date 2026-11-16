@@ -1,6 +1,6 @@
 """Base-branch choice for new worktrees: the default the manager picks, an
 explicit ``base_branch``, the ``GET /worktree-bases`` listing and the
-per-project memory of the last choice."""
+per-workspace memory of the last choice."""
 from __future__ import annotations
 
 import atexit
@@ -14,7 +14,7 @@ import pytest
 
 from mobaide.agent.git.service import list_worktree_bases
 from mobaide.core.git_exec import reset_caches
-from mobaide.core.projects_store import ProjectRecord, ProjectsStore
+from mobaide.core.workspaces_store import WorkspaceRecord, WorkspacesStore
 from mobaide.linear.worktree import (
     WorktreeCreationError,
     WorktreeManager,
@@ -206,21 +206,21 @@ class TestListWorktreeBases:
         assert gone.last_used is None
 
 
-class TestProjectsStoreLastBase:
+class TestWorkspacesStoreLastBase:
     def test_round_trips_and_survives_reload_and_rename(self, tmp_path):
-        from mobaide.core.projects_store import ProjectUpdatePatch
+        from mobaide.core.workspaces_store import WorkspaceUpdatePatch
 
         path = str(tmp_path / "projects.json")
-        store = ProjectsStore(path)
+        store = WorkspacesStore(path)
         store.load(seed_json="[]")
-        store.create(ProjectRecord(name="p", path=str(tmp_path)))
+        store.create(WorkspaceRecord(name="p", path=str(tmp_path)))
         assert store.get_last_worktree_base("p") is None
 
         store.set_last_worktree_base("p", "origin/dev")
-        store.update("p", ProjectUpdatePatch(name="q"))
+        store.update("p", WorkspaceUpdatePatch(name="q"))
         store.set_last_worktree_base("missing", "x")
 
-        reloaded = ProjectsStore(path)
+        reloaded = WorkspacesStore(path)
         reloaded.load()
         assert reloaded.get_last_worktree_base("q") == "origin/dev"
         assert "last_worktree_base" not in reloaded.list_public()[0]
@@ -232,11 +232,11 @@ class TestSessionManagerRemembersBase:
         from mobaide.core.session_manager import SessionManager
 
         (tmp_path / ".git").mkdir()
-        store = ProjectsStore(str(tmp_path / "projects.json"))
+        store = WorkspacesStore(str(tmp_path / "projects.json"))
         store.load(seed_json="[]")
-        store.create(ProjectRecord(name="p", path=str(tmp_path)))
+        store.create(WorkspaceRecord(name="p", path=str(tmp_path)))
         manager = SessionManager.__new__(SessionManager)
-        manager._projects_store = store
+        manager._workspaces_store = store
         manager._worktree_mgr = MagicMock()
         config = SessionConfig(
             session_id="s", command=["sh"], project_name="p",
@@ -249,7 +249,7 @@ class TestSessionManagerRemembersBase:
                 path=str(tmp_path), is_new=True, branch="b",
             )),
         ) as create:
-            await manager._resolve_project_cwd(config)
+            await manager._resolve_workspace_cwd(config)
 
         assert create.await_args.kwargs["base_branch"] == "origin/dev"
         assert store.get_last_worktree_base("p") == "origin/dev"
@@ -261,6 +261,6 @@ class TestSessionManagerRemembersBase:
                 path=str(tmp_path), is_new=True, branch="b",
             )),
         ):
-            await manager._resolve_project_cwd(config)
+            await manager._resolve_workspace_cwd(config)
 
         assert store.get_last_worktree_base("p") is None

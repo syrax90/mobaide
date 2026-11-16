@@ -173,7 +173,7 @@ describe('SessionsPanel rows', () => {
     expect(screen.queryByRole('list', { name: 'Sessions' })).toBeNull();
   });
 
-  it('lists the synced sessions with the current one marked, plus kind, project and attention', async () => {
+  it('lists the synced sessions with the current one marked, plus kind, workspace and attention', async () => {
     markSessionsSynced('a1');
     api.sessions = [
       session('s1', { title: 'fix: login', project_name: 'app', attention: 'awaiting_permission' }),

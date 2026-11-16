@@ -6,7 +6,7 @@
  * Both are pure, so every restore rule — bucket independence, the Antigravity
  * interlock, the effort clamp, which fields are per-session — is asserted
  * without a DOM. `NewSession.test.tsx` covers only what needs the component:
- * the seed on mount, the pin across an in-flight create, and the project
+ * the seed on mount, the pin across an in-flight create, and the workspace
  * pre-fill.
  */
 import type {
@@ -50,7 +50,7 @@ function restoreClaudeBucket(
     skipPermissions: saved.skipPermissions,
     noMemory: saved.noMemory,
     planMode: restorePlanMode ? saved.planMode : base.planMode,
-    // Per-session: Auto Scan seeds it from the project's `auto_scan_prompt`.
+    // Per-session: Auto Scan seeds it from the workspace's `auto_scan_prompt`.
     initialPrompt: base.initialPrompt,
     // Auto Scan always runs in the terminal and has no such toggle.
     terminalUi: bucketId === 'claude' ? saved.terminalUi : base.terminalUi,

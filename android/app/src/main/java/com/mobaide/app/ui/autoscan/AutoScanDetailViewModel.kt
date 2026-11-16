@@ -40,7 +40,7 @@ class AutoScanDetailViewModel @Inject constructor(
     private val repository: AutoScanRepository,
     private val appForegroundTracker: AppForegroundTracker,
 ) : ViewModel() {
-    val projectName: String = checkNotNull(savedStateHandle["projectName"])
+    val workspaceName: String = checkNotNull(savedStateHandle["workspaceName"])
 
     enum class ConnectionState { Connecting, Connected, Replaying, Disconnected }
 
@@ -114,10 +114,10 @@ class AutoScanDetailViewModel @Inject constructor(
 
     fun startStream() {
         streamJob?.cancel()
-        val resume = if (_ui.value.lastSeq > 0L) mapOf(projectName to _ui.value.lastSeq)
+        val resume = if (_ui.value.lastSeq > 0L) mapOf(workspaceName to _ui.value.lastSeq)
                      else emptyMap()
         streamJob = viewModelScope.launch {
-            repository.observeDetailFrames(projectName, resume).collect { frame ->
+            repository.observeDetailFrames(workspaceName, resume).collect { frame ->
                 handleFrame(frame)
             }
         }
@@ -134,7 +134,7 @@ class AutoScanDetailViewModel @Inject constructor(
                 _ui.update { it.copy(connection = ConnectionState.Connecting) }
             }
             is AutoScanWsClient.Frame.Snapshot -> {
-                val instance = frame.scans.firstOrNull { it.project_name == projectName }
+                val instance = frame.scans.firstOrNull { it.workspace_name == workspaceName }
                 _ui.update {
                     it.copy(
                         instance = instance,
@@ -143,13 +143,13 @@ class AutoScanDetailViewModel @Inject constructor(
                         connection = ConnectionState.Replaying,
                     )
                 }
-                frame.events[projectName]?.forEach { reduceEvent(it) }
+                frame.events[workspaceName]?.forEach { reduceEvent(it) }
             }
             is AutoScanWsClient.Frame.CaughtUp -> {
                 _ui.update { it.copy(connection = ConnectionState.Connected) }
             }
             is AutoScanWsClient.Frame.Event -> {
-                if (frame.event.projectName == projectName) reduceEvent(frame.event)
+                if (frame.event.workspaceName == workspaceName) reduceEvent(frame.event)
             }
             is AutoScanWsClient.Frame.Disconnected -> {
                 _ui.update { it.copy(connection = ConnectionState.Disconnected) }
@@ -268,7 +268,7 @@ class AutoScanDetailViewModel @Inject constructor(
     fun runNow() {
         viewModelScope.launch {
             try {
-                val response = repository.runNow(projectName)
+                val response = repository.runNow(workspaceName)
                 // Update immediately from REST so the UI resets before the bus event arrives.
                 _ui.update { it.copy(nextScanAt = response.next_scan_at) }
             } catch (_: Exception) {
@@ -279,7 +279,7 @@ class AutoScanDetailViewModel @Inject constructor(
 
     fun stop() {
         viewModelScope.launch {
-            try { repository.stopScan(projectName) } catch (_: Exception) { }
+            try { repository.stopScan(workspaceName) } catch (_: Exception) { }
         }
     }
 

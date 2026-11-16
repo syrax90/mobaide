@@ -2903,7 +2903,7 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--agent-name", default=None,
                     help=f"agent display name (default {DEFAULT_AGENT_NAME})")
     up.add_argument("--projects", default=None,
-                    help="optional PROJECTS seed for the agent (real project dirs)")
+                    help="optional PROJECTS seed for the agent (real workspace dirs)")
     up.add_argument("--reinstall", action="store_true",
                     help="re-run the editable pip installs before booting")
     up.add_argument("--web", action="store_true",

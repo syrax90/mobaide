@@ -52,9 +52,9 @@ export function useSessionGitMenu({
     useSessionGitCapabilities(agentId, session?.cwd !== undefined).data ?? NO_GIT_CAPABILITIES;
   const canCommit = gitCapabilities.commit;
   const canSync = hasGitSync(gitCapabilities);
-  // *Branches…* is a link to the project's Git screen, so it needs a
-  // project-backed session on top of the capability.
-  const branchesProject =
+  // *Branches…* is a link to the workspace's Git screen, so it needs a
+  // workspace-backed session on top of the capability.
+  const branchesWorkspace =
     gitCapabilities.branches && session?.project_name !== undefined ? session.project_name : null;
 
   const group: MenuGroup | null =
@@ -95,14 +95,14 @@ export function useSessionGitMenu({
                   },
                 ]
               : []),
-            ...(branchesProject !== null
+            ...(branchesWorkspace !== null
               ? [
                   {
                     id: 'branches',
                     label: 'Branches…',
                     onSelect: () => {
                       void navigate(
-                        `/agents/${encodeURIComponent(agentId)}/projects/${encodeURIComponent(branchesProject)}/git`,
+                        `/agents/${encodeURIComponent(agentId)}/workspaces/${encodeURIComponent(branchesWorkspace)}/git`,
                       );
                     },
                   },
@@ -130,7 +130,7 @@ export function useSessionGitMenu({
       commitRequest={commitRequest}
       syncRequest={syncRequest}
       rebaseRequest={rebaseRequest}
-      projectName={session?.project_name ?? null}
+      workspaceName={session?.project_name ?? null}
       onClose={() => {
         setChangesOpen(false);
         setCommitRequest(0);

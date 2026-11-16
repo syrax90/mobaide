@@ -7,9 +7,9 @@ from typing import Any
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from mobaide.core.projects_config import ProjectConfig
+from mobaide.core.workspaces_config import WorkspaceConfig
 
-__all__ = ["ProjectConfig", "AutoScanConfig"]
+__all__ = ["WorkspaceConfig", "AutoScanConfig"]
 
 _DEFAULT_AUTO_SCAN_PROMPT = (
     "Read the Linear issue matching the identifier in the current worktree name. "
@@ -22,21 +22,21 @@ _TRUTHY = frozenset({"1", "true", "yes", "on"})
 class AutoScanConfig(BaseSettings):
     """Configuration for the Linear auto-scan engine.
 
-    Holds only the non-project settings (intervals, prompt, worktree folders,
-    Linear workflow state names). The list of projects eligible for auto-scan
-    is read live from :class:`mobaide.core.projects_store.ProjectsStore`
+    Holds only the non-workspace settings (intervals, prompt, worktree folders,
+    Linear workflow state names). The list of workspaces eligible for auto-scan
+    is read live from :class:`mobaide.core.workspaces_store.WorkspacesStore`
     by :class:`mobaide.linear.scanner.AutoScanSessionManager` — adding
-    a project with a ``linear_api_key`` after boot makes it immediately
+    a workspace with a ``linear_api_key`` after boot makes it immediately
     available for auto-scan without a restart.
     """
 
-    # Folder that holds every worktree, one sub-folder per project. Empty
+    # Folder that holds every worktree, one sub-folder per workspace. Empty
     # means ``~/.mobaide/worktrees`` (``%USERPROFILE%\\.mobaide\\worktrees``
     # on Windows); see :meth:`resolved_worktrees_dir`.
     worktrees_dir: str | None = Field(
         default=None, validation_alias="MOBAIDE_WORKTREES_DIR",
     )
-    # Folder inside the project root where earlier agent versions put
+    # Folder inside the workspace root where earlier agent versions put
     # worktrees. New worktrees never go there; an old one is still reused.
     worktree_base: str = "mobaide_worktree"
     scan_interval_seconds: int = 300
@@ -70,7 +70,7 @@ class AutoScanConfig(BaseSettings):
         return value
 
     def resolved_worktrees_dir(self, test_mode: bool | None = None) -> str:
-        """Absolute folder that holds the worktrees of every project.
+        """Absolute folder that holds the worktrees of every workspace.
 
         ``~`` and environment variables in a configured value are expanded,
         and a relative value is taken from the home folder. With no value,
@@ -86,7 +86,7 @@ class AutoScanConfig(BaseSettings):
             return os.path.abspath(path)
         legacy = self.worktree_base
         if os.path.isabs(legacy):
-            # An operator who moved worktrees out of the project with an
+            # An operator who moved worktrees out of the workspace with an
             # absolute WORKTREE_BASE before this setting existed keeps that
             # folder.
             return os.path.abspath(legacy)

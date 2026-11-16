@@ -12,7 +12,7 @@ import { chatStoredSessionsResponseSchema } from './dto/chatSessions';
 import { createCustomAgentTypeRequestSchema } from './dto/customAgentTypes';
 import { busyByResponseSchema, busyHolderSchema } from './dto/gitConflict';
 import { gitJobSchema } from './dto/gitJob';
-import { autoScanFilterSchema, projectInfoSchema } from './dto/projects';
+import { autoScanFilterSchema, workspaceInfoSchema } from './dto/workspaces';
 import { sessionKindSchema, sessionResponseSchema } from './dto/session';
 import {
   antigravityOptionsSchema,
@@ -52,7 +52,7 @@ const REGISTRY: Readonly<Record<string, z.ZodType>> = {
   PiOptionsModel: piOptionsSchema,
   VersionInfoResponse: agentVersionSchema,
   CreateCustomAgentTypeRequest: createCustomAgentTypeRequestSchema,
-  ProjectInfo: projectInfoSchema,
+  ProjectInfo: workspaceInfoSchema,
   AutoScanFilterDto: autoScanFilterSchema,
   AutoScanInstanceDto: autoScanInstanceSchema,
   AutoScanListResponse: autoScanListResponseSchema,

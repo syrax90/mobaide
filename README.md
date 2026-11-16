@@ -49,7 +49,7 @@
 - **Several sessions at once.** Keep a Claude Code run, a Codex review and a shell side by side, each with its own state.
 - **[Voice input](#voice-input).** Dictate prompts instead of thumb-typing them. Your own computer does the transcription, in 25 languages. Opt-in, and the audio is never stored.
 - **Git from your phone.** Read diffs, stage, commit, fetch, pull, push, rebase, resolve conflicts and manage branches. Git runs on your machine, with the credentials it already has.
-- **Optional Git worktrees.** Start any session in its own worktree so parallel runs do not collide. Opt-in per launch, Git projects only.
+- **Optional Git worktrees.** Start any session in its own worktree so parallel runs do not collide. Opt-in per launch, Git workspaces only.
 - **Auto Scan.** Watch [Linear](https://linear.app) for matching issues and launch a Claude Code session in a new worktree for each one.
 - **Notifications.** Get an alert when a session needs your approval, finishes a turn or ends. A Cursor session sends the first two from the chat view only.
 - **Prompt templates and shortcuts.** Save prompts and reuse them in any session. Build custom key chords as buttons on the mobile control bar. Both sync across your devices.
@@ -98,7 +98,7 @@ irm https://get.mobaide.com/install.ps1 | iex
 
 **2. Get a client and pair.** Install the [Android](https://play.google.com/store/apps/details?id=com.mobaide.app) (8.0+) or [iPhone](https://apps.apple.com/app/id6797191741) (iOS 17+) app, then scan the QR code the agent prints. In a browser, open the pairing link the agent prints and sign in at [app.mobaide.com](https://app.mobaide.com).
 
-**3. Start a session.** Pick a project, pick what to run, and drive it from the chat view, or from the terminal view for shells and custom agents.
+**3. Start a session.** Pick a workspace, pick what to run, and drive it from the chat view, or from the terminal view for shells and custom agents.
 
 ## How it works
 

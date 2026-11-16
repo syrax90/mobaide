@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from mobaide.core.projects_store import normalize_project_path
+from mobaide.core.workspaces_store import normalize_workspace_path
 
 try:
     from mobaide.agent.logging import audit_event, get_logger
@@ -45,21 +45,21 @@ class ActiveWorkItem:
             id=str(data["id"]),
             uuid=str(data["uuid"]),
             slug=str(data["slug"]),
-            worktree_path=normalize_project_path(str(data["worktree_path"])),
-            project_root=normalize_project_path(str(data["project_root"])),
+            worktree_path=normalize_workspace_path(str(data["worktree_path"])),
+            project_root=normalize_workspace_path(str(data["project_root"])),
             added_at=str(data["added_at"]),
         )
 
 
-def _slug_project_name(name: str) -> str:
-    """Sanitize a project name into a filesystem-safe slug."""
+def _slug_workspace_name(name: str) -> str:
+    """Sanitize a workspace name into a filesystem-safe slug."""
     slug = re.sub(r"[^a-zA-Z0-9._-]", "_", name).strip("._-")
     return slug.lower() or "default"
 
 
-def active_workitems_path(state_dir: str | os.PathLike, project_name: str) -> Path:
-    """Return the absolute path to a project's active_workitems.json file."""
-    return (Path(state_dir) / _slug_project_name(project_name) / "active_workitems.json").resolve()
+def active_workitems_path(state_dir: str | os.PathLike, workspace_name: str) -> Path:
+    """Return the absolute path to a workspace's active_workitems.json file."""
+    return (Path(state_dir) / _slug_workspace_name(workspace_name) / "active_workitems.json").resolve()
 
 
 def now_iso_utc() -> str:
@@ -67,10 +67,10 @@ def now_iso_utc() -> str:
 
 
 class ActiveWorkItemsStore:
-    """Async-safe JSON store of active work items for one project.
+    """Async-safe JSON store of active work items for one workspace.
 
     Persists a top-level JSON array to ``active_workitems.json``.
-    One store instance per project — do not share across projects.
+    One store instance per workspace — do not share across workspaces.
     """
 
     def __init__(self, path: Path) -> None:

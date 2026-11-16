@@ -10,9 +10,9 @@ import { applyAutoScanSnapshot, applyAutoScanStatus } from './autoscanCache';
 const AGENT = 'agent-1';
 const key = queryKeys.autoscan(AGENT);
 
-function wireScan(projectName: string, overrides: Record<string, unknown> = {}) {
+function wireScan(workspaceName: string, overrides: Record<string, unknown> = {}) {
   return {
-    project_name: projectName,
+    project_name: workspaceName,
     status: 'scanning',
     started_at: 1_751_800_000.5,
     last_activity_at: 1_751_800_005.5,

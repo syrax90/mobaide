@@ -1,6 +1,6 @@
 """Launcher for the OpenCode CLI (``opencode``).
 
-Needs no hooks, project files or sign-in probe; terminal sessions get attention
+Needs no hooks, workspace files or sign-in probe; terminal sessions get attention
 from the OSC 7501 status reports that OpenCode 2 writes. Only ``--auto`` and
 ``--prompt`` are used: both OpenCode lines accept them, and OpenCode 2 has no
 ``--model`` or ``--agent`` flag for its TUI.
@@ -25,7 +25,7 @@ from .cli_launcher import (
     resolve_standard_worktree_cwd,
     windows_npm_fallbacks,
 )
-from .projects_config import ProjectConfig
+from .workspaces_config import WorkspaceConfig
 
 if TYPE_CHECKING:
     from mobaide.linear.worktree import WorktreeManager
@@ -93,7 +93,7 @@ def _turn_tabs_off(env: dict[str, str]) -> None:
 
     The status report covers every tab of the folder, so a request waiting in
     one terminal session would raise "permission needed" in every other session
-    of the project. The user's own tabs choice in this variable wins.
+    of the workspace. The user's own tabs choice in this variable wins.
     """
     raw = env.get(_CLI_CONFIG_ENV_VAR, "")
     try:
@@ -120,7 +120,7 @@ class OpenCodeOptions:
     auto_approve: bool = False
     initial_prompt: str | None = None
     connect: bool = False
-    # Worktree intent for a stored git project, resolved by ``resolve_cwd``
+    # Worktree intent for a stored git workspace, resolved by ``resolve_cwd``
     # exactly like Codex; ignored for ad-hoc launches.
     worktree: bool = False
     branch_name: str | None = None
@@ -183,11 +183,11 @@ class OpenCodeLauncher:
         return argv
 
     async def resolve_cwd(self, target: LaunchTarget, options: OpenCodeOptions) -> str:
-        """The session folder: the project root, a new git worktree when
-        ``worktree`` is set on a stored git project, or the bare ad-hoc cwd."""
+        """The session folder: the workspace root, a new git worktree when
+        ``worktree`` is set on a stored git workspace, or the bare ad-hoc cwd."""
         return await resolve_standard_worktree_cwd(
             target,
-            # A sign-in changes nothing in the project: it needs no worktree.
+            # A sign-in changes nothing in the workspace: it needs no worktree.
             worktree=options.worktree and not options.connect,
             branch_name=options.branch_name,
             base_branch=options.base_branch,
@@ -203,7 +203,7 @@ class OpenCodeLauncher:
         env.setdefault("TERM", "xterm-256color")
         env["PYTHONIOENCODING"] = "utf-8"
 
-        if isinstance(target, ProjectConfig) and target.conda_env:
+        if isinstance(target, WorkspaceConfig) and target.conda_env:
             conda_bin = conda_env_bin(target.conda_env)
             if conda_bin:
                 sep = os.pathsep

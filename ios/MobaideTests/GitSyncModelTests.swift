@@ -39,7 +39,7 @@ final class GitSyncModelTests: XCTestCase {
             sessionId: "s1",
             agentAPI: agentAPI,
             agentEventBus: bus,
-            projectName: { "proj" },
+            workspaceName: { "proj" },
             sleeper: sleeper,
             openSync: openSync
         )

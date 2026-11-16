@@ -19,8 +19,8 @@ import {
 
 interface GitRebaseDialogProps {
   agentId: string;
-  /** The session's project: its branches feed the picker; without one the ref is typed. */
-  projectName: string | null;
+  /** The session's workspace: its branches feed the picker; without one the ref is typed. */
+  workspaceName: string | null;
   status: SessionGitStatus | undefined;
   busy: boolean;
   rebase: (onto: string) => Promise<SessionGitRebaseResult>;
@@ -30,15 +30,15 @@ interface GitRebaseDialogProps {
 
 /**
  * The Rebase sheet: pick the branch to replay this one on top of. A
- * project-backed session picks from the project's local and remote-tracking
- * branches (the same rows as the project Git screen), deliberately with no
+ * workspace-backed session picks from the workspace's local and remote-tracking
+ * branches (the same rows as the workspace Git screen), deliberately with no
  * preselection for a history rewrite; any other session — or a list that
  * failed to load — types the ref. What would make git refuse to start is
  * explained up front and keeps the button disabled; the agent still decides.
  */
 export function GitRebaseDialog({
   agentId,
-  projectName,
+  workspaceName,
   status,
   busy,
   rebase,
@@ -49,15 +49,15 @@ export function GitRebaseDialog({
   const [typed, setTyped] = useState('');
   const [error, setError] = useState<{ text: string; output: string | null } | null>(null);
   const items = useQuery({
-    queryKey: queryKeys.gitItems(agentId, projectName ?? ''),
-    queryFn: () => listGitItems(agentId, projectName ?? ''),
-    enabled: projectName !== null,
+    queryKey: queryKeys.gitItems(agentId, workspaceName ?? ''),
+    queryFn: () => listGitItems(agentId, workspaceName ?? ''),
+    enabled: workspaceName !== null,
     meta: { silent: true },
   });
 
   const repo = status?.repo ?? null;
   const targets = items.data === undefined ? [] : rebaseTargets(items.data, repo?.head.branch);
-  const picking = projectName !== null && !items.isError;
+  const picking = workspaceName !== null && !items.isError;
   const onto = picking ? picked : typed.trim() === '' ? null : typed.trim();
   const blocker = rebaseBlocker(status);
   const submittable = !busy && blocker === null && onto !== null;
@@ -105,7 +105,7 @@ export function GitRebaseDialog({
           />
         )}
         {picking && items.isSuccess && targets.length === 0 && (
-          <p className="field-hint">No other branches in this project.</p>
+          <p className="field-hint">No other branches in this workspace.</p>
         )}
         {blocker !== null && <p className="field-error">{blocker}</p>}
         {error !== null && (

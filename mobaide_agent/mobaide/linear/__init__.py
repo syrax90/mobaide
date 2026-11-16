@@ -1,7 +1,7 @@
-from mobaide.core.projects_config import AutoScanFilter
+from mobaide.core.workspaces_config import AutoScanFilter
 
 from .client import LinearApiClient
-from .config import AutoScanConfig, ProjectConfig
+from .config import AutoScanConfig, WorkspaceConfig
 from .models import LinearIssue, ScanEvent, ScanStatus
 from .rate_limiter import LinearRateLimiter
 from .scanner import (
@@ -16,7 +16,7 @@ __all__ = [
     "LinearApiClient",
     "AutoScanConfig",
     "AutoScanFilter",
-    "ProjectConfig",
+    "WorkspaceConfig",
     "LinearIssue",
     "ScanEvent",
     "ScanStatus",

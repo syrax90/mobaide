@@ -2,15 +2,15 @@ import XCTest
 @testable import Mobaide
 
 /// Edge-case coverage for the shared 409-body parser. The model/repository
-/// flows (`ProjectsRepositoryTests`, `GitScreenModelTests`) exercise the happy
+/// flows (`WorkspacesRepositoryTests`, `GitScreenModelTests`) exercise the happy
 /// paths; these pin the malformed / cross-shape fallbacks directly.
 final class ConflictParsingTests: XCTestCase {
-    // MARK: - string(from:) — project conflicts
+    // MARK: - string(from:) — workspace conflicts
 
     func testStringExtractsDetailFromValidBody() {
         XCTAssertEqual(
-            ConflictDetail.string(from: #"{"detail":"Project 'p' already exists"}"#),
-            "Project 'p' already exists"
+            ConflictDetail.string(from: #"{"detail":"Workspace 'p' already exists"}"#),
+            "Workspace 'p' already exists"
         )
     }
 
@@ -50,14 +50,14 @@ final class ConflictParsingTests: XCTestCase {
         XCTAssertEqual(holders?[0].kind, "session")
         XCTAssertEqual(holders?[0].session_id, "s1")
         XCTAssertEqual(holders?[0].cwd, "/w")
-        XCTAssertNil(holders?[0].project_name)
+        XCTAssertNil(holders?[0].workspace_name)
         XCTAssertEqual(holders?[1].kind, "project")
-        XCTAssertEqual(holders?[1].project_name, "proj")
+        XCTAssertEqual(holders?[1].workspace_name, "proj")
         XCTAssertEqual(holders?[1].worktree_path, "/wt")
     }
 
-    func testBusyHoldersReturnsNilForProjectStringDetail() {
-        // A project-conflict body (`detail` is a string) is not the busy shape.
+    func testBusyHoldersReturnsNilForWorkspaceStringDetail() {
+        // A workspace-conflict body (`detail` is a string) is not the busy shape.
         XCTAssertNil(ConflictDetail.busyHolders(from: #"{"detail":"already exists"}"#))
     }
 }

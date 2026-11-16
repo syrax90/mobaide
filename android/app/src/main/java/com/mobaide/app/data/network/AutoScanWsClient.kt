@@ -39,7 +39,7 @@ class AutoScanWsClient(
     }
 
     data class ParsedEvent(
-        val projectName: String,
+        val workspaceName: String,
         val seq: Long,
         val ts: String,
         val type: String,
@@ -117,14 +117,14 @@ class AutoScanWsClient(
         }
     }
 
-    private fun parseEventDict(projectName: String, ev: JsonObject): ParsedEvent? {
+    private fun parseEventDict(workspaceName: String, ev: JsonObject): ParsedEvent? {
         return try {
             val seq = ev["seq"]?.jsonPrimitive?.long ?: 0L
             val ts = ev["ts"]?.jsonPrimitive?.contentOrNull.orEmpty()
             val type = ev["type"]?.jsonPrimitive?.contentOrNull.orEmpty()
             val payload = ev["payload"]?.jsonObject ?: JsonObject(emptyMap())
             ParsedEvent(
-                projectName = projectName,
+                workspaceName = workspaceName,
                 seq = seq,
                 ts = ts,
                 type = type,

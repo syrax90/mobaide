@@ -257,7 +257,7 @@ class SessionCreateDtoFixtureTest {
     fun nullBaseBranch_isLeftOffTheWire() {
         val encoded = json.encodeToJsonElement(
             CreateSessionRequest.serializer(),
-            CreateSessionRequest(project_name = "p", worktree = true),
+            CreateSessionRequest(workspace_name = "p", worktree = true),
         ) as JsonObject
         assertTrue("base_branch" !in encoded)
     }

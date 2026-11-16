@@ -36,7 +36,7 @@ from mobaide.core.cli_launcher import (
     shim_safe_argv,
     windows_npm_fallbacks,
 )
-from mobaide.core.projects_config import ProjectConfig
+from mobaide.core.workspaces_config import WorkspaceConfig
 
 from . import codex_bridge, pi_bridge
 from . import normalize as nz
@@ -170,7 +170,7 @@ class ChatLaunchPlan:
     title: str | None = None
     created_files: list[str] = field(default_factory=list)
     # Working directory of the agent process itself; the session folder goes
-    # to the agent in ``session/new``. Kept out of the project so files in it
+    # to the agent in ``session/new``. Kept out of the workspace so files in it
     # cannot pick which adapter runs.
     process_cwd: str | None = None
     # Asked before the agent opens the folder; None when no gate applies.
@@ -225,7 +225,7 @@ class ChatAgentSpec(Protocol):
     async def prepare(self, target: LaunchTarget, options: Any) -> ChatLaunchPlan: ...
 
     async def catalog_plan(self) -> ChatLaunchPlan:
-        """A launch for listing stored sessions: no project, no options."""
+        """A launch for listing stored sessions: no workspace, no options."""
         ...
 
 
@@ -850,8 +850,8 @@ class CodexChatSpec(_AdapterSpec):
         if not self.live_sessions or self._adapters_dir is None or "CODEX_PATH" in os.environ:
             return False
         # The shared app-server runs commands with its own environment, so a
-        # project that pins a conda env gets a private app-server instead.
-        if isinstance(target, ProjectConfig) and target.conda_env:
+        # workspace that pins a conda env gets a private app-server instead.
+        if isinstance(target, WorkspaceConfig) and target.conda_env:
             return False
         return codex_bridge.socket_reachable(codex_bridge.control_socket(env))
 

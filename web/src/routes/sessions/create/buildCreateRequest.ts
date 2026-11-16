@@ -15,7 +15,7 @@
  * with `--dangerously-skip-permissions`.
  */
 import type { components } from '../../../api/generated/agent';
-import type { ProjectSummary } from '../../../api/projectRepository';
+import type { WorkspaceSummary } from '../../../api/workspaceRepository';
 import type { ChatSupport } from '../../../protocol/dto/agentVersion';
 import type { ChatStoredSession } from '../../../protocol/dto/chatSessions';
 import {
@@ -46,8 +46,8 @@ type PiOptions = components['schemas']['PiOptionsModel'];
 export interface BuildContext {
   state: WizardState;
   mode: WizardMode;
-  /** The stored project the selection names, once resolved. The only source of `is_git`. */
-  project: ProjectSummary | null;
+  /** The stored workspace the selection names, once resolved. The only source of `is_git`. */
+  workspace: WorkspaceSummary | null;
   /** `capabilities.chat` for the mode's agent; absent reads as not known yet. */
   chat?: ChatSupport;
   /**
@@ -120,26 +120,26 @@ function blankToUndefined(value: string): string | undefined {
 }
 
 interface Placement {
-  projectName: string | undefined;
+  workspaceName: string | undefined;
   cwd: string | undefined;
-  /** Worktrees need a stored git project; a one-off path has no repo to branch. */
+  /** Worktrees need a stored git workspace; a one-off path has no repo to branch. */
   gitEligible: boolean;
   worktree: boolean;
   branchName: string | undefined;
   baseBranch: string | null;
 }
 
-function placement({ state, project, worktreeBase }: BuildContext): Placement {
+function placement({ state, workspace, worktreeBase }: BuildContext): Placement {
   const selection = state.selection;
-  const gitEligible = selection.kind === 'stored' && project?.is_git === true;
+  const gitEligible = selection.kind === 'stored' && workspace?.is_git === true;
   const worktree = gitEligible && state.git.worktree;
   return {
-    projectName: selection.kind === 'stored' ? selection.name : undefined,
+    workspaceName: selection.kind === 'stored' ? selection.name : undefined,
     cwd: selection.kind === 'customPath' ? selection.path : undefined,
     gitEligible,
     worktree,
     // Gated on git-eligibility alone, not on `worktree` — both mobile clients
-    // send a branch name whenever the project could host one.
+    // send a branch name whenever the workspace could host one.
     branchName:
       gitEligible && state.git.branchName.trim() !== '' ? state.git.branchName : undefined,
     // Unlike the branch name, only with a worktree: the base means nothing else.
@@ -256,7 +256,7 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
 
   const place = placement(context);
   const base = {
-    project_name: place.projectName,
+    project_name: place.workspaceName,
     cwd: place.cwd,
     rows: 24,
     cols: 80,
@@ -379,15 +379,15 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
 /**
  * Continue a session stored on the PC in a new chat session, with the agent's
  * current options but never a worktree: the conversation belongs to the folder
- * it was recorded in. That folder is the selected project when the paths
+ * it was recorded in. That folder is the selected workspace when the paths
  * match, else a plain `cwd`.
  */
 export function buildResumeRequest(
-  { state, project }: BuildContext,
+  { state, workspace }: BuildContext,
   kind: ChatAgentKind,
   stored: ChatStoredSession,
 ): CreateSessionRequest {
-  const sameFolder = project !== null && project.path === stored.cwd;
+  const sameFolder = workspace !== null && workspace.path === stored.cwd;
   const noWorktree = { worktree: false, branchName: undefined, baseBranch: null };
   const options =
     kind === 'codex'
@@ -407,7 +407,7 @@ export function buildResumeRequest(
                 ? { cli: 'pi', pi_options: piOptions(noWorktree) }
                 : { cli: 'claude', claude_options: claudeOptions(state.claude, noWorktree) };
   return {
-    project_name: sameFolder ? project.name : undefined,
+    project_name: sameFolder ? workspace.name : undefined,
     cwd: sameFolder ? undefined : stored.cwd,
     rows: 24,
     cols: 80,
@@ -427,7 +427,7 @@ export function buildConnectRequest(context: BuildContext): CreateSessionRequest
   if (context.state.selection.kind === 'none') return null;
   const place = placement(context);
   return {
-    project_name: place.projectName,
+    project_name: place.workspaceName,
     cwd: place.cwd,
     rows: 24,
     cols: 80,
@@ -438,7 +438,7 @@ export function buildConnectRequest(context: BuildContext): CreateSessionRequest
   };
 }
 
-/** `null` unless the mode is `auto_scan` against a stored project. */
+/** `null` unless the mode is `auto_scan` against a stored workspace. */
 export function buildStartScanRequest(context: BuildContext): StartScanRequest | null {
   const { state, mode } = context;
   if (mode !== 'auto_scan' || state.selection.kind !== 'stored') return null;

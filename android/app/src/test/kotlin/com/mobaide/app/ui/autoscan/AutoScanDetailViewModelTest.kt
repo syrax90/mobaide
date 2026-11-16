@@ -46,9 +46,9 @@ class AutoScanDetailViewModelTest {
 
     // ---- Helpers ------------------------------------------------------------
 
-    private fun instance(name: String = PROJECT, cycle: Int = 3): AutoScanInstanceDto =
+    private fun instance(name: String = WORKSPACE, cycle: Int = 3): AutoScanInstanceDto =
         AutoScanInstanceDto(
-            project_name = name,
+            workspace_name = name,
             status = "running",
             started_at = 1.0,
             last_activity_at = 1.0,
@@ -59,10 +59,10 @@ class AutoScanDetailViewModelTest {
     private fun parsedEvent(
         seq: Long,
         payload: ScanProgressPayload,
-        project: String = PROJECT,
+        workspace: String = WORKSPACE,
         type: String = "phase",
     ): AutoScanWsClient.ParsedEvent = AutoScanWsClient.ParsedEvent(
-        projectName = project,
+        workspaceName = workspace,
         seq = seq,
         ts = "2026-04-11T00:00:00Z",
         type = type,
@@ -111,12 +111,12 @@ class AutoScanDetailViewModelTest {
         )
         val events = MutableSharedFlow<AutoScanUiEvent>(replay = 0, extraBufferCapacity = 4)
         every { repository.events } returns events
-        every { repository.observeDetailFrames(PROJECT, any()) } returns frames
+        every { repository.observeDetailFrames(WORKSPACE, any()) } returns frames
         return Fixture(repository, frames, events)
     }
 
     private fun Fixture.buildVm(): AutoScanDetailViewModel {
-        val handle = SavedStateHandle(mapOf("projectName" to PROJECT))
+        val handle = SavedStateHandle(mapOf("workspaceName" to WORKSPACE))
         return AutoScanDetailViewModel(handle, repository, AppForegroundTracker())
     }
 
@@ -132,14 +132,14 @@ class AutoScanDetailViewModelTest {
         fx.frames.tryEmit(
             AutoScanWsClient.Frame.Snapshot(
                 scans = listOf(instance(cycle = 5)),
-                events = mapOf(PROJECT to listOf(bufferedStarted)),
+                events = mapOf(WORKSPACE to listOf(bufferedStarted)),
             ),
         )
         advanceUntilIdle()
 
         val s = vm.uiState.value
         assertNotNull(s.instance)
-        assertEquals(PROJECT, s.instance!!.project_name)
+        assertEquals(WORKSPACE, s.instance!!.workspace_name)
         assertEquals(5, s.cycleNumber)
         assertEquals(
             AutoScanDetailViewModel.ConnectionState.Replaying,
@@ -151,19 +151,19 @@ class AutoScanDetailViewModelTest {
     }
 
     @Test
-    fun eventFrame_forDifferentProject_isIgnored() = runTest {
+    fun eventFrame_forDifferentWorkspace_isIgnored() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
 
         fx.frames.tryEmit(
             AutoScanWsClient.Frame.Event(
-                event = parsedEvent(seq = 7, payload = phase("scan_started"), project = "other"),
+                event = parsedEvent(seq = 7, payload = phase("scan_started"), workspace = "other"),
             ),
         )
         advanceUntilIdle()
 
-        // lastSeq is not advanced because the foreign-project event is skipped.
+        // lastSeq is not advanced because the foreign-workspace event is skipped.
         assertEquals(0L, vm.uiState.value.lastSeq)
         assertNull(vm.uiState.value.activePhase)
     }
@@ -370,9 +370,9 @@ class AutoScanDetailViewModelTest {
     @Test
     fun runNow_invokesRepository_andAppliesNextScanAtFromResponse() = runTest {
         val fx = newFixture()
-        coEvery { fx.repository.runNow(PROJECT) } returns RunNowResponse(
+        coEvery { fx.repository.runNow(WORKSPACE) } returns RunNowResponse(
             ok = true,
-            project_name = PROJECT,
+            workspace_name = WORKSPACE,
             next_scan_at = "2026-04-11T03:00:00Z",
         )
         val vm = fx.buildVm()
@@ -381,11 +381,11 @@ class AutoScanDetailViewModelTest {
         vm.runNow()
         advanceUntilIdle()
 
-        coVerify(exactly = 1) { fx.repository.runNow(PROJECT) }
+        coVerify(exactly = 1) { fx.repository.runNow(WORKSPACE) }
         assertEquals("2026-04-11T03:00:00Z", vm.uiState.value.nextScanAt)
     }
 
     companion object {
-        private const val PROJECT = "alpha"
+        private const val WORKSPACE = "alpha"
     }
 }

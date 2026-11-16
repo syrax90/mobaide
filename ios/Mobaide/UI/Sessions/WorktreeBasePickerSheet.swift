@@ -21,7 +21,7 @@ enum WorktreeBaseDisplay {
     }
 }
 
-/// Searchable list of the project's local and remote-tracking branches. The
+/// Searchable list of the workspace's local and remote-tracking branches. The
 /// top row (outside a search) picks nil: the agent's own default start point.
 struct WorktreeBasePickerSheet: View {
     let bases: WorktreeBasesResponse

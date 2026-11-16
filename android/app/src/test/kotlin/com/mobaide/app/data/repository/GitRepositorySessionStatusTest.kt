@@ -49,7 +49,7 @@ class GitRepositorySessionStatusTest {
         val foreground: MutableStateFlow<Boolean>,
         val refreshRequests: MutableSharedFlow<Unit>,
     ) {
-        var projectName: String? = "alpha"
+        var workspaceName: String? = "alpha"
         var seed: GitStatusResponse? = null
     }
 
@@ -69,7 +69,7 @@ class GitRepositorySessionStatusTest {
 
     private fun Fixture.observe() = repo.observeSessionGitStatus(
         sessionId = "s1",
-        projectName = { projectName },
+        workspaceName = { workspaceName },
         foreground = foreground,
         refreshRequests = refreshRequests,
         initial = { seed },
@@ -260,7 +260,7 @@ class GitRepositorySessionStatusTest {
     }
 
     @Test
-    fun gitChanged_forTheSessionProject_refetches() = runTest {
+    fun gitChanged_forTheSessionWorkspace_refetches() = runTest {
         val f = newFixture()
         coEvery { f.restApi.getSessionGitStatus("s1", any()) } returns status("e1")
 
@@ -294,7 +294,7 @@ class GitRepositorySessionStatusTest {
     }
 
     @Test
-    fun gitChanged_matchingTheCachedToplevel_refetches_evenUnderAnotherProjectName() = runTest {
+    fun gitChanged_matchingTheCachedToplevel_refetches_evenUnderAnotherWorkspaceName() = runTest {
         val f = newFixture()
         coEvery { f.restApi.getSessionGitStatus("s1", any()) } returns
             status("e1", toplevel = "/repo")
@@ -311,11 +311,11 @@ class GitRepositorySessionStatusTest {
     }
 
     @Test
-    fun gitChanged_matchingTheCommonDir_refetches_forALinkedWorktreeWithoutAProject() = runTest {
-        // A session spawned in a linked worktree has no project name; the
-        // project's own git dir is the only thing the event and the repo share.
+    fun gitChanged_matchingTheCommonDir_refetches_forALinkedWorktreeWithoutAWorkspace() = runTest {
+        // A session spawned in a linked worktree has no workspace name; the
+        // workspace's own git dir is the only thing the event and the repo share.
         val f = newFixture()
-        f.projectName = null
+        f.workspaceName = null
         coEvery { f.restApi.getSessionGitStatus("s1", any()) } returns
             status("e1", toplevel = "/proj/.wt/feature", commonDir = "/proj/.git")
 

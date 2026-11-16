@@ -25,7 +25,7 @@ final class GitScreenModelTests: XCTestCase {
             tokens: FakeAgentTokens(token: AgentToken(value: "tok")),
             client: client
         )
-        let model = GitScreenModel(projectName: "proj", agentAPI: agentAPI, agentEventBus: bus, sleeper: sleeper)
+        let model = GitScreenModel(workspaceName: "proj", agentAPI: agentAPI, agentEventBus: bus, sleeper: sleeper)
         return (model, bus, factory)
     }
 

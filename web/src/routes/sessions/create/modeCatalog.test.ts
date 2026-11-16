@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CustomAgentType } from '../../../api/customAgentTypeRepository';
-import type { ProjectSummary } from '../../../api/projectRepository';
+import type { WorkspaceSummary } from '../../../api/workspaceRepository';
 import { agentVersionSchema, type AgentVersionInfo } from '../../../protocol/dto/agentVersion';
 import { applyModeOrder, buildModeCards, type ModeCard } from './modeCatalog';
 
@@ -13,7 +13,7 @@ const capabilities = (cli: Record<string, unknown>): AgentVersionInfo =>
     capabilities: { cli },
   });
 
-const project = (over: Partial<ProjectSummary> = {}): ProjectSummary => ({
+const workspace = (over: Partial<WorkspaceSummary> = {}): WorkspaceSummary => ({
   name: 'mobaide',
   path: '/srv/mobaide',
   order: 0,
@@ -26,12 +26,12 @@ const project = (over: Partial<ProjectSummary> = {}): ProjectSummary => ({
 
 const cards = (input: {
   capabilities?: AgentVersionInfo;
-  project?: ProjectSummary | null;
+  workspace?: WorkspaceSummary | null;
   customTypes?: CustomAgentType[];
 }): ModeCard[] =>
   buildModeCards({
     capabilities: input.capabilities,
-    project: input.project === undefined ? project() : input.project,
+    workspace: input.workspace === undefined ? workspace() : input.workspace,
     customTypes: input.customTypes ?? [],
   });
 
@@ -164,11 +164,11 @@ describe('buildModeCards', () => {
   });
 
   it('gates Auto Scan on both the Claude CLI and a Linear key', () => {
-    const missingKey = cards({ project: project({ has_linear_key: false }) });
+    const missingKey = cards({ workspace: workspace({ has_linear_key: false }) });
     const missingClaude = cards({ capabilities: capabilities({ claude: { available: false } }) });
     const missingBoth = cards({
       capabilities: capabilities({ claude: { available: false } }),
-      project: null,
+      workspace: null,
     });
 
     expect(card(cards({}), 'auto_scan')).toMatchObject({
@@ -176,7 +176,7 @@ describe('buildModeCards', () => {
       disabledReason: undefined,
     });
     expect(card(missingKey, 'auto_scan').disabledReason).toBe(
-      'Auto Scan needs a Linear API key for this project.',
+      'Auto Scan needs a Linear API key for this workspace.',
     );
     // The missing CLI is the more actionable of the two, so it wins.
     expect(card(missingClaude, 'auto_scan').disabledReason).toBe(

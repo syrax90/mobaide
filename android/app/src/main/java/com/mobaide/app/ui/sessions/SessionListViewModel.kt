@@ -209,10 +209,10 @@ class SessionListViewModel @Inject constructor(
         }
     }
 
-    fun stopAutoScan(projectName: String) {
+    fun stopAutoScan(workspaceName: String) {
         viewModelScope.launch {
             try {
-                autoScanRepository.stopScan(projectName)
+                autoScanRepository.stopScan(workspaceName)
             } catch (e: Exception) {
                 reviewPromptCoordinator.noteError()
                 _uiState.update { it.copy(error = "Failed to stop scan: ${e.message}") }

@@ -3,7 +3,7 @@
  * — the same split `routes/sessions/sessionDisplay.ts` uses.
  *
  * Tones reuse the session vocabulary rather than inventing a second one: a
- * scanning project and a running session mean the same thing to the reader, and
+ * scanning workspace and a running session mean the same thing to the reader, and
  * the CSS tokens already exist.
  */
 import type { AutoScanInstance } from '../protocol/dto/autoscan';

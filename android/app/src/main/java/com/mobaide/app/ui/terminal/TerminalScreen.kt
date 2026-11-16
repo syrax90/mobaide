@@ -124,12 +124,12 @@ fun TerminalScreen(
     onOpenGitChanges: () -> Unit = {},
     onOpenGitCommit: () -> Unit = {},
     onOpenGitSync: () -> Unit = {},
-    onOpenGitBranches: (projectName: String) -> Unit = {},
+    onOpenGitBranches: (workspaceName: String) -> Unit = {},
     onOpenGitRebase: () -> Unit = {},
 ) {
     val sessionState by viewModel.sessionState.collectAsStateWithLifecycle()
     val sessionCwd by viewModel.sessionCwd.collectAsStateWithLifecycle()
-    val sessionProjectName by viewModel.sessionProjectName.collectAsStateWithLifecycle()
+    val sessionWorkspaceName by viewModel.sessionWorkspaceName.collectAsStateWithLifecycle()
     val gitCommitAvailable by viewModel.gitCommitAvailable.collectAsStateWithLifecycle()
     val gitSyncAvailable by viewModel.gitSyncAvailable.collectAsStateWithLifecycle()
     val gitBranchesAvailable by viewModel.gitBranchesAvailable.collectAsStateWithLifecycle()
@@ -354,7 +354,7 @@ fun TerminalScreen(
                     },
                     actions = {
                         if (sessionCwd != null) {
-                            val branchesProject = sessionProjectName
+                            val branchesWorkspace = sessionWorkspaceName
                             TerminalOverflowMenu(
                                 onOpenGitChanges = onOpenGitChanges,
                                 onOpenGitCommit = onOpenGitCommit,
@@ -362,9 +362,9 @@ fun TerminalScreen(
                                 onOpenGitSync = onOpenGitSync,
                                 syncAvailable = gitSyncAvailable,
                                 onOpenGitBranches = {
-                                    if (branchesProject != null) onOpenGitBranches(branchesProject)
+                                    if (branchesWorkspace != null) onOpenGitBranches(branchesWorkspace)
                                 },
-                                branchesAvailable = gitBranchesAvailable && branchesProject != null,
+                                branchesAvailable = gitBranchesAvailable && branchesWorkspace != null,
                                 onOpenGitRebase = onOpenGitRebase,
                                 rebaseAvailable = gitRebaseAvailable,
                             )

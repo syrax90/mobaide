@@ -119,13 +119,13 @@ data class GitCapabilities(
     val fetch: Boolean = false,
     val pull: Boolean = false,
     val push: Boolean = false,
-    /** The project Git screen's remote rows, New branch and Check out. */
+    /** The workspace Git screen's remote rows, New branch and Check out. */
     val branches: Boolean = false,
     /** *Rebase…* and the Changes screen's Continue / Skip / Abort. */
     val rebase: Boolean = false,
     /** `stage` refuses a conflicted file that still holds markers, so *Mark resolved* is safe. */
     val resolve: Boolean = false,
-    /** The project Git screen may delete remote-tracking rows (on the remote). */
+    /** The workspace Git screen may delete remote-tracking rows (on the remote). */
     val deleteRemote: Boolean = false,
     /** The conflict resolver's routes and `resolved_paths` on status. */
     val conflicts: Boolean = false,
@@ -162,38 +162,38 @@ class GitRepository(
         replay = 0,
         extraBufferCapacity = 8,
     )
-    /** Emits the project name whenever the server publishes `git.changed`. */
+    /** Emits the workspace name whenever the server publishes `git.changed`. */
     val changed: SharedFlow<String> = _changed.asSharedFlow()
 
     init {
         scope.launch {
             eventBus.stream<AgentEvent.GitChanged>().collect { event ->
-                _changed.emit(event.projectName)
+                _changed.emit(event.workspaceName)
             }
         }
     }
 
-    suspend fun listGitItems(projectName: String): List<GitItem> =
-        restApi.getGitItems(projectName).items
+    suspend fun listGitItems(workspaceName: String): List<GitItem> =
+        restApi.getGitItems(workspaceName).items
 
-    suspend fun worktreeBases(projectName: String): WorktreeBasesResponse =
-        restApi.getWorktreeBases(projectName)
+    suspend fun worktreeBases(workspaceName: String): WorktreeBasesResponse =
+        restApi.getWorktreeBases(workspaceName)
 
     suspend fun deleteGitItems(
-        projectName: String,
+        workspaceName: String,
         items: List<GitDeleteItem>,
     ): GitDeleteResponse =
-        mapBusy { restApi.deleteGitItems(projectName, GitDeleteRequest(items)) }
+        mapBusy { restApi.deleteGitItems(workspaceName, GitDeleteRequest(items)) }
 
     suspend fun createBranch(
-        projectName: String,
+        workspaceName: String,
         request: GitBranchCreateRequest,
     ): GitBranchResponse =
-        mapBranchRoute { restApi.createGitBranch(projectName, request) }
+        mapBranchRoute { restApi.createGitBranch(workspaceName, request) }
 
     /** `ref` is a row's `branch` verbatim — a local name or `<remote>/<name>`. */
-    suspend fun checkout(projectName: String, ref: String, force: Boolean = false): GitBranchResponse =
-        mapBranchRoute { restApi.checkoutGitRef(projectName, GitCheckoutRequest(ref, force)) }
+    suspend fun checkout(workspaceName: String, ref: String, force: Boolean = false): GitBranchResponse =
+        mapBranchRoute { restApi.checkoutGitRef(workspaceName, GitCheckoutRequest(ref, force)) }
 
     suspend fun sessionGitStatus(sessionId: String, etag: String?): GitStatusResponse =
         mapSessionGit { restApi.getSessionGitStatus(sessionId, etag) }
@@ -399,7 +399,7 @@ class GitRepository(
     @OptIn(ExperimentalCoroutinesApi::class)
     fun observeSessionGitStatus(
         sessionId: String,
-        projectName: () -> String?,
+        workspaceName: () -> String?,
         foreground: Flow<Boolean>,
         refreshRequests: Flow<Unit>,
         initial: () -> GitStatusResponse?,
@@ -412,7 +412,7 @@ class GitRepository(
             if (inForeground) ticker(interval) else emptyFlow()
         }.map { PollTrigger.Tick }
         val pushes = eventBus.stream<AgentEvent.GitChanged>()
-            .filter { event -> matchesSession(event, projectName(), cached?.repo) }
+            .filter { event -> matchesSession(event, workspaceName(), cached?.repo) }
             .map { PollTrigger.Push }
         val manual = refreshRequests.map { PollTrigger.Manual }
         emitAll(
@@ -456,11 +456,11 @@ class GitRepository(
 
     private fun matchesSession(
         event: AgentEvent.GitChanged,
-        projectName: String?,
+        workspaceName: String?,
         repo: GitRepoInfo?,
     ): Boolean {
         if (repo == null) return true
-        if (projectName != null && event.projectName == projectName) return true
+        if (workspaceName != null && event.workspaceName == workspaceName) return true
         if (event.toplevel != null && event.toplevel == repo.toplevel) return true
         return event.commonDir != null && event.commonDir == repo.common_dir
     }
@@ -482,7 +482,7 @@ class GitRepository(
             throw e
         }
 
-    // The busy 409 keeps the project screen's own exception; every other coded
+    // The busy 409 keeps the workspace screen's own exception; every other coded
     // detail — the branch refusals and the session vocabulary they reuse —
     // maps like the session routes.
     private inline fun <T> mapBranchRoute(block: () -> T): T =

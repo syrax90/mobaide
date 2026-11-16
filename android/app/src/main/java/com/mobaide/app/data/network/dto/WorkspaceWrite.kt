@@ -1,0 +1,15 @@
+package com.mobaide.app.data.network.dto
+
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+
+/** Request body for `POST /api/projects`. */
+@Serializable
+data class WorkspaceWrite(
+    val name: String,
+    val path: String,
+    val linear_api_key: String? = null,
+    val conda_env: String? = null,
+    val default_flags: Map<String, JsonElement> = emptyMap(),
+    val auto_scan_filter: AutoScanFilterDto? = null,
+)

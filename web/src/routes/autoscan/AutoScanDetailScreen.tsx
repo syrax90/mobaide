@@ -18,19 +18,19 @@ import { AutoScanLogPane } from './AutoScanLogPane';
 import { scanFailureHandler } from './autoscanMutations';
 
 /**
- * Live monitor for one project's Auto Scan.
+ * Live monitor for one workspace's Auto Scan.
  *
  * The route carries both ids, so a link is shareable and does not depend on the
  * selected-agent store. The inner component is remounted by key on either id
  * changing, because the reduction state — cursor, log ring, phase timeline — is
- * per project and there is nothing sensible to migrate.
+ * per workspace and there is nothing sensible to migrate.
  */
 export function AutoScanDetailScreen() {
-  const { agentId, projectName } = useParams();
-  if (agentId === undefined || projectName === undefined) {
+  const { agentId, workspaceName } = useParams();
+  if (agentId === undefined || workspaceName === undefined) {
     return <p className="auth-error">Unknown Auto Scan.</p>;
   }
-  return <AutoScanDetail key={`${agentId}:${projectName}`} agentId={agentId} projectName={projectName} />;
+  return <AutoScanDetail key={`${agentId}:${workspaceName}`} agentId={agentId} workspaceName={workspaceName} />;
 }
 
 const CONNECTION_LABELS: Readonly<Record<string, string>> = {
@@ -40,9 +40,9 @@ const CONNECTION_LABELS: Readonly<Record<string, string>> = {
   disconnected: 'Reconnecting…',
 };
 
-function AutoScanDetail({ agentId, projectName }: { agentId: string; projectName: string }) {
+function AutoScanDetail({ agentId, workspaceName }: { agentId: string; workspaceName: string }) {
   const queryClient = useQueryClient();
-  const { state, declined, retry } = useAutoScanDetail(agentId, projectName);
+  const { state, declined, retry } = useAutoScanDetail(agentId, workspaceName);
 
   // Not for this screen's own state — `state.instance` comes from the
   // `ws/autoscan` snapshot alone, so the chip and counts only move when the
@@ -64,13 +64,13 @@ function AutoScanDetail({ agentId, projectName }: { agentId: string; projectName
     queryClient.invalidateQueries({ queryKey: queryKeys.autoscan(agentId) });
 
   const runNow = useMutation({
-    mutationFn: () => runAutoScanNow(agentId, projectName),
+    mutationFn: () => runAutoScanNow(agentId, workspaceName),
     onSuccess: invalidate,
     onError: scanFailureHandler('run', invalidate),
   });
 
   const stop = useMutation({
-    mutationFn: () => stopAutoScan(agentId, projectName),
+    mutationFn: () => stopAutoScan(agentId, workspaceName),
     onSuccess: invalidate,
     onError: scanFailureHandler('stop', invalidate),
   });
@@ -81,7 +81,7 @@ function AutoScanDetail({ agentId, projectName }: { agentId: string; projectName
     <section className="page autoscan-detail">
       <header className="page-header">
         <div>
-          <h1>{projectName}</h1>
+          <h1>{workspaceName}</h1>
           <p className="page-note">
             <Link to="/">Sessions</Link>
             {' · '}

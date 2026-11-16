@@ -102,14 +102,14 @@ class TestMobileProxyForward:
             assert ctrl["type"] == "proxy_request"
             assert ctrl["method"] == "POST"
             assert ctrl["path"] == "/api/sessions"
-            assert ctrl["query"] == {"project": "myproject"}
+            assert ctrl["query"] == {"project": "myworkspace"}
             assert ctrl["body"] == {"name": "test-session"}
             proxy.resolve(ctrl["request_id"], {"status": 201, "body": {"id": "s1"}})
 
         task = asyncio.create_task(
             proxy.forward(
                 "agent-1", "POST", "/api/sessions",
-                query={"project": "myproject"},
+                query={"project": "myworkspace"},
                 body={"name": "test-session"},
                 timeout=2.0,
             )

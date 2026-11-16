@@ -125,7 +125,7 @@ fun ChatScreen(
     onOpenGitChanges: () -> Unit = {},
     onOpenGitCommit: () -> Unit = {},
     onOpenGitSync: () -> Unit = {},
-    onOpenGitBranches: (projectName: String) -> Unit = {},
+    onOpenGitBranches: (workspaceName: String) -> Unit = {},
     onOpenGitRebase: () -> Unit = {},
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
@@ -289,15 +289,15 @@ fun ChatScreen(
                     onBack = onBack,
                     onOpenSessions = openDrawer,
                     menu = {
-                        val branchesProject = header.projectName
+                        val branchesWorkspace = header.workspaceName
                         TerminalOverflowMenu(
                             onOpenGitChanges = onOpenGitChanges,
                             onOpenGitCommit = onOpenGitCommit,
                             commitAvailable = git.commit,
                             onOpenGitSync = onOpenGitSync,
                             syncAvailable = git.hasSync,
-                            onOpenGitBranches = { if (branchesProject != null) onOpenGitBranches(branchesProject) },
-                            branchesAvailable = git.branches && branchesProject != null,
+                            onOpenGitBranches = { if (branchesWorkspace != null) onOpenGitBranches(branchesWorkspace) },
+                            branchesAvailable = git.branches && branchesWorkspace != null,
                             onOpenGitRebase = onOpenGitRebase,
                             rebaseAvailable = git.rebase,
                             showGit = header.cwd != null,

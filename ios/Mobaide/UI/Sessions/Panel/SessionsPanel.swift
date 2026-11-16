@@ -173,7 +173,7 @@ struct SessionsPanel: View {
     }
 }
 
-/// One session row: status square, title, `kind · project`, attention chip,
+/// One session row: status square, title, `kind · workspace`, attention chip,
 /// and — as on the sessions list's card — a stop control nested in the row's
 /// tap target, which a plain-styled outer button leaves independently tappable.
 private struct SessionsPanelRow: View {
@@ -187,7 +187,7 @@ private struct SessionsPanelRow: View {
 
     private var title: String {
         if let title = session.title, !title.isBlank { return title }
-        return "\(kindLabel) · \(session.project_name ?? String(session.session_id.prefix(8)))"
+        return "\(kindLabel) · \(session.workspace_name ?? String(session.session_id.prefix(8)))"
     }
 
     var body: some View {
@@ -198,7 +198,7 @@ private struct SessionsPanelRow: View {
                     .font(.body.weight(.semibold))
                     .foregroundStyle(colors.text)
                     .lineLimit(1)
-                Text([kindLabel, session.project_name].compactMap { $0 }.joined(separator: " · "))
+                Text([kindLabel, session.workspace_name].compactMap { $0 }.joined(separator: " · "))
                     .font(.caption)
                     .foregroundStyle(colors.textMuted)
                     .lineLimit(1)

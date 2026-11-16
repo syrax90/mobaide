@@ -2,22 +2,22 @@ import XCTest
 @testable import Mobaide
 
 final class AttentionContentTests: XCTestCase {
-    func testLabelPrefersTitleThenProjectThenFallback() {
-        XCTAssertEqual(AttentionContent.label(for: makeSessionResponse(title: "My Title", projectName: "proj")), "My Title")
-        XCTAssertEqual(AttentionContent.label(for: makeSessionResponse(title: nil, projectName: "proj")), "proj")
-        XCTAssertEqual(AttentionContent.label(for: makeSessionResponse(title: "   ", projectName: "proj")), "proj")
-        XCTAssertEqual(AttentionContent.label(for: makeSessionResponse(title: nil, projectName: nil)), "Claude session")
-        XCTAssertEqual(AttentionContent.label(for: makeSessionResponse(title: "  ", projectName: "  ")), "Claude session")
+    func testLabelPrefersTitleThenWorkspaceThenFallback() {
+        XCTAssertEqual(AttentionContent.label(for: makeSessionResponse(title: "My Title", workspaceName: "proj")), "My Title")
+        XCTAssertEqual(AttentionContent.label(for: makeSessionResponse(title: nil, workspaceName: "proj")), "proj")
+        XCTAssertEqual(AttentionContent.label(for: makeSessionResponse(title: "   ", workspaceName: "proj")), "proj")
+        XCTAssertEqual(AttentionContent.label(for: makeSessionResponse(title: nil, workspaceName: nil)), "Claude session")
+        XCTAssertEqual(AttentionContent.label(for: makeSessionResponse(title: "  ", workspaceName: "  ")), "Claude session")
     }
 
     func testAnUntitledCursorSessionIsNamedAfterItsKind() {
-        let untitled = makeSessionResponse(title: " ", projectName: nil, kind: .cursor)
+        let untitled = makeSessionResponse(title: " ", workspaceName: nil, kind: .cursor)
 
         XCTAssertEqual(AttentionContent.label(for: untitled), "Cursor session")
         XCTAssertEqual(
-            AttentionContent.label(for: makeSessionResponse(title: nil, projectName: "proj", kind: .cursor)),
+            AttentionContent.label(for: makeSessionResponse(title: nil, workspaceName: "proj", kind: .cursor)),
             "proj",
-            "the project still wins over the kind"
+            "the workspace still wins over the kind"
         )
     }
 

@@ -14,7 +14,7 @@
  */
 
 /**
- * Used when a session has neither a title nor a project, and the event names no
+ * Used when a session has neither a title nor a workspace, and the event names no
  * `kind` — an agent too old to send one only alerted for Claude sessions.
  */
 export const FALLBACK_LABEL = 'Claude session';
@@ -40,7 +40,7 @@ export interface AttentionSource {
   kind_label?: string;
 }
 
-/** The label for a session with neither a title nor a project. */
+/** The label for a session with neither a title nor a workspace. */
 function fallbackLabel(source: AttentionSource): string {
   const kind = source.kind;
   if (kind === undefined || kind === '') return FALLBACK_LABEL;

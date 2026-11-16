@@ -60,7 +60,7 @@ import androidx.compose.ui.unit.sp
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AutoScanDetailScreen(
-    projectName: String,
+    workspaceName: String,
     onBack: () -> Unit,
     viewModel: AutoScanDetailViewModel,
 ) {
@@ -77,7 +77,7 @@ fun AutoScanDetailScreen(
         snackbarHost = { PixelSnackbarHost(snackbarHostState) },
         topBar = {
             PixelTopBar(
-                title = { Text(projectName) },
+                title = { Text(workspaceName) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")

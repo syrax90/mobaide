@@ -77,7 +77,7 @@ class GitChangesViewModel @Inject constructor(
     private val loads: Flow<SessionGitStatusLoad> =
         gitRepository.observeSessionGitStatus(
             sessionId = sessionId,
-            projectName = { sessionRow.value?.project_name },
+            workspaceName = { sessionRow.value?.workspace_name },
             foreground = appForegroundTracker.isForeground,
             refreshRequests = refreshRequests,
             initial = { lastStatus },
@@ -455,7 +455,7 @@ class GitChangesViewModel @Inject constructor(
     }
 
     /**
-     * A project-backed session picks from the project's branches; any other
+     * A workspace-backed session picks from the workspace's branches; any other
      * session — or a list that fails to load — types the ref. Reached straight
      * from the terminal menu, the session row may not have landed yet, so it
      * is waited for briefly.
@@ -463,14 +463,14 @@ class GitChangesViewModel @Inject constructor(
     fun openRebase() {
         _rebaseSheet.value = RebaseSheetState(targets = RebaseTargetsState.Loading)
         viewModelScope.launch {
-            val projectName = withTimeoutOrNull(SESSION_ROW_WAIT_MS) {
+            val workspaceName = withTimeoutOrNull(SESSION_ROW_WAIT_MS) {
                 sessionRow.filterNotNull().first()
-            }?.project_name
-            val targets = if (projectName == null) {
+            }?.workspace_name
+            val targets = if (workspaceName == null) {
                 RebaseTargetsState.Typed
             } else {
                 try {
-                    RebaseTargetsState.Ready(gitRepository.listGitItems(projectName))
+                    RebaseTargetsState.Ready(gitRepository.listGitItems(workspaceName))
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {

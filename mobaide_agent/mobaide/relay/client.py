@@ -43,25 +43,25 @@ from mobaide.core.models import (
     resolve_spawn_args,
     session_to_wire_dict,
 )
-from mobaide.core.projects_store import safe_path_exists
+from mobaide.core.workspaces_store import safe_path_exists
 from mobaide.core.shell import resolve_default_shell
 
 from pydantic import ValidationError
 
-from mobaide.agent.projects.models import (
-    ProjectUpdateModel,
-    ProjectWriteModel,
+from mobaide.agent.workspaces.models import (
+    WorkspaceUpdateModel,
+    WorkspaceWriteModel,
     ReorderRequest,
 )
-from mobaide.agent.projects.service import (
-    DuplicateProjectError,
-    ProjectInUseError,
+from mobaide.agent.workspaces.service import (
+    DuplicateWorkspaceError,
+    WorkspaceInUseError,
     ReorderSetMismatchError,
-    create_project,
-    delete_project,
-    list_projects,
-    reorder_projects,
-    update_project,
+    create_workspace,
+    delete_workspace,
+    list_workspaces,
+    reorder_workspaces,
+    update_workspace,
 )
 
 from mobaide.agent.git.changes_conflicts import (
@@ -904,7 +904,7 @@ class RelayClient:
     async def _handle_request_events_snapshot(
         self, ws: ClientConnection
     ) -> None:
-        """Re-publish the current sessions / projects snapshots on event_bus.
+        """Re-publish the current sessions / workspaces snapshots on event_bus.
 
         Central server emits this control message whenever a mobile opens
         ``/relay/ws/events/{agent_id}`` or ``/relay/ws/sessions/{agent_id}``.
@@ -927,16 +927,16 @@ class RelayClient:
                 "relay.events_snapshot.sessions_publish_failed"
             )
 
-        projects_store = getattr(self._app_state, "projects_store", None)
-        if projects_store is not None:
+        workspaces_store = getattr(self._app_state, "workspaces_store", None)
+        if workspaces_store is not None:
             try:
-                projects = projects_store.list_public()
+                workspaces = workspaces_store.list_public()
                 self._event_bus.publish(
-                    "projects.changed", {"projects": projects}
+                    "projects.changed", {"projects": workspaces}
                 )
             except Exception:
                 logger.exception(
-                    "relay.events_snapshot.projects_publish_failed"
+                    "relay.events_snapshot.workspaces_publish_failed"
                 )
 
         voice = getattr(self._app_state, "voice", None)
@@ -1239,8 +1239,8 @@ class RelayClient:
                 return
 
         ctrl_cwd = ctrl.get("cwd")
-        ctrl_project_name = ctrl.get("project_name")
-        if ctrl_project_name is None and ctrl_cwd is not None:
+        ctrl_workspace_name = ctrl.get("project_name")
+        if ctrl_workspace_name is None and ctrl_cwd is not None:
             err = _validate_adhoc_cwd_or_error(ctrl_cwd)
             if err is not None:
                 logger.warning(
@@ -1317,7 +1317,7 @@ class RelayClient:
             env=spawn_env,
             rows=ctrl.get("rows", 24),
             cols=ctrl.get("cols", 80),
-            project_name=ctrl_project_name,
+            project_name=ctrl_workspace_name,
             claude_options=claude_options,
             codex_options=codex_options,
             antigravity_options=antigravity_options,
@@ -1390,7 +1390,7 @@ class RelayClient:
             # string rather than ``str(exc)``, which would embed
             # ``repr(filename)`` and produce ``D:\\\\ML\\\\...`` on the wire
             # once the relay frame is JSON-encoded.
-            missing = exc.filename or "project path"
+            missing = exc.filename or "workspace path"
             logger.warning(
                 "relay.create_session_path_missing session_id=%s path=%s",
                 session_id, missing,
@@ -1398,7 +1398,7 @@ class RelayClient:
             resp = {
                 "type": "session_create_failed",
                 "session_id": session_id,
-                "error": f"Project path not found: {missing}",
+                "error": f"Workspace path not found: {missing}",
             }
         except WorktreeCreationError as exc:
             logger.warning(
@@ -1528,7 +1528,7 @@ class RelayClient:
             # Same rationale as ``_handle_create_session``: mobile clients
             # proxying ``POST /api/sessions`` through the central server
             # otherwise re-hit the 4-backslash symptom via ``str(exc)``.
-            missing = exc.filename or "project path"
+            missing = exc.filename or "workspace path"
             logger.warning(
                 "relay.proxy_request_path_missing path=%s missing=%s",
                 path, missing,
@@ -1537,7 +1537,7 @@ class RelayClient:
                 "type": "proxy_response",
                 "request_id": request_id,
                 "status": 400,
-                "body": {"detail": f"Project path not found: {missing}"},
+                "body": {"detail": f"Workspace path not found: {missing}"},
             }
         except WorktreeCreationError as exc:
             logger.warning(
@@ -1828,12 +1828,12 @@ class RelayClient:
                 },
             }
 
-        # Projects CRUD — delegate to the shared service layer so direct HTTP
+        # Workspaces CRUD — delegate to the shared service layer so direct HTTP
         # and relay-forwarded requests produce identical semantics, including
         # audit events and bus broadcasts.
-        projects_resp = await self._dispatch_projects(method, path, body)
-        if projects_resp is not None:
-            return projects_resp
+        workspaces_resp = await self._dispatch_workspaces(method, path, body)
+        if workspaces_resp is not None:
+            return workspaces_resp
 
         git_resp = await self._dispatch_git(method, path, body, query)
         if git_resp is not None:
@@ -1912,14 +1912,14 @@ class RelayClient:
                     "body": {"detail": "Auto-scan not available"},
                 }
             body = body or {}
-            project_name = body.get("project_name", "")
+            workspace_name = body.get("project_name", "")
             try:
-                await mgr.stop(project_name)
+                await mgr.stop(workspace_name)
                 return {"status": 200, "body": {"status": "stopped"}}
             except KeyError:
                 return {
                     "status": 404,
-                    "body": {"detail": "No active scan for project"},
+                    "body": {"detail": "No active scan for workspace"},
                 }
 
         if method == "POST" and path == "/api/autoscan/run-now":
@@ -1930,12 +1930,12 @@ class RelayClient:
                     "body": {"detail": "Auto-scan not available"},
                 }
             body = body or {}
-            project_name = body.get("project_name", "")
-            instance = mgr.get(project_name)
+            workspace_name = body.get("project_name", "")
+            instance = mgr.get(workspace_name)
             if instance is None:
                 return {
                     "status": 404,
-                    "body": {"detail": "No active scan for project"},
+                    "body": {"detail": "No active scan for workspace"},
                 }
             instance.request_immediate_scan()
             dto = instance.to_dto()
@@ -1943,7 +1943,7 @@ class RelayClient:
                 "status": 200,
                 "body": {
                     "ok": True,
-                    "project_name": project_name,
+                    "project_name": workspace_name,
                     "next_scan_at": dto.get("next_scan_at"),
                 },
             }
@@ -1988,7 +1988,7 @@ class RelayClient:
             "body": {"detail": f"Unknown proxy route: {method} {path}"},
         }
 
-    async def _dispatch_projects(
+    async def _dispatch_workspaces(
         self,
         method: str,
         path: str,
@@ -2001,12 +2001,12 @@ class RelayClient:
         """
         import re as _re
 
-        store = getattr(self._app_state, "projects_store", None)
+        store = getattr(self._app_state, "workspaces_store", None)
         if store is None:
             if path == "/api/projects" or path.startswith("/api/projects/"):
                 return {
                     "status": 500,
-                    "body": {"detail": "projects store not configured"},
+                    "body": {"detail": "workspaces store not configured"},
                 }
             return None
 
@@ -2019,21 +2019,21 @@ class RelayClient:
 
         if path == "/api/projects":
             if method == "GET":
-                return {"status": 200, "body": list_projects(store)}
+                return {"status": 200, "body": list_workspaces(store)}
             if method == "POST":
                 try:
-                    model = ProjectWriteModel.model_validate(body or {})
+                    model = WorkspaceWriteModel.model_validate(body or {})
                 except ValidationError as exc:
                     return {
                         "status": 422,
                         "body": {"detail": _scrub_validation_errors(exc)},
                     }
                 try:
-                    created = create_project(
+                    created = create_workspace(
                         store, model, event_bus=event_bus, actor=actor,
                     )
                     return {"status": 201, "body": created}
-                except DuplicateProjectError as exc:
+                except DuplicateWorkspaceError as exc:
                     return {"status": 409, "body": {"detail": str(exc)}}
 
         if path == "/api/projects/order" and method == "PATCH":
@@ -2045,7 +2045,7 @@ class RelayClient:
                     "body": {"detail": _scrub_validation_errors(exc)},
                 }
             try:
-                result = reorder_projects(
+                result = reorder_workspaces(
                     store, model, event_bus=event_bus, actor=actor,
                 )
                 return {"status": 200, "body": result}
@@ -2057,14 +2057,14 @@ class RelayClient:
             name = m.group(1)
             if method == "PUT":
                 try:
-                    patch = ProjectUpdateModel.model_validate(body or {})
+                    patch = WorkspaceUpdateModel.model_validate(body or {})
                 except ValidationError as exc:
                     return {
                         "status": 422,
                         "body": {"detail": _scrub_validation_errors(exc)},
                     }
                 try:
-                    updated = update_project(
+                    updated = update_workspace(
                         store, autoscan_manager, name, patch,
                         event_bus=event_bus, actor=actor,
                     )
@@ -2074,11 +2074,11 @@ class RelayClient:
                         "status": 404,
                         "body": {"detail": str(exc).strip("'")},
                     }
-                except (ProjectInUseError, ValueError) as exc:
+                except (WorkspaceInUseError, ValueError) as exc:
                     return {"status": 409, "body": {"detail": str(exc)}}
             if method == "DELETE":
                 try:
-                    delete_project(
+                    delete_workspace(
                         store, autoscan_manager, name,
                         event_bus=event_bus, actor=actor,
                     )
@@ -2088,7 +2088,7 @@ class RelayClient:
                         "status": 404,
                         "body": {"detail": str(exc).strip("'")},
                     }
-                except ProjectInUseError as exc:
+                except WorkspaceInUseError as exc:
                     return {"status": 409, "body": {"detail": str(exc)}}
 
         return None
@@ -2118,11 +2118,11 @@ class RelayClient:
         name, route = match.group(1), match.group(2)
         is_items = route == "items"
 
-        store = getattr(self._app_state, "projects_store", None)
+        store = getattr(self._app_state, "workspaces_store", None)
         if store is None:
             return {
                 "status": 500,
-                "body": {"detail": "projects store not configured"},
+                "body": {"detail": "workspaces store not configured"},
             }
 
         manager = getattr(self._app_state, "worktree_manager", None)
@@ -2132,17 +2132,17 @@ class RelayClient:
                 "body": {"detail": "worktree manager not configured"},
             }
 
-        project = store.get(name)
-        if project is None:
+        workspace = store.get(name)
+        if workspace is None:
             return {
                 "status": 404,
-                "body": {"detail": f"Project '{name}' not found"},
+                "body": {"detail": f"Workspace '{name}' not found"},
             }
-        project_root = project.path
-        if not safe_path_exists(Path(project_root) / ".git"):
+        workspace_root = workspace.path
+        if not safe_path_exists(Path(workspace_root) / ".git"):
             return {
                 "status": 400,
-                "body": {"detail": f"Project '{name}' is not a git repository"},
+                "body": {"detail": f"Workspace '{name}' is not a git repository"},
             }
 
         if is_items and method == "GET":
@@ -2154,7 +2154,7 @@ class RelayClient:
                     "body": {"detail": _scrub_validation_errors(exc)},
                 }
             try:
-                items = await list_git_items(project_root, manager, remote=q.remote)
+                items = await list_git_items(workspace_root, manager, remote=q.remote)
             except Exception as exc:
                 mapped = git_changes_http_error_for(exc)
                 if mapped is None:
@@ -2168,9 +2168,9 @@ class RelayClient:
         if route == "worktree-bases" and method == "GET":
             try:
                 bases = await list_worktree_bases(
-                    project_root,
+                    workspace_root,
                     manager,
-                    last_used=store.get_last_worktree_base(project.name),
+                    last_used=store.get_last_worktree_base(workspace.name),
                 )
             except Exception as exc:
                 mapped = git_changes_http_error_for(exc)
@@ -2196,8 +2196,8 @@ class RelayClient:
             try:
                 resp = await handler(
                     req,
-                    project_name=project.name,
-                    project_root=project_root,
+                    workspace_name=workspace.name,
+                    workspace_root=workspace_root,
                     manager=manager,
                     session_manager=getattr(
                         self._app_state, "session_manager", None,
@@ -2265,7 +2265,7 @@ class RelayClient:
             }
         info = session.to_info()
         cwd = info.cwd
-        project_name = getattr(info, "project_name", None)
+        workspace_name = getattr(info, "project_name", None)
         event_bus = getattr(self._app_state, "event_bus", None)
         q = query or {}
         request_models = {
@@ -2290,18 +2290,18 @@ class RelayClient:
             if route == "fetch":
                 resp = await job_registry.start(
                     "fetch", cwd=cwd, session_id=session_id,
-                    project_name=project_name, event_bus=event_bus,
+                    workspace_name=workspace_name, event_bus=event_bus,
                 )
             elif route == "pull":
                 resp = await job_registry.start(
                     "pull", cwd=cwd, session_id=session_id,
-                    project_name=project_name, event_bus=event_bus,
+                    workspace_name=workspace_name, event_bus=event_bus,
                     pull_mode=req.mode,
                 )
             elif route == "push":
                 resp = await job_registry.start(
                     "push", cwd=cwd, session_id=session_id,
-                    project_name=project_name, event_bus=event_bus,
+                    workspace_name=workspace_name, event_bus=event_bus,
                     force=req.force,
                 )
             elif route == "jobs":
@@ -2324,56 +2324,56 @@ class RelayClient:
                 resp = await get_session_commit_context(cwd=cwd)
             elif route == "rebase":
                 resp = await start_session_rebase(
-                    cwd=cwd, onto=req.onto, project_name=project_name,
+                    cwd=cwd, onto=req.onto, workspace_name=workspace_name,
                     event_bus=event_bus,
                 )
             elif route == "rebase/continue":
                 resp = await continue_session_rebase(
-                    cwd=cwd, project_name=project_name, event_bus=event_bus,
+                    cwd=cwd, workspace_name=workspace_name, event_bus=event_bus,
                 )
             elif route == "rebase/skip":
                 resp = await skip_session_rebase(
-                    cwd=cwd, project_name=project_name, event_bus=event_bus,
+                    cwd=cwd, workspace_name=workspace_name, event_bus=event_bus,
                 )
             elif route == "rebase/abort":
                 resp = await abort_session_rebase(
-                    cwd=cwd, project_name=project_name, event_bus=event_bus,
+                    cwd=cwd, workspace_name=workspace_name, event_bus=event_bus,
                 )
             elif route == "conflict":
                 resp = await get_session_conflict(cwd=cwd, path=q.get("path"))
             elif route == "conflict/resolve":
                 resp = await resolve_session_conflict(
-                    cwd=cwd, request=req, project_name=project_name,
+                    cwd=cwd, request=req, workspace_name=workspace_name,
                     event_bus=event_bus,
                 )
             elif route == "conflict/take":
                 resp = await take_session_conflict(
-                    cwd=cwd, request=req, project_name=project_name,
+                    cwd=cwd, request=req, workspace_name=workspace_name,
                     event_bus=event_bus,
                 )
             elif route == "conflict/restore":
                 resp = await restore_session_conflict(
-                    cwd=cwd, request=req, project_name=project_name,
+                    cwd=cwd, request=req, workspace_name=workspace_name,
                     event_bus=event_bus,
                 )
             elif route == "stage":
                 resp = await stage_session_paths(
-                    cwd=cwd, paths=req.paths, project_name=project_name,
+                    cwd=cwd, paths=req.paths, workspace_name=workspace_name,
                     event_bus=event_bus,
                 )
             elif route == "unstage":
                 resp = await unstage_session_paths(
-                    cwd=cwd, paths=req.paths, project_name=project_name,
+                    cwd=cwd, paths=req.paths, workspace_name=workspace_name,
                     event_bus=event_bus,
                 )
             elif route == "discard":
                 resp = await discard_session_paths(
                     cwd=cwd, paths=req.paths, scope=req.scope,
-                    project_name=project_name, event_bus=event_bus,
+                    workspace_name=workspace_name, event_bus=event_bus,
                 )
             else:
                 resp = await commit_session(
-                    cwd=cwd, request=req, project_name=project_name,
+                    cwd=cwd, request=req, workspace_name=workspace_name,
                     event_bus=event_bus,
                 )
         except Exception as exc:
@@ -2551,9 +2551,9 @@ class RelayClient:
     ) -> dict | None:
         """Handle ``GET /api/projects/{name}/linear/(labels|states)`` over relay.
 
-        Mirrors the FastAPI endpoints in ``agent/projects/router.py`` so mobile
+        Mirrors the FastAPI endpoints in ``agent/workspaces/router.py`` so mobile
         clients connecting through the central server reach the same surface.
-        Returns 404 if the project is unknown, 400 if the project has no
+        Returns 404 if the workspace is unknown, 400 if the workspace has no
         ``linear_api_key``, 502 on upstream Linear failure, otherwise the
         deduped-by-name list returned by the agent's :class:`LinearApiClient`.
         """
@@ -2564,25 +2564,25 @@ class RelayClient:
         name = m.group(1)
         kind = m.group(2)
 
-        store = getattr(self._app_state, "projects_store", None)
+        store = getattr(self._app_state, "workspaces_store", None)
         if store is None:
             return {
                 "status": 500,
-                "body": {"detail": "projects store not configured"},
+                "body": {"detail": "workspaces store not configured"},
             }
-        project = store.get(name)
-        if project is None:
+        workspace = store.get(name)
+        if workspace is None:
             return {
                 "status": 404,
-                "body": {"detail": f"Project '{name}' not found"},
+                "body": {"detail": f"Workspace '{name}' not found"},
             }
-        api_key = project.linear_api_key
+        api_key = workspace.linear_api_key
         if not api_key:
             return {
                 "status": 400,
                 "body": {
                     "detail": (
-                        f"Project '{name}' has no linear_api_key configured; "
+                        f"Workspace '{name}' has no linear_api_key configured; "
                         "set one before fetching Linear metadata."
                     ),
                 },
@@ -2598,7 +2598,7 @@ class RelayClient:
                 items = await client.get_workflow_states()
         except Exception as exc:
             logger.warning(
-                "linear.discovery.%s_failed project=%s error=%s",
+                "linear.discovery.%s_failed workspace=%s error=%s",
                 kind, name, exc,
             )
             return {

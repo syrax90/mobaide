@@ -10,7 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
-/** The grip a reorderable row is dragged by (Projects screen, new-session wizard). */
+/** The grip a reorderable row is dragged by (Workspaces screen, new-session wizard). */
 @Composable
 fun DragHandleIcon(
     modifier: Modifier = Modifier,

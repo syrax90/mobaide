@@ -95,7 +95,7 @@ class TerminalOverflowMenuRebaseTest {
     }
 
     @Test
-    fun rebase_isOffered_onAnAgentThatAdvertisesIt_evenWithoutAProjectForBranches() {
+    fun rebase_isOffered_onAnAgentThatAdvertisesIt_evenWithoutAWorkspaceForBranches() {
         composeRule.setContent {
             MobaideTheme(darkTheme = true) {
                 TerminalOverflowMenu(

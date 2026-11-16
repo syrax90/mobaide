@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ProjectSummary } from '../../../api/projectRepository';
+import type { WorkspaceSummary } from '../../../api/workspaceRepository';
 import { CODEX_REASONING_EFFORTS } from '../../../protocol/dto/sessionCreate';
 import type { CliModelDetail } from '../../../protocol/dto/agentVersion';
 import {
@@ -17,7 +17,7 @@ import {
   type WizardState,
 } from './wizardState';
 
-const project = (over: Partial<ProjectSummary> = {}): ProjectSummary => ({
+const workspace = (over: Partial<WorkspaceSummary> = {}): WorkspaceSummary => ({
   name: 'mobaide',
   path: '/srv/mobaide',
   order: 0,
@@ -111,33 +111,33 @@ describe('selectors', () => {
 });
 
 describe('wizardReducer', () => {
-  it('clears the git bucket when the chosen project is not a repo', () => {
+  it('clears the git bucket when the chosen workspace is not a repo', () => {
     const dialled = reduce([
       { type: 'setWorktree', value: true },
       { type: 'setBranchName', value: 'feature/x' },
     ]);
 
-    expect(reduce([{ type: 'selectStoredProject', project: project() }], dialled).git).toEqual({
+    expect(reduce([{ type: 'selectStoredWorkspace', workspace: workspace() }], dialled).git).toEqual({
       worktree: true,
       branchName: 'feature/x',
     });
     expect(
-      reduce([{ type: 'selectStoredProject', project: project({ is_git: false }) }], dialled).git,
+      reduce([{ type: 'selectStoredWorkspace', workspace: workspace({ is_git: false }) }], dialled).git,
     ).toEqual({ worktree: false, branchName: '' });
   });
 
-  it('keeps a base-branch pick for its project and drops it on a project change', () => {
+  it('keeps a base-branch pick for its workspace and drops it on a workspace change', () => {
     const picked = reduce([
-      { type: 'selectStoredProject', project: project() },
-      { type: 'setWorktreeBase', pick: { projectName: project().name, ref: 'wip' } },
+      { type: 'selectStoredWorkspace', workspace: workspace() },
+      { type: 'setWorktreeBase', pick: { workspaceName: workspace().name, ref: 'wip' } },
     ]);
-    expect(picked.worktreeBasePick).toEqual({ projectName: project().name, ref: 'wip' });
+    expect(picked.worktreeBasePick).toEqual({ workspaceName: workspace().name, ref: 'wip' });
 
     expect(
-      reduce([{ type: 'selectStoredProject', project: project() }], picked).worktreeBasePick,
-    ).toEqual({ projectName: project().name, ref: 'wip' });
+      reduce([{ type: 'selectStoredWorkspace', workspace: workspace() }], picked).worktreeBasePick,
+    ).toEqual({ workspaceName: workspace().name, ref: 'wip' });
     expect(
-      reduce([{ type: 'selectStoredProject', project: project({ name: 'other' }) }], picked)
+      reduce([{ type: 'selectStoredWorkspace', workspace: workspace({ name: 'other' }) }], picked)
         .worktreeBasePick,
     ).toBeNull();
     expect(
@@ -362,19 +362,19 @@ describe('wizardReducer', () => {
     ).toBeNull();
   });
 
-  it('seeds the Auto Scan prompt once per project', () => {
-    const seeded = reduce([{ type: 'seedAutoScanPrompt', projectName: 'a', prompt: 'from a' }]);
+  it('seeds the Auto Scan prompt once per workspace', () => {
+    const seeded = reduce([{ type: 'seedAutoScanPrompt', workspaceName: 'a', prompt: 'from a' }]);
     const edited = reduce(
       [{ type: 'setClaudeText', bucket: 'autoScan', field: 'initialPrompt', value: 'mine' }],
       seeded,
     );
 
     expect(
-      reduce([{ type: 'seedAutoScanPrompt', projectName: 'a', prompt: 'from a' }], edited).autoScan
+      reduce([{ type: 'seedAutoScanPrompt', workspaceName: 'a', prompt: 'from a' }], edited).autoScan
         .initialPrompt,
     ).toBe('mine');
     expect(
-      reduce([{ type: 'seedAutoScanPrompt', projectName: 'b', prompt: 'from b' }], edited).autoScan
+      reduce([{ type: 'seedAutoScanPrompt', workspaceName: 'b', prompt: 'from b' }], edited).autoScan
         .initialPrompt,
     ).toBe('from b');
   });

@@ -1,7 +1,7 @@
 """End-to-end tests for the git management endpoints (CLA-46).
 
 The router is exercised through an ``ASGITransport`` so we go through the
-real auth dependency, the projects store, and the wired
+real auth dependency, the workspaces store, and the wired
 ``app.state.worktree_manager``. The underlying ``_run_git`` is exercised
 both directly (against a real on-disk repo built with ``git init``) and
 indirectly through the merge logic in ``service._build_items``.
@@ -30,7 +30,7 @@ from mobaide.agent.git.service import (
     _busy_holders,
     delete_git_items,
 )
-from mobaide.core import ProjectRecord
+from mobaide.core import WorkspaceRecord
 from mobaide.linear.worktree import (
     BranchDeleteError,
     BranchInfo,
@@ -109,12 +109,12 @@ async def app_with_git(tmp_path, real_repo):
     )
     application = create_app(config=cfg)
     application.state.user_store.add_user(TEST_USERNAME, TEST_PASSWORD)
-    store = application.state.projects_store
-    store.create(ProjectRecord(name="alpha", path=real_repo))
-    # Seed a non-git project to exercise the 400 path.
+    store = application.state.workspaces_store
+    store.create(WorkspaceRecord(name="alpha", path=real_repo))
+    # Seed a non-git workspace to exercise the 400 path.
     non_git = str(tmp_path / "plain")
     os.makedirs(non_git, exist_ok=True)
-    store.create(ProjectRecord(name="plain", path=non_git))
+    store.create(WorkspaceRecord(name="plain", path=non_git))
     yield application
     await application.state.session_manager.shutdown()
 
@@ -355,16 +355,16 @@ class _FakeManager:
         self.remove_worktree_error: Exception | None = None
 
     async def delete_branch(
-        self, project_root: str, name: str, *, force: bool = False,
+        self, workspace_root: str, name: str, *, force: bool = False,
     ) -> None:
-        self.delete_branch_calls.append((project_root, name, force))
+        self.delete_branch_calls.append((workspace_root, name, force))
         if self.delete_branch_error is not None:
             raise self.delete_branch_error
 
     async def remove_worktree(
-        self, project_root: str, path: str, *, force: bool = False,
+        self, workspace_root: str, path: str, *, force: bool = False,
     ) -> None:
-        self.remove_worktree_calls.append((project_root, path, force))
+        self.remove_worktree_calls.append((workspace_root, path, force))
         if self.remove_worktree_error is not None:
             raise self.remove_worktree_error
 
@@ -396,8 +396,8 @@ class TestDeleteGitItems:
         with pytest.raises(GitItemBusyError) as exc_info:
             await delete_git_items(
                 request,
-                project_name="alpha",
-                project_root=str(tmp_path),
+                workspace_name="alpha",
+                workspace_root=str(tmp_path),
                 manager=manager,
                 session_manager=session_manager,
                 autoscan_manager=None,
@@ -419,8 +419,8 @@ class TestDeleteGitItems:
 
         response = await delete_git_items(
             request,
-            project_name="alpha",
-            project_root=str(tmp_path),
+            workspace_name="alpha",
+            workspace_root=str(tmp_path),
             manager=manager,
             session_manager=None,
             autoscan_manager=None,
@@ -454,8 +454,8 @@ class TestDeleteGitItems:
 
         response = await delete_git_items(
             request,
-            project_name="alpha",
-            project_root=str(tmp_path),
+            workspace_name="alpha",
+            workspace_root=str(tmp_path),
             manager=manager,
             session_manager=None,
             autoscan_manager=None,
@@ -488,8 +488,8 @@ class TestDeleteGitItems:
 
         response = await delete_git_items(
             request,
-            project_name="alpha",
-            project_root=str(tmp_path),
+            workspace_name="alpha",
+            workspace_root=str(tmp_path),
             manager=manager,
             session_manager=None,
             autoscan_manager=None,
@@ -520,8 +520,8 @@ class TestDeleteGitItems:
         ])
         response = await delete_git_items(
             request,
-            project_name="alpha",
-            project_root=str(tmp_path),
+            workspace_name="alpha",
+            workspace_root=str(tmp_path),
             manager=manager,
             session_manager=None,
             autoscan_manager=None,
@@ -548,8 +548,8 @@ class TestDeleteGitItems:
         ])
         response = await delete_git_items(
             request,
-            project_name="alpha",
-            project_root=str(tmp_path),
+            workspace_name="alpha",
+            workspace_root=str(tmp_path),
             manager=manager,
             session_manager=None,
             autoscan_manager=None,
@@ -572,8 +572,8 @@ class TestDeleteGitItems:
         ])
         response = await delete_git_items(
             request,
-            project_name="alpha",
-            project_root=str(tmp_path),
+            workspace_name="alpha",
+            workspace_root=str(tmp_path),
             manager=manager,
             session_manager=None,
             autoscan_manager=None,
@@ -597,8 +597,8 @@ class TestDeleteGitItems:
         ])
         response = await delete_git_items(
             request,
-            project_name="alpha",
-            project_root=str(tmp_path),
+            workspace_name="alpha",
+            workspace_root=str(tmp_path),
             manager=manager,
             session_manager=None,
             autoscan_manager=None,
@@ -638,8 +638,8 @@ class TestDeleteGitItems:
         ])
         response = await delete_git_items(
             request,
-            project_name="alpha",
-            project_root=str(tmp_path),
+            workspace_name="alpha",
+            workspace_root=str(tmp_path),
             manager=manager,
             session_manager=None,
             autoscan_manager=None,
@@ -663,7 +663,7 @@ class TestDeleteGitItems:
 
 @requires_git
 class TestGitRouterEndpoints:
-    async def test_get_items_unknown_project_returns_404(
+    async def test_get_items_unknown_workspace_returns_404(
         self, client_git, auth_headers_g,
     ):
         resp = await client_git.get(
@@ -673,7 +673,7 @@ class TestGitRouterEndpoints:
         assert resp.status_code == 404
         assert "not found" in resp.json()["detail"].lower()
 
-    async def test_get_items_non_git_project_returns_400(
+    async def test_get_items_non_git_workspace_returns_400(
         self, client_git, auth_headers_g,
     ):
         resp = await client_git.get(
@@ -831,8 +831,8 @@ class TestGitBranchEndpoints:
     /branches`` and ``POST /checkout``, with the 200 / 400 / 404 / 409 shapes
     the three clients branch on."""
 
-    async def _branches(self, client, headers, project="alpha"):
-        resp = await client.get(f"/api/projects/{project}/git/items", headers=headers)
+    async def _branches(self, client, headers, workspace="alpha"):
+        resp = await client.get(f"/api/projects/{workspace}/git/items", headers=headers)
         assert resp.status_code == 200, resp.text
         return {
             i["branch"]: i for i in resp.json()["items"] if i.get("branch") is not None
@@ -842,7 +842,7 @@ class TestGitBranchEndpoints:
         self, client_git, auth_headers_g, app_with_git, tmp_path,
     ):
         clone = clone_repo(seed_remote(str(tmp_path)), str(tmp_path / "beta"))
-        app_with_git.state.projects_store.create(ProjectRecord(name="beta", path=clone))
+        app_with_git.state.workspaces_store.create(WorkspaceRecord(name="beta", path=clone))
 
         plain = await client_git.get(
             "/api/projects/beta/git/items", headers=auth_headers_g,
@@ -865,8 +865,8 @@ class TestGitBranchEndpoints:
         self, client_git, auth_headers_g, app_with_git, tmp_path,
     ):
         clone = clone_repo(seed_remote(str(tmp_path)), str(tmp_path / "beta"))
-        store = app_with_git.state.projects_store
-        store.create(ProjectRecord(name="beta", path=clone))
+        store = app_with_git.state.workspaces_store
+        store.create(WorkspaceRecord(name="beta", path=clone))
         store.set_last_worktree_base("beta", "main")
 
         resp = await client_git.get(
@@ -903,7 +903,7 @@ class TestGitBranchEndpoints:
     ):
         clone = clone_repo(seed_remote(str(tmp_path)), str(tmp_path / "beta"))
         _run_git_sync(clone, "push", "-q", "origin", "main:refs/heads/feature/x")
-        app_with_git.state.projects_store.create(ProjectRecord(name="beta", path=clone))
+        app_with_git.state.workspaces_store.create(WorkspaceRecord(name="beta", path=clone))
 
         resp = await client_git.post(
             "/api/projects/beta/git/items:delete",

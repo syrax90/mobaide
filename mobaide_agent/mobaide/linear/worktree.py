@@ -70,7 +70,7 @@ class WorktreeCreationError(RuntimeError):
     """Raised when ``git worktree add`` cannot produce a usable worktree.
 
     The launcher converts this into an HTTP 400 so the mobile client sees the
-    real git stderr instead of silently landing in the project root.
+    real git stderr instead of silently landing in the workspace root.
     """
 
     def __init__(self, *, branch: str, path: str, stderr: str) -> None:
@@ -136,7 +136,7 @@ def convert_to_worktree_slug(identifier: str, title: str) -> str:
 
 async def create_standard_worktree(
     mgr: WorktreeManager,
-    project_root: str,
+    workspace_root: str,
     branch_name: str | None,
     *,
     fallback_prefix: str = "claude-session",
@@ -154,7 +154,7 @@ async def create_standard_worktree(
     slug = convert_to_worktree_slug("", branch)
     return await mgr.create_worktree(
         slug,
-        project_root,
+        workspace_root,
         branch_name=branch,
         base_branch=(base_branch or "").strip() or None,
     )
@@ -316,9 +316,10 @@ def _same_dir(a: str, b: str) -> bool:
         return False
 
 
-# Marks which repository owns a project folder under the worktrees folder, so
-# two repositories with the same folder name never share one.
-PROJECT_OWNER_FILE = ".mobaide-project"
+# Marks which repository owns a workspace folder under the worktrees folder, so
+# two repositories with the same folder name never share one. The file name is
+# stored on disk, so it keeps the old "project" name.
+WORKSPACE_OWNER_FILE = ".mobaide-project"
 
 _UNSAFE_NAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _WINDOWS_RESERVED_NAMES = frozenset(
@@ -338,15 +339,15 @@ def _safe_dir_name(name: str) -> str:
     return cleaned
 
 
-def _canonical_root(project_root: str) -> str:
-    return os.path.normcase(os.path.realpath(project_root))
+def _canonical_root(workspace_root: str) -> str:
+    return os.path.normcase(os.path.realpath(workspace_root))
 
 
 def _read_owner(folder: str) -> str | None:
     """The owner recorded in ``folder``; ``None`` when there is none."""
     try:
         with open(
-            os.path.join(folder, PROJECT_OWNER_FILE),
+            os.path.join(folder, WORKSPACE_OWNER_FILE),
             encoding="utf-8", errors="surrogateescape",
         ) as fh:
             return fh.read().strip() or None
@@ -366,14 +367,14 @@ def _claim(folder: str, owner: str) -> bool:
     into place. A link fails when the file already exists, so a claim never
     overwrites another owner and nobody reads a half-written file.
     """
-    marker = os.path.join(folder, PROJECT_OWNER_FILE)
+    marker = os.path.join(folder, WORKSPACE_OWNER_FILE)
     tmp = os.path.join(
-        os.path.dirname(folder), f".{PROJECT_OWNER_FILE}-{uuid.uuid4().hex}.tmp",
+        os.path.dirname(folder), f".{WORKSPACE_OWNER_FILE}-{uuid.uuid4().hex}.tmp",
     )
     with _claim_lock:
         try:
             os.makedirs(folder, exist_ok=True)
-            if any(entry != PROJECT_OWNER_FILE for entry in os.listdir(folder)):
+            if any(entry != WORKSPACE_OWNER_FILE for entry in os.listdir(folder)):
                 return False
             with open(tmp, "w", encoding="utf-8", errors="surrogateescape") as fh:
                 fh.write(owner + "\n")
@@ -396,10 +397,10 @@ def _claim(folder: str, owner: str) -> bool:
 
 
 class WorktreeManager:
-    """Create and manage git worktrees and local branches for a project.
+    """Create and manage git worktrees and local branches for a workspace.
 
     Mutating operations acquire a per-repo ``asyncio.Lock`` keyed by the
-    realpath-normalized project root, so concurrent ``create_worktree`` /
+    realpath-normalized workspace root, so concurrent ``create_worktree`` /
     ``cleanup_worktree`` / ``delete_branch`` / ``remove_worktree`` calls
     against the same repo are serialized while different repos remain
     independent. Listings (``list_branches``, ``list_worktrees``) do not
@@ -415,8 +416,8 @@ class WorktreeManager:
         legacy_worktree_base: str | None = None,
     ) -> None:
         """``worktrees_dir`` holds new worktrees at
-        ``<worktrees_dir>/<project folder name>/<slug>``.
-        ``legacy_worktree_base`` is the folder inside the project root where
+        ``<worktrees_dir>/<workspace folder name>/<slug>``.
+        ``legacy_worktree_base`` is the folder inside the workspace root where
         earlier versions put worktrees; one found there is reused."""
         self._worktrees_dir = worktrees_dir
         self._legacy_worktree_base = legacy_worktree_base
@@ -424,21 +425,21 @@ class WorktreeManager:
         self._main_branch = main_branch
         self._repo_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
-    def _lock_for(self, project_root: str) -> asyncio.Lock:
+    def _lock_for(self, workspace_root: str) -> asyncio.Lock:
         try:
-            key = os.path.realpath(project_root)
+            key = os.path.realpath(workspace_root)
         except OSError:
-            key = project_root
+            key = workspace_root
         return self._repo_locks[key]
 
-    def project_worktrees_dir(self, project_root: str) -> str:
-        """The folder that holds the worktrees of ``project_root``.
+    def workspace_worktrees_dir(self, workspace_root: str) -> str:
+        """The folder that holds the worktrees of ``workspace_root``.
 
-        Its name is the project folder name. When another repository already
-        owns that name, a short hash of the project path is appended.
+        Its name is the workspace folder name. When another repository already
+        owns that name, a short hash of the workspace path is appended.
         """
-        owner = _canonical_root(project_root)
-        name = _safe_dir_name(os.path.basename(os.path.realpath(project_root)))
+        owner = _canonical_root(workspace_root)
+        name = _safe_dir_name(os.path.basename(os.path.realpath(workspace_root)))
         digest = hashlib.sha256(os.fsencode(owner)).hexdigest()[:8]
         candidates = (name, f"{name}-{digest}")
         for candidate in candidates:
@@ -452,29 +453,29 @@ class WorktreeManager:
         )
         return os.path.join(self._worktrees_dir, candidates[-1])
 
-    def _legacy_worktree_dir(self, project_root: str, slug: str) -> str | None:
+    def _legacy_worktree_dir(self, workspace_root: str, slug: str) -> str | None:
         base = self._legacy_worktree_base
         if not base:
             return None
-        # An absolute base replaces the project root, as it did before.
-        path = os.path.join(project_root, base, slug)
+        # An absolute base replaces the workspace root, as it did before.
+        path = os.path.join(workspace_root, base, slug)
         # Only a linked worktree counts. When the old and the new folder are
-        # the same, ``<base>/<slug>`` can also be the folder of a project.
+        # the same, ``<base>/<slug>`` can also be the folder of a workspace.
         if not os.path.exists(os.path.join(path, ".git")) or os.path.exists(
-            os.path.join(path, PROJECT_OWNER_FILE)
+            os.path.join(path, WORKSPACE_OWNER_FILE)
         ):
             return None
         return path
 
-    async def _ref_resolves(self, project_root: str, ref: str) -> bool:
+    async def _ref_resolves(self, workspace_root: str, ref: str) -> bool:
         rc, _, _ = await _run_git(
             "rev-parse", "--verify", "--quiet", "--end-of-options",
             f"{ref}^{{commit}}",
-            cwd=project_root,
+            cwd=workspace_root,
         )
         return rc == 0
 
-    async def default_base(self, project_root: str) -> str | None:
+    async def default_base(self, workspace_root: str) -> str | None:
         """The branch a worktree starts from when the client names none.
 
         ``origin/HEAD`` (the remote's default branch, set by ``git clone`` or
@@ -484,27 +485,27 @@ class WorktreeManager:
         """
         rc, stdout, _ = await _run_git(
             "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD",
-            cwd=project_root,
+            cwd=workspace_root,
         )
         origin_head = stdout.strip()
         if rc == 0 and origin_head and await self._ref_resolves(
-            project_root, f"refs/remotes/{origin_head}",
+            workspace_root, f"refs/remotes/{origin_head}",
         ):
             return origin_head
         if await self._ref_resolves(
-            project_root, f"refs/remotes/origin/{self._main_branch}",
+            workspace_root, f"refs/remotes/origin/{self._main_branch}",
         ):
             return f"origin/{self._main_branch}"
         if await self._ref_resolves(
-            project_root, f"refs/heads/{self._main_branch}",
+            workspace_root, f"refs/heads/{self._main_branch}",
         ):
             return self._main_branch
         return None
 
-    async def _remote_of(self, project_root: str, ref: str) -> str | None:
+    async def _remote_of(self, workspace_root: str, ref: str) -> str | None:
         """The configured remote ``ref`` (``<remote>/<branch>``) lives under;
         the longest name wins because remote names may contain ``/``."""
-        rc, stdout, _ = await _run_git("remote", cwd=project_root)
+        rc, stdout, _ = await _run_git("remote", cwd=workspace_root)
         if rc != 0:
             return None
         best: str | None = None
@@ -515,7 +516,7 @@ class WorktreeManager:
         return best
 
     async def _resolve_base(
-        self, project_root: str, base_branch: str,
+        self, workspace_root: str, base_branch: str,
     ) -> str | None:
         """Full refname of a client-chosen base, local branch first.
 
@@ -524,26 +525,26 @@ class WorktreeManager:
         current tip. Full refnames keep a same-named tag from winning.
         """
         local = f"refs/heads/{base_branch}"
-        if await self._ref_resolves(project_root, local):
+        if await self._ref_resolves(workspace_root, local):
             return local
-        remote = await self._remote_of(project_root, base_branch)
+        remote = await self._remote_of(workspace_root, base_branch)
         if remote is None:
             return None
-        await _run_git("fetch", "--", remote, cwd=project_root)
+        await _run_git("fetch", "--", remote, cwd=workspace_root)
         tracking = f"refs/remotes/{base_branch}"
-        if await self._ref_resolves(project_root, tracking):
+        if await self._ref_resolves(workspace_root, tracking):
             return tracking
         return None
 
-    async def _resolve_start_point(self, project_root: str) -> str:
+    async def _resolve_start_point(self, workspace_root: str) -> str:
         """Pick a commit-ish to branch from that actually exists in this repo.
 
         Fetches ``origin`` first, then takes :meth:`default_base`, falling
         back to ``HEAD`` so a worktree can still be created in a repo with
         no ``origin`` and no ``<main_branch>``.
         """
-        await _run_git("fetch", "origin", cwd=project_root)
-        base = await self.default_base(project_root)
+        await _run_git("fetch", "origin", cwd=workspace_root)
+        base = await self.default_base(workspace_root)
         if base is not None:
             return base
         logger.warning(
@@ -559,7 +560,7 @@ class WorktreeManager:
     async def create_worktree(
         self,
         slug: str,
-        project_root: str,
+        workspace_root: str,
         *,
         branch_name: str | None = None,
         base_branch: str | None = None,
@@ -582,18 +583,18 @@ class WorktreeManager:
 
         Raises ``WorktreeCreationError`` if the worktree cannot be created.
         The launcher surfaces this as HTTP 400 so the user sees the real
-        git stderr instead of silently landing in the project root.
+        git stderr instead of silently landing in the workspace root.
         """
-        async with self._lock_for(project_root):
+        async with self._lock_for(workspace_root):
             return await self._create_worktree_unlocked(
-                slug, project_root, branch_name=branch_name,
+                slug, workspace_root, branch_name=branch_name,
                 base_branch=base_branch,
             )
 
     async def _create_worktree_unlocked(
         self,
         slug: str,
-        project_root: str,
+        workspace_root: str,
         *,
         branch_name: str | None,
         base_branch: str | None = None,
@@ -618,13 +619,13 @@ class WorktreeManager:
                 stderr="base branch must not start with '-'",
             )
 
-        legacy_dir = self._legacy_worktree_dir(project_root, slug)
+        legacy_dir = self._legacy_worktree_dir(workspace_root, slug)
         if legacy_dir is not None:
             logger.info("Reusing worktree %s from the earlier location", legacy_dir)
             return WorktreeResult(path=legacy_dir, is_new=False, branch=branch_name)
 
-        project_dir = await asyncio.to_thread(self.project_worktrees_dir, project_root)
-        wt_dir = os.path.join(project_dir, slug)
+        workspace_dir = await asyncio.to_thread(self.workspace_worktrees_dir, workspace_root)
+        wt_dir = os.path.join(workspace_dir, slug)
 
         if os.path.exists(wt_dir):
             logger.warning("Worktree already exists at %s, reusing it", wt_dir)
@@ -633,7 +634,7 @@ class WorktreeManager:
         # git refuses to check a branch out twice, so a branch already living in
         # a worktree outside ``wt_dir`` (an earlier worktrees folder, or made by
         # hand) reopens it; a registration whose directory is gone is pruned.
-        existing = await self._find_branch_worktree(project_root, branch_name)
+        existing = await self._find_branch_worktree(workspace_root, branch_name)
         if existing is not None:
             if not existing.prunable and os.path.isdir(existing.path):
                 path = os.path.normpath(existing.path)
@@ -647,22 +648,22 @@ class WorktreeManager:
                     "Pruning stale worktree %s that still holds branch %s",
                     existing.path, branch_name,
                 )
-                await _run_git("worktree", "prune", cwd=project_root)
+                await _run_git("worktree", "prune", cwd=workspace_root)
 
-        await _run_git("config", "core.longpaths", "true", cwd=project_root)
+        await _run_git("config", "core.longpaths", "true", cwd=workspace_root)
 
         # An existing branch keeps its own history, so a chosen base is moot
         # and must not block reopening it (the base may be deleted by now).
         reuse_branch = base_branch is not None and await self._ref_resolves(
-            project_root, f"refs/heads/{branch_name}",
+            workspace_root, f"refs/heads/{branch_name}",
         )
         if reuse_branch:
             first_err = ""
         else:
             if base_branch is None:
-                start_point = await self._resolve_start_point(project_root)
+                start_point = await self._resolve_start_point(workspace_root)
             else:
-                resolved = await self._resolve_base(project_root, base_branch)
+                resolved = await self._resolve_base(workspace_root, base_branch)
                 if resolved is None:
                     raise WorktreeCreationError(
                         branch=branch_name,
@@ -679,7 +680,7 @@ class WorktreeManager:
             )
             rc, _, stderr = await _run_git(
                 "worktree", "add", "--no-track", wt_dir, "-b", branch_name, start_point,
-                cwd=project_root,
+                cwd=workspace_root,
             )
             if rc == 0:
                 logger.info("Worktree created successfully")
@@ -696,7 +697,7 @@ class WorktreeManager:
 
         rc, _, stderr = await _run_git(
             "worktree", "add", "--", wt_dir, branch_name,
-            cwd=project_root,
+            cwd=workspace_root,
         )
         if rc == 0:
             logger.info("Worktree created successfully (existing branch)")
@@ -726,36 +727,36 @@ class WorktreeManager:
         )
 
     async def _find_branch_worktree(
-        self, project_root: str, branch_name: str,
+        self, workspace_root: str, branch_name: str,
     ) -> WorktreeInfo | None:
         """Return the linked worktree that has ``branch_name`` checked out.
 
-        The main worktree and ``project_root`` itself are skipped: a worktree
-        session must never land in the project's own checkout. A failed
+        The main worktree and ``workspace_root`` itself are skipped: a worktree
+        session must never land in the workspace's own checkout. A failed
         listing yields ``None`` so creation proceeds and git reports the error.
         """
         try:
-            worktrees = await self.list_worktrees(project_root)
+            worktrees = await self.list_worktrees(workspace_root)
         except RuntimeError as exc:
-            logger.warning("Could not list worktrees of %s: %s", project_root, exc)
+            logger.warning("Could not list worktrees of %s: %s", workspace_root, exc)
             return None
         ref = f"refs/heads/{branch_name}"
         for wt in worktrees[1:]:
-            if wt.branch == ref and not _same_dir(wt.path, project_root):
+            if wt.branch == ref and not _same_dir(wt.path, workspace_root):
                 return wt
         return None
 
     @log_call(name="worktree.cleanup_worktree", log_args=("path",))
-    async def cleanup_worktree(self, path: str, project_root: str) -> bool:
+    async def cleanup_worktree(self, path: str, workspace_root: str) -> bool:
         """Remove a git worktree.
 
         Uses ``--force`` and silently swallows failures by design — auto-scan
         relies on this contract for retry-on-next-cycle semantics. New
         callers that need failure propagation should use ``remove_worktree``.
         """
-        async with self._lock_for(project_root):
+        async with self._lock_for(workspace_root):
             rc, _, stderr = await _run_git(
-                "worktree", "remove", path, "--force", cwd=project_root
+                "worktree", "remove", path, "--force", cwd=workspace_root
             )
             if rc != 0:
                 logger.error("Failed to remove worktree %s: %s", path, stderr.strip())
@@ -764,22 +765,22 @@ class WorktreeManager:
             audit_event("audit.worktree.removed", target=path, outcome="ok")
             return True
 
-    async def list_branches(self, project_root: str) -> list[BranchInfo]:
+    async def list_branches(self, workspace_root: str) -> list[BranchInfo]:
         """Enumerate local branches via ``git for-each-ref refs/heads/``."""
         fmt = "%(refname:lstrip=2)%00%(upstream:short)%00%(upstream:track)%00%(objectname)%00%(HEAD)"
         rc, stdout, stderr = await _run_git(
             "for-each-ref", f"--format={fmt}", "refs/heads/",
-            cwd=project_root,
+            cwd=workspace_root,
         )
         if rc != 0:
             raise RuntimeError(f"git for-each-ref failed: {stderr.strip()}")
         return _parse_for_each_ref(stdout)
 
-    async def list_worktrees(self, project_root: str) -> list[WorktreeInfo]:
+    async def list_worktrees(self, workspace_root: str) -> list[WorktreeInfo]:
         """Enumerate worktrees via ``git worktree list --porcelain``."""
         rc, stdout, stderr = await _run_git(
             "worktree", "list", "--porcelain",
-            cwd=project_root,
+            cwd=workspace_root,
         )
         if rc != 0:
             raise RuntimeError(f"git worktree list failed: {stderr.strip()}")
@@ -788,7 +789,7 @@ class WorktreeManager:
     @log_call(name="worktree.delete_branch", log_args=("name", "force"))
     async def delete_branch(
         self,
-        project_root: str,
+        workspace_root: str,
         name: str,
         *,
         force: bool = False,
@@ -800,9 +801,9 @@ class WorktreeManager:
         caller can map to ``force_required``.
         """
         flag = "-D" if force else "-d"
-        async with self._lock_for(project_root):
+        async with self._lock_for(workspace_root):
             rc, _, stderr = await _run_git(
-                "branch", flag, name, cwd=project_root,
+                "branch", flag, name, cwd=workspace_root,
             )
             if rc != 0:
                 err = stderr.strip()
@@ -829,7 +830,7 @@ class WorktreeManager:
     @log_call(name="worktree.remove_worktree", log_args=("path", "force"))
     async def remove_worktree(
         self,
-        project_root: str,
+        workspace_root: str,
         path: str,
         *,
         force: bool = False,
@@ -844,9 +845,9 @@ class WorktreeManager:
         ``--force`` to discard that work.
         """
         extra = ("--force",) if force else ()
-        async with self._lock_for(project_root):
+        async with self._lock_for(workspace_root):
             rc, _, stderr = await _run_git(
-                "worktree", "remove", path, *extra, cwd=project_root,
+                "worktree", "remove", path, *extra, cwd=workspace_root,
             )
             if rc != 0:
                 err = stderr.strip()
@@ -864,7 +865,7 @@ class WorktreeManager:
                     error=err,
                 )
                 raise WorktreeRemoveError(path=path, stderr=err, dirty=dirty)
-            await _run_git("worktree", "prune", cwd=project_root)
+            await _run_git("worktree", "prune", cwd=workspace_root)
             logger.info("Worktree removed and pruned: %s", path)
             audit_event(
                 "audit.git.worktree.removed",

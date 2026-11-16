@@ -27,7 +27,7 @@ const PRESETS: readonly { preset: CodexPreset; label: string; description: strin
   {
     preset: 'readOnly',
     label: 'Read-only',
-    description: 'Reads the project; asks before any change.',
+    description: 'Reads the workspace; asks before any change.',
   },
   {
     preset: 'auto',

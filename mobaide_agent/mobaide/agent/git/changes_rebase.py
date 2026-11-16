@@ -269,7 +269,7 @@ async def start_session_rebase(
     *,
     cwd: str | None,
     onto: str,
-    project_name: str | None,
+    workspace_name: str | None,
     event_bus: Any | None,
 ) -> GitRebaseResponse:
     """``git rebase --no-autostash <onto>``: git decides whether the tree is
@@ -297,14 +297,14 @@ async def start_session_rebase(
             )
     finally:
         if ran:
-            _publish(event_bus, project_name, repo)
+            _publish(event_bus, workspace_name, repo)
 
 
 async def _step(
     action: Literal["continue", "skip", "abort"],
     *,
     cwd: str | None,
-    project_name: str | None,
+    workspace_name: str | None,
     event_bus: Any | None,
 ) -> GitRebaseResponse:
     repo = await _writable_repo(cwd)
@@ -339,28 +339,28 @@ async def _step(
                 raise
     finally:
         if ran:
-            _publish(event_bus, project_name, repo)
+            _publish(event_bus, workspace_name, repo)
 
 
 async def continue_session_rebase(
-    *, cwd: str | None, project_name: str | None, event_bus: Any | None
+    *, cwd: str | None, workspace_name: str | None, event_bus: Any | None
 ) -> GitRebaseResponse:
     """``git rebase --continue``, refused while unmerged paths remain."""
     return await _step(
-        "continue", cwd=cwd, project_name=project_name, event_bus=event_bus
+        "continue", cwd=cwd, workspace_name=workspace_name, event_bus=event_bus
     )
 
 
 async def skip_session_rebase(
-    *, cwd: str | None, project_name: str | None, event_bus: Any | None
+    *, cwd: str | None, workspace_name: str | None, event_bus: Any | None
 ) -> GitRebaseResponse:
     """``git rebase --skip``: drops the commit git stopped at, including one git
     rescheduled."""
-    return await _step("skip", cwd=cwd, project_name=project_name, event_bus=event_bus)
+    return await _step("skip", cwd=cwd, workspace_name=workspace_name, event_bus=event_bus)
 
 
 async def abort_session_rebase(
-    *, cwd: str | None, project_name: str | None, event_bus: Any | None
+    *, cwd: str | None, workspace_name: str | None, event_bus: Any | None
 ) -> GitRebaseResponse:
     """``git rebase --abort``: back to the branch as it was before the rebase."""
-    return await _step("abort", cwd=cwd, project_name=project_name, event_bus=event_bus)
+    return await _step("abort", cwd=cwd, workspace_name=workspace_name, event_bus=event_bus)

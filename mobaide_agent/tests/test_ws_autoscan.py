@@ -178,14 +178,14 @@ class TestAuthAndConfiguration:
 class TestSnapshot:
     def test_snapshot_with_two_instances(self, test_client, auth_token, app):
         inst_a = FakeAutoScanInstance(
-            project_name="projectA",
+            project_name="workspaceA",
             _recent_events=[_make_event(1, "phase"), _make_event(2, "issue")],
-            _dto={"project_name": "projectA", "status": "running"},
+            _dto={"project_name": "workspaceA", "status": "running"},
         )
         inst_b = FakeAutoScanInstance(
-            project_name="projectB",
+            project_name="workspaceB",
             _recent_events=[_make_event(10, "worktree"), _make_event(11, "session")],
-            _dto={"project_name": "projectB", "status": "running"},
+            _dto={"project_name": "workspaceB", "status": "running"},
         )
         _install_manager(app, [inst_a, inst_b])
 
@@ -199,16 +199,16 @@ class TestSnapshot:
         assert "data" in snap
         scans = snap["data"]["scans"]
         assert isinstance(scans, list) and len(scans) == 2
-        project_names = {s["project_name"] for s in scans}
-        assert project_names == {"projectA", "projectB"}
+        workspace_names = {s["project_name"] for s in scans}
+        assert workspace_names == {"workspaceA", "workspaceB"}
 
         events = snap["data"]["events"]
-        assert set(events.keys()) == {"projectA", "projectB"}
-        assert [e["seq"] for e in events["projectA"]] == [1, 2]
-        assert [e["type"] for e in events["projectA"]] == ["phase", "issue"]
-        assert [e["seq"] for e in events["projectB"]] == [10, 11]
+        assert set(events.keys()) == {"workspaceA", "workspaceB"}
+        assert [e["seq"] for e in events["workspaceA"]] == [1, 2]
+        assert [e["type"] for e in events["workspaceA"]] == ["phase", "issue"]
+        assert [e["seq"] for e in events["workspaceB"]] == [10, 11]
         # Each serialized event has the full wire shape.
-        for e in events["projectA"] + events["projectB"]:
+        for e in events["workspaceA"] + events["workspaceB"]:
             assert set(e.keys()) == {"version", "seq", "ts", "type", "payload"}
 
         assert caught_up == {"type": "caught_up"}
@@ -280,7 +280,7 @@ class TestInitialFrame:
             app,
             [
                 FakeAutoScanInstance(
-                    "projectA",
+                    "workspaceA",
                     _recent_events=[_make_event(s) for s in (1, 2, 3, 4, 5)],
                 ),
             ],
@@ -288,12 +288,12 @@ class TestInitialFrame:
         with test_client.websocket_connect(
             f"/ws/autoscan?token={auth_token}",
         ) as ws:
-            ws.send_text(json.dumps({"resume_from_seq": {"projectA": 2}}))
+            ws.send_text(json.dumps({"resume_from_seq": {"workspaceA": 2}}))
             snap = ws.receive_json()
             caught_up = ws.receive_json()
 
         assert snap["type"] == "snapshot"
-        seqs = [e["seq"] for e in snap["data"]["events"]["projectA"]]
+        seqs = [e["seq"] for e in snap["data"]["events"]["workspaceA"]]
         assert seqs == [3, 4, 5]
         assert caught_up == {"type": "caught_up"}
 
@@ -305,7 +305,7 @@ class TestInitialFrame:
             app,
             [
                 FakeAutoScanInstance(
-                    "projectA",
+                    "workspaceA",
                     _recent_events=[_make_event(s) for s in (10, 11, 12)],
                 ),
             ],
@@ -313,12 +313,12 @@ class TestInitialFrame:
         with test_client.websocket_connect(
             f"/ws/autoscan?token={auth_token}",
         ) as ws:
-            ws.send_text(json.dumps({"resume_from_seq": {"projectA": 5}}))
+            ws.send_text(json.dumps({"resume_from_seq": {"workspaceA": 5}}))
             snap = ws.receive_json()
             caught_up = ws.receive_json()
 
         assert snap["type"] == "snapshot"
-        seqs = [e["seq"] for e in snap["data"]["events"]["projectA"]]
+        seqs = [e["seq"] for e in snap["data"]["events"]["workspaceA"]]
         assert seqs == [10, 11, 12]
         assert caught_up == {"type": "caught_up"}
 
@@ -336,7 +336,7 @@ class TestLiveEvents:
         ``phase`` event is delivered, proving the pump is alive and the filter
         is selective to ``type == 'log'``.
         """
-        inst = FakeAutoScanInstance("projectA")
+        inst = FakeAutoScanInstance("workspaceA")
         _install_manager(app, [inst])
 
         with test_client.websocket_connect(
@@ -351,7 +351,7 @@ class TestLiveEvents:
 
             frame = ws.receive_json()
             assert frame["type"] == "event"
-            assert frame["project_name"] == "projectA"
+            assert frame["project_name"] == "workspaceA"
             # The log event (seq=100) was skipped; we get the phase (seq=101).
             assert frame["event"]["seq"] == 101
             assert frame["event"]["type"] == "phase"
@@ -359,14 +359,14 @@ class TestLiveEvents:
     def test_log_event_delivered_for_subscribed_client(
         self, test_client, auth_token, app
     ):
-        """After an initial ``{"subscribe": ["projectA"]}`` frame, log events flow."""
-        inst = FakeAutoScanInstance("projectA")
+        """After an initial ``{"subscribe": ["workspaceA"]}`` frame, log events flow."""
+        inst = FakeAutoScanInstance("workspaceA")
         _install_manager(app, [inst])
 
         with test_client.websocket_connect(
             f"/ws/autoscan?token={auth_token}",
         ) as ws:
-            ws.send_text(json.dumps({"subscribe": ["projectA"]}))
+            ws.send_text(json.dumps({"subscribe": ["workspaceA"]}))
             ws.receive_json()  # snapshot
             ws.receive_json()  # caught_up
 
@@ -374,12 +374,12 @@ class TestLiveEvents:
             frame = ws.receive_json()
 
             assert frame["type"] == "event"
-            assert frame["project_name"] == "projectA"
+            assert frame["project_name"] == "workspaceA"
             assert frame["event"]["type"] == "log"
             assert frame["event"]["seq"] == 7
 
     def test_non_log_event_always_delivered(self, test_client, auth_token, app):
-        inst = FakeAutoScanInstance("projectA")
+        inst = FakeAutoScanInstance("workspaceA")
         _install_manager(app, [inst])
 
         with test_client.websocket_connect(
@@ -397,13 +397,13 @@ class TestLiveEvents:
             for _ in range(3):
                 frame = ws.receive_json()
                 assert frame["type"] == "event"
-                assert frame["project_name"] == "projectA"
+                assert frame["project_name"] == "workspaceA"
                 got_types.append(frame["event"]["type"])
 
         assert got_types == ["issue", "worktree", "session"]
 
-    def test_multi_project_event_routing(self, test_client, auth_token, app):
-        """Events flow to the correct ``project_name`` label on each frame."""
+    def test_multi_workspace_event_routing(self, test_client, auth_token, app):
+        """Events flow to the correct ``workspace_name`` label on each frame."""
         inst_a = FakeAutoScanInstance("A")
         inst_b = FakeAutoScanInstance("B")
         _install_manager(app, [inst_a, inst_b])
@@ -438,7 +438,7 @@ class TestSubscribeMidStream:
         Then the reader task takes over; a late ``{"subscribe": [...]}`` frame
         updates ``subscribe_set`` so subsequent log events are delivered.
         """
-        inst = FakeAutoScanInstance("projectA")
+        inst = FakeAutoScanInstance("workspaceA")
         _install_manager(app, [inst])
 
         with test_client.websocket_connect(
@@ -449,7 +449,7 @@ class TestSubscribeMidStream:
 
             # Late subscribe — reader task must process this text frame and
             # mutate ``subscribe_set``.
-            ws.send_text(json.dumps({"subscribe": ["projectA"]}))
+            ws.send_text(json.dumps({"subscribe": ["workspaceA"]}))
             # Small real-time delay so the reader coroutine has a chance to
             # run before we push the gated event.
             time.sleep(0.1)
@@ -458,7 +458,7 @@ class TestSubscribeMidStream:
             frame = ws.receive_json()
 
             assert frame["type"] == "event"
-            assert frame["project_name"] == "projectA"
+            assert frame["project_name"] == "workspaceA"
             assert frame["event"]["type"] == "log"
             assert frame["event"]["seq"] == 42
 
@@ -472,7 +472,7 @@ class TestCleanup:
     def test_queues_unsubscribed_on_disconnect(
         self, test_client, auth_token, app
     ):
-        inst = FakeAutoScanInstance("projectA")
+        inst = FakeAutoScanInstance("workspaceA")
         _install_manager(app, [inst])
 
         with test_client.websocket_connect(

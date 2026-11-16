@@ -11,7 +11,7 @@
      markup rather than data: URIs for the same reason.
   2. Every claim here is checked against the code. In particular: never write
      "end-to-end" (transport is TLS per hop, not E2E), and never state the
-     worktree feature without both qualifiers — opt-in per launch, Git projects
+     worktree feature without both qualifiers — opt-in per launch, Git workspaces
      only.
 #}<!DOCTYPE html>
 <html lang="en">
@@ -222,7 +222,7 @@
         <span class="step-n">03</span>
         <h3>Start an agent</h3>
         <p>
-          Pick a project, pick what to run — Claude Code, Codex CLI, Antigravity
+          Pick a workspace, pick what to run — Claude Code, Codex CLI, Antigravity
           CLI, OpenCode, GitHub Copilot CLI, Cursor CLI, Pi, a raw shell, or one of
           your own agent types. Claude Code, Codex, Antigravity, OpenCode, GitHub
           Copilot, Cursor and Pi open as a chat; shells and your own types open in a
@@ -328,8 +328,8 @@
           Start any session in its own dedicated Git worktree, so parallel runs
           never collide: Claude Code, Codex, Antigravity, OpenCode, GitHub
           Copilot, Cursor, Pi, a raw terminal, and your own custom types all support
-          it. <strong>Opt-in per launch, and Git projects only</strong> — a
-          non-Git project just runs in the project root.
+          it. <strong>Opt-in per launch, and Git workspaces only</strong> — a
+          non-Git workspace just runs in the workspace root.
         </p>
       </article>
 

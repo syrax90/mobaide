@@ -23,8 +23,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
-class AutoScanAlreadyRunningException(val projectName: String) :
-    Exception("Auto scan for project '$projectName' is already running")
+class AutoScanAlreadyRunningException(val workspaceName: String) :
+    Exception("Auto scan for workspace '$workspaceName' is already running")
 
 class AutoScanCapacityException(val maxScans: Int) :
     Exception("Maximum $maxScans concurrent auto scans reached")
@@ -42,7 +42,7 @@ class AutoScanRepository(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _list = MutableStateFlow(
-        AutoScanListResponse(scans = emptyList(), capacity = 0, max_scans = 5, available_projects = emptyList())
+        AutoScanListResponse(scans = emptyList(), capacity = 0, max_scans = 5, available_workspaces = emptyList())
     )
 
     // One-shot events for the UI (Snackbar). replay=0 so we never re-show
@@ -64,7 +64,7 @@ class AutoScanRepository(
             eventBus.stream<AgentEvent.AutoScanStatus>().collect { ev ->
                 val current = _list.value
                 val updated = current.scans.map {
-                    if (it.project_name == ev.instance.project_name) ev.instance else it
+                    if (it.workspace_name == ev.instance.workspace_name) ev.instance else it
                 }
                 _list.value = current.copy(scans = updated)
             }
@@ -88,15 +88,15 @@ class AutoScanRepository(
     fun getAutoScanPrompt(): String? = _list.value.auto_scan_prompt
 
     /** Throws [AutoScanAlreadyRunningException] on 409, [AutoScanCapacityException] on 429. */
-    suspend fun startScan(projectName: String, claudeOptions: ClaudeOptionsModel? = null) {
+    suspend fun startScan(workspaceName: String, claudeOptions: ClaudeOptionsModel? = null) {
         val prev = _list.value
         // Optimistic placeholder so the card appears immediately. The
         // server's `autoscan.list.changed` event will overwrite this with
         // authoritative state shortly after.
-        if (prev.scans.none { it.project_name == projectName }) {
+        if (prev.scans.none { it.workspace_name == workspaceName }) {
             val now = System.currentTimeMillis() / 1000.0
             val placeholder = AutoScanInstanceDto(
-                project_name = projectName,
+                workspace_name = workspaceName,
                 status = "starting",
                 started_at = now,
                 last_activity_at = now,
@@ -104,12 +104,12 @@ class AutoScanRepository(
             _list.value = prev.copy(scans = prev.scans + placeholder)
         }
         try {
-            restApi.startAutoScan(projectName, claudeOptions)
+            restApi.startAutoScan(workspaceName, claudeOptions)
         } catch (e: Exception) {
             _list.value = prev
             val typed: Exception = if (e is ApiException) {
                 when (e.code) {
-                    409 -> AutoScanAlreadyRunningException(projectName)
+                    409 -> AutoScanAlreadyRunningException(workspaceName)
                     429 -> AutoScanCapacityException(prev.max_scans)
                     else -> e
                 }
@@ -119,14 +119,14 @@ class AutoScanRepository(
         }
     }
 
-    suspend fun stopScan(projectName: String) {
+    suspend fun stopScan(workspaceName: String) {
         val prev = _list.value
         // Optimistic removal so the card disappears within ~50 ms.
         _list.value = prev.copy(
-            scans = prev.scans.filterNot { it.project_name == projectName },
+            scans = prev.scans.filterNot { it.workspace_name == workspaceName },
         )
         try {
-            restApi.stopAutoScan(projectName)
+            restApi.stopAutoScan(workspaceName)
         } catch (e: Exception) {
             _list.value = prev
             _events.tryEmit(AutoScanUiEvent.Error(e.message ?: "Failed to stop auto scan"))
@@ -138,18 +138,18 @@ class AutoScanRepository(
      * Trigger an immediate scan and return the server response so the caller can
      * rebind its countdown synchronously, without waiting for the bus event.
      */
-    suspend fun runNow(projectName: String): RunNowResponse {
+    suspend fun runNow(workspaceName: String): RunNowResponse {
         val prev = _list.value
         _list.value = prev.copy(
             scans = prev.scans.map {
-                if (it.project_name == projectName) it.copy(next_scan_at = null) else it
+                if (it.workspace_name == workspaceName) it.copy(next_scan_at = null) else it
             },
         )
         return try {
-            val response = restApi.runAutoScanNow(projectName)
+            val response = restApi.runAutoScanNow(workspaceName)
             _list.value = _list.value.copy(
                 scans = _list.value.scans.map {
-                    if (it.project_name == projectName) it.copy(next_scan_at = response.next_scan_at) else it
+                    if (it.workspace_name == workspaceName) it.copy(next_scan_at = response.next_scan_at) else it
                 },
             )
             response
@@ -161,15 +161,15 @@ class AutoScanRepository(
     }
 
     /**
-     * Open a WebSocket stream subscribed to a single project, causing the server
+     * Open a WebSocket stream subscribed to a single workspace, causing the server
      * to also relay heavy `log` events. Caller cancels the flow to disconnect.
      */
     fun observeDetailFrames(
-        projectName: String,
+        workspaceName: String,
         resumeFromSeq: Map<String, Long> = emptyMap(),
     ): Flow<AutoScanWsClient.Frame> =
         autoScanWsClient.connect(
-            subscribe = listOf(projectName),
+            subscribe = listOf(workspaceName),
             resumeFromSeq = resumeFromSeq,
         )
 }

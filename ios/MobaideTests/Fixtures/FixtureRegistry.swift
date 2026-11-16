@@ -153,14 +153,14 @@ enum FixtureRegistry {
         "DeviceCodeStatusResponse": runner(DeviceCodeStatusResponse.self),
         "DeviceCodeConfirmRequest": runner(DeviceCodeConfirmRequest.self),
         "TrustPinResponse": runner(TrustPinResponse.self),
-        // ProjectInfo.swift
-        "ProjectInfo": runner(ProjectInfo.self),
-        // ProjectOrderRequest.swift
-        "ProjectOrderRequest": runner(ProjectOrderRequest.self),
-        // ProjectUpdate.swift
-        "ProjectUpdate": runner(ProjectUpdate.self),
-        // ProjectWrite.swift
-        "ProjectWrite": runner(ProjectWrite.self),
+        // WorkspaceInfo.swift
+        "ProjectInfo": runner(WorkspaceInfo.self),
+        // WorkspaceOrderRequest.swift
+        "ProjectOrderRequest": runner(WorkspaceOrderRequest.self),
+        // WorkspaceUpdate.swift
+        "ProjectUpdate": runner(WorkspaceUpdate.self),
+        // WorkspaceWrite.swift
+        "ProjectWrite": runner(WorkspaceWrite.self),
         // SessionDto.swift
         "SessionKind": runner(SessionKind.self),
         "SessionResponse": runner(SessionResponse.self),

@@ -128,7 +128,7 @@ class TestHealthEndpointShape:
 
 
 @pytest.fixture
-def _no_projects_env(monkeypatch):
+def _no_workspaces_env(monkeypatch):
     """Ensure ``os.environ`` is decoupled from the seed mechanism.
 
     The whole point of the ``config.projects`` field + ``seed_json=`` arg
@@ -139,12 +139,12 @@ def _no_projects_env(monkeypatch):
     monkeypatch.delenv("PROJECTS", raising=False)
 
 
-_ = _no_projects_env  # silence pyright "not accessed" hint
+_ = _no_workspaces_env  # silence pyright "not accessed" hint
 
 
-class TestProjectsStoreSeededFromConfig:
+class TestWorkspacesStoreSeededFromConfig:
     """Verify ``create_app`` passes ``config.projects`` to
-    ``ProjectsStore.load(seed_json=...)``.
+    ``WorkspacesStore.load(seed_json=...)``.
 
     Pre-CLA-48 the store read ``os.getenv("PROJECTS")`` directly, which
     silently missed `.env`-defined values on Windows (the supervisor
@@ -152,8 +152,8 @@ class TestProjectsStoreSeededFromConfig:
     the pydantic-settings instance.
     """
 
-    def test_create_app_seeds_projects_from_config(
-        self, tmp_path, _no_projects_env,
+    def test_create_app_seeds_workspaces_from_config(
+        self, tmp_path, _no_workspaces_env,
     ):
         seed = json.dumps({"Alpha": {"path": str(tmp_path / "alpha")}})
         cfg = AgentConfig(
@@ -167,9 +167,9 @@ class TestProjectsStoreSeededFromConfig:
 
         app = create_app(config=cfg)
 
-        # ProjectsStore.load(seed_json=...) populated the store and
+        # WorkspacesStore.load(seed_json=...) populated the store and
         # persisted to disk.
-        store = app.state.projects_store
+        store = app.state.workspaces_store
         names = {p["name"] for p in store.list_public()}
         assert "Alpha" in names
         on_disk = json.loads(
@@ -178,12 +178,12 @@ class TestProjectsStoreSeededFromConfig:
         assert any(entry["name"] == "Alpha" for entry in on_disk)
 
 
-    def test_explicit_seed_takes_precedence_over_environ_projects(
+    def test_explicit_seed_takes_precedence_over_environ_workspaces(
         self, tmp_path, monkeypatch,
     ):
         # When both ``config.projects`` and ``os.environ['PROJECTS']`` are
         # set, the config-supplied value wins because ``app.create_app``
-        # passes it as the explicit ``seed_json=`` arg, and ``ProjectsStore.
+        # passes it as the explicit ``seed_json=`` arg, and ``WorkspacesStore.
         # load`` only falls back to ``os.getenv`` when the arg is None.
         # This pins the os.environ-decoupling fix.
         monkeypatch.setenv(
@@ -202,7 +202,7 @@ class TestProjectsStoreSeededFromConfig:
 
         app = create_app(config=cfg)
 
-        names = {p["name"] for p in app.state.projects_store.list_public()}
+        names = {p["name"] for p in app.state.workspaces_store.list_public()}
         assert "FromConfig" in names
         # The env-var value is ignored — seed_json takes precedence.
         assert "FromEnvLeak" not in names

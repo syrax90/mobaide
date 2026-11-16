@@ -31,7 +31,7 @@ import com.mobaide.app.ui.theme.MobaideTheme
  * Single-line secret-entry field with a reveal/hide toggle. Masks input with a
  * [PasswordVisualTransformation] unless [revealed]. Stateless and hoisted —
  * [value]/[onValueChange] and [revealed]/[onToggleRevealed] are owned by the
- * caller. Extracted from the project Linear-key field so any secret entry
+ * caller. Extracted from the workspace Linear-key field so any secret entry
  * (Codex API key, etc.) shares one widget.
  */
 @Composable

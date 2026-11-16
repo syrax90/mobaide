@@ -4,7 +4,7 @@ import Foundation
 /// `AutoScanAlreadyRunningException` / `AutoScanCapacityException`), mapped from
 /// the agent REST status codes.
 enum AutoScanStartError: Error, Equatable, Sendable {
-    case alreadyRunning(projectName: String)   // HTTP 409
+    case alreadyRunning(workspaceName: String)   // HTTP 409
     case capacity(maxScans: Int)               // HTTP 429
 }
 

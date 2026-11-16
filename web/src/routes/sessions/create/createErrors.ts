@@ -108,7 +108,7 @@ export function classifyCreateError(
     errorDetailString(body) === 'Custom agent type not found'
   ) {
     // Keyed on the exact detail string, not the status alone: a custom launch
-    // also 404s when the *project* was deleted concurrently, and that must fall
+    // also 404s when the *workspace* was deleted concurrently, and that must fall
     // through to the generic message rather than blaming the agent type.
     return { kind: 'customTypeDeleted', message: 'This agent type was deleted' };
   }
@@ -122,7 +122,7 @@ export function classifyCreateError(
  */
 export function classifyAutoScanError(error: unknown): string {
   if (isApiError(error)) {
-    if (error.status === 409) return 'A scan is already running for this project.';
+    if (error.status === 409) return 'A scan is already running for this workspace.';
     if (error.status === 429) return 'The agent is at its auto-scan limit.';
     if (error.status === 404) return error.message;
   }

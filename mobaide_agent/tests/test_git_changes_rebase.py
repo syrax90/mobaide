@@ -66,11 +66,11 @@ class FakeEventBus:
         self.published.append((event_type, payload))
 
 
-def _changed(toplevel: str, project_name: str, common_repo: str | None = None) -> tuple[str, dict]:
+def _changed(toplevel: str, workspace_name: str, common_repo: str | None = None) -> tuple[str, dict]:
     return (
         "git.changed",
         {
-            "project_name": project_name,
+            "project_name": workspace_name,
             "toplevel": norm_path(toplevel),
             "common_dir": norm_path(common_repo or toplevel) + "/.git",
         },
@@ -106,24 +106,24 @@ async def _status(cwd: str):
     return await get_session_git_status(session_id="s1", cwd=cwd, etag=None)
 
 
-async def _start(cwd, onto, *, project_name="proj", event_bus=None):
+async def _start(cwd, onto, *, workspace_name="proj", event_bus=None):
     return await start_session_rebase(
-        cwd=cwd, onto=onto, project_name=project_name, event_bus=event_bus
+        cwd=cwd, onto=onto, workspace_name=workspace_name, event_bus=event_bus
     )
 
 
-async def _continue(cwd, *, project_name="proj", event_bus=None):
+async def _continue(cwd, *, workspace_name="proj", event_bus=None):
     return await continue_session_rebase(
-        cwd=cwd, project_name=project_name, event_bus=event_bus
+        cwd=cwd, workspace_name=workspace_name, event_bus=event_bus
     )
 
 
-async def _skip(cwd, *, project_name="proj", event_bus=None):
-    return await skip_session_rebase(cwd=cwd, project_name=project_name, event_bus=event_bus)
+async def _skip(cwd, *, workspace_name="proj", event_bus=None):
+    return await skip_session_rebase(cwd=cwd, workspace_name=workspace_name, event_bus=event_bus)
 
 
-async def _abort(cwd, *, project_name="proj", event_bus=None):
-    return await abort_session_rebase(cwd=cwd, project_name=project_name, event_bus=event_bus)
+async def _abort(cwd, *, workspace_name="proj", event_bus=None):
+    return await abort_session_rebase(cwd=cwd, workspace_name=workspace_name, event_bus=event_bus)
 
 
 def _topic_behind_main(repo_dir: str) -> None:
@@ -249,7 +249,7 @@ class TestStart:
         before = _oid(repo)
         bus = FakeEventBus()
 
-        resp = await _start(repo, "main", project_name=None, event_bus=bus)
+        resp = await _start(repo, "main", workspace_name=None, event_bus=bus)
 
         assert resp.model_dump() == {"outcome": "up_to_date", "rebase": None, "message": None}
         assert _oid(repo) == before
@@ -406,7 +406,7 @@ class TestStart:
         self, repo
     ):
         # A bare `release` resolves to the tag first; the pickers send
-        # `refs/heads/` + the branch name the project listing reports.
+        # `refs/heads/` + the branch name the workspace listing reports.
         _topic_behind_main(repo)
         run_git_sync(repo, "branch", "release", "main")
         run_git_sync(repo, "tag", "release", "main~1")

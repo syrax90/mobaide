@@ -52,7 +52,7 @@ class AgentConfig(BaseSettings):
     port: int = 8000
     # OpenAPI exposure (ENABLE_API_DOCS). Default-deny, because the agent
     # binds every interface by default (DIRECT mode needs LAN reachability),
-    # so FastAPI's stock /docs would hand the whole session/project/git
+    # so FastAPI's stock /docs would hand the whole session/workspace/git
     # surface to anything on the network. Enable only for local development.
     enable_api_docs: bool = False
     max_sessions: int = 32
@@ -61,7 +61,7 @@ class AgentConfig(BaseSettings):
     log_format: str = "json"
     audit_log_path: str | None = None
     log_sample_ws: bool = False
-    # First-boot seed for ``ProjectsStore``. Read here (instead of via
+    # First-boot seed for ``WorkspacesStore``. Read here (instead of via
     # ``os.getenv`` inside the store) because pydantic-settings populates the
     # settings instance from `.env` but does NOT mutate ``os.environ`` —
     # without this field the seed would silently miss `.env`-defined values

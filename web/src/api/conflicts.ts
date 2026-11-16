@@ -2,10 +2,10 @@
  * The two 409 bodies the agent produces, in one place.
  *
  * Mirrors iOS `Data/Repository/ConflictParsing.swift`, which Android splits
- * across `ProjectsRepository.parseDetail` and `GitRepository.parseBusyBy`. The
+ * across `WorkspacesRepository.parseDetail` and `GitRepository.parseBusyBy`. The
  * shapes are genuinely different and neither is in an OpenAPI schema:
  *
- * * projects — `{"detail": "Cannot delete project 'x': auto-scan is active…"}`,
+ * * workspaces — `{"detail": "Cannot delete workspace 'x': auto-scan is active…"}`,
  *   a human string, raised for a duplicate name, a rename collision, or an
  *   active auto-scan.
  * * git delete — `{"detail": {"busy_by": [BusyHolder, …]}}`, structured, raised

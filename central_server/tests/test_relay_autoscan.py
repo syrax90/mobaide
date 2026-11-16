@@ -201,7 +201,7 @@ class TestMobileToAgentForwarding:
         with tc.websocket_connect(
             f"/relay/ws/autoscan/{agent_id}?token={access}",
         ) as ws:
-            ws.send_text(json.dumps({"subscribe": ["projectA"]}))
+            ws.send_text(json.dumps({"subscribe": ["workspaceA"]}))
             # Give the ASGI background loop a chance to process the text
             # frame and enqueue its CH_AUTOSCAN envelope.
             await asyncio.sleep(0.1)
@@ -217,7 +217,7 @@ class TestMobileToAgentForwarding:
         )
         sid_on_wire, payload = autoscan_envs[0]
         assert len(sid_on_wire) == 32
-        assert json.loads(payload) == {"subscribe": ["projectA"]}
+        assert json.loads(payload) == {"subscribe": ["workspaceA"]}
 
         # Same subscription_id carried on every control message for the run.
         open_sub = next(

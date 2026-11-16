@@ -173,9 +173,9 @@ class AgentEventBusStartRaceTest {
             assertEquals(1, sessions.sessions.size)
             assertEquals("s1", sessions.sessions[0].session_id)
 
-            val projects = seen.single { it is AgentEvent.ProjectsChanged }
-                as AgentEvent.ProjectsChanged
-            assertEquals(emptyList<Any>(), projects.projects)
+            val workspaces = seen.single { it is AgentEvent.WorkspacesChanged }
+                as AgentEvent.WorkspacesChanged
+            assertEquals(emptyList<Any>(), workspaces.workspaces)
 
             val autoscan = seen.single { it is AgentEvent.AutoScanListChanged }
                 as AgentEvent.AutoScanListChanged

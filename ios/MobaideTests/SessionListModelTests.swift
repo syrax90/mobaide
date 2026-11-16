@@ -103,7 +103,7 @@ final class SessionListModelTests: XCTestCase {
     func testDialogLabelNeverRendersTheSessionId() {
         let sessions = [
             makeSessionResponse(id: "6f2a91c4"),
-            makeSessionResponse(id: "6f2a91c4", projectName: "mobaide"),
+            makeSessionResponse(id: "6f2a91c4", workspaceName: "mobaide"),
             makeSessionResponse(id: "6f2a91c4", title: "", kind: .shell),
         ]
         for session in sessions {
@@ -210,7 +210,7 @@ final class SessionListModelTests: XCTestCase {
         defer { observe.cancel() }
 
         await waitUntil { !model.activeScans.isEmpty }
-        XCTAssertEqual(model.activeScans.map(\.project_name), ["p"])
+        XCTAssertEqual(model.activeScans.map(\.workspace_name), ["p"])
     }
 
     // MARK: - Stop

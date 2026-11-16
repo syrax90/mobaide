@@ -77,7 +77,7 @@ beforeEach(() => {
     copilot: null,
     cursor: null,
     pi: null,
-    lastProjectName: null,
+    lastWorkspaceName: null,
   });
   window.localStorage.clear();
 });
@@ -98,7 +98,7 @@ describe('hydration', () => {
     expect(prefs.claude).toEqual(CLAUDE_BLOB);
     expect(prefs.codex).toEqual(CODEX_BLOB);
     expect(prefs.antigravity).toEqual(ANTIGRAVITY_BLOB);
-    expect(prefs.lastProjectName).toBe('mobaide');
+    expect(prefs.lastWorkspaceName).toBe('mobaide');
     // `null`, not defaults: that is what keeps Auto Scan's skip-permissions
     // default of `true` alive for a profile that has never run a scan.
     expect(prefs.autoScan).toBeNull();
@@ -249,9 +249,19 @@ describe('hydration', () => {
     expect((await rehydrateWith({ codex: null })).codex).toBeNull();
   });
 
-  it('keeps only a usable project name', async () => {
-    expect((await rehydrateWith({ lastProjectName: 42 })).lastProjectName).toBeNull();
-    expect((await rehydrateWith({ lastProjectName: '' })).lastProjectName).toBeNull();
+  it('keeps only a usable workspace name', async () => {
+    expect((await rehydrateWith({ lastProjectName: 42 })).lastWorkspaceName).toBeNull();
+    expect((await rehydrateWith({ lastProjectName: '' })).lastWorkspaceName).toBeNull();
+  });
+
+  it('stores the workspace name under its pre-rename key', () => {
+    useLaunchPrefsStore.getState().setLastWorkspaceName('mobaide');
+
+    const written = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? '{}') as {
+      state: Record<string, unknown>;
+    };
+    expect(written.state.lastProjectName).toBe('mobaide');
+    expect('lastWorkspaceName' in written.state).toBe(false);
   });
 
   it('drops keys the persisted envelope has no slot for', async () => {
@@ -277,10 +287,10 @@ describe('hydration', () => {
       copilot: null,
       cursor: null,
       pi: null,
-      lastProjectName: null,
+      lastWorkspaceName: null,
     });
-    useLaunchPrefsStore.getState().setLastProjectName('mobaide');
-    expect(readLaunchPrefs().lastProjectName).toBe('mobaide');
+    useLaunchPrefsStore.getState().setLastWorkspaceName('mobaide');
+    expect(readLaunchPrefs().lastWorkspaceName).toBe('mobaide');
   });
 });
 

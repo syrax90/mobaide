@@ -15,9 +15,9 @@
  * whole 500-event ring at once, which is the burst the reducer's batch shape and
  * this buffer exist for.
  *
- * The hook holds per-project state and does not reset when `projectName`
+ * The hook holds per-workspace state and does not reset when `workspaceName`
  * changes; the screen remounts it with a `key` instead, as the sessions and
- * projects screens do for their lists.
+ * workspaces screens do for their lists.
  */
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { isAuthenticated } from '../auth/authState';
@@ -74,10 +74,10 @@ export interface AutoScanDetailHandle {
   retry: () => void;
 }
 
-export function useAutoScanDetail(agentId: string, projectName: string): AutoScanDetailHandle {
+export function useAutoScanDetail(agentId: string, workspaceName: string): AutoScanDetailHandle {
   const [state, dispatch] = useReducer(
     reduceAutoScanFrames,
-    projectName,
+    workspaceName,
     initialAutoScanDetailState,
   );
   const authenticated = useSessionStore((store) => isAuthenticated(store.authState));
@@ -125,7 +125,7 @@ export function useAutoScanDetail(agentId: string, projectName: string): AutoSca
     };
 
     const channel = new AutoScanChannel(agentId, {
-      subscribe: [projectName],
+      subscribe: [workspaceName],
       resumeFromSeq: resumeFromState(stateRef.current),
     });
     const unsubscribe = channel.channel.subscribe((event) => {
@@ -172,7 +172,7 @@ export function useAutoScanDetail(agentId: string, projectName: string): AutoSca
       channelRef.current = null;
       channel.dispose();
     };
-  }, [agentId, projectName, authenticated]);
+  }, [agentId, workspaceName, authenticated]);
 
   useEffect(() => {
     if (!authenticated || registered || declined) return;

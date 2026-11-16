@@ -311,7 +311,7 @@ def short_lived_config() -> SessionConfig:
 
 @pytest.fixture
 def agent_config(tmp_path) -> AgentConfig:
-    """Create a test AgentConfig with temp user/projects stores and a temp
+    """Create a test AgentConfig with temp user/workspaces stores and a temp
     voice dir, so no test reads or writes the real ``<prefix>/voice``."""
     return AgentConfig(
         jwt_secret_key=TEST_JWT_SECRET,

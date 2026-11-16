@@ -4,6 +4,8 @@ The detailed behaviour of each feature: the limits, the per-platform differences
 
 For the short overview, see the [README](../README.md). The wire contract itself lives in [PROTOCOL.md](../PROTOCOL.md).
 
+A **workspace** is a named folder that the agent starts sessions in. The wire and storage names still say "project" for compatibility (`/api/projects…`, `projects.changed`, `project_name`, `projects.json`).
+
 **On this page**
 
 | Area | Features |
@@ -44,7 +46,7 @@ The terminal's control-key bar and custom keyboard shortcut buttons are not part
 
 - **Terminal UI.** The Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot, Cursor and Pi pages of the new-session wizard have a **Terminal UI** toggle under Advanced, off by default and remembered. On, the session runs in the classic terminal (needed for TUI-only features such as Rewind). The wizard's Focus view and Debug logging apply only to terminal sessions; a chat session has its own Focus view in its ⋯ menu.
 - **Continue a session.** The same pages offer **Continue a session**: a list of the Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot, Cursor or Pi sessions stored on the PC, for this folder or all folders, including sessions started outside Mobaide (for example by running `claude` in a terminal). Picking one opens it in the chat view with its history. Sessions in the agent's own `voice-cleanup` folder are never listed.
-- **Live Codex sessions.** When the Codex shared app-server runs (the daemon that `codex` in a terminal starts), chat sessions join it through `mobaide/acp/codex_bridge.py`. A session open in a terminal and on the phone stay in sync both ways. This works on macOS and Linux, not on Windows, and not for projects with a conda env. A message typed in another app shows as **Message sent from another app on your PC**, followed by its answer. The adapter does not forward the text of that message. Closing the chat cancels only its own turn.
+- **Live Codex sessions.** When the Codex shared app-server runs (the daemon that `codex` in a terminal starts), chat sessions join it through `mobaide/acp/codex_bridge.py`. A session open in a terminal and on the phone stay in sync both ways. This works on macOS and Linux, not on Windows, and not for workspaces with a conda env. A message typed in another app shows as **Message sent from another app on your PC**, followed by its answer. The adapter does not forward the text of that message. Closing the chat cancels only its own turn.
 - **Antigravity sessions.** Each chat runs its own `agy acp` process in the session folder. Continue uses `session/list` and `session/load`, with history. It is not live: `agy` has no shared local server, so there is no sync with a terminal. There is no **Send now**, because `agy` has no steering.
 - **Antigravity conversation lock.** The chat holds the lock file that `agy` uses (`~/.gemini/antigravity-cli/presence/<id>.lock`). An `agy` terminal then warns "Conversation already open". When another app holds the lock, the Continue list shows "Open in another app on your PC. Close it there first.", and the chat shows a warning notice. Two processes that write one conversation overwrite each other. After the other app closes the conversation, the next message first reopens it, so the chat shows what was sent there ("Loaded the latest messages"), and then goes out.
 - **OpenCode sessions.** Each chat runs its own `opencode acp` process, apart from the server the OpenCode TUI uses. It is not live: there is no sync between a chat and a terminal on the same session. Continue lists the sessions stored per folder (`GET /api/chat/opencode/sessions`) and replays the history. The config chips come from OpenCode: model (`provider/model`), mode (Build or Plan) and, for models with variants, effort. With **Auto-approve permissions**, the agent answers each permission request with the "allow once" option and shows no card.
@@ -120,7 +122,7 @@ In `antigravity_options`, skip-permissions and sandbox are mutually exclusive, a
 Users can define up to 20 account-scoped custom agent types (display name + launch command) through the central server's `/api/custom-agent-types` REST resource. Types sync live across the user's devices.
 
 - **Managing them.** The create-session mode picker has one card per type, plus an "Add custom agent…" card. Long-press a custom card for Edit/Delete.
-- **Launching one.** The client sets `cli` to the type's `custom_<id>` kind and never sends the command. The relay resolves the stored command server-side, and the agent spawns it via the user's login shell as a plain terminal session. The create flow keeps the "Create worktree" toggle for git projects.
+- **Launching one.** The client sets `cli` to the type's `custom_<id>` kind and never sends the command. The relay resolves the stored command server-side, and the agent spawns it via the user's login shell as a plain terminal session. The create flow keeps the "Create worktree" toggle for git workspaces.
 - **Deleting one.** This soft-deletes its kind-scoped saved shortcuts in the same transaction.
 - **Older agents.** Pre-v7 agents are gated with a 409 `agent_update_required` on custom launches.
 
@@ -194,46 +196,46 @@ Every kind's bar ends with a custom-shortcut trigger (⌘) that opens a chord pi
 
 ## Terminal Sessions
 
-The third tile on the create-session screen opens a raw shell anchored to the selected project's cwd. Session cards show the `Terminal` kind label.
+The third tile on the create-session screen opens a raw shell anchored to the selected workspace's cwd. Session cards show the `Terminal` kind label.
 
 | Platform | Shell |
 |---|---|
 | Windows | `cmd.exe` |
 | Linux/Unix | The user's login shell: resolved `$SHELL`, falling back to the account's password-database shell, then `/bin/sh` |
 
-For stored git projects, tapping the tile first shows a "Terminal session" config page with a "Create worktree" toggle and an optional branch name, mirroring the Claude Standard config page. Non-git projects and custom paths skip the config page and start the shell immediately.
+For stored git workspaces, tapping the tile first shows a "Terminal session" config page with a "Create worktree" toggle and an optional branch name, mirroring the Claude Standard config page. Non-git workspaces and custom paths skip the config page and start the shell immediately.
 
 ## Worktree Base Branch
 
-When "Create worktree" is on for a git project, the config page shows a "Base branch" picker. The new worktree branch starts from the selected branch. This works for Claude, Codex, Antigravity, OpenCode, GitHub Copilot, Cursor, Pi and Terminal sessions.
+When "Create worktree" is on for a git workspace, the config page shows a "Base branch" picker. The new worktree branch starts from the selected branch. This works for Claude, Codex, Antigravity, OpenCode, GitHub Copilot, Cursor, Pi and Terminal sessions.
 
 - **List.** The picker lists the local branches and the remote-tracking branches. It has a search field. The default branch is first, then the newest branches.
 - **Default.** The agent picks `origin/HEAD` first, then `origin/main`, then the local `main`.
-- **Memory.** The agent remembers the last base branch for each project. Every client and device preselects it the next time. A pick of "Default branch" clears it. If that branch is gone, the picker selects the default.
+- **Memory.** The agent remembers the last base branch for each workspace. Every client and device preselects it the next time. A pick of "Default branch" clears it. If that branch is gone, the picker selects the default.
 - **Fresh start.** For a remote base, the agent fetches that remote before it creates the worktree.
 - **Older agents.** Clients hide the picker without `capabilities.git.worktree_base`.
-- **Location.** New worktrees go to `<MOBAIDE_WORKTREES_DIR>/<project folder name>/<slug>`, outside the project, so no `.gitignore` entry is needed. The default is `~/.mobaide/worktrees` (`%USERPROFILE%\.mobaide\worktrees` on Windows). `~` and environment variables are expanded, and a relative path starts at the home folder. A project sub-folder holds a `.mobaide-project` file that names its repo; a second repo with the same folder name gets `<name>-<8 hex>`. A linked worktree that already exists at `<project>/<WORKTREE_BASE>/<slug>` (default `mobaide_worktree`) is still reopened, but new ones never go there. Uninstall does not delete the worktrees folder. Chats for GitHub Copilot and Cursor ask for folder trust once for each new worktree, because trust on the project folder does not cover a folder outside it.
+- **Location.** New worktrees go to `<MOBAIDE_WORKTREES_DIR>/<workspace folder name>/<slug>`, outside the workspace, so no `.gitignore` entry is needed. The default is `~/.mobaide/worktrees` (`%USERPROFILE%\.mobaide\worktrees` on Windows). `~` and environment variables are expanded, and a relative path starts at the home folder. A workspace sub-folder holds a `.mobaide-project` file that names its repo; a second repo with the same folder name gets `<name>-<8 hex>`. A linked worktree that already exists at `<workspace>/<WORKTREE_BASE>/<slug>` (default `mobaide_worktree`) is still reopened, but new ones never go there. Uninstall does not delete the worktrees folder. Chats for GitHub Copilot and Cursor ask for folder trust once for each new worktree, because trust on the workspace folder does not cover a folder outside it.
 
 Wire details are in PROTOCOL.md, *Delta 2026-11-09: worktree base branch*.
 
 ## Custom Path Sessions
 
-A "Custom path…" entry in the project picker launches a one-off Claude or Terminal session in any folder on the agent machine, without adding it to `projects.json`. The agent validates the path (absolute, exists, is-directory) and returns a clean 400 on bad input.
+A "Custom path…" entry in the workspace picker launches a one-off Claude or Terminal session in any folder on the agent machine, without adding it to `projects.json`. The agent validates the path (absolute, exists, is-directory) and returns a clean 400 on bad input.
 
 The last 5 per-agent paths are offered again, and each can be forgotten. A path is recorded only after the session is actually created. The list is device-local, and it is cleared on sign-out and account deletion, since the paths name the user's own workstation.
 
 ## Reorderable New-Session Lists
 
-In the new-session wizard, users can drag projects and agent modes into the order they want. For example, the most-used project or agent goes to the top.
+In the new-session wizard, users can drag workspaces and agent modes into the order they want. For example, the most-used workspace or agent goes to the top.
 
 | List | Where the order is saved | Scope |
 |---|---|---|
-| Projects | The agent's `projects.json`, through `PATCH /api/projects/order` | Per agent. It is the same order as on the Projects screen. |
+| Workspaces | The agent's `projects.json`, through `PATCH /api/projects/order` | Per agent. It is the same order as on the Workspaces screen. |
 | Agent modes (built-in and custom) | The central server, through `PUT /api/session-mode-order` | Per account. |
 
-- **Sync.** Every client shows the saved order, also in later sessions. A change reaches the other open clients live: `projects.changed` for projects, `session_mode_order.updated` for modes.
+- **Sync.** Every client shows the saved order, also in later sessions. A change reaches the other open clients live: `projects.changed` for workspaces, `session_mode_order.updated` for modes.
 - **Cost.** One request per drop, never per drag step. Saves of one list run one at a time, in drop order. A drop that changes nothing sends nothing.
-- **Fixed rows.** "Custom path…", "Create new project…" and "Add custom agent…" stay at the bottom.
+- **Fixed rows.** "Custom path…", "Create new workspace…" and "Add custom agent…" stay at the bottom.
 - **New items.** A custom agent created after the last reorder goes below the ordered ones.
 - **Failure.** If a save fails, the list goes back to the saved order and a "Reorder failed — reverted." message shows.
 
@@ -247,9 +249,9 @@ The wire details are in [PROTOCOL.md](../PROTOCOL.md).
 
 ## Auto Scan Mode
 
-Auto Scan polls Linear for matching issues using a per-project configurable filter (trigger labels, trigger states, active/done state, removal label). It auto-creates git worktrees and launches Claude sessions to work on them.
+Auto Scan polls Linear for matching issues using a per-workspace configurable filter (trigger labels, trigger states, active/done state, removal label). It auto-creates git worktrees and launches Claude sessions to work on them.
 
-- **Remembered choices.** Each project remembers the last-applied initial prompt (`auto_scan_prompt` in `projects.json`). The wizard also remembers the last-used launch options on-device, in a bucket separate from the Claude Code sheet.
+- **Remembered choices.** Each workspace remembers the last-applied initial prompt (`auto_scan_prompt` in `projects.json`). The wizard also remembers the last-used launch options on-device, in a bucket separate from the Claude Code sheet.
 - **Skip permissions.** This is a live toggle, default ON for unattended scans. Switched OFF, the scan pauses at Claude Code permission prompts and raises the normal attention notification, so the user can open the session and approve.
 
 ## Reconnection
@@ -287,7 +289,7 @@ No client exposes a direct connection to the agent: the relay is the only path a
 
 ## Git Management
 
-An in-app screen, reachable from Edit Project on git-backed projects and from a session's ⋯ → Git → Branches…
+An in-app screen, reachable from Edit Workspace on git-backed workspaces and from a session's ⋯ → Git → Branches…
 
 - **Browse.** Local branches, worktrees and remote-tracking branches appear as an alphabetized folder tree, with each tip commit's subject and date.
 - **Delete.** Multi-select and batch delete, with undo and force-delete confirmation. Deleting on the remote too needs a confirmation and `capabilities.git.delete_remote`.
@@ -373,7 +375,7 @@ The apps raise a notification whenever an agent session needs attention. This co
   - Cursor terminal sessions raise no "your turn" alert and show no activity state, because Cursor's terminal UI does not report its state. Cursor chat sessions raise the alerts.
   - OpenCode 2 reports only `idle`, `working` and `blocked`. A `working` to `idle` change is the turn end (`turn_finished` after the quiet window), unless client input arrived within 2 s before it (an interrupt). `blocked` alerts (`awaiting_permission`) only after it stands 0.5 s, because with `--auto` OpenCode reports `blocked` for about 10 ms per request. OpenCode raises no `turn_failed`. OpenCode 1.x reports nothing, so it has no terminal alerts.
   - `awaiting_os_permission` comes from the agent's own startup-stall watchdog.
-- **Notification label.** With no title and no project, the label names the session kind, for example "Codex session". APNs pushes show "Agent session" for custom kinds.
+- **Notification label.** With no title and no workspace, the label names the session kind, for example "Codex session". APNs pushes show "Agent session" for custom kinds.
 - **Known limits.** Claude terminal sessions do not raise `turn_failed`. OSC 7501 on Windows ConPTY is unverified. Older clients show nothing for `turn_failed`.
 - **Shared Codex thread.** A Codex chat and a Codex terminal session in the same folder can see the same turn. They alert once within 6 s.
 - **One alert per stop.** An attention gate on the agent holds back `Stop` while background tasks are still running, so you get one alert rather than one per subagent.

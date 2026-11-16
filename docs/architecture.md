@@ -73,7 +73,7 @@ Chat sessions run the coding agent through an [Agent Client Protocol](https://ag
 | `android/` | Kotlin / Compose | Android app — OkHttp WebSocket client, multi-session UI, terminal view |
 | `ios/` | Swift / SwiftUI | iOS app — wire DTOs, REST clients, reconnecting WebSocket core, terminal framing, SwiftUI screens |
 | `web/` | React 19 / TypeScript / Vite | Web client — SPA shell, typed OpenAPI clients for the relay and agent APIs, wire protocol core, reconnecting WebSocket manager, terminal screen (xterm.js 6) |
-| `central_server/` | Python 3.12+ / FastAPI | Multi-tenant relay hub; auth, projects, agent↔client WebSocket broker, and the marketing site |
+| `central_server/` | Python 3.12+ / FastAPI | Multi-tenant relay hub; auth, workspaces, agent↔client WebSocket broker, and the marketing site |
 | `deploy/` | Shell / PowerShell / Python | Agent install scripts and production deploy tooling |
 | `config/` | PowerShell | Environment profiles, see [configuration-profiles.md](configuration-profiles.md) |
 | `tests/` | Python | Cross-component tests, the E2E harness and the protocol golden fixtures |

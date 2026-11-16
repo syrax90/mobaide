@@ -3,7 +3,7 @@
  * and `AutoScanListResponse.json`.
  *
  * Hand-written rather than taken from the generated agent schema for the reason
- * `session.ts` and `projects.ts` give: these shapes arrive over a socket
+ * `session.ts` and `workspaces.ts` give: these shapes arrive over a socket
  * (`autoscan.status`, `autoscan.list.changed`, and the `ws/autoscan` snapshot)
  * and are written straight into the query cache. The REST list decodes through
  * the same schemas so both writers agree byte-for-byte.
@@ -25,7 +25,7 @@ import { optionalWireNumber, optionalWireString } from '../wireSchema';
  * out: this field is display-only, and the cursor that must not lose precision
  * is the per-event `seq` in `autoscanFrames.ts`, which stays `bigint` end to end.
  *
- * `processed_count` counts this project's active work items, not issues seen in
+ * `processed_count` counts this workspace's active work items, not issues seen in
  * a cycle — the agent keeps the name for DTO compatibility.
  */
 export const autoScanInstanceSchema = z.looseObject({

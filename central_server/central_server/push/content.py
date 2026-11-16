@@ -7,11 +7,11 @@ below mirror the clients byte-for-byte.
 
 One deliberate exception: a custom agent type is named "Agent session" here,
 never by its user-chosen name. This text goes to Apple, and the privacy policy
-names only the CLI's title and the project name as what an alert carries.
+names only the CLI's title and the workspace name as what an alert carries.
 """
 from __future__ import annotations
 
-# The label when the session has neither a title nor a project. An agent too
+# The label when the session has neither a title nor a workspace. An agent too
 # old to send ``kind`` only alerted for Claude sessions.
 FALLBACK_LABEL = "Claude session"
 
@@ -34,25 +34,25 @@ def _fallback_label(kind: str | None) -> str:
     return _KIND_FALLBACK_LABELS.get(kind, "Agent session")
 
 
-def _label(title: str | None, project_name: str | None, kind: str | None = None) -> str:
+def _label(title: str | None, workspace_name: str | None, kind: str | None = None) -> str:
     if title and title.strip():
         return title
-    if project_name and project_name.strip():
-        return project_name
+    if workspace_name and workspace_name.strip():
+        return workspace_name
     return _fallback_label(kind)
 
 
 def attention_content(
     reason: str | None,
     title: str | None,
-    project_name: str | None,
+    workspace_name: str | None,
     exit_reason: str | None,
     kind: str | None = None,
 ) -> tuple[str, str] | None:
     """Return ``(title, body)`` for an attention reason, or ``None`` when the
     reason is absent/unrecognized — in which case no push is sent (parity
     with the clients posting no notification)."""
-    label = _label(title, project_name, kind)
+    label = _label(title, workspace_name, kind)
     if reason == "awaiting_permission":
         return ("Permission needed", f"{label} is waiting for your approval")
     if reason == "awaiting_os_permission":

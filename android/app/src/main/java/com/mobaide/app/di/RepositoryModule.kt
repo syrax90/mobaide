@@ -24,7 +24,7 @@ import com.mobaide.app.data.repository.DeviceRepository
 import com.mobaide.app.data.repository.GitRepository
 import com.mobaide.app.data.repository.LinearMetadataRepository
 import com.mobaide.app.data.repository.PathSuggestionRepository
-import com.mobaide.app.data.repository.ProjectsRepository
+import com.mobaide.app.data.repository.WorkspacesRepository
 import com.mobaide.app.data.repository.VoiceRepository
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.ShortcutsRepository
@@ -122,8 +122,8 @@ object RepositoryModule {
 
     @Provides
     @Singleton
-    fun provideProjectsRepository(restApi: RestApi, eventBus: AgentEventBus): ProjectsRepository {
-        return ProjectsRepository(restApi, eventBus)
+    fun provideWorkspacesRepository(restApi: RestApi, eventBus: AgentEventBus): WorkspacesRepository {
+        return WorkspacesRepository(restApi, eventBus)
     }
 
     @Provides

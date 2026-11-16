@@ -800,7 +800,7 @@ class TestResolveSpawnArgsOpenCode:
     """``resolve_spawn_args`` for the OpenCode kind: the explicit ``cli`` or the
     presence of the options block picks it, and exactly its options object is
     set. A request that resolved to another kind would start the wrong program
-    in the project folder."""
+    in the workspace folder."""
 
     _SHELL = ["/bin/sh"]
 

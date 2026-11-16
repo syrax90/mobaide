@@ -13,15 +13,15 @@ from mobaide.core.antigravity_launcher import (
     AntigravityOptions,
 )
 from mobaide.core.claude_launcher import AdHocLaunch
-from mobaide.core.projects_config import ProjectConfig
+from mobaide.core.workspaces_config import WorkspaceConfig
 
 # Captured before the autouse ``_pin_antigravity_binary`` fixture swaps it, so
 # the resolver tests below exercise the real implementation.
 _REAL_AGY_RESOLVER = antigravity_launcher._resolve_agy_binary
 
 
-def _make_project(path: str, *, conda: str | None = None) -> ProjectConfig:
-    return ProjectConfig(name="test", path=path, conda_env=conda)
+def _make_workspace(path: str, *, conda: str | None = None) -> WorkspaceConfig:
+    return WorkspaceConfig(name="test", path=path, conda_env=conda)
 
 
 # argv
@@ -32,7 +32,7 @@ async def test_argv_default_is_bare_agy(tmp_path: Path):
     """Default options launch a bare ``agy``: no ``--model`` (the CLI picks its
     own default) and — unlike Gemini before it — no approval-mode flag exists."""
     spec = await AntigravityLauncher().build(
-        _make_project(str(tmp_path)), AntigravityOptions(),
+        _make_workspace(str(tmp_path)), AntigravityOptions(),
     )
     assert spec.argv == ["agy"]
 
@@ -43,7 +43,7 @@ async def test_argv_model_display_name_is_single_element(tmp_path: Path):
     launcher must forward one verbatim as a SINGLE argv element (safe because
     the spawn execs argv directly, never via a shell)."""
     spec = await AntigravityLauncher().build(
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         AntigravityOptions(model="Gemini 3.1 Pro (Low)"),
     )
     assert spec.argv == ["agy", "--model", "Gemini 3.1 Pro (Low)"]
@@ -54,7 +54,7 @@ async def test_argv_model_saved_as_an_agy_models_line_passes_only_the_name(tmp_p
     """A choice saved from an older agent may hold a whole ``agy models``
     line (model id, tab, display name), which ``--model`` rejects."""
     spec = await AntigravityLauncher().build(
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         AntigravityOptions(model="gemini-3.8-flash-high\tGemini 3.8 Flash (High)"),
     )
     assert spec.argv == ["agy", "--model", "Gemini 3.8 Flash (High)"]
@@ -63,7 +63,7 @@ async def test_argv_model_saved_as_an_agy_models_line_passes_only_the_name(tmp_p
 @pytest.mark.asyncio
 async def test_argv_skip_permissions_flag_added_when_true(tmp_path: Path):
     spec = await AntigravityLauncher().build(
-        _make_project(str(tmp_path)), AntigravityOptions(skip_permissions=True),
+        _make_workspace(str(tmp_path)), AntigravityOptions(skip_permissions=True),
     )
     assert "--dangerously-skip-permissions" in spec.argv
 
@@ -71,7 +71,7 @@ async def test_argv_skip_permissions_flag_added_when_true(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_argv_sandbox_flag_added_when_true(tmp_path: Path):
     spec = await AntigravityLauncher().build(
-        _make_project(str(tmp_path)), AntigravityOptions(sandbox=True),
+        _make_workspace(str(tmp_path)), AntigravityOptions(sandbox=True),
     )
     assert "--sandbox" in spec.argv
 
@@ -81,7 +81,7 @@ async def test_argv_add_dirs_repeats_flag(tmp_path: Path):
     """Each extra workspace dir is passed as its own ``--add-dir`` flag so a
     path containing a comma can't corrupt the list."""
     spec = await AntigravityLauncher().build(
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         AntigravityOptions(add_dirs=("/a", "/b")),
     )
     assert spec.argv.count("--add-dir") == 2
@@ -95,13 +95,13 @@ async def test_argv_add_dirs_repeats_flag(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_env_adds_no_claude_specific_vars(tmp_path: Path, monkeypatch):
     """Antigravity copies the inherited env but ADDS none of Claude's extras and
-    — even for a project carrying a Linear key — no injected ``LINEAR_API_KEY``."""
+    — even for a workspace carrying a Linear key — no injected ``LINEAR_API_KEY``."""
     for key in (
         "ENABLE_PROMPT_CACHING_1H", "MOBAIDE_SESSION_ID",
         "MOBAIDE_HOOK_URL", "MOBAIDE_HOOK_TOKEN", "LINEAR_API_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
-    proj = ProjectConfig(name="t", path=str(tmp_path), linear_api_key="lin_secret")
+    proj = WorkspaceConfig(name="t", path=str(tmp_path), linear_api_key="lin_secret")
     spec = await AntigravityLauncher().build(proj, AntigravityOptions())
     assert "ENABLE_PROMPT_CACHING_1H" not in spec.env
     assert "MOBAIDE_SESSION_ID" not in spec.env
@@ -115,7 +115,7 @@ async def test_env_turns_on_agy_status_reports(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("AGY_CLI_OSC7501", raising=False)
     monkeypatch.delenv("AGY_CLI_OSC7501_MESSAGES", raising=False)
     spec = await AntigravityLauncher().build(
-        _make_project(str(tmp_path)), AntigravityOptions(),
+        _make_workspace(str(tmp_path)), AntigravityOptions(),
     )
     assert spec.env["AGY_CLI_OSC7501"] == "on"
     assert spec.env["AGY_CLI_OSC7501_MESSAGES"] == "brief"
@@ -139,12 +139,12 @@ async def test_env_prepends_binary_dir_to_path(tmp_path: Path, monkeypatch):
         lambda *_a, **_k: os.path.join("/opt", "ag", "bin", "agy"),
     )
     spec = await AntigravityLauncher().build(
-        _make_project(str(tmp_path)), AntigravityOptions(),
+        _make_workspace(str(tmp_path)), AntigravityOptions(),
     )
     assert spec.env["PATH"].split(os.pathsep)[0] == os.path.join("/opt", "ag", "bin")
 
 
-# cwd / project files
+# cwd / workspace files
 
 
 @pytest.mark.asyncio
@@ -152,7 +152,7 @@ async def test_cwd_missing_raises_clean_file_not_found(tmp_path: Path):
     missing = tmp_path / "does" / "not" / "exist"
     with pytest.raises(FileNotFoundError) as exc_info:
         await AntigravityLauncher().build(
-            _make_project(str(missing)), AntigravityOptions(),
+            _make_workspace(str(missing)), AntigravityOptions(),
         )
     assert exc_info.value.filename == str(missing)
     assert exc_info.value.errno == 2
@@ -165,23 +165,23 @@ class _RecordingWorktreeMgr:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    async def create_worktree(self, slug, project_root, *, branch_name=None, base_branch=None):
+    async def create_worktree(self, slug, workspace_root, *, branch_name=None, base_branch=None):
         from mobaide.linear.worktree import WorktreeResult
 
         self.calls.append({"slug": slug, "branch_name": branch_name})
-        wt = Path(project_root) / "wt" / slug
+        wt = Path(workspace_root) / "wt" / slug
         wt.mkdir(parents=True, exist_ok=True)
         return WorktreeResult(path=str(wt), is_new=True, branch=branch_name or slug)
 
 
 @pytest.mark.asyncio
-async def test_cwd_worktree_on_git_project_resolves_to_worktree(tmp_path: Path):
-    """worktree=True on a git project resolves cwd to the created worktree (not
-    the project root) and hands the user's branch name to the manager verbatim."""
+async def test_cwd_worktree_on_git_workspace_resolves_to_worktree(tmp_path: Path):
+    """worktree=True on a git workspace resolves cwd to the created worktree (not
+    the workspace root) and hands the user's branch name to the manager verbatim."""
     (tmp_path / ".git").mkdir()
     mgr = _RecordingWorktreeMgr()
     spec = await AntigravityLauncher(worktree_mgr=mgr).build(  # type: ignore[arg-type]
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         AntigravityOptions(worktree=True, branch_name="feature/x"),
     )
     assert len(mgr.calls) == 1
@@ -197,7 +197,7 @@ async def test_cwd_worktree_blank_branch_uses_antigravity_prefix(tmp_path: Path)
     (tmp_path / ".git").mkdir()
     mgr = _RecordingWorktreeMgr()
     await AntigravityLauncher(worktree_mgr=mgr).build(  # type: ignore[arg-type]
-        _make_project(str(tmp_path)), AntigravityOptions(worktree=True),
+        _make_workspace(str(tmp_path)), AntigravityOptions(worktree=True),
     )
     branch = mgr.calls[0]["branch_name"]
     assert isinstance(branch, str)
@@ -206,11 +206,11 @@ async def test_cwd_worktree_blank_branch_uses_antigravity_prefix(tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_cwd_worktree_non_git_falls_back_to_root(tmp_path: Path):
-    """A stale worktree=True for a non-git project is downgraded to the project
+    """A stale worktree=True for a non-git workspace is downgraded to the workspace
     root and the WorktreeManager is never touched."""
     mgr = _RecordingWorktreeMgr()
     spec = await AntigravityLauncher(worktree_mgr=mgr).build(  # type: ignore[arg-type]
-        _make_project(str(tmp_path)), AntigravityOptions(worktree=True),
+        _make_workspace(str(tmp_path)), AntigravityOptions(worktree=True),
     )
     assert spec.cwd == str(tmp_path)
     assert mgr.calls == []
@@ -218,19 +218,19 @@ async def test_cwd_worktree_non_git_falls_back_to_root(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_cwd_worktree_without_mgr_raises(tmp_path: Path):
-    """worktree=True on a git project with no WorktreeManager wired fails loud
-    rather than silently landing in the project root (mirrors Claude/Codex)."""
+    """worktree=True on a git workspace with no WorktreeManager wired fails loud
+    rather than silently landing in the workspace root (mirrors Claude/Codex)."""
     (tmp_path / ".git").mkdir()
     with pytest.raises(RuntimeError, match="WorktreeManager"):
         await AntigravityLauncher().build(
-            _make_project(str(tmp_path)),
+            _make_workspace(str(tmp_path)),
             AntigravityOptions(worktree=True, branch_name="x"),
         )
 
 
 @pytest.mark.asyncio
 async def test_cwd_adhoc_worktree_is_ignored(tmp_path: Path):
-    """Ad-hoc launches have no git/project context, so worktree=True is ignored
+    """Ad-hoc launches have no git/workspace context, so worktree=True is ignored
     and the bare cwd is used."""
     spec = await AntigravityLauncher().build(
         AdHocLaunch(cwd=str(tmp_path)), AntigravityOptions(worktree=True),
@@ -249,7 +249,7 @@ async def test_build_propagates_binary_not_found(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(antigravity_launcher, "_resolve_agy_binary", _raise)
     with pytest.raises(AntigravityBinaryNotFoundError):
         await AntigravityLauncher().build(
-            _make_project(str(tmp_path)), AntigravityOptions(),
+            _make_workspace(str(tmp_path)), AntigravityOptions(),
         )
 
 
@@ -263,7 +263,7 @@ async def test_launcher_forwards_override_to_resolver(tmp_path: Path, monkeypatc
 
     monkeypatch.setattr(antigravity_launcher, "_resolve_agy_binary", _capture)
     await AntigravityLauncher(agy_bin_override="/my/agy").build(
-        _make_project(str(tmp_path)), AntigravityOptions(),
+        _make_workspace(str(tmp_path)), AntigravityOptions(),
     )
     assert captured["override"] == "/my/agy"
 
@@ -304,7 +304,7 @@ async def test_build_succeeds_with_no_credentials_anywhere(tmp_path: Path, monke
     ):
         monkeypatch.delenv(key, raising=False)
     spec = await AntigravityLauncher().build(
-        _make_project(str(tmp_path)), AntigravityOptions(),
+        _make_workspace(str(tmp_path)), AntigravityOptions(),
     )
     assert spec.argv[0] == "agy"
     assert spec.cwd == str(tmp_path)

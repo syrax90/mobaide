@@ -15,11 +15,11 @@ import { isCustomSessionKind } from '../../../protocol/wireSchema';
 import { CODEX_REASONING_EFFORTS } from '../../../protocol/dto/sessionCreate';
 import type { CLAUDE_EFFORTS, CODEX_APPROVALS, CODEX_SANDBOXES } from '../../../protocol/dto/sessionCreate';
 import type { CliModelDetail } from '../../../protocol/dto/agentVersion';
-import type { ProjectSummary } from '../../../api/projectRepository';
+import type { WorkspaceSummary } from '../../../api/workspaceRepository';
 import { trimTrailingSeparator } from '../../../lib/pathCompletion';
 import type { WorktreeBasePick } from './worktreeBase';
 
-export type WizardStep = 'project' | 'mode' | 'config';
+export type WizardStep = 'workspace' | 'mode' | 'config';
 
 export const BUILT_IN_MODES = [
   'claude',
@@ -56,7 +56,7 @@ export type CodexApproval = (typeof CODEX_APPROVALS)[number];
 export type CodexReasoningEffort = string;
 export type CodexPreset = 'readOnly' | 'auto' | 'fullAccess';
 
-export type ProjectSelection =
+export type WorkspaceSelection =
   | { kind: 'none' }
   | { kind: 'stored'; name: string }
   /** Already trimmed — `customPathDraft` keeps whatever the user is typing. */
@@ -137,7 +137,7 @@ export interface WizardState {
    * selection before the request builder sees it. Reading it directly is how
    * the Create button once became a silent no-op after any reload.
    */
-  selection: ProjectSelection;
+  selection: WorkspaceSelection;
   customPathDraft: string;
   customPathError: string | null;
   claude: ClaudeBucket;
@@ -156,10 +156,10 @@ export interface WizardState {
   git: GitBucket;
   /**
    * The base branch the user picked by hand, if any. Not persisted: the agent
-   * remembers the last base per project and returns it as `last_used`.
+   * remembers the last base per workspace and returns it as `last_used`.
    */
   worktreeBasePick: WorktreeBasePick | null;
-  /** The project the Auto Scan prompt was seeded for, so edits are not discarded. */
+  /** The workspace the Auto Scan prompt was seeded for, so edits are not discarded. */
   autoScanPromptSeededFor: string | null;
 }
 
@@ -343,7 +343,7 @@ export function validateCustomPath(input: string): string | null {
 export type ClaudeBucketId = 'claude' | 'autoScan';
 
 export type WizardAction =
-  | { type: 'selectStoredProject'; project: ProjectSummary }
+  | { type: 'selectStoredWorkspace'; workspace: WorkspaceSummary }
   | { type: 'setCustomPathDraft'; draft: string }
   | { type: 'syncCustomPathFromUrl'; path: string | null }
   | { type: 'setClaudeModel'; bucket: ClaudeBucketId; model: string | null }
@@ -390,7 +390,7 @@ export type WizardAction =
   | { type: 'setWorktree'; value: boolean }
   | { type: 'setBranchName'; value: string }
   | { type: 'setWorktreeBase'; pick: WorktreeBasePick }
-  | { type: 'seedAutoScanPrompt'; projectName: string; prompt: string };
+  | { type: 'seedAutoScanPrompt'; workspaceName: string; prompt: string };
 
 function withClaudeBucket(
   state: WizardState,
@@ -404,17 +404,17 @@ function withClaudeBucket(
 
 export function wizardReducer(state: WizardState, action: WizardAction): WizardState {
   switch (action.type) {
-    case 'selectStoredProject':
+    case 'selectStoredWorkspace':
       return {
         ...state,
-        selection: { kind: 'stored', name: action.project.name },
+        selection: { kind: 'stored', name: action.workspace.name },
         customPathDraft: '',
         customPathError: null,
-        // A non-git project cannot host a worktree, and leaving a stale branch
+        // A non-git workspace cannot host a worktree, and leaving a stale branch
         // name behind would send it on the next launch.
-        git: action.project.is_git ? state.git : { worktree: false, branchName: '' },
+        git: action.workspace.is_git ? state.git : { worktree: false, branchName: '' },
         worktreeBasePick:
-          state.worktreeBasePick?.projectName === action.project.name
+          state.worktreeBasePick?.workspaceName === action.workspace.name
             ? state.worktreeBasePick
             : null,
       };
@@ -435,7 +435,7 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
     }
 
     // Distinct from `setCustomPathDraft`: this reconciles *from* the URL after a
-    // history navigation, so a null path (the entry selected a stored project,
+    // history navigation, so a null path (the entry selected a stored workspace,
     // or nothing) must clear a stale draft rather than leave it enabling
     // Continue for a directory this entry never named. Clearing must not raise
     // "Path is required" — the field is optional and nobody typed in it.
@@ -627,12 +627,12 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
       return { ...state, worktreeBasePick: action.pick };
 
     case 'seedAutoScanPrompt':
-      // Seeded once per project: re-entering the step must not discard edits,
-      // but changing project must re-seed from the new project's saved prompt.
-      if (state.autoScanPromptSeededFor === action.projectName) return state;
+      // Seeded once per workspace: re-entering the step must not discard edits,
+      // but changing workspace must re-seed from the new workspace's saved prompt.
+      if (state.autoScanPromptSeededFor === action.workspaceName) return state;
       return {
         ...state,
-        autoScanPromptSeededFor: action.projectName,
+        autoScanPromptSeededFor: action.workspaceName,
         autoScan: { ...state.autoScan, initialPrompt: action.prompt },
       };
   }

@@ -482,7 +482,7 @@ final class GitChangesDisplayRebaseTests: XCTestCase {
     }
 
     func testRebaseTargetsLeaveOutTheSessionsOwnBranchByNameNotTheRootsCurrentRow() {
-        // A linked-worktree session on `topic`: the project root has `main` checked out.
+        // A linked-worktree session on `topic`: the workspace root has `main` checked out.
         let items = [
             GitItem(kind: GitItem.kindBranchOnly, branch: "main", is_current: true),
             GitItem(kind: GitItem.kindBranchWithWorktree, branch: "topic", worktree_path: "/wt/topic"),

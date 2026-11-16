@@ -8,7 +8,7 @@ from pathlib import PureWindowsPath
 
 import pytest
 
-from mobaide.core import projects_store
+from mobaide.core import workspaces_store
 from mobaide.linear.workitems import (
     ActiveWorkItem,
     ActiveWorkItemsStore,
@@ -23,7 +23,7 @@ def windows_paths(monkeypatch):
     On POSIX a backslash is a legal filename character, so the backslash
     normalization only happens on Windows.
     """
-    monkeypatch.setattr(projects_store, "PurePath", PureWindowsPath)
+    monkeypatch.setattr(workspaces_store, "PurePath", PureWindowsPath)
 
 
 def _item(id_: str = "CLA-1", uuid: str = "uuid-1") -> ActiveWorkItem:
@@ -150,18 +150,18 @@ class TestStoreConcurrency:
 
 
 @pytest.mark.usefixtures("windows_paths")
-class TestLegacyProjectRootMigration:
+class TestLegacyWorkspaceRootMigration:
     """Pre-existing ``active_workitems.json`` files may hold OS-native
-    backslash paths in ``project_root`` / ``worktree_path`` from before the
-    project-path reconciliation. ``scanner._cleanup_completed_worktrees``
-    filters tracked items by string equality against the POSIX-form project
+    backslash paths in ``workspace_root`` / ``worktree_path`` from before the
+    workspace-path reconciliation. ``scanner._cleanup_completed_worktrees``
+    filters tracked items by string equality against the POSIX-form workspace
     path, so these legacy entries would be silently dropped and the
     associated worktrees would leak until manually cleaned up. The
     ``ActiveWorkItem.from_dict`` loader therefore normalizes both fields to
     POSIX on load so the comparison succeeds.
     """
 
-    def test_from_dict_normalizes_backslash_project_root(self):
+    def test_from_dict_normalizes_backslash_workspace_root(self):
         item = ActiveWorkItem.from_dict(
             {
                 "id": "CLA-99",

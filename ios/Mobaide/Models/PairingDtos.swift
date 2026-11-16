@@ -74,7 +74,7 @@ struct DeviceCodeStatusResponse: Codable, Equatable, Sendable {
 
     // Hand-written so `is_repair` tolerates an omitted key, matching the
     // Kotlin twin's `= false` default and the house pattern for every
-    // Kotlin-defaulted boolean (see `GitItem`, `ProjectInfo`). Synthesized
+    // Kotlin-defaulted boolean (see `GitItem`, `WorkspaceInfo`). Synthesized
     // `Codable` would throw instead, and the status poll swallows decode
     // errors — so the sheet would sit on "Waiting for a machine…" forever.
     init(from decoder: Decoder) throws {

@@ -49,7 +49,7 @@ describe('attentionContent', () => {
 });
 
 describe('attentionLabel', () => {
-  it('prefers the title, then the project, then the fallback', () => {
+  it('prefers the title, then the workspace, then the fallback', () => {
     expect(attentionLabel({ title: 'a', project_name: 'b' })).toBe('a');
     expect(attentionLabel({ project_name: 'b' })).toBe('b');
     expect(attentionLabel({})).toBe(FALLBACK_LABEL);
@@ -76,7 +76,7 @@ describe('attentionLabel', () => {
     expect(attentionLabel({ ...source, title: ' ', project_name: '' })).toBe(expected);
   });
 
-  it('still prefers the title and the project over the kind', () => {
+  it('still prefers the title and the workspace over the kind', () => {
     expect(attentionLabel({ title: 'a', project_name: 'b', kind: 'codex' })).toBe('a');
     expect(attentionLabel({ project_name: 'b', kind: 'codex' })).toBe('b');
   });
