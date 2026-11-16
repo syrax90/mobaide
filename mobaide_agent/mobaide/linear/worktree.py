@@ -317,8 +317,9 @@ def _same_dir(a: str, b: str) -> bool:
 
 
 # Marks which repository owns a workspace folder under the worktrees folder, so
-# two repositories with the same folder name never share one.
-WORKSPACE_OWNER_FILE = ".mobaide-workspace"
+# two repositories with the same folder name never share one. The file name is
+# stored on disk, so it keeps the old "project" name.
+WORKSPACE_OWNER_FILE = ".mobaide-project"
 
 _UNSAFE_NAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _WINDOWS_RESERVED_NAMES = frozenset(

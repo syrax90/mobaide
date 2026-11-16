@@ -2196,8 +2196,8 @@ class RelayClient:
             try:
                 resp = await handler(
                     req,
-                    project_name=workspace.name,
-                    project_root=workspace_root,
+                    workspace_name=workspace.name,
+                    workspace_root=workspace_root,
                     manager=manager,
                     session_manager=getattr(
                         self._app_state, "session_manager", None,

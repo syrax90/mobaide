@@ -187,6 +187,17 @@ class TestWorkspaceWorktreesDir:
         assert folder != str(wt / "app")
         assert not (wt / "app" / WORKSPACE_OWNER_FILE).exists()
 
+    def test_folder_from_older_agent_is_reused(self, tmp_path):
+        root = tmp_path / "app"
+        root.mkdir()
+        wt = tmp_path / "wt"
+        (wt / "app" / "slug").mkdir(parents=True)
+        (wt / "app" / ".mobaide-project").write_text(_owner(str(root)) + "\n")
+
+        folder = _manager(str(wt)).workspace_worktrees_dir(str(root))
+
+        assert folder == str(wt / "app")
+
     def test_empty_unowned_folder_is_claimed(self, tmp_path):
         root = tmp_path / "app"
         root.mkdir()

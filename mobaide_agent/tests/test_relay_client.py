@@ -7,6 +7,7 @@ in _connect_loop, and _send_heartbeat.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import struct
 import sys
@@ -50,6 +51,12 @@ from mobaide.core import (
     CodexBinaryNotFoundError,
 )
 from mobaide.core.models import SessionKind, SessionState
+
+
+def _assert_real_signature(fn, await_args) -> None:
+    """Fail if a mocked call would raise TypeError against the real handler."""
+    inspect.signature(fn).bind(*await_args.args, **await_args.kwargs)
+
 
 
 # ``relay_config``, ``mock_session_manager``, ``mock_event_bus``,
@@ -2361,7 +2368,10 @@ class TestProxyGitItems:
         mock_delete.assert_awaited_once()
         await_args = mock_delete.await_args
         assert await_args is not None
-        assert await_args.kwargs["project_name"] == "proj"
+        from mobaide.agent.git.service import delete_git_items
+
+        _assert_real_signature(delete_git_items, await_args)
+        assert await_args.kwargs["workspace_name"] == "proj"
         assert await_args.kwargs["actor"] is None
 
     async def test_post_delete_busy_returns_409_with_nested_detail(
@@ -2570,8 +2580,11 @@ class TestProxyGitBranches:
         assert await_args.args == (
             GitBranchCreateRequest(name="x", start_point="origin/main", checkout=True),
         )
-        assert await_args.kwargs["project_name"] == "proj"
-        assert await_args.kwargs["project_root"] == str(tmp_path)
+        from mobaide.agent.git.service import create_branch
+
+        _assert_real_signature(create_branch, await_args)
+        assert await_args.kwargs["workspace_name"] == "proj"
+        assert await_args.kwargs["workspace_root"] == str(tmp_path)
         assert await_args.kwargs["actor"] is None
 
     async def test_post_branches_malformed_returns_422(self, client, mock_app_state, tmp_path):
@@ -2614,7 +2627,10 @@ class TestProxyGitBranches:
         await_args = mock_checkout.await_args
         assert await_args is not None
         assert await_args.args == (GitCheckoutRequest(ref="origin/feature/x"),)
-        assert await_args.kwargs["project_name"] == "proj"
+        from mobaide.agent.git.service import checkout_ref
+
+        _assert_real_signature(checkout_ref, await_args)
+        assert await_args.kwargs["workspace_name"] == "proj"
 
     async def test_post_checkout_busy_returns_409_with_nested_detail(
         self, client, mock_app_state, tmp_path,
