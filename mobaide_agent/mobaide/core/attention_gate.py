@@ -372,6 +372,12 @@ class AttentionGate:
         self._passive_ids: frozenset[str] = frozenset()
         self._long_lived_ids: frozenset[str] = frozenset()
 
+    @property
+    def parked_activity(self) -> str | None:
+        """What the last ``Stop`` left in flight (``working`` / ``waiting``),
+        or ``None`` when nothing runs after the turn."""
+        return self._parked_activity
+
     def handle(self, kind: HookKind, payload: Mapping[str, Any]) -> None:
         """Apply one hook to the gate. Never raises on a malformed payload."""
         if kind is HookKind.PERMISSION:

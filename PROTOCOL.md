@@ -123,6 +123,21 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-16: chat state `background`
+
+Additive delta within proto-v7 (2026-11-16): **one chat state key. No version bump; `central_server` is untouched.**
+
+After the 2026-11-15 delta, a Claude chat session row reads `working` or `waiting` while a turn's background work runs, but the chat screen read only the timeline `status`, so its header showed "Ready" for that whole time.
+
+| Where | Change |
+|-------|--------|
+| State key `background` | `"working"` (a workflow or a sub-agent runs), `"waiting"` (only a background shell, a monitor or a scheduled wakeup), or `null`. Not `null` only while `status` is `ready` and the last `Stop` hook listed work in flight. It is then the session row's `activity`. |
+
+* Clients show it in the chat header in place of "Ready": "Working in background" for `working`, "Background task" for `waiting`. The composer stays usable, because the main agent waits for input.
+* `null` in the quiet window after a turn that left nothing in flight (the session row reads `working` there), and for every chat session without Claude Code hooks (other agents, a CLI that runs no hooks).
+* The patch that sets `background` rides in the same `events` frame as the `status` change that causes it, so a client never sees "Ready" in between.
+* Older clients ignore the key and keep showing "Ready".
+
 ### Delta 2026-11-15: Claude chat follows background work
 
 Agent-side delta within proto-v7 (2026-11-15): **no wire change, no version bump. No client change: every value below already exists.**
@@ -467,7 +482,7 @@ Chat sessions use the same `/ws/session/{id}` and `CH_SESSION_IO` channel. Two f
 | `events` | `epoch`, `seq`, `events[]` with own `seq` | Apply in order: `item` (upsert by `id`), `append` (add `text` to an item), `remove` (drop the item with that `id`; an unknown `id` is a no-op), `state` (shallow-merge `patch`). Skip an unknown event type but count its `seq`. On a gap or another epoch, send `sync`. |
 | `result` | `id`, `ok`, `data?`, `error?` | Resolve the command with that `id`; ignore others. |
 
-* State keys: `status`, `error`, `agent`, `title`, `cwd`, `acp_session_id`, `config`, `commands`, `usage`, `plan`, `requests`, `queue`, `prompt_caps`, `turn_started_at`, `cancelling`.
+* State keys: `status`, `error`, `agent`, `title`, `cwd`, `acp_session_id`, `config`, `commands`, `usage`, `plan`, `requests`, `queue`, `prompt_caps`, `turn_started_at`, `cancelling`, `steering` (Delta 2026-11-08), `background` (Delta 2026-11-16).
 * Item types: `user`, `agent`, `thought`, `tool`, `notice`, `compaction`, `turn_end`, `error`. Tool content parts: `text`, `diff` (a unified diff the agent computes), `image`, `link`, `resource`, `terminal`.
 * Bounds: text parts 32 KB, message texts 256 KB, diffs 48 KB / 1 200 lines, a snapshot ~2 MB (`truncated` marks dropped older items).
 * Attention works as for terminal sessions: a pending request raises `awaiting_permission`, a finished turn `turn_finished`, an agent exit `ended` (`exit_reason: process_exited`). A Claude chat raises `turn_finished` from Claude Code hooks (Delta 2026-11-15). An RPC error on the user's own prompt raises `turn_failed` (not after Stop, not on process death, not when a queued prompt starts next).

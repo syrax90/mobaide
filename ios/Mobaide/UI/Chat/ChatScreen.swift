@@ -601,7 +601,13 @@ enum ChatStatusLine {
             return ("Working · \(elapsed(max(0, now.timeIntervalSince(started))))", nil)
         case .error: return ("Stopped", .danger)
         case .stopped: return ("Session closed", nil)
-        default: return ("Ready", nil)
+        default: break
+        }
+        // The turn ended but left work running; the composer still takes a message.
+        switch model.state.background {
+        case .working: return ("Working in background", nil)
+        case .waiting: return ("Background task", nil)
+        case nil: return ("Ready", nil)
         }
     }
 

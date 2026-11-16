@@ -79,6 +79,8 @@ Run and switch between up to 32 concurrent sessions on one agent. 32 is the defa
 
 A running session that is mid-turn shows an animated accent square and a "Working" chip in the session list and sessions panel. A muted "Background" chip shows while the main agent is parked and only passive background work runs (a background shell, a monitor, a scheduled wakeup). "Needs permission" outranks both, and they outrank "Ready". The agent reports this as the session's `activity` (`working`, `waiting` or `idle`) for Claude and Auto Scan terminal sessions and for Claude chat sessions, and `working` or `idle` for the other chat sessions. Codex, Antigravity, OpenCode, GitHub Copilot, Cursor terminal, Pi, Terminal and custom terminal sessions show no Working state.
 
+In a Claude chat, a turn can end while work it started still runs. The chat header then shows "Working in background" (a workflow or a sub-agent) or "Background task" (only a background shell, a monitor or a scheduled wakeup) in place of "Ready". You can still send a message. "Ready" comes back when that work ends. Wire details: the chat state key `background` in PROTOCOL.md.
+
 ## Managed CLI agents
 
 The agent runs Claude Code by default. It can also launch the [OpenAI Codex CLI](https://developers.openai.com/codex/cli), the [Antigravity CLI](https://antigravity.google/docs/cli) (binary `agy`), [OpenCode](https://opencode.ai/docs/), the GitHub Copilot CLI (binary `copilot`), the [Cursor CLI](https://cursor.com/docs/cli/overview) (binary `cursor-agent`) or [Pi](https://pi.dev) (binary `pi`) as additional managed coding agents.

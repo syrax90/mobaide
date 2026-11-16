@@ -131,7 +131,8 @@
           "prompt_caps": { "image": true },
           "turn_started_at": "2026-11-07T12:00:05+00:00",
           "cancelling": false,
-          "steering": true
+          "steering": true,
+          "background": null
         },
         "items": [
           { "id": "u:1", "type": "user", "text": "Fix the login bug", "attachments": [{ "kind": "image", "mime": "image/png" }], "at": "2026-11-07T12:00:05+00:00" },
@@ -186,7 +187,7 @@
           { "type": "item", "seq": 42, "item": { "id": "m:8", "type": "agent", "text": "Done" } },
           { "type": "append", "seq": 43, "id": "m:8", "text": ": the tests pass." },
           { "type": "item", "seq": 44, "item": { "id": "toolu_03", "type": "tool", "title": "pytest -q", "kind": "execute", "status": "in_progress", "subtitle": "pytest -q", "locations": [], "content": [], "input": null } },
-          { "type": "state", "seq": 45, "patch": { "status": "ready", "turn_started_at": null, "requests": [] } }
+          { "type": "state", "seq": 45, "patch": { "status": "ready", "turn_started_at": null, "requests": [], "background": "working" } }
         ]
       }
     },
@@ -261,6 +262,17 @@
               ]
             }
           }
+        ]
+      }
+    },
+    {
+      "name": "events_background_cleared",
+      "frame": {
+        "t": "events",
+        "epoch": "9f3a1c2b7d4e",
+        "seq": 51,
+        "events": [
+          { "type": "state", "seq": 51, "patch": { "status": "running", "turn_started_at": "2026-11-07T12:05:00+00:00", "cancelling": false, "background": null } }
         ]
       }
     },
