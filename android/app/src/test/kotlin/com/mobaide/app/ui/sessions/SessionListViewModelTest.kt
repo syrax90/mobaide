@@ -96,7 +96,7 @@ class SessionListViewModelTest {
             scans = emptyList(),
             capacity = 0,
             max_scans = 5,
-            available_projects = emptyList(),
+            available_workspaces = emptyList(),
         ),
         initialConnection: AgentEventBus.ConnState = AgentEventBus.ConnState.Disconnected,
         initialSynced: Boolean = true,
@@ -369,7 +369,7 @@ class SessionListViewModelTest {
             scans = emptyList(),
             capacity = 0,
             max_scans = 5,
-            available_projects = emptyList(),
+            available_workspaces = emptyList(),
         )
 
         vm.refresh()

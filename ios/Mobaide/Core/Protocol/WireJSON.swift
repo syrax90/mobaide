@@ -8,7 +8,7 @@ import Foundation
 ///   field decodes via `decodeIfPresent ?? default` (an explicit-null `kind`
 ///   still falls back to `.claude`; unknown kind strings are preserved
 ///   verbatim as `SessionKind.custom` since proto-v7).
-/// - `explicitNulls = false; encodeDefaults = false` (the `ProjectUpdate`
+/// - `explicitNulls = false; encodeDefaults = false` (the `WorkspaceUpdate`
 ///   PATCH encoder) — synthesized `encodeIfPresent` omits nil optionals, so
 ///   the three-state omit semantics hold with the plain encoder.
 /// - Wire keys are the property names verbatim (snake_case); no key strategy.

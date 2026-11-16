@@ -25,7 +25,7 @@ from .cli_launcher import (
     resolve_cli_binary,
     resolve_standard_worktree_cwd,
 )
-from .projects_config import ProjectConfig
+from .workspaces_config import WorkspaceConfig
 
 if TYPE_CHECKING:
     from mobaide.linear.worktree import WorktreeManager
@@ -99,7 +99,7 @@ class CursorOptions:
     """
 
     force: bool = False
-    # Worktree intent for a stored git project, resolved by ``resolve_cwd``
+    # Worktree intent for a stored git workspace, resolved by ``resolve_cwd``
     # exactly like Codex; ignored for ad-hoc launches.
     worktree: bool = False
     branch_name: str | None = None
@@ -147,8 +147,8 @@ class CursorLauncher:
         return argv
 
     async def resolve_cwd(self, target: LaunchTarget, options: CursorOptions) -> str:
-        """The session folder: the project root, a new git worktree when
-        ``worktree`` is set on a stored git project, or the bare ad-hoc cwd."""
+        """The session folder: the workspace root, a new git worktree when
+        ``worktree`` is set on a stored git workspace, or the bare ad-hoc cwd."""
         return await resolve_standard_worktree_cwd(
             target,
             worktree=options.worktree,
@@ -165,7 +165,7 @@ class CursorLauncher:
         env.setdefault("TERM", "xterm-256color")
         env["PYTHONIOENCODING"] = "utf-8"
 
-        if isinstance(target, ProjectConfig) and target.conda_env:
+        if isinstance(target, WorkspaceConfig) and target.conda_env:
             conda_bin = conda_env_bin(target.conda_env)
             if conda_bin:
                 sep = os.pathsep

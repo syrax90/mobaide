@@ -256,7 +256,7 @@ struct ChatScreen: View {
                 if cwd != nil {
                     SessionGitMenuItems(
                         sessionId: sessionId,
-                        projectName: sessionRow?.project_name,
+                        workspaceName: sessionRow?.workspace_name,
                         capabilities: gitCapabilities,
                         navigate: { router.navigate(to: $0) }
                     )

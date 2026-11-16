@@ -165,7 +165,7 @@ class RestApiTest {
         val request = CreateSessionRequest(
             command = listOf("bash", "-l"),
             cwd = "/home/alice",
-            project_name = "alpha",
+            workspace_name = "alpha",
             claude_options = ClaudeOptionsModel(no_memory = true, worktree = true),
         )
 
@@ -209,7 +209,7 @@ class RestApiTest {
 
         api.createSession(
             CreateSessionRequest(
-                project_name = "alpha",
+                workspace_name = "alpha",
                 claude_options = ClaudeOptionsModel(debug = false),
             ),
         )
@@ -220,7 +220,7 @@ class RestApiTest {
 
         api.createSession(
             CreateSessionRequest(
-                project_name = "alpha",
+                workspace_name = "alpha",
                 claude_options = ClaudeOptionsModel(debug = true),
             ),
         )
@@ -241,17 +241,17 @@ class RestApiTest {
         }
 
         api.createSession(
-            CreateSessionRequest(project_name = "alpha", claude_options = ClaudeOptionsModel(focus_mode = false)),
+            CreateSessionRequest(workspace_name = "alpha", claude_options = ClaudeOptionsModel(focus_mode = false)),
         )
         assertTrue(bodyOf(captured.captured).contains("\"focus_mode\":false"))
 
         api.createSession(
-            CreateSessionRequest(project_name = "alpha", claude_options = ClaudeOptionsModel(focus_mode = true)),
+            CreateSessionRequest(workspace_name = "alpha", claude_options = ClaudeOptionsModel(focus_mode = true)),
         )
         assertTrue(bodyOf(captured.captured).contains("\"focus_mode\":true"))
 
         api.createSession(
-            CreateSessionRequest(project_name = "alpha", claude_options = ClaudeOptionsModel()),
+            CreateSessionRequest(workspace_name = "alpha", claude_options = ClaudeOptionsModel()),
         )
         assertFalse(bodyOf(captured.captured).contains("\"focus_mode\""))
     }
@@ -520,7 +520,7 @@ class RestApiTest {
 
     @Test
     fun execute_onErrorCode_throwsApiException_withCodeAndBody() = runTest {
-        // Tests the `execute<T>` path (used by listSessions/getProjects/etc).
+        // Tests the `execute<T>` path (used by listSessions/getWorkspaces/etc).
         for (code in errorCodes) {
             val (api, client) = newApi()
             stubCall(client) { req ->

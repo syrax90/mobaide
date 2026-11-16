@@ -8,7 +8,7 @@ final class AutoScanDetailModelTests: XCTestCase {
         func refreshedToken() async -> String? { nil }
     }
 
-    private func makeModel(projectName: String = "p") -> AutoScanDetailModel {
+    private func makeModel(workspaceName: String = "p") -> AutoScanDetailModel {
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
         let bus = AgentEventBus(
             webSocketFactory: .live(transportFactory: FakeWebSocketTransportFactory(), sleeper: RecordingSleeper()),
@@ -22,26 +22,26 @@ final class AutoScanDetailModelTests: XCTestCase {
             isAuthenticated: { false }
         )
         let repo = AutoScanRepository(agentAPI: agentAPI, agentEventBus: bus, wsClient: wsClient)
-        return AutoScanDetailModel(projectName: projectName, repository: repo)
+        return AutoScanDetailModel(workspaceName: workspaceName, repository: repo)
     }
 
-    private func phaseFrame(seq: Int64, phase: String, cycle: Int = 1, next: String? = nil, issues: Int = 0, project: String = "p") -> AutoScanFrame {
-        .event(ParsedScanEvent(projectName: project, seq: seq, ts: "T", type: "phase",
+    private func phaseFrame(seq: Int64, phase: String, cycle: Int = 1, next: String? = nil, issues: Int = 0, workspace: String = "p") -> AutoScanFrame {
+        .event(ParsedScanEvent(workspaceName: workspace, seq: seq, ts: "T", type: "phase",
                                payload: .phase(phase: phase, cycleNumber: cycle, nextScanAt: next, issuesProcessed: issues)))
     }
 
-    private func issueFrame(seq: Int64, id: String, step: String = "state_update", status: String = "started", project: String = "p") -> AutoScanFrame {
-        .event(ParsedScanEvent(projectName: project, seq: seq, ts: "T", type: "issue",
+    private func issueFrame(seq: Int64, id: String, step: String = "state_update", status: String = "started", workspace: String = "p") -> AutoScanFrame {
+        .event(ParsedScanEvent(workspaceName: workspace, seq: seq, ts: "T", type: "issue",
                                payload: .issue(identifier: id, title: "t", step: step, status: status, error: nil)))
     }
 
-    private func logFrame(seq: Int64, line: String, ansi: Bool = false, project: String = "p") -> AutoScanFrame {
-        .event(ParsedScanEvent(projectName: project, seq: seq, ts: "T", type: "log",
+    private func logFrame(seq: Int64, line: String, ansi: Bool = false, workspace: String = "p") -> AutoScanFrame {
+        .event(ParsedScanEvent(workspaceName: workspace, seq: seq, ts: "T", type: "log",
                                payload: .log(line: line, level: "info", ansi: ansi)))
     }
 
     private func instance(cycle: Int = 0, next: String? = nil) -> AutoScanInstanceDto {
-        AutoScanInstanceDto(project_name: "p", status: "scanning", started_at: 1.5, last_activity_at: 1.5,
+        AutoScanInstanceDto(workspace_name: "p", status: "scanning", started_at: 1.5, last_activity_at: 1.5,
                             next_scan_at: next, cycle_number: cycle)
     }
 
@@ -51,14 +51,14 @@ final class AutoScanDetailModelTests: XCTestCase {
         let model = makeModel()
         await model.handle(.snapshot(scans: [instance(cycle: 5)], events: ["p": [phaseFrame(seq: 10, phase: "scan_started", cycle: 5).parsedEvent]]))
         XCTAssertEqual(model.connection, .replaying)
-        XCTAssertEqual(model.instance?.project_name, "p")
+        XCTAssertEqual(model.instance?.workspace_name, "p")
         XCTAssertEqual(model.cycleNumber, 5)
         XCTAssertEqual(model.activePhase, "scan")
     }
 
-    func testEventForDifferentProjectIsIgnored() async {
+    func testEventForDifferentWorkspaceIsIgnored() async {
         let model = makeModel()
-        await model.handle(phaseFrame(seq: 1, phase: "scan_started", project: "other"))
+        await model.handle(phaseFrame(seq: 1, phase: "scan_started", workspace: "other"))
         XCTAssertNil(model.activePhase)
         XCTAssertTrue(model.logLines.isEmpty)
     }

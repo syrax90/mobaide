@@ -55,7 +55,7 @@ export function AutoScanSection({ agentId, online }: AutoScanSectionProps) {
     queryClient.invalidateQueries({ queryKey: queryKeys.autoscan(agentId) });
 
   const stop = useMutation({
-    mutationFn: (projectName: string) => stopAutoScan(agentId, projectName),
+    mutationFn: (workspaceName: string) => stopAutoScan(agentId, workspaceName),
     // The agent publishes `autoscan.list.changed` on stop, which is the honest
     // source; this only covers the socket being down.
     onSuccess: invalidate,
@@ -63,7 +63,7 @@ export function AutoScanSection({ agentId, online }: AutoScanSectionProps) {
   });
 
   const runNow = useMutation({
-    mutationFn: (projectName: string) => runAutoScanNow(agentId, projectName),
+    mutationFn: (workspaceName: string) => runAutoScanNow(agentId, workspaceName),
     onSuccess: invalidate,
     onError: scanFailureHandler('run', invalidate),
   });
@@ -102,8 +102,8 @@ interface AutoScanRowProps {
   scan: AutoScanInstance;
   now: number;
   busy: boolean;
-  onRunNow: (projectName: string) => void;
-  onStop: (projectName: string) => void;
+  onRunNow: (workspaceName: string) => void;
+  onStop: (workspaceName: string) => void;
 }
 
 function AutoScanRow({ agentId, scan, now, busy, onRunNow, onStop }: AutoScanRowProps) {

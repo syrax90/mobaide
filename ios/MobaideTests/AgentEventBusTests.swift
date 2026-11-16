@@ -48,16 +48,16 @@ final class AgentEventBusTests: XCTestCase {
         }
     }
 
-    func testProjectsChangedFixtureDemux() throws {
+    func testWorkspacesChangedFixtureDemux() throws {
         for fixtureCase in try EnvelopeFixtures.cases(fixture: "dto/agent/ProjectInfo.json") {
             let envelope = try EnvelopeFixtures.envelope(
                 type: "projects.changed",
                 payload: .object(["projects": .array([fixtureCase.wire])])
             )
-            guard case .projectsChanged(let projects)? = AgentEnvelopeDemux.demux(envelope) else {
-                return XCTFail("case \(fixtureCase.name): expected projectsChanged")
+            guard case .workspacesChanged(let workspaces)? = AgentEnvelopeDemux.demux(envelope) else {
+                return XCTFail("case \(fixtureCase.name): expected workspacesChanged")
             }
-            XCTAssertEqual(projects.count, 1, "case \(fixtureCase.name)")
+            XCTAssertEqual(workspaces.count, 1, "case \(fixtureCase.name)")
         }
     }
 
@@ -99,21 +99,21 @@ final class AgentEventBusTests: XCTestCase {
         let event = AgentEnvelopeDemux.demux(
             #"{"type":"git.changed","payload":{"project_name":"demo","toplevel":"/repo/wt","common_dir":"/repo/.git"}}"#
         )
-        XCTAssertEqual(event, .gitChanged(projectName: "demo", toplevel: "/repo/wt", commonDir: "/repo/.git"))
+        XCTAssertEqual(event, .gitChanged(workspaceName: "demo", toplevel: "/repo/wt", commonDir: "/repo/.git"))
 
         let nameless = AgentEnvelopeDemux.demux(
             #"{"type":"git.changed","payload":{"toplevel":"/repo/wt","common_dir":"/repo/.git"}}"#
         )
         XCTAssertEqual(
             nameless,
-            .gitChanged(projectName: "", toplevel: "/repo/wt", commonDir: "/repo/.git"),
-            "a session without a project still gets the repository keys"
+            .gitChanged(workspaceName: "", toplevel: "/repo/wt", commonDir: "/repo/.git"),
+            "a session without a workspace still gets the repository keys"
         )
 
         let wrongTypes = AgentEnvelopeDemux.demux(
             #"{"type":"git.changed","payload":{"project_name":"demo","toplevel":7,"common_dir":null}}"#
         )
-        XCTAssertEqual(wrongTypes, .gitChanged(projectName: "demo"), "non-string values are dropped, not coerced")
+        XCTAssertEqual(wrongTypes, .gitChanged(workspaceName: "demo"), "non-string values are dropped, not coerced")
     }
 
     func testAutoScanEventDemux() {
@@ -121,10 +121,10 @@ final class AgentEventBusTests: XCTestCase {
         {"type":"autoscan.event","payload":{"project_name":"demo","event":\
         {"seq":9007199254740993,"ts":"2026-07-06T10:00:00Z","type":"phase","payload":{"phase":"scan_started"}}}}
         """
-        guard case .autoScanEvent(let projectName, let seq, let ts, let payload)? = AgentEnvelopeDemux.demux(text) else {
+        guard case .autoScanEvent(let workspaceName, let seq, let ts, let payload)? = AgentEnvelopeDemux.demux(text) else {
             return XCTFail("expected autoScanEvent")
         }
-        XCTAssertEqual(projectName, "demo")
+        XCTAssertEqual(workspaceName, "demo")
         XCTAssertEqual(seq, 9_007_199_254_740_993, "seq is 64-bit, beyond 2^53")
         XCTAssertEqual(ts, "2026-07-06T10:00:00Z")
         XCTAssertEqual(payload, .phase(phase: "scan_started", cycleNumber: 0, nextScanAt: nil, issuesProcessed: 0))
@@ -169,14 +169,14 @@ final class AgentEventBusTests: XCTestCase {
         connection.emit(.text(#"{"type":"unknown.kind","payload":{}}"#))
 
         let firstGitEvent = try await first.next()
-        XCTAssertEqual(firstGitEvent, .gitChanged(projectName: "p1"))
+        XCTAssertEqual(firstGitEvent, .gitChanged(workspaceName: "p1"))
         guard case .unknownEnvelopeType(let type, _) = try await first.next() else {
             return XCTFail("expected unknownEnvelopeType")
         }
         XCTAssertEqual(type, "unknown.kind")
 
         let secondGitEvent = try await second.next()
-        XCTAssertEqual(secondGitEvent, .gitChanged(projectName: "p1"))
+        XCTAssertEqual(secondGitEvent, .gitChanged(workspaceName: "p1"))
         guard case .unknownEnvelopeType = try await second.next() else {
             return XCTFail("second subscriber must receive every event too")
         }

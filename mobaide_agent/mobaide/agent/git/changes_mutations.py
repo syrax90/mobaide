@@ -149,10 +149,10 @@ async def _run(
     return result
 
 
-def _publish(event_bus: Any | None, project_name: str | None, repo: ResolvedRepo) -> None:
+def _publish(event_bus: Any | None, workspace_name: str | None, repo: ResolvedRepo) -> None:
     _publish_git_changed(
         event_bus,
-        project_name or "",
+        workspace_name or "",
         toplevel=repo.toplevel,
         common_dir=repo.common_dir,
     )
@@ -162,7 +162,7 @@ async def stage_session_paths(
     *,
     cwd: str | None,
     paths: Sequence[str],
-    project_name: str | None,
+    workspace_name: str | None,
     event_bus: Any | None,
 ) -> GitMutationResponse:
     """``git add -A`` limited to ``paths``: stages modifications, deletions,
@@ -179,7 +179,7 @@ async def stage_session_paths(
             fallback="git add failed",
             stdin=_pathspec_stdin(rel),
         )
-    _publish(event_bus, project_name, repo)
+    _publish(event_bus, workspace_name, repo)
     return GitMutationResponse()
 
 
@@ -187,7 +187,7 @@ async def unstage_session_paths(
     *,
     cwd: str | None,
     paths: Sequence[str],
-    project_name: str | None,
+    workspace_name: str | None,
     event_bus: Any | None,
 ) -> GitMutationResponse:
     """``git reset -q -- paths``: unlike ``restore --staged`` it also works
@@ -201,7 +201,7 @@ async def unstage_session_paths(
             fallback="git reset failed",
             stdin=_pathspec_stdin(rel),
         )
-    _publish(event_bus, project_name, repo)
+    _publish(event_bus, workspace_name, repo)
     return GitMutationResponse()
 
 
@@ -210,7 +210,7 @@ async def discard_session_paths(
     cwd: str | None,
     paths: Sequence[str],
     scope: str | None,
-    project_name: str | None,
+    workspace_name: str | None,
     event_bus: Any | None,
 ) -> GitMutationResponse:
     """Throw away working-tree changes: ``restore --worktree`` for tracked
@@ -234,7 +234,7 @@ async def discard_session_paths(
                     toplevel=repo.toplevel,
                     fallback="git clean failed",
                 )
-    _publish(event_bus, project_name, repo)
+    _publish(event_bus, workspace_name, repo)
     return GitMutationResponse()
 
 
@@ -400,7 +400,7 @@ async def commit_session(
     *,
     cwd: str | None,
     request: GitCommitRequest,
-    project_name: str | None,
+    workspace_name: str | None,
     event_bus: Any | None,
 ) -> GitCommitResponse:
     """``git commit -F -`` of the staged set (never ``-a``); the message
@@ -432,5 +432,5 @@ async def commit_session(
         head = await _head_commit(toplevel)
     if head is None:
         raise GitCommandError("commit succeeded but HEAD is unreadable")
-    _publish(event_bus, project_name, repo)
+    _publish(event_bus, workspace_name, repo)
     return GitCommitResponse(oid=head.oid, short_oid=head.short_oid, subject=head.subject)

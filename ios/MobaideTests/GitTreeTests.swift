@@ -1,7 +1,7 @@
 import XCTest
 @testable import Mobaide
 
-/// The project Git screen's folder tree and branch order (`GitTree`,
+/// The workspace Git screen's folder tree and branch order (`GitTree`,
 /// `GitRefOrder`): the same cases the web and Android clients pin, so the
 /// three render one list identically.
 final class GitTreeTests: XCTestCase {

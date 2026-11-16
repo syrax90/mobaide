@@ -25,7 +25,7 @@ import com.mobaide.app.data.network.dto.OpenCodeOptionsModel
 import com.mobaide.app.data.network.dto.CopilotOptionsModel
 import com.mobaide.app.data.network.dto.CursorOptionsModel
 import com.mobaide.app.data.network.dto.PiOptionsModel
-import com.mobaide.app.data.network.dto.ProjectInfo
+import com.mobaide.app.data.network.dto.WorkspaceInfo
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.WorktreeBasesResponse
 import com.mobaide.app.data.network.dto.chatSupport
@@ -39,7 +39,7 @@ import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.GitRepository
 import com.mobaide.app.data.repository.PathSuggestionRepository
-import com.mobaide.app.data.repository.ProjectsRepository
+import com.mobaide.app.data.repository.WorkspacesRepository
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.ui.common.PathSuggestionsController
 import com.mobaide.app.ui.common.PathSuggestionsUi
@@ -69,7 +69,7 @@ import java.nio.file.InvalidPathException
 import java.nio.file.Paths
 import javax.inject.Inject
 
-enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig, CodexConfig, AntigravityConfig, OpenCodeConfig, CopilotConfig, CursorConfig, PiConfig, AutoScanConfig, TerminalConfig }
+enum class CreateSessionStep { WorkspaceSelect, ModePick, StandardConfig, CodexConfig, AntigravityConfig, OpenCodeConfig, CopilotConfig, CursorConfig, PiConfig, AutoScanConfig, TerminalConfig }
 
 /**
  * Mode-picker selection. The built-in modes are singletons; [Custom] carries
@@ -146,20 +146,20 @@ sealed interface TypeEditorState {
 enum class CodexAutonomyPreset { ReadOnly, Auto, FullAccess }
 
 /**
- * Active selection on the project picker.
+ * Active selection on the workspace picker.
  *
- * `None` is the freshly-mounted state; `Stored` references a project from
- * [CreateSessionUiState.projects] by name; `CustomPath` is an ephemeral
+ * `None` is the freshly-mounted state; `Stored` references a workspace from
+ * [CreateSessionUiState.workspaces] by name; `CustomPath` is an ephemeral
  * one-off launch directory typed by the user and never persisted to
- * `projects.json` on the agent.
+ * `workspaces.json` on the agent.
  */
-sealed interface ProjectSelection {
-    data object None : ProjectSelection
-    data class Stored(val name: String) : ProjectSelection
-    data class CustomPath(val path: String) : ProjectSelection
+sealed interface WorkspaceSelection {
+    data object None : WorkspaceSelection
+    data class Stored(val name: String) : WorkspaceSelection
+    data class CustomPath(val path: String) : WorkspaceSelection
 }
 
-/** The worktree base-branch list of the selected project. */
+/** The worktree base-branch list of the selected workspace. */
 sealed interface BaseBranchesLoad {
     data object Idle : BaseBranchesLoad
     data object Loading : BaseBranchesLoad
@@ -168,10 +168,10 @@ sealed interface BaseBranchesLoad {
 }
 
 data class CreateSessionUiState(
-    val step: CreateSessionStep = CreateSessionStep.ProjectSelect,
-    val projects: List<ProjectInfo> = emptyList(),
-    val isLoadingProjects: Boolean = false,
-    val selection: ProjectSelection = ProjectSelection.None,
+    val step: CreateSessionStep = CreateSessionStep.WorkspaceSelect,
+    val workspaces: List<WorkspaceInfo> = emptyList(),
+    val isLoadingWorkspaces: Boolean = false,
+    val selection: WorkspaceSelection = WorkspaceSelection.None,
     val customPathDraft: String = "",
     val customPathError: String? = null,
     val recentCustomPaths: List<String> = emptyList(),
@@ -291,17 +291,17 @@ data class CreateSessionUiState(
     // the agent ignores base_branch, so the picker stays hidden.
     val worktreeBaseSupported: Boolean = false,
     val baseBranches: BaseBranchesLoad = BaseBranchesLoad.Idle,
-    // The project [baseBranches] belongs to; a project change resets the list.
-    val baseBranchesProject: String? = null,
+    // The workspace [baseBranches] belongs to; a workspace change resets the list.
+    val baseBranchesWorkspace: String? = null,
     // null = the agent's default branch.
     val baseBranch: String? = null,
     // The user chose [baseBranch] on this screen, so a reload must not re-preselect.
     val baseBranchPicked: Boolean = false,
     val submitting: Boolean = false,
     val autoScanStarting: Boolean = false,
-    // Name of the stored project the AutoScan config step was last seeded for
-    // (null = not yet seeded). Tracked per-project so switching projects mid-
-    // wizard re-seeds the prompt, while re-entering the same project preserves
+    // Name of the stored workspace the AutoScan config step was last seeded for
+    // (null = not yet seeded). Tracked per-workspace so switching workspaces mid-
+    // wizard re-seeds the prompt, while re-entering the same workspace preserves
     // the user's in-flight edits.
     val autoScanConfigInitializedFor: String? = null,
     val dismiss: Boolean = false,
@@ -332,27 +332,27 @@ val CreateSessionUiState.orderedModes: List<CreateSessionMode>
     get() = orderModes(BUILT_IN_MODES + customTypes.map { CreateSessionMode.Custom(it.id) }, modeOrder)
 
 /**
- * Read-only projection: the name of a stored project, or `null` for any
+ * Read-only projection: the name of a stored workspace, or `null` for any
  * other selection (custom path / none). Lets callers that only care about
- * stored-project selections stay terse.
+ * stored-workspace selections stay terse.
  */
-val CreateSessionUiState.selectedProjectName: String?
-    get() = (selection as? ProjectSelection.Stored)?.name
+val CreateSessionUiState.selectedWorkspaceName: String?
+    get() = (selection as? WorkspaceSelection.Stored)?.name
 
-/** The base-branch field shows: worktree on, a stored git project, and an agent that reads the field. */
+/** The base-branch field shows: worktree on, a stored git workspace, and an agent that reads the field. */
 val CreateSessionUiState.showBaseBranchPicker: Boolean
     get() = worktreeBaseSupported && worktree &&
-        projects.firstOrNull { it.name == selectedProjectName }?.is_git == true
+        workspaces.firstOrNull { it.name == selectedWorkspaceName }?.is_git == true
 
 /**
- * The `base_branch` to send. Only a loaded list of the selected project
+ * The `base_branch` to send. Only a loaded list of the selected workspace
  * yields one; loading or a failed list sends null (the agent's default).
  */
 val CreateSessionUiState.effectiveBaseBranch: String?
     get() = baseBranch.takeIf {
         showBaseBranchPicker &&
             baseBranches is BaseBranchesLoad.Loaded &&
-            baseBranchesProject == selectedProjectName
+            baseBranchesWorkspace == selectedWorkspaceName
     }
 
 /**
@@ -460,12 +460,12 @@ val CreateSessionUiState.piChatUnavailableHint: String?
 val CreateSessionUiState.piResumeAvailable: Boolean
     get() = piUsesChat && (piChat as? ChatSupport.Available)?.resume == true
 
-/** The folder "This folder" lists: the selected project's path, or the custom path. */
+/** The folder "This folder" lists: the selected workspace's path, or the custom path. */
 val CreateSessionUiState.selectedFolder: String?
     get() = when (val sel = selection) {
-        is ProjectSelection.Stored -> projects.firstOrNull { it.name == sel.name }?.path
-        is ProjectSelection.CustomPath -> sel.path.takeIf { it.isNotBlank() }
-        ProjectSelection.None -> null
+        is WorkspaceSelection.Stored -> workspaces.firstOrNull { it.name == sel.name }?.path
+        is WorkspaceSelection.CustomPath -> sel.path.takeIf { it.isNotBlank() }
+        WorkspaceSelection.None -> null
     }
 
 /** Snapshot of the Claude reasoning controls for persistence / re-defaulting. */
@@ -551,13 +551,13 @@ val CreateSessionUiState.cursorEnabled: Boolean get() = cursorAvailable != false
 val CreateSessionUiState.piEnabled: Boolean get() = piAvailable != false && piKnown
 
 /**
- * Auto Scan additionally needs a Linear API key on the selected stored project
- * — the agent scans Linear for that project's issues. A custom path or no
+ * Auto Scan additionally needs a Linear API key on the selected stored workspace
+ * — the agent scans Linear for that workspace's issues. A custom path or no
  * selection can never satisfy it.
  */
 val CreateSessionUiState.autoScanEnabled: Boolean
     get() = claudeEnabled &&
-        projects.firstOrNull { it.name == selectedProjectName }?.has_linear_key == true
+        workspaces.firstOrNull { it.name == selectedWorkspaceName }?.has_linear_key == true
 
 /**
  * Whether tapping this mode-picker card can commit. Terminal and custom agent
@@ -579,7 +579,7 @@ fun CreateSessionUiState.isModeEnabled(mode: CreateSessionMode): Boolean = when 
 
 @HiltViewModel
 class CreateSessionViewModel @Inject constructor(
-    private val projectsRepository: ProjectsRepository,
+    private val workspacesRepository: WorkspacesRepository,
     private val sessionRepository: SessionRepository,
     private val autoScanRepository: AutoScanRepository,
     private val preferencesStore: PreferencesStore,
@@ -607,7 +607,7 @@ class CreateSessionViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             // Pre-fill the Claude reasoning controls from the last successful
-            // launch (mirrors the last-used-project pre-fill below).
+            // launch (mirrors the last-used-workspace pre-fill below).
             preferencesStore.getLastUsedClaudeOptions()?.let { saved ->
                 _uiState.update {
                     it.copy(
@@ -715,17 +715,17 @@ class CreateSessionViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            val last = preferencesStore.getLastUsedProjectName()
-            projectsRepository.observeProjects().collect { projects ->
-                serverProjects = projects
-                val display = displayProjects()
+            val last = preferencesStore.getLastUsedWorkspaceName()
+            workspacesRepository.observeWorkspaces().collect { workspaces ->
+                serverWorkspaces = workspaces
+                val display = displayWorkspaces()
                 _uiState.update { state ->
-                    val resolved = state.selection.takeUnless { it is ProjectSelection.None }
-                        ?: projects.firstOrNull { it.name == last }?.let { ProjectSelection.Stored(it.name) }
-                        ?: ProjectSelection.None
+                    val resolved = state.selection.takeUnless { it is WorkspaceSelection.None }
+                        ?: workspaces.firstOrNull { it.name == last }?.let { WorkspaceSelection.Stored(it.name) }
+                        ?: WorkspaceSelection.None
                     state.copy(
-                        projects = display,
-                        isLoadingProjects = projects.isEmpty(),
+                        workspaces = display,
+                        isLoadingWorkspaces = workspaces.isEmpty(),
                         selection = resolved,
                     )
                 }
@@ -753,7 +753,7 @@ class CreateSessionViewModel @Inject constructor(
             // Refs moved on the agent: refresh a list already on screen.
             gitRepository.changed.collect { name ->
                 val state = _uiState.value
-                if (name == state.baseBranchesProject &&
+                if (name == state.baseBranchesWorkspace &&
                     state.baseBranches is BaseBranchesLoad.Loaded &&
                     state.showBaseBranchPicker
                 ) {
@@ -785,87 +785,87 @@ class CreateSessionViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoadingProjects = true) }
+            _uiState.update { it.copy(isLoadingWorkspaces = true) }
             try {
-                val projects = projectsRepository.listProjects()
-                val last = preferencesStore.getLastUsedProjectName()
-                if (serverProjects.isEmpty()) serverProjects = projects
-                val display = displayProjects()
+                val workspaces = workspacesRepository.listWorkspaces()
+                val last = preferencesStore.getLastUsedWorkspaceName()
+                if (serverWorkspaces.isEmpty()) serverWorkspaces = workspaces
+                val display = displayWorkspaces()
                 _uiState.update { state ->
-                    if (state.projects.isEmpty()) {
-                        val resolved = state.selection.takeUnless { it is ProjectSelection.None }
-                            ?: projects.firstOrNull { it.name == last }?.let { ProjectSelection.Stored(it.name) }
-                            ?: ProjectSelection.None
+                    if (state.workspaces.isEmpty()) {
+                        val resolved = state.selection.takeUnless { it is WorkspaceSelection.None }
+                            ?: workspaces.firstOrNull { it.name == last }?.let { WorkspaceSelection.Stored(it.name) }
+                            ?: WorkspaceSelection.None
                         state.copy(
-                            projects = display,
-                            isLoadingProjects = false,
+                            workspaces = display,
+                            isLoadingWorkspaces = false,
                             selection = resolved,
                         )
                     } else {
-                        state.copy(isLoadingProjects = false)
+                        state.copy(isLoadingWorkspaces = false)
                     }
                 }
             } catch (e: Exception) {
                 _uiState.update {
-                    it.copy(isLoadingProjects = false, error = "Failed to load projects: ${e.message}")
+                    it.copy(isLoadingWorkspaces = false, error = "Failed to load workspaces: ${e.message}")
                 }
             }
         }
     }
 
-    // The latest project list the agent sent, and the order a drop is saving.
+    // The latest workspace list the agent sent, and the order a drop is saving.
     // Both are touched only on viewModelScope's main dispatcher.
-    private var serverProjects: List<ProjectInfo> = emptyList()
-    private var pendingProjectOrder: List<String>? = null
-    private val projectOrderMutex = Mutex()
+    private var serverWorkspaces: List<WorkspaceInfo> = emptyList()
+    private var pendingWorkspaceOrder: List<String>? = null
+    private val workspaceOrderMutex = Mutex()
 
     /**
-     * [serverProjects] in the order to show: the server's own, or the order a
+     * [serverWorkspaces] in the order to show: the server's own, or the order a
      * save in flight carries until the server's list matches it.
      */
-    private fun displayProjects(): List<ProjectInfo> {
-        val sorted = serverProjects.sortedBy { it.order }
-        val pending = pendingProjectOrder ?: return sorted
+    private fun displayWorkspaces(): List<WorkspaceInfo> {
+        val sorted = serverWorkspaces.sortedBy { it.order }
+        val pending = pendingWorkspaceOrder ?: return sorted
         if (sorted.map { it.name } == pending) {
-            pendingProjectOrder = null
+            pendingWorkspaceOrder = null
             return sorted
         }
         val rank = pending.withIndex().associate { (index, name) -> name to index }
         return sorted.sortedBy { rank[it.name] ?: Int.MAX_VALUE }
     }
 
-    /** Move one project row by index — the accessibility "Move up / down" path. */
-    fun moveProject(from: Int, to: Int) {
-        val names = _uiState.value.projects.map { it.name }
+    /** Move one workspace row by index — the accessibility "Move up / down" path. */
+    fun moveWorkspace(from: Int, to: Int) {
+        val names = _uiState.value.workspaces.map { it.name }
         if (from !in names.indices || to !in names.indices || from == to) return
-        reorderProjects(names.toMutableList().apply { add(to, removeAt(from)) })
+        reorderWorkspaces(names.toMutableList().apply { add(to, removeAt(from)) })
     }
 
     /**
-     * Save a new project order (the agent's own, so every client shows it) and
+     * Save a new workspace order (the agent's own, so every client shows it) and
      * show it at once. Saves run one at a time, and finish even if the user
      * leaves the wizard right after the drop.
      */
-    fun reorderProjects(names: List<String>) {
-        if (names == _uiState.value.projects.map { it.name }) return
-        pendingProjectOrder = names
-        _uiState.update { it.copy(projects = displayProjects()) }
+    fun reorderWorkspaces(names: List<String>) {
+        if (names == _uiState.value.workspaces.map { it.name }) return
+        pendingWorkspaceOrder = names
+        _uiState.update { it.copy(workspaces = displayWorkspaces()) }
         viewModelScope.launch {
             try {
                 val saved = withContext(NonCancellable) {
-                    projectOrderMutex.withLock { projectsRepository.reorderProjects(names) }
+                    workspaceOrderMutex.withLock { workspacesRepository.reorderWorkspaces(names) }
                 }
                 // The answer is the agent's re-sorted list; take it rather than
                 // wait for the `projects.changed` echo, which a down events
                 // socket would never deliver.
-                serverProjects = saved
-                if (pendingProjectOrder == names) pendingProjectOrder = null
-                _uiState.update { it.copy(projects = displayProjects()) }
+                serverWorkspaces = saved
+                if (pendingWorkspaceOrder == names) pendingWorkspaceOrder = null
+                _uiState.update { it.copy(workspaces = displayWorkspaces()) }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                if (pendingProjectOrder == names) {
-                    pendingProjectOrder = null
-                    _uiState.update { it.copy(projects = displayProjects()) }
+                if (pendingWorkspaceOrder == names) {
+                    pendingWorkspaceOrder = null
+                    _uiState.update { it.copy(workspaces = displayWorkspaces()) }
                     _transientMessages.tryEmit("Reorder failed — reverted.")
                 }
             }
@@ -892,11 +892,11 @@ class CreateSessionViewModel @Inject constructor(
         }
     }
 
-    fun selectProject(name: String) {
+    fun selectWorkspace(name: String) {
         _uiState.update {
-            val isGit = it.projects.firstOrNull { p -> p.name == name }?.is_git == true
+            val isGit = it.workspaces.firstOrNull { p -> p.name == name }?.is_git == true
             it.withBaseBranchesFor(name).copy(
-                selection = ProjectSelection.Stored(name),
+                selection = WorkspaceSelection.Stored(name),
                 customPathDraft = "",
                 customPathError = null,
                 worktree = if (isGit) it.worktree else false,
@@ -907,18 +907,18 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     /**
-     * Called after `ProjectsViewModel.projectCreated` emits — uses the new
-     * project's own `is_git` directly rather than looking it up in
-     * `state.projects`, which has not yet been refreshed by the
-     * `AgentEvent.ProjectsChanged` bus event.
+     * Called after `WorkspacesViewModel.workspaceCreated` emits — uses the new
+     * workspace's own `is_git` directly rather than looking it up in
+     * `state.workspaces`, which has not yet been refreshed by the
+     * `AgentEvent.WorkspacesChanged` bus event.
      */
-    fun onProjectCreated(project: ProjectInfo) = _uiState.update {
-        it.withBaseBranchesFor(project.name).copy(
-            selection = ProjectSelection.Stored(project.name),
+    fun onWorkspaceCreated(workspace: WorkspaceInfo) = _uiState.update {
+        it.withBaseBranchesFor(workspace.name).copy(
+            selection = WorkspaceSelection.Stored(workspace.name),
             customPathDraft = "",
             customPathError = null,
-            worktree = if (project.is_git) it.worktree else false,
-            branchName = if (project.is_git) it.branchName else "",
+            worktree = if (workspace.is_git) it.worktree else false,
+            branchName = if (workspace.is_git) it.branchName else "",
         )
     }
 
@@ -930,10 +930,10 @@ class CreateSessionViewModel @Inject constructor(
      * must not wipe a path the user has typed (iOS `selectCustomPath`).
      */
     fun selectCustomPath() {
-        if (_uiState.value.selection !is ProjectSelection.CustomPath) {
+        if (_uiState.value.selection !is WorkspaceSelection.CustomPath) {
             _uiState.update {
                 it.withBaseBranchesFor(null).copy(
-                    selection = ProjectSelection.CustomPath(""),
+                    selection = WorkspaceSelection.CustomPath(""),
                     customPathDraft = "",
                     customPathError = null,
                     worktree = false,
@@ -966,9 +966,9 @@ class CreateSessionViewModel @Inject constructor(
             // CreateSessionModel.setCustomPath does the same), and loses the
             // trailing separator a picked folder suggestion leaves behind.
             selection = if (error == null && value.isNotBlank()) {
-                ProjectSelection.CustomPath(PathCompletion.trimTrailingSeparator(value.trim()))
+                WorkspaceSelection.CustomPath(PathCompletion.trimTrailingSeparator(value.trim()))
             } else {
-                ProjectSelection.CustomPath("")
+                WorkspaceSelection.CustomPath("")
             },
         )
     }
@@ -999,16 +999,16 @@ class CreateSessionViewModel @Inject constructor(
         }
     }
 
-    fun confirmProject() = _uiState.update { state ->
+    fun confirmWorkspace() = _uiState.update { state ->
         when (val sel = state.selection) {
-            is ProjectSelection.Stored -> state.copy(step = CreateSessionStep.ModePick)
-            is ProjectSelection.CustomPath ->
+            is WorkspaceSelection.Stored -> state.copy(step = CreateSessionStep.ModePick)
+            is WorkspaceSelection.CustomPath ->
                 if (sel.path.isNotBlank() && state.customPathError == null) {
                     state.copy(step = CreateSessionStep.ModePick)
                 } else {
                     state
                 }
-            ProjectSelection.None -> state
+            WorkspaceSelection.None -> state
         }
     }
 
@@ -1195,15 +1195,15 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     /**
-     * Commit the mode picker's Terminal card. A stored git project
+     * Commit the mode picker's Terminal card. A stored git workspace
      * opens the Terminal session page (worktree toggle); anything else
-     * (non-git project, custom path) has nothing to configure, so the shell
+     * (non-git workspace, custom path) has nothing to configure, so the shell
      * session is created immediately rather than showing an empty sheet.
      */
     fun selectTerminalMode() {
         val state = _uiState.value
-        val storedGit = (state.selection as? ProjectSelection.Stored)?.let { sel ->
-            state.projects.firstOrNull { it.name == sel.name }?.is_git == true
+        val storedGit = (state.selection as? WorkspaceSelection.Stored)?.let { sel ->
+            state.workspaces.firstOrNull { it.name == sel.name }?.is_git == true
         } ?: false
         if (storedGit) {
             _uiState.update { it.copy(step = CreateSessionStep.TerminalConfig) }
@@ -1215,13 +1215,13 @@ class CreateSessionViewModel @Inject constructor(
     /**
      * Commit the mode picker's card for a custom agent type. Identical flow to
      * [selectTerminalMode] — custom types are plain-terminal sessions, so a
-     * stored git project opens the Terminal config page (worktree toggle) and
+     * stored git workspace opens the Terminal config page (worktree toggle) and
      * anything else launches immediately.
      */
     fun selectCustomAgentMode(typeId: String) {
         val state = _uiState.value
-        val storedGit = (state.selection as? ProjectSelection.Stored)?.let { sel ->
-            state.projects.firstOrNull { it.name == sel.name }?.is_git == true
+        val storedGit = (state.selection as? WorkspaceSelection.Stored)?.let { sel ->
+            state.workspaces.firstOrNull { it.name == sel.name }?.is_git == true
         } ?: false
         if (storedGit) {
             _uiState.update { it.copy(step = CreateSessionStep.TerminalConfig) }
@@ -1243,21 +1243,21 @@ class CreateSessionViewModel @Inject constructor(
 
     fun selectAutoScanMode() = _uiState.update {
         if (!it.claudeEnabled) return@update it
-        val projectName = it.selectedProjectName
-        if (projectName != null && it.autoScanConfigInitializedFor == projectName) {
-            // Already seeded for this project — keep the user's in-flight edits.
+        val workspaceName = it.selectedWorkspaceName
+        if (workspaceName != null && it.autoScanConfigInitializedFor == workspaceName) {
+            // Already seeded for this workspace — keep the user's in-flight edits.
             it.copy(step = CreateSessionStep.AutoScanConfig)
         } else {
-            // First entry for this project, or the selected project changed since
-            // the last entry: (re-)seed from this project's last-saved Auto Scan
+            // First entry for this workspace, or the selected workspace changed since
+            // the last entry: (re-)seed from this workspace's last-saved Auto Scan
             // prompt (persisted server-side on the previous scan start, delivered
-            // via ProjectInfo); fall back to the agent-wide default, then empty.
-            val savedPrompt = projectName
-                ?.let { name -> it.projects.firstOrNull { p -> p.name == name } }
+            // via WorkspaceInfo); fall back to the agent-wide default, then empty.
+            val savedPrompt = workspaceName
+                ?.let { name -> it.workspaces.firstOrNull { p -> p.name == name } }
                 ?.auto_scan_prompt
             it.copy(
                 step = CreateSessionStep.AutoScanConfig,
-                autoScanConfigInitializedFor = projectName,
+                autoScanConfigInitializedFor = workspaceName,
                 initialPrompt = savedPrompt ?: autoScanRepository.getAutoScanPrompt() ?: "",
             )
         }
@@ -1265,7 +1265,7 @@ class CreateSessionViewModel @Inject constructor(
 
     fun submitAutoScan() {
         val state = _uiState.value
-        val projectName = (state.selection as? ProjectSelection.Stored)?.name ?: return
+        val workspaceName = (state.selection as? WorkspaceSelection.Stored)?.name ?: return
         viewModelScope.launch {
             _uiState.update { it.copy(autoScanStarting = true) }
             try {
@@ -1283,11 +1283,11 @@ class CreateSessionViewModel @Inject constructor(
                     worktree = true,
                     initial_prompt = state.initialPrompt.takeIf { it.isNotBlank() },
                 )
-                autoScanRepository.startScan(projectName, options)
-                preferencesStore.setLastUsedProjectName(projectName)
+                autoScanRepository.startScan(workspaceName, options)
+                preferencesStore.setLastUsedWorkspaceName(workspaceName)
                 preferencesStore.setLastUsedAutoScanOptions(state.toAutoScanLaunchPrefs())
                 _uiState.update { it.copy(autoScanStarting = false) }
-                _navigateToAutoScan.tryEmit(projectName)
+                _navigateToAutoScan.tryEmit(workspaceName)
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -1311,10 +1311,10 @@ class CreateSessionViewModel @Inject constructor(
             CreateSessionStep.AutoScanConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.TerminalConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.ModePick -> it.copy(
-                step = CreateSessionStep.ProjectSelect,
+                step = CreateSessionStep.WorkspaceSelect,
                 selectedMode = null,
             )
-            CreateSessionStep.ProjectSelect -> it
+            CreateSessionStep.WorkspaceSelect -> it
         }
     }
 
@@ -1406,31 +1406,31 @@ class CreateSessionViewModel @Inject constructor(
     private fun ensureBaseBranches(force: Boolean = false) {
         val state = _uiState.value
         if (!state.showBaseBranchPicker) return
-        val project = state.selectedProjectName ?: return
-        val current = state.baseBranchesProject == project &&
+        val workspace = state.selectedWorkspaceName ?: return
+        val current = state.baseBranchesWorkspace == workspace &&
             (state.baseBranches is BaseBranchesLoad.Loading || state.baseBranches is BaseBranchesLoad.Loaded)
         if (current && !force) return
-        loadBaseBranches(project, silent = false)
+        loadBaseBranches(workspace, silent = false)
     }
 
     /** [silent] keeps the shown list while it reloads and keeps it on a failure. */
-    private fun loadBaseBranches(project: String, silent: Boolean) {
+    private fun loadBaseBranches(workspace: String, silent: Boolean) {
         baseBranchesJob?.cancel()
         if (!silent) {
             _uiState.update {
-                it.copy(baseBranches = BaseBranchesLoad.Loading, baseBranchesProject = project)
+                it.copy(baseBranches = BaseBranchesLoad.Loading, baseBranchesWorkspace = workspace)
             }
         }
         baseBranchesJob = viewModelScope.launch {
             val response = try {
-                gitRepository.worktreeBases(project)
+                gitRepository.worktreeBases(workspace)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
                 null
             }
             _uiState.update { state ->
-                if (state.baseBranchesProject != project) return@update state
+                if (state.baseBranchesWorkspace != workspace) return@update state
                 when {
                     response != null -> {
                         val keepPick = state.baseBranchPicked &&
@@ -1448,13 +1448,13 @@ class CreateSessionViewModel @Inject constructor(
         }
     }
 
-    /** Drops the base-branch list and the pick when the selection leaves its project. */
-    private fun CreateSessionUiState.withBaseBranchesFor(project: String?): CreateSessionUiState {
-        if (project != null && project == selectedProjectName) return this
+    /** Drops the base-branch list and the pick when the selection leaves its workspace. */
+    private fun CreateSessionUiState.withBaseBranchesFor(workspace: String?): CreateSessionUiState {
+        if (workspace != null && workspace == selectedWorkspaceName) return this
         baseBranchesJob?.cancel()
         return copy(
             baseBranches = BaseBranchesLoad.Idle,
-            baseBranchesProject = null,
+            baseBranchesWorkspace = null,
             baseBranch = null,
             baseBranchPicked = false,
         )
@@ -1542,45 +1542,45 @@ class CreateSessionViewModel @Inject constructor(
             base_branch = state.effectiveBaseBranch,
         )
         when (val sel = state.selection) {
-            is ProjectSelection.Stored -> submitSession(
+            is WorkspaceSelection.Stored -> submitSession(
                 selection = sel,
                 request = CreateSessionRequest(
-                    project_name = sel.name,
+                    workspace_name = sel.name,
                     claude_options = claudeOptions,
                     ui = ui,
                 ),
             )
-            is ProjectSelection.CustomPath -> {
+            is WorkspaceSelection.CustomPath -> {
                 if (sel.path.isBlank() || state.customPathError != null) return
                 submitSession(
                     selection = sel,
                     request = CreateSessionRequest(
-                        project_name = null,
+                        workspace_name = null,
                         cwd = sel.path,
                         claude_options = claudeOptions.copy(worktree = false, branch_name = null, base_branch = null),
                         ui = ui,
                     ),
                 )
             }
-            ProjectSelection.None -> Unit
+            WorkspaceSelection.None -> Unit
         }
     }
 
     /**
      * Continue a stored Claude Code, Codex, Antigravity, OpenCode, Copilot, Cursor or Pi session ([kind])
      * in a new chat session: the agent's current options without a worktree, in the
-     * selected project when its folder is the row's folder, otherwise in the
+     * selected workspace when its folder is the row's folder, otherwise in the
      * row's folder.
      */
     fun resumeChatSession(kind: String, row: ChatStoredSession) {
         val state = _uiState.value
         if (state.submitting) return
-        val project = (state.selection as? ProjectSelection.Stored)?.let { sel ->
-            state.projects.firstOrNull { it.name == sel.name }
+        val workspace = (state.selection as? WorkspaceSelection.Stored)?.let { sel ->
+            state.workspaces.firstOrNull { it.name == sel.name }
         }?.takeIf { samePath(it.path, row.cwd) }
         val base = CreateSessionRequest(
-            project_name = project?.name,
-            cwd = if (project == null) row.cwd else null,
+            workspace_name = workspace?.name,
+            cwd = if (workspace == null) row.cwd else null,
             ui = SessionResponse.UI_CHAT,
             chat_resume_id = row.session_id,
         )
@@ -1629,7 +1629,7 @@ class CreateSessionViewModel @Inject constructor(
             )
         }
         submitSession(
-            selection = if (project != null) ProjectSelection.Stored(project.name) else ProjectSelection.None,
+            selection = if (workspace != null) WorkspaceSelection.Stored(workspace.name) else WorkspaceSelection.None,
             request = request,
         )
     }
@@ -1719,21 +1719,21 @@ class CreateSessionViewModel @Inject constructor(
         )
         val ui = if (state.codexUsesChat) SessionResponse.UI_CHAT else SessionResponse.UI_TERMINAL
         when (val sel = state.selection) {
-            is ProjectSelection.Stored -> submitSession(
+            is WorkspaceSelection.Stored -> submitSession(
                 selection = sel,
                 request = CreateSessionRequest(
-                    project_name = sel.name,
+                    workspace_name = sel.name,
                     cli = "codex",
                     codex_options = codexOptions,
                     ui = ui,
                 ),
             )
-            is ProjectSelection.CustomPath -> {
+            is WorkspaceSelection.CustomPath -> {
                 if (sel.path.isBlank() || state.customPathError != null) return
                 submitSession(
                     selection = sel,
                     request = CreateSessionRequest(
-                        project_name = null,
+                        workspace_name = null,
                         cwd = sel.path,
                         cli = "codex",
                         codex_options = codexOptions.copy(worktree = false, branch_name = null, base_branch = null),
@@ -1741,7 +1741,7 @@ class CreateSessionViewModel @Inject constructor(
                     ),
                 )
             }
-            ProjectSelection.None -> Unit
+            WorkspaceSelection.None -> Unit
         }
     }
 
@@ -1755,21 +1755,21 @@ class CreateSessionViewModel @Inject constructor(
         )
         val ui = if (state.antigravityUsesChat) SessionResponse.UI_CHAT else SessionResponse.UI_TERMINAL
         when (val sel = state.selection) {
-            is ProjectSelection.Stored -> submitSession(
+            is WorkspaceSelection.Stored -> submitSession(
                 selection = sel,
                 request = CreateSessionRequest(
-                    project_name = sel.name,
+                    workspace_name = sel.name,
                     cli = "antigravity",
                     antigravity_options = antigravityOptions,
                     ui = ui,
                 ),
             )
-            is ProjectSelection.CustomPath -> {
+            is WorkspaceSelection.CustomPath -> {
                 if (sel.path.isBlank() || state.customPathError != null) return
                 submitSession(
                     selection = sel,
                     request = CreateSessionRequest(
-                        project_name = null,
+                        workspace_name = null,
                         cwd = sel.path,
                         cli = "antigravity",
                         antigravity_options = antigravityOptions.copy(worktree = false, branch_name = null, base_branch = null),
@@ -1777,7 +1777,7 @@ class CreateSessionViewModel @Inject constructor(
                     ),
                 )
             }
-            ProjectSelection.None -> Unit
+            WorkspaceSelection.None -> Unit
         }
     }
 
@@ -1791,21 +1791,21 @@ class CreateSessionViewModel @Inject constructor(
         )
         val ui = if (state.opencodeUsesChat) SessionResponse.UI_CHAT else SessionResponse.UI_TERMINAL
         when (val sel = state.selection) {
-            is ProjectSelection.Stored -> submitSession(
+            is WorkspaceSelection.Stored -> submitSession(
                 selection = sel,
                 request = CreateSessionRequest(
-                    project_name = sel.name,
+                    workspace_name = sel.name,
                     cli = "opencode",
                     opencode_options = opencodeOptions,
                     ui = ui,
                 ),
             )
-            is ProjectSelection.CustomPath -> {
+            is WorkspaceSelection.CustomPath -> {
                 if (sel.path.isBlank() || state.customPathError != null) return
                 submitSession(
                     selection = sel,
                     request = CreateSessionRequest(
-                        project_name = null,
+                        workspace_name = null,
                         cwd = sel.path,
                         cli = "opencode",
                         opencode_options = opencodeOptions.copy(worktree = false, branch_name = null, base_branch = null),
@@ -1813,7 +1813,7 @@ class CreateSessionViewModel @Inject constructor(
                     ),
                 )
             }
-            ProjectSelection.None -> Unit
+            WorkspaceSelection.None -> Unit
         }
     }
 
@@ -1836,18 +1836,18 @@ class CreateSessionViewModel @Inject constructor(
             ui = SessionResponse.UI_TERMINAL,
         )
         when (val sel = state.selection) {
-            is ProjectSelection.Stored -> submitSession(
+            is WorkspaceSelection.Stored -> submitSession(
                 selection = sel,
-                request = request.copy(project_name = sel.name),
+                request = request.copy(workspace_name = sel.name),
             )
-            is ProjectSelection.CustomPath -> {
+            is WorkspaceSelection.CustomPath -> {
                 if (sel.path.isBlank() || state.customPathError != null) return
                 submitSession(
                     selection = sel,
-                    request = request.copy(project_name = null, cwd = sel.path),
+                    request = request.copy(workspace_name = null, cwd = sel.path),
                 )
             }
-            ProjectSelection.None -> Unit
+            WorkspaceSelection.None -> Unit
         }
     }
 
@@ -1861,21 +1861,21 @@ class CreateSessionViewModel @Inject constructor(
         )
         val ui = if (state.copilotUsesChat) SessionResponse.UI_CHAT else SessionResponse.UI_TERMINAL
         when (val sel = state.selection) {
-            is ProjectSelection.Stored -> submitSession(
+            is WorkspaceSelection.Stored -> submitSession(
                 selection = sel,
                 request = CreateSessionRequest(
-                    project_name = sel.name,
+                    workspace_name = sel.name,
                     cli = "copilot",
                     copilot_options = copilotOptions,
                     ui = ui,
                 ),
             )
-            is ProjectSelection.CustomPath -> {
+            is WorkspaceSelection.CustomPath -> {
                 if (sel.path.isBlank() || state.customPathError != null) return
                 submitSession(
                     selection = sel,
                     request = CreateSessionRequest(
-                        project_name = null,
+                        workspace_name = null,
                         cwd = sel.path,
                         cli = "copilot",
                         copilot_options = copilotOptions.copy(worktree = false, branch_name = null, base_branch = null),
@@ -1883,7 +1883,7 @@ class CreateSessionViewModel @Inject constructor(
                     ),
                 )
             }
-            ProjectSelection.None -> Unit
+            WorkspaceSelection.None -> Unit
         }
     }
 
@@ -1897,21 +1897,21 @@ class CreateSessionViewModel @Inject constructor(
         )
         val ui = if (state.cursorUsesChat) SessionResponse.UI_CHAT else SessionResponse.UI_TERMINAL
         when (val sel = state.selection) {
-            is ProjectSelection.Stored -> submitSession(
+            is WorkspaceSelection.Stored -> submitSession(
                 selection = sel,
                 request = CreateSessionRequest(
-                    project_name = sel.name,
+                    workspace_name = sel.name,
                     cli = "cursor",
                     cursor_options = cursorOptions,
                     ui = ui,
                 ),
             )
-            is ProjectSelection.CustomPath -> {
+            is WorkspaceSelection.CustomPath -> {
                 if (sel.path.isBlank() || state.customPathError != null) return
                 submitSession(
                     selection = sel,
                     request = CreateSessionRequest(
-                        project_name = null,
+                        workspace_name = null,
                         cwd = sel.path,
                         cli = "cursor",
                         cursor_options = cursorOptions.copy(worktree = false, branch_name = null, base_branch = null),
@@ -1919,7 +1919,7 @@ class CreateSessionViewModel @Inject constructor(
                     ),
                 )
             }
-            ProjectSelection.None -> Unit
+            WorkspaceSelection.None -> Unit
         }
     }
 
@@ -1933,21 +1933,21 @@ class CreateSessionViewModel @Inject constructor(
         )
         val ui = if (state.piUsesChat) SessionResponse.UI_CHAT else SessionResponse.UI_TERMINAL
         when (val sel = state.selection) {
-            is ProjectSelection.Stored -> submitSession(
+            is WorkspaceSelection.Stored -> submitSession(
                 selection = sel,
                 request = CreateSessionRequest(
-                    project_name = sel.name,
+                    workspace_name = sel.name,
                     cli = "pi",
                     pi_options = piOptions,
                     ui = ui,
                 ),
             )
-            is ProjectSelection.CustomPath -> {
+            is WorkspaceSelection.CustomPath -> {
                 if (sel.path.isBlank() || state.customPathError != null) return
                 submitSession(
                     selection = sel,
                     request = CreateSessionRequest(
-                        project_name = null,
+                        workspace_name = null,
                         cwd = sel.path,
                         cli = "pi",
                         pi_options = piOptions.copy(worktree = false, branch_name = null, base_branch = null),
@@ -1955,7 +1955,7 @@ class CreateSessionViewModel @Inject constructor(
                     ),
                 )
             }
-            ProjectSelection.None -> Unit
+            WorkspaceSelection.None -> Unit
         }
     }
 
@@ -2031,10 +2031,10 @@ class CreateSessionViewModel @Inject constructor(
         val state = _uiState.value
         if (state.submitting) return
         when (val sel = state.selection) {
-            is ProjectSelection.Stored -> submitSession(
+            is WorkspaceSelection.Stored -> submitSession(
                 selection = sel,
                 request = CreateSessionRequest(
-                    project_name = sel.name,
+                    workspace_name = sel.name,
                     command = null,
                     cli = cli,
                     claude_options = null,
@@ -2043,12 +2043,12 @@ class CreateSessionViewModel @Inject constructor(
                     base_branch = state.effectiveBaseBranch,
                 ),
             )
-            is ProjectSelection.CustomPath -> {
+            is WorkspaceSelection.CustomPath -> {
                 if (sel.path.isBlank() || state.customPathError != null) return
                 submitSession(
                     selection = sel,
                     request = CreateSessionRequest(
-                        project_name = null,
+                        workspace_name = null,
                         cwd = sel.path,
                         command = null,
                         cli = cli,
@@ -2058,7 +2058,7 @@ class CreateSessionViewModel @Inject constructor(
                     ),
                 )
             }
-            ProjectSelection.None -> Unit
+            WorkspaceSelection.None -> Unit
         }
     }
 
@@ -2192,24 +2192,24 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     /** The Codex resume that hit `codex_auth_required`, re-sent after the sign-in. */
-    private var pendingCodexResume: Pair<ProjectSelection, CreateSessionRequest>? = null
+    private var pendingCodexResume: Pair<WorkspaceSelection, CreateSessionRequest>? = null
 
-    private fun submitSession(selection: ProjectSelection, request: CreateSessionRequest) {
+    private fun submitSession(selection: WorkspaceSelection, request: CreateSessionRequest) {
         viewModelScope.launch {
             _uiState.update { it.copy(submitting = true) }
             try {
                 val response = sessionRepository.createSession(request)
                 when (selection) {
-                    is ProjectSelection.Stored -> {
-                        preferencesStore.setLastUsedProjectName(selection.name)
+                    is WorkspaceSelection.Stored -> {
+                        preferencesStore.setLastUsedWorkspaceName(selection.name)
                     }
-                    is ProjectSelection.CustomPath -> {
+                    is WorkspaceSelection.CustomPath -> {
                         val scope = agentScopeKey()
                         if (scope != null) {
                             preferencesStore.addRecentCustomPath(scope, selection.path)
                         }
                     }
-                    ProjectSelection.None -> Unit
+                    WorkspaceSelection.None -> Unit
                 }
                 // Remember the per-CLI launch controls for the next session of
                 // the same kind. The request shape selects which blob to write:
@@ -2283,7 +2283,7 @@ class CreateSessionViewModel @Inject constructor(
                     // launch — refresh so the stale card disappears. Keyed on
                     // the relay's exact detail string, not the status alone: a
                     // custom launch can also 404 for a concurrently-deleted
-                    // project (agent-side "Project 'X' not found"), which must
+                    // workspace (agent-side "Workspace 'X' not found"), which must
                     // fall through to the generic message below. If the relay
                     // string ever changes this degrades to the generic path.
                     _uiState.update {

@@ -34,10 +34,10 @@ import com.mobaide.app.data.network.dto.GitRebaseResponse
 import com.mobaide.app.data.network.dto.GitStatusResponse
 import com.mobaide.app.data.network.dto.LinearLabelDto
 import com.mobaide.app.data.network.dto.LinearStateDto
-import com.mobaide.app.data.network.dto.ProjectInfo
-import com.mobaide.app.data.network.dto.ProjectOrderRequest
-import com.mobaide.app.data.network.dto.ProjectUpdate
-import com.mobaide.app.data.network.dto.ProjectWrite
+import com.mobaide.app.data.network.dto.WorkspaceInfo
+import com.mobaide.app.data.network.dto.WorkspaceOrderRequest
+import com.mobaide.app.data.network.dto.WorkspaceUpdate
+import com.mobaide.app.data.network.dto.WorkspaceWrite
 import com.mobaide.app.data.network.dto.RunNowRequest
 import com.mobaide.app.data.network.dto.RunNowResponse
 import com.mobaide.app.data.network.dto.ScrollbackResponse
@@ -88,11 +88,11 @@ class RestApi(
     // SessionResponse.kind's default instead of throwing.
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
 
-    // Dedicated encoder for `ProjectUpdate`: `explicitNulls = false` +
+    // Dedicated encoder for `WorkspaceUpdate`: `explicitNulls = false` +
     // `encodeDefaults = false` drop null/default fields from the wire, so the
     // server's "omitted = keep existing value" three-state semantics (rename,
     // linear_api_key, conda_env, default_flags) work correctly. Do NOT use
-    // this for `ProjectWrite`: we want `default_flags = emptyMap()` to be
+    // this for `WorkspaceWrite`: we want `default_flags = emptyMap()` to be
     // encoded as `"default_flags": {}`, not dropped.
     private val jsonForUpdate = Json {
         ignoreUnknownKeys = true
@@ -200,7 +200,7 @@ class RestApi(
         return execute(request)
     }
 
-    suspend fun getProjects(): List<ProjectInfo> {
+    suspend fun getWorkspaces(): List<WorkspaceInfo> {
         val request = Request.Builder()
             .url("${baseUrl()}/api/projects")
             .get()
@@ -208,7 +208,7 @@ class RestApi(
         return execute(request)
     }
 
-    suspend fun createProject(body: ProjectWrite): ProjectInfo {
+    suspend fun createWorkspace(body: WorkspaceWrite): WorkspaceInfo {
         val payload = json.encodeToString(body).toRequestBody(jsonMediaType)
         val request = Request.Builder()
             .url("${baseUrl()}/api/projects")
@@ -217,7 +217,7 @@ class RestApi(
         return execute(request)
     }
 
-    suspend fun updateProject(currentName: String, body: ProjectUpdate): ProjectInfo {
+    suspend fun updateWorkspace(currentName: String, body: WorkspaceUpdate): WorkspaceInfo {
         val payload = jsonForUpdate.encodeToString(body).toRequestBody(jsonMediaType)
         val request = Request.Builder()
             .url("${baseUrl()}/api/projects/${encodePathSegment(currentName)}")
@@ -226,7 +226,7 @@ class RestApi(
         return execute(request)
     }
 
-    suspend fun deleteProject(name: String) {
+    suspend fun deleteWorkspace(name: String) {
         val request = Request.Builder()
             .url("${baseUrl()}/api/projects/${encodePathSegment(name)}")
             .delete()
@@ -234,7 +234,7 @@ class RestApi(
         executeRaw(request)
     }
 
-    suspend fun reorderProjects(body: ProjectOrderRequest): List<ProjectInfo> {
+    suspend fun reorderWorkspaces(body: WorkspaceOrderRequest): List<WorkspaceInfo> {
         val payload = json.encodeToString(body).toRequestBody(jsonMediaType)
         val request = Request.Builder()
             .url("${baseUrl()}/api/projects/order")
@@ -243,17 +243,17 @@ class RestApi(
         return execute(request)
     }
 
-    suspend fun getLinearLabels(projectName: String): List<LinearLabelDto> {
+    suspend fun getLinearLabels(workspaceName: String): List<LinearLabelDto> {
         val request = Request.Builder()
-            .url("${baseUrl()}/api/projects/${encodePathSegment(projectName)}/linear/labels")
+            .url("${baseUrl()}/api/projects/${encodePathSegment(workspaceName)}/linear/labels")
             .get()
             .build()
         return execute(request)
     }
 
-    suspend fun getLinearStates(projectName: String): List<LinearStateDto> {
+    suspend fun getLinearStates(workspaceName: String): List<LinearStateDto> {
         val request = Request.Builder()
-            .url("${baseUrl()}/api/projects/${encodePathSegment(projectName)}/linear/states")
+            .url("${baseUrl()}/api/projects/${encodePathSegment(workspaceName)}/linear/states")
             .get()
             .build()
         return execute(request)
@@ -265,34 +265,34 @@ class RestApi(
     // Always asks for the remote-tracking rows: the flag shields *older
     // clients* from a kind they would offer for delete, and an older agent
     // ignores it.
-    suspend fun getGitItems(projectName: String): GitItemsResponse {
-        val url = projectGitUrl(projectName, "items")
+    suspend fun getGitItems(workspaceName: String): GitItemsResponse {
+        val url = workspaceGitUrl(workspaceName, "items")
             .addQueryParameter("remote", "true")
             .build()
         return execute(Request.Builder().url(url).get().build())
     }
 
-    /** Cancellable: the new-session wizard drops a listing when the project changes. */
-    suspend fun getWorktreeBases(projectName: String): WorktreeBasesResponse {
-        val url = projectGitUrl(projectName, "worktree-bases").build()
+    /** Cancellable: the new-session wizard drops a listing when the workspace changes. */
+    suspend fun getWorktreeBases(workspaceName: String): WorktreeBasesResponse {
+        val url = workspaceGitUrl(workspaceName, "worktree-bases").build()
         return executeCancellable(Request.Builder().url(url).get().build())
     }
 
     suspend fun createGitBranch(
-        projectName: String,
+        workspaceName: String,
         body: GitBranchCreateRequest,
     ): GitBranchResponse {
         val payload = json.encodeToString(body).toRequestBody(jsonMediaType)
-        val url = projectGitUrl(projectName, "branches").build()
+        val url = workspaceGitUrl(workspaceName, "branches").build()
         return execute(Request.Builder().url(url).post(payload).build())
     }
 
     suspend fun checkoutGitRef(
-        projectName: String,
+        workspaceName: String,
         body: GitCheckoutRequest,
     ): GitBranchResponse {
         val payload = json.encodeToString(body).toRequestBody(jsonMediaType)
-        val url = projectGitUrl(projectName, "checkout").build()
+        val url = workspaceGitUrl(workspaceName, "checkout").build()
         return execute(Request.Builder().url(url).post(payload).build())
     }
 
@@ -308,21 +308,21 @@ class RestApi(
         return executeCancellable(Request.Builder().url(url).get().build())
     }
 
-    private fun projectGitUrl(projectName: String, leaf: String): HttpUrl.Builder =
+    private fun workspaceGitUrl(workspaceName: String, leaf: String): HttpUrl.Builder =
         baseUrl().toHttpUrl().newBuilder()
             .addPathSegment("api")
             .addPathSegment("projects")
-            .addPathSegment(projectName)
+            .addPathSegment(workspaceName)
             .addPathSegment("git")
             .addPathSegment(leaf)
 
     suspend fun deleteGitItems(
-        projectName: String,
+        workspaceName: String,
         body: GitDeleteRequest,
     ): GitDeleteResponse {
         val payload = json.encodeToString(body).toRequestBody(jsonMediaType)
         val request = Request.Builder()
-            .url("${baseUrl()}/api/projects/${encodePathSegment(projectName)}/git/items:delete")
+            .url("${baseUrl()}/api/projects/${encodePathSegment(workspaceName)}/git/items:delete")
             .post(payload)
             .build()
         return execute(request)
@@ -527,8 +527,8 @@ class RestApi(
         return execute(request)
     }
 
-    suspend fun startAutoScan(projectName: String, claudeOptions: ClaudeOptionsModel? = null) {
-        val body = json.encodeToString(StartScanRequest(projectName, claudeOptions))
+    suspend fun startAutoScan(workspaceName: String, claudeOptions: ClaudeOptionsModel? = null) {
+        val body = json.encodeToString(StartScanRequest(workspaceName, claudeOptions))
             .toRequestBody(jsonMediaType)
         val request = Request.Builder()
             .url("${baseUrl()}/api/autoscan/start")
@@ -537,8 +537,8 @@ class RestApi(
         executeRaw(request)
     }
 
-    suspend fun stopAutoScan(projectName: String) {
-        val body = json.encodeToString(StopScanRequest(projectName))
+    suspend fun stopAutoScan(workspaceName: String) {
+        val body = json.encodeToString(StopScanRequest(workspaceName))
             .toRequestBody(jsonMediaType)
         val request = Request.Builder()
             .url("${baseUrl()}/api/autoscan/stop")
@@ -547,8 +547,8 @@ class RestApi(
         executeRaw(request)
     }
 
-    suspend fun runAutoScanNow(projectName: String): RunNowResponse {
-        val body = json.encodeToString(RunNowRequest(projectName))
+    suspend fun runAutoScanNow(workspaceName: String): RunNowResponse {
+        val body = json.encodeToString(RunNowRequest(workspaceName))
             .toRequestBody(jsonMediaType)
         val request = Request.Builder()
             .url("${baseUrl()}/api/autoscan/run-now")

@@ -13,7 +13,7 @@ final class GitRebaseModelTests: XCTestCase {
     }
 
     private func makeModel(
-        projectName: String? = "proj",
+        workspaceName: String? = "proj",
         openRebase: Bool = false
     ) -> GitChangesModel {
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
@@ -33,7 +33,7 @@ final class GitRebaseModelTests: XCTestCase {
             sessionId: "s1",
             agentAPI: agentAPI,
             agentEventBus: bus,
-            projectName: { projectName },
+            workspaceName: { workspaceName },
             sleeper: ManualSleeper(),
             openRebase: openRebase
         )
@@ -45,10 +45,10 @@ final class GitRebaseModelTests: XCTestCase {
     /// load's traffic already forgotten.
     private func loadedModel(
         _ fixture: String,
-        projectName: String? = nil,
+        workspaceName: String? = nil,
         git: String? = nil
     ) async throws -> GitChangesModel {
-        let model = makeModel(projectName: projectName)
+        let model = makeModel(workspaceName: workspaceName)
         StubURLProtocol.enqueue(
             status: 200,
             body: #"{"name":"mobaide-agent","server_version":"1.4.0","protocol_versions":[7],"min_client_version":1,"capabilities":{"git":\#(git ?? allGit)}}"#
@@ -60,7 +60,7 @@ final class GitRebaseModelTests: XCTestCase {
         return model
     }
 
-    /// The sheet open on a session without a project, its target list settled.
+    /// The sheet open on a session without a workspace, its target list settled.
     private func openTypedSheet(_ model: GitChangesModel) async {
         model.openRebase()
         await waitUntil { model.rebaseSheet?.targets == .typed }
@@ -88,8 +88,8 @@ final class GitRebaseModelTests: XCTestCase {
 
     // MARK: - Sheet
 
-    func testOpenRebaseListsTheProjectsBranchesWithRemotesAndCloseDropsIt() async throws {
-        let model = makeModel(projectName: "proj")
+    func testOpenRebaseListsTheWorkspacesBranchesWithRemotesAndCloseDropsIt() async throws {
+        let model = makeModel(workspaceName: "proj")
         StubURLProtocol.enqueue(
             status: 200,
             body: #"{"items":[{"kind":"branch_only","branch":"main"},{"kind":"remote_branch","branch":"origin/main","remote":"origin"}]}"#
@@ -112,13 +112,13 @@ final class GitRebaseModelTests: XCTestCase {
         XCTAssertNil(model.rebaseSheet)
     }
 
-    func testOpenRebaseTypesTheRefWithoutAProjectOrWhenTheListFails() async throws {
-        let noProject = makeModel(projectName: nil)
-        await openTypedSheet(noProject)
-        XCTAssertEqual(noProject.rebaseSheet?.targets, .typed)
-        XCTAssertTrue(StubURLProtocol.requests.isEmpty, "no project, no branch list")
+    func testOpenRebaseTypesTheRefWithoutAWorkspaceOrWhenTheListFails() async throws {
+        let noWorkspace = makeModel(workspaceName: nil)
+        await openTypedSheet(noWorkspace)
+        XCTAssertEqual(noWorkspace.rebaseSheet?.targets, .typed)
+        XCTAssertTrue(StubURLProtocol.requests.isEmpty, "no workspace, no branch list")
 
-        let failing = makeModel(projectName: "proj")
+        let failing = makeModel(workspaceName: "proj")
         StubURLProtocol.enqueue(status: 503, body: #"{"detail":"Agent is offline"}"#)
         failing.openRebase()
         await waitUntil { failing.rebaseSheet?.targets != .loading }
@@ -188,7 +188,7 @@ final class GitRebaseModelTests: XCTestCase {
     }
 
     func testCloseRebaseIsRefusedWhileStarting() async throws {
-        let model = makeModel(projectName: nil)
+        let model = makeModel(workspaceName: nil)
         await openTypedSheet(model)
         model.rebaseSheet?.isStarting = true
 

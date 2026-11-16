@@ -32,7 +32,7 @@ final class AppContainer {
     let foregroundSessionTracker: ForegroundSessionTracker
     let reviewPromptCoordinator: ReviewPromptCoordinator
     let sessionRepository: SessionRepository
-    let projectsRepository: ProjectsRepository
+    let workspacesRepository: WorkspacesRepository
     let voiceRepository: VoiceRepository
     let pathSuggestionRepository: PathSuggestionRepository
     let autoScanRepository: AutoScanRepository
@@ -246,7 +246,7 @@ final class AppContainer {
             let list = try? await agentAPI.listSessions()
             return list?.first(where: { $0.session_id == sessionId })?.kind
         }
-        self.projectsRepository = ProjectsRepository(
+        self.workspacesRepository = WorkspacesRepository(
             agentAPI: agentAPI,
             agentEventBus: agentEventBus
         )
@@ -373,7 +373,7 @@ final class AppContainer {
         Task { await versionGate.probe() }
         sessionRepository.start()
         chatSessionStore.start(sessions: sessionRepository.sessions())
-        projectsRepository.start()
+        workspacesRepository.start()
         voiceRepository.start()
         autoScanRepository.start()
         attentionCoordinator.start()

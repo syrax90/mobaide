@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { WorktreeBases } from '../../../api/gitRepository';
-import type { ProjectSummary } from '../../../api/projectRepository';
+import type { WorkspaceSummary } from '../../../api/workspaceRepository';
 import { agentVersionSchema, type AgentVersionInfo } from '../../../protocol/dto/agentVersion';
 import { ConfigStep, type WorktreeBasesView } from './ConfigStep';
 import {
@@ -12,7 +12,7 @@ import {
   wizardReducer,
 } from './wizardState';
 
-const gitProject: ProjectSummary = {
+const gitWorkspace: WorkspaceSummary = {
   name: 'mobaide',
   path: '/srv/mobaide',
   order: 0,
@@ -24,7 +24,7 @@ const gitProject: ProjectSummary = {
 
 const STATE: WizardState = {
   ...INITIAL_WIZARD_STATE,
-  selection: { kind: 'stored', name: gitProject.name },
+  selection: { kind: 'stored', name: gitWorkspace.name },
 };
 
 function renderStep(
@@ -39,7 +39,7 @@ function renderStep(
       mode={mode}
       state={state}
       selection={state.selection}
-      project={gitProject}
+      workspace={gitWorkspace}
       capabilities={capabilities}
       onContinueSession={onContinueSession}
       customTypes={[]}
@@ -383,7 +383,7 @@ describe('ConfigStep — worktree base branch', () => {
         mode={options.mode ?? 'claude'}
         state={state}
         selection={state.selection}
-        project={gitProject}
+        workspace={gitWorkspace}
         capabilities={options.capabilities}
         customTypes={[]}
         worktreeBases={{
@@ -444,10 +444,10 @@ describe('ConfigStep — worktree base branch', () => {
     expect(trigger()).toHaveTextContent('Default branch');
   });
 
-  it('shows a manual pick for this project over the preselection', () => {
+  it('shows a manual pick for this workspace over the preselection', () => {
     renderPicker({
       capabilities: CAPABLE,
-      state: { ...WORKTREE, worktreeBasePick: { projectName: gitProject.name, ref: 'wip' } },
+      state: { ...WORKTREE, worktreeBasePick: { workspaceName: gitWorkspace.name, ref: 'wip' } },
     });
     expect(trigger()).toHaveTextContent('wip');
   });
@@ -488,7 +488,7 @@ describe('ConfigStep — worktree base branch', () => {
 
     expect(actions).toContainEqual({
       type: 'setWorktreeBase',
-      pick: { projectName: gitProject.name, ref: 'origin/main' },
+      pick: { workspaceName: gitWorkspace.name, ref: 'origin/main' },
     });
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
     expect(trigger()).toHaveFocus();
@@ -501,7 +501,7 @@ describe('ConfigStep — worktree base branch', () => {
     fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name: /Default branch/ }));
     expect(actions).toContainEqual({
       type: 'setWorktreeBase',
-      pick: { projectName: gitProject.name, ref: null },
+      pick: { workspaceName: gitWorkspace.name, ref: null },
     });
 
     fireEvent.click(trigger());

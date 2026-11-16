@@ -8,8 +8,8 @@ import type {
   SessionGitStatus,
 } from '../../../api/sessionGitRepository';
 
-// The project's branch rows, shadowed as in `GitScreen.test.tsx`: `items.list`
-// answers the listing (or `items.error` fails it) and every project it was
+// The workspace's branch rows, shadowed as in `GitScreen.test.tsx`: `items.list`
+// answers the listing (or `items.error` fails it) and every workspace it was
 // asked for is recorded.
 const items = vi.hoisted(() => ({
   list: [] as GitItem[],
@@ -21,8 +21,8 @@ vi.mock('../../../api/gitRepository', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../api/gitRepository')>();
   return {
     ...actual,
-    listGitItems: (_agentId: string, projectName: string) => {
-      items.asked.push(projectName);
+    listGitItems: (_agentId: string, workspaceName: string) => {
+      items.asked.push(workspaceName);
       return items.error === undefined ? Promise.resolve(items.list) : Promise.reject(items.error);
     },
   };
@@ -94,7 +94,7 @@ const renderDialog = (over: Partial<Props> = {}) =>
     <QueryClientProvider client={client}>
       <GitRebaseDialog
         agentId="a1"
-        projectName="p1"
+        workspaceName="p1"
         status={status()}
         busy={false}
         rebase={rebase}
@@ -129,7 +129,7 @@ afterEach(() => {
 });
 
 describe('GitRebaseDialog picker', () => {
-  it("offers the project's other branches, local first, with no preselection", async () => {
+  it("offers the workspace's other branches, local first, with no preselection", async () => {
     items.list = [
       gitItem({ kind: 'remote_branch', branch: 'origin/main', remote: 'origin' }),
       gitItem({ branch: 'main', is_current: true }),
@@ -182,8 +182,8 @@ describe('GitRebaseDialog picker', () => {
 });
 
 describe('GitRebaseDialog typed ref', () => {
-  it('types the ref for a session with no project, trimmed, and never lists branches', async () => {
-    renderDialog({ projectName: null });
+  it('types the ref for a session with no workspace, trimmed, and never lists branches', async () => {
+    renderDialog({ workspaceName: null });
 
     const field = within(dialog()).getByLabelText('Onto');
     expect(field).toHaveAttribute('placeholder', 'Branch, tag or commit');
@@ -206,7 +206,7 @@ describe('GitRebaseDialog typed ref', () => {
 describe('GitRebaseDialog blockers and failures', () => {
   it('explains what is in the way and keeps Rebase disabled', () => {
     renderDialog({
-      projectName: null,
+      workspaceName: null,
       status: status({ counts: { conflicts: 0, staged: 1, unstaged: 0, untracked: 0, total: 1 } }),
     });
     fireEvent.change(within(dialog()).getByLabelText('Onto'), { target: { value: 'main' } });
@@ -217,7 +217,7 @@ describe('GitRebaseDialog blockers and failures', () => {
 
   it('lets untracked files through', () => {
     renderDialog({
-      projectName: null,
+      workspaceName: null,
       status: status({ counts: { conflicts: 0, staged: 0, unstaged: 0, untracked: 4, total: 4 } }),
     });
     fireEvent.change(within(dialog()).getByLabelText('Onto'), { target: { value: 'main' } });
@@ -229,7 +229,7 @@ describe('GitRebaseDialog blockers and failures', () => {
     rebase.mockRejectedValue(
       wireFailure(409, { code: 'dirty_worktree', message: 'error: cannot rebase: You have unstaged changes.' }),
     );
-    renderDialog({ projectName: null });
+    renderDialog({ workspaceName: null });
     fireEvent.change(within(dialog()).getByLabelText('Onto'), { target: { value: 'main' } });
 
     fireEvent.click(submit());
@@ -246,7 +246,7 @@ describe('GitRebaseDialog blockers and failures', () => {
   });
 
   it('locks the sheet while the rebase runs', () => {
-    renderDialog({ projectName: null, busy: true });
+    renderDialog({ workspaceName: null, busy: true });
 
     expect(within(dialog()).getByRole('button', { name: 'Rebasing…' })).toBeDisabled();
     expect(within(dialog()).getByRole('button', { name: 'Cancel' })).toBeDisabled();

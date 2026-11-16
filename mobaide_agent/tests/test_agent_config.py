@@ -220,9 +220,9 @@ class TestAgentConfigRelayIntegration:
 class TestAgentConfigProjectsField:
     """The ``projects`` field carries the JSON seed forward from `.env` /
     process env into the config instance, where ``app.create_app`` then
-    passes it explicitly to ``ProjectsStore.load(seed_json=...)``.
+    passes it explicitly to ``WorkspacesStore.load(seed_json=...)``.
 
-    This decouples the projects store from ``os.environ`` — necessary
+    This decouples the workspaces store from ``os.environ`` — necessary
     because pydantic-settings reads `.env` into the settings instance but
     does NOT mutate ``os.environ``. On platforms whose supervisor doesn't
     pre-load the env file (Windows Service launcher.cmd), the legacy
@@ -238,10 +238,10 @@ class TestAgentConfigProjectsField:
         cfg = AgentConfig.from_env()
 
         # The field carries the raw JSON string forward — parsing happens
-        # downstream in ``ProjectsStore._seed_from_env``. Keeping the
+        # downstream in ``WorkspacesStore._seed_from_env``. Keeping the
         # parse off the settings layer avoids early failure on a
         # malformed PROJECTS that would block agent startup before the
-        # projects store has a chance to surface a useful error.
+        # workspaces store has a chance to surface a useful error.
         assert cfg.projects == seed
         assert isinstance(cfg.projects, str)
 

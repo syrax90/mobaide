@@ -15,7 +15,7 @@ from mobaide.core.codex_launcher import (
     CodexLauncher,
     CodexOptions,
 )
-from mobaide.core.projects_config import ProjectConfig
+from mobaide.core.workspaces_config import WorkspaceConfig
 
 # Captured before the autouse ``_pin_codex_binary`` / ``_pin_model_enumeration``
 # fixtures swap them, so the resolver/runner tests below exercise the real
@@ -39,8 +39,8 @@ def _codex_authed_by_default(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-default")
 
 
-def _make_project(path: str, *, conda: str | None = None) -> ProjectConfig:
-    return ProjectConfig(name="test", path=path, conda_env=conda)
+def _make_workspace(path: str, *, conda: str | None = None) -> WorkspaceConfig:
+    return WorkspaceConfig(name="test", path=path, conda_env=conda)
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +52,7 @@ def _make_project(path: str, *, conda: str | None = None) -> ProjectConfig:
 async def test_argv_default_is_sandboxed_non_interactive_preset(tmp_path: Path):
     """Default options reproduce the v1 preset: sandboxed, no approval prompts
     (the mobile client cannot mediate them yet), high reasoning effort."""
-    spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+    spec = await CodexLauncher().build(_make_workspace(str(tmp_path)), CodexOptions())
     assert spec.argv == [
         "codex",
         "--sandbox", "workspace-write",
@@ -66,7 +66,7 @@ async def test_argv_full_auto_omits_sandbox_and_approval(tmp_path: Path):
     """full_auto maps to --dangerously-bypass-approvals-and-sandbox, which is
     mutually exclusive with the sandbox/approval flags — those must be dropped."""
     spec = await CodexLauncher().build(
-        _make_project(str(tmp_path)), CodexOptions(full_auto=True),
+        _make_workspace(str(tmp_path)), CodexOptions(full_auto=True),
     )
     assert "--dangerously-bypass-approvals-and-sandbox" in spec.argv
     assert "--sandbox" not in spec.argv
@@ -78,7 +78,7 @@ async def test_argv_initial_prompt_is_trailing_positional(tmp_path: Path):
     """Codex takes the prompt as a trailing positional — no ``--`` separator
     (unlike Claude)."""
     spec = await CodexLauncher().build(
-        _make_project(str(tmp_path)), CodexOptions(initial_prompt="do the thing"),
+        _make_workspace(str(tmp_path)), CodexOptions(initial_prompt="do the thing"),
     )
     assert spec.argv[-1] == "do the thing"
     assert "--" not in spec.argv
@@ -92,7 +92,7 @@ async def test_argv_initial_prompt_is_trailing_positional(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_env_adds_no_claude_specific_vars(tmp_path: Path, monkeypatch):
     """Codex copies the inherited env but ADDS none of Claude's extras: no
-    forced 1h-cache preset, no attention-hook vars, and — even for a project
+    forced 1h-cache preset, no attention-hook vars, and — even for a workspace
     carrying a Linear key — no injected ``LINEAR_API_KEY``. The parent env is
     cleared first so the assertion isolates what the launcher itself injects."""
     for key in (
@@ -100,7 +100,7 @@ async def test_env_adds_no_claude_specific_vars(tmp_path: Path, monkeypatch):
         "MOBAIDE_HOOK_URL", "MOBAIDE_HOOK_TOKEN", "LINEAR_API_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
-    proj = ProjectConfig(
+    proj = WorkspaceConfig(
         name="t", path=str(tmp_path), linear_api_key="lin_secret",
     )
     spec = await CodexLauncher().build(proj, CodexOptions())
@@ -115,12 +115,12 @@ async def test_env_prepends_binary_dir_to_path(tmp_path: Path, monkeypatch):
         codex_launcher, "_resolve_codex_binary",
         lambda *_a, **_k: os.path.join("/opt", "cx", "bin", "codex"),
     )
-    spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+    spec = await CodexLauncher().build(_make_workspace(str(tmp_path)), CodexOptions())
     assert spec.env["PATH"].split(os.pathsep)[0] == os.path.join("/opt", "cx", "bin")
 
 
 # ---------------------------------------------------------------------------
-# cwd / project files
+# cwd / workspace files
 # ---------------------------------------------------------------------------
 
 
@@ -128,7 +128,7 @@ async def test_env_prepends_binary_dir_to_path(tmp_path: Path, monkeypatch):
 async def test_cwd_missing_raises_clean_file_not_found(tmp_path: Path):
     missing = tmp_path / "does" / "not" / "exist"
     with pytest.raises(FileNotFoundError) as exc_info:
-        await CodexLauncher().build(_make_project(str(missing)), CodexOptions())
+        await CodexLauncher().build(_make_workspace(str(missing)), CodexOptions())
     assert exc_info.value.filename == str(missing)
     assert exc_info.value.errno == 2
 
@@ -140,11 +140,11 @@ class _RecordingWorktreeMgr:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    async def create_worktree(self, slug, project_root, *, branch_name=None, base_branch=None):
+    async def create_worktree(self, slug, workspace_root, *, branch_name=None, base_branch=None):
         from mobaide.linear.worktree import WorktreeResult
 
         self.calls.append({"slug": slug, "branch_name": branch_name})
-        wt = Path(project_root) / "wt" / slug
+        wt = Path(workspace_root) / "wt" / slug
         wt.mkdir(parents=True, exist_ok=True)
         return WorktreeResult(
             path=str(wt), is_new=True, branch=branch_name or slug,
@@ -152,13 +152,13 @@ class _RecordingWorktreeMgr:
 
 
 @pytest.mark.asyncio
-async def test_cwd_worktree_on_git_project_resolves_to_worktree(tmp_path: Path):
-    """worktree=True on a git project resolves cwd to the created worktree (not
-    the project root) and hands the user's branch name to the manager verbatim."""
+async def test_cwd_worktree_on_git_workspace_resolves_to_worktree(tmp_path: Path):
+    """worktree=True on a git workspace resolves cwd to the created worktree (not
+    the workspace root) and hands the user's branch name to the manager verbatim."""
     (tmp_path / ".git").mkdir()
     mgr = _RecordingWorktreeMgr()
     spec = await CodexLauncher(worktree_mgr=mgr).build(  # type: ignore[arg-type]
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         CodexOptions(worktree=True, branch_name="feature/x"),
     )
     assert len(mgr.calls) == 1
@@ -174,7 +174,7 @@ async def test_cwd_worktree_blank_branch_uses_codex_prefix(tmp_path: Path):
     (tmp_path / ".git").mkdir()
     mgr = _RecordingWorktreeMgr()
     await CodexLauncher(worktree_mgr=mgr).build(  # type: ignore[arg-type]
-        _make_project(str(tmp_path)), CodexOptions(worktree=True),
+        _make_workspace(str(tmp_path)), CodexOptions(worktree=True),
     )
     branch = mgr.calls[0]["branch_name"]
     assert isinstance(branch, str)
@@ -183,11 +183,11 @@ async def test_cwd_worktree_blank_branch_uses_codex_prefix(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_cwd_worktree_non_git_falls_back_to_root(tmp_path: Path):
-    """A stale worktree=True for a non-git project is downgraded to the project
+    """A stale worktree=True for a non-git workspace is downgraded to the workspace
     root and the WorktreeManager is never touched."""
     mgr = _RecordingWorktreeMgr()
     spec = await CodexLauncher(worktree_mgr=mgr).build(  # type: ignore[arg-type]
-        _make_project(str(tmp_path)), CodexOptions(worktree=True),
+        _make_workspace(str(tmp_path)), CodexOptions(worktree=True),
     )
     assert spec.cwd == str(tmp_path)
     assert mgr.calls == []
@@ -195,19 +195,19 @@ async def test_cwd_worktree_non_git_falls_back_to_root(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_cwd_worktree_without_mgr_raises(tmp_path: Path):
-    """worktree=True on a git project with no WorktreeManager wired fails loud
-    rather than silently landing in the project root (mirrors Claude)."""
+    """worktree=True on a git workspace with no WorktreeManager wired fails loud
+    rather than silently landing in the workspace root (mirrors Claude)."""
     (tmp_path / ".git").mkdir()
     with pytest.raises(RuntimeError, match="WorktreeManager"):
         await CodexLauncher().build(
-            _make_project(str(tmp_path)),
+            _make_workspace(str(tmp_path)),
             CodexOptions(worktree=True, branch_name="x"),
         )
 
 
 @pytest.mark.asyncio
 async def test_cwd_adhoc_worktree_is_ignored(tmp_path: Path):
-    """Ad-hoc launches have no git/project context, so worktree=True is ignored
+    """Ad-hoc launches have no git/workspace context, so worktree=True is ignored
     and the bare cwd is used."""
     spec = await CodexLauncher().build(
         AdHocLaunch(cwd=str(tmp_path)), CodexOptions(worktree=True),
@@ -227,7 +227,7 @@ async def test_build_propagates_binary_not_found(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(codex_launcher, "_resolve_codex_binary", _raise)
     with pytest.raises(CodexBinaryNotFoundError):
-        await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+        await CodexLauncher().build(_make_workspace(str(tmp_path)), CodexOptions())
 
 
 @pytest.mark.asyncio
@@ -240,7 +240,7 @@ async def test_launcher_forwards_override_to_resolver(tmp_path: Path, monkeypatc
 
     monkeypatch.setattr(codex_launcher, "_resolve_codex_binary", _capture)
     await CodexLauncher(codex_bin_override="/my/codex").build(
-        _make_project(str(tmp_path)), CodexOptions(),
+        _make_workspace(str(tmp_path)), CodexOptions(),
     )
     assert captured["override"] == "/my/codex"
 
@@ -296,20 +296,20 @@ async def test_build_raises_auth_required_when_unauthenticated(
     work when neither an env key nor an auth.json is reachable — so the spawn
     path never launches an unauthenticated codex into its login TUI."""
     with pytest.raises(CodexAuthRequiredError):
-        await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+        await CodexLauncher().build(_make_workspace(str(tmp_path)), CodexOptions())
 
 
 @pytest.mark.asyncio
 async def test_build_auth_guard_runs_before_worktree_creation(
     tmp_path: Path, _unauthenticated_codex_env,
 ):
-    """The guard fires before worktree resolution: a git project requesting a
+    """The guard fires before worktree resolution: a git workspace requesting a
     worktree with no WorktreeManager would otherwise raise the loud
     misconfiguration ``RuntimeError`` — proving auth is checked first."""
     (tmp_path / ".git").mkdir()
     with pytest.raises(CodexAuthRequiredError):
         await CodexLauncher().build(
-            _make_project(str(tmp_path)),
+            _make_workspace(str(tmp_path)),
             CodexOptions(worktree=True, branch_name="x"),
         )
 
@@ -321,7 +321,7 @@ async def test_build_without_require_auth_skips_the_guard(
     """A chat session builds with ``require_auth=False``: it offers the sign-in
     itself, so an unauthenticated host still gets a launch spec."""
     spec = await CodexLauncher().build(
-        _make_project(str(tmp_path)), CodexOptions(), require_auth=False
+        _make_workspace(str(tmp_path)), CodexOptions(), require_auth=False
     )
     assert spec.cwd == str(tmp_path)
     assert spec.argv[0] == "codex"
@@ -335,7 +335,7 @@ async def test_build_succeeds_when_env_api_key_present(
     completes normally (no auth.json required)."""
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-present")
-    spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+    spec = await CodexLauncher().build(_make_workspace(str(tmp_path)), CodexOptions())
     assert spec.cwd == str(tmp_path)
     assert spec.argv[0] == "codex"
 
@@ -356,7 +356,7 @@ async def test_build_falls_back_to_auth_json_when_status_unsupported(
             argv, 2, b"", b"error: unrecognized subcommand 'status'",
         ),
     )
-    spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+    spec = await CodexLauncher().build(_make_workspace(str(tmp_path)), CodexOptions())
     assert spec.cwd == str(tmp_path)
 
 
@@ -376,7 +376,7 @@ async def test_build_raises_when_auth_json_stale_and_status_logged_out(
         lambda argv, **_kw: subprocess.CompletedProcess(argv, 1, b"", b"Not logged in"),
     )
     with pytest.raises(CodexAuthRequiredError):
-        await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+        await CodexLauncher().build(_make_workspace(str(tmp_path)), CodexOptions())
 
 
 @pytest.mark.asyncio
@@ -392,7 +392,7 @@ async def test_build_succeeds_when_login_status_reports_signed_in(
         codex_auth.subprocess, "run",
         lambda argv, **_kw: subprocess.CompletedProcess(argv, 0, b"", b""),
     )
-    spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+    spec = await CodexLauncher().build(_make_workspace(str(tmp_path)), CodexOptions())
     assert spec.cwd == str(tmp_path)
     assert spec.argv[0] == "codex"
 

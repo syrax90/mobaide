@@ -41,7 +41,7 @@ def _session_info(
     session_id: str = "s1",
     state: SessionState = SessionState.RUNNING,
     title: str | None = None,
-    project_name: str | None = None,
+    workspace_name: str | None = None,
 ) -> SessionInfo:
     return SessionInfo(
         session_id=session_id,
@@ -51,7 +51,7 @@ def _session_info(
         command=["cmd.exe"],
         cwd="C:/tmp",
         title=title,
-        project_name=project_name,
+        project_name=workspace_name,
     )
 
 

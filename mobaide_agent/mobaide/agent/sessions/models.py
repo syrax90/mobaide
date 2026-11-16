@@ -205,7 +205,7 @@ class CreateSessionRequest(BaseModel):
     rows: int = 24
     cols: int = 80
     # When set, ``command``/``cwd``/``env`` are ignored and the matching
-    # launcher builds them from the project + the CLI options block.
+    # launcher builds them from the workspace + the CLI options block.
     project_name: str | None = None
     # Which managed CLI to launch: "claude" | "codex" | "antigravity" |
     # "opencode" | "copilot" | "cursor" | "pi". Optional —
@@ -221,7 +221,7 @@ class CreateSessionRequest(BaseModel):
     cursor_options: CursorOptionsModel | None = None
     pi_options: PiOptionsModel | None = None
     # Terminal-mode worktree: create a git worktree for a SHELL session
-    # (no CLI options) anchored to a stored git project and spawn the shell
+    # (no CLI options) anchored to a stored git workspace and spawn the shell
     # inside it. Managed Claude/Codex/Antigravity/OpenCode/Copilot/Cursor/Pi sessions
     # instead carry worktree
     # intent inside their own options block.

@@ -25,7 +25,7 @@ import org.junit.Test
  * to `events.filterIsInstance()`) works without needing a real bus. The
  * repository launches its event collector on `Dispatchers.Default`, so
  * event-driven tests rely on Turbine's default timeout for cross-thread
- * synchronisation — same pattern as `ProjectsRepositoryTest`.
+ * synchronisation — same pattern as `WorkspacesRepositoryTest`.
  */
 class GitRepositoryTest {
 
@@ -71,7 +71,7 @@ class GitRepositoryTest {
             assertEquals("session", e.busyBy[0].kind)
             assertEquals("s-1", e.busyBy[0].session_id)
             assertEquals("auto_scan", e.busyBy[1].kind)
-            assertEquals("alpha", e.busyBy[1].project_name)
+            assertEquals("alpha", e.busyBy[1].workspace_name)
         }
     }
 
@@ -105,7 +105,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun gitChangedEvent_emitsProjectName_onChangedFlow() = runTest {
+    fun gitChangedEvent_emitsWorkspaceName_onChangedFlow() = runTest {
         val (repo, _, _, eventFlow) = newRepo()
         repo.changed.test {
             eventFlow.emit(AgentEvent.GitChanged("alpha"))

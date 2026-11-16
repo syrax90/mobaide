@@ -24,7 +24,7 @@ describe('isConflict', () => {
 
 describe('conflictDetailString', () => {
   it("returns the agent's human detail verbatim", () => {
-    const message = "Cannot delete project 'proj': auto-scan is active";
+    const message = "Cannot delete workspace 'proj': auto-scan is active";
 
     expect(conflictDetailString(conflict({ detail: message }))).toBe(message);
   });
@@ -54,7 +54,7 @@ describe('busyHolders', () => {
     // `[]` opens an (empty) holders dialog; `null` must report a plain message
     // instead, which is why the two may not collapse into one another.
     expect(busyHolders(conflict({ detail: { busy_by: [] } }))).toEqual([]);
-    expect(busyHolders(conflict({ detail: "Cannot delete project 'proj'" }))).toBeNull();
+    expect(busyHolders(conflict({ detail: "Cannot delete workspace 'proj'" }))).toBeNull();
     expect(busyHolders(conflict(null))).toBeNull();
     expect(busyHolders(new Error('network down'))).toBeNull();
   });
@@ -73,7 +73,7 @@ describe('busyHolderLine', () => {
     );
   });
 
-  it('names an auto-scan holder by project and worktree', () => {
+  it('names an auto-scan holder by workspace and worktree', () => {
     expect(
       busyHolderLine(holder({ kind: 'auto_scan', project_name: 'proj', worktree_path: '/wt/x' })),
     ).toBe('Auto-scan proj: /wt/x');

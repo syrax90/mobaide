@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
-from .projects_config import ProjectConfig
+from .workspaces_config import WorkspaceConfig
 
 if TYPE_CHECKING:
     from mobaide.linear.worktree import WorktreeManager
@@ -102,18 +102,18 @@ class LaunchSpec:
 
 @dataclass(frozen=True)
 class AdHocLaunch:
-    """Ad-hoc launch target: a bare cwd with no stored project context.
+    """Ad-hoc launch target: a bare cwd with no stored workspace context.
 
     Used by the custom-path entry on the mobile picker to spawn a one-off
-    session against an arbitrary folder. No Linear key, no conda env, no project
+    session against an arbitrary folder. No Linear key, no conda env, no workspace
     files written. The log "source" is recorded as ``<ad-hoc>`` rather than
-    synthesising a fake :class:`ProjectConfig`.
+    synthesising a fake :class:`WorkspaceConfig`.
     """
 
     cwd: str
 
 
-LaunchTarget = ProjectConfig | AdHocLaunch
+LaunchTarget = WorkspaceConfig | AdHocLaunch
 
 
 class CliLauncher(Protocol):
@@ -171,9 +171,9 @@ async def resolve_standard_worktree_cwd(
 
     Centralises the guard sequence both ``ClaudeLauncher`` (Standard mode) and
     ``CodexLauncher`` apply: an ad-hoc launch, a ``worktree=False`` request, or a
-    worktree request against a non-git project all resolve to the bare cwd (a
+    worktree request against a non-git workspace all resolve to the bare cwd (a
     requested-but-unhonorable worktree is logged as a downgrade); a worktree
-    request on a git project creates one via ``create_standard_worktree`` under
+    request on a git workspace creates one via ``create_standard_worktree`` under
     ``fallback_prefix`` (e.g. ``claude-session`` / ``codex-session``). A missing
     ``WorktreeManager`` is a server misconfiguration and fails loud.
 
@@ -181,7 +181,7 @@ async def resolve_standard_worktree_cwd(
     branch from a Linear slug and calls the manager directly — so that launcher
     keeps its slug branch and delegates only the non-identifier case.
     """
-    from .projects_store import safe_path_exists
+    from .workspaces_store import safe_path_exists
 
     if isinstance(target, AdHocLaunch):
         if worktree:
@@ -193,7 +193,7 @@ async def resolve_standard_worktree_cwd(
         return check_cwd_exists(target.path)
     if not safe_path_exists(Path(target.path) / ".git"):
         logger.warning(
-            "worktree=true requested for non-git project %r; ignoring", target.name,
+            "worktree=true requested for non-git workspace %r; ignoring", target.name,
         )
         return check_cwd_exists(target.path)
     if worktree_mgr is None:

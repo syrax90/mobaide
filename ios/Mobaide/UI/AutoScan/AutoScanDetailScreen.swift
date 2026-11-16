@@ -4,12 +4,12 @@ import SwiftUI
 /// `autoScanDetail` route. Streams phases + an ANSI-colored log off the dedicated
 /// `ws/autoscan` channel; the stream is torn down on disappear.
 struct AutoScanDetailScreen: View {
-    let projectName: String
+    let workspaceName: String
     @Environment(\.appContainer) private var container
 
     var body: some View {
         if let container {
-            AutoScanDetailContent(container: container, projectName: projectName)
+            AutoScanDetailContent(container: container, workspaceName: workspaceName)
         }
     }
 }
@@ -20,8 +20,8 @@ private struct AutoScanDetailContent: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.mobaideColors) private var colors
 
-    init(container: AppContainer, projectName: String) {
-        _model = State(initialValue: AutoScanDetailModel(projectName: projectName, repository: container.autoScanRepository))
+    init(container: AppContainer, workspaceName: String) {
+        _model = State(initialValue: AutoScanDetailModel(workspaceName: workspaceName, repository: container.autoScanRepository))
     }
 
     var body: some View {
@@ -34,7 +34,7 @@ private struct AutoScanDetailContent: View {
             logPane
         }
         .pixelScreenBackground()
-        .navigationTitle(model.projectName)
+        .navigationTitle(model.workspaceName)
         .navigationBarTitleDisplayMode(.inline)
         .toast($toast)
         // Keyed on the scene phase so backgrounding cancels `run()`, which

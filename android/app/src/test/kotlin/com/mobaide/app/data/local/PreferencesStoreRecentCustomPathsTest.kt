@@ -152,7 +152,7 @@ class PreferencesStoreRecentCustomPathsTest {
         store.addRecentCustomPath("paths-purge-a", "/srv/two")
         store.addRecentCustomPath("paths-purge-b", "/home/alice/work")
         store.addRecentShortcutChord("paths-purge-a", "ctrl+c")
-        store.setLastUsedProjectName("paths-purge-project")
+        store.setLastUsedWorkspaceName("paths-purge-workspace")
 
         store.removeAllRecentCustomPaths()
 
@@ -167,7 +167,7 @@ class PreferencesStoreRecentCustomPathsTest {
             listOf("ctrl+c"),
             store.getRecentShortcutChords("paths-purge-a"),
         )
-        assertEquals("paths-purge-project", store.getLastUsedProjectName())
+        assertEquals("paths-purge-workspace", store.getLastUsedWorkspaceName())
     }
 
 }

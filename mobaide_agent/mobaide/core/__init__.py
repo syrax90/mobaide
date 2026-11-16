@@ -37,12 +37,12 @@ from .opencode_launcher import (
     OpenCodeLauncher,
     OpenCodeOptions,
 )
-from .projects_config import AutoScanFilter, ProjectConfig
-from .projects_store import (
-    ProjectRecord,
-    ProjectsStore,
-    ProjectUpdatePatch,
-    normalize_project_path,
+from .workspaces_config import AutoScanFilter, WorkspaceConfig
+from .workspaces_store import (
+    WorkspaceRecord,
+    WorkspacesStore,
+    WorkspaceUpdatePatch,
+    normalize_workspace_path,
 )
 from .pty_backend import FakePtyBackend, PtyBackend, create_pty_backend
 from .session import TerminalSession
@@ -87,9 +87,9 @@ __all__ = [
     "PiBinaryNotFoundError",
     "LaunchSpec",
     "AutoScanFilter",
-    "ProjectConfig",
-    "ProjectRecord",
-    "ProjectsStore",
-    "ProjectUpdatePatch",
-    "normalize_project_path",
+    "WorkspaceConfig",
+    "WorkspaceRecord",
+    "WorkspacesStore",
+    "WorkspaceUpdatePatch",
+    "normalize_workspace_path",
 ]

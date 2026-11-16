@@ -58,12 +58,12 @@ def test_run_now_calls_request_immediate_scan(app_with_mock_manager):
 # --------------------------------------------------------------------------- #
 
 
-def _make_status_dict(project_name: str = "p") -> dict:
+def _make_status_dict(workspace_name: str = "p") -> dict:
     """Minimal dict matching every required field on ``AutoScanInstanceDto``
     plus the ``recent_events`` list from ``AutoScanInstanceStatusResponse``.
     """
     return {
-        "project_name": project_name,
+        "project_name": workspace_name,
         "status": "running",
         "started_at": 1712000000.0,
         "last_activity_at": 1712000100.0,
@@ -77,14 +77,14 @@ def _make_status_dict(project_name: str = "p") -> dict:
     }
 
 
-def _make_dto_dict(project_name: str = "p") -> dict:
+def _make_dto_dict(workspace_name: str = "p") -> dict:
     """Minimal dict matching every required field on ``AutoScanInstanceDto``.
 
     Used for ``list_response`` scans entries (validated by the
     ``AutoScanListResponse`` pydantic model on the response).
     """
     return {
-        "project_name": project_name,
+        "project_name": workspace_name,
         "status": "running",
         "started_at": 1712000000.0,
         "last_activity_at": 1712000100.0,
@@ -102,7 +102,7 @@ def _make_dto_dict(project_name: str = "p") -> dict:
 #
 # Post-CLA-39: ``autoscan_manager`` is always instantiated in ``app.py`` — the
 # legacy "501 not configured" branch is unreachable and those tests were
-# deleted. Empty ``available_projects`` is the new signal that no projects
+# deleted. Empty ``available_projects`` is the new signal that no workspaces
 # have a Linear API key.
 # --------------------------------------------------------------------------- #
 
@@ -151,9 +151,9 @@ class TestStartScan:
         resp = client.post("/api/autoscan/start", json=body)
 
         assert resp.status_code == 200
-        assert resp.json() == {"message": "Auto scan started for project 'proj'"}
+        assert resp.json() == {"message": "Auto scan started for workspace 'proj'"}
         mgr.start.assert_awaited_once()
-        # Positional arg: project_name, kwarg: client_options as a real
+        # Positional arg: workspace_name, kwarg: client_options as a real
         # ClaudeOptions dataclass populated from the incoming model.
         call = mgr.start.await_args
         assert call is not None
@@ -213,11 +213,11 @@ class TestStartScan:
 
     def test_start_404_when_value_error(self, app_with_mock_manager):
         app, mgr = app_with_mock_manager
-        mgr.start = AsyncMock(side_effect=ValueError("unknown project"))
+        mgr.start = AsyncMock(side_effect=ValueError("unknown workspace"))
         client = TestClient(app)
         resp = client.post("/api/autoscan/start", json={"project_name": "nope"})
         assert resp.status_code == 404
-        assert "unknown project" in resp.json()["detail"]
+        assert "unknown workspace" in resp.json()["detail"]
 
 
 # --------------------------------------------------------------------------- #
@@ -232,7 +232,7 @@ class TestStopScan:
         client = TestClient(app)
         resp = client.post("/api/autoscan/stop", json={"project_name": "p"})
         assert resp.status_code == 200
-        assert resp.json() == {"message": "Auto scan stopped for project 'p'"}
+        assert resp.json() == {"message": "Auto scan stopped for workspace 'p'"}
         mgr.stop.assert_awaited_once_with("p")
 
     def test_stop_404_when_key_error(self, app_with_mock_manager):

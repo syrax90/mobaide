@@ -1,17 +1,17 @@
 import Foundation
 
-/// Raised when the agent rejects a project create/update/delete with 409 —
+/// Raised when the agent rejects a workspace create/update/delete with 409 —
 /// duplicate name, rename collision, or an active auto-scan blocking the change.
-/// Android `ProjectConflictException`; `detail` is the server's `detail` string.
-struct ProjectConflictError: Error, Equatable, Sendable {
+/// Android `WorkspaceConflictException`; `detail` is the server's `detail` string.
+struct WorkspaceConflictError: Error, Equatable, Sendable {
     let detail: String
 }
 
-/// Parsers for FastAPI's `{"detail": …}` 409 bodies. Projects wrap a human
+/// Parsers for FastAPI's `{"detail": …}` 409 bodies. Workspaces wrap a human
 /// string; git busy-conflicts wrap `{"busy_by": [...]}`. Android
-/// `ProjectsRepository.parseDetail` / `GitRepository.parseBusyBy` parity.
+/// `WorkspacesRepository.parseDetail` / `GitRepository.parseBusyBy` parity.
 enum ConflictDetail {
-    /// The `detail` string of a project conflict, falling back to the raw body
+    /// The `detail` string of a workspace conflict, falling back to the raw body
     /// and then a generic label (Android `parseDetail`).
     static func string(from errorBody: String) -> String {
         guard let detail = stringOrNil(from: errorBody) else {

@@ -35,8 +35,8 @@ from .cli_launcher import (
 # reference ``claude_launcher._nvm_version_key`` directly.
 from .cli_launcher import _nvm_version_key as _nvm_version_key
 from .hook_settings import HOOK_TOKEN_ENV, remove_session_hooks, write_session_hooks
-from .projects_config import ProjectConfig
-from .projects_store import safe_path_exists
+from .workspaces_config import WorkspaceConfig
+from .workspaces_store import safe_path_exists
 
 if TYPE_CHECKING:
     from mobaide.linear.worktree import WorktreeManager
@@ -163,7 +163,7 @@ CLAUDE_SESSION_PRESET_ENV: dict[str, str] = {
 
 
 class ClaudeLauncher:
-    """Build a ``claude`` invocation (argv / env / cwd) from a project config and options."""
+    """Build a ``claude`` invocation (argv / env / cwd) from a workspace config and options."""
 
     def __init__(
         self,
@@ -222,7 +222,7 @@ class ClaudeLauncher:
             argv = self._build_argv(options, hooks_path, cli_settings)
             cwd = await self._resolve_cwd(target, options)
             env = self._build_env(target, options, session_id)
-            created = self._write_project_files(target, cwd)
+            created = self._write_workspace_files(target, cwd)
         except BaseException:
             # A build that dies after the hooks write (missing CLI binary,
             # worktree failure) must not orphan the settings file — the
@@ -342,15 +342,15 @@ class ClaudeLauncher:
             env["MOBAIDE_SESSION_ID"] = session_id
             env["MOBAIDE_HOOK_URL"] = f"http://127.0.0.1:{self._hook_port}/internal/hook"
             env[HOOK_TOKEN_ENV] = self._hook_token
-        is_project = isinstance(target, ProjectConfig)
-        if is_project and target.linear_api_key:
+        is_workspace = isinstance(target, WorkspaceConfig)
+        if is_workspace and target.linear_api_key:
             env["LINEAR_API_KEY"] = target.linear_api_key
         if options.no_memory:
             env["CLAUDE_NO_MEMORY"] = "1"
         env.setdefault("TERM", "xterm-256color")
         env["PYTHONIOENCODING"] = "utf-8"
 
-        if is_project and target.conda_env:
+        if is_workspace and target.conda_env:
             conda_bin = conda_env_bin(target.conda_env)
             if conda_bin:
                 sep = os.pathsep
@@ -375,11 +375,11 @@ class ClaudeLauncher:
             and options.worktree
             and not isinstance(target, AdHocLaunch)
         ):
-            # A stale client may still send worktree=true for a non-git project;
-            # fall back to the project root.
+            # A stale client may still send worktree=true for a non-git workspace;
+            # fall back to the workspace root.
             if not safe_path_exists(Path(target.path) / ".git"):
                 logger.warning(
-                    "worktree=true requested for non-git project %r; ignoring",
+                    "worktree=true requested for non-git workspace %r; ignoring",
                     target.name,
                 )
                 return check_cwd_exists(target.path)
@@ -405,14 +405,14 @@ class ClaudeLauncher:
         )
 
     @staticmethod
-    def _write_project_files(target: LaunchTarget, cwd: str) -> list[str]:
+    def _write_workspace_files(target: LaunchTarget, cwd: str) -> list[str]:
         """Write ``.mcp.json`` and ``.claude/settings.local.json`` when a Linear API key is present.
 
-        Ad-hoc launches skip this entirely — they have no stored project,
+        Ad-hoc launches skip this entirely — they have no stored workspace,
         no Linear key, and writing into an arbitrary user-supplied folder
         would pollute it with files the user did not opt in to.
         """
-        if not isinstance(target, ProjectConfig) or not target.linear_api_key:
+        if not isinstance(target, WorkspaceConfig) or not target.linear_api_key:
             return []
         created: list[str] = []
         cwd_path = Path(cwd)

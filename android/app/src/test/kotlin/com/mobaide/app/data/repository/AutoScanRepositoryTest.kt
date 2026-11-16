@@ -39,11 +39,11 @@ import org.junit.Test
 class AutoScanRepositoryTest {
 
     private fun instance(
-        projectName: String,
+        workspaceName: String,
         status: String = "running",
         startedAt: Double = 1712822400.0,
     ): AutoScanInstanceDto = AutoScanInstanceDto(
-        project_name = projectName,
+        workspace_name = workspaceName,
         status = status,
         started_at = startedAt,
         last_activity_at = startedAt,
@@ -77,7 +77,7 @@ class AutoScanRepositoryTest {
             scans = listOf(instance("p1")),
             capacity = 1,
             max_scans = 5,
-            available_projects = listOf("p1", "p2"),
+            available_workspaces = listOf("p1", "p2"),
             auto_scan_prompt = "Do the thing",
         )
         coEvery { restApi.getAutoScanList() } returns payload
@@ -101,20 +101,20 @@ class AutoScanRepositoryTest {
         val list = repo.observeList().value
         assertEquals(1, list.scans.size)
         val placeholder = list.scans[0]
-        assertEquals("p1", placeholder.project_name)
+        assertEquals("p1", placeholder.workspace_name)
         assertEquals("starting", placeholder.status)
         coVerify(exactly = 1) { restApi.startAutoScan("p1", null) }
     }
 
     @Test
-    fun startScan_doesNotDuplicatePlaceholder_whenProjectAlreadyPresent() = runTest {
+    fun startScan_doesNotDuplicatePlaceholder_whenWorkspaceAlreadyPresent() = runTest {
         val (repo, restApi) = newRepo()
         // Seed the repo with an existing scan by calling refresh().
         coEvery { restApi.getAutoScanList() } returns AutoScanListResponse(
             scans = listOf(instance("p1", status = "running")),
             capacity = 1,
             max_scans = 5,
-            available_projects = listOf("p1"),
+            available_workspaces = listOf("p1"),
         )
         repo.refresh()
         coEvery { restApi.startAutoScan("p1", null) } returns Unit
@@ -137,7 +137,7 @@ class AutoScanRepositoryTest {
             repo.startScan("p1")
             fail("expected AutoScanAlreadyRunningException")
         } catch (e: AutoScanAlreadyRunningException) {
-            assertEquals("p1", e.projectName)
+            assertEquals("p1", e.workspaceName)
         }
 
         // Rollback: list is back to empty.
@@ -152,7 +152,7 @@ class AutoScanRepositoryTest {
             scans = listOf(),
             capacity = 5,
             max_scans = 5,
-            available_projects = listOf("p1", "p2"),
+            available_workspaces = listOf("p1", "p2"),
         )
         repo.refresh()
 
@@ -201,9 +201,9 @@ class AutoScanRepositoryTest {
                 // Expected.
             }
             val evt = awaitItem() as AutoScanUiEvent.Error
-            // Classified exception message carries the project name.
+            // Classified exception message carries the workspace name.
             assertTrue(
-                "ui error should mention project name — was: ${evt.message}",
+                "ui error should mention workspace name — was: ${evt.message}",
                 evt.message.contains("p1"),
             )
             cancelAndIgnoreRemainingEvents()
@@ -219,7 +219,7 @@ class AutoScanRepositoryTest {
             scans = listOf(instance("p1"), instance("p2")),
             capacity = 2,
             max_scans = 5,
-            available_projects = listOf("p1", "p2"),
+            available_workspaces = listOf("p1", "p2"),
         )
         repo.refresh()
         coEvery { restApi.stopAutoScan("p1") } returns Unit
@@ -228,7 +228,7 @@ class AutoScanRepositoryTest {
 
         val scans = repo.observeList().value.scans
         assertEquals(1, scans.size)
-        assertEquals("p2", scans[0].project_name)
+        assertEquals("p2", scans[0].workspace_name)
         coVerify(exactly = 1) { restApi.stopAutoScan("p1") }
     }
 
@@ -239,7 +239,7 @@ class AutoScanRepositoryTest {
             scans = listOf(instance("p1"), instance("p2")),
             capacity = 2,
             max_scans = 5,
-            available_projects = listOf("p1", "p2"),
+            available_workspaces = listOf("p1", "p2"),
         )
         coEvery { restApi.getAutoScanList() } returns seeded
         repo.refresh()
@@ -273,14 +273,14 @@ class AutoScanRepositoryTest {
             ),
             capacity = 1,
             max_scans = 5,
-            available_projects = listOf("p1"),
+            available_workspaces = listOf("p1"),
         )
         coEvery { restApi.getAutoScanList() } returns seeded
         repo.refresh()
 
         val resp = RunNowResponse(
             ok = true,
-            project_name = "p1",
+            workspace_name = "p1",
             next_scan_at = "2026-04-11T12:30:00Z",
         )
         coEvery { restApi.runAutoScanNow("p1") } returns resp
@@ -288,7 +288,7 @@ class AutoScanRepositoryTest {
         val returned = repo.runNow("p1")
 
         assertEquals(resp, returned)
-        val updated = repo.observeList().value.scans.first { it.project_name == "p1" }
+        val updated = repo.observeList().value.scans.first { it.workspace_name == "p1" }
         assertEquals("2026-04-11T12:30:00Z", updated.next_scan_at)
     }
 
@@ -301,7 +301,7 @@ class AutoScanRepositoryTest {
             ),
             capacity = 1,
             max_scans = 5,
-            available_projects = listOf("p1"),
+            available_workspaces = listOf("p1"),
         )
         coEvery { restApi.getAutoScanList() } returns seeded
         repo.refresh()
@@ -315,7 +315,7 @@ class AutoScanRepositoryTest {
         }
 
         // Rollback: original next_scan_at is back.
-        val afterRollback = repo.observeList().value.scans.first { it.project_name == "p1" }
+        val afterRollback = repo.observeList().value.scans.first { it.workspace_name == "p1" }
         assertEquals("2026-04-11T12:00:00Z", afterRollback.next_scan_at)
     }
 
@@ -334,7 +334,7 @@ class AutoScanRepositoryTest {
                 scans = listOf(instance("p1"), instance("p2")),
                 capacity = 2,
                 max_scans = 10,
-                available_projects = listOf("p1", "p2", "p3"),
+                available_workspaces = listOf("p1", "p2", "p3"),
             )
             eventFlow.emit(AgentEvent.AutoScanListChanged(pushed))
 
@@ -354,7 +354,7 @@ class AutoScanRepositoryTest {
             ),
             capacity = 2,
             max_scans = 5,
-            available_projects = listOf("p1", "p2"),
+            available_workspaces = listOf("p1", "p2"),
         )
         repo.refresh()
 
@@ -367,8 +367,8 @@ class AutoScanRepositoryTest {
 
             val afterUpdate = awaitItem()
             assertEquals(2, afterUpdate.scans.size)
-            assertEquals("idle", afterUpdate.scans.first { it.project_name == "p1" }.status)
-            assertEquals("running", afterUpdate.scans.first { it.project_name == "p2" }.status)
+            assertEquals("idle", afterUpdate.scans.first { it.workspace_name == "p1" }.status)
+            assertEquals("running", afterUpdate.scans.first { it.workspace_name == "p2" }.status)
             cancelAndIgnoreRemainingEvents()
         }
     }

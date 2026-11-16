@@ -4,11 +4,11 @@
  *
  * Both qualify for the write-rather-than-invalidate exception, on the evidence
  * `queryBridge.ts` states as the general rule: `autoscan.list.changed` carries
- * the agent's **entire** `list_response()` — scans, capacity, available projects
+ * the agent's **entire** `list_response()` — scans, capacity, available workspaces
  * and the default prompt — and `autoscan.status` carries a complete
  * `AutoScanInstanceDto`. Neither is a delta, so neither can drift.
  *
- * Invalidating would be far worse here than for projects, because of how often
+ * Invalidating would be far worse here than for workspaces, because of how often
  * these fire: `AutoScanInstance._emit` publishes an `autoscan.status` alongside
  * **every** scan event, so a verbose cycle would turn one `/proxy` GET per log
  * line into the cost of watching a scan.
@@ -16,7 +16,7 @@
  * Unlike `projects.changed`, though, the list is **not** republished when the
  * events socket reopens: the direct `ws/events` handler sends it as a connect
  * snapshot, but `relay/client.py::_handle_request_events_snapshot` — the path a
- * browser always takes — republishes only sessions and projects (CLA-249). The
+ * browser always takes — republishes only sessions and workspaces (CLA-249). The
  * connect-time refresh in `refreshOnAgentEventsConnect` covers that gap, which
  * is also why the auto-scan query must not pin `staleTime: Infinity` (CLA-234).
  */
@@ -42,7 +42,7 @@ export function applyAutoScanSnapshot(
   // makes `safeParse` succeed for *any* object, so an `autoscan.status` payload
   // misrouted here, or an event that lost its `scans`, would parse to an empty
   // list and silently wipe a good one. The sibling cannot do this because
-  // `projectsChangedSchema` requires its array; here the discrimination has to
+  // `workspacesChangedSchema` requires its array; here the discrimination has to
   // live at the write site.
   if (
     typeof payload !== 'object' ||

@@ -6,11 +6,11 @@ from pathlib import Path
 import pytest
 
 from mobaide.core.claude_launcher import AdHocLaunch, ClaudeLauncher, ClaudeOptions
-from mobaide.core.projects_config import ProjectConfig
+from mobaide.core.workspaces_config import WorkspaceConfig
 
 
-def _make_project(path: str, *, key: str | None = None, conda: str | None = None) -> ProjectConfig:
-    return ProjectConfig(
+def _make_workspace(path: str, *, key: str | None = None, conda: str | None = None) -> WorkspaceConfig:
+    return WorkspaceConfig(
         name="test", path=path, linear_api_key=key, conda_env=conda
     )
 
@@ -25,7 +25,7 @@ async def test_argv_minimal_adds_bypass(tmp_path: Path):
     ``--effort`` flag; ``debug`` defaults off, so no ``--debug``."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
-        _make_project(str(tmp_path)), ClaudeOptions()
+        _make_workspace(str(tmp_path)), ClaudeOptions()
     )
     assert spec.argv == [
         "claude",
@@ -39,7 +39,7 @@ async def test_argv_plan_mode_with_default_skip_permissions(tmp_path: Path):
     both --permission-mode plan and --allow-dangerously-skip-permissions are passed."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         ClaudeOptions(plan_mode=True),
     )
     assert spec.argv == [
@@ -54,7 +54,7 @@ async def test_argv_plan_mode_without_skip_permissions(tmp_path: Path):
     """Plan mode with skip_permissions=False: only --permission-mode plan."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         ClaudeOptions(plan_mode=True, skip_permissions=False),
     )
     assert spec.argv == [
@@ -67,7 +67,7 @@ async def test_argv_plan_mode_without_skip_permissions(tmp_path: Path):
 async def test_argv_all_flags(tmp_path: Path):
     launcher = ClaudeLauncher()
     spec = await launcher.build(
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         ClaudeOptions(
             plan_mode=True,
             no_memory=True,
@@ -101,11 +101,11 @@ async def test_argv_debug_off_by_default_on_when_requested(tmp_path: Path):
     """``--debug`` is opt-in per session. It used to be unconditional, which put
     Claude Code's verbose diagnostics into every user's terminal."""
     launcher = ClaudeLauncher()
-    off = await launcher.build(_make_project(str(tmp_path)), ClaudeOptions())
+    off = await launcher.build(_make_workspace(str(tmp_path)), ClaudeOptions())
     assert "--debug" not in off.argv
 
     on = await launcher.build(
-        _make_project(str(tmp_path)), ClaudeOptions(debug=True),
+        _make_workspace(str(tmp_path)), ClaudeOptions(debug=True),
     )
     assert on.argv[1] == "--debug"
 
@@ -118,7 +118,7 @@ async def test_argv_explicit_effort_emitted(tmp_path: Path, effort):
     per-model default (``medium`` in practice), not the level the user picked."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
-        _make_project(str(tmp_path)), ClaudeOptions(effort=effort),
+        _make_workspace(str(tmp_path)), ClaudeOptions(effort=effort),
     )
     assert spec.argv[spec.argv.index("--effort") + 1] == effort
 
@@ -129,7 +129,7 @@ async def test_argv_ultracode_suppresses_effort(tmp_path: Path):
     explicit effort is suppressed when ultracode is on."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         ClaudeOptions(effort="max", ultracode=True),
     )
     assert "--effort" not in spec.argv
@@ -141,7 +141,7 @@ async def test_argv_effort_placed_before_prompt_separator(tmp_path: Path):
     otherwise the level would be interpreted as part of the prompt passthrough."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         ClaudeOptions(effort="max", initial_prompt="go"),
     )
     effort_idx = spec.argv.index("--effort")
@@ -156,7 +156,7 @@ async def test_argv_settings_merges_fast_and_ultracode_inline(tmp_path: Path):
     as a single inline ``--settings`` JSON arg — never two ``--settings`` flags."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         ClaudeOptions(fast_mode=True, ultracode=True),
     )
     assert spec.argv.count("--settings") == 1
@@ -175,7 +175,7 @@ async def test_argv_focus_mode_sets_view_mode_inline(
     keep the session in focus view."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         ClaudeOptions(focus_mode=focus_mode, fast_mode=True),
     )
     assert spec.argv.count("--settings") == 1
@@ -187,7 +187,7 @@ async def test_argv_focus_mode_sets_view_mode_inline(
 async def test_env_linear_key_injected(tmp_path: Path):
     launcher = ClaudeLauncher()
     spec = await launcher.build(
-        _make_project(str(tmp_path), key="lin_test_123"), ClaudeOptions()
+        _make_workspace(str(tmp_path), key="lin_test_123"), ClaudeOptions()
     )
     assert spec.env["LINEAR_API_KEY"] == "lin_test_123"
     assert spec.env["PYTHONIOENCODING"] == "utf-8"
@@ -198,7 +198,7 @@ async def test_env_prompt_caching_1h_always_set(tmp_path: Path):
     """Every spawn MUST carry ENABLE_PROMPT_CACHING_1H=1 so the claude CLI
     opts into the 1-hour prompt-cache TTL (v2.1.108+)."""
     launcher = ClaudeLauncher()
-    spec = await launcher.build(_make_project(str(tmp_path)), ClaudeOptions())
+    spec = await launcher.build(_make_workspace(str(tmp_path)), ClaudeOptions())
     assert spec.env["ENABLE_PROMPT_CACHING_1H"] == "1"
 
 
@@ -211,7 +211,7 @@ async def test_env_prompt_caching_1h_overrides_outer_environment(
     forced to "1"."""
     monkeypatch.setenv("ENABLE_PROMPT_CACHING_1H", "0")
     launcher = ClaudeLauncher()
-    spec = await launcher.build(_make_project(str(tmp_path)), ClaudeOptions())
+    spec = await launcher.build(_make_workspace(str(tmp_path)), ClaudeOptions())
     assert spec.env["ENABLE_PROMPT_CACHING_1H"] == "1"
 
 
@@ -219,7 +219,7 @@ async def test_env_prompt_caching_1h_overrides_outer_environment(
 async def test_mcp_json_written_when_key_present(tmp_path: Path):
     launcher = ClaudeLauncher()
     spec = await launcher.build(
-        _make_project(str(tmp_path), key="lin_xyz"), ClaudeOptions()
+        _make_workspace(str(tmp_path), key="lin_xyz"), ClaudeOptions()
     )
     mcp = tmp_path / ".mcp.json"
     assert mcp.exists()
@@ -241,7 +241,7 @@ async def test_settings_local_not_overwritten(tmp_path: Path):
     existing.write_text('{"keep": "me"}')
     launcher = ClaudeLauncher()
     await launcher.build(
-        _make_project(str(tmp_path), key="lin_xyz"), ClaudeOptions()
+        _make_workspace(str(tmp_path), key="lin_xyz"), ClaudeOptions()
     )
     assert json.loads(existing.read_text()) == {"keep": "me"}
 
@@ -249,7 +249,7 @@ async def test_settings_local_not_overwritten(tmp_path: Path):
 class _FakeWorktreeMgr:
     """Test double capturing calls to ``create_worktree``.
 
-    Mirrors the real signature (``slug``, ``project_root``, ``branch_name=``)
+    Mirrors the real signature (``slug``, ``workspace_root``, ``branch_name=``)
     so tests can assert what the launcher handed off.
     """
 
@@ -257,15 +257,15 @@ class _FakeWorktreeMgr:
         self.calls: list[dict[str, object]] = []
 
     async def create_worktree(
-        self, slug, project_root, *, branch_name=None, base_branch=None,
+        self, slug, workspace_root, *, branch_name=None, base_branch=None,
     ):
         from mobaide.linear.worktree import WorktreeResult
 
         effective_branch = branch_name if branch_name is not None else slug
         self.calls.append(
-            {"slug": slug, "project_root": project_root, "branch_name": branch_name}
+            {"slug": slug, "project_root": workspace_root, "branch_name": branch_name}
         )
-        wt = Path(project_root) / "wt" / slug
+        wt = Path(workspace_root) / "wt" / slug
         wt.mkdir(parents=True, exist_ok=True)
         return WorktreeResult(
             path=str(wt), is_new=True, branch=effective_branch
@@ -274,11 +274,11 @@ class _FakeWorktreeMgr:
 
 @pytest.mark.asyncio
 async def test_cwd_resolution_with_worktree(tmp_path: Path):
-    # CLA-20: launcher now skips worktree creation for non-git projects.
+    # CLA-20: launcher now skips worktree creation for non-git workspaces.
     (tmp_path / ".git").mkdir()
     launcher = ClaudeLauncher(worktree_mgr=_FakeWorktreeMgr())  # type: ignore[arg-type]
     spec = await launcher.build(
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         ClaudeOptions(worktree=True, identifier="CLA-99", title="My Task"),
     )
     assert "cla-99-my-task" in spec.cwd
@@ -293,7 +293,7 @@ async def test_cwd_resolution_autoscan_uses_slug_no_explicit_branch(tmp_path: Pa
     mgr = _FakeWorktreeMgr()
     launcher = ClaudeLauncher(worktree_mgr=mgr)  # type: ignore[arg-type]
     await launcher.build(
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         ClaudeOptions(worktree=True, identifier="CLA-99", title="My Task"),
     )
     assert len(mgr.calls) == 1
@@ -311,7 +311,7 @@ async def test_cwd_resolution_standard_uses_branch_name_verbatim(tmp_path: Path)
     mgr = _FakeWorktreeMgr()
     launcher = ClaudeLauncher(worktree_mgr=mgr)  # type: ignore[arg-type]
     await launcher.build(
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         ClaudeOptions(worktree=True, branch_name="feature/my-fix"),
     )
     assert len(mgr.calls) == 1
@@ -328,7 +328,7 @@ async def test_cwd_resolution_standard_empty_branch_auto_generates(tmp_path: Pat
     mgr = _FakeWorktreeMgr()
     launcher = ClaudeLauncher(worktree_mgr=mgr)  # type: ignore[arg-type]
     await launcher.build(
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         ClaudeOptions(worktree=True),
     )
     assert len(mgr.calls) == 1
@@ -341,13 +341,13 @@ async def test_cwd_resolution_standard_empty_branch_auto_generates(tmp_path: Pat
 async def test_cwd_resolution_worktree_true_without_mgr_raises(tmp_path: Path):
     """Dropping the silent fallback: when ``worktree=True`` but no
     ``WorktreeManager`` is wired, fail loud rather than landing the user
-    back in project root."""
+    back in workspace root."""
     (tmp_path / ".git").mkdir()
     launcher = ClaudeLauncher()
 
     with pytest.raises(RuntimeError, match="WorktreeManager"):
         await launcher.build(
-            _make_project(str(tmp_path)),
+            _make_workspace(str(tmp_path)),
             ClaudeOptions(worktree=True, branch_name="x"),
         )
 
@@ -360,7 +360,7 @@ async def test_cwd_resolution_worktree_propagates_creation_error(tmp_path: Path)
     from mobaide.linear.worktree import WorktreeCreationError
 
     class _FailingMgr:
-        async def create_worktree(self, slug, project_root, *, branch_name=None, base_branch=None):
+        async def create_worktree(self, slug, workspace_root, *, branch_name=None, base_branch=None):
             raise WorktreeCreationError(
                 branch=branch_name or slug, path="/x", stderr="boom"
             )
@@ -369,7 +369,7 @@ async def test_cwd_resolution_worktree_propagates_creation_error(tmp_path: Path)
     launcher = ClaudeLauncher(worktree_mgr=_FailingMgr())  # type: ignore[arg-type]
     with pytest.raises(WorktreeCreationError):
         await launcher.build(
-            _make_project(str(tmp_path)),
+            _make_workspace(str(tmp_path)),
             ClaudeOptions(worktree=True, branch_name="my-branch"),
         )
 
@@ -378,24 +378,24 @@ async def test_cwd_resolution_worktree_propagates_creation_error(tmp_path: Path)
 async def test_mcp_json_written_into_worktree_dir(tmp_path: Path):
     """Regression for Bug 6: when a worktree is created, ``.mcp.json`` must
     land inside the worktree directory (the session's actual CWD), not in the
-    project root."""
+    workspace root."""
     (tmp_path / ".git").mkdir()
     mgr = _FakeWorktreeMgr()
     launcher = ClaudeLauncher(worktree_mgr=mgr)  # type: ignore[arg-type]
     spec = await launcher.build(
-        _make_project(str(tmp_path), key="lin_k"),
+        _make_workspace(str(tmp_path), key="lin_k"),
         ClaudeOptions(worktree=True, branch_name="feat/x"),
     )
     mcp = Path(spec.cwd) / ".mcp.json"
     assert mcp.exists()
-    project_root_mcp = tmp_path / ".mcp.json"
-    assert not project_root_mcp.exists(), (
-        ".mcp.json must not leak to the project root"
+    workspace_root_mcp = tmp_path / ".mcp.json"
+    assert not workspace_root_mcp.exists(), (
+        ".mcp.json must not leak to the workspace root"
     )
 
 
 # ---------------------------------------------------------------------------
-# Pre-spawn cwd existence check (reconcile-project-path-format)
+# Pre-spawn cwd existence check (reconcile-workspace-path-format)
 # ---------------------------------------------------------------------------
 
 
@@ -404,7 +404,7 @@ async def test_resolve_cwd_missing_directory_raises_file_not_found(
     tmp_path: Path,
 ):
     """The launcher must fail fast with a clean ``FileNotFoundError`` when
-    the project path does not exist — so the session router can surface a
+    the workspace path does not exist — so the session router can surface a
     readable 400 to the mobile client instead of letting ``pywinpty`` emit
     a ``repr``-escaped path that the client renders with 4 backslashes."""
     missing = tmp_path / "does" / "not" / "exist"
@@ -412,7 +412,7 @@ async def test_resolve_cwd_missing_directory_raises_file_not_found(
 
     with pytest.raises(FileNotFoundError) as exc_info:
         await launcher.build(
-            _make_project(str(missing)),
+            _make_workspace(str(missing)),
             ClaudeOptions(worktree=False),
         )
 
@@ -426,22 +426,22 @@ async def test_resolve_cwd_missing_directory_raises_file_not_found(
 async def test_resolve_cwd_worktree_fallback_also_checks_existence(
     tmp_path: Path,
 ):
-    """When worktree is requested for a non-git project the launcher falls
-    back to ``project.path`` — the existence check must still apply on that
+    """When worktree is requested for a non-git workspace the launcher falls
+    back to ``workspace.path`` — the existence check must still apply on that
     branch so the failure is reported at the same clean point."""
     missing = tmp_path / "ghost"
     launcher = ClaudeLauncher()
 
     with pytest.raises(FileNotFoundError):
         await launcher.build(
-            _make_project(str(missing)),
+            _make_workspace(str(missing)),
             ClaudeOptions(worktree=True),
         )
 
 
 @pytest.mark.asyncio
 async def test_adhoc_launch_missing_cwd_raises_file_not_found(tmp_path: Path):
-    """Ad-hoc cwd must exist on disk — same failure shape as the project
+    """Ad-hoc cwd must exist on disk — same failure shape as the workspace
     path branch so the router/relay error mapping stays uniform."""
     missing = tmp_path / "no" / "such" / "dir"
     launcher = ClaudeLauncher()
@@ -460,7 +460,7 @@ async def test_adhoc_launch_ignores_worktree_flag(tmp_path: Path):
     :class:`WorktreeManager`, never raise — and just spawn in the target
     cwd. The downgrade is logged for auditability."""
     # Even with a ``.git`` directory present, ad-hoc must NOT consult the
-    # worktree manager because there is no stored project / branch_prefix
+    # worktree manager because there is no stored workspace / branch_prefix
     # to use.
     (tmp_path / ".git").mkdir()
     mgr = _FakeWorktreeMgr()
@@ -482,7 +482,7 @@ async def test_adhoc_launch_ignores_worktree_flag(tmp_path: Path):
 async def test_adhoc_launch_env_omits_linear_api_key(
     tmp_path: Path, monkeypatch,
 ):
-    """Ad-hoc sessions have no stored project, so no ``LINEAR_API_KEY``
+    """Ad-hoc sessions have no stored workspace, so no ``LINEAR_API_KEY``
     can be injected — even if the outer shell happens to export one,
     the launcher must not surface it (that would leak the operator's
     key into an arbitrary user-supplied folder context)."""
@@ -493,10 +493,10 @@ async def test_adhoc_launch_env_omits_linear_api_key(
 
 
 @pytest.mark.asyncio
-async def test_adhoc_launch_writes_no_project_files(tmp_path: Path):
+async def test_adhoc_launch_writes_no_workspace_files(tmp_path: Path):
     """Polluting an arbitrary user-supplied directory with ``.mcp.json`` /
     ``.claude/settings.local.json`` would be a surprise — the ad-hoc
-    branch of ``_write_project_files`` must short-circuit and write
+    branch of ``_write_workspace_files`` must short-circuit and write
     nothing. ``spec.created_files`` is empty for the same reason."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(AdHocLaunch(cwd=str(tmp_path)), ClaudeOptions())
@@ -507,19 +507,19 @@ async def test_adhoc_launch_writes_no_project_files(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_adhoc_launch_argv_matches_project_launch(tmp_path: Path):
+async def test_adhoc_launch_argv_matches_workspace_launch(tmp_path: Path):
     """argv is built independently of the target — switching from a
-    :class:`ProjectConfig` to an :class:`AdHocLaunch` must produce the
+    :class:`WorkspaceConfig` to an :class:`AdHocLaunch` must produce the
     same flags for the same :class:`ClaudeOptions`. Regression guard:
-    if a future refactor sneaks a project-specific flag into
+    if a future refactor sneaks a workspace-specific flag into
     ``_build_argv``, this test catches it."""
     launcher = ClaudeLauncher()
     opts = ClaudeOptions(plan_mode=True, initial_prompt="hello")
 
-    project_spec = await launcher.build(_make_project(str(tmp_path)), opts)
+    workspace_spec = await launcher.build(_make_workspace(str(tmp_path)), opts)
     adhoc_spec = await launcher.build(AdHocLaunch(cwd=str(tmp_path)), opts)
 
-    assert project_spec.argv == adhoc_spec.argv
+    assert workspace_spec.argv == adhoc_spec.argv
 
 
 # When (and only when) a ``session_id`` is supplied AND the launcher was built
@@ -546,7 +546,7 @@ async def test_hooks_injected_when_session_and_config_present(
 ):
     launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
     spec = await launcher.build(
-        _make_project(str(tmp_path)), ClaudeOptions(), session_id="sid-1",
+        _make_workspace(str(tmp_path)), ClaudeOptions(), session_id="sid-1",
     )
 
     assert "--settings" in spec.argv
@@ -567,7 +567,7 @@ async def test_settings_flag_precedes_prompt_separator(
     # passthrough, or the path would be swallowed as a prompt argument.
     launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
     spec = await launcher.build(
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         ClaudeOptions(initial_prompt="go"),
         session_id="sid-1",
     )
@@ -578,7 +578,7 @@ async def test_settings_flag_precedes_prompt_separator(
 async def test_no_hooks_without_session_id(tmp_path: Path, _isolated_hooks_tempdir):
     # A build without a session_id → no hooks, no env.
     launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
-    spec = await launcher.build(_make_project(str(tmp_path)), ClaudeOptions())
+    spec = await launcher.build(_make_workspace(str(tmp_path)), ClaudeOptions())
 
     assert "--settings" not in spec.argv
     assert "MOBAIDE_SESSION_ID" not in spec.env
@@ -595,7 +595,7 @@ async def test_hooks_file_url_bakes_session_id(
     # on end-to-end.
     launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
     spec = await launcher.build(
-        _make_project(str(tmp_path)), ClaudeOptions(), session_id="sid-unique",
+        _make_workspace(str(tmp_path)), ClaudeOptions(), session_id="sid-unique",
     )
     settings_path = spec.argv[spec.argv.index("--settings") + 1]
     doc = json.loads(Path(settings_path).read_text(encoding="utf-8"))
@@ -612,7 +612,7 @@ async def test_settings_file_merges_fast_and_ultracode(
     duplicate."""
     launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
     spec = await launcher.build(
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         ClaudeOptions(fast_mode=True, ultracode=True),
         session_id="sid-merge",
     )
@@ -630,7 +630,7 @@ async def test_settings_file_merges_view_mode(
 ):
     launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
     spec = await launcher.build(
-        _make_project(str(tmp_path)),
+        _make_workspace(str(tmp_path)),
         ClaudeOptions(focus_mode=True),
         session_id="sid-focus",
     )
@@ -659,7 +659,7 @@ async def test_hooks_file_removed_when_binary_resolution_fails(
     launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
     with pytest.raises(ClaudeBinaryNotFoundError):
         await launcher.build(
-            _make_project(str(tmp_path)), ClaudeOptions(), session_id="sid-orphan",
+            _make_workspace(str(tmp_path)), ClaudeOptions(), session_id="sid-orphan",
         )
 
     hooks_dir = tmp_path / "mobaide_hooks_9001"
@@ -674,7 +674,7 @@ async def test_hooks_file_removed_when_worktree_creation_fails(
     from mobaide.linear.worktree import WorktreeCreationError
 
     class _FailingMgr:
-        async def create_worktree(self, slug, project_root, *, branch_name=None, base_branch=None):
+        async def create_worktree(self, slug, workspace_root, *, branch_name=None, base_branch=None):
             raise WorktreeCreationError(
                 branch=branch_name or slug, path="/x", stderr="boom"
             )
@@ -686,7 +686,7 @@ async def test_hooks_file_removed_when_worktree_creation_fails(
     )
     with pytest.raises(WorktreeCreationError):
         await launcher.build(
-            _make_project(str(tmp_path)),
+            _make_workspace(str(tmp_path)),
             ClaudeOptions(worktree=True, branch_name="my-branch"),
             session_id="sid-wt-fail",
         )

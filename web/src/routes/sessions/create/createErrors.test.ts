@@ -96,15 +96,15 @@ describe('classifyCreateError', () => {
     ).toEqual({ kind: 'customTypeDeleted', message: 'This agent type was deleted' });
   });
 
-  it('falls through when a custom launch 404s for a deleted project instead', () => {
+  it('falls through when a custom launch 404s for a deleted workspace instead', () => {
     const failure = classifyCreateError(
-      apiError(404, { detail: "Project 'demo' not found" }),
+      apiError(404, { detail: "Workspace 'demo' not found" }),
       CUSTOM_CLI,
     );
 
     expect(failure).toEqual({
       kind: 'generic',
-      message: "Failed to create session: Project 'demo' not found",
+      message: "Failed to create session: Workspace 'demo' not found",
     });
   });
 
@@ -130,14 +130,14 @@ describe('classifyCreateError', () => {
 describe('classifyAutoScanError', () => {
   it('types the three states the user can act on', () => {
     expect(classifyAutoScanError(apiError(409, { detail: 'busy' }))).toBe(
-      'A scan is already running for this project.',
+      'A scan is already running for this workspace.',
     );
     expect(classifyAutoScanError(apiError(429, { detail: 'slow down' }))).toBe(
       'The agent is at its auto-scan limit.',
     );
-    // 404 keeps the server's own copy, which names the missing project.
-    expect(classifyAutoScanError(apiError(404, { detail: "Project 'demo' not found" }))).toBe(
-      "Project 'demo' not found",
+    // 404 keeps the server's own copy, which names the missing workspace.
+    expect(classifyAutoScanError(apiError(404, { detail: "Workspace 'demo' not found" }))).toBe(
+      "Workspace 'demo' not found",
     );
     expect(classifyAutoScanError(apiError(500, { detail: 'boom' }))).toBe(
       'Failed to start Auto Scan: boom',

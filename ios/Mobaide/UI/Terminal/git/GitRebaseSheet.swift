@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// The Rebase sheet (Android `GitRebaseSheet`, web `GitRebaseDialog`): pick
-/// the branch to replay this one on top of. A project-backed session picks
-/// from the project's local and remote-tracking branches, deliberately with no
+/// the branch to replay this one on top of. A workspace-backed session picks
+/// from the workspace's local and remote-tracking branches, deliberately with no
 /// preselection for a history rewrite; any other session — or a list that
 /// failed to load — types the ref. What would make git refuse to start is
 /// explained up front and keeps the button disabled; the agent still decides.
@@ -97,7 +97,7 @@ struct GitRebaseSheet: View {
                 LoadingIndicator()
             case .ready:
                 if targets.isEmpty {
-                    Text("No other branches in this project.")
+                    Text("No other branches in this workspace.")
                         .font(.footnote)
                         .foregroundStyle(colors.textMuted)
                 } else {

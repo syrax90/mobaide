@@ -1,12 +1,12 @@
 """Tests for AutoScanConfig.from_env — env-driven auto-scan settings.
 
-Post-CLA-39: AutoScanConfig no longer owns a projects dict and
-``from_env()`` always returns an instance. The set of scannable projects is
-resolved live from ``mobaide.core.projects_store.ProjectsStore``.
+Post-CLA-39: AutoScanConfig no longer owns a workspaces dict and
+``from_env()`` always returns an instance. The set of scannable workspaces is
+resolved live from ``mobaide.core.workspaces_store.WorkspacesStore``.
 
 Post-CLA-52: ``LINEAR_ACTIVE_STATE`` / ``LINEAR_DONE_STATE`` are no longer
-on ``AutoScanConfig``. Per-project workflow-state names live on
-``ProjectRecord.auto_scan_filter``.
+on ``AutoScanConfig``. Per-workspace workflow-state names live on
+``WorkspaceRecord.auto_scan_filter``.
 """
 from __future__ import annotations
 

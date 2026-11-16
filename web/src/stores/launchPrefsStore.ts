@@ -112,7 +112,7 @@ export interface LaunchPrefs {
   copilot: CopilotLaunchPrefs | null;
   cursor: CursorLaunchPrefs | null;
   pi: PiLaunchPrefs | null;
-  lastProjectName: string | null;
+  lastWorkspaceName: string | null;
 }
 
 export type ClaudePrefsBucketId = 'claude' | 'autoScan';
@@ -129,7 +129,7 @@ export type LaunchPrefsSnapshot =
 
 interface LaunchPrefsState extends LaunchPrefs {
   setLaunchPrefs: (snapshot: LaunchPrefsSnapshot) => void;
-  setLastProjectName: (name: string) => void;
+  setLastWorkspaceName: (name: string) => void;
 }
 
 /*
@@ -392,6 +392,12 @@ function sanitizePiPrefs(raw: unknown): PiLaunchPrefs | null {
   return { terminalUi };
 }
 
+/**
+ * The persisted key of `lastWorkspaceName`. It keeps its pre-rename value so a
+ * browser that saved a workspace before the rename still finds it.
+ */
+const LAST_WORKSPACE_STORAGE_KEY = 'lastProjectName';
+
 export const useLaunchPrefsStore = create<LaunchPrefsState>()(
   persist(
     (set) => ({
@@ -403,7 +409,7 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
       copilot: null,
       cursor: null,
       pi: null,
-      lastProjectName: null,
+      lastWorkspaceName: null,
       setLaunchPrefs: (snapshot) => {
         switch (snapshot.kind) {
           case 'claude':
@@ -431,19 +437,23 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
             set({ pi: snapshot.prefs });
         }
       },
-      setLastProjectName: (lastProjectName) => {
-        set({ lastProjectName });
+      setLastWorkspaceName: (lastWorkspaceName) => {
+        set({ lastWorkspaceName });
       },
     }),
     {
       name: 'mobaide-launch-prefs',
+      partialize: ({ lastWorkspaceName, ...rest }) => ({
+        ...rest,
+        [LAST_WORKSPACE_STORAGE_KEY]: lastWorkspaceName,
+      }),
       // Same untrusted-boundary rule as `themeStore` and `lastSessionStore`:
       // every field is read out by name and validated rather than spread in, so
       // a hand-edited value cannot reach the wizard and a retired key from an
       // older build is dropped instead of lingering.
       merge: (persisted, current) => {
         const saved = isRecord(persisted) ? persisted : {};
-        const lastProjectName = saved.lastProjectName;
+        const lastWorkspaceName = saved[LAST_WORKSPACE_STORAGE_KEY];
         return {
           ...current,
           claude: sanitizeClaudePrefs(saved.claude),
@@ -454,9 +464,9 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
           copilot: sanitizeCopilotPrefs(saved.copilot),
           cursor: sanitizeCursorPrefs(saved.cursor),
           pi: sanitizePiPrefs(saved.pi),
-          lastProjectName:
-            typeof lastProjectName === 'string' && lastProjectName !== ''
-              ? lastProjectName
+          lastWorkspaceName:
+            typeof lastWorkspaceName === 'string' && lastWorkspaceName !== ''
+              ? lastWorkspaceName
               : null,
         };
       },
@@ -466,7 +476,7 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
 
 /** Non-reactive read, for the wizard's reducer initializer and prefill effect. */
 export function readLaunchPrefs(): LaunchPrefs {
-  const { claude, autoScan, codex, antigravity, opencode, copilot, cursor, pi, lastProjectName } =
+  const { claude, autoScan, codex, antigravity, opencode, copilot, cursor, pi, lastWorkspaceName } =
     useLaunchPrefsStore.getState();
-  return { claude, autoScan, codex, antigravity, opencode, copilot, cursor, pi, lastProjectName };
+  return { claude, autoScan, codex, antigravity, opencode, copilot, cursor, pi, lastWorkspaceName };
 }

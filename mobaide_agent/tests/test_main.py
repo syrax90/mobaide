@@ -32,7 +32,7 @@ class _StubSelectorPolicy:
     ``asyncio.WindowsSelectorEventLoopPolicy`` constructor.
 
     Letting the production code call the real
-    ``asyncio.WindowsSelectorEventLoopPolicy()`` is unsafe on the project's
+    ``asyncio.WindowsSelectorEventLoopPolicy()`` is unsafe on the workspace's
     Linux CI runner: the symbol is missing on POSIX builds of CPython
     (``hasattr(asyncio, "WindowsSelectorEventLoopPolicy")`` is False on
     Linux), so a test that monkeypatches ``sys.platform = "win32"`` would

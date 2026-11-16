@@ -16,14 +16,14 @@ Every documentation file in this repository, grouped by topic. Read this first, 
 
 | File | What it covers |
 |---|---|
-| [PROTOCOL.md](../PROTOCOL.md) | The wire contract: `protocol_version`, WebSocket close codes, the HTTPS-bootstrap update path, agent self-uninstall, voice input API (incl. the opt-in `POST /api/voice/cleanup` transcript cleanup), and the session and project git APIs (status, mutations, jobs, branches, rebase, conflict resolver). Also how to bump the version. |
+| [PROTOCOL.md](../PROTOCOL.md) | The wire contract: `protocol_version`, WebSocket close codes, the HTTPS-bootstrap update path, agent self-uninstall, voice input API (incl. the opt-in `POST /api/voice/cleanup` transcript cleanup), and the session and workspace git APIs (status, mutations, jobs, branches, rebase, conflict resolver). Also how to bump the version. |
 
 ## Clients
 
 | File | What it covers |
 |---|---|
 | [ios-client.md](ios-client.md) | iOS app: project layout, theme layer, device support, privacy manifest, build and test commands, simulator and APNs testing, sign-in configuration, notifications, Android→Swift protocol parity, golden fixtures. |
-| [web-client.md](web-client.md) | Web SPA: WEB-01…WEB-13 roadmap, typed API pipeline, CI drift gates, app shell, auth, realtime layer, terminal, sessions, pairing, projects and git, keyboard, auto-scan and notifications, Sign in with Apple, ad attribution. |
+| [web-client.md](web-client.md) | Web SPA: WEB-01…WEB-13 roadmap, typed API pipeline, CI drift gates, app shell, auth, realtime layer, terminal, sessions, pairing, workspaces and git, keyboard, auto-scan and notifications, Sign in with Apple, ad attribution. |
 | [web/README.md](../web/README.md) | Web client developer quick start: prerequisites and `npm` commands. |
 | [web-keyboard-reserved-keys.md](web-keyboard-reserved-keys.md) | Which chords the browser or window manager takes before the web terminal sees them: the two-fact model behind `reservedKeys.ts`, sources, `/dev/key-sweep` runbook, Keyboard Lock immersive mode. |
 | [terminal-view-fork-changes.md](terminal-view-fork-changes.md) | Changelog of edits to the vendored Termux `terminal-view` and `terminal-emulator` Java sources. The source of truth for fork drift on upstream rebase. |

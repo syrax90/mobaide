@@ -23,7 +23,7 @@ export function AutoScanOptionsPanel({
     <>
       <p className="page-note">
         Each matching issue runs in its own git worktree, so its changes stay isolated from
-        your working copy. Non-git projects run in the project directory.
+        your working copy. Non-git workspaces run in the workspace directory.
       </p>
 
       <ClaudeOptionsPanel

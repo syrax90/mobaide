@@ -2,10 +2,10 @@ import SwiftUI
 
 /// The session `⋯` menu's Git section, shared by the terminal and chat screens.
 /// Every mutating entry hangs off its `capabilities.git` key; Branches… also
-/// needs a project-backed session.
+/// needs a workspace-backed session.
 struct SessionGitMenuItems: View {
     let sessionId: String
-    let projectName: String?
+    let workspaceName: String?
     let capabilities: GitCapabilities
     let navigate: (Route) -> Void
 
@@ -30,9 +30,9 @@ struct SessionGitMenuItems: View {
                     Label("Fetch / Pull / Push…", systemImage: "arrow.triangle.2.circlepath")
                 }
             }
-            if capabilities.branches, let projectName {
+            if capabilities.branches, let workspaceName {
                 Button {
-                    navigate(.gitManagement(projectName: projectName))
+                    navigate(.gitManagement(workspaceName: workspaceName))
                 } label: {
                     Label("Branches…", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
                 }

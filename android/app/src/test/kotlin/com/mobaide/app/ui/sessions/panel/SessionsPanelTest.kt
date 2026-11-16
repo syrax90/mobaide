@@ -38,7 +38,7 @@ class SessionsPanelTest {
     private fun session(
         id: String,
         title: String? = null,
-        project: String? = null,
+        workspace: String? = null,
         kind: SessionKind = SessionKind.Claude,
         attention: String? = null,
         state: String = "running",
@@ -48,7 +48,7 @@ class SessionsPanelTest {
         state = state,
         created_at = "2026-01-01T00:00:00Z",
         title = title,
-        project_name = project,
+        workspace_name = workspace,
         kind = kind,
         attention = attention,
         activity = activity,
@@ -90,8 +90,8 @@ class SessionsPanelTest {
 
     private val twoSessions = SessionsPanelUiState(
         sessions = listOf(
-            session("s1", title = "fix: login", project = "app", attention = "awaiting_permission"),
-            session("s2", project = "api", kind = SessionKind.Codex),
+            session("s1", title = "fix: login", workspace = "app", attention = "awaiting_permission"),
+            session("s2", workspace = "api", kind = SessionKind.Codex),
         ),
         synced = true,
         agents = listOf(agent("a1", "desktop", online = true)),

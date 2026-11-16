@@ -151,9 +151,9 @@ class TestSnapshotAndCaughtUp:
         cancel via ``asyncio.wait_for``.
         """
         inst = FakeAutoScanInstance(
-            project_name="projectA",
+            project_name="workspaceA",
             _recent_events=[_make_event(1), _make_event(2)],
-            _dto={"project_name": "projectA", "status": "running"},
+            _dto={"project_name": "workspaceA", "status": "running"},
         )
         mgr = FakeAutoScanSessionManager([inst])
         transport = FakeTransport()
@@ -173,7 +173,7 @@ class TestSnapshotAndCaughtUp:
         snap = json.loads(transport.outbound[0])
         caught_up = json.loads(transport.outbound[1])
         assert snap["type"] == "snapshot"
-        assert [e["seq"] for e in snap["data"]["events"]["projectA"]] == [1, 2]
+        assert [e["seq"] for e in snap["data"]["events"]["workspaceA"]] == [1, 2]
         assert caught_up == {"type": "caught_up"}
 
     async def test_snapshot_empty_instances_waits_for_reader(self):
@@ -207,7 +207,7 @@ class TestSnapshotAndCaughtUp:
 
 class TestLiveEvents:
     async def test_non_log_event_flows_after_snapshot(self):
-        inst = FakeAutoScanInstance("projectA")
+        inst = FakeAutoScanInstance("workspaceA")
         mgr = FakeAutoScanSessionManager([inst])
         transport = FakeTransport()
 
@@ -227,13 +227,13 @@ class TestLiveEvents:
 
         frame = json.loads(transport.outbound[2])
         assert frame["type"] == "event"
-        assert frame["project_name"] == "projectA"
+        assert frame["project_name"] == "workspaceA"
         assert frame["event"]["seq"] == 7
         assert frame["event"]["type"] == "phase"
 
     async def test_log_event_filtered_without_subscribe(self):
-        """``log`` events are dropped for projects NOT in ``subscribe_set``."""
-        inst = FakeAutoScanInstance("projectA")
+        """``log`` events are dropped for workspaces NOT in ``subscribe_set``."""
+        inst = FakeAutoScanInstance("workspaceA")
         mgr = FakeAutoScanSessionManager([inst])
         transport = FakeTransport()
 
@@ -260,12 +260,12 @@ class TestLiveEvents:
         assert frame["event"]["type"] == "phase"
 
     async def test_log_event_delivered_after_initial_subscribe(self):
-        """An initial config frame with ``subscribe`` enables log delivery for that project."""
-        inst = FakeAutoScanInstance("projectA")
+        """An initial config frame with ``subscribe`` enables log delivery for that workspace."""
+        inst = FakeAutoScanInstance("workspaceA")
         mgr = FakeAutoScanSessionManager([inst])
         transport = FakeTransport()
 
-        transport.feed(json.dumps({"subscribe": ["projectA"]}))
+        transport.feed(json.dumps({"subscribe": ["workspaceA"]}))
 
         task = asyncio.create_task(
             run_autoscan_stream(
@@ -290,13 +290,13 @@ class TestResumeFromSeq:
     async def test_in_range_resume_filters_ring(self):
         """first_seq (1) <= resume_seq (2) + 1 → snapshot only contains seq > 2."""
         inst = FakeAutoScanInstance(
-            "projectA",
+            "workspaceA",
             _recent_events=[_make_event(s) for s in (1, 2, 3, 4, 5)],
         )
         mgr = FakeAutoScanSessionManager([inst])
         transport = FakeTransport()
 
-        transport.feed(json.dumps({"resume_from_seq": {"projectA": 2}}))
+        transport.feed(json.dumps({"resume_from_seq": {"workspaceA": 2}}))
 
         task = asyncio.create_task(
             run_autoscan_stream(
@@ -311,19 +311,19 @@ class TestResumeFromSeq:
                 await task
 
         snap = json.loads(transport.outbound[0])
-        seqs = [e["seq"] for e in snap["data"]["events"]["projectA"]]
+        seqs = [e["seq"] for e in snap["data"]["events"]["workspaceA"]]
         assert seqs == [3, 4, 5]
 
     async def test_gap_returns_full_ring(self):
         """first_seq (10) > resume_seq (5) + 1 → filter skipped, ring returned in full."""
         inst = FakeAutoScanInstance(
-            "projectA",
+            "workspaceA",
             _recent_events=[_make_event(s) for s in (10, 11, 12)],
         )
         mgr = FakeAutoScanSessionManager([inst])
         transport = FakeTransport()
 
-        transport.feed(json.dumps({"resume_from_seq": {"projectA": 5}}))
+        transport.feed(json.dumps({"resume_from_seq": {"workspaceA": 5}}))
 
         task = asyncio.create_task(
             run_autoscan_stream(
@@ -338,13 +338,13 @@ class TestResumeFromSeq:
                 await task
 
         snap = json.loads(transport.outbound[0])
-        seqs = [e["seq"] for e in snap["data"]["events"]["projectA"]]
+        seqs = [e["seq"] for e in snap["data"]["events"]["workspaceA"]]
         assert seqs == [10, 11, 12]
 
 
 class TestSubscribeMidStream:
     async def test_subscribe_frame_after_snapshot_enables_log_delivery(self):
-        inst = FakeAutoScanInstance("projectA")
+        inst = FakeAutoScanInstance("workspaceA")
         mgr = FakeAutoScanSessionManager([inst])
         transport = FakeTransport()
 
@@ -357,7 +357,7 @@ class TestSubscribeMidStream:
             await _drive_until(transport, 2)
 
             # Late subscribe — reader task must process this and mutate subscribe_set.
-            transport.feed(json.dumps({"subscribe": ["projectA"]}))
+            transport.feed(json.dumps({"subscribe": ["workspaceA"]}))
             # Small yield so the reader coroutine actually advances.
             await asyncio.sleep(0.05)
 
@@ -404,7 +404,7 @@ class TestCleanup:
     async def test_malformed_initial_frame_is_tolerated(self):
         """A non-JSON initial frame is silently ignored; snapshot still fires."""
         inst = FakeAutoScanInstance(
-            "projectA", _recent_events=[_make_event(1)],
+            "workspaceA", _recent_events=[_make_event(1)],
         )
         mgr = FakeAutoScanSessionManager([inst])
         transport = FakeTransport()
@@ -425,4 +425,4 @@ class TestCleanup:
 
         snap = json.loads(transport.outbound[0])
         assert snap["type"] == "snapshot"
-        assert [e["seq"] for e in snap["data"]["events"]["projectA"]] == [1]
+        assert [e["seq"] for e in snap["data"]["events"]["workspaceA"]] == [1]

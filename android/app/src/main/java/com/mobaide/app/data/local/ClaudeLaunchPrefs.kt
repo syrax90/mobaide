@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 
 /**
  * Persisted last-used Claude launch selections, re-applied to the create-session
- * wizard on the next launch (mirrors the last-used-project pre-fill in
+ * wizard on the next launch (mirrors the last-used-workspace pre-fill in
  * [PreferencesStore]). Backs two independent per-kind buckets — Claude Code and
  * Auto Scan — so each mode remembers its own choices; [planMode] is meaningful
  * only in the Auto Scan bucket. Stored as a single JSON blob; lenient decoding

@@ -23,22 +23,22 @@ vi.mock('../../api/autoscanRepository', async (importOriginal) => {
         available_projects: [],
         auto_scan_prompt: undefined,
       }),
-    stopAutoScan: (_agentId: string, projectName: string) => {
-      api.stops.push(projectName);
+    stopAutoScan: (_agentId: string, workspaceName: string) => {
+      api.stops.push(workspaceName);
       return Promise.resolve();
     },
-    runAutoScanNow: (_agentId: string, projectName: string) => {
-      api.runs.push(projectName);
-      return Promise.resolve({ ok: true, project_name: projectName, next_scan_at: null });
+    runAutoScanNow: (_agentId: string, workspaceName: string) => {
+      api.runs.push(workspaceName);
+      return Promise.resolve({ ok: true, project_name: workspaceName, next_scan_at: null });
     },
   };
 });
 
 const { AutoScanSection } = await import('./AutoScanSection');
 
-function scan(projectName: string, overrides: Record<string, unknown> = {}) {
+function scan(workspaceName: string, overrides: Record<string, unknown> = {}) {
   return {
-    project_name: projectName,
+    project_name: workspaceName,
     status: 'scanning',
     started_at: 1_751_800_000,
     last_activity_at: 1_751_800_000,
@@ -94,7 +94,7 @@ describe('AutoScanSection', () => {
     expect(screen.getByText('Scanning')).toBeInTheDocument();
   });
 
-  it('percent-encodes a project name in the monitor link', async () => {
+  it('percent-encodes a workspace name in the monitor link', async () => {
     api.scans = [scan('a/b')];
     renderSection();
 

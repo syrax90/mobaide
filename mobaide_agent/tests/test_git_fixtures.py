@@ -9,7 +9,7 @@ must survive ``model_validate`` → ``model_dump(mode="json")`` unchanged, and
 optionals dropped) must equal the wire with null-valued keys recursively
 stripped.
 
-The project git shapes (the items list, delete batch and the branch create /
+The workspace git shapes (the items list, delete batch and the branch create /
 checkout bodies) predate that rule and were written the Swift way — a
 minimal wire whose ``decoded_canonical`` materialises the model's defaults —
 so their arm compares the dump minus nulls with ``decoded_canonical`` (or

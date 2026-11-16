@@ -45,12 +45,12 @@ class SessionListScreenTest {
 
     private val stops = mutableListOf<Pair<String, Boolean>>()
 
-    private fun session(id: String, project: String, kind: SessionKind): SessionResponse =
+    private fun session(id: String, workspace: String, kind: SessionKind): SessionResponse =
         SessionResponse(
             session_id = id,
             state = "running",
             created_at = "2026-01-01T00:00:00Z",
-            project_name = project,
+            workspace_name = workspace,
             kind = kind,
         )
 
@@ -67,7 +67,7 @@ class SessionListScreenTest {
             scans = emptyList(),
             capacity = 0,
             max_scans = 5,
-            available_projects = emptyList(),
+            available_workspaces = emptyList(),
         )
         val autoScanRepo = mockk<AutoScanRepository>(relaxed = true)
         every { autoScanRepo.observeList() } returns MutableStateFlow(scanList)
@@ -99,8 +99,8 @@ class SessionListScreenTest {
     private fun setScreen() {
         val vm = newViewModel(
             listOf(
-                session("s1", project = "app", kind = SessionKind.Claude),
-                session("s2", project = "api", kind = SessionKind.Codex),
+                session("s1", workspace = "app", kind = SessionKind.Claude),
+                session("s2", workspace = "api", kind = SessionKind.Codex),
             ),
         )
         composeRule.setContent {

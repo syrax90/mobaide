@@ -3,10 +3,11 @@ package com.mobaide.app.data.events
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.network.dto.AutoScanListResponse
 import com.mobaide.app.data.network.dto.GitJobResponse
-import com.mobaide.app.data.network.dto.ProjectInfo
+import com.mobaide.app.data.network.dto.WorkspaceInfo
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.network.dto.VoiceStatusResponse
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
@@ -66,24 +67,24 @@ sealed class AgentEvent {
      *  The foreground service turns this into a system notification. State is also
      *  mirrored on [SessionUpdated]/snapshots for clients that miss it. */
     data class SessionAttention(val session: SessionResponse) : AgentEvent()
-    data class ProjectsChanged(val projects: List<ProjectInfo>) : AgentEvent()
+    data class WorkspacesChanged(val workspaces: List<WorkspaceInfo>) : AgentEvent()
     data class AutoScanStatus(val instance: AutoScanInstanceDto) : AgentEvent()
     data class AutoScanListChanged(val list: AutoScanListResponse) : AgentEvent()
     data class AutoScanEvent(
-        val projectName: String,
+        val workspaceName: String,
         val seq: Long,
         val ts: String,
         val payload: ScanProgressPayload,
     ) : AgentEvent()
 
-    /** Server emits this after any successful git delete in a project so an
+    /** Server emits this after any successful git delete in a workspace so an
      *  open Git management screen can refresh reactively. [toplevel] and
      *  [commonDir] (proto-v7 additive keys) name the resolved repository root
-     *  and common git dir, null when the project is no longer a repo, so a
-     *  session running in a linked worktree — which has no project name — can
+     *  and common git dir, null when the workspace is no longer a repo, so a
+     *  session running in a linked worktree — which has no workspace name — can
      *  still match the event against its own `repo.common_dir`. */
     data class GitChanged(
-        val projectName: String,
+        val workspaceName: String,
         val toplevel: String? = null,
         val commonDir: String? = null,
     ) : AgentEvent()
@@ -147,7 +148,7 @@ data class SessionsChangedPayload(val sessions: List<SessionResponse>)
 data class SessionUpdatedPayload(val session: SessionResponse)
 
 @Serializable
-data class ProjectsChangedPayload(val projects: List<ProjectInfo>)
+data class WorkspacesChangedPayload(@SerialName("projects") val workspaces: List<WorkspaceInfo>)
 
 @Serializable
 data class AgentStatusChangedPayload(

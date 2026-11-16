@@ -14,7 +14,7 @@
  * request and is always right.
  *
  * Full-snapshot events are the sanctioned exception, documented in
- * `sessionCache.ts` and `projectsCache.ts`: `sessions.changed` and
+ * `sessionCache.ts` and `workspacesCache.ts`: `sessions.changed` and
  * `projects.changed` are complete lists, and `session.updated` /
  * `session.attention` carry a whole row each, so there is no delta to drift.
  * On the user channel, `session_mode_order.updated` is the one event of this
@@ -50,10 +50,10 @@ import type { z } from 'zod';
 import type { SessionGitStatus } from '../api/sessionGitRepository';
 import { queryKeys } from '../lib/queryKeys';
 import { decodeEventEnvelope, type EventEnvelope } from '../protocol/dto/envelope';
-import { gitChangedSchema, type GitChanged } from '../protocol/dto/projects';
+import { gitChangedSchema, type GitChanged } from '../protocol/dto/workspaces';
 import type { SessionResponse } from '../protocol/dto/session';
 import { applyAutoScanSnapshot, applyAutoScanStatus } from './autoscanCache';
-import { applyProjectsSnapshot } from './projectsCache';
+import { applyWorkspacesSnapshot } from './workspacesCache';
 import { applySessionsSnapshot, applySessionUpsert } from './sessionCache';
 import { applySessionGitJobEvent } from './sessionGitJobCache';
 import { applySessionModeOrderEvent } from './sessionModeOrderCache';
@@ -141,7 +141,7 @@ const USER_EVENT_RULES: Readonly<Record<string, UserEventRule>> = {
  * Android `GitRepository.matchesSession`: a viewer that has no repo answer yet
  * always refreshes; otherwise its session's `project_name`, or its resolved
  * `toplevel` / `common_dir` (a linked worktree shares the common dir with the
- * project it was cut from), has to match the event. Read from the cache rather
+ * workspace it was cut from), has to match the event. Read from the cache rather
  * than tracked by the viewers, so this stays a pure function of what is cached.
  */
 function sessionGitKeysFor(
@@ -158,10 +158,10 @@ function sessionGitKeysFor(
     if (query.queryKey[4] !== 'status' || typeof sessionId !== 'string') continue;
     const status = query.state.data as SessionGitStatus | undefined;
     const repo = status?.repo ?? null;
-    const projectName = sessions?.find((row) => row.session_id === sessionId)?.project_name;
+    const workspaceName = sessions?.find((row) => row.session_id === sessionId)?.project_name;
     const matches =
       repo === null ||
-      (projectName !== undefined && projectName === event.project_name) ||
+      (workspaceName !== undefined && workspaceName === event.project_name) ||
       (event.toplevel !== undefined && event.toplevel === repo.toplevel) ||
       (event.common_dir !== undefined && event.common_dir === repo.common_dir);
     if (matches) keys.push(queryKeys.sessionGit(agentId, sessionId));
@@ -265,12 +265,12 @@ export function applyAgentEventEnvelope(
       };
     }
     case 'projects.changed': {
-      const outcome = applyProjectsSnapshot(client, agentId, envelope.payload);
+      const outcome = applyWorkspacesSnapshot(client, agentId, envelope.payload);
       if (outcome === 'dropped') return { kind: 'dropped' };
       return {
         kind: 'patched',
         type: envelope.type,
-        keys: [queryKeys.projects(agentId)],
+        keys: [queryKeys.workspaces(agentId)],
       };
     }
     case 'autoscan.list.changed': {
@@ -299,9 +299,9 @@ export function applyAgentEventEnvelope(
     case 'autoscan.event':
       return { kind: 'ignored', type: envelope.type };
     case 'git.changed': {
-      // Per project, not the whole agent: the payload names exactly one, and
+      // Per workspace, not the whole agent: the payload names exactly one, and
       // invalidating the others would refetch every open Git screen's list.
-      // The in-session viewers it touches are found by repo, not by project.
+      // The in-session viewers it touches are found by repo, not by workspace.
       const decoded = gitChangedSchema.safeParse(envelope.payload);
       if (!decoded.success) return { kind: 'dropped' };
       const keys = [
@@ -363,7 +363,7 @@ export function refreshOnUserEventsConnect(client: QueryClient): void {
 /**
  * Reconcile the agent-scoped caches the tunnel does not repair by itself.
  *
- * Sessions and projects are deliberately absent: the relay asks the agent for an
+ * Sessions and workspaces are deliberately absent: the relay asks the agent for an
  * events snapshot whenever a client opens the events socket, and the agent
  * answers by republishing both lists in full
  * (`relay/client.py::_handle_request_events_snapshot`). Those snapshots now
@@ -373,13 +373,13 @@ export function refreshOnUserEventsConnect(client: QueryClient): void {
  *
  * Git items need it: `git.changed` fires only on an actual change and carries no
  * snapshot, so a list cached before the socket dropped cannot otherwise be
- * trusted. The prefix key covers every project at once.
+ * trusted. The prefix key covers every workspace at once.
  *
  * Auto Scan needs it for a different reason — not a missing payload but a
  * missing *transport*. `autoscan.list.changed` is a full snapshot and the agent
  * does send it on connect, but only on the direct `ws/events` path;
  * `relay/client.py::_handle_request_events_snapshot` republishes sessions and
- * projects and stops there, and the relay is the only path a browser takes
+ * workspaces and stops there, and the relay is the only path a browser takes
  * (CLA-249). Without this, a scan started while the socket was down stays
  * invisible until the next start or stop.
  *

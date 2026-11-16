@@ -62,7 +62,7 @@ fun SessionListScreen(
     onSessionClick: (String) -> Unit,
     onCreateClick: () -> Unit,
     onSettingsClick: () -> Unit,
-    onProjectsClick: () -> Unit = {},
+    onWorkspacesClick: () -> Unit = {},
     onAutoScanClick: (String) -> Unit = {},
     onBack: (() -> Unit)? = null,
 ) {
@@ -110,7 +110,7 @@ fun SessionListScreen(
                     }
                 },
                 actions = {
-                    PixelIconButton(Icons.Default.Folder, "Projects", onClick = onProjectsClick)
+                    PixelIconButton(Icons.Default.Folder, "Workspaces", onClick = onWorkspacesClick)
                     PixelIconButton(Icons.Default.Settings, "Settings", onClick = onSettingsClick)
                 },
             )
@@ -154,7 +154,7 @@ fun SessionListScreen(
                         )
                     }
                 }
-                items(uiState.activeScans, key = { it.project_name }) { instance ->
+                items(uiState.activeScans, key = { it.workspace_name }) { instance ->
                     AutoScanCard(
                         instance = instance,
                         onStop = viewModel::stopAutoScan,

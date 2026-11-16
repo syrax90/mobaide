@@ -64,7 +64,7 @@ from mobaide.core.copilot_launcher import CopilotBinaryNotFoundError, CopilotOpt
 from mobaide.core.cursor_launcher import CursorBinaryNotFoundError, CursorOptions
 from mobaide.core.opencode_launcher import OpenCodeBinaryNotFoundError, OpenCodeOptions
 from mobaide.core.pi_launcher import PiBinaryNotFoundError, PiOptions
-from mobaide.core.projects_config import ProjectConfig
+from mobaide.core.workspaces_config import WorkspaceConfig
 from tests.conftest import skip_if_not_linux
 from tests.test_acp_install import fake_npm
 
@@ -115,7 +115,7 @@ class FakeCodexLauncher:
 
     async def build(self, target, options, session_id=None, *, require_auth=True) -> LaunchSpec:
         self.require_auth.append(require_auth)
-        cwd = target.path if isinstance(target, ProjectConfig) else target.cwd
+        cwd = target.path if isinstance(target, WorkspaceConfig) else target.cwd
         return LaunchSpec(
             argv=["codex"], cwd=cwd, env={"PATH": "/usr/bin", "LAUNCHER": "1", **self.env}
         )
@@ -135,7 +135,7 @@ class FakeAgyLauncher:
 
     async def build(self, target, options, session_id=None) -> LaunchSpec:
         self.built.append((target, options))
-        cwd = target.path if isinstance(target, ProjectConfig) else target.cwd
+        cwd = target.path if isinstance(target, WorkspaceConfig) else target.cwd
         return LaunchSpec(argv=["agy"], cwd=cwd, env={"PATH": "/usr/bin", "LAUNCHER": "1"})
 
 
@@ -156,7 +156,7 @@ class FakeCopilotLauncher:
 
     async def resolve_cwd(self, target, options) -> str:
         self.resolved.append((target, options))
-        return target.path if isinstance(target, ProjectConfig) else target.cwd
+        return target.path if isinstance(target, WorkspaceConfig) else target.cwd
 
     def build_env(self, target) -> dict[str, str]:
         return {"PATH": "/usr/bin", "LAUNCHER": "1", **self.env}
@@ -179,7 +179,7 @@ class FakeCursorLauncher:
 
     async def resolve_cwd(self, target, options) -> str:
         self.resolved.append((target, options))
-        return target.path if isinstance(target, ProjectConfig) else target.cwd
+        return target.path if isinstance(target, WorkspaceConfig) else target.cwd
 
     def build_env(self, target) -> dict[str, str]:
         return {"PATH": "/usr/bin", "LAUNCHER": "1", **self.env}
@@ -202,7 +202,7 @@ class FakePiLauncher:
 
     async def resolve_cwd(self, target, options) -> str:
         self.resolved.append((target, options))
-        return target.path if isinstance(target, ProjectConfig) else target.cwd
+        return target.path if isinstance(target, WorkspaceConfig) else target.cwd
 
     def build_env(self, target) -> dict[str, str]:
         return {"PATH": "/usr/bin", "LAUNCHER": "1", **self.env}
@@ -426,7 +426,7 @@ class TestPrepare:
         assert excinfo.value.kind == "claude"
         assert "Node.js" in str(excinfo.value)
 
-    async def test_adapter_process_runs_from_home_not_from_the_project(self, bin_dir, tmp_path):
+    async def test_adapter_process_runs_from_home_not_from_the_workspace(self, bin_dir, tmp_path):
         spec = ClaudeChatSpec(FakeLauncher(), command_override="adapter")
 
         plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), ClaudeOptions())
@@ -437,19 +437,19 @@ class TestPrepare:
     async def test_trust_gate_reads_the_config_dir_of_the_launch_env(
         self, bin_dir, tmp_path, monkeypatch
     ):
-        project = tmp_path / "project"
-        project.mkdir()
+        workspace = tmp_path / "project"
+        workspace.mkdir()
         launch_config = tmp_path / "launch-config"
         launch_config.mkdir()
         (launch_config / ".claude.json").write_text(
-            json.dumps({"projects": {os.path.realpath(project): {"hasTrustDialogAccepted": True}}}),
+            json.dumps({"projects": {os.path.realpath(workspace): {"hasTrustDialogAccepted": True}}}),
             encoding="utf-8",
         )
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "host-config"))
         launcher = FakeLauncher(env={"CLAUDE_CONFIG_DIR": str(launch_config)})
         spec = ClaudeChatSpec(launcher, command_override="adapter")
 
-        plan = await spec.prepare(AdHocLaunch(cwd=str(project)), ClaudeOptions())
+        plan = await spec.prepare(AdHocLaunch(cwd=str(workspace)), ClaudeOptions())
 
         assert plan.trust is not None
         assert plan.trust.is_trusted() is True
@@ -655,12 +655,12 @@ class TestCodexPrepare:
     async def test_plan_runs_the_host_codex_with_the_mapped_options(
         self, bin_dir, tmp_path, monkeypatch
     ):
-        project = tmp_path / "project"
-        project.mkdir()
+        workspace = tmp_path / "project"
+        workspace.mkdir()
         codex_home = tmp_path / "codex-home"
         codex_home.mkdir()
         (codex_home / "config.toml").write_text(
-            f'[projects.{json.dumps(os.path.realpath(project))}]\ntrust_level = "trusted"\n',
+            f'[projects.{json.dumps(os.path.realpath(workspace))}]\ntrust_level = "trusted"\n',
             encoding="utf-8",
         )
         monkeypatch.setenv("CODEX_HOME", str(tmp_path / "host-codex-home"))
@@ -674,10 +674,10 @@ class TestCodexPrepare:
             initial_prompt="Run the tests",
         )
 
-        plan = await spec.prepare(AdHocLaunch(cwd=str(project)), options)
+        plan = await spec.prepare(AdHocLaunch(cwd=str(workspace)), options)
 
         assert plan.argv == ["adapter"]
-        assert plan.cwd == str(project)
+        assert plan.cwd == str(workspace)
         assert plan.process_cwd == os.path.expanduser("~")
         assert plan.env["LAUNCHER"] == "1"
         assert plan.env["CODEX_PATH"] == "/opt/codex/bin/codex"
@@ -779,15 +779,15 @@ class TestCodexPrepare:
         # Nothing listens in this test, so the bridge runs a private app-server.
         assert run("app-server").stdout == "real codex app-server\n"
 
-    @pytest.mark.parametrize("case", ["conda-project", "no-adapters-dir", "fake-agent"])
+    @pytest.mark.parametrize("case", ["conda-workspace", "no-adapters-dir", "fake-agent"])
     async def test_a_private_app_server_where_sharing_does_not_apply(
         self, bin_dir, tmp_path, monkeypatch, case
     ):
         _socket_answers(monkeypatch)
         adapters = tmp_path / "adapters"
         target = AdHocLaunch(cwd=str(tmp_path))
-        if case == "conda-project":
-            target = ProjectConfig(name="ml", path=str(tmp_path), conda_env="ml")
+        if case == "conda-workspace":
+            target = WorkspaceConfig(name="ml", path=str(tmp_path), conda_env="ml")
         spec = CodexChatSpec(
             FakeCodexLauncher(),
             command_override=None if case == "fake-agent" else "adapter",
@@ -989,12 +989,12 @@ class TestAntigravityPrepare:
         home.mkdir()
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.setenv("USERPROFILE", str(home))
-        project = tmp_path / "work" / "app"
-        project.mkdir(parents=True)
+        workspace = tmp_path / "work" / "app"
+        workspace.mkdir(parents=True)
         data = tmp_path / "agy-data"
         data.mkdir()
         (data / "settings.json").write_text(
-            json.dumps({"trustedWorkspaces": [os.path.realpath(project)]}), encoding="utf-8"
+            json.dumps({"trustedWorkspaces": [os.path.realpath(workspace)]}), encoding="utf-8"
         )
         spec = AntigravityChatSpec(
             FakeAgyLauncher(str(agy_bin)), command_override="agy acp", app_data_dir=data
@@ -1006,12 +1006,12 @@ class TestAntigravityPrepare:
             add_dirs=("../shared", str(elsewhere), "~/notes"),
         )
 
-        plan = await spec.prepare(AdHocLaunch(cwd=str(project)), options)
+        plan = await spec.prepare(AdHocLaunch(cwd=str(workspace)), options)
 
         assert plan.argv == ["agy", "acp", "--dangerously-skip-permissions"]
-        assert plan.cwd == str(project)
+        assert plan.cwd == str(workspace)
         # ``agy acp`` works in its own working directory, whatever session/new says.
-        assert plan.process_cwd == str(project)
+        assert plan.process_cwd == str(workspace)
         assert plan.env["LAUNCHER"] == "1"
         assert plan.initial_config == [ConfigIntent("Gemini 3.8 Flash (High)", category="model")]
         assert plan.additional_dirs == [
@@ -1095,7 +1095,7 @@ class FakeOpenCodeLauncher:
 
     async def resolve_cwd(self, target, options) -> str:
         self.resolved.append((target, options))
-        return target.path if isinstance(target, ProjectConfig) else target.cwd
+        return target.path if isinstance(target, WorkspaceConfig) else target.cwd
 
 
 class TestOpenCodePrepare:
@@ -1107,16 +1107,16 @@ class TestOpenCodePrepare:
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.setenv("USERPROFILE", str(home))
         monkeypatch.delenv(agents.OPENCODE_ACP_COMMAND_ENV, raising=False)
-        project = tmp_path / "work" / "app"
-        project.mkdir(parents=True)
+        workspace = tmp_path / "work" / "app"
+        workspace.mkdir(parents=True)
         launcher = FakeOpenCodeLauncher()
         spec = OpenCodeChatSpec(launcher)
         options = OpenCodeOptions(auto_approve=True, initial_prompt="Fix the tests")
 
-        plan = await spec.prepare(AdHocLaunch(cwd=str(project)), options)
+        plan = await spec.prepare(AdHocLaunch(cwd=str(workspace)), options)
 
         assert plan.argv == ["/opt/opencode/bin/opencode", "acp"]
-        assert plan.cwd == str(project)
+        assert plan.cwd == str(workspace)
         assert plan.process_cwd == str(home)
         assert plan.env["LAUNCHER"] == "1"
         assert plan.initial_prompt == "Fix the tests"
@@ -1127,7 +1127,7 @@ class TestOpenCodePrepare:
         assert plan.trust is None
         assert plan.sign_in == []
         assert plan.sign_in_hint == agents.OPENCODE_SIGN_IN_HINT
-        assert launcher.resolved == [(AdHocLaunch(cwd=str(project)), options)]
+        assert launcher.resolved == [(AdHocLaunch(cwd=str(workspace)), options)]
 
     async def test_default_options_ask_before_each_permission(self, tmp_path, monkeypatch):
         monkeypatch.delenv(agents.OPENCODE_ACP_COMMAND_ENV, raising=False)
@@ -1146,7 +1146,7 @@ class TestOpenCodePrepare:
         assert spec.available() is False
         with pytest.raises(ChatAgentUnavailableError) as excinfo:
             await spec.prepare(
-                ProjectConfig(name="p", path=str(tmp_path)), OpenCodeOptions(worktree=True)
+                WorkspaceConfig(name="p", path=str(tmp_path)), OpenCodeOptions(worktree=True)
             )
 
         assert excinfo.value.kind == "opencode"
@@ -1210,24 +1210,24 @@ class TestCopilotPrepare:
         home.mkdir()
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.setenv("USERPROFILE", str(home))
-        project = tmp_path / "work" / "app"
-        project.mkdir(parents=True)
+        workspace = tmp_path / "work" / "app"
+        workspace.mkdir(parents=True)
         copilot_home = tmp_path / "copilot-home"
         copilot_home.mkdir()
         (copilot_home / "config.json").write_text(
             "// This file is managed automatically.\n"
-            + json.dumps({"trustedFolders": [os.path.realpath(project)]}),
+            + json.dumps({"trustedFolders": [os.path.realpath(workspace)]}),
             encoding="utf-8",
         )
         launcher = FakeCopilotLauncher(env={"COPILOT_HOME": str(copilot_home)})
         spec = CopilotChatSpec(launcher)
         options = CopilotOptions(allow_all=True)
 
-        plan = await spec.prepare(AdHocLaunch(cwd=str(project)), options)
+        plan = await spec.prepare(AdHocLaunch(cwd=str(workspace)), options)
 
         assert plan.argv == ["/opt/copilot/bin/copilot", "--acp"]
         # The folder goes to Copilot in ``session/new``; the server runs in home.
-        assert plan.cwd == str(project)
+        assert plan.cwd == str(workspace)
         assert plan.process_cwd == str(home)
         assert plan.env["LAUNCHER"] == "1"
         # ``allow_all`` is a config option of the session, never a launch flag.
@@ -1244,12 +1244,12 @@ class TestCopilotPrepare:
     async def test_a_folder_copilot_does_not_trust_yet_gets_the_trust_gate(self, tmp_path):
         """``copilot --acp`` loads a folder's hooks and MCP servers without its
         own trust question, so the chat must ask first."""
-        project = tmp_path / "work" / "app"
-        project.mkdir(parents=True)
+        workspace = tmp_path / "work" / "app"
+        workspace.mkdir(parents=True)
         launcher = FakeCopilotLauncher(env={"COPILOT_HOME": str(tmp_path / "copilot-home")})
 
         plan = await CopilotChatSpec(launcher).prepare(
-            AdHocLaunch(cwd=str(project)), CopilotOptions()
+            AdHocLaunch(cwd=str(workspace)), CopilotOptions()
         )
 
         assert isinstance(plan.trust, CopilotFolderTrust)
@@ -1332,18 +1332,18 @@ class TestCursorPrepare:
     async def test_plan_runs_the_server_in_the_session_folder(self, tmp_path):
         """Cursor reads a folder's rules, hooks and MCP servers from its own
         working directory, not from ``session/new``."""
-        project = tmp_path / "work" / "app"
-        project.mkdir(parents=True)
+        workspace = tmp_path / "work" / "app"
+        workspace.mkdir(parents=True)
         data_dir = tmp_path / "cursor-data"
         launcher = FakeCursorLauncher(env={"CURSOR_DATA_DIR": str(data_dir)})
         spec = CursorChatSpec(launcher)
         options = CursorOptions()
 
-        plan = await spec.prepare(AdHocLaunch(cwd=str(project)), options)
+        plan = await spec.prepare(AdHocLaunch(cwd=str(workspace)), options)
 
         assert plan.argv == ["/opt/cursor/bin/cursor-agent", "acp"]
-        assert plan.cwd == str(project)
-        assert plan.process_cwd == str(project)
+        assert plan.cwd == str(workspace)
+        assert plan.process_cwd == str(workspace)
         assert plan.env["LAUNCHER"] == "1"
         assert plan.initial_config == []
         assert plan.initial_prompt is None
@@ -1352,7 +1352,7 @@ class TestCursorPrepare:
         # Cursor writes a tool title in Markdown: `pytest -q`, Edit `app.py`.
         assert plan.markdown_titles is True
         assert [(target.cwd, opts) for target, opts in launcher.resolved] == [
-            (str(project), options)
+            (str(workspace), options)
         ]
 
     async def test_force_is_a_flag_of_the_program_before_its_acp_command(self, tmp_path):
@@ -1381,13 +1381,13 @@ class TestCursorPrepare:
     async def test_the_trust_record_is_the_one_of_the_cursor_the_launch_env_points_to(
         self, tmp_path
     ):
-        project = tmp_path / "work" / "app"
-        project.mkdir(parents=True)
+        workspace = tmp_path / "work" / "app"
+        workspace.mkdir(parents=True)
         data_dir = tmp_path / "cursor-data"
         launcher = FakeCursorLauncher(env={"CURSOR_DATA_DIR": str(data_dir)})
 
         plan = await CursorChatSpec(launcher).prepare(
-            AdHocLaunch(cwd=str(project)), CursorOptions()
+            AdHocLaunch(cwd=str(workspace)), CursorOptions()
         )
 
         # ``cursor-agent acp`` does not ask Cursor's trust question itself.
@@ -1944,10 +1944,10 @@ class TestPiCommand:
         assert specs["pi"].command() == ["custom-pi-server", "--stdio"]
 
 
-def _pi_resources(project: Path) -> None:
+def _pi_resources(workspace: Path) -> None:
     """What makes Pi ask its trust question for a folder."""
-    (project / ".pi").mkdir()
-    (project / ".pi" / "settings.json").write_text("{}", encoding="utf-8")
+    (workspace / ".pi").mkdir()
+    (workspace / ".pi" / "settings.json").write_text("{}", encoding="utf-8")
 
 
 class TestPiPrepare:
@@ -1956,25 +1956,25 @@ class TestPiPrepare:
         home.mkdir()
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.setenv("USERPROFILE", str(home))
-        project = tmp_path / "work" / "app"
-        project.mkdir(parents=True)
-        _pi_resources(project)
+        workspace = tmp_path / "work" / "app"
+        workspace.mkdir(parents=True)
+        _pi_resources(workspace)
         pi_dir = tmp_path / "pi-agent"
         pi_dir.mkdir()
         (pi_dir / "trust.json").write_text(
-            json.dumps({os.path.realpath(project): True}), encoding="utf-8"
+            json.dumps({os.path.realpath(workspace): True}), encoding="utf-8"
         )
         launcher = FakePiLauncher(env={"PI_CODING_AGENT_DIR": str(pi_dir)})
         options = PiOptions(worktree=True, branch_name="feature/x")
 
-        plan = await PiChatSpec(launcher).prepare(AdHocLaunch(cwd=str(project)), options)
+        plan = await PiChatSpec(launcher).prepare(AdHocLaunch(cwd=str(workspace)), options)
 
         assert plan.argv == [sys.executable, "-I", pi_bridge.__file__, "/opt/pi/bin/pi"]
         # The folder goes to the bridge in ``session/new``; the bridge runs in home.
-        assert plan.cwd == str(project)
+        assert plan.cwd == str(workspace)
         assert plan.process_cwd == str(home)
         assert plan.env["LAUNCHER"] == "1"
-        assert launcher.resolved == [(AdHocLaunch(cwd=str(project)), options)]
+        assert launcher.resolved == [(AdHocLaunch(cwd=str(workspace)), options)]
         # Pi takes no launch option: nothing to set, nothing to send.
         assert plan.initial_config == []
         assert plan.initial_prompt is None
@@ -1994,12 +1994,12 @@ class TestPiPrepare:
     ):
         """Without a terminal Pi skips a folder's own resources instead of
         asking, so the chat must ask first."""
-        project = tmp_path / "work" / "app"
-        project.mkdir(parents=True)
-        _pi_resources(project)
+        workspace = tmp_path / "work" / "app"
+        workspace.mkdir(parents=True)
+        _pi_resources(workspace)
         launcher = FakePiLauncher(env={"PI_CODING_AGENT_DIR": str(tmp_path / "pi-agent")})
 
-        plan = await PiChatSpec(launcher).prepare(AdHocLaunch(cwd=str(project)), PiOptions())
+        plan = await PiChatSpec(launcher).prepare(AdHocLaunch(cwd=str(workspace)), PiOptions())
 
         assert isinstance(plan.trust, PiFolderTrust)
         assert plan.trust.is_trusted() is False

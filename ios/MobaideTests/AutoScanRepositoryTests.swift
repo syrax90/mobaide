@@ -84,7 +84,7 @@ final class AutoScanRepositoryTests: XCTestCase {
 
         conn.emit(.text(listChangedFrame([(name: "a", status: "scanning"), (name: "b", status: "idle")])))
         let list = await waitFor(repo) { $0.scans.count == 2 }
-        XCTAssertEqual(list.scans.map(\.project_name), ["a", "b"])
+        XCTAssertEqual(list.scans.map(\.workspace_name), ["a", "b"])
     }
 
     func testAutoScanStatusReplacesMatchingInstanceInPlace() async throws {
@@ -97,9 +97,9 @@ final class AutoScanRepositoryTests: XCTestCase {
         _ = await waitFor(repo) { $0.scans.count == 2 }
 
         conn.emit(.text(statusFrame(name: "a", status: "idle")))
-        let list = await waitFor(repo) { $0.scans.first { $0.project_name == "a" }?.status == "idle" }
-        XCTAssertEqual(list.scans.first { $0.project_name == "a" }?.status, "idle")
-        XCTAssertEqual(list.scans.first { $0.project_name == "b" }?.status, "scanning")
+        let list = await waitFor(repo) { $0.scans.first { $0.workspace_name == "a" }?.status == "idle" }
+        XCTAssertEqual(list.scans.first { $0.workspace_name == "a" }?.status, "idle")
+        XCTAssertEqual(list.scans.first { $0.workspace_name == "b" }?.status, "scanning")
     }
 
     // MARK: - REST seed + mutations
@@ -111,15 +111,15 @@ final class AutoScanRepositoryTests: XCTestCase {
         )
         let repo = makeRESTRepo()
         let list = await repo.refresh()
-        XCTAssertEqual(list.scans.map(\.project_name), ["a"])
+        XCTAssertEqual(list.scans.map(\.workspace_name), ["a"])
         XCTAssertEqual(repo.autoScanPrompt, "do it")
     }
 
     func testStartScanAddsOptimisticPlaceholder() async throws {
         StubURLProtocol.enqueue(status: 200, body: "{}")
         let repo = makeRESTRepo()
-        try await repo.startScan(projectName: "p")
-        XCTAssertEqual(repo.currentScans.map(\.project_name), ["p"])
+        try await repo.startScan(workspaceName: "p")
+        XCTAssertEqual(repo.currentScans.map(\.workspace_name), ["p"])
         XCTAssertEqual(repo.currentScans.first?.status, "starting")
     }
 
@@ -127,7 +127,7 @@ final class AutoScanRepositoryTests: XCTestCase {
         StubURLProtocol.enqueue(status: 409, body: "{}")
         let repo = makeRESTRepo()
         do {
-            try await repo.startScan(projectName: "p")
+            try await repo.startScan(workspaceName: "p")
             XCTFail("expected alreadyRunning")
         } catch AutoScanStartError.alreadyRunning(let name) {
             XCTAssertEqual(name, "p")
@@ -148,10 +148,10 @@ final class AutoScanRepositoryTests: XCTestCase {
 
         StubURLProtocol.enqueue(status: 500, body: "down")
         do {
-            try await repo.stopScan(projectName: "p1")
+            try await repo.stopScan(workspaceName: "p1")
             XCTFail("expected stop to throw")
         } catch {}
-        XCTAssertEqual(Set(repo.currentScans.map(\.project_name)), ["p1", "p2"], "stop must roll back on error")
+        XCTAssertEqual(Set(repo.currentScans.map(\.workspace_name)), ["p1", "p2"], "stop must roll back on error")
     }
 
     func testRunNowReconcilesNextScanAtFromResponse() async throws {
@@ -163,14 +163,14 @@ final class AutoScanRepositoryTests: XCTestCase {
         _ = await repo.refresh()
 
         StubURLProtocol.enqueue(status: 200, body: #"{"ok":true,"project_name":"p","next_scan_at":"T2"}"#)
-        let response = try await repo.runNow(projectName: "p")
+        let response = try await repo.runNow(workspaceName: "p")
         XCTAssertEqual(response.next_scan_at, "T2")
         XCTAssertEqual(repo.currentScans.first?.next_scan_at, "T2")
     }
 
     // MARK: - Detail-frame delegation
 
-    func testObserveDetailFramesConnectsWithProjectAndResume() async throws {
+    func testObserveDetailFramesConnectsWithWorkspaceAndResume() async throws {
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
         let bus = AgentEventBus(
             webSocketFactory: .live(transportFactory: FakeWebSocketTransportFactory(), sleeper: RecordingSleeper()),
@@ -181,7 +181,7 @@ final class AutoScanRepositoryTests: XCTestCase {
         let wsFactory = FakeWebSocketTransportFactory()
         let repo = AutoScanRepository(agentAPI: agentAPI, agentEventBus: bus, wsClient: makeWsClient(factory: wsFactory))
 
-        let collector = StreamCollector(repo.observeDetailFrames(project: "p", resume: ["p": 9]))
+        let collector = StreamCollector(repo.observeDetailFrames(workspace: "p", resume: ["p": 9]))
         let conn = try await wsFactory.connection(1)
         conn.emit(.opened)
         _ = try await collector.next()

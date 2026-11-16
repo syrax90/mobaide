@@ -39,8 +39,8 @@ private struct GitChangesContent: View {
             sessionId: sessionId,
             agentAPI: container.agentAPI,
             agentEventBus: container.agentEventBus,
-            projectName: {
-                sessionRepository.currentSessions.first { $0.session_id == sessionId }?.project_name
+            workspaceName: {
+                sessionRepository.currentSessions.first { $0.session_id == sessionId }?.workspace_name
             },
             openCommit: openCommit,
             openSync: openSync,

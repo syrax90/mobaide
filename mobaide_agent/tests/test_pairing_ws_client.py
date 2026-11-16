@@ -478,7 +478,7 @@ class TestWaitForClaimWebSocketsConnectKwargs:
     """Pin the explicit ``ping_interval`` / ``ping_timeout`` keepalive
     arguments threaded into ``websockets.connect``.
 
-    The python-websockets default is also ~20 s, but the project's
+    The python-websockets default is also ~20 s, but the workspace's
     pyproject.toml only constrains ``websockets>=13.0`` — a later
     library version that changes the default would silently regress
     the WS-keepalive contract the agent relies on to surface

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { components } from '../../../api/generated/agent';
-import type { ProjectSummary } from '../../../api/projectRepository';
+import type { WorkspaceSummary } from '../../../api/workspaceRepository';
 import type { ChatSupport } from '../../../protocol/dto/agentVersion';
 import type { ChatStoredSession } from '../../../protocol/dto/chatSessions';
 import { createSessionRequestSchema } from '../../../protocol/dto/sessionCreate';
@@ -17,7 +17,7 @@ import { INITIAL_WIZARD_STATE, type WizardMode, type WizardState } from './wizar
 // mode tables below exhaustive rather than open-ended template-literal keys.
 const CUSTOM = 'custom_0123456789ab' satisfies WizardMode;
 
-const gitProject: ProjectSummary = {
+const gitWorkspace: WorkspaceSummary = {
   name: 'mobaide',
   path: '/srv/mobaide',
   order: 0,
@@ -33,7 +33,7 @@ const gitProject: ProjectSummary = {
  */
 const POPULATED: WizardState = {
   ...INITIAL_WIZARD_STATE,
-  selection: { kind: 'stored', name: gitProject.name },
+  selection: { kind: 'stored', name: gitWorkspace.name },
   claude: {
     model: 'sonnet',
     effort: 'medium',
@@ -82,11 +82,11 @@ const POPULATED: WizardState = {
   cursor: { force: true, terminalUi: false },
   pi: { terminalUi: false },
   git: { worktree: true, branchName: 'feature/x' },
-  autoScanPromptSeededFor: gitProject.name,
+  autoScanPromptSeededFor: gitWorkspace.name,
 };
 
 function build(mode: WizardMode, state: WizardState = POPULATED): CreateSessionRequest {
-  const request = buildCreateRequest({ state, mode, project: gitProject });
+  const request = buildCreateRequest({ state, mode, workspace: gitWorkspace });
   if (request === null) throw new Error(`expected a request for mode ${mode}`);
   return request;
 }
@@ -153,7 +153,7 @@ describe('buildCreateRequest — no cross-branch leakage', () => {
     const scan = buildStartScanRequest({
       state: POPULATED,
       mode: 'auto_scan',
-      project: gitProject,
+      workspace: gitWorkspace,
     })?.claude_options;
 
     expect(claude).toMatchObject({
@@ -268,7 +268,7 @@ describe('buildCreateRequest — every boolean explicit', () => {
   it('sends allow_all: false for a default Copilot launch', () => {
     const request = build('copilot', {
       ...INITIAL_WIZARD_STATE,
-      selection: { kind: 'stored', name: gitProject.name },
+      selection: { kind: 'stored', name: gitWorkspace.name },
     });
 
     expect(request.copilot_options?.allow_all).toBe(false);
@@ -281,7 +281,7 @@ describe('buildCreateRequest — every boolean explicit', () => {
   it('sends force: false for a default Cursor launch', () => {
     const request = build('cursor', {
       ...INITIAL_WIZARD_STATE,
-      selection: { kind: 'stored', name: gitProject.name },
+      selection: { kind: 'stored', name: gitWorkspace.name },
     });
 
     expect(request.cursor_options?.force).toBe(false);
@@ -291,7 +291,7 @@ describe('buildCreateRequest — every boolean explicit', () => {
     const scan = buildStartScanRequest({
       state: POPULATED,
       mode: 'auto_scan',
-      project: gitProject,
+      workspace: gitWorkspace,
     });
 
     expectExplicitBooleans(scan?.claude_options, CLAUDE_BOOLEANS);
@@ -302,7 +302,7 @@ describe('buildCreateRequest — every boolean explicit', () => {
     // launch with --dangerously-skip-permissions.
     const request = build('claude', {
       ...INITIAL_WIZARD_STATE,
-      selection: { kind: 'stored', name: gitProject.name },
+      selection: { kind: 'stored', name: gitWorkspace.name },
     });
 
     expect(request.claude_options?.skip_permissions).toBe(false);
@@ -310,7 +310,7 @@ describe('buildCreateRequest — every boolean explicit', () => {
 });
 
 describe('buildCreateRequest — placement', () => {
-  const nonGit: ProjectSummary = { ...gitProject, is_git: false };
+  const nonGit: WorkspaceSummary = { ...gitWorkspace, is_git: false };
 
   it('keeps a managed CLI’s worktree intent inside its own options block', () => {
     const request = build('claude');
@@ -350,14 +350,14 @@ describe('buildCreateRequest — placement', () => {
     expect(request.codex_options).toMatchObject({ worktree: false, branch_name: 'wip' });
   });
 
-  it('drops worktree and branch for a project that is not a repo', () => {
-    const request = buildCreateRequest({ state: POPULATED, mode: 'claude', project: nonGit });
+  it('drops worktree and branch for a workspace that is not a repo', () => {
+    const request = buildCreateRequest({ state: POPULATED, mode: 'claude', workspace: nonGit });
 
     expect(request?.claude_options).toMatchObject({ worktree: false });
     expect(request?.claude_options?.branch_name).toBeUndefined();
   });
 
-  it('sends a one-off path as cwd with no project and no git intent', () => {
+  it('sends a one-off path as cwd with no workspace and no git intent', () => {
     const request = build('claude', {
       ...POPULATED,
       selection: { kind: 'customPath', path: '/tmp/scratch' },
@@ -383,13 +383,13 @@ describe('buildCreateRequest — placement', () => {
   });
 
   it('returns null when there is nowhere to launch, and for auto_scan', () => {
-    expect(buildCreateRequest({ state: INITIAL_WIZARD_STATE, mode: 'shell', project: null })).toBeNull();
-    expect(buildCreateRequest({ state: POPULATED, mode: 'auto_scan', project: gitProject })).toBeNull();
+    expect(buildCreateRequest({ state: INITIAL_WIZARD_STATE, mode: 'shell', workspace: null })).toBeNull();
+    expect(buildCreateRequest({ state: POPULATED, mode: 'auto_scan', workspace: gitWorkspace })).toBeNull();
   });
 });
 
 describe('buildStartScanRequest', () => {
-  const scanContext = { state: POPULATED, mode: 'auto_scan' as WizardMode, project: gitProject };
+  const scanContext = { state: POPULATED, mode: 'auto_scan' as WizardMode, workspace: gitWorkspace };
 
   it('hardcodes a worktree per issue and names no branch', () => {
     const request = buildStartScanRequest(scanContext);
@@ -429,12 +429,12 @@ describe('focus_mode', () => {
   it('defaults to focus view on for both a Claude launch and a scan', () => {
     const fresh: WizardState = {
       ...INITIAL_WIZARD_STATE,
-      selection: { kind: 'stored', name: gitProject.name },
+      selection: { kind: 'stored', name: gitWorkspace.name },
     };
 
     expect(build('claude', fresh).claude_options?.focus_mode).toBe(true);
     expect(
-      buildStartScanRequest({ state: fresh, mode: 'auto_scan', project: gitProject })
+      buildStartScanRequest({ state: fresh, mode: 'auto_scan', workspace: gitWorkspace })
         ?.claude_options?.focus_mode,
     ).toBe(true);
   });
@@ -445,7 +445,7 @@ describe('focus_mode', () => {
       claude: { ...POPULATED.claude, focusMode: false },
       autoScan: { ...POPULATED.autoScan, focusMode: true },
     };
-    const scan = buildStartScanRequest({ state, mode: 'auto_scan', project: gitProject });
+    const scan = buildStartScanRequest({ state, mode: 'auto_scan', workspace: gitWorkspace });
 
     expect(build('claude', state).claude_options?.focus_mode).toBe(false);
     expect(scan?.claude_options?.focus_mode).toBe(true);
@@ -466,7 +466,7 @@ describe('Codex — chat view', () => {
     const request = buildCreateRequest({
       state: { ...POPULATED, codex: { ...POPULATED.codex, terminalUi } },
       mode: 'codex',
-      project: gitProject,
+      workspace: gitWorkspace,
       chat,
     });
 
@@ -486,7 +486,7 @@ describe('Antigravity — chat view', () => {
     const request = buildCreateRequest({
       state: { ...POPULATED, antigravity: { ...POPULATED.antigravity, terminalUi } },
       mode: 'antigravity',
-      project: gitProject,
+      workspace: gitWorkspace,
       chat,
     });
 
@@ -508,7 +508,7 @@ describe('OpenCode — chat view', () => {
     const request = buildCreateRequest({
       state: { ...POPULATED, opencode: { ...POPULATED.opencode, terminalUi } },
       mode: 'opencode',
-      project: gitProject,
+      workspace: gitWorkspace,
       chat,
     });
 
@@ -527,7 +527,7 @@ describe('OpenCode — chat view', () => {
   it('asks before each permission unless the user turned auto-approve on', () => {
     const request = build('opencode', {
       ...INITIAL_WIZARD_STATE,
-      selection: { kind: 'stored', name: gitProject.name },
+      selection: { kind: 'stored', name: gitWorkspace.name },
     });
 
     expect(request.opencode_options?.auto_approve).toBe(false);
@@ -547,7 +547,7 @@ describe('Copilot — chat view', () => {
     const request = buildCreateRequest({
       state: { ...POPULATED, copilot: { ...POPULATED.copilot, terminalUi } },
       mode: 'copilot',
-      project: gitProject,
+      workspace: gitWorkspace,
       chat,
     });
 
@@ -577,7 +577,7 @@ describe('Cursor — chat view', () => {
     const request = buildCreateRequest({
       state: { ...POPULATED, cursor: { ...POPULATED.cursor, terminalUi } },
       mode: 'cursor',
-      project: gitProject,
+      workspace: gitWorkspace,
       chat,
     });
 
@@ -618,7 +618,7 @@ describe('Pi — chat view', () => {
     const request = buildCreateRequest({
       state: { ...POPULATED, pi: { terminalUi } },
       mode: 'pi',
-      project: gitProject,
+      workspace: gitWorkspace,
       chat,
     });
 
@@ -637,7 +637,7 @@ describe('Pi — chat view', () => {
 describe('buildResumeRequest', () => {
   const stored: ChatStoredSession = {
     session_id: 'external-2222',
-    cwd: gitProject.path,
+    cwd: gitWorkspace.path,
     title: 'Add retries to the sync job',
     updated_at: '2026-11-08T10:00:00Z',
     open_session_id: undefined,
@@ -646,7 +646,7 @@ describe('buildResumeRequest', () => {
 
   it('continues a Codex session with the Codex options and never a worktree', () => {
     const request = buildResumeRequest(
-      { state: POPULATED, mode: 'codex', project: gitProject },
+      { state: POPULATED, mode: 'codex', workspace: gitWorkspace },
       'codex',
       stored,
     );
@@ -672,7 +672,7 @@ describe('buildResumeRequest', () => {
 
   it('keeps Codex options out of a Claude Code resume', () => {
     const request = buildResumeRequest(
-      { state: POPULATED, mode: 'claude', project: gitProject },
+      { state: POPULATED, mode: 'claude', workspace: gitWorkspace },
       'claude',
       stored,
     );
@@ -684,7 +684,7 @@ describe('buildResumeRequest', () => {
 
   it('continues an Antigravity conversation with the Antigravity options and never a worktree', () => {
     const request = buildResumeRequest(
-      { state: POPULATED, mode: 'antigravity', project: gitProject },
+      { state: POPULATED, mode: 'antigravity', workspace: gitWorkspace },
       'antigravity',
       stored,
     );
@@ -712,7 +712,7 @@ describe('buildResumeRequest', () => {
 
   it('continues an OpenCode session with the OpenCode options and never a worktree', () => {
     const request = buildResumeRequest(
-      { state: POPULATED, mode: 'opencode', project: gitProject },
+      { state: POPULATED, mode: 'opencode', workspace: gitWorkspace },
       'opencode',
       stored,
     );
@@ -737,7 +737,7 @@ describe('buildResumeRequest', () => {
 
   it('continues a Pi session with the Pi options and never a worktree', () => {
     const request = buildResumeRequest(
-      { state: POPULATED, mode: 'pi', project: gitProject },
+      { state: POPULATED, mode: 'pi', workspace: gitWorkspace },
       'pi',
       stored,
     );
@@ -761,7 +761,7 @@ describe('buildResumeRequest', () => {
 
   it('continues a Copilot session with the Copilot options and never a worktree', () => {
     const request = buildResumeRequest(
-      { state: POPULATED, mode: 'copilot', project: gitProject },
+      { state: POPULATED, mode: 'copilot', workspace: gitWorkspace },
       'copilot',
       stored,
     );
@@ -787,7 +787,7 @@ describe('buildResumeRequest', () => {
 
   it('continues a Cursor session with the Cursor options and never a worktree', () => {
     const request = buildResumeRequest(
-      { state: POPULATED, mode: 'cursor', project: gitProject },
+      { state: POPULATED, mode: 'cursor', workspace: gitWorkspace },
       'cursor',
       stored,
     );
@@ -811,9 +811,9 @@ describe('buildResumeRequest', () => {
     expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
   });
 
-  it('sends the recorded folder as cwd when it is not the selected project', () => {
+  it('sends the recorded folder as cwd when it is not the selected workspace', () => {
     const request = buildResumeRequest(
-      { state: POPULATED, mode: 'codex', project: gitProject },
+      { state: POPULATED, mode: 'codex', workspace: gitWorkspace },
       'codex',
       { ...stored, cwd: '/srv/elsewhere' },
     );
@@ -826,13 +826,13 @@ describe('buildResumeRequest', () => {
 describe('buildConnectRequest', () => {
   const SIGN_IN = { auto_approve: false, connect: true, worktree: false };
 
-  it('asks for a bare terminal sign-in in the project, whatever the wizard holds', () => {
+  it('asks for a bare terminal sign-in in the workspace, whatever the wizard holds', () => {
     // `opencode auth login` is not an agent session: auto-approve, the
     // worktree and its branch must not ride along, and neither may the chat view.
     const request = buildConnectRequest({
       state: POPULATED,
       mode: 'opencode',
-      project: gitProject,
+      workspace: gitWorkspace,
       worktreeBase: 'origin/dev',
       chat: { kind: 'available', resume: true, live: false },
     });
@@ -850,11 +850,11 @@ describe('buildConnectRequest', () => {
     expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
   });
 
-  it('runs in a one-off folder, sent as cwd with no project', () => {
+  it('runs in a one-off folder, sent as cwd with no workspace', () => {
     const request = buildConnectRequest({
       state: { ...POPULATED, selection: { kind: 'customPath', path: '/tmp/scratch' } },
       mode: 'opencode',
-      project: null,
+      workspace: null,
     });
 
     expect(request).toMatchObject({ cwd: '/tmp/scratch', opencode_options: SIGN_IN, ui: 'terminal' });
@@ -866,7 +866,7 @@ describe('buildConnectRequest', () => {
       buildConnectRequest({
         state: { ...POPULATED, selection: { kind: 'none' } },
         mode: 'opencode',
-        project: null,
+        workspace: null,
       }),
     ).toBeNull();
   });
@@ -874,7 +874,7 @@ describe('buildConnectRequest', () => {
 
 describe('base_branch', () => {
   const withBase = (mode: WizardMode, state: WizardState = POPULATED): CreateSessionRequest => {
-    const request = buildCreateRequest({ state, mode, project: gitProject, worktreeBase: 'origin/dev' });
+    const request = buildCreateRequest({ state, mode, workspace: gitWorkspace, worktreeBase: 'origin/dev' });
     if (request === null) throw new Error(`expected a request for mode ${mode}`);
     return request;
   };
@@ -913,11 +913,11 @@ describe('base_branch', () => {
     expect(block.base_branch).toBeNull();
   });
 
-  it('is null for a project that is not a repo, and for an unresolved base', () => {
+  it('is null for a workspace that is not a repo, and for an unresolved base', () => {
     const nonGit = buildCreateRequest({
       state: POPULATED,
       mode: 'claude',
-      project: { ...gitProject, is_git: false },
+      workspace: { ...gitWorkspace, is_git: false },
       worktreeBase: 'origin/dev',
     });
 
@@ -929,7 +929,7 @@ describe('base_branch', () => {
     const scan = buildStartScanRequest({
       state: POPULATED,
       mode: 'auto_scan',
-      project: gitProject,
+      workspace: gitWorkspace,
       worktreeBase: 'origin/dev',
     });
 

@@ -2,11 +2,11 @@ import Foundation
 
 /// Mirror of Android `PreferencesStore` (plain DataStore file
 /// "mobaide_prefs"): non-secret app preferences, including the
-/// `last_used_*` keys and per-project/per-agent dynamic caches.
+/// `last_used_*` keys and per-workspace/per-agent dynamic caches.
 struct PreferencesStore: @unchecked Sendable {
     static let suiteName = "mobaide_prefs"
 
-    static let keyLastUsedProjectName = "last_used_project_name"
+    static let keyLastUsedWorkspaceName = "last_used_project_name"
     static let keyLastUsedSessionId = "last_used_session_id"
     static let keyLastUsedClaudeOptions = "last_used_claude_options"
     static let keyLastUsedAutoScanOptions = "last_used_auto_scan_options"
@@ -38,8 +38,8 @@ struct PreferencesStore: @unchecked Sendable {
     static let maxRecentCustomPaths = 5
     static let maxRecentShortcutChords = 10
 
-    static func linearLabelsKey(projectName: String) -> String { "linear_labels::\(projectName)" }
-    static func linearStatesKey(projectName: String) -> String { "linear_states::\(projectName)" }
+    static func linearLabelsKey(workspaceName: String) -> String { "linear_labels::\(workspaceName)" }
+    static func linearStatesKey(workspaceName: String) -> String { "linear_states::\(workspaceName)" }
     static func recentCustomPathsKey(agentKey: String) -> String { "\(recentCustomPathsPrefix)\(agentKey)" }
     static func recentShortcutChordsKey(kindKey: String) -> String { "recent_shortcut_chords::\(kindKey)" }
     static func attentionSeenKey(agentKey: String) -> String { "\(attentionSeenPrefix)\(agentKey)" }
@@ -53,12 +53,12 @@ struct PreferencesStore: @unchecked Sendable {
         self.defaults = defaults
     }
 
-    func getLastUsedProjectName() -> String? {
-        defaults.string(forKey: Self.keyLastUsedProjectName)
+    func getLastUsedWorkspaceName() -> String? {
+        defaults.string(forKey: Self.keyLastUsedWorkspaceName)
     }
 
-    func setLastUsedProjectName(_ name: String?) {
-        setOrRemove(name, forKey: Self.keyLastUsedProjectName)
+    func setLastUsedWorkspaceName(_ name: String?) {
+        setOrRemove(name, forKey: Self.keyLastUsedWorkspaceName)
     }
 
     func getLastUsedSessionId() -> String? {
@@ -219,20 +219,20 @@ struct PreferencesStore: @unchecked Sendable {
         defaults.set(on, forKey: Self.keyChatFocusView)
     }
 
-    func getCachedLinearLabels(projectName: String) -> [LinearLabelDto] {
-        decodeBlob(forKey: Self.linearLabelsKey(projectName: projectName)) ?? []
+    func getCachedLinearLabels(workspaceName: String) -> [LinearLabelDto] {
+        decodeBlob(forKey: Self.linearLabelsKey(workspaceName: workspaceName)) ?? []
     }
 
-    func setCachedLinearLabels(projectName: String, labels: [LinearLabelDto]) {
-        encodeBlob(labels, forKey: Self.linearLabelsKey(projectName: projectName))
+    func setCachedLinearLabels(workspaceName: String, labels: [LinearLabelDto]) {
+        encodeBlob(labels, forKey: Self.linearLabelsKey(workspaceName: workspaceName))
     }
 
-    func getCachedLinearStates(projectName: String) -> [LinearStateDto] {
-        decodeBlob(forKey: Self.linearStatesKey(projectName: projectName)) ?? []
+    func getCachedLinearStates(workspaceName: String) -> [LinearStateDto] {
+        decodeBlob(forKey: Self.linearStatesKey(workspaceName: workspaceName)) ?? []
     }
 
-    func setCachedLinearStates(projectName: String, states: [LinearStateDto]) {
-        encodeBlob(states, forKey: Self.linearStatesKey(projectName: projectName))
+    func setCachedLinearStates(workspaceName: String, states: [LinearStateDto]) {
+        encodeBlob(states, forKey: Self.linearStatesKey(workspaceName: workspaceName))
     }
 
     func getRecentCustomPaths(agentKey: String) -> [String] {

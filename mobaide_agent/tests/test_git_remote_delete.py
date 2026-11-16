@@ -1,4 +1,4 @@
-"""``remote_branch`` and worktree-only deletes of the project git service
+"""``remote_branch`` and worktree-only deletes of the workspace git service
 against a real bare remote: which refs a ``git push`` deletion removes, the
 refusal vocabulary each remote failure maps to, and the positional results of
 a batch mixing local and remote items."""
@@ -71,11 +71,11 @@ class FakeEventBus:
         self.published.append((event_type, payload))
 
 
-def _changed(repo_dir: str, project_name: str) -> tuple[str, dict]:
+def _changed(repo_dir: str, workspace_name: str) -> tuple[str, dict]:
     return (
         "git.changed",
         {
-            "project_name": project_name,
+            "project_name": workspace_name,
             "toplevel": norm_path(repo_dir),
             "common_dir": norm_path(repo_dir) + "/.git",
         },
@@ -140,8 +140,8 @@ async def _delete(
 ) -> GitDeleteResponse:
     return await delete_git_items(
         GitDeleteRequest(items=list(items)),
-        project_name="proj",
-        project_root=root,
+        workspace_name="proj",
+        workspace_root=root,
         manager=_manager(),
         session_manager=None,
         autoscan_manager=None,

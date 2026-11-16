@@ -236,11 +236,11 @@ export function BaseBranchPicker({
                   {row.ref ?? "Default branch"}
                 </span>
                 {row.isDefault && (
-                  <span className="project-badge base-branch-badge-default">
+                  <span className="workspace-badge base-branch-badge-default">
                     default
                   </span>
                 )}
-                {row.isLocal && <span className="project-badge">local</span>}
+                {row.isLocal && <span className="workspace-badge">local</span>}
                 {row.age !== "" && (
                   <span className="base-branch-age">{row.age}</span>
                 )}

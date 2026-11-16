@@ -1,11 +1,11 @@
 import XCTest
 @testable import Mobaide
 
-/// The New Session base-branch picker: capability gate, preselection, project
+/// The New Session base-branch picker: capability gate, preselection, workspace
 /// change reset, and `base_branch` on the request per mode.
 @MainActor
 final class CreateSessionModelWorktreeBaseTests: XCTestCase {
-    private static let projectsJSON = #"""
+    private static let workspacesJSON = #"""
     [{"name":"repo","path":"/r","is_git":true},
      {"name":"other","path":"/o","is_git":true},
      {"name":"plain","path":"/p","is_git":false}]
@@ -52,15 +52,15 @@ final class CreateSessionModelWorktreeBaseTests: XCTestCase {
         )
     }
 
-    /// Projects loaded, the version probed, `repo` selected with the worktree on.
+    /// Workspaces loaded, the version probed, `repo` selected with the worktree on.
     private func readyModel(worktreeBase: Bool = true, mode: CreateSessionModel.Mode = .standard) async -> CreateSessionModel {
         StubURLProtocol.reset()
-        StubURLProtocol.enqueue(status: 200, body: Self.projectsJSON)
+        StubURLProtocol.enqueue(status: 200, body: Self.workspacesJSON)
         StubURLProtocol.enqueue(status: 200, body: Self.versionJSON(worktreeBase: worktreeBase))
         let model = stubbedModel()
         await model.load()
         await model.refreshCliAvailability()
-        model.selectStoredProject("repo")
+        model.selectStoredWorkspace("repo")
         model.mode = mode
         model.worktree = true
         return model
@@ -85,7 +85,7 @@ final class CreateSessionModelWorktreeBaseTests: XCTestCase {
         XCTAssertNil(request.claude_options?.base_branch)
     }
 
-    func testPickerVisibilityFollowsWorktreeProjectAndMode() async {
+    func testPickerVisibilityFollowsWorktreeWorkspaceAndMode() async {
         let model = await readyModel()
         XCTAssertTrue(model.showsBaseBranchPicker)
         XCTAssertEqual(model.worktreeBasesLoadKey, "repo")
@@ -95,13 +95,13 @@ final class CreateSessionModelWorktreeBaseTests: XCTestCase {
         model.mode = .autoScan
         XCTAssertFalse(model.showsBaseBranchPicker, "Auto Scan never shows the picker")
         model.mode = .shell
-        model.selectStoredProject("plain")
-        XCTAssertFalse(model.showsBaseBranchPicker, "a non-git project has no worktree")
+        model.selectStoredWorkspace("plain")
+        XCTAssertFalse(model.showsBaseBranchPicker, "a non-git workspace has no worktree")
     }
 
     // MARK: - Loading and preselection
 
-    func testLoadHitsTheProjectRoute() async throws {
+    func testLoadHitsTheWorkspaceRoute() async throws {
         let model = await readyModel()
         await loaded(model, default: "origin/main", lastUsed: nil)
         let url = try XCTUnwrap(StubURLProtocol.requests.last?.url?.absoluteString)
@@ -134,7 +134,7 @@ final class CreateSessionModelWorktreeBaseTests: XCTestCase {
         XCTAssertEqual(model.baseBranch, "origin/main", "Retry loads and preselects")
     }
 
-    func testListIsLoadedOncePerProject() async {
+    func testListIsLoadedOncePerWorkspace() async {
         let model = await readyModel()
         await loaded(model, default: "origin/main", lastUsed: nil)
         let count = StubURLProtocol.requests.count
@@ -142,7 +142,7 @@ final class CreateSessionModelWorktreeBaseTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requests.count, count)
     }
 
-    func testManualPickSurvivesReloadOfSameProject() async {
+    func testManualPickSurvivesReloadOfSameWorkspace() async {
         let model = await readyModel()
         await loaded(model, default: "origin/main", lastUsed: nil)
         model.pickBaseBranch("wip")
@@ -151,18 +151,18 @@ final class CreateSessionModelWorktreeBaseTests: XCTestCase {
         XCTAssertEqual(model.baseBranch, "wip")
     }
 
-    func testProjectChangeResetsPickAndList() async {
+    func testWorkspaceChangeResetsPickAndList() async {
         let model = await readyModel()
         await loaded(model, default: "origin/main", lastUsed: nil)
         model.pickBaseBranch("wip")
-        model.selectStoredProject("other")
+        model.selectStoredWorkspace("other")
         XCTAssertNil(model.baseBranch)
         XCTAssertEqual(model.worktreeBases, .idle)
         XCTAssertEqual(model.worktreeBasesLoadKey, "other")
 
         StubURLProtocol.enqueue(status: 200, body: Self.basesJSON(default: "origin/main", lastUsed: "origin/develop"))
         await model.loadWorktreeBases()
-        XCTAssertEqual(model.baseBranch, "origin/develop", "the new project's preselection applies")
+        XCTAssertEqual(model.baseBranch, "origin/develop", "the new workspace's preselection applies")
         XCTAssertEqual(StubURLProtocol.requests.last?.url?.path, "/api/projects/other/git/worktree-bases")
     }
 
@@ -204,7 +204,7 @@ final class CreateSessionModelWorktreeBaseTests: XCTestCase {
     }
 
     func testBaseBranchIsOnTheWireAndNilIsAbsent() throws {
-        let withBase = CreateSessionRequest(project_name: "repo", worktree: true, base_branch: "origin/main")
+        let withBase = CreateSessionRequest(workspace_name: "repo", worktree: true, base_branch: "origin/main")
         let json = try XCTUnwrap(String(data: WireJSON.encoder().encode(withBase), encoding: .utf8))
         XCTAssertTrue(json.contains(#""base_branch":"origin\/main""#) || json.contains(#""base_branch":"origin/main""#))
 

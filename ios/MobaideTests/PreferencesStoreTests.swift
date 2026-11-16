@@ -19,14 +19,14 @@ final class PreferencesStoreTests: XCTestCase {
     }
 
     func testLastUsedKeysRoundTripAndNilRemoves() {
-        store.setLastUsedProjectName("proj")
+        store.setLastUsedWorkspaceName("proj")
         store.setLastUsedSessionId("s1")
-        XCTAssertEqual(store.getLastUsedProjectName(), "proj")
+        XCTAssertEqual(store.getLastUsedWorkspaceName(), "proj")
         XCTAssertEqual(store.getLastUsedSessionId(), "s1")
 
-        store.setLastUsedProjectName(nil)
-        XCTAssertNil(store.getLastUsedProjectName())
-        XCTAssertNil(defaults.object(forKey: PreferencesStore.keyLastUsedProjectName))
+        store.setLastUsedWorkspaceName(nil)
+        XCTAssertNil(store.getLastUsedWorkspaceName())
+        XCTAssertNil(defaults.object(forKey: PreferencesStore.keyLastUsedWorkspaceName))
     }
 
     func testLaunchPrefsBlobsRoundTripWithDefaults() {
@@ -167,8 +167,8 @@ final class PreferencesStoreTests: XCTestCase {
     }
 
     func testDynamicKeysUseDoubleColonSeparator() {
-        XCTAssertEqual(PreferencesStore.linearLabelsKey(projectName: "p"), "linear_labels::p")
-        XCTAssertEqual(PreferencesStore.linearStatesKey(projectName: "p"), "linear_states::p")
+        XCTAssertEqual(PreferencesStore.linearLabelsKey(workspaceName: "p"), "linear_labels::p")
+        XCTAssertEqual(PreferencesStore.linearStatesKey(workspaceName: "p"), "linear_states::p")
         XCTAssertEqual(PreferencesStore.recentCustomPathsKey(agentKey: "k"), "recent_custom_paths::k")
         XCTAssertEqual(PreferencesStore.attentionSeenKey(agentKey: "k"), "attention_seen::k")
     }
@@ -200,14 +200,14 @@ final class PreferencesStoreTests: XCTestCase {
         // be gone — that scan must not take unrelated preferences with it.
         store.setAttentionSeen(agentKey: "a1", record: AttentionSeenRecord(baselined: true))
         store.setAttentionSeen(agentKey: "a2", record: AttentionSeenRecord(baselined: true))
-        store.setLastUsedProjectName("proj")
+        store.setLastUsedWorkspaceName("proj")
         store.addRecentCustomPath(agentKey: "a1", path: "/one")
 
         store.removeAllAttentionSeen()
 
         XCTAssertEqual(store.getAttentionSeen(agentKey: "a1"), AttentionSeenRecord())
         XCTAssertEqual(store.getAttentionSeen(agentKey: "a2"), AttentionSeenRecord())
-        XCTAssertEqual(store.getLastUsedProjectName(), "proj")
+        XCTAssertEqual(store.getLastUsedWorkspaceName(), "proj")
         XCTAssertEqual(store.getRecentCustomPaths(agentKey: "a1"), ["/one"])
     }
 
@@ -218,7 +218,7 @@ final class PreferencesStoreTests: XCTestCase {
         store.addRecentCustomPath(agentKey: "a2", path: "/home/alice/work")
         store.addRecentShortcutChord(kindKey: "claude", token: "ctrl+c")
         store.setAttentionSeen(agentKey: "a1", record: AttentionSeenRecord(baselined: true))
-        store.setLastUsedProjectName("proj")
+        store.setLastUsedWorkspaceName("proj")
 
         store.removeAllRecentCustomPaths()
 
@@ -232,7 +232,7 @@ final class PreferencesStoreTests: XCTestCase {
         )
         XCTAssertEqual(store.getRecentShortcutChords(kindKey: "claude"), ["ctrl+c"])
         XCTAssertEqual(store.getAttentionSeen(agentKey: "a1"), AttentionSeenRecord(baselined: true))
-        XCTAssertEqual(store.getLastUsedProjectName(), "proj")
+        XCTAssertEqual(store.getLastUsedWorkspaceName(), "proj")
     }
 
     func testRecentCustomPathsPrependDedupeAndCap() {

@@ -19,7 +19,7 @@ class SessionDisplayTest {
         title: String? = null,
         kind: SessionKind = SessionKind.Claude,
         kindLabel: String? = null,
-        projectName: String? = null,
+        workspaceName: String? = null,
         state: String = "running",
         attention: String? = null,
         activity: String? = null,
@@ -28,7 +28,7 @@ class SessionDisplayTest {
         state = state,
         created_at = "2026-01-01T00:00:00Z",
         title = title,
-        project_name = projectName,
+        workspace_name = workspaceName,
         kind = kind,
         kind_label = kindLabel,
         attention = attention,
@@ -64,21 +64,21 @@ class SessionDisplayTest {
     }
 
     @Test
-    fun title_fallsBackToKindAndProject_whenTitleUnusable() {
+    fun title_fallsBackToKindAndWorkspace_whenTitleUnusable() {
         assertEquals(
-            "several sessions of one kind need the project to tell them apart",
+            "several sessions of one kind need the workspace to tell them apart",
             "Codex · mobaide",
-            sessionTitle(session(projectName = "mobaide"), "Codex"),
+            sessionTitle(session(workspaceName = "mobaide"), "Codex"),
         )
         assertEquals(
             "a whitespace-only OSC title is not a headline",
             "Terminal · mobaide",
-            sessionTitle(session(title = "   ", projectName = "mobaide"), "Terminal"),
+            sessionTitle(session(title = "   ", workspaceName = "mobaide"), "Terminal"),
         )
     }
 
     @Test
-    fun title_fallsBackToTruncatedId_forAProjectLessSession() {
+    fun title_fallsBackToTruncatedId_forAWorkspaceLessSession() {
         assertEquals("Claude Code · 01234567", sessionTitle(session(), "Claude Code"))
     }
 

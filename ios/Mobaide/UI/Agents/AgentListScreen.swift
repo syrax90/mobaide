@@ -74,8 +74,8 @@ private struct AgentListContent: View {
                         Button { router.navigate(to: .connections) } label: {
                             Label("Manage connections", systemImage: "rectangle.2.swap")
                         }
-                        Button { router.navigate(to: .projects) } label: {
-                            Label("Projects", systemImage: "folder")
+                        Button { router.navigate(to: .workspaces) } label: {
+                            Label("Workspaces", systemImage: "folder")
                         }
                         Divider()
                         Button { router.navigate(to: .settings) } label: {

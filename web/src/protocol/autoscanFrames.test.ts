@@ -47,7 +47,7 @@ describe('auto-scan frame golden fixtures', () => {
       case 'event': {
         expect(frame?.kind).toBe('event');
         if (frame?.kind !== 'event') break;
-        expect(frame.event.projectName).toBe(expected.project_name);
+        expect(frame.event.workspaceName).toBe(expected.project_name);
         expect(frame.event.seq).toBe(BigInt(expected.seq ?? 0));
         // The fixture calls an unrecognised inner type "unknown"; the wire
         // string is preserved verbatim here rather than coerced, so an unknown
@@ -75,10 +75,10 @@ describe('auto-scan frame golden fixtures', () => {
 });
 
 describe('auto-scan wire cursor', () => {
-  const event = (projectName: string, seq: number): string =>
+  const event = (workspaceName: string, seq: number): string =>
     stringifyWire({
       type: 'event',
-      project_name: projectName,
+      project_name: workspaceName,
       event: { seq, ts: 't', type: 'log', payload: { line: 'x' } },
     });
 
@@ -105,7 +105,7 @@ describe('auto-scan wire cursor', () => {
     );
   });
 
-  it('omits a project whose buffered events all deduped away', () => {
+  it('omits a workspace whose buffered events all deduped away', () => {
     const cursor = new AutoScanCursor({ 'proj-a': 5n });
     const snapshot = stringifyWire({
       type: 'snapshot',
@@ -135,8 +135,8 @@ describe('subscribe message', () => {
   });
 });
 
-describe('snapshot events keyed by hostile project names', () => {
-  it('keeps a project literally named __proto__ instead of re-parenting the map', () => {
+describe('snapshot events keyed by hostile workspace names', () => {
+  it('keeps a workspace literally named __proto__ instead of re-parenting the map', () => {
     // JSON.parse yields `__proto__` as an *own* key, so a member assignment
     // would hit Object.prototype's setter: the events vanish while the cursor
     // has already advanced past them, so a resume can never recover them.

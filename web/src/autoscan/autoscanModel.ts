@@ -70,7 +70,7 @@ export type DetailConnection = 'connecting' | 'replaying' | 'connected' | 'disco
 export type DetailFrame = { kind: 'connected' } | { kind: 'disconnected' } | AutoScanFrame;
 
 export interface AutoScanDetailState {
-  readonly projectName: string;
+  readonly workspaceName: string;
   readonly instance?: AutoScanInstance;
   readonly nextScanAt?: string;
   readonly cycleNumber: number;
@@ -94,9 +94,9 @@ function freshPhases(activeScan: boolean): Record<PhaseKey, PhaseStatus> {
   };
 }
 
-export function initialAutoScanDetailState(projectName: string): AutoScanDetailState {
+export function initialAutoScanDetailState(workspaceName: string): AutoScanDetailState {
   return {
-    projectName,
+    workspaceName,
     cycleNumber: 0,
     phases: freshPhases(false),
     recentIssues: [],
@@ -181,7 +181,7 @@ function fromDraft(state: AutoScanDetailState, draft: Draft): AutoScanDetailStat
   // are `readonly`, and an absent optional has to stay absent so `undefined`
   // never has to be distinguished from "not set".
   return {
-    projectName: state.projectName,
+    workspaceName: state.workspaceName,
     cycleNumber: draft.cycleNumber,
     phases: draft.phases,
     recentIssues: draft.recentIssues,
@@ -309,12 +309,12 @@ function reduceFrame(draft: Draft, state: AutoScanDetailState, frame: DetailFram
       let match: AutoScanInstance | undefined;
       for (const raw of frame.scans) {
         const decoded = autoScanInstanceSchema.safeParse(raw);
-        if (!decoded.success || decoded.data.project_name !== state.projectName) continue;
+        if (!decoded.success || decoded.data.project_name !== state.workspaceName) continue;
         match = decoded.data;
         break;
       }
       // Assigned unconditionally, as iOS does: a snapshot that no longer carries
-      // this project means the scan is gone, and holding the last row would leave
+      // this workspace means the scan is gone, and holding the last row would leave
       // a stopped scan rendering "Scanning" and a frozen count for the life of
       // the screen. `cycleNumber` is the exception — it is also driven by phase
       // events, so a missing row must not reset it.
@@ -324,13 +324,13 @@ function reduceFrame(draft: Draft, state: AutoScanDetailState, frame: DetailFram
 
       draft.connection = 'replaying';
       draft.changed = true;
-      // `Object.hasOwn`, not a bare index: project names come off the wire and
+      // `Object.hasOwn`, not a bare index: workspace names come off the wire and
       // ride in the URL, and `events['__proto__' | 'toString' | 'constructor']`
       // resolves to a *non-nullish* inherited value — so `?? []` never fires and
       // the `for…of` throws out of a React render. `autoscanFrames.ts` hardened
       // the assignment half of this hazard; this is the lookup half.
-      const buffered = Object.hasOwn(frame.events, state.projectName)
-        ? frame.events[state.projectName]
+      const buffered = Object.hasOwn(frame.events, state.workspaceName)
+        ? frame.events[state.workspaceName]
         : undefined;
       for (const event of buffered ?? []) reduceEvent(draft, event);
       break;
@@ -340,8 +340,8 @@ function reduceFrame(draft: Draft, state: AutoScanDetailState, frame: DetailFram
       draft.changed = true;
       break;
     case 'event':
-      // The channel can carry several projects at once; the detail screen is one.
-      if (frame.event.projectName !== state.projectName) return;
+      // The channel can carry several workspaces at once; the detail screen is one.
+      if (frame.event.workspaceName !== state.workspaceName) return;
       reduceEvent(draft, frame.event);
       break;
     default:
@@ -381,5 +381,5 @@ export function orderedPhases(
  * capture is half of the Android bug this port exists to avoid.
  */
 export function resumeFromState(state: AutoScanDetailState): Record<string, bigint> {
-  return state.lastSeq > 0n ? { [state.projectName]: state.lastSeq } : {};
+  return state.lastSeq > 0n ? { [state.workspaceName]: state.lastSeq } : {};
 }

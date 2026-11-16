@@ -12,7 +12,7 @@ Responsibilities:
   per-repo lock owned by the manager, delete remote branches with one
   ``git push`` per remote, audit each outcome, and publish ``git.changed``
   after any successful delete.
-* Create branches and check them out in the project root through the
+* Create branches and check them out in the workspace root through the
   hardened runner, with the refusal vocabulary the session mutations use.
 """
 from __future__ import annotations
@@ -197,13 +197,13 @@ async def _quick(cwd: str, args: Sequence[str]) -> CmdResult:
     return result
 
 
-async def _ref_tips(project_root: str) -> tuple[dict[str, _Tip], list[str]]:
+async def _ref_tips(workspace_root: str) -> tuple[dict[str, _Tip], list[str]]:
     """``refname -> tip`` for every local and remote-tracking branch, plus
     the remote-tracking refnames that are real branches (``<remote>/HEAD``
     is a symref and is left out)."""
     result = await run_git(
         ["for-each-ref", f"--format={_TIP_FORMAT}", _REFS_HEADS, _REFS_REMOTES],
-        cwd=project_root,
+        cwd=workspace_root,
         timeout=_STATUS_TIMEOUT,
         max_bytes=_STATUS_MAX_BYTES,
     )
@@ -226,8 +226,8 @@ async def _ref_tips(project_root: str) -> tuple[dict[str, _Tip], list[str]]:
     return tips, remote_refs
 
 
-async def _remote_names(project_root: str) -> list[str]:
-    result = await _quick(project_root, ["remote"])
+async def _remote_names(workspace_root: str) -> list[str]:
+    result = await _quick(workspace_root, ["remote"])
     if result.rc != 0:
         raise _fail(result, "git remote failed")
     return [line for line in _lines(result.stdout) if line]
@@ -248,22 +248,22 @@ def _split_remote_ref(short: str, remotes: Iterable[str]) -> tuple[str, str] | N
 
 
 async def list_git_items(
-    project_root: str,
+    workspace_root: str,
     manager: WorktreeManager,
     *,
     remote: bool = False,
 ) -> list[GitItemRead]:
-    """List the unified git items for ``project_root``.
+    """List the unified git items for ``workspace_root``.
 
     Tip-commit enrichment is best-effort for the local rows; with
     ``remote`` the same ``for-each-ref`` call is what lists the remote
     branches, so its failure surfaces instead of silently hiding them.
     """
-    branches = await manager.list_branches(project_root)
-    worktrees = await manager.list_worktrees(project_root)
+    branches = await manager.list_branches(workspace_root)
+    worktrees = await manager.list_worktrees(workspace_root)
     items = _build_items(branches, worktrees)
     try:
-        tips, remote_refs = await _ref_tips(project_root)
+        tips, remote_refs = await _ref_tips(workspace_root)
     except Exception:
         if remote:
             raise
@@ -276,7 +276,7 @@ async def list_git_items(
             item.committed_at = tip.committed_at
     if not remote:
         return items
-    remotes = await _remote_names(project_root)
+    remotes = await _remote_names(workspace_root)
     for refname in remote_refs:
         short = refname[len(_REFS_REMOTES):]
         split = _split_remote_ref(short, remotes)
@@ -308,7 +308,7 @@ def _tip_epoch(committed_at: str | None) -> float:
 
 
 async def list_worktree_bases(
-    project_root: str,
+    workspace_root: str,
     manager: WorktreeManager,
     *,
     last_used: str | None,
@@ -318,8 +318,8 @@ async def list_worktree_bases(
     ``default`` comes first, then every other ref newest tip first. Reads
     local refs only: creating the worktree fetches a remote base anyway.
     """
-    tips, remote_refs = await _ref_tips(project_root)
-    remotes = await _remote_names(project_root)
+    tips, remote_refs = await _ref_tips(workspace_root)
+    remotes = await _remote_names(workspace_root)
     refs: list[WorktreeBaseRef] = []
     for refname, tip in tips.items():
         if refname.startswith(_REFS_HEADS):
@@ -340,7 +340,7 @@ async def list_worktree_bases(
                 committed_at=tip.committed_at,
             )
         )
-    default = await manager.default_base(project_root)
+    default = await manager.default_base(workspace_root)
     known = {r.ref for r in refs}
     if default not in known:
         default = None
@@ -357,8 +357,8 @@ async def list_worktree_bases(
 class _RepoContext:
     """All collaborators a delete batch or a ref mutation needs."""
 
-    project_name: str
-    project_root: str
+    workspace_name: str
+    workspace_root: str
     manager: WorktreeManager
     session_manager: Any | None
     autoscan_manager: Any | None
@@ -403,17 +403,17 @@ async def _holders(
 
     if autoscan_manager is not None:
         try:
-            workitems_by_project = await autoscan_manager.list_all_workitems()
+            workitems_by_workspace = await autoscan_manager.list_all_workitems()
         except Exception:
-            workitems_by_project = {}
-        for project_name, items in workitems_by_project.items():
+            workitems_by_workspace = {}
+        for workspace_name, items in workitems_by_workspace.items():
             for item in items:
                 norm = _normalize_path(getattr(item, "worktree_path", None))
                 if norm is not None and matches(norm):
                     holders.append(
                         BusyHolder(
                             kind="auto_scan",
-                            project_name=project_name,
+                            project_name=workspace_name,
                             worktree_path=getattr(item, "worktree_path", None),
                         )
                     )
@@ -436,14 +436,14 @@ def _within(path: str, root: str) -> bool:
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
 
-def _root_matcher(project_root: str, worktree_paths: Iterable[str]) -> Callable[[str], bool]:
-    """Holder predicate for a checkout in the project root: anything at or
+def _root_matcher(workspace_root: str, worktree_paths: Iterable[str]) -> Callable[[str], bool]:
+    """Holder predicate for a checkout in the workspace root: anything at or
     below the root counts, except what lives inside a linked worktree
     (which keeps its own HEAD). Only worktrees strictly inside the root can
-    shadow a holder — a project registered at a linked worktree nested in
+    shadow a holder — a workspace registered at a linked worktree nested in
     the main one must not have its own root hidden by the main worktree's
     path."""
-    root = _normalize_path(project_root)
+    root = _normalize_path(workspace_root)
     linked = [
         norm
         for norm in (_normalize_path(path) for path in worktree_paths)
@@ -495,7 +495,7 @@ async def _delete_one(
             return _result(kind=item.kind, target="", ok=False, error="invalid"), False
         try:
             await ctx.manager.delete_branch(
-                ctx.project_root, item.branch, force=item.force,
+                ctx.workspace_root, item.branch, force=item.force,
             )
         except BranchDeleteError as exc:
             err_code = "force_required" if exc.unmerged else "error"
@@ -509,7 +509,7 @@ async def _delete_one(
             target=item.branch,
             outcome="ok",
             kind=item.kind,
-            project=ctx.project_name,
+            workspace=ctx.workspace_name,
             force=item.force,
         )
         return _result(kind=item.kind, target=item.branch, ok=True), True
@@ -519,7 +519,7 @@ async def _delete_one(
             return _result(kind=item.kind, target="", ok=False, error="invalid"), False
         try:
             await ctx.manager.remove_worktree(
-                ctx.project_root, item.worktree_path, force=item.force,
+                ctx.workspace_root, item.worktree_path, force=item.force,
             )
         except WorktreeRemoveError as exc:
             return _result(
@@ -532,7 +532,7 @@ async def _delete_one(
             target=item.worktree_path,
             outcome="ok",
             kind=item.kind,
-            project=ctx.project_name,
+            workspace=ctx.workspace_name,
         )
         return _result(kind=item.kind, target=item.worktree_path, ok=True), True
 
@@ -544,7 +544,7 @@ async def _delete_one(
         if not worktree_already_gone:
             try:
                 await ctx.manager.remove_worktree(
-                    ctx.project_root, item.worktree_path, force=item.force,
+                    ctx.workspace_root, item.worktree_path, force=item.force,
                 )
             except WorktreeRemoveError as exc:
                 return _result(
@@ -553,7 +553,7 @@ async def _delete_one(
                 ), False
         try:
             await ctx.manager.delete_branch(
-                ctx.project_root, item.branch, force=item.force,
+                ctx.workspace_root, item.branch, force=item.force,
             )
         except BranchDeleteError as exc:
             err_code = "force_required" if exc.unmerged else "error"
@@ -567,7 +567,7 @@ async def _delete_one(
             target=f"{item.branch}@{item.worktree_path}",
             outcome="ok",
             kind=item.kind,
-            project=ctx.project_name,
+            workspace=ctx.workspace_name,
             force=item.force,
         )
         return _result(kind=item.kind, target=item.branch, ok=True), True
@@ -633,8 +633,8 @@ def _remote_failures(
     return [(index, _remote_failure(item, code, detail)) for index, item in targets]
 
 
-async def _config_values(project_root: str, key: str) -> list[str]:
-    result = await _quick(project_root, ["config", "--get-all", key])
+async def _config_values(workspace_root: str, key: str) -> list[str]:
+    result = await _quick(workspace_root, ["config", "--get-all", key])
     return _lines(result.stdout) if result.rc == 0 else []
 
 
@@ -650,13 +650,13 @@ async def _push_remote_deletes(
     # would lose the branch too and still report `-`. Raw config values are compared, so
     # `pushInsteadOf` rewrites are not checked (an https-fetch / ssh-push setup of one
     # repository keeps working).
-    urls = await _config_values(ctx.project_root, f"remote.{remote}.url")
-    push_urls = await _config_values(ctx.project_root, f"remote.{remote}.pushurl")
+    urls = await _config_values(ctx.workspace_root, f"remote.{remote}.url")
+    push_urls = await _config_values(ctx.workspace_root, f"remote.{remote}.pushurl")
     if set(push_urls or urls) != set(urls[:1]):
         detail = f"remote '{remote}' pushes to a different repository than it fetches from"
         return [(index, _remote_failure(item, "error", detail)) for index, item in targets]
 
-    refspecs = await _config_values(ctx.project_root, f"remote.{remote}.fetch")
+    refspecs = await _config_values(ctx.workspace_root, f"remote.{remote}.fetch")
     done: list[tuple[int, GitDeleteResultItem]] = []
     pending: list[tuple[int, GitDeleteItem, str]] = []
     for index, item in targets:
@@ -673,7 +673,7 @@ async def _push_remote_deletes(
 
     result = await run_git(
         ["push", "--porcelain", "--", remote, *(":" + source for _, _, source in pending)],
-        cwd=ctx.project_root,
+        cwd=ctx.workspace_root,
         timeout=_REMOTE_DELETE_TIMEOUT,
         max_bytes=_STATUS_MAX_BYTES,
         env_extra=_JOB_ENV,
@@ -693,7 +693,7 @@ async def _push_remote_deletes(
                 target=item.branch,
                 outcome="ok",
                 kind=item.kind,
-                project=ctx.project_name,
+                workspace=ctx.workspace_name,
                 remote=remote,
             )
             done.append((index, _result(kind=item.kind, target=item.branch or "", ok=True)))
@@ -731,8 +731,8 @@ async def _delete_remote_items(
     offers, then push the deletions, one ``git push`` per remote, the
     remotes in parallel."""
     try:
-        remotes = await _remote_names(ctx.project_root)
-        _, remote_refs = await _ref_tips(ctx.project_root)
+        remotes = await _remote_names(ctx.workspace_root)
+        _, remote_refs = await _ref_tips(ctx.workspace_root)
     except Exception as exc:
         return _remote_failures(entries, exc)
     listed = set(remote_refs)
@@ -757,7 +757,7 @@ async def _delete_remote_items(
 
 def _publish_git_changed(
     event_bus: Any | None,
-    project_name: str,
+    workspace_name: str,
     *,
     toplevel: str | None = None,
     common_dir: str | None = None,
@@ -768,7 +768,7 @@ def _publish_git_changed(
         event_bus.publish(
             "git.changed",
             {
-                "project_name": project_name,
+                "project_name": workspace_name,
                 "toplevel": toplevel,
                 "common_dir": common_dir,
             },
@@ -780,8 +780,8 @@ def _publish_git_changed(
 async def delete_git_items(
     request: GitDeleteRequest,
     *,
-    project_name: str,
-    project_root: str,
+    workspace_name: str,
+    workspace_root: str,
     manager: WorktreeManager,
     session_manager: Any | None,
     autoscan_manager: Any | None,
@@ -803,8 +803,8 @@ async def delete_git_items(
         raise GitItemBusyError(busy_by=busy)
 
     ctx = _RepoContext(
-        project_name=project_name,
-        project_root=project_root,
+        workspace_name=workspace_name,
+        workspace_root=workspace_root,
         manager=manager,
         session_manager=session_manager,
         autoscan_manager=autoscan_manager,
@@ -835,9 +835,9 @@ async def delete_git_items(
     results = [slot for slot in slots if slot is not None]
 
     if local_changed or remote_changed:
-        toplevel, common_dir = await resolve_repo_dirs(project_root)
+        toplevel, common_dir = await resolve_repo_dirs(workspace_root)
         _publish_git_changed(
-            event_bus, project_name, toplevel=toplevel, common_dir=common_dir
+            event_bus, workspace_name, toplevel=toplevel, common_dir=common_dir
         )
 
     return GitDeleteResponse(results=results)
@@ -858,14 +858,14 @@ def _validate_branch_name(name: str) -> None:
         raise GitBadRequestError("bad_branch_name")
 
 
-async def _check_branch_name(project_root: str, name: str) -> None:
+async def _check_branch_name(workspace_root: str, name: str) -> None:
     _validate_branch_name(name)
-    result = await _quick(project_root, ["check-ref-format", "--branch", name])
+    result = await _quick(workspace_root, ["check-ref-format", "--branch", name])
     if result.rc != 0:
         raise GitBadRequestError("bad_branch_name")
 
 
-async def _resolve_start_point(project_root: str, start_point: str | None) -> str:
+async def _resolve_start_point(workspace_root: str, start_point: str | None) -> str:
     """The start point as git should read it: a name that is a local or
     remote-tracking branch is qualified first, because a tag of the same name
     would make the bare name ambiguous and ``git branch`` refuses those."""
@@ -875,11 +875,11 @@ async def _resolve_start_point(project_root: str, start_point: str | None) -> st
     qualified = start
     if start_point:
         for prefix in (_REFS_HEADS, _REFS_REMOTES):
-            if await _ref_exists(project_root, prefix + start):
+            if await _ref_exists(workspace_root, prefix + start):
                 qualified = prefix + start
                 break
     result = await _quick(
-        project_root,
+        workspace_root,
         ["rev-parse", "-q", "--verify", "--end-of-options", f"{qualified}^{{commit}}"],
     )
     if result.rc != 0:
@@ -887,18 +887,18 @@ async def _resolve_start_point(project_root: str, start_point: str | None) -> st
     return qualified
 
 
-async def _resolve_checkout(project_root: str, ref: str) -> tuple[str, str | None]:
+async def _resolve_checkout(workspace_root: str, ref: str) -> tuple[str, str | None]:
     """``(local branch, start point)``: ``start point`` is the remote-tracking
     ref to create the branch from, ``None`` when the branch already exists."""
-    if await _ref_exists(project_root, _REFS_HEADS + ref):
+    if await _ref_exists(workspace_root, _REFS_HEADS + ref):
         return ref, None
-    if not await _ref_exists(project_root, _REFS_REMOTES + ref):
+    if not await _ref_exists(workspace_root, _REFS_REMOTES + ref):
         raise GitNotFoundError("ref_not_found")
-    split = _split_remote_ref(ref, await _remote_names(project_root))
+    split = _split_remote_ref(ref, await _remote_names(workspace_root))
     if split is None:
         raise GitNotFoundError("ref_not_found")
     short = split[1]
-    if await _ref_exists(project_root, _REFS_HEADS + short):
+    if await _ref_exists(workspace_root, _REFS_HEADS + short):
         return short, None
     return short, ref
 
@@ -917,13 +917,13 @@ def _refuse_running_job(toplevel: str) -> None:
 async def _guard_checkout(
     ctx: _RepoContext, repo: ResolvedRepo, *, force: bool = False
 ) -> None:
-    """Refuse to move the project root's HEAD under a session or auto-scan
+    """Refuse to move the workspace root's HEAD under a session or auto-scan
     item working in it (unless the user confirmed with ``force``), while a
     fetch/pull/push job owns the repository, or in the middle of a
     merge/rebase/cherry-pick/revert/bisect."""
     if not force:
-        worktrees = await ctx.manager.list_worktrees(ctx.project_root)
-        matches = _root_matcher(ctx.project_root, [wt.path for wt in worktrees])
+        worktrees = await ctx.manager.list_worktrees(ctx.workspace_root)
+        matches = _root_matcher(ctx.workspace_root, [wt.path for wt in worktrees])
         busy = await _holders(ctx.session_manager, ctx.autoscan_manager, matches)
         if busy:
             raise GitItemBusyError(busy_by=busy)
@@ -960,7 +960,7 @@ async def _run_ref_mutation(
 ) -> None:
     result = await run_git(
         list(args),
-        cwd=ctx.project_root,
+        cwd=ctx.workspace_root,
         timeout=_MUTATE_TIMEOUT,
         max_bytes=_SMALL_OUTPUT,
     )
@@ -972,22 +972,22 @@ async def _run_ref_mutation(
 async def create_branch(
     request: GitBranchCreateRequest,
     *,
-    project_name: str,
-    project_root: str,
+    workspace_name: str,
+    workspace_root: str,
     manager: WorktreeManager,
     session_manager: Any | None,
     autoscan_manager: Any | None,
     event_bus: Any | None,
     actor: str | None,
 ) -> GitBranchResponse:
-    """Create ``request.name`` at ``request.start_point`` in the project's
-    repository; with ``checkout`` the project root switches to it in the
+    """Create ``request.name`` at ``request.start_point`` in the workspace's
+    repository; with ``checkout`` the workspace root switches to it in the
     same ``git switch -c``, under the checkout guards."""
-    repo = await _mutable_repo(project_root)
+    repo = await _mutable_repo(workspace_root)
     _refuse_running_job(repo.toplevel)
     ctx = _RepoContext(
-        project_name=project_name,
-        project_root=project_root,
+        workspace_name=workspace_name,
+        workspace_root=workspace_root,
         manager=manager,
         session_manager=session_manager,
         autoscan_manager=autoscan_manager,
@@ -995,11 +995,11 @@ async def create_branch(
         actor=actor,
     )
     name = request.name
-    async with manager._lock_for(project_root):
+    async with manager._lock_for(workspace_root):
         async with _lock_for(repo.toplevel):
-            await _check_branch_name(project_root, name)
-            start = await _resolve_start_point(project_root, request.start_point)
-            if await _ref_exists(project_root, _REFS_HEADS + name):
+            await _check_branch_name(workspace_root, name)
+            start = await _resolve_start_point(workspace_root, request.start_point)
+            if await _ref_exists(workspace_root, _REFS_HEADS + name):
                 raise GitRefusedError("exists", name)
             if request.checkout:
                 await _guard_checkout(ctx, repo, force=request.force)
@@ -1012,13 +1012,13 @@ async def create_branch(
         actor=actor,
         target=name,
         outcome="ok",
-        project=project_name,
+        workspace=workspace_name,
         start_point=start,
         checkout=request.checkout,
         force=request.force,
     )
     _publish_git_changed(
-        event_bus, project_name, toplevel=repo.toplevel, common_dir=repo.common_dir
+        event_bus, workspace_name, toplevel=repo.toplevel, common_dir=repo.common_dir
     )
     return GitBranchResponse(branch=name, checked_out=request.checkout, created=True)
 
@@ -1026,35 +1026,35 @@ async def create_branch(
 async def checkout_ref(
     request: GitCheckoutRequest,
     *,
-    project_name: str,
-    project_root: str,
+    workspace_name: str,
+    workspace_root: str,
     manager: WorktreeManager,
     session_manager: Any | None,
     autoscan_manager: Any | None,
     event_bus: Any | None,
     actor: str | None,
 ) -> GitBranchResponse:
-    """Switch the project root to ``request.ref``: a local branch as is, a
+    """Switch the workspace root to ``request.ref``: a local branch as is, a
     remote-tracking branch through the local branch of the same name,
     created tracking it when missing."""
-    repo = await _mutable_repo(project_root)
+    repo = await _mutable_repo(workspace_root)
     _refuse_running_job(repo.toplevel)
     ref = request.ref
     if not ref or ref.startswith("-") or "\0" in ref:
         raise GitBadRequestError("bad_ref")
     ctx = _RepoContext(
-        project_name=project_name,
-        project_root=project_root,
+        workspace_name=workspace_name,
+        workspace_root=workspace_root,
         manager=manager,
         session_manager=session_manager,
         autoscan_manager=autoscan_manager,
         event_bus=event_bus,
         actor=actor,
     )
-    async with manager._lock_for(project_root):
+    async with manager._lock_for(workspace_root):
         async with _lock_for(repo.toplevel):
             await _guard_checkout(ctx, repo, force=request.force)
-            branch, start = await _resolve_checkout(project_root, ref)
+            branch, start = await _resolve_checkout(workspace_root, ref)
             if start is None:
                 args = ["switch", "--no-guess", "--", branch]
             else:
@@ -1065,12 +1065,12 @@ async def checkout_ref(
         actor=actor,
         target=branch,
         outcome="ok",
-        project=project_name,
+        workspace=workspace_name,
         ref=ref,
         created=start is not None,
         force=request.force,
     )
     _publish_git_changed(
-        event_bus, project_name, toplevel=repo.toplevel, common_dir=repo.common_dir
+        event_bus, workspace_name, toplevel=repo.toplevel, common_dir=repo.common_dir
     )
     return GitBranchResponse(branch=branch, checked_out=True, created=start is not None)

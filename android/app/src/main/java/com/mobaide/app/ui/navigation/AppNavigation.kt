@@ -39,8 +39,8 @@ import com.mobaide.app.ui.devices.DevicesScreen
 import com.mobaide.app.ui.login.ForgotPasswordScreen
 import com.mobaide.app.ui.login.LoginScreen
 import com.mobaide.app.ui.login.ResetPasswordScreen
-import com.mobaide.app.ui.projects.ProjectsScreen
-import com.mobaide.app.ui.projects.git.GitScreen
+import com.mobaide.app.ui.workspaces.WorkspacesScreen
+import com.mobaide.app.ui.workspaces.git.GitScreen
 import com.mobaide.app.ui.register.RegisterScreen
 import com.mobaide.app.ui.register.VerifyEmailScreen
 import com.mobaide.app.ui.sessions.CreateSessionScreen
@@ -250,18 +250,18 @@ fun AppNavigation(
                 onSettingsClick = {
                     navController.navigate(Routes.SETTINGS)
                 },
-                onProjectsClick = {
-                    navController.navigate(Routes.PROJECTS)
+                onWorkspacesClick = {
+                    navController.navigate(Routes.WORKSPACES)
                 },
-                onAutoScanClick = { projectName ->
-                    navController.navigate(Routes.autoScanDetail(projectName))
+                onAutoScanClick = { workspaceName ->
+                    navController.navigate(Routes.autoScanDetail(workspaceName))
                 },
                 onBack = { navController.popBackStack() },
             )
         }
 
-        composable(Routes.PROJECTS) {
-            ProjectsScreen(
+        composable(Routes.WORKSPACES) {
+            WorkspacesScreen(
                 viewModel = hiltViewModel(),
                 onBack = { navController.popBackStack() },
                 onOpenGit = { name ->
@@ -272,10 +272,10 @@ fun AppNavigation(
 
         composable(
             route = Routes.GIT_MANAGEMENT,
-            arguments = listOf(navArgument("projectName") { type = NavType.StringType }),
+            arguments = listOf(navArgument("workspaceName") { type = NavType.StringType }),
         ) { entry ->
             GitScreen(
-                projectName = entry.arguments?.getString("projectName").orEmpty(),
+                workspaceName = entry.arguments?.getString("workspaceName").orEmpty(),
                 viewModel = hiltViewModel(),
                 onBack = { navController.popBackStack() },
             )
@@ -284,13 +284,13 @@ fun AppNavigation(
         composable(Routes.CREATE_SESSION) {
             CreateSessionScreen(
                 viewModel = hiltViewModel(),
-                projectsViewModel = hiltViewModel(),
+                workspacesViewModel = hiltViewModel(),
                 onBack = { navController.popBackStack() },
                 onSessionCreated = { sessionId ->
                     navController.navigateFromCreate(Routes.sessionDetail(sessionId))
                 },
-                onAutoScanStarted = { projectName ->
-                    navController.navigateFromCreate(Routes.autoScanDetail(projectName))
+                onAutoScanStarted = { workspaceName ->
+                    navController.navigateFromCreate(Routes.autoScanDetail(workspaceName))
                 },
             )
         }
@@ -465,10 +465,10 @@ fun AppNavigation(
 
         composable(
             route = Routes.AUTO_SCAN_DETAIL,
-            arguments = listOf(navArgument("projectName") { type = NavType.StringType }),
+            arguments = listOf(navArgument("workspaceName") { type = NavType.StringType }),
         ) { entry ->
             AutoScanDetailScreen(
-                projectName = entry.arguments?.getString("projectName").orEmpty(),
+                workspaceName = entry.arguments?.getString("workspaceName").orEmpty(),
                 onBack = { navController.popBackStack() },
                 viewModel = hiltViewModel(),
             )

@@ -6,9 +6,9 @@
 import type { WorktreeBaseRef, WorktreeBases } from '../../../api/gitRepository';
 import { parseNextScanAt, relativeTime } from '../../../autoscan/autoscanDisplay';
 
-/** A manual pick, tagged with the project it was made for so a project change drops it. */
+/** A manual pick, tagged with the workspace it was made for so a workspace change drops it. */
 export interface WorktreeBasePick {
-  projectName: string;
+  workspaceName: string;
   /** `null` is "Default branch": the agent's own start point. */
   ref: string | null;
 }
@@ -20,17 +20,17 @@ export function preselectedWorktreeBase(bases: WorktreeBases | undefined): strin
 }
 
 /**
- * The base a launch sends for `projectName`. The user's pick wins while it
- * belongs to this project and still names a listed ref; otherwise the
+ * The base a launch sends for `workspaceName`. The user's pick wins while it
+ * belongs to this workspace and still names a listed ref; otherwise the
  * preselection. Without a loaded list (loading, error) the agent default.
  */
 export function effectiveWorktreeBase(
   pick: WorktreeBasePick | null,
-  projectName: string | null,
+  workspaceName: string | null,
   bases: WorktreeBases | undefined,
 ): string | null {
-  if (projectName === null) return null;
-  if (pick?.projectName === projectName) {
+  if (workspaceName === null) return null;
+  if (pick?.workspaceName === workspaceName) {
     if (pick.ref === null) return null;
     if (bases === undefined || bases.refs.some((entry) => entry.ref === pick.ref)) {
       return pick.ref;

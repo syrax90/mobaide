@@ -391,7 +391,7 @@ class AgentEventBusTest {
     }
 
     @Test
-    fun message_projectsChanged_parsesAndEmitsTypedEvent() = runTest {
+    fun message_workspacesChanged_parsesAndEmitsTypedEvent() = runTest {
         val (bus, connEvents, _) = newBus()
         bus.start()
 
@@ -410,10 +410,10 @@ class AgentEventBusTest {
                     """.trimIndent(),
                 ),
             )
-            val evt = awaitItem() as AgentEvent.ProjectsChanged
-            assertEquals(1, evt.projects.size)
-            assertEquals("p1", evt.projects[0].name)
-            assertTrue(evt.projects[0].is_git)
+            val evt = awaitItem() as AgentEvent.WorkspacesChanged
+            assertEquals(1, evt.workspaces.size)
+            assertEquals("p1", evt.workspaces[0].name)
+            assertTrue(evt.workspaces[0].is_git)
             cancelAndIgnoreRemainingEvents()
         }
 
@@ -443,7 +443,7 @@ class AgentEventBusTest {
             )
             val evt = awaitItem() as AgentEvent.AutoScanListChanged
             assertEquals(5, evt.list.max_scans)
-            assertEquals(listOf("p1", "p2"), evt.list.available_projects)
+            assertEquals(listOf("p1", "p2"), evt.list.available_workspaces)
             cancelAndIgnoreRemainingEvents()
         }
 
@@ -472,7 +472,7 @@ class AgentEventBusTest {
                 ),
             )
             val evt = awaitItem() as AgentEvent.AutoScanStatus
-            assertEquals("proj-a", evt.instance.project_name)
+            assertEquals("proj-a", evt.instance.workspace_name)
             assertEquals("running", evt.instance.status)
             cancelAndIgnoreRemainingEvents()
         }
@@ -510,7 +510,7 @@ class AgentEventBusTest {
                 ),
             )
             val evt = awaitItem() as AgentEvent.AutoScanEvent
-            assertEquals("proj-a", evt.projectName)
+            assertEquals("proj-a", evt.workspaceName)
             assertEquals(42L, evt.seq)
             assertEquals("2026-04-11T10:00:00Z", evt.ts)
             val phase = evt.payload as ScanProgressPayload.Phase

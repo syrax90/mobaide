@@ -26,7 +26,7 @@ RESOLVED_LIMIT = 200
 # Advertised as ``capabilities.git`` on ``GET /api/version`` (both transports).
 # Clients render the Changes viewer on ``changes`` and gate every mutating
 # control on its own key, so an agent without a key degrades to read-only.
-# ``branches`` covers the project-scoped ``GET /items?remote=true``,
+# ``branches`` covers the workspace-scoped ``GET /items?remote=true``,
 # ``POST /branches`` and ``POST /checkout`` routes. ``rebase`` covers the four
 # ``POST .../git/rebase`` routes and ``repo.rebase`` on status; ``resolve``
 # certifies that ``stage`` refuses an unmerged path still holding conflict

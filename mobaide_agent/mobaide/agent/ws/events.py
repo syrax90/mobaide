@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _serialize_projects(app) -> list[dict]:
-    store = getattr(app.state, "projects_store", None)
+def _serialize_workspaces(app) -> list[dict]:
+    store = getattr(app.state, "workspaces_store", None)
     if store is None:
         return []
     return store.list_public()
@@ -47,7 +47,7 @@ async def events_ws(websocket: WebSocket) -> None:
         {"type": "sessions.changed", "payload": {"sessions": _serialize_sessions(manager)}}
     )
     await websocket.send_json(
-        {"type": "projects.changed", "payload": {"projects": _serialize_projects(websocket.app)}}
+        {"type": "projects.changed", "payload": {"projects": _serialize_workspaces(websocket.app)}}
     )
     if autoscan_mgr is not None:
         try:

@@ -18,12 +18,12 @@ final class AutoScanWsClientTests: XCTestCase {
     }
 
     private func eventFrame(
-        project: String,
+        workspace: String,
         seq: Int64,
         type: String = "log",
         payload: [String: Any] = ["line": "x", "level": "info", "ansi": false]
     ) -> String {
-        json(["type": "event", "project_name": project,
+        json(["type": "event", "project_name": workspace,
               "event": ["seq": seq, "ts": "2026-07-08T00:00:00Z", "type": type, "payload": payload]])
     }
 
@@ -87,14 +87,14 @@ final class AutoScanWsClientTests: XCTestCase {
         conn.emit(.text(snapshotFrame(scans: [scan], events: ["proj-a": [bufferedEvent]])))
         let snapshot = try await collector.next()
         guard case .snapshot(let scans, let events) = snapshot else { return XCTFail("expected snapshot, got \(snapshot)") }
-        XCTAssertEqual(scans.first?.project_name, "proj-a")
+        XCTAssertEqual(scans.first?.workspace_name, "proj-a")
         XCTAssertEqual(events["proj-a"]?.count, 1)
 
         conn.emit(.text(json(["type": "caught_up"])))
         let caughtUp = try await collector.next()
         XCTAssertEqual(caughtUp, .caughtUp)
 
-        conn.emit(.text(eventFrame(project: "proj-a", seq: 2, type: "worktree", payload: ["identifier": "ISS-2", "path": "/w/ISS-2"])))
+        conn.emit(.text(eventFrame(workspace: "proj-a", seq: 2, type: "worktree", payload: ["identifier": "ISS-2", "path": "/w/ISS-2"])))
         let event = try await collector.next()
         guard case .event(let parsed) = event else { return XCTFail("expected event, got \(event)") }
         XCTAssertEqual(parsed.seq, 2)
@@ -108,10 +108,10 @@ final class AutoScanWsClientTests: XCTestCase {
         conn.emit(.opened)
         _ = try await collector.next()
 
-        conn.emit(.text(eventFrame(project: "proj-a", seq: 1)))
+        conn.emit(.text(eventFrame(workspace: "proj-a", seq: 1)))
         guard case .event(let first) = try await collector.next() else { return XCTFail() }
         XCTAssertEqual(first.seq, 1)
-        conn.emit(.text(eventFrame(project: "proj-a", seq: 2)))
+        conn.emit(.text(eventFrame(workspace: "proj-a", seq: 2)))
         guard case .event(let second) = try await collector.next() else { return XCTFail() }
         XCTAssertEqual(second.seq, 2)
     }
@@ -128,7 +128,7 @@ final class AutoScanWsClientTests: XCTestCase {
         _ = try await collector.next()
         XCTAssertTrue(resumeMap(from: try XCTUnwrap(conn1.sentTexts.first)).isEmpty, "initial resume is empty")
 
-        conn1.emit(.text(eventFrame(project: "proj-a", seq: 7)))
+        conn1.emit(.text(eventFrame(workspace: "proj-a", seq: 7)))
         _ = try await collector.next(where: { if case .event = $0 { return true } else { return false } })
 
         conn1.emit(.closed(code: 1006, reason: ""))
@@ -175,11 +175,11 @@ final class AutoScanWsClientTests: XCTestCase {
         conn.emit(.opened)
         _ = try await collector.next()
 
-        conn.emit(.text(eventFrame(project: "proj-a", seq: 5)))
+        conn.emit(.text(eventFrame(workspace: "proj-a", seq: 5)))
         guard case .event(let first) = try await collector.next() else { return XCTFail() }
         XCTAssertEqual(first.seq, 5)
 
-        conn.emit(.text(eventFrame(project: "proj-a", seq: 5)))
+        conn.emit(.text(eventFrame(workspace: "proj-a", seq: 5)))
         let quiet = await collector.expectNoElement()
         XCTAssertTrue(quiet, "a duplicate seq must not be delivered a second time")
     }
@@ -228,11 +228,20 @@ final class AutoScanWsClientTests: XCTestCase {
     private struct FrameCase: Decodable { let name: String; let wire: JSONValue; let expect: Expect }
     private struct Expect: Decodable {
         let kind: String
-        let project_name: String?
+        let workspace_name: String?
         let seq: Int64?
         let payload_type: String?
         let scan_count: Int?
         let event_count: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case kind
+            case workspace_name = "project_name"
+            case seq
+            case payload_type
+            case scan_count
+            case event_count
+        }
     }
 
     func testFrameFixtures() throws {
@@ -253,7 +262,7 @@ final class AutoScanWsClientTests: XCTestCase {
                 XCTAssertEqual(events.values.reduce(0) { $0 + $1.count }, testCase.expect.event_count, "case \(testCase.name)")
             case "event":
                 guard case .event(let event)? = frame else { return XCTFail("case \(testCase.name)") }
-                XCTAssertEqual(event.projectName, testCase.expect.project_name, "case \(testCase.name)")
+                XCTAssertEqual(event.workspaceName, testCase.expect.workspace_name, "case \(testCase.name)")
                 XCTAssertEqual(event.seq, testCase.expect.seq, "case \(testCase.name)")
                 XCTAssertEqual(Self.payloadType(event.payload), testCase.expect.payload_type, "case \(testCase.name)")
             default:

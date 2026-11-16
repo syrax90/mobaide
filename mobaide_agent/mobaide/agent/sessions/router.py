@@ -128,7 +128,7 @@ async def create_session(
     # Pre-validate user-supplied custom paths so the error surfaces as a
     # clean 400 from this layer rather than as a FileNotFoundError-mapped
     # 400 from the launcher or PtyBackend further down. Skipped when a
-    # stored project is named (server derives cwd from the project).
+    # stored workspace is named (server derives cwd from the workspace).
     if body.project_name is None and body.cwd is not None:
         _validate_adhoc_cwd(body.cwd)
     (
@@ -222,10 +222,10 @@ async def create_session(
         # embeds ``repr(filename)`` and doubles backslashes — the mobile
         # client would otherwise render ``D:\\\\ML\\\\...`` after one more
         # JSON-encoding layer.
-        missing = exc.filename or "project path"
+        missing = exc.filename or "workspace path"
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Project path not found: {missing}",
+            detail=f"Workspace path not found: {missing}",
         )
     except WorktreeCreationError as exc:
         raise HTTPException(

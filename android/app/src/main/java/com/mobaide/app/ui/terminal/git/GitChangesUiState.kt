@@ -16,7 +16,7 @@ import com.mobaide.app.data.network.dto.GitUpstreamInfo
 import com.mobaide.app.data.repository.GitCapabilities
 import com.mobaide.app.data.repository.SessionGitException
 import com.mobaide.app.data.repository.extractDetail
-import com.mobaide.app.ui.projects.git.RefNameOrder
+import com.mobaide.app.ui.workspaces.git.RefNameOrder
 
 sealed interface GitChangesUiState {
     data object Loading : GitChangesUiState
@@ -608,8 +608,8 @@ data class RebaseTarget(val value: String, val label: String)
 
 /**
  * The rebase sheet's picker: local branches, then remote-tracking ones, each
- * A→Z, from the project Git screen's rows. The session's own branch is left out by name
- * — the rows' `is_current` is the project root's checkout, which for a session
+ * A→Z, from the workspace Git screen's rows. The session's own branch is left out by name
+ * — the rows' `is_current` is the workspace root's checkout, which for a session
  * in a linked worktree is usually the very branch it wants to rebase onto.
  */
 internal fun rebaseTargets(items: List<GitItem>, currentBranch: String?): List<RebaseTarget> {
@@ -773,11 +773,11 @@ internal fun rebaseErrorOutput(error: Throwable): String? {
     return error.detailMessage?.takeIf { it.isNotEmpty() }
 }
 
-/** Where the rebase sheet's picker stands: no project types the ref instead. */
+/** Where the rebase sheet's picker stands: no workspace types the ref instead. */
 sealed interface RebaseTargetsState {
     data object Loading : RebaseTargetsState
     data class Ready(val items: List<GitItem>) : RebaseTargetsState
-    /** No project, or the list failed to load: the sheet asks for the ref as text. */
+    /** No workspace, or the list failed to load: the sheet asks for the ref as text. */
     data object Typed : RebaseTargetsState
 }
 

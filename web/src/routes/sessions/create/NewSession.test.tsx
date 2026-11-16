@@ -5,7 +5,7 @@
  * sanitising are covered by their own suites; what cannot be reached from
  * either is the wiring — the reducer's lazy seed, the pin taken before the
  * round trip, the per-write guard around a refused `setItem`, and the
- * one-shot project pre-fill effect.
+ * one-shot workspace pre-fill effect.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -13,7 +13,7 @@ import { useEffect } from 'react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubLocalStorage } from '../../../test/localStorageStub';
-import type { ProjectInfo } from '../../../api/projectRepository';
+import type { WorkspaceInfo } from '../../../api/workspaceRepository';
 import type { CreateSessionRequest } from '../../../api/sessionRepository';
 import type { WorktreeBases } from '../../../api/gitRepository';
 import type { SessionResponse } from '../../../protocol/dto/session';
@@ -28,38 +28,38 @@ vi.mock('../../../auth/agentTokens', () => ({
 
 const api = vi.hoisted(
   (): {
-    projects: ProjectInfo[];
-    /** How many times the project list was fetched. */
-    projectLists: number;
-    projectWrites: { name: string; path: string }[];
+    workspaces: WorkspaceInfo[];
+    /** How many times the workspace list was fetched. */
+    workspaceLists: number;
+    workspaceWrites: { name: string; path: string }[];
     requests: CreateSessionRequest[];
     create: (request: CreateSessionRequest) => Promise<SessionResponse>;
     worktreeBases: () => Promise<WorktreeBases>;
   } => ({
-    projects: [],
-    projectLists: 0,
-    projectWrites: [],
+    workspaces: [],
+    workspaceLists: 0,
+    workspaceWrites: [],
     requests: [],
     create: () => Promise.reject(new Error('createSession is not stubbed')),
     worktreeBases: () => Promise.reject(new Error('listWorktreeBases is not stubbed')),
   }),
 );
 
-vi.mock('../../../api/projectRepository', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../../api/projectRepository')>();
-  const { projectInfoSchema } = await import('../../../protocol/dto/projects');
+vi.mock('../../../api/workspaceRepository', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../api/workspaceRepository')>();
+  const { workspaceInfoSchema } = await import('../../../protocol/dto/workspaces');
   return {
     ...actual,
-    listProjects: () => {
-      api.projectLists += 1;
-      return Promise.resolve(api.projects);
+    listWorkspaces: () => {
+      api.workspaceLists += 1;
+      return Promise.resolve(api.workspaces);
     },
-    // Deliberately leaves `api.projects` alone: the list the wizard refetches
+    // Deliberately leaves `api.workspaces` alone: the list the wizard refetches
     // after a create has not caught up with it yet.
-    createProject: (_agentId: string, body: { name: string; path: string }) => {
-      api.projectWrites.push({ name: body.name, path: body.path });
+    createWorkspace: (_agentId: string, body: { name: string; path: string }) => {
+      api.workspaceWrites.push({ name: body.name, path: body.path });
       return Promise.resolve(
-        projectInfoSchema.parse({ name: body.name, path: body.path, order: 2 }),
+        workspaceInfoSchema.parse({ name: body.name, path: body.path, order: 2 }),
       );
     },
   };
@@ -114,7 +114,7 @@ vi.mock('../../../api/sessionModeOrderRepository', () => ({
 // Before any persisted store is imported.
 stubLocalStorage();
 
-const { projectInfoSchema } = await import('../../../protocol/dto/projects');
+const { workspaceInfoSchema } = await import('../../../protocol/dto/workspaces');
 const { sessionResponseSchema } = await import('../../../protocol/dto/session');
 const { queryKeys } = await import('../../../lib/queryKeys');
 const { useLastSessionStore } = await import('../../../stores/lastSessionStore');
@@ -133,7 +133,7 @@ const NO_PREFS: LaunchPrefs = {
   copilot: null,
   cursor: null,
   pi: null,
-  lastProjectName: null,
+  lastWorkspaceName: null,
 };
 
 /** What a Claude launch off an untouched wizard files. */
@@ -151,11 +151,11 @@ const CLAUDE_AT_DEFAULTS = {
   terminalUi: false,
 };
 
-const project = (name: string): ProjectInfo =>
-  projectInfoSchema.parse({ name, path: `/srv/${name}` });
+const workspace = (name: string): WorkspaceInfo =>
+  workspaceInfoSchema.parse({ name, path: `/srv/${name}` });
 
-const gitProject = (name: string): ProjectInfo =>
-  projectInfoSchema.parse({ name, path: `/srv/${name}`, is_git: true });
+const gitWorkspace = (name: string): WorkspaceInfo =>
+  workspaceInfoSchema.parse({ name, path: `/srv/${name}`, is_git: true });
 
 const session = (sessionId: string): SessionResponse =>
   sessionResponseSchema.parse({
@@ -230,17 +230,17 @@ async function renderWizard(search = '') {
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  // Every step is gated on the project list, and so is the pre-fill effect.
+  // Every step is gated on the workspace list, and so is the pre-fill effect.
   await waitFor(() => {
-    expect(screen.queryByText('Loading projects…')).not.toBeInTheDocument();
+    expect(screen.queryByText('Loading workspaces…')).not.toBeInTheDocument();
   });
 }
 
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  api.projects = [project('alpha'), project('beta')];
-  api.projectLists = 0;
-  api.projectWrites.length = 0;
+  api.workspaces = [workspace('alpha'), workspace('beta')];
+  api.workspaceLists = 0;
+  api.workspaceWrites.length = 0;
   api.requests.length = 0;
   api.create = () => Promise.resolve(session('s-new'));
   api.worktreeBases = () => Promise.reject(new Error('listWorktreeBases is not stubbed'));
@@ -276,7 +276,7 @@ describe('NewSession launch prefs', () => {
       },
     });
 
-    await renderWizard('?step=config&mode=claude&project=alpha');
+    await renderWizard('?step=config&mode=claude&workspace=alpha');
 
     expect(screen.getByRole('heading', { name: 'Claude code session' })).toBeInTheDocument();
     expect(screen.getByLabelText('Model')).toHaveValue('sonnet');
@@ -286,7 +286,7 @@ describe('NewSession launch prefs', () => {
   });
 
   it('completes a launch whose preference writes storage refuses', async () => {
-    await renderWizard('?step=config&mode=claude&project=alpha');
+    await renderWizard('?step=config&mode=claude&workspace=alpha');
     fireEvent.click(screen.getByLabelText('Skip permissions'));
     // A full quota, private mode, a partitioned context: `persist` calls
     // `setItem` on every `set` with no guard of its own, and an escaping throw
@@ -306,20 +306,20 @@ describe('NewSession launch prefs', () => {
     // Nothing durable survived, which is the whole cost of catching.
     expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
     // One guard per write, not one around both: the throw on the options must
-    // not swallow the project name behind it. `set` lands the in-memory half
+    // not swallow the workspace name behind it. `set` lands the in-memory half
     // before `persist` throws, so both halves are observable here.
     expect(useLaunchPrefsStore.getState().claude).toEqual({
       ...CLAUDE_AT_DEFAULTS,
       skipPermissions: true,
     });
-    expect(useLaunchPrefsStore.getState().lastProjectName).toBe('alpha');
+    expect(useLaunchPrefsStore.getState().lastWorkspaceName).toBe('alpha');
   });
 
   it('files the options the launch carried, not one toggled while it was in flight', async () => {
     const pending = deferredSession();
     api.create = () => pending.promise;
 
-    await renderWizard('?step=config&mode=claude&project=alpha');
+    await renderWizard('?step=config&mode=claude&workspace=alpha');
     fireEvent.click(screen.getByRole('button', { name: 'Create session' }));
     await screen.findByRole('button', { name: 'Creating…' });
 
@@ -340,7 +340,7 @@ describe('NewSession launch prefs', () => {
     expect(persistedPrefs().claude).toEqual(CLAUDE_AT_DEFAULTS);
   });
 
-  it('pre-selects the last launched project with a single replacing write', async () => {
+  it('pre-selects the last launched workspace with a single replacing write', async () => {
     await seedPrefs({ lastProjectName: 'beta' });
 
     await renderWizard();
@@ -351,16 +351,16 @@ describe('NewSession launch prefs', () => {
         'true',
       );
     });
-    // It only highlights. Now that picking a project advances, a pre-fill that
+    // It only highlights. Now that picking a workspace advances, a pre-fill that
     // went through the same path would launch the wizard past a step the user
     // never saw.
     expect(screen.getByRole('heading', { name: 'Where should it run?' })).toBeInTheDocument();
-    expect(currentPath()).toBe('/agents/agent-1/new-session?step=project&project=beta');
+    expect(currentPath()).toBe('/agents/agent-1/new-session?step=workspace&workspace=beta');
     // The latch is what keeps the clamp effect and this one from trading URLs.
-    expect(visited).toEqual(['', '?step=project&project=beta']);
+    expect(visited).toEqual(['', '?step=workspace&workspace=beta']);
   });
 
-  it('leaves the URL alone when the stored project is no longer on the agent', async () => {
+  it('leaves the URL alone when the stored workspace is no longer on the agent', async () => {
     await seedPrefs({ lastProjectName: 'ghost' });
 
     await renderWizard();
@@ -375,20 +375,20 @@ describe('NewSession launch prefs', () => {
   });
 });
 
-describe('NewSession project step', () => {
+describe('NewSession workspace step', () => {
   const RECENTS_KEY = 'recent_custom_paths::agent-1';
 
-  it('advances to the agent step on the project row itself', async () => {
+  it('advances to the agent step on the workspace row itself', async () => {
     await renderWizard();
 
     fireEvent.click(screen.getByRole('button', { name: /^alpha/ }));
 
     expect(await screen.findByRole('heading', { name: 'What should it run?' })).toBeInTheDocument();
-    expect(currentPath()).toBe('/agents/agent-1/new-session?step=mode&project=alpha');
+    expect(currentPath()).toBe('/agents/agent-1/new-session?step=mode&workspace=alpha');
     // One history write for one click: a replace of this entry followed by a
     // push of the next races the data router's abort rule, and the dropped one
     // would be the replace.
-    expect(visited).toEqual(['', '?step=mode&project=alpha']);
+    expect(visited).toEqual(['', '?step=mode&workspace=alpha']);
   });
 
   it('brings the picked row back highlighted on the wizard own Back', async () => {
@@ -399,11 +399,11 @@ describe('NewSession project step', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
 
     expect(await screen.findByRole('heading', { name: 'Where should it run?' })).toBeInTheDocument();
-    expect(currentPath()).toBe('/agents/agent-1/new-session?step=project&project=alpha');
+    expect(currentPath()).toBe('/agents/agent-1/new-session?step=workspace&workspace=alpha');
     expect(screen.getByRole('button', { name: /^alpha/ })).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('returns to the project step it came from on browser Back', async () => {
+  it('returns to the workspace step it came from on browser Back', async () => {
     // The stated cost of the single push: Back undoes the pick rather than
     // preserving it, because the entry it returns to predates the click.
     await renderWizard();
@@ -447,43 +447,43 @@ describe('NewSession project step', () => {
 
 });
 
-describe('NewSession create project', () => {
+describe('NewSession create workspace', () => {
   const openCreateDialog = (): HTMLElement => {
-    fireEvent.click(screen.getByRole('button', { name: /Create new project…/ }));
-    return screen.getByRole('dialog', { name: 'New project' });
+    fireEvent.click(screen.getByRole('button', { name: /Create new workspace…/ }));
+    return screen.getByRole('dialog', { name: 'New workspace' });
   };
 
-  function saveProject(dialog: HTMLElement, name: string) {
+  function saveWorkspace(dialog: HTMLElement, name: string) {
     fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: name } });
     fireEvent.change(within(dialog).getByLabelText('Path'), { target: { value: `/srv/${name}` } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
   }
 
-  it('advances to the agent step with the new project the list has not caught up with', async () => {
+  it('advances to the agent step with the new workspace the list has not caught up with', async () => {
     await renderWizard();
 
-    saveProject(openCreateDialog(), 'gamma');
+    saveWorkspace(openCreateDialog(), 'gamma');
 
     expect(await screen.findByRole('heading', { name: 'What should it run?' })).toBeInTheDocument();
-    expect(api.projectWrites).toEqual([{ name: 'gamma', path: '/srv/gamma' }]);
+    expect(api.workspaceWrites).toEqual([{ name: 'gamma', path: '/srv/gamma' }]);
     // The dialog's refetch has landed and still lacks `gamma`, so only the seed
-    // keeps the clamp from sending an unknown `?project=` back to step one.
-    expect(api.projectLists).toBe(2);
+    // keeps the clamp from sending an unknown `?workspace=` back to step one.
+    expect(api.workspaceLists).toBe(2);
     expect(
-      client.getQueryData<ProjectInfo[]>(queryKeys.projects('agent-1'))?.map((row) => row.name),
+      client.getQueryData<WorkspaceInfo[]>(queryKeys.workspaces('agent-1'))?.map((row) => row.name),
     ).toEqual(['alpha', 'beta', 'gamma']);
-    expect(currentPath()).toBe('/agents/agent-1/new-session?step=mode&project=gamma');
-    expect(visited).toEqual(['', '?step=mode&project=gamma']);
+    expect(currentPath()).toBe('/agents/agent-1/new-session?step=mode&workspace=gamma');
+    expect(visited).toEqual(['', '?step=mode&workspace=gamma']);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('drops a half-typed one-off path in favour of the created project', async () => {
+  it('drops a half-typed one-off path in favour of the created workspace', async () => {
     await renderWizard();
     fireEvent.change(screen.getByLabelText('Absolute path'), {
       target: { value: '/srv/typed' },
     });
 
-    saveProject(openCreateDialog(), 'gamma');
+    saveWorkspace(openCreateDialog(), 'gamma');
     await screen.findByRole('heading', { name: 'What should it run?' });
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
 
@@ -498,13 +498,13 @@ describe('NewSession create project', () => {
 
 describe('NewSession worktree options', () => {
   beforeEach(() => {
-    // `is_git` defaults to **false** in `projectInfoSchema`, so the default
+    // `is_git` defaults to **false** in `workspaceInfoSchema`, so the default
     // fixture renders no worktree group at all.
-    api.projects = [gitProject('alpha')];
+    api.workspaces = [gitWorkspace('alpha')];
   });
 
   it('gives the field back the branch the user already typed', async () => {
-    await renderWizard('?step=config&mode=claude&project=alpha');
+    await renderWizard('?step=config&mode=claude&workspace=alpha');
 
     const worktree = screen.getByLabelText('Create worktree');
     fireEvent.click(worktree);
@@ -533,7 +533,7 @@ describe('NewSession worktree options', () => {
 
   it('launches from the preselected base, then from a manual pick', async () => {
     api.worktreeBases = () => Promise.resolve(BASES);
-    await renderWizard('?step=config&mode=claude&project=alpha');
+    await renderWizard('?step=config&mode=claude&workspace=alpha');
 
     fireEvent.click(screen.getByLabelText('Create worktree'));
     await waitFor(() => {
@@ -552,7 +552,7 @@ describe('NewSession worktree options', () => {
 
   it('still launches, on the agent default, when the list fails', async () => {
     api.worktreeBases = () => Promise.reject(new Error('boom'));
-    await renderWizard('?step=config&mode=claude&project=alpha');
+    await renderWizard('?step=config&mode=claude&workspace=alpha');
 
     fireEvent.click(screen.getByLabelText('Create worktree'));
     expect(await screen.findByText('Couldn’t load branches')).toBeInTheDocument();
@@ -578,13 +578,13 @@ describe('NewSession OpenCode provider sign-in', () => {
   };
 
   it('sends a bare terminal sign-in and files no OpenCode launch options', async () => {
-    api.projects = [gitProject('alpha')];
+    api.workspaces = [gitWorkspace('alpha')];
     let fail!: (reason: Error) => void;
     api.create = () =>
       new Promise<SessionResponse>((_resolve, reject) => {
         fail = reject;
       });
-    await renderWizard('?step=config&mode=opencode&project=alpha');
+    await renderWizard('?step=config&mode=opencode&workspace=alpha');
     fireEvent.click(screen.getByLabelText('Auto-approve permissions (dangerous)'));
     fireEvent.click(screen.getByLabelText('Create worktree'));
 

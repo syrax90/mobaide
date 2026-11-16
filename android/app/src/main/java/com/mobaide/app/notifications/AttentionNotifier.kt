@@ -70,7 +70,7 @@ class AttentionNotifier @Inject constructor(
 
     private fun contentFor(session: SessionResponse): Pair<String, String>? {
         val label = session.title?.takeIf { it.isNotBlank() }
-            ?: session.project_name?.takeIf { it.isNotBlank() }
+            ?: session.workspace_name?.takeIf { it.isNotBlank() }
             ?: fallbackLabel(session)
         return when (session.attention) {
             "awaiting_permission" -> "Permission needed" to "$label is waiting for your approval"
@@ -89,7 +89,7 @@ class AttentionNotifier @Inject constructor(
         }
     }
 
-    /** The label for a session with neither a title nor a project. */
+    /** The label for a session with neither a title nor a workspace. */
     private fun fallbackLabel(session: SessionResponse): String = when (session.kind) {
         SessionKind.Claude -> "Claude session"
         SessionKind.Codex -> "Codex session"

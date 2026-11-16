@@ -9,7 +9,7 @@ struct FsSupport: Equatable, Sendable {
 }
 
 /// Folder listings behind the host-path fields (Android
-/// `PathSuggestionRepository`), cached per agent so the project form and the
+/// `PathSuggestionRepository`), cached per agent so the workspace form and the
 /// session wizard share what either has already fetched.
 @MainActor
 final class PathSuggestionRepository {

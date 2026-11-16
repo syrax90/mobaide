@@ -209,7 +209,7 @@ describe('remote delete and worktree removal eligibility', () => {
     expect(isDeletable(item({ is_current: true }), true)).toBe(false);
   });
 
-  it('offers Remove worktree only on a worktree row that is not the project checkout', () => {
+  it('offers Remove worktree only on a worktree row that is not the workspace checkout', () => {
     expect(canRemoveWorktree(item({ kind: 'branch_with_worktree', worktree_path: '/wt' }))).toBe(true);
     expect(
       canRemoveWorktree(

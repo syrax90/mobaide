@@ -1,5 +1,5 @@
 /**
- * The wizard's reorder wiring: the project rows save the agent's own project
+ * The wizard's reorder wiring: the workspace rows save the agent's own workspace
  * order, the mode cards save the account's mode order, both show a move at
  * once and both revert with a toast when the save fails.
  *
@@ -12,7 +12,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubLocalStorage } from '../../../test/localStorageStub';
-import type { ProjectInfo } from '../../../api/projectRepository';
+import type { WorkspaceInfo } from '../../../api/workspaceRepository';
 import type { SessionModeOrder } from '../../../protocol/dto/userEvents';
 
 // No agent token means no URL, so the wizard's agent channel never constructs a
@@ -24,16 +24,16 @@ vi.mock('../../../auth/agentTokens', () => ({
 
 const api = vi.hoisted(
   (): {
-    projects: string[];
-    /** The lists of agents other than `agent-1`, which lists `projects`. */
-    otherAgentProjects: Record<string, string[]>;
+    workspaces: string[];
+    /** The lists of agents other than `agent-1`, which lists `workspaces`. */
+    otherAgentWorkspaces: Record<string, string[]>;
     reorders: string[][];
     /** The agent each `reorders` entry was sent for. */
     reorderAgents: string[];
     modeOrder: SessionModeOrder;
     modeSaves: string[][];
     /** While set, the matching save rejects as the server would on a 5xx. */
-    failProjectSave: boolean;
+    failWorkspaceSave: boolean;
     failModeSave: boolean;
     /** While set, a save answers only when the test calls its queued release. */
     holdSaves: boolean;
@@ -42,13 +42,13 @@ const api = vi.hoisted(
     holdGet: boolean;
     settleGet: (() => void) | null;
   } => ({
-    projects: [],
-    otherAgentProjects: {},
+    workspaces: [],
+    otherAgentWorkspaces: {},
     reorders: [],
     reorderAgents: [],
     modeOrder: { order: [], version: 0, updated_at: undefined },
     modeSaves: [],
-    failProjectSave: false,
+    failWorkspaceSave: false,
     failModeSave: false,
     holdSaves: false,
     releaseSave: [],
@@ -57,26 +57,26 @@ const api = vi.hoisted(
   }),
 );
 
-vi.mock('../../../api/projectRepository', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../../api/projectRepository')>();
-  const { projectInfoSchema } = await import('../../../protocol/dto/projects');
-  const rows = (names: readonly string[]): ProjectInfo[] =>
-    names.map((name, order) => projectInfoSchema.parse({ name, path: `/srv/${name}`, order }));
+vi.mock('../../../api/workspaceRepository', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../api/workspaceRepository')>();
+  const { workspaceInfoSchema } = await import('../../../protocol/dto/workspaces');
+  const rows = (names: readonly string[]): WorkspaceInfo[] =>
+    names.map((name, order) => workspaceInfoSchema.parse({ name, path: `/srv/${name}`, order }));
   return {
     ...actual,
-    listProjects: (agentId: string) =>
-      Promise.resolve(rows(api.otherAgentProjects[agentId] ?? api.projects)),
+    listWorkspaces: (agentId: string) =>
+      Promise.resolve(rows(api.otherAgentWorkspaces[agentId] ?? api.workspaces)),
     // The 200 body is the agent's re-sorted list, which the wizard writes
     // straight into the cache — so the fake answers with it.
-    reorderProjects: (agentId: string, names: readonly string[]) => {
+    reorderWorkspaces: (agentId: string, names: readonly string[]) => {
       api.reorders.push([...names]);
       api.reorderAgents.push(agentId);
-      if (api.failProjectSave) return Promise.reject(new Error('agent unreachable'));
-      if (api.otherAgentProjects[agentId] === undefined) api.projects = [...names];
-      else api.otherAgentProjects[agentId] = [...names];
+      if (api.failWorkspaceSave) return Promise.reject(new Error('agent unreachable'));
+      if (api.otherAgentWorkspaces[agentId] === undefined) api.workspaces = [...names];
+      else api.otherAgentWorkspaces[agentId] = [...names];
       const answer = rows(names);
       if (!api.holdSaves) return Promise.resolve(answer);
-      return new Promise<ProjectInfo[]>((resolve) => {
+      return new Promise<WorkspaceInfo[]>((resolve) => {
         api.releaseSave.push(() => {
           resolve(answer);
         });
@@ -176,8 +176,8 @@ const handle = (label: string): HTMLElement =>
 const toasts = (): string[] =>
   useToastStore.getState().toasts.map((toast) => toast.message);
 
-const cachedProjectNames = (agentId = 'agent-1'): string[] | undefined =>
-  client.getQueryData<ProjectInfo[]>(queryKeys.projects(agentId))?.map((p) => p.name);
+const cachedWorkspaceNames = (agentId = 'agent-1'): string[] | undefined =>
+  client.getQueryData<WorkspaceInfo[]>(queryKeys.workspaces(agentId))?.map((p) => p.name);
 
 /** Saves waiting in their list's queue for the one ahead of them. */
 const queuedSaves = (): number =>
@@ -229,24 +229,24 @@ async function renderWizard(search: string) {
     </QueryClientProvider>,
   );
   await waitFor(() => {
-    expect(screen.queryByText('Loading projects…')).not.toBeInTheDocument();
+    expect(screen.queryByText('Loading workspaces…')).not.toBeInTheDocument();
   });
 }
 
 async function renderModeStep() {
-  await renderWizard('?step=mode&project=alpha');
+  await renderWizard('?step=mode&workspace=alpha');
   await screen.findByRole('heading', { name: 'What should it run?' });
 }
 
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  api.projects = ['alpha', 'beta', 'gamma'];
-  api.otherAgentProjects = {};
+  api.workspaces = ['alpha', 'beta', 'gamma'];
+  api.otherAgentWorkspaces = {};
   api.reorders.length = 0;
   api.reorderAgents.length = 0;
   api.modeOrder = { order: [], version: 0, updated_at: undefined };
   api.modeSaves.length = 0;
-  api.failProjectSave = false;
+  api.failWorkspaceSave = false;
   api.failModeSave = false;
   api.holdSaves = false;
   api.releaseSave.length = 0;
@@ -266,13 +266,13 @@ afterEach(() => {
     codex: null,
     antigravity: null,
     opencode: null,
-    lastProjectName: null,
+    lastWorkspaceName: null,
   });
   useSessionStore.setState({ session: null });
   window.localStorage.clear();
 });
 
-describe('NewSession project reorder', () => {
+describe('NewSession workspace reorder', () => {
   it('saves the whole name list as the agent’s order and shows the move at once', async () => {
     await renderWizard('');
     expect(handleOrder()).toEqual(['alpha', 'beta', 'gamma']);
@@ -286,7 +286,7 @@ describe('NewSession project reorder', () => {
     });
     await waitFor(() => {
       expect(
-        client.getQueryData<ProjectInfo[]>(queryKeys.projects('agent-1'))?.map((p) => p.name),
+        client.getQueryData<WorkspaceInfo[]>(queryKeys.workspaces('agent-1'))?.map((p) => p.name),
       ).toEqual(['beta', 'alpha', 'gamma']);
     });
     expect(handleOrder()).toEqual(['beta', 'alpha', 'gamma']);
@@ -294,7 +294,7 @@ describe('NewSession project reorder', () => {
   });
 
   it('reverts to the agent’s order and says so when the save fails', async () => {
-    api.failProjectSave = true;
+    api.failWorkspaceSave = true;
     await renderWizard('');
 
     fireEvent.keyDown(handle('gamma'), { key: 'ArrowUp' });
@@ -307,7 +307,7 @@ describe('NewSession project reorder', () => {
   });
 
   it('sends only the save in flight and the last of a burst of moves', async () => {
-    api.projects = ['alpha', 'beta', 'gamma', 'delta'];
+    api.workspaces = ['alpha', 'beta', 'gamma', 'delta'];
     api.holdSaves = true;
     await renderWizard('');
 
@@ -328,12 +328,12 @@ describe('NewSession project reorder', () => {
       ['beta', 'gamma', 'delta', 'alpha'],
     ]);
     // The first answer is in the cache, but the newer move stays on screen.
-    expect(cachedProjectNames()).toEqual(['beta', 'alpha', 'gamma', 'delta']);
+    expect(cachedWorkspaceNames()).toEqual(['beta', 'alpha', 'gamma', 'delta']);
     expect(handleOrder()).toEqual(['beta', 'gamma', 'delta', 'alpha']);
 
     await releaseOldestSave();
     await waitFor(() => {
-      expect(cachedProjectNames()).toEqual(['beta', 'gamma', 'delta', 'alpha']);
+      expect(cachedWorkspaceNames()).toEqual(['beta', 'gamma', 'delta', 'alpha']);
     });
     expect(handleOrder()).toEqual(['beta', 'gamma', 'delta', 'alpha']);
     expect(api.reorders).toHaveLength(2);
@@ -343,7 +343,7 @@ describe('NewSession project reorder', () => {
   it('keeps a save on the agent it was made on after the route moves to another agent', async () => {
     // A pending save's options follow the current render, which after the
     // move belongs to agent-2.
-    api.otherAgentProjects = { 'agent-2': ['delta', 'epsilon'] };
+    api.otherAgentWorkspaces = { 'agent-2': ['delta', 'epsilon'] };
     api.holdSaves = true;
     await renderWizard('');
 
@@ -375,8 +375,8 @@ describe('NewSession project reorder', () => {
       ['beta', 'gamma', 'alpha'],
     ]);
     expect(api.reorderAgents).toEqual(['agent-1', 'agent-1']);
-    expect(cachedProjectNames()).toEqual(['beta', 'gamma', 'alpha']);
-    expect(cachedProjectNames('agent-2')).toEqual(['delta', 'epsilon']);
+    expect(cachedWorkspaceNames()).toEqual(['beta', 'gamma', 'alpha']);
+    expect(cachedWorkspaceNames('agent-2')).toEqual(['delta', 'epsilon']);
     expect(handleOrder()).toEqual(['delta', 'epsilon']);
     expect(toasts()).toEqual([]);
   });
@@ -384,7 +384,7 @@ describe('NewSession project reorder', () => {
   it('still sends a save queued on one agent after a drop on another', async () => {
     // agent-1's second save waits behind its first; a drop on agent-2 must
     // neither skip it nor strand it in the queue.
-    api.otherAgentProjects = { 'agent-2': ['delta', 'epsilon'] };
+    api.otherAgentWorkspaces = { 'agent-2': ['delta', 'epsilon'] };
     api.holdSaves = true;
     await renderWizard('');
 
@@ -430,8 +430,8 @@ describe('NewSession project reorder', () => {
       ['epsilon', 'delta'],
     ]);
     expect(api.reorderAgents).toEqual(['agent-1', 'agent-1', 'agent-2']);
-    expect(cachedProjectNames()).toEqual(['beta', 'gamma', 'alpha']);
-    expect(cachedProjectNames('agent-2')).toEqual(['epsilon', 'delta']);
+    expect(cachedWorkspaceNames()).toEqual(['beta', 'gamma', 'alpha']);
+    expect(cachedWorkspaceNames('agent-2')).toEqual(['epsilon', 'delta']);
     expect(handleOrder()).toEqual(['epsilon', 'delta']);
   });
 

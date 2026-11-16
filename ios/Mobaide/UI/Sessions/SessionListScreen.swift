@@ -108,11 +108,11 @@ private struct SessionListContent: View {
             List {
                 if !model.activeScans.isEmpty {
                     Section(header: PixelSectionHeader("Active Auto Scans")) {
-                        ForEach(model.activeScans, id: \.project_name) { scan in
+                        ForEach(model.activeScans, id: \.workspace_name) { scan in
                             AutoScanCard(
                                 scan: scan,
-                                onTap: { router.navigate(to: .autoScanDetail(projectName: scan.project_name)) },
-                                onStop: { Task { await model.stopScan(scan.project_name) } }
+                                onTap: { router.navigate(to: .autoScanDetail(workspaceName: scan.workspace_name)) },
+                                onStop: { Task { await model.stopScan(scan.workspace_name) } }
                             )
                             .pixelCard()
                             .pixelListRow()

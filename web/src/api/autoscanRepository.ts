@@ -10,7 +10,7 @@ export type StartScanRequest = components['schemas']['StartScanRequest'];
 export type RunNowResponse = components['schemas']['RunNowResponse'];
 
 /**
- * Start an Auto Scan for a project.
+ * Start an Auto Scan for a workspace.
  *
  * The success body is deliberately discarded. The direct-REST handler answers
  * `{"message": "..."}` but the relay tunnel — the only path a browser takes —
@@ -45,16 +45,16 @@ export async function listAutoScans(agentId: string): Promise<AutoScanListRespon
 }
 
 /**
- * Stop one project's scan.
+ * Stop one workspace's scan.
  *
  * The body is discarded for the same reason as `startAutoScan`: direct REST
  * answers `{"message": …}` and the relay answers `{"status": "stopped"}`. A 404
  * means the scan was already gone, which the caller surfaces as a conflict
  * rather than as failure.
  */
-export async function stopAutoScan(agentId: string, projectName: string): Promise<void> {
+export async function stopAutoScan(agentId: string, workspaceName: string): Promise<void> {
   const { error, response } = await createAgentClient(agentId).POST('/api/autoscan/stop', {
-    body: { project_name: projectName },
+    body: { project_name: workspaceName },
   });
   if (error !== undefined) throw toApiError(response, error);
 }
@@ -70,11 +70,11 @@ export async function stopAutoScan(agentId: string, projectName: string): Promis
  */
 export async function runAutoScanNow(
   agentId: string,
-  projectName: string,
+  workspaceName: string,
 ): Promise<RunNowResponse> {
   const { data, error, response } = await createAgentClient(agentId).POST(
     '/api/autoscan/run-now',
-    { body: { project_name: projectName } },
+    { body: { project_name: workspaceName } },
   );
   if (error !== undefined || data === undefined) throw toApiError(response, error);
   return data;

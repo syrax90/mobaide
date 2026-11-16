@@ -1,7 +1,7 @@
 import Foundation
 
 /// Heterogeneous JSON container mirroring kotlinx `JsonElement` fields on the
-/// wire (`ProjectInfo.default_flags`, `VersionInfoResponse.capabilities`).
+/// wire (`WorkspaceInfo.default_flags`, `VersionInfoResponse.capabilities`).
 /// Decode order matters: Bool before Int before Double, so `true` stays a
 /// bool and `1` stays an int; `1.0` canonicalizes to `.int(1)` on re-encode.
 indirect enum JSONValue: Hashable, Sendable {

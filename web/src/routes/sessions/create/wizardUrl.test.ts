@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ProjectSummary } from '../../../api/projectRepository';
+import type { WorkspaceSummary } from '../../../api/workspaceRepository';
 import {
   parseWizardLocation,
   resolveWizardLocation,
@@ -9,7 +9,7 @@ import type { WizardMode } from './wizardState';
 
 const CUSTOM: WizardMode = 'custom_0123456789ab';
 
-const projects: ProjectSummary[] = [
+const workspaces: WorkspaceSummary[] = [
   {
     name: 'mobaide',
     path: '/srv/mobaide',
@@ -28,66 +28,68 @@ const parse = (query: string): WizardLocation =>
 
 const resolve = (
   requested: WizardLocation,
-  over: { projects?: ProjectSummary[] | undefined; selectable?: boolean } = {},
+  over: { workspaces?: WorkspaceSummary[] | undefined; selectable?: boolean } = {},
 ): WizardLocation | null =>
   resolveWizardLocation({
     requested,
-    projects: 'projects' in over ? over.projects : projects,
+    workspaces: 'workspaces' in over ? over.workspaces : workspaces,
     isModeSelectable: () => over.selectable ?? true,
   });
 
 describe('parseWizardLocation', () => {
   it('falls back to the first step for anything it cannot read', () => {
-    expect(parse('')).toEqual({ step: 'project', mode: null, selection: { kind: 'none' } });
+    expect(parse('')).toEqual({ step: 'workspace', mode: null, selection: { kind: 'none' } });
     expect(parse('step=nowhere&mode=gemini')).toEqual({
-      step: 'project',
+      step: 'workspace',
       mode: null,
       selection: { kind: 'none' },
     });
   });
 
-  it('reads a stored project, a trimmed path, and prefers the project', () => {
-    expect(parse('step=config&mode=claude&project=mobaide').selection).toEqual(stored);
+  it('reads a stored workspace, a trimmed path, and prefers the workspace', () => {
+    expect(parse('step=config&mode=claude&workspace=mobaide').selection).toEqual(stored);
     expect(parse('path=%20%2Ftmp%2Fx%20').selection).toEqual({
       kind: 'customPath',
       path: '/tmp/x',
     });
     // A hand-edited URL carrying both must resolve deterministically.
-    expect(parse('project=mobaide&path=/tmp/x').selection).toEqual(stored);
-    expect(parse('project=&path=').selection).toEqual({ kind: 'none' });
+    expect(parse('workspace=mobaide&path=/tmp/x').selection).toEqual(stored);
+    expect(parse('workspace=&path=').selection).toEqual({ kind: 'none' });
+    // A bookmark from before the rename still names the old `project` param.
+    expect(parse('step=config&mode=claude&project=mobaide').selection).toEqual(stored);
   });
 });
 
 describe('resolveWizardLocation', () => {
-  it('clamps nothing while the project list is still loading', () => {
+  it('clamps nothing while the workspace list is still loading', () => {
     // Without this, every deep-link reload would bounce to step one for the
     // duration of one request and lose the user's place.
     expect(
       resolve({ step: 'config', mode: 'claude', selection: { kind: 'stored', name: 'gone' } }, {
-        projects: undefined,
+        workspaces: undefined,
       }),
     ).toBeNull();
   });
 
-  it('sends an unknown project name back to the first step', () => {
+  it('sends an unknown workspace name back to the first step', () => {
     expect(
       resolve({ step: 'config', mode: 'claude', selection: { kind: 'stored', name: 'gone' } }),
-    ).toEqual({ step: 'project', mode: null, selection: { kind: 'none' } });
+    ).toEqual({ step: 'workspace', mode: null, selection: { kind: 'none' } });
   });
 
   it('keeps an invalid path so the inline error can explain the bounce', () => {
     const selection = { kind: 'customPath', path: 'relative' } as const;
 
     expect(resolve({ step: 'config', mode: 'claude', selection })).toEqual({
-      step: 'project',
+      step: 'workspace',
       mode: null,
       selection,
     });
   });
 
   it('drops a mode carried back to an earlier step', () => {
-    expect(resolve({ step: 'project', mode: 'claude', selection: { kind: 'none' } })).toEqual({
-      step: 'project',
+    expect(resolve({ step: 'workspace', mode: 'claude', selection: { kind: 'none' } })).toEqual({
+      step: 'workspace',
       mode: null,
       selection: { kind: 'none' },
     });
@@ -98,9 +100,9 @@ describe('resolveWizardLocation', () => {
     });
   });
 
-  it('sends a config deep link with no project back to the project step', () => {
+  it('sends a config deep link with no workspace back to the workspace step', () => {
     expect(resolve({ step: 'config', mode: 'claude', selection: { kind: 'none' } })).toEqual({
-      step: 'project',
+      step: 'workspace',
       mode: null,
       selection: { kind: 'none' },
     });

@@ -365,28 +365,28 @@ class TestAllFoldersLister:
 
     @pytest.fixture
     def folders(self, tmp_path):
-        project = tmp_path / "proj"
-        project.mkdir()
+        workspace = tmp_path / "proj"
+        workspace.mkdir()
         link = tmp_path / "link"
         if sys.platform != "win32":
-            link.symlink_to(project, target_is_directory=True)
+            link.symlink_to(workspace, target_is_directory=True)
         rows = [
-            {"sessionId": "old", "cwd": str(project), "title": "Old", "updatedAt": "2026-11-07T10:00:00Z"},
-            {"sessionId": "other", "cwd": "/elsewhere/other-project", "updatedAt": "2026-11-09T10:00:00Z"},
-            {"sessionId": "undated", "cwd": str(project)},
+            {"sessionId": "old", "cwd": str(workspace), "title": "Old", "updatedAt": "2026-11-07T10:00:00Z"},
+            {"sessionId": "other", "cwd": "/elsewhere/other-workspace", "updatedAt": "2026-11-09T10:00:00Z"},
+            {"sessionId": "undated", "cwd": str(workspace)},
             {"sessionId": "new", "cwd": str(link), "title": "New", "updatedAt": "2026-11-09T08:00:00Z"},
             {"sessionId": "no-folder", "updatedAt": "2026-11-09T11:00:00Z"},
         ]
-        return project, link, rows
+        return workspace, link, rows
 
     @pytest.mark.skipif(sys.platform == "win32", reason="symlinks")
     @pytest.mark.parametrize("asked", ["folder", "symlink"])
     async def test_the_rows_of_the_folder_newest_first(self, make_catalog, folders, asked):
-        project, link, rows = folders
+        workspace, link, rows = folders
         catalog = make_catalog(AllFoldersSpec(rows, FakePresence("old")), kind="antigravity")
 
         page = await catalog.list_sessions(
-            "antigravity", cwd=str(project if asked == "folder" else link), cursor=None
+            "antigravity", cwd=str(workspace if asked == "folder" else link), cursor=None
         )
 
         assert [(r["session_id"], r["open_elsewhere"]) for r in page["sessions"]] == [

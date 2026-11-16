@@ -13,7 +13,7 @@ except Exception:  # pragma: no cover
 from gql import Client, gql
 from gql.transport.httpx import HTTPXAsyncTransport
 
-from mobaide.core.projects_config import AutoScanFilter
+from mobaide.core.workspaces_config import AutoScanFilter
 
 from .models import IssueLabel, IssueState, LinearIssue
 from .rate_limiter import LinearRateLimiter
@@ -41,7 +41,7 @@ query {
 """)
 
 # Parameterized issue query — the filter is supplied as an `IssueFilter!`
-# variable so we can configure trigger states/labels per project without
+# variable so we can configure trigger states/labels per workspace without
 # splicing strings into the document. The `assignee.isMe` clause stays
 # baked in — only labels and states are user-configurable in this iteration.
 _QUERY_AUTO_SCAN_ISSUES = gql("""

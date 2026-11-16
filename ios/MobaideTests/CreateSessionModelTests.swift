@@ -84,9 +84,9 @@ final class CreateSessionModelTests: XCTestCase {
         )
     }
 
-    private func modelWithProjects(_ projectsJSON: String) async -> CreateSessionModel {
+    private func modelWithWorkspaces(_ workspacesJSON: String) async -> CreateSessionModel {
         StubURLProtocol.reset()
-        StubURLProtocol.enqueue(status: 200, body: projectsJSON)
+        StubURLProtocol.enqueue(status: 200, body: workspacesJSON)
         let model = stubbedModel()
         await model.load()
         return model
@@ -206,7 +206,7 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(request.ui, "chat")
         XCTAssertEqual(request.chat_resume_id, "external-2222")
         XCTAssertEqual(request.cwd, "/srv/other")
-        XCTAssertNil(request.project_name)
+        XCTAssertNil(request.workspace_name)
         XCTAssertNil(request.claude_options)
         XCTAssertEqual(request.codex_options?.sandbox, "read-only")
         XCTAssertEqual(request.codex_options?.worktree, false)
@@ -316,14 +316,14 @@ final class CreateSessionModelTests: XCTestCase {
     }
 
     func testOpenCodeCarriesWorktreeInItsOwnOptionsBlock() async throws {
-        let model = await modelWithProjects(#"[{"name":"a","path":"/p","is_git":true}]"#)
-        model.selectStoredProject("a")
+        let model = await modelWithWorkspaces(#"[{"name":"a","path":"/p","is_git":true}]"#)
+        model.selectStoredWorkspace("a")
         model.worktree = true
         model.branchName = "feat"
 
         let request = try XCTUnwrap(model.buildRequest(mode: .opencode))
 
-        XCTAssertEqual(request.project_name, "a")
+        XCTAssertEqual(request.workspace_name, "a")
         XCTAssertEqual(request.opencode_options?.worktree, true)
         XCTAssertEqual(request.opencode_options?.branch_name, "feat")
         XCTAssertEqual(request.worktree, false, "a managed CLI's worktree never rides the top level")
@@ -362,28 +362,28 @@ final class CreateSessionModelTests: XCTestCase {
     }
 
     func testConnectRequestIsABareTerminalSignInWhateverTheWizardHolds() async throws {
-        let model = await modelWithProjects(#"[{"name":"a","path":"/p","is_git":true}]"#)
+        let model = await modelWithWorkspaces(#"[{"name":"a","path":"/p","is_git":true}]"#)
         XCTAssertNil(model.connectRequest(), "a sign-in needs a folder to run in")
 
         // Options of the agent session the user did not launch.
-        model.selectStoredProject("a")
+        model.selectStoredWorkspace("a")
         model.opencodeAutoApprove = true
         model.worktree = true
         model.branchName = "feat"
-        let inProject = try XCTUnwrap(model.connectRequest())
+        let inWorkspace = try XCTUnwrap(model.connectRequest())
 
-        XCTAssertEqual(inProject.project_name, "a")
-        XCTAssertNil(inProject.cwd)
-        XCTAssertEqual(inProject.cli, "opencode")
-        XCTAssertEqual(inProject.ui, "terminal", "`opencode auth login` is a terminal program")
-        XCTAssertEqual(inProject.opencode_options, OpenCodeOptionsModel(connect: true))
-        XCTAssertEqual(inProject.worktree, false)
-        XCTAssertNil(inProject.branch_name)
+        XCTAssertEqual(inWorkspace.workspace_name, "a")
+        XCTAssertNil(inWorkspace.cwd)
+        XCTAssertEqual(inWorkspace.cli, "opencode")
+        XCTAssertEqual(inWorkspace.ui, "terminal", "`opencode auth login` is a terminal program")
+        XCTAssertEqual(inWorkspace.opencode_options, OpenCodeOptionsModel(connect: true))
+        XCTAssertEqual(inWorkspace.worktree, false)
+        XCTAssertNil(inWorkspace.branch_name)
 
         model.selection = .customPath("/tmp/scratch")
         let inFolder = try XCTUnwrap(model.connectRequest())
 
-        XCTAssertNil(inFolder.project_name)
+        XCTAssertNil(inFolder.workspace_name)
         XCTAssertEqual(inFolder.cwd, "/tmp/scratch")
         XCTAssertEqual(inFolder.opencode_options, OpenCodeOptionsModel(connect: true))
     }
@@ -452,8 +452,8 @@ final class CreateSessionModelTests: XCTestCase {
     }
 
     func testOpenCodeContinueRequestUsesTheOpenCodeOptionsWithoutAWorktree() async {
-        let model = await modelWithProjects(#"[{"name":"a","path":"/p","is_git":true}]"#)
-        model.selectStoredProject("a")
+        let model = await modelWithWorkspaces(#"[{"name":"a","path":"/p","is_git":true}]"#)
+        model.selectStoredWorkspace("a")
         model.mode = .opencode
         model.opencodeAutoApprove = true
         model.worktree = true
@@ -468,7 +468,7 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(request.ui, "chat")
         XCTAssertEqual(request.chat_resume_id, "external-2222")
         XCTAssertEqual(request.cwd, "/srv/other")
-        XCTAssertNil(request.project_name)
+        XCTAssertNil(request.workspace_name)
         XCTAssertNil(request.claude_options)
         XCTAssertNil(request.codex_options)
         XCTAssertEqual(request.opencode_options?.auto_approve, true)
@@ -479,8 +479,8 @@ final class CreateSessionModelTests: XCTestCase {
     // MARK: - GitHub Copilot
 
     func testCopilotRequestCarriesOnlyItsOwnOptionsBlock() async throws {
-        let model = await modelWithProjects(#"[{"name":"a","path":"/p","is_git":true}]"#)
-        model.selectStoredProject("a")
+        let model = await modelWithWorkspaces(#"[{"name":"a","path":"/p","is_git":true}]"#)
+        model.selectStoredWorkspace("a")
         model.copilotAllowAll = true
         model.worktree = true
         model.branchName = "feat"
@@ -488,7 +488,7 @@ final class CreateSessionModelTests: XCTestCase {
         let request = try XCTUnwrap(model.buildRequest(mode: .copilot))
 
         XCTAssertEqual(request.cli, "copilot")
-        XCTAssertEqual(request.project_name, "a")
+        XCTAssertEqual(request.workspace_name, "a")
         XCTAssertEqual(request.ui, "chat")
         XCTAssertNil(request.claude_options)
         XCTAssertNil(request.codex_options)
@@ -510,7 +510,7 @@ final class CreateSessionModelTests: XCTestCase {
 
         XCTAssertEqual(request.cli, "copilot")
         XCTAssertEqual(request.cwd, "/abs/path")
-        XCTAssertNil(request.project_name)
+        XCTAssertNil(request.workspace_name)
         XCTAssertEqual(request.copilot_options?.allow_all, false, "allow-all stays off until the user turns it on")
         XCTAssertEqual(request.copilot_options?.worktree, false)
         XCTAssertNil(request.copilot_options?.branch_name)
@@ -618,7 +618,7 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(request.ui, "chat")
         XCTAssertEqual(request.chat_resume_id, "external-3333")
         XCTAssertEqual(request.cwd, "/srv/other")
-        XCTAssertNil(request.project_name)
+        XCTAssertNil(request.workspace_name)
         XCTAssertNil(request.claude_options)
         XCTAssertNil(request.codex_options)
         XCTAssertNil(request.antigravity_options)
@@ -630,8 +630,8 @@ final class CreateSessionModelTests: XCTestCase {
     // MARK: - Cursor
 
     func testCursorRequestCarriesOnlyItsOwnOptionsBlock() async throws {
-        let model = await modelWithProjects(#"[{"name":"a","path":"/p","is_git":true}]"#)
-        model.selectStoredProject("a")
+        let model = await modelWithWorkspaces(#"[{"name":"a","path":"/p","is_git":true}]"#)
+        model.selectStoredWorkspace("a")
         model.cursorForce = true
         model.worktree = true
         model.branchName = "feat"
@@ -639,7 +639,7 @@ final class CreateSessionModelTests: XCTestCase {
         let request = try XCTUnwrap(model.buildRequest(mode: .cursor))
 
         XCTAssertEqual(request.cli, "cursor")
-        XCTAssertEqual(request.project_name, "a")
+        XCTAssertEqual(request.workspace_name, "a")
         XCTAssertEqual(request.ui, "chat")
         XCTAssertNil(request.claude_options)
         XCTAssertNil(request.codex_options)
@@ -662,7 +662,7 @@ final class CreateSessionModelTests: XCTestCase {
 
         XCTAssertEqual(request.cli, "cursor")
         XCTAssertEqual(request.cwd, "/abs/path")
-        XCTAssertNil(request.project_name)
+        XCTAssertNil(request.workspace_name)
         XCTAssertEqual(request.cursor_options?.force, false, "run-everything stays off until the user turns it on")
         XCTAssertEqual(request.cursor_options?.worktree, false)
         XCTAssertNil(request.cursor_options?.branch_name)
@@ -771,7 +771,7 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(request.ui, "chat")
         XCTAssertEqual(request.chat_resume_id, "external-4444")
         XCTAssertEqual(request.cwd, "/srv/other")
-        XCTAssertNil(request.project_name)
+        XCTAssertNil(request.workspace_name)
         XCTAssertNil(request.claude_options)
         XCTAssertNil(request.codex_options)
         XCTAssertNil(request.antigravity_options)
@@ -783,15 +783,15 @@ final class CreateSessionModelTests: XCTestCase {
     // MARK: - Pi
 
     func testPiRequestCarriesOnlyItsOwnOptionsBlock() async throws {
-        let model = await modelWithProjects(#"[{"name":"a","path":"/p","is_git":true}]"#)
-        model.selectStoredProject("a")
+        let model = await modelWithWorkspaces(#"[{"name":"a","path":"/p","is_git":true}]"#)
+        model.selectStoredWorkspace("a")
         model.worktree = true
         model.branchName = "feat"
 
         let request = try XCTUnwrap(model.buildRequest(mode: .pi))
 
         XCTAssertEqual(request.cli, "pi")
-        XCTAssertEqual(request.project_name, "a")
+        XCTAssertEqual(request.workspace_name, "a")
         XCTAssertEqual(request.ui, "chat")
         XCTAssertNil(request.claude_options)
         XCTAssertNil(request.codex_options)
@@ -813,7 +813,7 @@ final class CreateSessionModelTests: XCTestCase {
 
         XCTAssertEqual(request.cli, "pi")
         XCTAssertEqual(request.cwd, "/abs/path")
-        XCTAssertNil(request.project_name)
+        XCTAssertNil(request.workspace_name)
         XCTAssertEqual(request.pi_options?.worktree, false)
         XCTAssertNil(request.pi_options?.branch_name)
     }
@@ -916,7 +916,7 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(request.ui, "chat")
         XCTAssertEqual(request.chat_resume_id, "external-4444")
         XCTAssertEqual(request.cwd, "/srv/other")
-        XCTAssertNil(request.project_name)
+        XCTAssertNil(request.workspace_name)
         XCTAssertNil(request.claude_options)
         XCTAssertNil(request.copilot_options)
         XCTAssertEqual(request.pi_options?.worktree, false)
@@ -1121,15 +1121,15 @@ final class CreateSessionModelTests: XCTestCase {
 
     func testShellCarriesWorktreeOnTopLevel() async throws {
         // Shell worktree/branch ride the top-level request, but only for a
-        // stored git project (worktree is git-gated).
-        let model = await modelWithProjects(#"[{"name":"a","path":"/p","is_git":true}]"#)
-        model.selectStoredProject("a")
+        // stored git workspace (worktree is git-gated).
+        let model = await modelWithWorkspaces(#"[{"name":"a","path":"/p","is_git":true}]"#)
+        model.selectStoredWorkspace("a")
         model.worktree = true
         model.branchName = "feat"
         let request = try XCTUnwrap(model.buildRequest(mode: .shell))
         XCTAssertNil(request.cli)
         XCTAssertNil(request.claude_options)
-        XCTAssertEqual(request.project_name, "a")
+        XCTAssertEqual(request.workspace_name, "a")
         XCTAssertEqual(request.worktree, true)
         XCTAssertEqual(request.branch_name, "feat")
     }
@@ -1138,8 +1138,8 @@ final class CreateSessionModelTests: XCTestCase {
         // Custom agent types launch with plain-terminal semantics plus the
         // `cli` discriminator — worktree/branch ride the top level exactly
         // like `.shell` (compare testShellCarriesWorktreeOnTopLevel).
-        let model = await modelWithProjects(#"[{"name":"a","path":"/p","is_git":true}]"#)
-        model.selectStoredProject("a")
+        let model = await modelWithWorkspaces(#"[{"name":"a","path":"/p","is_git":true}]"#)
+        model.selectStoredWorkspace("a")
         model.worktree = true
         model.branchName = "feat"
         let request = try XCTUnwrap(model.buildRequest(mode: .custom("ab12cd34ef56")))
@@ -1148,7 +1148,7 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertNil(request.claude_options)
         XCTAssertNil(request.codex_options)
         XCTAssertNil(request.antigravity_options)
-        XCTAssertEqual(request.project_name, "a")
+        XCTAssertEqual(request.workspace_name, "a")
         XCTAssertEqual(request.worktree, true)
         XCTAssertEqual(request.branch_name, "feat")
     }
@@ -1159,7 +1159,7 @@ final class CreateSessionModelTests: XCTestCase {
         model.worktree = true
         let request = try XCTUnwrap(model.buildRequest(mode: .standard))
         XCTAssertEqual(request.cwd, "/abs/path")
-        XCTAssertNil(request.project_name)
+        XCTAssertNil(request.workspace_name)
         XCTAssertEqual(request.worktree, false)
         XCTAssertEqual(request.claude_options?.worktree, false)
     }
@@ -1175,14 +1175,14 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(model.buildRequest(mode: .standard)).cwd, "/")
     }
 
-    func testNonGitStoredProjectDropsWorktree() async throws {
-        let model = await modelWithProjects(#"[{"name":"plain","path":"/p","is_git":false}]"#)
-        model.selectStoredProject("plain")
+    func testNonGitStoredWorkspaceDropsWorktree() async throws {
+        let model = await modelWithWorkspaces(#"[{"name":"plain","path":"/p","is_git":false}]"#)
+        model.selectStoredWorkspace("plain")
         model.worktree = true
         model.branchName = "x"
         let request = try XCTUnwrap(model.buildRequest(mode: .standard))
         XCTAssertFalse(model.showsGitOptions)
-        XCTAssertEqual(request.claude_options?.worktree, false, "a non-git project must not send a stale worktree toggle")
+        XCTAssertEqual(request.claude_options?.worktree, false, "a non-git workspace must not send a stale worktree toggle")
         XCTAssertNil(request.claude_options?.branch_name)
     }
 
@@ -1203,52 +1203,52 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(CreateSessionModel.parseAddDirs("/a\r\n/b,\r/c"), ["/a", "/b", "/c"])
     }
 
-    func testOnProjectCreatedSelectsAndGatesGit() {
+    func testOnWorkspaceCreatedSelectsAndGatesGit() {
         let model = makeModel()
 
-        let gitProject = ProjectInfo(name: "repo", path: "/p", is_git: true)
+        let gitWorkspace = WorkspaceInfo(name: "repo", path: "/p", is_git: true)
         model.worktree = true
         model.branchName = "feat"
-        model.onProjectCreated(gitProject)
+        model.onWorkspaceCreated(gitWorkspace)
         XCTAssertEqual(model.selection, .stored("repo"))
-        XCTAssertTrue(model.projects.contains(gitProject), "the created project is merged into the wizard snapshot")
+        XCTAssertTrue(model.workspaces.contains(gitWorkspace), "the created workspace is merged into the wizard snapshot")
         XCTAssertTrue(model.showsGitOptions)
-        XCTAssertTrue(model.worktree, "a git project keeps the worktree toggle")
+        XCTAssertTrue(model.worktree, "a git workspace keeps the worktree toggle")
 
-        let plainProject = ProjectInfo(name: "plain", path: "/q", is_git: false)
-        model.onProjectCreated(plainProject)
+        let plainWorkspace = WorkspaceInfo(name: "plain", path: "/q", is_git: false)
+        model.onWorkspaceCreated(plainWorkspace)
         XCTAssertEqual(model.selection, .stored("plain"))
         XCTAssertFalse(model.showsGitOptions)
-        XCTAssertFalse(model.worktree, "a non-git project resets the stale worktree toggle")
+        XCTAssertFalse(model.worktree, "a non-git workspace resets the stale worktree toggle")
         XCTAssertEqual(model.branchName, "")
     }
 
-    func testLateLoadPreservesInlineCreatedProject() async {
+    func testLateLoadPreservesInlineCreatedWorkspace() async {
         StubURLProtocol.reset()
         let model = stubbedModel()
 
-        // A project is created inline before the initial load() response lands.
-        let created = ProjectInfo(name: "fresh", path: "/p", is_git: true)
-        model.onProjectCreated(created)
+        // A workspace is created inline before the initial load() response lands.
+        let created = WorkspaceInfo(name: "fresh", path: "/p", is_git: true)
+        model.onWorkspaceCreated(created)
 
         // The late load() snapshot predates the create and omits it.
         StubURLProtocol.enqueue(status: 200, body: #"[{"name":"old","path":"/o","is_git":false}]"#)
         await model.load()
 
-        XCTAssertTrue(model.projects.contains(created), "a stale load must not drop the inline-created project")
+        XCTAssertTrue(model.workspaces.contains(created), "a stale load must not drop the inline-created workspace")
         XCTAssertEqual(model.selection, .stored("fresh"))
         XCTAssertTrue(model.showsGitOptions, "Git options stay available for the created Git repo")
     }
 
-    func testProjectContinueGating() {
+    func testWorkspaceContinueGating() {
         let model = makeModel()
-        XCTAssertFalse(model.canContinueProject)
-        model.selectStoredProject("a")
-        XCTAssertTrue(model.canContinueProject)
+        XCTAssertFalse(model.canContinueWorkspace)
+        model.selectStoredWorkspace("a")
+        XCTAssertTrue(model.canContinueWorkspace)
         model.setCustomPath("relative")
-        XCTAssertFalse(model.canContinueProject)
+        XCTAssertFalse(model.canContinueWorkspace)
         model.setCustomPath("/abs")
-        XCTAssertTrue(model.canContinueProject)
+        XCTAssertTrue(model.canContinueWorkspace)
     }
 
     func testPrefillFromPreferences() {
@@ -1323,7 +1323,7 @@ final class CreateSessionModelTests: XCTestCase {
         let prefs = isolatedPrefs()
         prefs.addRecentCustomPath(agentKey: harnessAgentKey, path: "/srv/app")
         let model = makeModel(prefs: prefs)
-        model.selectStoredProject("alpha")
+        model.selectStoredWorkspace("alpha")
         model.worktree = true
         model.branchName = "feat"
 
@@ -1335,7 +1335,7 @@ final class CreateSessionModelTests: XCTestCase {
             model.customPathError,
             "an untouched field must not render \"Path is required\" the moment the section appears"
         )
-        XCTAssertFalse(model.worktree, "the stored project's git options do not carry into an ad-hoc path")
+        XCTAssertFalse(model.worktree, "the stored workspace's git options do not carry into an ad-hoc path")
         XCTAssertEqual(model.branchName, "")
         XCTAssertEqual(
             model.recentCustomPaths, ["/srv/app"],
@@ -1343,10 +1343,10 @@ final class CreateSessionModelTests: XCTestCase {
         )
     }
 
-    func testCreateWithCustomPathRecordsTheRecentButNeverTheLastUsedProject() async {
+    func testCreateWithCustomPathRecordsTheRecentButNeverTheLastUsedWorkspace() async {
         StubURLProtocol.reset()
         let prefs = isolatedPrefs()
-        prefs.setLastUsedProjectName("alpha")
+        prefs.setLastUsedWorkspaceName("alpha")
         let model = stubbedModel(prefs: prefs)
         model.mode = .standard
         model.selectCustomPath()
@@ -1365,8 +1365,8 @@ final class CreateSessionModelTests: XCTestCase {
         )
         XCTAssertEqual(model.recentCustomPaths, ["/srv/app"], "the open wizard picks it up immediately")
         XCTAssertEqual(
-            prefs.getLastUsedProjectName(), "alpha",
-            "an ad-hoc path must never displace the last-used project"
+            prefs.getLastUsedWorkspaceName(), "alpha",
+            "an ad-hoc path must never displace the last-used workspace"
         )
     }
 
@@ -1405,12 +1405,12 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(model.customPathDraft, "/srv/edited", "the in-flight edit itself is left alone")
     }
 
-    func testCreateOfAStoredProjectIgnoresACustomPathEnteredMidFlight() async {
+    func testCreateOfAStoredWorkspaceIgnoresACustomPathEnteredMidFlight() async {
         StubURLProtocol.reset()
         let prefs = isolatedPrefs()
         let model = stubbedModel(prefs: prefs)
         model.mode = .standard
-        model.selectStoredProject("alpha")
+        model.selectStoredWorkspace("alpha")
         StubURLProtocol.enqueue(
             status: 200,
             body: #"{"session_id":"s-new","state":"starting","created_at":"t"}"#
@@ -1431,8 +1431,8 @@ final class CreateSessionModelTests: XCTestCase {
 
         XCTAssertNil(model.error)
         XCTAssertEqual(
-            prefs.getLastUsedProjectName(), "alpha",
-            "the launched stored project is what the wizard remembers, even though the selection moved on"
+            prefs.getLastUsedWorkspaceName(), "alpha",
+            "the launched stored workspace is what the wizard remembers, even though the selection moved on"
         )
         XCTAssertEqual(
             prefs.getRecentCustomPaths(agentKey: harnessAgentKey), [],

@@ -76,11 +76,11 @@ class FakeEventBus:
         self.published.append((event_type, payload))
 
 
-def _changed(toplevel: str, project_name: str = "proj") -> tuple[str, dict]:
+def _changed(toplevel: str, workspace_name: str = "proj") -> tuple[str, dict]:
     return (
         "git.changed",
         {
-            "project_name": project_name,
+            "project_name": workspace_name,
             "toplevel": norm_path(toplevel),
             "common_dir": norm_path(toplevel) + "/.git",
         },
@@ -243,7 +243,7 @@ async def _get(cwd, path="keep.txt"):
 
 async def _resolve(
     cwd, content, *, path="keep.txt", token=None, mark_resolved=True,
-    project_name="proj", event_bus=None,
+    workspace_name="proj", event_bus=None,
 ):
     if token is None:
         token = _sha(_read(cwd, path))
@@ -252,28 +252,28 @@ async def _resolve(
         request=GitConflictResolveRequest(
             path=path, token=token, content=content, mark_resolved=mark_resolved
         ),
-        project_name=project_name,
+        workspace_name=workspace_name,
         event_bus=event_bus,
     )
 
 
-async def _take(cwd, side, *, path="keep.txt", project_name="proj", event_bus=None):
+async def _take(cwd, side, *, path="keep.txt", workspace_name="proj", event_bus=None):
     return await take_session_conflict(
         cwd=cwd,
         request=GitConflictTakeRequest(path=path, side=side),
-        project_name=project_name,
+        workspace_name=workspace_name,
         event_bus=event_bus,
     )
 
 
 async def _restore(
-    cwd, *, path="keep.txt", style="merge", token=None, project_name="proj",
+    cwd, *, path="keep.txt", style="merge", token=None, workspace_name="proj",
     event_bus=None,
 ):
     return await restore_session_conflict(
         cwd=cwd,
         request=GitConflictRestoreRequest(path=path, style=style, token=token),
-        project_name=project_name,
+        workspace_name=workspace_name,
         event_bus=event_bus,
     )
 

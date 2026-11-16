@@ -28,7 +28,7 @@ from mobaide.core import (
     PiLauncher,
     FakePtyBackend,
     OpenCodeLauncher,
-    ProjectsStore,
+    WorkspacesStore,
     SessionManager,
     create_pty_backend,
 )
@@ -83,7 +83,7 @@ from .install_paths import (
 )
 from .logging import bind_request_context, clear_request_context, get_logger
 from .logging_setup import configure_logging, shutdown_logging
-from .projects.router import router as projects_router
+from .workspaces.router import router as workspaces_router
 from .restart import restart_requested
 from .sessions.router import chat_router
 from .sessions.router import router as sessions_router
@@ -652,7 +652,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         shutdown_logging()
 
     # Default-deny on the doc routes: the agent binds every interface, so
-    # FastAPI's stock /docs would publish the full session/project/git/codex
+    # FastAPI's stock /docs would publish the full session/workspace/git/codex
     # surface to the local network. ENABLE_API_DOCS opts a dev box back in.
     docs_enabled = config.enable_api_docs
     app = FastAPI(
@@ -777,13 +777,13 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     app.state.config = config
     app.state.pairing_pending = pairing_pending
 
-    # Mutable, file-backed projects store (seeds from PROJECTS env var on
+    # Mutable, file-backed workspaces store (seeds from PROJECTS env var on
     # first boot, then file wins forever). Every downstream consumer
     # (SessionManager, auto-scan, relay proxy, WS snapshot) reads through
     # this single reference.
-    projects_store = ProjectsStore(config.projects_store_path)
-    projects_store.load(seed_json=config.projects)
-    app.state.projects_store = projects_store
+    workspaces_store = WorkspacesStore(config.projects_store_path)
+    workspaces_store.load(seed_json=config.projects)
+    app.state.workspaces_store = workspaces_store
 
     # Worktree manager is always wired so Standard-mode sessions can create
     # worktrees regardless of whether auto-scan is configured. The worktree
@@ -808,7 +808,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         hook_port=config.port,
         hook_token=app.state.hook_token,
     )
-    # Codex CLI launcher — shares the WorktreeManager so stored-project sessions
+    # Codex CLI launcher — shares the WorktreeManager so stored-workspace sessions
     # can create a git worktree (same as Claude's Standard mode); no attention
     # hooks — its sessions raise attention from OSC 7501 status reports
     # (``core.program_status``). Binary resolves lazily.
@@ -930,7 +930,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
 
     app.state.session_manager = SessionManager(
         max_sessions=config.max_sessions,
-        projects_store=projects_store,
+        workspaces_store=workspaces_store,
         launcher=app.state.claude_launcher,
         codex_launcher=app.state.codex_launcher,
         antigravity_launcher=app.state.antigravity_launcher,
@@ -957,15 +957,15 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     user_store.load()
     app.state.user_store = user_store
 
-    # Auto-scan manager is always wired in. Whether it has any projects to
-    # operate on is a runtime question answered by the projects store —
-    # adding a Linear-keyed project via the CRUD API makes it immediately
+    # Auto-scan manager is always wired in. Whether it has any workspaces to
+    # operate on is a runtime question answered by the workspaces store —
+    # adding a Linear-keyed workspace via the CRUD API makes it immediately
     # available for auto-scan without a restart.
     app.state.linear_rate_limiter = LinearRateLimiter()
     app.state.autoscan_manager = AutoScanSessionManager(
         config=auto_scan_cfg,
         session_manager=app.state.session_manager,
-        projects_store=projects_store,
+        workspaces_store=workspaces_store,
         launcher=app.state.claude_launcher,
         event_bus=app.state.event_bus,
         rate_limiter=app.state.linear_rate_limiter,
@@ -977,7 +977,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     app.include_router(chat_router)
     app.include_router(codex_router)
     app.include_router(hooks_router)
-    app.include_router(projects_router)
+    app.include_router(workspaces_router)
     app.include_router(fs_router)
     app.include_router(git_router)
     app.include_router(session_git_router)

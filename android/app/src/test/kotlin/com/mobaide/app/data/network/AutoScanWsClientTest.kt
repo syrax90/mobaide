@@ -118,14 +118,14 @@ class AutoScanWsClientTest {
             )
             val frame = awaitItem() as AutoScanWsClient.Frame.Snapshot
             assertEquals(1, frame.scans.size)
-            assertEquals("proj-a", frame.scans[0].project_name)
+            assertEquals("proj-a", frame.scans[0].workspace_name)
             assertEquals("running", frame.scans[0].status)
 
             val projEvents = frame.events["proj-a"]
             assertNotNull(projEvents)
             assertEquals(1, projEvents!!.size)
             val parsed = projEvents[0]
-            assertEquals("proj-a", parsed.projectName)
+            assertEquals("proj-a", parsed.workspaceName)
             assertEquals(1L, parsed.seq)
             assertEquals("2026-04-11T10:00:00Z", parsed.ts)
             assertEquals("issue", parsed.type)
@@ -142,7 +142,7 @@ class AutoScanWsClientTest {
     // ---- Frame parsing: event -----------------------------------------------
 
     @Test
-    fun message_event_parsesProjectAndPayload() = runTest {
+    fun message_event_parsesWorkspaceAndPayload() = runTest {
         val (client, connEvents, _) = newFixture()
 
         client.connect().test {
@@ -169,7 +169,7 @@ class AutoScanWsClientTest {
                 ),
             )
             val frame = awaitItem() as AutoScanWsClient.Frame.Event
-            assertEquals("proj-a", frame.event.projectName)
+            assertEquals("proj-a", frame.event.workspaceName)
             assertEquals(7L, frame.event.seq)
             assertEquals("2026-04-11T11:00:00Z", frame.event.ts)
             assertEquals("worktree", frame.event.type)

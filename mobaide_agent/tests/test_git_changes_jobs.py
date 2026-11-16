@@ -109,11 +109,11 @@ def other(remote, tmp_path) -> str:
     return clone_repo(remote, str(tmp_path / "other"))
 
 
-def _changed(repo_dir: str, project_name: str) -> tuple[str, dict]:
+def _changed(repo_dir: str, workspace_name: str) -> tuple[str, dict]:
     return (
         "git.changed",
         {
-            "project_name": project_name,
+            "project_name": workspace_name,
             "toplevel": norm_path(repo_dir),
             "common_dir": norm_path(repo_dir) + "/.git",
         },
@@ -160,16 +160,16 @@ def _diverge(local: str, other: str) -> None:
     commit_all(local, "ours")
 
 
-async def _start(op, cwd, *, bus=None, project_name="proj", **kwargs):
+async def _start(op, cwd, *, bus=None, workspace_name="proj", **kwargs):
     return await job_registry.start(
-        op, cwd=cwd, session_id=SESSION_ID, project_name=project_name,
+        op, cwd=cwd, session_id=SESSION_ID, workspace_name=workspace_name,
         event_bus=bus, **kwargs,
     )
 
 
-async def _run(op, cwd, *, bus=None, project_name="proj", **kwargs):
+async def _run(op, cwd, *, bus=None, workspace_name="proj", **kwargs):
     """Start ``op`` and wait for it; the finished snapshot."""
-    first = await _start(op, cwd, bus=bus, project_name=project_name, **kwargs)
+    first = await _start(op, cwd, bus=bus, workspace_name=workspace_name, **kwargs)
     await job_registry._jobs[first.job_id].task
     return job_registry.get(first.job_id)
 
@@ -397,7 +397,7 @@ class TestJobPublisher:
     def _job(bus) -> GitJob:
         return GitJob(
             job_id="a" * 32, session_id=SESSION_ID, op="push", repo=_fake_repo(),
-            project_name="proj", event_bus=bus,
+            workspace_name="proj", event_bus=bus,
         )
 
     def test_snapshot_carries_every_key_with_nulls_while_running(self):
@@ -1060,14 +1060,14 @@ class TestWritesDuringAJob:
 
         with pytest.raises(GitRefusedError) as staged:
             await stage_session_paths(
-                cwd=local, paths=["b.txt"], project_name=None, event_bus=None)
+                cwd=local, paths=["b.txt"], workspace_name=None, event_bus=None)
         with pytest.raises(GitRefusedError) as committed:
             await commit_session(
                 cwd=local, request=GitCommitRequest(message="x"),
-                project_name=None, event_bus=None)
+                workspace_name=None, event_bus=None)
         context = await get_session_commit_context(cwd=local)
         await job_registry.cancel(first.job_id)
-        await stage_session_paths(cwd=local, paths=["b.txt"], project_name=None, event_bus=None)
+        await stage_session_paths(cwd=local, paths=["b.txt"], workspace_name=None, event_bus=None)
 
         assert (staged.value.code, staged.value.message) == ("job_running", first.job_id)
         assert (committed.value.code, committed.value.message) == ("job_running", first.job_id)
@@ -1078,10 +1078,10 @@ class TestWritesDuringAJob:
         "call",
         [
             lambda cwd, bus: start_session_rebase(
-                cwd=cwd, onto="origin/main", project_name=None, event_bus=bus),
-            lambda cwd, bus: continue_session_rebase(cwd=cwd, project_name=None, event_bus=bus),
-            lambda cwd, bus: skip_session_rebase(cwd=cwd, project_name=None, event_bus=bus),
-            lambda cwd, bus: abort_session_rebase(cwd=cwd, project_name=None, event_bus=bus),
+                cwd=cwd, onto="origin/main", workspace_name=None, event_bus=bus),
+            lambda cwd, bus: continue_session_rebase(cwd=cwd, workspace_name=None, event_bus=bus),
+            lambda cwd, bus: skip_session_rebase(cwd=cwd, workspace_name=None, event_bus=bus),
+            lambda cwd, bus: abort_session_rebase(cwd=cwd, workspace_name=None, event_bus=bus),
         ],
         ids=["start", "continue", "skip", "abort"],
     )

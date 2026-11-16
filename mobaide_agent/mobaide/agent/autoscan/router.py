@@ -49,7 +49,7 @@ def _get_manager(request: Request) -> AutoScanSessionManager:
 
 @router.post("/start", status_code=status.HTTP_200_OK)
 async def start_scan(body: StartScanRequest, request: Request) -> dict:
-    """Start an auto scan for a project. 409 if already running, 429 if at cap."""
+    """Start an auto scan for a workspace. 409 if already running, 429 if at cap."""
     mgr = _get_manager(request)
     claude_options = (
         body.claude_options.to_options()
@@ -66,7 +66,7 @@ async def start_scan(body: StartScanRequest, request: Request) -> dict:
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
-    return {"message": f"Auto scan started for project '{instance.project_name}'"}
+    return {"message": f"Auto scan started for workspace '{instance.project_name}'"}
 
 
 @router.post("/stop", status_code=status.HTTP_200_OK)
@@ -76,7 +76,7 @@ async def stop_scan(body: StopScanRequest, request: Request) -> dict:
         await mgr.stop(body.project_name)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
-    return {"message": f"Auto scan stopped for project '{body.project_name}'"}
+    return {"message": f"Auto scan stopped for workspace '{body.project_name}'"}
 
 
 @router.post("/run-now", response_model=RunNowResponse, status_code=status.HTTP_200_OK)
@@ -91,7 +91,7 @@ async def run_now(body: RunNowRequest, request: Request) -> RunNowResponse:
     if instance is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No active auto scan for project '{body.project_name}'",
+            detail=f"No active auto scan for workspace '{body.project_name}'",
         )
     instance.request_immediate_scan()
     next_at = instance.to_dto().get("next_scan_at")
@@ -110,14 +110,14 @@ async def list_scans(request: Request) -> AutoScanListResponse:
 
 @router.get("/status", response_model=AutoScanInstanceStatusResponse)
 async def scan_status(
-    request: Request, project_name: str = Query(...)
+    request: Request, workspace_name: str = Query(..., alias="project_name")
 ) -> AutoScanInstanceStatusResponse:
     mgr = _get_manager(request)
-    instance = mgr.get(project_name)
+    instance = mgr.get(workspace_name)
     if instance is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No active auto scan for project '{project_name}'",
+            detail=f"No active auto scan for workspace '{workspace_name}'",
         )
     return AutoScanInstanceStatusResponse(**instance.get_status())
 

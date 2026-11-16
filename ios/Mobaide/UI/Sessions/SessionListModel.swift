@@ -106,9 +106,9 @@ final class SessionListModel {
         Dictionary(types.map { ("custom_\($0.id)", $0.name) }, uniquingKeysWith: { _, last in last })
     }
 
-    func stopScan(_ projectName: String) async {
+    func stopScan(_ workspaceName: String) async {
         do {
-            try await autoScanRepository.stopScan(projectName: projectName)
+            try await autoScanRepository.stopScan(workspaceName: workspaceName)
         } catch {
             self.error = "Failed to stop auto scan: \(String(describing: error))"
         }
@@ -194,7 +194,7 @@ enum SessionDisplay {
     static func dialogLabel(_ session: SessionResponse, customTypeNames: [String: String]) -> String {
         if let title = session.title, !title.isBlank { return title }
         let kind = kindLabel(session, customTypeNames: customTypeNames)
-        if let project = session.project_name, !project.isBlank { return "\(kind) · \(project)" }
+        if let workspace = session.workspace_name, !workspace.isBlank { return "\(kind) · \(workspace)" }
         return kind
     }
 

@@ -25,7 +25,7 @@ export function RootLayout() {
             Sessions
           </NavLink>
           <NavLink to="/agents">Agents</NavLink>
-          <NavLink to="/projects">Projects</NavLink>
+          <NavLink to="/workspaces">Workspaces</NavLink>
           <NavLink to="/templates">Templates</NavLink>
           <NavLink to="/account">Account</NavLink>
           {/* Devices is deliberately not here: Settings and Account both link

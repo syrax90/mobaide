@@ -27,21 +27,21 @@ describe('preselectedWorktreeBase', () => {
 });
 
 describe('effectiveWorktreeBase', () => {
-  it('keeps a manual pick for the same project, including the default row', () => {
-    expect(effectiveWorktreeBase({ projectName: 'p', ref: 'wip/Local' }, 'p', BASES)).toBe(
+  it('keeps a manual pick for the same workspace, including the default row', () => {
+    expect(effectiveWorktreeBase({ workspaceName: 'p', ref: 'wip/Local' }, 'p', BASES)).toBe(
       'wip/Local',
     );
-    expect(effectiveWorktreeBase({ projectName: 'p', ref: null }, 'p', BASES)).toBeNull();
+    expect(effectiveWorktreeBase({ workspaceName: 'p', ref: null }, 'p', BASES)).toBeNull();
   });
 
-  it('ignores a pick made for another project', () => {
-    expect(effectiveWorktreeBase({ projectName: 'other', ref: 'wip/Local' }, 'p', BASES)).toBe(
+  it('ignores a pick made for another workspace', () => {
+    expect(effectiveWorktreeBase({ workspaceName: 'other', ref: 'wip/Local' }, 'p', BASES)).toBe(
       'origin/develop',
     );
   });
 
   it('falls back to the preselection when the picked ref is gone', () => {
-    expect(effectiveWorktreeBase({ projectName: 'p', ref: 'deleted' }, 'p', BASES)).toBe(
+    expect(effectiveWorktreeBase({ workspaceName: 'p', ref: 'deleted' }, 'p', BASES)).toBe(
       'origin/develop',
     );
   });

@@ -119,13 +119,13 @@ struct GitCapabilities: Equatable, Sendable {
     var fetch = false
     var pull = false
     var push = false
-    /// The project Git screen's remote rows, New branch and Check out.
+    /// The workspace Git screen's remote rows, New branch and Check out.
     var branches = false
     /// *Rebase…* and the Changes screen's Continue / Skip / Abort.
     var rebase = false
     /// `stage` refuses a conflicted file that still holds markers, so *Mark resolved* is safe.
     var resolve = false
-    /// The project Git screen may delete remote-tracking rows (on the remote).
+    /// The workspace Git screen may delete remote-tracking rows (on the remote).
     var deleteRemote = false
     /// The conflict resolver's routes and `resolved_paths` on status.
     var conflicts = false

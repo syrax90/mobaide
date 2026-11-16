@@ -12,10 +12,10 @@ object Routes {
     const val CREATE_SESSION = "create_session"
     const val SETTINGS = "settings"
     const val SUPPORT = "support"
-    const val AUTO_SCAN_DETAIL = "auto_scan_detail/{projectName}"
+    const val AUTO_SCAN_DETAIL = "auto_scan_detail/{workspaceName}"
     const val CONNECTIONS = "connections"
-    const val PROJECTS = "projects"
-    const val GIT_MANAGEMENT = "git/{projectName}"
+    const val WORKSPACES = "workspaces"
+    const val GIT_MANAGEMENT = "git/{workspaceName}"
     const val SESSION_GIT_CHANGES =
         "session_git_changes/{sessionId}?commit={commit}&sync={sync}&rebase={rebase}"
     const val SESSION_GIT_DIFF =
@@ -33,11 +33,11 @@ object Routes {
     fun sessionDetail(sessionId: String, stoppedSessionId: String? = null) =
         if (stoppedSessionId == null) "session_detail/$sessionId"
         else "session_detail/$sessionId?stopped=${Uri.encode(stoppedSessionId)}"
-    fun autoScanDetail(projectName: String) =
-        "auto_scan_detail/${Uri.encode(projectName)}"
+    fun autoScanDetail(workspaceName: String) =
+        "auto_scan_detail/${Uri.encode(workspaceName)}"
     fun verifyEmail(email: String) = "verify_email/${Uri.encode(email)}"
     fun resetPassword(email: String) = "reset_password/${Uri.encode(email)}"
-    fun gitManagement(projectName: String) = "git/${Uri.encode(projectName)}"
+    fun gitManagement(workspaceName: String) = "git/${Uri.encode(workspaceName)}"
     /** [commit] presents the commit sheet over the list on arrival (the terminal
      *  menu's Commit…), [sync] the Fetch / Pull / Push sheet (its Fetch / Pull / Push…),
      *  [rebase] the Rebase sheet (its Rebase…). */

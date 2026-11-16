@@ -1,18 +1,18 @@
 import SwiftUI
 
 /// Create-session wizard (Android `CreateSessionScreen`), the real body for the
-/// `createSession` route: project select → mode pick (unavailable reasons in
+/// `createSession` route: workspace select → mode pick (unavailable reasons in
 /// `warningYellow`) → per-kind config.
 struct CreateSessionScreen: View {
-    /// Stored project to open directly in Auto Scan config (the Projects
+    /// Stored workspace to open directly in Auto Scan config (the Workspaces
     /// screen's "Start Auto Scan…" shortcut); nil for the normal wizard.
-    var autoScanProject: String?
+    var autoScanWorkspace: String?
 
     @Environment(\.appContainer) private var container
 
     var body: some View {
         if let container {
-            CreateSessionContent(container: container, autoScanProject: autoScanProject)
+            CreateSessionContent(container: container, autoScanWorkspace: autoScanWorkspace)
         }
     }
 }
@@ -20,7 +20,7 @@ struct CreateSessionScreen: View {
 private struct CreateSessionContent: View {
     @State private var model: CreateSessionModel
     @State private var toast: ToastMessage?
-    @State private var projectSheet: ProjectFormMode?
+    @State private var workspaceSheet: WorkspaceFormMode?
     @State private var pathSuggestions: PathSuggestionsModel
     @State private var claudeAdvancedExpanded = false
     @State private var codexAdvancedExpanded = false
@@ -33,8 +33,8 @@ private struct CreateSessionContent: View {
     @State private var showContinueSession = false
     @State private var pendingContinue: ChatStoredSession?
     @State private var baseBranchPickerShown = false
-    /// Reorder mode for the project and mode lists: rows show the native drag
-    /// handles and a tap no longer picks (the Projects screen's Edit pattern).
+    /// Reorder mode for the workspace and mode lists: rows show the native drag
+    /// handles and a tap no longer picks (the Workspaces screen's Edit pattern).
     @State private var editMode: EditMode = .inactive
     @FocusState private var customPathFocused: Bool
 
@@ -43,7 +43,7 @@ private struct CreateSessionContent: View {
 
     private let container: AppContainer
 
-    init(container: AppContainer, autoScanProject: String?) {
+    init(container: AppContainer, autoScanWorkspace: String?) {
         self.container = container
         _model = State(initialValue: CreateSessionModel(
             agentAPI: container.agentAPI,
@@ -52,8 +52,8 @@ private struct CreateSessionContent: View {
             tokenStore: container.tokenStore,
             customAgentTypesRepository: container.customAgentTypesRepository,
             autoScanRepository: container.autoScanRepository,
-            projectsRepository: container.projectsRepository,
-            autoScanProject: autoScanProject
+            workspacesRepository: container.workspacesRepository,
+            autoScanWorkspace: autoScanWorkspace
         ))
         _pathSuggestions = State(initialValue: PathSuggestionsModel(repository: container.pathSuggestionRepository))
     }
@@ -63,7 +63,7 @@ private struct CreateSessionContent: View {
         List {
             Group {
                 switch model.step {
-                case .projectSelect: projectSelectStep
+                case .workspaceSelect: workspaceSelectStep
                 case .modePick: modePickStep
                 case .config: configStep
                 }
@@ -74,9 +74,9 @@ private struct CreateSessionContent: View {
         .environment(\.editMode, $editMode)
         .navigationTitle("New Session")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(model.step != .projectSelect)
+        .navigationBarBackButtonHidden(model.step != .workspaceSelect)
         .toolbar {
-            if model.step != .projectSelect {
+            if model.step != .workspaceSelect {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { model.back() } label: {
                         Label("Back", systemImage: "chevron.backward")
@@ -93,13 +93,13 @@ private struct CreateSessionContent: View {
             }
         }
         .toast($toast)
-        .sheet(item: $projectSheet) { mode in
-            ProjectFormSheet(mode: mode, container: container, onCreated: { model.onProjectCreated($0) })
+        .sheet(item: $workspaceSheet) { mode in
+            WorkspaceFormSheet(mode: mode, container: container, onCreated: { model.onWorkspaceCreated($0) })
         }
         .task { await model.load() }
         .task { await model.observeCustomTypes() }
         .task { await model.observeModeOrder() }
-        .task { await model.observeProjects() }
+        .task { await model.observeWorkspaces() }
         .task { await model.refreshModeOrder() }
         .task { await model.observeScans() }
         .task(id: model.worktreeBasesLoadKey) { await model.loadWorktreeBases() }
@@ -168,9 +168,9 @@ private struct CreateSessionContent: View {
             }
         }
         .task {
-            for await projectName in model.autoScanNavEvents() {
+            for await workspaceName in model.autoScanNavEvents() {
                 leaveCreateScreen()
-                router.navigate(to: .autoScanDetail(projectName: projectName))
+                router.navigate(to: .autoScanDetail(workspaceName: workspaceName))
                 model.clearAutoScanNav()
             }
         }
@@ -179,7 +179,7 @@ private struct CreateSessionContent: View {
     /// Opened from the terminal's sessions drawer this screen sits over a
     /// terminal, and a plain pop would leave that old terminal beneath the new
     /// screen; the list is restored instead (Android `navigateFromCreate`).
-    /// Every other entry point (the list, the Projects shortcut) keeps the
+    /// Every other entry point (the list, the Workspaces shortcut) keeps the
     /// plain pop.
     private func leaveCreateScreen() {
         if case .sessionDetail = router.path.dropLast().last {
@@ -191,11 +191,11 @@ private struct CreateSessionContent: View {
 
     private var isReordering: Bool { editMode.isEditing }
 
-    /// The project list needs two rows to reorder; the mode list always has
+    /// The workspace list needs two rows to reorder; the mode list always has
     /// the five built-ins.
     private var canReorder: Bool {
         switch model.step {
-        case .projectSelect: return model.projects.count > 1
+        case .workspaceSelect: return model.workspaces.count > 1
         case .modePick: return true
         case .config: return false
         }
@@ -220,36 +220,36 @@ private struct CreateSessionContent: View {
         )
     }
 
-    // MARK: - Project select
+    // MARK: - Workspace select
 
     @ViewBuilder
-    private var projectSelectStep: some View {
+    private var workspaceSelectStep: some View {
         Section {
-            ForEach(model.projects, id: \.name) { project in
-                selectableRow(project.name, selected: isStoredSelected(project.name)) {
+            ForEach(model.workspaces, id: \.name) { workspace in
+                selectableRow(workspace.name, selected: isStoredSelected(workspace.name)) {
                     guard !isReordering else { return }
-                    model.selectStoredProject(project.name)
+                    model.selectStoredWorkspace(workspace.name)
                 }
             }
             .onMove { source, destination in
-                model.moveProjects(fromOffsets: source, toOffset: destination)
+                model.moveWorkspaces(fromOffsets: source, toOffset: destination)
             }
             selectableRow(
                 "Custom path…",
-                subtitle: "Run once — no project is created",
+                subtitle: "Run once — no workspace is created",
                 selected: isCustomPathSelected
             ) {
                 model.selectCustomPath()
             }
             Button {
-                projectSheet = .create
+                workspaceSheet = .create
             } label: {
-                Label("Create new project…", systemImage: "plus")
+                Label("Create new workspace…", systemImage: "plus")
             }
         } header: {
-            PixelSectionHeader("Project")
+            PixelSectionHeader("Workspace")
         } footer: {
-            if model.projects.count > 1 {
+            if model.workspaces.count > 1 {
                 PixelSectionFooter(reorderFooter)
             }
         }
@@ -290,12 +290,12 @@ private struct CreateSessionContent: View {
 
         Section {
             Button {
-                model.continueFromProject()
+                model.continueFromWorkspace()
             } label: {
                 Text("Continue")
             }
             .buttonStyle(.pixelPrimaryBlock)
-            .disabled(!model.canContinueProject)
+            .disabled(!model.canContinueWorkspace)
         }
     }
 
@@ -494,7 +494,7 @@ private struct CreateSessionContent: View {
         } header: {
             PixelSectionHeader("Auto Scan")
         } footer: {
-            PixelSectionFooter("Each matching issue runs in its own git worktree, so its changes stay isolated from your working copy. Non-git projects run in the project directory.")
+            PixelSectionFooter("Each matching issue runs in its own git worktree, so its changes stay isolated from your working copy. Non-git workspaces run in the workspace directory.")
         }
 
         claudeAdvancedOptions(

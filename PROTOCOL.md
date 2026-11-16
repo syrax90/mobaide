@@ -2,6 +2,8 @@
 
 The Mobaide system uses a single **integer** ``protocol_version`` as the authoritative compatibility signal between the Android app, ``mobaide_agent``, and ``central_server``. The three human-facing semvers (``android-vX.Y.Z``, ``agent-vX.Y.Z``, ``server-vX.Y.Z``) are independent and ship on their own cadence; they do **not** gate compatibility.
 
+**Naming note.** The product calls a named launch folder a **workspace**. The wire and storage names still say "project" for compatibility: the ``/api/projects…`` routes, ``projects.changed``, JSON keys such as ``project_name``, and the agent file ``projects.json``.
+
 On this page:
 
 * [proto-v7 (current)](#proto-v7-current)
@@ -357,21 +359,21 @@ Additive delta within proto-v7 (2026-11-09, choose the branch a new session's wo
 * ``refs`` lists every local branch (``kind: "local"``, the bare name) and every remote-tracking branch (``kind: "remote"``, ``<remote>/<name>``). ``<remote>/HEAD`` and refs under no configured remote are left out.
 * Order: ``default`` first, then the others by tip commit date, newest first.
 * ``default`` is the repository's default branch: ``origin/HEAD`` first, then ``origin/<MAIN_BRANCH>``, then the local ``<MAIN_BRANCH>`` (agent setting, default ``main``). ``null`` when none exists; the agent then branches from ``HEAD``.
-* ``last_used`` is the ``base_branch`` of the last worktree session created in this project, from any client. It is stored in the agent's ``projects.json`` (never in the public project row) and follows a rename. ``null`` when unset or when that ref no longer exists.
+* ``last_used`` is the ``base_branch`` of the last worktree session created in this workspace, from any client. It is stored in the agent's ``projects.json`` (never in the public workspace row) and follows a rename. ``null`` when unset or when that ref no longer exists.
 * ``default`` and ``last_used`` are always ``null`` or a ``ref`` present in ``refs``.
-* The route reads local refs only and never fetches. Errors are the project-git ones: ``404`` unknown project, ``400`` not a git repository, then the session git vocabulary.
+* The route reads local refs only and never fetches. Errors are the workspace-git ones: ``404`` unknown workspace, ``400`` not a git repository, then the session git vocabulary.
 
 Clients preselect ``last_used``, then ``default``, then nothing (the agent's own default).
 
 #### ``base_branch`` on session create
 
-``base_branch: str | null`` (default ``null``) joins ``branch_name`` in ``claude_options``, ``codex_options``, ``antigravity_options`` and the top-level Terminal-mode fields of ``POST /api/sessions`` and the relay ``create_session`` control message. It applies only when ``worktree`` is ``true`` on a git project:
+``base_branch: str | null`` (default ``null``) joins ``branch_name`` in ``claude_options``, ``codex_options``, ``antigravity_options`` and the top-level Terminal-mode fields of ``POST /api/sessions`` and the relay ``create_session`` control message. It applies only when ``worktree`` is ``true`` on a git workspace:
 
 * A local branch name is used first (``refs/heads/<base>``). Otherwise, when ``<base>`` starts with a configured remote name, the agent fetches that remote (best effort) and uses ``refs/remotes/<base>``. Full refnames keep a same-named tag from winning.
 * An unknown base or one starting with ``-`` fails the create with the usual worktree ``400`` (``Could not create worktree on branch <b>: base branch '<base>' not found``).
 * ``null`` or blank keeps the old start point (fetch ``origin``, then ``default`` above, then ``HEAD``).
 * The base is ignored when the worktree or the branch already exists and is reused. It is then not resolved, so a deleted base does not block reopening the branch.
-* After a successful worktree resolution the agent records the base as the project's ``last_used``. A ``null`` base (the "Default branch" row) clears it.
+* After a successful worktree resolution the agent records the base as the workspace's ``last_used``. A ``null`` base (the "Default branch" row) clears it.
 * Older agents ignore the field and branch from their default.
 
 #### Worktree-base capability key
@@ -397,7 +399,7 @@ Codex sessions open in the chat view too (`ui: "chat"` with `cli: "codex"`), thr
 
 #### Live Codex sessions
 
-`codex` in a terminal keeps its sessions in Codex's shared app-server (the daemon behind `codex agents`, control socket `$CODEX_HOME/app-server-control/app-server-control.sock`, JSON-RPC over a WebSocket). When that socket answers at session start, the chat session joins it through `mobaide/acp/codex_bridge.py`, a stdio-to-WebSocket relay that the adapter starts as its app-server. Mobaide never starts the daemon itself, and uses a private app-server instead on Windows, for a project with a conda env (the daemon runs commands with its own environment), or when the socket does not answer.
+`codex` in a terminal keeps its sessions in Codex's shared app-server (the daemon behind `codex agents`, control socket `$CODEX_HOME/app-server-control/app-server-control.sock`, JSON-RPC over a WebSocket). When that socket answers at session start, the chat session joins it through `mobaide/acp/codex_bridge.py`, a stdio-to-WebSocket relay that the adapter starts as its app-server. Mobaide never starts the daemon itself, and uses a private app-server instead on Windows, for a workspace with a conda env (the daemon runs commands with its own environment), or when the socket does not answer.
 
 * "Continue a session" then opens a session that is live in a terminal: both sides see the conversation and can send messages.
 * Codex reports its thread status in `session_info_update._meta.codex.threadStatus`. A turn that another app started shows as `status: "running"` after a `notice` item ("Message sent from another app on your PC"), also when it was already running as the chat opened; the adapter does not forward that message's text. Prompts sent meanwhile wait in the queue, and `cancel` stops that turn (after 15 s without an end report the chat returns to `ready`).
@@ -492,7 +494,7 @@ An agent run over ACP skips its own "trust this folder?" prompt. So before `sess
 
 Additive delta within proto-v7 (2026-11-04, drag-to-reorder in the new-session wizard): **one additive ``central_server`` REST resource, one additive user-event kind, no version bump.** The agent is untouched.
 
-**Projects** reuse the agent's existing ``PATCH /api/projects/order`` (full name list; the ``200`` body is the re-sorted list, and ``projects.changed`` follows). The order lives in the agent's ``projects.json``, so every client shows it.
+**Workspaces** reuse the agent's existing ``PATCH /api/projects/order`` (full name list; the ``200`` body is the re-sorted list, and ``projects.changed`` follows). The order lives in the agent's ``projects.json``, so every client shows it.
 
 **Mode-picker cards** (the "agents" step) are ordered per account on the central server:
 
@@ -618,7 +620,7 @@ The agent merges it into the session's single ``--settings`` source as Claude Co
 
 ### Delta 2026-10-17: host path suggestions
 
-Additive delta within proto-v7 (2026-10-17, host path suggestions): **one additive REST route, one additive capability key, no version bump.** Backs folder suggestions under the project form's Path field and the new-session wizard's one-off custom path, on both transports byte-identically (the relay forwards it through the ``/proxy`` catch-all; no ``central_server`` change).
+Additive delta within proto-v7 (2026-10-17, host path suggestions): **one additive REST route, one additive capability key, no version bump.** Backs folder suggestions under the workspace form's Path field and the new-session wizard's one-off custom path, on both transports byte-identically (the relay forwards it through the ``/proxy`` catch-all; no ``central_server`` change).
 
 * ``GET /api/fs/dirs?path=<dir>[&q=<substring>]`` answers ``FsDirsResponse {"path", "dirs", "truncated"}``: the names (not paths) of ``path``'s subdirectories — symlinks to directories included, dot directories included, sorted case-insensitively. ``path`` is expanded with ``expanduser`` and must then be absolute; the response echoes the expanded directory so a client completing ``~/co`` writes back an absolute path.
 
@@ -851,9 +853,9 @@ Also: ``validate_repo_path`` now rejects ``\`` and ``:`` on Windows agents (``40
 
 Golden fixtures: new ``tests/protocol_fixtures/dto/agent/{GitConflictResponse,GitConflictResolveRequest,GitConflictTakeRequest,GitConflictRestoreRequest}.json``; ``GitStatusResponse.json`` gains ``resolved_paths`` on every case and a ``rebasing_with_resolved_paths`` case.
 
-### Delta 2026-09-21: project Git remote delete
+### Delta 2026-09-21: workspace Git remote delete
 
-Additive delta within proto-v7 (2026-09-21, project Git management — delete remote branches, remove a worktree and keep its branch): **one widened request enum, six additive per-item error codes, one additive capability key, no version bump.** Same project-scoped ``POST /api/projects/{name}/git/items:delete``, both transports byte-identical (the relay already validates the body with ``GitDeleteRequest``).
+Additive delta within proto-v7 (2026-09-21, workspace Git management — delete remote branches, remove a worktree and keep its branch): **one widened request enum, six additive per-item error codes, one additive capability key, no version bump.** Same workspace-scoped ``POST /api/projects/{name}/git/items:delete``, both transports byte-identical (the relay already validates the body with ``GitDeleteRequest``).
 
 #### Remote-branch delete items
 
@@ -960,9 +962,9 @@ Clients gate the terminal menu's *Rebase…* entry on ``rebase``, the Changes sc
 
 Golden fixtures: new ``tests/protocol_fixtures/dto/agent/{GitRebaseRequest,GitRebaseResponse}.json``; ``GitStatusResponse.json`` gains ``rebase`` on every repo and a ``rebasing_stopped_on_conflict`` case.
 
-### Delta 2026-09-16: project Git branches
+### Delta 2026-09-16: workspace Git branches
 
-Additive delta within proto-v7 (2026-09-16, project Git management — remote branches, create and check out): **one additive query flag, two additive REST routes, three additive row fields, one additive row kind, one additive capability key, no version bump.** Branches are objects of the repository, not of a session, so ref management lives on the project-scoped prefix ``/api/projects/{name}/git`` the delete-only Git screen already used, both transports byte-identical.
+Additive delta within proto-v7 (2026-09-16, workspace Git management — remote branches, create and check out): **one additive query flag, two additive REST routes, three additive row fields, one additive row kind, one additive capability key, no version bump.** Branches are objects of the repository, not of a session, so ref management lives on the workspace-scoped prefix ``/api/projects/{name}/git`` the delete-only Git screen already used, both transports byte-identical.
 
 #### Branch items route
 
@@ -987,25 +989,25 @@ A start point naming a local or remote-tracking branch is resolved as that branc
 
 ``POST /api/projects/{name}/git/checkout`` ``{"ref", "force"?}`` → ``GitBranchResponse {"branch", "checked_out": true, "created"}``.
 
-``ref`` is a row's ``branch`` verbatim: a local branch runs ``git switch --no-guess -- <ref>`` in the project root; a remote-tracking ``<remote>/<short>`` switches to the local ``<short>`` when it exists, else creates it tracking the remote (``git switch --no-guess --track -c <short> -- <remote>/<short>``, ``created: true``); anything else is ``404 {"detail": {"code": "ref_not_found"}}`` (detached checkouts are out of scope; ``400 bad_ref`` for an empty or ``-``-leading ref).
+``ref`` is a row's ``branch`` verbatim: a local branch runs ``git switch --no-guess -- <ref>`` in the workspace root; a remote-tracking ``<remote>/<short>`` switches to the local ``<short>`` when it exists, else creates it tracking the remote (``git switch --no-guess --track -c <short> -- <remote>/<short>``, ``created: true``); anything else is ``404 {"detail": {"code": "ref_not_found"}}`` (detached checkouts are out of scope; ``400 bad_ref`` for an empty or ``-``-leading ref).
 
 #### Checkout guards
 
 Checkout guards, all ``409``:
 
 * ``job_running`` (message = job id) while a fetch/pull/push job owns the repository — asked first, before queuing on the per-toplevel lock, so a running job's whole duration is never awaited only to be refused.
-* Then, once queued, the project-git ``{"detail": {"busy_by": [...]}}`` shape when a session or auto-scan item works in the project root. A holder counts when its realpath-normalised cwd is the root or lies below it and not inside a linked worktree, so a session in a sub-folder blocks and a session in a linked worktree does not.
-  ``force: true`` (on ``POST /checkout`` and on ``POST /branches`` with ``checkout``; default ``false``) skips only this guard. Clients send it after the user confirms the soft "Project folder in use" prompt. An agent older than the field ignores it and answers ``busy_by`` again; clients then ask the user to update the agent. Additive, no version bump.
+* Then, once queued, the workspace-git ``{"detail": {"busy_by": [...]}}`` shape when a session or auto-scan item works in the workspace root. A holder counts when its realpath-normalised cwd is the root or lies below it and not inside a linked worktree, so a session in a sub-folder blocks and a session in a linked worktree does not.
+  ``force: true`` (on ``POST /checkout`` and on ``POST /branches`` with ``checkout``; default ``false``) skips only this guard. Clients send it after the user confirms the soft "Workspace folder in use" prompt. An agent older than the field ignores it and answers ``busy_by`` again; clients then ask the user to update the agent. Additive, no version bump.
 * ``operation_in_progress`` (message = ``merging`` / ``rebasing`` / ``cherry_picking`` / ``reverting`` / ``bisecting``).
 * ``dirty`` and ``checked_out_elsewhere`` (message = the worktree path) are git's own refusals classified from stderr. ``git switch`` carries unrelated local changes along and only refuses an overwrite, so a modified tree does not by itself block a checkout.
 
 The mutation floor (``git_too_old`` below 2.26), ``not_a_repo``, ``bare_repository``, ``unsafe_directory``, ``cwd_missing`` (400), ``git_unavailable`` (503), ``git_timeout`` (504, 15 s) and ``git_error`` (500) are the session vocabulary. Clients read ``detail.busy_by`` first, then ``detail.code``.
 
-Both routes serialise under the worktree manager's per-project lock *and* the session mutations' per-toplevel lock, audit (``audit.git.branch.created`` / ``audit.git.checked_out``) and publish ``git.changed {project_name, toplevel, common_dir}``.
+Both routes serialise under the worktree manager's per-workspace lock *and* the session mutations' per-toplevel lock, audit (``audit.git.branch.created`` / ``audit.git.checked_out``) and publish ``git.changed {project_name, toplevel, common_dir}``.
 
 #### Branches capability key
 
-``GET /api/version`` ``capabilities.git`` gains ``"branches": true`` (both transports). Clients gate the Git screen's New branch and Check out actions and the terminal menu's *Branches…* entry (a link to the project Git screen, only for a session with a ``project_name``) on it; the remote rows need no gate because the flag is sent regardless.
+``GET /api/version`` ``capabilities.git`` gains ``"branches": true`` (both transports). Clients gate the Git screen's New branch and Check out actions and the terminal menu's *Branches…* entry (a link to the workspace Git screen, only for a session with a ``project_name``) on it; the remote rows need no gate because the flag is sent regardless.
 
 #### GitDeleteItem kind narrowing
 
@@ -1130,7 +1132,7 @@ Answers ``GitCommitResponse`` ``{oid, short_oid, subject}`` of the new ``HEAD``.
 
 #### Mutation locking and pathspecs
 
-Every mutation resolves the repository first, then runs under a per-toplevel ``asyncio.Lock`` (two clients of one session cannot interleave index writes) and, on success, publishes ``git.changed`` ``{"project_name": <session's project or "">, "toplevel", "common_dir"}`` so every viewer of that repository — including the caller — refreshes through the etag poll; the reads still take no lock.
+Every mutation resolves the repository first, then runs under a per-toplevel ``asyncio.Lock`` (two clients of one session cannot interleave index writes) and, on success, publishes ``git.changed`` ``{"project_name": <session's workspace or "">, "toplevel", "common_dir"}`` so every viewer of that repository — including the caller — refreshes through the etag poll; the reads still take no lock.
 
 Pathspecs travel NUL-separated on stdin (``--pathspec-from-file=- --pathspec-file-nul``): no argv limit on Windows, and for ``stage`` / ``discard`` (``add``, ``restore``) one unmatched path fails the whole call before anything is touched; ``unstage`` (``reset``) and an untracked ``discard`` (``clean``) silently skip a path that no longer matches.
 
@@ -1179,7 +1181,7 @@ Golden fixtures ``tests/protocol_fixtures/dto/agent/{GitPathsRequest,GitDiscardR
 
 ### Delta 2026-08-27: in-session git Changes API
 
-Additive delta within proto-v7 (2026-08-27, in-session git Changes API): **two additive read-only REST routes + one additive capability key + two additive event keys, no version bump.** The agent now answers, for the directory a session was spawned in (project root or linked worktree — clients never send a path to run in).
+Additive delta within proto-v7 (2026-08-27, in-session git Changes API): **two additive read-only REST routes + one additive capability key + two additive event keys, no version bump.** The agent now answers, for the directory a session was spawned in (workspace root or linked worktree — clients never send a path to run in).
 
 #### Status route
 
@@ -1250,7 +1252,7 @@ Old agents answer ``404`` for both routes → clients render an "update your age
 
 #### git.changed payload
 
-``git.changed`` (published after a successful branch/worktree delete) gains ``toplevel`` and ``common_dir`` — the project's resolved repository root and common git dir, ``null`` when the project is no longer a repo — so a session whose ``repo.common_dir`` (linked worktree) or ``repo.toplevel`` matches can invalidate its Changes cache even when it has no ``project_name``.
+``git.changed`` (published after a successful branch/worktree delete) gains ``toplevel`` and ``common_dir`` — the workspace's resolved repository root and common git dir, ``null`` when the workspace is no longer a repo — so a session whose ``repo.common_dir`` (linked worktree) or ``repo.toplevel`` matches can invalidate its Changes cache even when it has no ``project_name``.
 
 Payload: ``{"project_name", "toplevel", "common_dir"}``. All three clients read the payload by key and ignore unknown ones.
 

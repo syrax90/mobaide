@@ -16,8 +16,8 @@ import pytest
 
 from typing import cast
 
-from mobaide.core import ProjectsStore, SessionManager
-from mobaide.core.projects_config import AutoScanFilter, ProjectConfig
+from mobaide.core import WorkspacesStore, SessionManager
+from mobaide.core.workspaces_config import AutoScanFilter, WorkspaceConfig
 from mobaide.linear.config import AutoScanConfig
 from mobaide.linear.models import (
     IssueLabel,
@@ -40,35 +40,35 @@ def _make_config(tmp_path, *, auto_remove_worktrees: bool = True) -> AutoScanCon
     )
 
 
-def _make_project_config(
+def _make_workspace_config(
     tmp_path, *, auto_scan_filter: AutoScanFilter | None = None,
-) -> ProjectConfig:
+) -> WorkspaceConfig:
     # POSIX form matches the canonical path that flows through the real
-    # ``ProjectsStore`` after project-path reconciliation — keeps the
+    # ``WorkspacesStore`` after workspace-path reconciliation — keeps the
     # synthetic fixture in sync with production, so string-equality
     # comparisons (e.g. ``scanner._cleanup_completed_worktrees`` filter
     # against ``ActiveWorkItem.project_root`` which is normalized on load)
     # match as they would at runtime.
-    return ProjectConfig(
-        name="test-project",
+    return WorkspaceConfig(
+        name="test-workspace",
         path=Path(tmp_path / "repo").as_posix(),
         linear_api_key="lin_api_test",
         auto_scan_filter=auto_scan_filter or AutoScanFilter(),
     )
 
 
-class _FakeProjectsStore:
+class _FakeWorkspacesStore:
     """In-memory stand-in that exposes only ``get`` to the scanner.
 
-    The scanner uses ``projects_store.get(name)`` once per cycle to refresh
+    The scanner uses ``workspaces_store.get(name)`` once per cycle to refresh
     its filter snapshot. Tests mutate ``self.config`` to simulate a UI-level
     filter edit without rebuilding the whole instance.
     """
 
-    def __init__(self, config: ProjectConfig | None) -> None:
+    def __init__(self, config: WorkspaceConfig | None) -> None:
         self.config = config
 
-    def get(self, name: str) -> ProjectConfig | None:
+    def get(self, name: str) -> WorkspaceConfig | None:
         if self.config is None or self.config.name != name:
             return None
         return self.config
@@ -96,20 +96,20 @@ def _make_issue(
 def _make_instance(
     tmp_path, *,
     client=None, worktree_mgr=None, session_manager=None,
-    launcher=None, config=None, project_config=None,
-    projects_store=None,
+    launcher=None, config=None, workspace_config=None,
+    workspaces_store=None,
 ) -> AutoScanInstance:
-    project_config = project_config or _make_project_config(tmp_path)
-    store = projects_store or _FakeProjectsStore(project_config)
+    workspace_config = workspace_config or _make_workspace_config(tmp_path)
+    store = workspaces_store or _FakeWorkspacesStore(workspace_config)
     return AutoScanInstance(
-        project_name="test-project",
-        project_config=project_config,
+        workspace_name="test-workspace",
+        workspace_config=workspace_config,
         config=config or _make_config(tmp_path),
         session_manager=session_manager or AsyncMock(spec=SessionManager),
         launcher=launcher or AsyncMock(),
         client=client or AsyncMock(),
         worktree_mgr=worktree_mgr or AsyncMock(),
-        projects_store=cast("ProjectsStore", store),
+        workspaces_store=cast("WorkspacesStore", store),
     )
 
 
@@ -518,7 +518,7 @@ class TestProcessIssueForwardsClientOptions:
 
         await inst._process_issue(_make_issue(issue_id="uuid-off", identifier="CLA-OFF"))
 
-        # launcher.build was called with (project, options). Pull the
+        # launcher.build was called with (workspace, options). Pull the
         # second positional arg regardless of whether it was passed by
         # keyword.
         call = launcher.build.await_args
@@ -597,7 +597,7 @@ class TestProcessIssueForwardsClientOptions:
         self, tmp_path,
     ):
         """Worktree isolation stays forced per issue — unlike skip_permissions
-        it is not the client's choice, because concurrent scans in the project
+        it is not the client's choice, because concurrent scans in the workspace
         root would trample each other."""
         from mobaide.core.claude_launcher import ClaudeOptions
 
@@ -623,11 +623,11 @@ class TestProcessIssueForwardsClientOptions:
         assert forwarded.worktree is True
 
     @pytest.mark.asyncio
-    async def test_process_issue_uses_project_prompt_when_no_client_prompt(
+    async def test_process_issue_uses_workspace_prompt_when_no_client_prompt(
         self, tmp_path,
     ):
         """When no per-scan prompt is supplied (optionless start), the scanner
-        falls back to the project's saved ``auto_scan_prompt`` before the
+        falls back to the workspace's saved ``auto_scan_prompt`` before the
         engine-wide default."""
         client = AsyncMock()
         client.update_issue_state.return_value = True
@@ -638,11 +638,11 @@ class TestProcessIssueForwardsClientOptions:
 
         launcher = _launcher_with_worktree(str(tmp_path / "worktree"))
 
-        project_config = ProjectConfig(
-            name="test-project",
+        workspace_config = WorkspaceConfig(
+            name="test-workspace",
             path=Path(tmp_path / "repo").as_posix(),
             linear_api_key="lin_api_test",
-            auto_scan_prompt="PROJECT SAVED PROMPT",
+            auto_scan_prompt="WORKSPACE SAVED PROMPT",
         )
         config = AutoScanConfig(
             worktrees_dir=str(tmp_path / "worktrees"),
@@ -658,7 +658,7 @@ class TestProcessIssueForwardsClientOptions:
         inst = _make_instance(
             tmp_path, client=client,
             session_manager=sess_mgr, launcher=launcher,
-            config=config, project_config=project_config,
+            config=config, workspace_config=workspace_config,
         )
         assert inst._client_options is None  # optionless start
 
@@ -666,13 +666,13 @@ class TestProcessIssueForwardsClientOptions:
 
         call = launcher.build.await_args
         forwarded = call.args[1] if len(call.args) > 1 else call.kwargs["options"]
-        assert forwarded.initial_prompt == "PROJECT SAVED PROMPT"
+        assert forwarded.initial_prompt == "WORKSPACE SAVED PROMPT"
 
     @pytest.mark.asyncio
-    async def test_process_issue_client_prompt_wins_over_project_prompt(
+    async def test_process_issue_client_prompt_wins_over_workspace_prompt(
         self, tmp_path,
     ):
-        """An explicit per-scan prompt takes precedence over both the project's
+        """An explicit per-scan prompt takes precedence over both the workspace's
         saved prompt and the engine-wide default."""
         from mobaide.core.claude_launcher import ClaudeOptions
 
@@ -685,17 +685,17 @@ class TestProcessIssueForwardsClientOptions:
 
         launcher = _launcher_with_worktree(str(tmp_path / "worktree"))
 
-        project_config = ProjectConfig(
-            name="test-project",
+        workspace_config = WorkspaceConfig(
+            name="test-workspace",
             path=Path(tmp_path / "repo").as_posix(),
             linear_api_key="lin_api_test",
-            auto_scan_prompt="PROJECT SAVED PROMPT",
+            auto_scan_prompt="WORKSPACE SAVED PROMPT",
         )
 
         inst = _make_instance(
             tmp_path, client=client,
             session_manager=sess_mgr, launcher=launcher,
-            project_config=project_config,
+            workspace_config=workspace_config,
         )
         inst._client_options = ClaudeOptions(initial_prompt="PER SCAN PROMPT")
 
@@ -1026,13 +1026,13 @@ class TestWorktreeCleanup:
         assert wt_mgr.cleanup_worktree.await_count == 2
 
     @pytest.mark.asyncio
-    async def test_cleanup_ignores_items_from_other_projects(self, tmp_path):
-        """The cleanup loop filters on ``project_root`` so a shared state
-        file cannot cause one project's scanner to tear down another
-        project's worktrees."""
+    async def test_cleanup_ignores_items_from_other_workspaces(self, tmp_path):
+        """The cleanup loop filters on ``workspace_root`` so a shared state
+        file cannot cause one workspace's scanner to tear down another
+        workspace's worktrees."""
         from mobaide.linear.workitems import ActiveWorkItem, now_iso_utc
 
-        our_root = str(tmp_path / "repo")  # matches _make_config's project path
+        our_root = str(tmp_path / "repo")  # matches _make_config's workspace path
         foreign_root = str(tmp_path / "other-repo")
 
         client = AsyncMock()
@@ -1085,7 +1085,7 @@ class TestWorktreeCleanup:
 
 class TestProcessedCountDTO:
     """The DTO field ``processed_count`` was repurposed: it now reflects
-    the number of active work items currently tracked for this project.
+    the number of active work items currently tracked for this workspace.
     The Android client reads this field — its meaning must not silently
     drift. The implementation caches the count in-memory and updates it
     via ``_process_issue`` (increment) and ``_cleanup_completed_worktrees``
@@ -1177,7 +1177,7 @@ class TestProcessedCountDTO:
 
         state_dir = tmp_path / "state"
         pre_store = ActiveWorkItemsStore(
-            active_workitems_path(state_dir, "test-project")
+            active_workitems_path(state_dir, "test-workspace")
         )
         await pre_store.write([
             ActiveWorkItem(
@@ -1218,16 +1218,16 @@ class TestClientOptionsTypeGuard:
         ``client_options`` is typed ``Any`` at the call boundary so the
         tests can pass the very inputs the guard is supposed to reject
         (dict, str) without fighting the static type checker."""
-        project_config = _make_project_config(tmp_path)
+        workspace_config = _make_workspace_config(tmp_path)
         return AutoScanInstance(
-            project_name="test-project",
-            project_config=project_config,
+            workspace_name="test-workspace",
+            workspace_config=workspace_config,
             config=_make_config(tmp_path),
             session_manager=AsyncMock(spec=SessionManager),
             launcher=AsyncMock(),
             client=AsyncMock(),
             worktree_mgr=AsyncMock(),
-            projects_store=cast("ProjectsStore", _FakeProjectsStore(project_config)),
+            workspaces_store=cast("WorkspacesStore", _FakeWorkspacesStore(workspace_config)),
             client_options=client_options,
         )
 
@@ -1299,8 +1299,8 @@ class TestPollLoopContextIsolation:
             clear_request_context()
 
 
-class TestPerProjectFilter:
-    """The scanner reads filter values from the project's
+class TestPerWorkspaceFilter:
+    """The scanner reads filter values from the workspace's
     ``auto_scan_filter``, not from hardcoded literals or global env."""
 
     @pytest.mark.asyncio
@@ -1314,16 +1314,16 @@ class TestPerProjectFilter:
             done_state="Released",
             removal_label="AI-ready",
         )
-        project_config = _make_project_config(tmp_path, auto_scan_filter=custom)
+        workspace_config = _make_workspace_config(tmp_path, auto_scan_filter=custom)
         inst = _make_instance(
             tmp_path,
             client=client,
-            project_config=project_config,
+            workspace_config=workspace_config,
         )
 
         await inst._scan_once()
 
-        # The client received the project's filter — not a default-built one.
+        # The client received the workspace's filter — not a default-built one.
         assert client.get_auto_scan_issues.await_count == 1
         passed = client.get_auto_scan_issues.await_args.args[0]
         assert isinstance(passed, AutoScanFilter)
@@ -1336,11 +1336,11 @@ class TestPerProjectFilter:
         client.remove_issue_label.return_value = True
 
         custom = AutoScanFilter(active_state="Doing")
-        project_config = _make_project_config(tmp_path, auto_scan_filter=custom)
+        workspace_config = _make_workspace_config(tmp_path, auto_scan_filter=custom)
         inst = _make_instance(
             tmp_path,
             client=client,
-            project_config=project_config,
+            workspace_config=workspace_config,
             launcher=_launcher_with_worktree(str(tmp_path / "wt")),
         )
         # Inject the team-state set the scanner will look up.
@@ -1373,11 +1373,11 @@ class TestPerProjectFilter:
         client.remove_issue_label.return_value = True
 
         custom = AutoScanFilter(removal_label="AI-ready")
-        project_config = _make_project_config(tmp_path, auto_scan_filter=custom)
+        workspace_config = _make_workspace_config(tmp_path, auto_scan_filter=custom)
         inst = _make_instance(
             tmp_path,
             client=client,
-            project_config=project_config,
+            workspace_config=workspace_config,
             launcher=_launcher_with_worktree(str(tmp_path / "wt")),
         )
         # Issue carries both labels — scanner must strip ONLY the
@@ -1406,32 +1406,32 @@ class TestPerProjectFilter:
 
     @pytest.mark.asyncio
     async def test_filter_refreshes_from_store_between_cycles(self, tmp_path):
-        """Editing the project's filter via the store takes effect on the
+        """Editing the workspace's filter via the store takes effect on the
         next ``_scan_once`` call without a restart — the snapshot at
         construction time is intentionally NOT load-bearing for filters."""
         client = AsyncMock()
         client.get_auto_scan_issues.return_value = []
 
         starting = AutoScanFilter(state_names=["Proposals"])
-        project_config = _make_project_config(tmp_path, auto_scan_filter=starting)
-        store = _FakeProjectsStore(project_config)
+        workspace_config = _make_workspace_config(tmp_path, auto_scan_filter=starting)
+        store = _FakeWorkspacesStore(workspace_config)
         inst = _make_instance(
             tmp_path,
             client=client,
-            project_config=project_config,
-            projects_store=store,
+            workspace_config=workspace_config,
+            workspaces_store=store,
         )
 
         await inst._scan_once()
         first_filter = client.get_auto_scan_issues.await_args.args[0]
         assert first_filter.state_names == ["Proposals"]
 
-        # Simulate a UI edit: replace the project_config in the store.
+        # Simulate a UI edit: replace the workspace_config in the store.
         new_filter = AutoScanFilter(state_names=["Backlog"])
-        store.config = ProjectConfig(
-            name=project_config.name,
-            path=project_config.path,
-            linear_api_key=project_config.linear_api_key,
+        store.config = WorkspaceConfig(
+            name=workspace_config.name,
+            path=workspace_config.path,
+            linear_api_key=workspace_config.linear_api_key,
             auto_scan_filter=new_filter,
         )
 
@@ -1446,8 +1446,8 @@ class TestPerProjectFilter:
         # that the access is via the filter (not a removed config field)
         # by ensuring the call doesn't raise AttributeError.
         custom = AutoScanFilter(done_state="Released")
-        project_config = _make_project_config(tmp_path, auto_scan_filter=custom)
-        inst = _make_instance(tmp_path, project_config=project_config)
+        workspace_config = _make_workspace_config(tmp_path, auto_scan_filter=custom)
+        inst = _make_instance(tmp_path, workspace_config=workspace_config)
 
         await inst._cleanup_completed_worktrees()
         assert inst._filter.done_state == "Released"

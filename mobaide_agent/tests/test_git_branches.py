@@ -1,4 +1,4 @@
-"""Remote-branch listing, branch creation and checkout of the project git
+"""Remote-branch listing, branch creation and checkout of the workspace git
 service against real temp repositories: the rows ``?remote=true`` adds, the
 refusal vocabulary each guard answers with, and the ``git.changed`` echo every
 successful mutation publishes."""
@@ -81,11 +81,11 @@ class FakeEventBus:
         self.published.append((event_type, payload))
 
 
-def _changed(repo_dir: str, project_name: str) -> tuple[str, dict]:
+def _changed(repo_dir: str, workspace_name: str) -> tuple[str, dict]:
     return (
         "git.changed",
         {
-            "project_name": project_name,
+            "project_name": workspace_name,
             "toplevel": norm_path(repo_dir),
             "common_dir": norm_path(repo_dir) + "/.git",
         },
@@ -209,8 +209,8 @@ async def _create(
         GitBranchCreateRequest(
             name=name, start_point=start_point, checkout=checkout, force=force,
         ),
-        project_name="proj",
-        project_root=root,
+        workspace_name="proj",
+        workspace_root=root,
         manager=_manager(),
         session_manager=session_manager,
         autoscan_manager=autoscan_manager,
@@ -230,8 +230,8 @@ async def _checkout(
 ) -> GitBranchResponse:
     return await checkout_ref(
         GitCheckoutRequest(ref=ref, force=force),
-        project_name="proj",
-        project_root=root,
+        workspace_name="proj",
+        workspace_root=root,
         manager=_manager(),
         session_manager=session_manager,
         autoscan_manager=autoscan_manager,
@@ -345,7 +345,7 @@ class TestListRemoteBranches:
     async def test_tip_lookup_failure_degrades_locally_but_surfaces_with_remote(
         self, local, monkeypatch
     ):
-        async def boom(project_root):
+        async def boom(workspace_root):
             raise GitCommandError("for-each-ref exploded")
 
         monkeypatch.setattr(service, "_ref_tips", boom)
@@ -602,7 +602,7 @@ class TestCheckoutRef:
         assert resp.checked_out is True
         assert _head(local) == "target"
 
-    async def test_a_project_registered_at_a_nested_linked_worktree_guards_its_own_root(
+    async def test_a_workspace_registered_at_a_nested_linked_worktree_guards_its_own_root(
         self, local
     ):
         feat = _add_linked_worktree(local, "feat")

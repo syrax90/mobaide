@@ -39,7 +39,7 @@ fun AutoScanCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick(instance.project_name) },
+            .clickable { onClick(instance.workspace_name) },
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.secondaryContainer,
         ),
@@ -54,13 +54,13 @@ fun AutoScanCard(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = instance.project_name,
+                    text = instance.workspace_name,
                     style = MaterialTheme.typography.titleSmall,
                     modifier = Modifier.weight(1f),
                 )
                 StatusChip(instance.status)
                 Spacer(modifier = Modifier.width(4.dp))
-                IconButton(onClick = { onStop(instance.project_name) }) {
+                IconButton(onClick = { onStop(instance.workspace_name) }) {
                     Icon(
                         Icons.Default.Stop,
                         contentDescription = "Stop scan",

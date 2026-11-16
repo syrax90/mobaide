@@ -18,10 +18,10 @@ import {
   listCustomAgentTypes,
 } from '../../../api/customAgentTypeRepository';
 import {
-  listProjects,
-  reorderProjects,
-  type ProjectInfo,
-} from '../../../api/projectRepository';
+  listWorkspaces,
+  reorderWorkspaces,
+  type WorkspaceInfo,
+} from '../../../api/workspaceRepository';
 import { createSession, type CreateSessionRequest } from '../../../api/sessionRepository';
 import {
   getSessionModeOrder,
@@ -46,20 +46,20 @@ import {
 } from '../../../stores/recentPaths';
 import { useToastStore } from '../../../stores/toastStore';
 import { useAgentEvents } from '../../../realtime';
-import { upsertProject } from '../../../realtime/projectsCache';
+import { upsertWorkspace } from '../../../realtime/workspacesCache';
 import { upsertSession } from '../../../realtime/sessionCache';
 import {
   newerSessionModeOrder,
   writeSessionModeOrder,
 } from '../../../realtime/sessionModeOrderCache';
-import { ProjectFormDialog } from '../../projects/ProjectFormDialog';
-import { moveAnnouncement, moveItem, reconcileOrder } from '../../projects/reorder';
+import { WorkspaceFormDialog } from '../../workspaces/WorkspaceFormDialog';
+import { moveAnnouncement, moveItem, reconcileOrder } from '../../workspaces/reorder';
 import { terminalPath } from '../terminalPath';
 import { CodexLoginDialog } from './CodexLoginDialog';
 import { ConfigStep, type WorktreeBasesView } from './ConfigStep';
 import { CreateCustomTypeDialog, DeleteCustomTypeDialog } from './CustomTypeDialogs';
 import { ModeStep } from './ModeStep';
-import { ProjectStep } from './ProjectStep';
+import { WorkspaceStep } from './WorkspaceStep';
 import { effectiveWorktreeBase } from './worktreeBase';
 import {
   buildConnectRequest,
@@ -83,7 +83,7 @@ import {
   isCustomMode,
   validateCustomPath,
   wizardReducer,
-  type ProjectSelection,
+  type WorkspaceSelection,
   type WizardMode,
   type WizardStep,
 } from './wizardState';
@@ -98,8 +98,8 @@ import {
  *
  * `snapshot` is `null` for the modes that carry no options — Terminal and
  * custom agent types — which is the same set that sends no options block on the
- * wire. `projectName` is absent for an ad-hoc directory; the generated request
- * type allows an explicit `null` there too, so both stand for "no project".
+ * wire. `workspaceName` is absent for an ad-hoc directory; the generated request
+ * type allows an explicit `null` there too, so both stand for "no workspace".
  *
  * Never allowed to throw. `persist` calls `localStorage.setItem` on every `set`
  * with no guard of its own, and this runs inside a mutation's `onSuccess`,
@@ -110,12 +110,12 @@ import {
  */
 function persistLaunchPrefs(
   snapshot: LaunchPrefsSnapshot | null,
-  projectName: string | null | undefined,
+  workspaceName: string | null | undefined,
 ): void {
   // One guard per write, not one around both. `set` lands the in-memory half
   // before `persist` throws, so a shared block would leave the options updated
-  // and the project name never written at all — and the next wizard in this
-  // same tab would then pre-select the wrong project off the stale value. Each
+  // and the workspace name never written at all — and the next wizard in this
+  // same tab would then pre-select the wrong workspace off the stale value. Each
   // write costs only its own durability.
   try {
     if (snapshot !== null) useLaunchPrefsStore.getState().setLaunchPrefs(snapshot);
@@ -124,8 +124,8 @@ function persistLaunchPrefs(
     // forgotten preference is a cosmetic loss; failing the launch is not.
   }
   try {
-    if (typeof projectName === 'string' && projectName !== '') {
-      useLaunchPrefsStore.getState().setLastProjectName(projectName);
+    if (typeof workspaceName === 'string' && workspaceName !== '') {
+      useLaunchPrefsStore.getState().setLastWorkspaceName(workspaceName);
     }
   } catch {
     // As above.
@@ -172,7 +172,7 @@ export function NewSession() {
   const [codexLoginError, setCodexLoginError] = useState<string | null>(null);
   const [showCodexLogin, setShowCodexLogin] = useState(false);
   const [showAddType, setShowAddType] = useState(false);
-  const [showCreateProject, setShowCreateProject] = useState(false);
+  const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
   const [typeDialogError, setTypeDialogError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [resumeOpen, setResumeOpen] = useState(false);
@@ -189,8 +189,8 @@ export function NewSession() {
   const pendingPrefs = useRef<LaunchPrefsSnapshot | null>(null);
   const setLastUsedSession = useLastSessionStore((state) => state.setLastUsedSession);
   // Optimistic orders shown while a drag's save is in flight, and released once
-  // the saved order catches up (the `ProjectList` override pattern).
-  const [pendingProjectOrder, setPendingProjectOrder] = useState<string[] | null>(null);
+  // the saved order catches up (the `WorkspaceList` override pattern).
+  const [pendingWorkspaceOrder, setPendingWorkspaceOrder] = useState<string[] | null>(null);
   const [pendingModeOrder, setPendingModeOrder] = useState<string[] | null>(null);
   const [reorderAnnouncement, setReorderAnnouncement] = useState('');
 
@@ -210,9 +210,9 @@ export function NewSession() {
   // down and re-handshaked on every list <-> wizard transition.
   useAgentEvents(resolvedAgentId);
 
-  const projects = useQuery({
-    queryKey: queryKeys.projects(resolvedAgentId),
-    queryFn: () => listProjects(resolvedAgentId),
+  const workspaces = useQuery({
+    queryKey: queryKeys.workspaces(resolvedAgentId),
+    queryFn: () => listWorkspaces(resolvedAgentId),
     enabled: resolvedAgentId !== '',
     ...wsBackedQueryOptions,
   });
@@ -269,28 +269,28 @@ export function NewSession() {
 
   const location = useMemo(() => parseWizardLocation(searchParams), [searchParams]);
 
-  const project = useMemo(() => {
+  const workspace = useMemo(() => {
     const selection = location.selection;
     if (selection.kind !== 'stored') return null;
-    return projects.data?.find((entry) => entry.name === selection.name) ?? null;
-  }, [projects.data, location.selection]);
+    return workspaces.data?.find((entry) => entry.name === selection.name) ?? null;
+  }, [workspaces.data, location.selection]);
 
   // Fetched only while the picker can show: the config step of a launch mode,
-  // a stored git project with a worktree requested, and an agent that has the
+  // a stored git workspace with a worktree requested, and an agent that has the
   // route. Re-read on each visit; `git.changed` invalidates it (see the key).
-  const worktreeBaseProject =
+  const worktreeBaseWorkspace =
     location.step === 'config' &&
     location.mode !== null &&
     location.mode !== 'auto_scan' &&
-    project?.is_git === true &&
+    workspace?.is_git === true &&
     state.git.worktree &&
     gitCapability(capabilities.data, 'worktree_base')
-      ? project.name
+      ? workspace.name
       : null;
   const worktreeBasesQuery = useQuery({
-    queryKey: queryKeys.worktreeBases(resolvedAgentId, worktreeBaseProject ?? ''),
-    queryFn: () => listWorktreeBases(resolvedAgentId, worktreeBaseProject ?? ''),
-    enabled: resolvedAgentId !== '' && worktreeBaseProject !== null,
+    queryKey: queryKeys.worktreeBases(resolvedAgentId, worktreeBaseWorkspace ?? ''),
+    queryFn: () => listWorktreeBases(resolvedAgentId, worktreeBaseWorkspace ?? ''),
+    enabled: resolvedAgentId !== '' && worktreeBaseWorkspace !== null,
   });
   // A failed refetch keeps the last good list usable.
   const worktreeBases: WorktreeBasesView = {
@@ -310,10 +310,10 @@ export function NewSession() {
     () =>
       buildModeCards({
         capabilities: capabilities.data,
-        project,
+        workspace,
         customTypes: customTypes.data ?? [],
       }),
-    [capabilities.data, project, customTypes.data],
+    [capabilities.data, workspace, customTypes.data],
   );
 
   const orderedCards = useMemo(
@@ -321,12 +321,12 @@ export function NewSession() {
     [cards, pendingModeOrder, modeOrder.data],
   );
 
-  const projectView = reconcileOrder(projects.data ?? [], pendingProjectOrder);
+  const workspaceView = reconcileOrder(workspaces.data ?? [], pendingWorkspaceOrder);
   useEffect(() => {
-    if (pendingProjectOrder !== null && projectView.pendingOrder === null) {
-      setPendingProjectOrder(null);
+    if (pendingWorkspaceOrder !== null && workspaceView.pendingOrder === null) {
+      setPendingWorkspaceOrder(null);
     }
-  }, [pendingProjectOrder, projectView.pendingOrder]);
+  }, [pendingWorkspaceOrder, workspaceView.pendingOrder]);
 
   // One save at a time per list, in the order the drops happened: a later drop
   // can never be overtaken by an earlier one's slower round trip.
@@ -337,29 +337,29 @@ export function NewSession() {
   // Keyed by agent: the router keeps this one component across a change of
   // `:agentId`, and a save queued for one agent must not be skipped because the
   // user then dropped on another.
-  const latestProjectOrder = useRef(new Map<string, string[]>());
+  const latestWorkspaceOrder = useRef(new Map<string, string[]>());
 
   // The save carries the agent it was made on: the options of a pending
   // mutation follow the current render, so reading `resolvedAgentId` here could
   // send one agent's names to another, or cache them under its key.
-  const saveProjectOrder = useMutation({
+  const saveWorkspaceOrder = useMutation({
     mutationFn: ({ names, agentId }: { names: string[]; agentId: string }) =>
-      latestProjectOrder.current.get(agentId) === names
-        ? reorderProjects(agentId, names)
+      latestWorkspaceOrder.current.get(agentId) === names
+        ? reorderWorkspaces(agentId, names)
         : Promise.resolve(null),
     // A constant id: TanStack copies the current options into a pending
     // mutation on every render, so an id built from the route would move a
     // queued save into another agent's queue and strand it there.
-    scope: { id: 'project-order' },
+    scope: { id: 'workspace-order' },
     onSuccess: (next, { names, agentId }) => {
       if (next === null) return;
-      queryClient.setQueryData<ProjectInfo[]>(queryKeys.projects(agentId), next);
-      setPendingProjectOrder((current) =>
+      queryClient.setQueryData<WorkspaceInfo[]>(queryKeys.workspaces(agentId), next);
+      setPendingWorkspaceOrder((current) =>
         current !== null && sameOrder(current, names) ? null : current,
       );
     },
     onError: (_cause, { names }) => {
-      setPendingProjectOrder((current) =>
+      setPendingWorkspaceOrder((current) =>
         current !== null && sameOrder(current, names) ? null : current,
       );
       useToastStore.getState().show('Reorder failed — reverted.', 'error');
@@ -389,15 +389,15 @@ export function NewSession() {
     },
   });
 
-  const moveProject = (from: number, to: number) => {
-    const names = projectView.projects.map((entry) => entry.name);
+  const moveWorkspace = (from: number, to: number) => {
+    const names = workspaceView.workspaces.map((entry) => entry.name);
     const moved = names[from];
     if (moved === undefined) return;
     const next = moveItem(names, from, to);
-    setPendingProjectOrder(next);
+    setPendingWorkspaceOrder(next);
     setReorderAnnouncement(moveAnnouncement(moved, to, names.length));
-    latestProjectOrder.current.set(resolvedAgentId, next);
-    saveProjectOrder.mutate({ names: next, agentId: resolvedAgentId });
+    latestWorkspaceOrder.current.set(resolvedAgentId, next);
+    saveWorkspaceOrder.mutate({ names: next, agentId: resolvedAgentId });
   };
 
   const moveModeCard = (from: number, to: number) => {
@@ -440,7 +440,7 @@ export function NewSession() {
   );
 
   /**
-   * Leave the project step.
+   * Leave the workspace step.
    *
    * One **push**, never a replace of this entry followed by a push of the next:
    * two `setSearchParams` in one handler race the data router, which aborts the
@@ -448,14 +448,14 @@ export function NewSession() {
    * the replace, silently degrading to this anyway. `MemoryRouter` is
    * declarative and synchronous, so the tests would not show it either.
    *
-   * The cost is that browser Back returns to the project step as it was
-   * *before* the click, which can name a different project than the one just
+   * The cost is that browser Back returns to the workspace step as it was
+   * *before* the click, which can name a different workspace than the one just
    * picked. The wizard's own Back carries the selection (`go` preserves it), so
    * the row comes back highlighted and a picked directory comes back in the
    * field.
    */
   const advanceToMode = useCallback(
-    (selection: ProjectSelection) => {
+    (selection: WorkspaceSelection) => {
       setSearchParams(serializeWizardLocation({ step: 'mode', mode: null, selection }));
     },
     [setSearchParams],
@@ -466,7 +466,7 @@ export function NewSession() {
   useEffect(() => {
     const clamp = resolveWizardLocation({
       requested: location,
-      projects: projects.data,
+      workspaces: workspaces.data,
       isModeSelectable,
     });
     if (clamp === null) return;
@@ -478,10 +478,10 @@ export function NewSession() {
     if (next.toString() !== searchParams.toString()) {
       setSearchParams(next, { replace: true });
     }
-  }, [location, projects.data, isModeSelectable, searchParams, setSearchParams]);
+  }, [location, workspaces.data, isModeSelectable, searchParams, setSearchParams]);
 
   // The URL owns the selection, so a history navigation that changes it has to
-  // reach the draft too — otherwise Back can land on a project step whose URL
+  // reach the draft too — otherwise Back can land on a workspace step whose URL
   // says `path=/foo` while the field is blank and Continue is disabled.
   const urlPath =
     location.selection.kind === 'customPath' ? location.selection.path : null;
@@ -519,24 +519,24 @@ export function NewSession() {
     dispatch({ type: 'reconcileCodexEffort', details: codexDetails });
   }, [codexDetails]);
 
-  // Seeded once per project, so re-entering the step never discards edits.
+  // Seeded once per workspace, so re-entering the step never discards edits.
   useEffect(() => {
-    if (location.mode === 'auto_scan' && project !== null) {
+    if (location.mode === 'auto_scan' && workspace !== null) {
       dispatch({
         type: 'seedAutoScanPrompt',
-        projectName: project.name,
-        prompt: project.auto_scan_prompt ?? '',
+        workspaceName: workspace.name,
+        prompt: workspace.auto_scan_prompt ?? '',
       });
     }
-  }, [location.mode, project]);
+  }, [location.mode, workspace]);
 
-  // Pre-select the project the last session was launched against — iOS's
-  // `applyProjectPrefill`, translated to the model where the URL owns the
-  // selection. It only *highlights*: writing `step: 'project'` explicitly
+  // Pre-select the workspace the last session was launched against — iOS's
+  // `applyWorkspacePrefill`, translated to the model where the URL owns the
+  // selection. It only *highlights*: writing `step: 'workspace'` explicitly
   // rather than going through `advanceToMode` is what keeps a remembered
-  // project from launching the wizard past a screen the user never saw, now
+  // workspace from launching the wizard past a screen the user never saw, now
   // that picking one advances. One shot per mount, and the latch arms only
-  // once an empty project step has actually been reached: the clamp effect
+  // once an empty workspace step has actually been reached: the clamp effect
   // above runs first and may still be redirecting a stale deep link, so arming
   // on the list's arrival alone would spend the one attempt on a step that is
   // about to be redirected away. A
@@ -546,23 +546,23 @@ export function NewSession() {
   // through an effect: the router keeps this one component instance across a
   // change of `:agentId`, so a boolean latch would leave the second agent
   // without a pre-fill for the rest of the visit.
-  const projectPrefilledFor = useRef<string | null>(null);
+  const workspacePrefilledFor = useRef<string | null>(null);
   useEffect(() => {
-    if (projectPrefilledFor.current === resolvedAgentId || projects.data === undefined) return;
-    if (location.step !== 'project' || location.selection.kind !== 'none') return;
-    projectPrefilledFor.current = resolvedAgentId;
-    const name = readLaunchPrefs().lastProjectName;
+    if (workspacePrefilledFor.current === resolvedAgentId || workspaces.data === undefined) return;
+    if (location.step !== 'workspace' || location.selection.kind !== 'none') return;
+    workspacePrefilledFor.current = resolvedAgentId;
+    const name = readLaunchPrefs().lastWorkspaceName;
     if (name === null) return;
-    if (!projects.data.some((entry) => entry.name === name)) return;
+    if (!workspaces.data.some((entry) => entry.name === name)) return;
     setSearchParams(
       serializeWizardLocation({
-        step: 'project',
+        step: 'workspace',
         mode: null,
         selection: { kind: 'stored', name },
       }),
       { replace: true },
     );
-  }, [projects.data, location.step, location.selection.kind, resolvedAgentId, setSearchParams]);
+  }, [workspaces.data, location.step, location.selection.kind, resolvedAgentId, setSearchParams]);
 
   const create = useMutation({
     mutationFn: (request: CreateSessionRequest) => createSession(resolvedAgentId, request),
@@ -581,15 +581,15 @@ export function NewSession() {
       // state: the wizard stays interactive while the POST is in flight, so a
       // path typed meanwhile would otherwise be filed as a directory nobody
       // launched (iOS pins both halves before the round trip). `cwd` is
-      // undefined for a stored project, which is what keeps those out of the
+      // undefined for a stored workspace, which is what keeps those out of the
       // bucket; the re-validation covers a `?path=` deep link.
       if (typeof request.cwd === 'string' && validateCustomPath(request.cwd) === null) {
         noteRecentPath(resolvedAgentId, request.cwd);
       }
       // Remember how this kind was launched, for the next wizard. The values
-      // are the pinned ones; the *project* comes off the request, which is
+      // are the pinned ones; the *workspace* comes off the request, which is
       // present only for a stored selection — an ad-hoc directory stays a
-      // recent and never becomes the last-used project, as on both mobile
+      // recent and never becomes the last-used workspace, as on both mobile
       // clients. Terminal and custom types pin `null` and so file nothing.
       persistLaunchPrefs(pendingPrefs.current, request.project_name);
       // Seed the row synchronously, before navigating. The terminal treats
@@ -632,7 +632,7 @@ export function NewSession() {
       // `<dialog>` on the top layer, so the page behind it is inert — a message
       // written to the config step would be invisible, and the dialog would sit
       // there re-enabled with no feedback, inviting the user to re-submit a key
-      // that was never the problem (session cap, agent update required, project
+      // that was never the problem (session cap, agent update required, workspace
       // deleted between login and launch).
       setShowCodexLogin(false);
       pendingRequest.current = null;
@@ -713,18 +713,18 @@ export function NewSession() {
     // remount (reload, deep link, Back into the wizard) while the search params
     // survive, so reading `state.selection` here would silently build nothing.
     // `parseWizardLocation` trims the custom path exactly as the reducer does,
-    // and `resolveWizardLocation` has already clamped an unknown project or a
+    // and `resolveWizardLocation` has already clamped an unknown workspace or a
     // non-absolute path back to step one, so this cannot be invalid.
     // The picker's shown value is what goes out; `null` (agent default) while
     // the list is loading or failed, or when the picker is hidden.
     const worktreeBase =
-      worktreeBaseProject === null
+      worktreeBaseWorkspace === null
         ? null
-        : effectiveWorktreeBase(state.worktreeBasePick, worktreeBaseProject, worktreeBases.bases);
+        : effectiveWorktreeBase(state.worktreeBasePick, worktreeBaseWorkspace, worktreeBases.bases);
     const context = {
       state: { ...state, selection: location.selection },
       mode: location.mode,
-      project,
+      workspace,
       chat: chatSupport(capabilities.data, chatAgentKind(location.mode) ?? 'claude'),
       worktreeBase,
     };
@@ -738,7 +738,7 @@ export function NewSession() {
     if (request === null) {
       // Never fail silently: a null here means the selection did not survive,
       // and a dead button with no message is the worst possible symptom.
-      setError('Pick a project before launching.');
+      setError('Pick a workspace before launching.');
       return;
     }
     if (location.mode === 'auto_scan') {
@@ -754,10 +754,10 @@ export function NewSession() {
     const request = buildConnectRequest({
       state: { ...state, selection: location.selection },
       mode: location.mode,
-      project,
+      workspace,
     });
     if (request === null) {
-      setError('Pick a project before launching.');
+      setError('Pick a workspace before launching.');
       return;
     }
     // A sign-in is not a launch of the agent: its options are not remembered.
@@ -783,7 +783,7 @@ export function NewSession() {
     const context = {
       state: { ...state, selection: location.selection },
       mode: location.mode,
-      project,
+      workspace,
     };
     pendingPrefs.current = launchPrefsFromState(state, kind);
     create.mutate(buildResumeRequest(context, kind, stored));
@@ -793,7 +793,7 @@ export function NewSession() {
 
   const resumeFolder =
     location.selection.kind === 'stored'
-      ? (project?.path ?? null)
+      ? (workspace?.path ?? null)
       : location.selection.kind === 'customPath'
         ? location.selection.path
         : null;
@@ -835,28 +835,28 @@ export function NewSession() {
       </header>
 
       <ol className="wizard-steps">
-        {(['project', 'mode', 'config'] as const).map((step) => (
+        {(['workspace', 'mode', 'config'] as const).map((step) => (
           <li
             key={step}
             className={`wizard-step${location.step === step ? ' wizard-step-current' : ''}`}
             aria-current={location.step === step ? 'step' : undefined}
           >
-            {step === 'project' ? 'Project' : step === 'mode' ? 'Agent' : 'Options'}
+            {step === 'workspace' ? 'Workspace' : step === 'mode' ? 'Agent' : 'Options'}
           </li>
         ))}
       </ol>
 
-      {projects.isPending ? (
-        <p className="page-note state-loading">Loading projects…</p>
-      ) : projects.isError ? (
+      {workspaces.isPending ? (
+        <p className="page-note state-loading">Loading workspaces…</p>
+      ) : workspaces.isError ? (
         <ErrorState
-          message="Failed to load projects."
-          onRetry={() => void projects.refetch()}
+          message="Failed to load workspaces."
+          onRetry={() => void workspaces.refetch()}
         />
-      ) : location.step === 'project' ? (
-        <ProjectStep
+      ) : location.step === 'workspace' ? (
+        <WorkspaceStep
           agentId={resolvedAgentId}
-          projects={projectView.projects}
+          workspaces={workspaceView.workspaces}
           selection={location.selection}
           customPathDraft={state.customPathDraft}
           customPathError={state.customPathError}
@@ -867,14 +867,14 @@ export function NewSession() {
             // always what storage holds (iOS `refreshRecentCustomPaths`).
             setRecentPaths(readRecentPaths(resolvedAgentId));
           }}
-          onSelectProject={(project) => {
+          onSelectWorkspace={(workspace) => {
             // The reducer still runs, for what the URL does not carry: it
             // clears a half-typed path and drops the worktree bucket for a
-            // project that is not a repo. `syncCustomPathFromUrl` cannot do the
+            // workspace that is not a repo. `syncCustomPathFromUrl` cannot do the
             // first — its key stays `null` across this navigation, so it never
             // fires.
-            dispatch({ type: 'selectStoredProject', project });
-            advanceToMode({ kind: 'stored', name: project.name });
+            dispatch({ type: 'selectStoredWorkspace', workspace });
+            advanceToMode({ kind: 'stored', name: workspace.name });
           }}
           onSelectRecentPath={(path) => {
             // Fill the field first, so a directory that cannot be launched
@@ -887,10 +887,10 @@ export function NewSession() {
             if (validateCustomPath(trimmed) !== null) return;
             advanceToMode({ kind: 'customPath', path: trimmed });
           }}
-          onCreateProject={() => {
-            setShowCreateProject(true);
+          onCreateWorkspace={() => {
+            setShowCreateWorkspace(true);
           }}
-          onMoveProject={moveProject}
+          onMoveWorkspace={moveWorkspace}
           // The custom-path field writes the reducer only. Per keystroke it
           // would be a router navigation and a `history.replaceState` per
           // character, which browsers rate-limit (Safari throws past 100 in
@@ -898,7 +898,7 @@ export function NewSession() {
           // step.
           dispatch={dispatch}
           onContinue={() => {
-            // Reachable only for a path typed by hand — a project row and a
+            // Reachable only for a path typed by hand — a workspace row and a
             // recent both advance on their own click. The child's `disabled` is
             // an affordance, not an invariant this container may lean on, and
             // `validateCustomPath` refuses the empty draft under the same call.
@@ -927,7 +927,7 @@ export function NewSession() {
           }}
           onMoveCard={moveModeCard}
           onBack={() => {
-            go({ step: 'project', mode: null });
+            go({ step: 'workspace', mode: null });
           }}
         />
       ) : location.mode !== null ? (
@@ -935,7 +935,7 @@ export function NewSession() {
           mode={location.mode}
           state={state}
           selection={location.selection}
-          project={project}
+          workspace={workspace}
           capabilities={capabilities.data}
           customTypes={customTypes.data ?? []}
           worktreeBases={worktreeBases}
@@ -988,25 +988,25 @@ export function NewSession() {
         />
       )}
 
-      {showCreateProject && (
-        <ProjectFormDialog
+      {showCreateWorkspace && (
+        <WorkspaceFormDialog
           agentId={resolvedAgentId}
           editing={null}
           onCreated={(created) => {
-            // Seed before advancing: the clamp effect sends a `?project=` the
+            // Seed before advancing: the clamp effect sends a `?workspace=` the
             // list does not hold back to step one, and neither the dialog's
             // refetch nor the `projects.changed` echo is guaranteed to have
             // landed. Idempotently replaced by whichever arrives next, as the
             // session seed in `create.onSuccess` is.
-            queryClient.setQueryData<ProjectInfo[]>(
-              queryKeys.projects(resolvedAgentId),
-              (current) => upsertProject(current ?? [], created),
+            queryClient.setQueryData<WorkspaceInfo[]>(
+              queryKeys.workspaces(resolvedAgentId),
+              (current) => upsertWorkspace(current ?? [], created),
             );
-            dispatch({ type: 'selectStoredProject', project: created });
+            dispatch({ type: 'selectStoredWorkspace', workspace: created });
             advanceToMode({ kind: 'stored', name: created.name });
           }}
           onClose={() => {
-            setShowCreateProject(false);
+            setShowCreateWorkspace(false);
           }}
         />
       )}

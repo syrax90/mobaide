@@ -49,7 +49,7 @@ const val GIT_REBASE_SUBMIT_TAG = "git_rebase_submit"
 
 /**
  * The Rebase sheet: pick the branch to replay this one on top of. A
- * project-backed session picks from the project's local and remote-tracking
+ * workspace-backed session picks from the workspace's local and remote-tracking
  * branches, deliberately with no preselection for a history rewrite; any
  * other session — or a list that failed to load — types the ref. What would
  * make git refuse to start is explained up front and keeps the button

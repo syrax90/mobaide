@@ -36,7 +36,7 @@ from .models import (
 )
 from .opencode_launcher import OpenCodeLauncher, OpenCodeOptions
 from .pi_launcher import PiLauncher, PiOptions
-from .projects_store import ProjectsStore, safe_path_exists
+from .workspaces_store import WorkspacesStore, safe_path_exists
 from .pty_backend import PtyBackend, create_pty_backend
 from .session import TerminalSession
 
@@ -58,7 +58,7 @@ class SessionManager:
     def __init__(
         self,
         max_sessions: int = 32,
-        projects_store: ProjectsStore | None = None,
+        workspaces_store: WorkspacesStore | None = None,
         launcher: ClaudeLauncher | None = None,
         codex_launcher: CodexLauncher | None = None,
         antigravity_launcher: AntigravityLauncher | None = None,
@@ -78,7 +78,7 @@ class SessionManager:
         self._lock = asyncio.Lock()
         self._max_sessions = max_sessions
         self._liveness_task: asyncio.Task[None] | None = None
-        self._projects_store = projects_store
+        self._workspaces_store = workspaces_store
         # ``launcher`` keeps its historical name (the Claude launcher); the
         # Codex, Antigravity, OpenCode, Copilot, Cursor and Pi launchers are siblings.
         # Dispatch picks between them per session.
@@ -135,14 +135,14 @@ class SessionManager:
         ``resolve_spawn_args``, so a raw shell session (none set) keeps its
         caller-supplied argv:
 
-        * stored project + managed → ``_apply_project_launch`` builds full
-          argv/cwd/env via the matching launcher against ``ProjectsStore``.
-        * stored project + shell → ``_resolve_project_cwd`` only fills ``cwd`` so
+        * stored workspace + managed → ``_apply_workspace_launch`` builds full
+          argv/cwd/env via the matching launcher against ``WorkspacesStore``.
+        * stored workspace + shell → ``_resolve_workspace_cwd`` only fills ``cwd`` so
           the caller's login-shell (or custom-type) argv stays intact.
-        * no project + managed → ``_apply_adhoc_launch`` builds a launch against
+        * no workspace + managed → ``_apply_adhoc_launch`` builds a launch against
           the bare ``config.cwd`` (custom-path mode); never touches
-          ``ProjectsStore``.
-        * no project + shell → raw Terminal session in ``config.cwd`` (or the
+          ``WorkspacesStore``.
+        * no workspace + shell → raw Terminal session in ``config.cwd`` (or the
           default cwd if ``cwd`` is also ``None``); no resolution required.
 
         ``config.ui == "chat"`` takes the ACP path instead
@@ -166,9 +166,9 @@ class SessionManager:
         )
         if config.project_name is not None:
             if managed:
-                await self._apply_project_launch(config)
+                await self._apply_workspace_launch(config)
             else:
-                await self._resolve_project_cwd(config)
+                await self._resolve_workspace_cwd(config)
         elif managed:
             await self._apply_adhoc_launch(config)
         async with self._lock:
@@ -234,15 +234,15 @@ class SessionManager:
 
             options = replace(options, worktree=False)
         if config.project_name is not None:
-            if self._projects_store is None:
-                raise ValueError("project_name set but agent has no projects store")
-            project = self._projects_store.get(config.project_name)
-            if project is None:
-                raise KeyError(f"Project '{config.project_name}' not found")
-            target = project
+            if self._workspaces_store is None:
+                raise ValueError("workspace_name set but agent has no workspaces store")
+            workspace = self._workspaces_store.get(config.project_name)
+            if workspace is None:
+                raise KeyError(f"Workspace '{config.project_name}' not found")
+            target = workspace
         else:
             if config.cwd is None:
-                raise ValueError("cwd is required for a session without a project")
+                raise ValueError("cwd is required for a session without a workspace")
             target = AdHocLaunch(cwd=config.cwd)
         plan = await spec.prepare(target, options)
         if config.project_name is not None and options is not None and getattr(options, "worktree", False):
@@ -360,42 +360,42 @@ class SessionManager:
             )
         return self._launcher, config.claude_options or ClaudeOptions()
 
-    async def _apply_project_launch(self, config: SessionConfig) -> None:
-        """Resolve a project via the matching launcher and overwrite command/cwd/env in place.
+    async def _apply_workspace_launch(self, config: SessionConfig) -> None:
+        """Resolve a workspace via the matching launcher and overwrite command/cwd/env in place.
 
-        The lookup goes through the live ``ProjectsStore`` so callers always
-        see post-mutation state (e.g. a project added via the REST CRUD API
+        The lookup goes through the live ``WorkspacesStore`` so callers always
+        see post-mutation state (e.g. a workspace added via the REST CRUD API
         is launchable without a restart).
         """
-        if self._projects_store is None:
+        if self._workspaces_store is None:
             raise ValueError(
-                "project_name set but agent has no projects store",
+                "workspace_name set but agent has no workspaces store",
             )
-        project = self._projects_store.get(config.project_name or "")
-        if project is None:
-            raise KeyError(f"Project '{config.project_name}' not found")
+        workspace = self._workspaces_store.get(config.project_name or "")
+        if workspace is None:
+            raise KeyError(f"Workspace '{config.project_name}' not found")
         launcher, options = self._launcher_and_options(config)
-        spec = await launcher.build(project, options, session_id=config.session_id)
+        spec = await launcher.build(workspace, options, session_id=config.session_id)
         config.command = spec.argv
         config.cwd = spec.cwd
         config.env = spec.env
         if options.worktree:
-            self._remember_worktree_base(project.name, options.base_branch)
+            self._remember_worktree_base(workspace.name, options.base_branch)
 
-    def _remember_worktree_base(self, project_name: str, base: str | None) -> None:
-        if self._projects_store is None:
+    def _remember_worktree_base(self, workspace_name: str, base: str | None) -> None:
+        if self._workspaces_store is None:
             return
         base = (base or "").strip() or None
         try:
-            self._projects_store.set_last_worktree_base(project_name, base)
+            self._workspaces_store.set_last_worktree_base(workspace_name, base)
         except OSError:
             logger.warning("session_manager.remember_worktree_base_failed", exc_info=True)
 
     async def _apply_adhoc_launch(self, config: SessionConfig) -> None:
         """Build an ad-hoc managed-CLI launch against ``config.cwd`` and overwrite command/cwd/env in place.
 
-        Never touches ``ProjectsStore`` — a custom-path session is not a
-        project. Router/relay layers are expected to pre-validate that
+        Never touches ``WorkspacesStore`` — a custom-path session is not a
+        workspace. Router/relay layers are expected to pre-validate that
         ``cwd`` is non-empty, absolute, exists, and is a directory; the
         ``ValueError`` raised here is defense-in-depth.
         """
@@ -408,52 +408,52 @@ class SessionManager:
         config.cwd = spec.cwd
         config.env = spec.env
 
-    async def _resolve_project_cwd(self, config: SessionConfig) -> None:
-        """Resolve the project ``cwd`` (optionally a worktree) without invoking ``ClaudeLauncher``.
+    async def _resolve_workspace_cwd(self, config: SessionConfig) -> None:
+        """Resolve the workspace ``cwd`` (optionally a worktree) without invoking ``ClaudeLauncher``.
 
         Used by the Terminal mode path (and custom agent types): caller has
         set ``config.command`` to the login shell or the resolved custom
-        command and we just need the PTY to spawn in the project's
+        command and we just need the PTY to spawn in the workspace's
         working directory — or, when ``config.worktree`` is set, in a freshly
-        created git worktree of that project. Raises the same ``ValueError`` /
-        ``KeyError`` shapes ``_apply_project_launch`` uses so router/relay
+        created git worktree of that workspace. Raises the same ``ValueError`` /
+        ``KeyError`` shapes ``_apply_workspace_launch`` uses so router/relay
         error mapping stays unchanged.
         """
-        if self._projects_store is None:
+        if self._workspaces_store is None:
             raise ValueError(
-                "project_name set but agent has no projects store",
+                "workspace_name set but agent has no workspaces store",
             )
-        project = self._projects_store.get(config.project_name or "")
-        if project is None:
-            raise KeyError(f"Project '{config.project_name}' not found")
+        workspace = self._workspaces_store.get(config.project_name or "")
+        if workspace is None:
+            raise KeyError(f"Workspace '{config.project_name}' not found")
         if config.worktree:
             config.cwd = await self._resolve_worktree_cwd(
-                project.path, config.branch_name, config.base_branch,
+                workspace.path, config.branch_name, config.base_branch,
             )
-            self._remember_worktree_base(project.name, config.base_branch)
+            self._remember_worktree_base(workspace.name, config.base_branch)
         else:
-            config.cwd = project.path
+            config.cwd = workspace.path
 
     async def _resolve_worktree_cwd(
         self,
-        project_path: str,
+        workspace_path: str,
         branch_name: str | None,
         base_branch: str | None = None,
     ) -> str:
         """Create a git worktree for a Terminal (SHELL) session and return its path.
 
         Mirrors ``ClaudeLauncher._resolve_cwd``'s Standard-mode guards: a stale
-        client requesting a worktree for a non-git project is downgraded to the
-        project root (logged), and a missing ``WorktreeManager`` is a server
+        client requesting a worktree for a non-git workspace is downgraded to the
+        workspace root (logged), and a missing ``WorktreeManager`` is a server
         misconfiguration. ``WorktreeCreationError`` propagates for the
         router/relay to map to a clean HTTP 400.
         """
-        if not safe_path_exists(Path(project_path) / ".git"):
+        if not safe_path_exists(Path(workspace_path) / ".git"):
             logger.warning(
-                "worktree=true requested for non-git project %r; ignoring",
-                project_path,
+                "worktree=true requested for non-git workspace %r; ignoring",
+                workspace_path,
             )
-            return project_path
+            return workspace_path
         if self._worktree_mgr is None:
             raise RuntimeError(
                 "worktree=true requested but no WorktreeManager is configured; "
@@ -463,7 +463,7 @@ class SessionManager:
 
         result = await create_standard_worktree(
             self._worktree_mgr,
-            project_path,
+            workspace_path,
             branch_name,
             fallback_prefix="terminal-session",
             base_branch=base_branch,

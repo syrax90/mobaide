@@ -100,10 +100,10 @@ def session_at(git_app, mock_session_manager, monkeypatch):
     """Register one session whose ``to_info().cwd`` is the given directory on
     both the app's session manager and the relay's stub."""
 
-    def install(cwd: str | None, project_name: str | None = None) -> None:
+    def install(cwd: str | None, workspace_name: str | None = None) -> None:
         info = types.SimpleNamespace(cwd=cwd)
-        if project_name is not None:
-            info.project_name = project_name
+        if workspace_name is not None:
+            info.project_name = workspace_name
         session = types.SimpleNamespace(to_info=lambda: info)
 
         async def get_session(session_id: str):
@@ -391,10 +391,10 @@ class TestMutationRouting:
 
 @requires_git
 class TestMutationRoutes:
-    async def test_stage_matches_and_publishes_the_session_project(
+    async def test_stage_matches_and_publishes_the_session_workspace(
         self, http, headers, relay, session_at, repo, mock_app_state
     ):
-        session_at(repo, project_name="proj")
+        session_at(repo, workspace_name="proj")
         bus = _FakeEventBus()
         mock_app_state.event_bus = bus
         write_file(repo, "a.txt", b"a\n")
@@ -676,7 +676,7 @@ class TestJobRoutes:
     async def test_second_job_on_the_repo_is_409_until_cancel_ends_the_first(
         self, http, headers, relay, session_at, git_app, mock_app_state, local
     ):
-        session_at(local, project_name="proj")
+        session_at(local, workspace_name="proj")
         bus = _FakeEventBus()
         git_app.state.event_bus = bus
         mock_app_state.event_bus = bus
@@ -781,7 +781,7 @@ class TestRebaseRoutes:
         self, http, headers, relay, session_at, git_app, mock_app_state, stopped_repo,
         transport,
     ):
-        session_at(stopped_repo, project_name="proj")
+        session_at(stopped_repo, workspace_name="proj")
         bus = _FakeEventBus()
         git_app.state.event_bus = bus
         mock_app_state.event_bus = bus
@@ -1009,7 +1009,7 @@ class TestConflictRoutes:
         self, http, headers, relay, session_at, git_app, mock_app_state, merging_repo,
         transport,
     ):
-        session_at(merging_repo, project_name="proj")
+        session_at(merging_repo, workspace_name="proj")
         bus = _FakeEventBus()
         git_app.state.event_bus = bus
         mock_app_state.event_bus = bus

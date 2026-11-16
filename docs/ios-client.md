@@ -32,18 +32,18 @@ On this page:
   ≥ 9.0 with a custom nonce + Sign in with Apple).
 - **CLA-100:** the SwiftTerm-backed terminal, the sessions list, and the
   create-session wizard.
-- **CLA-101:** Projects management and Git branches/worktrees screens (deferred
-  batch delete with force/busy handling), on an app-scoped `ProjectsRepository`
+- **CLA-101:** Workspaces management and Git branches/worktrees screens (deferred
+  batch delete with force/busy handling), on an app-scoped `WorkspacesRepository`
   and a reusable `UndoSnackbar`.
 - **CLA-102:** Agents (QR pairing with an in-app scanner gated by
   `NSCameraUsageDescription` and Trust-On-First-Use trust-key confirmation),
   Devices (optimistic revoke) and Templates screens, on app-scoped
   `AgentRepository`/`TemplatesRepository` stores wired to the `UserEventBus`.
 - **CLA-103:** live autoscan monitor (an "Active Auto Scans" section atop the
-  sessions list, plus a per-project detail screen). `AutoScanRepository` takes
+  sessions list, plus a per-workspace detail screen). `AutoScanRepository` takes
   list state from the `ws/events` bus plus a REST seed, with optimistic
   start/stop/run-now and typed 409/429 errors. `AutoScanWsClient` keeps a live
-  per-project resume cursor with two-layer seq dedupe. `AnsiParser` is 256-color.
+  per-workspace resume cursor with two-layer seq dedupe. `AnsiParser` is 256-color.
 - **CLA-104:** Settings and Support.
   - Delete-account flow (`DeleteAccountModel`): Explain + scheduled/immediate
     mode, then password / Google / **Apple** re-auth, then typed-email
@@ -379,8 +379,8 @@ reference CLA-154).
 - The create-session mode step has one card per custom type plus an "Add custom
   agent…" card opening `CustomAgentTypeEditorSheet` (edit via long-press;
   delete confirmation spells out the shortcut cascade).
-- The project and mode steps have a **Reorder** / **Done** toolbar toggle
-  (`EditMode` + `.onMove`). One save per drop. The project step also mirrors
+- The workspace and mode steps have a **Reorder** / **Done** toolbar toggle
+  (`EditMode` + `.onMove`). One save per drop. The workspace step also mirrors
   `projects.changed` live. See "Reorderable New-Session Lists" in
   [features.md](features.md).
 - Custom launches keep the worktree toggle and run as plain terminal sessions.
@@ -498,25 +498,25 @@ OSC 52 is write-direction and live-only, matching Android.
 The create-session wizard has a fifth **Auto Scan** mode card, between
 Antigravity and Terminal.
 
-- It is enabled only when the selected stored project carries a Linear API key
+- It is enabled only when the selected stored workspace carries a Linear API key
   and the Claude CLI is installed; otherwise it is greyed out with the reason. A
-  custom path has no stored project, so it can never satisfy it.
+  custom path has no stored workspace, so it can never satisfy it.
 - The config step has the Claude model / effort pickers (shared with the Claude
   Code step), Plan mode, a Focus view toggle (default ON; sets
   `claude_options.focus_mode`), Skip permissions (default ON for unattended
   scans, with an always-visible caption explaining the off-state), a collapsible
   Advanced section (`claudeAdvancedOptions`), and an Initial prompt seeded from
-  the project's saved `auto_scan_prompt` and then the agent-wide default.
+  the workspace's saved `auto_scan_prompt` and then the agent-wide default.
 - Submit POSTs `/api/autoscan/start` with `worktree` forced true, because the
   scanner branches a worktree per Linear issue, then routes to the CLA-103 live
   monitor. Last-used choices persist to their own `last_used_auto_scan_options`
   bucket, separate from the Claude Code bucket.
-- iOS-first (Android mirrors tracked in CLA-223): a scan is one-per-project, so a
-  card for a project with a running scan reads "Already running…" and opens the
+- iOS-first (Android mirrors tracked in CLA-223): a scan is one-per-workspace, so a
+  card for a workspace with a running scan reads "Already running…" and opens the
   live monitor. A start that loses that race is handled as typed `alreadyRunning`
-  / `capacity` (409 / 429) failures. Linear-keyed rows on the Projects screen have
+  / `capacity` (409 / 429) failures. Linear-keyed rows on the Workspaces screen have
   a "Start Auto Scan…" long-press action, via
-  `Route.createAutoScan(projectName:)`.
+  `Route.createAutoScan(workspaceName:)`.
 
 ### Device-code pairing (CLA-199)
 
@@ -532,7 +532,7 @@ The wizard's "Custom path…" step loads a "Recent paths" section from
 `recent_custom_paths::<agentKey>`, MRU, cap 5 per agent). Tapping a row fills the
 field; swipe or long-press removes it. Both clients trim the path (and one
 trailing separator, never a root) before storing it. A path is recorded only
-after the session is actually created, and never becomes the last-used project.
+after the session is actually created, and never becomes the last-used workspace.
 
 #### Sign-out purge (CLA-258)
 
@@ -740,9 +740,9 @@ Both child screens hold a ref-counted watch on `ForegroundSessionTracker`
 (`View.holdsSessionWatch`) while on the stack, so the terminal underneath stays
 attached and returning never costs a ring replay.
 
-### Project Git screen branch management (#677)
+### Workspace Git screen branch management (#677)
 
-The project Git screen (`UI/Projects/git`) has branch management on top of the
+The workspace Git screen (`UI/Workspaces/git`) has branch management on top of the
 delete flow.
 
 - `load()` always asks for `?remote=true`. `GitScreenModel.loadCapabilities()`
@@ -764,15 +764,15 @@ delete flow.
   drops only the worktree and keeps the branch. Delete on that row reads "Delete
   branch and worktree".
 
-The terminal menu's *Branches…* entry routes to `.gitManagement(projectName:)` for
-a project-backed session.
+The terminal menu's *Branches…* entry routes to `.gitManagement(workspaceName:)` for
+a workspace-backed session.
 
 ### Rebase in the Changes screen (#678)
 
 The terminal menu's `⋯ → Git → Rebase…` (gated on `capabilities.git.rebase`,
 `Route.sessionGitChanges(sessionId:rebase:)`) presents `GitRebaseSheet`.
 
-- A project-backed session picks the target from a `Picker` fed by `getGitItems`.
+- A workspace-backed session picks the target from a `Picker` fed by `getGitItems`.
   Refs are sent fully qualified (`refs/heads/…` / `refs/remotes/…`) so a
   same-named tag cannot shadow them, with deliberately no preselection. Any other
   session, or a list that fails to load, types the ref in a `TextField`.
@@ -1072,8 +1072,8 @@ reviewable file by file:
   - `SessionKind` preserves unknown raw values verbatim as `.custom` (proto-v7
     `SessionKindSerializer` parity; an explicit-null `kind` still falls back to
     `.claude`).
-  - `ProjectUpdate` relies on synthesized `encodeIfPresent` so nil fields vanish
-    (three-state PATCH), while `ProjectWrite.default_flags` is non-optional and
+  - `WorkspaceUpdate` relies on synthesized `encodeIfPresent` so nil fields vanish
+    (three-state PATCH), while `WorkspaceWrite.default_flags` is non-optional and
     always serialized.
 - **Terminal frames** (`TerminalFrame.swift`): type byte + payload; encode
   `i`/`x`/`m`/`r`, decode `o`/`s`/`b`/`e`, nil for anything else; resize is
@@ -1104,7 +1104,7 @@ Known deliberate deviations from Android's bytes (server-verified safe):
   401≡tokenRejected mapping stays in `WebSocketCore` for transports that do
   surface a real 401.
 - **Auth skip-list matching.** `AgentAPI` matches the percent-decoded URL path
-  where Android matches the encoded one. It is reachable only via a project name
+  where Android matches the encoded one. It is reachable only via a workspace name
   embedding an encoded auth suffix (e.g. `x%2Fapi%2Fauth%2Flogin`) and fails
   closed (Bearer withheld → 401). Fix if it ever matters:
   `url.path(percentEncoded: true)`.

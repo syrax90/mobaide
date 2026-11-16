@@ -23,9 +23,9 @@ from mobaide.core import (
     ClaudeBinaryNotFoundError,
     ClaudeLauncher,
     ClaudeOptions,
-    ProjectConfig,
-    ProjectsStore,
-    ProjectUpdatePatch,
+    WorkspaceConfig,
+    WorkspacesStore,
+    WorkspaceUpdatePatch,
     SessionConfig,
     SessionKind,
     SessionManager,
@@ -56,7 +56,7 @@ logger = get_logger(__name__)
 
 
 class AutoScanAlreadyRunning(Exception):
-    """Raised when start() is called for a project that already has an active scan."""
+    """Raised when start() is called for a workspace that already has an active scan."""
 
 
 class AutoScanCapacityReached(Exception):
@@ -64,14 +64,14 @@ class AutoScanCapacityReached(Exception):
 
 
 class AutoScanInstance:
-    """One Auto Scan polling loop bound to a single project.
+    """One Auto Scan polling loop bound to a single workspace.
 
     Snapshot semantics:
 
     * ``path``, ``linear_api_key``, ``conda_env``, ``default_flags`` are
       captured at construction time — mid-scan mutations do NOT affect the
       running loop. Stop+start the scan to pick those up.
-    * ``auto_scan_filter`` is re-read from the injected ``ProjectsStore`` at
+    * ``auto_scan_filter`` is re-read from the injected ``WorkspacesStore`` at
       the top of each cycle, so filter edits apply on the next iteration
       (within at most ``scan_interval_seconds``) without needing a restart.
     """
@@ -79,14 +79,14 @@ class AutoScanInstance:
     def __init__(
         self,
         *,
-        project_name: str,
-        project_config: ProjectConfig,
+        workspace_name: str,
+        workspace_config: WorkspaceConfig,
         config: AutoScanConfig,
         session_manager: SessionManager,
         launcher: ClaudeLauncher,
         client: LinearApiClient,
         worktree_mgr: WorktreeManager,
-        projects_store: ProjectsStore,
+        workspaces_store: WorkspacesStore,
         event_bus=None,
         client_options: ClaudeOptions | None = None,
     ) -> None:
@@ -97,24 +97,24 @@ class AutoScanInstance:
                 "client_options must be a ClaudeOptions instance or None, "
                 f"got {type(client_options).__name__}"
             )
-        self._project_name = project_name
-        self._project_config = project_config
+        self._workspace_name = workspace_name
+        self._workspace_config = workspace_config
         self._config = config
         self._session_manager = session_manager
         self._launcher = launcher
         self._client = client
         self._worktree_mgr = worktree_mgr
-        self._projects_store = projects_store
+        self._workspaces_store = workspaces_store
         self._event_bus = event_bus
         self._client_options = client_options
         # Filter snapshot for the in-progress cycle. Refreshed at the top of
-        # each ``_scan_once`` call from ``self._projects_store``; pre-seeded
-        # from the construction-time project snapshot so the first cycle
-        # has a valid filter even if the store ever reports the project as
+        # each ``_scan_once`` call from ``self._workspaces_store``; pre-seeded
+        # from the construction-time workspace snapshot so the first cycle
+        # has a valid filter even if the store ever reports the workspace as
         # missing (defensive — should not happen under normal operation).
-        self._filter: AutoScanFilter = project_config.auto_scan_filter
+        self._filter: AutoScanFilter = workspace_config.auto_scan_filter
 
-        # Per-project persistent record of issues whose worktrees have been
+        # Per-workspace persistent record of issues whose worktrees have been
         # created by auto-scan. The scanner consults this file AFTER the
         # processing loop each cycle to detect issues that reached the
         # configured Done state and tear down their worktrees.
@@ -127,7 +127,7 @@ class AutoScanInstance:
         # naturally prevents the issue from reappearing unless the user
         # explicitly resets it in Linear.
         self._workitems_store = ActiveWorkItemsStore(
-            active_workitems_path(config.state_dir, project_name)
+            active_workitems_path(config.state_dir, workspace_name)
         )
         # Cache of ``len(workitems_store)`` kept in sync by every add/remove
         # call in this class. Primed lazily from disk on first read to cover
@@ -149,7 +149,7 @@ class AutoScanInstance:
 
     @property
     def project_name(self) -> str:
-        return self._project_name
+        return self._workspace_name
 
     @property
     def status(self) -> ScanStatus:
@@ -157,7 +157,7 @@ class AutoScanInstance:
 
     @property
     def processed_count(self) -> int:
-        """Number of currently tracked active work items for this project.
+        """Number of currently tracked active work items for this workspace.
 
         Name kept for DTO compatibility with the Android client, which
         reads ``processed_count`` from the auto-scan status payload. The
@@ -185,9 +185,9 @@ class AutoScanInstance:
     async def start(self) -> None:
         viewer = await self._client.get_viewer()
         logger.info(
-            "Linear authenticated as %s for project %s",
+            "Linear authenticated as %s for workspace %s",
             viewer.get("name", "unknown"),
-            self._project_name,
+            self._workspace_name,
         )
 
         self._status = ScanStatus.SCANNING
@@ -201,12 +201,12 @@ class AutoScanInstance:
         # it, making debugging run-now cycles very confusing.
         self._poll_task = asyncio.create_task(
             self._poll_loop(),
-            name=f"autoscan-poll[{self._project_name}]",
+            name=f"autoscan-poll[{self._workspace_name}]",
             context=contextvars.Context(),
         )
         logger.info(
-            "Auto Scan started for project '%s'. Interval: %ds",
-            self._project_name,
+            "Auto Scan started for workspace '%s'. Interval: %ds",
+            self._workspace_name,
             self._config.scan_interval_seconds,
         )
 
@@ -222,7 +222,7 @@ class AutoScanInstance:
         self._status = ScanStatus.STOPPED
         self._next_scan_at = None
         self._emit_phase("scan_stopped")
-        logger.info("Auto Scan stopped for project '%s'", self._project_name)
+        logger.info("Auto Scan stopped for workspace '%s'", self._workspace_name)
 
     def request_immediate_scan(self) -> None:
         """Wake the polling loop to run a scan cycle immediately.
@@ -232,7 +232,7 @@ class AutoScanInstance:
         having to wait for the next poll cycle to emit a phase event.
 
         Re-processing of previously-seen issues is now driven purely by
-        the configured Linear query filters (per-project trigger states
+        the configured Linear query filters (per-workspace trigger states
         and labels) — there is no in-memory dedup set to clear.
         """
         self._run_now_event.set()
@@ -271,17 +271,17 @@ class AutoScanInstance:
             return
 
     def _refresh_filter(self) -> AutoScanFilter:
-        """Re-read the project's filter from the store, fall back to last-known.
+        """Re-read the workspace's filter from the store, fall back to last-known.
 
         Decoupling the filter from the construction-time snapshot is
-        intentional: edits in the project form propagate via
-        ``ProjectsStore`` and take effect on the next cycle without a
-        manual stop+start. If the project has been deleted concurrently,
+        intentional: edits in the workspace form propagate via
+        ``WorkspacesStore`` and take effect on the next cycle without a
+        manual stop+start. If the workspace has been deleted concurrently,
         we keep using the last-known filter to avoid spuriously dropping
         in-flight issues — the next cycle will fail at the issue query
         anyway and the manager will surface a sensible error.
         """
-        current = self._projects_store.get(self._project_name)
+        current = self._workspaces_store.get(self._workspace_name)
         if current is not None:
             self._filter = current.auto_scan_filter
         return self._filter
@@ -291,8 +291,8 @@ class AutoScanInstance:
         self._last_activity_at = self._last_scan_time
         filter_cfg = self._refresh_filter()
         logger.info(
-            "autoscan.scan_started project=%s state_names=%s label_names=%s",
-            self._project_name,
+            "autoscan.scan_started workspace=%s state_names=%s label_names=%s",
+            self._workspace_name,
             list(filter_cfg.state_names),
             list(filter_cfg.label_names),
         )
@@ -308,8 +308,8 @@ class AutoScanInstance:
                     await self._process_issue(issue)
                 except ClaudeBinaryNotFoundError:
                     logger.error(
-                        "autoscan.aborting_cycle reason=claude_cli_missing project=%s",
-                        self._project_name,
+                        "autoscan.aborting_cycle reason=claude_cli_missing workspace=%s",
+                        self._workspace_name,
                     )
                     self._emit(
                         "log",
@@ -327,8 +327,8 @@ class AutoScanInstance:
                 processed_count += 1
         else:
             logger.info(
-                "autoscan.no_matches project=%s state_names=%s label_names=%s",
-                self._project_name,
+                "autoscan.no_matches workspace=%s state_names=%s label_names=%s",
+                self._workspace_name,
                 list(filter_cfg.state_names),
                 list(filter_cfg.label_names),
             )
@@ -345,7 +345,7 @@ class AutoScanInstance:
     @log_call(name="autoscan.process_issue", log_args=("issue",))
     async def _process_issue(self, issue: LinearIssue) -> None:
         bind_request_context(issue_identifier=issue.identifier)
-        project = self._project_config
+        workspace = self._workspace_config
         filter_cfg = self._filter
         logger.info("Processing: %s - %s", issue.identifier, issue.title)
 
@@ -399,10 +399,10 @@ class AutoScanInstance:
             initial_prompt=(
                 base.initial_prompt
                 if base is not None and base.initial_prompt
-                # Honour this project's saved prompt (construction-time snapshot,
+                # Honour this workspace's saved prompt (construction-time snapshot,
                 # no extra I/O) before the engine-wide default, so optionless or
-                # prompt-less starts still use the project's own prompt.
-                else (project.auto_scan_prompt or self._config.auto_scan_prompt)
+                # prompt-less starts still use the workspace's own prompt.
+                else (workspace.auto_scan_prompt or self._config.auto_scan_prompt)
             ),
             # Worktree isolation stays forced per issue; skip_permissions is
             # the client's choice — the build below carries a session_id, so
@@ -414,7 +414,7 @@ class AutoScanInstance:
         session_id = uuid.uuid4().hex[:12]
         self._emit_issue(issue, "worktree_create", "started")
         try:
-            spec = await self._launcher.build(project, opts, session_id=session_id)
+            spec = await self._launcher.build(workspace, opts, session_id=session_id)
         except WorktreeCreationError as exc:
             self._emit_issue(issue, "worktree_create", "failed", error=str(exc))
             logger.error(
@@ -443,7 +443,7 @@ class AutoScanInstance:
                 error="Claude CLI not found",
             )
             logger.error(
-                "autoscan.claude_cli_missing project=%s", self._project_name,
+                "autoscan.claude_cli_missing workspace=%s", self._workspace_name,
             )
             self._last_activity_at = time.time()
             raise
@@ -472,7 +472,7 @@ class AutoScanInstance:
                 session_id, issue.identifier,
             )
 
-        if self._config.auto_remove_worktrees and spec.cwd != project.path:
+        if self._config.auto_remove_worktrees and spec.cwd != workspace.path:
             try:
                 added = await self._workitems_store.add(
                     ActiveWorkItem(
@@ -480,7 +480,7 @@ class AutoScanInstance:
                         uuid=issue.id,
                         slug=slug,
                         worktree_path=str(spec.cwd),
-                        project_root=project.path,
+                        project_root=workspace.path,
                         added_at=now_iso_utc(),
                     )
                 )
@@ -523,28 +523,28 @@ class AutoScanInstance:
 
         Mirrors the PowerShell ``Remove-CompletedWorktrees`` function: for
         each item in ``active_workitems.json`` belonging to the current
-        project, query Linear for the issue's current workflow state;
-        if it matches the project's configured ``done_state``, remove
+        workspace, query Linear for the issue's current workflow state;
+        if it matches the workspace's configured ``done_state``, remove
         the git worktree and drop the entry from the store. Items for
-        other projects are preserved (the same file is shared per-project
+        other workspaces are preserved (the same file is shared per-workspace
         in practice, but the guard is kept for safety).
         """
-        project = self._project_config
-        project_root = project.path
+        workspace = self._workspace_config
+        workspace_root = workspace.path
         done_state_name = self._filter.done_state
 
         items = await self._workitems_store.read()
-        tracked = [i for i in items if i.project_root == project_root]
+        tracked = [i for i in items if i.project_root == workspace_root]
         if not tracked:
             logger.info(
-                "autoscan.cleanup.start project=%s tracked=0 — nothing to check",
-                self._project_name,
+                "autoscan.cleanup.start workspace=%s tracked=0 — nothing to check",
+                self._workspace_name,
             )
             return
 
         logger.info(
-            "autoscan.cleanup.start project=%s tracked=%d",
-            self._project_name, len(tracked),
+            "autoscan.cleanup.start workspace=%s tracked=%d",
+            self._workspace_name, len(tracked),
         )
 
         removed = 0
@@ -582,7 +582,7 @@ class AutoScanInstance:
             )
             try:
                 ok = await self._worktree_mgr.cleanup_worktree(
-                    item.worktree_path, project_root,
+                    item.worktree_path, workspace_root,
                 )
             except Exception as exc:
                 logger.warning(
@@ -604,8 +604,8 @@ class AutoScanInstance:
             removed += 1
 
         logger.info(
-            "autoscan.cleanup.summary project=%s removed=%d remaining=%d",
-            self._project_name, removed, kept,
+            "autoscan.cleanup.summary workspace=%s removed=%d remaining=%d",
+            self._workspace_name, removed, kept,
         )
 
     def _emit(self, type_: str, payload: dict) -> ScanEvent:
@@ -628,7 +628,7 @@ class AutoScanInstance:
             self._event_bus.publish(
                 "autoscan.event",
                 {
-                    "project_name": self._project_name,
+                    "project_name": self._workspace_name,
                     "event": evt.to_dict(),
                 },
             )
@@ -683,7 +683,7 @@ class AutoScanInstance:
 
     def to_dto(self) -> dict:
         return {
-            "project_name": self._project_name,
+            "project_name": self._workspace_name,
             "status": self._status.value,
             "started_at": self._started_at,
             "last_activity_at": self._last_activity_at,
@@ -704,16 +704,16 @@ class AutoScanInstance:
 class AutoScanSessionManager:
     """Manages multiple concurrent AutoScanInstance objects.
 
-    The manager reads the list of scannable projects live from the injected
-    :class:`ProjectsStore` (filtered to those with a ``linear_api_key``), so
-    projects added via the REST CRUD API are picked up without a restart.
+    The manager reads the list of scannable workspaces live from the injected
+    :class:`WorkspacesStore` (filtered to those with a ``linear_api_key``), so
+    workspaces added via the REST CRUD API are picked up without a restart.
     """
 
     def __init__(
         self,
         config: AutoScanConfig,
         session_manager: SessionManager,
-        projects_store: ProjectsStore,
+        workspaces_store: WorkspacesStore,
         launcher: ClaudeLauncher | None = None,
         event_bus=None,
         rate_limiter: LinearRateLimiter | None = None,
@@ -723,7 +723,7 @@ class AutoScanSessionManager:
         self._config = config
         self._worktrees_dir = worktrees_dir or config.resolved_worktrees_dir()
         self._session_manager = session_manager
-        self._projects_store = projects_store
+        self._workspaces_store = workspaces_store
         self._launcher = launcher or ClaudeLauncher()
         self._event_bus = event_bus
         self._rate_limiter = rate_limiter or LinearRateLimiter()
@@ -737,16 +737,16 @@ class AutoScanSessionManager:
 
     @property
     def available_projects(self) -> list[str]:
-        return self._projects_store.list_with_linear_key()
+        return self._workspaces_store.list_with_linear_key()
 
-    def get(self, project_name: str) -> AutoScanInstance | None:
-        return self._scans.get(project_name)
+    def get(self, workspace_name: str) -> AutoScanInstance | None:
+        return self._scans.get(workspace_name)
 
     def all_instances(self) -> list[AutoScanInstance]:
         return list(self._scans.values())
 
     async def list_all_workitems(self) -> dict[str, list[ActiveWorkItem]]:
-        """Return ``{project_name: [work_items]}`` across every running scan."""
+        """Return ``{workspace_name: [work_items]}`` across every running scan."""
         result: dict[str, list[ActiveWorkItem]] = {}
         for inst in self._scans.values():
             result[inst.project_name] = await inst.list_workitems()
@@ -765,24 +765,24 @@ class AutoScanSessionManager:
         }
 
     async def start(
-        self, project_name: str, *, client_options: ClaudeOptions | None = None,
+        self, workspace_name: str, *, client_options: ClaudeOptions | None = None,
     ) -> AutoScanInstance:
-        project = self._projects_store.get(project_name)
-        if project is None:
+        workspace = self._workspaces_store.get(workspace_name)
+        if workspace is None:
             raise ValueError(
-                f"Project '{project_name}' not found in store. "
+                f"Workspace '{workspace_name}' not found in store. "
                 f"Available: {self.available_projects}",
             )
-        if not project.linear_api_key:
+        if not workspace.linear_api_key:
             raise ValueError(
-                f"Project '{project_name}' has no Linear API key configured.",
+                f"Workspace '{workspace_name}' has no Linear API key configured.",
             )
 
         prompt_persisted = False
         async with self._lock:
-            if project_name in self._scans:
+            if workspace_name in self._scans:
                 raise AutoScanAlreadyRunning(
-                    f"Auto scan for project '{project_name}' is already running"
+                    f"Auto scan for workspace '{workspace_name}' is already running"
                 )
             if len(self._scans) >= self._max_scans:
                 raise AutoScanCapacityReached(
@@ -790,7 +790,7 @@ class AutoScanSessionManager:
                 )
 
             client = LinearApiClient(
-                api_key=project.linear_api_key,
+                api_key=workspace.linear_api_key,
                 rate_limiter=self._rate_limiter,
             )
             prefix = self._config.branch_prefix or "feature/mobaide"
@@ -801,40 +801,40 @@ class AutoScanSessionManager:
                 legacy_worktree_base=self._config.worktree_base,
             )
             instance = AutoScanInstance(
-                project_name=project_name,
-                project_config=project,
+                workspace_name=workspace_name,
+                workspace_config=workspace,
                 config=self._config,
                 session_manager=self._session_manager,
                 launcher=self._launcher,
                 client=client,
                 worktree_mgr=worktree_mgr,
-                projects_store=self._projects_store,
+                workspaces_store=self._workspaces_store,
                 event_bus=self._event_bus,
                 client_options=client_options,
             )
             await instance.start()
-            self._scans[project_name] = instance
+            self._scans[workspace_name] = instance
 
             # Persist the applied prompt only after the scan has actually
             # started and been registered, so a rejected start (already-running
             # / at-capacity) or a failed instance.start() never rewrites the
-            # project's saved prompt.
+            # workspace's saved prompt.
             prompt_persisted = self._persist_applied_prompt(
-                project_name, client_options,
+                workspace_name, client_options,
             )
 
         self._publish_list_changed()
         # Emit projects.changed outside the lock so clients reconcile their
-        # cached project list — and thus the wizard's pre-seeded prompt.
+        # cached workspace list — and thus the wizard's pre-seeded prompt.
         if prompt_persisted:
-            self._publish_projects_changed()
+            self._publish_workspaces_changed()
         return instance
 
-    async def stop(self, project_name: str) -> None:
+    async def stop(self, workspace_name: str) -> None:
         async with self._lock:
-            instance = self._scans.pop(project_name, None)
+            instance = self._scans.pop(workspace_name, None)
         if instance is None:
-            raise KeyError(f"No active auto scan for project '{project_name}'")
+            raise KeyError(f"No active auto scan for workspace '{workspace_name}'")
         await instance.stop()
         self._publish_list_changed()
 
@@ -856,16 +856,16 @@ class AutoScanSessionManager:
 
     def _persist_applied_prompt(
         self,
-        project_name: str,
+        workspace_name: str,
         client_options: ClaudeOptions | None,
     ) -> bool:
-        """Save the just-applied Auto Scan prompt onto the project record.
+        """Save the just-applied Auto Scan prompt onto the workspace record.
 
         Returns ``True`` when the store was written (so the caller emits
         ``projects.changed``). It is a no-op returning ``False`` unless the
         caller supplied a non-empty ``initial_prompt``: a start that omits the
         prompt (``client_options is None``) or sends a blank one expresses no
-        prompt intent, so the project's existing saved prompt is preserved
+        prompt intent, so the workspace's existing saved prompt is preserved
         rather than clobbered — e.g. a flags-only start that just toggles
         ``no_memory`` must not wipe the saved prompt.
         """
@@ -875,26 +875,26 @@ class AutoScanSessionManager:
         if not applied:
             return False
         try:
-            self._projects_store.update(
-                project_name,
-                ProjectUpdatePatch(auto_scan_prompt=applied),
+            self._workspaces_store.update(
+                workspace_name,
+                WorkspaceUpdatePatch(auto_scan_prompt=applied),
             )
         except Exception:
             # Best-effort metadata save: the scan is already started and
             # registered by the time we get here, so a persistence failure —
-            # the project vanished (KeyError) or a transient disk/permission
+            # the workspace vanished (KeyError) or a transient disk/permission
             # error on the store write — must NOT surface as a start failure.
             # Log and carry on; the prompt simply re-seeds on the next start.
             logger.warning(
-                "autoscan.prompt_persist.failed project=%s",
-                project_name, exc_info=True,
+                "autoscan.prompt_persist.failed workspace=%s",
+                workspace_name, exc_info=True,
             )
             return False
         return True
 
-    def _publish_projects_changed(self) -> None:
+    def _publish_workspaces_changed(self) -> None:
         if self._event_bus is not None:
             self._event_bus.publish(
                 "projects.changed",
-                {"projects": self._projects_store.list_public()},
+                {"projects": self._workspaces_store.list_public()},
             )

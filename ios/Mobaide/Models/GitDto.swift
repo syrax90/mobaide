@@ -1,6 +1,6 @@
 import Foundation
 
-/// One row of the project Git screen. `remote_branch` rows (`branch` is
+/// One row of the workspace Git screen. `remote_branch` rows (`branch` is
 /// `<remote>/<name>`, `remote` names the remote) arrive only when asked for
 /// with `?remote=true`; `subject` / `committed_at` describe the tip commit.
 struct GitItem: Codable, Equatable, Sendable {
@@ -78,7 +78,7 @@ struct GitItem: Codable, Equatable, Sendable {
     }
 
     /// *Remove worktree* keeps the branch: a worktree-backed row other than the
-    /// project root's checkout.
+    /// workspace root's checkout.
     var canRemoveWorktree: Bool {
         !is_current && kind == Self.kindBranchWithWorktree && !(worktree_path ?? "").isEmpty
     }
@@ -153,7 +153,7 @@ struct WorktreeBasesResponse: Codable, Equatable, Sendable {
         self.refs = refs
     }
 
-    /// The ref the picker starts on: the project's last base, then the
+    /// The ref the picker starts on: the workspace's last base, then the
     /// repository default, then nil (the agent's own default).
     var preselected: String? { last_used ?? self.default }
 }
@@ -201,9 +201,17 @@ struct GitDeleteResponse: Codable, Equatable, Sendable {
 struct BusyHolder: Codable, Equatable, Sendable {
     let kind: String
     let session_id: String?
-    let project_name: String?
+    let workspace_name: String?
     let cwd: String?
     let worktree_path: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case session_id
+        case workspace_name = "project_name"
+        case cwd
+        case worktree_path
+    }
 }
 
 struct BusyByResponse: Codable, Equatable, Sendable {

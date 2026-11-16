@@ -9,7 +9,7 @@ import {
   cliKnown,
   type AgentVersionInfo,
 } from '../../../protocol/dto/agentVersion';
-import type { ProjectSummary } from '../../../api/projectRepository';
+import type { WorkspaceSummary } from '../../../api/workspaceRepository';
 import type { CustomAgentType } from '../../../api/customAgentTypeRepository';
 import { BUILT_IN_MODES, type BuiltInMode, type WizardMode } from './wizardState';
 
@@ -74,7 +74,7 @@ function cliEnabled(capabilities: AgentVersionInfo | undefined, cliId: string): 
 
 export function buildModeCards(input: {
   capabilities: AgentVersionInfo | undefined;
-  project: ProjectSummary | null;
+  workspace: WorkspaceSummary | null;
   customTypes: readonly CustomAgentType[];
 }): ModeCard[] {
   const claudeEnabled = cliEnabled(input.capabilities, 'claude');
@@ -167,7 +167,7 @@ export function buildModeCards(input: {
       }
       case 'auto_scan': {
         // Auto Scan drives Claude against Linear issues, so it needs both.
-        const hasLinearKey = input.project?.has_linear_key === true;
+        const hasLinearKey = input.workspace?.has_linear_key === true;
         const enabled = claudeEnabled && hasLinearKey;
         return {
           mode,
@@ -176,7 +176,7 @@ export function buildModeCards(input: {
           disabledReason: enabled
             ? undefined
             : claudeEnabled
-              ? 'Auto Scan needs a Linear API key for this project.'
+              ? 'Auto Scan needs a Linear API key for this workspace.'
               : "Auto Scan needs the Claude CLI, which isn't installed on the agent.",
         };
       }

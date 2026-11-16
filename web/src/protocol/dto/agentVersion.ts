@@ -160,13 +160,13 @@ export interface GitCapabilities {
   fetch: boolean;
   pull: boolean;
   push: boolean;
-  /** The project Git screen's remote rows, New branch and Check out (#677). */
+  /** The workspace Git screen's remote rows, New branch and Check out (#677). */
   branches: boolean;
   /** *Rebase…* and the Changes screen's Continue / Skip / Abort. */
   rebase: boolean;
   /** `stage` refuses a conflicted file that still holds markers, so *Mark resolved* is safe. */
   resolve: boolean;
-  /** The project Git screen may delete remote-tracking rows (on the remote). */
+  /** The workspace Git screen may delete remote-tracking rows (on the remote). */
   deleteRemote: boolean;
   /** The conflict resolver's routes and `resolved_paths` on status. */
   conflicts: boolean;

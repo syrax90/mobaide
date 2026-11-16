@@ -1,6 +1,7 @@
 package com.mobaide.app.data.network.dto
 
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
@@ -97,7 +98,8 @@ data class SessionResponse(
     val command: List<String> = emptyList(),
     val cwd: String? = null,
     val title: String? = null,
-    val project_name: String? = null,
+    @SerialName("project_name")
+    val workspace_name: String? = null,
     val kind: SessionKind = SessionKind.Claude,
     // Display-name snapshot of a custom agent type at session-creation time
     // (proto-v7); null for built-in kinds. Survives rename/delete of the type,
@@ -136,8 +138,9 @@ data class CreateSessionRequest(
     val env: Map<String, String>? = null,
     val rows: Int = 24,
     val cols: Int = 80,
-    // When set, command/cwd/env are ignored; the server derives them from the named project.
-    val project_name: String? = null,
+    // When set, command/cwd/env are ignored; the server derives them from the named workspace.
+    @SerialName("project_name")
+    val workspace_name: String? = null,
     // Which managed CLI to launch: "claude" | "codex" | "antigravity" | "opencode" | "copilot" | "cursor" |
     // "pi", or "custom_<12hex>" for an account-scoped custom agent type (proto-v7; the relay resolves the stored
     // command — the client never sends it). Null for Terminal/shell sessions; when null
@@ -151,7 +154,7 @@ data class CreateSessionRequest(
     val cursor_options: CursorOptionsModel? = null,
     val pi_options: PiOptionsModel? = null,
     // Terminal-mode worktree: create a git worktree for a shell session (no CLI options)
-    // on a stored git project and spawn the shell inside it. Managed Claude/Codex sessions
+    // on a stored git workspace and spawn the shell inside it. Managed Claude/Codex sessions
     // instead carry worktree intent inside their own options block.
     val worktree: Boolean = false,
     val branch_name: String? = null,

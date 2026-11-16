@@ -73,7 +73,7 @@ export function SettingsScreen() {
         <h2 className="settings-heading">Management</h2>
         <nav className="account-links settings-links">
           <Link to="/agents">My agents</Link>
-          <Link to="/projects">Projects</Link>
+          <Link to="/workspaces">Workspaces</Link>
           <Link to="/templates">Prompt templates</Link>
           <Link to="/devices">My devices</Link>
           <Link to="/account">Account</Link>

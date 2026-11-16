@@ -75,8 +75,8 @@ interface GitChangesPanelProps {
   syncRequest?: number;
   /** Bumped by the terminal menu's *Rebase…*, the same way. */
   rebaseRequest?: number;
-  /** The session's project, whose branches the rebase sheet offers; null types the ref. */
-  projectName?: string | null;
+  /** The session's workspace, whose branches the rebase sheet offers; null types the ref. */
+  workspaceName?: string | null;
   onClose: () => void;
 }
 
@@ -116,7 +116,7 @@ export function GitChangesPanel({
   commitRequest = 0,
   syncRequest = 0,
   rebaseRequest = 0,
-  projectName = null,
+  workspaceName = null,
   onClose,
 }: GitChangesPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -932,7 +932,7 @@ export function GitChangesPanel({
       {rebaseOpen && (
         <GitRebaseDialog
           agentId={agentId}
-          projectName={projectName}
+          workspaceName={workspaceName}
           status={body}
           busy={rebase.start.isPending}
           rebase={(onto) => rebase.start.mutateAsync(onto)}

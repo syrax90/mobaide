@@ -54,7 +54,7 @@ class SessionKind(enum.Enum):
     ``PI`` — Pi coding agent launched via ``PiLauncher``
     (create with ``cli="pi"`` / ``pi_options``). ``AUTO_SCAN`` —
     sub-sessions spawned by the Linear scanner; argv/cwd/env pre-built by the
-    scanner. ``SHELL`` — the user's login shell anchored to a project's cwd;
+    scanner. ``SHELL`` — the user's login shell anchored to a workspace's cwd;
     bypasses the managed-CLI launchers entirely.
 
     Account-scoped custom AI agent types are NOT members: their wire kind is
@@ -91,7 +91,7 @@ class SessionConfig:
     # of dense Ink/React TUI output; tests override this with a small cap
     # to exercise the overflow path without producing megabytes of bytes.
     ring_buffer_bytes: int = 4 * 1024 * 1024
-    # When set, ``SessionManager`` resolves the project and uses
+    # When set, ``SessionManager`` resolves the workspace and uses
     # ``ClaudeLauncher`` to build argv/cwd/env, overwriting the raw
     # fields above before the PTY is spawned.
     project_name: str | None = None
@@ -123,8 +123,8 @@ class SessionConfig:
     # correctly even after the type is renamed or deleted. None for
     # built-in kinds.
     kind_label: str | None = None
-    # Terminal-mode worktree request. Consumed only on the SHELL+project path
-    # (``SessionManager._resolve_project_cwd``); kept separate from
+    # Terminal-mode worktree request. Consumed only on the SHELL+workspace path
+    # (``SessionManager._resolve_workspace_cwd``); kept separate from
     # ``claude_options`` so a Terminal session can create a worktree while
     # staying ``SessionKind.SHELL`` (Claude sessions use claude_options.worktree).
     worktree: bool = False
@@ -275,7 +275,7 @@ def resolve_spawn_args(
     non-managed (shell) request the spawn always uses ``default_shell`` with a
     clean env, regardless of any client-supplied ``command``/``env`` hints. This
     prevents an authenticated client from piggybacking arbitrary argv into a
-    project's cwd via the Terminal path. Managed
+    workspace's cwd via the Terminal path. Managed
     (Claude/Codex/Antigravity/OpenCode/Copilot/Cursor/Pi) requests honour the hints
     (overwritten later by the launcher inside ``SessionManager``).
 

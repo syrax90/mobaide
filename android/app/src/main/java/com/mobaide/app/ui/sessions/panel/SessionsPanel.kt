@@ -310,7 +310,7 @@ private fun SessionRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            val detail = listOfNotNull(kindLabel, session.project_name).joinToString(" · ")
+            val detail = listOfNotNull(kindLabel, session.workspace_name).joinToString(" · ")
             Text(
                 text = detail,
                 style = MaterialTheme.typography.bodySmall,
@@ -388,15 +388,15 @@ private val previewState = SessionsPanelUiState(
     sessions = listOf(
         SessionResponse(
             session_id = "abc12345", state = "running", created_at = "", cwd = "/home/me/app",
-            title = "fix: login", project_name = "app", kind = SessionKind.Claude,
+            title = "fix: login", workspace_name = "app", kind = SessionKind.Claude,
             attention = "awaiting_permission",
         ),
         SessionResponse(
-            session_id = "fed09876", state = "running", created_at = "", project_name = "web",
+            session_id = "fed09876", state = "running", created_at = "", workspace_name = "web",
             kind = SessionKind.Claude, activity = "working",
         ),
         SessionResponse(
-            session_id = "def67890", state = "running", created_at = "", project_name = "api",
+            session_id = "def67890", state = "running", created_at = "", workspace_name = "api",
             kind = SessionKind.Codex,
         ),
     ),

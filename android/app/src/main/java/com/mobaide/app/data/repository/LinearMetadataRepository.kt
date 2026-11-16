@@ -21,8 +21,8 @@ sealed interface MetadataResult<T> {
 }
 
 /**
- * Per-project Linear discovery: labels and workflow states. SWR-cached in
- * DataStore Preferences keyed by project name so the project form's chip
+ * Per-workspace Linear discovery: labels and workflow states. SWR-cached in
+ * DataStore Preferences keyed by workspace name so the workspace form's chip
  * groups paint instantly when the sheet opens, with a background refresh
  * to pick up label/state changes done in Linear.
  */
@@ -31,21 +31,21 @@ class LinearMetadataRepository(
     private val preferencesStore: PreferencesStore,
 ) {
     /**
-     * Fetch labels for the project. Reads the cache first; on `forceRefresh`
+     * Fetch labels for the workspace. Reads the cache first; on `forceRefresh`
      * or after an empty cache, hits the network. Network results are
      * persisted before returning.
      */
     suspend fun getLabels(
-        projectName: String,
+        workspaceName: String,
         forceRefresh: Boolean = false,
     ): MetadataResult<LinearLabelDto> {
-        val cached = preferencesStore.getCachedLinearLabels(projectName)
+        val cached = preferencesStore.getCachedLinearLabels(workspaceName)
         if (cached.isNotEmpty() && !forceRefresh) {
             return MetadataResult.Cached(cached)
         }
         return try {
-            val fresh = restApi.getLinearLabels(projectName)
-            preferencesStore.setCachedLinearLabels(projectName, fresh)
+            val fresh = restApi.getLinearLabels(workspaceName)
+            preferencesStore.setCachedLinearLabels(workspaceName, fresh)
             MetadataResult.Fresh(fresh)
         } catch (e: Exception) {
             MetadataResult.Error(
@@ -56,20 +56,20 @@ class LinearMetadataRepository(
     }
 
     /**
-     * Fetch workflow states for the project. Same SWR contract as
+     * Fetch workflow states for the workspace. Same SWR contract as
      * [getLabels] — see that method for caching semantics.
      */
     suspend fun getStates(
-        projectName: String,
+        workspaceName: String,
         forceRefresh: Boolean = false,
     ): MetadataResult<LinearStateDto> {
-        val cached = preferencesStore.getCachedLinearStates(projectName)
+        val cached = preferencesStore.getCachedLinearStates(workspaceName)
         if (cached.isNotEmpty() && !forceRefresh) {
             return MetadataResult.Cached(cached)
         }
         return try {
-            val fresh = restApi.getLinearStates(projectName)
-            preferencesStore.setCachedLinearStates(projectName, fresh)
+            val fresh = restApi.getLinearStates(workspaceName)
+            preferencesStore.setCachedLinearStates(workspaceName, fresh)
             MetadataResult.Fresh(fresh)
         } catch (e: Exception) {
             MetadataResult.Error(
@@ -85,10 +85,10 @@ class LinearMetadataRepository(
      * fetch is in flight.
      */
     suspend fun refreshLabels(
-        projectName: String,
-    ): MetadataResult<LinearLabelDto> = getLabels(projectName, forceRefresh = true)
+        workspaceName: String,
+    ): MetadataResult<LinearLabelDto> = getLabels(workspaceName, forceRefresh = true)
 
     suspend fun refreshStates(
-        projectName: String,
-    ): MetadataResult<LinearStateDto> = getStates(projectName, forceRefresh = true)
+        workspaceName: String,
+    ): MetadataResult<LinearStateDto> = getStates(workspaceName, forceRefresh = true)
 }

@@ -3,8 +3,8 @@
  * before anything reaches the server.
  *
  * This is the model git delete already uses on Android and iOS, and the one web
- * also uses for project delete — instead of mobile's delete-then-recreate, whose
- * compensating `POST` cannot restore a project's `linear_api_key` (the server
+ * also uses for workspace delete — instead of mobile's delete-then-recreate, whose
+ * compensating `POST` cannot restore a workspace's `linear_api_key` (the server
  * never echoes it) or its position in the order. Android and iOS follow in
  * CLA-240 / CLA-241.
  *
@@ -24,7 +24,7 @@ export interface DeferredCommit<T> {
   /**
    * Open a window, or replace an open one. `merge` decides what happens to a
    * payload scheduled while a window is already open: git coalesces into one
-   * batch, projects commit the first and start over.
+   * batch, workspaces commit the first and start over.
    */
   schedule: (payload: T) => void;
   /** Send now, ending the window early. */

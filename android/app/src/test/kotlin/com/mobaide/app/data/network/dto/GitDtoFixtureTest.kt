@@ -12,7 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The Android arm of the project git golden fixtures under
+ * The Android arm of the workspace git golden fixtures under
  * `tests/protocol_fixtures/dto/agent/`: the items list and the branch create /
  * checkout bodies. The request shapes are what this client sends, so they
  * must also encode back to the wire; every shape decodes from `wire` and, where

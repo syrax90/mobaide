@@ -182,10 +182,10 @@ class MockMobileClient:
         resp.raise_for_status()
         return resp.json()["session_id"]
 
-    def create_project(
+    def create_workspace(
         self, agent_id: str, mobile_token: str, name: str, path: str
     ) -> dict:
-        """Create a project on the agent over the server proxy."""
+        """Create a workspace on the agent over the server proxy."""
         resp = self._http.post(
             f"/proxy/{agent_id}/api/projects",
             json={"name": name, "path": path},
@@ -194,8 +194,8 @@ class MockMobileClient:
         resp.raise_for_status()
         return resp.json()
 
-    def list_projects(self, agent_id: str, mobile_token: str) -> list[dict]:
-        """List the agent's projects over the server proxy."""
+    def list_workspaces(self, agent_id: str, mobile_token: str) -> list[dict]:
+        """List the agent's workspaces over the server proxy."""
         resp = self._http.get(
             f"/proxy/{agent_id}/api/projects",
             headers=self._bearer(mobile_token),
@@ -203,10 +203,10 @@ class MockMobileClient:
         resp.raise_for_status()
         return resp.json()
 
-    def reorder_projects(
+    def reorder_workspaces(
         self, agent_id: str, mobile_token: str, names: list[str]
     ) -> list[dict]:
-        """Reorder the agent's projects via ``PATCH`` over the server proxy."""
+        """Reorder the agent's workspaces via ``PATCH`` over the server proxy."""
         resp = self._http.patch(
             f"/proxy/{agent_id}/api/projects/order",
             json={"names": names},

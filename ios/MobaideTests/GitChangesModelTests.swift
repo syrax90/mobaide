@@ -19,7 +19,7 @@ final class GitChangesModelTests: XCTestCase {
 
     private func makeModel(
         sleeper: any Sleeper = ManualSleeper(),
-        projectName: String? = "proj",
+        workspaceName: String? = "proj",
         openCommit: Bool = false
     ) -> (GitChangesModel, AgentEventBus, FakeWebSocketTransportFactory) {
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
@@ -39,7 +39,7 @@ final class GitChangesModelTests: XCTestCase {
             sessionId: "s1",
             agentAPI: agentAPI,
             agentEventBus: bus,
-            projectName: { projectName },
+            workspaceName: { workspaceName },
             sleeper: sleeper,
             openCommit: openCommit
         )
@@ -227,7 +227,7 @@ final class GitChangesModelTests: XCTestCase {
 
     // MARK: - observeGitChanged()
 
-    func testGitChangedRefreshesOnProjectNameToplevelOrCommonDirOnly() async throws {
+    func testGitChangedRefreshesOnWorkspaceNameToplevelOrCommonDirOnly() async throws {
         let (model, bus, factory) = makeModel()
         StubURLProtocol.enqueue(status: 200, body: try fixtureBody("linked_worktree_full"))
         await model.load()
@@ -262,7 +262,7 @@ final class GitChangesModelTests: XCTestCase {
     }
 
     func testGitChangedBeforeTheFirstBodyRefreshesWhateverItNames() async throws {
-        let (model, bus, factory) = makeModel(projectName: nil)
+        let (model, bus, factory) = makeModel(workspaceName: nil)
         Task { await model.observeGitChanged() }
         await bus.start()
         let connection = try await factory.connection(1)

@@ -344,7 +344,7 @@ The relay never publishes its OpenAPI schema. `create_app` passes `docs_url=None
 
 Set `ENABLE_API_DOCS=1` in `/opt/mobaide/.env` to get the docs back. They are then **admin-gated**: a request must carry either the `dashboard_token` cookie from `/dashboard/login` or an admin `Authorization: Bearer` token. Everything else — anonymous callers and non-admin users alike — still gets a 404, so the flag cannot re-expose the schema publicly. Browsers work as expected: sign in at `/dashboard/login` first, then open `/docs`. The dashboard, portal, marketing routes and `POST /api/internal/agent_manifest` are excluded from the schema (`include_in_schema=False`).
 
-The agent has the same knob with the same name and the same default. It matters more there than it looks: the agent binds `0.0.0.0` so DIRECT mode works over the LAN, so stock FastAPI docs would hand its whole session/project/git surface to anything on the same network. Leave it off outside local development.
+The agent has the same knob with the same name and the same default. It matters more there than it looks: the agent binds `0.0.0.0` so DIRECT mode works over the LAN, so stock FastAPI docs would hand its whole session/workspace/git surface to anything on the same network. Leave it off outside local development.
 
 ### Security response headers
 
@@ -1059,9 +1059,9 @@ The systemd unit retains `NoNewPrivileges=yes`, `ProtectSystem=strict` with expl
 
 This is the same trust model adopted by comparable per-user developer tools (code-server, JupyterLab, VS Code Server). It is incompatible with multi-tenant hosting on a single agent install — pair one agent per developer.
 
-#### Project paths outside `$HOME`
+#### Workspace paths outside `$HOME`
 
-`ReadWritePaths` only grants writes to the agent user's `$HOME` and the install prefix. A project pointing at e.g. `/srv/code/myrepo` or `/data/repos/foo` will fail with `OSError: [Errno 30] Read-only file system` at worktree creation, because `ProtectSystem=strict` mounts the rest of the OS hierarchy read-only. The same applies to a `MOBAIDE_WORKTREES_DIR` outside `$HOME`; the default `~/.mobaide/worktrees` is inside `$HOME` and needs no override. To support such projects, drop in an override that extends the writable list — keeping the rest of the hardening intact:
+`ReadWritePaths` only grants writes to the agent user's `$HOME` and the install prefix. A workspace pointing at e.g. `/srv/code/myrepo` or `/data/repos/foo` will fail with `OSError: [Errno 30] Read-only file system` at worktree creation, because `ProtectSystem=strict` mounts the rest of the OS hierarchy read-only. The same applies to a `MOBAIDE_WORKTREES_DIR` outside `$HOME`; the default `~/.mobaide/worktrees` is inside `$HOME` and needs no override. To support such workspaces, drop in an override that extends the writable list — keeping the rest of the hardening intact:
 
 ```bash
 sudo systemctl edit mobaide-agent.service
@@ -1077,13 +1077,13 @@ Multiple paths can be listed whitespace-separated. Re-running the install script
 
 ### Migrating from the legacy `mobaide` system user
 
-Older installs ran the agent as a dedicated `mobaide` system account with `ProtectHome=yes`, which broke any project under `/home/<user>/...`. Re-running either install script on an existing host:
+Older installs ran the agent as a dedicated `mobaide` system account with `ProtectHome=yes`, which broke any workspace under `/home/<user>/...`. Re-running either install script on an existing host:
 
 * re-renders the systemd unit with `User=$SUDO_USER` (or `MOBAIDE_RUN_AS_USER`),
 * `chown -R`s `/opt/mobaide` to the new user,
 * `userdel`s the legacy `mobaide` account (best-effort; skipped if still in use).
 
-No data migration is needed — `projects.json`, releases, and `agent.env` survive the chown.
+No data migration is needed — `projects.json` (the workspace list), releases, and `agent.env` survive the chown.
 
 ### Linux (systemd, manual)
 

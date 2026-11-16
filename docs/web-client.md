@@ -15,7 +15,7 @@ On this page:
 - [Realtime layer (WEB-04)](#realtime-layer-web-04)
 - [Sessions (WEB-07)](#sessions-web-07)
 - [Agents and pairing (WEB-08)](#agents-and-pairing-web-08)
-- [Projects, git & templates (WEB-09)](#projects-git--templates-web-09)
+- [Workspaces, git & templates (WEB-09)](#workspaces-git--templates-web-09)
 - [Terminal screen (WEB-05)](#terminal-screen-web-05)
 - [Desktop keyboard & shortcuts (WEB-06)](#desktop-keyboard--shortcuts-web-06)
 - [Auto Scan, notifications & settings (WEB-10)](#auto-scan-notifications--settings-web-10)
@@ -39,7 +39,7 @@ The series is tracked in Linear project "Web Client (React)"
 | WEB-06 | | Keyboard and shortcuts |
 | WEB-07 | CLA-193 | Sessions list and six-branch create wizard |
 | WEB-08 | CLA-194 | Agents and pairing phase 1 |
-| WEB-09 | CLA-195 | Projects, git and templates |
+| WEB-09 | CLA-195 | Workspaces, git and templates |
 | WEB-10 | CLA-196 | Auto Scan, notifications, settings |
 | WEB-11 | CLA-198 | Sign in with Apple |
 | WEB-12 | CLA-199 | Pairing phase 2 |
@@ -107,7 +107,7 @@ web/
 The relay's `/proxy/{agent_id}/{path:path}` catch-all
 (`central_server/central_server/relay/mobile_proxy.py`) forwards arbitrary
 REST requests to the paired agent and is untyped in the central-server
-schema (no `response_model`). The proxied session/project/git surface is
+schema (no `response_model`). The proxied session/workspace/git surface is
 typed only by the **agent's** own OpenAPI schema. The web client therefore
 carries two generated type sets and two clients:
 
@@ -217,7 +217,7 @@ every open — the client is the sole size authority and the agent spawns at
 24×80 (WEB-05's replay state machine owns two further re-assert points, driven
 through `setSize`). The auto-scan channel sends `{subscribe, resume_from_seq}`
 as the first thing on every open (the agent's grace window is 200 ms direct, 1 s
-through the relay), rebuilt from a live per-project cursor; it
+through the relay), rebuilt from a live per-workspace cursor; it
 also drops `seq <= cursor` because the server's replay is best-effort.
 
 **Wire DTO policy.** `z.looseObject` everywhere, so unknown keys survive; kind
@@ -227,7 +227,7 @@ promotes integer literals beyond 2^53 to `bigint` via the ES2026 `JSON.parse`
 source-access reviver. Runtimes without source access degrade only above 2^53.
 
 **Event → Query bridge.** Refresh-on-connect invalidates agents / templates /
-custom types on the user channel and projects on an agent channel. Web dropped
+custom types on the user channel and workspaces on an agent channel. Web dropped
 saved shortcuts entirely, so it neither subscribes to `shortcut.*` nor needs the
 `custom_type.deleted` cascade. Per event the default policy is
 `invalidateQueries`, never a hand-applied delta. Payloads are schema-validated
@@ -308,18 +308,18 @@ raw wire token. Stopping uses iOS's Stop / Force Stop / Cancel confirmation.
 
 ### Create wizard
 
-**The create wizard** is three steps (project → agent → options), iOS's shape
+**The create wizard** is three steps (workspace → agent → options), iOS's shape
 rather than Android's seven. State is one reducer over **per-mode buckets**, and
 the request builder switches on mode, so a Codex request cannot name a Claude
 field. Auto Scan gets its own Claude bucket, since its `skip_permissions`
-defaults the opposite way. Only `step`, `mode` and the project selection live in
+defaults the opposite way. Only `step`, `mode` and the workspace selection live in
 the URL; the ~30 option fields do not, so no prompt text reaches browser
 history.
 
 #### Step advance behaviour
 
-**Every step advances on the click that decides it.** Picking a project row,
-a recent directory or an agent card writes the URL and moves on. The project
+**Every step advances on the click that decides it.** Picking a workspace row,
+a recent directory or an agent card writes the URL and moves on. The workspace
 step keeps a Continue button only for the one choice with no row to click — a
 path typed into the one-off directory field — enabled only while that field
 holds a valid absolute path.
@@ -327,23 +327,23 @@ holds a valid absolute path.
 The advance is a single **push**, never a replace followed by a push: two
 `setSearchParams` calls in one handler race the data router, which aborts the
 in-flight navigation and drops the replace. Browser Back therefore returns to
-the project step *as it was before the click*, while the wizard's own Back
+the workspace step *as it was before the click*, while the wizard's own Back
 carries the selection forward.
 
 This is a deliberate divergence from the list + Continue that Android and iOS
 keep, tracked as #650 (Android) and #651 (iOS). The same applies to
-**creating a project**: the project list always ends with a "Create new
-project…" row, which opens `ProjectFormDialog` over the wizard, and saving
-advances the step like a row click. Android and iOS stay on the project step
+**creating a workspace**: the workspace list always ends with a "Create new
+workspace…" row, which opens `WorkspaceFormDialog` over the wizard, and saving
+advances the step like a row click. Android and iOS stay on the workspace step
 until their own Continue.
 
 #### Remembered launch options
 
 **The wizard opens where the last launch left off** (CLA-232), as both mobile
 clients do. `localStorage` key `mobaide-launch-prefs` holds the four option
-buckets plus the last project name, and `launchPrefs.ts` is the seam in both
+buckets plus the last workspace name, and `launchPrefs.ts` is the seam in both
 directions. The pre-fill only *highlights* the row; it never advances the step,
-so a remembered project cannot launch past a screen the user never saw.
+so a remembered workspace cannot launch past a screen the user never saw.
 
 Three things are load-bearing:
 
@@ -367,10 +367,10 @@ nullable (`null` renders "Agent default"). Restore re-applies the Antigravity
 restored effort through `effectiveClaudeEffort`. Worktree/branch, `add_dirs` and
 the Auto Scan initial prompt are per-session and are not persisted on any
 client. The worktree base branch is not persisted either: the agent remembers
-the last one per project and returns it as `last_used`.
+the last one per workspace and returns it as `last_used`.
 
 **Not purged at sign-out**, matching mobile and unlike the recents below. What
-survives is a project name and `append_system_prompt`, free text the user typed,
+survives is a workspace name and `append_system_prompt`, free text the user typed,
 which the agent puts on argv. Android and iOS store the same values in
 per-OS-user app storage, while `localStorage` is per *browser profile*, so on a
 shared profile the next account to sign in inherits both, pre-filled. The
@@ -392,10 +392,10 @@ per agent, newest first, deduped by exact string equality after one trailing
 separator (never a root) is trimmed, with no `~` expansion — and never filtered
 against what is being typed.
 
-Picking one advances the step, exactly as a project row does, after the
+Picking one advances the step, exactly as a workspace row does, after the
 container re-validates it. A path is recorded in `create`'s `onSuccess` from the
 **mutation's variables**, not from live state, because the wizard stays
-interactive during the POST. `cwd` is `undefined` for a stored project, which
+interactive during the POST. `cwd` is `undefined` for a stored workspace, which
 keeps stored launches out of the bucket. Each row can be forgotten individually
 (CLA-255).
 
@@ -620,7 +620,7 @@ the browser.
   (`baseUrl: '/'`).
 
 While the guide is up the flat four-button row is suppressed. The sessions and
-projects "No agents yet" lines point at `/agents` rather than `/pair`, because
+workspaces "No agents yet" lines point at `/agents` rather than `/pair`, because
 an account with nothing paired has no code to paste yet.
 
 #### Guide paste-box hand-off
@@ -662,34 +662,36 @@ agent's redeem, and confirms through `POST .../confirm` — the same completion
 path `/pair`'s claim uses. See [qr-pairing.md](qr-pairing.md) for the protocol
 and the account-level `trust_key_fp` pin.
 
-## Projects, git & templates (WEB-09)
+## Workspaces, git & templates (WEB-09)
 
-Three routes: `/projects` (agent-scoped, with the same agent picker and
+The wire names still say "project" for compatibility: `/api/projects…`, `projects.changed`, `project_name` and the `ProjectInfo` fixture.
+
+Three routes: `/workspaces` (agent-scoped, with the same agent picker and
 `mobaide-agent` selection the sessions list uses),
-`/agents/:agentId/projects/:projectName/git`, and `/templates`. Projects and
+`/agents/:agentId/workspaces/:workspaceName/git`, and `/templates`. Workspaces and
 git are agent-axis calls through `/proxy`; templates are central-server ones,
 so the templates screen works while every agent is offline.
 
-### Projects cache and snapshot events
+### Workspaces cache and snapshot events
 
 **`projects.changed` is written, not invalidated.** It carries the agent's
 complete list, republished after every mutation *and* on every events-socket
 connect (the relay sends `request_events_snapshot`; `relay/client.py`). So it
 joins `sessions.changed` in `queryBridge`'s full-snapshot exception, via
-`src/realtime/projectsCache.ts`. That also closes CLA-234: an invalidation
+`src/realtime/workspacesCache.ts`. That also closes CLA-234: an invalidation
 landing during a **cold** fetch was deduped into it and `staleTime: Infinity`
 pinned the older list.
 
 The general rule: an event carrying the new state is written; an event carrying
 only a pointer to it is invalidated, and a pointer event's query must **not**
 pin `staleTime: Infinity`. `git.changed` is the pointer case and invalidates
-`['agent', id, 'git', projectName]`. `refreshOnAgentEventsConnect` covers the
-git prefix: projects arrive in the connect snapshot, git items never do.
+`['agent', id, 'git', workspaceName]`. `refreshOnAgentEventsConnect` covers the
+git prefix: workspaces arrive in the connect snapshot, git items never do.
 
-Because both REST and the push write the same cache, the project list keeps its
-**wire shape** (`projectInfoSchema`) instead of a camelCase mapping.
+Because both REST and the push write the same cache, the workspace list keeps its
+**wire shape** (`workspaceInfoSchema`) instead of a camelCase mapping.
 
-### Project reorder, delete and form
+### Workspace reorder, delete and form
 
 **Reorder is buttons first, drag second.** Every row carries Move up / Move
 down plus a live region announcing `"<name> moved to position N of M"`; a
@@ -702,15 +704,15 @@ mismatch, so the move is applied to the full list even when a row is hidden by
 an open undo window. The optimistic order is an *override*, never a cache write,
 and is released only when the server's own order matches it exactly.
 
-**Project delete is deferred-commit**, not mobile's immediate delete with a
+**Workspace delete is deferred-commit**, not mobile's immediate delete with a
 recreating Undo: the compensating `POST` cannot restore `linear_api_key` (the
-server never echoes it) or the project's `order`. Android and iOS follow in
+server never echoes it) or the workspace's `order`. Android and iOS follow in
 CLA-240 / CLA-241. Only one deletion is in flight at a time — there is no batch
 endpoint — so a second delete commits the first and opens a fresh window.
 
-**The project form tracks the live snapshot.** React Hook Form's `values` +
+**The workspace form tracks the live snapshot.** React Hook Form's `values` +
 `resetOptions: { keepDirtyValues: true }` re-seed every untouched field while
-protecting the edited ones, and `buildProjectUpdate` diffs against that same
+protecting the edited ones, and `buildWorkspaceUpdate` diffs against that same
 snapshot, so untouched ⇒ equal ⇒ absent from the patch. Flags and the Auto Scan
 filter are arrays, so they carry their own touch gate instead.
 
@@ -727,7 +729,7 @@ masked `PasswordField` with a reveal toggle, and the save mutation pins
 submitted variables, plaintext key included, readable app-wide through
 `getMutationCache()` for minutes after the dialog closes.
 
-Two related traps the form closes: `editing` is resolved by name, so a project
+Two related traps the form closes: `editing` is resolved by name, so a workspace
 deleted or renamed by another client closes the editor instead of flipping the
 dialog into *create* mode; and the Auto Scan filter is validated even while
 hidden, so Save is never disabled with no reason on screen.
@@ -768,7 +770,7 @@ Branch actions:
 - Check out is a per-row button on `branch_only` and `remote_branch` rows behind
   an `alertdialog` confirmation whose initial focus is Cancel.
 - Both mutations reuse `toSessionGitError` after the busy check. A `busy_by` 409
-  opens the soft "Project folder in use" prompt. It lists the holders and offers
+  opens the soft "Workspace folder in use" prompt. It lists the holders and offers
   *Check out anyway*, which resends the request with `force: true`. A forced
   request that still gets a `busy_by` 409 comes from an agent without `force`,
   and a toast asks the user to update it. Every coded detail becomes a
@@ -784,8 +786,8 @@ Branch actions:
   only the worktree and keeps the branch (`enqueueWorktreeRemoval`).
 
 The terminal's `⋯` menu gains *Branches…* after *Fetch / Pull / Push…* for a
-project-backed session, navigating to
-`/agents/:agentId/projects/:projectName/git`.
+workspace-backed session, navigating to
+`/agents/:agentId/workspaces/:workspaceName/git`.
 
 ### Templates and fixture coverage
 
@@ -822,7 +824,7 @@ Sessions* in `features.md`.
 
 **Sessions panel.** A `☰` "Sessions" button in `.terminal-bar` opens a panel
 listing the connected agent's sessions (state dot or working square, title,
-kind · project, attention or "Working" chip; the current row highlighted), a "New session" shortcut and the
+kind · workspace, attention or "Working" chip; the current row highlighted), a "New session" shortcut and the
 account's other agents (online → select it and go to `/`; offline rows
 disabled).
 
@@ -936,7 +938,7 @@ initial focus is Cancel. The panel shows the same job as a notice strip until
 its result is dismissed (a success clears itself after 6 s).
 
 #678 adds an in-progress **rebase**: `⋯ → Git → Rebase…` (gated on
-`capabilities.git.rebase`) opens `GitRebaseDialog.tsx`. A project-backed session
+`capabilities.git.rebase`) opens `GitRebaseDialog.tsx`. A workspace-backed session
 picks the target from `listGitItems`, each sent as a fully qualified
 `refs/heads/…` / `refs/remotes/…` ref so a same-named tag cannot shadow it; any
 other session, or a list that fails to load, types the ref instead. Nothing is
@@ -1355,8 +1357,8 @@ surface, and a settings hub.
 **Monitor, two channels.** The card list rides the shared agent-events bus
 that `SessionList` already opened and mounts as an "Active Auto Scans" section
 above the sessions; only the detail screen at
-`agents/:agentId/autoscan/:projectName` opens the dedicated `ws/autoscan`
-channel. Both ids ride in the path, because a scan is one project on one host
+`agents/:agentId/autoscan/:workspaceName` opens the dedicated `ws/autoscan`
+channel. Both ids ride in the path, because a scan is one workspace on one host
 and the selected-agent store would make a shared link resolve elsewhere.
 
 That channel is capacity-limited: past its ten-subscription cap, or when the
@@ -1377,7 +1379,7 @@ The Auto Scan list is nonetheless the one written cache that also needs a
 connect-time refresh: the agent publishes `autoscan.list.changed` as a connect
 snapshot only on the direct `ws/events` path, while
 `relay/client.py::_handle_request_events_snapshot` republishes sessions and
-projects and stops there, and the relay is the only path a browser takes.
+workspaces and stops there, and the relay is the only path a browser takes.
 `refreshOnAgentEventsConnect` covers the gap, which is also why the query must
 not pin `staleTime: Infinity` (CLA-234). Filed as CLA-249 for the agent.
 `GET /api/autoscan/status` has no relay handler at all, so detail state is
@@ -1427,8 +1429,8 @@ re-raising an alert from a latched field.
 Android and `central_server/push/content.py` carry, em dashes included.
 One exception: push text never names a custom agent type. Custom kinds read
 "Agent session" in APNs pushes, because the privacy policy lists only the CLI
-title and project name as alert content. Local notifications use the custom name.
-With no title and no project, the label names the kind ("Codex session",
+title and workspace name as alert content. Local notifications use the custom name.
+With no title and no workspace, the label names the kind ("Codex session",
 "Terminal session"); no `kind` reads "Claude session".
 
 Delivery follows the rule both mobile clients share — never alert about the
@@ -1501,7 +1503,7 @@ Appearance picker (the same `ThemePicker` the header carries, plus the OS
 appearance as body text, because the header's `title` is unreachable on a
 touchscreen), notification permission and the in-app opt-out, the Ctrl+V
 terminal preference, support and privacy links (the same constants iOS and
-Android carry), and sign out. It links onward to agents, projects, templates,
+Android carry), and sign out. It links onward to agents, workspaces, templates,
 devices and the account danger zone; `Devices` left the top nav in exchange.
 There is **no** terminal display-mode picker — web ships Full display only, the
 WEB-05 divergence above.

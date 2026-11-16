@@ -80,11 +80,11 @@ struct SyncPrompt: Equatable {
     let confirm: String
 }
 
-/// Where the rebase sheet's picker stands: no project types the ref instead.
+/// Where the rebase sheet's picker stands: no workspace types the ref instead.
 enum RebaseTargets: Equatable {
     case loading
     case ready([GitItem])
-    /// No project, or the list failed to load: the sheet asks for the ref as text.
+    /// No workspace, or the list failed to load: the sheet asks for the ref as text.
     case typed
 }
 
@@ -176,7 +176,7 @@ final class GitChangesModel {
     let sessionId: String
     private let agentAPI: AgentAPI
     private let agentEventBus: AgentEventBus
-    private let projectName: @MainActor () -> String?
+    private let workspaceName: @MainActor () -> String?
     private let sleeper: any Sleeper
 
     /// The etag cache. Lives as long as the screen is on the navigation stack,
@@ -200,7 +200,7 @@ final class GitChangesModel {
         sessionId: String,
         agentAPI: AgentAPI,
         agentEventBus: AgentEventBus,
-        projectName: @escaping @MainActor () -> String?,
+        workspaceName: @escaping @MainActor () -> String?,
         sleeper: any Sleeper = ContinuousSleeper(),
         openCommit: Bool = false,
         openSync: Bool = false,
@@ -209,7 +209,7 @@ final class GitChangesModel {
         self.sessionId = sessionId
         self.agentAPI = agentAPI
         self.agentEventBus = agentEventBus
-        self.projectName = projectName
+        self.workspaceName = workspaceName
         self.sleeper = sleeper
         self.openCommitOnAppear = openCommit
         self.openSyncOnAppear = openSync
@@ -323,13 +323,13 @@ final class GitChangesModel {
     }
 
     /// Re-fetch when the agent reports a git change for this session's
-    /// repository — by project name, or by the resolved `toplevel` /
+    /// repository — by workspace name, or by the resolved `toplevel` /
     /// `common_dir` for a session without one. Before the first body nothing
     /// is known, so every push refreshes.
     func observeGitChanged() async {
         for await event in agentEventBus.events() {
             guard case .gitChanged(let name, let toplevel, let commonDir) = event,
-                  matches(projectName: name, toplevel: toplevel, commonDir: commonDir)
+                  matches(workspaceName: name, toplevel: toplevel, commonDir: commonDir)
             else { continue }
             await load()
         }
@@ -373,7 +373,7 @@ final class GitChangesModel {
         openRebase()
     }
 
-    /// A project-backed session picks from the project's branches; any other
+    /// A workspace-backed session picks from the workspace's branches; any other
     /// session — or a list that fails to load — types the ref.
     func openRebase() {
         rebaseSheet = RebaseSheetState()
@@ -382,12 +382,12 @@ final class GitChangesModel {
 
     func loadRebaseTargets() async {
         guard rebaseSheet != nil else { return }
-        guard let name = projectName() else {
+        guard let name = workspaceName() else {
             rebaseSheet?.targets = .typed
             return
         }
         do {
-            let items = try await agentAPI.getGitItems(projectName: name).items
+            let items = try await agentAPI.getGitItems(workspaceName: name).items
             rebaseSheet?.targets = .ready(items)
         } catch {
             guard !SessionGitError.isCancellation(error) else { return }
@@ -791,9 +791,9 @@ final class GitChangesModel {
         await load()
     }
 
-    private func matches(projectName eventProject: String, toplevel: String?, commonDir: String?) -> Bool {
+    private func matches(workspaceName eventWorkspace: String, toplevel: String?, commonDir: String?) -> Bool {
         guard let repo = cached?.repo else { return true }
-        if let own = projectName(), own == eventProject { return true }
+        if let own = workspaceName(), own == eventWorkspace { return true }
         if let toplevel, toplevel == repo.toplevel { return true }
         return commonDir != nil && commonDir == repo.common_dir
     }
@@ -1279,8 +1279,8 @@ extension GitChangesDisplay {
     }
 
     /// The rebase sheet's picker: local branches, then remote-tracking ones,
-    /// each A→Z, from the project Git screen's rows. The session's own branch is left
-    /// out by name — the rows' `is_current` is the project root's checkout,
+    /// each A→Z, from the workspace Git screen's rows. The session's own branch is left
+    /// out by name — the rows' `is_current` is the workspace root's checkout,
     /// which for a session in a linked worktree is usually the very branch it
     /// wants to rebase onto.
     static func rebaseTargets(_ items: [GitItem], currentBranch: String?) -> [RebaseTarget] {

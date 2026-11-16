@@ -59,7 +59,7 @@ import java.io.IOException
  * Unit tests for [GitChangesViewModel]. The repository poll is replaced by a
  * hand-driven [MutableSharedFlow] of [SessionGitStatusLoad]s, so each test
  * pushes exactly the load it is about; the two lambdas and the refresh flow
- * the ViewModel hands the repository are captured so the project-name lookup
+ * the ViewModel hands the repository are captured so the workspace-name lookup
  * and the etag seed can be checked as values and a test can stand in for the
  * poll that listens for pulls.
  */
@@ -75,7 +75,7 @@ class GitChangesViewModelTest {
         val handle: SavedStateHandle,
         val loads: MutableSharedFlow<SessionGitStatusLoad>,
         val refreshRequests: Flow<Unit>,
-        val projectName: () -> String?,
+        val workspaceName: () -> String?,
         val initial: () -> GitStatusResponse?,
         /** Every job frame of the session, as the repository would surface them. */
         val frames: MutableSharedFlow<GitJobResponse>,
@@ -88,7 +88,7 @@ class GitChangesViewModelTest {
     )
 
     private fun newFixture(
-        projectName: String? = "alpha",
+        workspaceName: String? = "alpha",
         capabilities: GitCapabilities = GitCapabilities.NONE,
         commit: Boolean = false,
         sync: Boolean = false,
@@ -114,13 +114,13 @@ class GitChangesViewModelTest {
             observedJobIds += secondArg<String>()
             jobLoads
         }
-        val projectNameSlot = slot<() -> String?>()
+        val workspaceNameSlot = slot<() -> String?>()
         val refreshSlot = slot<Flow<Unit>>()
         val initialSlot = slot<() -> GitStatusResponse?>()
         every {
             repo.observeSessionGitStatus(
                 sessionId = "s1",
-                projectName = capture(projectNameSlot),
+                workspaceName = capture(workspaceNameSlot),
                 foreground = any(),
                 refreshRequests = capture(refreshSlot),
                 initial = capture(initialSlot),
@@ -135,7 +135,7 @@ class GitChangesViewModelTest {
                         state = "running",
                         created_at = "2026-09-07T10:00:00Z",
                         cwd = "/repo",
-                        project_name = projectName,
+                        workspace_name = workspaceName,
                     ),
                 ),
             )
@@ -157,7 +157,7 @@ class GitChangesViewModelTest {
             handle = handle,
             loads = loads,
             refreshRequests = refreshSlot.captured,
-            projectName = { projectNameSlot.captured() },
+            workspaceName = { workspaceNameSlot.captured() },
             initial = { initialSlot.captured() },
             frames = frames,
             jobLoads = jobLoads,
@@ -612,10 +612,10 @@ class GitChangesViewModelTest {
     // MARK: - Repository wiring
 
     @Test
-    fun theRepositoryIsHandedTheSessionProjectName_andTheLastBodyAsTheSeed() = runTest {
-        val f = newFixture(projectName = "alpha")
+    fun theRepositoryIsHandedTheSessionWorkspaceName_andTheLastBodyAsTheSeed() = runTest {
+        val f = newFixture(workspaceName = "alpha")
         subscribe(f.vm)
-        assertEquals("alpha", f.projectName())
+        assertEquals("alpha", f.workspaceName())
         assertNull(f.initial())
 
         val first = status("e1")
@@ -1377,7 +1377,7 @@ class GitChangesViewModelTest {
     )
 
     @Test
-    fun openRebase_forAProjectSession_loadsTheProjectsBranches() = runTest {
+    fun openRebase_forAWorkspaceSession_loadsTheWorkspacesBranches() = runTest {
         val f = loaded(capabilities = rebaseCaps)
         val reply = CompletableDeferred<List<GitItem>>()
         coEvery { f.repo.listGitItems("alpha") } coAnswers { reply.await() }
@@ -1392,15 +1392,15 @@ class GitChangesViewModelTest {
     }
 
     @Test
-    fun openRebase_typesTheRef_forASessionWithoutAProject_orWhenTheListFails() = runTest {
-        val noProject = newFixture(projectName = null, capabilities = rebaseCaps)
-        subscribe(noProject.vm)
+    fun openRebase_typesTheRef_forASessionWithoutAWorkspace_orWhenTheListFails() = runTest {
+        val noWorkspace = newFixture(workspaceName = null, capabilities = rebaseCaps)
+        subscribe(noWorkspace.vm)
 
-        noProject.vm.openRebase()
+        noWorkspace.vm.openRebase()
         runCurrent()
 
-        assertEquals(RebaseTargetsState.Typed, noProject.vm.rebaseSheet.value?.targets)
-        coVerify(exactly = 0) { noProject.repo.listGitItems(any()) }
+        assertEquals(RebaseTargetsState.Typed, noWorkspace.vm.rebaseSheet.value?.targets)
+        coVerify(exactly = 0) { noWorkspace.repo.listGitItems(any()) }
 
         val failing = loaded(capabilities = rebaseCaps)
         coEvery { failing.repo.listGitItems("alpha") } throws IOException("down")

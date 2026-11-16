@@ -8,10 +8,10 @@ enum AgentEvent: Equatable, Sendable {
     /// One-shot "needs user" trigger; the reason lives in
     /// `SessionResponse.attention`.
     case sessionAttention(SessionResponse)
-    case projectsChanged([ProjectInfo])
+    case workspacesChanged([WorkspaceInfo])
     /// `toplevel` / `common_dir` (proto-v7 additive keys) let a session match
     /// a push by repository even when it has no `project_name`.
-    case gitChanged(projectName: String, toplevel: String? = nil, commonDir: String? = nil)
+    case gitChanged(workspaceName: String, toplevel: String? = nil, commonDir: String? = nil)
     /// A running fetch / pull / push as a whole snapshot: at most four a second
     /// per job, newest counters winning, so a dropped one costs nothing.
     case gitJobProgress(GitJobResponse)
@@ -22,7 +22,7 @@ enum AgentEvent: Equatable, Sendable {
     case voiceChanged(VoiceStatusResponse)
     case autoScanStatus(AutoScanInstanceDto)
     case autoScanListChanged(AutoScanListResponse)
-    case autoScanEvent(projectName: String, seq: Int64, ts: String, payload: ScanProgressPayload)
+    case autoScanEvent(workspaceName: String, seq: Int64, ts: String, payload: ScanProgressPayload)
     case agentStatusChanged(agentId: String, online: Bool)
     case templateCreated(TemplateDto)
     case templateUpdated(TemplateDto)
@@ -54,8 +54,12 @@ struct SessionUpdatedPayload: Codable, Equatable, Sendable {
     let session: SessionResponse
 }
 
-struct ProjectsChangedPayload: Codable, Equatable, Sendable {
-    let projects: [ProjectInfo]
+struct WorkspacesChangedPayload: Codable, Equatable, Sendable {
+    let workspaces: [WorkspaceInfo]
+
+    private enum CodingKeys: String, CodingKey {
+        case workspaces = "projects"
+    }
 }
 
 struct AgentStatusChangedPayload: Codable, Equatable, Sendable {
@@ -86,11 +90,11 @@ enum AgentEnvelopeDemux {
         case "session.attention":
             return decode(SessionUpdatedPayload.self, from: envelope).map { .sessionAttention($0.session) }
         case "projects.changed":
-            return decode(ProjectsChangedPayload.self, from: envelope).map { .projectsChanged($0.projects) }
+            return decode(WorkspacesChangedPayload.self, from: envelope).map { .workspacesChanged($0.workspaces) }
         case "git.changed":
             guard let payload = envelope.payloadObject else { return nil }
             return .gitChanged(
-                projectName: payload["project_name"] as? String ?? "",
+                workspaceName: payload["project_name"] as? String ?? "",
                 toplevel: payload["toplevel"] as? String,
                 commonDir: payload["common_dir"] as? String
             )
@@ -116,14 +120,14 @@ enum AgentEnvelopeDemux {
     /// default. `seq` is 64-bit (can exceed 2^53).
     private static func demuxAutoScanEvent(_ envelope: EventEnvelope) -> AgentEvent? {
         guard let payload = envelope.payloadObject else { return nil }
-        let projectName = payload["project_name"] as? String ?? ""
+        let workspaceName = payload["project_name"] as? String ?? ""
         guard let event = payload["event"] as? [String: Any] else { return nil }
         let seq = (event["seq"] as? NSNumber)?.int64Value ?? 0
         let ts = event["ts"] as? String ?? ""
         let type = event["type"] as? String ?? ""
         let innerPayload = event["payload"] as? [String: Any] ?? [:]
         return .autoScanEvent(
-            projectName: projectName,
+            workspaceName: workspaceName,
             seq: seq,
             ts: ts,
             payload: ScanPayloadParser.parse(type: type, payload: innerPayload)

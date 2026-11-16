@@ -20,7 +20,7 @@ import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.data.network.dto.FsDirsResponse
 import com.mobaide.app.data.network.dto.OpenCodeOptionsModel
-import com.mobaide.app.data.network.dto.ProjectInfo
+import com.mobaide.app.data.network.dto.WorkspaceInfo
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.VersionInfoResponse
 import com.mobaide.app.data.network.dto.WorktreeBaseRef
@@ -29,7 +29,7 @@ import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.GitRepository
 import com.mobaide.app.data.repository.PathSuggestionRepository
-import com.mobaide.app.data.repository.ProjectsRepository
+import com.mobaide.app.data.repository.WorkspacesRepository
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.Runs
@@ -60,8 +60,8 @@ import org.junit.Test
 
 /**
  * Unit tests for [CreateSessionViewModel] — exercises the wizard step flow
- * (ProjectSelect -> ModePick -> StandardConfig / AutoScanConfig), worktree
- * clamping when the selected project is non-git, the `submit()` ->
+ * (WorkspaceSelect -> ModePick -> StandardConfig / AutoScanConfig), worktree
+ * clamping when the selected workspace is non-git, the `submit()` ->
  * [CreateSessionRequest] payload shape, the AutoScan preset defaults, the
  * navigation SharedFlow emissions on success, and the error state on
  * repository failure.
@@ -78,18 +78,18 @@ class CreateSessionViewModelTest {
 
     // ---- Helpers ------------------------------------------------------------
 
-    private fun project(
+    private fun workspace(
         name: String,
         isGit: Boolean = true,
-    ): ProjectInfo = ProjectInfo(name = name, path = "/p/$name", is_git = isGit)
+    ): WorkspaceInfo = WorkspaceInfo(name = name, path = "/p/$name", is_git = isGit)
 
     private class Fixture(
-        val projectsRepo: ProjectsRepository,
+        val workspacesRepo: WorkspacesRepository,
         val sessionRepo: SessionRepository,
         val autoScanRepo: AutoScanRepository,
         val prefs: PreferencesStore,
         val tokenStore: TokenStore,
-        val projectsFlow: MutableStateFlow<List<ProjectInfo>>,
+        val workspacesFlow: MutableStateFlow<List<WorkspaceInfo>>,
         val customTypesRepo: CustomAgentTypesRepository,
         val customTypesFlow: MutableStateFlow<List<CustomAgentTypeDto>>,
         val restApi: RestApi,
@@ -98,27 +98,27 @@ class CreateSessionViewModelTest {
     )
 
     private fun newFixture(
-        initialProjects: List<ProjectInfo> = listOf(
-            project("alpha", isGit = true),
-            project("beta", isGit = false),
+        initialWorkspaces: List<WorkspaceInfo> = listOf(
+            workspace("alpha", isGit = true),
+            workspace("beta", isGit = false),
         ),
-        lastUsedProject: String? = null,
+        lastUsedWorkspace: String? = null,
         autoScanPrompt: String? = "default auto scan prompt",
         agentId: String? = "agent-1",
         agentUrl: String? = null,
         recentCustomPaths: List<String> = emptyList(),
     ): Fixture {
-        val projectsRepo = mockk<ProjectsRepository>(relaxed = true)
+        val workspacesRepo = mockk<WorkspacesRepository>(relaxed = true)
         val sessionRepo = mockk<SessionRepository>(relaxed = true)
         val autoScanRepo = mockk<AutoScanRepository>(relaxed = true)
         val prefs = mockk<PreferencesStore>(relaxed = true)
         val tokenStore = mockk<TokenStore>(relaxed = true)
-        val projectsFlow = MutableStateFlow(initialProjects)
+        val workspacesFlow = MutableStateFlow(initialWorkspaces)
 
-        every { projectsRepo.observeProjects() } returns projectsFlow
-        coEvery { projectsRepo.listProjects() } returns initialProjects
-        coEvery { prefs.getLastUsedProjectName() } returns lastUsedProject
-        coEvery { prefs.setLastUsedProjectName(any()) } just Runs
+        every { workspacesRepo.observeWorkspaces() } returns workspacesFlow
+        coEvery { workspacesRepo.listWorkspaces() } returns initialWorkspaces
+        coEvery { prefs.getLastUsedWorkspaceName() } returns lastUsedWorkspace
+        coEvery { prefs.setLastUsedWorkspaceName(any()) } just Runs
         coEvery { prefs.setLastUsedSessionId(any()) } just Runs
         coEvery { prefs.getLastUsedClaudeOptions() } returns null
         coEvery { prefs.setLastUsedClaudeOptions(any()) } just Runs
@@ -161,14 +161,14 @@ class CreateSessionViewModelTest {
         every { gitRepo.changed } returns gitChanged
 
         return Fixture(
-            projectsRepo, sessionRepo, autoScanRepo, prefs, tokenStore, projectsFlow,
+            workspacesRepo, sessionRepo, autoScanRepo, prefs, tokenStore, workspacesFlow,
             customTypesRepo, customTypesFlow, restApi, gitRepo, gitChanged,
         )
     }
 
     private fun Fixture.buildVm(): CreateSessionViewModel =
         CreateSessionViewModel(
-            projectsRepo, sessionRepo, autoScanRepo, prefs, tokenStore, customTypesRepo,
+            workspacesRepo, sessionRepo, autoScanRepo, prefs, tokenStore, customTypesRepo,
             PathSuggestionRepository(restApi, tokenStore),
             gitRepo,
         )
@@ -176,17 +176,17 @@ class CreateSessionViewModelTest {
     // ---- Wizard step flow --------------------------------------------------
 
     @Test
-    fun wizardFlow_ProjectSelect_to_ModePick_to_StandardConfig() = runTest {
+    fun wizardFlow_WorkspaceSelect_to_ModePick_to_StandardConfig() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
 
-        assertEquals(CreateSessionStep.ProjectSelect, vm.uiState.value.step)
+        assertEquals(CreateSessionStep.WorkspaceSelect, vm.uiState.value.step)
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
-        assertEquals("alpha", vm.uiState.value.selectedProjectName)
+        assertEquals("alpha", vm.uiState.value.selectedWorkspaceName)
 
         vm.selectStandardMode()
         assertEquals(CreateSessionStep.StandardConfig, vm.uiState.value.step)
@@ -198,8 +198,8 @@ class CreateSessionViewModelTest {
         val vm = fx.buildVm()
         advanceUntilIdle()
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.pickMode(CreateSessionMode.Standard)
         vm.selectStandardMode()
 
@@ -207,28 +207,28 @@ class CreateSessionViewModelTest {
         assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
 
         vm.goBack()
-        assertEquals(CreateSessionStep.ProjectSelect, vm.uiState.value.step)
+        assertEquals(CreateSessionStep.WorkspaceSelect, vm.uiState.value.step)
         assertNull(vm.uiState.value.selectedMode)
     }
 
-    // ---- Worktree clamping on non-git project ------------------------------
+    // ---- Worktree clamping on non-git workspace ------------------------------
 
     @Test
-    fun selectProject_nonGit_clampsWorktreeOff_andClearsBranchName() = runTest {
+    fun selectWorkspace_nonGit_clampsWorktreeOff_andClearsBranchName() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
 
-        // User toggled worktree on + set a branch name while a git project
+        // User toggled worktree on + set a branch name while a git workspace
         // was implicitly active...
         vm.toggleWorktree(true)
         vm.setBranchName("feature/x")
         assertTrue(vm.uiState.value.worktree)
         assertEquals("feature/x", vm.uiState.value.branchName)
 
-        // ...then picks a non-git project. The VM must clamp both off.
-        vm.selectProject("beta")
-        assertEquals("beta", vm.uiState.value.selectedProjectName)
+        // ...then picks a non-git workspace. The VM must clamp both off.
+        vm.selectWorkspace("beta")
+        assertEquals("beta", vm.uiState.value.selectedWorkspaceName)
         assertFalse(vm.uiState.value.worktree)
         assertEquals("", vm.uiState.value.branchName)
     }
@@ -249,8 +249,8 @@ class CreateSessionViewModelTest {
                 created_at = "2026-04-11T00:00:00Z",
             )
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectStandardMode()
         vm.toggleNoMemory(true)
         vm.toggleWorktree(true)
@@ -265,7 +265,7 @@ class CreateSessionViewModelTest {
         }
 
         val req = requestSlot.captured
-        assertEquals("alpha", req.project_name)
+        assertEquals("alpha", req.workspace_name)
         val opts = req.claude_options
         assertNotNull(opts)
         assertTrue(opts!!.no_memory)
@@ -277,7 +277,7 @@ class CreateSessionViewModelTest {
         assertNull(opts.append_system_prompt)
         assertTrue(opts.worktree)
         assertEquals("feature/x", opts.branch_name)
-        coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
+        coVerify(exactly = 1) { fx.prefs.setLastUsedWorkspaceName("alpha") }
         coVerify(exactly = 1) { fx.prefs.setLastUsedClaudeOptions(any()) }
         coVerify(exactly = 1) { fx.prefs.setLastUsedSessionId("sess-123") }
         assertFalse(vm.uiState.value.submitting)
@@ -295,7 +295,7 @@ class CreateSessionViewModelTest {
         val prefsSlot = slot<ClaudeLaunchPrefs>()
         coEvery { fx.prefs.setLastUsedClaudeOptions(capture(prefsSlot)) } just Runs
 
-        vm.selectProject("alpha")
+        vm.selectWorkspace("alpha")
         vm.setClaudeModel("opus")
         vm.setClaudeEffort("max")
         vm.setClaudeAppendSystemPrompt("be terse")
@@ -333,7 +333,7 @@ class CreateSessionViewModelTest {
         val prefsSlot = slot<ClaudeLaunchPrefs>()
         coEvery { fx.prefs.setLastUsedClaudeOptions(capture(prefsSlot)) } just Runs
 
-        vm.selectProject("alpha")
+        vm.selectWorkspace("alpha")
         vm.submit()
         advanceUntilIdle()
 
@@ -363,7 +363,7 @@ class CreateSessionViewModelTest {
         val prefsSlot = slot<ClaudeLaunchPrefs>()
         coEvery { fx.prefs.setLastUsedClaudeOptions(capture(prefsSlot)) } just Runs
 
-        vm.selectProject("alpha")
+        vm.selectWorkspace("alpha")
         vm.submit()
         advanceUntilIdle()
 
@@ -538,7 +538,7 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-1", "starting", "2026-04-11T00:00:00Z")
 
-        vm.selectProject("alpha")
+        vm.selectWorkspace("alpha")
         vm.setBranchName("   ") // whitespace-only -> takeIf { it.isNotBlank() } drops it
         vm.submit()
         advanceUntilIdle()
@@ -554,7 +554,7 @@ class CreateSessionViewModelTest {
 
         coEvery { fx.sessionRepo.createSession(any()) } throws RuntimeException("boom")
 
-        vm.selectProject("alpha")
+        vm.selectWorkspace("alpha")
         vm.submit()
         advanceUntilIdle()
 
@@ -573,8 +573,8 @@ class CreateSessionViewModelTest {
         val vm = fx.buildVm()
         advanceUntilIdle()
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectAutoScanMode()
         vm.goBack()
 
@@ -585,18 +585,18 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun selectAutoScanMode_secondCall_sameProject_doesNotOverwriteUserEdits() = runTest {
+    fun selectAutoScanMode_secondCall_sameWorkspace_doesNotOverwriteUserEdits() = runTest {
         val fx = newFixture(autoScanPrompt = "seed")
         val vm = fx.buildVm()
         advanceUntilIdle()
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectAutoScanMode() // seeds defaults
         vm.setInitialPrompt("user edit")
         vm.toggleAutoScanNoMemory(true)
         vm.goBack()
-        vm.selectAutoScanMode() // same project → must NOT re-seed (preserve edits)
+        vm.selectAutoScanMode() // same workspace → must NOT re-seed (preserve edits)
 
         val s = vm.uiState.value
         assertEquals("user edit", s.initialPrompt)
@@ -604,26 +604,26 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun selectAutoScanMode_afterProjectChange_reseedsPromptForNewProject() = runTest {
-        // Switching to a different project mid-wizard must re-seed the prompt
-        // from the new project's saved value, not retain the first project's.
+    fun selectAutoScanMode_afterWorkspaceChange_reseedsPromptForNewWorkspace() = runTest {
+        // Switching to a different workspace mid-wizard must re-seed the prompt
+        // from the new workspace's saved value, not retain the first workspace's.
         val fx = newFixture(
-            initialProjects = listOf(
-                ProjectInfo(name = "alpha", path = "/p/alpha", is_git = true, auto_scan_prompt = "alpha prompt"),
-                ProjectInfo(name = "beta", path = "/p/beta", is_git = true, auto_scan_prompt = "beta prompt"),
+            initialWorkspaces = listOf(
+                WorkspaceInfo(name = "alpha", path = "/p/alpha", is_git = true, auto_scan_prompt = "alpha prompt"),
+                WorkspaceInfo(name = "beta", path = "/p/beta", is_git = true, auto_scan_prompt = "beta prompt"),
             ),
             autoScanPrompt = "agent wide default",
         )
         val vm = fx.buildVm()
         advanceUntilIdle()
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectAutoScanMode()
         assertEquals("alpha prompt", vm.uiState.value.initialPrompt)
 
-        // User goes back, picks a different project, re-enters AutoScan config.
-        vm.selectProject("beta")
+        // User goes back, picks a different workspace, re-enters AutoScan config.
+        vm.selectWorkspace("beta")
         vm.selectAutoScanMode()
 
         val s = vm.uiState.value
@@ -632,12 +632,12 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun selectAutoScanMode_firstCall_fallsBackToAgentDefault_whenProjectHasNoSavedPrompt() = runTest {
-        // A project that has never customized its prompt (auto_scan_prompt = null)
+    fun selectAutoScanMode_firstCall_fallsBackToAgentDefault_whenWorkspaceHasNoSavedPrompt() = runTest {
+        // A workspace that has never customized its prompt (auto_scan_prompt = null)
         // must fall back to the agent-wide default from the AutoScan repository.
         val fx = newFixture(
-            initialProjects = listOf(
-                ProjectInfo(
+            initialWorkspaces = listOf(
+                WorkspaceInfo(
                     name = "alpha",
                     path = "/p/alpha",
                     is_git = true,
@@ -649,8 +649,8 @@ class CreateSessionViewModelTest {
         val vm = fx.buildVm()
         advanceUntilIdle()
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectAutoScanMode()
 
         assertEquals("agent wide default", vm.uiState.value.initialPrompt)
@@ -665,8 +665,8 @@ class CreateSessionViewModelTest {
         val optsSlot = slot<ClaudeOptionsModel>()
         coEvery { fx.autoScanRepo.startScan("alpha", capture(optsSlot)) } just Runs
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectAutoScanMode() // seeds initialPrompt="seed"; request hardcodes worktree=true
 
         vm.navigateToAutoScan.test {
@@ -688,7 +688,7 @@ class CreateSessionViewModelTest {
         assertTrue(opts.worktree)
         assertNull(opts.branch_name)
         assertEquals("seed", opts.initial_prompt)
-        coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
+        coVerify(exactly = 1) { fx.prefs.setLastUsedWorkspaceName("alpha") }
         // Auto Scan persists into its own bucket, never the Claude Code one.
         coVerify(exactly = 1) { fx.prefs.setLastUsedAutoScanOptions(any()) }
         coVerify(exactly = 0) { fx.prefs.setLastUsedClaudeOptions(any()) }
@@ -706,8 +706,8 @@ class CreateSessionViewModelTest {
         val prefsSlot = slot<ClaudeLaunchPrefs>()
         coEvery { fx.prefs.setLastUsedAutoScanOptions(capture(prefsSlot)) } just Runs
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectAutoScanMode()
         vm.toggleAutoScanSkipPermissions(false)
         vm.toggleAutoScanPlanMode(true)
@@ -735,8 +735,8 @@ class CreateSessionViewModelTest {
         val prefsSlot = slot<ClaudeLaunchPrefs>()
         coEvery { fx.prefs.setLastUsedAutoScanOptions(capture(prefsSlot)) } just Runs
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectAutoScanMode()
         vm.toggleClaudeDebug(true) // the STANDARD toggle, a different kind
         vm.submitAutoScan()
@@ -799,8 +799,8 @@ class CreateSessionViewModelTest {
 
         coEvery { fx.autoScanRepo.startScan(any(), any()) } throws RuntimeException("capacity")
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectAutoScanMode()
         vm.submitAutoScan()
         advanceUntilIdle()
@@ -810,49 +810,49 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun onProjectCreated_nonGitProject_clampsWorktreeOff_andClearsBranchName() = runTest {
-        val fx = newFixture(initialProjects = emptyList())
+    fun onWorkspaceCreated_nonGitWorkspace_clampsWorktreeOff_andClearsBranchName() = runTest {
+        val fx = newFixture(initialWorkspaces = emptyList())
         val vm = fx.buildVm()
         advanceUntilIdle()
         vm.toggleWorktree(true)
         vm.setBranchName("feature/x")
 
-        vm.onProjectCreated(project("gamma", isGit = false))
+        vm.onWorkspaceCreated(workspace("gamma", isGit = false))
 
         val s = vm.uiState.value
-        assertEquals("gamma", s.selectedProjectName)
+        assertEquals("gamma", s.selectedWorkspaceName)
         assertFalse(
-            "Worktree must clamp off for a non-git newly-created project",
+            "Worktree must clamp off for a non-git newly-created workspace",
             s.worktree,
         )
         assertEquals("", s.branchName)
     }
 
     @Test
-    fun onProjectCreated_doesNotConsultProjectsList_ignoringStaleEntry() = runTest {
-        // Even when `state.projects` is populated AND happens to
-        // contain a same-named project with a CONFLICTING `is_git` (e.g.
-        // the projects flow hasn't refreshed yet with the latest server
-        // snapshot), `onProjectCreated` must trust the passed-in
-        // ProjectInfo, never `state.projects`. This pins the contract that
-        // `selectProject(name)` would violate.
+    fun onWorkspaceCreated_doesNotConsultWorkspacesList_ignoringStaleEntry() = runTest {
+        // Even when `state.workspaces` is populated AND happens to
+        // contain a same-named workspace with a CONFLICTING `is_git` (e.g.
+        // the workspaces flow hasn't refreshed yet with the latest server
+        // snapshot), `onWorkspaceCreated` must trust the passed-in
+        // WorkspaceInfo, never `state.workspaces`. This pins the contract that
+        // `selectWorkspace(name)` would violate.
         val fx = newFixture(
             // Stale fixture says "gamma" is non-git...
-            initialProjects = listOf(project("gamma", isGit = false)),
+            initialWorkspaces = listOf(workspace("gamma", isGit = false)),
         )
         val vm = fx.buildVm()
         advanceUntilIdle()
         vm.toggleWorktree(true)
         vm.setBranchName("feature/x")
 
-        // ...but the freshly-returned ProjectInfo from the create call says
+        // ...but the freshly-returned WorkspaceInfo from the create call says
         // it IS git. The new method must believe the argument, not the list.
-        vm.onProjectCreated(project("gamma", isGit = true))
+        vm.onWorkspaceCreated(workspace("gamma", isGit = true))
 
         val s = vm.uiState.value
-        assertEquals("gamma", s.selectedProjectName)
+        assertEquals("gamma", s.selectedWorkspaceName)
         assertTrue(
-            "Worktree must follow the passed ProjectInfo.is_git, not state.projects",
+            "Worktree must follow the passed WorkspaceInfo.is_git, not state.workspaces",
             s.worktree,
         )
         assertEquals("feature/x", s.branchName)
@@ -874,8 +874,8 @@ class CreateSessionViewModelTest {
                 created_at = "2026-05-20T00:00:00Z",
             )
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
 
         vm.navigateToSession.test {
             vm.submitCustomShell()
@@ -886,34 +886,34 @@ class CreateSessionViewModelTest {
         }
 
         val req = requestSlot.captured
-        assertEquals("alpha", req.project_name)
+        assertEquals("alpha", req.workspace_name)
         assertNull("Terminal mode must not send claude_options", req.claude_options)
         assertNull("Terminal mode must let server pick _DEFAULT_SHELL", req.command)
-        coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
+        coVerify(exactly = 1) { fx.prefs.setLastUsedWorkspaceName("alpha") }
         coVerify(exactly = 1) { fx.prefs.setLastUsedSessionId("sess-shell") }
     }
 
     @Test
-    fun selectTerminalMode_gitStoredProject_advancesToTerminalConfig_noSubmit() = runTest {
+    fun selectTerminalMode_gitStoredWorkspace_advancesToTerminalConfig_noSubmit() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
 
-        vm.selectProject("alpha") // is_git = true
-        vm.confirmProject()
+        vm.selectWorkspace("alpha") // is_git = true
+        vm.confirmWorkspace()
         vm.pickMode(CreateSessionMode.CustomShell)
 
         vm.selectTerminalMode()
         advanceUntilIdle()
 
-        // A git stored project opens the Terminal session page (worktree
+        // A git stored workspace opens the Terminal session page (worktree
         // toggle) rather than creating the shell immediately.
         assertEquals(CreateSessionStep.TerminalConfig, vm.uiState.value.step)
         coVerify(exactly = 0) { fx.sessionRepo.createSession(any()) }
     }
 
     @Test
-    fun selectTerminalMode_nonGitStoredProject_submitsShellImmediately_noStepChange() = runTest {
+    fun selectTerminalMode_nonGitStoredWorkspace_submitsShellImmediately_noStepChange() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
@@ -922,20 +922,20 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-nongit", "starting", "2026-05-20T00:00:00Z")
 
-        vm.selectProject("beta") // is_git = false
-        vm.confirmProject()
+        vm.selectWorkspace("beta") // is_git = false
+        vm.confirmWorkspace()
         vm.pickMode(CreateSessionMode.CustomShell)
 
         vm.selectTerminalMode()
         advanceUntilIdle()
 
-        // Non-git stored project has nothing to configure -> shell session is
+        // Non-git stored workspace has nothing to configure -> shell session is
         // created immediately, no empty TerminalConfig sheet.
         assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
         coVerify(exactly = 1) { fx.sessionRepo.createSession(any()) }
         val req = requestSlot.captured
         assertNull("Terminal mode must keep claude_options null", req.claude_options)
-        assertFalse("Non-git project must never request a worktree", req.worktree)
+        assertFalse("Non-git workspace must never request a worktree", req.worktree)
     }
 
     @Test
@@ -948,8 +948,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-wt", "starting", "2026-05-20T00:00:00Z")
 
-        vm.selectProject("alpha") // git
-        vm.confirmProject()
+        vm.selectWorkspace("alpha") // git
+        vm.confirmWorkspace()
         vm.pickMode(CreateSessionMode.CustomShell)
         vm.selectTerminalMode()
         assertEquals(CreateSessionStep.TerminalConfig, vm.uiState.value.step)
@@ -960,7 +960,7 @@ class CreateSessionViewModelTest {
         advanceUntilIdle()
 
         val req = requestSlot.captured
-        assertEquals("alpha", req.project_name)
+        assertEquals("alpha", req.workspace_name)
         assertNull("Terminal worktree must travel outside claude_options", req.claude_options)
         assertNull("Terminal mode must let server pick _DEFAULT_SHELL", req.command)
         assertTrue("worktree toggle must propagate to the request", req.worktree)
@@ -1002,9 +1002,9 @@ class CreateSessionViewModelTest {
         val s = vm.uiState.value
         assertTrue(
             "selection must flip to CustomPath after selectCustomPath()",
-            s.selection is ProjectSelection.CustomPath,
+            s.selection is WorkspaceSelection.CustomPath,
         )
-        assertEquals("", (s.selection as ProjectSelection.CustomPath).path)
+        assertEquals("", (s.selection as WorkspaceSelection.CustomPath).path)
         assertEquals("", s.customPathDraft)
         assertNull(s.customPathError)
         assertEquals(listOf("/tmp/foo", "/var/log"), s.recentCustomPaths)
@@ -1047,7 +1047,7 @@ class CreateSessionViewModelTest {
         // When the draft is invalid the selection.path is held at "" so
         // `submit()` cannot ship an invalid request even if the user
         // races through the Continue button.
-        assertEquals("", (s.selection as ProjectSelection.CustomPath).path)
+        assertEquals("", (s.selection as WorkspaceSelection.CustomPath).path)
     }
 
     @Test
@@ -1083,7 +1083,7 @@ class CreateSessionViewModelTest {
         val s = vm.uiState.value
         assertNull(s.customPathError)
         assertEquals(hostAbsolutePath, s.customPathDraft)
-        assertEquals(hostAbsolutePath, (s.selection as ProjectSelection.CustomPath).path)
+        assertEquals(hostAbsolutePath, (s.selection as WorkspaceSelection.CustomPath).path)
     }
 
     @Test
@@ -1100,11 +1100,11 @@ class CreateSessionViewModelTest {
         vm.setCustomPathDraft("  C:/srv/app/ ")
 
         assertEquals("  C:/srv/app/ ", vm.uiState.value.customPathDraft)
-        assertEquals("C:/srv/app", (vm.uiState.value.selection as ProjectSelection.CustomPath).path)
+        assertEquals("C:/srv/app", (vm.uiState.value.selection as WorkspaceSelection.CustomPath).path)
 
         vm.setCustomPathDraft("C:\\")
 
-        assertEquals("C:\\", (vm.uiState.value.selection as ProjectSelection.CustomPath).path)
+        assertEquals("C:\\", (vm.uiState.value.selection as WorkspaceSelection.CustomPath).path)
     }
 
     @Test
@@ -1132,7 +1132,7 @@ class CreateSessionViewModelTest {
         advanceTimeBy(201)
 
         assertEquals("C:/srv/", vm.uiState.value.customPathDraft)
-        assertEquals("C:/srv", (vm.uiState.value.selection as ProjectSelection.CustomPath).path)
+        assertEquals("C:/srv", (vm.uiState.value.selection as WorkspaceSelection.CustomPath).path)
         assertEquals(listOf("app"), vm.customPathSuggestionState.value.names)
     }
 
@@ -1155,7 +1155,7 @@ class CreateSessionViewModelTest {
             "Windows-style absolute path with forward slash must validate as absolute",
             s.customPathError,
         )
-        assertEquals("C:/ML/Projects", (s.selection as ProjectSelection.CustomPath).path)
+        assertEquals("C:/ML/Projects", (s.selection as WorkspaceSelection.CustomPath).path)
     }
 
     @Test
@@ -1170,7 +1170,7 @@ class CreateSessionViewModelTest {
 
         val s = vm.uiState.value
         assertNull(s.customPathError)
-        assertEquals("D:\\ML\\Projects", (s.selection as ProjectSelection.CustomPath).path)
+        assertEquals("D:\\ML\\Projects", (s.selection as WorkspaceSelection.CustomPath).path)
     }
 
     @Test
@@ -1209,7 +1209,7 @@ class CreateSessionViewModelTest {
             s.customPathError,
         )
         assertEquals("the field must not fight the user mid-keystroke", typed, s.customPathDraft)
-        assertEquals(hostAbsolutePath, (s.selection as ProjectSelection.CustomPath).path)
+        assertEquals(hostAbsolutePath, (s.selection as WorkspaceSelection.CustomPath).path)
     }
 
     @Test
@@ -1227,15 +1227,15 @@ class CreateSessionViewModelTest {
 
         val s = vm.uiState.value
         assertNull(s.customPathError)
-        assertEquals("C:/ML/Projects", (s.selection as ProjectSelection.CustomPath).path)
+        assertEquals("C:/ML/Projects", (s.selection as WorkspaceSelection.CustomPath).path)
     }
 
     @Test
-    fun confirmProject_customPathWithLeadingWhitespace_advancesToModePick() = runTest {
+    fun confirmWorkspace_customPathWithLeadingWhitespace_advancesToModePick() = runTest {
         // The user-visible half of the fix: Continue gates on
         // `selection.path.isNotBlank() && customPathError == null`, so before
         // the trim a leading-space paste left the wizard stuck on
-        // ProjectSelect with a disabled button and no way forward but editing.
+        // WorkspaceSelect with a disabled button and no way forward but editing.
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
@@ -1243,7 +1243,7 @@ class CreateSessionViewModelTest {
         advanceUntilIdle()
 
         vm.setCustomPathDraft("  $hostAbsolutePath  ")
-        vm.confirmProject()
+        vm.confirmWorkspace()
 
         assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
     }
@@ -1287,30 +1287,30 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun confirmProject_customPathInvalid_staysOnProjectSelect() = runTest {
+    fun confirmWorkspace_customPathInvalid_staysOnWorkspaceSelect() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
         vm.selectCustomPath()
         advanceUntilIdle()
         // No draft set yet — error is null but selection.path is "".
-        vm.confirmProject()
-        assertEquals(CreateSessionStep.ProjectSelect, vm.uiState.value.step)
+        vm.confirmWorkspace()
+        assertEquals(CreateSessionStep.WorkspaceSelect, vm.uiState.value.step)
 
         // With an invalid draft, still must not advance.
         vm.setCustomPathDraft("nope")
-        vm.confirmProject()
-        assertEquals(CreateSessionStep.ProjectSelect, vm.uiState.value.step)
+        vm.confirmWorkspace()
+        assertEquals(CreateSessionStep.WorkspaceSelect, vm.uiState.value.step)
     }
 
     @Test
-    fun submit_customPath_buildsAdHocRequest_andAddsToRecents_notLastUsedProject() = runTest {
+    fun submit_customPath_buildsAdHocRequest_andAddsToRecents_notLastUsedWorkspace() = runTest {
         // The defining contract of custom-path submit:
-        // (a) send `project_name = null` + `cwd = <path>`,
+        // (a) send `workspace_name = null` + `cwd = <path>`,
         // (b) clamp `worktree=false` + `branch_name=null` so the agent
-        //     doesn't try a worktree dance on a non-project path,
+        //     doesn't try a worktree dance on a non-workspace path,
         // (c) call `addRecentCustomPath(scopeKey, path)`,
-        // (d) NOT call `setLastUsedProjectName` — recents are a separate
+        // (d) NOT call `setLastUsedWorkspaceName` — recents are a separate
         //     concept; `last_used_project_name` should remain untouched.
         val fx = newFixture(agentId = "agent-1")
         val vm = fx.buildVm()
@@ -1320,7 +1320,7 @@ class CreateSessionViewModelTest {
         vm.setCustomPathDraft(hostAbsolutePath)
 
         // Even if the user previously toggled worktree on while a stored
-        // project was active, the CustomPath branch must clamp it off.
+        // workspace was active, the CustomPath branch must clamp it off.
         vm.toggleWorktree(true)
         vm.setBranchName("feature/x")
 
@@ -1328,20 +1328,20 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-adhoc", "starting", "2026-05-20T00:00:00Z")
 
-        vm.confirmProject()
+        vm.confirmWorkspace()
         vm.selectStandardMode()
         vm.submit()
         advanceUntilIdle()
 
         val req = requestSlot.captured
-        assertNull(req.project_name)
+        assertNull(req.workspace_name)
         assertEquals(hostAbsolutePath, req.cwd)
         val opts = req.claude_options
         assertNotNull(opts)
         assertFalse("worktree must be forced false for CustomPath submits", opts!!.worktree)
         assertNull("branch_name must be null for CustomPath submits", opts.branch_name)
         coVerify(exactly = 1) { fx.prefs.addRecentCustomPath("agent-1", hostAbsolutePath) }
-        coVerify(exactly = 0) { fx.prefs.setLastUsedProjectName(any()) }
+        coVerify(exactly = 0) { fx.prefs.setLastUsedWorkspaceName(any()) }
         coVerify(exactly = 1) { fx.prefs.setLastUsedSessionId("sess-adhoc") }
     }
 
@@ -1360,12 +1360,12 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(any()) } returns
             SessionResponse("sess-no-scope", "starting", "2026-05-20T00:00:00Z")
 
-        vm.confirmProject()
+        vm.confirmWorkspace()
         vm.submit()
         advanceUntilIdle()
 
         coVerify(exactly = 0) { fx.prefs.addRecentCustomPath(any(), any()) }
-        coVerify(exactly = 0) { fx.prefs.setLastUsedProjectName(any()) }
+        coVerify(exactly = 0) { fx.prefs.setLastUsedWorkspaceName(any()) }
         coVerify(exactly = 1) { fx.sessionRepo.createSession(any()) }
     }
 
@@ -1402,23 +1402,23 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-adhoc-shell", "starting", "2026-05-20T00:00:00Z")
 
-        vm.confirmProject()
+        vm.confirmWorkspace()
         vm.submitCustomShell()
         advanceUntilIdle()
 
         val req = requestSlot.captured
-        assertNull(req.project_name)
+        assertNull(req.workspace_name)
         assertEquals(hostAbsolutePath, req.cwd)
         assertNull("Terminal mode must not send claude_options", req.claude_options)
         assertNull("Terminal mode must let server pick _DEFAULT_SHELL", req.command)
         coVerify(exactly = 1) { fx.prefs.addRecentCustomPath("agent-1", hostAbsolutePath) }
-        coVerify(exactly = 0) { fx.prefs.setLastUsedProjectName(any()) }
+        coVerify(exactly = 0) { fx.prefs.setLastUsedWorkspaceName(any()) }
     }
 
     @Test
-    fun selectProject_afterCustomPath_clearsDraft_andSwitchesToStored() = runTest {
+    fun selectWorkspace_afterCustomPath_clearsDraft_andSwitchesToStored() = runTest {
         // The dropdown lets the user flip back from "Custom path…" to a
-        // stored project. The CustomPath state (draft, error) must clear
+        // stored workspace. The CustomPath state (draft, error) must clear
         // so a subsequent CustomPath re-select starts fresh.
         val fx = newFixture()
         val vm = fx.buildVm()
@@ -1429,11 +1429,11 @@ class CreateSessionViewModelTest {
         vm.setCustomPathDraft(hostAbsolutePath)
         assertNull(vm.uiState.value.customPathError)
 
-        vm.selectProject("alpha")
+        vm.selectWorkspace("alpha")
 
         val s = vm.uiState.value
-        assertTrue(s.selection is ProjectSelection.Stored)
-        assertEquals("alpha", (s.selection as ProjectSelection.Stored).name)
+        assertTrue(s.selection is WorkspaceSelection.Stored)
+        assertEquals("alpha", (s.selection as WorkspaceSelection.Stored).name)
         assertEquals("", s.customPathDraft)
         assertNull(s.customPathError)
     }
@@ -1460,8 +1460,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-codex", "starting", "2026-06-23T00:00:00Z")
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectCodexMode()
 
         vm.navigateToSession.test {
@@ -1472,7 +1472,7 @@ class CreateSessionViewModelTest {
         }
 
         val req = requestSlot.captured
-        assertEquals("alpha", req.project_name)
+        assertEquals("alpha", req.workspace_name)
         assertEquals("codex", req.cli)
         assertNull("Codex must not send claude_options", req.claude_options)
         val opts = req.codex_options
@@ -1481,7 +1481,7 @@ class CreateSessionViewModelTest {
         assertEquals("on-request", opts.approval)
         assertEquals("high", opts.reasoning_effort)
         assertFalse(opts.full_auto)
-        coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
+        coVerify(exactly = 1) { fx.prefs.setLastUsedWorkspaceName("alpha") }
         coVerify(exactly = 1) { fx.prefs.setLastUsedSessionId("sess-codex") }
         coVerify(exactly = 1) { fx.prefs.setLastUsedCodexOptions(any()) }
         assertFalse(vm.uiState.value.submitting)
@@ -1498,8 +1498,8 @@ class CreateSessionViewModelTest {
         val prefsSlot = slot<CodexLaunchPrefs>()
         coEvery { fx.prefs.setLastUsedCodexOptions(capture(prefsSlot)) } just Runs
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectCodexMode()
         vm.setCodexModel("gpt-5.4-mini")
         vm.setCodexReasoningEffort("low")
@@ -1528,7 +1528,7 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-yolo", "starting", "2026-06-23T00:00:00Z")
 
-        vm.selectProject("alpha")
+        vm.selectWorkspace("alpha")
         vm.selectCodexPreset(CodexAutonomyPreset.FullAccess)
         vm.submitCodex()
         advanceUntilIdle()
@@ -1540,7 +1540,7 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun submitCodex_gitProject_withWorktree_carriesWorktreeAndBranchInCodexOptions() = runTest {
+    fun submitCodex_gitWorkspace_withWorktree_carriesWorktreeAndBranchInCodexOptions() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
@@ -1549,8 +1549,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-wt", "starting", "2026-06-23T00:00:00Z")
 
-        vm.selectProject("alpha") // is_git = true
-        vm.confirmProject()
+        vm.selectWorkspace("alpha") // is_git = true
+        vm.confirmWorkspace()
         vm.selectCodexMode()
         vm.toggleWorktree(true)
         vm.setBranchName("feature/x")
@@ -1584,13 +1584,13 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-codex-adhoc", "starting", "2026-06-23T00:00:00Z")
 
-        vm.confirmProject()
+        vm.confirmWorkspace()
         vm.selectCodexMode()
         vm.submitCodex()
         advanceUntilIdle()
 
         val req = requestSlot.captured
-        assertNull(req.project_name)
+        assertNull(req.workspace_name)
         assertEquals(hostAbsolutePath, req.cwd)
         assertEquals("codex", req.cli)
         val opts = req.codex_options
@@ -1667,8 +1667,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-agy", "starting", "2026-07-02T00:00:00Z")
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectAntigravityMode()
 
         vm.navigateToSession.test {
@@ -1679,7 +1679,7 @@ class CreateSessionViewModelTest {
         }
 
         val req = requestSlot.captured
-        assertEquals("alpha", req.project_name)
+        assertEquals("alpha", req.workspace_name)
         assertEquals("antigravity", req.cli)
         assertNull("Antigravity must not send claude_options", req.claude_options)
         assertNull("Antigravity must not send codex_options", req.codex_options)
@@ -1689,7 +1689,7 @@ class CreateSessionViewModelTest {
         assertFalse("skip_permissions defaults off", opts.skip_permissions)
         assertFalse("sandbox defaults off", opts.sandbox)
         assertTrue("add_dirs defaults empty", opts.add_dirs.isEmpty())
-        coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
+        coVerify(exactly = 1) { fx.prefs.setLastUsedWorkspaceName("alpha") }
         coVerify(exactly = 1) { fx.prefs.setLastUsedSessionId("sess-agy") }
         coVerify(exactly = 1) { fx.prefs.setLastUsedAntigravityOptions(any()) }
         assertFalse(vm.uiState.value.submitting)
@@ -1705,8 +1705,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-agy-model", "starting", "2026-07-02T00:00:00Z")
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectAntigravityMode()
         vm.setAntigravityModel("Gemini 3.1 Pro (High)")
         vm.setAntigravitySkipPermissions(true)
@@ -1730,8 +1730,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-agy-dirs", "starting", "2026-07-02T00:00:00Z")
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectAntigravityMode()
         vm.setAntigravityAddDirsDraft("/a\n/b, /c\n\n")
         vm.submitAntigravity()
@@ -1755,8 +1755,8 @@ class CreateSessionViewModelTest {
         val prefsSlot = slot<AntigravityLaunchPrefs>()
         coEvery { fx.prefs.setLastUsedAntigravityOptions(capture(prefsSlot)) } just Runs
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectAntigravityMode()
         vm.setAntigravityModel("Claude Sonnet 4.6 (Thinking)")
         vm.setAntigravitySandbox(true)
@@ -1774,7 +1774,7 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun submitAntigravity_gitProject_withWorktree_carriesWorktreeAndBranchInAntigravityOptions() = runTest {
+    fun submitAntigravity_gitWorkspace_withWorktree_carriesWorktreeAndBranchInAntigravityOptions() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
@@ -1783,8 +1783,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-agy-wt", "starting", "2026-07-02T00:00:00Z")
 
-        vm.selectProject("alpha") // is_git = true
-        vm.confirmProject()
+        vm.selectWorkspace("alpha") // is_git = true
+        vm.confirmWorkspace()
         vm.selectAntigravityMode()
         vm.toggleWorktree(true)
         vm.setBranchName("feature/x")
@@ -1813,8 +1813,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(any()) } throws
             ApiException(409, """{"detail":{"codex_auth_required":true}}""")
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectCodexMode()
         vm.submitCodex()
         advanceUntilIdle()
@@ -1835,8 +1835,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(any()) } throws
             ApiException(409, """{"codex_auth_required":true,"detail":"Codex sign-in required."}""")
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectCodexMode()
         vm.submitCodex()
         advanceUntilIdle()
@@ -1856,8 +1856,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(any()) } throws
             ApiException(401, """{"detail":"Not authenticated"}""")
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectCodexMode()
         vm.submitCodex()
         advanceUntilIdle()
@@ -1878,8 +1878,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(any()) } throws
             ApiException(401, "not json at all <<<")
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectCodexMode()
         vm.submitCodex()
         advanceUntilIdle()
@@ -1902,8 +1902,8 @@ class CreateSessionViewModelTest {
             SessionResponse("sess-after-login", "starting", "2026-06-23T00:00:00Z")
 
         // The user is on the Codex step with the login dialog open.
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectCodexMode()
         vm.setCodexApiKeyDraft("sk-user-key")
 
@@ -1931,8 +1931,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.codexLogin(secretKey) } throws
             ApiException(400, """{"detail":"Codex login failed: bad key"}""")
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectCodexMode()
         vm.setCodexApiKeyDraft(secretKey)
 
@@ -2476,8 +2476,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.getAgentVersion() } returns
             versionResponse(claude = false, codex = true)
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.refreshCliAvailability()
         advanceUntilIdle()
 
@@ -2497,8 +2497,8 @@ class CreateSessionViewModelTest {
         val vm = fx.buildVm()
         advanceUntilIdle()
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectCodexMode()
 
         assertEquals(CreateSessionStep.CodexConfig, vm.uiState.value.step)
@@ -2564,8 +2564,8 @@ class CreateSessionViewModelTest {
         fx.customTypesFlow.value = listOf(customType(id = "t1"))
         advanceUntilIdle()
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.pickMode(CreateSessionMode.Custom("t1"))
         assertEquals(CreateSessionMode.Custom("t1"), vm.uiState.value.selectedMode)
 
@@ -2576,7 +2576,7 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun selectCustomAgentMode_nonGitProject_submitsImmediately_withCustomCli() = runTest {
+    fun selectCustomAgentMode_nonGitWorkspace_submitsImmediately_withCustomCli() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
@@ -2585,8 +2585,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-custom", "starting", "2026-07-28T00:00:00Z")
 
-        vm.selectProject("beta") // is_git = false
-        vm.confirmProject()
+        vm.selectWorkspace("beta") // is_git = false
+        vm.confirmWorkspace()
         vm.pickMode(CreateSessionMode.Custom("ab12cd34ef56"))
         vm.selectCustomAgentMode("ab12cd34ef56")
         advanceUntilIdle()
@@ -2596,7 +2596,7 @@ class CreateSessionViewModelTest {
         assertEquals("custom_ab12cd34ef56", req.cli)
         assertNull("only the type id goes on the wire, never the command", req.command)
         assertNull("custom types must not send claude_options", req.claude_options)
-        assertFalse("non-git project must never request a worktree", req.worktree)
+        assertFalse("non-git workspace must never request a worktree", req.worktree)
     }
 
     @Test
@@ -2609,8 +2609,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-custom-wt", "starting", "2026-07-28T00:00:00Z")
 
-        vm.selectProject("alpha") // git
-        vm.confirmProject()
+        vm.selectWorkspace("alpha") // git
+        vm.confirmWorkspace()
         vm.pickMode(CreateSessionMode.Custom("ab12cd34ef56"))
         vm.selectCustomAgentMode("ab12cd34ef56")
         assertEquals(CreateSessionStep.TerminalConfig, vm.uiState.value.step)
@@ -2639,8 +2639,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-shell2", "starting", "2026-07-28T00:00:00Z")
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.pickMode(CreateSessionMode.CustomShell)
         vm.selectTerminalMode()
         vm.submitFromTerminalConfig()
@@ -2884,8 +2884,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(any()) } throws
             ApiException(409, """{"agent_update_required":true,"detail":"agent too old"}""")
 
-        vm.selectProject("beta") // non-git -> submits immediately
-        vm.confirmProject()
+        vm.selectWorkspace("beta") // non-git -> submits immediately
+        vm.confirmWorkspace()
         vm.pickMode(CreateSessionMode.Custom("t1"))
         vm.selectCustomAgentMode("t1")
         advanceUntilIdle()
@@ -2907,8 +2907,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(any()) } throws
             ApiException(404, """{"detail":"Custom agent type not found"}""")
 
-        vm.selectProject("beta")
-        vm.confirmProject()
+        vm.selectWorkspace("beta")
+        vm.confirmWorkspace()
         vm.pickMode(CreateSessionMode.Custom("t1"))
         vm.selectCustomAgentMode("t1")
         advanceUntilIdle()
@@ -2919,18 +2919,18 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun submitCustomAgent_projectDeleted404_fallsThroughToGenericError() = runTest {
-        // A custom launch can also 404 for a concurrently-deleted PROJECT
+    fun submitCustomAgent_workspaceDeleted404_fallsThroughToGenericError() = runTest {
+        // A custom launch can also 404 for a concurrently-deleted WORKSPACE
         // (agent-side detail) — same status, different detail string. That
         // must not masquerade as a deleted type nor trigger a type refresh.
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
         coEvery { fx.sessionRepo.createSession(any()) } throws
-            ApiException(404, """{"detail":"Project 'beta' not found"}""")
+            ApiException(404, """{"detail":"Workspace 'beta' not found"}""")
 
-        vm.selectProject("beta")
-        vm.confirmProject()
+        vm.selectWorkspace("beta")
+        vm.confirmWorkspace()
         vm.pickMode(CreateSessionMode.Custom("t1"))
         vm.selectCustomAgentMode("t1")
         advanceUntilIdle()
@@ -2938,7 +2938,7 @@ class CreateSessionViewModelTest {
         assertNotNull(vm.uiState.value.error)
         assertTrue(vm.uiState.value.error!!.startsWith("Failed to create session"))
         assertFalse(vm.uiState.value.submitting)
-        // Only init's cold-start seed — a project 404 must not reconcile types.
+        // Only init's cold-start seed — a workspace 404 must not reconcile types.
         coVerify(exactly = 1) { fx.customTypesRepo.refreshTypes() }
     }
 
@@ -2950,10 +2950,10 @@ class CreateSessionViewModelTest {
         val vm = fx.buildVm()
         advanceUntilIdle()
         coEvery { fx.sessionRepo.createSession(any()) } throws
-            ApiException(404, """{"detail":"project gone"}""")
+            ApiException(404, """{"detail":"workspace gone"}""")
 
-        vm.selectProject("beta")
-        vm.confirmProject()
+        vm.selectWorkspace("beta")
+        vm.confirmWorkspace()
         vm.pickMode(CreateSessionMode.CustomShell)
         vm.selectTerminalMode()
         advanceUntilIdle()
@@ -2972,8 +2972,8 @@ class CreateSessionViewModelTest {
         val vm = fx.buildVm()
         advanceUntilIdle()
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
 
         vm.chooseMode(CreateSessionMode.Standard)
 
@@ -2983,7 +2983,7 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun chooseMode_Custom_nonGitProject_launchesWithThatTypesCli() = runTest {
+    fun chooseMode_Custom_nonGitWorkspace_launchesWithThatTypesCli() = runTest {
         // The tapped card's type id has to survive the dispatch — a custom
         // card must never launch as a plain shell or as another type.
         val fx = newFixture()
@@ -2994,8 +2994,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-tap-custom", "starting", "2026-07-30T00:00:00Z")
 
-        vm.selectProject("beta") // is_git = false
-        vm.confirmProject()
+        vm.selectWorkspace("beta") // is_git = false
+        vm.confirmWorkspace()
 
         vm.chooseMode(CreateSessionMode.Custom("ab12cd34ef56"))
         advanceUntilIdle()
@@ -3016,8 +3016,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.getAgentVersion() } returns
             versionResponse(claude = false, codex = true)
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.refreshCliAvailability()
         advanceUntilIdle()
 
@@ -3039,8 +3039,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.getAgentVersion() } returns
             versionResponse(claude = true, codex = false)
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.refreshCliAvailability()
         advanceUntilIdle()
 
@@ -3053,10 +3053,10 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun chooseMode_AutoScan_projectWithLinearKey_advancesToAutoScanConfig() = runTest {
+    fun chooseMode_AutoScan_workspaceWithLinearKey_advancesToAutoScanConfig() = runTest {
         val fx = newFixture(
-            initialProjects = listOf(
-                ProjectInfo(
+            initialWorkspaces = listOf(
+                WorkspaceInfo(
                     name = "linear",
                     path = "/p/linear",
                     is_git = true,
@@ -3068,8 +3068,8 @@ class CreateSessionViewModelTest {
         val vm = fx.buildVm()
         advanceUntilIdle()
 
-        vm.selectProject("linear")
-        vm.confirmProject()
+        vm.selectWorkspace("linear")
+        vm.confirmWorkspace()
 
         vm.chooseMode(CreateSessionMode.AutoScan)
 
@@ -3080,15 +3080,15 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun chooseMode_AutoScan_projectWithoutLinearKey_isBlocked() = runTest {
-        // Auto Scan reads the selected project's Linear issues, so a project
+    fun chooseMode_AutoScan_workspaceWithoutLinearKey_isBlocked() = runTest {
+        // Auto Scan reads the selected workspace's Linear issues, so a workspace
         // with no stored key must not commit — and must not seed the config.
         val fx = newFixture(autoScanPrompt = "seed")
         val vm = fx.buildVm()
         advanceUntilIdle()
 
-        vm.selectProject("alpha") // has_linear_key defaults to false
-        vm.confirmProject()
+        vm.selectWorkspace("alpha") // has_linear_key defaults to false
+        vm.confirmWorkspace()
 
         vm.chooseMode(CreateSessionMode.AutoScan)
 
@@ -3100,12 +3100,12 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun chooseMode_AutoScan_customPath_isBlocked_despiteALinearKeyedProject() = runTest {
-        // The key must be read off the SELECTED stored project — a custom path
-        // has none, and another project's key must not stand in for it.
+    fun chooseMode_AutoScan_customPath_isBlocked_despiteALinearKeyedWorkspace() = runTest {
+        // The key must be read off the SELECTED stored workspace — a custom path
+        // has none, and another workspace's key must not stand in for it.
         val fx = newFixture(
-            initialProjects = listOf(
-                ProjectInfo(
+            initialWorkspaces = listOf(
+                WorkspaceInfo(
                     name = "linear",
                     path = "/p/linear",
                     is_git = true,
@@ -3118,7 +3118,7 @@ class CreateSessionViewModelTest {
 
         vm.selectCustomPath()
         vm.setCustomPathDraft(hostAbsolutePath)
-        vm.confirmProject()
+        vm.confirmWorkspace()
         advanceUntilIdle()
         assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
 
@@ -3142,8 +3142,8 @@ class CreateSessionViewModelTest {
         val gate = CompletableDeferred<SessionResponse>()
         coEvery { fx.sessionRepo.createSession(any()) } coAnswers { gate.await() }
 
-        vm.selectProject("beta") // non-git -> launches on tap
-        vm.confirmProject()
+        vm.selectWorkspace("beta") // non-git -> launches on tap
+        vm.confirmWorkspace()
         vm.chooseMode(CreateSessionMode.CustomShell)
         advanceUntilIdle()
         assertTrue(vm.uiState.value.submitting)
@@ -3185,8 +3185,8 @@ class CreateSessionViewModelTest {
         val prefsSlot = slot<CodexLaunchPrefs>()
         coEvery { fx.prefs.setLastUsedCodexOptions(capture(prefsSlot)) } just Runs
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectCodexMode()
         setUp(vm)
         vm.submitCodex()
@@ -3253,8 +3253,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-resumed", "starting", "2026-11-08T00:00:00Z")
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectCodexMode()
         vm.selectCodexPreset(CodexAutonomyPreset.ReadOnly)
         vm.toggleWorktree(true)
@@ -3264,7 +3264,7 @@ class CreateSessionViewModelTest {
 
         val request = requestSlot.captured
         assertEquals("codex", request.cli)
-        assertEquals("alpha", request.project_name)
+        assertEquals("alpha", request.workspace_name)
         assertNull(request.cwd)
         assertEquals(SessionResponse.UI_CHAT, request.ui)
         assertEquals("external-2222", request.chat_resume_id)
@@ -3285,13 +3285,13 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-resumed", "starting", "2026-11-08T00:00:00Z")
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectCodexMode()
         vm.resumeChatSession("codex", ChatStoredSession(session_id = "external-1111", cwd = "/srv/other"))
         advanceUntilIdle()
 
-        assertNull(requestSlot.captured.project_name)
+        assertNull(requestSlot.captured.workspace_name)
         assertEquals("/srv/other", requestSlot.captured.cwd)
         assertEquals("codex", requestSlot.captured.cli)
     }
@@ -3304,8 +3304,8 @@ class CreateSessionViewModelTest {
             SessionResponse("sess-resumed", "starting", "2026-11-08T00:00:00Z")
         coEvery { fx.sessionRepo.codexLogin("sk-user-key") } returns CodexLoginResponse(authenticated = true)
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectCodexMode()
         vm.resumeChatSession("codex", ChatStoredSession(session_id = "external-2222", cwd = "/srv/other"))
         advanceUntilIdle()
@@ -3345,7 +3345,7 @@ class CreateSessionViewModelTest {
 
         assertEquals(2, requests.size)
         assertNull(requests[1].chat_resume_id)
-        assertEquals("alpha", requests[1].project_name)
+        assertEquals("alpha", requests[1].workspace_name)
         assertEquals("codex", requests[1].cli)
     }
 
@@ -3365,8 +3365,8 @@ class CreateSessionViewModelTest {
         val prefsSlot = slot<AntigravityLaunchPrefs>()
         coEvery { fx.prefs.setLastUsedAntigravityOptions(capture(prefsSlot)) } just Runs
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectAntigravityMode()
         setUp(vm)
         vm.submitAntigravity()
@@ -3453,8 +3453,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-agy-resumed", "starting", "2026-11-09T00:00:00Z")
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectAntigravityMode()
         vm.setAntigravityModel("Gemini 3.8 Flash (High)")
         vm.setAntigravitySandbox(true)
@@ -3466,7 +3466,7 @@ class CreateSessionViewModelTest {
 
         val request = requestSlot.captured
         assertEquals("antigravity", request.cli)
-        assertEquals("alpha", request.project_name)
+        assertEquals("alpha", request.workspace_name)
         assertNull(request.cwd)
         assertEquals(SessionResponse.UI_CHAT, request.ui)
         assertEquals("external-2222", request.chat_resume_id)
@@ -3496,8 +3496,8 @@ class CreateSessionViewModelTest {
             SessionResponse("sess-opencode", "starting", "2026-11-12T00:00:00Z")
         coEvery { fx.prefs.setLastUsedOpenCodeOptions(capture(prefsSlot)) } just Runs
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectOpenCodeMode()
         configure(vm)
         vm.submitOpenCode()
@@ -3510,7 +3510,7 @@ class CreateSessionViewModelTest {
         val fx = newFixture()
         val (request, saved) = opencodeSubmit(fx)
 
-        assertEquals("alpha", request.project_name)
+        assertEquals("alpha", request.workspace_name)
         assertEquals("opencode", request.cli)
         assertEquals(SessionResponse.UI_CHAT, request.ui)
         assertNull("OpenCode must not send claude_options", request.claude_options)
@@ -3574,7 +3574,7 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-opencode-path", "starting", "2026-11-12T00:00:00Z")
 
-        // A worktree choice left over from a git project must not follow the
+        // A worktree choice left over from a git workspace must not follow the
         // user to a one-off folder.
         vm.toggleWorktree(true)
         vm.setBranchName("feature/x")
@@ -3586,7 +3586,7 @@ class CreateSessionViewModelTest {
         advanceUntilIdle()
 
         val request = requestSlot.captured
-        assertNull(request.project_name)
+        assertNull(request.workspace_name)
         assertEquals("/tmp/scratch", request.cwd)
         assertEquals("opencode", request.cli)
         val options = request.opencode_options!!
@@ -3605,8 +3605,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-opencode-connect", "starting", "2026-11-12T00:00:00Z")
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectOpenCodeMode()
         // Options of the agent session the user did not launch.
         vm.setOpenCodeAutoApprove(true)
@@ -3616,7 +3616,7 @@ class CreateSessionViewModelTest {
         advanceUntilIdle()
 
         val request = requestSlot.captured
-        assertEquals("alpha", request.project_name)
+        assertEquals("alpha", request.workspace_name)
         assertEquals("opencode", request.cli)
         // `opencode auth login` is a terminal program, whatever the chat support.
         assertEquals(SessionResponse.UI_TERMINAL, request.ui)
@@ -3643,7 +3643,7 @@ class CreateSessionViewModelTest {
         advanceUntilIdle()
 
         val request = requestSlot.captured
-        assertNull(request.project_name)
+        assertNull(request.workspace_name)
         assertEquals("/tmp/scratch", request.cwd)
         assertEquals(SessionResponse.UI_TERMINAL, request.ui)
         assertEquals(OpenCodeOptionsModel(connect = true), request.opencode_options)
@@ -3673,8 +3673,8 @@ class CreateSessionViewModelTest {
             versionResponse(claude = true, codex = true)
         val vm = fx.buildVm()
         advanceUntilIdle()
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
 
         vm.refreshCliAvailability()
         advanceUntilIdle()
@@ -3737,8 +3737,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-opencode-resumed", "starting", "2026-11-12T00:00:00Z")
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectOpenCodeMode()
         vm.setOpenCodeAutoApprove(true)
         vm.toggleWorktree(true)
@@ -3748,7 +3748,7 @@ class CreateSessionViewModelTest {
 
         val request = requestSlot.captured
         assertEquals("opencode", request.cli)
-        assertEquals("alpha", request.project_name)
+        assertEquals("alpha", request.workspace_name)
         assertNull(request.cwd)
         assertEquals(SessionResponse.UI_CHAT, request.ui)
         assertEquals("external-2222", request.chat_resume_id)
@@ -3778,8 +3778,8 @@ class CreateSessionViewModelTest {
         val prefsSlot = slot<CopilotLaunchPrefs>()
         coEvery { fx.prefs.setLastUsedCopilotOptions(capture(prefsSlot)) } just Runs
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectCopilotMode()
         setUp(vm)
         vm.submitCopilot()
@@ -3798,7 +3798,7 @@ class CreateSessionViewModelTest {
             vm.setBranchName("feature/x")
         }
 
-        assertEquals("alpha", request.project_name)
+        assertEquals("alpha", request.workspace_name)
         assertEquals("copilot", request.cli)
         assertEquals(SessionResponse.UI_CHAT, request.ui)
         assertNull("Copilot must not send claude_options", request.claude_options)
@@ -3869,14 +3869,14 @@ class CreateSessionViewModelTest {
         vm.setCustomPathDraft(hostAbsolutePath)
         vm.toggleWorktree(true)
         vm.setBranchName("feature/x")
-        vm.confirmProject()
+        vm.confirmWorkspace()
         vm.selectCopilotMode()
         vm.setCopilotAllowAll(true)
         vm.submitCopilot()
         advanceUntilIdle()
 
         val request = requestSlot.captured
-        assertNull(request.project_name)
+        assertNull(request.workspace_name)
         assertEquals(hostAbsolutePath, request.cwd)
         assertEquals("copilot", request.cli)
         val options = request.copilot_options
@@ -3896,8 +3896,8 @@ class CreateSessionViewModelTest {
             versionResponse(claude = true, codex = true)
         val vm = fx.buildVm()
         advanceUntilIdle()
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
 
         vm.refreshCliAvailability()
         advanceUntilIdle()
@@ -3969,8 +3969,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-copilot-resumed", "starting", "2026-11-12T00:00:00Z")
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectCopilotMode()
         vm.setCopilotAllowAll(true)
         vm.toggleWorktree(true)
@@ -3980,7 +3980,7 @@ class CreateSessionViewModelTest {
 
         val request = requestSlot.captured
         assertEquals("copilot", request.cli)
-        assertEquals("alpha", request.project_name)
+        assertEquals("alpha", request.workspace_name)
         assertNull(request.cwd)
         assertEquals(SessionResponse.UI_CHAT, request.ui)
         assertEquals("external-3333", request.chat_resume_id)
@@ -4010,8 +4010,8 @@ class CreateSessionViewModelTest {
         val prefsSlot = slot<CursorLaunchPrefs>()
         coEvery { fx.prefs.setLastUsedCursorOptions(capture(prefsSlot)) } just Runs
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectCursorMode()
         setUp(vm)
         vm.submitCursor()
@@ -4030,7 +4030,7 @@ class CreateSessionViewModelTest {
             vm.setBranchName("feature/x")
         }
 
-        assertEquals("alpha", request.project_name)
+        assertEquals("alpha", request.workspace_name)
         assertEquals("cursor", request.cli)
         assertEquals(SessionResponse.UI_CHAT, request.ui)
         assertNull("Cursor must not send claude_options", request.claude_options)
@@ -4121,14 +4121,14 @@ class CreateSessionViewModelTest {
         vm.setCustomPathDraft(hostAbsolutePath)
         vm.toggleWorktree(true)
         vm.setBranchName("feature/x")
-        vm.confirmProject()
+        vm.confirmWorkspace()
         vm.selectCursorMode()
         vm.setCursorForce(true)
         vm.submitCursor()
         advanceUntilIdle()
 
         val request = requestSlot.captured
-        assertNull(request.project_name)
+        assertNull(request.workspace_name)
         assertEquals(hostAbsolutePath, request.cwd)
         assertEquals("cursor", request.cli)
         val options = request.cursor_options
@@ -4148,8 +4148,8 @@ class CreateSessionViewModelTest {
             versionResponse(claude = true, codex = true)
         val vm = fx.buildVm()
         advanceUntilIdle()
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
 
         vm.refreshCliAvailability()
         advanceUntilIdle()
@@ -4218,8 +4218,8 @@ class CreateSessionViewModelTest {
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectCursorMode()
         assertEquals(CreateSessionStep.CursorConfig, vm.uiState.value.step)
 
@@ -4237,8 +4237,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-cursor-resumed", "starting", "2026-11-13T00:00:00Z")
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectCursorMode()
         vm.setCursorForce(true)
         vm.toggleWorktree(true)
@@ -4248,7 +4248,7 @@ class CreateSessionViewModelTest {
 
         val request = requestSlot.captured
         assertEquals("cursor", request.cli)
-        assertEquals("alpha", request.project_name)
+        assertEquals("alpha", request.workspace_name)
         assertNull(request.cwd)
         assertEquals(SessionResponse.UI_CHAT, request.ui)
         assertEquals("external-4444", request.chat_resume_id)
@@ -4278,8 +4278,8 @@ class CreateSessionViewModelTest {
         val prefsSlot = slot<PiLaunchPrefs>()
         coEvery { fx.prefs.setLastUsedPiOptions(capture(prefsSlot)) } just Runs
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectPiMode()
         setUp(vm)
         vm.submitPi()
@@ -4297,7 +4297,7 @@ class CreateSessionViewModelTest {
             vm.setBranchName("feature/x")
         }
 
-        assertEquals("alpha", request.project_name)
+        assertEquals("alpha", request.workspace_name)
         assertEquals("pi", request.cli)
         assertEquals(SessionResponse.UI_CHAT, request.ui)
         assertNull("Pi must not send claude_options", request.claude_options)
@@ -4360,13 +4360,13 @@ class CreateSessionViewModelTest {
         vm.setCustomPathDraft(hostAbsolutePath)
         vm.toggleWorktree(true)
         vm.setBranchName("feature/x")
-        vm.confirmProject()
+        vm.confirmWorkspace()
         vm.selectPiMode()
         vm.submitPi()
         advanceUntilIdle()
 
         val request = requestSlot.captured
-        assertNull(request.project_name)
+        assertNull(request.workspace_name)
         assertEquals(hostAbsolutePath, request.cwd)
         assertEquals("pi", request.cli)
         val options = request.pi_options
@@ -4385,8 +4385,8 @@ class CreateSessionViewModelTest {
             versionResponse(claude = true, codex = true)
         val vm = fx.buildVm()
         advanceUntilIdle()
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
 
         vm.refreshCliAvailability()
         advanceUntilIdle()
@@ -4440,8 +4440,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-pi-resumed", "starting", "2026-11-13T00:00:00Z")
 
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.selectPiMode()
         vm.toggleWorktree(true)
         vm.setBranchName("feature/x")
@@ -4450,7 +4450,7 @@ class CreateSessionViewModelTest {
 
         val request = requestSlot.captured
         assertEquals("pi", request.cli)
-        assertEquals("alpha", request.project_name)
+        assertEquals("alpha", request.workspace_name)
         assertNull(request.cwd)
         assertEquals(SessionResponse.UI_CHAT, request.ui)
         assertEquals("external-4444", request.chat_resume_id)
@@ -4488,8 +4488,8 @@ class CreateSessionViewModelTest {
         coEvery { fx.sessionRepo.getAgentVersion() } returns worktreeBaseVersion(capability)
         val vm = fx.buildVm()
         advanceUntilIdle()
-        vm.selectProject("alpha")
-        vm.confirmProject()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
         vm.refreshCliAvailability()
         advanceUntilIdle()
         vm.toggleWorktree(true)
@@ -4507,24 +4507,24 @@ class CreateSessionViewModelTest {
     @Test
     fun baseBranch_preselectsDefault_withoutLastUsed_andNullWithNeither() = runTest {
         val fx = newFixture(
-            initialProjects = listOf(project("alpha"), project("gamma")),
+            initialWorkspaces = listOf(workspace("alpha"), workspace("gamma")),
         )
         coEvery { fx.gitRepo.worktreeBases("alpha") } returns bases("origin/main", null, "origin/main", "wip")
         coEvery { fx.gitRepo.worktreeBases("gamma") } returns bases(null, null, "wip")
         val vm = worktreeVm(fx)
         assertEquals("origin/main", vm.uiState.value.baseBranch)
 
-        vm.selectProject("gamma")
+        vm.selectWorkspace("gamma")
         advanceUntilIdle()
-        assertEquals("gamma", vm.uiState.value.baseBranchesProject)
+        assertEquals("gamma", vm.uiState.value.baseBranchesWorkspace)
         assertNull(vm.uiState.value.baseBranch)
         assertTrue(vm.uiState.value.baseBranches is BaseBranchesLoad.Loaded)
     }
 
     @Test
-    fun baseBranch_projectChange_resetsManualPick_andReloads() = runTest {
+    fun baseBranch_workspaceChange_resetsManualPick_andReloads() = runTest {
         val fx = newFixture(
-            initialProjects = listOf(project("alpha"), project("gamma")),
+            initialWorkspaces = listOf(workspace("alpha"), workspace("gamma")),
         )
         coEvery { fx.gitRepo.worktreeBases("alpha") } returns
             bases("origin/main", null, "origin/main", "feature/a")
@@ -4535,15 +4535,15 @@ class CreateSessionViewModelTest {
         vm.selectBaseBranch("feature/a")
         assertEquals("feature/a", vm.uiState.value.baseBranch)
 
-        vm.selectProject("gamma")
+        vm.selectWorkspace("gamma")
         assertTrue(vm.uiState.value.baseBranches is BaseBranchesLoad.Loading)
         assertFalse(vm.uiState.value.baseBranchPicked)
         advanceUntilIdle()
         assertEquals("origin/rel", vm.uiState.value.baseBranch)
 
-        // Re-selecting the same project keeps the list and the pick.
+        // Re-selecting the same workspace keeps the list and the pick.
         vm.selectBaseBranch(null)
-        vm.selectProject("gamma")
+        vm.selectWorkspace("gamma")
         advanceUntilIdle()
         assertNull(vm.uiState.value.baseBranch)
         assertTrue(vm.uiState.value.baseBranchPicked)

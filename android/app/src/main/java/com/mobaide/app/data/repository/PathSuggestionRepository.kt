@@ -19,7 +19,7 @@ data class FsSupport(val dirs: Boolean, val windowsPaths: Boolean) {
 }
 
 /**
- * Folder listings behind the host-path fields, cached per agent so the project
+ * Folder listings behind the host-path fields, cached per agent so the workspace
  * form and the session wizard share what either has already fetched.
  */
 class PathSuggestionRepository(

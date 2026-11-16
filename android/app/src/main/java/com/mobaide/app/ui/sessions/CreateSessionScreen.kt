@@ -120,15 +120,15 @@ import com.mobaide.app.ui.common.DragHandleIcon
 import com.mobaide.app.ui.common.PathSuggestionsUi
 import com.mobaide.app.ui.common.PathTextField
 import com.mobaide.app.ui.common.SecretTextField
-import com.mobaide.app.ui.projects.ProjectFormSheet
-import com.mobaide.app.ui.projects.ProjectsUiEvent
-import com.mobaide.app.ui.projects.ProjectsViewModel
+import com.mobaide.app.ui.workspaces.WorkspaceFormSheet
+import com.mobaide.app.ui.workspaces.WorkspacesUiEvent
+import com.mobaide.app.ui.workspaces.WorkspacesViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CreateSessionScreen(
     viewModel: CreateSessionViewModel,
-    projectsViewModel: ProjectsViewModel,
+    workspacesViewModel: WorkspacesViewModel,
     onBack: () -> Unit,
     onSessionCreated: (String) -> Unit,
     onAutoScanStarted: (String) -> Unit,
@@ -142,30 +142,30 @@ fun CreateSessionScreen(
         chatResumeViewModel.open(kind, state.selectedFolder, (chat as? ChatSupport.Available)?.live == true)
         showResume = true
     }
-    val projectsState by projectsViewModel.uiState.collectAsStateWithLifecycle()
+    val workspacesState by workspacesViewModel.uiState.collectAsStateWithLifecycle()
     val customPathSuggestions by viewModel.customPathSuggestionState.collectAsStateWithLifecycle()
-    val projectPathSuggestions by projectsViewModel.pathSuggestionState.collectAsStateWithLifecycle()
+    val workspacePathSuggestions by workspacesViewModel.pathSuggestionState.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(viewModel) {
         viewModel.navigateToSession.collect { sessionId -> onSessionCreated(sessionId) }
     }
     LaunchedEffect(viewModel) {
-        viewModel.navigateToAutoScan.collect { projectName -> onAutoScanStarted(projectName) }
+        viewModel.navigateToAutoScan.collect { workspaceName -> onAutoScanStarted(workspaceName) }
     }
     LaunchedEffect(viewModel) {
         viewModel.transientMessages.collect { msg -> snackbar.showSnackbar(msg) }
     }
-    LaunchedEffect(projectsViewModel) {
-        projectsViewModel.projectCreated.collect { newProject ->
-            viewModel.onProjectCreated(newProject)
+    LaunchedEffect(workspacesViewModel) {
+        workspacesViewModel.workspaceCreated.collect { newWorkspace ->
+            viewModel.onWorkspaceCreated(newWorkspace)
         }
     }
-    LaunchedEffect(projectsViewModel) {
+    LaunchedEffect(workspacesViewModel) {
         // Only Message events apply to the create-only flow on this screen.
-        // DeletedWithUndo / LinearKeyReminder / CloseSheet belong to ProjectsScreen.
-        projectsViewModel.events.collect { event ->
-            if (event is ProjectsUiEvent.Message) snackbar.showSnackbar(event.text)
+        // DeletedWithUndo / LinearKeyReminder / CloseSheet belong to WorkspacesScreen.
+        workspacesViewModel.events.collect { event ->
+            if (event is WorkspacesUiEvent.Message) snackbar.showSnackbar(event.text)
         }
     }
     LaunchedEffect(state.error) {
@@ -189,12 +189,12 @@ fun CreateSessionScreen(
     }
 
     // System back navigates between steps before exiting the screen.
-    BackHandler(enabled = state.step != CreateSessionStep.ProjectSelect) {
+    BackHandler(enabled = state.step != CreateSessionStep.WorkspaceSelect) {
         viewModel.goBack()
     }
 
     val onTopBarBack: () -> Unit = {
-        if (state.step == CreateSessionStep.ProjectSelect) onBack() else viewModel.goBack()
+        if (state.step == CreateSessionStep.WorkspaceSelect) onBack() else viewModel.goBack()
     }
 
     PixelScaffold(
@@ -203,7 +203,7 @@ fun CreateSessionScreen(
                 title = {
                     Text(
                         when (state.step) {
-                            CreateSessionStep.ProjectSelect -> "New Session"
+                            CreateSessionStep.WorkspaceSelect -> "New Session"
                             CreateSessionStep.ModePick -> "Select mode"
                             CreateSessionStep.StandardConfig -> "Claude code session"
                             CreateSessionStep.CodexConfig -> "Codex session"
@@ -245,33 +245,33 @@ fun CreateSessionScreen(
             .padding(padding)
             .windowInsetsPadding(WindowInsets.ime.exclude(WindowInsets.systemBars))
         run {
-            val storedProject = (state.selection as? ProjectSelection.Stored)?.let { sel ->
-                state.projects.firstOrNull { it.name == sel.name }
+            val storedWorkspace = (state.selection as? WorkspaceSelection.Stored)?.let { sel ->
+                state.workspaces.firstOrNull { it.name == sel.name }
             }
-            val customPathSelected = state.selection as? ProjectSelection.CustomPath
+            val customPathSelected = state.selection as? WorkspaceSelection.CustomPath
             val modeHeader = when (val sel = state.selection) {
-                is ProjectSelection.Stored -> ModeHeader(
-                    title = storedProject?.name ?: sel.name,
-                    subtitle = storedProject?.path,
+                is WorkspaceSelection.Stored -> ModeHeader(
+                    title = storedWorkspace?.name ?: sel.name,
+                    subtitle = storedWorkspace?.path,
                 )
-                is ProjectSelection.CustomPath -> ModeHeader(
+                is WorkspaceSelection.CustomPath -> ModeHeader(
                     title = "Custom path",
                     subtitle = sel.path,
                 )
-                ProjectSelection.None -> ModeHeader(
+                WorkspaceSelection.None -> ModeHeader(
                     title = "",
                     subtitle = null,
                 )
             }
 
             when (state.step) {
-                CreateSessionStep.ProjectSelect -> ProjectSelectStep(
+                CreateSessionStep.WorkspaceSelect -> WorkspaceSelectStep(
                     state = state,
                     customPathSelected = customPathSelected != null,
                     modifier = bodyModifier,
-                    onSelect = viewModel::selectProject,
-                    onReorder = viewModel::reorderProjects,
-                    onMove = viewModel::moveProject,
+                    onSelect = viewModel::selectWorkspace,
+                    onReorder = viewModel::reorderWorkspaces,
+                    onMove = viewModel::moveWorkspace,
                     onCustomPathSelected = viewModel::selectCustomPath,
                     onCustomPathChange = viewModel::setCustomPathDraft,
                     onPickRecentCustomPath = viewModel::pickRecentCustomPath,
@@ -279,8 +279,8 @@ fun CreateSessionScreen(
                     customPathSuggestions = customPathSuggestions,
                     onCustomPathFocusChange = viewModel::onCustomPathFocusChange,
                     onPickCustomPathSuggestion = viewModel::pickCustomPathSuggestion,
-                    onCreateProjectClicked = projectsViewModel::openCreateSheet,
-                    onContinue = viewModel::confirmProject,
+                    onCreateWorkspaceClicked = workspacesViewModel::openCreateSheet,
+                    onContinue = viewModel::confirmWorkspace,
                 )
                 CreateSessionStep.ModePick -> ModePickerStep(
                     header = modeHeader,
@@ -302,50 +302,50 @@ fun CreateSessionScreen(
                     when (state.step) {
                         CreateSessionStep.StandardConfig -> StandardConfigSection(
                             state = state,
-                            showWorktreeToggle = state.selection is ProjectSelection.Stored &&
-                                storedProject?.is_git == true,
+                            showWorktreeToggle = state.selection is WorkspaceSelection.Stored &&
+                                storedWorkspace?.is_git == true,
                             viewModel = viewModel,
                             onContinueSession = { openResume("claude", state.claudeChat) },
                         )
                         CreateSessionStep.CodexConfig -> CodexConfigSection(
                             state = state,
-                            showWorktreeToggle = state.selection is ProjectSelection.Stored &&
-                                storedProject?.is_git == true,
+                            showWorktreeToggle = state.selection is WorkspaceSelection.Stored &&
+                                storedWorkspace?.is_git == true,
                             viewModel = viewModel,
                             onContinueSession = { openResume("codex", state.codexChat) },
                         )
                         CreateSessionStep.AntigravityConfig -> AntigravityConfigSection(
                             state = state,
-                            showWorktreeToggle = state.selection is ProjectSelection.Stored &&
-                                storedProject?.is_git == true,
+                            showWorktreeToggle = state.selection is WorkspaceSelection.Stored &&
+                                storedWorkspace?.is_git == true,
                             viewModel = viewModel,
                             onContinueSession = { openResume("antigravity", state.antigravityChat) },
                         )
                         CreateSessionStep.OpenCodeConfig -> OpenCodeConfigSection(
                             state = state,
-                            showWorktreeToggle = state.selection is ProjectSelection.Stored &&
-                                storedProject?.is_git == true,
+                            showWorktreeToggle = state.selection is WorkspaceSelection.Stored &&
+                                storedWorkspace?.is_git == true,
                             viewModel = viewModel,
                             onContinueSession = { openResume("opencode", state.opencodeChat) },
                         )
                         CreateSessionStep.CopilotConfig -> CopilotConfigSection(
                             state = state,
-                            showWorktreeToggle = state.selection is ProjectSelection.Stored &&
-                                storedProject?.is_git == true,
+                            showWorktreeToggle = state.selection is WorkspaceSelection.Stored &&
+                                storedWorkspace?.is_git == true,
                             viewModel = viewModel,
                             onContinueSession = { openResume("copilot", state.copilotChat) },
                         )
                         CreateSessionStep.CursorConfig -> CursorConfigSection(
                             state = state,
-                            showWorktreeToggle = state.selection is ProjectSelection.Stored &&
-                                storedProject?.is_git == true,
+                            showWorktreeToggle = state.selection is WorkspaceSelection.Stored &&
+                                storedWorkspace?.is_git == true,
                             viewModel = viewModel,
                             onContinueSession = { openResume("cursor", state.cursorChat) },
                         )
                         CreateSessionStep.PiConfig -> PiConfigSection(
                             state = state,
-                            showWorktreeToggle = state.selection is ProjectSelection.Stored &&
-                                storedProject?.is_git == true,
+                            showWorktreeToggle = state.selection is WorkspaceSelection.Stored &&
+                                storedWorkspace?.is_git == true,
                             viewModel = viewModel,
                             onContinueSession = { openResume("pi", state.piChat) },
                         )
@@ -357,7 +357,7 @@ fun CreateSessionScreen(
                             state = state,
                             viewModel = viewModel,
                         )
-                        CreateSessionStep.ProjectSelect, CreateSessionStep.ModePick -> Unit
+                        CreateSessionStep.WorkspaceSelect, CreateSessionStep.ModePick -> Unit
                     }
                 }
             }
@@ -405,31 +405,31 @@ fun CreateSessionScreen(
         )
     }
 
-    val form = projectsState.form
+    val form = workspacesState.form
     if (form != null) {
-        ProjectFormSheet(
+        WorkspaceFormSheet(
             state = form,
-            onDismiss = projectsViewModel::closeSheet,
-            onNameChange = projectsViewModel::onNameChange,
-            onPathChange = projectsViewModel::onPathChange,
-            onCondaChange = projectsViewModel::onCondaChange,
-            onLinearKeyChange = projectsViewModel::onLinearKeyChange,
-            onToggleKeyVisible = projectsViewModel::toggleLinearKeyVisible,
-            onRequestClearLinearKey = projectsViewModel::requestClearLinearKey,
-            onTouch = projectsViewModel::touch,
-            onAddFlag = projectsViewModel::addFlag,
-            onUpdateFlag = projectsViewModel::updateFlag,
-            onRemoveFlag = projectsViewModel::removeFlag,
-            onToggleTriggerLabel = projectsViewModel::toggleTriggerLabel,
-            onToggleTriggerState = projectsViewModel::toggleTriggerState,
-            onActiveStateChange = projectsViewModel::onActiveStateChange,
-            onDoneStateChange = projectsViewModel::onDoneStateChange,
-            onRemovalLabelChange = projectsViewModel::onRemovalLabelChange,
-            onRefreshFilterMetadata = projectsViewModel::refreshFilterMetadata,
-            onSave = projectsViewModel::save,
-            pathSuggestions = projectPathSuggestions,
-            onPathFocusChange = projectsViewModel::onPathFocusChange,
-            onPickPathSuggestion = projectsViewModel::pickPathSuggestion,
+            onDismiss = workspacesViewModel::closeSheet,
+            onNameChange = workspacesViewModel::onNameChange,
+            onPathChange = workspacesViewModel::onPathChange,
+            onCondaChange = workspacesViewModel::onCondaChange,
+            onLinearKeyChange = workspacesViewModel::onLinearKeyChange,
+            onToggleKeyVisible = workspacesViewModel::toggleLinearKeyVisible,
+            onRequestClearLinearKey = workspacesViewModel::requestClearLinearKey,
+            onTouch = workspacesViewModel::touch,
+            onAddFlag = workspacesViewModel::addFlag,
+            onUpdateFlag = workspacesViewModel::updateFlag,
+            onRemoveFlag = workspacesViewModel::removeFlag,
+            onToggleTriggerLabel = workspacesViewModel::toggleTriggerLabel,
+            onToggleTriggerState = workspacesViewModel::toggleTriggerState,
+            onActiveStateChange = workspacesViewModel::onActiveStateChange,
+            onDoneStateChange = workspacesViewModel::onDoneStateChange,
+            onRemovalLabelChange = workspacesViewModel::onRemovalLabelChange,
+            onRefreshFilterMetadata = workspacesViewModel::refreshFilterMetadata,
+            onSave = workspacesViewModel::save,
+            pathSuggestions = workspacePathSuggestions,
+            onPathFocusChange = workspacesViewModel::onPathFocusChange,
+            onPickPathSuggestion = workspacesViewModel::pickPathSuggestion,
         )
     }
 
@@ -572,7 +572,7 @@ private fun CodexLoginDialog(
     )
 }
 
-private const val PROJECT_KEY = "project:"
+private const val WORKSPACE_KEY = "workspace:"
 private const val MODE_KEY = "mode:"
 private val HANDLE_WIDTH = 48.dp
 private const val REORDER_HINT = "Drag a handle to reorder — the order syncs to all your devices."
@@ -644,16 +644,16 @@ private fun WizardDragHandle(label: String, dragging: Boolean, modifier: Modifie
 }
 
 /**
- * Project step. Each stored project is a card: tap selects it, the handle drags
- * it. The order saved is the agent's own project order, so every client shows
- * it. "Custom path…" and "Create new project…" stay last and do not move.
+ * Workspace step. Each stored workspace is a card: tap selects it, the handle drags
+ * it. The order saved is the agent's own workspace order, so every client shows
+ * it. "Custom path…" and "Create new workspace…" stay last and do not move.
  *
  * A LazyColumn rather than the config steps' scrolling Column, so a drag near
  * the top or bottom edge scrolls the list.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ProjectSelectStep(
+private fun WorkspaceSelectStep(
     state: CreateSessionUiState,
     customPathSelected: Boolean,
     modifier: Modifier,
@@ -667,7 +667,7 @@ private fun ProjectSelectStep(
     customPathSuggestions: PathSuggestionsUi,
     onCustomPathFocusChange: (Boolean) -> Unit,
     onPickCustomPathSuggestion: (String) -> Unit,
-    onCreateProjectClicked: () -> Unit,
+    onCreateWorkspaceClicked: () -> Unit,
     onContinue: () -> Unit,
 ) {
     val listState = rememberLazyListState()
@@ -675,21 +675,21 @@ private fun ProjectSelectStep(
     // Moved in the drag's own frame, so the library sees each swap at once. The
     // view model's order replaces it on every upstream change — except during a
     // drag, where the answer to the previous drop would undo the swaps so far.
-    var display by remember { mutableStateOf(state.projects) }
+    var display by remember { mutableStateOf(state.workspaces) }
     val reorderState = rememberReorderableLazyListState(listState) { from, to ->
-        display = display.movedByKey(from.key, to.key) { PROJECT_KEY + it.name }
+        display = display.movedByKey(from.key, to.key) { WORKSPACE_KEY + it.name }
         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
     }
-    LaunchedEffect(state.projects, reorderState.isAnyItemDragging) {
-        if (!reorderState.isAnyItemDragging) display = state.projects
+    LaunchedEffect(state.workspaces, reorderState.isAnyItemDragging) {
+        if (!reorderState.isAnyItemDragging) display = state.workspaces
     }
     val reorderable = display.size > 1
-    val selectedName = (state.selection as? ProjectSelection.Stored)?.name
+    val selectedName = (state.selection as? WorkspaceSelection.Stored)?.name
     val canContinue = when (val sel = state.selection) {
-        is ProjectSelection.Stored -> true
-        is ProjectSelection.CustomPath ->
+        is WorkspaceSelection.Stored -> true
+        is WorkspaceSelection.CustomPath ->
             state.customPathDraft.isNotBlank() && state.customPathError == null
-        ProjectSelection.None -> false
+        WorkspaceSelection.None -> false
     }
 
     LazyColumn(
@@ -698,44 +698,44 @@ private fun ProjectSelectStep(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        item(key = "project_header") {
+        item(key = "workspace_header") {
             WizardListHeader(
-                title = "Project",
+                title = "Workspace",
                 hint = if (reorderable) REORDER_HINT else null,
             )
         }
         if (display.isEmpty()) {
-            item(key = "project_empty") {
+            item(key = "workspace_empty") {
                 Text(
-                    text = if (state.isLoadingProjects) {
-                        "Loading projects…"
+                    text = if (state.isLoadingWorkspaces) {
+                        "Loading workspaces…"
                     } else {
-                        "This agent has no projects yet. Create one, or run once in a custom path."
+                        "This agent has no workspaces yet. Create one, or run once in a custom path."
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
-        itemsIndexed(display, key = { _, project -> PROJECT_KEY + project.name }) { index, project ->
-            ReorderableItem(reorderState, key = PROJECT_KEY + project.name) { isDragging ->
+        itemsIndexed(display, key = { _, workspace -> WORKSPACE_KEY + workspace.name }) { index, workspace ->
+            ReorderableItem(reorderState, key = WORKSPACE_KEY + workspace.name) { isDragging ->
                 val handleModifier = Modifier.draggableHandle(
                     onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) },
                     onDragStopped = { onReorder(display.map { it.name }) },
                 )
                 HandleRow(
                     handle = if (reorderable) {
-                        { WizardDragHandle(project.name, isDragging, handleModifier) }
+                        { WizardDragHandle(workspace.name, isDragging, handleModifier) }
                     } else {
                         null
                     },
                     reserveHandle = false,
                 ) {
-                    ProjectPickCard(
-                        project = project,
-                        selected = project.name == selectedName,
+                    WorkspacePickCard(
+                        workspace = workspace,
+                        selected = workspace.name == selectedName,
                         dragging = isDragging,
-                        onClick = { onSelect(project.name) },
+                        onClick = { onSelect(workspace.name) },
                         modifier = Modifier.moveActions(index, display.size, onMove),
                     )
                 }
@@ -745,25 +745,25 @@ private fun ProjectSelectStep(
             HandleRow(handle = null, reserveHandle = reorderable) {
                 WizardActionCard(
                     title = "Custom path…",
-                    subtitle = "Run once — no project is created",
+                    subtitle = "Run once — no workspace is created",
                     icon = Icons.Default.FolderOpen,
                     selected = customPathSelected,
                     onClick = onCustomPathSelected,
                     contentDescription = "Custom path",
-                    testTag = "project_custom_path",
+                    testTag = "workspace_custom_path",
                 )
             }
         }
-        item(key = "create_project_row") {
+        item(key = "create_workspace_row") {
             HandleRow(handle = null, reserveHandle = reorderable) {
                 WizardActionCard(
-                    title = "Create new project…",
+                    title = "Create new workspace…",
                     subtitle = "Name + path, saved on this agent for next time",
                     icon = Icons.Default.Add,
                     selected = false,
-                    onClick = onCreateProjectClicked,
-                    contentDescription = "Create new project",
-                    testTag = "project_create",
+                    onClick = onCreateWorkspaceClicked,
+                    contentDescription = "Create new workspace",
+                    testTag = "workspace_create",
                 )
             }
         }
@@ -782,7 +782,7 @@ private fun ProjectSelectStep(
                 }
             }
         }
-        item(key = "project_continue") {
+        item(key = "workspace_continue") {
             PixelButton(
                 style = PixelButtonStyle.Primary,
                 onClick = onContinue,
@@ -818,10 +818,10 @@ private val selectedCardColors: CardColors
 private val transparentListColors: ListItemColors
     @Composable get() = ListItemDefaults.colors(containerColor = Color.Transparent)
 
-/** A stored project on the project step. */
+/** A stored workspace on the workspace step. */
 @Composable
-private fun ProjectPickCard(
-    project: com.mobaide.app.data.network.dto.ProjectInfo,
+private fun WorkspacePickCard(
+    workspace: com.mobaide.app.data.network.dto.WorkspaceInfo,
     selected: Boolean,
     dragging: Boolean,
     onClick: () -> Unit,
@@ -837,22 +837,22 @@ private fun ProjectPickCard(
         modifier = modifier
             .fillMaxWidth()
             .semantics { this.selected = selected }
-            .testTag("project_row_${project.name}"),
+            .testTag("workspace_row_${workspace.name}"),
     ) {
         ListItem(
             headlineContent = {
-                Text(project.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(workspace.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
             },
             supportingContent = {
                 Column {
-                    Text(project.path, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (!project.path_exists) {
+                    Text(workspace.path, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (!workspace.path_exists) {
                         Text(
                             text = "Folder not found on the agent",
                             color = MaterialTheme.pixel.warning,
                         )
                     }
-                    if (project.has_linear_key) {
+                    if (workspace.has_linear_key) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -873,7 +873,7 @@ private fun ProjectPickCard(
     }
 }
 
-/** A fixed row under a reorderable list ("Custom path…", "Create new project…"). */
+/** A fixed row under a reorderable list ("Custom path…", "Create new workspace…"). */
 @Composable
 private fun WizardActionCard(
     title: String,
@@ -932,7 +932,7 @@ internal fun CustomPathPanel(
         label = { Text("Absolute path on the agent") },
         isError = state.customPathError != null,
         supportingText = {
-            val example = if (suggestions.windowsPaths) "e.g. D:\\projects\\demo" else "e.g. /home/user/code"
+            val example = if (suggestions.windowsPaths) "e.g. D:\\workspaces\\demo" else "e.g. /home/user/code"
             Text(text = state.customPathError ?: "$example — ${pathBrowseHint(suggestions.windowsPaths)}")
         },
     )
@@ -978,7 +978,7 @@ internal fun CustomPathPanel(
 
 /** Display metadata for the mode picker — derived once at the call site
  *  so the section composable doesn't have to know about the sealed
- *  [ProjectSelection]. */
+ *  [WorkspaceSelection]. */
 private data class ModeHeader(
     val title: String,
     val subtitle: String?,
@@ -1238,7 +1238,7 @@ private fun BuiltInModeCard(
         CreateSessionMode.AutoScan -> Pair(
             when {
                 !state.claudeEnabled -> "Auto Scan needs the Claude CLI, which isn't installed on the agent."
-                !state.autoScanEnabled -> "Auto Scan needs a Linear API key for this project."
+                !state.autoScanEnabled -> "Auto Scan needs a Linear API key for this workspace."
                 else -> "Scan Linear for matching issues and launch sessions."
             },
             "mode_card_autoscan",
@@ -1423,7 +1423,7 @@ private fun StandardConfigSection(
     PixelButton(
         style = PixelButtonStyle.Primary,
         onClick = viewModel::submit,
-        enabled = state.selection !is ProjectSelection.None && !state.submitting,
+        enabled = state.selection !is WorkspaceSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(if (state.submitting) "Creating…" else "Create session")
@@ -1531,7 +1531,7 @@ private fun CodexConfigSection(
     }
     Text(
         text = when (preset) {
-            CodexAutonomyPreset.ReadOnly -> "Reads the project; asks before any change."
+            CodexAutonomyPreset.ReadOnly -> "Reads the workspace; asks before any change."
             CodexAutonomyPreset.Auto -> "Edits within the workspace; asks before risky actions."
             CodexAutonomyPreset.FullAccess -> "No sandbox or approval prompts (--yolo)."
             null -> "Custom sandbox/approval set in Advanced."
@@ -1617,7 +1617,7 @@ private fun CodexConfigSection(
     PixelButton(
         style = PixelButtonStyle.Primary,
         onClick = viewModel::submitCodex,
-        enabled = state.selection !is ProjectSelection.None && !state.submitting,
+        enabled = state.selection !is WorkspaceSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(if (state.submitting) "Creating…" else "Create session")
@@ -1756,7 +1756,7 @@ private fun AntigravityConfigSection(
     PixelButton(
         style = PixelButtonStyle.Primary,
         onClick = viewModel::submitAntigravity,
-        enabled = state.selection !is ProjectSelection.None && !state.submitting,
+        enabled = state.selection !is WorkspaceSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(if (state.submitting) "Creating…" else "Create session")
@@ -1810,7 +1810,7 @@ private fun OpenCodeConfigSection(
     PixelButton(
         style = PixelButtonStyle.Primary,
         onClick = viewModel::submitOpenCode,
-        enabled = state.selection !is ProjectSelection.None && !state.submitting,
+        enabled = state.selection !is WorkspaceSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(if (state.submitting) "Creating…" else "Create session")
@@ -1860,7 +1860,7 @@ private fun CopilotConfigSection(
     PixelButton(
         style = PixelButtonStyle.Primary,
         onClick = viewModel::submitCopilot,
-        enabled = state.selection !is ProjectSelection.None && !state.submitting,
+        enabled = state.selection !is WorkspaceSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(if (state.submitting) "Creating…" else "Create session")
@@ -1911,7 +1911,7 @@ private fun CursorConfigSection(
     PixelButton(
         style = PixelButtonStyle.Primary,
         onClick = viewModel::submitCursor,
-        enabled = state.selection !is ProjectSelection.None && !state.submitting,
+        enabled = state.selection !is WorkspaceSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(if (state.submitting) "Creating…" else "Create session")
@@ -1959,7 +1959,7 @@ private fun PiConfigSection(
     PixelButton(
         style = PixelButtonStyle.Primary,
         onClick = viewModel::submitPi,
-        enabled = state.selection !is ProjectSelection.None && !state.submitting,
+        enabled = state.selection !is WorkspaceSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(if (state.submitting) "Creating…" else "Create session")
@@ -2245,7 +2245,7 @@ private fun TerminalConfigSection(
     PixelButton(
         style = PixelButtonStyle.Primary,
         onClick = viewModel::submitFromTerminalConfig,
-        enabled = state.selection !is ProjectSelection.None && !state.submitting,
+        enabled = state.selection !is WorkspaceSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(if (state.submitting) "Creating…" else "Create session")
@@ -2308,7 +2308,7 @@ private fun AutoScanConfigSection(
     PixelButton(
         style = PixelButtonStyle.Primary,
         onClick = viewModel::submitAutoScan,
-        enabled = state.selectedProjectName != null && !state.autoScanStarting,
+        enabled = state.selectedWorkspaceName != null && !state.autoScanStarting,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(if (state.autoScanStarting) "Starting…" else "Start Auto Scan")

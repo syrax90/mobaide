@@ -1,7 +1,7 @@
 /**
  * The wizard's navigation state, in the URL.
  *
- * Only `step`, `mode` and the project selection live here. The option buckets
+ * Only `step`, `mode` and the workspace selection live here. The option buckets
  * deliberately do not: there are around thirty of them, two are long free text
  * that would end up in browser history and any intermediary log, and keeping
  * them out means the no-leak invariant never depends on URL hygiene. The cost —
@@ -10,11 +10,11 @@
  * that kind has happened, discarding whatever was being edited — is honest, and
  * is why the clamps below exist rather than a pretence of full restoration.
  */
-import type { ProjectSummary } from '../../../api/projectRepository';
+import type { WorkspaceSummary } from '../../../api/workspaceRepository';
 import {
   parseMode,
   validateCustomPath,
-  type ProjectSelection,
+  type WorkspaceSelection,
   type WizardMode,
   type WizardStep,
 } from './wizardState';
@@ -22,28 +22,29 @@ import {
 export interface WizardLocation {
   step: WizardStep;
   mode: WizardMode | null;
-  selection: ProjectSelection;
+  selection: WorkspaceSelection;
 }
 
-const STEPS: readonly WizardStep[] = ['project', 'mode', 'config'];
+const STEPS: readonly WizardStep[] = ['workspace', 'mode', 'config'];
 
 export function parseWizardLocation(params: URLSearchParams): WizardLocation {
   const rawStep = params.get('step');
   const step: WizardStep =
     rawStep !== null && (STEPS as readonly string[]).includes(rawStep)
       ? (rawStep as WizardStep)
-      : 'project';
+      : 'workspace';
 
   const rawMode = params.get('mode');
   const mode = rawMode === null ? null : parseMode(rawMode);
 
-  const project = params.get('project');
+  // `project` is the pre-rename name, read so old bookmarks still resolve.
+  const workspace = params.get('workspace') ?? params.get('project');
   const path = params.get('path');
-  // `project` wins: the two are mutually exclusive, and a hand-edited URL
+  // `workspace` wins: the two are mutually exclusive, and a hand-edited URL
   // carrying both should resolve deterministically.
-  const selection: ProjectSelection =
-    project !== null && project !== ''
-      ? { kind: 'stored', name: project }
+  const selection: WorkspaceSelection =
+    workspace !== null && workspace !== ''
+      ? { kind: 'stored', name: workspace }
       : path !== null && path !== ''
         ? { kind: 'customPath', path: path.trim() }
         : { kind: 'none' };
@@ -55,15 +56,15 @@ export function serializeWizardLocation(location: WizardLocation): URLSearchPara
   const params = new URLSearchParams();
   params.set('step', location.step);
   if (location.mode !== null) params.set('mode', location.mode);
-  if (location.selection.kind === 'stored') params.set('project', location.selection.name);
+  if (location.selection.kind === 'stored') params.set('workspace', location.selection.name);
   if (location.selection.kind === 'customPath') params.set('path', location.selection.path);
   return params;
 }
 
 export interface ResolveInput {
   requested: WizardLocation;
-  /** `undefined` while the project list is still loading. */
-  projects: readonly ProjectSummary[] | undefined;
+  /** `undefined` while the workspace list is still loading. */
+  workspaces: readonly WorkspaceSummary[] | undefined;
   isModeSelectable: (mode: WizardMode) => boolean;
 }
 
@@ -72,30 +73,30 @@ export interface ResolveInput {
  * replace it with.
  */
 export function resolveWizardLocation(input: ResolveInput): WizardLocation | null {
-  const { requested, projects } = input;
+  const { requested, workspaces } = input;
   const selection = requested.selection;
 
   // Nothing can be validated against a list that has not arrived. Without this,
   // every reload of a deep link would bounce to step one for the duration of one
   // request and lose the user's place.
-  if (projects === undefined) return null;
+  if (workspaces === undefined) return null;
 
   if (selection.kind === 'stored') {
-    const known = projects.some((project) => project.name === selection.name);
-    if (!known) return { step: 'project', mode: null, selection: { kind: 'none' } };
+    const known = workspaces.some((workspace) => workspace.name === selection.name);
+    if (!known) return { step: 'workspace', mode: null, selection: { kind: 'none' } };
   }
 
   if (selection.kind === 'customPath' && validateCustomPath(selection.path) !== null) {
     // Keep the text so the inline error can explain why we came back here.
-    return { step: 'project', mode: null, selection };
+    return { step: 'workspace', mode: null, selection };
   }
 
-  if (requested.step === 'project') {
+  if (requested.step === 'workspace') {
     return requested.mode === null ? null : { ...requested, mode: null };
   }
 
   if (selection.kind === 'none') {
-    return { step: 'project', mode: null, selection: { kind: 'none' } };
+    return { step: 'workspace', mode: null, selection: { kind: 'none' } };
   }
 
   if (requested.step === 'mode') {

@@ -3,12 +3,12 @@
 Sibling of :mod:`codex_launcher`, sharing the CLI-agnostic primitives in
 :mod:`cli_launcher`. Antigravity is the thinnest managed CLI: no attention
 hooks (its terminal sessions get attention from agy's OSC 7501 status reports,
-see :mod:`program_status`), no project files, and no pre-spawn auth probe —
+see :mod:`program_status`), no workspace files, and no pre-spawn auth probe —
 ``agy`` authenticates via Google Sign-In / the system keyring with no env-var
 or config-file marker to detect, so binary presence is the only availability
 signal and an unauthenticated ``agy`` simply renders its login prompt inside
 the PTY. It
-supports git worktrees on stored projects, resolved the same way Codex does
+supports git worktrees on stored workspaces, resolved the same way Codex does
 (``create_standard_worktree``). Flags are verified against ``agy --help``
 (https://antigravity.google/docs/cli/reference): only the curated interactive
 set is exposed — ``--model`` / ``--dangerously-skip-permissions`` /
@@ -35,7 +35,7 @@ from .cli_launcher import (
     resolve_standard_worktree_cwd,
     shim_safe_argv,
 )
-from .projects_config import ProjectConfig
+from .workspaces_config import WorkspaceConfig
 
 if TYPE_CHECKING:
     from mobaide.linear.worktree import WorktreeManager
@@ -149,7 +149,7 @@ class AntigravityOptions:
     skip_permissions: bool = False
     sandbox: bool = False
     add_dirs: tuple[str, ...] = ()
-    # Worktree intent for a stored git project, resolved by ``_resolve_cwd``
+    # Worktree intent for a stored git workspace, resolved by ``_resolve_cwd``
     # exactly like Codex; ignored for ad-hoc launches.
     worktree: bool = False
     branch_name: str | None = None
@@ -264,7 +264,7 @@ class AntigravityLauncher:
     async def _resolve_cwd(
         self, target: LaunchTarget, options: AntigravityOptions
     ) -> str:
-        # A project session runs in the project root, or — when worktree=True —
+        # A workspace session runs in the workspace root, or — when worktree=True —
         # in a freshly created git worktree; an ad-hoc session always runs in
         # its bare cwd. Shared guards live in cli_launcher so the per-CLI
         # modules stay thin.
@@ -288,7 +288,7 @@ class AntigravityLauncher:
         env.setdefault("AGY_CLI_OSC7501", "on")
         env.setdefault("AGY_CLI_OSC7501_MESSAGES", "brief")
 
-        if isinstance(target, ProjectConfig) and target.conda_env:
+        if isinstance(target, WorkspaceConfig) and target.conda_env:
             conda_bin = conda_env_bin(target.conda_env)
             if conda_bin:
                 sep = os.pathsep

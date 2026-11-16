@@ -1,7 +1,7 @@
 /**
- * The unified branch/worktree list behind a project's Git screen, plus the
+ * The unified branch/worktree list behind a workspace's Git screen, plus the
  * ref management the screen grew in #677: remote-tracking rows on request,
- * branch creation and a checkout in the project root. Worktree creation
+ * branch creation and a checkout in the workspace root. Worktree creation
  * stays with the session wizard; the agent exposes nothing else here.
  */
 import type { components } from './generated/agent';
@@ -64,7 +64,7 @@ export function isDeletable(item: GitItem, deleteRemote: boolean): item is Delet
 
 /**
  * *Remove worktree* keeps the branch: offered on a worktree-backed row other
- * than the project root's own checkout.
+ * than the workspace root's own checkout.
  */
 export function canRemoveWorktree(item: GitItem): boolean {
   return (
@@ -117,11 +117,11 @@ export class GitBusyError extends Error {
  */
 export async function listGitItems(
   agentId: string,
-  projectName: string,
+  workspaceName: string,
 ): Promise<GitItem[]> {
   const { data, error, response } = await createAgentClient(agentId).GET(
     '/api/projects/{name}/git/items',
-    { params: { path: { name: projectName }, query: { remote: true } } },
+    { params: { path: { name: workspaceName }, query: { remote: true } } },
   );
   if (error !== undefined || data === undefined) {
     throw toApiError(response, error);
@@ -140,12 +140,12 @@ export async function listGitItems(
  */
 export async function deleteGitItems(
   agentId: string,
-  projectName: string,
+  workspaceName: string,
   items: readonly GitDeleteItem[],
 ): Promise<GitDeleteResult[]> {
   const { data, error, response } = await createAgentClient(agentId).POST(
     '/api/projects/{name}/git/items:delete',
-    { params: { path: { name: projectName } }, body: { items: [...items] } },
+    { params: { path: { name: workspaceName } }, body: { items: [...items] } },
   );
   if (error !== undefined || data === undefined) {
     const apiError = toApiError(response, error);
@@ -156,7 +156,7 @@ export async function deleteGitItems(
 }
 
 /**
- * The busy `409` keeps the project screen's own class; every other coded
+ * The busy `409` keeps the workspace screen's own class; every other coded
  * detail — the branch refusals and the session vocabulary they reuse —
  * becomes a `SessionGitError`, whose copy the screen already knows.
  */
@@ -170,12 +170,12 @@ function toBranchError(error: unknown): unknown {
 
 export async function createGitBranch(
   agentId: string,
-  projectName: string,
+  workspaceName: string,
   request: GitBranchCreateRequest,
 ): Promise<GitBranchResult> {
   const { data, error, response } = await createAgentClient(agentId).POST(
     '/api/projects/{name}/git/branches',
-    { params: { path: { name: projectName } }, body: request },
+    { params: { path: { name: workspaceName } }, body: request },
   );
   if (error !== undefined || data === undefined) {
     throw toBranchError(toApiError(response, error));
@@ -189,13 +189,13 @@ export async function createGitBranch(
  */
 export async function checkoutGitRef(
   agentId: string,
-  projectName: string,
+  workspaceName: string,
   ref: string,
   force = false,
 ): Promise<GitBranchResult> {
   const { data, error, response } = await createAgentClient(agentId).POST(
     '/api/projects/{name}/git/checkout',
-    { params: { path: { name: projectName } }, body: { ref, force } },
+    { params: { path: { name: workspaceName } }, body: { ref, force } },
   );
   if (error !== undefined || data === undefined) {
     throw toBranchError(toApiError(response, error));
@@ -210,11 +210,11 @@ export async function checkoutGitRef(
  */
 export async function listWorktreeBases(
   agentId: string,
-  projectName: string,
+  workspaceName: string,
 ): Promise<WorktreeBases> {
   const { data, error, response } = await createAgentClient(agentId).GET(
     '/api/projects/{name}/git/worktree-bases',
-    { params: { path: { name: projectName } } },
+    { params: { path: { name: workspaceName } } },
   );
   if (error !== undefined || data === undefined) {
     throw toApiError(response, error);

@@ -12,12 +12,12 @@ or a test fake (unit tests).
 
 Protocol v1:
     Client may send within ``grace_timeout_s`` of start a JSON text frame:
-        { "subscribe": ["projectA", ...],
-          "resume_from_seq": {"projectA": 42, ...} }
+        { "subscribe": ["workspaceA", ...],
+          "resume_from_seq": {"workspaceA": 42, ...} }
     The server then sends:
         1. { "type": "snapshot",
              "data": { "scans": [...DTOs...],
-                       "events": {projectName: [event,...]} } }
+                       "events": {workspaceName: [event,...]} } }
         2. { "type": "caught_up" }
         3. Live { "type": "event", "project_name": ..., "event": {...} } frames.
     Clients NOT in ``subscribe`` get all event types except ``log`` filtered out.
@@ -105,15 +105,15 @@ async def run_autoscan_stream(
         await _send({"type": "caught_up"})
         msg_count += 1
 
-        async def _pump_one(project_name: str, q: asyncio.Queue) -> None:
+        async def _pump_one(workspace_name: str, q: asyncio.Queue) -> None:
             nonlocal msg_count
             while True:
                 evt = await q.get()
-                if evt.type == "log" and project_name not in subscribe_set:
+                if evt.type == "log" and workspace_name not in subscribe_set:
                     continue
                 await _send({
                     "type": "event",
-                    "project_name": project_name,
+                    "project_name": workspace_name,
                     "event": evt.to_dict(),
                 })
                 msg_count += 1

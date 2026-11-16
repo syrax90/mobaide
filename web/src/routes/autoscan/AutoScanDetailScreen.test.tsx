@@ -39,7 +39,7 @@ async function renderScreen(path = '/agents/agent-1/autoscan/alpha') {
       <MemoryRouter initialEntries={[path]}>
         <Routes>
           <Route
-            path="/agents/:agentId/autoscan/:projectName"
+            path="/agents/:agentId/autoscan/:workspaceName"
             element={<AutoScanDetailScreen />}
           />
         </Routes>
@@ -62,7 +62,7 @@ afterEach(() => {
 });
 
 describe('AutoScanDetailScreen', () => {
-  it('shows the project from the path, decoded', async () => {
+  it('shows the workspace from the path, decoded', async () => {
     await renderScreen('/agents/agent-1/autoscan/a%2Fb');
 
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('a/b');

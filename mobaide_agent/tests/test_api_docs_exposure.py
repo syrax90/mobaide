@@ -1,7 +1,7 @@
 """ENABLE_API_DOCS exposure policy for the agent's OpenAPI routes.
 
 The agent binds ``0.0.0.0`` so DIRECT mode stays reachable over the LAN,
-which made FastAPI's stock ``/docs`` publish the whole session / project /
+which made FastAPI's stock ``/docs`` publish the whole session / workspace /
 git / codex surface to anything on the network. There is no admin role here,
 so the flag itself is the gate: off (the default) leaves the three routes
 unregistered, on serves them.
