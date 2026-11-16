@@ -38,6 +38,7 @@ from .herdr_support import (  # noqa: F401  (``scheduler`` is a fixture)
     SHELL_PANE,
     ScriptedBackend,
     ScriptedLink,
+    ScriptedStream,
     Scheduler,
     scheduler,
     settle,
@@ -67,11 +68,10 @@ class Harness:
         self.flush()
 
 
-@pytest.fixture
-async def herdr(scheduler):  # noqa: F811
+async def _started(scheduler, manager: SessionManager) -> Harness:  # noqa: F811
+    """A running service on ``manager``, attached to its scripted server."""
     published: list[tuple[str, dict]] = []
     backend = ScriptedBackend()
-    manager = SessionManager(max_sessions=1, backend_factory=FakePtyBackend)
     service = HerdrService(
         publish=lambda kind, payload: published.append((kind, payload)),
         session_manager=manager,
@@ -82,10 +82,17 @@ async def herdr(scheduler):  # noqa: F811
     await asyncio.wait_for(backend.attached.wait(), 5)
     assert backend.link is not None
     await asyncio.wait_for(backend.link.running.wait(), 5)
-    harness = Harness(service, backend, backend.link, manager, scheduler, published)
+    return Harness(service, backend, backend.link, manager, scheduler, published)
+
+
+@pytest.fixture
+async def herdr(scheduler):  # noqa: F811
+    harness = await _started(
+        scheduler, SessionManager(max_sessions=1, backend_factory=FakePtyBackend)
+    )
     yield harness
-    await service.shutdown()
-    await manager.shutdown()
+    await harness.service.shutdown()
+    await harness.manager.shutdown()
 
 
 @pytest.fixture
@@ -354,6 +361,171 @@ class TestPaneSessions:
 
         assert seen.link.closed_targets == []
         assert set(seen.link.panes) == {AGENT_PANE, SHELL_PANE}
+
+
+class TestReopenDuringRelease:
+    """A pane keeps its session id, and the last step of a release ends the
+    fanout of that id. A view that is adopted while the release of the one
+    before it still runs loses its fanout to that step and stays empty."""
+
+    @pytest.fixture
+    async def live(self, app, scheduler):  # noqa: F811
+        """The service on the app's session manager: a pane session gets its
+        fanout from the created hook and loses it in the removed hook, as in
+        the running agent. The ``app`` fixture stops the manager and the
+        fanouts."""
+        harness = await _started(scheduler, app.state.session_manager)
+        yield harness
+        await harness.service.shutdown()
+
+    async def test_the_new_view_is_made_after_the_release_and_keeps_its_fanout(
+        self, app, live, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(service_module, "PANE_SESSION_IDLE_SECONDS", -1.0)
+        fanouts = app.state.fanouts
+        closing = asyncio.Event()
+
+        class HeldClose(ScriptedStream):
+            """A bridge that is slow to leave."""
+
+            async def aclose(self) -> None:
+                await closing.wait()
+                await super().aclose()
+
+        live.link.stream_class = HeldClose
+        session_id = await live.service.open_pane(SERVER_ID, AGENT_PANE)
+        old = await live.manager.get_session(session_id)
+        old_fanout = fanouts[session_id]
+        old.viewer_attached()
+        await settle()
+        # The last client leaves: the stream begins to close and does not end.
+        old.viewer_detached()
+        await settle()
+        live.link.stream_class = ScriptedStream
+
+        # The idle sweep drops the view, and its ``stop()`` waits for the stream.
+        assert live.scheduler.elapse(DISCOVER_SECONDS) == 1
+        await settle()
+        opening = asyncio.ensure_future(live.service.open_pane(SERVER_ID, AGENT_PANE))
+        await settle()
+
+        assert not opening.done()
+        assert await live.manager.get_session(session_id) is None
+        assert fanouts[session_id] is old_fanout
+
+        closing.set()
+
+        assert await asyncio.wait_for(opening, 5) == session_id
+        await settle()
+        new = await live.manager.get_session(session_id)
+        assert new is not old and new.is_alive()
+        assert fanouts[session_id] is not old_fanout
+        events = fanouts[session_id].subscribe()
+        new.viewer_attached()
+        await settle()
+        live.link.live_streams[-1].sink.on_output(b"second view", repaint=True)
+        await settle()
+
+        received = [events.get_nowait() for _ in range(events.qsize())]
+        assert [e.data for e in received if e.event_type == "output"] == [b"second view"]
+
+    async def test_a_cancelled_open_does_not_cut_the_release_of_an_ended_view_short(
+        self, scheduler  # noqa: F811
+    ) -> None:
+        # The client that asked for the pane again went away. A release that
+        # ended with that call would leave the id half released, and the next
+        # view would get what is left of the old one.
+        removed: list[str] = []
+        ending = asyncio.Event()
+
+        async def held_hook(session_id: str) -> None:
+            """The last step of a release, slow to finish."""
+            await ending.wait()
+            removed.append(session_id)
+
+        manager = SessionManager(on_session_removed=held_hook)
+        herdr = await _started(scheduler, manager)
+        try:
+            session_id = await herdr.service.open_pane(SERVER_ID, AGENT_PANE)
+            old = await manager.get_session(session_id)
+            # The view ended, and the service has not dropped it yet.
+            old.end()
+
+            opening = asyncio.ensure_future(herdr.service.open_pane(SERVER_ID, AGENT_PANE))
+            await settle()
+            assert not opening.done()
+            opening.cancel()
+            await settle()
+
+            assert opening.cancelled()
+            assert removed == []
+
+            ending.set()
+            await settle()
+
+            assert removed == [session_id]
+            assert await manager.get_session(session_id) is None
+            assert (
+                await asyncio.wait_for(herdr.service.open_pane(SERVER_ID, AGENT_PANE), 5)
+                == session_id
+            )
+            new = await manager.get_session(session_id)
+            assert new is not old and new.is_alive()
+            new.viewer_attached()
+            await settle()
+            herdr.link.live_streams[-1].sink.on_output(b"second view", repaint=True)
+
+            events = new.event_queue
+            received = [events.get_nowait() for _ in range(events.qsize())]
+            assert [e.data for e in received if e.event_type == "output"] == [b"second view"]
+        finally:
+            ending.set()
+            await herdr.service.shutdown()
+            await manager.shutdown()
+
+    @pytest.mark.parametrize(
+        ("lose", "code"),
+        [
+            (lambda link: link.stop_server(), "server_not_found"),
+            (lambda link: link.remove_pane(AGENT_PANE), "pane_not_found"),
+        ],
+        ids=["the server stopped", "the pane was closed"],
+    )
+    async def test_a_pane_that_is_lost_during_the_release_gets_no_new_view(
+        self, scheduler, lose, code  # noqa: F811
+    ) -> None:
+        # A link that ends takes only the views it knows with it. A view that
+        # is made after the wait on a link that is gone stays "alive" for good.
+        ending = asyncio.Event()
+
+        async def held_hook(session_id: str) -> None:
+            """The last step of a release, slow to finish."""
+            await ending.wait()
+
+        manager = SessionManager(on_session_removed=held_hook)
+        herdr = await _started(scheduler, manager)
+        try:
+            session_id = await herdr.service.open_pane(SERVER_ID, AGENT_PANE)
+            (await manager.get_session(session_id)).end()
+            opening = asyncio.ensure_future(herdr.service.open_pane(SERVER_ID, AGENT_PANE))
+            await settle()
+            assert not opening.done()
+
+            lose(herdr.link)
+            await settle()
+            assert not opening.done()
+            ending.set()
+
+            with pytest.raises(errors.HerdrError) as refused:
+                await asyncio.wait_for(opening, 5)
+            assert (refused.value.status, refused.value.code) == (404, code)
+            await settle()
+            assert await manager.get_session(session_id) is None
+            assert manager.external_sessions() == []
+        finally:
+            ending.set()
+            await herdr.service.shutdown()
+            await manager.shutdown()
 
 
 class TestActions:

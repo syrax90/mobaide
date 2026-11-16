@@ -76,6 +76,7 @@ The herdr socket has no authentication. Access to it is equal to a shell.
 - Pane text is not stored on the relay. A push notification carries the pane title and the reason, not the pane content.
 - A new workspace folder must exist on the agent's computer. The agent checks it.
 - The agent's `stop()` of a pane session only detaches. It never closes the pane.
+- No session route ends a pane view. `DELETE /api/sessions/{id}` answers 404 for a pane session id.
 - Each Herdr action writes an audit record on the agent: `audit.herdr.created`, `audit.herdr.closed`, `audit.herdr.renamed` (without the label), `audit.herdr.agent_started`, `audit.herdr.control`.
 - A label must not contain control characters. Herdr draws it on the user's desktop terminal.
 

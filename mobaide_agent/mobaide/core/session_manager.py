@@ -500,8 +500,9 @@ class SessionManager:
         not own (a herdr pane).
 
         Such a session is reachable by id like any other, so clients use the
-        normal session socket. It does not count for ``max_sessions``, and
-        stopping it only detaches.
+        normal session socket. It does not count for ``max_sessions``.
+        ``stop_session`` refuses it as an unknown id; its owner ends it
+        through ``release_session``, which only detaches.
         """
         async with self._lock:
             if session.session_id in self._sessions:
@@ -517,12 +518,20 @@ class SessionManager:
             except Exception:
                 logger.exception("session_manager.on_created_hook_failed")
 
-    async def release_session(self, session_id: str) -> None:
-        """Detach and forget an external session. A missing id is not an error."""
+    async def release_session(self, session_id: str, session: Any = None) -> None:
+        """Detach and forget an external session. A missing id is not an error.
+
+        With ``session``, only that object is released: an external session
+        can come back under the same id, and a release that was asked for the
+        old one must not take the new one away.
+        """
         async with self._lock:
-            session = self._sessions.get(session_id)
-            if session is None or not _is_external(session):
+            current = self._sessions.get(session_id)
+            if current is None or not _is_external(current):
                 return
+            if session is not None and current is not session:
+                return
+            session = current
             del self._sessions[session_id]
         await session.stop()
         # One loop turn: the hook ends the session's fanout, and its readers
@@ -542,11 +551,17 @@ class SessionManager:
 
     @log_call(name="session_manager.stop_session", log_args=("session_id", "force"))
     async def stop_session(self, session_id: str, force: bool = False) -> None:
-        """Stop and remove a session."""
+        """Stop and remove a session.
+
+        An external session is not one of this manager's to stop: its owner
+        ends it through ``release_session``, which is in step with the owner's
+        own bookkeeping. To a caller it does not exist here, as in the list.
+        """
         async with self._lock:
-            session = self._sessions.pop(session_id, None)
-        if session is None:
-            raise KeyError(f"Session '{session_id}' not found")
+            session = self._sessions.get(session_id)
+            if session is None or _is_external(session):
+                raise KeyError(f"Session '{session_id}' not found")
+            del self._sessions[session_id]
         await session.stop(force=force)
         logger.info("session.removed", session_id=session_id)
         audit_event(
@@ -557,8 +572,7 @@ class SessionManager:
             via="session_manager",
         )
         await self._run_removed_hook(session_id)
-        if not _is_external(session):
-            await self._publish_sessions_changed()
+        await self._publish_sessions_changed()
 
     async def stop_all(self) -> None:
         """Stop all sessions concurrently."""

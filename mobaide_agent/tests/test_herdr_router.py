@@ -598,6 +598,48 @@ class TestRelayTunnel:
             "pane": {"mode": "watch", "cols": WATCH_GRID[0], "rows": WATCH_GRID[1]},
         } in _states(frames())
 
+    async def test_a_session_delete_is_a_404_for_a_pane_view_and_the_view_goes_on(
+        self, live_tunnel, herdr_app, http, headers
+    ):
+        # A pane view ends only through the Herdr service. A session delete
+        # that takes it out of the manager ends the fanout of its id, and the
+        # service still has the view: the client would watch an empty screen.
+        client, ws = live_tunnel
+        manager = herdr_app.state.session_manager
+        session_id = await herdr_app.state.herdr.open_pane(**CLAUDE_PANE)
+        session = await manager.get_session(session_id)
+        url = f"/api/sessions/{session_id}"
+        attach = json.dumps({"type": "mobile_session_attach", "session_id": session_id}).encode()
+
+        def frames() -> list[bytes]:
+            return _session_frames(ws, session_id)
+
+        def painted(text: bytes) -> bool:
+            return any(f[:1] == FRAME_OUTPUT and text in f for f in frames())
+
+        def proxy_responses() -> list[dict]:
+            return [m for m in _control_messages(ws) if m["type"] == "proxy_response"]
+
+        await client._handle_control(attach, ws)
+        await _wait_for(lambda: painted(b"api refactor"))
+
+        direct = await http.delete(url, headers=headers)
+        await asyncio.wait_for(client._handle_control(_proxy("r-1", "DELETE", url), ws), 1)
+        await _wait_for(lambda: len(proxy_responses()) == 1)
+
+        assert direct.status_code == 404
+        assert proxy_responses() == [
+            {"type": "proxy_response", "request_id": "r-1", "status": 404,
+             "body": {"detail": "Session not found"}},
+        ]
+        assert await manager.get_session(session_id) is session
+        assert session.is_alive() and session.viewers == 1
+
+        # The pane paints what a client types, and the paint still goes out.
+        await session.write(b"still-here")
+        await _wait_for(lambda: painted(b"still-here"))
+        assert "stopped" not in [state["status"] for state in _states(frames())]
+
     async def test_viewer_counts_survive_a_tunnel_reconnect(self, live_tunnel, herdr_app):
         client, ws = live_tunnel
         session_id = await herdr_app.state.herdr.open_pane(**CLAUDE_PANE)

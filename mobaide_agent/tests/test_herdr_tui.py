@@ -33,7 +33,7 @@ from mobaide.herdr.tui import (
 )
 
 from .conftest import TEST_JWT_SECRET
-from .herdr_support import settle
+from .herdr_support import scheduler, settle  # noqa: F401  (``scheduler`` is a fixture)
 
 # The real lookups and the real socket client, taken before a fixture pins
 # them (``conftest._pin_herdr_discovery`` and ``herdr`` below).
@@ -219,6 +219,10 @@ class TestVersionGate:
             ("", None),
             (None, None),
             ("nightly", None),
+            # Neither of these may raise: ``int`` refuses both.
+            ("0.9.²", (0, 9)),
+            ("0." + "9" * 5000, (0,)),
+            ("0.9.1234567890", (0, 9)),
         ],
     )
     def test_parse_version(self, text, version) -> None:
@@ -254,6 +258,36 @@ class TestVersionGate:
         await asyncio.gather(task, return_exceptions=True)
 
         assert link.state().state == "ready"
+
+    @pytest.mark.parametrize("still_old", ["0.9.1", None], ids=["old", "no-version"])
+    async def test_an_outdated_server_ends_its_link_when_a_later_ping_is_supported(
+        self, herdr, scheduler, still_old  # noqa: F811
+    ) -> None:
+        # An update restarts herdr. A restart that fits inside one wait fails
+        # no ping, so only the version of the answer shows it. The link must
+        # end: the next discovery pass then sets the server up as ready.
+        herdr.version = still_old
+        link = TuiLink(SERVER_ID, "default", "/unused", lambda: None, lambda: [])
+        task = asyncio.create_task(link.run())
+        await settle()
+
+        assert scheduler.elapse(tui.OUTDATED_RECHECK_SECONDS) == 1
+        await settle()
+
+        assert not task.done()
+        assert link.state().state == "outdated"
+
+        herdr.version = "0.9.2"
+        assert scheduler.elapse(tui.OUTDATED_RECHECK_SECONDS) == 1
+        await settle()
+        ended = task.done()
+        task.cancel()
+        (result,) = await asyncio.gather(task, return_exceptions=True)
+
+        assert ended
+        assert isinstance(result, ServerGone)
+        # The link of the old server never reads the new one.
+        assert herdr.methods == {"ping"}
 
 
 class TestMirror:

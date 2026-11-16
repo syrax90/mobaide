@@ -142,7 +142,9 @@ def parse_version(text: str | None) -> tuple[int, ...] | None:
     token = text.strip().split()[-1] if text.strip() else ""
     parts: list[int] = []
     for piece in token.split("-")[0].split("."):
-        if not piece.isdigit():
+        # ASCII digits, and few of them: ``isdigit`` alone also takes "²",
+        # and ``int`` refuses that and a number of thousands of digits.
+        if not (piece.isascii() and piece.isdigit() and len(piece) <= 9):
             break
         parts.append(int(piece))
     return tuple(parts) if parts else None
@@ -572,10 +574,14 @@ class TuiLink(ServerLink):
         )
         self._on_change()
         while True:
-            # An update restarts the server: the ping fails and discovery
-            # finds the new one.
+            # An update restarts the server. Mostly the ping then fails and
+            # discovery finds the new one. A restart inside one wait answers
+            # the ping from the new server: its version ends this link too.
             await asyncio.sleep(OUTDATED_RECHECK_SECONDS)
-            await self._client.request("ping")
+            pong = await self._client.request("ping")
+            version = parse_version(_text(pong.get("version")))
+            if version is not None and version >= MIN_VERSION:
+                raise ServerGone("the server was updated")
 
     async def _refresh(self) -> None:
         failures = 0

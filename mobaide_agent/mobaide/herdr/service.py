@@ -115,8 +115,9 @@ class HerdrService:
         self._published: HerdrSnapshot | None = None
         self._alerts: dict[tuple[str, str], _PaneAlerts] = {}
         self._pane_sessions: dict[str, HerdrPaneSession] = {}
-        self._background: set[asyncio.Future[Any]] = set()
         self._open_lock = asyncio.Lock()
+        # Releases of pane sessions that still run, by session id.
+        self._releases: dict[str, asyncio.Future[Any]] = {}
         # Set on every change of a link; see ``_link_after_restart``.
         self._change_seen = asyncio.Event()
 
@@ -322,7 +323,20 @@ class HerdrService:
             if existing is not None and existing.is_alive():
                 return session_id
             if existing is not None:
-                await self._session_manager.release_session(session_id)
+                self._drop_session(session_id)
+            # A release of the view that had this id can still run. It is a
+            # task of its own, so a cancel of this call does not cut it short.
+            # Its last step ends the fanout of the id, so the new view must
+            # not be made before it is over.
+            pending = self._releases.get(session_id)
+            if pending is not None:
+                await asyncio.wait({pending})
+                # The wait can take seconds. A link that ended in that time
+                # ended only the views it knew, so this one would stand on a
+                # dead link for good: read the link and the pane again.
+                link = self._link(server_id)
+                if link.pane_key(pane_id) != key:
+                    raise errors.pane_not_found()
             session = HerdrPaneSession(
                 session_id,
                 link,
@@ -465,11 +479,18 @@ class HerdrService:
         )
 
     def _drop_session(self, session_id: str) -> None:
-        if self._pane_sessions.pop(session_id, None) is None:
+        session = self._pane_sessions.pop(session_id, None)
+        if session is None:
             return
-        task = asyncio.ensure_future(self._session_manager.release_session(session_id))
-        self._background.add(task)
-        task.add_done_callback(self._background.discard)
+        task = asyncio.ensure_future(self._session_manager.release_session(session_id, session))
+        # Held here until it is done, and named by id so ``open_pane`` can
+        # wait for it.
+        self._releases[session_id] = task
+        task.add_done_callback(lambda done: self._forget_release(session_id, done))
+
+    def _forget_release(self, session_id: str, task: asyncio.Future[Any]) -> None:
+        if self._releases.get(session_id) is task:
+            del self._releases[session_id]
 
     def _sweep_idle_sessions(self) -> None:
         now = asyncio.get_running_loop().time()

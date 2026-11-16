@@ -178,7 +178,7 @@ Herdr is a workspace manager for coding agents. The agent attaches to the herdr 
 **Pane session.** `POST /api/herdr/pane/open` returns a normal terminal session id; the client opens the usual session socket with it. The session differs in three ways:
 
 * It is not in `sessions.changed` or `GET /api/sessions`, it does not count for the session limit, and it does not hold back an agent update.
-* Stopping it only detaches. It ends (`stopped` state frame) when the pane closes or the herdr server goes away. The id is stable for a pane: a client that gets `stopped` calls `open` again once.
+* No route stops it: `DELETE /api/sessions/{id}` answers 404 for it, as for an id that is not in the list. It ends (`stopped` state frame) when the pane closes or the herdr server goes away; the agent's own end of a view only detaches from the pane. The id is stable for a pane: a client that gets `stopped` calls `open` again once.
 * Its stream runs only while a client is attached, and control ends when the last client detaches.
 
 Its state frame (`s`) carries a `pane` block: `{"status": "running", "pane": {"mode": "watch", "cols": 84, "rows": 47}}`. The agent sends a new state frame when the block changes.
