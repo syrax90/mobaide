@@ -1,5 +1,19 @@
 # mobaide_agent Changelog
 
+## [0.3.30](https://github.com/syrax90/mobaide/compare/agent-v0.3.29...agent-v0.3.30) (2026-11-17)
+
+
+### Features
+
+* **agent,server,android,ios,web:** support Junie CLI as a managed agent ([#890](https://github.com/syrax90/mobaide/issues/890)) ([ab85eda](https://github.com/syrax90/mobaide/commit/ab85eda88db22fc10947cd1d6b99287e5c785ae0))
+* **agent:** keep git worktrees in ~/.mobaide/worktrees instead of the project ([#881](https://github.com/syrax90/mobaide/issues/881)) ([6b196c0](https://github.com/syrax90/mobaide/commit/6b196c00db51af4c257812ba00cd78bfce114fa4))
+
+
+### Bug Fixes
+
+* **agent,android,ios,web:** show background work in the chat header instead of "Ready" ([#887](https://github.com/syrax90/mobaide/issues/887)) ([4a221f7](https://github.com/syrax90/mobaide/commit/4a221f7eb6a70460f7e8a26846fa0484bb59e223))
+* **agent:** stop showing a Claude chat as Ready while background work runs ([#885](https://github.com/syrax90/mobaide/issues/885)) ([23b6db2](https://github.com/syrax90/mobaide/commit/23b6db24099a21aeba5de866af7652c4690c4895))
+
 ## [0.3.29](https://github.com/syrax90/mobaide/compare/agent-v0.3.28...agent-v0.3.29) (2026-11-14)
 
 

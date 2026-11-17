@@ -1,5 +1,12 @@
 # central_server Changelog
 
+## [0.2.27](https://github.com/syrax90/mobaide/compare/server-v0.2.26...server-v0.2.27) (2026-11-17)
+
+
+### Features
+
+* **agent,server,android,ios,web:** support Junie CLI as a managed agent ([#890](https://github.com/syrax90/mobaide/issues/890)) ([ab85eda](https://github.com/syrax90/mobaide/commit/ab85eda88db22fc10947cd1d6b99287e5c785ae0))
+
 ## [0.2.26](https://github.com/syrax90/mobaide/compare/server-v0.2.25...server-v0.2.26) (2026-11-14)
 
 
