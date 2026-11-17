@@ -1,5 +1,18 @@
 # Android Changelog
 
+## [3.7.5](https://github.com/syrax90/mobaide/compare/android-v3.7.4...android-v3.7.5) (2026-11-17)
+
+
+### Features
+
+* **agent,server,android,ios,web:** support Junie CLI as a managed agent ([#890](https://github.com/syrax90/mobaide/issues/890)) ([ab85eda](https://github.com/syrax90/mobaide/commit/ab85eda88db22fc10947cd1d6b99287e5c785ae0))
+
+
+### Bug Fixes
+
+* **agent,android,ios,web:** show background work in the chat header instead of "Ready" ([#887](https://github.com/syrax90/mobaide/issues/887)) ([4a221f7](https://github.com/syrax90/mobaide/commit/4a221f7eb6a70460f7e8a26846fa0484bb59e223))
+* **android,ios,web:** rename "ACP session ID" to "Session ID" in session info ([#882](https://github.com/syrax90/mobaide/issues/882)) ([355379b](https://github.com/syrax90/mobaide/commit/355379b691e44162e066af6a914b0d9b0247fbe3))
+
 ## [3.7.4](https://github.com/syrax90/mobaide/compare/android-v3.7.3...android-v3.7.4) (2026-11-14)
 
 
