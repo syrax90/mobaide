@@ -28,6 +28,7 @@ private struct CreateSessionContent: View {
     @State private var opencodeAdvancedExpanded = false
     @State private var copilotAdvancedExpanded = false
     @State private var cursorAdvancedExpanded = false
+    @State private var junieAdvancedExpanded = false
     @State private var piAdvancedExpanded = false
     @State private var autoScanAdvancedExpanded = false
     @State private var showContinueSession = false
@@ -426,6 +427,7 @@ private struct CreateSessionContent: View {
             case .opencode: opencodeConfig
             case .copilot: copilotConfig
             case .cursor: cursorConfig
+            case .junie: junieConfig
             case .pi: piConfig
             case .custom(let id): customConfig(id)
             case .autoScan, .shell, .none: shellConfig
@@ -448,6 +450,9 @@ private struct CreateSessionContent: View {
             }
             if model.mode == .cursor {
                 cursorAdvancedSection
+            }
+            if model.mode == .junie {
+                junieAdvancedSection
             }
             if model.mode == .pi {
                 piAdvancedSection
@@ -946,6 +951,45 @@ private struct CreateSessionContent: View {
                         set: { model.cursorTerminalUI = $0 }
                     ),
                     unavailableReason: model.cursorChatUnavailableReason
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var junieConfig: some View {
+        @Bindable var model = model
+        Section(header: PixelSectionHeader("Junie")) {
+            Toggle("Start in Plan mode", isOn: $model.juniePlanMode)
+            Text("Junie prepares a plan and asks you to approve it before it changes your files.")
+                .font(.footnote)
+                .foregroundStyle(colors.textMuted)
+            Toggle("Brave mode (dangerous)", isOn: $model.junieBrave)
+            Text(
+                model.junieBrave
+                    ? "Junie runs all commands without asking, in this session only."
+                    : "Junie uses its own Brave setting. By default it asks before commands that are not safe."
+            )
+            .font(.footnote)
+            .foregroundStyle(colors.textMuted)
+        }
+        continueSessionSection(
+            agentName: "Junie",
+            hint: "Open a Junie session stored on your PC, also one you started in Junie’s terminal UI."
+        )
+    }
+
+    /// Collapsed like the Codex one; rendered after the Worktree section.
+    @ViewBuilder
+    private var junieAdvancedSection: some View {
+        Section {
+            DisclosureGroup("Advanced", isExpanded: $junieAdvancedExpanded) {
+                terminalUIToggle(
+                    Binding(
+                        get: { model.junieTerminalUI || model.junieChatUnavailable },
+                        set: { model.junieTerminalUI = $0 }
+                    ),
+                    unavailableReason: model.junieChatUnavailableReason
                 )
             }
         }

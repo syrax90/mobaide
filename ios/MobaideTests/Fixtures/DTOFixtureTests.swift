@@ -50,6 +50,18 @@ final class DTOFixtureTests: XCTestCase {
         XCTAssertEqual(String(decoding: reencoded, as: UTF8.self), "\"cursor\"")
     }
 
+    func testJunieSessionKindIsItsOwnCaseNotACustomKind() throws {
+        // A kind held as `.custom` would get the neutral key row and no
+        // "Junie" label.
+        let decoded = try FixtureLoader.decodeCase(
+            SessionKind.self, path: "dto/agent/SessionKind.json", name: "junie"
+        )
+        XCTAssertEqual(decoded, .junie)
+
+        let reencoded = try WireJSON.encoder().encode(decoded)
+        XCTAssertEqual(String(decoding: reencoded, as: UTF8.self), "\"junie\"")
+    }
+
     func testGitItemComputedPropertiesAreDerivedNotSerialized() throws {
         let withWorktree = GitItem(kind: GitItem.kindBranchWithWorktree, branch: "b", worktree_path: "/wt/b")
         XCTAssertEqual(withWorktree.id, "branch_with_worktree:b")

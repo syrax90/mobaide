@@ -10,6 +10,7 @@ from mobaide.core.claude_launcher import AdHocLaunch, ClaudeOptions, LaunchSpec
 from mobaide.core.codex_launcher import CodexOptions
 from mobaide.core.copilot_launcher import CopilotOptions
 from mobaide.core.cursor_launcher import CursorOptions
+from mobaide.core.junie_launcher import JunieOptions
 from mobaide.core.models import SessionConfig, SessionKind, SessionState
 from mobaide.core.opencode_launcher import OpenCodeOptions
 from mobaide.core.pi_launcher import PiOptions
@@ -708,6 +709,91 @@ class TestCursorLaunchBranching:
                 kind=SessionKind.CURSOR,
             )
             with pytest.raises(ValueError, match="Cursor launcher"):
+                await mgr.create_session(config)
+
+            claude_launcher.build.assert_not_awaited()
+            assert mgr.list_sessions() == []
+        finally:
+            await mgr.shutdown()
+
+
+@pytest.mark.timeout(20)
+class TestJunieLaunchBranching:
+    """``create_session`` routes a ``junie_options`` session to the Junie
+    launcher (not the Claude one), and raises a clear error when no Junie
+    launcher is wired.
+    """
+
+    async def test_workspace_junie_options_invokes_junie_launcher(
+        self, tmp_path,
+    ) -> None:
+        workspace = MagicMock()
+        workspace.name = "proj"
+        workspace.path = str(tmp_path)
+        store = MagicMock()
+        store.get = MagicMock(return_value=workspace)
+
+        claude_launcher = MagicMock()
+        claude_launcher.build = AsyncMock()
+        cursor_launcher = MagicMock()
+        cursor_launcher.build = AsyncMock()
+        junie_launcher = MagicMock()
+        # A real spawnable command, so the PTY start succeeds on a host
+        # without ``junie``; the argv is covered by ``test_junie_launcher``.
+        junie_launcher.build = AsyncMock(
+            return_value=LaunchSpec(
+                argv=default_shell(),
+                cwd=str(tmp_path),
+                env={"X": "Y"},
+            ),
+        )
+        options = JunieOptions(plan_mode=True, brave=True)
+
+        mgr = SessionManager(
+            workspaces_store=store,
+            launcher=claude_launcher,
+            cursor_launcher=cursor_launcher,
+            junie_launcher=junie_launcher,
+        )
+        try:
+            config = SessionConfig(
+                session_id="junie-sess",
+                command=default_shell(),
+                rows=24, cols=80, scrollback_size=50,
+                project_name="proj",
+                junie_options=options,
+                kind=SessionKind.JUNIE,
+            )
+            await mgr.create_session(config)
+
+            claude_launcher.build.assert_not_awaited()
+            cursor_launcher.build.assert_not_awaited()
+            assert config.env == {"X": "Y"}
+            call = junie_launcher.build.await_args
+            assert call.args[0] is workspace
+            assert call.args[1] is options
+            assert mgr.list_sessions()[0].kind == SessionKind.JUNIE
+        finally:
+            await mgr.shutdown()
+
+    async def test_junie_session_without_a_junie_launcher_is_refused(
+        self, tmp_path,
+    ) -> None:
+        """Without the check the session would start the caller's fallback
+        command (a plain shell) under the Junie kind."""
+        claude_launcher = MagicMock()
+        claude_launcher.build = AsyncMock()
+        mgr = SessionManager(launcher=claude_launcher)
+        try:
+            config = SessionConfig(
+                session_id="junie-unwired",
+                command=default_shell(),
+                cwd=str(tmp_path),
+                rows=24, cols=80, scrollback_size=50,
+                junie_options=JunieOptions(),
+                kind=SessionKind.JUNIE,
+            )
+            with pytest.raises(ValueError, match="Junie launcher"):
                 await mgr.create_session(config)
 
             claude_launcher.build.assert_not_awaited()

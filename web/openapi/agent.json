@@ -835,6 +835,16 @@
             ],
             "title": "Env"
           },
+          "junie_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JunieOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "opencode_options": {
             "anyOf": [
               {
@@ -2566,6 +2576,50 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "JunieOptionsModel": {
+        "description": "Wire DTO for Junie CLI launch options (see :class:`JunieOptions`).\n\n``plan_mode`` starts the session in Junie's Plan mode. ``brave`` is\nJunie's ``--brave``: Brave mode for this session only, which runs\ncommands without asking.",
+        "properties": {
+          "base_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Branch"
+          },
+          "branch_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Name"
+          },
+          "brave": {
+            "default": false,
+            "title": "Brave",
+            "type": "boolean"
+          },
+          "plan_mode": {
+            "default": false,
+            "title": "Plan Mode",
+            "type": "boolean"
+          },
+          "worktree": {
+            "default": false,
+            "title": "Worktree",
+            "type": "boolean"
+          }
+        },
+        "title": "JunieOptionsModel",
+        "type": "object"
+      },
       "LinearLabelModel": {
         "description": "Linear label discovered via the per-workspace API key.",
         "properties": {
@@ -3054,6 +3108,7 @@
               "opencode",
               "copilot",
               "cursor",
+              "junie",
               "pi"
             ],
             "title": "Kind",

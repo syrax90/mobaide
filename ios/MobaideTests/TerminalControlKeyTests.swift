@@ -47,6 +47,18 @@ final class TerminalControlKeyTests: XCTestCase {
         )
     }
 
+    func testJunieKindUsesTheSharedKeysPlusModeAndCtrlP() {
+        // Junie picks an approval from a list, has no Rewind chord and does
+        // not bind Ctrl+L.
+        XCTAssertEqual(
+            ids(TerminalControlKey.keys(for: .junie)),
+            [
+                "enter", "up", "down", "left", "right", "ctrlC", "mode", "esc",
+                "ctrlP", "tab", "backspace", "ctrlO", "ctrlR",
+            ]
+        )
+    }
+
     // MARK: - Set composition (order is what the user sees + the fixed wire order)
 
     func testDefaultSetCompositionOmitsClaudeTUIKeys() {
@@ -98,6 +110,14 @@ final class TerminalControlKeyTests: XCTestCase {
         XCTAssertEqual(bytes("mode", in: opencode), [0x1B, 0x5B, 0x5A], "Shift+Tab cycles the agent")
         XCTAssertEqual(bytes("backspace", in: opencode), [0x7F])
     }
+    func testJunieControlBytes() {
+        let junie = TerminalControlKey.junieKeys
+        XCTAssertEqual(bytes("mode", in: junie), [0x1B, 0x5B, 0x5A], "Shift+Tab toggles Plan mode")
+        XCTAssertEqual(bytes("ctrlP", in: junie), [0x10], "Ctrl+P opens the plan")
+        XCTAssertNil(bytes("approve", in: junie))
+        XCTAssertNil(bytes("rewind", in: junie))
+    }
+
     func testCursorControlBytes() {
         let cursor = TerminalControlKey.cursorKeys
         XCTAssertEqual(bytes("mode", in: cursor), [0x1B, 0x5B, 0x5A], "Shift+Tab switches Agent, Plan and Ask")

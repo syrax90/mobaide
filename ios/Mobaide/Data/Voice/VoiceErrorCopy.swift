@@ -48,6 +48,7 @@ enum VoiceErrorCopy {
         case "opencode": return ("OpenCode", "opencode upgrade")
         case "copilot": return ("GitHub Copilot", "copilot update")
         case "cursor": return ("Cursor", "cursor-agent update")
+        case "junie": return ("Junie", "junie update")
         case "pi": return ("Pi", "pi update")
         default: return ("The session's AI agent", nil)
         }

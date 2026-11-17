@@ -22,6 +22,7 @@ from mobaide.acp import agents, codex_bridge, pi_bridge
 from mobaide.acp.agents import (
     CODEX_USER_CODE_PATTERN,
     COPILOT_USER_CODE_PATTERN,
+    JUNIE_PLAN_REVIEW_PREFIX,
     AntigravityChatSpec,
     ChatAgentUnavailableError,
     ClaudeChatSpec,
@@ -29,6 +30,7 @@ from mobaide.acp.agents import (
     ConfigIntent,
     CopilotChatSpec,
     CursorChatSpec,
+    JunieChatSpec,
     OpenCodeChatSpec,
     PiChatSpec,
     antigravity_config_intents,
@@ -53,6 +55,7 @@ from mobaide.acp.trust import (
     CodexFolderTrust,
     CopilotFolderTrust,
     CursorFolderTrust,
+    JunieFolderTrust,
     PiFolderTrust,
 )
 from mobaide.core.antigravity_launcher import AntigravityBinaryNotFoundError, AntigravityOptions
@@ -62,6 +65,7 @@ from mobaide.core import codex_auth
 from mobaide.core.codex_launcher import CodexBinaryNotFoundError, CodexOptions
 from mobaide.core.copilot_launcher import CopilotBinaryNotFoundError, CopilotOptions
 from mobaide.core.cursor_launcher import CursorBinaryNotFoundError, CursorOptions
+from mobaide.core.junie_launcher import JunieBinaryNotFoundError, JunieOptions
 from mobaide.core.opencode_launcher import OpenCodeBinaryNotFoundError, OpenCodeOptions
 from mobaide.core.pi_launcher import PiBinaryNotFoundError, PiOptions
 from mobaide.core.workspaces_config import WorkspaceConfig
@@ -175,6 +179,29 @@ class FakeCursorLauncher:
     def resolve_binary(self) -> str:
         if self.binary is None:
             raise CursorBinaryNotFoundError(searched_paths=["PATH:cursor-agent"])
+        return self.binary
+
+    async def resolve_cwd(self, target, options) -> str:
+        self.resolved.append((target, options))
+        return target.path if isinstance(target, WorkspaceConfig) else target.cwd
+
+    def build_env(self, target) -> dict[str, str]:
+        return {"PATH": "/usr/bin", "LAUNCHER": "1", **self.env}
+
+
+class FakeJunieLauncher:
+    """The three ``JunieLauncher`` calls a chat spec makes."""
+
+    def __init__(
+        self, binary: str | None = "/opt/junie/bin/junie", env: dict[str, str] | None = None
+    ) -> None:
+        self.binary = binary
+        self.env = env or {}
+        self.resolved: list[tuple[object, JunieOptions]] = []
+
+    def resolve_binary(self) -> str:
+        if self.binary is None:
+            raise JunieBinaryNotFoundError(searched_paths=["PATH:junie"])
         return self.binary
 
     async def resolve_cwd(self, target, options) -> str:
@@ -1459,6 +1486,169 @@ class TestCursorPrepare:
 
         assert excinfo.value.kind == "cursor"
         assert "cursor.com/install" in str(excinfo.value)
+
+
+class TestJunieCommand:
+    def test_junie_runs_its_own_acp_server(self):
+        spec = JunieChatSpec(FakeJunieLauncher())
+
+        assert spec.command() == ["/opt/junie/bin/junie", "--acp=true"]
+        assert spec.available() is True
+        assert spec.uses_fake_agent() is False
+
+    def test_no_junie_is_unavailable(self):
+        spec = JunieChatSpec(FakeJunieLauncher(binary=None))
+
+        assert spec.command() is None
+        assert spec.available() is False
+
+    def test_test_mode_runs_the_fake_agent_in_its_junie_flavor(self):
+        spec = JunieChatSpec(FakeJunieLauncher(), test_mode=True)
+
+        assert spec.command() == fake_agent_argv("junie")
+        assert spec.uses_fake_agent() is True
+
+    async def test_the_registry_keeps_the_trusted_folders_in_the_state_folder(self, tmp_path):
+        """The uninstall removes ``junie-trusted-folders.json`` from the prefix."""
+        workspace = tmp_path / "work" / "app"
+        workspace.mkdir(parents=True)
+        specs = build_chat_agents(
+            {"junie": FakeJunieLauncher(binary=None), "shell": object()},
+            command_overrides={"junie": "junie-dev --acp=true"},
+            state_dir=tmp_path / "prefix",
+        )
+        (tmp_path / "prefix").mkdir()
+
+        assert list(specs) == ["junie"]
+        assert specs["junie"].command() == ["junie-dev", "--acp=true"]
+        plan = await specs["junie"].prepare(AdHocLaunch(cwd=str(workspace)), JunieOptions())
+        assert plan.trust is not None and plan.trust.grant() is True
+        assert [p.name for p in (tmp_path / "prefix").iterdir()] == ["junie-trusted-folders.json"]
+
+    async def test_without_a_state_folder_trust_lasts_for_the_session(self, tmp_path):
+        workspace = tmp_path / "work" / "app"
+        workspace.mkdir(parents=True)
+        specs = build_chat_agents({"junie": FakeJunieLauncher()})
+
+        plan = await specs["junie"].prepare(AdHocLaunch(cwd=str(workspace)), JunieOptions())
+
+        assert plan.trust is not None and plan.trust.grant() is False
+
+
+class TestJuniePrepare:
+    async def test_plan_runs_in_home_and_opens_the_session_folder(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        workspace = tmp_path / "work" / "app"
+        workspace.mkdir(parents=True)
+        launcher = FakeJunieLauncher()
+        options = JunieOptions()
+
+        plan = await JunieChatSpec(launcher).prepare(AdHocLaunch(cwd=str(workspace)), options)
+
+        assert plan.argv == ["/opt/junie/bin/junie", "--acp=true"]
+        # The folder goes to Junie in ``session/new``; the server runs in home.
+        assert plan.cwd == str(workspace)
+        assert plan.process_cwd == str(home)
+        assert plan.env["LAUNCHER"] == "1"
+        assert plan.initial_config == []
+        assert plan.auto_approve is False
+        # Junie signs in only on its own welcome screen in the terminal UI.
+        assert plan.sign_in == []
+        assert plan.sign_in_hint is not None
+        assert set(plan.error_hints) == {"model_not_available"}
+        assert [(target.cwd, opts) for target, opts in launcher.resolved] == [
+            (str(workspace), options)
+        ]
+
+    async def test_plan_mode_is_junie_s_mode_option_and_must_be_set(self, tmp_path):
+        """``--plan`` applies only to the terminal UI; the chat sets the mode,
+        and never starts without it."""
+        plan = await JunieChatSpec(FakeJunieLauncher()).prepare(
+            AdHocLaunch(cwd=str(tmp_path)), JunieOptions(plan_mode=True)
+        )
+
+        assert plan.argv == ["/opt/junie/bin/junie", "--acp=true"]
+        assert plan.initial_config == [ConfigIntent("plan", option_id="mode", required=True)]
+
+    async def test_brave_is_a_flag_of_this_process_only(self, tmp_path):
+        """Junie's ``brave_mode`` option would change its saved setting for
+        every later session."""
+        plan = await JunieChatSpec(FakeJunieLauncher()).prepare(
+            AdHocLaunch(cwd=str(tmp_path)), JunieOptions(brave=True)
+        )
+
+        assert plan.argv == ["/opt/junie/bin/junie", "--acp=true", "--brave"]
+        assert plan.initial_config == []
+        # Junie's own flag does the work: the chat accepts nothing for the user.
+        assert plan.auto_approve is False
+
+    async def test_brave_with_an_operator_command_makes_the_chat_accept_the_requests(
+        self, tmp_path
+    ):
+        """A command the operator set has no place for Junie's flag."""
+        spec = JunieChatSpec(FakeJunieLauncher(), command_override="junie-dev --acp=true")
+
+        brave = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), JunieOptions(brave=True))
+        asking = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), JunieOptions())
+
+        assert brave.argv == ["junie-dev", "--acp=true"]
+        assert brave.auto_approve is True
+        # Except "Implement this plan?", which stays the user's own choice.
+        assert brave.decision_tool_prefixes == (JUNIE_PLAN_REVIEW_PREFIX,)
+        assert asking.argv == ["junie-dev", "--acp=true"]
+        assert asking.auto_approve is False
+
+    async def test_brave_with_the_fake_agent_has_no_trust_gate_and_accepts_the_requests(
+        self, tmp_path
+    ):
+        spec = JunieChatSpec(FakeJunieLauncher(binary=None), test_mode=True)
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), JunieOptions(brave=True))
+
+        assert plan.argv == fake_agent_argv("junie")
+        assert plan.trust is None
+        assert plan.auto_approve is True
+
+    async def test_the_trust_markers_are_the_ones_of_the_junie_the_launch_env_points_to(
+        self, tmp_path
+    ):
+        """Over ACP Junie loads a folder's MCP servers and skills without its
+        own trust question, so the chat asks first."""
+        workspace = tmp_path / "work" / "app"
+        workspace.mkdir(parents=True)
+        trusted = tmp_path / "work" / "trusted"
+        trusted.mkdir()
+        junie_dir = tmp_path / "junie-home"
+        (junie_dir / "trust").mkdir(parents=True)
+        (junie_dir / "trust" / "marker.json").write_text(
+            json.dumps({"path": os.path.realpath(trusted), "kind": "EXACT_PROJECT"}),
+            encoding="utf-8",
+        )
+        spec = JunieChatSpec(FakeJunieLauncher(env={"JUNIE_HOME": str(junie_dir)}))
+
+        asked = await spec.prepare(AdHocLaunch(cwd=str(workspace)), JunieOptions())
+        known = await spec.prepare(AdHocLaunch(cwd=str(trusted)), JunieOptions())
+
+        assert isinstance(asked.trust, JunieFolderTrust)
+        assert asked.trust.is_trusted() is False
+        assert isinstance(known.trust, JunieFolderTrust)
+        assert known.trust.is_trusted() is True
+
+    async def test_no_junie_fails_before_the_launcher_runs(self, tmp_path):
+        launcher = FakeJunieLauncher(binary=None)
+
+        with pytest.raises(ChatAgentUnavailableError) as excinfo:
+            await JunieChatSpec(launcher).prepare(
+                AdHocLaunch(cwd=str(tmp_path)), JunieOptions(worktree=True)
+            )
+
+        assert excinfo.value.kind == "junie"
+        assert "junie.jetbrains.com/install.sh" in str(excinfo.value)
+        # The launcher would have made a worktree for a session that never starts.
+        assert launcher.resolved == []
 
 
 def _agy_setup(*, available_models: bool = True) -> dict:

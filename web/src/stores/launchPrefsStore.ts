@@ -93,6 +93,13 @@ export interface CursorLaunchPrefs {
   terminalUi: boolean;
 }
 
+/** Android `JunieLaunchPrefs`, iOS `JunieLaunchPrefs`. */
+export interface JunieLaunchPrefs {
+  planMode: boolean;
+  brave: boolean;
+  terminalUi: boolean;
+}
+
 /** Android `PiLaunchPrefs`, iOS `PiLaunchPrefs`. */
 export interface PiLaunchPrefs {
   terminalUi: boolean;
@@ -111,6 +118,7 @@ export interface LaunchPrefs {
   opencode: OpenCodeLaunchPrefs | null;
   copilot: CopilotLaunchPrefs | null;
   cursor: CursorLaunchPrefs | null;
+  junie: JunieLaunchPrefs | null;
   pi: PiLaunchPrefs | null;
   lastWorkspaceName: string | null;
 }
@@ -125,6 +133,7 @@ export type LaunchPrefsSnapshot =
   | { kind: 'opencode'; prefs: OpenCodeLaunchPrefs }
   | { kind: 'copilot'; prefs: CopilotLaunchPrefs }
   | { kind: 'cursor'; prefs: CursorLaunchPrefs }
+  | { kind: 'junie'; prefs: JunieLaunchPrefs }
   | { kind: 'pi'; prefs: PiLaunchPrefs };
 
 interface LaunchPrefsState extends LaunchPrefs {
@@ -189,6 +198,12 @@ export const COPILOT_PREFS_DEFAULTS: CopilotLaunchPrefs = {
 
 export const CURSOR_PREFS_DEFAULTS: CursorLaunchPrefs = {
   force: false,
+  terminalUi: false,
+};
+
+export const JUNIE_PREFS_DEFAULTS: JunieLaunchPrefs = {
+  planMode: false,
+  brave: false,
   terminalUi: false,
 };
 
@@ -385,6 +400,15 @@ function sanitizeCursorPrefs(raw: unknown): CursorLaunchPrefs | null {
   return { force, terminalUi };
 }
 
+function sanitizeJuniePrefs(raw: unknown): JunieLaunchPrefs | null {
+  if (!isRecord(raw)) return null;
+  const planMode = field(raw, 'planMode', JUNIE_PREFS_DEFAULTS.planMode, isBoolean);
+  const brave = field(raw, 'brave', JUNIE_PREFS_DEFAULTS.brave, isBoolean);
+  const terminalUi = field(raw, 'terminalUi', JUNIE_PREFS_DEFAULTS.terminalUi, isBoolean);
+  if (planMode === undefined || brave === undefined || terminalUi === undefined) return null;
+  return { planMode, brave, terminalUi };
+}
+
 function sanitizePiPrefs(raw: unknown): PiLaunchPrefs | null {
   if (!isRecord(raw)) return null;
   const terminalUi = field(raw, 'terminalUi', PI_PREFS_DEFAULTS.terminalUi, isBoolean);
@@ -408,6 +432,7 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
       opencode: null,
       copilot: null,
       cursor: null,
+      junie: null,
       pi: null,
       lastWorkspaceName: null,
       setLaunchPrefs: (snapshot) => {
@@ -432,6 +457,9 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
             return;
           case 'cursor':
             set({ cursor: snapshot.prefs });
+            return;
+          case 'junie':
+            set({ junie: snapshot.prefs });
             return;
           case 'pi':
             set({ pi: snapshot.prefs });
@@ -463,6 +491,7 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
           opencode: sanitizeOpenCodePrefs(saved.opencode),
           copilot: sanitizeCopilotPrefs(saved.copilot),
           cursor: sanitizeCursorPrefs(saved.cursor),
+          junie: sanitizeJuniePrefs(saved.junie),
           pi: sanitizePiPrefs(saved.pi),
           lastWorkspaceName:
             typeof lastWorkspaceName === 'string' && lastWorkspaceName !== ''
@@ -476,7 +505,7 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
 
 /** Non-reactive read, for the wizard's reducer initializer and prefill effect. */
 export function readLaunchPrefs(): LaunchPrefs {
-  const { claude, autoScan, codex, antigravity, opencode, copilot, cursor, pi, lastWorkspaceName } =
+  const { claude, autoScan, codex, antigravity, opencode, copilot, cursor, junie, pi, lastWorkspaceName } =
     useLaunchPrefsStore.getState();
-  return { claude, autoScan, codex, antigravity, opencode, copilot, cursor, pi, lastWorkspaceName };
+  return { claude, autoScan, codex, antigravity, opencode, copilot, cursor, junie, pi, lastWorkspaceName };
 }

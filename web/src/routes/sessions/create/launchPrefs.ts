@@ -113,6 +113,14 @@ export function applyLaunchPrefs(base: WizardState, prefs: LaunchPrefs): WizardS
       prefs.cursor === null
         ? base.cursor
         : { force: prefs.cursor.force, terminalUi: prefs.cursor.terminalUi },
+    junie:
+      prefs.junie === null
+        ? base.junie
+        : {
+            planMode: prefs.junie.planMode,
+            brave: prefs.junie.brave,
+            terminalUi: prefs.junie.terminalUi,
+          },
     pi:
       prefs.pi === null
         ? base.pi
@@ -207,6 +215,15 @@ export function launchPrefsFromState(
         prefs: {
           force: state.cursor.force,
           terminalUi: state.cursor.terminalUi,
+        },
+      };
+    case 'junie':
+      return {
+        kind: 'junie',
+        prefs: {
+          planMode: state.junie.planMode,
+          brave: state.junie.brave,
+          terminalUi: state.junie.terminalUi,
         },
       };
     case 'pi':

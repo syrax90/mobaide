@@ -23,8 +23,8 @@ async def test_get_version(client) -> None:
     # capabilities.cli now reports per-CLI binary availability so the Android
     # mode-picker can gray out a CLI that isn't installed. The autouse
     # _pin_claude_binary / _pin_codex_binary / _pin_antigravity_binary /
-    # _pin_opencode_binary / _pin_copilot_binary / _pin_cursor_binary / _pin_pi_binary fixtures
-    # make all seven resolve,
+    # _pin_opencode_binary / _pin_copilot_binary / _pin_cursor_binary /
+    # _pin_junie_binary / _pin_pi_binary fixtures make all eight resolve,
     # so all report available. The entries stay bare
     # {"available": bool} because the ASGITransport fixtures never run the app
     # lifespan, so the model-cache warm task never fires.
@@ -36,6 +36,7 @@ async def test_get_version(client) -> None:
             "opencode": {"available": True},
             "copilot": {"available": True},
             "cursor": {"available": True},
+            "junie": {"available": True},
             "pi": {"available": True},
         },
         "git": {
@@ -59,7 +60,7 @@ async def test_get_version(client) -> None:
             "max_seconds": 120,
             "max_chunk_bytes": 65536,
             "cleanup": True,
-            "cleanup_kinds": ["claude", "codex", "antigravity", "opencode", "copilot", "cursor", "pi"],
+            "cleanup_kinds": ["claude", "codex", "antigravity", "opencode", "copilot", "cursor", "junie", "pi"],
         },
         "fs": {"dirs": True, "windows_paths": sys.platform == "win32"},
         "chat": {
@@ -68,6 +69,7 @@ async def test_get_version(client) -> None:
             "opencode": {"resume": True, "live": False},
             "copilot": {"resume": True, "live": False},
             "cursor": {"resume": True, "live": False},
+            "junie": {"resume": True, "live": False},
             "pi": {"resume": True, "live": False},
         },
     }
@@ -121,6 +123,7 @@ async def test_get_version_all_clis_missing_still_returns_200(
         codex_launcher,
         copilot_launcher,
         cursor_launcher,
+        junie_launcher,
         pi_launcher,
     )
 
@@ -139,12 +142,16 @@ async def test_get_version_all_clis_missing_still_returns_200(
     def _copilot_raise(*_a, **_kw):
         raise copilot_launcher.CopilotBinaryNotFoundError(["PATH:copilot"])
 
+    def _junie_raise(*_a, **_kw):
+        raise junie_launcher.JunieBinaryNotFoundError(["PATH:junie"])
+
     def _pi_raise(*_a, **_kw):
         raise pi_launcher.PiBinaryNotFoundError(["PATH:pi"])
 
     monkeypatch.setattr(claude_launcher, "_resolve_claude_binary", _claude_raise)
     monkeypatch.setattr(copilot_launcher, "_resolve_copilot_binary", _copilot_raise)
     monkeypatch.setattr(cursor_launcher, "_resolve_cursor_binary", _cursor_raise)
+    monkeypatch.setattr(junie_launcher, "_resolve_junie_binary", _junie_raise)
     monkeypatch.setattr(pi_launcher, "_resolve_pi_binary", _pi_raise)
     monkeypatch.setattr(codex_launcher, "_resolve_codex_binary", _codex_raise)
     monkeypatch.setattr(
@@ -160,6 +167,7 @@ async def test_get_version_all_clis_missing_still_returns_200(
         "opencode": {"available": True},
         "copilot": {"available": False},
         "cursor": {"available": False},
+        "junie": {"available": False},
         "pi": {"available": False},
     }
 

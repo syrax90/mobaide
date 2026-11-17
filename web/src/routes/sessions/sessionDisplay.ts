@@ -11,6 +11,7 @@ const BUILT_IN_KIND_LABELS: Readonly<Record<string, string>> = {
   opencode: 'OpenCode',
   copilot: 'GitHub Copilot',
   cursor: 'Cursor',
+  junie: 'Junie',
   pi: 'Pi',
   auto_scan: 'Auto Scan',
   shell: 'Terminal',

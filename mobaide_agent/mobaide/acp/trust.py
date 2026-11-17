@@ -586,6 +586,113 @@ class CursorFolderTrust:
         return True
 
 
+def junie_home(env: Mapping[str, str] | None = None) -> Path:
+    """Where the Junie CLI started with ``env`` keeps its settings, sessions
+    and trust markers."""
+    custom = ((env if env is not None else os.environ).get("JUNIE_HOME") or "").strip()
+    return Path(custom).expanduser() if custom else Path.home() / ".junie"
+
+
+# Junie's kinds of trust marker: one folder, or every folder inside one.
+_JUNIE_EXACT = "EXACT_PROJECT"
+_JUNIE_RECURSIVE = "RECURSIVE_DIRECTORY"
+# Junie writes one small marker per trusted scope; more is not a marker folder.
+_JUNIE_MARKERS_MAX = 2000
+
+
+class JunieFolderTrust:
+    """Junie's trust question, asked by the chat.
+
+    Over ACP Junie loads a folder's MCP servers and skills without asking.
+    Junie signs its trust markers with a keychain key, so the chat only reads
+    them and keeps its own answers in ``record_path``.
+    """
+
+    prompt_title = "Trust this folder?"
+
+    def __init__(
+        self, cwd: str, *, junie_dir: Path | None = None, record_path: Path | None = None
+    ) -> None:
+        self._cwd = cwd
+        self._junie_dir = junie_dir or junie_home()
+        self._record_path = record_path
+
+    @property
+    def prompt_text(self) -> str:
+        text = (
+            "Junie will use this folder's MCP servers, skills, commands and Junie "
+            "settings. They can run commands on your PC. Only trust a folder whose "
+            "files you know."
+        )
+        if self._record_path is None or too_broad_to_record(self._cwd):
+            text += " Trust for this folder lasts for this session only."
+        return text
+
+    def _junie_trusts(self, folder: str) -> bool:
+        markers = self._junie_dir / "trust"
+        try:
+            names = sorted(os.listdir(markers))[:_JUNIE_MARKERS_MAX]
+        except OSError:
+            return False
+        for name in names:
+            if not name.endswith(".json"):
+                continue
+            try:
+                data = json.loads((markers / name).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(data, dict) or not isinstance(data.get("path"), str):
+                continue
+            path = data["path"]
+            if data.get("kind") == _JUNIE_EXACT and _same_folder(path, folder):
+                return True
+            if data.get("kind") == _JUNIE_RECURSIVE and (
+                _same_folder(path, folder) or _inside(folder, path)
+            ):
+                return True
+        return False
+
+    def _recorded(self, *, strict: bool = False) -> list[str]:
+        """The recorded folders. ``strict`` raises for a record that exists
+        but cannot be read back whole, so a grant never rewrites it."""
+        if self._record_path is None:
+            return []
+        try:
+            data = json.loads(self._record_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return []
+        except (OSError, ValueError):
+            if strict:
+                raise
+            return []
+        if strict and not isinstance(data, dict):
+            raise ValueError(f"{self._record_path} is not a JSON object")
+        folders = data.get("folders") if isinstance(data, dict) else None
+        if strict and folders is not None and not isinstance(folders, list):
+            raise ValueError(f"{self._record_path}: folders is not a list")
+        return [f for f in folders if isinstance(f, str)] if isinstance(folders, list) else []
+
+    def is_trusted(self) -> bool:
+        folder = os.path.realpath(self._cwd)
+        if any(_same_folder(entry, folder) for entry in self._recorded()):
+            return True
+        return self._junie_trusts(folder)
+
+    def grant(self) -> bool:
+        """Save the answer for this folder alone. Returns False, and writes
+        nothing, without a record file or for a folder too broad to record."""
+        if self._record_path is None or too_broad_to_record(self._cwd):
+            return False
+        with _config_lock(self._record_path):
+            folder = os.path.realpath(self._cwd)
+            folders = self._recorded(strict=True)
+            if not any(_same_folder(entry, folder) for entry in folders):
+                record = {"folders": [*folders, folder]}
+                text = json.dumps(record, indent=2, ensure_ascii=False) + "\n"
+                atomic_write(self._record_path, text, mode=0o600)
+        return True
+
+
 # What makes Pi ask its trust question: these entries of a folder's ``.pi``,
 # or an ``.agents/skills`` folder in it or above it.
 _PI_TRUST_RESOURCES = (

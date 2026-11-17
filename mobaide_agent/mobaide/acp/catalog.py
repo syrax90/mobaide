@@ -77,14 +77,18 @@ class ChatCatalog:
         spec = self._specs.get(kind)
         if spec is None or not spec.supports_resume:
             raise ChatCatalogError(404, f"Chat sessions are not available for {kind}")
-        if cwd is not None and not os.path.isabs(cwd):
+        if cwd is not None and (not os.path.isabs(cwd) or "\x00" in cwd):
             raise ChatCatalogError(400, "cwd must be an absolute path")
         lock = self._locks.setdefault(kind, asyncio.Lock())
         async with lock:
+            real_cwd: str | None = None
+            if cwd and getattr(spec, "lists_real_folder", False):
+                loop = asyncio.get_running_loop()
+                real_cwd = await loop.run_in_executor(PROBE_POOL, os.path.realpath, cwd)
             lister = await self._lister(kind, spec)
             params: dict[str, Any] = {}
             if cwd:
-                params["cwd"] = cwd
+                params["cwd"] = real_cwd or cwd
             if cursor:
                 params["cursor"] = cursor
             try:
@@ -123,6 +127,12 @@ class ChatCatalog:
                 raise ChatCatalogError(502, str(exc) or "The agent did not answer") from None
             finally:
                 self._arm_idle(kind)
+        if real_cwd is not None and real_cwd != cwd:
+            # The agent answers with the real path: give the rows back the
+            # folder as the client asked for it, so they match its workspace.
+            for row in page["sessions"]:
+                if row["cwd"] == real_cwd:
+                    row["cwd"] = cwd
         return page
 
     async def _page(self, spec: ChatAgentSpec, result: Any, cwd: str | None) -> dict[str, Any]:

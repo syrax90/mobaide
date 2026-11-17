@@ -259,12 +259,14 @@ fun primaryConfigChips(config: List<ChatConfigOption>): List<ChatConfigOption> =
         .mapNotNull { category -> config.firstOrNull { !it.isBoolean && it.category == category } }
 
 @Composable
-fun modeTone(value: String?): Color {
+fun modeTone(value: String?, name: String? = null): Color {
     val id = value.orEmpty().lowercase()
     return when {
         "plan" in id -> MaterialTheme.colorScheme.primary
         "bypass" in id || "yolo" in id -> MaterialTheme.pixel.danger
         "accept" in id || "auto" in id -> MaterialTheme.pixel.warning
+        // Junie's run-everything mode: its value is a bare "on", its name "Brave".
+        "brave" in name.orEmpty().lowercase() -> MaterialTheme.pixel.danger
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
 }
@@ -293,7 +295,8 @@ fun ChatConfigChips(
     ) {
         chips.forEach { option ->
             val (icon, tone) = when (option.category) {
-                ChatConfigOption.CATEGORY_MODE -> Icons.Outlined.Shield to modeTone(option.selectValue)
+                ChatConfigOption.CATEGORY_MODE ->
+                    Icons.Outlined.Shield to modeTone(option.selectValue, option.currentName())
                 // A chip for the model, a brain for the effort: the same symbols as iOS and the web.
                 ChatConfigOption.CATEGORY_MODEL -> Icons.Outlined.Memory to MaterialTheme.colorScheme.onSurfaceVariant
                 else -> Icons.Outlined.Psychology to MaterialTheme.colorScheme.onSurfaceVariant

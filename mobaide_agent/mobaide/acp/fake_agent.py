@@ -1,6 +1,6 @@
 """A scripted ACP agent for tests and for UI checks on a local stack.
 
-Run with ``python -m mobaide.acp.fake_agent [--flavor codex|antigravity|opencode|copilot|cursor|pi]``.
+Run with ``python -m mobaide.acp.fake_agent [--flavor codex|antigravity|opencode|copilot|cursor|junie|pi]``.
 ``MOBAIDE_ENV=test`` makes the chat sessions use it instead of a real agent,
 so every chat UI state can be reached without an account or network. The
 flavor picks the config options and names of the agent it stands in for. The
@@ -11,7 +11,8 @@ prompt text picks the scenario:
   flavor reports it as one "Command exited with code N" text; the Copilot
   flavor sends the output so far, then a last ``<shellId: …>`` line; the
   Cursor flavor sends it as ``rawOutput`` when the command ends, and also
-  creates a file; the Pi
+  creates a file; the Junie flavor sends a shortened copy as ``content`` and
+  the whole output as ``rawOutput``; the Pi
   flavor sends the output so far as terminal ``_meta``);
 * ``permission`` — a command that waits for approval;
 * ``question`` — a form with single choice, multiple choice and text (the
@@ -19,7 +20,9 @@ prompt text picks the scenario:
 * ``plan`` — a plan that progresses step by step (the Cursor flavor asks to
   accept it with ``cursor/create_plan``, then reports its tasks with
   ``cursor/update_todos``; in Plan mode it stops after the accept, and the
-  prompt ``Implement the plan.`` does the work);
+  prompt ``Implement the plan.`` does the work; the Junie flavor asks
+  "Implement this plan?" and then does the work in the same turn);
+* ``nomodel`` — the Junie flavor refuses the prompt: no model can take it;
 * ``markdown`` — a long Markdown answer (headings, lists, code, table);
 * ``slow`` — a slow stream, to try Stop, the message queue and Send now
   (``_session/steering``);
@@ -117,6 +120,20 @@ CURSOR_EFFORTS = [
     {"value": "high", "name": "High"},
 ]
 CURSOR_FAST = [{"value": "false", "name": "Off"}, {"value": "true", "name": "Fast"}]
+JUNIE_MODES = [
+    {"value": "default", "name": "Default", "description": "Junie plans and implements as needed"},
+    {"value": "plan", "name": "Plan", "description": "Junie prepares a plan and waits for your approval before implementing"},
+    {"value": "goal", "name": "Goal", "description": "Junie works autonomously toward a configured goal"},
+]
+# Junie groups its models by provider.
+JUNIE_MODELS = [
+    {"group": "jetbrains-ai", "name": "JetBrains AI", "options": [
+        {"value": "v1:7:jetbrains-ai:claude-sonnet-5-5", "name": "Claude Sonnet 5.5", "description": ""},
+        {"value": "v1:7:jetbrains-ai:gpt-6.1-sol", "name": "GPT-6.1 Sol", "description": ""},
+    ]},
+]
+JUNIE_EFFORTS = [{"value": v, "name": n} for v, n in (("low", "◎ Low effort"), ("medium", "◐ Medium effort"), ("high", "◕ High effort"))]
+JUNIE_BRAVE = [{"value": "brave-auto", "name": "Auto"}, {"value": "on", "name": "Brave"}, {"value": "off", "name": "Safe"}]
 PI_MODELS = [
     {"value": "openai-codex/gpt-6.1-sol", "name": "GPT-6.1 Sol"},
     {"value": "openai-codex/gpt-5.6-luna", "name": "GPT-5.6 Luna"},
@@ -178,6 +195,7 @@ class FakeAgent:
         self.opencode = flavor == "opencode"
         self.copilot = flavor == "copilot"
         self.cursor = flavor == "cursor"
+        self.junie = flavor == "junie"
         self.pi = flavor == "pi"
         self.steers: dict[str, list[str]] = {}
         self.write_lock = threading.Lock()
@@ -250,6 +268,14 @@ class FakeAgent:
             if s["model"] != "default":
                 options.append({"id": "fast", "name": "Fast", "category": "model_config", "type": "select", "currentValue": s["fast"], "options": CURSOR_FAST})
             return options
+        if self.junie:
+            # Like Junie: its own modes have no category; Brave mode has "mode".
+            return [
+                {"id": "mode", "name": "Mode", "type": "select", "currentValue": s["mode"], "options": JUNIE_MODES},
+                {"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": s["model"], "options": JUNIE_MODELS},
+                {"id": "effort", "name": "Effort", "category": "thought_level", "type": "select", "currentValue": s["effort"], "options": JUNIE_EFFORTS},
+                {"id": "brave_mode", "name": "Brave Mode", "category": "mode", "type": "select", "currentValue": s["brave_mode"], "options": JUNIE_BRAVE},
+            ]
         if self.codex:
             return [
                 {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": s["mode"], "options": CODEX_MODES},
@@ -291,6 +317,10 @@ class FakeAgent:
             self.sessions[sid].update({"mode": COPILOT_MODE_PREFIX + "agent", "allow_all": "off"})
         if self.cursor:
             self.sessions[sid].update({"mode": "agent", "model": "default", "effort": "medium", "fast": "false"})
+        if self.junie:
+            self.sessions[sid].update(
+                {"model": "v1:7:jetbrains-ai:claude-sonnet-5-5", "effort": "medium", "brave_mode": "brave-auto"}
+            )
         if self.pi:
             self.sessions[sid].update({"model": "openai-codex/gpt-6.1-sol", "thought_level": "medium"})
         return sid
@@ -314,6 +344,8 @@ class FakeAgent:
             return ("mode", "allow_all")
         if self.pi:
             return ("model", "thought_level")
+        if self.junie:
+            return ("mode", "model", "effort", "brave_mode")
         return ("mode", "model", "effort", "fast")
 
     def commands(self, sid: str) -> None:
@@ -349,6 +381,12 @@ class FakeAgent:
                 {"name": "create-rule", "description": "Create Cursor rules for persistent AI guidance. (builtin skill)"},
                 {"name": "goal", "description": "Set a goal that Cursor will pursue to completion. (builtin skill)"},
             ]
+        elif self.junie:
+            available = [
+                {"name": "compress", "description": "Compress context before the next task, which may discard some information"},
+                {"name": "rollback", "description": "Roll back the last turns: the agent's context and the files its edit tools changed", "input": {"type": "unstructured", "hint": "number of turns (default 1)"}},
+                {"name": "review", "description": "Review code changes (pick a git revision, or describe what to review)", "input": {"type": "unstructured", "hint": "commit, branch, range, or what to review (optional)"}},
+            ]
         elif self.codex:
             available = [
                 {"name": "plan", "description": "Turn plan mode on.", "input": None},
@@ -377,14 +415,17 @@ class FakeAgent:
             result = await self.dispatch(method, params)
         except _RpcError as exc:
             if msg_id is not None:
-                self.send({"jsonrpc": "2.0", "id": msg_id, "error": {"code": exc.code, "message": exc.message}})
+                error: dict[str, Any] = {"code": exc.code, "message": exc.message}
+                if exc.data is not None:
+                    error["data"] = exc.data
+                self.send({"jsonrpc": "2.0", "id": msg_id, "error": error})
             return
         if msg_id is not None:
             self.send({"jsonrpc": "2.0", "id": msg_id, "result": result})
 
     async def dispatch(self, method: str, params: dict[str, Any]) -> Any:
         if method == "initialize" and signed_out() and not (
-            self.codex or self.agy or self.copilot or self.cursor or self.pi
+            self.codex or self.agy or self.copilot or self.cursor or self.junie or self.pi
         ):
             # claude-agent-acp reports a missing login right after initialize.
             self.loop.call_later(0.05, lambda: self.send({
@@ -392,7 +433,7 @@ class FakeAgent:
                 "params": {"authStatus": {"kind": "none", "label": "Not logged in"}},
             }))
         if method in ("session/new", "session/load") and signed_out() and (
-            self.codex or self.agy or self.copilot or self.cursor or self.pi
+            self.codex or self.agy or self.copilot or self.cursor or self.junie or self.pi
         ):
             raise _RpcError(AUTH_REQUIRED, "Authentication required")
         if method == "session/list" and signed_out() and self.cursor:
@@ -444,6 +485,20 @@ class FakeAgent:
                         "sessionCapabilities": {"list": {}},
                     },
                     "authMethods": [{"id": "cursor_login", "name": "Cursor Login"}],
+                }
+            if self.junie:
+                return {
+                    "protocolVersion": 1,
+                    "agentCapabilities": {
+                        "loadSession": True,
+                        "promptCapabilities": {"audio": False, "image": True, "embeddedContext": True},
+                        "mcpCapabilities": {"http": True, "sse": True},
+                        "sessionCapabilities": {"fork": {}, "list": {}, "resume": {}, "delete": {}, "close": {}, "additionalDirectories": {}},
+                        "auth": {"logout": {}},
+                    },
+                    "authMethods": [{"type": "agent", "id": "jetbrains-account", "name": "Junie Account", "description": "Log in via Junie Account in a browser."}],
+                    "agentInfo": {"name": "@jetbrains/junie", "version": "26.11.1 (4020.10)", "title": "Junie"},
+                    "_meta": {"steering": {"supported": True}},
                 }
             if self.pi:
                 return {
@@ -605,6 +660,8 @@ class FakeAgent:
         if signed_out():
             await asyncio.sleep(0.2)
             raise _RpcError(AUTH_REQUIRED, "Authentication required")
+        if self.junie and "nomodel" in lower:
+            raise _RpcError(-32002, "No models are currently available for submission", {"reason": "model_not_available"})
         ok = True
         if "tool" in lower and self.agy:
             ok = await self.agy_tools(sid)
@@ -616,6 +673,8 @@ class FakeAgent:
             ok = await (self.cursor_question(sid) if self.cursor else self.question(sid))
         elif self.cursor and lower.startswith("implement the plan"):
             ok = await self.cursor_build(sid)
+        elif "plan" in lower and self.junie:
+            ok = await self.junie_plan(sid)
         elif "plan" in lower:
             ok = await (self.cursor_plan(sid) if self.cursor else self.plan(sid))
         elif "markdown" in lower:
@@ -644,8 +703,8 @@ class FakeAgent:
             # The Pi bridge reports the context use, but no cost.
             self.update(sid, {"sessionUpdate": "usage_update", "used": s["used"], "size": 500000})
             return {"stopReason": "end_turn" if ok else "cancelled"}
-        if self.copilot:
-            # Copilot reports the context use, but no cost.
+        if self.copilot or self.junie:
+            # Copilot and Junie report the context use, but no cost.
             self.update(sid, {"sessionUpdate": "usage_update", "used": s["used"], "size": 128000})
             return {"stopReason": "end_turn" if ok else "cancelled",
                     "usage": {"inputTokens": s["used"], "outputTokens": 120, "totalTokens": s["used"] + 120}}
@@ -702,6 +761,24 @@ class FakeAgent:
                               "rawInput": {"path": notes}, "locations": [{"path": notes}]})
             self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": create, "status": "completed",
                               "content": [{"type": "diff", "path": notes, "oldText": "-- /dev/null", "newText": f"++ b/{notes}\nThe tests pass."}]})
+        elif self.junie:
+            # Junie shows a shortened copy of the output in ``content`` and
+            # sends the whole output, then the exit code, as ``rawOutput``.
+            self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": run, "title": "pytest -q", "kind": "execute", "status": "in_progress",
+                              "content": [], "locations": [], "rawInput": {"command": "pytest -q", "cwd": cwd}})
+            output = ""
+            for chunk in ("============ test session starts ============\n", "collected 4 items\n\n", "tests/test_app.py ....\n", "4 passed in 0.12s"):
+                await asyncio.sleep(0.25)
+                output += chunk
+                short = output if output.count("\n") < 2 else output.split("\n", 1)[0] + "\n...\n" + output.rsplit("\n", 1)[-1]
+                self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": run, "status": "in_progress",
+                                  "content": [{"type": "content", "content": {"type": "text", "text": short}}],
+                                  "rawInput": {"command": "pytest -q", "cwd": cwd}, "rawOutput": {"output": output}})
+            if self.stopped(sid):
+                return False
+            self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": run, "status": "completed",
+                              "content": [{"type": "content", "content": {"type": "text", "text": short}}],
+                              "rawInput": {"command": "pytest -q", "cwd": cwd}, "rawOutput": {"output": output, "exitCode": 0}})
         elif self.copilot:
             # Copilot keeps the tool ``pending`` while the command runs and
             # sends the whole output so far in each update.
@@ -824,17 +901,24 @@ class FakeAgent:
         tool = self.tool_id("perm")
         self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": tool, "title": "rm -rf build/", "kind": "execute", "status": "pending",
                           "rawInput": {"command": "rm -rf build/", "description": "Delete the build folder"}})
-        result = await self.call("session/request_permission", {
-            "sessionId": sid,
-            "toolCall": {"toolCallId": tool, "title": "rm -rf build/", "kind": "execute"},
-            "options": [
+        options = (
+            # Junie answers only yes or no.
+            [{"optionId": "Yes", "name": "Yes", "kind": "allow_once"},
+             {"optionId": "No", "name": "No", "kind": "reject_once"}]
+            if self.junie
+            else [
                 {"optionId": "allow", "name": "Allow once", "kind": "allow_once"},
                 {"optionId": "always", "name": "Always allow rm in this project", "kind": "allow_always"},
                 {"optionId": "reject", "name": "Reject", "kind": "reject_once"},
-            ],
+            ]
+        )
+        result = await self.call("session/request_permission", {
+            "sessionId": sid,
+            "toolCall": {"toolCallId": tool, "title": "rm -rf build/", "kind": "execute"},
+            "options": options,
         })
         outcome = (result or {}).get("outcome") or {}
-        if outcome.get("outcome") != "selected" or outcome.get("optionId") == "reject":
+        if outcome.get("outcome") != "selected" or outcome.get("optionId") in ("reject", "No"):
             self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": tool, "status": "failed", "rawOutput": "The user rejected the command"})
             if self.stopped(sid):
                 return False
@@ -931,6 +1015,52 @@ class FakeAgent:
             await asyncio.sleep(0.5)
         return await self.stream(sid, "All three steps are done.")
 
+    async def junie_plan(self, sid: str) -> bool:
+        """Like Junie: the plan as a message, then "Implement this plan?";
+        on yes the mode goes back to Default and the work runs in this turn."""
+        s = self.sessions[sid]
+        text = (
+            "**Requirements**\n\n- Fix the login null check.\n\n**Delivery Steps**\n\n"
+            "**Step 1: Read the code**\n\nFind the handler.\n\n**Step 2: Write the fix**\n\n"
+            "Check for a missing user.\n\n"
+        )
+        if not await self.stream(sid, text, delay=0.01):
+            return False
+        review = "junie-plan-review:" + str(uuid.uuid4())
+        result = await self.call("session/request_permission", {
+            "sessionId": sid,
+            "toolCall": {"toolCallId": review, "title": "Implement this plan?", "kind": "other", "status": "pending",
+                         "rawInput": {"plan": text.strip(), "planFilePath": os.path.join(s["cwd"], ".junie", "plans", "fix-login.md")}},
+            "options": [
+                {"optionId": "implement", "name": "Confirm and implement", "kind": "allow_once"},
+                {"optionId": "spawn-agentic-team", "name": "Spawn agentic team", "kind": "allow_once"},
+                {"optionId": "revise", "name": "Not yet — I'll revise it", "kind": "reject_once"},
+                {"optionId": "stop", "name": "Save the plan and stop", "kind": "reject_once"},
+            ],
+        })
+        outcome = (result or {}).get("outcome") or {}
+        self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": review, "status": "completed"})
+        if outcome.get("outcome") != "selected" or outcome.get("optionId") not in ("implement", "spawn-agentic-team"):
+            return not self.stopped(sid)
+        s["mode"] = "default"
+        self.update(sid, {"sessionUpdate": "config_option_update", "configOptions": self.config(sid)})
+        steps = ["Read the code", "Write the fix"]
+        for done in range(len(steps) + 1):
+            if self.stopped(sid):
+                return False
+            entries = [
+                {"content": step, "priority": "low",
+                 "status": "completed" if i < done else ("in_progress" if i == done else "pending")}
+                for i, step in enumerate(steps)
+            ]
+            self.update(sid, {"sessionUpdate": "plan", "entries": entries})
+            await asyncio.sleep(0.4)
+        ok = await self.stream(sid, "The login handler now checks for a missing user.")
+        # Like Junie: a last update for a plan review id that no tool call announced.
+        self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": "junie-plan-review:" + str(uuid.uuid4()),
+                          "kind": "other", "status": "completed", "rawInput": {"planFilePath": ""}})
+        return ok
+
     async def plan(self, sid: str) -> bool:
         steps = ["Read the code", "Write the fix", "Run the tests"]
         for done in range(len(steps) + 1):
@@ -947,10 +1077,11 @@ class FakeAgent:
 
 
 class _RpcError(Exception):
-    def __init__(self, code: int, message: str) -> None:
+    def __init__(self, code: int, message: str, data: Any = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.data = data
 
 
 def fake_login(flavor: str, device: bool) -> int:

@@ -21,6 +21,7 @@ fun sessionKindLabel(
     SessionKind.OpenCode -> "OpenCode"
     SessionKind.Copilot -> "GitHub Copilot"
     SessionKind.Cursor -> "Cursor"
+    SessionKind.Junie -> "Junie"
     SessionKind.Pi -> "Pi"
     SessionKind.AutoScan -> "Auto Scan"
     SessionKind.Shell -> "Terminal"

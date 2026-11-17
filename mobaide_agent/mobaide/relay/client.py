@@ -134,6 +134,7 @@ from mobaide.agent.sessions.models import (
     CodexOptionsModel,
     CopilotOptionsModel,
     CursorOptionsModel,
+    JunieOptionsModel,
     PiOptionsModel,
     CreateSessionRequest,
 )
@@ -1218,6 +1219,26 @@ class RelayClient:
                 await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
                 return
 
+        junie_options = None
+        raw_junie_options = ctrl.get("junie_options")
+        if raw_junie_options is not None:
+            try:
+                junie_options = JunieOptionsModel.model_validate(
+                    raw_junie_options
+                ).to_options()
+            except ValidationError as exc:
+                logger.warning(
+                    "relay.create_session_invalid_junie_options session_id=%s: %s",
+                    session_id, exc,
+                )
+                resp = {
+                    "type": "session_create_failed",
+                    "session_id": session_id,
+                    "error": f"Invalid junie_options: {exc}",
+                }
+                await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+                return
+
         pi_options = None
         raw_pi_options = ctrl.get("pi_options")
         if raw_pi_options is not None:
@@ -1265,6 +1286,7 @@ class RelayClient:
                 opencode_options,
                 copilot_options,
                 cursor_options,
+                junie_options,
                 pi_options,
             ) = resolve_spawn_args(
                 ctrl.get("cli"),
@@ -1278,6 +1300,7 @@ class RelayClient:
                 opencode_options=opencode_options,
                 copilot_options=copilot_options,
                 cursor_options=cursor_options,
+                junie_options=junie_options,
                 pi_options=pi_options,
             )
         except CustomCommandUnresolvedError as exc:
@@ -1324,6 +1347,7 @@ class RelayClient:
             opencode_options=opencode_options,
             copilot_options=copilot_options,
             cursor_options=cursor_options,
+            junie_options=junie_options,
             pi_options=pi_options,
             worktree=bool(ctrl.get("worktree", False)),
             branch_name=ctrl.get("branch_name"),
@@ -1717,6 +1741,11 @@ class RelayClient:
                 if parsed.cursor_options is not None
                 else None
             )
+            junie_options = (
+                parsed.junie_options.to_options()
+                if parsed.junie_options is not None
+                else None
+            )
             pi_options = (
                 parsed.pi_options.to_options()
                 if parsed.pi_options is not None
@@ -1733,6 +1762,7 @@ class RelayClient:
                     opencode_options,
                     copilot_options,
                     cursor_options,
+                    junie_options,
                     pi_options,
                 ) = resolve_spawn_args(
                     parsed.cli,
@@ -1746,6 +1776,7 @@ class RelayClient:
                     opencode_options=opencode_options,
                     copilot_options=copilot_options,
                     cursor_options=cursor_options,
+                    junie_options=junie_options,
                     pi_options=pi_options,
                 )
             except CustomCommandUnresolvedError as exc:
@@ -1772,6 +1803,7 @@ class RelayClient:
                 opencode_options=opencode_options,
                 copilot_options=copilot_options,
                 cursor_options=cursor_options,
+                junie_options=junie_options,
                 pi_options=pi_options,
                 worktree=parsed.worktree,
                 branch_name=parsed.branch_name,

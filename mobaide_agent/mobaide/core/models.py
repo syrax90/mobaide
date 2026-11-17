@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from .opencode_launcher import OpenCodeOptions  # noqa: F401
     from .copilot_launcher import CopilotOptions  # noqa: F401
     from .cursor_launcher import CursorOptions  # noqa: F401
+    from .junie_launcher import JunieOptions  # noqa: F401
     from .pi_launcher import PiOptions  # noqa: F401
 
 # Wire pattern for account-scoped custom AI agent type kinds. The 12-hex id
@@ -51,6 +52,8 @@ class SessionKind(enum.Enum):
     ``CopilotLauncher`` (create with ``cli="copilot"`` /
     ``copilot_options``). ``CURSOR`` — Cursor CLI launched via
     ``CursorLauncher`` (create with ``cli="cursor"`` / ``cursor_options``).
+    ``JUNIE`` — Junie CLI launched via ``JunieLauncher`` (create with
+    ``cli="junie"`` / ``junie_options``).
     ``PI`` — Pi coding agent launched via ``PiLauncher``
     (create with ``cli="pi"`` / ``pi_options``). ``AUTO_SCAN`` —
     sub-sessions spawned by the Linear scanner; argv/cwd/env pre-built by the
@@ -70,6 +73,7 @@ class SessionKind(enum.Enum):
     OPENCODE = "opencode"
     COPILOT = "copilot"
     CURSOR = "cursor"
+    JUNIE = "junie"
     PI = "pi"
     AUTO_SCAN = "auto_scan"
     SHELL = "shell"
@@ -112,6 +116,9 @@ class SessionConfig:
     # Set when the session runs the Cursor CLI. Mutually exclusive with
     # the other options blocks; ``SessionManager`` dispatches to ``CursorLauncher``.
     cursor_options: CursorOptions | None = None
+    # Set when the session runs the Junie CLI. Mutually exclusive with
+    # the other options blocks; ``SessionManager`` dispatches to ``JunieLauncher``.
+    junie_options: JunieOptions | None = None
     # Set when the session runs the Pi coding agent. Mutually exclusive with
     # the other options blocks; ``SessionManager`` dispatches to ``PiLauncher``.
     pi_options: PiOptions | None = None
@@ -214,6 +221,7 @@ def _resolve_session_kind(
     opencode_options: "OpenCodeOptions | None" = None,
     copilot_options: "CopilotOptions | None" = None,
     cursor_options: "CursorOptions | None" = None,
+    junie_options: "JunieOptions | None" = None,
     pi_options: "PiOptions | None" = None,
 ) -> SessionKind:
     """Pick the managed CLI from an explicit ``cli`` plus options presence.
@@ -228,6 +236,8 @@ def _resolve_session_kind(
         return SessionKind.COPILOT
     if cli == SessionKind.CURSOR.value or (cli is None and cursor_options is not None):
         return SessionKind.CURSOR
+    if cli == SessionKind.JUNIE.value or (cli is None and junie_options is not None):
+        return SessionKind.JUNIE
     if cli == SessionKind.PI.value or (cli is None and pi_options is not None):
         return SessionKind.PI
     if cli == SessionKind.ANTIGRAVITY.value or (
@@ -254,6 +264,7 @@ def resolve_spawn_args(
     opencode_options: "OpenCodeOptions | None" = None,
     copilot_options: "CopilotOptions | None" = None,
     cursor_options: "CursorOptions | None" = None,
+    junie_options: "JunieOptions | None" = None,
     pi_options: "PiOptions | None" = None,
 ) -> tuple[
     SessionKind | str,
@@ -265,18 +276,20 @@ def resolve_spawn_args(
     "OpenCodeOptions | None",
     "CopilotOptions | None",
     "CursorOptions | None",
+    "JunieOptions | None",
     "PiOptions | None",
 ]:
     """Resolve ``(kind, command, env, claude_options, codex_options,
     antigravity_options, opencode_options, copilot_options, cursor_options,
-    pi_options)``.
+    junie_options, pi_options)``.
 
     The single source of truth for the Terminal-mode security guard: for a
     non-managed (shell) request the spawn always uses ``default_shell`` with a
     clean env, regardless of any client-supplied ``command``/``env`` hints. This
     prevents an authenticated client from piggybacking arbitrary argv into a
     workspace's cwd via the Terminal path. Managed
-    (Claude/Codex/Antigravity/OpenCode/Copilot/Cursor/Pi) requests honour the hints
+    (Claude/Codex/Antigravity/OpenCode/Copilot/Cursor/Junie/Pi) requests honour
+    the hints
     (overwritten later by the launcher inside ``SessionManager``).
 
     Custom agent types (``cli`` matching ``CUSTOM_KIND_PATTERN``) keep the
@@ -302,18 +315,7 @@ def resolve_spawn_args(
             raise CustomCommandUnresolvedError(
                 "Custom agent types can only be launched through the relay"
             )
-        return (
-            cli,
-            build_custom_argv(resolved_command),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
+        return _spawn_args(cli, build_custom_argv(resolved_command), None)
     kind = _resolve_session_kind(
         cli,
         claude_options,
@@ -322,114 +324,58 @@ def resolve_spawn_args(
         opencode_options,
         copilot_options,
         cursor_options,
+        junie_options,
         pi_options,
     )
+    command = command_hint or default_shell
     if kind is SessionKind.OPENCODE:
         from .opencode_launcher import OpenCodeOptions
 
-        return (
-            kind,
-            command_hint or default_shell,
-            env_hint,
-            None,
-            None,
-            None,
-            opencode_options or OpenCodeOptions(),
-            None,
-            None,
-            None,
-        )
+        return _spawn_args(kind, command, env_hint, opencode=opencode_options or OpenCodeOptions())
     if kind is SessionKind.COPILOT:
         from .copilot_launcher import CopilotOptions
 
-        return (
-            kind,
-            command_hint or default_shell,
-            env_hint,
-            None,
-            None,
-            None,
-            None,
-            copilot_options or CopilotOptions(),
-            None,
-            None,
-        )
+        return _spawn_args(kind, command, env_hint, copilot=copilot_options or CopilotOptions())
     if kind is SessionKind.CURSOR:
         from .cursor_launcher import CursorOptions
 
-        return (
-            kind,
-            command_hint or default_shell,
-            env_hint,
-            None,
-            None,
-            None,
-            None,
-            None,
-            cursor_options or CursorOptions(),
-            None,
-        )
+        return _spawn_args(kind, command, env_hint, cursor=cursor_options or CursorOptions())
+    if kind is SessionKind.JUNIE:
+        from .junie_launcher import JunieOptions
+
+        return _spawn_args(kind, command, env_hint, junie=junie_options or JunieOptions())
     if kind is SessionKind.PI:
         from .pi_launcher import PiOptions
 
-        return (
-            kind,
-            command_hint or default_shell,
-            env_hint,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            pi_options or PiOptions(),
-        )
+        return _spawn_args(kind, command, env_hint, pi=pi_options or PiOptions())
     if kind is SessionKind.ANTIGRAVITY:
         from .antigravity_launcher import AntigravityOptions
 
-        return (
-            kind,
-            command_hint or default_shell,
-            env_hint,
-            None,
-            None,
-            antigravity_options or AntigravityOptions(),
-            None,
-            None,
-            None,
-            None,
+        return _spawn_args(
+            kind, command, env_hint, antigravity=antigravity_options or AntigravityOptions()
         )
     if kind is SessionKind.CODEX:
         from .codex_launcher import CodexOptions
 
-        return (
-            kind,
-            command_hint or default_shell,
-            env_hint,
-            None,
-            codex_options or CodexOptions(),
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
+        return _spawn_args(kind, command, env_hint, codex=codex_options or CodexOptions())
     if kind is SessionKind.CLAUDE:
         from .claude_launcher import ClaudeOptions
 
-        return (
-            kind,
-            command_hint or default_shell,
-            env_hint,
-            claude_options or ClaudeOptions(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-    return SessionKind.SHELL, default_shell, None, None, None, None, None, None, None, None
+        return _spawn_args(kind, command, env_hint, claude=claude_options or ClaudeOptions())
+    return _spawn_args(SessionKind.SHELL, default_shell, None)
+
+
+# The options slots of a ``resolve_spawn_args`` result, in tuple order.
+_OPTION_SLOTS = ("claude", "codex", "antigravity", "opencode", "copilot", "cursor", "junie", "pi")
+
+
+def _spawn_args(
+    kind: SessionKind | str,
+    command: list[str],
+    env: dict[str, str] | None,
+    **options: Any,
+) -> tuple[Any, ...]:
+    return (kind, command, env, *(options.get(slot) for slot in _OPTION_SLOTS))
 
 
 def session_to_wire_dict(info: SessionInfo) -> dict[str, Any]:

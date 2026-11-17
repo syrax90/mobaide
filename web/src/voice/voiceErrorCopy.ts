@@ -46,6 +46,7 @@ const CLEANUP_CLIS: Readonly<Record<string, { name: string; update: string }>> =
   opencode: { name: 'OpenCode', update: 'opencode upgrade' },
   copilot: { name: 'GitHub Copilot', update: 'copilot update' },
   cursor: { name: 'Cursor', update: 'cursor-agent update' },
+  junie: { name: 'Junie', update: 'junie update' },
   pi: { name: 'Pi', update: 'pi update' },
 };
 

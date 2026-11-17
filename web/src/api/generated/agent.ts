@@ -1484,6 +1484,7 @@ export interface components {
             env?: {
                 [key: string]: string;
             } | null;
+            junie_options?: components["schemas"]["JunieOptionsModel"] | null;
             opencode_options?: components["schemas"]["OpenCodeOptionsModel"] | null;
             pi_options?: components["schemas"]["PiOptionsModel"] | null;
             /** Project Name */
@@ -2286,6 +2287,35 @@ export interface components {
             detail?: components["schemas"]["ValidationError"][];
         };
         /**
+         * JunieOptionsModel
+         * @description Wire DTO for Junie CLI launch options (see :class:`JunieOptions`).
+         *
+         *     ``plan_mode`` starts the session in Junie's Plan mode. ``brave`` is
+         *     Junie's ``--brave``: Brave mode for this session only, which runs
+         *     commands without asking.
+         */
+        JunieOptionsModel: {
+            /** Base Branch */
+            base_branch?: string | null;
+            /** Branch Name */
+            branch_name?: string | null;
+            /**
+             * Brave
+             * @default false
+             */
+            brave: boolean;
+            /**
+             * Plan Mode
+             * @default false
+             */
+            plan_mode: boolean;
+            /**
+             * Worktree
+             * @default false
+             */
+            worktree: boolean;
+        };
+        /**
          * LinearLabelModel
          * @description Linear label discovered via the per-workspace API key.
          */
@@ -2497,7 +2527,7 @@ export interface components {
              * @default claude
              * @enum {string}
              */
-            kind: "claude" | "codex" | "antigravity" | "opencode" | "copilot" | "cursor" | "pi";
+            kind: "claude" | "codex" | "antigravity" | "opencode" | "copilot" | "cursor" | "junie" | "pi";
             /** Text */
             text: string;
         };

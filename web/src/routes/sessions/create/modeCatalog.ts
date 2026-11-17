@@ -40,6 +40,10 @@ const BUILT_IN_COPY: Readonly<Record<BuiltInMode, { title: string; subtitle: str
     title: 'Cursor',
     subtitle: 'Configure and launch a Cursor session.',
   },
+  junie: {
+    title: 'Junie',
+    subtitle: 'Configure and launch a Junie session.',
+  },
   pi: {
     title: 'Pi',
     subtitle: 'Configure and launch a Pi session.',
@@ -58,6 +62,7 @@ const MISSING_CLI: Readonly<Record<string, string>> = {
   opencode: 'OpenCode CLI is not installed on the agent.',
   copilot: 'GitHub Copilot CLI is not installed on the agent.',
   cursor: 'Cursor CLI is not installed on the agent.',
+  junie: 'Junie CLI is not installed on the agent.',
   pi: 'Pi is not installed on the agent.',
 };
 
@@ -137,6 +142,24 @@ export function buildModeCards(input: {
             ...copy,
             enabled: false,
             disabledReason: 'Update Mobaide on your PC to use Cursor.',
+          };
+        }
+        const enabled = cliEnabled(input.capabilities, mode);
+        return {
+          mode,
+          ...copy,
+          enabled,
+          disabledReason: enabled ? undefined : MISSING_CLI[mode],
+        };
+      }
+      case 'junie': {
+        // An agent from before Junie support would open a plain shell for it.
+        if (!cliKnown(input.capabilities, mode)) {
+          return {
+            mode,
+            ...copy,
+            enabled: false,
+            disabledReason: 'Update Mobaide on your PC to use Junie.',
           };
         }
         const enabled = cliEnabled(input.capabilities, mode);

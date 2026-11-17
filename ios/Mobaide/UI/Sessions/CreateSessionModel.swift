@@ -26,6 +26,7 @@ final class CreateSessionModel {
         case opencode
         case copilot
         case cursor
+        case junie
         case pi
         case autoScan
         case shell
@@ -38,7 +39,7 @@ final class CreateSessionModel {
         case custom(String)
 
         /// The static mode cards, in default order; custom-type cards follow.
-        static let builtIn: [Mode] = [.standard, .codex, .antigravity, .opencode, .copilot, .cursor, .pi, .autoScan, .shell]
+        static let builtIn: [Mode] = [.standard, .codex, .antigravity, .opencode, .copilot, .cursor, .junie, .pi, .autoScan, .shell]
 
         /// The id `/api/session-mode-order` stores for this card.
         var orderId: String {
@@ -49,6 +50,7 @@ final class CreateSessionModel {
             case .opencode: return "opencode"
             case .copilot: return "copilot"
             case .cursor: return "cursor"
+            case .junie: return "junie"
             case .pi: return "pi"
             case .autoScan: return "auto_scan"
             case .shell: return "shell"
@@ -165,6 +167,10 @@ final class CreateSessionModel {
     /// The probed agent predates Cursor: it would open a plain shell for
     /// `cli = "cursor"`, so the card is disabled instead.
     private(set) var cursorNeedsAgentUpdate = false
+    private(set) var junieAvailable: Bool?
+    /// The probed agent predates Junie: it would open a plain shell for
+    /// `cli = "junie"`, so the card is disabled instead.
+    private(set) var junieNeedsAgentUpdate = false
     private(set) var piAvailable: Bool?
     /// The probed agent predates Pi: it would open a plain shell for
     /// `cli = "pi"`, so the card is disabled instead.
@@ -287,6 +293,15 @@ final class CreateSessionModel {
     var cursorTerminalUI = false
     /// `capabilities.chat.cursor`; nil until the probe answers.
     private(set) var cursorChatCapability: ChatCapability?
+
+    // Junie
+    var juniePlanMode = false
+    var junieBrave = false
+    /// Off by default: a Junie session opens in the chat view whenever the
+    /// agent can run it.
+    var junieTerminalUI = false
+    /// `capabilities.chat.junie`; nil until the probe answers.
+    private(set) var junieChatCapability: ChatCapability?
 
     // Pi
     /// Off by default: a Pi session opens in the chat view whenever the
@@ -435,6 +450,15 @@ final class CreateSessionModel {
         Self.chatUnavailableReason(cursorChatCapability, kind: "cursor")
     }
 
+    var junieChatUnavailable: Bool { junieChatCapability.map { !$0.isAvailable } ?? false }
+
+    /// The Junie session will open in the chat view.
+    var junieUsesChat: Bool { !junieTerminalUI && !junieChatUnavailable }
+
+    var junieChatUnavailableReason: String? {
+        Self.chatUnavailableReason(junieChatCapability, kind: "junie")
+    }
+
     var piChatUnavailable: Bool { piChatCapability.map { !$0.isAvailable } ?? false }
 
     /// The Pi session will open in the chat view.
@@ -454,6 +478,7 @@ final class CreateSessionModel {
             case "opencode": return "The chat view is not available for OpenCode on your PC."
             case "copilot": return "The chat view is not available for GitHub Copilot on your PC."
             case "cursor": return "The chat view is not available for Cursor on your PC."
+            case "junie": return "The chat view is not available for Junie on your PC."
             case "pi": return "The chat view is not available for Pi on your PC."
             default: return "The chat view needs Node.js on your PC."
             }
@@ -469,6 +494,7 @@ final class CreateSessionModel {
         case .opencode: return "opencode"
         case .copilot: return "copilot"
         case .cursor: return "cursor"
+        case .junie: return "junie"
         case .pi: return "pi"
         default: return "claude"
         }
@@ -481,6 +507,7 @@ final class CreateSessionModel {
         case .opencode: return opencodeChatCapability
         case .copilot: return copilotChatCapability
         case .cursor: return cursorChatCapability
+        case .junie: return junieChatCapability
         case .pi: return piChatCapability
         default: return chatCapability
         }
@@ -498,6 +525,7 @@ final class CreateSessionModel {
         case .opencode: return opencodeUsesChat && opencodeChatCapability?.canResume == true
         case .copilot: return copilotUsesChat && copilotChatCapability?.canResume == true
         case .cursor: return cursorUsesChat && cursorChatCapability?.canResume == true
+        case .junie: return junieUsesChat && junieChatCapability?.canResume == true
         case .pi: return piUsesChat && piChatCapability?.canResume == true
         default: return false
         }
@@ -516,6 +544,7 @@ final class CreateSessionModel {
     var opencodeEnabled: Bool { opencodeAvailable != false && !opencodeNeedsAgentUpdate }
     var copilotEnabled: Bool { copilotAvailable != false && !copilotNeedsAgentUpdate }
     var cursorEnabled: Bool { cursorAvailable != false && !cursorNeedsAgentUpdate }
+    var junieEnabled: Bool { junieAvailable != false && !junieNeedsAgentUpdate }
     var piEnabled: Bool { piAvailable != false && !piNeedsAgentUpdate }
 
     /// Auto Scan additionally needs a Linear API key on the selected stored
@@ -541,6 +570,7 @@ final class CreateSessionModel {
         case .opencode: return opencodeEnabled
         case .copilot: return copilotEnabled
         case .cursor: return cursorEnabled
+        case .junie: return junieEnabled
         case .pi: return piEnabled
         // A running scan keeps the card tappable even when the launch gate
         // would refuse — tapping opens its monitor rather than the config step.
@@ -575,6 +605,10 @@ final class CreateSessionModel {
             if cursorNeedsAgentUpdate { return "Update Mobaide on your PC to use Cursor." }
             return cursorEnabled ? "Configure and launch a Cursor session."
                 : "Cursor CLI is not installed on the agent."
+        case .junie:
+            if junieNeedsAgentUpdate { return "Update Mobaide on your PC to use Junie." }
+            return junieEnabled ? "Configure and launch a Junie session."
+                : "Junie CLI is not installed on the agent."
         case .pi:
             if piNeedsAgentUpdate { return "Update Mobaide on your PC to use Pi." }
             return piEnabled ? "Configure and launch a Pi session."
@@ -614,6 +648,7 @@ final class CreateSessionModel {
         case .opencode: return "OpenCode"
         case .copilot: return "GitHub Copilot"
         case .cursor: return "Cursor"
+        case .junie: return "Junie"
         case .pi: return "Pi"
         case .autoScan: return "Auto Scan"
         case .shell: return "Terminal"
@@ -781,6 +816,7 @@ final class CreateSessionModel {
         opencodeChatCapability = version.chatCapability("opencode")
         copilotChatCapability = version.chatCapability("copilot")
         cursorChatCapability = version.chatCapability("cursor")
+        junieChatCapability = version.chatCapability("junie")
         piChatCapability = version.chatCapability("pi")
         codexAvailable = version.cliAvailable("codex")
         antigravityAvailable = version.cliAvailable("antigravity")
@@ -790,6 +826,8 @@ final class CreateSessionModel {
         copilotNeedsAgentUpdate = !version.cliKnown("copilot")
         cursorAvailable = version.cliAvailable("cursor")
         cursorNeedsAgentUpdate = !version.cliKnown("cursor")
+        junieAvailable = version.cliAvailable("junie")
+        junieNeedsAgentUpdate = !version.cliKnown("junie")
         piAvailable = version.cliAvailable("pi")
         piNeedsAgentUpdate = !version.cliKnown("pi")
         if let models = version.cliModels("codex"), !models.isEmpty { codexModels = models }
@@ -1561,6 +1599,14 @@ final class CreateSessionModel {
                 cursor_options: cursorOptions(worktree: effectiveWorktree, branchName: effectiveBranch, baseBranch: effectiveBase),
                 ui: cursorUsesChat ? "chat" : "terminal"
             )
+        case .junie:
+            return CreateSessionRequest(
+                cwd: cwd,
+                workspace_name: workspaceName,
+                cli: "junie",
+                junie_options: junieOptions(worktree: effectiveWorktree, branchName: effectiveBranch, baseBranch: effectiveBase),
+                ui: junieUsesChat ? "chat" : "terminal"
+            )
         case .pi:
             return CreateSessionRequest(
                 cwd: cwd,
@@ -1691,6 +1737,16 @@ final class CreateSessionModel {
         )
     }
 
+    private func junieOptions(worktree: Bool, branchName: String?, baseBranch: String? = nil) -> JunieOptionsModel {
+        JunieOptionsModel(
+            plan_mode: juniePlanMode,
+            brave: junieBrave,
+            worktree: worktree,
+            branch_name: branchName,
+            base_branch: baseBranch
+        )
+    }
+
     private func piOptions(worktree: Bool, branchName: String?, baseBranch: String? = nil) -> PiOptionsModel {
         PiOptionsModel(
             worktree: worktree,
@@ -1770,6 +1826,16 @@ final class CreateSessionModel {
                 workspace_name: workspaceName,
                 cli: "cursor",
                 cursor_options: cursorOptions(worktree: false, branchName: nil),
+                ui: "chat",
+                chat_resume_id: stored.session_id
+            )
+        }
+        if mode == .junie {
+            return CreateSessionRequest(
+                cwd: cwd,
+                workspace_name: workspaceName,
+                cli: "junie",
+                junie_options: junieOptions(worktree: false, branchName: nil),
                 ui: "chat",
                 chat_resume_id: stored.session_id
             )
@@ -1920,6 +1986,12 @@ final class CreateSessionModel {
                 force: cursorForce,
                 terminalUI: cursorTerminalUI
             ))
+        case .junie:
+            preferencesStore.setLastUsedJunieOptions(JunieLaunchPrefs(
+                planMode: juniePlanMode,
+                brave: junieBrave,
+                terminalUI: junieTerminalUI
+            ))
         case .pi:
             preferencesStore.setLastUsedPiOptions(PiLaunchPrefs(terminalUI: piTerminalUI))
         // Auto Scan persists its own bucket from `startAutoScan`, which never
@@ -1981,6 +2053,11 @@ final class CreateSessionModel {
         if let cursor = preferencesStore.getLastUsedCursorOptions() {
             cursorForce = cursor.force
             cursorTerminalUI = cursor.terminalUI
+        }
+        if let junie = preferencesStore.getLastUsedJunieOptions() {
+            juniePlanMode = junie.planMode
+            junieBrave = junie.brave
+            junieTerminalUI = junie.terminalUI
         }
         if let pi = preferencesStore.getLastUsedPiOptions() {
             piTerminalUI = pi.terminalUI

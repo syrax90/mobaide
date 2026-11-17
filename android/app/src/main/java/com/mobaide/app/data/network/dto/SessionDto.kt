@@ -24,6 +24,7 @@ sealed interface SessionKind {
     data object OpenCode : SessionKind
     data object Copilot : SessionKind
     data object Cursor : SessionKind
+    data object Junie : SessionKind
     data object Pi : SessionKind
     data object AutoScan : SessionKind
     data object Shell : SessionKind
@@ -47,6 +48,7 @@ val SessionKind.wireName: String
         SessionKind.OpenCode -> "opencode"
         SessionKind.Copilot -> "copilot"
         SessionKind.Cursor -> "cursor"
+        SessionKind.Junie -> "junie"
         SessionKind.Pi -> "pi"
         SessionKind.AutoScan -> "auto_scan"
         SessionKind.Shell -> "shell"
@@ -74,6 +76,7 @@ object SessionKindSerializer : KSerializer<SessionKind> {
         "opencode" to SessionKind.OpenCode,
         "copilot" to SessionKind.Copilot,
         "cursor" to SessionKind.Cursor,
+        "junie" to SessionKind.Junie,
         "pi" to SessionKind.Pi,
         "auto_scan" to SessionKind.AutoScan,
         "shell" to SessionKind.Shell,
@@ -142,7 +145,7 @@ data class CreateSessionRequest(
     @SerialName("project_name")
     val workspace_name: String? = null,
     // Which managed CLI to launch: "claude" | "codex" | "antigravity" | "opencode" | "copilot" | "cursor" |
-    // "pi", or "custom_<12hex>" for an account-scoped custom agent type (proto-v7; the relay resolves the stored
+    // "junie" | "pi", or "custom_<12hex>" for an account-scoped custom agent type (proto-v7; the relay resolves the stored
     // command — the client never sends it). Null for Terminal/shell sessions; when null
     // the server infers the kind from whichever options block is present.
     val cli: String? = null,
@@ -152,6 +155,7 @@ data class CreateSessionRequest(
     val opencode_options: OpenCodeOptionsModel? = null,
     val copilot_options: CopilotOptionsModel? = null,
     val cursor_options: CursorOptionsModel? = null,
+    val junie_options: JunieOptionsModel? = null,
     val pi_options: PiOptionsModel? = null,
     // Terminal-mode worktree: create a git worktree for a shell session (no CLI options)
     // on a stored git workspace and spawn the shell inside it. Managed Claude/Codex sessions

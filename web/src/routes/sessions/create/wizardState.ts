@@ -28,6 +28,7 @@ export const BUILT_IN_MODES = [
   'opencode',
   'copilot',
   'cursor',
+  'junie',
   'pi',
   'auto_scan',
   'shell',
@@ -118,6 +119,15 @@ export interface CursorBucket {
   terminalUi: boolean;
 }
 
+export interface JunieBucket {
+  /** Start in Junie's Plan mode: a plan to approve before any change. */
+  planMode: boolean;
+  /** Junie's `--brave`: run commands without asking, in this session only. */
+  brave: boolean;
+  /** The classic terminal instead of the chat view. */
+  terminalUi: boolean;
+}
+
 /** Pi has no approval mode to choose: it runs its tools without asking. */
 export interface PiBucket {
   /** The classic terminal instead of the chat view. */
@@ -152,6 +162,7 @@ export interface WizardState {
   opencode: OpenCodeBucket;
   copilot: CopilotBucket;
   cursor: CursorBucket;
+  junie: JunieBucket;
   pi: PiBucket;
   git: GitBucket;
   /**
@@ -211,6 +222,7 @@ export const INITIAL_WIZARD_STATE: WizardState = {
   opencode: { autoApprove: false, terminalUi: false },
   copilot: { allowAll: false, terminalUi: false },
   cursor: { force: false, terminalUi: false },
+  junie: { planMode: false, brave: false, terminalUi: false },
   pi: { terminalUi: false },
   git: { worktree: false, branchName: '' },
   worktreeBasePick: null,
@@ -386,6 +398,9 @@ export type WizardAction =
   | { type: 'setCopilotTerminalUi'; value: boolean }
   | { type: 'setCursorForce'; value: boolean }
   | { type: 'setCursorTerminalUi'; value: boolean }
+  | { type: 'setJuniePlanMode'; value: boolean }
+  | { type: 'setJunieBrave'; value: boolean }
+  | { type: 'setJunieTerminalUi'; value: boolean }
   | { type: 'setPiTerminalUi'; value: boolean }
   | { type: 'setWorktree'; value: boolean }
   | { type: 'setBranchName'; value: string }
@@ -613,6 +628,15 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
 
     case 'setCursorTerminalUi':
       return { ...state, cursor: { ...state.cursor, terminalUi: action.value } };
+
+    case 'setJuniePlanMode':
+      return { ...state, junie: { ...state.junie, planMode: action.value } };
+
+    case 'setJunieBrave':
+      return { ...state, junie: { ...state.junie, brave: action.value } };
+
+    case 'setJunieTerminalUi':
+      return { ...state, junie: { ...state.junie, terminalUi: action.value } };
 
     case 'setPiTerminalUi':
       return { ...state, pi: { ...state.pi, terminalUi: action.value } };

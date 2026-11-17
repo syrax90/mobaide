@@ -65,6 +65,11 @@ struct TerminalControlKey: Identifiable {
     /// block, Ctrl+R opens the review of the changed files, Ctrl+L clears the
     /// screen. It has no Rewind chord.
     static let cursorKeys: [TerminalControlKey] = ordered([mode, approve, reject] + sharedTail + [ctrlL])
+    /// Mode (Shift+Tab) toggles Junie's Plan mode, Ctrl+P opens the plan. Ctrl+O
+    /// opens the session log, Ctrl+R searches past prompts. Approvals are a list
+    /// picked with the arrows and Enter, so there are no `y` / `n` keys; Esc-Esc
+    /// only clears the input, so there is no Rewind; Ctrl+L is not bound.
+    static let junieKeys: [TerminalControlKey] = ordered([mode, ctrlP] + sharedTail)
     /// Pi's own controls on top of the neutral set (Android `PI_CONTROL_KEYS`):
     /// Thinking (Shift+Tab cycles the thinking level), Ctrl+P (next model),
     /// Ctrl+L (model list) and Ctrl+O (expand tool output). Ctrl+R is absent:
@@ -94,6 +99,7 @@ struct TerminalControlKey: Identifiable {
         // the history and Ctrl+L clears the screen.
         case .copilot: return claudeKeys
         case .cursor: return cursorKeys
+        case .junie: return junieKeys
         case .pi: return piKeys
         }
     }

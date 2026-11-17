@@ -939,6 +939,9 @@ the elevation re-launch re-fetches the installer from
      `MOBAIDE_AGENT_CURSOR_BIN_HINT` → `MOBAIDE_CURSOR_BIN` (`Set-CursorBinIfMissing`).
      The installer writes this key with `set-env` after `init-env`, the same
      way as Copilot.
+   - The optional Junie CLI: `Find-JunieBinary` →
+     `MOBAIDE_AGENT_JUNIE_BIN_HINT` → `MOBAIDE_JUNIE_BIN` (set with `set-env`,
+     the same way as Cursor).
    - The optional Pi CLI works the same way: `Find-PiBinary` (PATH,
      `%USERPROFILE%\.pi\agent\bin\pi.cmd`, npm folders) →
      `MOBAIDE_AGENT_PI_BIN_HINT` → `MOBAIDE_PI_BIN`, written with `set-env`.

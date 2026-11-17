@@ -503,6 +503,76 @@ class TestAllFoldersLister:
         assert page == {"sessions": [], "next_cursor": None}
 
 
+# Like ``junie --acp=true``: ``session/list`` answers the sessions of exactly
+# the folder string it is given. AGENT_FOLDER is the real path of the one
+# folder that has a stored session.
+EXACT_FOLDER_AGENT = r"""
+import json, os, sys
+folder = os.environ["AGENT_FOLDER"]
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg or "method" not in msg:
+        continue
+    if msg["method"] == "initialize":
+        caps = {"loadSession": True, "sessionCapabilities": {"list": {}}}
+        reply = {"result": {"protocolVersion": 1, "agentCapabilities": caps}}
+    else:
+        asked = (msg.get("params") or {}).get("cwd")
+        rows = [{"sessionId": "s1", "cwd": folder}] if asked == folder else []
+        reply = {"result": {"sessions": rows}}
+    reply.update({"jsonrpc": "2.0", "id": msg["id"]})
+    sys.stdout.write(json.dumps(reply) + "\n")
+    sys.stdout.flush()
+"""
+
+
+class RealFolderSpec(StubSpec):
+    kind = "junie"
+    display_name = "Junie"
+    lists_real_folder = True
+
+
+class TestRealFolderLister:
+    """An agent whose ``session/list`` matches ``cwd`` to the exact real path
+    (Junie): the catalog asks with the real path of the folder."""
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks")
+    async def test_a_symlinked_folder_lists_the_sessions_of_its_real_path(
+        self, make_catalog, tmp_path
+    ):
+        workspace = tmp_path / "proj"
+        workspace.mkdir()
+        link = tmp_path / "link"
+        link.symlink_to(workspace, target_is_directory=True)
+        env = {"AGENT_FOLDER": os.path.realpath(workspace)}
+        argv = [sys.executable, "-c", EXACT_FOLDER_AGENT]
+        real = make_catalog(RealFolderSpec(argv, env=env), kind="junie")
+        plain = make_catalog(StubSpec(argv, env=env))
+
+        listed = await real.list_sessions("junie", cwd=str(link), cursor=None)
+        unresolved = await plain.list_sessions("claude", cwd=str(link), cursor=None)
+
+        # The rows come back with the folder as the client sent it.
+        assert [(r["session_id"], r["cwd"]) for r in listed["sessions"]] == [("s1", str(link))]
+        # The same agent asked with the link spelling finds nothing.
+        assert unresolved["sessions"] == []
+
+    async def test_a_cwd_with_a_nul_byte_is_refused_before_an_agent_starts(
+        self, make_catalog, tmp_path
+    ):
+        spec = RealFolderSpec(["unused"])
+        catalog = make_catalog(spec, kind="junie")
+
+        with pytest.raises(ChatCatalogError) as excinfo:
+            await catalog.list_sessions("junie", cwd=f"{tmp_path}\x00/etc", cursor=None)
+
+        assert (excinfo.value.status, excinfo.value.detail) == (
+            400,
+            "cwd must be an absolute path",
+        )
+        assert spec.plans == 0
+
+
 class FakeManager:
     def __init__(self, chat_kinds=(), open_sessions=None) -> None:
         self.chat_agents = {kind: object() for kind in chat_kinds}
@@ -658,6 +728,7 @@ class TestChatRest:
             "opencode": {"resume": True, "live": False},
             "copilot": {"resume": True, "live": False},
             "cursor": {"resume": True, "live": False},
+            "junie": {"resume": True, "live": False},
             "pi": {"resume": True, "live": False},
         }
 
@@ -838,6 +909,29 @@ class TestChatRest:
             ("external-2222", str(tmp_path)),
         ]
         assert version.json()["capabilities"]["chat"]["cursor"] == {"resume": True, "live": False}
+
+    async def test_junie_chat_session_and_its_stored_sessions(
+        self, client, auth_headers, tmp_path
+    ):
+        body = {
+            "cli": "junie",
+            "ui": "chat",
+            "cwd": str(tmp_path),
+            "junie_options": {"plan_mode": True, "brave": True},
+        }
+
+        created = await client.post("/api/sessions", headers=auth_headers, json=body)
+        listed = await client.get(
+            f"/api/chat/junie/sessions?cwd={tmp_path}", headers=auth_headers
+        )
+
+        assert created.status_code == 201, created.text
+        assert (created.json()["kind"], created.json()["ui"]) == ("junie", "chat")
+        assert listed.status_code == 200
+        assert [(r["session_id"], r["cwd"]) for r in listed.json()["sessions"]] == [
+            ("external-1111", str(tmp_path)),
+            ("external-2222", str(tmp_path)),
+        ]
 
     async def test_list_needs_auth(self, client):
         resp = await client.get("/api/chat/claude/sessions")

@@ -29,6 +29,7 @@ import {
   type OpenCodeBucket,
   type CopilotBucket,
   type CursorBucket,
+  type JunieBucket,
   type WizardMode,
   type WizardState,
 } from './wizardState';
@@ -41,6 +42,7 @@ type AntigravityOptions = components['schemas']['AntigravityOptionsModel'];
 type OpenCodeOptions = components['schemas']['OpenCodeOptionsModel'];
 type CopilotOptions = components['schemas']['CopilotOptionsModel'];
 type CursorOptions = components['schemas']['CursorOptionsModel'];
+type JunieOptions = components['schemas']['JunieOptionsModel'];
 type PiOptions = components['schemas']['PiOptionsModel'];
 
 export interface BuildContext {
@@ -80,6 +82,7 @@ export type ChatAgentKind =
   | 'opencode'
   | 'copilot'
   | 'cursor'
+  | 'junie'
   | 'pi';
 
 export function chatAgentKind(mode: WizardMode | null): ChatAgentKind | null {
@@ -89,6 +92,7 @@ export function chatAgentKind(mode: WizardMode | null): ChatAgentKind | null {
     mode === 'opencode' ||
     mode === 'copilot' ||
     mode === 'cursor' ||
+    mode === 'junie' ||
     mode === 'pi'
     ? mode
     : null;
@@ -109,6 +113,8 @@ export function terminalUiOf(state: WizardState, kind: ChatAgentKind): boolean {
       return state.copilot.terminalUi;
     case 'cursor':
       return state.cursor.terminalUi;
+    case 'junie':
+      return state.junie.terminalUi;
     case 'pi':
       return state.pi.terminalUi;
   }
@@ -236,6 +242,19 @@ function cursorOptions(
   };
 }
 
+function junieOptions(
+  bucket: JunieBucket,
+  extras: { worktree: boolean; branchName: string | undefined; baseBranch: string | null },
+): JunieOptions {
+  return {
+    plan_mode: bucket.planMode,
+    brave: bucket.brave,
+    worktree: extras.worktree,
+    branch_name: extras.branchName,
+    base_branch: extras.baseBranch,
+  };
+}
+
 function piOptions(extras: {
   worktree: boolean;
   branchName: string | undefined;
@@ -348,6 +367,20 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
     };
   }
 
+  if (mode === 'junie') {
+    return {
+      ...base,
+      cli: 'junie',
+      junie_options: junieOptions(state.junie, {
+        worktree: place.worktree,
+        branchName: place.branchName,
+        baseBranch: place.baseBranch,
+      }),
+      worktree: false,
+      ui: usesChatView(state.junie.terminalUi, context.chat) ? 'chat' : 'terminal',
+    };
+  }
+
   if (mode === 'pi') {
     return {
       ...base,
@@ -403,9 +436,11 @@ export function buildResumeRequest(
             ? { cli: 'copilot', copilot_options: copilotOptions(state.copilot, noWorktree) }
             : kind === 'cursor'
               ? { cli: 'cursor', cursor_options: cursorOptions(state.cursor, noWorktree) }
-              : kind === 'pi'
-                ? { cli: 'pi', pi_options: piOptions(noWorktree) }
-                : { cli: 'claude', claude_options: claudeOptions(state.claude, noWorktree) };
+              : kind === 'junie'
+                ? { cli: 'junie', junie_options: junieOptions(state.junie, noWorktree) }
+                : kind === 'pi'
+                  ? { cli: 'pi', pi_options: piOptions(noWorktree) }
+                  : { cli: 'claude', claude_options: claudeOptions(state.claude, noWorktree) };
   return {
     project_name: sameFolder ? workspace.name : undefined,
     cwd: sameFolder ? undefined : stored.cwd,

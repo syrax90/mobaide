@@ -2,7 +2,7 @@
  * Outbound create-session wire shapes, pinned by
  * `tests/protocol_fixtures/dto/agent/{CreateSessionRequest,ClaudeOptionsModel,
  * CodexOptionsModel,AntigravityOptionsModel,OpenCodeOptionsModel,CopilotOptionsModel,
- * CursorOptionsModel,PiOptionsModel}.json`.
+ * CursorOptionsModel,JunieOptionsModel,PiOptionsModel}.json`.
  *
  * **These are `z.strictObject`, deliberately breaking the `looseObject` rule in
  * `../wireSchema`.** That rule protects *inbound* data, where an unknown key is
@@ -136,6 +136,14 @@ export const cursorOptionsSchema = z.strictObject({
   base_branch: optionalWireString(),
 });
 
+export const junieOptionsSchema = z.strictObject({
+  plan_mode: z.boolean().default(false),
+  brave: z.boolean().default(false),
+  worktree: z.boolean().default(false),
+  branch_name: optionalWireString(),
+  base_branch: optionalWireString(),
+});
+
 export const piOptionsSchema = z.strictObject({
   worktree: z.boolean().default(false),
   branch_name: optionalWireString(),
@@ -165,6 +173,7 @@ export const createSessionRequestSchema = z.strictObject({
   opencode_options: opencodeOptionsSchema.nullish().transform((value) => value ?? undefined),
   copilot_options: copilotOptionsSchema.nullish().transform((value) => value ?? undefined),
   cursor_options: cursorOptionsSchema.nullish().transform((value) => value ?? undefined),
+  junie_options: junieOptionsSchema.nullish().transform((value) => value ?? undefined),
   pi_options: piOptionsSchema.nullish().transform((value) => value ?? undefined),
   /** Terminal/custom worktree intent. Managed CLIs carry theirs inside their options block. */
   worktree: z.boolean().default(false),
@@ -189,5 +198,6 @@ export type AntigravityOptionsWire = z.infer<typeof antigravityOptionsSchema>;
 export type OpenCodeOptionsWire = z.infer<typeof opencodeOptionsSchema>;
 export type CopilotOptionsWire = z.infer<typeof copilotOptionsSchema>;
 export type CursorOptionsWire = z.infer<typeof cursorOptionsSchema>;
+export type JunieOptionsWire = z.infer<typeof junieOptionsSchema>;
 export type PiOptionsWire = z.infer<typeof piOptionsSchema>;
 export type CreateSessionRequestWire = z.infer<typeof createSessionRequestSchema>;

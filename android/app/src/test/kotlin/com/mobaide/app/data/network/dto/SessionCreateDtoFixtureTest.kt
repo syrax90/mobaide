@@ -207,6 +207,47 @@ class SessionCreateDtoFixtureTest {
     }
 
     @Test
+    fun junieOptions_fullCarriesBaseBranch_andEncodesTheServerKeys() {
+        val decoded = fixture("JunieOptionsModel").decodeAll(JunieOptionsModel.serializer())
+        val full = decoded.getValue("full")
+        assertTrue(full.plan_mode)
+        assertTrue(full.brave)
+        assertTrue(full.worktree)
+        assertEquals("b", full.branch_name)
+        assertEquals("origin/main", full.base_branch)
+        assertBaseBranchEncodes(JunieOptionsModel.serializer(), full, "origin/main")
+        val encoded = allKeysJson.encodeToJsonElement(JunieOptionsModel.serializer(), full) as JsonObject
+        assertEquals(setOf("plan_mode", "brave", "worktree", "branch_name", "base_branch"), encoded.keys)
+        val defaults = decoded.getValue("empty_defaults_materialize")
+        // Neither Brave mode nor Plan mode may default on.
+        assertEquals(JunieOptionsModel(plan_mode = false, brave = false, worktree = false), defaults)
+    }
+
+    @Test
+    fun createSessionRequest_junieLaunchCarriesTheJunieBlock() {
+        val decoded = fixture("CreateSessionRequest").decodeAll(CreateSessionRequest.serializer())
+        val launch = decoded.getValue("junie_launch")
+        assertEquals("junie", launch.cli)
+        assertEquals(SessionResponse.UI_CHAT, launch.ui)
+        assertEquals(
+            JunieOptionsModel(
+                plan_mode = true,
+                brave = true,
+                worktree = true,
+                branch_name = "feature/x",
+                base_branch = "origin/main",
+            ),
+            launch.junie_options,
+        )
+        assertNull(launch.claude_options)
+        assertNull(launch.cursor_options)
+        val encoded = json.encodeToJsonElement(CreateSessionRequest.serializer(), launch) as JsonObject
+        assertEquals("junie", encoded["cli"]?.jsonPrimitive?.content)
+        assertTrue("junie_options" in encoded)
+        assertTrue("cursor_options" !in encoded)
+    }
+
+    @Test
     fun piOptions_fullCarriesBaseBranch_andEncodesTheServerKeys() {
         val decoded = fixture("PiOptionsModel").decodeAll(PiOptionsModel.serializer())
         val full = decoded.getValue("full")

@@ -17,11 +17,13 @@ const CHIP_CATEGORIES = ['mode', 'model', 'thought_level'] as const;
 type Tone = 'info' | 'danger' | 'warning' | 'muted';
 
 /** The mode chip's colour hint, by what the mode id says about autonomy. */
-function modeTone(value: string): Tone {
+function modeTone(value: string, name: string): Tone {
   const id = value.toLowerCase();
   if (id.includes('plan')) return 'info';
   if (id.includes('bypass') || id.includes('yolo')) return 'danger';
   if (id.includes('accept') || id.includes('auto')) return 'warning';
+  // Junie's run-everything mode: its value is a bare "on", its name "Brave".
+  if (name.toLowerCase().includes('brave')) return 'danger';
   return 'muted';
 }
 
@@ -122,7 +124,7 @@ export const ConfigChips = memo(function ConfigChips({
         const current = String(valueOf(option));
         const choice = option.options.find((entry) => entry.value === current);
         const shown = choice?.name ?? current;
-        const tone = option.category === 'mode' ? modeTone(current) : 'muted';
+        const tone = option.category === 'mode' ? modeTone(current, shown) : 'muted';
         return (
           <MenuButton
             key={option.id}

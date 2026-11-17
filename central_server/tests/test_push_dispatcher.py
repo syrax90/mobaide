@@ -66,6 +66,7 @@ class TestAttentionContent:
             (None, "Claude session"),
             ("codex", "Codex session"),
             ("cursor", "Cursor session"),
+            ("junie", "Junie session"),
             # A custom type's user-chosen name never goes to Apple.
             ("custom_0123456789ab", "Agent session"),
         ],

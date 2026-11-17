@@ -219,11 +219,13 @@ enum ChatConfigCategory {
     }
 
     /// The mode chip hints at how much the agent may do unasked.
-    static func modeTone(_ value: String) -> PixelTone {
+    static func modeTone(_ value: String, name: String? = nil) -> PixelTone {
         let id = value.lowercased()
         if id.contains("plan") { return .accent }
         if id.contains("bypass") || id.contains("yolo") { return .danger }
         if id.contains("accept") || id.contains("auto") { return .warning }
+        // Junie's run-everything mode: its value is a bare "on", its name "Brave".
+        if name?.lowercased().contains("brave") == true { return .danger }
         return .muted
     }
 }

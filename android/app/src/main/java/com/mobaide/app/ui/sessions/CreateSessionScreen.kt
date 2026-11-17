@@ -211,6 +211,7 @@ fun CreateSessionScreen(
                             CreateSessionStep.OpenCodeConfig -> "OpenCode session"
                             CreateSessionStep.CopilotConfig -> "Copilot session"
                             CreateSessionStep.CursorConfig -> "Cursor session"
+                            CreateSessionStep.JunieConfig -> "Junie session"
                             CreateSessionStep.PiConfig -> "Pi session"
                             CreateSessionStep.AutoScanConfig -> "Auto Scan mode"
                             // TerminalConfig is shared between Terminal mode and
@@ -342,6 +343,13 @@ fun CreateSessionScreen(
                             viewModel = viewModel,
                             onContinueSession = { openResume("cursor", state.cursorChat) },
                         )
+                        CreateSessionStep.JunieConfig -> JunieConfigSection(
+                            state = state,
+                            showWorktreeToggle = state.selection is WorkspaceSelection.Stored &&
+                                storedWorkspace?.is_git == true,
+                            viewModel = viewModel,
+                            onContinueSession = { openResume("junie", state.junieChat) },
+                        )
                         CreateSessionStep.PiConfig -> PiConfigSection(
                             state = state,
                             showWorktreeToggle = state.selection is WorkspaceSelection.Stored &&
@@ -371,6 +379,7 @@ fun CreateSessionScreen(
         CreateSessionStep.OpenCodeConfig -> "opencode"
         CreateSessionStep.CopilotConfig -> "copilot"
         CreateSessionStep.CursorConfig -> "cursor"
+        CreateSessionStep.JunieConfig -> "junie"
         CreateSessionStep.PiConfig -> "pi"
         else -> null
     }
@@ -381,6 +390,7 @@ fun CreateSessionScreen(
             "opencode" -> state.opencodeChat
             "copilot" -> state.copilotChat
             "cursor" -> state.cursorChat
+            "junie" -> state.junieChat
             "pi" -> state.piChat
             else -> state.claudeChat
         }
@@ -1170,6 +1180,7 @@ private fun builtInModeTitle(mode: CreateSessionMode): String = when (mode) {
     CreateSessionMode.OpenCode -> "OpenCode session"
     CreateSessionMode.Copilot -> "GitHub Copilot session"
     CreateSessionMode.Cursor -> "Cursor session"
+    CreateSessionMode.Junie -> "Junie session"
     CreateSessionMode.Pi -> "Pi session"
     CreateSessionMode.AutoScan -> "Auto Scan mode"
     CreateSessionMode.CustomShell -> "Terminal"
@@ -1226,6 +1237,14 @@ private fun BuiltInModeCard(
                 else -> "Configure and launch a Cursor session."
             },
             "mode_card_cursor",
+        )
+        CreateSessionMode.Junie -> Pair(
+            when {
+                !state.junieKnown -> "Update Mobaide on your PC to use Junie."
+                !state.junieEnabled -> "Junie CLI is not installed on the agent."
+                else -> "Configure and launch a Junie session."
+            },
+            "mode_card_junie",
         )
         CreateSessionMode.Pi -> Pair(
             when {
@@ -1911,6 +1930,72 @@ private fun CursorConfigSection(
     PixelButton(
         style = PixelButtonStyle.Primary,
         onClick = viewModel::submitCursor,
+        enabled = state.selection !is WorkspaceSelection.None && !state.submitting,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (state.submitting) "Creating…" else "Create session")
+    }
+}
+
+@Composable
+private fun JunieConfigSection(
+    state: CreateSessionUiState,
+    showWorktreeToggle: Boolean,
+    viewModel: CreateSessionViewModel,
+    onContinueSession: () -> Unit,
+) {
+    if (state.junieResumeAvailable) {
+        ContinueSessionCard(
+            subtitle = "Open a Junie session stored on your PC, also one you started in Junie’s terminal UI.",
+            onClick = onContinueSession,
+        )
+    }
+
+    Text("Mode", style = MaterialTheme.typography.labelLarge)
+    ToggleRow(
+        label = "Start in Plan mode",
+        checked = state.juniePlanMode,
+        onChange = viewModel::setJuniePlanMode,
+    )
+    Text(
+        text = "Junie prepares a plan and asks you to approve it before it changes your files.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    Text("Permissions", style = MaterialTheme.typography.labelLarge)
+    ToggleRow(
+        label = "Brave mode (dangerous)",
+        checked = state.junieBrave,
+        onChange = viewModel::setJunieBrave,
+    )
+    Text(
+        text = if (state.junieBrave) {
+            "Junie runs all commands without asking, in this session only."
+        } else {
+            "Junie uses its own Brave setting. By default it asks before commands that are not safe."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    if (showWorktreeToggle) {
+        ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
+
+        if (state.worktree) WorktreeBranchFields(state, viewModel)
+    }
+
+    AdvancedSection {
+        TerminalUiToggle(
+            checked = state.junieTerminalUi,
+            lockedHint = state.junieChatUnavailableHint,
+            onChange = viewModel::toggleJunieTerminalUi,
+        )
+    }
+
+    PixelButton(
+        style = PixelButtonStyle.Primary,
+        onClick = viewModel::submitJunie,
         enabled = state.selection !is WorkspaceSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
     ) {

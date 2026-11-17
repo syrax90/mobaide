@@ -144,6 +144,22 @@ def _pin_cursor_binary(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _pin_junie_binary(monkeypatch):
+    """Pin the Junie resolver to the literal string ``"junie"`` for every test.
+
+    A host with or without the CLI must give the same argv and
+    ``capabilities.cli.junie``. Missing-binary tests re-patch
+    ``junie_launcher._resolve_junie_binary`` to raise.
+    """
+    from mobaide.core import junie_launcher
+
+    monkeypatch.setattr(
+        junie_launcher, "_resolve_junie_binary", lambda *_a, **_kw: "junie"
+    )
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _pin_pi_binary(monkeypatch):
     """Pin the Pi resolver to the literal string ``"pi"`` for every test.
 

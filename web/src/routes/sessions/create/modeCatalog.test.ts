@@ -42,7 +42,7 @@ const card = (list: ModeCard[], mode: string): ModeCard => {
 };
 
 describe('buildModeCards', () => {
-  it('offers the nine built-ins in order, then the account’s custom types', () => {
+  it('offers the ten built-ins in order, then the account’s custom types', () => {
     const list = cards({
       customTypes: [
         {
@@ -62,6 +62,7 @@ describe('buildModeCards', () => {
       'opencode',
       'copilot',
       'cursor',
+      'junie',
       'pi',
       'auto_scan',
       'shell',
@@ -145,6 +146,27 @@ describe('buildModeCards', () => {
     });
     expect(card(installed, 'cursor')).toMatchObject({ enabled: true, disabledReason: undefined });
     expect(card(cards({ capabilities: capabilities({}) }), 'cursor').enabled).toBe(true);
+  });
+
+  it('disables Junie on an agent from before Junie support', () => {
+    // That agent would open a plain shell for `cli: "junie"`.
+    const older = cards({
+      capabilities: capabilities({ claude: { available: true }, cursor: { available: true } }),
+    });
+    const missing = cards({ capabilities: capabilities({ junie: { available: false } }) });
+    const installed = cards({ capabilities: capabilities({ junie: { available: true } }) });
+
+    expect(card(older, 'junie')).toMatchObject({
+      enabled: false,
+      disabledReason: 'Update Mobaide on your PC to use Junie.',
+    });
+    expect(card(older, 'cursor').enabled).toBe(true);
+    expect(card(missing, 'junie')).toMatchObject({
+      enabled: false,
+      disabledReason: 'Junie CLI is not installed on the agent.',
+    });
+    expect(card(installed, 'junie')).toMatchObject({ enabled: true, disabledReason: undefined });
+    expect(card(cards({ capabilities: capabilities({}) }), 'junie').enabled).toBe(true);
   });
 
   it('disables Pi on an agent from before Pi support', () => {
