@@ -308,7 +308,7 @@ class GitViewModel @Inject constructor(
     private suspend fun sendDelete(batch: List<PendingDelete>) {
         if (batch.isEmpty()) return
         _uiState.update {
-            it.copy(deleting = true, deleteProgress = DeleteProgress(completed = 0, total = batch.size))
+            it.copy(deleteProgress = DeleteProgress(completed = 0, total = batch.size))
         }
         val useJobs = _uiState.value.deleteJobsEnabled
         try {
@@ -344,7 +344,6 @@ class GitViewModel @Inject constructor(
             }
             _uiState.update {
                 it.copy(
-                    deleting = false,
                     deleteProgress = null,
                     pendingDeleteIds = it.pendingDeleteIds - restore,
                     forceDeletePrompt = if (unmerged.isEmpty()) {
@@ -367,7 +366,6 @@ class GitViewModel @Inject constructor(
             // The busy guard is all-or-nothing: nothing was processed.
             _uiState.update {
                 it.copy(
-                    deleting = false,
                     deleteProgress = null,
                     busyDialog = e.busyBy,
                     pendingDeleteIds = it.pendingDeleteIds - batch.map(PendingDelete::id),
@@ -379,7 +377,6 @@ class GitViewModel @Inject constructor(
         } catch (e: Exception) {
             _uiState.update {
                 it.copy(
-                    deleting = false,
                     deleteProgress = null,
                     pendingDeleteIds = it.pendingDeleteIds - batch.map(PendingDelete::id),
                 )

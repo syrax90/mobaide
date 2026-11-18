@@ -23,7 +23,9 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
@@ -177,7 +179,9 @@ fun GitScreen(
                         text = state.deleteProgress?.let(::deleteProgressMessage)
                             ?: "No branches or worktrees.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.align(Alignment.Center),
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .semantics { liveRegion = LiveRegionMode.Polite },
                     )
                 }
                 else -> {
@@ -196,6 +200,7 @@ fun GitScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier
                                     .padding(horizontal = 16.dp, vertical = 4.dp)
+                                    .semantics { liveRegion = LiveRegionMode.Polite }
                                     .testTag(GIT_DELETE_PROGRESS_TAG),
                             )
                         }

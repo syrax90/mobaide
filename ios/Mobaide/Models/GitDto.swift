@@ -209,8 +209,9 @@ struct GitDeleteJobResponse: Codable, Equatable, Sendable {
     let results: [GitDeleteResultItem]?
 
     static let statusRunning = "running"
+    static let statusDone = "done"
 
-    var isRunning: Bool { status == Self.statusRunning }
+    var isRunning: Bool { status != Self.statusDone }
 }
 
 struct BusyHolder: Codable, Equatable, Sendable {

@@ -138,10 +138,11 @@ data class GitDeleteJobResponse(
     val completed: Int,
     val results: List<GitDeleteResultItem>? = null,
 ) {
-    val isRunning: Boolean get() = status == STATUS_RUNNING
+    val isRunning: Boolean get() = status != STATUS_DONE
 
     companion object {
         const val STATUS_RUNNING = "running"
+        const val STATUS_DONE = "done"
     }
 }
 

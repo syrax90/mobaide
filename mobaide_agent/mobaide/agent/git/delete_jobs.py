@@ -7,7 +7,7 @@ deletes a whole checkout), far past the relay's 30 s proxied-request budget.
 refuses the batch whole, then hands the batch to a background task and
 answers at once; clients poll ``GET /delete-jobs/{job_id}`` for ``completed``
 and, once ``status`` is ``done``, the same ``results`` ``POST /items:delete``
-returns. Finished jobs stay readable for ``FINISHED_TTL``.
+returns. Finished jobs stay readable for ``changes_jobs.FINISHED_TTL``.
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from typing import Any
 from mobaide.linear.worktree import WorktreeManager
 
 from ..logging import get_logger
+from .changes_jobs import prune_finished
 from .changes_service import GitNotFoundError, GitRefusedError
 from .models import (
     GitDeleteJobResponse,
@@ -31,8 +32,6 @@ from .service import _publish_git_changed, check_delete_busy, run_delete_batch
 
 logger = get_logger(__name__)
 
-FINISHED_TTL = 600.0
-MAX_FINISHED = 100
 MAX_RUNNING = 8
 _SHUTDOWN_TIMEOUT = 10.0
 
@@ -87,7 +86,7 @@ class DeleteJobRegistry:
         :class:`~.service.GitItemBusyError` like ``POST /items:delete`` and
         ``GitRefusedError("too_many_jobs")`` past ``MAX_RUNNING``."""
         await check_delete_busy(request, session_manager, autoscan_manager)
-        self._prune()
+        prune_finished(self._jobs)
         if sum(1 for job in self._jobs.values() if job.running) >= MAX_RUNNING:
             raise GitRefusedError("too_many_jobs")
         job = DeleteJob(job_id=secrets.token_hex(16), request=request)
@@ -122,18 +121,6 @@ class DeleteJobRegistry:
             task.cancel()
         if tasks:
             await asyncio.wait(tasks, timeout=_SHUTDOWN_TIMEOUT)
-
-    def _prune(self) -> None:
-        now = time.monotonic()
-        finished = sorted(
-            (job for job in self._jobs.values() if job.finished_at is not None),
-            key=lambda job: job.finished_at or 0.0,
-        )
-        keep = [job for job in finished if now - (job.finished_at or 0.0) <= FINISHED_TTL]
-        drop = [job for job in finished if job not in keep]
-        drop += keep[: max(0, len(keep) - MAX_FINISHED)]
-        for job in drop:
-            self._jobs.pop(job.job_id, None)
 
     async def _run(self, job: DeleteJob, **kwargs: Any) -> None:
         try:

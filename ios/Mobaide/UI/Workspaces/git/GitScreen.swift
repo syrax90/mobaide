@@ -51,6 +51,7 @@ private struct GitContent: View {
                         .padding(.horizontal, 16)
                         .padding(.vertical, 6)
                         .background(colors.bg)
+                        .accessibilityAddTraits(.updatesFrequently)
                         .accessibilityIdentifier("git_delete_progress")
                 }
             }

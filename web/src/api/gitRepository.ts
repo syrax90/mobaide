@@ -137,6 +137,11 @@ export const DELETE_JOB_POLL_MS = 1000;
  * client gives up on a job; the agent keeps a finished job for 10 minutes.
  */
 export const DELETE_JOB_GIVE_UP_MS = 120_000;
+/**
+ * Caps each job request, as the mobile clients' request timeout does: a
+ * half-open connection would otherwise hold a poll past the give-up limit.
+ */
+export const DELETE_JOB_REQUEST_TIMEOUT_MS = 30_000;
 
 export interface DeleteGitItemsOptions {
   /**
@@ -175,6 +180,7 @@ async function runDeleteJob(
   const started = await client.POST('/api/projects/{name}/git/delete-jobs', {
     params: { path: { name: workspaceName } },
     body: { items: [...items] },
+    signal: AbortSignal.timeout(DELETE_JOB_REQUEST_TIMEOUT_MS),
   });
   if (started.error !== undefined || started.data === undefined) {
     throw toDeleteError(started.response, started.error);
@@ -189,6 +195,7 @@ async function runDeleteJob(
     try {
       polled = await client.GET('/api/projects/{name}/git/delete-jobs/{job_id}', {
         params: { path: { name: workspaceName, job_id: job.job_id } },
+        signal: AbortSignal.timeout(DELETE_JOB_REQUEST_TIMEOUT_MS),
       });
     } catch (error: unknown) {
       if (givenUp()) throw error;

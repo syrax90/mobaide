@@ -818,6 +818,30 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertNil(model.message)
     }
 
+    func testTheProgressLineClearsBeforeThePostJobReloadReturns() async throws {
+        let (model, sleeper) = await deleteJobsModel()
+        StubURLProtocol.enqueue(status: 202, body: job("running", completed: 0))
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: job("done", completed: 1, results: #"[{"kind":"branch_only","target":"b1","ok":true}]"#)
+        )
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[{"kind":"branch_only","branch":"b2"}]}"#)
+        let reloadGate = DispatchSemaphore(value: 0)
+        StubURLProtocol.onRequest = { request in
+            if request.url?.path.hasSuffix("/git/items") == true { reloadGate.wait() }
+        }
+        model.delete(model.items[0])
+
+        await tick(sleeper)
+        await tick(sleeper)
+        await waitUntil { StubURLProtocol.requests.count == 3 }
+
+        XCTAssertFalse(model.isDeleting, "the reload is still in flight, but the batch is over")
+        XCTAssertNil(model.deleteProgress)
+        reloadGate.signal()
+        await waitUntil { model.items.compactMap(\.branch) == ["b2"] }
+    }
+
     func testDeleteJobOutagesShorterThanTheBudgetKeepPollingAndStillDeliverTheResults() async throws {
         let (model, sleeper) = await deleteJobsModel()
         let unreachable = #"{"detail":"agent unreachable"}"#
@@ -871,7 +895,7 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertNil(model.message)
 
         await tick(sleeper, elapsed: GitScreenModel.deleteJobGiveUpAfter - .seconds(119))
-        // `isDeleting` clears only once the reload after the failure returned.
+        // The fifth request is the reload after the failure.
         await waitUntil { model.message != nil && StubURLProtocol.requests.count == 5 && !model.isDeleting }
 
         XCTAssertEqual(pollCount(), 3)

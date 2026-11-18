@@ -557,6 +557,7 @@ final class GitScreenModel {
             // `observeGitChanged` turns into a re-fetch. A job can outlive a
             // reconnect that drops that one event, so its end re-fetches too.
             if capabilities.deleteJobs {
+                deleteProgress = nil
                 await load()
             }
         } catch let error as APIError where error.code == 409 && !Self.isCodedRefusal(error) {
@@ -572,6 +573,7 @@ final class GitScreenModel {
             message = "Delete failed: \(String(describing: error))"
             // Part of the batch may have gone through, and its `git.changed`
             // may have been missed while the connection was down.
+            deleteProgress = nil
             await load()
         }
     }

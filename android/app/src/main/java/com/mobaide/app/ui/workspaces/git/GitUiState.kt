@@ -23,7 +23,6 @@ data class GitUiState(
 
     val selected: Set<String> = emptySet(),
     val inSelectionMode: Boolean = false,
-    val deleting: Boolean = false,
     /** The batch in flight, for the "Deleting… n of m done" status line. */
     val deleteProgress: DeleteProgress? = null,
 
@@ -91,6 +90,8 @@ data class GitUiState(
 
     /** An active filter opens the remote section: hidden matches would read as "not found". */
     val remoteOpen: Boolean get() = remoteExpanded || filterActive
+
+    val deleting: Boolean get() = deleteProgress != null
 
     val rowBusy: Boolean get() = deleting || checkingOut
 }

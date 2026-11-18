@@ -18,6 +18,7 @@ import struct
 import sys
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -2442,51 +2443,59 @@ class RelayClient:
             return {"status": mapped[0], "body": mapped[1]}
         return {"status": 200, "body": resp.model_dump(mode="json")}
 
-    def _spawn_voice_proxy(self, ctrl: dict) -> None:
-        if len(self._voice_proxy_tasks) >= MAX_VOICE_PROXY_TASKS:
+    def _spawn_aside(
+        self,
+        ctrl: dict,
+        tasks: set[asyncio.Task],
+        limit: int,
+        run: Callable[[dict], Awaitable[None]],
+        name: str,
+        busy_detail: Any = "Too many requests in flight",
+    ) -> None:
+        """Run a slow proxy route aside from the tunnel reader, so it never
+        holds up other frames; past ``limit`` in flight it answers 503."""
+        if len(tasks) >= limit:
             coro = self._send_proxy_result(
-                ctrl,
-                {
-                    "status": 503,
-                    "body": {
-                        "detail": {
-                            "code": "voice_busy",
-                            "message": "Too many voice requests are in flight.",
-                        }
-                    },
-                },
+                ctrl, {"status": 503, "body": {"detail": busy_detail}},
             )
         else:
-            coro = self._run_voice_proxy(ctrl)
-        task = asyncio.create_task(coro, name="relay-voice-proxy")
-        self._voice_proxy_tasks.add(task)
-        task.add_done_callback(self._voice_proxy_tasks.discard)
+            coro = run(ctrl)
+        task = asyncio.create_task(coro, name=name)
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+    def _spawn_voice_proxy(self, ctrl: dict) -> None:
+        self._spawn_aside(
+            ctrl,
+            self._voice_proxy_tasks,
+            MAX_VOICE_PROXY_TASKS,
+            self._run_voice_proxy,
+            "relay-voice-proxy",
+            busy_detail={
+                "code": "voice_busy",
+                "message": "Too many voice requests are in flight.",
+            },
+        )
 
     def _spawn_chat_proxy(self, ctrl: dict) -> None:
-        """Run a stored-chat-sessions listing aside from the tunnel reader:
-        its first call starts the agent process, which takes seconds."""
-        if len(self._chat_proxy_tasks) >= MAX_CHAT_PROXY_TASKS:
-            coro = self._send_proxy_result(
-                ctrl,
-                {"status": 503, "body": {"detail": "Too many requests in flight"}},
-            )
-        else:
-            coro = self._run_chat_proxy(ctrl)
-        task = asyncio.create_task(coro, name="relay-chat-proxy")
-        self._chat_proxy_tasks.add(task)
-        task.add_done_callback(self._chat_proxy_tasks.discard)
+        """A stored-chat-sessions listing: its first call starts the agent
+        process, which takes seconds."""
+        self._spawn_aside(
+            ctrl,
+            self._chat_proxy_tasks,
+            MAX_CHAT_PROXY_TASKS,
+            self._run_chat_proxy,
+            "relay-chat-proxy",
+        )
 
     def _spawn_git_proxy(self, ctrl: dict) -> None:
-        if len(self._git_proxy_tasks) >= MAX_GIT_PROXY_TASKS:
-            coro = self._send_proxy_result(
-                ctrl,
-                {"status": 503, "body": {"detail": "Too many requests in flight"}},
-            )
-        else:
-            coro = self._run_git_proxy(ctrl)
-        task = asyncio.create_task(coro, name="relay-git-proxy")
-        self._git_proxy_tasks.add(task)
-        task.add_done_callback(self._git_proxy_tasks.discard)
+        self._spawn_aside(
+            ctrl,
+            self._git_proxy_tasks,
+            MAX_GIT_PROXY_TASKS,
+            self._run_git_proxy,
+            "relay-git-proxy",
+        )
 
     async def _run_git_proxy(self, ctrl: dict) -> None:
         method = str(ctrl.get("method", "GET")).upper()
