@@ -495,6 +495,14 @@ class ChatSession:
         if op == "sync":
             self._emit_frame(self.sync_frame(cmd.get("epoch"), cmd.get("after_seq")))
             return
+        if op == "new_conversation":
+            # Claimed before the task runs: a prompt in the next frame must
+            # wait for the new conversation, not start on the closing process.
+            try:
+                self._claim_new_conversation()
+            except ChatCommandError as exc:
+                self._send_result(cmd_id, ok=False, error=str(exc))
+                return
         if op in ("set_config", "restart", "new_conversation", "steer", "sign_in"):
             # These wait on the agent; running them aside keeps a later
             # cancel or prompt from queueing behind them.
@@ -1105,17 +1113,20 @@ class ChatSession:
                 await self._hold_presence()
                 if conflict and self._presence_hold is not None:
                     self._presence_stale = True
+            # A new conversation or a restart replaced this one while the
+            # lock was taken: the message must neither go out nor be queued.
+            replaced = not self._ready.is_set()
             # Sending from the stale copy would overwrite the other app's turns.
-            reload = self._presence_stale and not self._cancel_before_dispatch
+            reload = self._presence_stale and not self._cancel_before_dispatch and not replaced
             if reload:
                 pass
-            elif self._cancel_before_dispatch:
+            elif self._cancel_before_dispatch or replaced:
                 # Stopped before the prompt reached the agent: never send it.
                 stop_reason = "cancelled"
             else:
                 if mode is not None:
                     await self._switch_mode(mode)
-                if self._cancel_before_dispatch:
+                if self._cancel_before_dispatch or not self._ready.is_set():
                     # Stopped while the mode was switching: never send it.
                     stop_reason = "cancelled"
                 else:
@@ -1138,10 +1149,12 @@ class ChatSession:
             )
             if exc.code == ERR_AUTH_REQUIRED and self._sign_in.available:
                 auth_failed = True
-                self._auth_retry.append(
-                    _QueuedPrompt(self._next_id("q"), text, images, mode=mode)
-                )
-                del self._auth_retry[:-QUEUE_MAX]
+                if self._ready.is_set():
+                    # Not while a new conversation replaces this one.
+                    self._auth_retry.append(
+                        _QueuedPrompt(self._next_id("q"), text, images, mode=mode)
+                    )
+                    del self._auth_retry[:-QUEUE_MAX]
                 self._sign_in.offer()
         except AcpProcessError as exc:
             if tl.state.get("status") != "error":
@@ -1182,6 +1195,10 @@ class ChatSession:
                     "text": STOP_REASON_TEXT.get(stop_reason, f"Stopped: {stop_reason}"),
                 }
             )
+        if not self._ready.is_set():
+            # A new conversation or a restart took over: its bootstrap sends
+            # the queue, never this process.
+            return
         alive = self._conn is not None and self._conn.alive
         if alive and not self._stopping and self._resume_pending:
             # The turn's own alert goes out before the restart clears it.
@@ -1391,6 +1408,9 @@ class ChatSession:
         queued = next((q for q in self._queue if q.key == key), None)
         if queued is None or queued.steering:
             raise ChatCommandError("This message was already sent")
+        if not self._ready.is_set():
+            # The agent is starting: the message goes out once it is ready.
+            return {"steered": False}
         if not self._own_turn_running() and not self._external_turn:
             # Idle: the queue sends it as the next prompt anyway.
             self._start_queue_if_idle()
@@ -1554,9 +1574,21 @@ class ChatSession:
         # Set before the first await: a second request (double tap, another
         # client) must not spawn a second adapter that nothing would close.
         self._restarting = True
+        # Nothing may start on the process that is closing: a message sent
+        # from here on waits in the queue for the new conversation.
+        self._ready.clear()
+        self._queue.clear()
+        self._publish_queue()
+        self._auth_retry.clear()
+        self._resume_pending = False
+        self._initial_prompt = None
+        # A message sent from now on queues, also from the error state.
+        self._timeline.patch_state(
+            status="starting", error=None, turn_started_at=None, cancelling=False, urgent=True
+        )
 
     async def _cmd_new_conversation(self) -> dict[str, Any]:
-        self._claim_new_conversation()
+        # handle_command claimed it already.
         try:
             await self._new_conversation()
         except Exception:
@@ -1590,23 +1622,21 @@ class ChatSession:
         """Start an empty conversation in a new agent process.
 
         Not a second ``session/new`` on this process: some agents keep
-        per-process state (the working folder, a bridge's session)."""
-        # Nothing may start on the process that is closing: a message sent
-        # from here on waits in the queue for the new conversation.
-        self._ready.clear()
-        self._queue.clear()
-        self._auth_retry.clear()
-        self._resume_pending = False
-        self._initial_prompt = None
+        per-process state (the working folder, a bridge's session).
+
+        Runs after ``_claim_new_conversation``."""
         self._cancel_forced = False
         self._disarm_cancel_watchdog()
         conn = self._conn
         turn = self._turn_task
         turn_running = turn is not None and not turn.done()
         if turn is not None and turn_running:
-            if self._prompt_dispatched and conn is not None and conn.alive and self._acp_session_id:
-                # On a shared host the turn would go on in the other app's
-                # server after this process closes.
+            if self._plan.shared_host:
+                # Closing this process does not stop the turn in the other
+                # app's server: it would go on changing the folder while the
+                # new conversation starts. Wait for it to stop, as stop() does.
+                await self._stop_own_turn()
+            elif self._prompt_dispatched and conn is not None and conn.alive and self._acp_session_id:
                 conn.notify("session/cancel", {"sessionId": self._acp_session_id})
             turn.cancel()
             await asyncio.gather(turn, return_exceptions=True)

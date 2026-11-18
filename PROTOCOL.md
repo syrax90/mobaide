@@ -140,7 +140,7 @@ ACP has no "clear" method, and `claude-agent-acp` hides `/clear`. A user who wan
 * What the command does: it cancels a running turn of this session (`session/cancel`, then the process closes), answers open requests as cancelled, drops the queue and the messages kept for a sign-in retry, and never sends the wizard's first prompt again. Then it starts a new epoch with an empty timeline. The state resets `acp_session_id`, `usage`, `plan`, `queue`, `background` and `title` (back to the name from the wizard, or `null`).
 * The Mobaide session id, the session row, the folder or worktree, and the folder trust stay. A message sent while the new conversation starts waits in the queue and goes into it.
 * The agent keeps the old conversation. The new timeline starts with an info `notice` "Started a new conversation". When the old one was stored (a turn finished, or it was a continued session) and the agent can load sessions, the notice text says how to open it again (Continue a session); otherwise the text is empty.
-* On a shared host (live Codex), a turn that another app started goes on there.
+* On a shared host (live Codex), the agent waits up to 3 s for this session's own turn to stop before the process closes, as closing the session does. A turn that another app started goes on there.
 * Clients confirm first, and the dialog says when a running turn stops or queued messages are removed. Older clients ignore the key; on an older agent the command answers "Unknown command".
 
 ### Delta 2026-11-16: Junie sessions

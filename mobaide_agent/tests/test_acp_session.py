@@ -55,6 +55,7 @@ from mobaide.acp.agents import (
 )
 from mobaide.acp.install import AdapterInstallError
 from mobaide.acp.presence import ConversationPresence
+from mobaide.acp.rpc import AcpConnection
 from mobaide.acp.session import ChatSession
 from mobaide.core.attention_dedupe import SharedTurnDedupe, real_cwd
 from mobaide.core.attention_gate import AttentionGate, HookKind
@@ -1605,6 +1606,77 @@ class TestNewConversation:
         assert queue_at_spawn == [["also this"]]
         assert m.state["queue"] == []
 
+    @pytest.mark.parametrize("before", ["idle", "crashed", "running"])
+    @pytest.mark.parametrize(
+        "trigger",
+        [{"op": "new_conversation"}, {"op": "prompt", "text": "/clear"}],
+        ids=["command", "slash-clear"],
+    )
+    async def test_a_message_in_the_same_loop_turn_as_the_request_goes_to_the_new_one(
+        self, open_chat, trigger, before
+    ):
+        """A burst of frames (iOS after a reconnect) is handled with no yield
+        in between: the message must not start on the closing process, go
+        into its turn by Send now, or be refused after a crash."""
+        m = await open_chat()
+        if before == "crashed":
+            await m.command("prompt", text="crash now")
+            await m.until(lambda: m.status == "error")
+        elif before == "running":
+            await m.command("prompt", text="slow")
+            await m.until(lambda: m.status == "running")
+        old_epoch = m.epoch
+
+        await m.session.handle_command(orjson.dumps({"id": "n1", **trigger}))
+        await m.session.handle_command(b'{"id": "p1", "op": "prompt", "text": "also this"}')
+        queue_id = m.session.timeline.state["queue"][0]["id"]
+        await m.session.handle_command(orjson.dumps({"id": "s1", "op": "steer", "queue_id": queue_id}))
+        await m.until(lambda: {"n1", "p1", "s1"} <= m.results.keys())
+
+        assert m.results["n1"]["ok"] is True
+        assert m.results["p1"]["data"] == {"queued": True, "queue_id": queue_id}
+        assert m.results["s1"]["data"] == {"steered": False}
+        await m.until(lambda: m.epoch != old_epoch and "You said: also this" in m.texts("agent"))
+        await m.until(lambda: m.status == "ready")
+        assert m.texts("user") == ["also this"]
+        assert _fake_agent_pids() == {m.session.pid}
+
+    async def test_a_turn_answered_just_before_the_request_leaves_the_message_to_the_new_one(
+        self, open_chat, monkeypatch
+    ):
+        """The agent's answer is in, but its turn runs on only after the
+        request and a message in the same burst: that turn must not send the
+        message on the closing process."""
+        m = await open_chat()
+        request = AcpConnection.request
+        answered = asyncio.Event()
+        resume = asyncio.get_running_loop().create_future()
+
+        async def hold_the_first_answer(conn, method, params, timeout=None):
+            result = await request(conn, method, params, timeout)
+            if method == "session/prompt" and not answered.is_set():
+                answered.set()
+                await resume
+            return result
+
+        monkeypatch.setattr(AcpConnection, "request", hold_the_first_answer)
+        await m.command("prompt", text="hi")
+        await asyncio.wait_for(answered.wait(), 20)
+        old_epoch = m.epoch
+
+        # The turn wakes up first: it is in the loop's queue before the request's task.
+        resume.set_result(None)
+        await m.session.handle_command(b'{"id": "n1", "op": "new_conversation"}')
+        await m.session.handle_command(b'{"id": "p1", "op": "prompt", "text": "also this"}')
+        await m.until(lambda: {"n1", "p1"} <= m.results.keys())
+
+        assert m.results["n1"]["ok"] is True
+        assert m.results["p1"]["data"]["queued"] is True
+        await m.until(lambda: m.epoch != old_epoch and "You said: also this" in m.texts("agent"))
+        await m.until(lambda: m.status == "ready")
+        assert m.texts("user") == ["also this"]
+        assert _fake_agent_pids() == {m.session.pid}
+
     async def test_a_failure_while_starting_offers_restart(self, open_chat, monkeypatch):
         m = await open_chat()
         spawn = m.session._spawn_with_install
@@ -2211,6 +2283,35 @@ class TestSharedHost:
 
         assert m.session.state == SessionState.STOPPED
         assert [x for x in _methods(log) if x in ("session/cancel", "session/close")] == sent
+
+    async def test_a_new_conversation_lets_the_other_app_stop_the_own_turn_first(
+        self, open_chat, tmp_path, monkeypatch
+    ):
+        """Closing this process does not stop the turn in the shared server:
+        the agent must answer ``session/cancel`` before the old process closes."""
+        log = tmp_path / "agent.log"
+        m = await open_chat(argv=_logging_agent(log), shared_host=True)
+        await m.command("prompt", text="work")
+        await m.until(lambda: "Working" in m.texts("agent"))
+        turn = m.session._turn_task
+        old_epoch = m.epoch
+        close = AcpConnection.close
+        at_close: list[tuple[bool, list[str]]] = []
+
+        async def note_turn_then_close(conn, grace=2.0):
+            if not at_close:
+                at_close.append((turn.done() and not turn.cancelled(), _methods(log)))
+            await close(conn, grace)
+
+        monkeypatch.setattr(AcpConnection, "close", note_turn_then_close)
+
+        assert (await m.command("new_conversation"))["ok"] is True
+        await m.until(lambda: m.epoch != old_epoch and m.status == "ready")
+
+        ended_by_the_agent, methods = at_close[0]
+        assert ended_by_the_agent
+        assert "session/cancel" in methods
+        assert "session/close" not in _methods(log)
 
 
 # Logs each request as one JSON line ``{"method", "params"}`` to argv[1].
@@ -3736,6 +3837,45 @@ class TestConversationPresence:
         ]
         assert m.epoch != epoch
         assert _notices(m) == [self.LOADED]
+
+    async def test_a_turn_that_takes_the_conversation_after_a_new_one_is_asked_sends_nothing(
+        self, open_chat, tmp_path, monkeypatch
+    ):
+        """The turn has the lock (so it would reload), but runs on only after
+        a new conversation's request and a message in the same burst: its
+        message must neither go out nor wait for the new conversation."""
+        with _other_app_holds(self._lock(tmp_path, "external-1111")):
+            m = await self._open(open_chat, tmp_path)
+            await m.until(lambda: self.WARNING in _notices(m))
+        hold = m.session._hold_presence
+        taken = asyncio.Event()
+        resume = asyncio.get_running_loop().create_future()
+
+        async def take_then_wait() -> None:
+            await hold()
+            if not taken.is_set():
+                taken.set()
+                await resume
+
+        monkeypatch.setattr(m.session, "_hold_presence", take_then_wait)
+        await m.session.handle_command(b'{"id": "a", "op": "prompt", "text": "A"}')
+        await asyncio.wait_for(taken.wait(), 20)
+        old_epoch = m.epoch
+
+        # The turn wakes up first: it is in the loop's queue before the request's task.
+        resume.set_result(None)
+        await m.session.handle_command(b'{"id": "n1", "op": "new_conversation"}')
+        await m.session.handle_command(b'{"id": "b", "op": "prompt", "text": "B"}')
+        await m.until(lambda: {"n1", "b"} <= m.results.keys())
+
+        assert m.results["n1"]["ok"] is True
+        assert m.results["b"]["data"]["queued"] is True
+        await m.until(lambda: m.epoch != old_epoch and "You said: B" in m.texts("agent"))
+        await m.until(lambda: m.status == "ready")
+        assert m.texts("user") == ["B"]
+        assert m.state["queue"] == []
+        assert self.LOADED not in _notices(m)
+        assert _fake_agent_pids() == {m.session.pid}
 
     async def test_a_reload_the_agent_refuses_keeps_the_message_for_restart(
         self, open_chat, tmp_path
