@@ -53,6 +53,9 @@ final class GitScreenModel {
     /// The batch in flight, for the "Deleting… n of m done" status line.
     private(set) var deleteProgress: DeleteProgress?
     var isDeleting: Bool { deleteProgress != nil }
+    /// Owner of `deleteProgress`: a force-delete confirmed during the previous
+    /// batch's reload starts a new batch that the old one must not clear.
+    private var deleteBatchID = 0
     var forcePrompt: ForcePrompt?
     var busyDialog: [BusyHolder]?
     /// A checkout the busy guard refused; the user may retry it with `force`.
@@ -514,10 +517,16 @@ final class GitScreenModel {
         return GitDeleteResponse(results: job.results ?? [])
     }
 
+    private func endDeleteProgress(of batchID: Int) {
+        if deleteBatchID == batchID { deleteProgress = nil }
+    }
+
     private func sendDelete(_ batch: [PendingDelete]) async {
         guard !batch.isEmpty else { return }
+        deleteBatchID += 1
+        let batchID = deleteBatchID
         deleteProgress = DeleteProgress(completed: 0, total: batch.count)
-        defer { deleteProgress = nil }
+        defer { endDeleteProgress(of: batchID) }
         do {
             let response = try await runDelete(GitDeleteRequest(items: batch.map(\.item)))
 
@@ -555,7 +564,7 @@ final class GitScreenModel {
             }
             // The agent's one `git.changed` can be lost in a reconnect, so the
             // end of a batch re-fetches the list too, as on web.
-            deleteProgress = nil
+            endDeleteProgress(of: batchID)
             await load()
         } catch let error as APIError where error.code == 409 && !Self.isCodedRefusal(error) {
             // The busy guard is all-or-nothing: nothing was processed.
@@ -570,7 +579,7 @@ final class GitScreenModel {
             message = "Delete failed: \(String(describing: error))"
             // Part of the batch may have gone through, and its `git.changed`
             // may have been missed while the connection was down.
-            deleteProgress = nil
+            endDeleteProgress(of: batchID)
             await load()
         }
     }

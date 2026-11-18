@@ -844,10 +844,7 @@ final class GitScreenModelTests: XCTestCase {
             body: job("done", completed: 1, results: #"[{"kind":"branch_only","target":"b1","ok":true}]"#)
         )
         StubURLProtocol.enqueue(status: 200, body: #"{"items":[{"kind":"branch_only","branch":"b2"}]}"#)
-        let reloadGate = DispatchSemaphore(value: 0)
-        StubURLProtocol.onRequest = { request in
-            if request.url?.path.hasSuffix("/git/items") == true { reloadGate.wait() }
-        }
+        StubURLProtocol.hold = { $0.url?.path.hasSuffix("/git/items") == true }
         model.delete(model.items[0])
 
         await tick(sleeper)
@@ -856,8 +853,51 @@ final class GitScreenModelTests: XCTestCase {
 
         XCTAssertFalse(model.isDeleting, "the reload is still in flight, but the batch is over")
         XCTAssertNil(model.deleteProgress)
-        reloadGate.signal()
+        StubURLProtocol.releaseHeld()
         await waitUntil { model.items.compactMap(\.branch) == ["b2"] }
+        XCTAssertEqual(model.items.compactMap(\.branch), ["b2"])
+    }
+
+    func testAForceDeleteConfirmedDuringTheReloadKeepsItsOwnProgress() async throws {
+        let (model, sleeper) = await deleteJobsModel()
+        StubURLProtocol.enqueue(status: 202, body: job("running", completed: 0))
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: job("done", completed: 1, results: #"[{"kind":"branch_only","target":"b1","ok":false,"error":"force_required"}]"#)
+        )
+        // The first reload's answer; a third row marks when it has been applied.
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"items":[{"kind":"branch_only","branch":"b1"},{"kind":"branch_only","branch":"b2"},{"kind":"branch_only","branch":"b3"}]}"#
+        )
+        StubURLProtocol.enqueue(status: 202, body: job("running", completed: 0))
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: job("done", completed: 1, results: #"[{"kind":"branch_only","target":"b1","ok":true}]"#)
+        )
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[{"kind":"branch_only","branch":"b2"}]}"#)
+        StubURLProtocol.hold = { $0.url?.path.hasSuffix("/git/items") == true }
+        model.delete(model.items[0])
+
+        await tick(sleeper)
+        await tick(sleeper)
+        await waitUntil { model.forcePrompt != nil && StubURLProtocol.requests.count == 3 }
+        model.confirmForceDelete()
+        await waitUntil { StubURLProtocol.requests.count == 4 && sleeper.isWaiting }
+        XCTAssertEqual(StubURLProtocol.requests.count, 4, "the forced batch started while the reload is held")
+        XCTAssertTrue(model.isDeleting)
+
+        StubURLProtocol.releaseHeld()
+        await waitUntil { model.items.count == 3 }
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(model.items.count, 3, "the first reload returned")
+        XCTAssertTrue(model.isDeleting, "the first batch's reload must not end the forced batch")
+
+        StubURLProtocol.hold = nil
+        await tick(sleeper)
+        await waitUntil { model.items.compactMap(\.branch) == ["b2"] && !model.isDeleting }
+        XCTAssertEqual(model.items.compactMap(\.branch), ["b2"])
+        XCTAssertFalse(model.isDeleting)
     }
 
     func testDeleteJobOutagesShorterThanTheBudgetKeepPollingAndStillDeliverTheResults() async throws {
