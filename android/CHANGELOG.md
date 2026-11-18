@@ -1,5 +1,18 @@
 # Android Changelog
 
+## [3.7.6](https://github.com/syrax90/mobaide/compare/android-v3.7.5...android-v3.7.6) (2026-11-18)
+
+
+### Features
+
+* **agent,android,ios,web:** add "New conversation" to ACP chat sessions ([#891](https://github.com/syrax90/mobaide/issues/891)) ([42dd11b](https://github.com/syrax90/mobaide/commit/42dd11bb95d62bf7fea86eea5da366aeda498009))
+
+
+### Bug Fixes
+
+* **agent,android,ios,web:** delete worktrees and branches in background jobs ([#910](https://github.com/syrax90/mobaide/issues/910)) ([056c4aa](https://github.com/syrax90/mobaide/commit/056c4aab855ef6d7a32e0e091f8832f1fcdca5c7))
+* **android,ios,web:** ask before a new conversation only when work is lost ([#911](https://github.com/syrax90/mobaide/issues/911)) ([f22a01c](https://github.com/syrax90/mobaide/commit/f22a01c263252db4870660e00afcaad2a3233db9))
+
 ## [3.7.5](https://github.com/syrax90/mobaide/compare/android-v3.7.4...android-v3.7.5) (2026-11-17)
 
 
