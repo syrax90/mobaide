@@ -249,6 +249,61 @@ async def test_first_message_caps_the_description_and_the_whole_prompt(tmp_path)
     assert sessions2.configs[0].command[-1] == "p" * INITIAL_PROMPT_MAX
 
 
+@pytest.mark.parametrize("body_length", [5000, INITIAL_PROMPT_MAX + 1000])
+async def test_first_message_keeps_a_linear_description_whole_up_to_the_prompt_cap(
+    tmp_path, body_length,
+):
+    issue = ScanIssue(
+        key="uuid-1", identifier="TEAM-1", title="Long", description="x" * body_length,
+        url=None, slug_seed="TEAM-1",
+    )
+    source = _FakeSource([issue])
+    source.kind, source.label = "linear", "Linear"
+    inst, _, sessions = _instance(
+        tmp_path, cli="pi", launcher=PiLauncher(), source=source, initial_prompt="Go.",
+    )
+
+    await inst._scan_once()
+
+    # A Linear issue has no link to the rest of its description, and only
+    # Claude Code can read Linear.
+    full = "Go.\n\nLinear issue TEAM-1: Long\n\n" + "x" * body_length
+    prompt = sessions.configs[0].command[-1]
+    if len(full) <= INITIAL_PROMPT_MAX:
+        assert prompt == full
+    else:
+        assert len(prompt) <= INITIAL_PROMPT_MAX
+        assert prompt.endswith("\n[…]")
+        assert prompt.startswith("Go.\n\nLinear issue TEAM-1: Long\n\nxxx")
+
+
+_LINEAR_HEAD = "Go.\n\nLinear issue TEAM-1: Long"
+
+
+def _linear_source(body: str, url: str | None = None) -> _FakeSource:
+    source = _FakeSource([
+        ScanIssue(
+            key="uuid-1", identifier="TEAM-1", title="Long", description=body,
+            url=url, slug_seed="TEAM-1",
+        ),
+    ])
+    source.kind, source.label = "linear", "Linear"
+    return source
+
+
+async def test_first_message_cuts_at_4000_by_source_kind_not_by_link(tmp_path):
+    url = "https://linear.app/acme/issue/TEAM-1"
+    inst, _, sessions = _instance(
+        tmp_path, cli="pi", launcher=PiLauncher(), source=_linear_source("x" * 5000, url),
+        initial_prompt="Go.",
+    )
+
+    await inst._scan_once()
+
+    # A link does not let the agent read the rest of a Linear issue.
+    assert sessions.configs[0].command[-1] == f"{_LINEAR_HEAD}\n{url}\n\n" + "x" * 5000
+
+
 async def test_first_message_drops_control_characters_from_the_issue_text(tmp_path):
     source = _FakeSource([
         _issue(7, "Fix\x1b]52;c;ZXZpbA==\x07 crash\x9b2J", "Line one\r\n\tindented\x1b[31m red\x00\rend"),
@@ -463,3 +518,34 @@ async def test_issue_text_reaches_a_windows_cmd_shim_sanitized(tmp_path, monkeyp
     assert not _CMD_SPECIALS & set(options.initial_prompt)
     assert "GitHub issue #7: a' + calc + 'b" in options.initial_prompt
     assert sessions.configs[0].command[-1] == options.initial_prompt
+
+
+@pytest.mark.parametrize(
+    ("platform", "binary", "limit", "starts_with", "ends_with"),
+    [
+        pytest.param("linux", "/x/codex", INITIAL_PROMPT_MAX,
+                     f"{_LINEAR_HEAD}\n\nx", "x\n[…]", id="not-windows"),
+        pytest.param("win32", r"C:\x\codex.exe", 24_000,
+                     f"{_LINEAR_HEAD}\n\nx", "x\n[…]", id="windows-native"),
+        pytest.param("win32", r"C:\x\codex.cmd", 6000,
+                     " ".join(_LINEAR_HEAD.split()) + " x", "x […]", id="windows-cmd-shim"),
+    ],
+)
+async def test_a_long_description_is_cut_to_the_launch_limit_and_marked(
+    tmp_path, monkeypatch, platform, binary, limit, starts_with, ends_with,
+):
+    agent = _WindowsAgent(binary)
+    inst, _, _ = _instance(
+        tmp_path, cli="codex", launcher=agent,
+        source=_linear_source("x" * (INITIAL_PROMPT_MAX + 1000)), initial_prompt="Go.",
+    )
+    monkeypatch.setattr(sys, "platform", platform)
+
+    await inst._scan_once()
+
+    # Windows takes at most 32,767 UTF-16 units per command line, cmd.exe
+    # 8,191. The issue line must survive, and the agent must see the cut.
+    [options] = agent.options
+    assert len(options.initial_prompt) <= limit
+    assert options.initial_prompt.startswith(starts_with)
+    assert options.initial_prompt.endswith(ends_with)

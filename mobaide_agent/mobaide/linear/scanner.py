@@ -107,6 +107,10 @@ _GITHUB_DEFAULT_PROMPT = (
     "first, then analyze it deeply and implement the fix."
 )
 _DESCRIPTION_MAX = 4000
+_CUT_MARK = "\n[…]"
+# Windows takes at most 32,767 UTF-16 units per command line; quote escaping
+# and surrogate pairs grow the prompt there, and the path and flags need room.
+_WIN_PROMPT_MAX = 24_000
 # Control characters but line feed and tab: an agent that echoes its prompt
 # would pass escape sequences from the issue text on to the apps' terminals.
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
@@ -350,23 +354,31 @@ class AutoScanInstance:
             return _GITHUB_DEFAULT_PROMPT
         return self._config.auto_scan_prompt or ""
 
-    def _issue_prompt(self, issue: ScanIssue) -> str:
+    def _issue_prompt(self, issue: ScanIssue, limit: int = INITIAL_PROMPT_MAX) -> str:
         """The first message of an issue's session: the instruction, then the issue.
 
         The issue text is included because only Claude Code gets the Linear
         MCP server, and every agent should know its issue without a lookup.
+        The message is one argv element of at most ``limit`` characters; a
+        description cut to fit ends with ``[…]`` so the agent knows text is
+        missing.
         """
         title = _CONTROL_CHARS.sub("", issue.title)
-        lines = [self._prompt, "", f"{self._source.label} issue {issue.identifier}: {title}"]
+        head = [self._prompt, "", f"{self._source.label} issue {issue.identifier}: {title}"]
         if issue.url:
-            lines.append(issue.url)
+            head.append(issue.url)
+        head_text = "\n".join(head).strip()
         description = _CONTROL_CHARS.sub("", (issue.description or "").replace("\r\n", "\n")).strip()
-        if description:
-            if len(description) > _DESCRIPTION_MAX:
-                description = description[:_DESCRIPTION_MAX].rstrip() + "\n[…]"
-            lines += ["", description]
-        # One argv element, so it stays within the launchers' prompt cap.
-        return "\n".join(lines).strip()[:INITIAL_PROMPT_MAX]
+        if not description:
+            return head_text[:limit]
+        # A GitHub agent reads the rest with ``gh issue view``; a Linear one
+        # cannot, so only the prompt limit cuts a Linear description.
+        if self._source.kind == "github" and len(description) > _DESCRIPTION_MAX:
+            description = description[:_DESCRIPTION_MAX].rstrip() + _CUT_MARK
+        room = limit - len(head_text) - 2
+        if len(description) > room:
+            description = description[: max(room - len(_CUT_MARK), 0)].rstrip() + _CUT_MARK
+        return f"{head_text}\n\n{description}"[:limit]
 
     async def start(self) -> None:
         who = await self._source.connect()
@@ -569,8 +581,15 @@ class AutoScanInstance:
 
         slug = convert_to_worktree_slug(issue.slug_seed, issue.title)
         session_id = uuid.uuid4().hex[:12]
-        prompt = self._issue_prompt(issue)
-        if _through_cmd_shim(launcher):
+        through_shim = _through_cmd_shim(launcher)
+        if through_shim:
+            limit = _CMD_PROMPT_MAX
+        elif sys.platform == "win32":
+            limit = _WIN_PROMPT_MAX
+        else:
+            limit = INITIAL_PROMPT_MAX
+        prompt = self._issue_prompt(issue, limit)
+        if through_shim:
             prompt = _cmd_safe_prompt(prompt)
         if self._cli == "claude":
             await self._launch_claude(issue, slug, session_id, prompt)

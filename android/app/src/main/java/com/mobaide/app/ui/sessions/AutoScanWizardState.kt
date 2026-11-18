@@ -60,7 +60,14 @@ data class GitHubFilterDraft(
     val activeLabel: String = "",
 ) {
     val activeLabelError: String?
-        get() = githubLabelError(activeLabel.trim()).takeIf { activeLabel.isNotBlank() }
+        get() {
+            val active = activeLabel.trim()
+            if (active.isEmpty()) return null
+            if (labels.any { it.equals(active, ignoreCase = true) }) {
+                return "The label to add must not be one of the labels to pick up."
+            }
+            return githubLabelError(active)
+        }
 
     val assigneeError: String?
         get() = "At most $GITHUB_LABEL_MAX characters".takeIf { assignee.trim().length > GITHUB_LABEL_MAX }

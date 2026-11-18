@@ -50,6 +50,11 @@ class AutoScanStartBlockerTest {
         )
         assertNotNull(changed { it.copy(githubStatus = null) }.autoScanStartBlocker)
         assertNotNull(changed { it.copy(githubFilter = GitHubFilterDraft()) }.autoScanStartBlocker)
+        // The agent answers 422: the added label would make the issue match again.
+        assertNotNull(
+            changed { it.copy(githubFilter = GitHubFilterDraft(labels = listOf("ai-ready"), activeLabel = " AI-Ready ")) }
+                .autoScanStartBlocker,
+        )
         assertNotNull(changed { it.copy(cli = null) }.autoScanStartBlocker)
         // Listed by the agent, but not installed on the PC.
         assertNotNull(changed { it.copy(cli = "pi") }.autoScanStartBlocker)

@@ -32,9 +32,12 @@ export function GitHubSourcePanel({ filter, sources, submitting, dispatch }: Git
   const activeLabel = filter.activeLabel.trim();
   const activeLabelError = activeLabel.includes(',')
     ? 'A label name cannot contain a comma.'
-    : activeLabel.length > GITHUB_TEXT_MAX
-      ? `A label name can have at most ${String(GITHUB_TEXT_MAX)} characters.`
-      : undefined;
+    : activeLabel !== '' &&
+        filter.labels.some((label) => label.toLowerCase() === activeLabel.toLowerCase())
+      ? 'The label to add must not be one of the labels to pick up.'
+      : activeLabel.length > GITHUB_TEXT_MAX
+        ? `A label name can have at most ${String(GITHUB_TEXT_MAX)} characters.`
+        : undefined;
   const repoLabels = sources.githubLabels.labels.map((label) => label.name);
 
   return (

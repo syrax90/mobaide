@@ -468,6 +468,17 @@ def _optional_text(value: object) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def _usable_active_label(labels: list[str], active: str | None) -> str | None:
+    """``active`` unless it is one of the trigger labels (ignoring case).
+
+    Mirrors the wire check — such a label would make the issue match again —
+    so a filter saved before that check still lists and saves cleanly.
+    """
+    if active is not None and active.casefold() in {label.casefold() for label in labels}:
+        return None
+    return active
+
+
 def _github_filter_from_dict(data: object) -> GitHubScanFilter | None:
     """Parse a stored ``github_scan_filter``; ``None`` when absent or unusable."""
     if not isinstance(data, dict):
@@ -478,7 +489,7 @@ def _github_filter_from_dict(data: object) -> GitHubScanFilter | None:
     return GitHubScanFilter(
         labels=labels,
         assignee=_optional_text(data.get("assignee")),
-        active_label=_optional_text(data.get("active_label")),
+        active_label=_usable_active_label(labels, _optional_text(data.get("active_label"))),
     )
 
 
@@ -486,7 +497,7 @@ def _github_filter_to_dict(f: GitHubScanFilter) -> dict[str, object]:
     return {
         "labels": list(f.labels),
         "assignee": f.assignee,
-        "active_label": f.active_label,
+        "active_label": _usable_active_label(list(f.labels), f.active_label),
     }
 
 

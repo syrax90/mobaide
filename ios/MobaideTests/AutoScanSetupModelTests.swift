@@ -144,7 +144,8 @@ final class AutoScanSetupModelTests: XCTestCase {
         model.githubAssignee = String(repeating: "a", count: 100)
         XCTAssertNil(model.startBlocker)
 
-        for rejected in ["doing,now", String(repeating: "l", count: 101)] {
+        // " Bot " is a trigger label: adding it would make the issue match again.
+        for rejected in ["doing,now", String(repeating: "l", count: 101), " Bot "] {
             model.githubActiveLabel = rejected
             XCTAssertNotNil(model.startBlocker, rejected)
         }

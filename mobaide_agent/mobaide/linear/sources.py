@@ -240,6 +240,9 @@ class GitHubIssueSource:
         emit(issue, "state_update", "started", None)
         if not active:
             emit(issue, "state_update", "ok", "no label to add")
+        elif active.casefold() in self._triggers():
+            # It would make the issue match again on the next cycle.
+            emit(issue, "state_update", "ok", f"label '{active}' is a trigger label; not added")
         elif active.casefold() in {name.casefold() for name in raw.labels}:
             emit(issue, "state_update", "ok", f"label '{active}' already on issue")
         else:

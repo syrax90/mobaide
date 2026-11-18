@@ -112,6 +112,20 @@ async def test_taken_issue_swaps_trigger_labels_for_the_active_label():
     assert [i.key for i in await source.fetch()] == ["4"]
 
 
+async def test_an_active_label_that_is_also_a_trigger_label_is_not_added():
+    # A filter saved before the agent refused this pair.
+    repo = _FakeRepository({8: {"ai"}})
+    source = await _connected(repo, labels=["ai", "bot"], active="Bot")
+    steps = _Steps()
+    [issue] = await source.fetch()
+
+    await source.claim(issue, steps)
+
+    # Adding "Bot" would make the issue match again on the next cycle.
+    assert repo.labels[8] == set()
+    assert ("#8", "state_update", "ok") in steps.seen
+
+
 async def test_refused_label_removal_skips_the_issue_until_the_scan_restarts():
     repo = _FakeRepository({1: {"ai"}, 2: {"ai"}}, refuse_removal={1})
     source = await _connected(repo, labels=["ai"])

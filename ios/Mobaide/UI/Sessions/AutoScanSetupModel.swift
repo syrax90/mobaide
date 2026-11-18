@@ -406,6 +406,9 @@ final class AutoScanSetupModel {
             if !active.isEmpty, let error = Self.githubLabelError(active) {
                 return "Label to add: \(error)"
             }
+            if !active.isEmpty, githubLabels.contains(where: { $0.lowercased() == active.lowercased() }) {
+                return "The label to add must not be one of the labels to pick up."
+            }
         case .linear:
             if !hasLinearKey { return "Save a Linear API key for this workspace." }
             if linearTriggerStates.isEmpty { return "Choose at least one trigger state." }

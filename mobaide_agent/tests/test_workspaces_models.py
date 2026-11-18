@@ -129,6 +129,8 @@ class TestGitHubScanFilterModel:
             pytest.param({"labels": ["ai,bot"]}, id="comma-in-label"),
             pytest.param({"labels": ["x" * 101]}, id="long-label"),
             pytest.param({"labels": ["ai"], "active_label": "doing,now"}, id="comma-in-active-label"),
+            # Adding a trigger label would make the issue match again.
+            pytest.param({"labels": ["ai", "bot"], "active_label": " BOT "}, id="active-label-is-a-trigger"),
         ],
     )
     def test_rejects(self, fields):

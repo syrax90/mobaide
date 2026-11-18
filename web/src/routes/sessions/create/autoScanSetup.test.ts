@@ -188,6 +188,10 @@ describe('autoScanBlocker', () => {
     expect(blocker({ source: null })).not.toBeNull();
     expect(blocker({}, { ...readyStatus, signed_in: false, problem: 'Sign in.' })).not.toBeNull();
     expect(blocker({ githubFilter: EMPTY_GITHUB_FILTER })).not.toBeNull();
+    // The agent answers 422: the added label would make the issue match again.
+    expect(
+      blocker({ githubFilter: { labels: ['ai-ready'], assignee: '', activeLabel: ' AI-Ready ' } }),
+    ).not.toBeNull();
     expect(blocker({ cli: null })).not.toBeNull();
     expect(blocker({ cli: 'pi' })).not.toBeNull(); // listed, but not installed on the PC
     expect(blocker({ source: 'linear' })).not.toBeNull(); // no Linear key, no filter

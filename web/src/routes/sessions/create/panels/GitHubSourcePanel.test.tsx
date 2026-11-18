@@ -20,7 +20,11 @@ const SIGNED_IN: GitHubStatus = {
 
 function renderPanel(
   status: GitHubStatus,
-  { repoLabels = [], chosen = [] }: { repoLabels?: string[]; chosen?: string[] } = {},
+  {
+    repoLabels = [],
+    chosen = [],
+    activeLabel = '',
+  }: { repoLabels?: string[]; chosen?: string[]; activeLabel?: string } = {},
 ): GitHubSetupAction[] {
   const opened: GitHubSetupAction[] = [];
   const sources: AutoScanSourcesView = {
@@ -46,7 +50,7 @@ function renderPanel(
   };
   render(
     <GitHubSourcePanel
-      filter={{ labels: chosen, assignee: '', activeLabel: '' }}
+      filter={{ labels: chosen, assignee: '', activeLabel }}
       sources={sources}
       submitting={false}
       dispatch={() => undefined}
@@ -110,5 +114,24 @@ describe('GitHubSourcePanel — label chips', () => {
 
     expect(chips()).toEqual([...range(30, 39), 'label-40', 'custom']);
     expect(screen.queryByText(/more labels: type to find them/)).not.toBeInTheDocument();
+  });
+});
+
+describe('GitHubSourcePanel — label to add', () => {
+  const field = () => screen.getByRole('combobox', { name: 'Label to add when work starts' });
+
+  // The agent refuses it: the added label would make the issue match again.
+  it('flags a label to add that is one of the labels to pick up', () => {
+    renderPanel(SIGNED_IN, { chosen: ['ai-ready'], activeLabel: ' AI-Ready ' });
+
+    expect(field()).toHaveAccessibleDescription(
+      'The label to add must not be one of the labels to pick up.',
+    );
+  });
+
+  it('accepts a label to add that is not picked up', () => {
+    renderPanel(SIGNED_IN, { chosen: ['ai-ready'], activeLabel: 'in-progress' });
+
+    expect(field()).not.toBeInvalid();
   });
 });

@@ -86,6 +86,9 @@ export function githubFilterError(filter: GitHubFilterDraft): string | null {
   }
   const active = filter.activeLabel.trim();
   if (active.includes(',')) return 'The label to add cannot contain a comma.';
+  if (active !== '' && filter.labels.some((label) => label.toLowerCase() === active.toLowerCase())) {
+    return 'The label to add must not be one of the labels to pick up.';
+  }
   if (active.length > GITHUB_TEXT_MAX) {
     return `The label to add can have at most ${String(GITHUB_TEXT_MAX)} characters.`;
   }

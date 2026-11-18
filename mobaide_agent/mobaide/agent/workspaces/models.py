@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, SecretStr, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 
 from mobaide.core.workspaces_config import AutoScanFilter, GitHubScanFilter
 
@@ -126,6 +126,15 @@ class GitHubScanFilterModel(BaseModel):
         if info.field_name == "active_label":
             return _github_label(value)
         return value.strip()
+
+    @model_validator(mode="after")
+    def _active_label_is_not_a_trigger(self) -> "GitHubScanFilterModel":
+        # Adding a trigger label would make the issue match again next cycle.
+        if self.active_label and self.active_label.casefold() in {
+            label.casefold() for label in self.labels
+        }:
+            raise ValueError("The label to add must not be one of the labels to pick up.")
+        return self
 
     @classmethod
     def from_dataclass(cls, f: GitHubScanFilter) -> "GitHubScanFilterModel":

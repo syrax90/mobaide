@@ -258,7 +258,7 @@ The wire details are in [PROTOCOL.md](../PROTOCOL.md).
 Auto Scan watches an issue source for matching issues. It creates a git worktree for each issue and launches an AI agent session to work on it. The wire contract is in [PROTOCOL.md](../PROTOCOL.md) ("Delta 2026-11-18: Auto Scan sources and agents").
 
 - **Issue source.** The wizard asks for the source: GitHub or Linear.
-- **GitHub.** The scan reads the open issues of the workspace's own GitHub repository. An issue matches when it has any trigger label (case-insensitive). Starting work removes the trigger labels and adds an optional "label to add". A closed issue counts as done, and its worktree is removed without `--force`.
+- **GitHub.** The scan reads the open issues of the workspace's own GitHub repository. An issue matches when it has any trigger label (case-insensitive). Starting work removes the trigger labels and adds an optional "label to add". The label to add must not be one of the trigger labels: the agent rejects such a filter with `422`, and the clients block Start. A closed issue counts as done, and its worktree is removed without `--force`.
 - **GitHub CLI.** The wizard shows the `gh` status. **Install GitHub CLI** and **Sign in to GitHub** open a setup terminal on top of the wizard. The agent runs the installer (brew, winget, apt-get, dnf, pacman or zypper) or `gh auth login`.
 - **Linear.** The scan uses the workspace's Linear API key. The wizard has a **Save key** action and a Linear filter.
 - **Filters.** Filters start empty, with no built-in defaults. The last choices are remembered per workspace on the agent (`auto_scan` in the workspace record).
