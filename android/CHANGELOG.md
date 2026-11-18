@@ -1,5 +1,12 @@
 # Android Changelog
 
+## [3.7.7](https://github.com/syrax90/mobaide/compare/android-v3.7.6...android-v3.7.7) (2026-11-18)
+
+
+### Bug Fixes
+
+* **android:** mark portrait screen and microphone as optional features ([#912](https://github.com/syrax90/mobaide/issues/912)) ([4c1f173](https://github.com/syrax90/mobaide/commit/4c1f173d539adc939f66536fdb8d9f28e77c9671))
+
 ## [3.7.6](https://github.com/syrax90/mobaide/compare/android-v3.7.5...android-v3.7.6) (2026-11-18)
 
 
