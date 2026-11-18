@@ -107,6 +107,11 @@
       },
       "AutoScanInstanceDto": {
         "properties": {
+          "cli": {
+            "default": "claude",
+            "title": "Cli",
+            "type": "string"
+          },
           "current_seq": {
             "default": 0,
             "title": "Current Seq",
@@ -155,6 +160,11 @@
             "title": "Scan Interval Seconds",
             "type": "integer"
           },
+          "source": {
+            "default": "linear",
+            "title": "Source",
+            "type": "string"
+          },
           "started_at": {
             "title": "Started At",
             "type": "number"
@@ -177,6 +187,11 @@
       },
       "AutoScanInstanceStatusResponse": {
         "properties": {
+          "cli": {
+            "default": "claude",
+            "title": "Cli",
+            "type": "string"
+          },
           "current_seq": {
             "default": 0,
             "title": "Current Seq",
@@ -233,6 +248,11 @@
           "scan_interval_seconds": {
             "title": "Scan Interval Seconds",
             "type": "integer"
+          },
+          "source": {
+            "default": "linear",
+            "title": "Source",
+            "type": "string"
           },
           "started_at": {
             "title": "Started At",
@@ -297,6 +317,59 @@
           "available_projects"
         ],
         "title": "AutoScanListResponse",
+        "type": "object"
+      },
+      "AutoScanSettingsModel": {
+        "description": "The last Auto Scan choices of a workspace, for the wizard to show again.\n\nEvery field is ``null`` until a scan start (or, for ``linear_filter``, an\nolder client's workspace form) sets it. A ``null`` filter means nobody\nchose one: the wizard starts with empty fields.",
+        "properties": {
+          "cli": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cli"
+          },
+          "github_filter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitHubScanFilterModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "linear_filter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AutoScanFilterModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "linear",
+                  "github"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "title": "AutoScanSettingsModel",
         "type": "object"
       },
       "ChatStoredSession": {
@@ -1803,6 +1876,221 @@
         "title": "GitHead",
         "type": "object"
       },
+      "GitHubLabelModel": {
+        "properties": {
+          "color": {
+            "default": "",
+            "title": "Color",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "GitHubLabelModel",
+        "type": "object"
+      },
+      "GitHubLabelsResponse": {
+        "properties": {
+          "labels": {
+            "items": {
+              "$ref": "#/components/schemas/GitHubLabelModel"
+            },
+            "title": "Labels",
+            "type": "array"
+          }
+        },
+        "required": [
+          "labels"
+        ],
+        "title": "GitHubLabelsResponse",
+        "type": "object"
+      },
+      "GitHubScanFilterModel": {
+        "description": "Per-workspace GitHub filter for Auto Scan Mode.\n\nMirrors :class:`mobaide.core.workspaces_config.GitHubScanFilter`.\n``labels`` holds 1\u201320 distinct label names; a blank ``assignee`` or\n``active_label`` is ``null``.",
+        "properties": {
+          "active_label": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Label"
+          },
+          "assignee": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Labels",
+            "type": "array"
+          }
+        },
+        "required": [
+          "labels"
+        ],
+        "title": "GitHubScanFilterModel",
+        "type": "object"
+      },
+      "GitHubSetupRequest": {
+        "description": "``POST /api/autoscan/github/setup``: open a terminal session that\ninstalls the GitHub CLI (``install``) or signs it in (``sign_in``).",
+        "properties": {
+          "action": {
+            "enum": [
+              "install",
+              "sign_in"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "cols": {
+            "default": 80,
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Cols",
+            "type": "integer"
+          },
+          "project_name": {
+            "title": "Project Name",
+            "type": "string"
+          },
+          "rows": {
+            "default": 24,
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Rows",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project_name",
+          "action"
+        ],
+        "title": "GitHubSetupRequest",
+        "type": "object"
+      },
+      "GitHubStatusResponse": {
+        "description": "``GET /api/autoscan/github/status``: what a GitHub scan still needs.\n\n``problem`` is the first blocking reason in plain words, ``null`` when a\nscan can start. ``can_install`` says whether ``POST\n/api/autoscan/github/setup`` with ``action: \"install\"`` knows an\ninstaller for this PC; ``install_command`` is that command as text.",
+        "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account"
+          },
+          "can_install": {
+            "title": "Can Install",
+            "type": "boolean"
+          },
+          "host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host"
+          },
+          "install_command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Install Command"
+          },
+          "installed": {
+            "title": "Installed",
+            "type": "boolean"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo"
+          },
+          "repo_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo Url"
+          },
+          "signed_in": {
+            "title": "Signed In",
+            "type": "boolean"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "installed",
+          "signed_in",
+          "can_install"
+        ],
+        "title": "GitHubStatusResponse",
+        "type": "object"
+      },
       "GitItemRead": {
         "description": "One row in the unified git management list.\n\n``branch`` is set for ``branch_*`` kinds and, as ``<remote>/<name>``,\nfor ``remote_branch``; ``worktree_path`` is set for\n``branch_with_worktree`` and ``orphan_worktree``; ``remote`` only for\n``remote_branch`` (remote and branch names may both contain ``/``, so\nthe client never splits ``branch`` itself). ``subject`` and\n``committed_at`` (committer date, ISO 8601) describe the tip commit\nwhen the ref resolves to one. Status fields apply where relevant;\nclients should ignore irrelevant fields.",
         "properties": {
@@ -2980,7 +3268,13 @@
         "type": "object"
       },
       "StartScanRequest": {
+        "description": "``POST /api/autoscan/start``.\n\n``source`` absent is an older client: Linear, Claude Code, the stored\nfilter. A newer client sends every choice: ``source``, ``cli``, the\nsource's filter, ``auto_approve`` (agents other than Claude; Claude takes\n``claude_options.skip_permissions``), ``initial_prompt`` (``\"\"`` clears\nthe saved prompt) and, when the workspace has none, ``linear_api_key``.",
         "properties": {
+          "auto_approve": {
+            "default": true,
+            "title": "Auto Approve",
+            "type": "boolean"
+          },
           "claude_options": {
             "anyOf": [
               {
@@ -2991,9 +3285,90 @@
               }
             ]
           },
+          "cli": {
+            "anyOf": [
+              {
+                "enum": [
+                  "claude",
+                  "codex",
+                  "antigravity",
+                  "opencode",
+                  "copilot",
+                  "cursor",
+                  "junie",
+                  "pi"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cli"
+          },
+          "github_filter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitHubScanFilterModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "initial_prompt": {
+            "anyOf": [
+              {
+                "maxLength": 32000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Initial Prompt"
+          },
+          "linear_api_key": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Linear Api Key"
+          },
+          "linear_filter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AutoScanFilterModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "project_name": {
             "title": "Project Name",
             "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "linear",
+                  "github"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
           }
         },
         "required": [
@@ -3535,6 +3910,9 @@
       "WorkspaceReadModel": {
         "description": "Client-safe view of a single workspace.",
         "properties": {
+          "auto_scan": {
+            "$ref": "#/components/schemas/AutoScanSettingsModel"
+          },
           "auto_scan_filter": {
             "$ref": "#/components/schemas/AutoScanFilterModel"
           },
@@ -3987,6 +4365,134 @@
         ]
       }
     },
+    "/api/autoscan/github/labels": {
+      "get": {
+        "description": "Labels of the workspace's GitHub repository.",
+        "operationId": "github_labels_api_autoscan_github_labels_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project_name",
+            "required": true,
+            "schema": {
+              "title": "Project Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitHubLabelsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Github Labels",
+        "tags": [
+          "autoscan"
+        ]
+      }
+    },
+    "/api/autoscan/github/setup": {
+      "post": {
+        "description": "Open a terminal session that installs (``install``) or signs in\n(``sign_in``) the GitHub CLI; the response is the new session.",
+        "operationId": "github_setup_api_autoscan_github_setup_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitHubSetupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Github Setup",
+        "tags": [
+          "autoscan"
+        ]
+      }
+    },
+    "/api/autoscan/github/status": {
+      "get": {
+        "description": "What a GitHub scan of the workspace still needs (``gh``, sign-in, repo).",
+        "operationId": "github_status_api_autoscan_github_status_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project_name",
+            "required": true,
+            "schema": {
+              "title": "Project Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitHubStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Github Status",
+        "tags": [
+          "autoscan"
+        ]
+      }
+    },
     "/api/autoscan/list": {
       "get": {
         "operationId": "list_scans_api_autoscan_list_get",
@@ -4052,7 +4558,7 @@
     },
     "/api/autoscan/start": {
       "post": {
-        "description": "Start an auto scan for a workspace. 409 if already running, 429 if at cap.",
+        "description": "Start an auto scan for a workspace. 409 if already running, 429 if at\ncap, 400 when a choice is missing or the source or agent is not usable.",
         "operationId": "start_scan_api_autoscan_start_post",
         "requestBody": {
           "content": {

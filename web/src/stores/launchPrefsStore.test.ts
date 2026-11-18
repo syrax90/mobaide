@@ -185,7 +185,8 @@ describe('hydration', () => {
 
     expect(prefs.claude).toBeNull();
     expect(prefs.antigravity).toBeNull();
-    expect(prefs.autoScan).toEqual(CLAUDE_BLOB);
+    // A blob saved before `autoApprove` existed reads as on.
+    expect(prefs.autoScan).toEqual({ ...CLAUDE_BLOB, autoApprove: true });
   });
 
   it('voids the bucket for an enum value outside the wire vocabulary', async () => {
@@ -317,7 +318,10 @@ describe('writes', () => {
   it('files a snapshot under its own slot and reads it back through the sanitiser', async () => {
     useLaunchPrefsStore
       .getState()
-      .setLaunchPrefs({ kind: 'autoScan', prefs: { ...CLAUDE_DEFAULTS, skipPermissions: false } });
+      .setLaunchPrefs({
+        kind: 'autoScan',
+        prefs: { ...CLAUDE_DEFAULTS, skipPermissions: false, autoApprove: false },
+      });
     useLaunchPrefsStore
       .getState()
       .setLaunchPrefs({ kind: 'codex', prefs: { ...CODEX_BLOB, reasoningEffort: null } });
@@ -331,7 +335,7 @@ describe('writes', () => {
     await useLaunchPrefsStore.persist.rehydrate();
 
     const prefs = readLaunchPrefs();
-    expect(prefs.autoScan).toEqual({ ...CLAUDE_DEFAULTS, skipPermissions: false });
+    expect(prefs.autoScan).toEqual({ ...CLAUDE_DEFAULTS, skipPermissions: false, autoApprove: false });
     expect(prefs.codex).toEqual({ ...CODEX_BLOB, reasoningEffort: null });
     expect(prefs.claude).toBeNull();
   });

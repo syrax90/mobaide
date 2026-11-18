@@ -15,6 +15,11 @@ import { isCustomSessionKind } from '../../../protocol/wireSchema';
 import { CODEX_REASONING_EFFORTS } from '../../../protocol/dto/sessionCreate';
 import type { CLAUDE_EFFORTS, CODEX_APPROVALS, CODEX_SANDBOXES } from '../../../protocol/dto/sessionCreate';
 import type { CliModelDetail } from '../../../protocol/dto/agentVersion';
+import type {
+  AutoScanFilter,
+  AutoScanSettings,
+  GitHubScanFilter,
+} from '../../../protocol/dto/workspaces';
 import type { WorkspaceSummary } from '../../../api/workspaceRepository';
 import { trimTrailingSeparator } from '../../../lib/pathCompletion';
 import type { WorktreeBasePick } from './worktreeBase';
@@ -139,6 +144,69 @@ export interface GitBucket {
   branchName: string;
 }
 
+export type AutoScanSource = 'linear' | 'github';
+
+/** The GitHub filter as the wizard edits it: blank text is "not set". */
+export interface GitHubFilterDraft {
+  labels: string[];
+  assignee: string;
+  activeLabel: string;
+}
+
+/**
+ * What a scan runs on and with (Delta 2026-11-18), for an agent that has
+ * `capabilities.autoscan`. Seeded once per workspace from the agent's saved
+ * choices (`workspace.auto_scan`), which start empty: nothing here has a
+ * default the user did not pick, except `autoApprove`, which is remembered
+ * on this device with the Auto Scan launch prefs.
+ */
+export interface AutoScanSetup {
+  /** The workspace whose saved choices seeded this slice, so edits survive re-entry. */
+  seededFor: string | null;
+  source: AutoScanSource | null;
+  /** An agent kind from `capabilities.autoscan.clis`. */
+  cli: string | null;
+  /** Empty strings and lists are "not chosen yet"; `filterError` names what is missing. */
+  linearFilter: AutoScanFilter;
+  githubFilter: GitHubFilterDraft;
+  /** The agent's own "run without asking" switch, for every agent but Claude Code. */
+  autoApprove: boolean;
+}
+
+export const EMPTY_LINEAR_FILTER: AutoScanFilter = {
+  state_names: [],
+  label_names: [],
+  active_state: '',
+  done_state: '',
+  removal_label: '',
+};
+
+export const EMPTY_GITHUB_FILTER: GitHubFilterDraft = { labels: [], assignee: '', activeLabel: '' };
+
+function linearFilterDraft(filter: AutoScanFilter): AutoScanFilter {
+  return {
+    state_names: [...filter.state_names],
+    label_names: [...filter.label_names],
+    active_state: filter.active_state,
+    done_state: filter.done_state,
+    removal_label: filter.removal_label,
+  };
+}
+
+function githubFilterDraft(filter: GitHubScanFilter): GitHubFilterDraft {
+  return {
+    labels: [...filter.labels],
+    assignee: filter.assignee ?? '',
+    activeLabel: filter.active_label ?? '',
+  };
+}
+
+/** The Auto Scan part of the wizard that survives a trip to the GitHub setup terminal. */
+export interface AutoScanDraft {
+  setup: AutoScanSetup;
+  bucket: ClaudeBucket;
+}
+
 export interface WizardState {
   /**
    * **Not the source of truth for a launch.** The URL is: this copy is reset by
@@ -172,6 +240,7 @@ export interface WizardState {
   worktreeBasePick: WorktreeBasePick | null;
   /** The workspace the Auto Scan prompt was seeded for, so edits are not discarded. */
   autoScanPromptSeededFor: string | null;
+  autoScanSetup: AutoScanSetup;
 }
 
 const CLAUDE_DEFAULTS: ClaudeBucket = {
@@ -227,6 +296,15 @@ export const INITIAL_WIZARD_STATE: WizardState = {
   git: { worktree: false, branchName: '' },
   worktreeBasePick: null,
   autoScanPromptSeededFor: null,
+  autoScanSetup: {
+    seededFor: null,
+    source: null,
+    cli: null,
+    linearFilter: EMPTY_LINEAR_FILTER,
+    githubFilter: EMPTY_GITHUB_FILTER,
+    // On, like the Auto Scan bucket's `skipPermissions`: a scan runs unattended.
+    autoApprove: true,
+  },
 };
 
 export const CLAUDE_MODELS = ['opus', 'sonnet', 'haiku', 'fable'] as const;
@@ -405,7 +483,14 @@ export type WizardAction =
   | { type: 'setWorktree'; value: boolean }
   | { type: 'setBranchName'; value: string }
   | { type: 'setWorktreeBase'; pick: WorktreeBasePick }
-  | { type: 'seedAutoScanPrompt'; workspaceName: string; prompt: string };
+  | { type: 'seedAutoScanPrompt'; workspaceName: string; prompt: string }
+  | { type: 'seedAutoScanSetup'; workspaceName: string; saved: AutoScanSettings | undefined }
+  | { type: 'restoreAutoScanDraft'; workspaceName: string; draft: AutoScanDraft }
+  | { type: 'setAutoScanSource'; source: AutoScanSource }
+  | { type: 'setAutoScanCli'; cli: string }
+  | { type: 'setAutoScanLinearFilter'; filter: AutoScanFilter }
+  | { type: 'setAutoScanGitHubFilter'; filter: GitHubFilterDraft }
+  | { type: 'setAutoScanAutoApprove'; value: boolean };
 
 function withClaudeBucket(
   state: WizardState,
@@ -659,5 +744,55 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         autoScanPromptSeededFor: action.workspaceName,
         autoScan: { ...state.autoScan, initialPrompt: action.prompt },
       };
+
+    // Same once-per-workspace rule as the prompt. A choice the agent never saved
+    // stays unset — no legacy filter defaults, no default source or agent.
+    case 'seedAutoScanSetup': {
+      if (state.autoScanSetup.seededFor === action.workspaceName) return state;
+      const saved = action.saved;
+      const source = saved?.source === 'linear' || saved?.source === 'github' ? saved.source : null;
+      return {
+        ...state,
+        autoScanSetup: {
+          ...state.autoScanSetup,
+          seededFor: action.workspaceName,
+          source,
+          cli: saved?.cli ?? null,
+          linearFilter:
+            saved?.linear_filter === undefined
+              ? EMPTY_LINEAR_FILTER
+              : linearFilterDraft(saved.linear_filter),
+          githubFilter:
+            saved?.github_filter === undefined
+              ? EMPTY_GITHUB_FILTER
+              : githubFilterDraft(saved.github_filter),
+        },
+      };
+    }
+
+    // The draft parked before the GitHub setup terminal opened. It marks both
+    // seeds as done, so the saved choices cannot overwrite it afterwards.
+    case 'restoreAutoScanDraft':
+      return {
+        ...state,
+        autoScan: action.draft.bucket,
+        autoScanPromptSeededFor: action.workspaceName,
+        autoScanSetup: { ...action.draft.setup, seededFor: action.workspaceName },
+      };
+
+    case 'setAutoScanSource':
+      return { ...state, autoScanSetup: { ...state.autoScanSetup, source: action.source } };
+
+    case 'setAutoScanCli':
+      return { ...state, autoScanSetup: { ...state.autoScanSetup, cli: action.cli } };
+
+    case 'setAutoScanLinearFilter':
+      return { ...state, autoScanSetup: { ...state.autoScanSetup, linearFilter: action.filter } };
+
+    case 'setAutoScanGitHubFilter':
+      return { ...state, autoScanSetup: { ...state.autoScanSetup, githubFilter: action.filter } };
+
+    case 'setAutoScanAutoApprove':
+      return { ...state, autoScanSetup: { ...state.autoScanSetup, autoApprove: action.value } };
   }
 }

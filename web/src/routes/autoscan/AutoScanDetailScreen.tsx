@@ -9,6 +9,7 @@ import {
   issueTone,
   phaseLabel,
   phaseTone,
+  scanSourceAgentLabel,
 } from '../../autoscan/autoscanDisplay';
 import { orderedPhases } from '../../autoscan/autoscanModel';
 import { useAutoScanDetail, useSecondTicker } from '../../autoscan/useAutoScanDetail';
@@ -141,6 +142,9 @@ function AutoScanDetail({ agentId, workspaceName }: { agentId: string; workspace
             : autoScanStatusLabel(status)}
         </span>
         <AutoScanCountdown nextScanAt={state.nextScanAt} />
+        {state.instance !== undefined && (
+          <span className="page-note">{scanSourceAgentLabel(state.instance)}</span>
+        )}
         {state.instance !== undefined && (
           <span className="page-note">Processed: {state.instance.processed_count}</span>
         )}

@@ -29,6 +29,9 @@ struct AutoScanCard: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Stop scan")
                 }
+                Text(AutoScanDisplay.sourceAndAgent(scan))
+                    .font(.caption)
+                    .foregroundStyle(colors.textMuted)
                 HStack {
                     Text("Processed: \(scan.processed_count)")
                         .font(.caption)
@@ -76,6 +79,34 @@ enum AutoScanDisplay {
         case "starting": return "Starting"
         default: return status.isEmpty ? status : status.prefix(1).uppercased() + status.dropFirst()
         }
+    }
+
+    static func sourceName(_ source: String) -> String {
+        switch source {
+        case "github": return "GitHub"
+        case "linear": return "Linear"
+        default: return source.isEmpty ? source : source.prefix(1).uppercased() + source.dropFirst()
+        }
+    }
+
+    /// Display name of an agent kind Auto Scan can run.
+    static func agentName(_ cli: String) -> String {
+        switch cli {
+        case "claude": return "Claude Code"
+        case "codex": return "Codex"
+        case "antigravity": return "Antigravity"
+        case "opencode": return "OpenCode"
+        case "copilot": return "GitHub Copilot"
+        case "cursor": return "Cursor"
+        case "junie": return "Junie"
+        case "pi": return "Pi"
+        default: return cli
+        }
+    }
+
+    /// "GitHub · Codex".
+    static func sourceAndAgent(_ scan: AutoScanInstanceDto) -> String {
+        "\(sourceName(scan.source)) · \(agentName(scan.cli))"
     }
 
     static func relativeTime(_ epochSeconds: Double) -> String {

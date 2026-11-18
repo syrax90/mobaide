@@ -8,6 +8,28 @@
         "project_name": "p",
         "claude_options": { "plan_mode": false, "no_memory": false, "skip_permissions": true, "worktree": false, "fast_mode": false, "ultracode": false, "model": "opus", "debug": false, "focus_mode": true }
       }
+    },
+    {
+      "name": "github_source_other_agent",
+      "wire": {
+        "project_name": "p",
+        "source": "github",
+        "cli": "codex",
+        "auto_approve": false,
+        "initial_prompt": "",
+        "github_filter": { "labels": ["ai-ready", "bot"], "assignee": "@me", "active_label": "ai-doing" }
+      }
+    },
+    {
+      "name": "linear_source_claude",
+      "wire": {
+        "project_name": "p",
+        "claude_options": { "plan_mode": false, "no_memory": false, "skip_permissions": true, "worktree": true, "fast_mode": false, "ultracode": false, "model": "opus", "debug": false, "focus_mode": true },
+        "source": "linear",
+        "cli": "claude",
+        "initial_prompt": "Fix it.",
+        "linear_filter": { "state_names": ["Todo"], "label_names": ["bot"], "active_state": "Doing", "done_state": "Shipped", "removal_label": "bot" }
+      }
     }
   ]
 }

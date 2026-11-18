@@ -22,19 +22,20 @@ logger = get_logger(__name__)
 
 @dataclass
 class ActiveWorkItem:
-    """A Linear issue being worked on by auto-scan.
+    """An issue being worked on by auto-scan.
 
     Persisted to ``active_workitems.json`` so the scanner can later
-    (once the issue reaches the configured Done state) remove the
-    associated git worktree.
+    (once the issue is done in its tracker) remove the associated git
+    worktree. Only a scan of the same ``source`` checks an item.
     """
 
-    id: str  # Human-readable identifier, e.g. "TEAM-31"
-    uuid: str  # Internal UUID used for single-issue API queries
+    id: str  # Human-readable identifier, e.g. "TEAM-31" or "#42"
+    uuid: str  # Tracker key for single-issue queries: Linear UUID, GitHub number
     slug: str  # Worktree directory name
     worktree_path: str
     project_root: str
     added_at: str  # ISO8601 UTC
+    source: str = "linear"
 
     @classmethod
     def from_dict(cls, data: dict) -> "ActiveWorkItem":
@@ -48,6 +49,7 @@ class ActiveWorkItem:
             worktree_path=normalize_workspace_path(str(data["worktree_path"])),
             project_root=normalize_workspace_path(str(data["project_root"])),
             added_at=str(data["added_at"]),
+            source=str(data.get("source") or "linear"),
         )
 
 

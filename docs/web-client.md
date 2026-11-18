@@ -487,7 +487,7 @@ Custom agent types are listed, launched, created and deleted here; editing
 is CLA-231. A launch sends only `cli: "custom_<id>"` — the relay resolves the
 stored command server-side, and the agent-direct REST path rejects custom
 kinds outright. The Auto Scan branch posts to `/api/autoscan/start` and
-returns to the list; its monitor screen is WEB-10.
+returns to the list; its monitor screen is WEB-10. Agents with `capabilities.autoscan` get the source-and-agent wizard step described in [features.md](features.md#auto-scan-mode). Older agents keep the Linear + Claude panel.
 
 ## Agents and pairing (WEB-08)
 
@@ -731,7 +731,7 @@ submitted variables, plaintext key included, readable app-wide through
 
 Two related traps the form closes: `editing` is resolved by name, so a workspace
 deleted or renamed by another client closes the editor instead of flipping the
-dialog into *create* mode; and the Auto Scan filter is validated even while
+dialog into *create* mode; and the Auto Scan filter (shown only for agents without `capabilities.autoscan`) is validated even while
 hidden, so Save is never disabled with no reason on screen.
 
 ### Git delete and branch management

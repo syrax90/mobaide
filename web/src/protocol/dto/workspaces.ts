@@ -44,6 +44,33 @@ export const autoScanFilterSchema = z.looseObject({
 });
 
 /**
+ * The per-workspace GitHub filter (`GitHubScanFilterModel`): 1–20 trigger
+ * labels, an optional assignee (`@me` is the signed-in `gh` account) and an
+ * optional label the scan adds when it takes an issue.
+ */
+export const githubScanFilterSchema = z.looseObject({
+  labels: z.array(z.string()).default([]),
+  assignee: optionalWireString(),
+  active_label: optionalWireString(),
+});
+
+/**
+ * `auto_scan`: the last Auto Scan choices of a workspace, for the wizard to
+ * pre-fill (Delta 2026-11-18). Every field is absent or `null` until a scan
+ * start sets it, and a `null` filter means nobody chose one, so the wizard
+ * starts that filter empty rather than at the legacy defaults.
+ *
+ * `source` and `cli` stay open strings, as every kind on the wire does; the
+ * wizard ignores a value it does not offer.
+ */
+export const autoScanSettingsSchema = z.looseObject({
+  source: optionalWireString(),
+  cli: optionalWireString(),
+  linear_filter: autoScanFilterSchema.nullish().transform((value) => value ?? undefined),
+  github_filter: githubScanFilterSchema.nullish().transform((value) => value ?? undefined),
+});
+
+/**
  * One workspace as the agent publishes it (`WorkspaceReadModel` /
  * `workspaces_store._record_to_public`).
  *
@@ -63,10 +90,17 @@ export const workspaceInfoSchema = z.looseObject({
   auto_scan_filter: autoScanFilterSchema.default(defaultAutoScanFilter),
   /** Seeded by the previous scan start; `null` means "use the engine default". */
   auto_scan_prompt: optionalWireString(),
+  /** Absent on an agent from before the delta, which the wizard reads as "nothing chosen". */
+  auto_scan: autoScanSettingsSchema
+    .nullish()
+    .transform((value) => value ?? undefined)
+    .optional(),
 });
 
 export type WorkspaceInfo = z.infer<typeof workspaceInfoSchema>;
 export type AutoScanFilter = z.infer<typeof autoScanFilterSchema>;
+export type GitHubScanFilter = z.infer<typeof githubScanFilterSchema>;
+export type AutoScanSettings = z.infer<typeof autoScanSettingsSchema>;
 export type FlagValue = z.infer<typeof flagValueSchema>;
 
 /**

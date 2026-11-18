@@ -9,6 +9,7 @@ import com.mobaide.app.data.network.RestApi
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.network.dto.AutoScanListResponse
 import com.mobaide.app.data.network.dto.RunNowResponse
+import com.mobaide.app.data.network.dto.StartScanRequest
 import com.mobaide.app.testing.awaitSubscribers
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -94,7 +95,7 @@ class AutoScanRepositoryTest {
     @Test
     fun startScan_happyPath_addsPlaceholder_andPersistsAfterServerOk() = runTest {
         val (repo, restApi) = newRepo()
-        coEvery { restApi.startAutoScan("p1", null) } returns Unit
+        coEvery { restApi.startAutoScan(StartScanRequest("p1", null)) } returns Unit
 
         repo.startScan("p1")
 
@@ -103,7 +104,7 @@ class AutoScanRepositoryTest {
         val placeholder = list.scans[0]
         assertEquals("p1", placeholder.workspace_name)
         assertEquals("starting", placeholder.status)
-        coVerify(exactly = 1) { restApi.startAutoScan("p1", null) }
+        coVerify(exactly = 1) { restApi.startAutoScan(StartScanRequest("p1", null)) }
     }
 
     @Test
@@ -117,7 +118,7 @@ class AutoScanRepositoryTest {
             available_workspaces = listOf("p1"),
         )
         repo.refresh()
-        coEvery { restApi.startAutoScan("p1", null) } returns Unit
+        coEvery { restApi.startAutoScan(StartScanRequest("p1", null)) } returns Unit
 
         repo.startScan("p1")
 
@@ -130,7 +131,7 @@ class AutoScanRepositoryTest {
     @Test
     fun startScan_409_rollsBackList_andThrowsAlreadyRunningException() = runTest {
         val (repo, restApi) = newRepo()
-        coEvery { restApi.startAutoScan("p1", null) } throws
+        coEvery { restApi.startAutoScan(StartScanRequest("p1", null)) } throws
             ApiException(409, """{"detail":"already"}""")
 
         try {
@@ -141,6 +142,24 @@ class AutoScanRepositoryTest {
         }
 
         // Rollback: list is back to empty.
+        assertTrue(repo.observeList().value.scans.isEmpty())
+    }
+
+    @Test
+    fun startScan_400_rollsBackList_andCarriesTheAgentsDetail() = runTest {
+        val (repo, restApi) = newRepo()
+        val request = StartScanRequest(workspace_name = "p1", source = "github", cli = "codex")
+        coEvery { restApi.startAutoScan(request) } throws
+            ApiException(400, """{"detail":"Choose the GitHub labels to scan for."}""")
+
+        try {
+            repo.startScan(request)
+            fail("expected AutoScanRejectedException")
+        } catch (e: AutoScanRejectedException) {
+            // Shown above the wizard's Start button as the agent wrote it.
+            assertEquals("Choose the GitHub labels to scan for.", e.detail)
+        }
+
         assertTrue(repo.observeList().value.scans.isEmpty())
     }
 
@@ -156,7 +175,7 @@ class AutoScanRepositoryTest {
         )
         repo.refresh()
 
-        coEvery { restApi.startAutoScan("p2", null) } throws
+        coEvery { restApi.startAutoScan(StartScanRequest("p2", null)) } throws
             ApiException(429, """{"detail":"capacity"}""")
 
         try {
@@ -173,7 +192,7 @@ class AutoScanRepositoryTest {
     fun startScan_otherApiException_rollsBackList_andRethrowsOriginal() = runTest {
         val (repo, restApi) = newRepo()
         val boom = ApiException(500, "server exploded")
-        coEvery { restApi.startAutoScan("p1", null) } throws boom
+        coEvery { restApi.startAutoScan(StartScanRequest("p1", null)) } throws boom
 
         try {
             repo.startScan("p1")
@@ -191,7 +210,7 @@ class AutoScanRepositoryTest {
     @Test
     fun startScan_failure_emitsUiErrorEvent_withClassifiedMessage() = runTest {
         val (repo, restApi) = newRepo()
-        coEvery { restApi.startAutoScan("p1", null) } throws ApiException(409, "{}")
+        coEvery { restApi.startAutoScan(StartScanRequest("p1", null)) } throws ApiException(409, "{}")
 
         repo.events.test {
             try {

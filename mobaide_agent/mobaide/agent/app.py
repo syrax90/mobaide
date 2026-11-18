@@ -90,6 +90,7 @@ from .restart import restart_requested
 from .sessions.router import chat_router
 from .sessions.router import router as sessions_router
 from .events import EventBus
+from .autoscan.models import AUTOSCAN_CAPABILITIES
 from .fs.models import FS_CAPABILITIES
 from .fs.router import router as fs_router
 from .update_check import (
@@ -860,9 +861,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         pi_bin_override=config.pi_bin,
         worktree_mgr=worktree_mgr,
     )
-    # Registry keyed by CLI name. SessionManager picks a launcher per session;
-    # the Auto Scan scanner stays Claude-only. build_cli_capabilities reads this
-    # registry, so a new entry auto-surfaces in /api/version capabilities.
+    # Registry keyed by CLI name. SessionManager picks a launcher per session
+    # and Auto Scan picks the agent a scan runs. build_cli_capabilities reads
+    # this registry, so a new entry auto-surfaces in /api/version capabilities.
     app.state.cli_launchers = {
         "claude": app.state.claude_launcher,
         "codex": app.state.codex_launcher,
@@ -984,6 +985,8 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         event_bus=app.state.event_bus,
         rate_limiter=app.state.linear_rate_limiter,
         worktrees_dir=worktrees_dir,
+        cli_launchers=app.state.cli_launchers,
+        worktree_mgr=worktree_mgr,
     )
 
     app.include_router(auth_router)
@@ -1052,6 +1055,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 "git": GIT_CAPABILITIES,
                 "voice": VOICE_CAPABILITIES,
                 "fs": FS_CAPABILITIES,
+                "autoscan": AUTOSCAN_CAPABILITIES,
                 "chat": await asyncio.to_thread(
                     build_chat_capabilities, app.state.chat_agents
                 ),

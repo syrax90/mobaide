@@ -71,6 +71,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/autoscan/github/labels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Github Labels
+         * @description Labels of the workspace's GitHub repository.
+         */
+        get: operations["github_labels_api_autoscan_github_labels_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/autoscan/github/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Github Setup
+         * @description Open a terminal session that installs (``install``) or signs in
+         *     (``sign_in``) the GitHub CLI; the response is the new session.
+         */
+        post: operations["github_setup_api_autoscan_github_setup_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/autoscan/github/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Github Status
+         * @description What a GitHub scan of the workspace still needs (``gh``, sign-in, repo).
+         */
+        get: operations["github_status_api_autoscan_github_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/autoscan/list": {
         parameters: {
             query?: never;
@@ -122,7 +183,8 @@ export interface paths {
         put?: never;
         /**
          * Start Scan
-         * @description Start an auto scan for a workspace. 409 if already running, 429 if at cap.
+         * @description Start an auto scan for a workspace. 409 if already running, 429 if at
+         *     cap, 400 when a choice is missing or the source or agent is not usable.
          */
         post: operations["start_scan_api_autoscan_start_post"];
         delete?: never;
@@ -1194,6 +1256,11 @@ export interface components {
         /** AutoScanInstanceDto */
         AutoScanInstanceDto: {
             /**
+             * Cli
+             * @default claude
+             */
+            cli: string;
+            /**
              * Current Seq
              * @default 0
              */
@@ -1215,6 +1282,11 @@ export interface components {
             project_name: string;
             /** Scan Interval Seconds */
             scan_interval_seconds: number;
+            /**
+             * Source
+             * @default linear
+             */
+            source: string;
             /** Started At */
             started_at: number;
             /** Status */
@@ -1222,6 +1294,11 @@ export interface components {
         };
         /** AutoScanInstanceStatusResponse */
         AutoScanInstanceStatusResponse: {
+            /**
+             * Cli
+             * @default claude
+             */
+            cli: string;
             /**
              * Current Seq
              * @default 0
@@ -1251,6 +1328,11 @@ export interface components {
             }[];
             /** Scan Interval Seconds */
             scan_interval_seconds: number;
+            /**
+             * Source
+             * @default linear
+             */
+            source: string;
             /** Started At */
             started_at: number;
             /** Status */
@@ -1268,6 +1350,22 @@ export interface components {
             max_scans: number;
             /** Scans */
             scans: components["schemas"]["AutoScanInstanceDto"][];
+        };
+        /**
+         * AutoScanSettingsModel
+         * @description The last Auto Scan choices of a workspace, for the wizard to show again.
+         *
+         *     Every field is ``null`` until a scan start (or, for ``linear_filter``, an
+         *     older client's workspace form) sets it. A ``null`` filter means nobody
+         *     chose one: the wizard starts with empty fields.
+         */
+        AutoScanSettingsModel: {
+            /** Cli */
+            cli?: string | null;
+            github_filter?: components["schemas"]["GitHubScanFilterModel"] | null;
+            linear_filter?: components["schemas"]["AutoScanFilterModel"] | null;
+            /** Source */
+            source?: ("linear" | "github") | null;
         };
         /**
          * ChatStoredSession
@@ -1954,6 +2052,92 @@ export interface components {
             /** Short Oid */
             short_oid?: string | null;
         };
+        /** GitHubLabelModel */
+        GitHubLabelModel: {
+            /**
+             * Color
+             * @default
+             */
+            color: string;
+            /** Name */
+            name: string;
+        };
+        /** GitHubLabelsResponse */
+        GitHubLabelsResponse: {
+            /** Labels */
+            labels: components["schemas"]["GitHubLabelModel"][];
+        };
+        /**
+         * GitHubScanFilterModel
+         * @description Per-workspace GitHub filter for Auto Scan Mode.
+         *
+         *     Mirrors :class:`mobaide.core.workspaces_config.GitHubScanFilter`.
+         *     ``labels`` holds 1–20 distinct label names; a blank ``assignee`` or
+         *     ``active_label`` is ``null``.
+         */
+        GitHubScanFilterModel: {
+            /** Active Label */
+            active_label?: string | null;
+            /** Assignee */
+            assignee?: string | null;
+            /** Labels */
+            labels: string[];
+        };
+        /**
+         * GitHubSetupRequest
+         * @description ``POST /api/autoscan/github/setup``: open a terminal session that
+         *     installs the GitHub CLI (``install``) or signs it in (``sign_in``).
+         */
+        GitHubSetupRequest: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "install" | "sign_in";
+            /**
+             * Cols
+             * @default 80
+             */
+            cols: number;
+            /** Project Name */
+            project_name: string;
+            /**
+             * Rows
+             * @default 24
+             */
+            rows: number;
+        };
+        /**
+         * GitHubStatusResponse
+         * @description ``GET /api/autoscan/github/status``: what a GitHub scan still needs.
+         *
+         *     ``problem`` is the first blocking reason in plain words, ``null`` when a
+         *     scan can start. ``can_install`` says whether ``POST
+         *     /api/autoscan/github/setup`` with ``action: "install"`` knows an
+         *     installer for this PC; ``install_command`` is that command as text.
+         */
+        GitHubStatusResponse: {
+            /** Account */
+            account?: string | null;
+            /** Can Install */
+            can_install: boolean;
+            /** Host */
+            host?: string | null;
+            /** Install Command */
+            install_command?: string | null;
+            /** Installed */
+            installed: boolean;
+            /** Problem */
+            problem?: string | null;
+            /** Repo */
+            repo?: string | null;
+            /** Repo Url */
+            repo_url?: string | null;
+            /** Signed In */
+            signed_in: boolean;
+            /** Version */
+            version?: string | null;
+        };
         /**
          * GitItemRead
          * @description One row in the unified git management list.
@@ -2473,11 +2657,35 @@ export interface components {
              */
             ui: string;
         };
-        /** StartScanRequest */
+        /**
+         * StartScanRequest
+         * @description ``POST /api/autoscan/start``.
+         *
+         *     ``source`` absent is an older client: Linear, Claude Code, the stored
+         *     filter. A newer client sends every choice: ``source``, ``cli``, the
+         *     source's filter, ``auto_approve`` (agents other than Claude; Claude takes
+         *     ``claude_options.skip_permissions``), ``initial_prompt`` (``""`` clears
+         *     the saved prompt) and, when the workspace has none, ``linear_api_key``.
+         */
         StartScanRequest: {
+            /**
+             * Auto Approve
+             * @default true
+             */
+            auto_approve: boolean;
             claude_options?: components["schemas"]["ClaudeOptionsModel"] | null;
+            /** Cli */
+            cli?: ("claude" | "codex" | "antigravity" | "opencode" | "copilot" | "cursor" | "junie" | "pi") | null;
+            github_filter?: components["schemas"]["GitHubScanFilterModel"] | null;
+            /** Initial Prompt */
+            initial_prompt?: string | null;
+            /** Linear Api Key */
+            linear_api_key?: string | null;
+            linear_filter?: components["schemas"]["AutoScanFilterModel"] | null;
             /** Project Name */
             project_name: string;
+            /** Source */
+            source?: ("linear" | "github") | null;
         };
         /** StopScanRequest */
         StopScanRequest: {
@@ -2689,6 +2897,7 @@ export interface components {
          * @description Client-safe view of a single workspace.
          */
         WorkspaceReadModel: {
+            auto_scan?: components["schemas"]["AutoScanSettingsModel"];
             auto_scan_filter?: components["schemas"]["AutoScanFilterModel"];
             /** Auto Scan Prompt */
             auto_scan_prompt?: string | null;
@@ -2881,6 +3090,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TokenResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    github_labels_api_autoscan_github_labels_get: {
+        parameters: {
+            query: {
+                project_name: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubLabelsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    github_setup_api_autoscan_github_setup_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitHubSetupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    github_status_api_autoscan_github_status_get: {
+        parameters: {
+            query: {
+                project_name: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubStatusResponse"];
                 };
             };
             /** @description Validation Error */

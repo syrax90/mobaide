@@ -321,6 +321,7 @@ class WorkspaceFormStateTest {
             activeState = "Doing",
             doneState = "Released",
             removalLabel = "AI-ready",
+            filterDirty = true,
         )
         val body = s.toCreateBody()
         assertNotNull(body.auto_scan_filter)
@@ -330,6 +331,13 @@ class WorkspaceFormStateTest {
         assertEquals("Doing", f.active_state)
         assertEquals("Released", f.done_state)
         assertEquals("AI-ready", f.removal_label)
+    }
+
+    @Test
+    fun toCreateBody_untouchedFilter_sendsNone() {
+        val s = WorkspaceFormState.forCreate().copy(name = "alpha", path = "/p/alpha")
+        assertFalse(s.filterDirty)
+        assertNull(s.toCreateBody().auto_scan_filter)
     }
 
     @Test
@@ -362,16 +370,24 @@ class WorkspaceFormStateTest {
 
     @Test
     fun showAutoScanFilterSection_trueInCreateModeWithKey() {
-        val s = WorkspaceFormState.forCreate().copy(linearApiKey = "lin_test")
+        val s = WorkspaceFormState.forCreate()
+            .copy(linearApiKey = "lin_test", autoScanFilterInWizard = false)
         assertTrue(s.showAutoScanFilterSection)
     }
 
     @Test
     fun showAutoScanFilterSection_trueInEditModeWithExistingKey() {
         val current = WorkspaceInfo(name = "alpha", path = "/p/alpha", has_linear_key = true)
-        val s = WorkspaceFormState.forEdit(current)
+        val s = WorkspaceFormState.forEdit(current).copy(autoScanFilterInWizard = false)
         // linearApiKey stays "" in edit mode (server doesn't echo it back),
         // but the section still renders because the workspace HAS a key.
         assertTrue(s.showAutoScanFilterSection)
+    }
+
+    @Test
+    fun showAutoScanFilterSection_falseWhenTheWizardTakesTheFilterOrTheAgentIsNotProbed() {
+        val base = WorkspaceFormState.forCreate().copy(linearApiKey = "lin_test")
+        assertFalse(base.copy(autoScanFilterInWizard = true).showAutoScanFilterSection)
+        assertFalse(base.copy(autoScanFilterInWizard = null).showAutoScanFilterSection)
     }
 }

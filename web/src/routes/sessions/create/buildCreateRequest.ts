@@ -16,7 +16,9 @@
  */
 import type { components } from '../../../api/generated/agent';
 import type { WorkspaceSummary } from '../../../api/workspaceRepository';
-import type { ChatSupport } from '../../../protocol/dto/agentVersion';
+import type { AutoScanCapability, ChatSupport } from '../../../protocol/dto/agentVersion';
+import type { AutoScanFilter } from '../../../protocol/dto/workspaces';
+import { isAutoScanAgentId } from '../../../autoscan/autoscanDisplay';
 import type { ChatStoredSession } from '../../../protocol/dto/chatSessions';
 import {
   effectiveClaudeEffort,
@@ -29,6 +31,7 @@ import {
   type OpenCodeBucket,
   type CopilotBucket,
   type CursorBucket,
+  type GitHubFilterDraft,
   type JunieBucket,
   type WizardMode,
   type WizardState,
@@ -44,6 +47,8 @@ type CopilotOptions = components['schemas']['CopilotOptionsModel'];
 type CursorOptions = components['schemas']['CursorOptionsModel'];
 type JunieOptions = components['schemas']['JunieOptionsModel'];
 type PiOptions = components['schemas']['PiOptionsModel'];
+type LinearFilterWire = components['schemas']['AutoScanFilterModel'];
+type GitHubFilterWire = components['schemas']['GitHubScanFilterModel'];
 
 export interface BuildContext {
   state: WizardState;
@@ -57,6 +62,11 @@ export interface BuildContext {
    * the agent's default. Sent only when a worktree is really requested.
    */
   worktreeBase?: string | null;
+  /**
+   * `capabilities.autoscan`. Absent or `null` is an agent from before the
+   * Auto Scan sources delta, which gets the legacy Linear + Claude request.
+   */
+  autoScan?: AutoScanCapability | null;
 }
 
 /**
@@ -473,22 +483,81 @@ export function buildConnectRequest(context: BuildContext): CreateSessionRequest
   };
 }
 
-/** `null` unless the mode is `auto_scan` against a stored workspace. */
+function scanClaudeOptions(bucket: ClaudeBucket): ClaudeOptions {
+  return claudeOptions(bucket, {
+    // Hardcoded: the scanner branches a worktree per issue so concurrent
+    // issues stay isolated. No branch name — it names them.
+    worktree: true,
+    branchName: undefined,
+    // The scanner picks its own start point; the wizard's picker never shows.
+    baseBranch: null,
+  });
+}
+
+/** Listed field by field, so no extra key a looser draft carries reaches the wire. */
+function linearFilterWire(filter: AutoScanFilter): LinearFilterWire {
+  return {
+    state_names: [...filter.state_names],
+    label_names: [...filter.label_names],
+    active_state: filter.active_state,
+    done_state: filter.done_state,
+    removal_label: filter.removal_label,
+  };
+}
+
+/** Trimmed, with a blank assignee or label to add sent as `null` (not set). */
+function githubFilterWire(filter: GitHubFilterDraft): GitHubFilterWire {
+  const assignee = filter.assignee.trim();
+  const activeLabel = filter.activeLabel.trim();
+  return {
+    labels: filter.labels.map((label) => label.trim()),
+    assignee: assignee === '' ? null : assignee,
+    active_label: activeLabel === '' ? null : activeLabel,
+  };
+}
+
+/**
+ * `null` unless the mode is `auto_scan` against a stored workspace — and, for
+ * an agent with `capabilities.autoscan`, until a source and an agent are
+ * chosen (the wizard keeps Start disabled until then).
+ *
+ * The newer request names every choice: `source`, `cli`, only the chosen
+ * source's filter, and `initial_prompt` at the top level, where `""` clears
+ * the prompt the workspace saved. `auto_approve` is always sent because its
+ * wire-absence default is `true`, the same trap as `skip_permissions`: for
+ * Claude Code it mirrors the Skip permissions switch, which is what Claude
+ * actually reads from `claude_options`.
+ */
 export function buildStartScanRequest(context: BuildContext): StartScanRequest | null {
   const { state, mode } = context;
   if (mode !== 'auto_scan' || state.selection.kind !== 'stored') return null;
+
+  const capability = context.autoScan ?? null;
+  if (capability === null) {
+    return {
+      project_name: state.selection.name,
+      claude_options: {
+        ...scanClaudeOptions(state.autoScan),
+        initial_prompt: blankToUndefined(state.autoScan.initialPrompt),
+      },
+      // Required by the generated type; an older agent ignores it, and Claude
+      // Code reads `claude_options.skip_permissions` instead.
+      auto_approve: state.autoScan.skipPermissions,
+    };
+  }
+
+  const { source, cli, linearFilter, githubFilter, autoApprove } = state.autoScanSetup;
+  if (source === null || cli === null || !isAutoScanAgentId(cli)) return null;
+  const isClaude = cli === 'claude';
   return {
     project_name: state.selection.name,
-    claude_options: {
-      ...claudeOptions(state.autoScan, {
-        // Hardcoded: the scanner branches a worktree per Linear issue so
-        // concurrent issues stay isolated. No branch name — it names them.
-        worktree: true,
-        branchName: undefined,
-        // The scanner picks its own start point; the wizard's picker never shows.
-        baseBranch: null,
-      }),
-      initial_prompt: blankToUndefined(state.autoScan.initialPrompt),
-    },
+    source,
+    cli,
+    ...(source === 'github'
+      ? { github_filter: githubFilterWire(githubFilter) }
+      : { linear_filter: linearFilterWire(linearFilter) }),
+    initial_prompt: state.autoScan.initialPrompt,
+    auto_approve: isClaude ? state.autoScan.skipPermissions : autoApprove,
+    ...(isClaude && { claude_options: scanClaudeOptions(state.autoScan) }),
   };
 }

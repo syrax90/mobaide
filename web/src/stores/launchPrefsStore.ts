@@ -48,6 +48,16 @@ export interface ClaudeLaunchPrefs {
   terminalUi: boolean;
 }
 
+/**
+ * The Auto Scan bucket: the Claude options a Claude Code scan runs with, plus
+ * `autoApprove`, the "run without asking" switch for every other agent a scan
+ * can run (Delta 2026-11-18). A blob from before it existed reads as on, the
+ * same unattended default the Claude `skipPermissions` has here.
+ */
+export interface AutoScanLaunchPrefs extends ClaudeLaunchPrefs {
+  autoApprove: boolean;
+}
+
 /** Android `CodexLaunchPrefs`, iOS `CodexLaunchPrefs`. */
 export interface CodexLaunchPrefs {
   model: string | null;
@@ -112,7 +122,7 @@ export interface PiLaunchPrefs {
  */
 export interface LaunchPrefs {
   claude: ClaudeLaunchPrefs | null;
-  autoScan: ClaudeLaunchPrefs | null;
+  autoScan: AutoScanLaunchPrefs | null;
   codex: CodexLaunchPrefs | null;
   antigravity: AntigravityLaunchPrefs | null;
   opencode: OpenCodeLaunchPrefs | null;
@@ -127,7 +137,8 @@ export type ClaudePrefsBucketId = 'claude' | 'autoScan';
 
 /** One bucket's worth of options, tagged with the slot it belongs in. */
 export type LaunchPrefsSnapshot =
-  | { kind: ClaudePrefsBucketId; prefs: ClaudeLaunchPrefs }
+  | { kind: 'claude'; prefs: ClaudeLaunchPrefs }
+  | { kind: 'autoScan'; prefs: AutoScanLaunchPrefs }
   | { kind: 'codex'; prefs: CodexLaunchPrefs }
   | { kind: 'antigravity'; prefs: AntigravityLaunchPrefs }
   | { kind: 'opencode'; prefs: OpenCodeLaunchPrefs }
@@ -325,6 +336,14 @@ function sanitizeClaudePrefs(raw: unknown): ClaudeLaunchPrefs | null {
   };
 }
 
+function sanitizeAutoScanPrefs(raw: unknown): AutoScanLaunchPrefs | null {
+  const claude = sanitizeClaudePrefs(raw);
+  if (claude === null || !isRecord(raw)) return null;
+  const autoApprove = field(raw, 'autoApprove', true, isBoolean);
+  if (autoApprove === undefined) return null;
+  return { ...claude, autoApprove };
+}
+
 function sanitizeCodexPrefs(raw: unknown): CodexLaunchPrefs | null {
   if (!isRecord(raw)) return null;
   const model = field(raw, 'model', CODEX_PREFS_DEFAULTS.model, isNullableString);
@@ -485,7 +504,7 @@ export const useLaunchPrefsStore = create<LaunchPrefsState>()(
         return {
           ...current,
           claude: sanitizeClaudePrefs(saved.claude),
-          autoScan: sanitizeClaudePrefs(saved.autoScan),
+          autoScan: sanitizeAutoScanPrefs(saved.autoScan),
           codex: sanitizeCodexPrefs(saved.codex),
           antigravity: sanitizeAntigravityPrefs(saved.antigravity),
           opencode: sanitizeOpenCodePrefs(saved.opencode),

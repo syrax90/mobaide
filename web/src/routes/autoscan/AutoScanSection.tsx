@@ -6,6 +6,7 @@ import {
   autoScanTone,
   countdownLabel,
   relativeTime,
+  scanSourceAgentLabel,
   sortScans,
 } from '../../autoscan/autoscanDisplay';
 import { useSecondTicker } from '../../autoscan/useAutoScanDetail';
@@ -126,6 +127,7 @@ function AutoScanRow({ agentId, scan, now, busy, onRunNow, onStop }: AutoScanRow
       </div>
 
       <p className="autoscan-card-meta">
+        <span>{scanSourceAgentLabel(scan)}</span>
         <span>Cycle {scan.cycle_number}</span>
         <span>Processed: {scan.processed_count}</span>
         {activity !== '' && <span>{activity}</span>}

@@ -41,6 +41,7 @@ private struct CreateSessionContent: View {
 
     @Environment(Router.self) private var router
     @Environment(\.mobaideColors) private var colors
+    @Environment(\.scenePhase) private var scenePhase
 
     private let container: AppContainer
 
@@ -104,6 +105,19 @@ private struct CreateSessionContent: View {
         .task { await model.refreshModeOrder() }
         .task { await model.observeScans() }
         .task(id: model.worktreeBasesLoadKey) { await model.loadWorktreeBases() }
+        // A pushed setup terminal cancels these and popping back runs them
+        // again, so returning from `gh auth login` checks GitHub again.
+        .task(id: model.autoScanGitHubLoadKey) {
+            guard model.autoScanGitHubLoadKey != nil else { return }
+            await model.autoScanSetup.refreshGitHubStatus()
+        }
+        .task(id: model.autoScanLinearLoadKey) {
+            guard model.autoScanLinearLoadKey != nil else { return }
+            await model.autoScanSetup.loadLinearMetadata()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await model.recheckGitHub() } }
+        }
         .sheet(isPresented: $baseBranchPickerShown) {
             if case .loaded(let bases) = model.worktreeBases {
                 WorktreeBasePickerSheet(bases: bases, selected: model.baseBranch) { model.pickBaseBranch($0) }
@@ -165,6 +179,12 @@ private struct CreateSessionContent: View {
         .task {
             for await id in model.navEvents() {
                 leaveCreateScreen()
+                router.navigate(to: .sessionDetail(sessionId: id))
+            }
+        }
+        .task {
+            // The wizard stays beneath the setup terminal, so Back returns to it.
+            for await id in model.setupNavEvents() {
                 router.navigate(to: .sessionDetail(sessionId: id))
             }
         }
@@ -474,8 +494,73 @@ private struct CreateSessionContent: View {
         }
     }
 
+    /// An agent with `capabilities.autoscan` gets the source, filter and agent
+    /// choices; an older one keeps the Linear + Claude Code panel. The step
+    /// waits for the probe so it does not switch panels under the user.
     @ViewBuilder
     private var autoScanConfig: some View {
+        let setup = model.autoScanSetup
+        if !setup.capabilityProbed {
+            Section {
+                HStack(spacing: 10) {
+                    PixelLoadingBlock(width: 7, height: 13)
+                    Text("Checking the agent on your PC…")
+                        .font(.footnote)
+                        .foregroundStyle(colors.textMuted)
+                }
+            }
+        } else if setup.isAvailable {
+            AutoScanSourceSections(setup: setup, setupStarting: model.githubSetupStarting) { action in
+                Task { await model.runGitHubSetup(action) }
+            }
+            AutoScanAgentSection(setup: setup)
+            autoScanAgentOptions
+            autoScanPromptSection(showsHint: true)
+            autoScanStartSection
+        } else {
+            autoScanClaudeSections
+            autoScanPromptSection(showsHint: false)
+            autoScanStartSection
+        }
+    }
+
+    @ViewBuilder
+    private var autoScanAgentOptions: some View {
+        @Bindable var model = model
+        switch model.autoScanSetup.cli {
+        case "claude"?:
+            autoScanClaudeSections
+        case "pi"?:
+            Section {
+                Text("Pi runs its tools without asking.")
+                    .font(.footnote)
+                    .foregroundStyle(colors.textMuted)
+            } header: {
+                PixelSectionHeader("Pi")
+            } footer: {
+                PixelSectionFooter(Self.autoScanWorktreeNote)
+            }
+        case let kind?:
+            Section {
+                Toggle("Run without asking for permission (dangerous)", isOn: $model.autoScanAutoApprove)
+                Text("When on, the agent runs commands without asking (Codex also without its sandbox). When off, it may stop and wait for your approval in its session; Codex never asks and stays in its sandbox.")
+                    .font(.footnote)
+                    .foregroundStyle(colors.textMuted)
+            } header: {
+                PixelSectionHeader(AutoScanDisplay.agentName(kind))
+            } footer: {
+                PixelSectionFooter(Self.autoScanWorktreeNote)
+            }
+        case nil:
+            EmptyView()
+        }
+    }
+
+    private static let autoScanWorktreeNote = "Each issue runs in its own git worktree, so its changes stay isolated from your working copy."
+
+    /// Claude Code's options for Auto Scan, from the Auto Scan bucket.
+    @ViewBuilder
+    private var autoScanClaudeSections: some View {
         @Bindable var model = model
         Section(header: PixelSectionHeader("Claude")) {
             claudeModelAndEffortPickers(
@@ -512,15 +597,31 @@ private struct CreateSessionContent: View {
             debug: $model.autoScanClaudeDebug,
             appendSystemPrompt: $model.autoScanClaudeAppendSystemPrompt
         )
+    }
 
-        Section(header: PixelSectionHeader("Initial prompt")) {
+    @ViewBuilder
+    private func autoScanPromptSection(showsHint: Bool) -> some View {
+        @Bindable var model = model
+        Section {
             TextField("Sent to each spawned session", text: $model.autoScanInitialPrompt, axis: .vertical)
                 .lineLimit(3...8)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .pixelField()
+        } header: {
+            PixelSectionHeader("Initial prompt")
+        } footer: {
+            if showsHint {
+                PixelSectionFooter(
+                    "The issue's title, link and description are added after your prompt. "
+                        + "Leave it empty to use the default prompt of the issue source."
+                )
+            }
         }
+    }
 
+    @ViewBuilder
+    private var autoScanStartSection: some View {
         Section {
             Button {
                 Task { await model.startAutoScan() }
@@ -535,8 +636,20 @@ private struct CreateSessionContent: View {
             .buttonStyle(.pixelPrimaryBlock)
             .disabled(!model.canStartAutoScan)
         } footer: {
-            if !model.claudeEnabled {
-                PixelSectionFooter(model.reason(for: .autoScan), tone: .warning)
+            VStack(alignment: .leading, spacing: 6) {
+                if let startError = model.autoScanStartError {
+                    PixelSectionFooter(startError, tone: .danger)
+                }
+                if model.autoScanSetup.isAvailable {
+                    if let blocker = model.autoScanSetup.startBlocker(prompt: model.autoScanInitialPrompt) {
+                        PixelSectionFooter(blocker, tone: .warning)
+                    }
+                } else {
+                    if !model.claudeEnabled {
+                        PixelSectionFooter(model.reason(for: .autoScan), tone: .warning)
+                    }
+                    PixelSectionFooter("Update Mobaide on your PC to scan GitHub issues and choose the agent.")
+                }
             }
         }
     }
@@ -1088,21 +1201,7 @@ private struct CreateSessionContent: View {
         selected: Bool,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title).foregroundStyle(colors.text)
-                    if let subtitle {
-                        Text(subtitle)
-                            .font(.caption)
-                            .foregroundStyle(colors.textMuted)
-                    }
-                }
-                Spacer()
-                PixelRadio(isSelected: selected)
-            }
-        }
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        SelectableRow(title: title, subtitle: subtitle, selected: selected, action: action)
     }
 
     /// Tap fills the field; swipe forgets the path. Head truncation keeps the

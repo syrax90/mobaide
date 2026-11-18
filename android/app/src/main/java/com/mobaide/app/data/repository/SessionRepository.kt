@@ -8,6 +8,7 @@ import com.mobaide.app.data.network.WebSocketManager
 import com.mobaide.app.data.network.dto.ChatStoredSessionsResponse
 import com.mobaide.app.data.network.dto.CodexLoginResponse
 import com.mobaide.app.data.network.dto.CreateSessionRequest
+import com.mobaide.app.data.network.dto.GitHubSetupRequest
 import com.mobaide.app.data.network.dto.ScrollbackResponse
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.VersionInfoResponse
@@ -66,6 +67,16 @@ class SessionRepository(
      *  a session that does not exist. */
     suspend fun createSession(request: CreateSessionRequest): SessionResponse {
         val created = restApi.createSession(request)
+        _sessions.update { it.upsert(created) }
+        return created
+    }
+
+    /**
+     * Open the terminal session that installs or signs in the GitHub CLI on the
+     * PC (`POST /api/autoscan/github/setup`), seeded like [createSession].
+     */
+    suspend fun startGitHubSetup(request: GitHubSetupRequest): SessionResponse {
+        val created = restApi.startGitHubSetup(request)
         _sessions.update { it.upsert(created) }
         return created
     }

@@ -132,6 +132,8 @@ fun CreateSessionScreen(
     onBack: () -> Unit,
     onSessionCreated: (String) -> Unit,
     onAutoScanStarted: (String) -> Unit,
+    // The GitHub setup terminal: opened on top of the wizard so Back returns to it.
+    onSetupSessionOpened: (String) -> Unit = onSessionCreated,
     chatResumeViewModel: ChatResumeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -152,6 +154,9 @@ fun CreateSessionScreen(
     }
     LaunchedEffect(viewModel) {
         viewModel.navigateToAutoScan.collect { workspaceName -> onAutoScanStarted(workspaceName) }
+    }
+    LaunchedEffect(viewModel) {
+        viewModel.navigateToSetupSession.collect { sessionId -> onSetupSessionOpened(sessionId) }
     }
     LaunchedEffect(viewModel) {
         viewModel.transientMessages.collect { msg -> snackbar.showSnackbar(msg) }
@@ -1256,6 +1261,9 @@ private fun BuiltInModeCard(
         )
         CreateSessionMode.AutoScan -> Pair(
             when {
+                state.autoScanCapability != null ->
+                    if (state.autoScanEnabled) "Scan GitHub or Linear issues and launch agent sessions."
+                    else "Auto Scan needs a saved workspace."
                 !state.claudeEnabled -> "Auto Scan needs the Claude CLI, which isn't installed on the agent."
                 !state.autoScanEnabled -> "Auto Scan needs a Linear API key for this workspace."
                 else -> "Scan Linear for matching issues and launch sessions."
@@ -2342,6 +2350,39 @@ private fun AutoScanConfigSection(
     state: CreateSessionUiState,
     viewModel: CreateSessionViewModel,
 ) {
+    val capability = state.autoScanCapability
+    if (capability != null) {
+        AutoScanWizardSection(state = state, capability = capability, viewModel = viewModel)
+        return
+    }
+    if (state.autoScanProbed) {
+        Text(
+            text = "Update Mobaide on your PC to scan GitHub issues and choose the agent.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("autoscan_update_agent_note"),
+        )
+    }
+    AutoScanClaudeOptions(state = state, viewModel = viewModel)
+
+    AutoScanInitialPromptField(state.initialPrompt, viewModel::setInitialPrompt)
+
+    PixelButton(
+        style = PixelButtonStyle.Primary,
+        onClick = viewModel::submitAutoScan,
+        enabled = state.selectedWorkspaceName != null && !state.autoScanStarting,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (state.autoScanStarting) "Starting…" else "Start Auto Scan")
+    }
+}
+
+/** Claude Code's Auto Scan options, from the Auto Scan launch-prefs bucket. */
+@Composable
+internal fun AutoScanClaudeOptions(
+    state: CreateSessionUiState,
+    viewModel: CreateSessionViewModel,
+) {
     ClaudeOptionControls(
         model = state.autoScanClaudeModel,
         effort = state.autoScanClaudeEffort,
@@ -2375,13 +2416,18 @@ private fun AutoScanConfigSection(
         onDebugToggle = viewModel::toggleAutoScanClaudeDebug,
         onAppendSystemPromptChange = viewModel::setAutoScanClaudeAppendSystemPrompt,
     )
+}
 
+@Composable
+internal fun AutoScanInitialPromptField(value: String, onChange: (String) -> Unit) {
     OutlinedTextField(
         colors = PixelTextFieldDefaults.colors(),
-        value = state.initialPrompt,
-        onValueChange = viewModel::setInitialPrompt,
+        value = value,
+        onValueChange = onChange,
         label = { Text("Initial prompt (optional)") },
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("autoscan_initial_prompt"),
         minLines = 3,
         maxLines = 8,
         keyboardOptions = KeyboardOptions(
@@ -2389,19 +2435,10 @@ private fun AutoScanConfigSection(
             autoCorrectEnabled = false,
         ),
     )
-
-    PixelButton(
-        style = PixelButtonStyle.Primary,
-        onClick = viewModel::submitAutoScan,
-        enabled = state.selectedWorkspaceName != null && !state.autoScanStarting,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Text(if (state.autoScanStarting) "Starting…" else "Start Auto Scan")
-    }
 }
 
 @Composable
-private fun ToggleRow(
+internal fun ToggleRow(
     label: String,
     checked: Boolean,
     onChange: (Boolean) -> Unit,

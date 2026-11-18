@@ -108,6 +108,17 @@ export const queryKeys = {
   sessionGitConflict: (agentId: string, sessionId: string, path: string) =>
     ['agent', agentId, 'session-git-conflict', sessionId, path] as const,
   autoscan: (agentId: string) => ['agent', agentId, 'autoscan'] as const,
+  /**
+   * The Auto Scan wizard's GitHub readiness and label list for one workspace.
+   *
+   * Its own segment, not under `autoscan`: query keys match by prefix, and every
+   * Auto Scan list invalidation (each agent-channel connect) would otherwise
+   * re-run `gh` on the PC.
+   */
+  githubStatus: (agentId: string, workspaceName: string) =>
+    ['agent', agentId, 'autoscan-github', workspaceName, 'status'] as const,
+  githubLabels: (agentId: string, workspaceName: string) =>
+    ['agent', agentId, 'autoscan-github', workspaceName, 'labels'] as const,
   /** Which CLIs the agent has installed, and the models each advertises. */
   agentCapabilities: (agentId: string) => ['agent', agentId, 'capabilities'] as const,
   /**
@@ -122,6 +133,12 @@ export const queryKeys = {
    * `gcTime: 0` — a second observer would stretch that entry's lifetime.
    */
   agentFsDirs: (agentId: string) => ['agent', agentId, 'capabilities', 'fs-dirs'] as const,
+  /**
+   * Whether the agent has `capabilities.autoscan`, for the workspace form. Its
+   * own key for the reason `agentFsDirs` gives.
+   */
+  agentAutoScanSupport: (agentId: string) =>
+    ['agent', agentId, 'capabilities', 'autoscan'] as const,
   /** "Continue a session": one chat agent's stored sessions, in one folder or all (`null`). */
   chatStoredSessions: (agentId: string, kind: string, cwd: string | null) =>
     ['agent', agentId, 'chat-stored', kind, cwd] as const,

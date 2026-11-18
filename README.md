@@ -50,7 +50,7 @@
 - **[Voice input](#voice-input).** Dictate prompts instead of thumb-typing them. Your own computer does the transcription, in 25 languages. Opt-in, and the audio is never stored.
 - **Git from your phone.** Read diffs, stage, commit, fetch, pull, push, rebase, resolve conflicts and manage branches. Git runs on your machine, with the credentials it already has.
 - **Optional Git worktrees.** Start any session in its own worktree so parallel runs do not collide. Opt-in per launch, Git workspaces only.
-- **Auto Scan.** Watch [Linear](https://linear.app) for matching issues and launch a Claude Code session in a new worktree for each one.
+- **Auto Scan.** Watch GitHub issues or [Linear](https://linear.app) for matching issues and launch the AI agent you pick in a new worktree for each one.
 - **Notifications.** Get an alert when a session needs your approval, finishes a turn or ends. A Cursor or Junie session sends the first two from the chat view only.
 - **Prompt templates and shortcuts.** Save prompts and reuse them in any session. Build custom key chords as buttons on the mobile control bar. Both sync across your devices.
 - **Set up once.** The agent installs as an OS service, restarts itself if it dies, and updates itself from signed releases.

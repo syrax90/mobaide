@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { fetchAgentCapabilities } from '../../../api/agentCapabilities';
 import {
+  autoScanCapability,
   chatSupport,
   cliModelDetails,
   cliModelsPending,
@@ -70,6 +71,8 @@ import {
   type StartScanRequest,
 } from './buildCreateRequest';
 import { ResumeSessionDialog } from './ResumeSessionDialog';
+import { parkAutoScanDraft, takeAutoScanDraft } from './autoScanDraft';
+import { useAutoScanSources } from './useAutoScanSources';
 import {
   classifyAutoScanError,
   classifyCreateError,
@@ -306,6 +309,46 @@ export function NewSession() {
     },
   };
 
+  // `null` for an agent from before the Auto Scan sources delta, and while the
+  // probe has not answered: ConfigStep waits on `capabilities.isPending`.
+  const scanCapability = useMemo(() => autoScanCapability(capabilities.data), [capabilities.data]);
+
+  const autoScanSources = useAutoScanSources({
+    agentId: resolvedAgentId,
+    workspace,
+    active:
+      location.step === 'config' &&
+      location.mode === 'auto_scan' &&
+      scanCapability !== null &&
+      workspace !== null,
+    source: state.autoScanSetup.source,
+    githubSetup: scanCapability?.githubSetup === true,
+    onSetupSession: (session) => {
+      // Park the choices first: leaving unmounts the reducer, and Back from
+      // the terminal (or the next Auto Scan for this workspace in this tab)
+      // takes them back.
+      if (workspace !== null) {
+        parkAutoScanDraft(resolvedAgentId, workspace.name, {
+          setup: state.autoScanSetup,
+          bucket: state.autoScan,
+        });
+      }
+      // Seeded before navigating, as `create.onSuccess` does, so the terminal
+      // does not take the not-yet-listed session for an ended one.
+      queryClient.setQueryData<SessionResponse[]>(
+        queryKeys.sessions(resolvedAgentId),
+        (current) => upsertSession(current ?? [], session),
+      );
+      void queryClient.invalidateQueries({ queryKey: queryKeys.sessions(resolvedAgentId) });
+      useToastStore
+        .getState()
+        .show('When the command is done, go back to continue with Auto Scan.', 'info');
+      // A push, unlike a launch: Back must return to this wizard, which then
+      // checks GitHub again on mount.
+      void navigate(terminalPath(resolvedAgentId, session.session_id));
+    },
+  });
+
   const cards = useMemo(
     () =>
       buildModeCards({
@@ -520,15 +563,21 @@ export function NewSession() {
   }, [codexDetails]);
 
   // Seeded once per workspace, so re-entering the step never discards edits.
+  // A draft parked on the way to the GitHub setup terminal wins over the
+  // agent's saved choices: it is newer, and it was never saved anywhere.
   useEffect(() => {
-    if (location.mode === 'auto_scan' && workspace !== null) {
-      dispatch({
-        type: 'seedAutoScanPrompt',
-        workspaceName: workspace.name,
-        prompt: workspace.auto_scan_prompt ?? '',
-      });
+    if (location.mode !== 'auto_scan' || workspace === null) return;
+    const parked = takeAutoScanDraft(resolvedAgentId, workspace.name);
+    if (parked !== null) {
+      dispatch({ type: 'restoreAutoScanDraft', workspaceName: workspace.name, draft: parked });
     }
-  }, [location.mode, workspace]);
+    dispatch({
+      type: 'seedAutoScanPrompt',
+      workspaceName: workspace.name,
+      prompt: workspace.auto_scan_prompt ?? '',
+    });
+    dispatch({ type: 'seedAutoScanSetup', workspaceName: workspace.name, saved: workspace.auto_scan });
+  }, [location.mode, workspace, resolvedAgentId]);
 
   // Pre-select the workspace the last session was launched against — iOS's
   // `applyWorkspacePrefill`, translated to the model where the URL owns the
@@ -727,6 +776,7 @@ export function NewSession() {
       workspace,
       chat: chatSupport(capabilities.data, chatAgentKind(location.mode) ?? 'claude'),
       worktreeBase,
+      autoScan: scanCapability,
     };
     const request =
       location.mode === 'auto_scan'
@@ -736,9 +786,14 @@ export function NewSession() {
     // are provably the same snapshot of the options.
     pendingPrefs.current = launchPrefsFromState(state, location.mode);
     if (request === null) {
-      // Never fail silently: a null here means the selection did not survive,
-      // and a dead button with no message is the worst possible symptom.
-      setError('Pick a workspace before launching.');
+      // Never fail silently: a null here means the selection did not survive
+      // (or, for Auto Scan, a source or agent is missing), and a dead button
+      // with no message is the worst possible symptom.
+      setError(
+        location.mode === 'auto_scan' && location.selection.kind === 'stored'
+          ? 'Choose where to find issues and an AI agent before starting.'
+          : 'Pick a workspace before launching.',
+      );
       return;
     }
     if (location.mode === 'auto_scan') {
@@ -811,7 +866,8 @@ export function NewSession() {
     );
   }
 
-  const submitting = create.isPending || scan.isPending || login.isPending;
+  const submitting =
+    create.isPending || scan.isPending || login.isPending || autoScanSources.githubSetupPending;
 
   return (
     <section className="page wizard">
@@ -951,6 +1007,8 @@ export function NewSession() {
             setResumeOpen(true);
           }}
           onConnectProvider={connectProvider}
+          capabilitiesPending={capabilities.isPending}
+          autoScanSources={scanCapability !== null ? autoScanSources : undefined}
         />
       ) : null}
 

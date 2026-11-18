@@ -255,10 +255,19 @@ The wire details are in [PROTOCOL.md](../PROTOCOL.md).
 
 ## Auto Scan Mode
 
-Auto Scan polls Linear for matching issues using a per-workspace configurable filter (trigger labels, trigger states, active/done state, removal label). It auto-creates git worktrees and launches Claude sessions to work on them.
+Auto Scan watches an issue source for matching issues. It creates a git worktree for each issue and launches an AI agent session to work on it. The wire contract is in [PROTOCOL.md](../PROTOCOL.md) ("Delta 2026-11-18: Auto Scan sources and agents").
 
-- **Remembered choices.** Each workspace remembers the last-applied initial prompt (`auto_scan_prompt` in `projects.json`). The wizard also remembers the last-used launch options on-device, in a bucket separate from the Claude Code sheet.
-- **Skip permissions.** This is a live toggle, default ON for unattended scans. Switched OFF, the scan pauses at Claude Code permission prompts and raises the normal attention notification, so the user can open the session and approve.
+- **Issue source.** The wizard asks for the source: GitHub or Linear.
+- **GitHub.** The scan reads the open issues of the workspace's own GitHub repository. An issue matches when it has any trigger label (case-insensitive). Starting work removes the trigger labels and adds an optional "label to add". A closed issue counts as done, and its worktree is removed without `--force`.
+- **GitHub CLI.** The wizard shows the `gh` status. **Install GitHub CLI** and **Sign in to GitHub** open a setup terminal on top of the wizard. The agent runs the installer (brew, winget, apt-get, dnf, pacman or zypper) or `gh auth login`.
+- **Linear.** The scan uses the workspace's Linear API key. The wizard has a **Save key** action and a Linear filter.
+- **Filters.** Filters start empty, with no built-in defaults. The last choices are remembered per workspace on the agent (`auto_scan` in the workspace record).
+- **AI agent.** The user picks the agent that runs each issue: Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot, Cursor, Junie or Pi. Before the first claim the agent checks that the CLI is installed, and that Codex is signed in.
+- **Initial prompt.** The first prompt is the instruction plus the issue title, URL and description.
+- **Remembered choices.** The wizard remembers the last-used launch options on-device, in a bucket separate from the Claude Code sheet.
+- **Permissions.** Claude Code has its own options, with Skip permissions as a live toggle (default ON). Other agents get **Run without asking for permission (dangerous)**, ON by default and remembered on the device. Switched OFF, the scan pauses at permission prompts and raises the normal attention notification.
+- **Card and detail.** The Auto Scan card and detail screen show "Source · Agent".
+- **Older agents.** An agent without `capabilities.autoscan` keeps the Linear and Claude panel, with an "Update Mobaide on your PC" note. The workspace form shows the Auto Scan filter section only for those agents.
 
 ## Reconnection
 

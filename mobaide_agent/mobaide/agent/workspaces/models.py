@@ -8,14 +8,20 @@
 * :class:`WorkspaceWriteModel` / :class:`WorkspaceUpdateModel` accept the key as
   a :class:`pydantic.SecretStr` so it is auto-redacted in logs and ``repr``
   while still allowing it to reach disk via ``.get_secret_value()``.
-* :class:`AutoScanFilterModel` is the wire shape for the per-workspace filter.
+* :class:`AutoScanFilterModel` is the wire shape for the per-workspace Linear
+  filter, :class:`GitHubScanFilterModel` for the GitHub one, and
+  :class:`AutoScanSettingsModel` for the last Auto Scan choices.
 * :class:`ReorderRequest` carries the atomic reorder payload.
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, SecretStr, field_validator
 
-from mobaide.core.workspaces_config import AutoScanFilter
+from mobaide.core.workspaces_config import AutoScanFilter, GitHubScanFilter
+
+_LABEL_MAX = 100
 
 # Narrower than ``dict[str, object]`` but wider than plain strings — matches
 # the types the launcher's ``default_flags`` handler already accepts.
@@ -82,6 +88,71 @@ class AutoScanFilterModel(BaseModel):
         )
 
 
+def _github_label(value: str) -> str:
+    label = value.strip()
+    if not label:
+        raise ValueError("label names must be non-empty")
+    if len(label) > _LABEL_MAX:
+        raise ValueError(f"label names must be at most {_LABEL_MAX} characters")
+    # gh splits a label option's value on commas.
+    if "," in label:
+        raise ValueError("label names must not contain a comma")
+    return label
+
+
+class GitHubScanFilterModel(BaseModel):
+    """Per-workspace GitHub filter for Auto Scan Mode.
+
+    Mirrors :class:`mobaide.core.workspaces_config.GitHubScanFilter`.
+    ``labels`` holds 1–20 distinct label names; a blank ``assignee`` or
+    ``active_label`` is ``null``.
+    """
+
+    labels: list[str] = Field(min_length=1, max_length=20)
+    assignee: str | None = Field(default=None, max_length=100)
+    active_label: str | None = Field(default=None, max_length=_LABEL_MAX)
+
+    @field_validator("labels")
+    @classmethod
+    def _clean_labels(cls, value: list[str]) -> list[str]:
+        cleaned = list(dict.fromkeys(_github_label(item) for item in value))
+        return cleaned
+
+    @field_validator("assignee", "active_label")
+    @classmethod
+    def _blank_to_none(cls, value: str | None, info) -> str | None:
+        if value is None or not value.strip():
+            return None
+        if info.field_name == "active_label":
+            return _github_label(value)
+        return value.strip()
+
+    @classmethod
+    def from_dataclass(cls, f: GitHubScanFilter) -> "GitHubScanFilterModel":
+        return cls(labels=list(f.labels), assignee=f.assignee, active_label=f.active_label)
+
+    def to_dataclass(self) -> GitHubScanFilter:
+        return GitHubScanFilter(
+            labels=list(self.labels),
+            assignee=self.assignee,
+            active_label=self.active_label,
+        )
+
+
+class AutoScanSettingsModel(BaseModel):
+    """The last Auto Scan choices of a workspace, for the wizard to show again.
+
+    Every field is ``null`` until a scan start (or, for ``linear_filter``, an
+    older client's workspace form) sets it. A ``null`` filter means nobody
+    chose one: the wizard starts with empty fields.
+    """
+
+    source: Literal["linear", "github"] | None = None
+    cli: str | None = None
+    linear_filter: AutoScanFilterModel | None = None
+    github_filter: GitHubScanFilterModel | None = None
+
+
 class WorkspaceReadModel(BaseModel):
     """Client-safe view of a single workspace."""
 
@@ -97,6 +168,7 @@ class WorkspaceReadModel(BaseModel):
     # Per-workspace Auto Scan initial prompt, saved on scan start so the wizard
     # can pre-seed it next time. ``None`` means "use the engine-wide default".
     auto_scan_prompt: str | None = None
+    auto_scan: AutoScanSettingsModel = Field(default_factory=AutoScanSettingsModel)
 
 
 class WorkspaceWriteModel(BaseModel):

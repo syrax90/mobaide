@@ -132,6 +132,16 @@ final class SessionRepository {
         return response
     }
 
+    /// Opens the terminal session that installs the GitHub CLI or signs it in
+    /// for Auto Scan, published like a created session.
+    func createGitHubSetupSession(workspaceName: String, action: GitHubSetupAction) async throws -> SessionResponse {
+        let response = try await agentAPI.startGitHubSetup(
+            GitHubSetupRequest(workspace_name: workspaceName, action: action)
+        )
+        upsert(response)
+        return response
+    }
+
     func deleteSession(id: String, force: Bool) async throws {
         try await agentAPI.deleteSession(sessionId: id, force: force)
         terminalSessionStore.evict(id)

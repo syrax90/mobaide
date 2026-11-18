@@ -448,6 +448,80 @@ describe('buildStartScanRequest', () => {
   });
 });
 
+describe('buildStartScanRequest — agent with capabilities.autoscan', () => {
+  const autoScan = {
+    sources: ['linear', 'github'],
+    clis: ['claude', 'codex', 'antigravity', 'opencode', 'copilot', 'cursor', 'junie', 'pi'],
+    githubSetup: true,
+  };
+  const linearFilter = {
+    state_names: ['Todo'],
+    label_names: ['bot'],
+    active_state: 'Doing',
+    done_state: 'Shipped',
+    removal_label: 'bot',
+  };
+  const withSetup = (setup: Partial<WizardState['autoScanSetup']>, prompt = 'scan the backlog') =>
+    buildStartScanRequest({
+      state: {
+        ...POPULATED,
+        autoScan: { ...POPULATED.autoScan, initialPrompt: prompt, skipPermissions: false },
+        autoScanSetup: {
+          ...POPULATED.autoScanSetup,
+          source: 'github',
+          cli: 'codex',
+          linearFilter,
+          githubFilter: { labels: [' ai-ready '], assignee: '  ', activeLabel: ' doing ' },
+          autoApprove: true,
+          ...setup,
+        },
+      },
+      mode: 'auto_scan',
+      workspace: gitWorkspace,
+      autoScan,
+    });
+
+  it('names every choice and sends only the chosen source’s filter', () => {
+    expect(withSetup({}, '')).toEqual({
+      project_name: 'mobaide',
+      source: 'github',
+      cli: 'codex',
+      github_filter: { labels: ['ai-ready'], assignee: null, active_label: 'doing' },
+      // "" is sent: it clears the prompt the workspace saved.
+      initial_prompt: '',
+      auto_approve: true,
+    });
+    expect(withSetup({ source: 'linear' })).toMatchObject({ linear_filter: linearFilter });
+    expect(withSetup({ source: 'linear' })).not.toHaveProperty('github_filter');
+  });
+
+  it('gives Claude Code its own options and mirrors Skip permissions into auto_approve', () => {
+    const request = withSetup({ cli: 'claude', autoApprove: true });
+
+    expect(request?.claude_options).toMatchObject({ worktree: true, skip_permissions: false });
+    expect(request?.auto_approve).toBe(false);
+    expect(withSetup({ cli: 'codex' })).not.toHaveProperty('claude_options');
+  });
+
+  it('builds nothing until a source and a known agent are chosen', () => {
+    expect(withSetup({ source: null })).toBeNull();
+    expect(withSetup({ cli: null })).toBeNull();
+    expect(withSetup({ cli: 'aider' })).toBeNull();
+  });
+
+  it('keeps the legacy Linear + Claude body for an agent without the capability', () => {
+    const request = buildStartScanRequest({
+      state: { ...POPULATED, autoScanSetup: { ...POPULATED.autoScanSetup, source: 'github', cli: 'codex' } },
+      mode: 'auto_scan',
+      workspace: gitWorkspace,
+    });
+
+    expect(request).not.toHaveProperty('source');
+    expect(request).not.toHaveProperty('cli');
+    expect(request?.claude_options?.initial_prompt).toBe('scan the backlog');
+  });
+});
+
 describe('focus_mode', () => {
   it('defaults to focus view on for both a Claude launch and a scan', () => {
     const fresh: WizardState = {

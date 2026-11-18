@@ -259,6 +259,26 @@ extension VersionInfoResponse {
     }
 }
 
+/// `capabilities.autoscan`: the issue sources and agent kinds Auto Scan
+/// supports. An agent without it scans Linear only, runs Claude Code only and
+/// has no GitHub routes.
+struct AutoScanCapability: Equatable, Sendable {
+    let sources: [String]
+    let clis: [String]
+    let githubSetup: Bool
+}
+
+extension VersionInfoResponse {
+    var autoScanCapability: AutoScanCapability? {
+        guard let entry = capabilities["autoscan"], entry.objectValue != nil else { return nil }
+        return AutoScanCapability(
+            sources: entry["sources"]?.arrayValue?.compactMap(\.stringValue) ?? [],
+            clis: entry["clis"]?.arrayValue?.compactMap(\.stringValue) ?? [],
+            githubSetup: entry["github_setup"]?.boolValue == true
+        )
+    }
+}
+
 /// One entry of `capabilities.cli.<id>.model_details`: the reasoning efforts a
 /// model supports and (when the catalog names one) its default effort. Built
 /// only by the loose walk in `cliModelDetails` — never decoded directly.

@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 
@@ -68,6 +69,13 @@ fun AutoScanCard(
                     )
                 }
             }
+
+            Text(
+                text = instance.sourceAndAgent,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("autoscan_card_source_agent"),
+            )
 
             Spacer(modifier = Modifier.height(4.dp))
 

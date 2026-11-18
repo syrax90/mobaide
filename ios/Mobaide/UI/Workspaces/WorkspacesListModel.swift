@@ -147,7 +147,9 @@ final class WorkspacesListModel {
 extension WorkspaceInfo {
     /// Compensating create body for undo. The server never echoes
     /// `linear_api_key`, so a restored workspace always starts keyless (Android
-    /// `toUndoCreateBody`).
+    /// `toUndoCreateBody`). An agent with `auto_scan` gets back only a Linear
+    /// filter someone chose: its `auto_scan_filter` holds legacy defaults
+    /// while none is chosen.
     func toUndoCreateBody() -> WorkspaceWrite {
         WorkspaceWrite(
             name: name,
@@ -155,7 +157,7 @@ extension WorkspaceInfo {
             linear_api_key: nil,
             conda_env: conda_env,
             default_flags: default_flags,
-            auto_scan_filter: auto_scan_filter
+            auto_scan_filter: auto_scan == nil ? auto_scan_filter : auto_scan?.linear_filter
         )
     }
 }

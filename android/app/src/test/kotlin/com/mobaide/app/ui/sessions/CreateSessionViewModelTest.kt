@@ -29,6 +29,7 @@ import com.mobaide.app.data.network.dto.WorktreeBasesResponse
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.GitRepository
+import com.mobaide.app.data.repository.LinearMetadataRepository
 import com.mobaide.app.data.repository.PathSuggestionRepository
 import com.mobaide.app.data.repository.WorkspacesRepository
 import com.mobaide.app.data.repository.SessionRepository
@@ -174,6 +175,7 @@ class CreateSessionViewModelTest {
             workspacesRepo, sessionRepo, autoScanRepo, prefs, tokenStore, customTypesRepo,
             PathSuggestionRepository(restApi, tokenStore),
             gitRepo,
+            mockk<LinearMetadataRepository>(relaxed = true),
         )
 
     // ---- Wizard step flow --------------------------------------------------
@@ -657,6 +659,38 @@ class CreateSessionViewModelTest {
         vm.selectAutoScanMode()
 
         assertEquals("agent wide default", vm.uiState.value.initialPrompt)
+    }
+
+    @Test
+    fun selectAutoScanMode_agentWithAutoScanCapability_neverSeedsTheLinearOnlyAgentDefault() = runTest {
+        // The agent-wide default is a Linear prompt; a newer agent picks the
+        // chosen source's own default when the prompt is left empty.
+        val fx = newFixture(
+            initialWorkspaces = listOf(
+                WorkspaceInfo(name = "alpha", path = "/p/alpha", is_git = true, auto_scan_prompt = null),
+            ),
+            autoScanPrompt = "agent wide default",
+        )
+        coEvery { fx.sessionRepo.getAgentVersion() } returns VersionInfoResponse(
+            name = "mobaide_agent",
+            server_version = "0.2.16",
+            protocol_versions = listOf(7),
+            min_client_version = 5,
+            capabilities = Json.parseToJsonElement(
+                """{"autoscan":{"sources":["linear","github"],"clis":["claude"],"github_setup":true}}""",
+            ).jsonObject,
+        )
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        vm.selectAutoScanMode()
+
+        assertNotNull(vm.uiState.value.autoScanCapability)
+        assertEquals("", vm.uiState.value.initialPrompt)
     }
 
     @Test

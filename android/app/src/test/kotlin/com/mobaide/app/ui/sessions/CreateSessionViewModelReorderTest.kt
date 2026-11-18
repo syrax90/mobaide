@@ -10,6 +10,7 @@ import com.mobaide.app.data.network.dto.WorkspaceInfo
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.GitRepository
+import com.mobaide.app.data.repository.LinearMetadataRepository
 import com.mobaide.app.data.repository.PathSuggestionRepository
 import com.mobaide.app.data.repository.WorkspacesRepository
 import com.mobaide.app.data.repository.SessionRepository
@@ -132,6 +133,7 @@ class CreateSessionViewModelReorderTest {
             mockk<GitRepository>(relaxed = true) {
                 every { changed } returns MutableSharedFlow()
             },
+            mockk<LinearMetadataRepository>(relaxed = true),
         )
         return Fixture(
             workspacesRepo, workspacesFlow, customTypesRepo, customTypesFlow, modeOrderFlow,

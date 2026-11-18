@@ -11,6 +11,10 @@ struct AutoScanInstanceDto: Codable, Equatable, Sendable {
     let next_scan_at: String?
     let cycle_number: Int
     let current_seq: Int64
+    /// `linear` or `github`; an older agent sends neither field.
+    let source: String
+    /// The agent kind each issue runs in (`claude`, `codex`, …).
+    let cli: String
 
     private enum CodingKeys: String, CodingKey {
         case workspace_name = "project_name"
@@ -23,6 +27,8 @@ struct AutoScanInstanceDto: Codable, Equatable, Sendable {
         case next_scan_at
         case cycle_number
         case current_seq
+        case source
+        case cli
     }
 
     init(
@@ -35,7 +41,9 @@ struct AutoScanInstanceDto: Codable, Equatable, Sendable {
         scan_interval_seconds: Int = 300,
         next_scan_at: String? = nil,
         cycle_number: Int = 0,
-        current_seq: Int64 = 0
+        current_seq: Int64 = 0,
+        source: String = "linear",
+        cli: String = "claude"
     ) {
         self.workspace_name = workspace_name
         self.status = status
@@ -47,6 +55,8 @@ struct AutoScanInstanceDto: Codable, Equatable, Sendable {
         self.next_scan_at = next_scan_at
         self.cycle_number = cycle_number
         self.current_seq = current_seq
+        self.source = source
+        self.cli = cli
     }
 }
 
@@ -63,6 +73,8 @@ extension AutoScanInstanceDto {
         next_scan_at = try container.decodeIfPresent(String.self, forKey: .next_scan_at)
         cycle_number = try container.decodeIfPresent(Int.self, forKey: .cycle_number) ?? 0
         current_seq = try container.decodeIfPresent(Int64.self, forKey: .current_seq) ?? 0
+        source = try container.decodeIfPresent(String.self, forKey: .source) ?? "linear"
+        cli = try container.decodeIfPresent(String.self, forKey: .cli) ?? "claude"
     }
 }
 
@@ -107,18 +119,54 @@ extension AutoScanListResponse {
     }
 }
 
+/// `POST /api/autoscan/start`. An older client sends only `project_name` and
+/// `claude_options`; a client of an agent with `capabilities.autoscan` sends
+/// every choice: `source`, `cli`, that source's filter, `initial_prompt` (`""`
+/// clears the saved prompt) and, for agents other than Claude Code,
+/// `auto_approve`. Nil fields stay off the wire.
 struct StartScanRequest: Codable, Equatable, Sendable {
     let workspace_name: String
     let claude_options: ClaudeOptionsModel?
+    let source: String?
+    let cli: String?
+    let auto_approve: Bool?
+    let initial_prompt: String?
+    let linear_filter: AutoScanFilterDto?
+    let github_filter: GitHubScanFilterDto?
+    let linear_api_key: String?
 
     private enum CodingKeys: String, CodingKey {
         case workspace_name = "project_name"
         case claude_options
+        case source
+        case cli
+        case auto_approve
+        case initial_prompt
+        case linear_filter
+        case github_filter
+        case linear_api_key
     }
 
-    init(workspace_name: String, claude_options: ClaudeOptionsModel? = nil) {
+    init(
+        workspace_name: String,
+        claude_options: ClaudeOptionsModel? = nil,
+        source: String? = nil,
+        cli: String? = nil,
+        auto_approve: Bool? = nil,
+        initial_prompt: String? = nil,
+        linear_filter: AutoScanFilterDto? = nil,
+        github_filter: GitHubScanFilterDto? = nil,
+        linear_api_key: String? = nil
+    ) {
         self.workspace_name = workspace_name
         self.claude_options = claude_options
+        self.source = source
+        self.cli = cli
+        self.auto_approve = auto_approve
+        self.initial_prompt = initial_prompt
+        self.linear_filter = linear_filter
+        self.github_filter = github_filter
+        self.linear_api_key = linear_api_key
     }
 }
 
@@ -147,5 +195,120 @@ struct RunNowResponse: Codable, Equatable, Sendable {
         case ok
         case workspace_name = "project_name"
         case next_scan_at
+    }
+}
+
+/// `GET /api/autoscan/github/status`: what a GitHub scan of the workspace still
+/// needs. `problem` is the first blocking reason in plain words, nil when a
+/// scan can start; `can_install` says whether the setup route knows an
+/// installer for the PC, and `install_command` is that command as text.
+struct GitHubStatusResponse: Codable, Equatable, Sendable {
+    let installed: Bool
+    let version: String?
+    let signed_in: Bool
+    let account: String?
+    let host: String?
+    let repo: String?
+    let repo_url: String?
+    let problem: String?
+    let can_install: Bool
+    let install_command: String?
+
+    init(
+        installed: Bool = false,
+        version: String? = nil,
+        signed_in: Bool = false,
+        account: String? = nil,
+        host: String? = nil,
+        repo: String? = nil,
+        repo_url: String? = nil,
+        problem: String? = nil,
+        can_install: Bool = false,
+        install_command: String? = nil
+    ) {
+        self.installed = installed
+        self.version = version
+        self.signed_in = signed_in
+        self.account = account
+        self.host = host
+        self.repo = repo
+        self.repo_url = repo_url
+        self.problem = problem
+        self.can_install = can_install
+        self.install_command = install_command
+    }
+}
+
+extension GitHubStatusResponse {
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        installed = try container.decodeIfPresent(Bool.self, forKey: .installed) ?? false
+        version = try container.decodeIfPresent(String.self, forKey: .version)
+        signed_in = try container.decodeIfPresent(Bool.self, forKey: .signed_in) ?? false
+        account = try container.decodeIfPresent(String.self, forKey: .account)
+        host = try container.decodeIfPresent(String.self, forKey: .host)
+        repo = try container.decodeIfPresent(String.self, forKey: .repo)
+        repo_url = try container.decodeIfPresent(String.self, forKey: .repo_url)
+        problem = try container.decodeIfPresent(String.self, forKey: .problem)
+        can_install = try container.decodeIfPresent(Bool.self, forKey: .can_install) ?? false
+        install_command = try container.decodeIfPresent(String.self, forKey: .install_command)
+    }
+}
+
+struct GitHubLabelDto: Codable, Equatable, Sendable {
+    let name: String
+    let color: String
+
+    init(name: String, color: String = "") {
+        self.name = name
+        self.color = color
+    }
+}
+
+extension GitHubLabelDto {
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        color = try container.decodeIfPresent(String.self, forKey: .color) ?? ""
+    }
+}
+
+/// `GET /api/autoscan/github/labels`.
+struct GitHubLabelsResponse: Codable, Equatable, Sendable {
+    let labels: [GitHubLabelDto]
+}
+
+extension GitHubLabelsResponse {
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        labels = try container.decodeIfPresent([GitHubLabelDto].self, forKey: .labels) ?? []
+    }
+}
+
+enum GitHubSetupAction: String, Codable, Sendable {
+    case install
+    case signIn = "sign_in"
+}
+
+/// `POST /api/autoscan/github/setup`: opens a terminal session on the PC that
+/// installs the GitHub CLI or signs it in. Answers with a session dict.
+struct GitHubSetupRequest: Codable, Equatable, Sendable {
+    let workspace_name: String
+    let action: GitHubSetupAction
+    let rows: Int
+    let cols: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case workspace_name = "project_name"
+        case action
+        case rows
+        case cols
+    }
+
+    init(workspace_name: String, action: GitHubSetupAction, rows: Int = 24, cols: Int = 80) {
+        self.workspace_name = workspace_name
+        self.action = action
+        self.rows = rows
+        self.cols = cols
     }
 }

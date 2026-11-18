@@ -396,11 +396,27 @@ struct AgentAPI: Sendable {
     }
 
     func startAutoScan(workspaceName: String, claudeOptions: ClaudeOptionsModel? = nil) async throws {
-        try await executeRaw(
-            method: "POST",
-            url: "\(try await base())/api/autoscan/start",
-            body: StartScanRequest(workspace_name: workspaceName, claude_options: claudeOptions)
-        )
+        try await startAutoScan(StartScanRequest(workspace_name: workspaceName, claude_options: claudeOptions))
+    }
+
+    func startAutoScan(_ request: StartScanRequest) async throws {
+        try await executeRaw(method: "POST", url: "\(try await base())/api/autoscan/start", body: request)
+    }
+
+    func getGitHubScanStatus(workspaceName: String) async throws -> GitHubStatusResponse {
+        let query = "?project_name=\(Self.encodeQueryValue(workspaceName))"
+        return try await execute(method: "GET", url: "\(try await base())/api/autoscan/github/status\(query)")
+    }
+
+    func getGitHubScanLabels(workspaceName: String) async throws -> GitHubLabelsResponse {
+        let query = "?project_name=\(Self.encodeQueryValue(workspaceName))"
+        return try await execute(method: "GET", url: "\(try await base())/api/autoscan/github/labels\(query)")
+    }
+
+    /// `POST /api/autoscan/github/setup` — answers with the terminal session
+    /// that runs the installer or `gh auth login`.
+    func startGitHubSetup(_ request: GitHubSetupRequest) async throws -> SessionResponse {
+        try await execute(method: "POST", url: "\(try await base())/api/autoscan/github/setup", body: request)
     }
 
     func stopAutoScan(workspaceName: String) async throws {

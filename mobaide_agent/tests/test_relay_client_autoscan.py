@@ -20,10 +20,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from mobaide.github import setup as github_setup
+from mobaide.github.gh import GhCli
+from mobaide.linear.sources import AutoScanSourceError
+from mobaide.relay import client as relay_module
 from mobaide.relay.client import MAX_AUTOSCAN_STREAMS, RelayClient
 from mobaide.relay.envelope import (
     CH_AUTOSCAN,
@@ -397,3 +402,197 @@ class TestCancelAllSubtasksAutoscan:
                 await t
             assert t.cancelled()
 
+
+
+class _Gate:
+    """A GitHub that answers only once the test opens it."""
+
+    def __init__(self) -> None:
+        self.opened = asyncio.Event()
+        self.entered = 0
+        self.cancelled = 0
+
+    async def wait(self) -> None:
+        self.entered += 1
+        try:
+            await self.opened.wait()
+        except asyncio.CancelledError:
+            self.cancelled += 1
+            raise
+
+
+class _SlowGh(GhCli):
+    def __init__(self, gate: _Gate) -> None:
+        super().__init__()
+        self._gate = gate
+
+    def resolve_binary(self) -> str:
+        return "gh"
+
+    async def version(self) -> str | None:
+        await self._gate.wait()
+        return "2.83.0"
+
+
+class _SlowScans:
+    """The Auto Scan manager: a start checks GitHub before it answers."""
+
+    def __init__(self, gate: _Gate) -> None:
+        self.gh = _SlowGh(gate)
+        self._gate = gate
+
+    async def start(self, workspace_name, *, client_options, request):
+        await self._gate.wait()
+        raise AutoScanSourceError("GitHub CLI is not signed in to github.com.")
+
+
+def _slow_linear_client(gate: _Gate) -> type:
+    class _SlowLinear:
+        """The Linear API: the wizard's label list answers once the gate opens."""
+
+        def __init__(self, *, api_key, rate_limiter) -> None:
+            pass
+
+        async def get_labels(self) -> list[dict]:
+            await gate.wait()
+            return [{"id": "l-1", "name": "bot"}]
+
+    return _SlowLinear
+
+
+def _linear_labels_request(request_id: str) -> bytes:
+    return json.dumps({
+        "type": "proxy_request", "request_id": request_id, "method": "GET",
+        "path": "/api/projects/alpha/linear/labels",
+    }).encode()
+
+
+def _status_request(request_id: str) -> bytes:
+    return json.dumps({
+        "type": "proxy_request", "request_id": request_id, "method": "GET",
+        "path": "/api/autoscan/github/status", "query": {"project_name": "alpha"},
+    }).encode()
+
+
+def _start_request(request_id: str) -> bytes:
+    return json.dumps({
+        "type": "proxy_request", "request_id": request_id, "method": "POST",
+        "path": "/api/autoscan/start",
+        "body": {"project_name": "alpha", "source": "github", "cli": "codex"},
+    }).encode()
+
+
+def _replies(ws) -> list[dict]:
+    out = []
+    for call in ws.send.call_args_list:
+        channel, _sid, payload = decode(call[0][0])
+        if channel == CH_CONTROL:
+            out.append(json.loads(payload))
+    return out
+
+
+async def _wait_for(predicate, timeout: float = 5.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not predicate():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition not reached in time")
+        await asyncio.sleep(0.01)
+
+
+class TestAutoscanProxyRunsAside:
+    @pytest.fixture
+    async def tunnel(self, tmp_path, monkeypatch, relay_config, mock_session_manager,
+                     mock_event_bus, mock_broadcaster, mock_app_state):
+        monkeypatch.setattr(github_setup, "install_command", lambda: None)
+        gate = _Gate()
+        folder = tmp_path / "alpha"
+        folder.mkdir()
+        mock_app_state.workspaces_store = SimpleNamespace(
+            get=lambda name: (
+                SimpleNamespace(path=str(folder), linear_api_key="lin_api_test")
+                if name == "alpha" else None
+            ),
+        )
+        mock_app_state.autoscan_manager = _SlowScans(gate)
+        monkeypatch.setattr(relay_module, "LinearApiClient", _slow_linear_client(gate))
+        client = RelayClient(
+            config=relay_config, session_manager=mock_session_manager, event_bus=mock_event_bus,
+            broadcaster=mock_broadcaster, app_state=mock_app_state,
+        )
+        ws = AsyncMock()
+        client._ws = ws
+        yield client, ws, gate
+        gate.opened.set()
+        await client.stop()
+
+    @pytest.mark.parametrize(
+        ("make_request", "status"),
+        [pytest.param(_status_request, 200, id="github-status"),
+         pytest.param(_start_request, 400, id="scan-start"),
+         pytest.param(_linear_labels_request, 200, id="linear-labels")],
+    )
+    async def test_a_slow_issue_tracker_does_not_hold_up_the_tunnel_reader(
+        self, tunnel, make_request, status,
+    ):
+        client, ws, gate = tunnel
+
+        # Inline handling would block here until GitHub answers.
+        await asyncio.wait_for(client._handle_control(make_request("r-1"), ws), 1)
+        await _wait_for(lambda: gate.entered == 1)
+        assert _replies(ws) == []
+
+        gate.opened.set()
+        await _wait_for(lambda: len(_replies(ws)) == 1)
+        assert (_replies(ws)[0]["request_id"], _replies(ws)[0]["status"]) == ("r-1", status)
+
+    async def test_requests_beyond_the_in_flight_cap_are_503(self, tunnel):
+        client, ws, gate = tunnel
+        cap = relay_module.MAX_AUTOSCAN_PROXY_TASKS
+        for i in range(cap):
+            await client._handle_control(_status_request(f"r-{i}"), ws)
+        await _wait_for(lambda: gate.entered == cap)
+
+        await client._handle_control(_start_request("r-over"), ws)
+        await _wait_for(lambda: len(_replies(ws)) == 1)
+
+        (reply,) = _replies(ws)
+        assert (reply["request_id"], reply["status"]) == ("r-over", 503)
+        assert gate.entered == cap
+
+    async def test_github_that_never_answers_is_504_before_the_relay_gives_up(
+        self, tunnel, monkeypatch,
+    ):
+        client, ws, gate = tunnel
+        monkeypatch.setattr(relay_module, "_AUTOSCAN_PROXY_TIMEOUT", 0.05)
+
+        await client._handle_control(_status_request("r-1"), ws)
+        await _wait_for(lambda: len(_replies(ws)) == 1)
+
+        (reply,) = _replies(ws)
+        assert (reply["request_id"], reply["status"]) == ("r-1", 504)
+        assert gate.cancelled == 1
+
+    async def test_an_answer_that_outlives_a_reconnect_goes_out_on_the_new_tunnel(self, tunnel):
+        client, old_ws, gate = tunnel
+        await client._handle_control(_status_request("r-1"), old_ws)
+        await _wait_for(lambda: gate.entered == 1)
+
+        new_ws = AsyncMock()
+        client._ws = new_ws
+        gate.opened.set()
+        await _wait_for(lambda: len(_replies(new_ws)) == 1)
+
+        # The central server matches the reply by request_id on whatever
+        # tunnel is live; the closed one would lose it.
+        assert _replies(old_ws) == []
+        (reply,) = _replies(new_ws)
+        assert (reply["request_id"], reply["status"]) == ("r-1", 200)
+
+    async def test_stop_cancels_in_flight_requests(self, tunnel):
+        client, ws, gate = tunnel
+        await client._handle_control(_status_request("r-1"), ws)
+        await _wait_for(lambda: gate.entered == 1)
+
+        await client.stop()
+
+        await _wait_for(lambda: gate.cancelled == 1)

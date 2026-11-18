@@ -24,6 +24,32 @@ data class AutoScanFilterDto(
     val removal_label: String = "AutoPipeline",
 )
 
+/**
+ * Per-workspace Auto Scan GitHub filter. An open issue that carries any of
+ * [labels] (1–20 names, no commas) is picked up; [assignee] null takes any
+ * assignee (`@me` is the signed-in `gh` account); [active_label] is added when
+ * the scan takes the issue.
+ */
+@Serializable
+data class GitHubScanFilterDto(
+    val labels: List<String> = emptyList(),
+    val assignee: String? = null,
+    val active_label: String? = null,
+)
+
+/**
+ * The workspace's last Auto Scan choices (`auto_scan` on the workspace). Each
+ * field is null until a scan start chose it; a null filter means the wizard
+ * starts with empty fields. Absent on older agents.
+ */
+@Serializable
+data class AutoScanSettingsDto(
+    val source: String? = null,
+    val cli: String? = null,
+    val linear_filter: AutoScanFilterDto? = null,
+    val github_filter: GitHubScanFilterDto? = null,
+)
+
 /** A Linear label discovered for the workspace's API key. */
 @Serializable
 data class LinearLabelDto(

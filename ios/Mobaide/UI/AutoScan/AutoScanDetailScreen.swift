@@ -75,6 +75,11 @@ private struct AutoScanDetailContent: View {
                 }
                 Spacer()
             }
+            if let instance = model.instance {
+                Text(AutoScanDisplay.sourceAndAgent(instance))
+                    .font(.subheadline)
+                    .foregroundStyle(colors.textMuted)
+            }
             CountdownView(nextScanAt: model.nextScanAt)
             HStack(spacing: 12) {
                 Button("Run Now") { Task { await model.runNow() } }

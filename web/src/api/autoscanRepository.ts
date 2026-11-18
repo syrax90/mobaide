@@ -5,9 +5,13 @@ import {
   autoScanListResponseSchema,
   type AutoScanListResponse,
 } from '../protocol/dto/autoscan';
+import { sessionResponseSchema, type SessionResponse } from '../protocol/dto/session';
 
 export type StartScanRequest = components['schemas']['StartScanRequest'];
 export type RunNowResponse = components['schemas']['RunNowResponse'];
+export type GitHubStatus = components['schemas']['GitHubStatusResponse'];
+export type GitHubLabel = components['schemas']['GitHubLabelModel'];
+export type GitHubSetupAction = components['schemas']['GitHubSetupRequest']['action'];
 
 /**
  * Start an Auto Scan for a workspace.
@@ -78,4 +82,55 @@ export async function runAutoScanNow(
   );
   if (error !== undefined || data === undefined) throw toApiError(response, error);
   return data;
+}
+
+/**
+ * What a GitHub scan of the workspace still needs: `gh` installed, signed in,
+ * and a GitHub repository in the workspace folder. `problem` is the first
+ * blocking reason in plain words, `null` once a scan can start.
+ *
+ * Runs `gh` on the PC on every call, so callers fetch it only while GitHub is
+ * the chosen source.
+ */
+export async function getGitHubStatus(
+  agentId: string,
+  workspaceName: string,
+): Promise<GitHubStatus> {
+  const { data, error, response } = await createAgentClient(agentId).GET(
+    '/api/autoscan/github/status',
+    { params: { query: { project_name: workspaceName } } },
+  );
+  if (error !== undefined || data === undefined) throw toApiError(response, error);
+  return data;
+}
+
+/** The repository's labels (up to 200), for the label picker. 400 when `gh` cannot read them. */
+export async function listGitHubLabels(
+  agentId: string,
+  workspaceName: string,
+): Promise<GitHubLabel[]> {
+  const { data, error, response } = await createAgentClient(agentId).GET(
+    '/api/autoscan/github/labels',
+    { params: { query: { project_name: workspaceName } } },
+  );
+  if (error !== undefined || data === undefined) throw toApiError(response, error);
+  return data.labels;
+}
+
+/**
+ * Open a terminal session on the PC that installs the GitHub CLI (`install`) or
+ * runs `gh auth login` (`sign_in`) in the workspace folder. The answer is an
+ * ordinary session, decoded like `createSession`'s so it can seed the list.
+ */
+export async function startGitHubSetup(
+  agentId: string,
+  workspaceName: string,
+  action: GitHubSetupAction,
+): Promise<SessionResponse> {
+  const { data, error, response } = await createAgentClient(agentId).POST(
+    '/api/autoscan/github/setup',
+    { body: { project_name: workspaceName, action, rows: 24, cols: 80 } },
+  );
+  if (error !== undefined || data === undefined) throw toApiError(response, error);
+  return sessionResponseSchema.parse(data);
 }

@@ -1,4 +1,6 @@
+import { useId } from 'react';
 import {
+  autoScanCapability,
   chatSupport,
   cliModelDetails,
   cliModels,
@@ -11,6 +13,7 @@ import type { WorkspaceSummary } from '../../../api/workspaceRepository';
 import type { CustomAgentType } from '../../../api/customAgentTypeRepository';
 import { AntigravityOptionsPanel } from './panels/AntigravityOptionsPanel';
 import { AutoScanOptionsPanel } from './panels/AutoScanOptionsPanel';
+import { AutoScanPanel } from './panels/AutoScanPanel';
 import { ClaudeAdvancedPanel } from './panels/ClaudeAdvancedPanel';
 import { ClaudeOptionsPanel } from './panels/ClaudeOptionsPanel';
 import { CodexOptionsPanel } from './panels/CodexOptionsPanel';
@@ -22,6 +25,8 @@ import { PiOptionsPanel } from './panels/PiOptionsPanel';
 import type { BaseBranchStatus } from './panels/BaseBranchPicker';
 import { WorktreeSection } from './panels/WorktreeSection';
 import { chatAgentKind, terminalUiOf, usesChatView, type ChatAgentKind } from './buildCreateRequest';
+import { autoScanAgentOptions, autoScanBlocker, autoScanSources } from './autoScanSetup';
+import type { AutoScanSourcesView } from './useAutoScanSources';
 import { effectiveWorktreeBase } from './worktreeBase';
 import {
   addDirsError,
@@ -58,6 +63,13 @@ interface ConfigStepProps {
   onContinueSession?: () => void;
   /** Start OpenCode's provider sign-in in a terminal session (OpenCode only). */
   onConnectProvider?: () => void;
+  /**
+   * The agent probe has not answered yet. Auto Scan waits for it, because the
+   * answer decides between the source-and-agent panel and the legacy one.
+   */
+  capabilitiesPending?: boolean;
+  /** What the PC says about the chosen Auto Scan source (newer agents only). */
+  autoScanSources?: AutoScanSourcesView;
 }
 
 export function modeTitle(
@@ -128,7 +140,10 @@ export function ConfigStep({
   onBack,
   onContinueSession,
   onConnectProvider,
+  capabilitiesPending = false,
+  autoScanSources: sourcesView,
 }: ConfigStepProps) {
+  const startHintId = useId();
   const chatKind = chatAgentKind(mode);
   const chat = chatSupport(capabilities, chatKind ?? 'claude');
   const usesChat = chatKind !== null && usesChatView(terminalUiOf(state, chatKind), chat);
@@ -157,10 +172,38 @@ export function ConfigStep({
         }
       : null;
 
+  // Auto Scan has three layouts: the source-and-agent panel for an agent with
+  // `capabilities.autoscan`, a wait while the probe has not answered, and the
+  // legacy Linear + Claude panel for an older agent (or a failed probe).
+  const scanCapability = mode === 'auto_scan' ? autoScanCapability(capabilities) : null;
+  const scan =
+    scanCapability !== null && sourcesView !== undefined && workspace !== null
+      ? {
+          workspace,
+          sources: autoScanSources(scanCapability),
+          agents: autoScanAgentOptions(scanCapability, capabilities),
+          view: sourcesView,
+        }
+      : null;
+  const scanPending = mode === 'auto_scan' && scan === null && capabilitiesPending;
+  const scanBlocker =
+    scan === null
+      ? null
+      : autoScanBlocker({
+          setup: state.autoScanSetup,
+          prompt: state.autoScan.initialPrompt,
+          sources: scan.sources,
+          agents: scan.agents,
+          github: scan.view.github,
+          hasLinearKey: scan.workspace.has_linear_key,
+        });
+
   // The server 422s a flag-shaped directory, so refuse the launch rather than
   // showing the inline error and sending it anyway.
   const blocked =
-    mode === 'antigravity' && addDirsError(state.antigravity.addDirsDraft) !== null;
+    (mode === 'antigravity' && addDirsError(state.antigravity.addDirsDraft) !== null) ||
+    scanPending ||
+    scanBlocker !== null;
 
   return (
     <div className="wizard-body">
@@ -243,13 +286,35 @@ export function ConfigStep({
       {mode === 'pi' && (
         <PiOptionsPanel bucket={state.pi} chat={chat} dispatch={dispatch} />
       )}
-      {mode === 'auto_scan' && (
-        <AutoScanOptionsPanel
-          bucket={state.autoScan}
-          models={cliModels(capabilities, 'claude')}
-          dispatch={dispatch}
-        />
-      )}
+      {mode === 'auto_scan' &&
+        (scan !== null ? (
+          <AutoScanPanel
+            workspace={scan.workspace}
+            state={state}
+            sources={scan.sources}
+            agents={scan.agents}
+            claudeModels={cliModels(capabilities, 'claude')}
+            sourcesView={scan.view}
+            submitting={submitting}
+            dispatch={dispatch}
+          />
+        ) : scanPending ? (
+          <p className="page-note state-loading">Checking the agent on your PC…</p>
+        ) : (
+          <>
+            {/* Only for an agent known to predate the delta, not a failed probe. */}
+            {capabilities !== undefined && (
+              <p className="page-note">
+                Update Mobaide on your PC to scan GitHub issues and choose the agent.
+              </p>
+            )}
+            <AutoScanOptionsPanel
+              bucket={state.autoScan}
+              models={cliModels(capabilities, 'claude')}
+              dispatch={dispatch}
+            />
+          </>
+        ))}
       {(mode === 'shell' || isCustomMode(mode)) && (
         <p className="page-note">
           {isCustomMode(mode)
@@ -278,9 +343,11 @@ export function ConfigStep({
           type="button"
           className="button button-primary"
           disabled={submitting || blocked}
+          aria-describedby={scanBlocker !== null ? startHintId : undefined}
           onClick={onSubmit}
         >
-          {submitting
+          {/* Not while the GitHub setup terminal opens: that is no start. */}
+          {submitting && sourcesView?.githubSetupPending !== true
             ? mode === 'auto_scan'
               ? 'Starting…'
               : 'Creating…'
@@ -294,6 +361,11 @@ export function ConfigStep({
           Back
         </button>
       </div>
+      {scanBlocker !== null && (
+        <p className="field-hint" id={startHintId}>
+          {scanBlocker}
+        </p>
+      )}
     </div>
   );
 }

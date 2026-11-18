@@ -11,6 +11,23 @@ interface AutoScanFilterSectionProps {
   error: string | null;
   onChange: (filter: AutoScanFilter) => void;
   onRefresh: () => void;
+  /** The section heading; the Auto Scan wizard names it after its source. */
+  title?: string;
+  /**
+   * Show the "select at least one" messages under each group. The wizard turns
+   * them off: its filter starts empty on purpose, and the hint under its Start
+   * button names the first missing choice instead.
+   */
+  showErrors?: boolean;
+}
+
+/**
+ * A select's options, led by a "Choose…" entry while nothing is chosen. A
+ * controlled `<select>` whose value matches no option shows its first option
+ * while the state holds `''`, so an unset value needs an option of its own.
+ */
+function withUnsetOption(value: string, options: SelectOption[], label: string): SelectOption[] {
+  return value === '' ? [{ value: null, label }, ...options] : options;
 }
 
 function toggle(values: readonly string[], value: string, ordered: readonly string[]) {
@@ -30,6 +47,10 @@ function toggle(values: readonly string[], value: string, ordered: readonly stri
  * Option lists are the ordered union of what Linear returned and what the
  * workspace already selects, so the form stays usable before discovery resolves,
  * when it fails, and when a saved value no longer exists in Linear.
+ *
+ * Shared by the workspace form (an older agent, whose filter always holds a
+ * value) and the Auto Scan wizard (a newer agent, whose filter starts empty:
+ * an empty state or label reads as "not chosen yet").
  */
 export function AutoScanFilterSection({
   filter,
@@ -39,6 +60,8 @@ export function AutoScanFilterSection({
   error,
   onChange,
   onRefresh,
+  title = 'Auto Scan filters',
+  showErrors = true,
 }: AutoScanFilterSectionProps) {
   const labelOptions = orderedUnion(
     labels.map((label) => label.name),
@@ -65,7 +88,7 @@ export function AutoScanFilterSection({
   return (
     <section className="option-group">
       <div className="option-group-head">
-        <h3>Auto Scan filters</h3>
+        <h3>{title}</h3>
         <button type="button" className="button" disabled={loading} onClick={onRefresh}>
           {loading ? 'Refreshing…' : 'Refresh from Linear'}
         </button>
@@ -105,7 +128,7 @@ export function AutoScanFilterSection({
             ))}
           </div>
         )}
-        {filter.label_names.length === 0 && (
+        {showErrors && filter.label_names.length === 0 && (
           <p className="field-error">Select at least one trigger label</p>
         )}
       </fieldset>
@@ -138,7 +161,7 @@ export function AutoScanFilterSection({
             ))}
           </div>
         )}
-        {filter.state_names.length === 0 && (
+        {showErrors && filter.state_names.length === 0 && (
           <p className="field-error">Select at least one trigger state</p>
         )}
       </fieldset>
@@ -146,7 +169,7 @@ export function AutoScanFilterSection({
       <SelectField
         label="Active state (set on claim)"
         value={filter.active_state}
-        options={stateSelectOptions}
+        options={withUnsetOption(filter.active_state, stateSelectOptions, 'Choose a state')}
         onChange={(value) => {
           onChange({ ...filter, active_state: value ?? '' });
         }}
@@ -154,7 +177,7 @@ export function AutoScanFilterSection({
       <SelectField
         label="Done state (cleanup trigger)"
         value={filter.done_state}
-        options={stateSelectOptions}
+        options={withUnsetOption(filter.done_state, stateSelectOptions, 'Choose a state')}
         onChange={(value) => {
           onChange({ ...filter, done_state: value ?? '' });
         }}
@@ -162,7 +185,7 @@ export function AutoScanFilterSection({
       <SelectField
         label="Removal label (stripped on claim)"
         value={filter.removal_label}
-        options={labelSelectOptions}
+        options={withUnsetOption(filter.removal_label, labelSelectOptions, 'Choose a label')}
         onChange={(value) => {
           onChange({ ...filter, removal_label: value ?? '' });
         }}

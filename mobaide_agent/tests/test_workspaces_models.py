@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from mobaide.agent.workspaces.models import AutoScanFilterModel
+from mobaide.agent.workspaces.models import AutoScanFilterModel, GitHubScanFilterModel
 
 
 class TestAutoScanFilterModelRoundTrip:
@@ -108,3 +108,29 @@ class TestAutoScanFilterModelElementValidators:
         kwargs[field] = "   "
         with pytest.raises(ValidationError):
             AutoScanFilterModel(**kwargs)
+
+
+class TestGitHubScanFilterModel:
+    """The API boundary for the GitHub filter. ``gh`` splits a label option's
+    value on commas, so a comma would silently turn one label into two."""
+
+    def test_cleans_labels_and_blank_optionals(self):
+        m = GitHubScanFilterModel(labels=[" ai ", "ai", "bot"], assignee="  ", active_label="")
+
+        assert m.to_dataclass().labels == ["ai", "bot"]
+        assert (m.assignee, m.active_label) == (None, None)
+
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            pytest.param({"labels": []}, id="no-label"),
+            pytest.param({"labels": [f"l{i}" for i in range(21)]}, id="21-labels"),
+            pytest.param({"labels": ["  "]}, id="blank-label"),
+            pytest.param({"labels": ["ai,bot"]}, id="comma-in-label"),
+            pytest.param({"labels": ["x" * 101]}, id="long-label"),
+            pytest.param({"labels": ["ai"], "active_label": "doing,now"}, id="comma-in-active-label"),
+        ],
+    )
+    def test_rejects(self, fields):
+        with pytest.raises(ValidationError):
+            GitHubScanFilterModel(**fields)

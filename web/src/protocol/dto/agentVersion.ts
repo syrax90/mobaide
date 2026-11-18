@@ -257,6 +257,39 @@ export function voiceCleanupKinds(info: AgentVersionInfo | undefined): readonly 
   return kinds.filter((kind): kind is string => typeof kind === 'string');
 }
 
+/** `capabilities.autoscan` (Delta 2026-11-18): what the Auto Scan wizard may offer. */
+export interface AutoScanCapability {
+  /** Issue sources the agent can scan (`linear`, `github`). */
+  sources: readonly string[];
+  /** Agent kinds a scan can run on each issue. */
+  clis: readonly string[];
+  /** `POST /api/autoscan/github/setup` exists: the wizard can install or sign in `gh`. */
+  githubSetup: boolean;
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item !== '')
+    : [];
+}
+
+/**
+ * The agent's Auto Scan capability, or `null` for an agent from before the
+ * delta: it scans Linear only, runs Claude Code only and has none of the GitHub
+ * routes, so the wizard keeps its legacy panel.
+ */
+export function autoScanCapability(info: AgentVersionInfo | undefined): AutoScanCapability | null {
+  if (info === undefined) return null;
+  const autoscan = info.capabilities.autoscan;
+  if (typeof autoscan !== 'object' || autoscan === null || Array.isArray(autoscan)) return null;
+  const fields = autoscan as Record<string, unknown>;
+  return {
+    sources: stringList(fields.sources),
+    clis: stringList(fields.clis),
+    githubSetup: fields.github_setup === true,
+  };
+}
+
 /** `capabilities.fs.<key>`, with `gitCapability`'s explicit-`true` rule. */
 export function fsCapability(info: AgentVersionInfo | undefined, key: string): boolean {
   if (info === undefined) return false;

@@ -61,6 +61,70 @@
           "removal_label": "AutoPipeline"
         }
       }
+    },
+    {
+      "name": "auto_scan_choices",
+      "wire": {
+        "name": "proj",
+        "path": "/home/user/proj",
+        "conda_env": null,
+        "default_flags": {},
+        "order": 0,
+        "has_linear_key": true,
+        "is_git": true,
+        "path_exists": true,
+        "auto_scan_filter": { "state_names": ["Todo"], "label_names": ["bot"], "active_state": "Doing", "done_state": "Shipped", "removal_label": "bot" },
+        "auto_scan_prompt": null,
+        "auto_scan": {
+          "source": "github",
+          "cli": "codex",
+          "linear_filter": { "state_names": ["Todo"], "label_names": ["bot"], "active_state": "Doing", "done_state": "Shipped", "removal_label": "bot" },
+          "github_filter": { "labels": ["ai-ready", "bot"], "assignee": "@me", "active_label": null }
+        }
+      },
+      "decoded_canonical": {
+        "name": "proj",
+        "path": "/home/user/proj",
+        "default_flags": {},
+        "order": 0,
+        "has_linear_key": true,
+        "is_git": true,
+        "path_exists": true,
+        "auto_scan_filter": { "state_names": ["Todo"], "label_names": ["bot"], "active_state": "Doing", "done_state": "Shipped", "removal_label": "bot" },
+        "auto_scan": {
+          "source": "github",
+          "cli": "codex",
+          "linear_filter": { "state_names": ["Todo"], "label_names": ["bot"], "active_state": "Doing", "done_state": "Shipped", "removal_label": "bot" },
+          "github_filter": { "labels": ["ai-ready", "bot"], "assignee": "@me" }
+        }
+      }
+    },
+    {
+      "name": "auto_scan_nothing_chosen",
+      "wire": {
+        "name": "p",
+        "path": "/x",
+        "conda_env": null,
+        "default_flags": {},
+        "order": 0,
+        "has_linear_key": false,
+        "is_git": true,
+        "path_exists": true,
+        "auto_scan_filter": { "state_names": ["Proposals"], "label_names": ["AutoPipeline"], "active_state": "In Progress", "done_state": "Done", "removal_label": "AutoPipeline" },
+        "auto_scan_prompt": null,
+        "auto_scan": { "source": null, "cli": null, "linear_filter": null, "github_filter": null }
+      },
+      "decoded_canonical": {
+        "name": "p",
+        "path": "/x",
+        "default_flags": {},
+        "order": 0,
+        "has_linear_key": false,
+        "is_git": true,
+        "path_exists": true,
+        "auto_scan_filter": { "state_names": ["Proposals"], "label_names": ["AutoPipeline"], "active_state": "In Progress", "done_state": "Done", "removal_label": "AutoPipeline" },
+        "auto_scan": {}
+      }
     }
   ]
 }

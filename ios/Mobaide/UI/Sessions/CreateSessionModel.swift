@@ -9,7 +9,9 @@ import Observation
 /// Auto Scan is the one mode that does not create a session: it POSTs
 /// `/api/autoscan/start` through `AutoScanRepository` and navigates to the
 /// live monitor, so it has its own submit path (`startAutoScan`), its own
-/// option bucket, and its own nav stream.
+/// option bucket, and its own nav stream. Against an agent with
+/// `capabilities.autoscan` its source, filter and agent choices live in
+/// `autoScanSetup`.
 @MainActor
 @Observable
 final class CreateSessionModel {
@@ -115,7 +117,9 @@ final class CreateSessionModel {
     static let codexApprovals = ["untrusted", "on-request", "never"]
 
     private(set) var step: Step = .workspaceSelect
-    private(set) var workspaces: [WorkspaceInfo] = []
+    private(set) var workspaces: [WorkspaceInfo] = [] {
+        didSet { autoScanSetup.workspacesChanged(workspaces) }
+    }
     private(set) var submitting = false
     var error: String?
 
@@ -251,8 +255,16 @@ final class CreateSessionModel {
     /// would strand it (Android `autoScanSkipPermissions = true`).
     var autoScanSkipPermissions = true
     var autoScanNoMemory = false
+    /// The "run without asking" switch of the agents other than Claude Code.
+    /// Defaults ON for the same reason as `autoScanSkipPermissions`.
+    var autoScanAutoApprove = true
     var autoScanInitialPrompt = ""
     private(set) var autoScanStarting = false
+    /// The agent's `detail` for a refused start (400), shown next to Start.
+    private(set) var autoScanStartError: String?
+    let autoScanSetup: AutoScanSetupModel
+    /// A GitHub CLI install or sign-in terminal is being opened.
+    private(set) var githubSetupStarting = false
     private(set) var activeScans: [AutoScanInstanceDto] = []
     /// Stored-workspace name the initial prompt was last seeded for, so
     /// re-entering the step keeps in-flight edits and only a workspace change
@@ -351,6 +363,9 @@ final class CreateSessionModel {
     /// `SessionListModel` auto-resume pattern); the screen clears the cache
     /// once it has navigated.
     private let autoScanNavBroadcaster = Broadcaster<String>(replay: .latestClearable)
+    /// Carries the session id of a GitHub CLI setup terminal. It opens on top
+    /// of the wizard, which stays in the stack so its choices survive.
+    private let setupNavBroadcaster = Broadcaster<String>(replay: .none)
     /// Stored workspace the wizard should open directly in Auto Scan config
     /// (the Workspaces screen shortcut); applied once `load()` resolves it.
     private let autoScanWorkspacePreset: String?
@@ -380,6 +395,7 @@ final class CreateSessionModel {
         self.autoScanRepository = autoScanRepository
         self.workspacesRepository = workspacesRepository
         self.autoScanWorkspacePreset = autoScanWorkspace
+        self.autoScanSetup = AutoScanSetupModel(agentAPI: agentAPI)
         self.customTypes = customAgentTypesRepository.currentTypes
         self.modeOrder = customAgentTypesRepository.currentModeOrder
         self.activeScans = autoScanRepository.currentScans
@@ -389,6 +405,8 @@ final class CreateSessionModel {
     func navEvents() -> AsyncStream<String> { navBroadcaster.subscribe(replayLatest: false) }
 
     func autoScanNavEvents() -> AsyncStream<String> { autoScanNavBroadcaster.subscribe() }
+
+    func setupNavEvents() -> AsyncStream<String> { setupNavBroadcaster.subscribe(replayLatest: false) }
 
     /// Called by the screen once it has consumed the workspace name and
     /// navigated, so the cached id is not replayed.
@@ -547,11 +565,13 @@ final class CreateSessionModel {
     var junieEnabled: Bool { junieAvailable != false && !junieNeedsAgentUpdate }
     var piEnabled: Bool { piAvailable != false && !piNeedsAgentUpdate }
 
-    /// Auto Scan additionally needs a Linear API key on the selected stored
-    /// workspace — the agent scans Linear for that workspace's issues. A custom
+    /// Auto Scan needs a stored workspace. An agent without
+    /// `capabilities.autoscan` scans Linear with Claude Code only, so it also
+    /// needs a Linear API key on the workspace and the Claude CLI. A custom
     /// path or no selection can never satisfy it (Android `autoScanEnabled`).
     var autoScanEnabled: Bool {
-        claudeEnabled && selectedWorkspace?.has_linear_key == true
+        if autoScanSetup.isAvailable { return Self.storedName(selection) != nil }
+        return claudeEnabled && selectedWorkspace?.has_linear_key == true
     }
 
     /// The scan already running for the selected stored workspace, if any. Auto
@@ -616,6 +636,10 @@ final class CreateSessionModel {
         case .autoScan:
             if let running = runningScan {
                 return "Already running for \(running.workspace_name) — tap to open the live monitor."
+            }
+            if autoScanSetup.isAvailable {
+                return autoScanEnabled ? "Scan GitHub or Linear issues and launch agent sessions."
+                    : "Auto Scan needs a saved workspace."
             }
             if !claudeEnabled {
                 return "Auto Scan needs the Claude CLI, which isn't installed on the agent."
@@ -750,12 +774,13 @@ final class CreateSessionModel {
                 // by a start that 409s — and not even that when the Claude CLI
                 // is missing, since the Start button is then disabled.
                 activeScans = await autoScanRepository.refresh().scans
-            }
-            // The preset skips the mode picker, where the probe normally runs,
-            // so the config step would not know whether Claude is installed.
-            if applyAutoScanPreset() {
+                // The preset skips the mode picker, where the probe normally
+                // runs: the config step needs the CLI list, and the preset
+                // needs `capabilities.autoscan` to accept a workspace without
+                // a Linear key.
                 await refreshCliAvailability()
             }
+            applyAutoScanPreset()
         } catch {
             // Non-fatal: the wizard still allows a custom path. The repository's
             // cached list is not a fallback — it is not scoped to this account
@@ -782,32 +807,37 @@ final class CreateSessionModel {
 
     /// Workspaces-screen shortcut: drop straight into the Auto Scan config step
     /// for `autoScanWorkspacePreset`. Runs once, after `load()` has the workspace
-    /// (its `has_linear_key` is the launch gate). An already-running scan
-    /// routes to the monitor instead; a workspace that lost its Linear key falls
-    /// back to the mode picker rather than a dead end.
-    /// Returns whether the config step was entered.
-    @discardableResult
-    private func applyAutoScanPreset() -> Bool {
-        guard !didApplyAutoScanPreset, let name = autoScanWorkspacePreset else { return false }
-        guard workspaces.contains(where: { $0.name == name }) else { return false }
+    /// (on an agent without `capabilities.autoscan` its `has_linear_key` is the
+    /// launch gate). An already-running scan routes to the monitor instead; a
+    /// workspace that lost its Linear key falls back to the mode picker rather
+    /// than a dead end.
+    private func applyAutoScanPreset() {
+        guard !didApplyAutoScanPreset, let name = autoScanWorkspacePreset else { return }
+        guard workspaces.contains(where: { $0.name == name }) else { return }
         didApplyAutoScanPreset = true
         selection = .stored(name)
         if let running = runningScan {
             autoScanNavBroadcaster.emit(running.workspace_name)
-            return false
+            return
         }
-        guard selectedWorkspace?.has_linear_key == true else {
+        guard let workspace = selectedWorkspace,
+              workspace.has_linear_key || autoScanSetup.isAvailable
+        else {
             step = .modePick
-            return false
+            return
         }
         seedAutoScanPrompt()
+        autoScanSetup.prepare(for: workspace)
         mode = .autoScan
         step = .config
-        return true
     }
 
     func refreshCliAvailability() async {
-        guard let version = try? await agentAPI.getAgentVersion() else { return }
+        guard let version = try? await agentAPI.getAgentVersion() else {
+            autoScanSetup.applyProbe(nil)
+            return
+        }
+        autoScanSetup.applyProbe(version)
         worktreeBaseSupported = version.gitCapability("worktree_base")
         claudeAvailable = version.cliAvailable("claude")
         chatCapability = version.chatCapability("claude")
@@ -1199,6 +1229,7 @@ final class CreateSessionModel {
                 return
             }
             seedAutoScanPrompt()
+            if let workspace = selectedWorkspace { autoScanSetup.prepare(for: workspace) }
         }
         self.mode = mode
         step = .config
@@ -1213,11 +1244,19 @@ final class CreateSessionModel {
     /// this step before that lands would otherwise mark the workspace seeded with
     /// an empty prompt and strand it that way for the rest of the wizard's
     /// life — `observeScans()` re-attempts the seed once the refresh returns.
+    ///
+    /// The agent-wide default is Linear's. An agent with
+    /// `capabilities.autoscan` uses the chosen source's default for an empty
+    /// prompt, so there only the saved prompt seeds, and an empty field latches.
     private func seedAutoScanPrompt() {
         guard case .stored(let name) = selection, autoScanPromptSeededFor != name else { return }
-        guard let prompt = workspaces.first(where: { $0.name == name })?.auto_scan_prompt
-            ?? autoScanRepository.autoScanPrompt
-        else { return }
+        let saved = workspaces.first(where: { $0.name == name })?.auto_scan_prompt
+        if autoScanSetup.isAvailable {
+            autoScanPromptSeededFor = name
+            autoScanInitialPrompt = saved ?? ""
+            return
+        }
+        guard let prompt = saved ?? autoScanRepository.autoScanPrompt else { return }
         autoScanPromptSeededFor = name
         autoScanInitialPrompt = prompt
     }
@@ -1452,22 +1491,37 @@ final class CreateSessionModel {
     // MARK: - Auto Scan submit
 
     var canStartAutoScan: Bool {
-        guard case .stored = selection else { return false }
-        return claudeEnabled && !autoScanStarting
+        guard case .stored = selection, !autoScanStarting else { return false }
+        if autoScanSetup.isAvailable {
+            return autoScanSetup.startBlocker(prompt: autoScanInitialPrompt) == nil
+        }
+        return claudeEnabled
     }
 
     /// `POST /api/autoscan/start`, then navigate to the live monitor. Note
     /// this does **not** create a session — the scanner spawns its own,
-    /// one per matching Linear issue.
+    /// one per matching issue.
     func startAutoScan() async {
         guard case .stored(let workspaceName) = selection, !autoScanStarting else { return }
+        let request: StartScanRequest
+        if autoScanSetup.isAvailable {
+            guard autoScanSetup.startBlocker(prompt: autoScanInitialPrompt) == nil,
+                  let built = autoScanSetup.startRequest(
+                      workspaceName: workspaceName,
+                      claudeOptions: autoScanClaudeOptions(includesPrompt: false),
+                      autoApprove: autoScanAutoApprove,
+                      initialPrompt: Self.blankToNil(autoScanInitialPrompt) ?? ""
+                  )
+            else { return }
+            request = built
+        } else {
+            request = StartScanRequest(workspace_name: workspaceName, claude_options: autoScanClaudeOptions())
+        }
         autoScanStarting = true
+        autoScanStartError = nil
         error = nil
         do {
-            try await autoScanRepository.startScan(
-                workspaceName: workspaceName,
-                claudeOptions: autoScanClaudeOptions()
-            )
+            try await autoScanRepository.startScan(request)
             preferencesStore.setLastUsedWorkspaceName(workspaceName)
             preferencesStore.setLastUsedAutoScanOptions(autoScanLaunchPrefs())
             autoScanStarting = false
@@ -1480,20 +1534,68 @@ final class CreateSessionModel {
         } catch AutoScanStartError.capacity(let maxScans) {
             autoScanStarting = false
             self.error = "Auto Scan capacity reached (max \(maxScans))."
+        } catch AutoScanStartError.rejected(let detail) {
+            autoScanStarting = false
+            autoScanStartError = detail
         } catch {
             autoScanStarting = false
             self.error = "Failed to start Auto Scan: \(String(describing: error))"
         }
     }
 
-    /// `worktree` is hardcoded true: the scanner branches a worktree per Linear
-    /// issue so concurrent issues stay isolated (Android `submitAutoScan`).
-    func autoScanClaudeOptions() -> ClaudeOptionsModel {
+    /// Opens the terminal session on the PC that installs the GitHub CLI or
+    /// signs it in, on top of the wizard.
+    func runGitHubSetup(_ action: GitHubSetupAction) async {
+        guard case .stored(let workspaceName) = selection, !githubSetupStarting else { return }
+        githubSetupStarting = true
+        defer { githubSetupStarting = false }
+        do {
+            let response = try await sessionRepository.createGitHubSetupSession(
+                workspaceName: workspaceName,
+                action: action
+            )
+            setupNavBroadcaster.emit(response.session_id)
+        } catch let apiError as APIError {
+            error = ConflictDetail.stringOrNil(from: apiError.errorBody)
+                ?? "Couldn't open the terminal on the PC (HTTP \(apiError.code))."
+        } catch {
+            self.error = "Couldn't open the terminal on the PC: \(String(describing: error))"
+        }
+    }
+
+    /// The `.task(id:)` key that checks GitHub: the workspace name while the
+    /// Auto Scan step shows the GitHub source, else nil.
+    var autoScanGitHubLoadKey: String? {
+        guard showsAutoScanSetup, autoScanSetup.source == .github else { return nil }
+        return autoScanSetup.workspace?.name
+    }
+
+    /// The `.task(id:)` key that loads Linear's labels and states.
+    var autoScanLinearLoadKey: String? {
+        guard showsAutoScanSetup, autoScanSetup.source == .linear, autoScanSetup.hasLinearKey else { return nil }
+        return autoScanSetup.workspace?.name
+    }
+
+    private var showsAutoScanSetup: Bool {
+        step == .config && mode == .autoScan && autoScanSetup.isAvailable
+    }
+
+    /// Checks GitHub again when the app comes back to the foreground, for
+    /// example after the user signed in on the PC.
+    func recheckGitHub() async {
+        guard autoScanGitHubLoadKey != nil else { return }
+        await autoScanSetup.refreshGitHubStatus()
+    }
+
+    /// `worktree` is hardcoded true: the scanner branches a worktree per
+    /// issue so concurrent issues stay isolated (Android `submitAutoScan`). An
+    /// agent with `capabilities.autoscan` takes the prompt top-level instead.
+    func autoScanClaudeOptions(includesPrompt: Bool = true) -> ClaudeOptionsModel {
         ClaudeOptionsModel(
             plan_mode: autoScanPlanMode,
             no_memory: autoScanNoMemory,
             skip_permissions: autoScanSkipPermissions,
-            initial_prompt: Self.blankToNil(autoScanInitialPrompt),
+            initial_prompt: includesPrompt ? Self.blankToNil(autoScanInitialPrompt) : nil,
             worktree: true,
             model: effectiveAutoScanModel,
             effort: effectiveAutoScanEffort,
@@ -1516,7 +1618,8 @@ final class CreateSessionModel {
             noMemory: autoScanNoMemory,
             planMode: autoScanPlanMode,
             debug: autoScanClaudeDebug,
-            focusMode: autoScanFocusMode
+            focusMode: autoScanFocusMode,
+            autoApprove: autoScanAutoApprove
         )
     }
 
@@ -2027,6 +2130,7 @@ final class CreateSessionModel {
             autoScanPlanMode = autoScan.planMode
             autoScanClaudeDebug = autoScan.debug
             autoScanFocusMode = autoScan.focusMode
+            autoScanAutoApprove = autoScan.autoApprove
         }
         if let codex = preferencesStore.getLastUsedCodexOptions() {
             codexModel = codex.model

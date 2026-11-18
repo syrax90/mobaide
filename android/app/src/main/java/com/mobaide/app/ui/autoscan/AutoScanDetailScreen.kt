@@ -52,6 +52,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -91,6 +92,7 @@ fun AutoScanDetailScreen(
         ) {
             HeaderCard(
                 statusText = ui.instance?.status ?: ui.connection.name,
+                sourceAndAgent = ui.instance?.sourceAndAgent,
                 nextScanAtIso = ui.nextScanAt,
                 cycleNumber = ui.cycleNumber,
                 onRunNow = viewModel::runNow,
@@ -118,6 +120,7 @@ fun AutoScanDetailScreen(
 @Composable
 private fun HeaderCard(
     statusText: String,
+    sourceAndAgent: String?,
     nextScanAtIso: String?,
     cycleNumber: Int,
     onRunNow: () -> Unit,
@@ -138,6 +141,16 @@ private fun HeaderCard(
                 Text(
                     text = "  · cycle #$cycleNumber",
                     style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            if (sourceAndAgent != null) {
+                Text(
+                    text = sourceAndAgent,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .padding(top = 4.dp)
+                        .testTag("autoscan_detail_source_agent"),
                 )
             }
             CountdownText(

@@ -16,6 +16,9 @@ data class AutoScanInstanceDto(
     val next_scan_at: String? = null,
     val cycle_number: Int = 0,
     val current_seq: Long = 0L,
+    // Older agents scan Linear with Claude Code only.
+    val source: String = AUTO_SCAN_SOURCE_LINEAR,
+    val cli: String = "claude",
 )
 
 @Serializable
@@ -28,11 +31,67 @@ data class AutoScanListResponse(
     val auto_scan_prompt: String? = null,
 )
 
+/**
+ * `POST /api/autoscan/start`. An older client sends only the workspace and
+ * [claude_options]. A client of an agent with `capabilities.autoscan` sends
+ * every choice: [source], [cli], the chosen source's filter, [initial_prompt]
+ * (`""` clears the saved prompt), [auto_approve] for agents other than Claude
+ * Code, and [claude_options] (without the prompt) only for Claude Code.
+ */
 @Serializable
 data class StartScanRequest(
     @SerialName("project_name")
     val workspace_name: String,
     val claude_options: ClaudeOptionsModel? = null,
+    val source: String? = null,
+    val cli: String? = null,
+    val auto_approve: Boolean? = null,
+    val initial_prompt: String? = null,
+    val linear_filter: AutoScanFilterDto? = null,
+    val github_filter: GitHubScanFilterDto? = null,
+)
+
+const val AUTO_SCAN_SOURCE_LINEAR = "linear"
+const val AUTO_SCAN_SOURCE_GITHUB = "github"
+
+/**
+ * `GET /api/autoscan/github/status`: what a GitHub scan of the workspace still
+ * needs. [problem] is the first blocking reason in plain words; null means a
+ * scan can start.
+ */
+@Serializable
+data class GitHubStatusDto(
+    val installed: Boolean = false,
+    val version: String? = null,
+    val signed_in: Boolean = false,
+    val account: String? = null,
+    val host: String? = null,
+    val repo: String? = null,
+    val repo_url: String? = null,
+    val problem: String? = null,
+    val can_install: Boolean = false,
+    val install_command: String? = null,
+)
+
+@Serializable
+data class GitHubLabelDto(
+    val name: String,
+    val color: String = "",
+)
+
+@Serializable
+data class GitHubLabelsResponse(
+    val labels: List<GitHubLabelDto> = emptyList(),
+)
+
+/** `POST /api/autoscan/github/setup`; [action] is `install` or `sign_in`. */
+@Serializable
+data class GitHubSetupRequest(
+    @SerialName("project_name")
+    val workspace_name: String,
+    val action: String,
+    val rows: Int = 24,
+    val cols: Int = 80,
 )
 
 @Serializable

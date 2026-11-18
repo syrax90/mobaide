@@ -6171,6 +6171,74 @@ body:has(dialog[open]) {
   overflow-wrap: anywhere;
 }
 
+/* ---- create wizard: Auto Scan sources and agents ---- */
+
+/* A radio group inside an `.option-group`: the legend wears the group's
+   heading style, since the group is what the heading names. */
+.choice-group {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.choice-group legend {
+  margin-bottom: 0.4rem;
+  padding: 0;
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.choice-group > .field-hint {
+  margin-bottom: 0.25rem;
+}
+
+.radio-row-disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.autoscan-github-status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.autoscan-github-status p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.autoscan-github-action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+}
+
+.autoscan-github-action code {
+  font-family: var(--font-code);
+  overflow-wrap: anywhere;
+}
+
+/* The field and its button stack, so an error under the field never pushes
+   the button out of line; a form only so Enter adds or saves. */
+.autoscan-label-add,
+.autoscan-key-form {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.autoscan-label-add .field,
+.autoscan-key-form .field {
+  align-self: stretch;
+  margin-bottom: 0.5rem;
+}
+
 /* ---- create wizard: "Continue a session" ---- */
 
 .resume-entry {

@@ -35,6 +35,7 @@ from mobaide.core.cli_launcher import (
     prepend_path_dir,
 )
 from mobaide.core.codex_auth import codex_login_with_api_key
+from mobaide.core.session_manager import MaxSessionsError
 from mobaide.core.models import (
     CustomCommandUnresolvedError,
     SessionConfig,
@@ -124,7 +125,17 @@ from mobaide.agent.git.service import (
 from mobaide.linear.client import LinearApiClient
 from mobaide.linear.rate_limiter import LinearRateLimiter
 
-from mobaide.agent.autoscan.models import StartScanRequest
+from mobaide.agent.autoscan.models import (
+    AUTOSCAN_CAPABILITIES,
+    GitHubSetupRequest,
+    StartScanRequest,
+)
+from mobaide.agent.autoscan.service import (
+    github_labels_for,
+    github_status_for,
+    start_github_setup,
+)
+from mobaide.linear.sources import AutoScanSourceError
 from mobaide.agent.autoscan.stream import run_autoscan_stream
 from mobaide.agent.codex.models import CodexLoginRequest
 from mobaide.agent.sessions.models import (
@@ -239,6 +250,14 @@ def _build_relay_ssl_context(
 _VOICE_PATH_PREFIX = "/api/voice/"
 MAX_VOICE_PROXY_TASKS = 32
 MAX_CHAT_PROXY_TASKS = 8
+# Auto Scan routes that ask GitHub or Linear (``gh`` status, labels, setup,
+# a scan start that checks its tracker, the wizard's Linear labels and
+# states) also run aside. The bound answers before the central server's
+# 30 s proxy timeout.
+MAX_AUTOSCAN_PROXY_TASKS = 4
+_AUTOSCAN_PROXY_TIMEOUT = 25.0
+_AUTOSCAN_GITHUB_PREFIX = "/api/autoscan/github/"
+_LINEAR_DISCOVERY_ROUTE = re.compile(r"^/api/projects/[^/]+/linear/(labels|states)$")
 _VOICE_ROUTE = re.compile(r"^/api/voice/(status|install|install/cancel|model|dictations|cleanup|cleanup/settings)$")
 _VOICE_DICTATION_ROUTE = re.compile(r"^/api/voice/dictations/([^/]+)(?:/(audio|finish))?$")
 
@@ -477,6 +496,7 @@ class RelayClient:
         # In-flight ``/api/chat/{kind}/sessions`` listings, run aside for the
         # same reason (the first one starts the agent process).
         self._chat_proxy_tasks: set[asyncio.Task] = set()
+        self._autoscan_proxy_tasks: set[asyncio.Task] = set()
 
         # Latest manifest pointer received from central_server (auth_ok or a
         # mid-connection ``agent_manifest_update`` control frame). Consumed by
@@ -516,7 +536,11 @@ class RelayClient:
         """Gracefully shut down the relay client."""
         self._stopping = True
         self._cancel_all_subtasks()
-        for task in [*self._voice_proxy_tasks, *self._chat_proxy_tasks]:
+        for task in [
+            *self._voice_proxy_tasks,
+            *self._chat_proxy_tasks,
+            *self._autoscan_proxy_tasks,
+        ]:
             task.cancel()
         if self._task and not self._task.done():
             self._task.cancel()
@@ -833,6 +857,12 @@ class RelayClient:
                 self._spawn_voice_proxy(ctrl)
             elif match_chat_sessions_route(path) is not None:
                 self._spawn_chat_proxy(ctrl)
+            elif (
+                path.startswith(_AUTOSCAN_GITHUB_PREFIX)
+                or path == "/api/autoscan/start"
+                or _LINEAR_DISCOVERY_ROUTE.match(path)
+            ):
+                self._spawn_autoscan_proxy(ctrl, ws)
             else:
                 await self._handle_proxy_request(ctrl, ws)
 
@@ -1486,12 +1516,69 @@ class RelayClient:
             }
         await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
 
+    async def _dispatch_autoscan_github(
+        self,
+        method: str,
+        path: str,
+        body: dict | None,
+        query: dict | None,
+        ws: ClientConnection,
+    ) -> dict | None:
+        """The ``/api/autoscan/github/*`` routes, with the REST router's status
+        codes; ``None`` for any other route."""
+        if not path.startswith(_AUTOSCAN_GITHUB_PREFIX):
+            return None
+        if method == "GET" and not (query or {}).get("project_name"):
+            # Same answer as the REST router's required query parameter.
+            return {"status": 422, "body": {"detail": "project_name is required"}}
+        try:
+            if method == "GET" and path == "/api/autoscan/github/status":
+                name = (query or {}).get("project_name") or ""
+                status = await github_status_for(self._app_state, name)
+                return {"status": 200, "body": status.model_dump()}
+            if method == "GET" and path == "/api/autoscan/github/labels":
+                name = (query or {}).get("project_name") or ""
+                labels = await github_labels_for(self._app_state, name)
+                return {
+                    "status": 200,
+                    "body": {"labels": [label.model_dump() for label in labels]},
+                }
+            if method == "POST" and path == "/api/autoscan/github/setup":
+                try:
+                    parsed = GitHubSetupRequest.model_validate(body or {})
+                except ValidationError as exc:
+                    return {
+                        "status": 422,
+                        "body": {"detail": _scrub_validation_errors(exc)},
+                    }
+                info = await start_github_setup(
+                    self._app_state, parsed.project_name, parsed.action,
+                    parsed.rows, parsed.cols,
+                )
+                session = await self._session_manager.get_session(info.session_id)
+                if session is not None:
+                    self._bridge_session(session, self._ws or ws)
+                return {"status": 201, "body": session_to_wire_dict(info)}
+        except KeyError as exc:
+            return {"status": 404, "body": {"detail": str(exc).strip("'")}}
+        except AutoScanSourceError as exc:
+            return {"status": 400, "body": {"detail": str(exc)}}
+        except MaxSessionsError as exc:
+            return {"status": 409, "body": {"detail": str(exc)}}
+        return None
+
     async def _handle_proxy_request(
         self, ctrl: dict, ws: ClientConnection
     ) -> None:
         """Handle a proxy_request forwarded from a mobile client via the
         central server.  Dispatches on (method, path) and returns a
         proxy_response control message with the result."""
+        resp = await self._proxy_response(ctrl, ws)
+        await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+
+    async def _proxy_response(self, ctrl: dict, ws: ClientConnection) -> dict:
+        """The ``proxy_response`` message for a proxied request, with every
+        error mapped to its status."""
         request_id = ctrl.get("request_id", "")
         method = ctrl.get("method", "GET").upper()
         path: str = ctrl.get("path", "")
@@ -1601,8 +1688,7 @@ class RelayClient:
                 "status": 500,
                 "body": {"detail": str(exc)},
             }
-
-        await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+        return resp
 
     async def _dispatch_proxy(
         self,
@@ -1644,6 +1730,7 @@ class RelayClient:
                         "git": GIT_CAPABILITIES,
                         "voice": VOICE_CAPABILITIES,
                         "fs": FS_CAPABILITIES,
+                        "autoscan": AUTOSCAN_CAPABILITIES,
                         "chat": await asyncio.to_thread(
                             build_chat_capabilities,
                             getattr(self._app_state, "chat_agents", None) or {},
@@ -1926,8 +2013,12 @@ class RelayClient:
             )
             try:
                 instance = await mgr.start(
-                    parsed.project_name, client_options=claude_options,
+                    parsed.project_name,
+                    client_options=claude_options,
+                    request=parsed.to_start(),
                 )
+            except AutoScanSourceError as exc:
+                return {"status": 400, "body": {"detail": str(exc)}}
             except AutoScanAlreadyRunning as exc:
                 return {"status": 409, "body": {"detail": str(exc)}}
             except AutoScanCapacityReached as exc:
@@ -1935,6 +2026,10 @@ class RelayClient:
             except ValueError as exc:
                 return {"status": 404, "body": {"detail": str(exc)}}
             return {"status": 200, "body": instance.to_dto()}
+
+        github_resp = await self._dispatch_autoscan_github(method, path, body, query, ws)
+        if github_resp is not None:
+            return github_resp
 
         if method == "POST" and path == "/api/autoscan/stop":
             mgr = getattr(self._app_state, "autoscan_manager", None)
@@ -2434,6 +2529,35 @@ class RelayClient:
         task = asyncio.create_task(coro, name="relay-voice-proxy")
         self._voice_proxy_tasks.add(task)
         task.add_done_callback(self._voice_proxy_tasks.discard)
+
+    def _spawn_autoscan_proxy(self, ctrl: dict, ws: ClientConnection) -> None:
+        """Run an Auto Scan route aside from the tunnel reader: each call to
+        GitHub or Linear can take seconds."""
+        if len(self._autoscan_proxy_tasks) >= MAX_AUTOSCAN_PROXY_TASKS:
+            coro = self._send_proxy_result(
+                ctrl,
+                {"status": 503, "body": {"detail": "Too many requests in flight"}},
+            )
+        else:
+            coro = self._run_autoscan_proxy(ctrl, ws)
+        task = asyncio.create_task(coro, name="relay-autoscan-proxy")
+        self._autoscan_proxy_tasks.add(task)
+        task.add_done_callback(self._autoscan_proxy_tasks.discard)
+
+    async def _run_autoscan_proxy(self, ctrl: dict, ws: ClientConnection) -> None:
+        try:
+            resp = await asyncio.wait_for(
+                self._proxy_response(ctrl, ws), timeout=_AUTOSCAN_PROXY_TIMEOUT,
+            )
+            result = {"status": resp.get("status", 200), "body": resp.get("body")}
+        except TimeoutError:
+            logger.warning("relay.autoscan_proxy_timeout path=%s", ctrl.get("path"))
+            result = {
+                "status": 504,
+                "body": {"detail": "The issue tracker did not answer in time. Try again."},
+            }
+        # On the live tunnel: one that reconnected meanwhile still gets it.
+        await self._send_proxy_result(ctrl, result)
 
     def _spawn_chat_proxy(self, ctrl: dict) -> None:
         """Run a stored-chat-sessions listing aside from the tunnel reader:

@@ -84,6 +84,8 @@ class PiOptions:
     worktree: bool = False
     branch_name: str | None = None
     base_branch: str | None = None
+    # First message, after ``--`` (Auto Scan only).
+    initial_prompt: str | None = None
 
 
 class PiLauncher:
@@ -116,6 +118,9 @@ class PiLauncher:
         # ``session_id`` is accepted for ``CliLauncher`` parity but unused:
         # Pi has no per-session hooks.
         argv = [self.resolve_binary()]
+        if options.initial_prompt:
+            # After ``--`` a prompt that starts with ``-`` stays a message.
+            argv += ["--", options.initial_prompt]
         env = self.build_env(target)
         cwd = await self.resolve_cwd(target, options)
         return LaunchSpec(argv=argv, cwd=cwd, env=env, created_files=[])
