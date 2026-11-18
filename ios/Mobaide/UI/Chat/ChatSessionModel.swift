@@ -699,6 +699,9 @@ final class ChatSessionModel {
     /// The agent offers a new conversation at all; `canStartNew` says whether it can start now.
     var offersNewConversation: Bool { state.newConversation && !sessionClosed }
 
+    /// Ask first only when a new conversation would stop a turn or drop queued messages.
+    var newConversationNeedsConfirm: Bool { isRunning || !state.queue.isEmpty }
+
     var canStartNew: Bool {
         offersNewConversation && isLive && !restarting && !startingNew
             && [.ready, .running, .error].contains(phase)

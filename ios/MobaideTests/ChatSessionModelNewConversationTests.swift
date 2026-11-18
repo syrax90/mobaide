@@ -75,6 +75,22 @@ final class ChatSessionModelNewConversationTests: XCTestCase {
         XCTAssertEqual(try newConversationIds(live.connection).count, 2)
     }
 
+    func testAnIdleChatNeedsNoConfirmButARunningTurnOrAQueueDoes() async throws {
+        let live = try await liveModel(stateJSON: #""status":"ready","new_conversation":true"#)
+        defer { live.model.disconnect() }
+        XCTAssertFalse(live.model.newConversationNeedsConfirm)
+
+        emit(live.connection, #"{"t":"events","epoch":"e1","seq":2,"events":[{"seq":2,"type":"state","#
+            + #""patch":{"status":"running"}}]}"#)
+        await waitUntil { live.model.phase == .running }
+        XCTAssertTrue(live.model.newConversationNeedsConfirm)
+
+        emit(live.connection, #"{"t":"events","epoch":"e1","seq":3,"events":[{"seq":3,"type":"state","#
+            + #""patch":{"status":"ready","queue":[{"id":"q:1","text":"next","images":0}]}}]}"#)
+        await waitUntil { live.model.phase == .ready }
+        XCTAssertTrue(live.model.newConversationNeedsConfirm)
+    }
+
     func testAnAgentWithoutNewConversationOrOneThatIsStartingGetsNoCommandAndTheUserIsTold() async throws {
         let live = try await liveModel(stateJSON: #""status":"ready""#)
         defer { live.model.disconnect() }

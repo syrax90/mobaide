@@ -12,7 +12,10 @@ import com.mobaide.app.ui.theme.MobaideTheme
 const val NEW_CONVERSATION_CONFIRM_TAG = "new_conversation_confirm"
 const val NEW_CONVERSATION_CANCEL_TAG = "new_conversation_cancel"
 
-/** Confirms `new_conversation`, as on iOS and web: the chat empties, the agent keeps the old one. */
+/**
+ * Confirms `new_conversation` when it stops a turn or drops queued messages, as on iOS and web.
+ * The chat empties; the agent keeps the old one.
+ */
 @Composable
 fun NewConversationDialog(
     agentName: String,
