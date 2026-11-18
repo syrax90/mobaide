@@ -1113,17 +1113,20 @@ class ChatSession:
                 await self._hold_presence()
                 if conflict and self._presence_hold is not None:
                     self._presence_stale = True
+            # A new conversation or a restart replaced this one while the
+            # lock was taken: the message must neither go out nor be queued.
+            replaced = not self._ready.is_set()
             # Sending from the stale copy would overwrite the other app's turns.
-            reload = self._presence_stale and not self._cancel_before_dispatch
+            reload = self._presence_stale and not self._cancel_before_dispatch and not replaced
             if reload:
                 pass
-            elif self._cancel_before_dispatch:
+            elif self._cancel_before_dispatch or replaced:
                 # Stopped before the prompt reached the agent: never send it.
                 stop_reason = "cancelled"
             else:
                 if mode is not None:
                     await self._switch_mode(mode)
-                if self._cancel_before_dispatch:
+                if self._cancel_before_dispatch or not self._ready.is_set():
                     # Stopped while the mode was switching: never send it.
                     stop_reason = "cancelled"
                 else:

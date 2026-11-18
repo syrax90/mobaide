@@ -3838,6 +3838,45 @@ class TestConversationPresence:
         assert m.epoch != epoch
         assert _notices(m) == [self.LOADED]
 
+    async def test_a_turn_that_takes_the_conversation_after_a_new_one_is_asked_sends_nothing(
+        self, open_chat, tmp_path, monkeypatch
+    ):
+        """The turn has the lock (so it would reload), but runs on only after
+        a new conversation's request and a message in the same burst: its
+        message must neither go out nor wait for the new conversation."""
+        with _other_app_holds(self._lock(tmp_path, "external-1111")):
+            m = await self._open(open_chat, tmp_path)
+            await m.until(lambda: self.WARNING in _notices(m))
+        hold = m.session._hold_presence
+        taken = asyncio.Event()
+        resume = asyncio.get_running_loop().create_future()
+
+        async def take_then_wait() -> None:
+            await hold()
+            if not taken.is_set():
+                taken.set()
+                await resume
+
+        monkeypatch.setattr(m.session, "_hold_presence", take_then_wait)
+        await m.session.handle_command(b'{"id": "a", "op": "prompt", "text": "A"}')
+        await asyncio.wait_for(taken.wait(), 20)
+        old_epoch = m.epoch
+
+        # The turn wakes up first: it is in the loop's queue before the request's task.
+        resume.set_result(None)
+        await m.session.handle_command(b'{"id": "n1", "op": "new_conversation"}')
+        await m.session.handle_command(b'{"id": "b", "op": "prompt", "text": "B"}')
+        await m.until(lambda: {"n1", "b"} <= m.results.keys())
+
+        assert m.results["n1"]["ok"] is True
+        assert m.results["b"]["data"]["queued"] is True
+        await m.until(lambda: m.epoch != old_epoch and "You said: B" in m.texts("agent"))
+        await m.until(lambda: m.status == "ready")
+        assert m.texts("user") == ["B"]
+        assert m.state["queue"] == []
+        assert self.LOADED not in _notices(m)
+        assert _fake_agent_pids() == {m.session.pid}
+
     async def test_a_reload_the_agent_refuses_keeps_the_message_for_restart(
         self, open_chat, tmp_path
     ):
