@@ -131,6 +131,24 @@ class ChatViewModelNewConversationTest {
     }
 
     @Test
+    fun anIdleChat_needsNoConfirm_butARunningTurnOrAQueueDoes() = runTest {
+        val vm = open(""""status":"ready","new_conversation":true""")
+        assertFalse(vm.uiState.value.newConversationNeedsConfirm)
+
+        emitFrame(
+            """{"t":"events","epoch":"e1","seq":2,"events":[{"seq":2,"type":"state",""" +
+                """"patch":{"status":"running"}}]}""",
+        )
+        assertTrue(vm.uiState.first { it.state.status == ChatStatus.RUNNING }.newConversationNeedsConfirm)
+
+        emitFrame(
+            """{"t":"events","epoch":"e1","seq":3,"events":[{"seq":3,"type":"state",""" +
+                """"patch":{"status":"ready","queue":[{"id":"q:1","text":"next","images":0}]}}]}""",
+        )
+        assertTrue(vm.uiState.first { it.state.status == ChatStatus.READY }.newConversationNeedsConfirm)
+    }
+
+    @Test
     fun anAgentWithoutNewConversation_orOneThatIsStarting_getsNoCommand_andTheUserIsTold() = runTest {
         val vm = open(""""status":"ready"""")
         val refused = "Could not start a new conversation now. Try again."

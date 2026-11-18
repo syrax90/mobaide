@@ -12,7 +12,10 @@ interface NewConversationDialogProps {
   onCancel: () => void;
 }
 
-/** Confirms `new_conversation`: the chat empties, the agent keeps the old one. */
+/**
+ * Confirms `new_conversation` when it stops a turn or drops queued messages.
+ * The chat empties; the agent keeps the old one.
+ */
 export function NewConversationDialog({
   kindLabel,
   running,

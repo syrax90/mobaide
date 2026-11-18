@@ -253,7 +253,9 @@ function ChatView({ model, session, headerLabel }: ChatViewProps) {
               description: 'Clear the chat; keep the folder and settings',
               disabled: !canStartNew,
               onSelect: () => {
-                setNewOpen(true);
+                // Ask first only when this stops a turn or drops queued messages.
+                if (running || state.queue.length > 0) setNewOpen(true);
+                else startNew();
               },
             },
           ]

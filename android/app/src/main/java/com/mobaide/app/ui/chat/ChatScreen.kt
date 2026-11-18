@@ -322,7 +322,11 @@ fun ChatScreen(
                                         enabled = ui.canStartNew,
                                         onClick = {
                                             closeMenu()
-                                            confirmNewConversation = true
+                                            if (ui.newConversationNeedsConfirm) {
+                                                confirmNewConversation = true
+                                            } else {
+                                                viewModel.newConversation()
+                                            }
                                         },
                                     )
                                 }

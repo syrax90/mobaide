@@ -288,7 +288,11 @@ struct ChatScreen: View {
                     }
                     if model.offersNewConversation {
                         Button {
-                            confirmNewConversation = true
+                            if model.newConversationNeedsConfirm {
+                                confirmNewConversation = true
+                            } else {
+                                model.newConversation()
+                            }
                         } label: {
                             Label("New conversation", systemImage: "plus.bubble")
                         }
