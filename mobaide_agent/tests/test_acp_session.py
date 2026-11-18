@@ -2284,6 +2284,35 @@ class TestSharedHost:
         assert m.session.state == SessionState.STOPPED
         assert [x for x in _methods(log) if x in ("session/cancel", "session/close")] == sent
 
+    async def test_a_new_conversation_lets_the_other_app_stop_the_own_turn_first(
+        self, open_chat, tmp_path, monkeypatch
+    ):
+        """Closing this process does not stop the turn in the shared server:
+        the agent must answer ``session/cancel`` before the old process closes."""
+        log = tmp_path / "agent.log"
+        m = await open_chat(argv=_logging_agent(log), shared_host=True)
+        await m.command("prompt", text="work")
+        await m.until(lambda: "Working" in m.texts("agent"))
+        turn = m.session._turn_task
+        old_epoch = m.epoch
+        close = AcpConnection.close
+        at_close: list[tuple[bool, list[str]]] = []
+
+        async def note_turn_then_close(conn, grace=2.0):
+            if not at_close:
+                at_close.append((turn.done() and not turn.cancelled(), _methods(log)))
+            await close(conn, grace)
+
+        monkeypatch.setattr(AcpConnection, "close", note_turn_then_close)
+
+        assert (await m.command("new_conversation"))["ok"] is True
+        await m.until(lambda: m.epoch != old_epoch and m.status == "ready")
+
+        ended_by_the_agent, methods = at_close[0]
+        assert ended_by_the_agent
+        assert "session/cancel" in methods
+        assert "session/close" not in _methods(log)
+
 
 # Logs each request as one JSON line ``{"method", "params"}`` to argv[1].
 # argv[2] ``dirs`` advertises ``sessionCapabilities.additionalDirectories``.

@@ -1628,9 +1628,12 @@ class ChatSession:
         turn = self._turn_task
         turn_running = turn is not None and not turn.done()
         if turn is not None and turn_running:
-            if self._prompt_dispatched and conn is not None and conn.alive and self._acp_session_id:
-                # On a shared host the turn would go on in the other app's
-                # server after this process closes.
+            if self._plan.shared_host:
+                # Closing this process does not stop the turn in the other
+                # app's server: it would go on changing the folder while the
+                # new conversation starts. Wait for it to stop, as stop() does.
+                await self._stop_own_turn()
+            elif self._prompt_dispatched and conn is not None and conn.alive and self._acp_session_id:
                 conn.notify("session/cancel", {"sessionId": self._acp_session_id})
             turn.cancel()
             await asyncio.gather(turn, return_exceptions=True)
