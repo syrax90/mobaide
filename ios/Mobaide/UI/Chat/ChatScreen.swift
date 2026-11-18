@@ -14,6 +14,7 @@ struct ChatScreen: View {
     @State private var drawerOpen: Bool
     @State private var drawerDrag: CGFloat?
     @State private var pendingStop: SessionResponse?
+    @State private var confirmNewConversation = false
     @State private var showTemplates = false
     @State private var showSaveTemplate = false
     @State private var templateName = ""
@@ -61,6 +62,14 @@ struct ChatScreen: View {
     }
 
     // MARK: - Labels
+
+    private var newConversationMessage: String {
+        let stop = model.isRunning ? "The running turn stops. " : ""
+        let queued = model.state.queue.isEmpty ? "" : "Queued messages are removed. "
+        let agent = kindLabel.prefix(1).uppercased() + kindLabel.dropFirst()
+        return "\(stop)\(queued)The chat starts empty, with the same folder and settings. "
+            + "If \(agent) saved this conversation, open it again with Continue a session."
+    }
 
     private var kindLabel: String {
         if let sessionRow { return SessionDisplay.kindLabel(sessionRow, customTypeNames: customTypeNames) }
@@ -159,6 +168,7 @@ struct ChatScreen: View {
             Button("Save") { saveTemplate() }
             Button("Cancel", role: .cancel) {}
         }
+        .modifier(NewConversationConfirm(isPresented: $confirmNewConversation, message: newConversationMessage, confirm: { model.newConversation() }))
         .confirmationDialog("Stop session?", isPresented: stopPresented, presenting: pendingStop) { session in
             Button("Stop", role: .destructive) {
                 Task { await stopSession(session.session_id, force: false) }
@@ -275,6 +285,15 @@ struct ChatScreen: View {
                             Label("Restart agent", systemImage: "arrow.clockwise")
                         }
                         .disabled(!model.isLive || model.restarting)
+                    }
+                    if model.offersNewConversation {
+                        Button {
+                            confirmNewConversation = true
+                        } label: {
+                            Label("New conversation", systemImage: "plus.bubble")
+                        }
+                        .disabled(!model.canStartNew)
+                        .accessibilityHint("Clears the chat and keeps the folder and settings")
                     }
                     Button {
                         showSessionInfo = true
@@ -706,5 +725,20 @@ private struct ChatSessionInfoSheet: View {
         }
         .pixelSheet()
         .presentationDetents([.medium, .large])
+    }
+}
+
+private struct NewConversationConfirm: ViewModifier {
+    @Binding var isPresented: Bool
+    let message: String
+    let confirm: () -> Void
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog("Start a new conversation?", isPresented: $isPresented, titleVisibility: .visible) {
+            Button("New conversation", action: confirm)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(message)
+        }
     }
 }

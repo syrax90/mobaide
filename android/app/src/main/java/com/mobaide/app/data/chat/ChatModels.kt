@@ -277,6 +277,8 @@ data class ChatState(
     val steering: Boolean = false,
     // A [ChatBackgroundWork] value while the turn has ended but its work still runs.
     val background: String? = null,
+    // The agent takes `new_conversation`; an older one leaves the key out.
+    val newConversation: Boolean = false,
 )
 
 /** Lenient decoding of the agent's JSON: a malformed field never drops its whole frame. */
@@ -326,6 +328,7 @@ internal object ChatJson {
         cancelling = obj.bool("cancelling") == true,
         steering = obj.bool("steering") == true,
         background = ChatBackgroundWork.normalize(obj.str("background")),
+        newConversation = obj.bool("new_conversation") == true,
     )
 
     private fun configOption(obj: JsonObject): ChatConfigOption? {

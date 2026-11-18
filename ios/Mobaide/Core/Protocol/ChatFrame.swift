@@ -73,6 +73,11 @@ struct ChatCommand: Encodable, Equatable, Sendable {
         ChatCommand(id: id, op: "restart")
     }
 
+    /// Starts an empty conversation with the same folder and settings.
+    static func newConversation(id: String) -> ChatCommand {
+        ChatCommand(id: id, op: "new_conversation")
+    }
+
     static func signInStart(id: String, method: String) -> ChatCommand {
         ChatCommand(id: id, op: "sign_in", action: "start", method: method)
     }

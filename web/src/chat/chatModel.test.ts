@@ -128,21 +128,24 @@ describe('ChatSessionModel commands', () => {
     expect(modelTimers.pending.map((entry) => entry.delayMs)).not.toContain(COMMAND_TIMEOUT_MS);
   });
 
-  it('a second restart while one is in flight shares its result', async () => {
+  it.each([
+    { op: 'restart', send: (model: Model) => model.restart(), flag: 'restarting' },
+    { op: 'new_conversation', send: (model: Model) => model.newConversation(), flag: 'startingNew' },
+  ] as const)('a second $op while one is in flight shares its result', async ({ op, send, flag }) => {
     const { model, socket } = await harness();
 
-    const first = model.restart();
-    const second = model.restart();
+    const first = send(model);
+    const second = send(model);
 
     expect(second).toBe(first);
-    expect(model.state().restarting).toBe(true);
-    const restarts = commands(socket).filter((command) => command.op === 'restart');
-    expect(restarts).toHaveLength(1);
+    expect(model.state()[flag]).toBe(true);
+    const sent = commands(socket).filter((command) => command.op === op);
+    expect(sent).toHaveLength(1);
 
-    deliverResult(socket, { id: restarts[0]?.id, ok: true });
+    deliverResult(socket, { id: sent[0]?.id, ok: true });
 
     await expect(first).resolves.toEqual({ ok: true, data: undefined });
-    expect(model.state().restarting).toBe(false);
+    expect(model.state()[flag]).toBe(false);
   });
 
   it('a session that left the agent list while on screen reads as gone', async () => {

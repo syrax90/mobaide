@@ -65,6 +65,8 @@ export interface ChatViewState {
   gone: boolean;
   /** A `restart` is waiting for its result. */
   restarting: boolean;
+  /** A `new_conversation` is waiting for its result. */
+  startingNew: boolean;
   timeline: ChatTimeline;
   /** Config values set here and not yet confirmed by the agent's state. */
   overrides: Readonly<Record<string, string | boolean>>;
@@ -93,6 +95,7 @@ function initialView(): ChatViewState {
     suspended: false,
     gone: false,
     restarting: false,
+    startingNew: false,
     timeline: INITIAL_CHAT_TIMELINE,
     overrides: {},
     draftImages: [],
@@ -137,6 +140,7 @@ export class ChatSessionModel {
   private snapshotRequested = false;
   private cancelSettle: (() => void) | null = null;
   private restartInFlight: Promise<ChatResult> | null = null;
+  private newConversationInFlight: Promise<ChatResult> | null = null;
 
   constructor(agentId: string, sessionId: string, options: ChatSessionModelOptions = {}) {
     this.agentId = agentId;
@@ -261,6 +265,22 @@ export class ChatSessionModel {
       return result;
     });
     this.restartInFlight = done;
+    return done;
+  }
+
+  /**
+   * Start an empty conversation with the same settings. A second call while
+   * one is in flight shares its result instead of sending again.
+   */
+  newConversation(): Promise<ChatResult> {
+    if (this.newConversationInFlight !== null) return this.newConversationInFlight;
+    this.patch({ startingNew: true });
+    const done = this.command({ op: 'new_conversation' }).then((result) => {
+      this.newConversationInFlight = null;
+      this.patch({ startingNew: false });
+      return result;
+    });
+    this.newConversationInFlight = done;
     return done;
   }
 

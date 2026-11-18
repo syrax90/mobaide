@@ -125,6 +125,24 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-18: new conversation in a chat session
+
+Additive delta within proto-v7 (2026-11-18): **one chat command, one chat state key, one agent slash command. No version bump; `central_server` is untouched.**
+
+ACP has no "clear" method, and `claude-agent-acp` hides `/clear`. A user who wanted an empty chat had to open New session and go through the wizard again.
+
+| Where | Change |
+|-------|--------|
+| `'c'` command `new_conversation` | No fields. Starts an empty conversation in the same Mobaide session: a new agent process, then `session/new` with the same folder, extra folders, hooks and system prompt. The config values in use apply again, as for `restart` (required ones stay required). `data: {}`. Refused with "The session is closing" or "The agent is already starting" (also while a `restart` runs). |
+| State key `new_conversation` | `true` when the agent takes the command. Clients offer **New conversation** only then. |
+| Slash command `clear` | The agent adds `/clear` to `commands` unless the agent itself lists one. Sending `/clear` runs `new_conversation` and answers like a prompt (`queued: false`). |
+
+* What the command does: it cancels a running turn of this session (`session/cancel`, then the process closes), answers open requests as cancelled, drops the queue and the messages kept for a sign-in retry, and never sends the wizard's first prompt again. Then it starts a new epoch with an empty timeline. The state resets `acp_session_id`, `usage`, `plan`, `queue`, `background` and `title` (back to the name from the wizard, or `null`).
+* The Mobaide session id, the session row, the folder or worktree, and the folder trust stay. A message sent while the new conversation starts waits in the queue and goes into it.
+* The agent keeps the old conversation. The new timeline starts with an info `notice` "Started a new conversation". When the old one was stored (a turn finished, or it was a continued session) and the agent can load sessions, the notice text says how to open it again (Continue a session); otherwise the text is empty.
+* On a shared host (live Codex), a turn that another app started goes on there.
+* Clients confirm first, and the dialog says when a running turn stops or queued messages are removed. Older clients ignore the key; on an older agent the command answers "Unknown command".
+
 ### Delta 2026-11-16: Junie sessions
 
 Additive delta within proto-v7 (2026-11-16): **one session kind, one options block, three capability entries, one push label. No version bump; `central_server` gained only the "Junie session" push label.** An older agent does not list `junie`, and the clients then disable the card with "Update Mobaide on your PC to use Junie."
@@ -506,6 +524,7 @@ Chat sessions use the same `/ws/session/{id}` and `CH_SESSION_IO` channel. Two f
 | `respond` | `request_id`, `option_id` or `action` + `values` | Answers a permission or a form question; the first answer wins. |
 | `dequeue` | `queue_id` | Removes a queued message. |
 | `restart` | — | After a failure: respawns the agent and reloads the conversation (new epoch). |
+| `new_conversation` | — | Starts an empty conversation with the same settings in a new agent process (new epoch) (Delta 2026-11-18). |
 | `sign_in` | `action` (`start` + `method`, `submit` + `value`, `cancel`) | Drives the `sign_in` request (Delta 2026-11-11 "sign-in from the chat"). |
 
 | Frame `t` | Fields | Client action |
@@ -514,7 +533,7 @@ Chat sessions use the same `/ws/session/{id}` and `CH_SESSION_IO` channel. Two f
 | `events` | `epoch`, `seq`, `events[]` with own `seq` | Apply in order: `item` (upsert by `id`), `append` (add `text` to an item), `remove` (drop the item with that `id`; an unknown `id` is a no-op), `state` (shallow-merge `patch`). Skip an unknown event type but count its `seq`. On a gap or another epoch, send `sync`. |
 | `result` | `id`, `ok`, `data?`, `error?` | Resolve the command with that `id`; ignore others. |
 
-* State keys: `status`, `error`, `agent`, `title`, `cwd`, `acp_session_id`, `config`, `commands`, `usage`, `plan`, `requests`, `queue`, `prompt_caps`, `turn_started_at`, `cancelling`, `steering` (Delta 2026-11-08), `background` (Delta 2026-11-16).
+* State keys: `status`, `error`, `agent`, `title`, `cwd`, `acp_session_id`, `config`, `commands`, `usage`, `plan`, `requests`, `queue`, `prompt_caps`, `turn_started_at`, `cancelling`, `steering` (Delta 2026-11-08), `background` (Delta 2026-11-16), `new_conversation` (Delta 2026-11-18).
 * Item types: `user`, `agent`, `thought`, `tool`, `notice`, `compaction`, `turn_end`, `error`. Tool content parts: `text`, `diff` (a unified diff the agent computes), `image`, `link`, `resource`, `terminal`.
 * Bounds: text parts 32 KB, message texts 256 KB, diffs 48 KB / 1 200 lines, a snapshot ~2 MB (`truncated` marks dropped older items).
 * Attention works as for terminal sessions: a pending request raises `awaiting_permission`, a finished turn `turn_finished`, an agent exit `ended` (`exit_reason: process_exited`). A Claude chat raises `turn_finished` from Claude Code hooks (Delta 2026-11-15). An RPC error on the user's own prompt raises `turn_failed` (not after Stop, not on process death, not when a queued prompt starts next).

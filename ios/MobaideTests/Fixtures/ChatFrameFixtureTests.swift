@@ -60,6 +60,7 @@ final class ChatFrameFixtureTests: XCTestCase {
             "sign_in_start": { .signInStart(id: $0, method: "claude_ai") },
             "sign_in_submit": { .signInSubmit(id: $0, value: "ab12-cd34") },
             "sign_in_cancel": { .signInCancel(id: $0) },
+            "new_conversation": { .newConversation(id: $0) },
         ]
     }
 
@@ -189,6 +190,7 @@ final class ChatFrameFixtureTests: XCTestCase {
         XCTAssertEqual(state.queue.map(\.text), ["Also update the README"])
         XCTAssertTrue(state.promptImages)
         XCTAssertTrue(state.steering)
+        XCTAssertTrue(state.newConversation)
     }
 
     func testEventsBatchAppliesOnTopOfTheSnapshot() throws {

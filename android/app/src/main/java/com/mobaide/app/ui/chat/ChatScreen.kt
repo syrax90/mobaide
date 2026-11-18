@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.outlined.AddComment
 import androidx.compose.material.icons.outlined.CenterFocusStrong
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Info
@@ -151,6 +152,7 @@ fun ChatScreen(
     var showFullScreenInput by remember { mutableStateOf(false) }
     var stopTarget by remember { mutableStateOf<SessionResponse?>(null) }
     var closeSelf by remember { mutableStateOf(false) }
+    var confirmNewConversation by remember { mutableStateOf(false) }
 
     LaunchedEffect(viewModel) { viewModel.sessionEnded.collect { onSessionEnded() } }
     LaunchedEffect(viewModel) { viewModel.messages.collect { snackbarHostState.showSnackbar(it) } }
@@ -310,6 +312,17 @@ fun ChatScreen(
                                         onClick = {
                                             closeMenu()
                                             viewModel.restart()
+                                        },
+                                    )
+                                }
+                                if (ui.offersNewConversation) {
+                                    DropdownMenuItem(
+                                        text = { Text("New conversation") },
+                                        leadingIcon = { Icon(Icons.Outlined.AddComment, contentDescription = null) },
+                                        enabled = ui.canStartNew,
+                                        onClick = {
+                                            closeMenu()
+                                            confirmNewConversation = true
                                         },
                                     )
                                 }
@@ -523,6 +536,19 @@ fun ChatScreen(
                 closeSelf = false
             },
             onDismiss = { closeSelf = false },
+        )
+    }
+
+    if (confirmNewConversation) {
+        NewConversationDialog(
+            agentName = header.kindLabel.ifBlank { "the agent" },
+            running = ui.running,
+            queued = ui.state.queue.isNotEmpty(),
+            onConfirm = {
+                confirmNewConversation = false
+                viewModel.newConversation()
+            },
+            onDismiss = { confirmNewConversation = false },
         )
     }
 

@@ -29,6 +29,7 @@ import { Composer, type ComposerHandle } from './Composer';
 import { ConfigChips, UsageIndicator } from './ConfigChips';
 import { PlanBar, QueueList, toastFailure } from './DockPanels';
 import { RequestDock } from './RequestCard';
+import { NewConversationDialog } from './NewConversationDialog';
 import { SessionInfoDialog } from './SessionInfoDialog';
 
 export function ChatScreen() {
@@ -169,8 +170,15 @@ function ChatView({ model, session, headerLabel }: ChatViewProps) {
 
   const [infoOpen, setInfoOpen] = useState(false);
   const [stopOpen, setStopOpen] = useState(false);
+  const [newOpen, setNewOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const restarting = useStore(model.store, (view) => view.restarting);
+  const startingNew = useStore(model.store, (view) => view.startingNew);
+  const canStartNew =
+    live &&
+    !restarting &&
+    !startingNew &&
+    (state.status === 'ready' || state.status === 'running' || state.status === 'error');
   const focusView = useChatPrefsStore((prefs) => prefs.focusView);
   const setFocusView = useChatPrefsStore((prefs) => prefs.setFocusView);
   const fullscreen = useFullscreen();
@@ -195,6 +203,14 @@ function ChatView({ model, session, headerLabel }: ChatViewProps) {
     if (model.state().restarting) return;
     void model.restart().then((result) => {
       toastFailure(result, 'Could not restart the agent');
+    });
+  }, [model]);
+
+  const startNew = useCallback(() => {
+    setNewOpen(false);
+    if (model.state().startingNew) return;
+    void model.newConversation().then((result) => {
+      toastFailure(result, 'Could not start a new conversation');
     });
   }, [model]);
 
@@ -228,6 +244,19 @@ function ChatView({ model, session, headerLabel }: ChatViewProps) {
     items: [
       ...(state.status === 'error' && !closed
         ? [{ id: 'restart', label: 'Restart agent', disabled: !live || restarting, onSelect: restart }]
+        : []),
+      ...(state.new_conversation && !closed
+        ? [
+            {
+              id: 'new-conversation',
+              label: 'New conversation',
+              description: 'Clear the chat; keep the folder and settings',
+              disabled: !canStartNew,
+              onSelect: () => {
+                setNewOpen(true);
+              },
+            },
+          ]
         : []),
       {
         id: 'info',
@@ -385,6 +414,17 @@ function ChatView({ model, session, headerLabel }: ChatViewProps) {
             rows={infoRows}
             onClose={() => {
               setInfoOpen(false);
+            }}
+          />
+        )}
+        {newOpen && (
+          <NewConversationDialog
+            kindLabel={kindLabel}
+            running={running}
+            queued={state.queue.length > 0}
+            onConfirm={startNew}
+            onCancel={() => {
+              setNewOpen(false);
             }}
           />
         )}

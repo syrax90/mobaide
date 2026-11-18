@@ -335,6 +335,8 @@ const STATE_FIELDS = {
   cancelling: flag,
   steering: flag,
   background: oneOf(BACKGROUND_WORK, null),
+  /** The agent takes `new_conversation`; an older one leaves it out. */
+  new_conversation: flag,
 };
 
 type StateFields = typeof STATE_FIELDS;
@@ -358,6 +360,7 @@ export const INITIAL_CHAT_STATE: ChatState = {
   cancelling: false,
   steering: false,
   background: null,
+  new_conversation: false,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -502,6 +505,7 @@ export type ChatCommand =
   | { op: 'dequeue'; queue_id: string }
   | { op: 'steer'; queue_id: string }
   | { op: 'restart' }
+  | { op: 'new_conversation' }
   | { op: 'sign_in'; action: 'start'; method: string }
   | { op: 'sign_in'; action: 'submit'; value: string }
   | { op: 'sign_in'; action: 'cancel' };

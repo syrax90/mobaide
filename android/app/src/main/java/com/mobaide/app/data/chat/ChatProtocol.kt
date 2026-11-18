@@ -84,6 +84,8 @@ object ChatProtocol {
 
     fun restart(id: String): JsonObject = op(id, "restart")
 
+    fun newConversation(id: String): JsonObject = op(id, "new_conversation")
+
     fun setConfig(id: String, configId: String, value: JsonPrimitive): JsonObject = buildJsonObject {
         put("id", id)
         put("op", "set_config")
