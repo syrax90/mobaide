@@ -59,6 +59,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 /**
  * Typed 409 surface for git deletes — the server includes a structured
@@ -127,6 +128,8 @@ data class GitCapabilities(
     val resolve: Boolean = false,
     /** The workspace Git screen may delete remote-tracking rows (on the remote). */
     val deleteRemote: Boolean = false,
+    /** Workspace deletes run as background jobs the client polls (`POST /delete-jobs`). */
+    val deleteJobs: Boolean = false,
     /** The conflict resolver's routes and `resolved_paths` on status. */
     val conflicts: Boolean = false,
 ) {
@@ -149,12 +152,14 @@ fun VersionInfoResponse.toGitCapabilities(): GitCapabilities = GitCapabilities(
     rebase = gitCapability("rebase"),
     resolve = gitCapability("resolve"),
     deleteRemote = gitCapability("delete_remote"),
+    deleteJobs = gitCapability("delete_jobs"),
     conflicts = gitCapability("conflicts"),
 )
 
 class GitRepository(
     private val restApi: RestApi,
     private val eventBus: AgentEventBus,
+    private val timeSource: TimeSource = TimeSource.Monotonic,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -179,11 +184,39 @@ class GitRepository(
     suspend fun worktreeBases(workspaceName: String): WorktreeBasesResponse =
         restApi.getWorktreeBases(workspaceName)
 
+    /**
+     * Batch delete. With [useJobs] (`capabilities.git.delete_jobs`) the batch
+     * runs as an agent background job polled every [DELETE_JOB_POLL_INTERVAL],
+     * so slow worktree removals never hit the request timeout; [onProgress]
+     * receives `(completed, total)` while it runs.
+     */
     suspend fun deleteGitItems(
         workspaceName: String,
         items: List<GitDeleteItem>,
-    ): GitDeleteResponse =
-        mapBusy { restApi.deleteGitItems(workspaceName, GitDeleteRequest(items)) }
+        useJobs: Boolean = false,
+        onProgress: (completed: Int, total: Int) -> Unit = { _, _ -> },
+    ): GitDeleteResponse {
+        if (!useJobs) {
+            return mapBusy { restApi.deleteGitItems(workspaceName, GitDeleteRequest(items)) }
+        }
+        var job = mapBusy { restApi.startGitDeleteJob(workspaceName, GitDeleteRequest(items)) }
+        var lastSuccess = timeSource.markNow()
+        while (job.isRunning) {
+            onProgress(job.completed, job.total)
+            delay(DELETE_JOB_POLL_INTERVAL)
+            job = try {
+                restApi.getGitDeleteJob(workspaceName, job.job_id).also { lastSuccess = timeSource.markNow() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // A 404 means the agent restarted and forgot the job: nothing will finish it.
+                if ((e as? ApiException)?.code == 404 || lastSuccess.elapsedNow() >= DELETE_JOB_GIVE_UP_AFTER) throw e
+                job
+            }
+        }
+        onProgress(job.completed, job.total)
+        return GitDeleteResponse(job.results.orEmpty())
+    }
 
     suspend fun createBranch(
         workspaceName: String,
@@ -474,13 +507,24 @@ class GitRepository(
             throw mapSessionGitError(e)
         }
 
+    // Every 409 of a delete is the busy guard except a coded refusal (`too_many_jobs`).
     private inline fun <T> mapBusy(block: () -> T): T =
         try {
             block()
         } catch (e: ApiException) {
-            if (e.code == 409) throw GitBusyException(parseBusyBy(e.errorBody))
+            if (e.code == 409) {
+                val holders = parseBusyBy(e.errorBody)
+                if (holders.isNotEmpty() || !hasCodedDetail(e.errorBody)) throw GitBusyException(holders)
+            }
             throw e
         }
+
+    private fun hasCodedDetail(body: String): Boolean = try {
+        val root = lenientDetailJson.parseToJsonElement(body) as? JsonObject
+        (root?.get("detail") as? JsonObject)?.containsKey("code") == true
+    } catch (_: Exception) {
+        false
+    }
 
     // The busy 409 keeps the workspace screen's own exception; every other coded
     // detail — the branch refusals and the session vocabulary they reuse —
@@ -515,6 +559,12 @@ class GitRepository(
     companion object {
         val SESSION_GIT_POLL_INTERVAL: Duration = 10.seconds
         val SESSION_GIT_JOB_POLL_INTERVAL: Duration = 3.seconds
+        val DELETE_JOB_POLL_INTERVAL: Duration = 1.seconds
+        /**
+         * How long polls may keep failing (agent or relay reconnecting) before
+         * the client gives up on a job; the agent keeps a finished job for 10 minutes.
+         */
+        val DELETE_JOB_GIVE_UP_AFTER: Duration = 120.seconds
 
         const val REBASE_CONTINUE = "continue"
         const val REBASE_SKIP = "skip"

@@ -741,6 +741,9 @@ lives outside the timer so a coalescing restart cannot discard it, `results` map
 positionally onto the request, `force_required` restores the row *and*
 re-prompts, a short `results` array restores the unreported tail, and the busy
 409 restores the entire batch because the guard runs before anything is deleted.
+With `capabilities.git.delete_jobs` the batch is a background job polled every
+second; the client gives up only on a 404 or after 2 minutes without a good
+poll, then reloads the list.
 The overlapping-load guard is not ported, because the list lives in TanStack
 Query, whose invalidation cancels an in-flight refetch on a warm cache.
 

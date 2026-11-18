@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,7 +23,9 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
@@ -63,6 +66,7 @@ const val GIT_FILTER_TAG = "git_filter"
 const val GIT_REMOTE_HEADER_TAG = "git_remote_header"
 const val GIT_FOLDER_ROW_TAG = "git_folder_row"
 const val GIT_BUSY_CHECKOUT_CONFIRM_TAG = "git_busy_checkout_confirm"
+const val GIT_DELETE_PROGRESS_TAG = "git_delete_progress"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -172,9 +176,12 @@ fun GitScreen(
                 }
                 visibleItems.isEmpty() -> {
                     Text(
-                        text = "No branches or worktrees.",
+                        text = state.deleteProgress?.let(::deleteProgressMessage)
+                            ?: "No branches or worktrees.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.align(Alignment.Center),
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .semantics { liveRegion = LiveRegionMode.Polite },
                     )
                 }
                 else -> {
@@ -182,47 +189,64 @@ fun GitScreen(
                     val remoteItems = state.remoteItems
                     val localRows = state.localRows
                     val remoteRows = if (state.remoteOpen) state.remoteRows else emptyList()
-                    LazyColumn(
-                        contentPadding = PaddingValues(vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
-                        if (state.filterable) {
-                            item(key = "filter") {
-                                OutlinedTextField(
-                                    colors = PixelTextFieldDefaults.colors(),
-                                    value = state.filter,
-                                    onValueChange = viewModel::setFilter,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 4.dp)
-                                        .testTag(GIT_FILTER_TAG),
-                                    placeholder = { Text("Filter branches") },
-                                    singleLine = true,
-                                )
-                            }
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // Pinned above the list: a list item inserted at the top
+                        // would stay above the viewport of a scrolled list.
+                        val progress = state.deleteProgress
+                        if (progress != null) {
+                            Text(
+                                text = deleteProgressMessage(progress),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier
+                                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                                    .semantics { liveRegion = LiveRegionMode.Polite }
+                                    .testTag(GIT_DELETE_PROGRESS_TAG),
+                            )
                         }
-                        if (localItems.isEmpty() && remoteItems.isEmpty()) {
-                            item(key = "no-match") {
-                                Text(
-                                    text = "No matching branches or worktrees.",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(24.dp),
-                                )
+                        LazyColumn(
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            if (state.filterable) {
+                                item(key = "filter") {
+                                    OutlinedTextField(
+                                        colors = PixelTextFieldDefaults.colors(),
+                                        value = state.filter,
+                                        onValueChange = viewModel::setFilter,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                                            .testTag(GIT_FILTER_TAG),
+                                        placeholder = { Text("Filter branches") },
+                                        singleLine = true,
+                                    )
+                                }
                             }
-                        }
-                        items(localRows, key = { it.key }) { row ->
-                            GitTreeLine(row = row, state = state, viewModel = viewModel)
-                        }
-                        if (remoteItems.isNotEmpty()) {
-                            item(key = "remote-header") {
-                                RemoteSectionHeader(
-                                    count = remoteItems.size,
-                                    open = state.remoteOpen,
-                                    onToggle = viewModel::toggleRemote,
-                                )
+                            if (localItems.isEmpty() && remoteItems.isEmpty()) {
+                                item(key = "no-match") {
+                                    Text(
+                                        text = "No matching branches or worktrees.",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(24.dp),
+                                    )
+                                }
                             }
-                            items(remoteRows, key = { it.key }) { row ->
+                            items(localRows, key = { it.key }) { row ->
                                 GitTreeLine(row = row, state = state, viewModel = viewModel)
+                            }
+                            if (remoteItems.isNotEmpty()) {
+                                item(key = "remote-header") {
+                                    RemoteSectionHeader(
+                                        count = remoteItems.size,
+                                        open = state.remoteOpen,
+                                        onToggle = viewModel::toggleRemote,
+                                    )
+                                }
+                                items(remoteRows, key = { it.key }) { row ->
+                                    GitTreeLine(row = row, state = state, viewModel = viewModel)
+                                }
                             }
                         }
                     }

@@ -2461,6 +2461,132 @@ class TestProxyGitItems:
             "Mobaide Workspace",
         )
 
+    def _wire_git_state(self, mock_app_state, tmp_path) -> None:
+        mock_app_state.workspaces_store = MagicMock()
+        mock_app_state.workspaces_store.get = MagicMock(
+            return_value=self._make_workspace(tmp_path, name="proj"),
+        )
+        mock_app_state.worktree_manager = MagicMock()
+        mock_app_state.session_manager = MagicMock()
+        mock_app_state.event_bus = MagicMock()
+
+    async def test_delete_job_start_is_202_and_poll_reads_the_registry(
+        self, client, mock_app_state, tmp_path,
+    ):
+        """Parity with the FastAPI router: ``POST delete-jobs`` answers 202
+        with the first snapshot, ``GET delete-jobs/{id}`` the registry's
+        snapshot, and an id the registry does not know a coded 404."""
+        from mobaide.agent.git.delete_jobs import delete_job_registry
+        from mobaide.agent.git.models import GitDeleteJobResponse
+
+        self._wire_git_state(mock_app_state, tmp_path)
+        snapshot = GitDeleteJobResponse(
+            job_id="j1", status="running", total=1, completed=0, results=None,
+        )
+        ws = AsyncMock()
+        with patch.object(
+            delete_job_registry, "start", new=AsyncMock(return_value=snapshot),
+        ) as mock_start, patch.object(
+            delete_job_registry, "get", new=MagicMock(return_value=snapshot),
+        ) as mock_get:
+            started = await client._dispatch_proxy(
+                "POST",
+                "/api/projects/proj/git/delete-jobs",
+                {"items": [{"kind": "branch_only", "branch": "x"}]},
+                None,
+                ws,
+            )
+            polled = await client._dispatch_proxy(
+                "GET", "/api/projects/proj/git/delete-jobs/j1", None, None, ws,
+            )
+
+        assert started == {"status": 202, "body": snapshot.model_dump()}
+        assert polled == {"status": 200, "body": snapshot.model_dump()}
+        await_args = mock_start.await_args
+        assert await_args is not None
+        _assert_real_signature(delete_job_registry.start, await_args)
+        assert await_args.kwargs["workspace_name"] == "proj"
+        mock_get.assert_called_once_with("j1")
+
+        delete_job_registry.reset()
+        unknown = await client._dispatch_proxy(
+            "GET", "/api/projects/proj/git/delete-jobs/nope", None, None, ws,
+        )
+        assert unknown == {"status": 404, "body": {"detail": {"code": "job_not_found"}}}
+
+    async def test_slow_items_delete_does_not_hold_up_the_listing(
+        self, client, mock_app_state, tmp_path,
+    ):
+        """A long synchronous delete batch used to be awaited on the tunnel
+        reader, so even the Git screen's own list request timed out behind
+        it. It must run aside and answer when it finishes."""
+        from mobaide.agent.git.models import (
+            GitDeleteResponse,
+            GitDeleteResultItem,
+            GitItemRead,
+        )
+
+        self._wire_git_state(mock_app_state, tmp_path)
+        gate = asyncio.Event()
+
+        async def slow_delete(*args, **kwargs):
+            await gate.wait()
+            return GitDeleteResponse(results=[
+                GitDeleteResultItem(kind="branch_only", target="x", ok=True),
+            ])
+
+        def proxy(request_id: str, method: str, path: str, body=None) -> bytes:
+            return json.dumps({
+                "type": "proxy_request", "request_id": request_id,
+                "method": method, "path": path, "body": body,
+            }).encode()
+
+        def responses(ws) -> list[dict]:
+            out = []
+            for call in ws.send.call_args_list:
+                channel, _sid, payload = decode(call[0][0])
+                if channel == CH_CONTROL:
+                    out.append(json.loads(payload))
+            return out
+
+        async def wait_for(predicate) -> None:
+            for _ in range(500):
+                if predicate():
+                    return
+                await asyncio.sleep(0.01)
+            raise AssertionError("condition not reached in time")
+
+        ws = AsyncMock()
+        client._ws = ws
+        try:
+            with patch(
+                "mobaide.relay.client.delete_git_items", new=slow_delete,
+            ), patch(
+                "mobaide.relay.client.list_git_items",
+                new=AsyncMock(return_value=[GitItemRead(kind="branch_only", branch="x")]),
+            ):
+                await asyncio.wait_for(client._handle_control(proxy(
+                    "r-delete", "POST", "/api/projects/proj/git/items:delete",
+                    {"items": [{"kind": "branch_only", "branch": "x"}]},
+                ), ws), 1)
+                await asyncio.wait_for(client._handle_control(proxy(
+                    "r-list", "GET", "/api/projects/proj/git/items",
+                ), ws), 1)
+                await wait_for(lambda: len(responses(ws)) == 1)
+
+                assert responses(ws)[0]["request_id"] == "r-list"
+                assert responses(ws)[0]["status"] == 200
+
+                gate.set()
+                await wait_for(lambda: len(responses(ws)) == 2)
+        finally:
+            gate.set()
+            await client.stop()
+
+        assert responses(ws)[1]["request_id"] == "r-delete"
+        assert responses(ws)[1]["status"] == 200
+        assert responses(ws)[1]["body"]["results"][0]["ok"] is True
+
 
 class TestProxyWorktreeBases:
     """``GET /api/projects/{name}/git/worktree-bases`` through the relay:
@@ -3516,6 +3642,7 @@ class TestProxyVersionCapabilities:
                 "rebase": True,
                 "resolve": True,
                 "delete_remote": True,
+                "delete_jobs": True,
                 "conflicts": True,
                 "worktree_base": True,
             },

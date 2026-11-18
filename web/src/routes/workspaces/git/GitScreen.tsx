@@ -39,11 +39,13 @@ import {
   checkoutErrorCopy,
   createBranchErrorCopy,
   deleteFailureMessage,
+  deleteProgressMessage,
   forceDeleteMessage,
   gitTreeRows,
   matchesFilter,
   primaryLabel,
   remoteDeleteMessage,
+  type DeleteProgress,
   type GitTreeRow,
 } from './gitDisplay';
 import {
@@ -105,6 +107,7 @@ export function GitScreen() {
   const [checkoutPrompt, setCheckoutPrompt] = useState<GitItem | null>(null);
   const checkoutCancelRef = useRef<HTMLButtonElement>(null);
   const [busyCheckout, setBusyCheckout] = useState<BusyCheckout | null>(null);
+  const [deleteProgress, setDeleteProgress] = useState<DeleteProgress | null>(null);
   const busyCheckoutCancelRef = useRef<HTMLButtonElement>(null);
 
   // The delete callbacks run from a timer and from mutation results, both of
@@ -134,12 +137,23 @@ export function GitScreen() {
   });
 
   const del = useMutation({
-    mutationFn: (batch: PendingDelete[]) =>
-      deleteGitItems(
+    mutationFn: (batch: PendingDelete[]) => {
+      setDeleteProgress({ completed: 0, total: batch.length });
+      return deleteGitItems(
         agentId,
         workspaceName,
         batch.map((entry) => entry.item),
-      ),
+        {
+          jobs: capabilities.deleteJobs,
+          onProgress: (completed, total) => {
+            setDeleteProgress({ completed, total });
+          },
+        },
+      );
+    },
+    onSettled: () => {
+      setDeleteProgress(null);
+    },
     onSuccess: (results, batch) => {
       const outcome = applyResults(machineRef.current, batch, results);
       setMachine(outcome.state);
@@ -165,6 +179,11 @@ export function GitScreen() {
           isApiError(error) ? `Delete failed: ${error.message}` : 'Delete failed',
           'error',
         );
+      // Part of the batch may have gone through, and its `git.changed` may have
+      // been missed while the connection was down.
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.gitItems(agentId, workspaceName),
+      });
     },
   });
 
@@ -373,6 +392,8 @@ export function GitScreen() {
           <button
             type="button"
             className="button button-danger"
+            // One batch at a time: a second one would share the progress line.
+            disabled={rowBusy}
             onClick={() => {
               queue(selectedItems);
             }}
@@ -391,6 +412,12 @@ export function GitScreen() {
         </div>
       )}
 
+      {deleteProgress !== null && (
+        <p className="page-note state-loading" role="status">
+          {deleteProgressMessage(deleteProgress)}
+        </p>
+      )}
+
       {items.isPending ? (
         <p className="page-note state-loading">Loading git items…</p>
       ) : items.isError ? (
@@ -399,7 +426,8 @@ export function GitScreen() {
           onRetry={() => void items.refetch()}
         />
       ) : visible.length === 0 ? (
-        <p className="empty-state">No branches or worktrees.</p>
+        // While a batch runs the status line above already says what is happening.
+        deleteProgress === null && <p className="empty-state">No branches or worktrees.</p>
       ) : (
         <>
           {filterable && (

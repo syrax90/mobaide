@@ -189,6 +189,7 @@ class TestAuthAndRouting:
             "rebase": True,
             "resolve": True,
             "delete_remote": True,
+            "delete_jobs": True,
             "conflicts": True,
             "worktree_base": True,
         }

@@ -34,11 +34,28 @@ final class GitScreenModel {
         let refs: [String]
     }
 
+    /// A delete batch in flight: items processed so far out of the batch.
+    struct DeleteProgress: Equatable {
+        let completed: Int
+        let total: Int
+    }
+
+    static let deleteJobPollInterval: Duration = .seconds(1)
+    /// How long polls may keep failing (agent or relay reconnecting) before the
+    /// client gives up on a job; the agent keeps a finished job for 10 minutes.
+    static let deleteJobGiveUpAfter: Duration = .seconds(120)
+
     private(set) var items: [GitItem] = []
     private(set) var isLoading = false
     var selected: Set<String> = []
 
     var undoToast: UndoToast?
+    /// The batch in flight, for the "Deleting… n of m done" status line.
+    private(set) var deleteProgress: DeleteProgress?
+    var isDeleting: Bool { deleteProgress != nil }
+    /// Owner of `deleteProgress`: a force-delete confirmed during the previous
+    /// batch's reload starts a new batch that the old one must not clear.
+    private var deleteBatchID = 0
     var forcePrompt: ForcePrompt?
     var busyDialog: [BusyHolder]?
     /// A checkout the busy guard refused; the user may retry it with `force`.
@@ -68,6 +85,7 @@ final class GitScreenModel {
     private let agentAPI: AgentAPI
     private let agentEventBus: AgentEventBus
     private let sleeper: any Sleeper
+    private let now: @Sendable () -> ContinuousClock.Instant
 
     /// Rows queued for deletion, hidden from the list so a swipe disappears at
     /// once instead of lingering through the Undo window. Every failure path
@@ -87,11 +105,18 @@ final class GitScreenModel {
     private var deferredCommit: Task<Void, Never>?
     private var loadGeneration = 0
 
-    init(workspaceName: String, agentAPI: AgentAPI, agentEventBus: AgentEventBus, sleeper: any Sleeper = ContinuousSleeper()) {
+    init(
+        workspaceName: String,
+        agentAPI: AgentAPI,
+        agentEventBus: AgentEventBus,
+        sleeper: any Sleeper = ContinuousSleeper(),
+        now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
+    ) {
         self.workspaceName = workspaceName
         self.agentAPI = agentAPI
         self.agentEventBus = agentEventBus
         self.sleeper = sleeper
+        self.now = now
     }
 
     var visibleItems: [GitItem] { items.filter { !hiddenIDs.contains($0.id) } }
@@ -451,6 +476,15 @@ final class GitScreenModel {
         }
     }
 
+    /// Every 409 of a delete is the busy guard except a coded refusal (`too_many_jobs`).
+    private static func isCodedRefusal(_ error: APIError) -> Bool {
+        guard ConflictDetail.busyHolders(from: error.errorBody) == nil,
+              let data = error.errorBody.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let detail = root["detail"] as? [String: Any] else { return false }
+        return detail["code"] != nil
+    }
+
     /// The busy `409` keeps the screen's own dialog; every other coded detail
     /// maps like the session routes.
     private static func busyHolders(in error: any Error) -> [BusyHolder]? {
@@ -458,13 +492,43 @@ final class GitScreenModel {
         return ConflictDetail.busyHolders(from: apiError.errorBody)
     }
 
+    /// With `capabilities.git.delete_jobs` the batch runs as an agent background
+    /// job polled every `deleteJobPollInterval`, so slow worktree removals never
+    /// hit the request timeout.
+    private func runDelete(_ request: GitDeleteRequest) async throws -> GitDeleteResponse {
+        guard capabilities.deleteJobs else {
+            return try await agentAPI.deleteGitItems(workspaceName: workspaceName, request: request)
+        }
+        var job = try await agentAPI.startGitDeleteJob(workspaceName: workspaceName, request: request)
+        var lastSuccess = now()
+        while job.isRunning {
+            deleteProgress = DeleteProgress(completed: job.completed, total: job.total)
+            try await sleeper.sleep(for: Self.deleteJobPollInterval)
+            do {
+                job = try await agentAPI.getGitDeleteJob(workspaceName: workspaceName, jobId: job.job_id)
+                lastSuccess = now()
+            } catch {
+                // A 404 means the agent restarted and forgot the job: nothing will finish it.
+                if (error as? APIError)?.code == 404 || now() - lastSuccess >= Self.deleteJobGiveUpAfter {
+                    throw error
+                }
+            }
+        }
+        return GitDeleteResponse(results: job.results ?? [])
+    }
+
+    private func endDeleteProgress(of batchID: Int) {
+        if deleteBatchID == batchID { deleteProgress = nil }
+    }
+
     private func sendDelete(_ batch: [PendingDelete]) async {
         guard !batch.isEmpty else { return }
+        deleteBatchID += 1
+        let batchID = deleteBatchID
+        deleteProgress = DeleteProgress(completed: 0, total: batch.count)
+        defer { endDeleteProgress(of: batchID) }
         do {
-            let response = try await agentAPI.deleteGitItems(
-                workspaceName: workspaceName,
-                request: GitDeleteRequest(items: batch.map(\.item))
-            )
+            let response = try await runDelete(GitDeleteRequest(items: batch.map(\.item)))
 
             var unmerged: [PendingDelete] = []
             var failures: [GitDeleteResultItem] = []
@@ -498,9 +562,11 @@ final class GitScreenModel {
             if !failures.isEmpty {
                 message = GitItemDisplay.deleteFailureMessage(failures)
             }
-            // A successful delete makes the agent emit `git.changed`, which
-            // `observeGitChanged` turns into a re-fetch.
-        } catch let error as APIError where error.code == 409 {
+            // The agent's one `git.changed` can be lost in a reconnect, so the
+            // end of a batch re-fetches the list too, as on web.
+            endDeleteProgress(of: batchID)
+            await load()
+        } catch let error as APIError where error.code == 409 && !Self.isCodedRefusal(error) {
             // The busy guard is all-or-nothing: nothing was processed.
             hiddenIDs.subtract(batch.map(\.id))
             if let holders = ConflictDetail.busyHolders(from: error.errorBody) {
@@ -511,6 +577,10 @@ final class GitScreenModel {
         } catch {
             hiddenIDs.subtract(batch.map(\.id))
             message = "Delete failed: \(String(describing: error))"
+            // Part of the batch may have gone through, and its `git.changed`
+            // may have been missed while the connection was down.
+            endDeleteProgress(of: batchID)
+            await load()
         }
     }
 }
@@ -599,6 +669,13 @@ enum GitItemDisplay {
         if item.kind == GitItem.kindOrphanWorktree { chips.append(("orphan", .danger)) }
         if item.prunable { chips.append(("prunable", .muted)) }
         return chips
+    }
+
+    /// The status line shown while a delete batch runs, identical on all three clients.
+    static func deleteProgressMessage(_ progress: GitScreenModel.DeleteProgress) -> String {
+        progress.completed > 0
+            ? "Deleting… \(progress.completed) of \(progress.total) done"
+            : "Deleting \(progress.total) item(s)…"
     }
 
     static func deleteFailureMessage(_ failures: [GitDeleteResultItem]) -> String {

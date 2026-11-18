@@ -1432,6 +1432,54 @@
         "title": "GitDeleteItem",
         "type": "object"
       },
+      "GitDeleteJobResponse": {
+        "description": "A delete batch run as a background job (``POST /delete-jobs``,\n``GET /delete-jobs/{job_id}``).\n\n``completed`` counts the items processed so far out of ``total``.\n``results`` stays ``null`` while ``status`` is ``running`` and then holds\nthe same per-item outcomes, in request order, as ``POST /items:delete``.",
+        "properties": {
+          "completed": {
+            "title": "Completed",
+            "type": "integer"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "results": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/GitDeleteResultItem"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Results"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "done"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "job_id",
+          "status",
+          "total",
+          "completed",
+          "results"
+        ],
+        "title": "GitDeleteJobResponse",
+        "type": "object"
+      },
       "GitDeleteRequest": {
         "properties": {
           "items": {
@@ -1462,7 +1510,7 @@
         "type": "object"
       },
       "GitDeleteResultItem": {
-        "description": "Per-item outcome.\n\n``error`` codes:\n    * ``force_required`` \u2014 branch is unmerged, or worktree holds\n      modified/untracked files; retry with ``force=True``.\n    * ``locked`` \u2014 worktree is locked.\n    * ``not_found`` \u2014 branch or worktree no longer exists.\n    * ``invalid`` \u2014 request payload missing the required identifier.\n    * ``auth_required`` / ``network`` / ``remote_not_found`` \u2014 a\n      ``remote_branch`` push could not reach or log in to the remote.\n    * ``rejected`` / ``hook_failed`` \u2014 the remote, or a hook, refused\n      the deletion.\n    * ``git_timeout`` \u2014 the push outlasted its budget.\n    * ``error`` \u2014 other git failure (full message in ``error_detail``).",
+        "description": "Per-item outcome.\n\n``error`` codes:\n    * ``force_required`` \u2014 branch is unmerged, or worktree holds\n      modified/untracked files; retry with ``force=True``. For\n      ``branch_with_worktree`` an unmerged branch is reported before\n      the worktree is touched, so the retry removes both.\n    * ``locked`` \u2014 worktree is locked.\n    * ``not_found`` \u2014 branch or worktree no longer exists.\n    * ``invalid`` \u2014 request payload missing the required identifier.\n    * ``auth_required`` / ``network`` / ``remote_not_found`` \u2014 a\n      ``remote_branch`` push could not reach or log in to the remote.\n    * ``rejected`` / ``hook_failed`` \u2014 the remote, or a hook, refused\n      the deletion.\n    * ``git_timeout`` \u2014 the push outlasted its budget.\n    * ``error`` \u2014 other git failure (full message in ``error_detail``).",
         "properties": {
           "error": {
             "anyOf": [
@@ -4689,6 +4737,111 @@
           }
         },
         "summary": "Checkout Endpoint",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/projects/{name}/git/delete-jobs": {
+      "post": {
+        "description": "Start ``body`` as a background delete job and answer its first\nsnapshot. The busy guard runs first and refuses the batch whole with\nthe same 409 as ``POST /items:delete``; ``409 too_many_jobs`` past the\nagent's running-job cap.",
+        "operationId": "start_delete_job_endpoint_api_projects__name__git_delete_jobs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitDeleteJobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Delete Job Endpoint",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/projects/{name}/git/delete-jobs/{job_id}": {
+      "get": {
+        "description": "The job's current snapshot; ``404 job_not_found`` for an unknown id.",
+        "operationId": "get_delete_job_endpoint_api_projects__name__git_delete_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitDeleteJobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Delete Job Endpoint",
         "tags": [
           "git"
         ]

@@ -60,6 +60,21 @@ class GitDtoFixtureTest {
         fixture("GitCheckoutRequest").assertCanonicalDecodesLikeWire(GitCheckoutRequest.serializer())
         fixture("GitBranchResponse").assertCanonicalDecodesLikeWire(GitBranchResponse.serializer())
         fixture("WorktreeBasesResponse").assertCanonicalDecodesLikeWire(WorktreeBasesResponse.serializer())
+        fixture("GitDeleteJobResponse").assertCanonicalDecodesLikeWire(GitDeleteJobResponse.serializer())
+    }
+
+    @Test
+    fun deleteJob_holdsResultsOnlyOnceDone() {
+        val fixture = fixture("GitDeleteJobResponse")
+
+        val running = fixture.decode(GitDeleteJobResponse.serializer(), "running")
+        val done = fixture.decode(GitDeleteJobResponse.serializer(), "done")
+
+        assertTrue(running.isRunning)
+        assertEquals(1 to 3, running.completed to running.total)
+        assertNull(running.results)
+        assertFalse(done.isRunning)
+        assertEquals("force_required", done.results?.single()?.error)
     }
 
     @Test

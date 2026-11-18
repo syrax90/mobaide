@@ -242,6 +242,7 @@ describe('gitCapabilities', () => {
       rebase: false,
       resolve: false,
       deleteRemote: false,
+      deleteJobs: false,
       conflicts: false,
     });
   });

@@ -14,6 +14,8 @@ final class StubURLProtocol: URLProtocol {
     private nonisolated(unsafe) static var recordedRequests: [URLRequest] = []
     private nonisolated(unsafe) static var recordedBodies: [Data] = []
     private nonisolated(unsafe) static var onRequestStorage: (@Sendable (URLRequest) -> Void)?
+    private nonisolated(unsafe) static var holdStorage: (@Sendable (URLRequest) -> Bool)?
+    private nonisolated(unsafe) static var held: [(StubURLProtocol, StubResponse)] = []
 
     /// Fires on the URLSession loading thread after the request is recorded
     /// and strictly before its response is delivered — the deterministic seam
@@ -24,12 +26,32 @@ final class StubURLProtocol: URLProtocol {
         set { lock.withLock { onRequestStorage = newValue } }
     }
 
+    /// Requests it matches are recorded but answered only by `releaseHeld()`,
+    /// so a test can keep one request in flight while others complete.
+    /// Cleared by `reset()`.
+    static var hold: (@Sendable (URLRequest) -> Bool)? {
+        get { lock.withLock { holdStorage } }
+        set { lock.withLock { holdStorage = newValue } }
+    }
+
+    static func releaseHeld() {
+        let pending = lock.withLock { () -> [(StubURLProtocol, StubResponse)] in
+            defer { held = [] }
+            return held
+        }
+        for (stub, response) in pending {
+            stub.deliver(response)
+        }
+    }
+
     static func reset() {
         lock.withLock {
             queue = []
             recordedRequests = []
             recordedBodies = []
             onRequestStorage = nil
+            holdStorage = nil
+            held = []
         }
     }
 
@@ -61,6 +83,14 @@ final class StubURLProtocol: URLProtocol {
                 : Self.queue.removeFirst()
         }
         Self.onRequest?(request)
+        if Self.hold?(request) == true {
+            Self.lock.withLock { Self.held.append((self, response)) }
+            return
+        }
+        deliver(response)
+    }
+
+    private func deliver(_ response: StubResponse) {
         let http = HTTPURLResponse(
             url: request.url!,
             statusCode: response.status,

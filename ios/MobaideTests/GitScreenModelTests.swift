@@ -6,6 +6,15 @@ final class GitScreenModelTests: XCTestCase {
     private let gitItemsBody = #"{"items":[{"kind":"branch_only","branch":"b"}]}"#
     private let twoBranchesBody = #"{"items":[{"kind":"branch_only","branch":"b1"},{"kind":"branch_only","branch":"b2"}]}"#
 
+    /// Hand-driven `now` for the delete-job give-up budget, so no test waits it out.
+    private final class Clock: @unchecked Sendable {
+        let start = ContinuousClock.now
+        var offset: Duration = .zero
+        var now: ContinuousClock.Instant { start + offset }
+    }
+
+    private let clock = Clock()
+
     override func setUp() {
         super.setUp()
         StubURLProtocol.reset()
@@ -25,7 +34,13 @@ final class GitScreenModelTests: XCTestCase {
             tokens: FakeAgentTokens(token: AgentToken(value: "tok")),
             client: client
         )
-        let model = GitScreenModel(workspaceName: "proj", agentAPI: agentAPI, agentEventBus: bus, sleeper: sleeper)
+        let model = GitScreenModel(
+            workspaceName: "proj",
+            agentAPI: agentAPI,
+            agentEventBus: bus,
+            sleeper: sleeper,
+            now: { [clock] in clock.now }
+        )
         return (model, bus, factory)
     }
 
@@ -57,6 +72,7 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertEqual(model.selected, [model.items[0].id])
 
         StubURLProtocol.enqueue(status: 200, body: #"{"results":[{"kind":"branch_only","target":"b","ok":true}]}"#)
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[]}"#)
         model.requestDelete()
         XCTAssertNotNil(model.undoToast)
         XCTAssertTrue(model.visibleItems.isEmpty, "the queued row hides at once")
@@ -66,11 +82,12 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requests.count, 1, "the delete must not fire during the 5s window")
 
         sleeper.release()
-        await waitUntil { StubURLProtocol.requests.count == 2 }
+        await waitUntil { StubURLProtocol.requests.count == 3 }
         let deleteRequest = StubURLProtocol.requests[1]
         XCTAssertEqual(deleteRequest.httpMethod, "POST")
         XCTAssertEqual(deleteRequest.url?.absoluteString.hasSuffix("/git/items:delete"), true)
         XCTAssertNil(model.undoToast, "the toast clears once the window elapses")
+        XCTAssertEqual(StubURLProtocol.requests[2].url?.path.hasSuffix("/git/items"), true, "the list reloads after the batch")
     }
 
     func testUndoCancelsDeferredDelete() async throws {
@@ -99,6 +116,7 @@ final class GitScreenModelTests: XCTestCase {
         await model.load()
 
         StubURLProtocol.enqueue(status: 200, body: #"{"results":[{"kind":"branch_only","target":"b","ok":true}]}"#)
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[]}"#)
         model.delete(model.items[0])
         XCTAssertTrue(model.visibleItems.isEmpty)
         XCTAssertEqual(model.undoToast?.message, "Deleting 1 item(s)…")
@@ -107,7 +125,7 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requests.count, 1)
 
         sleeper.release()
-        await waitUntil { StubURLProtocol.requests.count == 2 }
+        await waitUntil { StubURLProtocol.requests.count == 3 }
         XCTAssertEqual(try sentItems(inBodyAt: 1).count, 1)
     }
 
@@ -129,11 +147,16 @@ final class GitScreenModelTests: XCTestCase {
             status: 200,
             body: #"{"results":[{"kind":"branch_only","target":"b1","ok":true},{"kind":"branch_only","target":"b2","ok":true}]}"#
         )
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[]}"#)
         sleeper.release()
-        await waitUntil { StubURLProtocol.requests.count == 2 }
+        await waitUntil { StubURLProtocol.requests.count == 3 }
         try await Task.sleep(for: .milliseconds(20))
 
-        XCTAssertEqual(StubURLProtocol.requests.count, 2, "the restarted window must not drop the first batch into a second POST")
+        XCTAssertEqual(
+            StubURLProtocol.requests.map(\.httpMethod),
+            ["GET", "POST", "GET"],
+            "the restarted window must not drop the first batch into a second POST"
+        )
         let sent = try sentItems(inBodyAt: 1)
         XCTAssertEqual(sent.compactMap { $0["branch"]?.stringValue }, ["b1", "b2"])
     }
@@ -173,8 +196,9 @@ final class GitScreenModelTests: XCTestCase {
             {"results":[{"kind":"branch_only","target":"b1","ok":true},{"kind":"branch_only","target":"b2","ok":false,"error":"locked"}]}
             """#
         )
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[{"kind":"branch_only","branch":"b2"}]}"#)
         sleeper.release()
-        await waitUntil { model.message != nil }
+        await waitUntil { model.message != nil && StubURLProtocol.requests.count == 3 && model.items.count == 1 }
 
         XCTAssertEqual(model.visibleItems.map(\.branch), ["b2"], "only the failed row comes back")
         XCTAssertEqual(model.message, "Couldn't delete b2: the worktree is locked")
@@ -188,22 +212,24 @@ final class GitScreenModelTests: XCTestCase {
         model.select(model.items[0])
 
         StubURLProtocol.enqueue(status: 200, body: #"{"results":[{"kind":"branch_only","target":"b","ok":false,"error":"force_required"}]}"#)
+        StubURLProtocol.enqueue(status: 200, body: gitItemsBody)
         model.requestDelete()
         await waitUntil { sleeper.durations.contains(.seconds(5)) }
         sleeper.release()
 
-        await waitUntil { model.forcePrompt != nil }
+        await waitUntil { model.forcePrompt != nil && StubURLProtocol.requests.count == 3 }
         XCTAssertEqual(model.forcePrompt?.items.count, 1)
         XCTAssertEqual(model.visibleItems.count, 1, "nothing was deleted, so the row is visible under the prompt")
         let firstForce = try forceValue(inBodyAt: 1)
         XCTAssertEqual(firstForce, .bool(false), "the first attempt is sent without force")
 
         StubURLProtocol.enqueue(status: 200, body: #"{"results":[{"kind":"branch_only","target":"b","ok":true}]}"#)
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[]}"#)
         model.confirmForceDelete()
         XCTAssertTrue(model.visibleItems.isEmpty, "confirming re-hides the row")
-        await waitUntil { StubURLProtocol.requests.count == 3 }
+        await waitUntil { StubURLProtocol.requests.count == 5 }
 
-        let resendForce = try forceValue(inBodyAt: 2)
+        let resendForce = try forceValue(inBodyAt: 3)
         XCTAssertEqual(resendForce, .bool(true), "the same item is re-sent with force=true")
         XCTAssertNil(model.forcePrompt, "the prompt clears after confirming")
     }
@@ -217,16 +243,18 @@ final class GitScreenModelTests: XCTestCase {
         await model.load()
 
         StubURLProtocol.enqueue(status: 200, body: #"{"results":[{"kind":"branch_only","target":"b","ok":false,"error":"force_required"}]}"#)
+        StubURLProtocol.enqueue(status: 200, body: gitItemsBody)
         model.delete(model.items[0])
         await waitUntil { sleeper.durations.contains(.seconds(5)) }
         sleeper.release()
-        await waitUntil { model.forcePrompt != nil }
+        await waitUntil { model.forcePrompt != nil && StubURLProtocol.requests.count == 3 }
 
         StubURLProtocol.enqueue(status: 200, body: #"{"results":[{"kind":"branch_only","target":"b","ok":true}]}"#)
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[]}"#)
         model.forcePrompt = nil
         model.confirmForceDelete()
-        await waitUntil { StubURLProtocol.requests.count == 3 }
-        XCTAssertEqual(try forceValue(inBodyAt: 2), .bool(true))
+        await waitUntil { StubURLProtocol.requests.count == 5 }
+        XCTAssertEqual(try forceValue(inBodyAt: 3), .bool(true))
     }
 
     func testForcePromptMapsPositionallyInACoalescedBatch() async throws {
@@ -251,14 +279,16 @@ final class GitScreenModelTests: XCTestCase {
             {"results":[{"kind":"branch_only","target":"b1","ok":true},{"kind":"branch_only","target":"b2","ok":false,"error":"force_required"},{"kind":"branch_only","target":"b3","ok":true}]}
             """#
         )
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[{"kind":"branch_only","branch":"b2"}]}"#)
         sleeper.release()
-        await waitUntil { model.forcePrompt != nil }
+        await waitUntil { model.forcePrompt != nil && StubURLProtocol.requests.count == 3 }
         XCTAssertEqual(model.forcePrompt?.refs, ["b2"])
 
         StubURLProtocol.enqueue(status: 200, body: #"{"results":[{"kind":"branch_only","target":"b2","ok":true}]}"#)
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[]}"#)
         model.confirmForceDelete()
-        await waitUntil { StubURLProtocol.requests.count == 3 }
-        let resent = try sentItems(inBodyAt: 2)
+        await waitUntil { StubURLProtocol.requests.count == 5 }
+        let resent = try sentItems(inBodyAt: 3)
         XCTAssertEqual(resent.count, 1)
         XCTAssertEqual(resent.first?["branch"]?.stringValue, "b2")
         XCTAssertEqual(resent.first?["force"], .bool(true))
@@ -307,13 +337,11 @@ final class GitScreenModelTests: XCTestCase {
         await model.load()
 
         StubURLProtocol.enqueue(status: 200, body: #"{"results":[{"kind":"branch_only","target":"b1","ok":true}]}"#)
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[{"kind":"branch_only","branch":"b2"}]}"#)
         model.delete(model.items[0])
         await waitUntil { sleeper.durations.contains(.seconds(5)) }
         sleeper.release()
-        await waitUntil { StubURLProtocol.requests.count == 2 }
-
-        StubURLProtocol.enqueue(status: 200, body: #"{"items":[{"kind":"branch_only","branch":"b2"}]}"#)
-        await model.load()
+        await waitUntil { StubURLProtocol.requests.count == 3 && model.items.count == 1 }
         XCTAssertEqual(model.visibleItems.map(\.branch), ["b2"])
 
         // The branch is re-created upstream: the stale hidden id must not keep it invisible.
@@ -610,6 +638,7 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertEqual(model.visibleItems.count, 4)
 
         StubURLProtocol.enqueue(status: 200, body: #"{"results":[{"kind":"remote_branch","target":"origin/feature-x","ok":true}]}"#)
+        StubURLProtocol.enqueue(status: 200, body: branchesBody)
         model.remoteDeletePrompt = nil
         model.confirmRemoteDelete()
 
@@ -619,7 +648,7 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertEqual(requestURLs, [], "the delete must not fire during the 5s window")
 
         sleeper.release()
-        await waitUntil { StubURLProtocol.requests.count == 1 }
+        await waitUntil { StubURLProtocol.requests.count == 2 }
         XCTAssertEqual(
             try sentBody(GitDeleteRequest.self, at: 0),
             GitDeleteRequest(items: [GitDeleteItem(kind: GitItem.kindRemoteBranch, branch: "origin/feature-x")])
@@ -643,11 +672,12 @@ final class GitScreenModelTests: XCTestCase {
             status: 200,
             body: #"{"results":[{"kind":"branch_only","target":"stale","ok":true},{"kind":"remote_branch","target":"origin/feature-x","ok":true}]}"#
         )
+        StubURLProtocol.enqueue(status: 200, body: branchesBody)
         model.confirmRemoteDelete()
         XCTAssertTrue(model.selected.isEmpty)
         XCTAssertEqual(model.undoToast?.message, "Deleting 2 item(s)…")
         sleeper.release()
-        await waitUntil { StubURLProtocol.requests.count == 1 }
+        await waitUntil { StubURLProtocol.requests.count == 2 }
 
         XCTAssertEqual(try sentItems(inBodyAt: 0).compactMap { $0["branch"]?.stringValue }, ["stale", "origin/feature-x"])
     }
@@ -656,6 +686,7 @@ final class GitScreenModelTests: XCTestCase {
         let (model, sleeper) = await remoteDeleteModel()
         let topic = try row(model, "topic")
         StubURLProtocol.enqueue(status: 200, body: #"{"results":[{"kind":"orphan_worktree","target":"/repo/wt/topic","ok":true}]}"#)
+        StubURLProtocol.enqueue(status: 200, body: branchesBody)
 
         model.removeWorktree(topic)
 
@@ -663,7 +694,7 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertEqual(model.undoToast?.message, "Deleting 1 item(s)…")
         XCTAssertFalse(model.visibleItems.contains(topic))
         sleeper.release()
-        await waitUntil { StubURLProtocol.requests.count == 1 }
+        await waitUntil { StubURLProtocol.requests.count == 2 }
         XCTAssertEqual(try sentBody(GitDeleteRequest.self, at: 0), GitDeleteRequest(items: [worktreeOnlyTopic]))
     }
 
@@ -673,17 +704,278 @@ final class GitScreenModelTests: XCTestCase {
             status: 200,
             body: #"{"results":[{"kind":"orphan_worktree","target":"/repo/wt/topic","ok":false,"error":"force_required"}]}"#
         )
+        StubURLProtocol.enqueue(status: 200, body: branchesBody)
         model.removeWorktree(try row(model, "topic"))
         sleeper.release()
-        await waitUntil { model.forcePrompt != nil }
+        await waitUntil { model.forcePrompt != nil && StubURLProtocol.requests.count == 2 }
 
         XCTAssertEqual(model.forcePrompt?.refs, ["/repo/wt/topic"])
 
         StubURLProtocol.enqueue(status: 200, body: #"{"results":[{"kind":"orphan_worktree","target":"/repo/wt/topic","ok":true}]}"#)
+        StubURLProtocol.enqueue(status: 200, body: branchesBody)
         model.confirmForceDelete()
-        await waitUntil { StubURLProtocol.requests.count == 2 }
+        await waitUntil { StubURLProtocol.requests.count == 4 }
 
         let forced = GitDeleteItem(kind: GitItem.kindOrphanWorktree, worktree_path: "/repo/wt/topic", force: true)
-        XCTAssertEqual(try sentBody(GitDeleteRequest.self, at: 1), GitDeleteRequest(items: [forced]))
+        XCTAssertEqual(try sentBody(GitDeleteRequest.self, at: 2), GitDeleteRequest(items: [forced]))
+    }
+
+    // MARK: - Delete jobs
+
+    /// Both rows of `twoBranchesBody` on screen with `delete_jobs` advertised,
+    /// the probe's and the load's traffic already forgotten.
+    private func deleteJobsModel() async -> (GitScreenModel, ManualSleeper) {
+        let sleeper = ManualSleeper()
+        let (model, _, _) = makeModel(sleeper: sleeper)
+        StubURLProtocol.enqueue(status: 200, body: versionBody(#"{"delete_jobs":true}"#))
+        await model.loadCapabilities()
+        StubURLProtocol.enqueue(status: 200, body: twoBranchesBody)
+        await model.load()
+        StubURLProtocol.reset()
+        return (model, sleeper)
+    }
+
+    private func job(_ status: String, completed: Int, results: String = "null") -> String {
+        #"{"job_id":"j1","status":"\#(status)","total":2,"completed":\#(completed),"results":\#(results)}"#
+    }
+
+    /// Steps the model past one blocked sleep: the undo window, then each poll
+    /// interval. `elapsed` moves the clock first, as if the sleep had lasted that long.
+    private func tick(_ sleeper: ManualSleeper, elapsed: Duration = .zero) async {
+        await waitUntil { sleeper.isWaiting }
+        clock.offset += elapsed
+        sleeper.tick()
+    }
+
+    private func pollCount() -> Int {
+        StubURLProtocol.requests.filter { $0.url?.path.hasSuffix("/delete-jobs/j1") == true }.count
+    }
+
+    func testWithDeleteJobsTheBatchIsPolledThroughATransientFailureUntilDone() async throws {
+        let (model, sleeper) = await deleteJobsModel()
+        XCTAssertTrue(model.capabilities.deleteJobs)
+        StubURLProtocol.enqueue(status: 202, body: job("running", completed: 0))
+        StubURLProtocol.enqueue(status: 503, body: #"{"detail":"agent unreachable"}"#)
+        StubURLProtocol.enqueue(status: 200, body: job("running", completed: 1))
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: job("done", completed: 2, results: #"[{"kind":"branch_only","target":"b1","ok":true},{"kind":"branch_only","target":"b2","ok":false,"error":"force_required"}]"#)
+        )
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[{"kind":"branch_only","branch":"b2"}]}"#)
+        model.select(model.items[0])
+        model.select(model.items[1])
+        model.requestDelete()
+
+        await tick(sleeper)
+        await tick(sleeper)
+        await tick(sleeper)
+        await waitUntil { StubURLProtocol.requests.count == 3 && sleeper.isWaiting }
+        XCTAssertEqual(model.deleteProgress, GitScreenModel.DeleteProgress(completed: 1, total: 2))
+        XCTAssertEqual(sleeper.durations.last, GitScreenModel.deleteJobPollInterval)
+
+        await tick(sleeper)
+        await waitUntil { model.forcePrompt != nil && !model.isDeleting }
+
+        XCTAssertEqual(StubURLProtocol.requests.map(\.httpMethod), ["POST", "GET", "GET", "GET", "GET"])
+        XCTAssertEqual(StubURLProtocol.requests.first?.url?.absoluteString.hasSuffix("/git/delete-jobs"), true)
+        XCTAssertEqual(pollCount(), 3)
+        XCTAssertEqual(try sentItems(inBodyAt: 0).compactMap { $0["branch"]?.stringValue }, ["b1", "b2"])
+        XCTAssertEqual(model.forcePrompt?.refs, ["b2"])
+        XCTAssertNil(model.deleteProgress)
+    }
+
+    func testAForgottenDeleteJobRestoresTheRowsWithoutPollingAgain() async throws {
+        let (model, sleeper) = await deleteJobsModel()
+        StubURLProtocol.enqueue(status: 202, body: job("running", completed: 0))
+        StubURLProtocol.enqueue(status: 404, body: #"{"detail":{"code":"job_not_found"}}"#)
+        StubURLProtocol.enqueue(status: 200, body: twoBranchesBody)
+        model.delete(model.items[0])
+
+        await tick(sleeper)
+        await tick(sleeper)
+        await waitUntil { model.message != nil && StubURLProtocol.requests.count == 3 && !model.isDeleting }
+
+        XCTAssertEqual(pollCount(), 1, "a forgotten job is not polled again")
+        XCTAssertEqual(StubURLProtocol.requests.last?.url?.path.hasSuffix("/git/items"), true, "the list reloads instead")
+        XCTAssertEqual(model.visibleItems.count, 2, "the hidden row comes back")
+        XCTAssertNil(model.deleteProgress)
+    }
+
+    func testACodedTooManyJobsRefusalIsNotTheBusyDialog() async throws {
+        let (model, sleeper) = await deleteJobsModel()
+        StubURLProtocol.enqueue(status: 409, body: #"{"detail":{"code":"too_many_jobs","message":""}}"#)
+        StubURLProtocol.enqueue(status: 200, body: twoBranchesBody)
+        model.delete(model.items[0])
+
+        await tick(sleeper)
+        await waitUntil { model.message != nil && StubURLProtocol.requests.count == 2 }
+
+        XCTAssertNil(model.busyDialog)
+        XCTAssertNotEqual(model.message, "Some items are in use.")
+        XCTAssertEqual(model.visibleItems.count, 2)
+    }
+
+    func testASuccessfulDeleteJobReloadsTheListWithoutWaitingForGitChanged() async throws {
+        let (model, sleeper) = await deleteJobsModel()
+        StubURLProtocol.enqueue(status: 202, body: job("running", completed: 0))
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: job("done", completed: 1, results: #"[{"kind":"branch_only","target":"b1","ok":true}]"#)
+        )
+        // The job removed b1; its one `git.changed` was lost in a reconnect.
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[{"kind":"branch_only","branch":"b2"}]}"#)
+        model.delete(model.items[0])
+
+        await tick(sleeper)
+        await tick(sleeper)
+        await waitUntil { StubURLProtocol.requests.count == 3 && !model.isDeleting }
+
+        XCTAssertEqual(StubURLProtocol.requests.last?.httpMethod, "GET")
+        XCTAssertEqual(StubURLProtocol.requests.last?.url?.path.hasSuffix("/git/items"), true)
+        XCTAssertEqual(model.items.compactMap(\.branch), ["b2"], "the list is re-fetched, not only hidden")
+        XCTAssertNil(model.message)
+    }
+
+    func testTheProgressLineClearsBeforeThePostJobReloadReturns() async throws {
+        let (model, sleeper) = await deleteJobsModel()
+        StubURLProtocol.enqueue(status: 202, body: job("running", completed: 0))
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: job("done", completed: 1, results: #"[{"kind":"branch_only","target":"b1","ok":true}]"#)
+        )
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[{"kind":"branch_only","branch":"b2"}]}"#)
+        StubURLProtocol.hold = { $0.url?.path.hasSuffix("/git/items") == true }
+        model.delete(model.items[0])
+
+        await tick(sleeper)
+        await tick(sleeper)
+        await waitUntil { StubURLProtocol.requests.count == 3 }
+
+        XCTAssertFalse(model.isDeleting, "the reload is still in flight, but the batch is over")
+        XCTAssertNil(model.deleteProgress)
+        StubURLProtocol.releaseHeld()
+        await waitUntil { model.items.compactMap(\.branch) == ["b2"] }
+        XCTAssertEqual(model.items.compactMap(\.branch), ["b2"])
+    }
+
+    func testAForceDeleteConfirmedDuringTheReloadKeepsItsOwnProgress() async throws {
+        let (model, sleeper) = await deleteJobsModel()
+        StubURLProtocol.enqueue(status: 202, body: job("running", completed: 0))
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: job("done", completed: 1, results: #"[{"kind":"branch_only","target":"b1","ok":false,"error":"force_required"}]"#)
+        )
+        // The first reload's answer; a third row marks when it has been applied.
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"items":[{"kind":"branch_only","branch":"b1"},{"kind":"branch_only","branch":"b2"},{"kind":"branch_only","branch":"b3"}]}"#
+        )
+        StubURLProtocol.enqueue(status: 202, body: job("running", completed: 0))
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: job("done", completed: 1, results: #"[{"kind":"branch_only","target":"b1","ok":true}]"#)
+        )
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[{"kind":"branch_only","branch":"b2"}]}"#)
+        StubURLProtocol.hold = { $0.url?.path.hasSuffix("/git/items") == true }
+        model.delete(model.items[0])
+
+        await tick(sleeper)
+        await tick(sleeper)
+        await waitUntil { model.forcePrompt != nil && StubURLProtocol.requests.count == 3 }
+        model.confirmForceDelete()
+        await waitUntil { StubURLProtocol.requests.count == 4 && sleeper.isWaiting }
+        XCTAssertEqual(StubURLProtocol.requests.count, 4, "the forced batch started while the reload is held")
+        XCTAssertTrue(model.isDeleting)
+
+        StubURLProtocol.releaseHeld()
+        await waitUntil { model.items.count == 3 }
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(model.items.count, 3, "the first reload returned")
+        XCTAssertTrue(model.isDeleting, "the first batch's reload must not end the forced batch")
+
+        StubURLProtocol.hold = nil
+        await tick(sleeper)
+        await waitUntil { model.items.compactMap(\.branch) == ["b2"] && !model.isDeleting }
+        XCTAssertEqual(model.items.compactMap(\.branch), ["b2"])
+        XCTAssertFalse(model.isDeleting)
+    }
+
+    func testDeleteJobOutagesShorterThanTheBudgetKeepPollingAndStillDeliverTheResults() async throws {
+        let (model, sleeper) = await deleteJobsModel()
+        let unreachable = #"{"detail":"agent unreachable"}"#
+        StubURLProtocol.enqueue(status: 202, body: job("running", completed: 0))
+        StubURLProtocol.enqueue(status: 503, body: unreachable)
+        StubURLProtocol.enqueue(status: 503, body: unreachable)
+        StubURLProtocol.enqueue(status: 200, body: job("running", completed: 1))
+        StubURLProtocol.enqueue(status: 503, body: unreachable)
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: job("done", completed: 2, results: #"[{"kind":"branch_only","target":"b1","ok":true},{"kind":"branch_only","target":"b2","ok":false,"error":"force_required"}]"#)
+        )
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[{"kind":"branch_only","branch":"b2"}]}"#)
+        model.select(model.items[0])
+        model.select(model.items[1])
+        model.requestDelete()
+
+        await tick(sleeper)
+        await tick(sleeper, elapsed: .seconds(1))
+        await tick(sleeper, elapsed: .seconds(118))
+        await waitUntil { self.pollCount() == 2 && sleeper.isWaiting }
+        XCTAssertNil(model.message, "119 s without a successful poll is inside the budget")
+        XCTAssertTrue(model.isDeleting)
+
+        await tick(sleeper, elapsed: .seconds(1))
+        // The successful poll restarts the budget, so another 119 s outage is survived.
+        await tick(sleeper, elapsed: .seconds(119))
+        await tick(sleeper, elapsed: .seconds(1))
+        await waitUntil { model.forcePrompt != nil && !model.isDeleting }
+
+        XCTAssertEqual(pollCount(), 5)
+        XCTAssertEqual(model.forcePrompt?.refs, ["b2"])
+        XCTAssertNil(model.message)
+        XCTAssertFalse(model.isDeleting)
+    }
+
+    func testDeleteJobGivesUpOnceNoPollSucceededForTheWholeBudget() async throws {
+        let (model, sleeper) = await deleteJobsModel()
+        let unreachable = #"{"detail":"agent unreachable"}"#
+        StubURLProtocol.enqueue(status: 202, body: job("running", completed: 0))
+        StubURLProtocol.enqueue(status: 503, body: unreachable)
+        StubURLProtocol.enqueue(status: 503, body: unreachable)
+        StubURLProtocol.enqueue(status: 503, body: unreachable)
+        StubURLProtocol.enqueue(status: 200, body: twoBranchesBody)
+        model.delete(model.items[0])
+
+        await tick(sleeper)
+        await tick(sleeper, elapsed: .seconds(1))
+        await tick(sleeper, elapsed: .seconds(118))
+        await waitUntil { self.pollCount() == 2 && sleeper.isWaiting }
+        XCTAssertNil(model.message)
+
+        await tick(sleeper, elapsed: GitScreenModel.deleteJobGiveUpAfter - .seconds(119))
+        // The fifth request is the reload after the failure.
+        await waitUntil { model.message != nil && StubURLProtocol.requests.count == 5 && !model.isDeleting }
+
+        XCTAssertEqual(pollCount(), 3)
+        XCTAssertEqual(model.message?.hasPrefix("Delete failed"), true)
+        XCTAssertEqual(model.visibleItems.count, 2, "the hidden row comes back")
+        XCTAssertFalse(model.isDeleting)
+    }
+
+    func testAFailedDeleteReloadsTheListSincePartOfTheBatchMayBeGone() async throws {
+        let sleeper = ManualSleeper()
+        let (model, _, _) = makeModel(sleeper: sleeper)
+        StubURLProtocol.enqueue(status: 200, body: twoBranchesBody)
+        await model.load()
+        StubURLProtocol.enqueue(status: 500, body: #"{"detail":"request timed out"}"#)
+        // The agent removed b1 before the request failed.
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[{"kind":"branch_only","branch":"b2"}]}"#)
+        model.delete(model.items[0])
+
+        sleeper.release()
+        await waitUntil { StubURLProtocol.requests.count == 3 && model.items.count == 1 }
+
+        XCTAssertEqual(model.message?.hasPrefix("Delete failed"), true)
+        XCTAssertEqual(model.visibleItems.compactMap(\.branch), ["b2"])
     }
 }
