@@ -24,11 +24,15 @@ data class GitUiState(
     val selected: Set<String> = emptySet(),
     val inSelectionMode: Boolean = false,
     val deleting: Boolean = false,
+    /** The batch in flight, for the "Deleting… n of m done" status line. */
+    val deleteProgress: DeleteProgress? = null,
 
     /** `capabilities.git.branches`: gates New branch and the row's Check out. */
     val branchesEnabled: Boolean = false,
     /** `capabilities.git.delete_remote`: gates deleting remote-tracking rows. */
     val deleteRemoteEnabled: Boolean = false,
+    /** `capabilities.git.delete_jobs`: deletes run as polled background jobs. */
+    val deleteJobsEnabled: Boolean = false,
     val remoteExpanded: Boolean = false,
     /** Tree folders the user flipped away from their default open/closed state. */
     val toggledFolders: Set<String> = emptySet(),
@@ -135,6 +139,17 @@ sealed interface GitUiEvent {
     /** Generic snackbar text — used for delete failures. */
     data class Message(val text: String) : GitUiEvent
 }
+
+/** A delete batch in flight: items processed so far out of the batch. */
+data class DeleteProgress(val completed: Int, val total: Int)
+
+/** The status line shown while a delete batch runs, identical on all three clients. */
+internal fun deleteProgressMessage(progress: DeleteProgress): String =
+    if (progress.completed > 0) {
+        "Deleting… ${progress.completed} of ${progress.total} done"
+    } else {
+        "Deleting ${progress.total} item(s)…"
+    }
 
 internal fun deleteFailureMessage(failures: List<GitDeleteResultItem>): String {
     val failure = failures.singleOrNull() ?: return "${failures.size} item(s) failed to delete"

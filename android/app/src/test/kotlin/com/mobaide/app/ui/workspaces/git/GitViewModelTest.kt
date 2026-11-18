@@ -173,7 +173,7 @@ class GitViewModelTest {
         val f = newFixture()
         advanceUntilIdle()
         val payload = slot<List<GitDeleteItem>>()
-        coEvery { f.repo.deleteGitItems(eq("alpha"), capture(payload)) } returns GitDeleteResponse(
+        coEvery { f.repo.deleteGitItems(eq("alpha"), capture(payload), any(), any()) } returns GitDeleteResponse(
             results = listOf(okResult(GitItem.KIND_BRANCH_ONLY, "stale")),
         )
         f.vm.enterSelection(staleId)
@@ -187,10 +187,10 @@ class GitViewModelTest {
 
         advanceTimeBy(4_000)
         runCurrent()
-        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any()) }
+        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any(), any(), any()) }
 
         advanceUntilIdle()
-        coVerify(exactly = 1) { f.repo.deleteGitItems("alpha", any()) }
+        coVerify(exactly = 1) { f.repo.deleteGitItems("alpha", any(), any(), any()) }
         assertEquals(1, payload.captured.size)
         assertEquals("stale", payload.captured[0].branch)
         assertFalse("force must default to false", payload.captured[0].force)
@@ -206,7 +206,7 @@ class GitViewModelTest {
         val f = newFixture()
         advanceUntilIdle()
         val payload = slot<List<GitDeleteItem>>()
-        coEvery { f.repo.deleteGitItems(eq("alpha"), capture(payload)) } returns GitDeleteResponse(
+        coEvery { f.repo.deleteGitItems(eq("alpha"), capture(payload), any(), any()) } returns GitDeleteResponse(
             results = listOf(
                 okResult(GitItem.KIND_BRANCH_WITH_WORKTREE, "topic"),
                 okResult(GitItem.KIND_ORPHAN_WORKTREE, "/repo/wt/orphan"),
@@ -231,7 +231,7 @@ class GitViewModelTest {
         advanceUntilIdle()
         assertNull(f.vm.uiState.value.undoPrompt)
         assertTrue(f.vm.uiState.value.pendingDeleteIds.isEmpty())
-        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any()) }
+        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any(), any(), any()) }
     }
 
     @Test
@@ -241,7 +241,7 @@ class GitViewModelTest {
         val f = newFixture()
         advanceUntilIdle()
         val payload = slot<List<GitDeleteItem>>()
-        coEvery { f.repo.deleteGitItems(eq("alpha"), capture(payload)) } returns GitDeleteResponse(
+        coEvery { f.repo.deleteGitItems(eq("alpha"), capture(payload), any(), any()) } returns GitDeleteResponse(
             results = listOf(
                 okResult(GitItem.KIND_BRANCH_ONLY, "stale"),
                 okResult(GitItem.KIND_BRANCH_WITH_WORKTREE, "topic"),
@@ -257,7 +257,7 @@ class GitViewModelTest {
         assertEquals(setOf(staleId, topicId), state.pendingDeleteIds)
 
         advanceUntilIdle()
-        coVerify(exactly = 1) { f.repo.deleteGitItems("alpha", any()) }
+        coVerify(exactly = 1) { f.repo.deleteGitItems("alpha", any(), any(), any()) }
         assertEquals(listOf("stale", "topic"), payload.captured.map { it.branch })
     }
 
@@ -276,20 +276,20 @@ class GitViewModelTest {
         assertTrue(state.pendingDeleteIds.isEmpty())
 
         advanceUntilIdle()
-        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any()) }
+        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any(), any(), any()) }
     }
 
     @Test
     fun commitNow_sendsWithoutWaitingOutTheWindow() = runTest {
         val f = newFixture()
         advanceUntilIdle()
-        coEvery { f.repo.deleteGitItems("alpha", any()) } returns GitDeleteResponse(
+        coEvery { f.repo.deleteGitItems("alpha", any(), any(), any()) } returns GitDeleteResponse(
             results = listOf(okResult(GitItem.KIND_BRANCH_ONLY, "stale")),
         )
         f.vm.deleteItem(staleId)
         f.vm.commitNow()
         runCurrent()
-        coVerify(exactly = 1) { f.repo.deleteGitItems("alpha", any()) }
+        coVerify(exactly = 1) { f.repo.deleteGitItems("alpha", any(), any(), any()) }
         assertNull(f.vm.uiState.value.undoPrompt)
     }
 
@@ -299,7 +299,7 @@ class GitViewModelTest {
     fun forceRequired_populatesPrompt_andRestoresTheRowUnderIt() = runTest {
         val f = newFixture()
         advanceUntilIdle()
-        coEvery { f.repo.deleteGitItems("alpha", any()) } returns GitDeleteResponse(
+        coEvery { f.repo.deleteGitItems("alpha", any(), any(), any()) } returns GitDeleteResponse(
             results = listOf(failedResult(GitItem.KIND_BRANCH_ONLY, "stale", "force_required")),
         )
         f.vm.deleteItem(staleId)
@@ -322,21 +322,21 @@ class GitViewModelTest {
     fun confirmForceDelete_reissuesWithForceTrue_andRehidesTheRow() = runTest {
         val f = newFixture()
         advanceUntilIdle()
-        coEvery { f.repo.deleteGitItems("alpha", any()) } returns GitDeleteResponse(
+        coEvery { f.repo.deleteGitItems("alpha", any(), any(), any()) } returns GitDeleteResponse(
             results = listOf(failedResult(GitItem.KIND_BRANCH_ONLY, "stale", "force_required")),
         )
         f.vm.deleteItem(staleId)
         advanceUntilIdle()
 
         val forced = listOf(GitDeleteItem(kind = GitItem.KIND_BRANCH_ONLY, branch = "stale", force = true))
-        coEvery { f.repo.deleteGitItems("alpha", forced) } returns GitDeleteResponse(
+        coEvery { f.repo.deleteGitItems("alpha", forced, any(), any()) } returns GitDeleteResponse(
             results = listOf(okResult(GitItem.KIND_BRANCH_ONLY, "stale")),
         )
         f.vm.confirmForceDelete()
         assertEquals(setOf(staleId), f.vm.uiState.value.pendingDeleteIds)
         advanceUntilIdle()
 
-        coVerify(exactly = 1) { f.repo.deleteGitItems("alpha", forced) }
+        coVerify(exactly = 1) { f.repo.deleteGitItems("alpha", forced, any(), any()) }
         assertNull(
             "forceDeletePrompt must clear after the user confirmed",
             f.vm.uiState.value.forceDeletePrompt,
@@ -347,7 +347,7 @@ class GitViewModelTest {
     fun partialFailure_restoresOnlyTheFailedRow_andNamesItInTheMessage() = runTest {
         val f = newFixture()
         advanceUntilIdle()
-        coEvery { f.repo.deleteGitItems("alpha", any()) } returns GitDeleteResponse(
+        coEvery { f.repo.deleteGitItems("alpha", any(), any(), any()) } returns GitDeleteResponse(
             results = listOf(
                 okResult(GitItem.KIND_BRANCH_ONLY, "stale"),
                 failedResult(GitItem.KIND_BRANCH_WITH_WORKTREE, "topic", "locked"),
@@ -376,11 +376,11 @@ class GitViewModelTest {
         val f = newFixture()
         advanceUntilIdle()
         val reply = CompletableDeferred<GitDeleteResponse>()
-        coEvery { f.repo.deleteGitItems("alpha", any()) } coAnswers { reply.await() }
+        coEvery { f.repo.deleteGitItems("alpha", any(), any(), any()) } coAnswers { reply.await() }
 
         f.vm.deleteItem(staleId)
         advanceUntilIdle()
-        coVerify(exactly = 1) { f.repo.deleteGitItems("alpha", any()) }
+        coVerify(exactly = 1) { f.repo.deleteGitItems("alpha", any(), any(), any()) }
 
         f.changed.emit("alpha")
         advanceUntilIdle()
@@ -398,13 +398,46 @@ class GitViewModelTest {
     }
 
     @Test
+    fun deleteJobsCapability_sendsTheBatchAsAJob_andShowsItsProgressUntilDone() = runTest {
+        val f = newFixture(capabilities = GitCapabilities(deleteJobs = true))
+        advanceUntilIdle()
+        val reply = CompletableDeferred<GitDeleteResponse>()
+        val onProgress = slot<(Int, Int) -> Unit>()
+        coEvery {
+            f.repo.deleteGitItems("alpha", any(), true, capture(onProgress))
+        } coAnswers { reply.await() }
+
+        f.vm.deleteItem(staleId)
+        f.vm.deleteItem(topicId)
+        f.vm.commitNow()
+        runCurrent()
+
+        assertEquals(DeleteProgress(completed = 0, total = 2), f.vm.uiState.value.deleteProgress)
+        onProgress.captured(1, 2)
+        assertEquals(DeleteProgress(completed = 1, total = 2), f.vm.uiState.value.deleteProgress)
+
+        reply.complete(
+            GitDeleteResponse(
+                results = listOf(
+                    okResult(GitItem.KIND_BRANCH_ONLY, "stale"),
+                    okResult(GitItem.KIND_BRANCH_WITH_WORKTREE, "topic"),
+                ),
+            ),
+        )
+        advanceUntilIdle()
+
+        assertNull(f.vm.uiState.value.deleteProgress)
+        assertFalse(f.vm.uiState.value.deleting)
+    }
+
+    @Test
     fun busyException_setsBusyDialog_andRestoresEveryRow() = runTest {
         val f = newFixture()
         advanceUntilIdle()
         val holders = listOf(
             BusyHolder(kind = "session", session_id = "s-1", cwd = "/repo/wt/topic"),
         )
-        coEvery { f.repo.deleteGitItems("alpha", any()) } throws GitBusyException(holders)
+        coEvery { f.repo.deleteGitItems("alpha", any(), any(), any()) } throws GitBusyException(holders)
 
         f.vm.deleteItem(topicId)
         advanceUntilIdle()
@@ -421,7 +454,7 @@ class GitViewModelTest {
     fun unknownException_emitsMessageEvent_andRestoresRows() = runTest {
         val f = newFixture()
         advanceUntilIdle()
-        coEvery { f.repo.deleteGitItems("alpha", any()) } throws RuntimeException("oops")
+        coEvery { f.repo.deleteGitItems("alpha", any(), any(), any()) } throws RuntimeException("oops")
 
         f.vm.events.test {
             f.vm.deleteItem(staleId)
@@ -433,6 +466,27 @@ class GitViewModelTest {
         }
         assertFalse(f.vm.uiState.value.deleting)
         assertTrue(f.vm.uiState.value.pendingDeleteIds.isEmpty())
+    }
+
+    @Test
+    fun failedDelete_reloadsTheList_sincePartOfTheBatchMayBeGone() = runTest {
+        val f = newFixture()
+        advanceUntilIdle()
+        coEvery { f.repo.deleteGitItems("alpha", any(), any(), any()) } throws ApiException(503, "down")
+        // The agent removed the row before the connection dropped.
+        coEvery { f.repo.listGitItems("alpha") } returns listOf(
+            branchOnly("main", isCurrent = true),
+            branchWithWorktree("topic", "/repo/wt/topic"),
+        )
+
+        f.vm.deleteItem(staleId)
+        f.vm.deleteItem(topicId)
+        advanceUntilIdle()
+
+        val state = f.vm.uiState.value
+        assertFalse(state.deleting)
+        assertNull(state.deleteProgress)
+        assertEquals(listOf(mainId, topicId), state.visibleItems.map { it.id })
     }
 
     // MARK: - Reload
@@ -491,7 +545,7 @@ class GitViewModelTest {
         // and re-hide a branch that gets re-created later.
         val f = newFixture()
         advanceUntilIdle()
-        coEvery { f.repo.deleteGitItems("alpha", any()) } returns GitDeleteResponse(
+        coEvery { f.repo.deleteGitItems("alpha", any(), any(), any()) } returns GitDeleteResponse(
             results = listOf(okResult(GitItem.KIND_BRANCH_ONLY, "stale")),
         )
         f.vm.deleteItem(staleId)
@@ -524,7 +578,7 @@ class GitViewModelTest {
         advanceUntilIdle()
 
         assertNull(f.vm.uiState.value.undoPrompt)
-        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any()) }
+        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any(), any(), any()) }
     }
 
     // MARK: - Failure copy
@@ -934,7 +988,7 @@ class GitViewModelTest {
         advanceUntilIdle()
         assertTrue(f.vm.uiState.value.deleteRemoteEnabled)
         val payload = slot<List<GitDeleteItem>>()
-        coEvery { f.repo.deleteGitItems(eq("alpha"), capture(payload)) } returns GitDeleteResponse(
+        coEvery { f.repo.deleteGitItems(eq("alpha"), capture(payload), any(), any()) } returns GitDeleteResponse(
             results = listOf(okResult(GitItem.KIND_REMOTE_BRANCH, "origin/feature-x")),
         )
 
@@ -953,7 +1007,7 @@ class GitViewModelTest {
         assertEquals(1, state.undoPrompt?.count)
         advanceTimeBy(4_000)
         runCurrent()
-        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any()) }
+        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any(), any(), any()) }
 
         advanceUntilIdle()
         assertEquals(
@@ -975,7 +1029,7 @@ class GitViewModelTest {
         assertNull(state.remoteDeletePrompt)
         assertNull(state.undoPrompt)
         assertTrue(state.visibleItems.any { it.id == remoteId })
-        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any()) }
+        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any(), any(), any()) }
     }
 
     @Test
@@ -983,7 +1037,7 @@ class GitViewModelTest {
         val f = remoteDeleteFixture()
         advanceUntilIdle()
         val payload = slot<List<GitDeleteItem>>()
-        coEvery { f.repo.deleteGitItems(eq("alpha"), capture(payload)) } returns GitDeleteResponse(
+        coEvery { f.repo.deleteGitItems(eq("alpha"), capture(payload), any(), any()) } returns GitDeleteResponse(
             results = listOf(
                 okResult(GitItem.KIND_BRANCH_ONLY, "stale"),
                 okResult(GitItem.KIND_REMOTE_BRANCH, "origin/feature-x"),
@@ -1027,7 +1081,7 @@ class GitViewModelTest {
         assertTrue(state.inSelectionMode)
         assertEquals(setOf(staleId, remoteId), state.selected)
         assertTrue(state.pendingDeleteIds.isEmpty())
-        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any()) }
+        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any(), any(), any()) }
 
         f.vm.requestDelete()
 
@@ -1051,7 +1105,7 @@ class GitViewModelTest {
         val state = f.vm.uiState.value
         assertNull(state.remoteDeletePrompt)
         assertTrue(state.pendingDeleteIds.isEmpty())
-        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any()) }
+        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any(), any(), any()) }
     }
 
     @Test
@@ -1059,7 +1113,7 @@ class GitViewModelTest {
         val f = remoteDeleteFixture()
         advanceUntilIdle()
         val payload = slot<List<GitDeleteItem>>()
-        coEvery { f.repo.deleteGitItems(eq("alpha"), capture(payload)) } returns GitDeleteResponse(
+        coEvery { f.repo.deleteGitItems(eq("alpha"), capture(payload), any(), any()) } returns GitDeleteResponse(
             results = listOf(okResult(GitItem.KIND_ORPHAN_WORKTREE, "/repo/wt/topic")),
         )
 
@@ -1092,14 +1146,14 @@ class GitViewModelTest {
 
         assertTrue(f.vm.uiState.value.pendingDeleteIds.isEmpty())
         assertNull(f.vm.uiState.value.undoPrompt)
-        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any()) }
+        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any(), any(), any()) }
     }
 
     @Test
     fun removeWorktree_dirty_promptsWithThePath_thenReissuesOnlyTheRemovalWithForce() = runTest {
         val f = remoteDeleteFixture()
         advanceUntilIdle()
-        coEvery { f.repo.deleteGitItems("alpha", listOf(worktreeOnlyTopic)) } returns GitDeleteResponse(
+        coEvery { f.repo.deleteGitItems("alpha", listOf(worktreeOnlyTopic), any(), any()) } returns GitDeleteResponse(
             results = listOf(
                 failedResult(GitItem.KIND_ORPHAN_WORKTREE, "/repo/wt/topic", "force_required"),
             ),
@@ -1110,13 +1164,13 @@ class GitViewModelTest {
         assertEquals(listOf("/repo/wt/topic"), f.vm.uiState.value.forceDeletePrompt?.refs)
 
         val forced = listOf(worktreeOnlyTopic.copy(force = true))
-        coEvery { f.repo.deleteGitItems("alpha", forced) } returns GitDeleteResponse(
+        coEvery { f.repo.deleteGitItems("alpha", forced, any(), any()) } returns GitDeleteResponse(
             results = listOf(okResult(GitItem.KIND_ORPHAN_WORKTREE, "/repo/wt/topic")),
         )
         f.vm.confirmForceDelete()
         advanceUntilIdle()
 
-        coVerify(exactly = 1) { f.repo.deleteGitItems("alpha", forced) }
+        coVerify(exactly = 1) { f.repo.deleteGitItems("alpha", forced, any(), any()) }
         assertNull(f.vm.uiState.value.forceDeletePrompt)
     }
 

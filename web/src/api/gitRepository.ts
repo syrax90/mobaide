@@ -14,6 +14,7 @@ import type { BusyHolder } from '../protocol/dto/gitConflict';
 export type GitItem = components['schemas']['GitItemRead'];
 export type GitDeleteItem = components['schemas']['GitDeleteItem'];
 export type GitDeleteResult = components['schemas']['GitDeleteResultItem'];
+export type GitDeleteJob = components['schemas']['GitDeleteJobResponse'];
 export type GitBranchCreateRequest = components['schemas']['GitBranchCreateRequest'];
 export type GitBranchResult = components['schemas']['GitBranchResponse'];
 export type WorktreeBases = components['schemas']['WorktreeBasesResponse'];
@@ -129,28 +130,110 @@ export async function listGitItems(
   return data.items;
 }
 
+/** How often a running delete job is polled. */
+export const DELETE_JOB_POLL_MS = 1000;
 /**
- * Batch delete. Per-item git failures come back in the **200** body so each row
+ * How long polls may keep failing (agent or relay reconnecting) before the
+ * client gives up on a job; the agent keeps a finished job for 10 minutes.
+ */
+export const DELETE_JOB_GIVE_UP_MS = 120_000;
+
+export interface DeleteGitItemsOptions {
+  /**
+   * `capabilities.git.delete_jobs`: run the batch as a background job and poll
+   * it, so a batch of slow worktree removals never hits the request timeout.
+   */
+  jobs?: boolean;
+  /** Items processed so far, while a job runs. */
+  onProgress?: (completed: number, total: number) => void;
+}
+
+function toDeleteError(response: Response, error: unknown): Error {
+  const apiError = toApiError(response, error);
+  if (apiError.status === 409) {
+    // Every 409 is the busy guard except a coded refusal (`too_many_jobs`).
+    const holders = busyHolders(apiError);
+    const detail: unknown = apiError.detail;
+    const coded = typeof detail === 'object' && detail !== null && 'code' in detail;
+    if (holders !== null || !coded) return new GitBusyError(holders);
+  }
+  return apiError;
+}
+
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+async function runDeleteJob(
+  agentId: string,
+  workspaceName: string,
+  items: readonly GitDeleteItem[],
+  onProgress: DeleteGitItemsOptions['onProgress'],
+): Promise<GitDeleteResult[]> {
+  const client = createAgentClient(agentId);
+  const started = await client.POST('/api/projects/{name}/git/delete-jobs', {
+    params: { path: { name: workspaceName } },
+    body: { items: [...items] },
+  });
+  if (started.error !== undefined || started.data === undefined) {
+    throw toDeleteError(started.response, started.error);
+  }
+  let job: GitDeleteJob = started.data;
+  let lastSuccess = Date.now();
+  const givenUp = () => Date.now() - lastSuccess >= DELETE_JOB_GIVE_UP_MS;
+  while (job.status !== 'done') {
+    onProgress?.(job.completed, job.total);
+    await sleep(DELETE_JOB_POLL_MS);
+    let polled;
+    try {
+      polled = await client.GET('/api/projects/{name}/git/delete-jobs/{job_id}', {
+        params: { path: { name: workspaceName, job_id: job.job_id } },
+      });
+    } catch (error: unknown) {
+      if (givenUp()) throw error;
+      continue;
+    }
+    if (polled.error !== undefined || polled.data === undefined) {
+      // A 404 means the agent restarted and forgot the job: nothing will finish it.
+      if (polled.response.status === 404 || givenUp()) {
+        throw toApiError(polled.response, polled.error);
+      }
+      continue;
+    }
+    lastSuccess = Date.now();
+    job = polled.data;
+  }
+  onProgress?.(job.completed, job.total);
+  return job.results ?? [];
+}
+
+/**
+ * Batch delete. Per-item git failures come back with the results so each row
  * can be acted on independently; only the busy guard rejects the whole batch,
  * and it does so before touching anything.
  *
- * The path really does contain a colon (`items:delete`) — an RPC-style verb the
- * agent chose because some proxies drop bodies on `DELETE`. openapi-fetch treats
- * the path as a literal template, so the colon passes through untouched.
+ * With `jobs` the batch runs as an agent background job the client polls;
+ * otherwise it is one `items:delete` request, whose path really does contain a
+ * colon — an RPC-style verb the agent chose because some proxies drop bodies on
+ * `DELETE`. openapi-fetch treats the path as a literal template, so the colon
+ * passes through untouched.
  */
 export async function deleteGitItems(
   agentId: string,
   workspaceName: string,
   items: readonly GitDeleteItem[],
+  options: DeleteGitItemsOptions = {},
 ): Promise<GitDeleteResult[]> {
+  if (options.jobs === true) {
+    return runDeleteJob(agentId, workspaceName, items, options.onProgress);
+  }
   const { data, error, response } = await createAgentClient(agentId).POST(
     '/api/projects/{name}/git/items:delete',
     { params: { path: { name: workspaceName } }, body: { items: [...items] } },
   );
   if (error !== undefined || data === undefined) {
-    const apiError = toApiError(response, error);
-    if (apiError.status === 409) throw new GitBusyError(busyHolders(apiError));
-    throw apiError;
+    throw toDeleteError(response, error);
   }
   return data.results;
 }

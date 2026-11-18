@@ -131,6 +131,7 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/agent/GitBranchResponse.json': OWNER.generated,
   'dto/agent/GitCheckoutRequest.json': OWNER.generated,
   'dto/agent/GitDeleteItem.json': OWNER.generated,
+  'dto/agent/GitDeleteJobResponse.json': OWNER.generated,
   'dto/agent/GitDeleteRequest.json': OWNER.generated,
   'dto/agent/GitDeleteResponse.json': OWNER.generated,
   'dto/agent/GitDeleteResultItem.json': OWNER.generated,

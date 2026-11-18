@@ -19,7 +19,8 @@ vi.mock('../../../auth/agentTokens', () => ({
 
 type Outcome =
   | { kind: 'results'; results: GitDeleteResult[] }
-  | { kind: 'busy'; holders: BusyHolder[] | null };
+  | { kind: 'busy'; holders: BusyHolder[] | null }
+  | { kind: 'error'; error: Error };
 
 const api = vi.hoisted(() => ({
   items: [] as GitItem[],
@@ -47,6 +48,7 @@ vi.mock('../../../api/gitRepository', async (importOriginal) => {
         // The real class, so the screen's `instanceof` branch is the one taken.
         return Promise.reject(new actual.GitBusyError(outcome.holders));
       }
+      if (outcome?.kind === 'error') return Promise.reject(outcome.error);
       return Promise.resolve(
         outcome?.results ??
           items.map((item) => ({
@@ -216,6 +218,26 @@ describe('GitScreen busy conflict', () => {
       expect(screen.getByRole('button', { name: 'Delete feature-a' })).toBeInTheDocument();
     });
     expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+});
+
+describe('GitScreen failed delete', () => {
+  it('reloads the list, since part of the batch may already be gone', async () => {
+    api.outcomes = [{ kind: 'error', error: toApiError(new Response(null, { status: 503 }), {}) }];
+    renderScreen();
+    await screen.findByRole('button', { name: 'Delete feature-a' });
+    // The agent removed the row before the connection dropped.
+    api.items = [branch('feature-b')];
+
+    await deleteNow('feature-a');
+
+    await waitFor(() => {
+      expect(lastToast()).toMatch(/^Delete failed/);
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Delete feature-a' })).toBeNull();
+    });
+    expect(screen.getByRole('button', { name: 'Delete feature-b' })).toBeInTheDocument();
   });
 });
 

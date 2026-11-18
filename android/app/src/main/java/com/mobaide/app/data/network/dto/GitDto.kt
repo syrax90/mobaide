@@ -125,6 +125,26 @@ data class GitDeleteResultItem(
 @Serializable
 data class GitDeleteResponse(val results: List<GitDeleteResultItem>)
 
+/**
+ * A delete batch run as an agent background job (`capabilities.git.delete_jobs`).
+ * [results] is null while [status] is `running`, then holds the same per-item
+ * outcomes, in request order, as `POST /items:delete`.
+ */
+@Serializable
+data class GitDeleteJobResponse(
+    val job_id: String,
+    val status: String,
+    val total: Int,
+    val completed: Int,
+    val results: List<GitDeleteResultItem>? = null,
+) {
+    val isRunning: Boolean get() = status == STATUS_RUNNING
+
+    companion object {
+        const val STATUS_RUNNING = "running"
+    }
+}
+
 @Serializable
 data class BusyHolder(
     val kind: String,

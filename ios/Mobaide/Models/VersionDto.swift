@@ -127,6 +127,8 @@ struct GitCapabilities: Equatable, Sendable {
     var resolve = false
     /// The workspace Git screen may delete remote-tracking rows (on the remote).
     var deleteRemote = false
+    /// Workspace deletes run as background jobs the client polls (`POST /delete-jobs`).
+    var deleteJobs = false
     /// The conflict resolver's routes and `resolved_paths` on status.
     var conflicts = false
     /// `GET …/git/worktree-bases` and `base_branch` on session create.
@@ -165,6 +167,7 @@ extension VersionInfoResponse {
             rebase: gitCapability("rebase"),
             resolve: gitCapability("resolve"),
             deleteRemote: gitCapability("delete_remote"),
+            deleteJobs: gitCapability("delete_jobs"),
             conflicts: gitCapability("conflicts"),
             worktreeBase: gitCapability("worktree_base")
         )

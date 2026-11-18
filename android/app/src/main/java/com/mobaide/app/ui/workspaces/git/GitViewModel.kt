@@ -89,6 +89,7 @@ class GitViewModel @Inject constructor(
                 it.copy(
                     branchesEnabled = capabilities.branches,
                     deleteRemoteEnabled = capabilities.deleteRemote,
+                    deleteJobsEnabled = capabilities.deleteJobs,
                 )
             }
         } catch (e: CancellationException) {
@@ -306,9 +307,17 @@ class GitViewModel @Inject constructor(
 
     private suspend fun sendDelete(batch: List<PendingDelete>) {
         if (batch.isEmpty()) return
-        _uiState.update { it.copy(deleting = true) }
+        _uiState.update {
+            it.copy(deleting = true, deleteProgress = DeleteProgress(completed = 0, total = batch.size))
+        }
         try {
-            val response = gitRepository.deleteGitItems(workspaceName, batch.map(PendingDelete::item))
+            val response = gitRepository.deleteGitItems(
+                workspaceName,
+                batch.map(PendingDelete::item),
+                useJobs = _uiState.value.deleteJobsEnabled,
+            ) { completed, total ->
+                _uiState.update { it.copy(deleteProgress = DeleteProgress(completed, total)) }
+            }
             val unmerged = mutableListOf<PendingDelete>()
             val failures = mutableListOf<GitDeleteResultItem>()
             val restore = mutableSetOf<String>()
@@ -335,6 +344,7 @@ class GitViewModel @Inject constructor(
             _uiState.update {
                 it.copy(
                     deleting = false,
+                    deleteProgress = null,
                     pendingDeleteIds = it.pendingDeleteIds - restore,
                     forceDeletePrompt = if (unmerged.isEmpty()) {
                         it.forceDeletePrompt
@@ -354,6 +364,7 @@ class GitViewModel @Inject constructor(
             _uiState.update {
                 it.copy(
                     deleting = false,
+                    deleteProgress = null,
                     busyDialog = e.busyBy,
                     pendingDeleteIds = it.pendingDeleteIds - batch.map(PendingDelete::id),
                 )
@@ -365,10 +376,14 @@ class GitViewModel @Inject constructor(
             _uiState.update {
                 it.copy(
                     deleting = false,
+                    deleteProgress = null,
                     pendingDeleteIds = it.pendingDeleteIds - batch.map(PendingDelete::id),
                 )
             }
             _events.tryEmit(GitUiEvent.Message("Delete failed: ${e.message ?: "unknown error"}"))
+            // Part of the batch may have gone through, and its `git.changed`
+            // may have been missed while the connection was down.
+            reload()
         }
     }
 

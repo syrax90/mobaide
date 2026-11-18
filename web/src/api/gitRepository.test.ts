@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { GitItem } from './gitRepository';
+import type { GitDeleteItem, GitDeleteJob, GitItem } from './gitRepository';
 
 // Hand-written stand-in for the typed agent client, as in
 // `sessionGitRepository.test.ts`: what is under test is the repository's own
@@ -22,20 +22,25 @@ vi.mock('./clients', () => ({
 }));
 
 const {
+  DELETE_JOB_GIVE_UP_MS,
+  DELETE_JOB_POLL_MS,
   GitBusyError,
   canCheckOut,
   canRemoveWorktree,
   checkoutGitRef,
   compareRefNames,
   createGitBranch,
+  deleteGitItems,
   isDeletable,
   listGitItems,
 } = await import('./gitRepository');
 const { SessionGitError } = await import('./sessionGitRepository');
+const { ApiError } = await import('./errors');
 
 afterEach(() => {
   agent.results.length = 0;
   agent.requests.length = 0;
+  vi.useRealTimers();
 });
 
 const lastRequest = () => {
@@ -171,6 +176,125 @@ describe('checkoutGitRef', () => {
 
     expect(missing).toMatchObject({ kind: 'git', code: 'ref_not_found' });
     expect(outdated).toMatchObject({ kind: 'agentOutdated', code: null });
+  });
+});
+
+describe('deleteGitItems as a background job', () => {
+  const batch: GitDeleteItem[] = [
+    { kind: 'branch_with_worktree', branch: 'topic', worktree_path: '/wt/topic', force: false },
+    { kind: 'branch_only', branch: 'stale', force: false },
+  ];
+  const job = (over: Partial<GitDeleteJob> = {}): GitDeleteJob => ({
+    job_id: 'j1',
+    status: 'running',
+    total: 2,
+    completed: 0,
+    results: null,
+    ...over,
+  });
+  const done = job({
+    status: 'done',
+    completed: 2,
+    results: [
+      { kind: 'branch_with_worktree', target: 'topic', ok: true },
+      { kind: 'branch_only', target: 'stale', ok: false, error: 'force_required' },
+    ],
+  });
+
+  const run = async (onProgress?: (completed: number, total: number) => void) => {
+    vi.useFakeTimers();
+    const pending = deleteGitItems('a1', 'proj', batch, { jobs: true, onProgress }).catch(
+      (failure: unknown) => failure,
+    );
+    await vi.runAllTimersAsync();
+    return pending;
+  };
+
+  it('polls the job until done, through a transient failure, and returns its results', async () => {
+    ok(job());
+    refuse(503, 'agent unreachable');
+    ok(job({ completed: 1 }));
+    ok(done);
+    const progress: [number, number][] = [];
+
+    await expect(run((completed, total) => progress.push([completed, total]))).resolves.toEqual(
+      done.results,
+    );
+
+    expect(agent.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+      'POST /api/projects/{name}/git/delete-jobs',
+      'GET /api/projects/{name}/git/delete-jobs/{job_id}',
+      'GET /api/projects/{name}/git/delete-jobs/{job_id}',
+      'GET /api/projects/{name}/git/delete-jobs/{job_id}',
+    ]);
+    expect(agent.requests[0]?.init).toMatchObject({ body: { items: batch } });
+    expect(agent.requests[1]?.init).toMatchObject({
+      params: { path: { name: 'proj', job_id: 'j1' } },
+    });
+    expect(progress).toContainEqual([1, 2]);
+    expect(progress.at(-1)).toEqual([2, 2]);
+  });
+
+  it('gives up at once when the agent no longer knows the job', async () => {
+    ok(job());
+    refuse(404, { code: 'job_not_found' });
+
+    const error = await run();
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 404 });
+    expect(agent.requests).toHaveLength(2);
+  });
+
+  // Polls in a row that fit inside the give-up budget, with no success between them.
+  const pollsInBudget = DELETE_JOB_GIVE_UP_MS / DELETE_JOB_POLL_MS;
+
+  it('keeps polling through outages shorter than the budget, restarted by each successful poll', async () => {
+    ok(job());
+    for (let i = 0; i < pollsInBudget - 1; i++) refuse(503, 'agent unreachable');
+    ok(job({ completed: 1 }));
+    for (let i = 0; i < pollsInBudget - 1; i++) refuse(503, 'agent unreachable');
+    ok(done);
+
+    await expect(run()).resolves.toEqual(done.results);
+  });
+
+  it('gives up once no poll has succeeded for the whole budget', async () => {
+    ok(job());
+    for (let i = 0; i < pollsInBudget + 5; i++) refuse(503, 'agent unreachable');
+
+    const error = await run();
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 503 });
+    expect(agent.requests).toHaveLength(1 + pollsInBudget);
+  });
+
+  it('gives up on a poll that throws once the budget is spent', async () => {
+    ok(job());
+    // Nothing more is queued, so every poll rejects like a dropped connection.
+
+    const error = await run();
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/unexpected GET/);
+    expect(agent.requests).toHaveLength(1 + pollsInBudget);
+  });
+
+  it('keeps the busy 409 as GitBusyError but a coded too_many_jobs 409 as a plain API error', async () => {
+    refuse(409, { busy_by: [{ kind: 'session', session_id: 's1', cwd: '/wt/topic' }] });
+    refuse(409, { code: 'too_many_jobs', message: '' });
+
+    const busy = await run();
+    const capped = await run();
+
+    expect(busy).toBeInstanceOf(GitBusyError);
+    expect((busy as InstanceType<typeof GitBusyError>).holders).toEqual([
+      { kind: 'session', session_id: 's1', cwd: '/wt/topic' },
+    ]);
+    expect(capped).not.toBeInstanceOf(GitBusyError);
+    expect(capped).toBeInstanceOf(ApiError);
+    expect(capped).toMatchObject({ status: 409 });
   });
 });
 

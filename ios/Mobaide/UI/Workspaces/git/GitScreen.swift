@@ -42,6 +42,18 @@ private struct GitContent: View {
 
     var body: some View {
         content
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if let progress = model.deleteProgress, !model.visibleItems.isEmpty {
+                    Text(GitItemDisplay.deleteProgressMessage(progress))
+                        .font(.footnote)
+                        .foregroundStyle(colors.textMuted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                        .background(colors.bg)
+                        .accessibilityIdentifier("git_delete_progress")
+                }
+            }
             .environment(\.editMode, $editMode)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
@@ -133,7 +145,7 @@ private struct GitContent: View {
                         if model.remoteDeletePrompt == nil { editMode = .inactive }
                     }
                 }
-                .disabled(model.selected.isEmpty)
+                .disabled(model.selected.isEmpty || model.isDeleting)
             } else if model.canManageBranches {
                 Button {
                     model.openNewBranch()
@@ -160,8 +172,12 @@ private struct GitContent: View {
                     .pixelScreenBackground()
             } else {
                 ScrollView {
-                    PixelEmptyState("No branches or worktrees", systemImage: "arrow.triangle.branch")
-                        .padding(16)
+                    PixelEmptyState(
+                        model.deleteProgress.map(GitItemDisplay.deleteProgressMessage)
+                            ?? "No branches or worktrees",
+                        systemImage: "arrow.triangle.branch"
+                    )
+                    .padding(16)
                 }
                 .pixelScreenBackground()
             }
@@ -292,16 +308,19 @@ private struct GitContent: View {
                     .selectionDisabled()
             }
         } else if deletable || checkoutable || removable {
+            // One batch at a time, as on Android and web: while one runs the row
+            // offers no action, since a disabled row still opens its swipe actions.
+            let idle = !model.isDeleting
             GitItemRow(item: item, label: label)
                 .selectionDisabled(!deletable)
                 .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                    if checkoutable {
+                    if checkoutable && idle {
                         checkoutButton(item)
                             .tint(colors.accent)
                     }
                 }
                 .swipeActions(edge: .trailing) {
-                    if deletable {
+                    if deletable && idle {
                         Button(role: .destructive) {
                             withAnimation { model.delete(item) }
                         } label: {
@@ -310,17 +329,17 @@ private struct GitContent: View {
                     }
                 }
                 .contextMenu {
-                    if checkoutable {
+                    if checkoutable && idle {
                         checkoutButton(item)
                     }
-                    if removable {
+                    if removable && idle {
                         Button {
                             withAnimation { model.removeWorktree(item) }
                         } label: {
                             Label("Remove worktree", systemImage: "folder.badge.minus")
                         }
                     }
-                    if deletable {
+                    if deletable && idle {
                         Button(role: .destructive) {
                             withAnimation { model.delete(item) }
                         } label: {

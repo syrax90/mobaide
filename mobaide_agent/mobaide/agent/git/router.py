@@ -1,11 +1,13 @@
 """HTTP endpoints for the in-app git management screen.
 
-Five endpoints, all nested under ``/api/projects/{name}/git`` and protected
+Seven endpoints, all nested under ``/api/projects/{name}/git`` and protected
 by the same JWT auth dependency as the workspaces router:
 
 * ``GET /items`` — list local branches and worktrees as a unified array,
   plus the remote-tracking branches with ``?remote=true``.
 * ``POST /items:delete`` — batch-delete branches and/or worktrees.
+* ``POST /delete-jobs`` / ``GET /delete-jobs/{job_id}`` — the same batch as
+  a background job the client polls, for batches that outlast a request.
 * ``POST /branches`` — create a branch, optionally checking it out.
 * ``POST /checkout`` — check a local or remote-tracking branch out in the
   workspace root.
@@ -27,11 +29,13 @@ from mobaide.core.workspaces_store import safe_path_exists
 
 from ..auth.dependencies import get_current_user
 from .changes_service import http_error_for
+from .delete_jobs import delete_job_registry
 from .models import (
     BusyByResponse,
     GitBranchCreateRequest,
     GitBranchResponse,
     GitCheckoutRequest,
+    GitDeleteJobResponse,
     GitDeleteRequest,
     GitDeleteResponse,
     GitItemsResponse,
@@ -172,6 +176,56 @@ async def delete_git_items_endpoint(
         )
     except GitItemBusyError as exc:
         _raise_busy(exc)
+        raise
+
+
+@router.post(
+    "/delete-jobs",
+    response_model=GitDeleteJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def start_delete_job_endpoint(
+    name: str,
+    body: GitDeleteRequest,
+    request: Request,
+) -> GitDeleteJobResponse:
+    """Start ``body`` as a background delete job and answer its first
+    snapshot. The busy guard runs first and refuses the batch whole with
+    the same 409 as ``POST /items:delete``; ``409 too_many_jobs`` past the
+    agent's running-job cap."""
+    workspace_name, workspace_root = _resolve_workspace(request, name)
+    manager = _worktree_manager(request)
+    try:
+        return await delete_job_registry.start(
+            body,
+            workspace_name=workspace_name,
+            workspace_root=workspace_root,
+            manager=manager,
+            session_manager=_session_manager(request),
+            autoscan_manager=_autoscan_manager(request),
+            event_bus=_event_bus(request),
+            actor=_actor(request),
+        )
+    except GitItemBusyError as exc:
+        _raise_busy(exc)
+        raise
+    except Exception as exc:
+        _raise_mapped(exc)
+        raise
+
+
+@router.get("/delete-jobs/{job_id}", response_model=GitDeleteJobResponse)
+async def get_delete_job_endpoint(
+    name: str,
+    job_id: str,
+    request: Request,
+) -> GitDeleteJobResponse:
+    """The job's current snapshot; ``404 job_not_found`` for an unknown id."""
+    _resolve_workspace(request, name)
+    try:
+        return delete_job_registry.get(job_id)
+    except Exception as exc:
+        _raise_mapped(exc)
         raise
 
 

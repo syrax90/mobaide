@@ -151,6 +151,20 @@ struct AgentAPI: Sendable {
         return try await execute(method: "POST", url: "\(try await base())/api/projects/\(name)/git/items:delete", body: request)
     }
 
+    /// `POST /api/projects/{name}/git/delete-jobs` — the same batch as a
+    /// background job (`capabilities.git.delete_jobs`); answers `202` at once.
+    func startGitDeleteJob(workspaceName: String, request: GitDeleteRequest) async throws -> GitDeleteJobResponse {
+        let name = Self.encodePathSegment(workspaceName)
+        return try await execute(method: "POST", url: "\(try await base())/api/projects/\(name)/git/delete-jobs", body: request)
+    }
+
+    /// `GET /api/projects/{name}/git/delete-jobs/{job_id}`.
+    func getGitDeleteJob(workspaceName: String, jobId: String) async throws -> GitDeleteJobResponse {
+        let name = Self.encodePathSegment(workspaceName)
+        let job = Self.encodePathSegment(jobId)
+        return try await execute(method: "GET", url: "\(try await base())/api/projects/\(name)/git/delete-jobs/\(job)")
+    }
+
     /// `GET /api/sessions/{id}/git/status?etag=` — the session-scoped Changes
     /// list. A matching `etag` answers `200 {unchanged: true}` (never 304, which
     /// `execute` would reject as an empty body), so the caller keeps its cached

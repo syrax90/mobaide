@@ -73,6 +73,7 @@ from .autoscan.router import ws_router as autoscan_ws_router
 from .codex.router import router as codex_router
 from .config import AgentConfig
 from .git.changes_jobs import job_registry
+from .git.delete_jobs import delete_job_registry
 from .git.changes_models import GIT_CAPABILITIES
 from .git.router import router as git_router
 from .git.session_router import router as session_git_router
@@ -647,6 +648,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         if autoscan_mgr is not None:
             await autoscan_mgr.shutdown()
         await job_registry.shutdown()
+        await delete_job_registry.shutdown()
         for fanout in app.state.fanouts.values():
             fanout.stop()
         await app.state.session_manager.shutdown()

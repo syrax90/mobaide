@@ -51,6 +51,7 @@ async def test_get_version(client) -> None:
             "rebase": True,
             "resolve": True,
             "delete_remote": True,
+            "delete_jobs": True,
             "conflicts": True,
             "worktree_base": True,
         },

@@ -168,6 +168,8 @@ export interface GitCapabilities {
   resolve: boolean;
   /** The workspace Git screen may delete remote-tracking rows (on the remote). */
   deleteRemote: boolean;
+  /** Workspace deletes run as background jobs the client polls (`POST /delete-jobs`). */
+  deleteJobs: boolean;
   /** The conflict resolver's routes and `resolved_paths` on status. */
   conflicts: boolean;
 }
@@ -183,6 +185,7 @@ export const NO_GIT_CAPABILITIES: GitCapabilities = {
   rebase: false,
   resolve: false,
   deleteRemote: false,
+  deleteJobs: false,
   conflicts: false,
 };
 
@@ -277,6 +280,7 @@ export function gitCapabilities(info: AgentVersionInfo | undefined): GitCapabili
     rebase: gitCapability(info, 'rebase'),
     resolve: gitCapability(info, 'resolve'),
     deleteRemote: gitCapability(info, 'delete_remote'),
+    deleteJobs: gitCapability(info, 'delete_jobs'),
     conflicts: gitCapability(info, 'conflicts'),
   };
 }
