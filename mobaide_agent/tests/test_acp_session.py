@@ -2,6 +2,7 @@
 (``mobaide/acp/fake_agent.py``, a real subprocess): start, prompts, the
 message queue, cancel, permission and form requests, config changes, a
 crash with restart, a sandbox mode that every Restart must apply again,
+a new conversation in the same chat (``new_conversation`` and ``/clear``),
 opening a stored session, the adapter install on first
 use, Send now (steering), command output (and how often it is re-sent),
 signing in from the chat (``sign_in`` and ``/login``),
@@ -108,6 +109,36 @@ for line in sys.stdin:
     send({"id": msg["id"], "result": result})
 """
 MINI_AGENT_ARGV = [sys.executable, "-c", MINI_AGENT]
+
+# Lists its own ``clear`` command after ``session/new``; a prompt is echoed.
+OWN_CLEAR_AGENT = r"""
+import json, sys
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg or "method" not in msg:
+        continue
+    method = msg["method"]
+    if method == "initialize":
+        send({"id": msg["id"], "result": {"protocolVersion": 1, "agentCapabilities": {}}})
+    elif method == "session/new":
+        send({"id": msg["id"], "result": {"sessionId": "own-clear"}})
+        send({"method": "session/update", "params": {"sessionId": "own-clear", "update": {
+            "sessionUpdate": "available_commands_update",
+            "availableCommands": [{"name": "clear", "description": "Clear the history"}]}}})
+    elif method == "session/prompt":
+        text = " ".join(block.get("text", "") for block in msg["params"]["prompt"])
+        send({"method": "session/update", "params": {"sessionId": "own-clear", "update": {
+            "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "echo " + text}}}})
+        send({"id": msg["id"], "result": {"stopReason": "end_turn"}})
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+"""
+OWN_CLEAR_AGENT_ARGV = [sys.executable, "-c", OWN_CLEAR_AGENT]
 
 # Logs every method it gets to the file named by argv[1]. Advertises
 # ``session/close`` and steering; a prompt streams "Working" and is answered
@@ -579,8 +610,8 @@ class TestStart:
         assert m.state["cwd"] == str(tmp_path)
         assert isinstance(m.state["acp_session_id"], str) and m.state["acp_session_id"]
         assert [o["id"] for o in m.state["config"]] == ["mode", "model", "effort", "fast"]
-        await m.until(lambda: bool(m.state.get("commands")))
-        assert [c["name"] for c in m.state["commands"]] == ["review", "test", "compact"]
+        await m.until(lambda: "review" in [c["name"] for c in m.state.get("commands") or []])
+        assert [c["name"] for c in m.state["commands"]] == ["review", "test", "compact", "clear"]
 
         info = m.session.to_info()
         assert info.ui == "chat"
@@ -1464,6 +1495,169 @@ class TestCrashAndRestart:
         assert m.state["error"].startswith(
             "Could not set the read-only mode, so the session did not start"
         )
+
+
+class TestNewConversation:
+    NOTICE = "Started a new conversation"
+
+    async def _started_new(self, m: TimelineMirror, old_epoch: str | None) -> None:
+        await m.until(lambda: m.epoch != old_epoch and m.status == "ready")
+
+    async def test_starts_an_empty_conversation_with_the_settings_in_use(self, open_chat):
+        m = await open_chat()
+        assert (await m.command("set_config", config_id="model", value="fast"))["ok"] is True
+        await m.command("prompt", text="hi")
+        await m.until(_turn_done(m, "You said: hi"))
+        old_epoch, old_id = m.epoch, m.state["acp_session_id"]
+        old_pid = m.session.pid
+
+        assert (await m.command("new_conversation"))["ok"] is True
+        await self._started_new(m, old_epoch)
+
+        assert m.state["acp_session_id"] not in (None, old_id)
+        assert [item["type"] for item in m.items.values()] == ["notice"]
+        assert _notices(m) == [self.NOTICE]
+        assert {o["id"]: o["value"] for o in m.state["config"]}["model"] == "fast"
+        assert m.session.pid != old_pid
+        assert _fake_agent_pids() == {m.session.pid}
+
+        await m.command("prompt", text="again")
+        await m.until(_turn_done(m, "You said: again"))
+        assert m.texts("user") == ["again"]
+
+    STORED = (
+        "Claude Code keeps the previous one on your PC. To open it again, "
+        "use Continue a session in New session."
+    )
+
+    @pytest.mark.parametrize(
+        ("argv", "load_session_id", "first_prompt", "stored"),
+        [
+            (None, None, None, False),
+            (None, "conv-1", None, True),
+            (MINI_AGENT_ARGV, None, "hi", False),
+        ],
+        ids=["nothing-stored-yet", "resumed-session", "agent-without-load-session"],
+    )
+    async def test_notice_always_shows_and_names_the_stored_conversation_only_when_kept(
+        self, open_chat, argv, load_session_id, first_prompt, stored
+    ):
+        m = await open_chat(argv=argv, load_session_id=load_session_id)
+        if first_prompt is not None:
+            await m.command("prompt", text=first_prompt)
+            await m.until(lambda: m.status == "ready" and bool(m.texts("agent")))
+        old_epoch = m.epoch
+
+        assert (await m.command("new_conversation"))["ok"] is True
+        await self._started_new(m, old_epoch)
+
+        notices = m.of_type("notice")
+        assert [n["title"] for n in notices] == [self.NOTICE]
+        assert notices[0]["severity"] == "info"
+        assert notices[0]["text"] == (self.STORED if stored else "")
+        assert m.texts("user") == []
+        assert m.state.get("title") != "Earlier session"
+
+    async def test_a_second_request_while_one_starts_is_refused(self, open_chat):
+        """Two taps in one tick (double tap, or two clients) must not start
+        two agent processes."""
+        m = await open_chat()
+        old_epoch = m.epoch
+
+        await m.session.handle_command(b'{"id": "n1", "op": "new_conversation"}')
+        await m.session.handle_command(b'{"id": "n2", "op": "new_conversation"}')
+        await m.until(lambda: {"n1", "n2"} <= m.results.keys())
+
+        assert m.results["n1"]["ok"] is True
+        assert m.results["n2"]["error"] == "The agent is already starting"
+        await self._started_new(m, old_epoch)
+        assert _fake_agent_pids() == {m.session.pid}
+
+    async def test_a_running_turn_stops_and_a_message_sent_meanwhile_goes_to_the_new_one(
+        self, open_chat, monkeypatch
+    ):
+        m = await open_chat()
+        await m.command("prompt", text="slow")
+        await m.until(lambda: m.status == "running")
+        old_epoch = m.epoch
+        spawn = m.session._spawn_with_install
+        queue_at_spawn: list[list[str]] = []
+
+        async def note_queue_then_spawn() -> bool:
+            queue_at_spawn.append([q["text"] for q in m.session.timeline.state["queue"]])
+            return await spawn()
+
+        monkeypatch.setattr(m.session, "_spawn_with_install", note_queue_then_spawn)
+
+        await m.session.handle_command(b'{"id": "n1", "op": "new_conversation"}')
+        # One loop turn: the command claims the transition before its first await.
+        await asyncio.sleep(0)
+        sent = await m.command("prompt", text="also this")
+        await m.until(lambda: "n1" in m.results)
+
+        assert sent["data"]["queued"] is True
+        assert m.results["n1"]["ok"] is True
+        await m.until(lambda: m.epoch != old_epoch and "You said: also this" in m.texts("agent"))
+        await m.until(lambda: m.status == "ready")
+        assert m.texts("user") == ["also this"]
+        assert _fake_agent_pids() == {m.session.pid}
+        # Clients can see (and remove) the message until the new conversation sends it.
+        assert queue_at_spawn == [["also this"]]
+        assert m.state["queue"] == []
+
+    async def test_a_failure_while_starting_offers_restart(self, open_chat, monkeypatch):
+        m = await open_chat()
+        spawn = m.session._spawn_with_install
+        failures = [RuntimeError("spawn broke")]
+
+        async def fail_once_then_spawn() -> bool:
+            if failures:
+                raise failures.pop()
+            return await spawn()
+
+        monkeypatch.setattr(m.session, "_spawn_with_install", fail_once_then_spawn)
+
+        result = await m.command("new_conversation")
+
+        message = "Could not start a new conversation. Use Restart to try again."
+        assert result["ok"] is False
+        await m.until(lambda: m.status == "error")
+        assert m.state["error"] == message
+        assert m.texts("error") == [message]
+
+        assert (await m.command("restart"))["ok"] is True
+        await m.until(lambda: m.status == "ready")
+        await m.command("prompt", text="hi")
+        await m.until(_turn_done(m, "You said: hi"))
+
+    async def test_slash_clear_starts_a_new_conversation_instead_of_a_prompt(self, open_chat):
+        m = await open_chat()
+        await m.command("prompt", text="hi")
+        await m.until(_turn_done(m, "You said: hi"))
+        old_epoch, old_id = m.epoch, m.state["acp_session_id"]
+
+        result = await m.command("prompt", text="/Clear")
+        await self._started_new(m, old_epoch)
+
+        assert result["data"] == {"queued": False, "queue_id": None}
+        assert m.state["acp_session_id"] not in (None, old_id)
+        assert m.texts("user") == []
+
+    async def test_an_agent_with_its_own_clear_gets_slash_clear_as_a_prompt(self, open_chat):
+        m = await open_chat(argv=OWN_CLEAR_AGENT_ARGV)
+        await m.until(
+            lambda: any(
+                c.get("description") == "Clear the history" for c in m.state.get("commands") or []
+            )
+        )
+        assert [c["name"] for c in m.state["commands"]] == ["clear"]
+        old_epoch = m.epoch
+
+        await m.command("prompt", text="/clear")
+        await m.until(_turn_done(m, "echo /clear"))
+
+        assert m.epoch == old_epoch
+        assert m.texts("user") == ["/clear"]
 
 
 class TestSyncAndStop:
@@ -3669,7 +3863,9 @@ class TestSignIn:
         assert request["stage"] == "choose"
         assert [x["id"] for x in request["methods"]] == ["claude_ai", "console"]
         await m.until(lambda: "review" in [c["name"] for c in m.state.get("commands") or []])
-        assert [c["name"] for c in m.state["commands"]] == ["review", "test", "compact", "login"]
+        assert [c["name"] for c in m.state["commands"]] == [
+            "review", "test", "compact", "clear", "login"
+        ]
 
     async def test_a_signed_in_chat_offers_nothing(self, open_chat):
         m = await open_chat(**self._claude())

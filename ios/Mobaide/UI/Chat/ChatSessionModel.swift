@@ -78,6 +78,8 @@ final class ChatSessionModel {
     /// Queued messages with a remove or a Send now in flight.
     private(set) var dequeuing: Set<String> = []
     private(set) var restarting = false
+    /// A `new_conversation` this client sent has no result yet.
+    private(set) var startingNew = false
     /// Rows the user expanded; kept here so a row scrolled out of the lazy
     /// list comes back the way it was left.
     private(set) var expandedItems: Set<String> = []
@@ -126,6 +128,7 @@ final class ChatSessionModel {
         case steer(queueId: String)
         case cancel
         case restart
+        case newConversation
 
         var configId: String? {
             if case .setConfig(let configId) = self { return configId }
@@ -464,6 +467,11 @@ final class ChatSessionModel {
             if !result.ok {
                 message = ToastMessage(text: result.error ?? "The agent did not restart", tone: .danger)
             }
+        case .newConversation:
+            startingNew = false
+            if !result.ok {
+                message = ToastMessage(text: result.error ?? "Could not start a new conversation", tone: .danger)
+            }
         case .signIn(let requestId):
             // The request stays across its stages, so the spinner ends with the result.
             answering[requestId] = nil
@@ -498,6 +506,7 @@ final class ChatSessionModel {
         dequeuing = []
         configOverrides = [:]
         restarting = false
+        startingNew = false
         pending = pending.filter { _, command in
             if case .prompt = command { return true }
             return false
@@ -518,6 +527,8 @@ final class ChatSessionModel {
             dequeuing.remove(queueId)
         case .restart:
             restarting = false
+        case .newConversation:
+            startingNew = false
         case .cancel:
             break
         }
@@ -683,6 +694,27 @@ final class ChatSessionModel {
         guard isLive, phase == .error, !restarting else { return }
         restarting = true
         enqueue(.restart(id: nextCommandId()), pending: .restart)
+    }
+
+    /// The agent offers a new conversation at all; `canStartNew` says whether it can start now.
+    var offersNewConversation: Bool { state.newConversation && !sessionClosed }
+
+    var canStartNew: Bool {
+        offersNewConversation && isLive && !restarting && !startingNew
+            && [.ready, .running, .error].contains(phase)
+    }
+
+    /// Start an empty conversation with the same folder and settings.
+    func newConversation() {
+        guard canStartNew else {
+            // The dialog stayed open while the chat lost the connection or began a restart.
+            if !startingNew {
+                message = ToastMessage(text: "Could not start a new conversation now. Try again.", tone: .danger)
+            }
+            return
+        }
+        startingNew = true
+        enqueue(.newConversation(id: nextCommandId()), pending: .newConversation)
     }
 
     func toggleExpanded(_ id: String) {

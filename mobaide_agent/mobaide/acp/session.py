@@ -73,6 +73,9 @@ STEER_METHOD = "_session/steering"
 # claude-agent-acp pushes the login it found; ``kind: "none"`` = signed out.
 AUTH_STATUS_METHOD = "_auth/status_update"
 LOGIN_COMMAND = "login"
+# Agents have no ``/clear`` over ACP (claude-agent-acp hides it): unless the
+# agent lists its own, the chat starts a new conversation for it.
+CLEAR_COMMAND = "clear"
 # Command output of a running tool is re-rendered at most this often.
 CONSOLE_RENDER_INTERVAL = 0.3
 CONSOLE_TOOLS_MAX = 64
@@ -282,7 +285,9 @@ class ChatSession:
         self._auth_retry: list[_QueuedPrompt] = []
         # A turn has finished, so the agent has stored the conversation.
         self._has_turns = False
-        self._timeline.state["commands"] = self._with_login([])
+        # The slash commands the agent itself lists.
+        self._agent_commands: set[str] = set()
+        self._timeline.state["commands"] = self._with_own_commands([])
 
     @property
     def state(self) -> SessionState:
@@ -490,7 +495,7 @@ class ChatSession:
         if op == "sync":
             self._emit_frame(self.sync_frame(cmd.get("epoch"), cmd.get("after_seq")))
             return
-        if op in ("set_config", "restart", "steer", "sign_in"):
+        if op in ("set_config", "restart", "new_conversation", "steer", "sign_in"):
             # These wait on the agent; running them aside keeps a later
             # cancel or prompt from queueing behind them.
             task = asyncio.create_task(self._run_command(op, cmd, cmd_id))
@@ -524,6 +529,8 @@ class ChatSession:
             return self._cmd_dequeue(cmd)
         if op == "restart":
             return await self._cmd_restart()
+        if op == "new_conversation":
+            return await self._cmd_new_conversation()
         if op == "steer":
             return await self._cmd_steer(cmd)
         if op == "sign_in":
@@ -951,6 +958,8 @@ class ChatSession:
             raise ChatCommandError("The message is too long")
         if not images and text.lower() == f"/{LOGIN_COMMAND}" and self._sign_in.available:
             return self._cmd_login()
+        if not images and text.lower() == f"/{CLEAR_COMMAND}" and CLEAR_COMMAND not in self._agent_commands:
+            return self._cmd_clear()
         status = self._timeline.state.get("status")
         if status in ("error", "stopped"):
             raise ChatCommandError("The agent is not running. Use Restart to start it again.")
@@ -1461,41 +1470,45 @@ class ChatSession:
             self._restarting = False
         return {}
 
+    def _restore_config(self) -> None:
+        """Queue the values in use for the next start: a new agent process
+        starts with the agent's defaults. A start that failed before applying
+        the launch choices keeps those instead."""
+        if self._pending_config:
+            return
+        restored = [
+            ConfigIntent(
+                opt["value"],
+                option_id=opt["id"],
+                category=opt.get("category"),
+                required=(
+                    opt.get("category") in self._required_categories
+                    or opt["id"] in self._required_option_ids
+                ),
+            )
+            for opt in self._timeline.state.get("config") or []
+            if isinstance(opt, dict)
+            and "value" in opt
+            and opt.get("id") not in self._plan.restore_skip_option_ids
+        ]
+        # A required option the agent no longer lists falls back to the
+        # launch choice, which then fails closed if it cannot be applied.
+        covered_categories = {i.category for i in restored if i.required and i.category}
+        covered_ids = {i.option_id for i in restored if i.required and i.option_id}
+        restored += [
+            i for i in self._plan.initial_config
+            if i.required
+            and not (i.category and i.category in covered_categories)
+            and not (i.option_id and i.option_id in covered_ids)
+        ]
+        self._pending_config = restored
+
     async def _restart(self) -> None:
         self._cancel_forced = False
         if self._turn_task is not None and not self._turn_task.done():
             self._turn_task.cancel()
         self._resolve_all_requests_cancelled()
-        # The reloaded session starts with the agent's defaults: re-apply
-        # the values the user had chosen. A start that failed before applying
-        # the launch choices retries those instead of the agent's defaults.
-        if not self._pending_config:
-            restored = [
-                ConfigIntent(
-                    opt["value"],
-                    option_id=opt["id"],
-                    category=opt.get("category"),
-                    required=(
-                        opt.get("category") in self._required_categories
-                        or opt["id"] in self._required_option_ids
-                    ),
-                )
-                for opt in self._timeline.state.get("config") or []
-                if isinstance(opt, dict)
-                and "value" in opt
-                and opt.get("id") not in self._plan.restore_skip_option_ids
-            ]
-            # A required option the agent no longer lists falls back to the
-            # launch choice, which then fails closed if it cannot be applied.
-            covered_categories = {i.category for i in restored if i.required and i.category}
-            covered_ids = {i.option_id for i in restored if i.required and i.option_id}
-            restored += [
-                i for i in self._plan.initial_config
-                if i.required
-                and not (i.category and i.category in covered_categories)
-                and not (i.option_id and i.option_id in covered_ids)
-            ]
-            self._pending_config = restored
+        self._restore_config()
         if self._conn is not None:
             await self._conn.close(grace=0.5)
         load_id = self._acp_session_id or self._load_session_id
@@ -1531,6 +1544,140 @@ class ChatSession:
             name=f"chat-bootstrap-{self.session_id}",
         )
 
+    def _claim_new_conversation(self) -> None:
+        if self._stopping:
+            raise ChatCommandError("The session is closing")
+        if self._restarting or (
+            self._bootstrap_task is not None and not self._bootstrap_task.done()
+        ):
+            raise ChatCommandError("The agent is already starting")
+        # Set before the first await: a second request (double tap, another
+        # client) must not spawn a second adapter that nothing would close.
+        self._restarting = True
+
+    async def _cmd_new_conversation(self) -> dict[str, Any]:
+        self._claim_new_conversation()
+        try:
+            await self._new_conversation()
+        except Exception:
+            self._fail_new_conversation()
+            raise
+        finally:
+            self._restarting = False
+        return {}
+
+    def _cmd_clear(self) -> dict[str, Any]:
+        """``/clear``: the same as ``new_conversation``, answered at once like
+        a prompt."""
+        self._claim_new_conversation()
+        self._run_aside(self._clear_aside())
+        return {"queued": False, "queue_id": None}
+
+    async def _clear_aside(self) -> None:
+        try:
+            await self._new_conversation()
+        except Exception:
+            self._fail_new_conversation()
+        finally:
+            self._restarting = False
+
+    def _fail_new_conversation(self) -> None:
+        # Without this a failure halfway leaves the chat not ready, with no Restart.
+        logger.exception("chat.new_conversation_failed session=%s", self.session_id)
+        self._fail_start("Could not start a new conversation. Use Restart to try again.")
+
+    async def _new_conversation(self) -> None:
+        """Start an empty conversation in a new agent process.
+
+        Not a second ``session/new`` on this process: some agents keep
+        per-process state (the working folder, a bridge's session)."""
+        # Nothing may start on the process that is closing: a message sent
+        # from here on waits in the queue for the new conversation.
+        self._ready.clear()
+        self._queue.clear()
+        self._auth_retry.clear()
+        self._resume_pending = False
+        self._initial_prompt = None
+        self._cancel_forced = False
+        self._disarm_cancel_watchdog()
+        conn = self._conn
+        turn = self._turn_task
+        turn_running = turn is not None and not turn.done()
+        if turn is not None and turn_running:
+            if self._prompt_dispatched and conn is not None and conn.alive and self._acp_session_id:
+                # On a shared host the turn would go on in the other app's
+                # server after this process closes.
+                conn.notify("session/cancel", {"sessionId": self._acp_session_id})
+            turn.cancel()
+            await asyncio.gather(turn, return_exceptions=True)
+        self._resolve_all_requests_cancelled()
+        self._restore_config()
+        if conn is not None:
+            await conn.close(grace=CLOSE_TIMEOUT if turn_running else 0.5)
+        if self._stopping:
+            return
+        stored = self._agent_caps.get("loadSession") and (
+            self._has_turns or self._load_session_id is not None
+        )
+        self._release_presence()
+        self._presence_conflict = False
+        self._presence_stale = False
+        self._reload_notice = False
+        self._acp_session_id = None
+        self._load_session_id = None
+        self._has_turns = False
+        self._external_turn = False
+        self._self_turn = False
+        self._busy_before_ready = False
+        self._turn_stop = None
+        self._turn_reopened = False
+        self._last_tool_id = None
+        self._last_agent_message_id = None
+        self._last_thought_message_id = None
+        self._last_user_message_id = None
+        self._timeline.reset()
+        self._start_error_item = None
+        self._close_streaming_items()
+        self._drop_consoles()
+        self._set_title(self._plan.title)
+        self._timeline.patch_state(
+            status="starting",
+            error=None,
+            acp_session_id=None,
+            usage=None,
+            plan=[],
+            requests=self._public_requests(),
+            turn_started_at=None,
+            cancelling=False,
+            background=None,
+            urgent=True,
+        )
+        # A message sent while the old process closed waits for the new conversation.
+        self._publish_queue()
+        # Always shown: after a ``/clear`` it is the only sign of what happened.
+        self._timeline.upsert(
+            {
+                "id": self._next_id("n"),
+                "type": "notice",
+                "severity": "info",
+                "title": "Started a new conversation",
+                "text": (
+                    f"{self._agent_title} keeps the previous one on your PC. To open it "
+                    "again, use Continue a session in New session."
+                    if stored
+                    else ""
+                ),
+            }
+        )
+        if not await self._spawn_with_install():
+            return
+        self._exit_reason = None
+        self._clear_attention()
+        self._bootstrap_task = asyncio.create_task(
+            self._bootstrap(load_id=None),
+            name=f"chat-bootstrap-{self.session_id}",
+        )
+
     async def _cmd_sign_in(self, cmd: dict[str, Any]) -> dict[str, Any]:
         if self._stopping:
             raise ChatCommandError("The session is closing")
@@ -1558,12 +1705,20 @@ class ChatSession:
         self._run_aside(self._sign_in.open())
         return {"queued": False, "queue_id": None}
 
-    def _with_login(self, commands: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _with_own_commands(self, commands: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        own = list(commands)
+        if CLEAR_COMMAND not in self._agent_commands:
+            own.append(
+                {
+                    "name": CLEAR_COMMAND,
+                    "description": "Start a new conversation with the same settings",
+                    "hint": None,
+                }
+            )
         if not self._sign_in.available:
-            return commands
-        own = [c for c in commands if c.get("name") != LOGIN_COMMAND]
+            return own
         return [
-            *own,
+            *(c for c in own if c.get("name") != LOGIN_COMMAND),
             {
                 "name": LOGIN_COMMAND,
                 "description": f"Sign in to {self._agent_title} on your PC",
@@ -1684,7 +1839,9 @@ class ChatSession:
         elif kind == "plan":
             tl.patch_state(plan=nz.plan_entries(update.get("entries")))
         elif kind == "available_commands_update":
-            tl.patch_state(commands=self._with_login(nz.commands(update.get("availableCommands"))))
+            commands = nz.commands(update.get("availableCommands"))
+            self._agent_commands = {str(c.get("name")) for c in commands}
+            tl.patch_state(commands=self._with_own_commands(commands))
         elif kind == "current_mode_update":
             mode = update.get("currentModeId")
             if isinstance(mode, str):

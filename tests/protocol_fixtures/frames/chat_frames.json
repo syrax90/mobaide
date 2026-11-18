@@ -22,7 +22,8 @@
     { "name": "steer", "command": { "id": "c-13", "op": "steer", "queue_id": "q:14" } },
     { "name": "sign_in_start", "command": { "id": "c-14", "op": "sign_in", "action": "start", "method": "claude_ai" } },
     { "name": "sign_in_submit", "command": { "id": "c-15", "op": "sign_in", "action": "submit", "value": "ab12-cd34" } },
-    { "name": "sign_in_cancel", "command": { "id": "c-16", "op": "sign_in", "action": "cancel" } }
+    { "name": "sign_in_cancel", "command": { "id": "c-16", "op": "sign_in", "action": "cancel" } },
+    { "name": "new_conversation", "command": { "id": "c-17", "op": "new_conversation" } }
   ],
   "server": [
     {
@@ -132,7 +133,8 @@
           "turn_started_at": "2026-11-07T12:00:05+00:00",
           "cancelling": false,
           "steering": true,
-          "background": null
+          "background": null,
+          "new_conversation": true
         },
         "items": [
           { "id": "u:1", "type": "user", "text": "Fix the login bug", "attachments": [{ "kind": "image", "mime": "image/png" }], "at": "2026-11-07T12:00:05+00:00" },

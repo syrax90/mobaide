@@ -51,6 +51,8 @@ data class ChatUiState(
     val imagesLoading: Boolean = false,
     /** A `restart` this client sent has no result yet. */
     val restarting: Boolean = false,
+    /** A `new_conversation` this client sent has no result yet. */
+    val startingNew: Boolean = false,
     /** Queued messages with a remove or a Send now in flight. */
     val queueBusy: Set<String> = emptySet(),
 ) {
@@ -64,6 +66,14 @@ data class ChatUiState(
 
     val canRestart: Boolean
         get() = live && !sessionClosed && !restarting && state.status == ChatStatus.ERROR
+
+    /** The agent offers a new conversation at all; [canStartNew] says whether it can start now. */
+    val offersNewConversation: Boolean
+        get() = state.newConversation && !sessionClosed
+
+    val canStartNew: Boolean
+        get() = offersNewConversation && live && !restarting && !startingNew &&
+            state.status in NEW_CONVERSATION_STATUSES
 
     /** Whether a draft of [text] (plus the picked images) can go out now. */
     fun canSend(text: String): Boolean = canAct && !imagesLoading && (text.isNotBlank() || images.isNotEmpty())
@@ -149,3 +159,6 @@ fun formValues(request: ChatRequest.Form, draft: Map<String, ChatFormValue>): Js
     }
     return buildJsonObject { values.forEach { (k, v) -> put(k, v) } }
 }
+
+/** Statuses in which the agent takes `new_conversation`; it refuses while it starts. */
+private val NEW_CONVERSATION_STATUSES = setOf(ChatStatus.READY, ChatStatus.RUNNING, ChatStatus.ERROR)

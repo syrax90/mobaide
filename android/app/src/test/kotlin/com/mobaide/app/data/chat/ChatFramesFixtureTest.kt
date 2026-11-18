@@ -70,6 +70,7 @@ class ChatFramesFixtureTest {
         "sign_in_start" to { id -> ChatProtocol.signInStart(id, "claude_ai") },
         "sign_in_submit" to { id -> ChatProtocol.signInSubmit(id, "ab12-cd34") },
         "sign_in_cancel" to { id -> ChatProtocol.signInCancel(id) },
+        "new_conversation" to { id -> ChatProtocol.newConversation(id) },
     )
 
     private fun sync(id: String, request: ChatSyncRequest): JsonObject = when (request) {
@@ -172,6 +173,7 @@ class ChatFramesFixtureTest {
         assertEquals(listOf(ChatQueuedMessage("q:14", "Also update the README", 0)), state.queue)
         assertTrue(state.promptImages)
         assertTrue(state.steering)
+        assertTrue(state.newConversation)
     }
 
     @Test

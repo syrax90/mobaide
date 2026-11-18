@@ -55,6 +55,7 @@ const BUILDERS: Readonly<Record<string, () => ChatCommand>> = {
   sign_in_start: () => ({ op: 'sign_in', action: 'start', method: 'claude_ai' }),
   sign_in_submit: () => ({ op: 'sign_in', action: 'submit', value: 'ab12-cd34' }),
   sign_in_cancel: () => ({ op: 'sign_in', action: 'cancel' }),
+  new_conversation: () => ({ op: 'new_conversation' }),
 };
 
 function agentBytes(frame: unknown): Uint8Array {
@@ -133,6 +134,7 @@ describe('chat frame golden fixtures', () => {
     expect(state.queue).toEqual([{ id: 'q:14', text: 'Also update the README', images: 0 }]);
     expect(state.prompt_caps.image).toBe(true);
     expect(state.steering).toBe(true);
+    expect(state.new_conversation).toBe(true);
     const tool = frame.items[3];
     expect(tool?.type === 'tool' ? tool.content[0]?.type : null).toBe('diff');
   });

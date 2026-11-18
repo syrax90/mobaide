@@ -123,6 +123,7 @@ class ChatViewModel @Inject constructor(
         data class Simple(val failure: String?) : PendingCommand
         data class Queue(val queueId: String, val failure: String?) : PendingCommand
         data object Restart : PendingCommand
+        data object NewConversation : PendingCommand
     }
 
     private class ConfigOverride(val value: JsonPrimitive, var confirmed: Boolean = false)
@@ -284,6 +285,7 @@ class ChatViewModel @Inject constructor(
                 answering = emptyMap(),
                 config = ui.state.config,
                 restarting = false,
+                startingNew = false,
                 queueBusy = emptySet(),
             )
         }
@@ -421,6 +423,10 @@ class ChatViewModel @Inject constructor(
                 _ui.update { it.copy(restarting = false) }
                 if (!result.ok) _messages.trySend(result.error ?: "Could not restart the agent")
             }
+            PendingCommand.NewConversation -> {
+                _ui.update { it.copy(startingNew = false) }
+                if (!result.ok) _messages.trySend(result.error ?: "Could not start a new conversation")
+            }
         }
     }
 
@@ -494,6 +500,23 @@ class ChatViewModel @Inject constructor(
         }
         pending[id] = PendingCommand.Restart
         _ui.update { it.copy(restarting = true) }
+    }
+
+    /** Start an empty conversation with the same folder and settings. */
+    fun newConversation() {
+        val ui = _ui.value
+        if (!ui.canStartNew) {
+            // The dialog stayed open while the chat lost the connection or began a restart.
+            if (!ui.startingNew) _messages.trySend("Could not start a new conversation now. Try again.")
+            return
+        }
+        val id = nextCommandId()
+        if (!send(ChatProtocol.newConversation(id))) {
+            _messages.trySend("Not connected. Try again.")
+            return
+        }
+        pending[id] = PendingCommand.NewConversation
+        _ui.update { it.copy(startingNew = true) }
     }
 
     fun dequeue(queueId: String) = sendQueueCommand(queueId, "Could not remove the message") { id ->

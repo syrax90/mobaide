@@ -595,6 +595,7 @@ struct ChatStatePatch: Sendable, Decodable {
     var cancelling: Bool?
     var steering: Bool?
     var background: ChatBackgroundWork??
+    var newConversation: Bool?
 
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: ChatKey.self)
@@ -626,6 +627,7 @@ struct ChatStatePatch: Sendable, Decodable {
         if c.has("background") {
             background = .some(c.string("background").flatMap(ChatBackgroundWork.init(rawValue:)))
         }
+        if c.has("new_conversation") { newConversation = c.bool("new_conversation") ?? false }
     }
 }
 
@@ -649,6 +651,8 @@ struct ChatState: Equatable, Sendable {
     var steering = false
     /// Set while the turn has ended but its work still runs.
     var background: ChatBackgroundWork?
+    /// The agent takes `new_conversation`; an older one leaves the key out.
+    var newConversation = false
 
     mutating func apply(_ patch: ChatStatePatch) {
         if let value = patch.status { status = value }
@@ -668,6 +672,7 @@ struct ChatState: Equatable, Sendable {
         if let value = patch.cancelling { cancelling = value }
         if let value = patch.steering { steering = value }
         if let value = patch.background { background = value }
+        if let value = patch.newConversation { newConversation = value }
     }
 
     /// Unknown statuses read as `ready`.
