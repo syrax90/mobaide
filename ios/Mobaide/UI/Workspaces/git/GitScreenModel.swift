@@ -554,7 +554,11 @@ final class GitScreenModel {
                 message = GitItemDisplay.deleteFailureMessage(failures)
             }
             // A successful delete makes the agent emit `git.changed`, which
-            // `observeGitChanged` turns into a re-fetch.
+            // `observeGitChanged` turns into a re-fetch. A job can outlive a
+            // reconnect that drops that one event, so its end re-fetches too.
+            if capabilities.deleteJobs {
+                await load()
+            }
         } catch let error as APIError where error.code == 409 && !Self.isCodedRefusal(error) {
             // The busy guard is all-or-nothing: nothing was processed.
             hiddenIDs.subtract(batch.map(\.id))

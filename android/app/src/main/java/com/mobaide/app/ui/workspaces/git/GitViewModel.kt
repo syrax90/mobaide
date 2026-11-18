@@ -310,11 +310,12 @@ class GitViewModel @Inject constructor(
         _uiState.update {
             it.copy(deleting = true, deleteProgress = DeleteProgress(completed = 0, total = batch.size))
         }
+        val useJobs = _uiState.value.deleteJobsEnabled
         try {
             val response = gitRepository.deleteGitItems(
                 workspaceName,
                 batch.map(PendingDelete::item),
-                useJobs = _uiState.value.deleteJobsEnabled,
+                useJobs = useJobs,
             ) { completed, total ->
                 _uiState.update { it.copy(deleteProgress = DeleteProgress(completed, total)) }
             }
@@ -359,6 +360,9 @@ class GitViewModel @Inject constructor(
             if (failures.isNotEmpty()) {
                 _events.tryEmit(GitUiEvent.Message(deleteFailureMessage(failures)))
             }
+            // A job can outlive a reconnect that drops the agent's one
+            // `git.changed`, so its end re-fetches the list too.
+            if (useJobs) reload()
         } catch (e: GitBusyException) {
             // The busy guard is all-or-nothing: nothing was processed.
             _uiState.update {

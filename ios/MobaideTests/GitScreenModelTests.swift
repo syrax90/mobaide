@@ -743,6 +743,7 @@ final class GitScreenModelTests: XCTestCase {
             status: 200,
             body: job("done", completed: 2, results: #"[{"kind":"branch_only","target":"b1","ok":true},{"kind":"branch_only","target":"b2","ok":false,"error":"force_required"}]"#)
         )
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[{"kind":"branch_only","branch":"b2"}]}"#)
         model.select(model.items[0])
         model.select(model.items[1])
         model.requestDelete()
@@ -755,11 +756,11 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertEqual(sleeper.durations.last, GitScreenModel.deleteJobPollInterval)
 
         await tick(sleeper)
-        await waitUntil { model.forcePrompt != nil }
+        await waitUntil { model.forcePrompt != nil && !model.isDeleting }
 
-        XCTAssertEqual(StubURLProtocol.requests.map(\.httpMethod), ["POST", "GET", "GET", "GET"])
+        XCTAssertEqual(StubURLProtocol.requests.map(\.httpMethod), ["POST", "GET", "GET", "GET", "GET"])
         XCTAssertEqual(StubURLProtocol.requests.first?.url?.absoluteString.hasSuffix("/git/delete-jobs"), true)
-        XCTAssertEqual(StubURLProtocol.requests.last?.url?.absoluteString.hasSuffix("/git/delete-jobs/j1"), true)
+        XCTAssertEqual(pollCount(), 3)
         XCTAssertEqual(try sentItems(inBodyAt: 0).compactMap { $0["branch"]?.stringValue }, ["b1", "b2"])
         XCTAssertEqual(model.forcePrompt?.refs, ["b2"])
         XCTAssertNil(model.deleteProgress)
@@ -774,7 +775,7 @@ final class GitScreenModelTests: XCTestCase {
 
         await tick(sleeper)
         await tick(sleeper)
-        await waitUntil { model.message != nil && StubURLProtocol.requests.count == 3 }
+        await waitUntil { model.message != nil && StubURLProtocol.requests.count == 3 && !model.isDeleting }
 
         XCTAssertEqual(pollCount(), 1, "a forgotten job is not polled again")
         XCTAssertEqual(StubURLProtocol.requests.last?.url?.path.hasSuffix("/git/items"), true, "the list reloads instead")
@@ -796,6 +797,27 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertEqual(model.visibleItems.count, 2)
     }
 
+    func testASuccessfulDeleteJobReloadsTheListWithoutWaitingForGitChanged() async throws {
+        let (model, sleeper) = await deleteJobsModel()
+        StubURLProtocol.enqueue(status: 202, body: job("running", completed: 0))
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: job("done", completed: 1, results: #"[{"kind":"branch_only","target":"b1","ok":true}]"#)
+        )
+        // The job removed b1; its one `git.changed` was lost in a reconnect.
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[{"kind":"branch_only","branch":"b2"}]}"#)
+        model.delete(model.items[0])
+
+        await tick(sleeper)
+        await tick(sleeper)
+        await waitUntil { StubURLProtocol.requests.count == 3 && !model.isDeleting }
+
+        XCTAssertEqual(StubURLProtocol.requests.last?.httpMethod, "GET")
+        XCTAssertEqual(StubURLProtocol.requests.last?.url?.path.hasSuffix("/git/items"), true)
+        XCTAssertEqual(model.items.compactMap(\.branch), ["b2"], "the list is re-fetched, not only hidden")
+        XCTAssertNil(model.message)
+    }
+
     func testDeleteJobOutagesShorterThanTheBudgetKeepPollingAndStillDeliverTheResults() async throws {
         let (model, sleeper) = await deleteJobsModel()
         let unreachable = #"{"detail":"agent unreachable"}"#
@@ -808,6 +830,7 @@ final class GitScreenModelTests: XCTestCase {
             status: 200,
             body: job("done", completed: 2, results: #"[{"kind":"branch_only","target":"b1","ok":true},{"kind":"branch_only","target":"b2","ok":false,"error":"force_required"}]"#)
         )
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[{"kind":"branch_only","branch":"b2"}]}"#)
         model.select(model.items[0])
         model.select(model.items[1])
         model.requestDelete()
@@ -823,7 +846,7 @@ final class GitScreenModelTests: XCTestCase {
         // The successful poll restarts the budget, so another 119 s outage is survived.
         await tick(sleeper, elapsed: .seconds(119))
         await tick(sleeper, elapsed: .seconds(1))
-        await waitUntil { model.forcePrompt != nil }
+        await waitUntil { model.forcePrompt != nil && !model.isDeleting }
 
         XCTAssertEqual(pollCount(), 5)
         XCTAssertEqual(model.forcePrompt?.refs, ["b2"])
@@ -848,7 +871,8 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertNil(model.message)
 
         await tick(sleeper, elapsed: GitScreenModel.deleteJobGiveUpAfter - .seconds(119))
-        await waitUntil { model.message != nil && StubURLProtocol.requests.count == 5 }
+        // `isDeleting` clears only once the reload after the failure returned.
+        await waitUntil { model.message != nil && StubURLProtocol.requests.count == 5 && !model.isDeleting }
 
         XCTAssertEqual(pollCount(), 3)
         XCTAssertEqual(model.message?.hasPrefix("Delete failed"), true)

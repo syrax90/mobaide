@@ -431,6 +431,27 @@ class GitViewModelTest {
     }
 
     @Test
+    fun deleteJobsCapability_aSuccessfulJobReloadsTheList_withoutWaitingForGitChanged() = runTest {
+        val f = newFixture(capabilities = GitCapabilities(deleteJobs = true))
+        advanceUntilIdle()
+        coEvery { f.repo.deleteGitItems("alpha", any(), true, any()) } returns GitDeleteResponse(
+            results = listOf(okResult(GitItem.KIND_BRANCH_ONLY, "stale")),
+        )
+        // The job removed the row; its one `git.changed` was lost in a reconnect.
+        coEvery { f.repo.listGitItems("alpha") } returns listOf(
+            branchOnly("main", isCurrent = true),
+            branchWithWorktree("topic", "/repo/wt/topic"),
+            orphanWorktree("/repo/wt/orphan"),
+        )
+
+        f.vm.deleteItem(staleId)
+        advanceUntilIdle()
+
+        assertEquals(listOf(mainId, topicId, orphanId), f.vm.uiState.value.items.map { it.id })
+        coVerify(exactly = 2) { f.repo.listGitItems("alpha") }
+    }
+
+    @Test
     fun busyException_setsBusyDialog_andRestoresEveryRow() = runTest {
         val f = newFixture()
         advanceUntilIdle()
