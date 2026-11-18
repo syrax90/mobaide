@@ -359,9 +359,9 @@ class GitViewModel @Inject constructor(
             if (failures.isNotEmpty()) {
                 _events.tryEmit(GitUiEvent.Message(deleteFailureMessage(failures)))
             }
-            // A job can outlive a reconnect that drops the agent's one
-            // `git.changed`, so its end re-fetches the list too.
-            if (useJobs) reload()
+            // The agent's one `git.changed` can be lost in a reconnect, so the
+            // end of a batch re-fetches the list too, as on web.
+            reload()
         } catch (e: GitBusyException) {
             // The busy guard is all-or-nothing: nothing was processed.
             _uiState.update {
