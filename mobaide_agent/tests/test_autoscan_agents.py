@@ -7,6 +7,7 @@ session config, the worktree it ran in, the tracked work item.
 """
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -25,11 +26,12 @@ from mobaide.core.cursor_launcher import CursorLauncher
 from mobaide.core.junie_launcher import JunieLauncher
 from mobaide.core.opencode_launcher import INITIAL_PROMPT_MAX, OpenCodeLauncher
 from mobaide.core.pi_launcher import PiBinaryNotFoundError, PiLauncher
-from mobaide.core.workspaces_config import WorkspaceConfig
-from mobaide.linear import scanner
+from mobaide.core.workspaces_config import GitHubScanFilter, WorkspaceConfig
+from mobaide.github.gh import GhBinaryNotFoundError, GhCli, GhIssue
+from mobaide.linear import scanner, sources
 from mobaide.linear.config import AutoScanConfig
 from mobaide.linear.scanner import AutoScanInstance
-from mobaide.linear.sources import ScanIssue
+from mobaide.linear.sources import GitHubIssueSource, ScanIssue
 from mobaide.linear.workitems import ActiveWorkItem, now_iso_utc
 from mobaide.linear.worktree import WorktreeManager, WorktreeResult
 
@@ -116,7 +118,7 @@ def _workspace(tmp_path: Path, *, saved_prompt: str | None = None) -> WorkspaceC
 
 
 def _instance(
-    tmp_path: Path, *, cli: str, launcher, source: _FakeSource,
+    tmp_path: Path, *, cli: str, launcher, source: _FakeSource | GitHubIssueSource,
     agent_options: dict[str, object] | None = None, initial_prompt: str | None = None,
     workspace: WorkspaceConfig | None = None,
     worktrees: _FakeWorktrees | None = None,
@@ -429,6 +431,68 @@ async def test_claude_gets_the_linear_key_only_on_a_linear_scan(
     [config] = sessions.configs
     assert ("LINEAR_API_KEY" in config.env) is key_reaches_the_session
     assert (Path(config.cwd) / ".mcp.json").exists() is key_reaches_the_session
+
+
+class _Gh(GhCli):
+    """A ``gh`` at ``binary`` (``None``: not installed) whose repository has
+    issue #7 open with the asked label."""
+
+    def __init__(self, binary: str | None) -> None:
+        super().__init__()
+        self._binary = binary
+
+    def resolve_binary(self) -> str:
+        if self._binary is None:
+            raise GhBinaryNotFoundError(searched_paths=[])
+        return self._binary
+
+    async def list_issues(self, repo, *, label, assignee, issue_type=None, with_types=False):
+        return [GhIssue(number=7, title="Fix the login crash", body="", url="", labels=(label,))]
+
+    async def edit_labels(self, repo, number, *, add=(), remove=()) -> None:
+        pass
+
+    async def issue_state(self, repo, number) -> str | None:
+        return "OPEN"
+
+
+@pytest.mark.parametrize(
+    ("source_kind", "gh_installed", "gh_on_host_path", "gh_added"),
+    [
+        ("github", True, False, True),
+        ("github", True, True, False),
+        ("github", False, False, False),
+        ("linear", True, False, False),
+    ],
+    ids=["github", "github-gh-already-on-path", "github-gh-missing", "linear"],
+)
+async def test_a_github_scan_adds_its_gh_folder_last_on_the_session_path(
+    tmp_path, monkeypatch, source_kind, gh_installed, gh_on_host_path, gh_added,
+):
+    async def ready(_gh, _path):
+        return {"problem": None, "host": "github.com", "repo": "acme/app",
+                "repo_url": "https://github.com/acme/app"}
+
+    monkeypatch.setattr(sources, "github_status", ready)
+    gh_dir = tmp_path / "gh-bin"
+    if gh_on_host_path:
+        monkeypatch.setenv("PATH", f"{gh_dir}{os.pathsep}{os.environ['PATH']}")
+    gh = _Gh(str(gh_dir / "gh") if gh_installed else None)
+    source = (
+        GitHubIssueSource(gh, "/srv/app", GitHubScanFilter(labels=["ai"]))
+        if source_kind == "github" else _linear_source("Steps to reproduce")
+    )
+    await source.connect()
+    inst, _, sessions = _instance(tmp_path, cli="pi", launcher=PiLauncher(), source=source)
+
+    await inst._scan_once()
+
+    # The first prompt asks the agent to run ``gh issue view``; MOBAIDE_GH_BIN
+    # or a fallback folder may have found a gh that is not on the agent's PATH.
+    # Without a gh, or with its folder already on PATH, PATH stays as it was.
+    [config] = sessions.configs
+    host_path = os.environ["PATH"]
+    assert config.env["PATH"] == (f"{host_path}{os.pathsep}{gh_dir}" if gh_added else host_path)
 
 
 @pytest.mark.parametrize(("source_kind", "forced"), [("github", False), ("linear", True)])

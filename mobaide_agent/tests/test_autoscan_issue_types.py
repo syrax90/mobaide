@@ -37,14 +37,17 @@ class _PinnedGh(GhCli):
 
 class _ScriptedRun:
     """Stands in for ``subprocess.run``: answers each call with the next
-    ``(returncode, stdout, stderr)`` and records the ``gh`` arguments."""
+    ``(returncode, stdout, stderr)`` and records the ``gh`` arguments and
+    timeouts."""
 
     def __init__(self, answers: list[tuple[int, str, str]]) -> None:
         self._answers = list(answers)
         self.args: list[list[str]] = []
+        self.timeouts: list[float | None] = []
 
     def __call__(self, argv, **kwargs):
         self.args.append(list(argv[1:]))
+        self.timeouts.append(kwargs.get("timeout"))
         rc, out, err = self._answers.pop(0)
         return subprocess.CompletedProcess(argv, rc, stdout=out.encode(), stderr=err.encode())
 
@@ -78,6 +81,32 @@ class TestGhCli:
         # no type is chosen.
         assert "issueType" not in _json_fields(run.args[1])
         assert not any(arg.startswith("--type") for arg in run.args[1])
+
+    @pytest.mark.parametrize(
+        ("issue_type", "with_types", "limit", "reads_types", "timeout"),
+        [
+            # Above 10 (label, type) pairs: issues of other types are never
+            # taken, so they stay labelled and must not fill the answer. gh
+            # pages through those rows, so the call gets more time.
+            pytest.param(None, True, "300", True, 60.0, id="label-only-fallback"),
+            pytest.param("Bug", True, "50", True, 20.0, id="per-pair-type"),
+            pytest.param(None, False, "50", False, 20.0, id="untyped"),
+        ],
+    )
+    async def test_only_the_label_only_typed_fallback_reads_past_the_50_issue_window(
+        self, monkeypatch, issue_type, with_types, limit, reads_types, timeout,
+    ):
+        run = _ScriptedRun([(0, "[]", "")])
+        monkeypatch.setattr(gh_module.subprocess, "run", run)
+
+        await _PinnedGh().list_issues(
+            _REPO, label="ai", assignee=None, issue_type=issue_type, with_types=with_types,
+        )
+
+        [args] = run.args
+        assert args[args.index("--limit") + 1] == limit
+        assert ("issueType" in _json_fields(args)) is reads_types
+        assert run.timeouts == [timeout]
 
     @pytest.mark.parametrize(
         "stderr",

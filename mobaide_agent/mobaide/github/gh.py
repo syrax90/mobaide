@@ -36,6 +36,11 @@ _TIMEOUT = 20.0
 _ISSUE_TYPES_TIMEOUT = 8.0
 _MAX_ERROR = 300
 _ISSUE_LIMIT = 50
+# A label-only query whose types are filtered here: issues of other types are
+# never taken, so they stay labelled and must not fill the whole answer.
+_TYPED_FALLBACK_LIMIT = 300
+# gh reads those rows in up to three search pages within one call.
+_TYPED_FALLBACK_TIMEOUT = 60.0
 _LABEL_LIMIT = 200
 _ACCOUNT_RE = re.compile(r"(?:account|as)\s+([A-Za-z0-9-]+)")
 _ISSUE_TYPES_QUERY = (
@@ -244,22 +249,25 @@ class GhCli:
         """Open issues with ``label`` and, when ``issue_type`` is set, of that
         issue type. GitHub filters the type, so issues of other types do not
         use up the ``_ISSUE_LIMIT`` rows. ``issue_type`` or ``with_types`` also
-        reads each issue's type. Types need a gh that knows ``--type`` and the
-        ``issueType`` field."""
+        reads each issue's type; ``with_types`` alone reads up to
+        ``_TYPED_FALLBACK_LIMIT`` rows (gh pages through them). Types need a gh
+        that knows ``--type`` and the ``issueType`` field."""
         reads_types = bool(issue_type) or with_types
+        limit = _TYPED_FALLBACK_LIMIT if with_types and not issue_type else _ISSUE_LIMIT
         # ``--flag=value`` forms: a user-chosen value that starts with ``-``
         # can never be read as another flag.
         fields = "number,title,body,url,labels" + (",issueType" if reads_types else "")
         args = [
             "issue", "list", "--repo", repo.selector, "--state", "open",
-            f"--label={label}", "--limit", str(_ISSUE_LIMIT),
+            f"--label={label}", "--limit", str(limit),
             "--json", fields,
         ]
         if assignee:
             args.append(f"--assignee={assignee}")
         if issue_type:
             args.append(f"--type={issue_type}")
-        rc, out, err = await self._run(args)
+        timeout = _TYPED_FALLBACK_TIMEOUT if limit == _TYPED_FALLBACK_LIMIT else _TIMEOUT
+        rc, out, err = await self._run(args, timeout=timeout)
         if rc != 0:
             if reads_types and ("issueType" in err or "--type" in err):
                 raise GhError(

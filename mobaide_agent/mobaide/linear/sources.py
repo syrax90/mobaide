@@ -8,12 +8,13 @@ everything after the claim: the worktree, the agent session, the events.
 """
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
 from mobaide.core.workspaces_config import AutoScanFilter, GitHubScanFilter, WorkspaceConfig
-from mobaide.github.gh import GhCli, GhError, GhIssue, GitHubRepo
+from mobaide.github.gh import GhBinaryNotFoundError, GhCli, GhError, GhIssue, GitHubRepo
 from mobaide.github.setup import github_status
 
 from .client import LinearApiClient
@@ -203,6 +204,15 @@ class GitHubIssueSource:
             f"repo={repo} labels={list(self.filter.labels)} "
             f"assignee={self.filter.assignee or '*'} types={types}"
         )
+
+    def tool_dir(self) -> str | None:
+        """The folder of the ``gh`` this scan uses, for the agent sessions'
+        PATH: the first prompt asks the agent to run ``gh issue view``, and
+        ``gh`` may have been found outside the agent's PATH."""
+        try:
+            return os.path.dirname(self._gh.resolve_binary())
+        except GhBinaryNotFoundError:
+            return None
 
     def _triggers(self) -> set[str]:
         # GitHub matches label names without regard to case.

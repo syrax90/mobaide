@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import os
 import re
 import sys
 import time
@@ -653,12 +654,22 @@ class AutoScanInstance:
         self, issue: ScanIssue, session_id: str, spec, kind: SessionKind,
     ) -> bool:
         self._emit_issue(issue, "session_spawn", "started")
+        env = spec.env
+        tool_dir = getattr(self._source, "tool_dir", None)
+        directory = tool_dir() if tool_dir is not None else None
+        if directory and env is not None:
+            # Last, not first: the folder must not change which python3,
+            # node or git the agent and the workspace's conda env resolve.
+            env = dict(env)
+            parts = env["PATH"].split(os.pathsep) if env.get("PATH") else []
+            if directory not in parts:
+                env["PATH"] = os.pathsep.join([*parts, directory])
         try:
             config = SessionConfig(
                 session_id=session_id,
                 command=spec.argv,
                 cwd=spec.cwd,
-                env=spec.env,
+                env=env,
                 kind=kind,
             )
             session = await self._session_manager.create_session(config)
