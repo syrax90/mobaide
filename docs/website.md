@@ -288,6 +288,27 @@ tell docs-enabled-but-gated from docs-disabled. The same `robots.txt` is served 
 a noindex guarantee, use an `X-Robots-Tag: noindex` response header, not a public
 file.
 
+### sitemap.xml lastmod
+
+Each sitemap URL has a `<lastmod>`: the time the server first served the page's
+current text. Google uses it to decide when to crawl again, and ignores it once it
+is wrong. The site goes live on a central-server deploy (`deploy_all.py` →
+Central server), not on a merge, so the server sets the date itself and nobody
+edits it by hand.
+
+At startup, `loader.stamp_lastmod` hashes each pre-rendered page, without the
+`?v=` asset query. It compares each hash with `site_lastmod.json`, which sits
+beside the database (`/app/data/` in production, on the volume that survives
+deploys):
+
+- Same hash: the page keeps its recorded date. A restart changes nothing.
+- New or changed hash: the page gets the startup time.
+- Missing or unreadable file: every page gets the startup time, once.
+
+A CSS or image change alone does not move a date. A text change in a shared
+partial such as `_site_foot.html` moves the date of every page that includes it.
+For `/privacy.html` only the policy text counts, not the `portal_base.html` shell.
+
 ### Static asset caching
 
 `CachedStaticFiles` supplies the `Cache-Control` that Starlette's `StaticFiles`
