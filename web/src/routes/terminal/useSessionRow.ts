@@ -14,6 +14,11 @@ import type { SessionResponse } from '../../protocol/dto/session';
 import { useSessionsSynced } from '../../realtime';
 
 export function useSessionRow(agentId: string, sessionId: string): SessionResponse | undefined {
+  return useSessionRows(agentId)?.find((row) => row.session_id === sessionId);
+}
+
+/** The whole session list behind {@link useSessionRow}. */
+export function useSessionRows(agentId: string): SessionResponse[] | undefined {
   const synced = useSessionsSynced(agentId);
   const sessions = useQuery({
     queryKey: queryKeys.sessions(agentId),
@@ -21,5 +26,5 @@ export function useSessionRow(agentId: string, sessionId: string): SessionRespon
     enabled: synced,
     ...wsBackedQueryOptions,
   });
-  return sessions.data?.find((row) => row.session_id === sessionId);
+  return sessions.data;
 }

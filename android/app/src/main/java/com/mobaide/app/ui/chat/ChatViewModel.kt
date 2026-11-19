@@ -79,6 +79,7 @@ data class ChatSessionHeader(
     val kind: SessionKind? = null,
     val cwd: String? = null,
     val workspaceName: String? = null,
+    val worktreeBranch: String? = null,
 )
 
 /**
@@ -180,6 +181,7 @@ class ChatViewModel @Inject constructor(
                 kind = session.kind,
                 cwd = session.cwd,
                 workspaceName = session.workspace_name,
+                worktreeBranch = session.worktree_branch,
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ChatSessionHeader())
 

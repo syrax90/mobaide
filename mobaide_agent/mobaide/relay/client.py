@@ -107,6 +107,7 @@ from mobaide.agent.git.changes_service import (
     http_error_for as git_changes_http_error_for,
 )
 from mobaide.agent.git.delete_jobs import delete_job_registry
+from mobaide.agent.sessions.stop import stop_session as stop_session_and_worktree
 from mobaide.agent.git.models import (
     BusyByResponse,
     GitBranchCreateRequest,
@@ -1840,9 +1841,17 @@ class RelayClient:
         if m and method == "DELETE":
             session_id = m.group(1)
             force = (query or {}).get("force", "false").lower() == "true"
+            remove_worktree = (
+                (query or {}).get("remove_worktree", "false").lower() == "true"
+            )
             try:
-                await self._session_manager.stop_session(
-                    session_id, force=force
+                await stop_session_and_worktree(
+                    self._session_manager,
+                    session_id,
+                    force=force,
+                    remove_worktree=remove_worktree,
+                    app_state=self._app_state,
+                    actor=None,
                 )
                 return {"status": 204, "body": None}
             except KeyError:

@@ -61,10 +61,18 @@ export async function stopSession(
   agentId: string,
   sessionId: string,
   force: boolean,
+  removeWorktree = false,
 ): Promise<void> {
   const { error, response } = await createAgentClient(agentId).DELETE(
     '/api/sessions/{session_id}',
-    { params: { path: { session_id: sessionId }, query: { force } } },
+    {
+      params: {
+        path: { session_id: sessionId },
+        // Older agents ignore `remove_worktree`; they never send `worktree_branch`,
+        // so no client offers it to them.
+        query: { force, remove_worktree: removeWorktree },
+      },
+    },
   );
   if (error !== undefined) throw toApiError(response, error);
 }

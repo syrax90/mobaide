@@ -13,6 +13,7 @@ import {
   sessionStateTone,
   sessionStatusChip,
   sessionTitle,
+  worktreeInUse,
 } from './sessionDisplay';
 
 /** Built through the schema so the defaults these helpers read are the wire's. */
@@ -273,5 +274,19 @@ describe('nearestOpenSession', () => {
 
   it('returns null when the stopped session was not in the snapshot', () => {
     expect(nearestOpenSession([row('a'), row('b')], [row('a'), row('b')], 'x')).toBeNull();
+  });
+});
+
+describe('worktreeInUse', () => {
+  it('is in use only when another session shares the target cwd', () => {
+    const target = session({ session_id: 'a', cwd: '/wt/feature-x' });
+    const sibling = session({ session_id: 'b', cwd: '/wt/feature-x' });
+    const elsewhere = session({ session_id: 'c', cwd: '/wt/other' });
+
+    expect(worktreeInUse(target, [target, sibling])).toBe(true);
+    // The target itself never counts as "another session".
+    expect(worktreeInUse(target, [target, elsewhere])).toBe(false);
+    expect(worktreeInUse(target, undefined)).toBe(false);
+    expect(worktreeInUse(session({ session_id: 'a' }), [session({ session_id: 'b' })])).toBe(false);
   });
 });

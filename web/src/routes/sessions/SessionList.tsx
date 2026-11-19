@@ -15,7 +15,12 @@ import { useLastSessionStore } from '../../stores/lastSessionStore';
 import { AutoScanSection } from '../autoscan/AutoScanSection';
 import { SessionCard } from './SessionCard';
 import { StopSessionDialog } from './StopSessionDialog';
-import { customTypeNameMap, sessionDialogLabel, sessionKindLabel } from './sessionDisplay';
+import {
+  customTypeNameMap,
+  sessionDialogLabel,
+  sessionKindLabel,
+  worktreeInUse,
+} from './sessionDisplay';
 import { newSessionPath } from './terminalPath';
 import { useAutoResume } from './useAutoResume';
 import { useStopSession } from './useStopSession';
@@ -129,9 +134,11 @@ export function SessionList({ agentId, online }: SessionListProps) {
       {stopTarget !== null && (
         <StopSessionDialog
           label={sessionDialogLabel(stopTarget, names)}
+          worktreeBranch={stopTarget.worktree_branch}
+          worktreeInUse={worktreeInUse(stopTarget, sessions.data)}
           busy={stop.isPending}
-          onStop={(force) => {
-            stop.mutate({ sessionId: stopTarget.session_id, force });
+          onStop={(force, removeWorktree) => {
+            stop.mutate({ sessionId: stopTarget.session_id, force, removeWorktree });
           }}
           onCancel={() => {
             setStopTarget(null);

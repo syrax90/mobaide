@@ -61,6 +61,7 @@ import com.mobaide.app.ui.sessions.panel.edgeSwipeToOpen
 import com.mobaide.app.ui.sessions.sessionKindLabel
 import com.mobaide.app.ui.sessions.sessionStateColor
 import com.mobaide.app.ui.sessions.sessionTitle
+import com.mobaide.app.ui.sessions.worktreeInUse
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -560,8 +561,10 @@ fun TerminalScreen(
     stopTarget?.let { target ->
         StopSessionDialog(
             label = sessionTitle(target, sessionKindLabel(target, panelState.customTypeNames)),
-            onStop = { force ->
-                panelViewModel.stopSession(target.session_id, force)
+            worktreeBranch = target.worktree_branch,
+            worktreeInUse = worktreeInUse(target.session_id, target.cwd, panelState.sessions),
+            onStop = { force, removeWorktree ->
+                panelViewModel.stopSession(target.session_id, force, removeWorktree)
                 stopTarget = null
             },
             onDismiss = { stopTarget = null },

@@ -137,6 +137,9 @@ class SessionConfig:
     worktree: bool = False
     branch_name: str | None = None
     base_branch: str | None = None
+    # Set by ``SessionManager`` when it ran the session in a worktree it made
+    # (or reused) for a ``worktree`` request: the branch checked out there.
+    worktree_branch: str | None = None
     # Seconds after spawn to wait before flagging a session that produced
     # essentially no output (< STARTUP_STALL_MIN_BYTES) as stalled — almost
     # always a macOS file-access (TCC) modal blocking the child invisibly on the
@@ -194,6 +197,10 @@ class SessionInfo:
     # running session with a source for it reports a value: Claude Code hooks
     # (terminal) and the turn state (chat). ``None`` means unknown.
     activity: str | None = None
+    # The local branch of the linked worktree the agent made for this session
+    # (see ``SessionConfig.worktree_branch``); ``None`` otherwise. Clients offer
+    # to remove the worktree and this branch when the session stops.
+    worktree_branch: str | None = None
 
 
 @dataclass
@@ -404,4 +411,5 @@ def session_to_wire_dict(info: SessionInfo) -> dict[str, Any]:
         "exit_reason": info.exit_reason,
         "ui": info.ui,
         "activity": info.activity,
+        "worktree_branch": info.worktree_branch,
     }

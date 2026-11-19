@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubLocalStorage } from '../../test/localStorageStub';
@@ -17,7 +17,7 @@ vi.mock('../../auth/agentTokens', () => ({
 const api = vi.hoisted(() => ({
   agents: [] as Agent[],
   sessions: [] as SessionResponse[],
-  stops: [] as { sessionId: string; force: boolean }[],
+  stops: [] as { sessionId: string; force: boolean; removeWorktree: boolean }[],
 }));
 
 vi.mock('../../api/agentRepository', () => ({
@@ -26,8 +26,8 @@ vi.mock('../../api/agentRepository', () => ({
 
 vi.mock('../../api/sessionRepository', () => ({
   listSessions: () => Promise.resolve(api.sessions),
-  stopSession: (_agentId: string, sessionId: string, force: boolean) => {
-    api.stops.push({ sessionId, force });
+  stopSession: (_agentId: string, sessionId: string, force: boolean, removeWorktree = false) => {
+    api.stops.push({ sessionId, force, removeWorktree });
     return Promise.resolve();
   },
 }));
@@ -45,6 +45,7 @@ const { useSelectedAgentStore } = await import('../../stores/selectedAgentStore'
 const { stopAllRealtime } = await import('../../realtime');
 const { resetAutoResumeAttempts } = await import('./autoResume');
 const { SessionsScreen } = await import('./SessionsScreen');
+const { WORKTREE_IN_USE_HINT } = await import('./StopSessionDialog');
 // Auto-resume only acts on a list the connected agent just pushed, and no socket
 // is ever built here (see the agent-token mock), so both halves of that signal
 // are staged directly.
@@ -153,7 +154,56 @@ describe('SessionsScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Force Stop' }));
 
     await waitFor(() => {
-      expect(api.stops).toEqual([{ sessionId: 's1', force: true }]);
+      expect(api.stops).toEqual([{ sessionId: 's1', force: true, removeWorktree: false }]);
+    });
+    // No worktree, no removal offer.
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+  });
+
+  it('offers the worktree removal unchecked, and stops without it unless checked', async () => {
+    api.sessions = [session('s1', { title: 'build', worktree_branch: 'feature/x' })];
+
+    renderScreen();
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+    const offer = screen.getByRole('checkbox', { name: /feature\/x/ });
+    expect(offer).not.toBeChecked();
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Stop' }));
+
+    await waitFor(() => {
+      expect(api.stops).toEqual([{ sessionId: 's1', force: false, removeWorktree: false }]);
+    });
+  });
+
+  it('passes a checked worktree removal through to the stop call', async () => {
+    api.sessions = [session('s1', { title: 'build', worktree_branch: 'feature/x' })];
+
+    renderScreen();
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /feature\/x/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Force Stop' }));
+
+    await waitFor(() => {
+      expect(api.stops).toEqual([{ sessionId: 's1', force: true, removeWorktree: true }]);
+    });
+  });
+
+  it('disables the worktree removal while another session runs in that worktree', async () => {
+    api.sessions = [
+      session('s1', { title: 'build', cwd: '/wt/feature-x', worktree_branch: 'feature/x' }),
+      session('s2', { title: 'shell', cwd: '/wt/feature-x' }),
+    ];
+
+    renderScreen();
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Stop' }))[0]!);
+    const offer = screen.getByRole('checkbox', { name: /feature\/x/ });
+    expect(offer).toBeDisabled();
+    expect(offer).not.toBeChecked();
+    expect(offer).toHaveAccessibleDescription(WORKTREE_IN_USE_HINT);
+    fireEvent.click(offer);
+    fireEvent.click(screen.getByRole('button', { name: 'Force Stop' }));
+
+    await waitFor(() => {
+      expect(api.stops).toEqual([{ sessionId: 's1', force: true, removeWorktree: false }]);
     });
   });
 

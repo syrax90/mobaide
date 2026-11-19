@@ -285,21 +285,14 @@ private struct TerminalScreenContent: View {
         router.popTo(.sessionList)
     }
 
-    private var stopPresented: Binding<Bool> {
-        Binding(
-            get: { pendingStop != nil },
-            set: { if !$0 { pendingStop = nil } }
-        )
-    }
-
     /// `checkSessionStillExists` never leaves a session this screen has seen
     /// alive, so stopping the one on screen navigates away here instead — to
     /// the nearest open session, or the list when none is left — unless the
     /// user switched sessions while the request was in flight.
-    private func stopSession(_ id: String, force: Bool) async {
+    private func stopSession(_ id: String, force: Bool, removeWorktree: Bool) async {
         let stopped: SessionsPanelModel.StoppedSession
         do {
-            guard let result = try await panel.stopSession(id, force: force) else { return }
+            guard let result = try await panel.stopSession(id, force: force, removeWorktree: removeWorktree) else { return }
             stopped = result
         } catch {
             model.noteReviewError()
@@ -475,20 +468,10 @@ private struct TerminalScreenContent: View {
                 keyboard.start()
             }
         }
-        .confirmationDialog(
-            "Stop session?",
-            isPresented: stopPresented,
-            presenting: pendingStop
-        ) { session in
-            Button("Stop", role: .destructive) {
-                Task { await stopSession(session.session_id, force: false) }
-            }
-            Button("Force Stop", role: .destructive) {
-                Task { await stopSession(session.session_id, force: true) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { session in
-            Text("Stop “\(SessionDisplay.dialogLabel(session, customTypeNames: panel.customTypeNames))”?")
+        .stopSessionConfirm(pending: $pendingStop, sessions: panel.sessions) { session in
+            SessionDisplay.dialogLabel(session, customTypeNames: panel.customTypeNames)
+        } onStop: { session, force, removeWorktree in
+            Task { await stopSession(session.session_id, force: force, removeWorktree: removeWorktree) }
         }
         .alert("Save as template", isPresented: $showSaveTemplate) {
             TextField("Name", text: $templateName)

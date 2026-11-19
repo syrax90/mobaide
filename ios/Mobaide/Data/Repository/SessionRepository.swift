@@ -132,8 +132,8 @@ final class SessionRepository {
         return response
     }
 
-    func deleteSession(id: String, force: Bool) async throws {
-        try await agentAPI.deleteSession(sessionId: id, force: force)
+    func deleteSession(id: String, force: Bool, removeWorktree: Bool = false) async throws {
+        try await agentAPI.deleteSession(sessionId: id, force: force, removeWorktree: removeWorktree)
         terminalSessionStore.evict(id)
     }
 

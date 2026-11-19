@@ -82,8 +82,11 @@ struct AgentAPI: Sendable {
         try await execute(method: "POST", url: "\(try await base())/api/codex/login", body: CodexLoginRequest(api_key: apiKey))
     }
 
-    func deleteSession(sessionId: String, force: Bool = false) async throws {
-        let query = force ? "?force=true" : ""
+    func deleteSession(sessionId: String, force: Bool = false, removeWorktree: Bool = false) async throws {
+        var params: [String] = []
+        if force { params.append("force=true") }
+        if removeWorktree { params.append("remove_worktree=true") }
+        let query = params.isEmpty ? "" : "?" + params.joined(separator: "&")
         try await executeRaw(method: "DELETE", url: "\(try await base())/api/sessions/\(sessionId)\(query)")
     }
 

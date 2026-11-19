@@ -165,4 +165,22 @@ class SessionDisplayTest {
             sessionStatusChip(session(activity = "waiting", attention = "awaiting_permission")),
         )
     }
+
+    @Test
+    fun worktreeInUse_onlyWhenAnotherSessionSharesTheCwd() {
+        fun row(id: String, cwd: String?) = SessionResponse(
+            session_id = id,
+            state = "running",
+            created_at = "2026-01-01T00:00:00Z",
+            cwd = cwd,
+        )
+        val target = row("a", "/wt/feature-x")
+
+        assertTrue(worktreeInUse("a", "/wt/feature-x", listOf(target, row("b", "/wt/feature-x"))))
+        assertFalse(
+            "the target itself is not another session",
+            worktreeInUse("a", "/wt/feature-x", listOf(target, row("c", "/wt/other"))),
+        )
+        assertFalse(worktreeInUse("a", null, listOf(row("a", null), row("b", null))))
+    }
 }

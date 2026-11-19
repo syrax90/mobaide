@@ -109,3 +109,10 @@ fun sessionStatusChip(session: SessionResponse): SessionAttention? = when {
     isSessionWaiting(session) -> SessionAttention("Background", AttentionTone.Muted)
     else -> sessionAttention(session.attention)
 }
+
+/**
+ * Another session works in the worktree of session [sessionId] (at [cwd]), so
+ * the agent's busy guard would refuse removing it on stop.
+ */
+fun worktreeInUse(sessionId: String, cwd: String?, sessions: List<SessionResponse>): Boolean =
+    cwd != null && sessions.any { it.session_id != sessionId && it.cwd == cwd }

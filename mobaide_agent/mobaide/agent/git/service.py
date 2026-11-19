@@ -426,10 +426,16 @@ async def _busy_holders(
     session_manager: Any | None,
     autoscan_manager: Any | None,
 ) -> list[BusyHolder]:
-    """Return every session / auto-scan work item whose path is in ``affected``."""
+    """Return every session / auto-scan work item at or below a path in
+    ``affected``: a session in a sub-folder of a worktree also loses its
+    working directory when the worktree goes."""
     if not affected:
         return []
-    return await _holders(session_manager, autoscan_manager, affected.__contains__)
+    return await _holders(
+        session_manager,
+        autoscan_manager,
+        lambda norm: any(_within(norm, path) for path in affected),
+    )
 
 
 def _within(path: str, root: str) -> bool:

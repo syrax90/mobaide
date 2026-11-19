@@ -354,6 +354,7 @@ class ChatSession:
             exit_reason=self._exit_reason,
             ui="chat",
             activity=self._activity if self._state == SessionState.RUNNING else None,
+            worktree_branch=self._config.worktree_branch,
         )
 
     async def start(self) -> None:
