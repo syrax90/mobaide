@@ -380,3 +380,65 @@ class TestListMethods:
         assert "worktree" in args
         assert "list" in args
         assert "--porcelain" in args
+
+
+class TestLinkedWorktreeBranch:
+    """``linked_worktree_branch`` names the branch a stop-and-remove request
+    deletes, so every "not a linked worktree on a branch" case must be
+    ``None``. Paths are real directories: matching goes through
+    ``os.path.samefile``."""
+
+    @staticmethod
+    def _porcelain(root, *linked: tuple[str, str | None]) -> str:
+        stanzas = [f"worktree {root}\nHEAD sha0\nbranch refs/heads/main\n"]
+        for path, branch in linked:
+            ref = f"branch refs/heads/{branch}\n" if branch else "detached\n"
+            stanzas.append(f"worktree {path}\nHEAD sha1\n{ref}")
+        return "\n".join(stanzas) + "\n"
+
+    @patch("mobaide.linear.worktree._run_git")
+    async def test_returns_the_short_branch_of_the_matching_linked_worktree(
+        self, mock_git, manager, tmp_path,
+    ):
+        root = tmp_path / "repo"
+        other = tmp_path / "wt" / "other"
+        target = tmp_path / "wt" / "target"
+        for d in (root, other, target):
+            d.mkdir(parents=True)
+        mock_git.return_value = (
+            0,
+            self._porcelain(root, (str(other), "other"), (str(target), "feature/x")),
+            "",
+        )
+
+        assert await manager.linked_worktree_branch(str(root), str(target)) == "feature/x"
+
+    @patch("mobaide.linear.worktree._run_git")
+    async def test_main_checkout_is_none_without_asking_git(
+        self, mock_git, manager, tmp_path,
+    ):
+        assert await manager.linked_worktree_branch(str(tmp_path), str(tmp_path)) is None
+        mock_git.assert_not_called()
+
+    @patch("mobaide.linear.worktree._run_git")
+    async def test_detached_linked_worktree_is_none(self, mock_git, manager, tmp_path):
+        root = tmp_path / "repo"
+        target = tmp_path / "wt"
+        root.mkdir()
+        target.mkdir()
+        mock_git.return_value = (0, self._porcelain(root, (str(target), None)), "")
+
+        assert await manager.linked_worktree_branch(str(root), str(target)) is None
+
+    @patch("mobaide.linear.worktree._run_git")
+    async def test_path_that_is_not_a_worktree_of_the_repo_is_none(
+        self, mock_git, manager, tmp_path,
+    ):
+        root = tmp_path / "repo"
+        listed = tmp_path / "wt" / "listed"
+        stranger = tmp_path / "elsewhere"
+        for d in (root, listed, stranger):
+            d.mkdir(parents=True)
+        mock_git.return_value = (0, self._porcelain(root, (str(listed), "feature/x")), "")
+
+        assert await manager.linked_worktree_branch(str(root), str(stranger)) is None

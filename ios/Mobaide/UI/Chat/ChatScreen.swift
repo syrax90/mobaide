@@ -169,16 +169,10 @@ struct ChatScreen: View {
             Button("Cancel", role: .cancel) {}
         }
         .modifier(NewConversationConfirm(isPresented: $confirmNewConversation, message: newConversationMessage, confirm: { model.newConversation() }))
-        .confirmationDialog("Stop session?", isPresented: stopPresented, presenting: pendingStop) { session in
-            Button("Stop", role: .destructive) {
-                Task { await stopSession(session.session_id, force: false) }
-            }
-            Button("Force Stop", role: .destructive) {
-                Task { await stopSession(session.session_id, force: true) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { session in
-            Text("Stop “\(SessionDisplay.dialogLabel(session, customTypeNames: panel.customTypeNames))”?")
+        .stopSessionConfirm(pending: $pendingStop, sessions: panel.sessions) { session in
+            SessionDisplay.dialogLabel(session, customTypeNames: panel.customTypeNames)
+        } onStop: { session, force, removeWorktree in
+            Task { await stopSession(session.session_id, force: force, removeWorktree: removeWorktree) }
         }
         .onChange(of: drawerOpen) { _, open in
             if open { hideKeyboard() }
@@ -473,16 +467,12 @@ struct ChatScreen: View {
         )
     }
 
-    private var stopPresented: Binding<Bool> {
-        Binding(get: { pendingStop != nil }, set: { if !$0 { pendingStop = nil } })
-    }
-
     /// Stopping the session on screen moves to the nearest open session, or
     /// the list when none is left, unless the user moved on meanwhile.
-    private func stopSession(_ id: String, force: Bool) async {
+    private func stopSession(_ id: String, force: Bool, removeWorktree: Bool) async {
         let stopped: SessionsPanelModel.StoppedSession
         do {
-            guard let result = try await panel.stopSession(id, force: force) else { return }
+            guard let result = try await panel.stopSession(id, force: force, removeWorktree: removeWorktree) else { return }
             stopped = result
         } catch {
             model.noteReviewError()

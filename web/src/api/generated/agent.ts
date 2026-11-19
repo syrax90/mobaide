@@ -574,7 +574,8 @@ export interface paths {
         post?: never;
         /**
          * Stop Session
-         * @description Stop a session by ID.
+         * @description Stop a session by ID; ``remove_worktree`` also removes the worktree
+         *     the agent made for it and that worktree's local branch, in the background.
          */
         delete: operations["stop_session_api_sessions__session_id__delete"];
         options?: never;
@@ -2541,6 +2542,8 @@ export interface components {
              * @default terminal
              */
             ui: string;
+            /** Worktree Branch */
+            worktree_branch?: string | null;
         };
         /** StartScanRequest */
         StartScanRequest: {
@@ -3776,6 +3779,7 @@ export interface operations {
         parameters: {
             query?: {
                 force?: boolean;
+                remove_worktree?: boolean;
             };
             header?: never;
             path: {

@@ -3014,6 +3014,17 @@
             "default": "terminal",
             "title": "Ui",
             "type": "string"
+          },
+          "worktree_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worktree Branch"
           }
         },
         "required": [
@@ -5158,7 +5169,7 @@
     },
     "/api/sessions/{session_id}": {
       "delete": {
-        "description": "Stop a session by ID.",
+        "description": "Stop a session by ID; ``remove_worktree`` also removes the worktree\nthe agent made for it and that worktree's local branch, in the background.",
         "operationId": "stop_session_api_sessions__session_id__delete",
         "parameters": [
           {
@@ -5177,6 +5188,16 @@
             "schema": {
               "default": false,
               "title": "Force",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "remove_worktree",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Remove Worktree",
               "type": "boolean"
             }
           }

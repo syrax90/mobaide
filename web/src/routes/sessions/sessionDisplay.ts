@@ -214,3 +214,16 @@ export function customTypeNameMap(
 ): ReadonlyMap<string, string> {
   return new Map((types ?? []).map((type) => [`custom_${type.id}`, type.name]));
 }
+
+/**
+ * Another session works in `target`'s worktree, so the agent's busy guard
+ * would refuse removing it on stop. The stop dialog says so up front instead
+ * of offering a removal that silently does nothing.
+ */
+export function worktreeInUse(
+  target: SessionResponse,
+  sessions: readonly SessionResponse[] | undefined,
+): boolean {
+  if (target.cwd == null || sessions === undefined) return false;
+  return sessions.some((row) => row.session_id !== target.session_id && row.cwd === target.cwd);
+}

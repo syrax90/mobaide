@@ -82,6 +82,9 @@ struct SessionResponse: Codable, Equatable, Sendable {
     /// on background work, `"idle"` between turns; nil when the agent cannot
     /// tell (Codex, Antigravity, OpenCode, Copilot, Cursor, Junie, Pi and Terminal PTY sessions).
     let activity: String?
+    /// Local branch of the worktree the agent made for this session; nil when
+    /// the session does not run in one.
+    let worktree_branch: String?
 
     var isChat: Bool { ui == "chat" }
 
@@ -100,6 +103,7 @@ struct SessionResponse: Codable, Equatable, Sendable {
         case exit_reason
         case ui
         case activity
+        case worktree_branch
     }
 
     init(
@@ -116,7 +120,8 @@ struct SessionResponse: Codable, Equatable, Sendable {
         attention: String?,
         exit_reason: String?,
         ui: String? = nil,
-        activity: String? = nil
+        activity: String? = nil,
+        worktree_branch: String? = nil
     ) {
         self.session_id = session_id
         self.state = state
@@ -132,6 +137,7 @@ struct SessionResponse: Codable, Equatable, Sendable {
         self.exit_reason = exit_reason
         self.ui = ui
         self.activity = activity
+        self.worktree_branch = worktree_branch
     }
 }
 
@@ -154,6 +160,7 @@ extension SessionResponse {
         exit_reason = try container.decodeIfPresent(String.self, forKey: .exit_reason)
         ui = try container.decodeIfPresent(String.self, forKey: .ui)
         activity = try container.decodeIfPresent(String.self, forKey: .activity)
+        worktree_branch = try container.decodeIfPresent(String.self, forKey: .worktree_branch)
     }
 }
 

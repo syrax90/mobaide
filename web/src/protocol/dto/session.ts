@@ -42,6 +42,8 @@ export const sessionResponseSchema = z.looseObject({
    * background work, `idle` between turns; absent when unknown.
    */
   activity: optionalWireString(),
+  /** Local branch of the worktree the agent made for the session; absent otherwise. */
+  worktree_branch: optionalWireString(),
 });
 
 export type SessionResponse = z.infer<typeof sessionResponseSchema>;

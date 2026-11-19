@@ -116,6 +116,19 @@ final class AgentAPITests: XCTestCase {
         XCTAssertEqual(urls[1], "http://agent.example.com/api/sessions/s1?force=true")
     }
 
+    func testDeleteSessionAppendsRemoveWorktreeQueryOnlyWhenTrue() async throws {
+        StubURLProtocol.enqueue(status: 200, body: "")
+        StubURLProtocol.enqueue(status: 200, body: "")
+        let api = makeAPI()
+
+        try await api.deleteSession(sessionId: "s1", removeWorktree: true)
+        try await api.deleteSession(sessionId: "s1", force: true, removeWorktree: true)
+
+        let urls = StubURLProtocol.requests.map(\.url?.absoluteString)
+        XCTAssertEqual(urls[0], "http://agent.example.com/api/sessions/s1?remove_worktree=true")
+        XCTAssertEqual(urls[1], "http://agent.example.com/api/sessions/s1?force=true&remove_worktree=true")
+    }
+
     func testWorkspaceNamePathSegmentEncoding() async throws {
         StubURLProtocol.enqueue(status: 200, body: #"{"name":"p","path":"/x"}"#)
         _ = try await makeAPI().updateWorkspace(currentName: "My Workspace/α", update: WorkspaceUpdate(conda_env: "ml"))

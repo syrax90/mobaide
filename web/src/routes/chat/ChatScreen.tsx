@@ -14,14 +14,14 @@ import { useChatPrefsStore } from '../../stores/chatPrefsStore';
 import { useLastSessionStore } from '../../stores/lastSessionStore';
 import { useToastStore } from '../../stores/toastStore';
 import { clearMountedTerminal, setMountedTerminal } from '../../terminal/watchedTerminal';
-import { sessionDialogLabel, sessionKindLabel } from '../sessions/sessionDisplay';
+import { sessionDialogLabel, sessionKindLabel, worktreeInUse } from '../sessions/sessionDisplay';
 import { StopSessionDialog } from '../sessions/StopSessionDialog';
 import { useStopSession } from '../sessions/useStopSession';
 import { ConnectionOverlay } from '../terminal/ConnectionOverlay';
 import { useSessionGitMenu } from '../terminal/git/useSessionGitMenu';
 import { useSessionGone } from '../terminal/useSessionGone';
 import { useSessionHeaderLabel } from '../terminal/useSessionHeaderLabel';
-import { useSessionRow } from '../terminal/useSessionRow';
+import { useSessionRows } from '../terminal/useSessionRow';
 import { useSessionsPanelHost } from '../terminal/useSessionsPanelHost';
 import { CollapseIcon, ExpandIcon } from './ChatIcons';
 import { ChatTimelineView } from './ChatTimelineView';
@@ -48,7 +48,8 @@ export function ChatScreen() {
 function ChatRoute({ agentId, sessionId }: { agentId: string; sessionId: string }) {
   useSessionGone(agentId, sessionId);
   const headerLabel = useSessionHeaderLabel(agentId, sessionId);
-  const session = useSessionRow(agentId, sessionId);
+  const sessionRows = useSessionRows(agentId);
+  const session = sessionRows?.find((row) => row.session_id === sessionId);
   const key = chatChannelName(agentId, sessionId);
   const model = useChatStore((state) => state.models[key]);
 
@@ -75,7 +76,15 @@ function ChatRoute({ agentId, sessionId }: { agentId: string; sessionId: string 
       </section>
     );
   }
-  return <ChatView key={key} model={model} session={session} headerLabel={headerLabel} />;
+  return (
+    <ChatView
+      key={key}
+      model={model}
+      session={session}
+      headerLabel={headerLabel}
+      worktreeShared={session !== undefined && worktreeInUse(session, sessionRows)}
+    />
+  );
 }
 
 /** Ticks once a second while `active`, for the running turn's elapsed time. */
@@ -137,9 +146,11 @@ interface ChatViewProps {
   model: ChatSessionModel;
   session: SessionResponse | undefined;
   headerLabel: string;
+  /** Another session works in this session's worktree. */
+  worktreeShared: boolean;
 }
 
-function ChatView({ model, session, headerLabel }: ChatViewProps) {
+function ChatView({ model, session, headerLabel, worktreeShared }: ChatViewProps) {
   const navigate = useNavigate();
   const state = useStore(model.store, (view) => view.timeline.state);
   const connection = useStore(model.store, (view) => view.connection);
@@ -433,9 +444,11 @@ function ChatView({ model, session, headerLabel }: ChatViewProps) {
         {stopOpen && (
           <StopSessionDialog
             label={session === undefined ? title : sessionDialogLabel(session, new Map())}
+            worktreeBranch={session?.worktree_branch}
+            worktreeInUse={worktreeShared}
             busy={stop.isPending}
-            onStop={(force) => {
-              stop.mutate({ sessionId: model.sessionId, force });
+            onStop={(force, removeWorktree) => {
+              stop.mutate({ sessionId: model.sessionId, force, removeWorktree });
             }}
             onCancel={() => {
               setStopOpen(false);

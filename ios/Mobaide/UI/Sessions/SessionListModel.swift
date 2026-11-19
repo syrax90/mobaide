@@ -121,9 +121,9 @@ final class SessionListModel {
 
     /// A 404 means the session is already gone, so it counts as stopped
     /// (`SessionsPanelModel` parity).
-    func deleteSession(_ id: String, force: Bool) async {
+    func deleteSession(_ id: String, force: Bool, removeWorktree: Bool = false) async {
         do {
-            try await repository.deleteSession(id: id, force: force)
+            try await repository.deleteSession(id: id, force: force, removeWorktree: removeWorktree)
         } catch let error as APIError where error.code == 404 {
         } catch {
             self.error = "Failed to stop session: \(String(describing: error))"

@@ -17,8 +17,15 @@ export function useStopSession(agentId: string, { onStopped, onSettled }: StopSe
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ sessionId, force }: { sessionId: string; force: boolean }) =>
-      stopSession(agentId, sessionId, force),
+    mutationFn: ({
+      sessionId,
+      force,
+      removeWorktree = false,
+    }: {
+      sessionId: string;
+      force: boolean;
+      removeWorktree?: boolean;
+    }) => stopSession(agentId, sessionId, force, removeWorktree),
     onSuccess: async (_result, { sessionId }) => {
       onSettled?.();
       onStopped?.(sessionId);

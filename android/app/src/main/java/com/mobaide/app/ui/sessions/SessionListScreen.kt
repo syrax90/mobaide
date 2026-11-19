@@ -205,8 +205,10 @@ fun SessionListScreen(
     stopTarget?.let { target ->
         StopSessionDialog(
             label = sessionTitle(target, sessionKindLabel(target, uiState.customTypeNames)),
-            onStop = { force ->
-                viewModel.deleteSession(target.session_id, force)
+            worktreeBranch = target.worktree_branch,
+            worktreeInUse = worktreeInUse(target.session_id, target.cwd, uiState.sessions),
+            onStop = { force, removeWorktree ->
+                viewModel.deleteSession(target.session_id, force, removeWorktree)
                 stopTarget = null
             },
             onDismiss = { stopTarget = null },

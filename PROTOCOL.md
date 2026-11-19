@@ -125,6 +125,18 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-19: remove a session's worktree when it stops
+
+Additive delta within proto-v7 (2026-11-19): **one session field, one stop query parameter. No version bump; `central_server` is untouched.**
+
+| Where | Change |
+|-------|--------|
+| `SessionResponse.worktree_branch` (REST list, `sessions.changed`, `session.updated`) | `str \| null`. The local branch of the linked worktree the agent made (or reused) for a `worktree: true` create. `null` when the session runs anywhere else, when the create fell back to the workspace root, or when the worktree HEAD was detached. |
+| `DELETE /api/sessions/{id}?remove_worktree=true` (both transports) | After the stop, the agent removes that worktree and its local branch with `force` (uncommitted changes and unmerged commits are lost). It deletes the `worktree_branch` the client showed, even when the worktree has another branch checked out by then, so a branch the user did not confirm is never deleted. The removal runs as a background delete job (see *workspace Git delete jobs*) and publishes `git.changed`. The answer stays `204` and does not wait for the job. |
+
+* The removal is best effort: the stop has already succeeded. When the busy guard refuses (another session or auto-scan item works in the same worktree) or 8 jobs already run, the agent logs it and keeps the worktree. It never removes the workspace root. For every workspace Git delete (this one and the Git screen's), a session or auto-scan item in a sub-folder of a worktree now counts as a holder too, because it loses its working directory when the worktree goes.
+* Clients offer the removal in the Stop / Force Stop confirmation only when `worktree_branch` is set, as a checkbox that is never pre-checked (iOS: a sheet, because a confirmation dialog cannot host a toggle). While another session in the list has the same `cwd`, the checkbox is disabled and says why, because the busy guard would refuse the removal. Older agents never send the field, so no client offers it to them.
+
 ### Delta 2026-11-18: workspace Git delete jobs
 
 Additive delta within proto-v7 (2026-11-18): **two workspace Git routes, one capability key, one earlier `force_required`. No version bump; `central_server` is untouched.**

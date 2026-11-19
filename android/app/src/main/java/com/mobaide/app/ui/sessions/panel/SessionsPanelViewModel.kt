@@ -144,7 +144,7 @@ class SessionsPanelViewModel @Inject constructor(
     /** The row disappears through the agent's `sessions.changed` push, so a
      *  success needs no refetch here. One stop at a time: the panel disables
      *  every stop control while one is in flight. */
-    fun stopSession(sessionId: String, force: Boolean) {
+    fun stopSession(sessionId: String, force: Boolean, removeWorktree: Boolean = false) {
         if (stoppingSessionId.value != null) return
         stoppingSessionId.value = sessionId
         // Positions are read before the request: the agent's push can drop the
@@ -156,7 +156,7 @@ class SessionsPanelViewModel @Inject constructor(
         )
         viewModelScope.launch {
             try {
-                sessionRepository.deleteSession(sessionId, force)
+                sessionRepository.deleteSession(sessionId, force, removeWorktree)
                 _events.send(stopped())
             } catch (e: ApiException) {
                 // A 404 means the session is already gone, so the stop the user

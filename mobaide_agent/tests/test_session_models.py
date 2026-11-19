@@ -195,6 +195,23 @@ class TestActivityWireField:
         assert resp.activity is None
 
 
+class TestWorktreeBranchWireField:
+    """``worktree_branch`` decides whether a client offers to remove the
+    session's worktree on stop, so both wire builders must carry it and an
+    older agent's payload without it must read as "no worktree"."""
+
+    def test_wire_dict_and_session_response_carry_the_branch(self):
+        from dataclasses import replace
+
+        from mobaide.agent.sessions.models import SessionResponse
+        from mobaide.core.models import session_to_wire_dict
+
+        assert session_to_wire_dict(_attention_info())["worktree_branch"] is None
+        info = replace(_attention_info(), worktree_branch="feature/x")
+        assert session_to_wire_dict(info)["worktree_branch"] == "feature/x"
+        assert SessionResponse.from_info(info).worktree_branch == "feature/x"
+
+
 class TestCodexToOptions:
     """``CodexOptionsModel.to_options()`` must return a real ``CodexOptions``
     dataclass carrying every field verbatim — the same drift guard as the

@@ -996,6 +996,47 @@ class TestTerminalWorktreeResolution:
         finally:
             await mgr.shutdown()
 
+    @pytest.mark.parametrize(
+        ("lookup", "expected"),
+        [
+            pytest.param("feature/x", "feature/x", id="linked_worktree"),
+            pytest.param(RuntimeError("git worktree list failed"), None, id="lookup_fails"),
+        ],
+    )
+    async def test_worktree_session_reports_the_branch_checked_out_there(
+        self, tmp_path, lookup, expected,
+    ) -> None:
+        """``worktree_branch`` is what makes clients offer the worktree removal
+        on stop. A failed lookup must not fail the launch; it only drops the
+        offer."""
+        (tmp_path / ".git").mkdir()
+        store = self._store_for("proj", str(tmp_path))
+        worktree_dir = tmp_path / "wt" / "feature-x"
+        worktree_dir.mkdir(parents=True)
+        worktree_mgr = AsyncMock()
+        worktree_mgr.create_worktree.return_value = WorktreeResult(
+            path=str(worktree_dir), is_new=True, branch="feature/x",
+        )
+        if isinstance(lookup, Exception):
+            worktree_mgr.linked_worktree_branch.side_effect = lookup
+        else:
+            worktree_mgr.linked_worktree_branch.return_value = lookup
+
+        mgr = SessionManager(
+            workspaces_store=store, launcher=MagicMock(), worktree_mgr=worktree_mgr,
+        )
+        try:
+            await mgr.create_session(self._shell_config(
+                "wt-branch", "proj", worktree=True, branch_name="feature/x",
+            ))
+
+            assert worktree_mgr.linked_worktree_branch.await_args.args == (
+                str(tmp_path), str(worktree_dir),
+            )
+            assert mgr.list_sessions()[0].worktree_branch == expected
+        finally:
+            await mgr.shutdown()
+
     async def test_worktree_on_git_workspace_blank_branch_uses_terminal_prefix(
         self, tmp_path,
     ) -> None:

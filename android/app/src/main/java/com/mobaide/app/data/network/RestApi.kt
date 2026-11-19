@@ -183,9 +183,17 @@ class RestApi(
         return execute(request)
     }
 
-    suspend fun deleteSession(sessionId: String, force: Boolean = false): Unit {
+    suspend fun deleteSession(
+        sessionId: String,
+        force: Boolean = false,
+        removeWorktree: Boolean = false,
+    ): Unit {
+        val query = buildList {
+            if (force) add("force=true")
+            if (removeWorktree) add("remove_worktree=true")
+        }
         val url = "${baseUrl()}/api/sessions/$sessionId" +
-            if (force) "?force=true" else ""
+            if (query.isEmpty()) "" else query.joinToString("&", prefix = "?")
         val request = Request.Builder()
             .url(url)
             .delete()

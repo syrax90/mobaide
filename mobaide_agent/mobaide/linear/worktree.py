@@ -786,6 +786,23 @@ class WorktreeManager:
             raise RuntimeError(f"git worktree list failed: {stderr.strip()}")
         return _parse_worktree_porcelain(stdout)
 
+    async def linked_worktree_branch(self, workspace_root: str, path: str) -> str | None:
+        """The local branch checked out in the linked worktree at ``path``.
+
+        ``None`` when ``path`` is the main checkout, is not a worktree of
+        ``workspace_root``, or has a detached HEAD.
+        """
+        if _same_dir(path, workspace_root):
+            return None
+        worktrees = await self.list_worktrees(workspace_root)
+        # The first stanza is always the main checkout.
+        for info in worktrees[1:]:
+            if _same_dir(info.path, path):
+                if info.detached or not info.branch:
+                    return None
+                return info.branch.removeprefix("refs/heads/")
+        return None
+
     @log_call(name="worktree.delete_branch", log_args=("name", "force"))
     async def delete_branch(
         self,

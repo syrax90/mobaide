@@ -291,6 +291,9 @@ class SessionResponse(BaseModel):
     # ``working`` | ``waiting`` | ``idle`` | null (unknown); see
     # ``SessionInfo.activity``.
     activity: str | None = None
+    # Local branch of the worktree the agent made for this session; null when
+    # the session does not run in one.
+    worktree_branch: str | None = None
 
     @classmethod
     def from_info(cls, info: SessionInfo) -> SessionResponse:

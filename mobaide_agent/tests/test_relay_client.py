@@ -553,6 +553,7 @@ class TestHandleRequestEventsSnapshot:
         sess_info.exit_reason = None
         sess_info.ui = "terminal"
         sess_info.activity = None
+        sess_info.worktree_branch = None
         mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
 
         ws = AsyncMock()
@@ -583,6 +584,7 @@ class TestHandleRequestEventsSnapshot:
                     "exit_reason": None,
                     "ui": "terminal",
                     "activity": None,
+                    "worktree_branch": None,
                 },
             ],
         }
@@ -642,6 +644,7 @@ class TestHandleRequestEventsSnapshot:
         sess_info.exit_reason = None
         sess_info.ui = "terminal"
         sess_info.activity = None
+        sess_info.worktree_branch = None
         mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
 
         ws = AsyncMock()
@@ -675,6 +678,7 @@ class TestHandleRequestEventsSnapshot:
                 "exit_reason": None,
                 "ui": "terminal",
                 "activity": None,
+                "worktree_branch": None,
             },
         ]
 
@@ -3021,7 +3025,7 @@ class TestProxySessionsWireShape:
         expected_keys = {
             "session_id", "state", "created_at", "pid",
             "command", "cwd", "title", "project_name", "kind",
-            "kind_label", "attention", "exit_reason", "ui", "activity",
+            "kind_label", "attention", "exit_reason", "ui", "activity", "worktree_branch",
         }
         assert set(a.keys()) == expected_keys
         assert set(b.keys()) == expected_keys
@@ -3081,7 +3085,7 @@ class TestProxySessionsWireShape:
         assert set(body.keys()) == {
             "session_id", "state", "created_at", "pid",
             "command", "cwd", "title", "project_name", "kind",
-            "kind_label", "attention", "exit_reason", "ui", "activity",
+            "kind_label", "attention", "exit_reason", "ui", "activity", "worktree_branch",
         }
         # The two new fields are present (even when title is None at create).
         assert body["title"] is None
@@ -3446,6 +3450,7 @@ class TestHandleProxyRequestCodex:
             info.exit_reason = None
             info.ui = "terminal"
             info.activity = None
+            info.worktree_branch = None
             s.to_info = MagicMock(return_value=info)
             return s
 
@@ -3776,6 +3781,7 @@ class TestHandleProxyRequestAntigravity:
             info.exit_reason = None
             info.ui = "terminal"
             info.activity = None
+            info.worktree_branch = None
             s.to_info = MagicMock(return_value=info)
             return s
 
@@ -4097,6 +4103,7 @@ class TestHandleProxyRequestCopilot:
             info.exit_reason = None
             info.ui = "terminal"
             info.activity = None
+            info.worktree_branch = None
             s.to_info = MagicMock(return_value=info)
             return s
 
@@ -4291,6 +4298,7 @@ class TestHandleProxyRequestCursor:
             info.exit_reason = None
             info.ui = "terminal"
             info.activity = None
+            info.worktree_branch = None
             s.to_info = MagicMock(return_value=info)
             return s
 
@@ -4453,6 +4461,7 @@ class TestHandleProxyRequestJunie:
             info.exit_reason = None
             info.ui = "terminal"
             info.activity = None
+            info.worktree_branch = None
             s.to_info = MagicMock(return_value=info)
             return s
 
@@ -4796,6 +4805,7 @@ class TestHandleProxyRequestPi:
             info.exit_reason = None
             info.ui = "terminal"
             info.activity = None
+            info.worktree_branch = None
             s.to_info = MagicMock(return_value=info)
             return s
 
@@ -4837,3 +4847,69 @@ class TestHandleProxyRequestPi:
         assert resp["request_id"] == "req-pi"
         assert resp["status"] == 201
         assert resp["body"]["kind"] == "pi"
+
+
+class TestDispatchProxyStopSessionRemoveWorktree:
+    """The relay twin of ``DELETE /api/sessions/{id}`` must read
+    ``remove_worktree`` from the query like the REST route does: only an
+    explicit ``true`` starts the worktree removal, and the reply stays 204."""
+
+    class _Registry:
+        def __init__(self) -> None:
+            self.items: list = []
+
+        async def start(self, request, **_kwargs):
+            self.items.extend(request.items)
+
+    @pytest.fixture
+    def worktree_session(self, mock_session_manager, mock_app_state, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+
+        from mobaide.core.models import SessionInfo
+
+        root = tmp_path / "repo"
+        worktree = tmp_path / "wt" / "feature-x"
+        root.mkdir()
+        worktree.mkdir(parents=True)
+        info = SessionInfo(
+            session_id="s1",
+            state=SessionState.RUNNING,
+            created_at=datetime(2026, 11, 19, tzinfo=timezone.utc),
+            pid=1,
+            command=["claude"],
+            cwd=str(worktree),
+            project_name="repo",
+            worktree_branch="feature/x",
+        )
+        mock_session_manager.get_session.return_value = SimpleNamespace(to_info=lambda: info)
+        store = MagicMock()
+        store.get.return_value = SimpleNamespace(name="repo", path=str(root))
+        mock_app_state.workspaces_store = store
+        mock_app_state.worktree_manager = MagicMock()
+        mock_app_state.worktree_manager.linked_worktree_branch = AsyncMock(
+            return_value="feature/x",
+        )
+        registry = self._Registry()
+        monkeypatch.setattr("mobaide.agent.sessions.stop.delete_job_registry", registry)
+        return registry
+
+    @pytest.mark.parametrize(
+        ("query", "removes"),
+        [
+            pytest.param({"force": "true", "remove_worktree": "true"}, True, id="requested"),
+            pytest.param({"force": "true"}, False, id="absent"),
+            pytest.param({"remove_worktree": "false"}, False, id="false"),
+        ],
+    )
+    async def test_remove_worktree_query_flag(
+        self, client, mock_session_manager, worktree_session, query, removes,
+    ):
+        result = await client._dispatch_proxy(
+            "DELETE", "/api/sessions/s1", None, query, AsyncMock(),
+        )
+
+        assert result == {"status": 204, "body": None}
+        mock_session_manager.stop_session.assert_awaited_once()
+        assert [item.branch for item in worktree_session.items] == (
+            ["feature/x"] if removes else []
+        )

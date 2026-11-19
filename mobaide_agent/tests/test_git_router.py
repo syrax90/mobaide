@@ -306,6 +306,27 @@ class TestBusyHolders:
         )
         assert result == []
 
+    async def test_session_in_subfolder_matches_but_prefix_sibling_does_not(self, tmp_path):
+        # Removing the worktree takes a sub-folder cwd with it; a sibling
+        # that only shares the string prefix must stay untouched.
+        wt_dir = tmp_path / "feat"
+        (wt_dir / "src" / "pkg").mkdir(parents=True)
+        sibling = tmp_path / "feat-2"
+        sibling.mkdir()
+        canonical = os.path.normcase(os.path.realpath(str(wt_dir)))
+        sessions = [
+            types.SimpleNamespace(session_id="s-sub", cwd=str(wt_dir / "src" / "pkg")),
+            types.SimpleNamespace(session_id="s-sibling", cwd=str(sibling)),
+        ]
+        session_manager = types.SimpleNamespace(list_sessions=lambda: sessions)
+
+        result = await _busy_holders(
+            {canonical},
+            session_manager=session_manager,
+            autoscan_manager=None,
+        )
+        assert [(h.kind, h.session_id) for h in result] == [("session", "s-sub")]
+
 
     async def test_autoscan_workitem_match(self, tmp_path):
         wt_dir = tmp_path / "wt-autoscan"
