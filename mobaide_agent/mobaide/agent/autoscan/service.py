@@ -112,6 +112,10 @@ def delete_template(app_state: Any, template_id: str) -> AutoScanTemplatesRespon
     return AutoScanTemplatesResponse(templates=_templates(app_state).delete(template_id))
 
 
+# The relay gives a setup request 25 s; the host lookup must leave room.
+_SETUP_HOST_TIMEOUT = 8.0
+
+
 async def start_github_setup(
     app_state: Any, project_name: str, action: str, rows: int, cols: int,
 ) -> SessionInfo:
@@ -137,8 +141,20 @@ async def start_github_setup(
             gh_bin = gh.resolve_binary()
         except GhBinaryNotFoundError as exc:
             raise AutoScanSourceError("Install GitHub CLI first.") from exc
-        hosts = await remote_hosts(path)
-        command = sign_in_command(gh_bin, github_host(hosts) or "github.com")
+        # The host the status reports: gh may read another remote than the
+        # first GitHub one (an ``upstream`` on GitHub Enterprise).
+        try:
+            status = await asyncio.wait_for(
+                github_status(gh, path), timeout=_SETUP_HOST_TIMEOUT,
+            )
+        except TimeoutError:
+            # Slow GitHub or busy gh threads: open the terminal in time.
+            status = {}
+        status_host = status.get("host")
+        host = status_host if isinstance(status_host, str) and status_host else None
+        command = sign_in_command(
+            gh_bin, host or github_host(await remote_hosts(path)) or "github.com",
+        )
         env = sign_in_env(gh_bin)
 
     manager = app_state.session_manager

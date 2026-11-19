@@ -255,7 +255,14 @@ async def test_first_message_caps_the_description_and_the_whole_prompt(tmp_path)
         initial_prompt="p" * INITIAL_PROMPT_MAX,
     )
     await inst2._scan_once()
-    assert sessions2.configs[0].command[-1] == "p" * INITIAL_PROMPT_MAX
+    prompt = sessions2.configs[0].command[-1]
+    # A long instruction is cut (never the issue line) and the start of the
+    # description stays.
+    assert len(prompt) <= INITIAL_PROMPT_MAX
+    assert prompt.startswith("p" * 1000)
+    assert "\n[…]\n\n" in prompt
+    assert "Long" in prompt
+    assert "x" * 900 in prompt
 
 
 @pytest.mark.parametrize("body_length", [5000, INITIAL_PROMPT_MAX + 1000])
@@ -620,6 +627,65 @@ async def test_a_long_description_is_cut_to_the_launch_limit_and_marked(
     assert len(options.initial_prompt) <= limit
     assert options.initial_prompt.startswith(starts_with)
     assert options.initial_prompt.endswith(ends_with)
+
+
+_ISSUE_TEXT = "GitHub issue #7: Fix the login crash\nhttps://github.com/acme/app/issues/7"
+
+
+def _cmd_folded(text: str) -> str:
+    return " ".join(text.split())
+
+
+@pytest.mark.parametrize(
+    ("platform", "binary", "limit", "fold"),
+    [
+        pytest.param("linux", "/x/codex", INITIAL_PROMPT_MAX, False, id="not-windows"),
+        pytest.param("win32", r"C:\x\codex.exe", 24_000, False, id="windows-native"),
+        pytest.param("win32", r"C:\x\codex.cmd", 6000, True, id="windows-cmd-shim"),
+    ],
+)
+async def test_a_long_instruction_is_cut_before_the_issue_line_and_the_description_start(
+    tmp_path, monkeypatch, platform, binary, limit, fold,
+):
+    agent = _WindowsAgent(binary)
+    inst, _, _ = _instance(
+        tmp_path, cli="codex", launcher=agent, source=_FakeSource([_issue(body="d" * 5000)]),
+        initial_prompt="p" * (limit - 10),
+    )
+    monkeypatch.setattr(sys, "platform", platform)
+
+    await inst._scan_once()
+
+    # The issue was claimed before the launch: the agent must still learn
+    # which issue it has and how its description starts.
+    [options] = agent.options
+    prompt = options.initial_prompt
+    middle = f"p\n[…]\n\n{_ISSUE_TEXT}\n\n" + "d" * 900
+    ending = "d\n[…]"
+    if fold:
+        middle, ending = _cmd_folded(middle), _cmd_folded(ending)
+    assert len(prompt) <= limit
+    assert prompt.startswith("p" * 1000)
+    assert middle in prompt
+    assert prompt.endswith(ending)
+
+
+async def test_an_issue_line_that_leaves_no_room_for_the_instruction_drops_it(tmp_path):
+    # With 1,000 characters kept for the description, this title leaves no room.
+    title = " ".join(["crash"] * 5200)
+    inst, _, sessions = _instance(
+        tmp_path, cli="pi", launcher=PiLauncher(),
+        source=_FakeSource([_issue(title=title, body="d" * 5000)]), initial_prompt=_PROMPT,
+    )
+
+    await inst._scan_once()
+
+    prompt = sessions.configs[0].command[-1]
+    assert len(prompt) <= INITIAL_PROMPT_MAX
+    assert prompt.startswith(
+        f"GitHub issue #7: {title}\nhttps://github.com/acme/app/issues/7\n\nddd",
+    )
+    assert prompt.endswith("d\n[…]")
 
 
 class _TrustRecord:

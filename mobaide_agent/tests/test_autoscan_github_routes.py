@@ -26,7 +26,7 @@ from mobaide.agent.autoscan.models import (
 from mobaide.agent.workspaces.models import WorkspaceReadModel
 from mobaide.core import SessionKind, WorkspaceRecord, WorkspacesStore
 from mobaide.github import gh as gh_module
-from mobaide.github.gh import GhCli
+from mobaide.github.gh import GhAuth, GhCli, GitHubRepo
 from mobaide.github.setup import SetupCommand
 from mobaide.relay.client import RelayClient
 
@@ -231,6 +231,53 @@ async def test_sign_in_opens_an_interactive_login_for_the_repository_host(
     assert (config.project_name, config.rows, config.cols) == ("alpha", 30, 100)
     # The sign-in asks how to sign in: the session must not turn prompts off.
     assert "GH_PROMPT_DISABLED" not in config.env
+
+
+class _EnterpriseUpstreamGh(_PinnedGh):
+    """``gh repo view`` reads an ``upstream`` on GitHub Enterprise; only
+    github.com is signed in."""
+
+    async def version(self) -> str | None:
+        return "2.83.0"
+
+    async def auth_status(self, host: str) -> GhAuth:
+        if host == "github.com":
+            return GhAuth(signed_in=True, account="octocat")
+        return GhAuth(signed_in=False, detail=f"not signed in to {host}")
+
+    async def repo_of(self, path: str) -> GitHubRepo:
+        return GitHubRepo(
+            host="github.acme.dev", name_with_owner="acme/app",
+            url="https://github.acme.dev/acme/app",
+        )
+
+
+@requires_git
+async def test_sign_in_goes_to_the_host_of_the_repository_gh_reads(tmp_path, monkeypatch):
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    repo = init_repo(str(tmp_path / "repo"), initial_commit=False)
+    run_git_sync(repo, "remote", "add", "origin", "https://github.com/acme/app.git")
+    run_git_sync(repo, "remote", "add", "upstream", "https://github.acme.dev/acme/app.git")
+    store = WorkspacesStore(str(tmp_path / "projects.json"))
+    store.load()
+    store.create(WorkspaceRecord(name="alpha", path=repo))
+    sessions = _RecordingSessions()
+    state = SimpleNamespace(
+        workspaces_store=store,
+        autoscan_manager=SimpleNamespace(gh=_EnterpriseUpstreamGh()),
+        session_manager=sessions,
+        broadcaster=None,
+    )
+
+    await service.start_github_setup(state, "alpha", "sign_in", 30, 100)
+
+    # Signing in to the first GitHub remote (github.com) again would leave
+    # the scan blocked on the host it really reads.
+    [config] = sessions.configs
+    assert config.command == [
+        "/opt/gh/bin/gh", "auth", "login", "--hostname", "github.acme.dev",
+        "--git-protocol", "https",
+    ]
 
 
 @pytest.mark.parametrize(

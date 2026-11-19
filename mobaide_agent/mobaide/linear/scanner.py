@@ -116,6 +116,8 @@ _GITHUB_DEFAULT_PROMPT = (
     "first, then analyze it deeply and implement the fix."
 )
 _DESCRIPTION_MAX = 4000
+# The start of the description a long instruction must leave room for.
+_DESCRIPTION_KEEP = 1000
 _CUT_MARK = "\n[…]"
 # Windows takes at most 32,767 UTF-16 units per command line; quote escaping
 # and surrogate pairs grow the prompt there, and the path and flags need room.
@@ -400,22 +402,35 @@ class AutoScanInstance:
 
         The issue text is included because only Claude Code gets the Linear
         MCP server, and every agent should know its issue without a lookup.
-        The message is one argv element of at most ``limit`` characters; a
-        description cut to fit ends with ``[…]`` so the agent knows text is
+        The message is one argv element of at most ``limit`` characters. The
+        issue line is never cut: a long instruction is cut first, then the
+        description, and each cut ends with ``[…]`` so the agent knows text is
         missing.
         """
         title = _CONTROL_CHARS.sub("", issue.title)
-        head = [self._prompt, "", f"{self._source.label} issue {issue.identifier}: {title}"]
+        issue_lines = [f"{self._source.label} issue {issue.identifier}: {title}"]
         if issue.url:
-            head.append(issue.url)
-        head_text = "\n".join(head).strip()
+            issue_lines.append(issue.url)
+        issue_text = "\n".join(issue_lines)
         description = _CONTROL_CHARS.sub("", (issue.description or "").replace("\r\n", "\n")).strip()
-        if not description:
-            return head_text[:limit]
         # A GitHub agent reads the rest with ``gh issue view``; a Linear one
         # cannot, so only the prompt limit cuts a Linear description.
         if self._source.kind == "github" and len(description) > _DESCRIPTION_MAX:
             description = description[:_DESCRIPTION_MAX].rstrip() + _CUT_MARK
+        # The issue was claimed already: a long instruction is cut, never the
+        # issue line, and it leaves room for the start of the description.
+        instruction = self._prompt.strip()
+        kept = min(len(description) + 2, _DESCRIPTION_KEEP) if description else 0
+        room = limit - len(issue_text) - 2 - kept
+        if len(instruction) > room:
+            instruction = (
+                instruction[: room - len(_CUT_MARK)].rstrip() + _CUT_MARK
+                if room > len(_CUT_MARK)
+                else ""
+            )
+        head_text = f"{instruction}\n\n{issue_text}" if instruction else issue_text
+        if not description:
+            return head_text[:limit]
         room = limit - len(head_text) - 2
         if len(description) > room:
             description = description[: max(room - len(_CUT_MARK), 0)].rstrip() + _CUT_MARK
