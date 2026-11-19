@@ -49,6 +49,8 @@ android/app/release/
 manifest_signing_key.pem
 deploy/get/install.sh.tmp
 central_server/data/agent_manifest.json
+# Sitemap lastmod record a local central_server run writes beside its DB.
+site_lastmod.json
 # Same file shows up at the repo root when tests/manual server runs
 # resolve the default `data/agent_manifest.json` from the repo root CWD.
 /data/agent_manifest.json

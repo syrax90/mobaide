@@ -8,12 +8,19 @@ small enough to build from f-strings; only the page itself needs Jinja.
 from __future__ import annotations
 
 import hashlib
+import json
+import os
+import re
+from datetime import datetime
 from pathlib import Path
 from xml.sax.saxutils import escape as xml_escape
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 
+from ..logging_setup import get_logger
 from ..templates_dir import resolve_templates_dir
+
+logger = get_logger(__name__)
 
 _TEMPLATE_NAME = "marketing_landing.html"
 _VOICE_TEMPLATE_NAME = "marketing_voice_input.html"
@@ -161,25 +168,81 @@ def render_robots(site_origin: str) -> str:
     )
 
 
-def render_sitemap(site_origin: str) -> str:
-    """Sitemap covering the public, indexable pages.
+SITEMAP_PAGES = (
+    ("/", "weekly", "1.0"),
+    ("/voice-input", "monthly", "0.8"),
+    ("/privacy.html", "monthly", "0.3"),
+)
 
-    ``lastmod`` is deliberately omitted rather than stamped at render time: the
-    page is pre-rendered per process start, so a startup timestamp would claim
-    the content changed on every restart.
+LASTMOD_STATE_FILENAME = "site_lastmod.json"
+
+# The ``?v=`` asset hash moves with CSS and images, which is not a text change.
+_ASSET_QUERY = re.compile(r"\?v=[0-9A-Za-z._+-]+")
+
+
+def stamp_lastmod(
+    state_path: Path, pages: dict[str, str], now: datetime
+) -> dict[str, str]:
+    """Return each page's sitemap ``lastmod``: when its served text last changed.
+
+    Google trusts ``lastmod`` only while it stays accurate, and the site goes
+    live on a central-server deploy, not on a merge. So the date comes from the
+    running server: a page keeps its recorded date while its fingerprint
+    matches, and a new or changed page gets ``now``. A restart changes nothing.
+    The record lives beside the database, on the volume that survives deploys.
+    A missing or unreadable record restamps every page once.
     """
+    try:
+        record = json.loads(state_path.read_text(encoding="utf-8"))
+        if not isinstance(record, dict):
+            record = {}
+    except (OSError, ValueError):
+        record = {}
+
+    stamp = now.replace(microsecond=0).isoformat()
+    lastmods: dict[str, str] = {}
+    updated: dict[str, dict[str, str]] = {}
+    for path, text in pages.items():
+        fingerprint = hashlib.sha256(
+            _ASSET_QUERY.sub("", text).encode()
+        ).hexdigest()
+        entry = record.get(path)
+        if (
+            isinstance(entry, dict)
+            and entry.get("sha256") == fingerprint
+            and isinstance(entry.get("lastmod"), str)
+        ):
+            lastmods[path] = entry["lastmod"]
+        else:
+            lastmods[path] = stamp
+        updated[path] = {"sha256": fingerprint, "lastmod": lastmods[path]}
+
+    if updated != record:
+        tmp = state_path.with_name(state_path.name + ".tmp")
+        try:
+            tmp.write_text(json.dumps(updated, indent=2), encoding="utf-8")
+            os.replace(tmp, state_path)
+        except OSError as exc:
+            logger.warning(
+                "sitemap.lastmod_not_saved "
+                f"{state_path}: {exc}. Changed pages get a new lastmod on every "
+                "restart until the record can be written."
+            )
+    return lastmods
+
+
+def render_sitemap(site_origin: str, lastmods: dict[str, str]) -> str:
+    """Sitemap covering the public, indexable pages; ``lastmods`` comes from
+    :func:`stamp_lastmod`."""
     # XML-escaped, unlike the HTML path where Jinja autoescaping covers it. An
     # `&` in the configured origin would otherwise emit XML that every crawler
     # rejects outright.
     urls = "".join(
         f"<url><loc>{xml_escape(site_origin + path)}</loc>"
+        f"<lastmod>{lastmods[path]}</lastmod>"
         f"<changefreq>{freq}</changefreq>"
         f"<priority>{priority}</priority></url>"
-        for path, freq, priority in (
-            ("/", "weekly", "1.0"),
-            ("/voice-input", "monthly", "0.8"),
-            ("/privacy.html", "monthly", "0.3"),
-        )
+        for path, freq, priority in SITEMAP_PAGES
     )
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'

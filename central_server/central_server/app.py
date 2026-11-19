@@ -5,6 +5,8 @@ import asyncio
 import secrets
 import time
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from pathlib import Path
 
 from asgi_correlation_id import CorrelationIdMiddleware
 from asgi_correlation_id.context import correlation_id
@@ -25,12 +27,14 @@ from .custom_agent_types.service import CustomAgentTypeService
 from .db.database import Database
 from .legal.loader import render_privacy, resolve_legal_dir
 from .marketing.loader import (
+    LASTMOD_STATE_FILENAME,
     asset_version,
     read_favicon,
     render_landing,
     render_robots,
     render_sitemap,
     render_voice_input,
+    stamp_lastmod,
 )
 from .session_mode_order.service import SessionModeOrderService
 from .shortcuts.service import ShortcutService
@@ -504,7 +508,16 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         _site_origin, app.state.web_app_origin, app.state.asset_version
     )
     app.state.marketing_robots = render_robots(_site_origin)
-    app.state.marketing_sitemap = render_sitemap(_site_origin)
+    _lastmods = stamp_lastmod(
+        Path(config.db_path).parent / LASTMOD_STATE_FILENAME,
+        {
+            "/": app.state.marketing_html,
+            "/voice-input": app.state.voice_input_html,
+            "/privacy.html": app.state.privacy_toc_html + app.state.privacy_html,
+        },
+        datetime.now(UTC),
+    )
+    app.state.marketing_sitemap = render_sitemap(_site_origin, _lastmods)
 
     # Read once here rather than per request: /favicon.ico is anonymous and
     # crawler-facing, and a per-request stat would block the relay's event loop.
