@@ -226,6 +226,7 @@ struct AutoScanHowItWorksSection: View {
             "Each session starts at once with the issue as its prompt. You get a notification when it needs you.",
         ]
         guard isGit else { return lines }
+        lines.append("Auto Scan trusts each worktree it creates, so the agent does not ask to trust the folder.")
         switch setup.source {
         case .github?:
             lines.append("When an issue is closed, its worktree is removed. A worktree with uncommitted changes is kept.")
@@ -244,6 +245,8 @@ struct AutoScanHowItWorksSection: View {
 struct AutoScanSourceSections: View {
     @Bindable var setup: AutoScanSetupModel
     let setupStarting: Bool
+    /// Kept on the device (`PreferencesStore`): hidden tips stay hidden.
+    @Binding var tipsHidden: Bool
     let onSetup: (GitHubSetupAction) -> Void
 
     @State private var revealLinearKey = false
@@ -405,22 +408,36 @@ struct AutoScanSourceSections: View {
             )
         }
         Section {
-            AutoScanCallout(
-                kind: .tip,
-                title: "Tips",
-                lines: [
-                    "Create a dedicated label, for example auto-scan, and add it only to the issues an agent should solve.",
-                    "Avoid common labels such as bug: every open issue with them would start a session.",
-                    "Keep the label out of issue templates and workflows that label new issues, or anyone who opens an issue could start a session on your PC.",
-                    "Use one label per kind of work, such as auto-scan-small and auto-scan-complex, and save a template for each.",
-                ],
-                bulleted: true
-            )
+            if tipsHidden {
+                tipsToggle("Show tips", hidden: false)
+            } else {
+                AutoScanCallout(
+                    kind: .tip,
+                    title: "Tips",
+                    lines: [
+                        "Create a dedicated label, for example auto-scan, and add it only to the issues an agent should solve.",
+                        "Avoid common labels such as bug: every open issue with them would start a session.",
+                        "Keep the label out of issue templates and workflows that label new issues, or anyone who opens an issue could start a session on your PC.",
+                        "Use one label per kind of work, such as auto-scan-small and auto-scan-complex, and save a template for each.",
+                    ],
+                    bulleted: true
+                )
+                tipsToggle("Hide tips", hidden: true)
+            }
         }
         Section {
             labelsField
             issueTypesField
         }
+    }
+
+    /// A text button that hides or shows the tips.
+    private func tipsToggle(_ title: String, hidden: Bool) -> some View {
+        Button(title) { tipsHidden = hidden }
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(colors.accent)
+            .buttonStyle(.borderless)
+            .frame(minHeight: 44)
     }
 
     @ViewBuilder
@@ -660,6 +677,67 @@ struct AutoScanAgentSection: View {
     }
 }
 
+/// How each issue's session opens: the terminal, or the chat view for an agent
+/// `capabilities.chat` lists.
+struct AutoScanSessionViewSection: View {
+    @Bindable var setup: AutoScanSetupModel
+
+    @Environment(\.mobaideColors) private var colors
+
+    var body: some View {
+        if let cli = setup.cli {
+            let chatAvailable = setup.isChatAvailable(cli)
+            let view = setup.effectiveSessionView
+            Section {
+                SelectableRow(
+                    title: AutoScanSetupModel.SessionView.terminal.title,
+                    subtitle: "The agent's own terminal app.",
+                    selected: view == .terminal
+                ) {
+                    setup.sessionView = .terminal
+                }
+                SelectableRow(
+                    title: AutoScanSetupModel.SessionView.chat.title,
+                    subtitle: chatAvailable
+                        ? "Messages, tool steps and approvals in the app."
+                        : setup.chatUnavailableReason(cli),
+                    selected: view == .chat
+                ) {
+                    setup.sessionView = .chat
+                }
+                .disabled(!chatAvailable)
+                if chatAvailable, cli == "junie", view == .terminal {
+                    Text("Junie asks to trust a new worktree unless you trusted the workspace folder in Junie. Trust it once in Junie, or use Chat.")
+                        .font(.footnote)
+                        .foregroundStyle(colors.warning)
+                }
+            } header: {
+                PixelSectionHeader("Open sessions in")
+            }
+        }
+    }
+}
+
+/// "Time between scans": a menu row (the whole row opens the menu, like the
+/// Model and Effort rows), then its hint as a muted row.
+struct AutoScanIntervalRows: View {
+    @Bindable var setup: AutoScanSetupModel
+
+    @Environment(\.mobaideColors) private var colors
+
+    var body: some View {
+        Picker("Time between scans", selection: $setup.intervalMinutes) {
+            ForEach(setup.intervalOptions, id: \.self) { minutes in
+                Text(AutoScanSetupModel.intervalTitle(minutes)).tag(minutes)
+            }
+        }
+        .pickerStyle(.menu)
+        Text("After each scan, Auto Scan waits this long before it looks for new issues. Run now starts a scan at once.")
+            .font(.caption)
+            .foregroundStyle(colors.textMuted)
+    }
+}
+
 /// "Save as template…": the name, and whether the save replaces a template.
 struct AutoScanSaveTemplateSheet: View {
     let setup: AutoScanSetupModel
@@ -696,7 +774,7 @@ struct AutoScanSaveTemplateSheet: View {
                             .font(.footnote)
                             .foregroundStyle(colors.warning)
                     } else {
-                        Text("Saves the source, filter, agent, its options and the instructions on your PC.")
+                        Text("Saves the source, filter, agent, its options, the session view, the time between scans and the instructions on your PC.")
                             .font(.footnote)
                             .foregroundStyle(colors.textMuted)
                     }

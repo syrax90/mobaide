@@ -105,6 +105,8 @@ object LenientJunieScanOptions : LenientObjectSerializer<JunieScanOptionsDto>(Ju
 data class AutoScanTemplateSettingsDto(
     val source: String? = null,
     val cli: String? = null,
+    val ui: String? = null,
+    val interval_minutes: Int? = null,
     val initial_prompt: String? = null,
     val linear_filter: AutoScanFilterDraftDto? = null,
     val github_filter: GitHubScanFilterDto? = null,

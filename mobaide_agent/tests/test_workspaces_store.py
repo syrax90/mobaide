@@ -1373,6 +1373,8 @@ class TestAutoScanChoicesRoundTrip:
                     "claude", "codex", "antigravity", "opencode", "copilot", "cursor", "junie",
                 )
             },
+            "ui": None,
+            "interval_minutes": None,
         }
 
     def test_unusable_stored_choices_load_as_unset(self, tmp_path):
@@ -1403,3 +1405,37 @@ class TestAutoScanChoicesRoundTrip:
         assert alpha.github_scan_filter == GitHubScanFilter(labels=["ai"])
         assert (alpha.auto_scan_source, alpha.auto_scan_cli) == (None, None)
         assert beta.github_scan_filter is None
+
+    @pytest.mark.parametrize(
+        ("ui", "interval", "loaded"),
+        [
+            pytest.param("chat", 1440, ("chat", 1440), id="usable"),
+            pytest.param("web", 0, (None, None), id="unknown-view-and-no-wait"),
+            pytest.param(" chat", 1441, (None, None), id="padded-view-and-over-a-day"),
+            pytest.param(None, True, (None, None), id="json-true-is-not-a-minute"),
+            pytest.param(None, 15.5, (None, None), id="part-minute"),
+        ],
+    )
+    def test_stored_view_and_interval_load_only_when_usable(self, tmp_path, ui, interval, loaded):
+        """A hand-edited file must not hand a scan a view it cannot open or
+        a wait outside 1 to 1440 minutes."""
+        path = tmp_path / "projects.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "alpha", "path": "C:/alpha", "order": 0,
+                        "auto_scan_ui": ui, "auto_scan_interval_minutes": interval,
+                    },
+                ],
+            ),
+        )
+
+        store = WorkspacesStore(str(path))
+        store.load()
+
+        alpha = store.get("alpha")
+        assert alpha is not None
+        assert (alpha.auto_scan_ui, alpha.auto_scan_interval_minutes) == loaded
+        saved = cast("dict", store.list_public()[0])["auto_scan"]
+        assert (saved["ui"], saved["interval_minutes"]) == loaded

@@ -1,5 +1,7 @@
 package com.mobaide.app.ui.sessions
 
+import com.mobaide.app.data.network.dto.AUTO_SCAN_UI_CHAT
+import com.mobaide.app.data.network.dto.AUTO_SCAN_UI_TERMINAL
 import com.mobaide.app.data.network.dto.AntigravityScanOptionsDto
 import com.mobaide.app.data.network.dto.AutoScanFilterDraftDto
 import com.mobaide.app.data.network.dto.AutoScanFilterDto
@@ -127,13 +129,14 @@ data class GitHubFilterDraft(
 
 /**
  * Codex's Auto Scan options. Defaults run without asking (Full access), as
- * the agent does for a start that names no options.
+ * the agent does for a start that names no options. A null
+ * [reasoningEffort] is "Agent default": Codex uses its own setting.
  */
 data class CodexScanBucket(
     val model: String? = null,
     val sandbox: String = "workspace-write",
     val approval: String = "never",
-    val reasoningEffort: String = "high",
+    val reasoningEffort: String? = "high",
     val fullAuto: Boolean = true,
 ) {
     val preset: CodexAutonomyPreset? get() = codexPresetOf(sandbox, approval, fullAuto)
@@ -156,8 +159,7 @@ data class CodexScanBucket(
         model = dto.model,
         sandbox = dto.sandbox,
         approval = dto.approval,
-        // null on the wire is "no flag"; this client always picks a level.
-        reasoningEffort = dto.reasoning_effort ?: "high",
+        reasoningEffort = dto.reasoning_effort,
         fullAuto = dto.full_auto,
     )
 }
@@ -235,6 +237,8 @@ fun codexPresetOf(sandbox: String, approval: String, fullAuto: Boolean): CodexAu
 fun AutoScanSettingsDto.asTemplateSettings(prompt: String?) = AutoScanTemplateSettingsDto(
     source = source,
     cli = cli,
+    ui = ui,
+    interval_minutes = interval_minutes,
     initial_prompt = prompt,
     linear_filter = linear_filter?.toDraft(),
     github_filter = github_filter,
@@ -290,6 +294,20 @@ data class AutoScanTemplatesUi(
     val canSave: Boolean get() = loaded && !loading && loadError == null && !saving
 }
 
+/** The waits a scan offers between cycles, in minutes; the agent takes any whole minute in range. */
+val AUTO_SCAN_INTERVALS = listOf(1, 2, 5, 10, 15, 30, 60, 120, 240, 480, 1440)
+const val AUTO_SCAN_INTERVAL_DEFAULT = 5
+val AUTO_SCAN_INTERVAL_RANGE = 1..1440
+
+/** "5 min", "1 hour", "24 hours", "45 min". */
+fun autoScanIntervalLabel(minutes: Int): String = when {
+    minutes >= 60 && minutes % 60 == 0 -> (minutes / 60).let { if (it == 1) "1 hour" else "$it hours" }
+    else -> "$minutes min"
+}
+
+/** A valid session view, or null for a value this client does not know. */
+fun autoScanUiOrNull(value: String?): String? = value?.takeIf { it == AUTO_SCAN_UI_TERMINAL || it == AUTO_SCAN_UI_CHAT }
+
 const val GITHUB_LABELS_MAX = 20
 const val GITHUB_ISSUE_TYPES_MAX = 20
 const val GITHUB_LABEL_MAX = 100
@@ -313,6 +331,9 @@ data class AutoScanWizardState(
     val source: String? = null,
     val cli: String? = null,
     val agents: AutoScanAgentBuckets = AutoScanAgentBuckets(),
+    // The session view the user chose; Terminal is sent while the agent has no chat view.
+    val ui: String = AUTO_SCAN_UI_TERMINAL,
+    val intervalMinutes: Int = AUTO_SCAN_INTERVAL_DEFAULT,
     val linearFilter: LinearFilterDraft = LinearFilterDraft(),
     val linearFilterTouched: Boolean = false,
     val linearLabels: List<LinearLabelDto> = emptyList(),

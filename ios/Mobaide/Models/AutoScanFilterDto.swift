@@ -106,6 +106,10 @@ extension GitHubScanFilterDto {
 struct AutoScanSettingsDto: Codable, Equatable, Sendable {
     var source: String?
     var cli: String?
+    /// `terminal` or `chat`; nil until chosen (the terminal).
+    var ui: String?
+    /// Minutes between two scan cycles; nil until chosen (the agent's default).
+    var interval_minutes: Int?
     var initial_prompt: String?
     var linear_filter: AutoScanFilterDto?
     var github_filter: GitHubScanFilterDto?
@@ -120,6 +124,8 @@ struct AutoScanSettingsDto: Codable, Equatable, Sendable {
     init(
         source: String? = nil,
         cli: String? = nil,
+        ui: String? = nil,
+        interval_minutes: Int? = nil,
         initial_prompt: String? = nil,
         linear_filter: AutoScanFilterDto? = nil,
         github_filter: GitHubScanFilterDto? = nil,
@@ -133,6 +139,8 @@ struct AutoScanSettingsDto: Codable, Equatable, Sendable {
     ) {
         self.source = source
         self.cli = cli
+        self.ui = ui
+        self.interval_minutes = interval_minutes
         self.initial_prompt = initial_prompt
         self.linear_filter = linear_filter
         self.github_filter = github_filter
@@ -153,6 +161,8 @@ extension AutoScanSettingsDto {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         source = try container.decodeIfPresent(String.self, forKey: .source)
         cli = try container.decodeIfPresent(String.self, forKey: .cli)
+        ui = try? container.decodeIfPresent(String.self, forKey: .ui)
+        interval_minutes = try? container.decodeIfPresent(Int.self, forKey: .interval_minutes)
         initial_prompt = try container.decodeIfPresent(String.self, forKey: .initial_prompt)
         linear_filter = try container.decodeIfPresent(AutoScanFilterDto.self, forKey: .linear_filter)
         github_filter = try container.decodeIfPresent(GitHubScanFilterDto.self, forKey: .github_filter)

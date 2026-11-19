@@ -13,7 +13,9 @@
       "name": "github_source_other_agent",
       "wire": {
         "project_name": "p",
-        "codex_options": { "model": "gpt-5.5", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": "high", "full_auto": false },
+        "codex_options": { "model": "gpt-5.5", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": null, "full_auto": false },
+        "ui": "chat",
+        "interval_minutes": 15,
         "source": "github",
         "cli": "codex",
         "initial_prompt": "",
@@ -25,6 +27,8 @@
       "wire": {
         "project_name": "p",
         "junie_options": { "plan_mode": true, "brave": false },
+        "ui": "terminal",
+        "interval_minutes": 1440,
         "source": "github",
         "cli": "junie",
         "initial_prompt": "Plan first.",

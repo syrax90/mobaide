@@ -27,7 +27,12 @@ from pydantic import (
     model_validator,
 )
 
-from mobaide.core.workspaces_config import AutoScanFilter, GitHubScanFilter
+from mobaide.core.workspaces_config import (
+    AUTO_SCAN_INTERVAL_MAX_MINUTES,
+    AUTO_SCAN_INTERVAL_MIN_MINUTES,
+    AutoScanFilter,
+    GitHubScanFilter,
+)
 
 from ..sessions.models import (
     AntigravityScanOptionsModel,
@@ -217,7 +222,18 @@ class AutoScanFilterDraftModel(BaseModel):
 
 class AutoScanAgentOptionsModel(BaseModel):
     """The Auto Scan launch options of each agent kind; ``null`` for a kind
-    nobody chose options for. Pi has none."""
+    nobody chose options for. Pi has none.
+
+    ``ui`` is how each issue's session opens: ``terminal`` or ``chat`` (the
+    chat view; only for agents ``capabilities.chat`` lists). ``null`` means
+    the terminal. ``interval_minutes`` is the wait between two scan cycles;
+    ``null`` means the agent's default (five minutes).
+    """
+
+    ui: Literal["terminal", "chat"] | None = None
+    interval_minutes: int | None = Field(
+        default=None, ge=AUTO_SCAN_INTERVAL_MIN_MINUTES, le=AUTO_SCAN_INTERVAL_MAX_MINUTES,
+    )
 
     claude_options: ClaudeScanOptionsModel | None = None
     codex_options: CodexScanOptionsModel | None = None

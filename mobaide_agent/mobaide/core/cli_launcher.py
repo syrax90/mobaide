@@ -488,6 +488,18 @@ def prepend_path_dir(env: dict[str, str], directory: str) -> None:
     env["PATH"] = f"{directory}{sep}{existing}" if existing else directory
 
 
+def append_path_dir(env: dict[str, str], directory: str) -> None:
+    """Append ``directory`` to ``env['PATH']`` in place, unless it is empty or
+    already there. Last, not first: the folder must not change which
+    ``python3``, ``node`` or ``git`` the session resolves."""
+    if not directory:
+        return
+    existing = env.get("PATH", "")
+    parts = existing.split(os.pathsep) if existing else []
+    if directory not in parts:
+        env["PATH"] = os.pathsep.join([*parts, directory])
+
+
 def conda_env_bin(conda_env: str) -> str | None:
     """Resolve the bin / Scripts dir for a conda env name or absolute path.
 

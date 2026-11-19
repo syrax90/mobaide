@@ -83,7 +83,7 @@ def _make_store(tmp_path, *, key: str | None = None, prompt: str | None = None) 
     return store
 
 
-def _make_manager(store, bus, *, agents=None) -> AutoScanSessionManager:
+def _make_manager(store, bus, *, agents=None, session_manager=None) -> AutoScanSessionManager:
     return AutoScanSessionManager(
         config=AutoScanConfig(
             worktrees_dir=_WORKTREES_DIR,
@@ -94,7 +94,7 @@ def _make_manager(store, bus, *, agents=None) -> AutoScanSessionManager:
             auto_remove_worktrees=False,
             state_dir="state",
         ),
-        session_manager=AsyncMock(spec=SessionManager),
+        session_manager=session_manager or AsyncMock(spec=SessionManager),
         workspaces_store=store,
         event_bus=bus,
         cli_launchers=agents or {"copilot": _Agent(installed=True)},
@@ -135,6 +135,8 @@ async def test_github_start_remembers_every_choice(tmp_path):
         "copilot_options": {},
         "cursor_options": None,
         "junie_options": None,
+        "ui": None,
+        "interval_minutes": None,
     }
     snap = store.get("alpha")
     assert snap is not None and snap.auto_scan_prompt == "Fix it."
@@ -321,3 +323,75 @@ async def test_an_older_client_start_saves_no_agent_options(tmp_path):
     await mgr.start("alpha", request=wire.to_start())
 
     assert _saved(store)["claude_options"] is None
+
+
+class _ChatAgent:
+    """``SessionManager.chat_agents[kind]``: its chat adapter is on the PC or not."""
+
+    def __init__(self, available: bool) -> None:
+        self._available = available
+
+    def available(self) -> bool:
+        return self._available
+
+
+class _ChatSessions:
+    def __init__(self, chat_agents: dict[str, _ChatAgent]) -> None:
+        self.chat_agents = chat_agents
+
+
+@pytest.mark.parametrize("chat_available", [True, False], ids=["chat-view", "no-chat-view"])
+async def test_a_chat_scan_starts_only_where_the_agent_has_a_chat_view(tmp_path, chat_available):
+    store = _make_store(tmp_path)
+    mgr = _make_manager(
+        store, _RecordingEventBus(),
+        session_manager=_ChatSessions({"copilot": _ChatAgent(chat_available)}),
+    )
+    wire = StartScanRequest.model_validate({
+        "project_name": "alpha", "source": "github", "cli": "copilot",
+        "copilot_options": {"allow_all": True}, "github_filter": {"labels": ["ai-ready"]},
+        "ui": "chat", "interval_minutes": 15,
+    })
+
+    if not chat_available:
+        # Refused up front: every issue it took would otherwise fail to open.
+        with pytest.raises(AutoScanSourceError, match="chat view is not available"):
+            await mgr.start("alpha", request=wire.to_start())
+        assert mgr.get("alpha") is None
+        return
+    instance = await mgr.start("alpha", request=wire.to_start())
+
+    dto = instance.to_dto()
+    assert (dto["ui"], dto["scan_interval_seconds"]) == ("chat", 900)
+    reloaded = WorkspacesStore(str(tmp_path / "projects.json"))
+    reloaded.load()
+    assert (_saved(reloaded)["ui"], _saved(reloaded)["interval_minutes"]) == ("chat", 15)
+
+
+async def test_a_start_without_a_view_or_interval_keeps_the_terminal_and_the_config_wait(tmp_path):
+    store = _make_store(tmp_path)
+    mgr = _make_manager(store, _RecordingEventBus())
+
+    instance = await mgr.start(
+        "alpha", request=AutoScanStart(source="github", cli="copilot", github_filter=_GITHUB),
+    )
+
+    # An older client sends neither; ``scan_interval_seconds`` is the config's.
+    dto = instance.to_dto()
+    assert (dto["ui"], dto["scan_interval_seconds"]) == ("terminal", 1)
+    assert (_saved(store)["ui"], _saved(store)["interval_minutes"]) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("interval_minutes", 0, id="interval-below-one-minute"),
+        pytest.param("interval_minutes", 1441, id="interval-above-a-day"),
+        pytest.param("ui", "web", id="unknown-view"),
+    ],
+)
+def test_the_wire_refuses_a_view_or_interval_outside_the_contract(field, value):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        StartScanRequest.model_validate({"project_name": "alpha", field: value})

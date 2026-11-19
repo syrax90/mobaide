@@ -387,12 +387,21 @@ final class CreateSessionModel {
         self.workspacesRepository = workspacesRepository
         self.autoScanWorkspacePreset = autoScanWorkspace
         self.autoScanSetup = AutoScanSetupModel(agentAPI: agentAPI)
+        self.autoScanTipsHidden = preferencesStore.isAutoScanTipsHidden()
         self.customTypes = customAgentTypesRepository.currentTypes
         self.modeOrder = customAgentTypesRepository.currentModeOrder
         self.activeScans = autoScanRepository.currentScans
         applyPrefill()
         autoScanSetup.applyClaudeOptions = { [weak self] in self?.applyAutoScanClaudeOptions($0) }
         autoScanSetup.applyInitialPrompt = { [weak self] in self?.autoScanInitialPrompt = $0 }
+    }
+
+    /// The Auto Scan tips were hidden; kept on the device for the next wizard.
+    private(set) var autoScanTipsHidden = false
+
+    func setAutoScanTipsHidden(_ hidden: Bool) {
+        autoScanTipsHidden = hidden
+        preferencesStore.setAutoScanTipsHidden(hidden)
     }
 
     func navEvents() -> AsyncStream<String> { navBroadcaster.subscribe(replayLatest: false) }
@@ -720,10 +729,10 @@ final class CreateSessionModel {
     /// `setCodexModel` for Auto Scan's own Codex options.
     func setAutoScanCodexModel(_ model: String?) {
         autoScanSetup.codexOptions.model = model
-        autoScanSetup.codexOptions.reasoning_effort = codexEffort(
-            afterSwitchingTo: model,
-            from: autoScanSetup.codexOptions.reasoning_effort ?? "high"
-        )
+        // "Agent default" fits every model.
+        if let effort = autoScanSetup.codexOptions.reasoning_effort {
+            autoScanSetup.codexOptions.reasoning_effort = codexEffort(afterSwitchingTo: model, from: effort)
+        }
     }
 
     private func codexEffort(afterSwitchingTo model: String?, from effort: String) -> String {

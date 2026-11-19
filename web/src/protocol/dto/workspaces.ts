@@ -8,7 +8,7 @@
  * byte-for-byte.
  */
 import { z } from 'zod';
-import { optionalWireBoolean, optionalWireString } from '../wireSchema';
+import { optionalWireBoolean, optionalWireNumber, optionalWireString } from '../wireSchema';
 import { CLAUDE_EFFORTS, CODEX_APPROVALS, CODEX_SANDBOXES } from './sessionCreate';
 
 /**
@@ -127,6 +127,10 @@ function lenientOptions<T extends z.ZodType>(schema: T) {
 export const autoScanSettingsSchema = z.looseObject({
   source: optionalWireString(),
   cli: optionalWireString(),
+  /** `terminal` or `chat`; an open string, the wizard ignores a value it does not offer. */
+  ui: optionalWireString(),
+  /** Minutes between two scan cycles. */
+  interval_minutes: optionalWireNumber(),
   linear_filter: autoScanFilterSchema.nullish().transform((value) => value ?? undefined),
   github_filter: githubScanFilterSchema.nullish().transform((value) => value ?? undefined),
   /** The options of the last start with each agent; Pi has none. */

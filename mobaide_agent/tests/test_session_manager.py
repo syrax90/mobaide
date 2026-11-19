@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -1225,6 +1226,109 @@ class TestSharedTurnDedupe:
 
             assert terminal._attention_dedupe is not None
             assert chat.attention_dedupe is terminal._attention_dedupe
+        finally:
+            await mgr.shutdown()
+
+
+class _PlanRecordingChatSession(_FakeChatSession):
+    plans: list = []
+
+    def __init__(self, config, plan, **kwargs) -> None:
+        super().__init__(config, plan, **kwargs)
+        type(self).plans.append(plan)
+
+
+class _GatedChatSpec:
+    """A chat agent that asks before it opens a folder it does not trust."""
+
+    display_name = "GitHub Copilot"
+
+    def __init__(self, env: dict[str, str] | None = None) -> None:
+        self.targets: list = []
+        self._env = env or {}
+
+    async def prepare(self, target, options):
+        from mobaide.acp.agents import ChatLaunchPlan
+
+        self.targets.append(target)
+        return ChatLaunchPlan(
+            argv=["fake-acp"], env=dict(self._env), cwd=str(target.path), trust=object(),  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.timeout(20)
+class TestAgentSideChatLaunch:
+    @pytest.mark.parametrize("trust_folder", [True, False], ids=["scan-worktree", "default"])
+    async def test_the_launch_target_replaces_the_store_and_only_the_flag_skips_the_ask(
+        self, tmp_path, monkeypatch, trust_folder
+    ) -> None:
+        """Auto Scan opens a chat in the worktree it made, which the store
+        does not know; any other chat still asks before an untrusted folder."""
+        import mobaide.acp.session as acp_session
+        from mobaide.core.workspaces_config import WorkspaceConfig
+
+        _PlanRecordingChatSession.plans = []
+        monkeypatch.setattr(acp_session, "ChatSession", _PlanRecordingChatSession)
+        spec = _GatedChatSpec()
+        mgr = SessionManager(chat_agents={"copilot": spec})
+        worktree = WorkspaceConfig(name="app", path=str(tmp_path / "wt" / "gh-7"))
+        try:
+            await mgr.create_session(
+                SessionConfig(
+                    session_id="scan-chat",
+                    command=[],
+                    cwd=worktree.path,
+                    kind=SessionKind.COPILOT,
+                    ui="chat",
+                    copilot_options=CopilotOptions(initial_prompt="Fix #7"),
+                    chat_launch_target=worktree,
+                    trust_folder=trust_folder,
+                )
+            )
+
+            assert spec.targets == [worktree]
+            [plan] = _PlanRecordingChatSession.plans
+            assert (plan.trust is None) is trust_folder
+        finally:
+            await mgr.shutdown()
+
+    @pytest.mark.parametrize(
+        ("append", "expected"),
+        [
+            ("/opt/gh/bin", f"/usr/bin{os.pathsep}/opt/gh/bin"),
+            ("/usr/bin", "/usr/bin"),
+            (None, "/usr/bin"),
+        ],
+        ids=["gh-folder-last", "already-on-path", "none"],
+    )
+    async def test_the_path_folder_goes_last_on_the_chat_agent_path(
+        self, tmp_path, monkeypatch, append, expected
+    ) -> None:
+        """Auto Scan's ``gh`` must reach the chat agent without changing
+        which ``python3``, ``node`` or ``git`` it resolves."""
+        import mobaide.acp.session as acp_session
+        from mobaide.core.workspaces_config import WorkspaceConfig
+
+        _PlanRecordingChatSession.plans = []
+        monkeypatch.setattr(acp_session, "ChatSession", _PlanRecordingChatSession)
+        spec = _GatedChatSpec(env={"PATH": "/usr/bin"})
+        mgr = SessionManager(chat_agents={"copilot": spec})
+        try:
+            await mgr.create_session(
+                SessionConfig(
+                    session_id="scan-chat",
+                    command=[],
+                    cwd=str(tmp_path),
+                    kind=SessionKind.COPILOT,
+                    ui="chat",
+                    copilot_options=CopilotOptions(initial_prompt="Fix #7"),
+                    chat_launch_target=WorkspaceConfig(name="app", path=str(tmp_path)),
+                    chat_path_append=append,
+                )
+            )
+
+            [plan] = _PlanRecordingChatSession.plans
+            assert plan.env["PATH"] == expected
         finally:
             await mgr.shutdown()
 

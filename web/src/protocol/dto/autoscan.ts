@@ -49,6 +49,8 @@ export const autoScanInstanceSchema = z.looseObject({
    */
   source: z.string().default('linear'),
   cli: z.string().default('claude'),
+  /** `terminal` or `chat`: how the scan opens each issue's session. Open string. */
+  ui: z.string().default('terminal'),
 });
 
 /**

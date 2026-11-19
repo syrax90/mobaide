@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 
 from mobaide import __version__
 from mobaide.acp.agents import build_chat_agents, build_chat_capabilities
+from mobaide.acp.trust import terminal_folder_trust
 from mobaide.acp.catalog import ChatCatalog
 from mobaide.acp.install import PROBE_POOL
 from mobaide.core import (
@@ -991,6 +992,8 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         worktrees_dir=worktrees_dir,
         cli_launchers=app.state.cli_launchers,
         worktree_mgr=worktree_mgr,
+        # A test agent must not write trust records into the real home folder.
+        folder_trust=None if config.is_test_mode else terminal_folder_trust,
     )
 
     app.include_router(auth_router)

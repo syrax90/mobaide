@@ -26,6 +26,8 @@ import {
   isCustomMode,
   parseAddDirs,
   type AntigravityBucket,
+  type AutoScanSetup,
+  type AutoScanUi,
   type ClaudeBucket,
   type CodexBucket,
   type OpenCodeBucket,
@@ -71,6 +73,16 @@ export interface BuildContext {
    * Auto Scan sources delta, which gets the legacy Linear + Claude request.
    */
   autoScan?: AutoScanCapability | null;
+  /** `capabilities.chat` for the agent the Auto Scan wizard has chosen. */
+  autoScanChat?: ChatSupport;
+}
+
+/**
+ * The view an Auto Scan opens each issue's session in: the chat only when it
+ * was chosen and the PC is known to have a chat view for the agent.
+ */
+export function autoScanUi(setup: AutoScanSetup, chat: ChatSupport | undefined): AutoScanUi {
+  return setup.ui === 'chat' && chat?.kind === 'available' ? 'chat' : 'terminal';
 }
 
 /**
@@ -602,8 +614,9 @@ function scanAgentOptions(
  * an agent with `capabilities.autoscan`, until a source and an agent are
  * chosen (the wizard keeps Start disabled until then).
  *
- * The newer request names every choice: `source`, `cli`, only the chosen
- * source's filter, only the chosen agent's options, and `initial_prompt` at
+ * The newer request names every choice: `source`, `cli`, `ui`,
+ * `interval_minutes`, only the chosen source's filter, only the chosen
+ * agent's options, and `initial_prompt` at
  * the top level, where `""` clears the prompt the workspace saved. A start
  * without the agent's options would run it without asking, so they are
  * always sent.
@@ -633,6 +646,8 @@ export function buildStartScanRequest(context: BuildContext): StartScanRequest |
       ? { github_filter: githubFilterWire(githubFilter) }
       : { linear_filter: linearFilterWire(linearFilter) }),
     initial_prompt: state.autoScan.initialPrompt,
+    ui: autoScanUi(state.autoScanSetup, context.autoScanChat),
+    interval_minutes: state.autoScanSetup.intervalMinutes,
     ...(cli === 'claude'
       ? { claude_options: scanClaudeOptions(state.autoScan) }
       : scanAgentOptions(state, cli)),
@@ -641,7 +656,7 @@ export function buildStartScanRequest(context: BuildContext): StartScanRequest |
 
 /**
  * The wizard's current Auto Scan choices as a template's `settings`: the
- * source, the agent, the prompt, both filters as they stand (a template may
+ * source, the agent, the view, the time between scans, the prompt, both filters as they stand (a template may
  * hold a half-made filter), and only the chosen agent's options. Never the
  * Linear key. `applyAutoScanSettings` is the reverse.
  */
@@ -651,6 +666,8 @@ export function autoScanTemplateSettings(state: WizardState): AutoScanTemplateSe
   return {
     source,
     cli: agent,
+    ui: state.autoScanSetup.ui,
+    interval_minutes: state.autoScanSetup.intervalMinutes,
     initial_prompt: state.autoScan.initialPrompt,
     linear_filter: linearFilterWire(linearFilter),
     github_filter: githubFilterWire(githubFilter),

@@ -2,6 +2,7 @@ package com.mobaide.app.ui.autoscan
 
 import com.mobaide.app.data.network.dto.AUTO_SCAN_SOURCE_GITHUB
 import com.mobaide.app.data.network.dto.AUTO_SCAN_SOURCE_LINEAR
+import com.mobaide.app.data.network.dto.AUTO_SCAN_UI_CHAT
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 
 /** The display name of an Auto Scan agent kind; an unknown kind shows as sent. */
@@ -24,6 +25,13 @@ fun autoScanSourceName(source: String): String = when (source) {
     else -> source
 }
 
-/** "GitHub · Codex": where a running scan finds issues and which agent runs them. */
+/**
+ * "GitHub · Codex": where a running scan finds issues and which agent runs
+ * them; "GitHub · Codex · Chat" when its sessions open in the chat view.
+ */
 val AutoScanInstanceDto.sourceAndAgent: String
-    get() = "${autoScanSourceName(source)} · ${autoScanAgentName(cli)}"
+    get() = listOfNotNull(
+        autoScanSourceName(source),
+        autoScanAgentName(cli),
+        "Chat".takeIf { ui == AUTO_SCAN_UI_CHAT },
+    ).joinToString(" · ")

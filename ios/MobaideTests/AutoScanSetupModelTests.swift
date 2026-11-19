@@ -180,11 +180,13 @@ final class AutoScanSetupModelTests: XCTestCase {
     }
 
     func testTheGitHubStartBodyEncodesToTheFixtureWire() throws {
-        let model = try makeModel()
+        // The probe lists the chat view for Codex: the saved "chat" is sent as is.
+        let model = try probedModel(codexChat: true)
         model.prepare(for: try workspace("auto_scan_choices"))
         model.githubActiveLabel = " ai-doing "
         model.toggleGitHubIssueType("Task")
         model.codexOptions.full_auto = false
+        model.codexOptions.reasoning_effort = nil
 
         let request = try XCTUnwrap(
             model.startRequest(
@@ -287,6 +289,86 @@ final class AutoScanSetupModelTests: XCTestCase {
         XCTAssertNil(saved.codex_options)
         XCTAssertEqual(saved.copilot_options, CopilotScanOptionsDto(allow_all: false))
         XCTAssertEqual(saved.cli, "codex")
+    }
+
+    /// The fixture probe, plus `capabilities.chat` listing Codex when `codexChat`.
+    private func probedModel(codexChat: Bool) throws -> AutoScanSetupModel {
+        let chat = codexChat ? #","chat":{"codex":{"resume":true}}"# : ""
+        let wire = Data(#"""
+        {"name":"mobaide_agent","server_version":"0.3.30","protocol_versions":[6,7],"min_client_version":6,
+         "capabilities":{"cli":{"claude":{"available":true},"codex":{"available":true}},
+          "autoscan":{"sources":["linear","github"],"clis":["claude","codex"],"github_setup":true}\#(chat)}}
+        """#.utf8)
+        let model = AutoScanSetupModel(
+            agentAPI: AgentAPI(baseURL: { "https://agent.test" }, tokens: StubAgentTokens())
+        )
+        model.applyProbe(try WireJSON.decoder().decode(VersionInfoResponse.self, from: wire))
+        return model
+    }
+
+    func testTheStartSendsTheChatOnlyOnceTheProbeShowsTheAgentsChatView() throws {
+        // The workspace saved Codex in the chat view, 15 minutes apart.
+        let withChat = try probedModel(codexChat: true)
+        withChat.prepare(for: try workspace("auto_scan_choices"))
+        let withoutChat = try probedModel(codexChat: false)
+        withoutChat.prepare(for: try workspace("auto_scan_choices"))
+
+        let chat = try XCTUnwrap(
+            withChat.startRequest(workspaceName: "p", claudeOptions: ClaudeOptionsModel(), initialPrompt: "")
+        )
+        // The PC refuses a chat scan for an agent without a chat view.
+        let terminal = try XCTUnwrap(
+            withoutChat.startRequest(workspaceName: "p", claudeOptions: ClaudeOptionsModel(), initialPrompt: "")
+        )
+
+        XCTAssertEqual(chat.ui, "chat")
+        XCTAssertEqual(chat.interval_minutes, 15)
+        XCTAssertEqual(terminal.ui, "terminal")
+        XCTAssertEqual(terminal.interval_minutes, 15)
+        withChat.sessionView = .terminal
+        XCTAssertEqual(
+            withChat.startRequest(workspaceName: "p", claudeOptions: ClaudeOptionsModel(), initialPrompt: "")?.ui,
+            "terminal"
+        )
+    }
+
+    func testUnusableSavedViewsAndIntervalsKeepTheStepsChoice() throws {
+        let model = try probedModel(codexChat: true)
+        model.prepare(for: try workspace("auto_scan_choices"))
+        XCTAssertEqual(model.sessionView, .chat)
+        XCTAssertEqual(model.intervalMinutes, 15)
+
+        // A template from another client, or a hand-edited one.
+        model.apply(AutoScanSettingsDto(ui: "web", interval_minutes: 0))
+        model.apply(AutoScanSettingsDto(ui: "Chat", interval_minutes: 1441))
+
+        XCTAssertEqual(model.sessionView, .chat)
+        XCTAssertEqual(model.intervalMinutes, 15)
+
+        model.prepare(for: try workspace("auto_scan_nothing_chosen"))
+        XCTAssertEqual(model.sessionView, .terminal)
+        XCTAssertEqual(model.intervalMinutes, AutoScanSetupModel.defaultIntervalMinutes)
+    }
+
+    func testCodexAgentDefaultEffortStaysNilThroughATemplate() throws {
+        let dialled = try makeModel()
+        dialled.prepare(for: try workspace("auto_scan_nothing_chosen"))
+        dialled.source = .github
+        dialled.cli = "codex"
+        dialled.codexOptions.reasoning_effort = nil
+        let other = try makeModel()
+        other.prepare(for: try workspace("auto_scan_nothing_chosen"))
+
+        let captured = dialled.templateSettings(claudeOptions: ClaudeScanOptionsDto(), initialPrompt: "")
+        let settings = try WireJSON.decoder().decode(
+            AutoScanSettingsDto.self,
+            from: WireJSON.encoder().encode(captured)
+        )
+        other.apply(settings)
+
+        // nil is Codex's own setting, not "no choice" to fill with "high".
+        XCTAssertEqual(other.codexOptions.reasoning_effort, nil)
+        XCTAssertNotNil(settings.codex_options)
     }
 
     func testTemplatesLoadFromThePCAndNamesMatchTheWayThePCMatchesThem() async throws {

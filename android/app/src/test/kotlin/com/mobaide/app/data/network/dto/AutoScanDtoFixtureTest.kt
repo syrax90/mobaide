@@ -56,6 +56,8 @@ class AutoScanDtoFixtureTest {
             AutoScanSettingsDto(
                 source = "github",
                 cli = "codex",
+                ui = "chat",
+                interval_minutes = 15,
                 linear_filter = AutoScanFilterDto(
                     state_names = listOf("Todo"),
                     label_names = listOf("bot"),
@@ -102,7 +104,9 @@ class AutoScanDtoFixtureTest {
             workspace_name = "p",
             source = "github",
             cli = "codex",
-            codex_options = CodexScanOptionsDto(model = "gpt-5.5", full_auto = false),
+            ui = "chat",
+            interval_minutes = 15,
+            codex_options = CodexScanOptionsDto(model = "gpt-5.5", reasoning_effort = null, full_auto = false),
             // "" is sent on purpose: it clears the prompt the workspace saved.
             initial_prompt = "",
             github_filter = GitHubScanFilterDto(

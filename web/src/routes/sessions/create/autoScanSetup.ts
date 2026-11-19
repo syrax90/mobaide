@@ -11,9 +11,11 @@ import {
   type AutoScanAgentId,
 } from '../../../autoscan/autoscanDisplay';
 import {
+  chatSupport,
   cliAvailable,
   type AgentVersionInfo,
   type AutoScanCapability,
+  type ChatSupport,
 } from '../../../protocol/dto/agentVersion';
 import { filterError } from '../../workspaces/workspaceForm';
 import {
@@ -56,6 +58,10 @@ export interface AutoScanAgentOption {
   name: string;
   /** `capabilities.cli[id].available` is `true`; anything else cannot run a scan. */
   available: boolean;
+  /** `capabilities.chat` for the agent; its sessions can open in the chat view when `available`. */
+  chatSupport: ChatSupport;
+  /** `chatSupport` is `available`. */
+  chat: boolean;
 }
 
 /**
@@ -70,8 +76,38 @@ export function autoScanAgentOptions(
     id: agent.id,
     name: agent.name,
     available: cliAvailable(capabilities, agent.id) === true,
+    chatSupport: chatSupport(capabilities, agent.id),
+    chat: chatSupport(capabilities, agent.id).kind === 'available',
   }));
 }
+
+/** The choices "Time between scans" offers, in minutes. */
+export const AUTO_SCAN_INTERVAL_CHOICES: readonly number[] = [
+  1, 2, 5, 10, 15, 30, 60, 120, 240, 480, 1440,
+];
+
+/** "5 min", "1 hour", "24 hours"; minutes that are not whole hours stay minutes. */
+export function autoScanIntervalLabel(minutes: number): string {
+  if (minutes >= 60 && minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return hours === 1 ? '1 hour' : `${String(hours)} hours`;
+  }
+  return `${String(minutes)} min`;
+}
+
+/** The interval choices, plus `current` when a saved value is not one of them. */
+export function autoScanIntervalChoices(current: number): number[] {
+  const choices = [...AUTO_SCAN_INTERVAL_CHOICES];
+  if (!choices.includes(current)) choices.push(current);
+  return choices.sort((a, b) => a - b);
+}
+
+/** Shown under "Open sessions in" while the PC has not said whether the agent has a chat view. */
+export const AUTO_SCAN_CHAT_UNKNOWN_HINT = 'Checking the chat view on the PC…';
+
+/** Shown under "Open sessions in" for Junie in the terminal. */
+export const AUTO_SCAN_JUNIE_TRUST_HINT =
+  'Junie asks to trust a new worktree unless you trusted the workspace folder in Junie. Trust it once in Junie, or use Chat.';
 
 export function githubFilterError(filter: GitHubFilterDraft): string | null {
   if (filter.labels.length === 0) return 'Choose at least one label to pick up.';

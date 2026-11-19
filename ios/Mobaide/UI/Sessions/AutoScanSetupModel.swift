@@ -34,6 +34,19 @@ final class AutoScanSetupModel {
         }
     }
 
+    /// How each issue's session opens.
+    enum SessionView: String, CaseIterable, Sendable {
+        case terminal
+        case chat
+
+        var title: String {
+            switch self {
+            case .terminal: return "Terminal"
+            case .chat: return "Chat"
+            }
+        }
+    }
+
     enum GitHubStatusState: Equatable {
         case idle
         case loading
@@ -55,6 +68,11 @@ final class AutoScanSetupModel {
     static let maxTemplateNameLength = 60
     /// Above this many repository labels a search field filters them.
     static let maxLabelSuggestions = 30
+    /// The agent's own wait between cycles when a start sends none.
+    static let defaultIntervalMinutes = 5
+    static let intervalRange = 1...1440
+    /// The "Time between scans" choices, in minutes.
+    static let intervalChoices = [1, 2, 5, 10, 15, 30, 60, 120, 240, 480, 1440]
 
     /// nil for an agent without the capability, and until a probe answers.
     private(set) var capability: AutoScanCapability?
@@ -62,11 +80,16 @@ final class AutoScanSetupModel {
     /// agent" from "still asking".
     private(set) var capabilityProbed = false
     private var cliAvailability: [String: Bool] = [:]
+    /// `capabilities.chat` for each agent kind; empty until a probe answers.
+    private var chatCapabilities: [String: ChatCapability] = [:]
 
     /// The workspace the choices belong to, kept current with the live list.
     private(set) var workspace: WorkspaceInfo?
     var source: Source?
     var cli: String?
+    /// The chosen view; `effectiveSessionView` is the one a start sends.
+    var sessionView: SessionView = .terminal
+    var intervalMinutes = AutoScanSetupModel.defaultIntervalMinutes
 
     // GitHub
     private(set) var githubStatus: GitHubStatusState = .idle
@@ -153,6 +176,11 @@ final class AutoScanSetupModel {
             availability[kind] = version.cliAvailable(kind) == true
         }
         cliAvailability = availability
+        var chat: [String: ChatCapability] = [:]
+        for kind in capability?.clis ?? [] {
+            chat[kind] = version.chatCapability(kind)
+        }
+        chatCapabilities = chat
     }
 
     /// GitHub first, as the wizard lists them.
@@ -164,6 +192,40 @@ final class AutoScanSetupModel {
     var agents: [String] { capability?.clis ?? [] }
 
     func isAgentAvailable(_ kind: String) -> Bool { cliAvailability[kind] == true }
+
+    /// The agent can open its sessions in the chat view on this PC.
+    func isChatAvailable(_ kind: String) -> Bool { chatCapabilities[kind]?.isAvailable == true }
+
+    /// Why the agent cannot open its sessions in the chat view (or that the
+    /// probe has not answered yet); nil when it can.
+    func chatUnavailableReason(_ kind: String) -> String? {
+        guard let capability = chatCapabilities[kind] else {
+            return "Checking the chat view on the PC…"
+        }
+        return CreateSessionModel.chatUnavailableReason(capability, kind: kind)
+    }
+
+    /// The chosen view, or the terminal for an agent without the chat view.
+    var effectiveSessionView: SessionView {
+        guard sessionView == .chat, let cli, isChatAvailable(cli) else { return .terminal }
+        return .chat
+    }
+
+    /// "5 min", "1 hour", "24 hours".
+    static func intervalTitle(_ minutes: Int) -> String {
+        if minutes >= 60, minutes % 60 == 0 {
+            let hours = minutes / 60
+            return hours == 1 ? "1 hour" : "\(hours) hours"
+        }
+        return "\(minutes) min"
+    }
+
+    /// The choices, with a saved value the list does not have (45 min, say).
+    var intervalOptions: [Int] {
+        Self.intervalChoices.contains(intervalMinutes)
+            ? Self.intervalChoices
+            : (Self.intervalChoices + [intervalMinutes]).sorted()
+    }
 
     /// `POST /api/autoscan/github/setup` exists: the install and sign-in
     /// buttons can open a terminal on the PC.
@@ -180,6 +242,8 @@ final class AutoScanSetupModel {
         seededFor = workspace.name
         source = nil
         cli = nil
+        sessionView = .terminal
+        intervalMinutes = Self.defaultIntervalMinutes
 
         githubLabels = []
         githubAssignee = ""
@@ -405,6 +469,10 @@ final class AutoScanSetupModel {
     func apply(_ settings: AutoScanSettingsDto) {
         if let saved = settings.source.flatMap(Source.init(rawValue:)) { source = saved }
         if let saved = settings.cli { cli = saved }
+        if let saved = settings.ui.flatMap(SessionView.init(rawValue:)) { sessionView = saved }
+        if let saved = settings.interval_minutes, Self.intervalRange.contains(saved) {
+            intervalMinutes = saved
+        }
         if let github = settings.github_filter {
             githubLabels = Array(github.labels.prefix(Self.maxGitHubLabels))
             githubAssignee = github.assignee ?? ""
@@ -419,11 +487,7 @@ final class AutoScanSetupModel {
             linearDoneState = linear.done_state
             linearRemovalLabel = linear.removal_label
         }
-        if var codex = settings.codex_options {
-            // This client has no "agent default" effort to show.
-            if codex.reasoning_effort == nil { codex.reasoning_effort = "high" }
-            codexOptions = codex
-        }
+        if let codex = settings.codex_options { codexOptions = codex }
         if let antigravity = settings.antigravity_options {
             antigravityOptions = antigravity
             if antigravity.skip_permissions { antigravityOptions.sandbox = false }
@@ -443,6 +507,10 @@ final class AutoScanSetupModel {
         AutoScanSettingsDto(
             source: source?.rawValue,
             cli: cli,
+            // The view the user chose: a template may run on a PC where the
+            // agent has the chat view. A start sends the effective one.
+            ui: sessionView.rawValue,
+            interval_minutes: intervalMinutes,
             initial_prompt: initialPrompt,
             linear_filter: linearFilter,
             github_filter: githubFilter,
@@ -777,6 +845,8 @@ final class AutoScanSetupModel {
             copilot_options: cli == "copilot" ? copilotOptions : nil,
             cursor_options: cli == "cursor" ? cursorOptions : nil,
             junie_options: cli == "junie" ? junieOptions : nil,
+            ui: effectiveSessionView.rawValue,
+            interval_minutes: intervalMinutes,
             source: source.rawValue,
             cli: cli,
             initial_prompt: initialPrompt,

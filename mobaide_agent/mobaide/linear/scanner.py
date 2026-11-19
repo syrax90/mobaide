@@ -7,11 +7,12 @@ import re
 import sys
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 try:
     from mobaide.agent.logging import bind_request_context, get_logger, log_call
@@ -45,7 +46,8 @@ from mobaide.core import (
     SessionKind,
     SessionManager,
 )
-from mobaide.core.cli_launcher import CliLauncher, probe_cli_available
+from mobaide.acp.install import PROBE_POOL
+from mobaide.core.cli_launcher import CliLauncher, append_path_dir, probe_cli_available
 from mobaide.core.opencode_launcher import INITIAL_PROMPT_MAX
 from mobaide.core.workspaces_config import AUTO_SCAN_OPTION_FIELDS
 from mobaide.core.workspaces_store import safe_path_exists
@@ -79,6 +81,11 @@ from .workitems import (
 from .worktree import WorktreeCreationError, WorktreeManager, convert_to_worktree_slug
 
 logger = get_logger(__name__)
+
+
+# ``(agent kind, folder, launch env)`` → the trust record that agent's
+# terminal app reads for the folder, or ``None``.
+FolderTrustFactory = Callable[[str, str, Mapping[str, str]], Any]
 
 
 class AutoScanAlreadyRunning(Exception):
@@ -128,13 +135,18 @@ class AutoScanStart:
     starts, and so are ``source``, ``cli`` and ``agent_options``.
     ``agent_options`` are the chosen agent's options (the fields
     ``AUTO_SCAN_OPTION_FIELDS`` lists); ``None`` runs an agent other than
-    Claude Code without asking (``_SCAN_DEFAULTS``). ``initial_prompt``
-    ``None`` keeps the saved prompt; ``""`` clears it.
+    Claude Code without asking (``_SCAN_DEFAULTS``). ``ui`` ``"chat"`` opens
+    each issue's session in the chat view; ``None`` means the terminal.
+    ``interval_minutes`` ``None`` waits the configured interval between
+    cycles. ``initial_prompt`` ``None`` keeps the saved prompt; ``""`` clears
+    it.
     """
 
     source: str | None = None
     cli: str | None = None
     agent_options: Mapping[str, object] | None = None
+    ui: str | None = None
+    interval_minutes: int | None = None
     initial_prompt: str | None = None
     linear_filter: AutoScanFilter | None = None
     github_filter: GitHubScanFilter | None = None
@@ -223,7 +235,11 @@ class AutoScanInstance:
 
     ``source`` defaults to a Linear source over ``client``; ``cli`` names the
     agent each issue runs (``launchers`` maps it to its launcher), Claude
-    Code by default.
+    Code by default. ``ui`` ``"chat"`` opens each issue's session in the chat
+    view. ``interval_seconds`` is the wait between cycles, the config's by
+    default. ``folder_trust`` gives the trust record an agent's terminal app
+    reads for a folder (see :func:`mobaide.acp.trust.terminal_folder_trust`);
+    ``None`` writes none.
     """
 
     def __init__(
@@ -244,6 +260,9 @@ class AutoScanInstance:
         launchers: Mapping[str, CliLauncher] | None = None,
         agent_options: Mapping[str, object] | None = None,
         initial_prompt: str | None = None,
+        ui: str = "terminal",
+        interval_seconds: int | None = None,
+        folder_trust: FolderTrustFactory | None = None,
     ) -> None:
         if client_options is not None and not isinstance(
             client_options, ClaudeOptions
@@ -272,6 +291,9 @@ class AutoScanInstance:
         self._cli = cli
         self._launchers: Mapping[str, CliLauncher] = launchers or {"claude": launcher}
         self._agent_options = dict(agent_options) if agent_options is not None else None
+        self._ui = ui
+        self._folder_trust = folder_trust
+        self._interval_seconds = interval_seconds or config.scan_interval_seconds
         self._prompt = self._resolve_prompt(initial_prompt)
 
         # Per-workspace persistent record of issues whose worktrees have been
@@ -425,7 +447,7 @@ class AutoScanInstance:
         logger.info(
             "Auto Scan started for workspace '%s'. Interval: %ds",
             self._workspace_name,
-            self._config.scan_interval_seconds,
+            self._interval_seconds,
         )
 
     async def stop(self) -> None:
@@ -475,7 +497,7 @@ class AutoScanInstance:
                 else:
                     self._status = ScanStatus.SCANNING
 
-                interval = self._config.scan_interval_seconds
+                interval = self._interval_seconds
                 self._next_scan_at = datetime.now(timezone.utc) + timedelta(seconds=interval)
                 self._publish_status()
 
@@ -560,6 +582,10 @@ class AutoScanInstance:
             except Exception:
                 logger.exception("autoscan.cleanup.failed")
 
+        # Before the event: clients take the countdown from its next_scan_at.
+        self._next_scan_at = datetime.now(timezone.utc) + timedelta(
+            seconds=self._interval_seconds,
+        )
         self._emit_phase("scan_completed", issues_processed=processed_count)
 
     @property
@@ -600,6 +626,11 @@ class AutoScanInstance:
 
         slug = convert_to_worktree_slug(issue.slug_seed, issue.title)
         session_id = uuid.uuid4().hex[:12]
+        if self._ui == "chat":
+            # A chat sends the prompt as a message, not on a command line.
+            await self._launch_chat(issue, slug, session_id, self._issue_prompt(issue))
+            self._last_activity_at = time.time()
+            return
         through_shim = _through_cmd_shim(launcher)
         if through_shim:
             limit = _CMD_PROMPT_MAX
@@ -650,28 +681,85 @@ class AutoScanInstance:
                 "autoscan.workitem.persist_failed id=%s", issue.identifier,
             )
 
-    async def _spawn(
-        self, issue: ScanIssue, session_id: str, spec, kind: SessionKind,
-    ) -> bool:
-        self._emit_issue(issue, "session_spawn", "started")
-        env = spec.env
-        tool_dir = getattr(self._source, "tool_dir", None)
-        directory = tool_dir() if tool_dir is not None else None
-        if directory and env is not None:
-            # Last, not first: the folder must not change which python3,
-            # node or git the agent and the workspace's conda env resolve.
-            env = dict(env)
-            parts = env["PATH"].split(os.pathsep) if env.get("PATH") else []
-            if directory not in parts:
-                env["PATH"] = os.pathsep.join([*parts, directory])
+    async def _trust_worktree(
+        self, issue: ScanIssue, cwd: str, env: Mapping[str, str],
+    ) -> None:
+        """Record the agent's trust in an issue's worktree, so its terminal
+        app does not ask. The worktree holds the workspace's own files."""
+        if self._folder_trust is None:
+            return
+        if os.path.realpath(cwd) == os.path.realpath(self._workspace_config.path):
+            return
+        trust = self._folder_trust(self._cli, cwd, env)
+        if trust is None:
+            return
+
+        def grant() -> bool:
+            # The agent's own running processes rewrite the same file without
+            # a lock (Claude Code: ``~/.claude.json``), so a record can be
+            # lost or the file read half-written: check, and try again.
+            for attempt in range(3):
+                if attempt:
+                    time.sleep(0.2)
+                try:
+                    if trust.is_trusted():
+                        return True
+                    if not trust.grant():
+                        return False
+                    if trust.is_trusted():
+                        return True
+                except ValueError:
+                    pass
+            return False
+
         try:
-            config = SessionConfig(
-                session_id=session_id,
-                command=spec.argv,
-                cwd=spec.cwd,
-                env=env,
-                kind=kind,
+            trusted = await asyncio.get_running_loop().run_in_executor(PROBE_POOL, grant)
+        except Exception:
+            logger.warning(
+                "autoscan.trust_failed cli=%s cwd=%s", self._cli, cwd, exc_info=True,
             )
+            trusted = False
+        if not trusted:
+            self._emit("log", {
+                "line": (
+                    f"{issue.identifier}: could not trust the worktree for "
+                    f"{self._cli_name}. The session may ask to trust the folder."
+                ),
+                "level": "warning",
+                "ansi": False,
+            })
+
+    def _tool_dir(self) -> str | None:
+        """The folder of the source's tool (``gh``) for the session's PATH."""
+        tool_dir = getattr(self._source, "tool_dir", None)
+        return tool_dir() if tool_dir is not None else None
+
+    def _terminal_config(
+        self, session_id: str, spec, kind: SessionKind,
+    ) -> SessionConfig:
+        env = spec.env
+        directory = self._tool_dir()
+        if directory and env is not None:
+            env = dict(env)
+            append_path_dir(env, directory)
+        return SessionConfig(
+            session_id=session_id, command=spec.argv, cwd=spec.cwd, env=env, kind=kind,
+        )
+
+    async def _spawn(
+        self,
+        issue: ScanIssue,
+        session_id: str,
+        config: SessionConfig,
+        *,
+        trust_env: Mapping[str, str] | None = None,
+    ) -> bool:
+        """Start the issue's session. With ``trust_env`` (a terminal session)
+        the agent's trust in the folder is recorded first."""
+        self._emit_issue(issue, "session_spawn", "started")
+        if trust_env is not None and config.cwd:
+            await self._trust_worktree(issue, str(config.cwd), trust_env)
+        try:
             session = await self._session_manager.create_session(config)
         except Exception as exc:
             self._emit_issue(issue, "session_spawn", "failed", error=str(exc))
@@ -757,7 +845,10 @@ class AutoScanInstance:
             )
 
         await self._track_workitem(issue, slug, str(spec.cwd))
-        if not await self._spawn(issue, session_id, spec, SessionKind.AUTO_SCAN):
+        if not await self._spawn(
+            issue, session_id, self._terminal_config(session_id, spec, SessionKind.AUTO_SCAN),
+            trust_env=spec.env if spec.env is not None else os.environ,
+        ):
             # The SessionEnd hook that normally deletes the hooks settings
             # file never fires for a session that failed to spawn.
             self._launcher.discard_session_hooks(session_id)
@@ -769,32 +860,9 @@ class AutoScanInstance:
         Claude would get (``<branch_prefix>/<slug>``)."""
         workspace = self._launch_workspace()
         launcher = self._launchers[self._cli]
-        self._emit_issue(issue, "worktree_create", "started")
-        try:
-            if safe_path_exists(Path(workspace.path) / ".git"):
-                result = await self._worktree_mgr.create_worktree(slug, workspace.path)
-                cwd = result.path
-            else:
-                cwd = workspace.path
-        except WorktreeCreationError as exc:
-            self._emit_issue(issue, "worktree_create", "failed", error=str(exc))
-            logger.error(
-                "autoscan.worktree_create_failed id=%s: %s",
-                issue.identifier, exc.stderr,
-            )
+        cwd = await self._create_worktree(issue, slug)
+        if cwd is None:
             return
-        except Exception as exc:
-            self._emit_issue(issue, "worktree_create", "failed", error=str(exc))
-            logger.error(
-                "autoscan.worktree_create_failed id=%s", issue.identifier,
-                exc_info=True,
-            )
-            return
-        self._emit_issue(issue, "worktree_create", "ok")
-        self._emit("worktree", asdict(ScanWorktreePayload(
-            identifier=issue.identifier, path=str(cwd),
-        )))
-        await self._track_workitem(issue, slug, str(cwd))
 
         try:
             options = _agent_options(self._cli, self._agent_options, prompt)
@@ -811,7 +879,90 @@ class AutoScanInstance:
                 issue.identifier, self._cli, exc_info=True,
             )
             return
-        await self._spawn(issue, session_id, spec, SessionKind(self._cli))
+        await self._spawn(
+            issue, session_id, self._terminal_config(session_id, spec, SessionKind(self._cli)),
+            trust_env=spec.env if spec.env is not None else os.environ,
+        )
+
+    async def _create_worktree(self, issue: ScanIssue, slug: str) -> str | None:
+        """The issue's worktree (``<branch_prefix>/<slug>``), or the workspace
+        folder when it is not a git repository; ``None`` when that failed."""
+        workspace = self._workspace_config
+        self._emit_issue(issue, "worktree_create", "started")
+        try:
+            if safe_path_exists(Path(workspace.path) / ".git"):
+                result = await self._worktree_mgr.create_worktree(slug, workspace.path)
+                cwd = str(result.path)
+            else:
+                cwd = workspace.path
+        except WorktreeCreationError as exc:
+            self._emit_issue(issue, "worktree_create", "failed", error=str(exc))
+            logger.error(
+                "autoscan.worktree_create_failed id=%s: %s",
+                issue.identifier, exc.stderr,
+            )
+            return None
+        except Exception as exc:
+            self._emit_issue(issue, "worktree_create", "failed", error=str(exc))
+            logger.error(
+                "autoscan.worktree_create_failed id=%s", issue.identifier,
+                exc_info=True,
+            )
+            return None
+        self._emit_issue(issue, "worktree_create", "ok")
+        self._emit("worktree", asdict(ScanWorktreePayload(
+            identifier=issue.identifier, path=cwd,
+        )))
+        await self._track_workitem(issue, slug, cwd)
+        return cwd
+
+    async def _launch_chat(
+        self, issue: ScanIssue, slug: str, session_id: str, prompt: str,
+    ) -> None:
+        """Open the issue's session in the chat view, in the issue's worktree.
+
+        The chat sends ``prompt`` as the first message. A worktree counts as
+        trusted, so the chat does not ask before it starts.
+        """
+        cwd = await self._create_worktree(issue, slug)
+        if cwd is None:
+            return
+        workspace = self._launch_workspace()
+        kind = SessionKind(self._cli)
+        options: dict[str, object] = {}
+        if self._cli == "claude":
+            base = self._client_options
+            options["claude_options"] = replace(
+                base if base is not None else ClaudeOptions(),
+                identifier=issue.slug_seed,
+                title=issue.title,
+                initial_prompt=prompt,
+                worktree=False,
+            )
+        else:
+            try:
+                options[f"{self._cli}_options"] = _agent_options(
+                    self._cli, self._agent_options, prompt,
+                )
+            except Exception as exc:
+                self._emit_issue(issue, "session_spawn", "failed", error=str(exc))
+                return
+        config = SessionConfig(
+            session_id=session_id,
+            command=[],
+            cwd=cwd,
+            kind=kind,
+            ui="chat",
+            chat_launch_target=replace(workspace, path=cwd),
+            # The scan trusts the worktrees it creates, not a workspace
+            # folder that is not a git repository.
+            trust_folder=os.path.realpath(cwd) != os.path.realpath(self._workspace_config.path),
+            chat_path_append=self._tool_dir(),
+            **options,  # type: ignore[arg-type]
+        )
+        # The record too, not only the skipped question: some agents (Pi,
+        # Codex) read their own record and skip an untrusted folder's files.
+        await self._spawn(issue, session_id, config, trust_env=os.environ)
 
     async def _cleanup_completed_worktrees(self) -> None:
         """Remove worktrees for tracked issues that are done in their tracker.
@@ -987,12 +1138,13 @@ class AutoScanInstance:
             "last_activity_at": self._last_activity_at,
             "processed_count": self.processed_count,
             "last_scan_time": self._last_scan_time,
-            "scan_interval_seconds": self._config.scan_interval_seconds,
+            "scan_interval_seconds": self._interval_seconds,
             "next_scan_at": self._next_scan_at.isoformat() if self._next_scan_at else None,
             "cycle_number": self._cycle_number,
             "current_seq": self._seq,
             "source": self._source.kind,
             "cli": self._cli,
+            "ui": self._ui,
         }
 
     def get_status(self) -> dict:
@@ -1007,7 +1159,8 @@ class AutoScanSessionManager:
     The manager reads workspaces live from the injected
     :class:`WorkspacesStore`, so workspaces added via the REST CRUD API are
     picked up without a restart. ``cli_launchers`` holds the agents a scan
-    can run (Claude Code only when absent); ``gh`` reaches GitHub.
+    can run (Claude Code only when absent); ``gh`` reaches GitHub;
+    ``folder_trust`` lets each scan trust the worktrees it creates.
     """
 
     def __init__(
@@ -1023,8 +1176,10 @@ class AutoScanSessionManager:
         cli_launchers: Mapping[str, CliLauncher] | None = None,
         gh: GhCli | None = None,
         worktree_mgr: WorktreeManager | None = None,
+        folder_trust: FolderTrustFactory | None = None,
     ) -> None:
         self._config = config
+        self._folder_trust = folder_trust
         self._worktrees_dir = worktrees_dir or config.resolved_worktrees_dir()
         self._session_manager = session_manager
         self._workspaces_store = workspaces_store
@@ -1122,8 +1277,9 @@ class AutoScanSessionManager:
                     raise ValueError(f"Workspace '{workspace_name}' not found in store.")
 
                 cli = req.cli or "claude"
+                ui = req.ui or "terminal"
                 source = self._build_source(workspace, req)
-                await self._check_agent(cli, workspace)
+                await self._check_agent(cli, workspace, ui)
                 instance = AutoScanInstance(
                     workspace_name=workspace_name,
                     workspace_config=workspace,
@@ -1139,6 +1295,11 @@ class AutoScanSessionManager:
                     launchers=self._launchers,
                     agent_options=req.agent_options if cli != "claude" else None,
                     initial_prompt=req.initial_prompt,
+                    ui=ui,
+                    folder_trust=self._folder_trust,
+                    interval_seconds=(
+                        req.interval_minutes * 60 if req.interval_minutes else None
+                    ),
                 )
                 await instance.start()
                 self._scans[workspace_name] = instance
@@ -1184,6 +1345,8 @@ class AutoScanSessionManager:
                 if req.source is not None and req.agent_options is not None
                 else None
             ),
+            auto_scan_ui=req.ui,
+            auto_scan_interval_minutes=req.interval_minutes,
         )
         if patch == WorkspaceUpdatePatch():
             return False
@@ -1221,11 +1384,18 @@ class AutoScanSessionManager:
         )
         return LinearIssueSource(client, workspace.auto_scan_filter)
 
-    async def _check_agent(self, cli: str, workspace: WorkspaceConfig) -> None:
+    async def _check_agent(self, cli: str, workspace: WorkspaceConfig, ui: str = "terminal") -> None:
         launcher = self._launchers.get(cli)
         name = CLI_DISPLAY_NAMES.get(cli, cli)
         if launcher is None:
             raise AutoScanSourceError(f"{name} cannot run Auto Scan on this PC.")
+        if ui == "chat" and not await asyncio.get_running_loop().run_in_executor(
+            PROBE_POOL, self._chat_available, cli,
+        ):
+            raise AutoScanSourceError(
+                f"The chat view is not available for {name} on this PC. "
+                "Choose the terminal."
+            )
         # Claude's absence surfaces per issue, as it always has.
         if cli == "claude":
             return
@@ -1237,6 +1407,15 @@ class AutoScanSessionManager:
                 await ensure_auth(workspace)
             except CliAuthRequiredError as exc:
                 raise AutoScanSourceError(f"{name} is not signed in on the PC. {exc}") from exc
+
+    def _chat_available(self, cli: str) -> bool:
+        spec = getattr(self._session_manager, "chat_agents", {}).get(cli)
+        if spec is None:
+            return False
+        try:
+            return bool(spec.available())
+        except Exception:
+            return False
 
     async def stop(self, workspace_name: str) -> None:
         async with self._lock:

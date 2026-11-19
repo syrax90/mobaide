@@ -42,6 +42,8 @@ import androidx.compose.material3.InputChipDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -72,9 +74,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.mobaide.app.data.network.dto.AUTO_SCAN_SOURCE_GITHUB
 import com.mobaide.app.data.network.dto.AUTO_SCAN_SOURCE_LINEAR
+import com.mobaide.app.data.network.dto.AUTO_SCAN_UI_CHAT
+import com.mobaide.app.data.network.dto.AUTO_SCAN_UI_TERMINAL
 import com.mobaide.app.data.network.dto.AutoScanCapability
 import com.mobaide.app.data.network.dto.AutoScanTemplateDto
 import com.mobaide.app.data.network.dto.AutoScanTemplateSettingsDto
+import com.mobaide.app.data.network.dto.ChatSupport
 import com.mobaide.app.data.network.dto.GitHubIssueTypeDto
 import com.mobaide.app.data.network.dto.GitHubLabelDto
 import com.mobaide.app.data.network.dto.GitHubStatusDto
@@ -91,6 +96,7 @@ import com.mobaide.app.ui.common.pixel.PixelRadio
 import com.mobaide.app.ui.common.pixel.PixelTextButton
 import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import com.mobaide.app.ui.common.pixel.pixelFrame
+import com.mobaide.app.ui.common.pixel.pixelSegmentedButtonColors
 import com.mobaide.app.ui.theme.MobaideTheme
 import com.mobaide.app.ui.theme.pixel
 
@@ -164,6 +170,8 @@ internal fun AutoScanWizardSection(
                 onToggleIssueType = viewModel::toggleAutoScanGitHubIssueType,
                 onAssigneeChange = viewModel::setAutoScanGitHubAssignee,
                 onActiveLabelChange = viewModel::setAutoScanGitHubActiveLabel,
+                tipsHidden = state.autoScanTipsHidden,
+                onTipsHiddenChange = viewModel::setAutoScanTipsHidden,
             )
             AUTO_SCAN_SOURCE_LINEAR -> if (workspace != null) {
                 LinearSourcePanel(workspace = workspace, wizard = wizard, viewModel = viewModel)
@@ -180,16 +188,30 @@ internal fun AutoScanWizardSection(
         onSelect = viewModel::setAutoScanCli,
     )
     if (cli != null) {
+        // Before the options: choosing Chat hides some of them (Claude's
+        // Focus view), which must not move this control under the finger.
+        AutoScanSessionViewField(
+            cli = cli,
+            chatAvailable = state.autoScanChatAvailable,
+            chatSupport = state.chatSupport(cli),
+            selected = state.autoScanUi,
+            onSelect = viewModel::setAutoScanUi,
+        )
         AutoScanAgentOptions(cli = cli, state = state, viewModel = viewModel)
     }
 
-    NumberedSectionHeader(4, "Instructions")
+    NumberedSectionHeader(4, "Instructions and schedule")
     AutoScanInitialPromptField(
         value = state.initialPrompt,
         onChange = viewModel::setInitialPrompt,
         label = "Instructions for the agent (optional)",
     )
     Hint("Your playbook for every issue. The issue's title, link and description are added after it.")
+
+    AutoScanIntervalField(
+        minutes = wizard.intervalMinutes,
+        onSelect = viewModel::setAutoScanInterval,
+    )
 
     HorizontalDivider(thickness = 2.dp, color = MaterialTheme.pixel.rule)
 
@@ -233,6 +255,7 @@ private fun AutoScanAgentOptions(
                 onPreset = viewModel::selectAutoScanCodexPreset,
                 onModel = viewModel::setAutoScanCodexModel,
                 onEffort = viewModel::setAutoScanCodexReasoningEffort,
+                onAgentDefaultEffort = { viewModel.setAutoScanCodexReasoningEffort(null) },
                 onSandbox = viewModel::setAutoScanCodexSandbox,
                 onApproval = viewModel::setAutoScanCodexApproval,
                 autonomyHint = CODEX_ASK_HINT.takeIf { !codex.fullAuto && codex.approval != "never" },
@@ -369,6 +392,9 @@ private fun HowAutoScanWorksCallout(source: String?, isGit: Boolean, doneState: 
             },
         )
         CalloutLine("Each session starts at once with the issue as its prompt. You get a notification when it needs you.")
+        if (isGit) {
+            CalloutLine("Auto Scan trusts each worktree it creates, so the agent does not ask to trust the folder.")
+        }
         if (isGit) {
             when (source) {
                 AUTO_SCAN_SOURCE_GITHUB -> CalloutLine(
@@ -718,6 +744,8 @@ private fun GitHubSourcePanel(
     onToggleIssueType: (String) -> Unit,
     onAssigneeChange: (String) -> Unit,
     onActiveLabelChange: (String) -> Unit,
+    tipsHidden: Boolean,
+    onTipsHiddenChange: (Boolean) -> Unit,
 ) {
     // Fires when the panel first shows and on every return to this screen:
     // back from the setup terminal, or the app back in the foreground.
@@ -735,7 +763,7 @@ private fun GitHubSourcePanel(
     )
 
     PickedUpByLabelsCallout()
-    LabelTip()
+    LabelTip(hidden = tipsHidden, onHiddenChange = onTipsHiddenChange)
 
     GitHubLabelsField(
         selected = wizard.githubFilter.labels,
@@ -825,7 +853,14 @@ private val LABEL_TIPS = listOf(
 )
 
 @Composable
-private fun LabelTip() {
+private fun LabelTip(hidden: Boolean, onHiddenChange: (Boolean) -> Unit) {
+    if (hidden) {
+        PixelTextButton(
+            onClick = { onHiddenChange(false) },
+            modifier = Modifier.testTag("autoscan_github_tips_show"),
+        ) { Text("Show tips") }
+        return
+    }
     Row(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.testTag("autoscan_github_label_tip"),
@@ -849,8 +884,94 @@ private fun LabelTip() {
                     Hint(tip)
                 }
             }
+            PixelTextButton(
+                onClick = { onHiddenChange(true) },
+                modifier = Modifier.testTag("autoscan_github_tips_hide"),
+            ) { Text("Hide tips") }
         }
     }
+}
+
+/**
+ * Terminal or Chat for each issue's session. Chat is offered only when the
+ * chosen agent has the chat view on this PC.
+ */
+@Composable
+private fun AutoScanSessionViewField(
+    cli: String,
+    chatAvailable: Boolean,
+    chatSupport: ChatSupport?,
+    selected: String,
+    onSelect: (String) -> Unit,
+) {
+    Text("Open sessions in", style = MaterialTheme.typography.labelLarge)
+    SingleChoiceSegmentedButtonRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("autoscan_session_view"),
+    ) {
+        listOf(AUTO_SCAN_UI_TERMINAL to "Terminal", AUTO_SCAN_UI_CHAT to "Chat").forEach { (value, label) ->
+            SegmentedButton(
+                selected = selected == value,
+                onClick = { onSelect(value) },
+                enabled = value == AUTO_SCAN_UI_TERMINAL || chatAvailable,
+                shape = RectangleShape,
+                colors = pixelSegmentedButtonColors(),
+                icon = {},
+                modifier = Modifier.testTag("autoscan_session_view_$value"),
+            ) { Text(label) }
+        }
+    }
+    if (!chatAvailable) {
+        // The probe has not answered yet: the shared hint knows only its answers.
+        Hint(
+            chatUnavailableHint(chatSupport, cli)
+                ?: "Checking the chat view on the PC…",
+        )
+    } else if (cli == "junie" && selected == AUTO_SCAN_UI_TERMINAL) {
+        Hint(
+            "Junie asks to trust a new worktree unless you trusted the workspace folder in Junie. " +
+                "Trust it once in Junie, or use Chat.",
+            Modifier.testTag("autoscan_junie_trust_hint"),
+        )
+    }
+}
+
+/** The wait between two scans; a saved value outside the list still shows. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AutoScanIntervalField(minutes: Int, onSelect: (Int) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val options = if (minutes in AUTO_SCAN_INTERVALS) AUTO_SCAN_INTERVALS else (AUTO_SCAN_INTERVALS + minutes).sorted()
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded },
+        modifier = Modifier.testTag("autoscan_interval"),
+    ) {
+        OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
+            value = autoScanIntervalLabel(minutes),
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Time between scans") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .menuAnchor()
+                .fillMaxWidth(),
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { value ->
+                DropdownMenuItem(
+                    text = { Text(autoScanIntervalLabel(value)) },
+                    onClick = {
+                        onSelect(value)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+    Hint("After each scan, Auto Scan waits this long before it looks for new issues. Run now starts a scan at once.")
 }
 
 /** What the PC still needs for a GitHub scan, with the buttons that fix it. */
@@ -1216,7 +1337,7 @@ private fun AutoScanPartsPreview() {
                 onSetup = {},
             )
             PickedUpByLabelsCallout()
-            LabelTip()
+            LabelTip(hidden = false, onHiddenChange = {})
             GitHubIssueTypesField(
                 chosen = listOf("Bug"),
                 repoTypes = listOf(GitHubIssueTypeDto("Bug", "RED"), GitHubIssueTypeDto("Task", "YELLOW")),

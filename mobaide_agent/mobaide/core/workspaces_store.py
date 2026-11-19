@@ -17,10 +17,12 @@ from pathlib import Path, PurePath
 from .workspaces_config import (
     AUTO_SCAN_OPTION_FIELDS,
     AUTO_SCAN_SOURCES,
+    AUTO_SCAN_UIS,
     AutoScanFilter,
     GitHubScanFilter,
     WorkspaceConfig,
     clean_auto_scan_options,
+    valid_auto_scan_interval,
 )
 
 logger = logging.getLogger(__name__)
@@ -96,6 +98,10 @@ class WorkspaceRecord:
     auto_scan_cli: str | None = None
     # Auto Scan launch options by agent kind, from the last start with each.
     auto_scan_options: dict[str, dict[str, object]] = field(default_factory=dict)
+    # Session view (``terminal`` / ``chat``) and minutes between cycles of the
+    # last scan start.
+    auto_scan_ui: str | None = None
+    auto_scan_interval_minutes: int | None = None
     # Base branch of the last worktree a client created in this workspace;
     # agent-private, so every client and device preselects the same one.
     last_worktree_base: str | None = None
@@ -115,8 +121,9 @@ class WorkspaceUpdatePatch:
     * ``auto_scan_filter``: ``None`` keeps, a filter replaces wholesale.
     * ``auto_scan_prompt``: ``None`` keeps, ``""`` clears (stored as ``None``,
       so the engine-wide default prompt is used), any other string replaces.
-    * ``github_scan_filter``, ``auto_scan_source``, ``auto_scan_cli``:
-      ``None`` keeps, a value replaces.
+    * ``github_scan_filter``, ``auto_scan_source``, ``auto_scan_cli``,
+      ``auto_scan_ui``, ``auto_scan_interval_minutes``: ``None`` keeps, a
+      value replaces.
     * ``auto_scan_options``: ``None`` keeps; each agent kind it names gets
       those options, the other kinds keep theirs.
     """
@@ -132,6 +139,8 @@ class WorkspaceUpdatePatch:
     auto_scan_source: str | None = None
     auto_scan_cli: str | None = None
     auto_scan_options: dict[str, dict[str, object]] | None = None
+    auto_scan_ui: str | None = None
+    auto_scan_interval_minutes: int | None = None
 
 
 class WorkspacesStore:
@@ -327,6 +336,14 @@ class WorkspacesStore:
                     **record.auto_scan_options,
                     **_options_from_dict(patch.auto_scan_options),
                 }
+
+            if patch.auto_scan_ui is not None:
+                record.auto_scan_ui = _stored_ui(patch.auto_scan_ui)
+
+            if patch.auto_scan_interval_minutes is not None:
+                record.auto_scan_interval_minutes = valid_auto_scan_interval(
+                    patch.auto_scan_interval_minutes
+                )
 
             if new_name != record.name:
                 self._workspaces.pop(record.name)
@@ -540,6 +557,10 @@ def _stored_source(value: object) -> str | None:
     return value if isinstance(value, str) and value in AUTO_SCAN_SOURCES else None
 
 
+def _stored_ui(value: object) -> str | None:
+    return value if isinstance(value, str) and value in AUTO_SCAN_UIS else None
+
+
 def _stored_cli(value: object) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
@@ -579,6 +600,10 @@ def _record_from_dict(data: object) -> WorkspaceRecord | None:
         auto_scan_source=source,
         auto_scan_cli=_stored_cli(data.get("auto_scan_cli")),
         auto_scan_options=_options_from_dict(data.get("auto_scan_options")),
+        auto_scan_ui=_stored_ui(data.get("auto_scan_ui")),
+        auto_scan_interval_minutes=valid_auto_scan_interval(
+            data.get("auto_scan_interval_minutes")
+        ),
         last_worktree_base=(
             last_base if isinstance(last_base, str) and last_base else None
         ),
@@ -609,6 +634,10 @@ def _record_to_dict(r: WorkspaceRecord) -> dict[str, object]:
         d["auto_scan_cli"] = r.auto_scan_cli
     if r.auto_scan_options:
         d["auto_scan_options"] = {cli: dict(o) for cli, o in r.auto_scan_options.items()}
+    if r.auto_scan_ui is not None:
+        d["auto_scan_ui"] = r.auto_scan_ui
+    if r.auto_scan_interval_minutes is not None:
+        d["auto_scan_interval_minutes"] = r.auto_scan_interval_minutes
     if r.last_worktree_base is not None:
         d["last_worktree_base"] = r.last_worktree_base
     return d
@@ -628,6 +657,8 @@ def _record_to_config(r: WorkspaceRecord) -> WorkspaceConfig:
         auto_scan_source=r.auto_scan_source,
         auto_scan_cli=r.auto_scan_cli,
         auto_scan_options={cli: dict(o) for cli, o in r.auto_scan_options.items()},
+        auto_scan_ui=r.auto_scan_ui,
+        auto_scan_interval_minutes=r.auto_scan_interval_minutes,
     )
 
 
@@ -647,6 +678,8 @@ def _record_to_public(r: WorkspaceRecord) -> dict[str, object]:
         "auto_scan": {
             "source": r.auto_scan_source,
             "cli": r.auto_scan_cli,
+            "ui": r.auto_scan_ui,
+            "interval_minutes": r.auto_scan_interval_minutes,
             "linear_filter": (
                 _filter_to_dict(r.auto_scan_filter)
                 if r.auto_scan_filter is not None

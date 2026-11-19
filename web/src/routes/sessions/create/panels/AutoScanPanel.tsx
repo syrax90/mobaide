@@ -1,11 +1,19 @@
 import { useId, type ReactNode } from 'react';
+import { SelectField } from '../../../../components/form/SelectField';
 import { TextAreaField } from '../../../../components/form/TextAreaField';
 import type { CliModelDetail } from '../../../../protocol/dto/agentVersion';
 import type { WorkspaceSummary } from '../../../../api/workspaceRepository';
-import { AUTO_SCAN_SOURCE_TITLES, type AutoScanAgentOption } from '../autoScanSetup';
+import {
+  AUTO_SCAN_CHAT_UNKNOWN_HINT,
+  AUTO_SCAN_JUNIE_TRUST_HINT,
+  AUTO_SCAN_SOURCE_TITLES,
+  autoScanIntervalChoices,
+  autoScanIntervalLabel,
+  type AutoScanAgentOption,
+} from '../autoScanSetup';
 import type { AutoScanSourcesView } from '../useAutoScanSources';
 import type { AutoScanTemplatesView } from '../useAutoScanTemplates';
-import type { AutoScanSource, WizardAction, WizardState } from '../wizardState';
+import type { AutoScanSource, AutoScanUi, WizardAction, WizardState } from '../wizardState';
 import { AntigravityOptionsPanel } from './AntigravityOptionsPanel';
 import { AutoScanTemplatesPanel } from './AutoScanTemplatesPanel';
 import { ClaudeAdvancedPanel } from './ClaudeAdvancedPanel';
@@ -18,6 +26,7 @@ import { JunieOptionsPanel } from './JunieOptionsPanel';
 import { LinearSourcePanel } from './LinearSourcePanel';
 import { OpenCodeOptionsPanel } from './OpenCodeOptionsPanel';
 import { ScanCallout } from './ScanCallout';
+import { terminalUiHint } from './TerminalUiField';
 
 const SOURCE_HINTS: Readonly<Record<AutoScanSource, string>> = {
   github: 'Open issues of this workspace’s GitHub repository, read with the GitHub CLI (gh) on the PC.',
@@ -66,6 +75,7 @@ export function AutoScanPanel({
   const sourceName = useId();
   const agentName = useId();
   const setup = state.autoScanSetup;
+  const chosenAgent = agents.find((entry) => entry.id === setup.cli);
 
   return (
     <>
@@ -149,10 +159,21 @@ export function AutoScanPanel({
             </label>
           ))}
         </fieldset>
-        <AgentOptions state={state} models={models} dispatch={dispatch} />
+        {/* Before the options: choosing Chat hides some of them, which must not move this. */}
+        <SessionViewChoice
+          agent={chosenAgent}
+          ui={setup.ui}
+          dispatch={dispatch}
+        />
+        <AgentOptions
+          state={state}
+          models={models}
+          inChat={setup.ui === 'chat' && chosenAgent?.chat === true}
+          dispatch={dispatch}
+        />
       </ScanStep>
 
-      <ScanStep number={4} title="Instructions">
+      <ScanStep number={4} title="Instructions and schedule">
         <TextAreaField
           label="Instructions for the agent (optional)"
           value={state.autoScan.initialPrompt}
@@ -167,8 +188,81 @@ export function AutoScanPanel({
             });
           }}
         />
+        <SelectField
+          label="Time between scans"
+          value={String(setup.intervalMinutes)}
+          options={autoScanIntervalChoices(setup.intervalMinutes).map((minutes) => ({
+            value: String(minutes),
+            label: autoScanIntervalLabel(minutes),
+          }))}
+          hint="After each scan, Auto Scan waits this long before it looks for new issues. Run now starts a scan at once."
+          onChange={(value) => {
+            if (value !== null) dispatch({ type: 'setAutoScanInterval', minutes: Number(value) });
+          }}
+        />
       </ScanStep>
     </>
+  );
+}
+
+/**
+ * "Open sessions in": the terminal or the chat view, for every issue. Chat is
+ * offered only for an agent the PC has a chat view for; otherwise Terminal
+ * shows as chosen, and that is what the start sends.
+ */
+function SessionViewChoice({
+  agent,
+  ui,
+  dispatch,
+}: {
+  agent: AutoScanAgentOption | undefined;
+  ui: AutoScanUi;
+  dispatch: (action: WizardAction) => void;
+}) {
+  const name = useId();
+  if (agent === undefined) return null;
+  const shown: AutoScanUi = ui === 'chat' && agent.chat ? 'chat' : 'terminal';
+  const choices: readonly { value: AutoScanUi; title: string; hint: string }[] = [
+    { value: 'terminal', title: 'Terminal', hint: "The agent's own terminal app." },
+    { value: 'chat', title: 'Chat', hint: 'Messages, tool steps and approvals in the app.' },
+  ];
+  return (
+    <fieldset className="autoscan-choices">
+      <legend className="field-label">Open sessions in</legend>
+      {choices.map((choice) => {
+        const disabled = choice.value === 'chat' && !agent.chat;
+        return (
+          <label
+            key={choice.value}
+            className={`autoscan-choice${disabled ? ' autoscan-choice-disabled' : ''}`}
+          >
+            <input
+              type="radio"
+              name={name}
+              checked={shown === choice.value}
+              disabled={disabled}
+              onChange={() => {
+                dispatch({ type: 'setAutoScanUi', ui: choice.value });
+              }}
+            />
+            <span className="autoscan-choice-text">
+              <strong>{choice.title}</strong>
+              <small>{choice.hint}</small>
+            </span>
+          </label>
+        );
+      })}
+      {!agent.chat && (
+        <p className="field-hint">
+          {agent.chatSupport.kind === 'unknown'
+            ? AUTO_SCAN_CHAT_UNKNOWN_HINT
+            : terminalUiHint(agent.chatSupport, agent.id)}
+        </p>
+      )}
+      {agent.chat && agent.id === 'junie' && shown === 'terminal' && (
+        <p className="field-hint">{AUTO_SCAN_JUNIE_TRUST_HINT}</p>
+      )}
+    </fieldset>
   );
 }
 
@@ -218,6 +312,12 @@ function HowItWorks({
           Each session starts at once with the issue as its prompt. You get a notification when
           it needs you.
         </li>
+        {isGit && (
+          <li>
+            Auto Scan trusts each worktree it creates, so the agent does not ask to trust the
+            folder.
+          </li>
+        )}
         {isGit && source === 'github' && (
           <li>
             When an issue is closed, its worktree is removed. A worktree with uncommitted
@@ -236,10 +336,13 @@ function HowItWorks({
 function AgentOptions({
   state,
   models,
+  inChat,
   dispatch,
 }: {
   state: WizardState;
   models: AutoScanModels;
+  /** The sessions open in the chat view, so terminal-only options are hidden. */
+  inChat: boolean;
   dispatch: (action: WizardAction) => void;
 }) {
   const agents = state.autoScanAgents;
@@ -251,6 +354,7 @@ function AgentOptions({
             bucket={state.autoScan}
             bucketId="autoScan"
             models={models.claude}
+            showTerminalOptions={!inChat}
             dispatch={dispatch}
           />
           <ClaudeAdvancedPanel bucket={state.autoScan} bucketId="autoScan" dispatch={dispatch} />

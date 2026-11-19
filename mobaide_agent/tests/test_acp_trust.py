@@ -28,6 +28,7 @@ from mobaide.acp.trust import (
     cursor_projects_dir,
     junie_home,
     pi_agent_dir,
+    terminal_folder_trust,
     too_broad_to_record,
 )
 from tests.conftest import skip_if_not_linux
@@ -640,6 +641,37 @@ class TestCodexLinkedWorktree:
         assert list(projects) == [os.path.realpath(main)]
         assert _codex_trust(main, config).is_trusted() is True
         assert _codex_trust(linked, config).is_trusted() is True
+
+    def test_auto_scan_trusts_only_the_worktree_not_the_main_checkout(self, tmp_path):
+        main, linked = _linked_worktree(tmp_path)
+        codex_home = tmp_path / "codex-home"
+        env = {"CODEX_HOME": str(codex_home)}
+
+        trust = terminal_folder_trust("codex", str(linked), env)
+
+        assert trust is not None and trust.grant() is True
+        config = codex_home / "config.toml"
+        projects = tomllib.loads(config.read_text(encoding="utf-8"))["projects"]
+        assert list(projects) == [os.path.realpath(linked)]
+        assert _codex_trust(linked, config).is_trusted() is True
+        assert _codex_trust(main, config).is_trusted() is False
+
+    @pytest.mark.parametrize("level", ["untrusted", "trusted"])
+    def test_auto_scan_keeps_a_record_codex_reads_for_the_worktree(self, tmp_path, level):
+        """An explicit choice on the main checkout is the user's: an Auto Scan
+        worktree must not override it with a record of its own."""
+        main, linked = _linked_worktree(tmp_path)
+        codex_home = tmp_path / "codex-home"
+        codex_home.mkdir()
+        config = codex_home / "config.toml"
+        before = _codex_entries({main: level})
+        config.write_text(before, encoding="utf-8")
+
+        trust = terminal_folder_trust("codex", str(linked), {"CODEX_HOME": str(codex_home)})
+
+        assert trust is not None and trust.grant() is False
+        assert config.read_text(encoding="utf-8") == before
+        assert trust.is_trusted() is (level == "trusted")
 
 
 class TestCodexGitFileLayouts:
@@ -1822,3 +1854,48 @@ class TestPiGrant:
 
         assert _pi_records(pi_dir) == {"/srv/old": True, os.path.realpath(project): True}
         assert lock.is_symlink()
+
+
+class TestTerminalFolderTrust:
+    """The record Auto Scan grants for a worktree before an agent's terminal
+    app starts there: the one that app reads under its launch env."""
+
+    @pytest.mark.parametrize(
+        ("kind", "env_name"),
+        [
+            ("claude", "CLAUDE_CONFIG_DIR"),
+            ("auto_scan", "CLAUDE_CONFIG_DIR"),
+            ("codex", "CODEX_HOME"),
+            ("copilot", "COPILOT_HOME"),
+            ("cursor", "CURSOR_DATA_DIR"),
+            ("pi", "PI_CODING_AGENT_DIR"),
+        ],
+    )
+    def test_the_grant_lands_in_the_folder_of_the_launch_env(
+        self, tmp_path, home, monkeypatch, kind, env_name
+    ):
+        # With a file Pi would load, so Pi asks about the folder too.
+        worktree = _pi_project(tmp_path, "worktrees", "gh-7")
+        launch_dir = tmp_path / "launch"
+        launch_dir.mkdir()
+        monkeypatch.setenv(env_name, str(tmp_path / "host"))
+        env = {env_name: str(launch_dir)}
+
+        trust = terminal_folder_trust(kind, str(worktree), env)
+
+        assert trust is not None
+        assert trust.is_trusted() is False
+        assert trust.grant() is True
+        # A second record over the same env reads the grant back.
+        again = terminal_folder_trust(kind, str(worktree), env)
+        assert again is not None and again.is_trusted() is True
+        assert any(path.is_file() for path in launch_dir.rglob("*"))
+        assert not (tmp_path / "host").exists()
+        assert not any(path.is_file() for path in home.rglob("*"))
+
+    @pytest.mark.parametrize("kind", ["junie", "opencode", "shell"])
+    def test_an_agent_whose_record_mobaide_cannot_write_gets_none(self, tmp_path, home, kind):
+        """Junie signs its own records; the others have no folder trust."""
+        worktree = _project(tmp_path, "worktrees", "gh-7")
+
+        assert terminal_folder_trust(kind, str(worktree), {}) is None

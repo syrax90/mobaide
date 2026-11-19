@@ -802,6 +802,7 @@ export function NewSession() {
       chat: chatSupport(capabilities.data, chatAgentKind(location.mode) ?? 'claude'),
       worktreeBase,
       autoScan: scanCapability,
+      autoScanChat: chatSupport(capabilities.data, state.autoScanSetup.cli ?? 'claude'),
     };
     const request =
       location.mode === 'auto_scan'

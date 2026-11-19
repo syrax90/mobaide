@@ -40,6 +40,7 @@ class PreferencesStore(private val context: Context) {
     private val keyTerminalStaticColumns = intPreferencesKey("terminal_static_columns")
     private val keyVoiceCleanupNoticeSeen = booleanPreferencesKey("voice_cleanup_notice_seen")
     private val keyChatFocusView = booleanPreferencesKey("chat_focus_view")
+    private val keyAutoScanTipsHidden = booleanPreferencesKey("autoscan_tips_hidden")
 
     // Device-local, not account-scoped (device backups carry them): no sign-out
     // sweep touches them, since the store's quota follows the device's store
@@ -127,6 +128,16 @@ class PreferencesStore(private val context: Context) {
 
     suspend fun setChatFocusView(on: Boolean) {
         context.dataStore.edit { prefs -> prefs[keyChatFocusView] = on }
+    }
+
+    /** The user hid the Auto Scan label tips; they stay hidden until shown again. */
+    val autoScanTipsHidden: Flow<Boolean> =
+        context.dataStore.data
+            .catch { e -> if (e is IOException) emit(emptyPreferences()) else throw e }
+            .map { it[keyAutoScanTipsHidden] ?: false }
+
+    suspend fun setAutoScanTipsHidden(hidden: Boolean) {
+        context.dataStore.edit { prefs -> prefs[keyAutoScanTipsHidden] = hidden }
     }
 
     val terminalStaticColumns: Flow<Int> =

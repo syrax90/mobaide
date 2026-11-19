@@ -7,16 +7,7 @@ from pydantic import BaseModel, Field, SecretStr, field_validator
 from mobaide.core.opencode_launcher import INITIAL_PROMPT_MAX
 from mobaide.linear.scanner import AUTO_SCAN_CLIS, AutoScanStart
 
-from ..sessions.models import (
-    AntigravityScanOptionsModel,
-    ClaudeOptionsModel,
-    ClaudeScanOptionsModel,
-    CodexScanOptionsModel,
-    CopilotScanOptionsModel,
-    CursorScanOptionsModel,
-    JunieScanOptionsModel,
-    OpenCodeScanOptionsModel,
-)
+from ..sessions.models import ClaudeOptionsModel, ClaudeScanOptionsModel
 from ..workspaces.models import (
     AutoScanAgentOptionsModel,
     AutoScanFilterDraftModel,
@@ -38,25 +29,20 @@ AUTOSCAN_CAPABILITIES: dict[str, object] = {
 }
 
 
-class StartScanRequest(BaseModel):
+class StartScanRequest(AutoScanAgentOptionsModel):
     """``POST /api/autoscan/start``.
 
     ``source`` absent is an older client: Linear, Claude Code, the stored
     filter. A newer client sends every choice: ``source``, ``cli``, the
     source's filter, the chosen agent's options (``claude_options``,
-    ``codex_options``, …; Pi has none), ``initial_prompt`` (``""`` clears
-    the saved prompt) and, when the workspace has none, ``linear_api_key``.
-    The options of other agents are ignored.
+    ``codex_options``, …; Pi has none), ``ui``, ``interval_minutes``,
+    ``initial_prompt`` (``""`` clears the saved prompt) and, when the
+    workspace has none, ``linear_api_key``. The options of other agents are
+    ignored.
     """
 
     project_name: str
-    claude_options: ClaudeOptionsModel | None = None
-    codex_options: CodexScanOptionsModel | None = None
-    antigravity_options: AntigravityScanOptionsModel | None = None
-    opencode_options: OpenCodeScanOptionsModel | None = None
-    copilot_options: CopilotScanOptionsModel | None = None
-    cursor_options: CursorScanOptionsModel | None = None
-    junie_options: JunieScanOptionsModel | None = None
+    claude_options: ClaudeOptionsModel | None = None  # type: ignore[assignment]
     source: Literal["linear", "github"] | None = None
     cli: AutoScanCli | None = None
     initial_prompt: str | None = Field(default=None, max_length=INITIAL_PROMPT_MAX)
@@ -83,6 +69,8 @@ class StartScanRequest(BaseModel):
             source=self.source,
             cli=self.cli,
             agent_options=self.agent_options(),
+            ui=self.ui,
+            interval_minutes=self.interval_minutes,
             # A blank prompt means "none", as on the older Claude path.
             initial_prompt=prompt if prompt is None or prompt.strip() else "",
             linear_filter=(
@@ -120,6 +108,7 @@ class AutoScanInstanceDto(BaseModel):
     current_seq: int = 0
     source: str = "linear"
     cli: str = "claude"
+    ui: str = "terminal"
 
 
 class AutoScanListResponse(BaseModel):

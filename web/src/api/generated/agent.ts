@@ -1385,6 +1385,11 @@ export interface components {
             started_at: number;
             /** Status */
             status: string;
+            /**
+             * Ui
+             * @default terminal
+             */
+            ui: string;
         };
         /** AutoScanInstanceStatusResponse */
         AutoScanInstanceStatusResponse: {
@@ -1431,6 +1436,11 @@ export interface components {
             started_at: number;
             /** Status */
             status: string;
+            /**
+             * Ui
+             * @default terminal
+             */
+            ui: string;
         };
         /** AutoScanListResponse */
         AutoScanListResponse: {
@@ -1463,11 +1473,15 @@ export interface components {
             copilot_options?: components["schemas"]["CopilotScanOptionsModel"] | null;
             cursor_options?: components["schemas"]["CursorScanOptionsModel"] | null;
             github_filter?: components["schemas"]["GitHubScanFilterModel"] | null;
+            /** Interval Minutes */
+            interval_minutes?: number | null;
             junie_options?: components["schemas"]["JunieScanOptionsModel"] | null;
             linear_filter?: components["schemas"]["AutoScanFilterModel"] | null;
             opencode_options?: components["schemas"]["OpenCodeScanOptionsModel"] | null;
             /** Source */
             source?: ("linear" | "github") | null;
+            /** Ui */
+            ui?: ("terminal" | "chat") | null;
         };
         /**
          * AutoScanTemplate
@@ -1501,11 +1515,15 @@ export interface components {
             github_filter?: components["schemas"]["GitHubScanFilterDraftModel"] | null;
             /** Initial Prompt */
             initial_prompt?: string | null;
+            /** Interval Minutes */
+            interval_minutes?: number | null;
             junie_options?: components["schemas"]["JunieScanOptionsModel"] | null;
             linear_filter?: components["schemas"]["AutoScanFilterDraftModel"] | null;
             opencode_options?: components["schemas"]["OpenCodeScanOptionsModel"] | null;
             /** Source */
             source?: ("linear" | "github") | null;
+            /** Ui */
+            ui?: ("terminal" | "chat") | null;
         };
         /**
          * AutoScanTemplatesResponse
@@ -3000,9 +3018,10 @@ export interface components {
          *     ``source`` absent is an older client: Linear, Claude Code, the stored
          *     filter. A newer client sends every choice: ``source``, ``cli``, the
          *     source's filter, the chosen agent's options (``claude_options``,
-         *     ``codex_options``, …; Pi has none), ``initial_prompt`` (``""`` clears
-         *     the saved prompt) and, when the workspace has none, ``linear_api_key``.
-         *     The options of other agents are ignored.
+         *     ``codex_options``, …; Pi has none), ``ui``, ``interval_minutes``,
+         *     ``initial_prompt`` (``""`` clears the saved prompt) and, when the
+         *     workspace has none, ``linear_api_key``. The options of other agents are
+         *     ignored.
          */
         StartScanRequest: {
             antigravity_options?: components["schemas"]["AntigravityScanOptionsModel"] | null;
@@ -3015,6 +3034,8 @@ export interface components {
             github_filter?: components["schemas"]["GitHubScanFilterModel"] | null;
             /** Initial Prompt */
             initial_prompt?: string | null;
+            /** Interval Minutes */
+            interval_minutes?: number | null;
             junie_options?: components["schemas"]["JunieScanOptionsModel"] | null;
             /** Linear Api Key */
             linear_api_key?: string | null;
@@ -3024,6 +3045,8 @@ export interface components {
             project_name: string;
             /** Source */
             source?: ("linear" | "github") | null;
+            /** Ui */
+            ui?: ("terminal" | "chat") | null;
         };
         /** StopScanRequest */
         StopScanRequest: {

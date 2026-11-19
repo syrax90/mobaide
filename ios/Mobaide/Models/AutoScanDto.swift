@@ -15,6 +15,8 @@ struct AutoScanInstanceDto: Codable, Equatable, Sendable {
     let source: String
     /// The agent kind each issue runs in (`claude`, `codex`, …).
     let cli: String
+    /// How each issue's session opens: `terminal` or `chat`.
+    let ui: String
 
     private enum CodingKeys: String, CodingKey {
         case workspace_name = "project_name"
@@ -29,6 +31,7 @@ struct AutoScanInstanceDto: Codable, Equatable, Sendable {
         case current_seq
         case source
         case cli
+        case ui
     }
 
     init(
@@ -43,7 +46,8 @@ struct AutoScanInstanceDto: Codable, Equatable, Sendable {
         cycle_number: Int = 0,
         current_seq: Int64 = 0,
         source: String = "linear",
-        cli: String = "claude"
+        cli: String = "claude",
+        ui: String = "terminal"
     ) {
         self.workspace_name = workspace_name
         self.status = status
@@ -57,6 +61,7 @@ struct AutoScanInstanceDto: Codable, Equatable, Sendable {
         self.current_seq = current_seq
         self.source = source
         self.cli = cli
+        self.ui = ui
     }
 }
 
@@ -75,6 +80,7 @@ extension AutoScanInstanceDto {
         current_seq = try container.decodeIfPresent(Int64.self, forKey: .current_seq) ?? 0
         source = try container.decodeIfPresent(String.self, forKey: .source) ?? "linear"
         cli = try container.decodeIfPresent(String.self, forKey: .cli) ?? "claude"
+        ui = try container.decodeIfPresent(String.self, forKey: .ui) ?? "terminal"
     }
 }
 
@@ -122,7 +128,8 @@ extension AutoScanListResponse {
 /// `POST /api/autoscan/start`. An older client sends only `project_name` and
 /// `claude_options`; a client of an agent with `capabilities.autoscan` sends
 /// every choice: `source`, `cli`, that source's filter, the chosen agent's
-/// options (Pi has none) and `initial_prompt` (`""` clears the saved prompt).
+/// options (Pi has none), `ui` (`terminal` / `chat`), `interval_minutes`
+/// (1–1440) and `initial_prompt` (`""` clears the saved prompt).
 /// Nil fields stay off the wire.
 struct StartScanRequest: Codable, Equatable, Sendable {
     let workspace_name: String
@@ -133,6 +140,8 @@ struct StartScanRequest: Codable, Equatable, Sendable {
     let copilot_options: CopilotScanOptionsDto?
     let cursor_options: CursorScanOptionsDto?
     let junie_options: JunieScanOptionsDto?
+    let ui: String?
+    let interval_minutes: Int?
     let source: String?
     let cli: String?
     let initial_prompt: String?
@@ -149,6 +158,8 @@ struct StartScanRequest: Codable, Equatable, Sendable {
         case copilot_options
         case cursor_options
         case junie_options
+        case ui
+        case interval_minutes
         case source
         case cli
         case initial_prompt
@@ -166,6 +177,8 @@ struct StartScanRequest: Codable, Equatable, Sendable {
         copilot_options: CopilotScanOptionsDto? = nil,
         cursor_options: CursorScanOptionsDto? = nil,
         junie_options: JunieScanOptionsDto? = nil,
+        ui: String? = nil,
+        interval_minutes: Int? = nil,
         source: String? = nil,
         cli: String? = nil,
         initial_prompt: String? = nil,
@@ -181,6 +194,8 @@ struct StartScanRequest: Codable, Equatable, Sendable {
         self.copilot_options = copilot_options
         self.cursor_options = cursor_options
         self.junie_options = junie_options
+        self.ui = ui
+        self.interval_minutes = interval_minutes
         self.source = source
         self.cli = cli
         self.initial_prompt = initial_prompt

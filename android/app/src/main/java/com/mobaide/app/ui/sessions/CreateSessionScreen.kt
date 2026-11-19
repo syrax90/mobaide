@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.outlined.History
@@ -113,6 +114,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mobaide.app.data.network.dto.AUTO_SCAN_UI_CHAT
 import com.mobaide.app.data.network.dto.ChatSupport
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.ui.common.pathBrowseHint
@@ -1288,16 +1290,22 @@ private fun BuiltInModeCard(
         ListItem(
             headlineContent = { Text(builtInModeTitle(mode)) },
             supportingContent = { Text(subtitle) },
-            leadingContent = if (mode == CreateSessionMode.CustomShell) {
-                { Icon(imageVector = Icons.Filled.Terminal, contentDescription = null) }
-            } else {
-                null
+            leadingContent = when (mode) {
+                CreateSessionMode.CustomShell -> {
+                    { Icon(imageVector = Icons.Filled.Terminal, contentDescription = null) }
+                }
+                CreateSessionMode.AutoScan -> {
+                    { Icon(imageVector = Icons.Filled.Radar, contentDescription = null) }
+                }
+                else -> null
             },
             trailingContent = { ModeChevron() },
             colors = listColorsFor(available),
         )
     }
 }
+
+private const val CODEX_EFFORT_AGENT_DEFAULT = "Agent default"
 
 /** Trailing disclosure chevron: tapping a mode card commits and moves on. */
 @Composable
@@ -1588,7 +1596,7 @@ internal fun CodexOptionControls(
     preset: CodexAutonomyPreset?,
     models: List<String>,
     model: String?,
-    effort: String,
+    effort: String?,
     efforts: List<String>,
     sandbox: String,
     approval: String,
@@ -1600,6 +1608,8 @@ internal fun CodexOptionControls(
     onApproval: (String) -> Unit,
     advancedLeading: (@Composable () -> Unit)? = null,
     autonomyHint: String? = null,
+    // Offers "Agent default" (a null effort: Codex uses its own setting).
+    onAgentDefaultEffort: (() -> Unit)? = null,
 ) {
     Text("Autonomy", style = MaterialTheme.typography.labelLarge)
     val presets = listOf(
@@ -1644,6 +1654,7 @@ internal fun CodexOptionControls(
         selected = effort,
         advertised = efforts,
         onSelect = onEffort,
+        onAgentDefault = onAgentDefaultEffort,
     )
 
     AdvancedSection {
@@ -2357,22 +2368,23 @@ private fun ClaudeEffortDropdown(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CodexEffortDropdown(
-    selected: String,
+    selected: String?,
     advertised: List<String>,
     onSelect: (String) -> Unit,
+    onAgentDefault: (() -> Unit)? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
     // Keep-selected repair: a restored-prefs or late-probe effort outside the
     // advertised set must stay in the menu, or the field would display a value
     // its own options cannot reproduce while the request still sends it.
-    val options = if (selected in advertised) advertised else advertised + selected
+    val options = if (selected == null || selected in advertised) advertised else advertised + selected
     ExposedDropdownMenuBox(
         expanded = expanded,
         onExpandedChange = { expanded = !expanded },
     ) {
         OutlinedTextField(
             colors = PixelTextFieldDefaults.colors(),
-            value = selected.replaceFirstChar { it.uppercase() },
+            value = selected?.replaceFirstChar { it.uppercase() } ?: CODEX_EFFORT_AGENT_DEFAULT,
             onValueChange = {},
             readOnly = true,
             label = { Text("Reasoning effort") },
@@ -2383,6 +2395,15 @@ private fun CodexEffortDropdown(
             expanded = expanded,
             onDismissRequest = { expanded = false },
         ) {
+            if (onAgentDefault != null) {
+                DropdownMenuItem(
+                    text = { Text(CODEX_EFFORT_AGENT_DEFAULT) },
+                    onClick = {
+                        onAgentDefault()
+                        expanded = false
+                    },
+                )
+            }
             options.forEach { effort ->
                 DropdownMenuItem(
                     text = { Text(effort.replaceFirstChar { it.uppercase() }) },
@@ -2502,7 +2523,7 @@ internal fun AutoScanClaudeOptions(
         onEffortSelect = viewModel::setAutoScanClaudeEffort,
     )
     ToggleRow("Plan mode", state.autoScanPlanMode, viewModel::toggleAutoScanPlanMode)
-    FocusViewToggle(state.autoScanFocusMode, viewModel::toggleAutoScanFocusMode)
+    if (state.autoScanUi != AUTO_SCAN_UI_CHAT) FocusViewToggle(state.autoScanFocusMode, viewModel::toggleAutoScanFocusMode)
     ToggleRow(
         "Skip permissions",
         state.autoScanSkipPermissions,

@@ -106,7 +106,8 @@ enum AutoScanDisplay {
 
     /// "GitHub · Codex".
     static func sourceAndAgent(_ scan: AutoScanInstanceDto) -> String {
-        "\(sourceName(scan.source)) · \(agentName(scan.cli))"
+        let base = "\(sourceName(scan.source)) · \(agentName(scan.cli))"
+        return scan.ui == AutoScanSetupModel.SessionView.chat.rawValue ? "\(base) · Chat" : base
     }
 
     static func relativeTime(_ epochSeconds: Double) -> String {

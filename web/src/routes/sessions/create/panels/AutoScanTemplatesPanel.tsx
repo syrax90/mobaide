@@ -263,7 +263,8 @@ function SaveTemplateDialog({
         <h2 id={titleId}>Save as template</h2>
         <p className="field-hint">
           Keeps where to find issues, the filter, the AI agent with its options, and the
-          instructions. Templates are saved on the PC, for every workspace.
+          instructions. It also keeps the session view and the time between scans. Templates
+          are saved on the PC, for every workspace.
         </p>
         {formError !== null && (
           <p className="field-error" role="alert">

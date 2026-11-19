@@ -2224,6 +2224,28 @@ input[type='radio']:checked {
   box-shadow: inset 0 0 0 2px var(--rule);
 }
 
+.mode-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+/* Terminal and Auto Scan lead with a glyph, as on Android. */
+.mode-card-with-icon {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* Two classes: `.chat-icon` (16px) comes later in this file. */
+.mode-card .mode-icon {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  color: var(--text-muted);
+}
+
 .workspace-row-selected,
 .workspace-row-selected:hover {
   background: var(--surface);
@@ -6227,9 +6249,16 @@ body:has(dialog[open]) {
   grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));
 }
 
-.autoscan-choices > legend.field-hint {
+.autoscan-choices > legend.field-hint,
+.autoscan-choices > legend.field-label {
   margin-bottom: 0.5rem;
   padding: 0;
+}
+
+/* A hint under the choices spans the whole grid. */
+.autoscan-choices > .field-hint {
+  grid-column: 1 / -1;
+  margin: 0;
 }
 
 .autoscan-choice {
@@ -6347,6 +6376,19 @@ body:has(dialog[open]) {
   margin: 0 0 0.25rem;
   font-weight: 600;
   color: var(--text);
+}
+
+.autoscan-tip-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+/* "Hide tips" in the tips' head; "Show tips" alone once they are hidden. */
+.autoscan-tips-toggle {
+  align-self: flex-start;
+  font-size: 0.85rem;
 }
 
 .autoscan-tip ul {

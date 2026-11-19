@@ -5,6 +5,7 @@ import type {
   GitHubSetupAction,
   GitHubStatus,
 } from '../../../../api/autoscanRepository';
+import { useAutoScanPrefsStore } from '../../../../stores/autoScanPrefsStore';
 import { orderedUnion } from '../../../workspaces/workspaceForm';
 import {
   GITHUB_ISSUE_TYPES_MAX,
@@ -31,6 +32,8 @@ interface GitHubSourcePanelProps {
 export function GitHubSourcePanel({ filter, sources, submitting, dispatch }: GitHubSourcePanelProps) {
   const datalistId = useId();
   const tipsId = useId();
+  const tipsHidden = useAutoScanPrefsStore((prefs) => prefs.tipsHidden);
+  const setTipsHidden = useAutoScanPrefsStore((prefs) => prefs.setTipsHidden);
   const setFilter = (next: GitHubFilterDraft) => {
     dispatch({ type: 'setAutoScanGitHubFilter', filter: next });
   };
@@ -83,29 +86,52 @@ export function GitHubSourcePanel({ filter, sources, submitting, dispatch }: Git
           issue again.
         </p>
       </ScanCallout>
-      <div className="autoscan-tip">
-        <p className="autoscan-tip-title" id={tipsId}>
-          Tips
-        </p>
-        <ul aria-labelledby={tipsId}>
-          <li>
-            Create a dedicated label, for example <code>auto-scan</code>, and add it only to the
-            issues an agent should solve.
-          </li>
-          <li>
-            Avoid common labels such as <code>bug</code>: every open issue with them would start
-            a session.
-          </li>
-          <li>
-            Keep the label out of issue templates and workflows that label new issues, or anyone
-            who opens an issue could start a session on your PC.
-          </li>
-          <li>
-            Use one label per kind of work, such as <code>auto-scan-small</code> and{' '}
-            <code>auto-scan-complex</code>, and save a template for each.
-          </li>
-        </ul>
-      </div>
+      {tipsHidden ? (
+        <button
+          type="button"
+          className="link-button autoscan-tips-toggle"
+          onClick={() => {
+            setTipsHidden(false);
+          }}
+        >
+          Show tips
+        </button>
+      ) : (
+        <div className="autoscan-tip">
+          <div className="autoscan-tip-head">
+            <p className="autoscan-tip-title" id={tipsId}>
+              Tips
+            </p>
+            <button
+              type="button"
+              className="link-button autoscan-tips-toggle"
+              onClick={() => {
+                setTipsHidden(true);
+              }}
+            >
+              Hide tips
+            </button>
+          </div>
+          <ul aria-labelledby={tipsId}>
+            <li>
+              Create a dedicated label, for example <code>auto-scan</code>, and add it only to the
+              issues an agent should solve.
+            </li>
+            <li>
+              Avoid common labels such as <code>bug</code>: every open issue with them would start
+              a session.
+            </li>
+            <li>
+              Keep the label out of issue templates and workflows that label new issues, or anyone
+              who opens an issue could start a session on your PC.
+            </li>
+            <li>
+              Use one label per kind of work, such as <code>auto-scan-small</code> and{' '}
+              <code>auto-scan-complex</code>, and save a template for each.
+            </li>
+          </ul>
+        </div>
+      )}
 
       <GitHubLabelsField
         labels={filter.labels}

@@ -231,12 +231,19 @@ class CodexFolderTrust:
 
     prompt_title = "Trust this folder?"
 
-    def __init__(self, cwd: str, config_path: Path | None = None) -> None:
+    def __init__(
+        self, cwd: str, config_path: Path | None = None, *, exact: bool = False,
+    ) -> None:
+        """``exact`` records the folder itself, not its repository: Auto Scan
+        trusts only the worktree it created, not the user's main checkout."""
         self._cwd = cwd
         self._config_path = config_path or codex_config_path()
+        self._exact = exact
 
     def _record_folder(self) -> str:
         folder = Path(os.path.realpath(self._cwd))
+        if self._exact:
+            return str(folder)
         root = _repo_root(folder)
         if root is None:
             return str(folder)
@@ -290,6 +297,10 @@ class CodexFolderTrust:
         if not isinstance(projects, dict):
             raise ValueError(f"{path}: projects is not a table")
         if folder in projects:
+            return False
+        # A record Codex would read first for this folder (an explicit
+        # "untrusted" on the main checkout) is the user's choice: keep it.
+        if self._exact and any(key in projects for key in _codex_trust_candidates(self._cwd)):
             return False
         updated = _append_codex_trust(text, folder)
         expected = {**before, "projects": {**projects, folder: {"trust_level": "trusted"}}}
@@ -847,3 +858,25 @@ class PiFolderTrust:
             json.dumps(dict(sorted(data.items())), indent=2, ensure_ascii=False) + "\n",
             mode=mode,
         )
+
+
+def terminal_folder_trust(kind: str, cwd: str, env: Mapping[str, str]) -> WorkspaceTrust | None:
+    """The trust record the terminal app of agent ``kind``, started with
+    ``env``, reads for ``cwd``; ``None`` when Mobaide cannot write it.
+
+    Junie signs its own records with a key in the keychain, so only Junie can
+    write one. It does trust a git worktree whose main checkout it trusts.
+    """
+    if kind in ("claude", "auto_scan"):
+        return ClaudeFolderTrust(cwd, config_path=claude_config_path(env))
+    if kind == "codex":
+        return CodexFolderTrust(cwd, config_path=codex_config_path(env), exact=True)
+    if kind == "antigravity":
+        return AntigravityFolderTrust(cwd)
+    if kind == "copilot":
+        return CopilotFolderTrust(cwd, config_path=copilot_config_path(env))
+    if kind == "cursor":
+        return CursorFolderTrust(cwd, projects_dir=cursor_projects_dir(env))
+    if kind == "pi":
+        return PiFolderTrust(cwd, agent_dir=pi_agent_dir(env))
+    return None

@@ -20,6 +20,7 @@ import {
 import { autoScanTemplateSettings } from './buildCreateRequest';
 import {
   AUTO_SCAN_AGENT_DEFAULTS,
+  AUTO_SCAN_DEFAULT_INTERVAL_MINUTES,
   EMPTY_GITHUB_FILTER,
   EMPTY_LINEAR_FILTER,
   INITIAL_WIZARD_STATE,
@@ -111,6 +112,22 @@ describe('seeding the Auto Scan choices', () => {
     });
   });
 
+  it('pre-fills the saved session view and time between scans, and a new workspace starts at the defaults', () => {
+    const seeded = reduce([
+      { type: 'seedAutoScanSetup', workspaceName: 'proj', saved: savedChoices('auto_scan_choices') },
+    ]);
+    const other = reduce(
+      [{ type: 'seedAutoScanSetup', workspaceName: 'other', saved: undefined }],
+      seeded,
+    );
+
+    expect([seeded.autoScanSetup.ui, seeded.autoScanSetup.intervalMinutes]).toEqual(['chat', 15]);
+    expect([other.autoScanSetup.ui, other.autoScanSetup.intervalMinutes]).toEqual([
+      'terminal',
+      AUTO_SCAN_DEFAULT_INTERVAL_MINUTES,
+    ]);
+  });
+
   it('keeps edits for the same workspace and re-seeds for another one', () => {
     const saved = savedChoices('auto_scan_choices');
     const edited = reduce([
@@ -185,6 +202,8 @@ describe('autoScanBlocker', () => {
     cli: 'codex',
     linearFilter: EMPTY_LINEAR_FILTER,
     githubFilter: { labels: ['ai-ready'], assignee: '', activeLabel: '', issueTypes: [] },
+    ui: 'terminal',
+    intervalMinutes: 5,
   };
   const blocker = (setup: Partial<AutoScanSetup>, github: GitHubStatus = readyStatus) =>
     autoScanBlocker({
@@ -346,6 +365,27 @@ describe('Auto Scan templates', () => {
       skipPermissions: false,
     });
     expect(applied.claude).toEqual(INITIAL_WIZARD_STATE.claude);
+  });
+
+  it('brings back the session view and time between scans, and ignores ones the wizard cannot offer', () => {
+    const dialled = reduce([
+      { type: 'setAutoScanUi', ui: 'chat' },
+      { type: 'setAutoScanInterval', minutes: 240 },
+    ]);
+    const settings = throughTheWire(autoScanTemplateSettings(dialled));
+
+    const applied = wizardReducer(INITIAL_WIZARD_STATE, { type: 'applyAutoScanSettings', settings });
+
+    expect([applied.autoScanSetup.ui, applied.autoScanSetup.intervalMinutes]).toEqual(['chat', 240]);
+    // A template from another client, or a hand-edited one, keeps the wizard's choice.
+    for (const bad of [
+      { ui: 'web', interval_minutes: 0 },
+      { ui: 'Chat', interval_minutes: 1441 },
+      { ui: null, interval_minutes: 2.5 },
+    ]) {
+      const kept = wizardReducer(dialled, { type: 'applyAutoScanSettings', settings: bad });
+      expect([kept.autoScanSetup.ui, kept.autoScanSetup.intervalMinutes]).toEqual(['chat', 240]);
+    }
   });
 
   it('matches and checks names the way the PC does', () => {

@@ -14,7 +14,7 @@
       },
       "decoded_canonical": {
         "scans": [
-          { "project_name": "p", "status": "idle", "started_at": 1751800000.5, "last_activity_at": 1751800000.5, "processed_count": 0, "scan_interval_seconds": 300, "cycle_number": 0, "current_seq": 1, "source": "linear", "cli": "claude" }
+          { "project_name": "p", "status": "idle", "started_at": 1751800000.5, "last_activity_at": 1751800000.5, "processed_count": 0, "scan_interval_seconds": 300, "cycle_number": 0, "current_seq": 1, "source": "linear", "cli": "claude", "ui": "terminal" }
         ],
         "capacity": 4,
         "max_scans": 5,

@@ -11,6 +11,8 @@
             "name": "Complex features",
             "updated_at": "2026-11-19T10:00:00+00:00",
             "settings": {
+              "ui": "chat",
+              "interval_minutes": 60,
               "claude_options": { "plan_mode": true, "no_memory": false, "skip_permissions": true, "model": "opus", "effort": "max", "fast_mode": false, "ultracode": true, "append_system_prompt": null, "debug": false, "focus_mode": null },
               "codex_options": null,
               "antigravity_options": null,
@@ -30,6 +32,8 @@
             "name": "Small bugs",
             "updated_at": "2026-11-19T09:30:00+00:00",
             "settings": {
+              "ui": "terminal",
+              "interval_minutes": null,
               "claude_options": null,
               "codex_options": { "model": "gpt-5.5-mini", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": "low", "full_auto": true },
               "antigravity_options": null,
@@ -53,6 +57,8 @@
             "name": "Complex features",
             "updated_at": "2026-11-19T10:00:00+00:00",
             "settings": {
+              "ui": "chat",
+              "interval_minutes": 60,
               "claude_options": { "plan_mode": true, "no_memory": false, "skip_permissions": true, "model": "opus", "effort": "max", "fast_mode": false, "ultracode": true, "debug": false },
               "source": "github",
               "cli": "claude",
@@ -65,6 +71,7 @@
             "name": "Small bugs",
             "updated_at": "2026-11-19T09:30:00+00:00",
             "settings": {
+              "ui": "terminal",
               "codex_options": { "model": "gpt-5.5-mini", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": "low", "full_auto": true },
               "source": "github",
               "cli": "codex",

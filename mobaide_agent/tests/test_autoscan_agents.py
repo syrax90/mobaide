@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 
@@ -122,6 +123,9 @@ def _instance(
     agent_options: dict[str, object] | None = None, initial_prompt: str | None = None,
     workspace: WorkspaceConfig | None = None,
     worktrees: _FakeWorktrees | None = None,
+    ui: str = "terminal",
+    folder_trust=None,
+    interval_seconds: int | None = None,
 ):
     workspace = workspace or _workspace(tmp_path)
     worktrees = worktrees or _FakeWorktrees(tmp_path / "worktrees")
@@ -147,6 +151,9 @@ def _instance(
         launchers={cli: launcher},
         agent_options=agent_options,
         initial_prompt=initial_prompt,
+        ui=ui,
+        folder_trust=folder_trust,
+        interval_seconds=interval_seconds,
     )
     return inst, worktrees, sessions
 
@@ -613,3 +620,249 @@ async def test_a_long_description_is_cut_to_the_launch_limit_and_marked(
     assert len(options.initial_prompt) <= limit
     assert options.initial_prompt.startswith(starts_with)
     assert options.initial_prompt.endswith(ends_with)
+
+
+class _TrustRecord:
+    """A folder's trust record; ``grant`` notes how many sessions had already
+    started."""
+
+    def __init__(self, *, trusted: bool, fails: bool) -> None:
+        self.sessions = _RecordingSessions()
+        self._trusted = trusted
+        self._fails = fails
+        self.granted_with_sessions: list[int] = []
+
+    def is_trusted(self) -> bool:
+        return self._trusted
+
+    def grant(self) -> bool:
+        if self._fails:
+            raise PermissionError("the config file is read-only")
+        self.granted_with_sessions.append(len(self.sessions.configs))
+        self._trusted = True
+        return True
+
+
+class _FolderTrust:
+    """The ``folder_trust`` factory: one record, and every call it got."""
+
+    def __init__(self, *, trusted: bool = False, fails: bool = False) -> None:
+        self.record = _TrustRecord(trusted=trusted, fails=fails)
+        self.calls: list[tuple[str, str, dict[str, str]]] = []
+
+    def __call__(self, kind: str, cwd: str, env) -> _TrustRecord:
+        self.calls.append((kind, cwd, dict(env)))
+        return self.record
+
+
+@pytest.mark.parametrize(
+    ("record", "grants"),
+    [
+        pytest.param("untrusted", [0], id="untrusted-granted-before-the-start"),
+        pytest.param("trusted", [], id="already-trusted-left-alone"),
+        pytest.param("fails", [], id="failed-grant-still-starts"),
+    ],
+)
+async def test_a_terminal_scan_trusts_the_issue_worktree_before_the_agent_starts(
+    tmp_path, record, grants,
+):
+    trust = _FolderTrust(trusted=record == "trusted", fails=record == "fails")
+    inst, _, sessions = _instance(
+        tmp_path, cli="copilot", launcher=CopilotLauncher(), source=_FakeSource([_issue()]),
+        folder_trust=trust,
+    )
+    trust.record.sessions = sessions
+
+    await inst._scan_once()
+
+    # The record is the one the agent reads under the env it starts with.
+    [config] = sessions.configs
+    worktree = (tmp_path / "worktrees" / "gh-7-fix-the-login-crash").as_posix()
+    assert trust.calls == [("copilot", worktree, config.env)]
+    assert trust.record.granted_with_sessions == grants
+    assert config.cwd == worktree
+
+
+@pytest.mark.parametrize(
+    ("cli", "make_launcher", "ui"),
+    [("copilot", CopilotLauncher, "terminal"), ("pi", PiLauncher, "chat")],
+    ids=["terminal", "chat"],
+)
+async def test_a_scan_in_a_folder_that_is_not_a_repository_trusts_nothing(
+    tmp_path, cli, make_launcher, ui,
+):
+    folder = tmp_path / "plain"
+    folder.mkdir()
+    trust = _FolderTrust()
+    inst, worktrees, sessions = _instance(
+        tmp_path, cli=cli, launcher=make_launcher(), source=_FakeSource([_issue()]),
+        workspace=WorkspaceConfig(name="app", path=folder.as_posix()), folder_trust=trust,
+        ui=ui,
+    )
+
+    await inst._scan_once()
+
+    # The agent runs in the workspace itself: the user decides on that folder.
+    assert worktrees.created == []
+    assert sessions.configs[0].cwd == folder.as_posix()
+    assert trust.calls == []
+
+
+async def test_a_chat_scan_writes_the_agents_own_trust_record_for_the_worktree(tmp_path):
+    trust = _FolderTrust()
+    inst, _, sessions = _instance(
+        tmp_path, cli="pi", launcher=PiLauncher(), source=_FakeSource([_issue()]),
+        ui="chat", folder_trust=trust,
+    )
+    trust.record.sessions = sessions
+
+    await inst._scan_once()
+
+    # Pi reads its own record: skipping the chat's question is not enough.
+    # The chat agent starts under the agent's environment, granted once,
+    # before the session.
+    worktree = (tmp_path / "worktrees" / "gh-7-fix-the-login-crash").as_posix()
+    assert trust.calls == [("pi", worktree, dict(os.environ))]
+    assert trust.record.granted_with_sessions == [0]
+    [config] = sessions.configs
+    assert (config.ui, config.cwd) == ("chat", worktree)
+
+
+class _ScriptedTrustRecord:
+    """A trust record another process rewrites: each ``is_trusted`` takes the
+    next answer (the last one repeats); an exception class is raised."""
+
+    def __init__(self, checks: list, *, grant_result: bool = True) -> None:
+        self._checks = list(checks)
+        self._grant_result = grant_result
+        self.grants = 0
+
+    def is_trusted(self) -> bool:
+        answer = self._checks.pop(0) if len(self._checks) > 1 else self._checks[0]
+        if isinstance(answer, type):
+            raise answer("the file is half-written")
+        return answer
+
+    def grant(self) -> bool:
+        self.grants += 1
+        return self._grant_result
+
+
+@pytest.mark.parametrize(
+    ("checks", "grant_result", "grants", "warned"),
+    [
+        pytest.param([ValueError, False, True], True, 1, False, id="half-written-file-read-again"),
+        pytest.param([False, False, False, True], True, 2, False, id="lost-record-granted-again"),
+        pytest.param([False], False, 1, True, id="grant-refused-stops-at-once"),
+        pytest.param([False], True, 3, True, id="record-never-sticks"),
+    ],
+)
+async def test_a_worktree_trust_that_does_not_hold_is_retried_then_reported(
+    tmp_path, monkeypatch, checks, grant_result, grants, warned,
+):
+    monkeypatch.setattr(scanner.time, "sleep", lambda _seconds: None)
+    record = _ScriptedTrustRecord(checks, grant_result=grant_result)
+    inst, _, sessions = _instance(
+        tmp_path, cli="copilot", launcher=CopilotLauncher(), source=_FakeSource([_issue()]),
+        folder_trust=lambda _kind, _cwd, _env: record,
+    )
+
+    await inst._scan_once()
+
+    # The session starts either way; the user is told when it may ask.
+    assert len(sessions.configs) == 1
+    assert record.grants == grants
+    warnings = [
+        e for e in inst.get_status()["recent_events"]
+        if e["type"] == "log" and e["payload"].get("level") == "warning"
+    ]
+    assert len(warnings) == (1 if warned else 0)
+
+
+@pytest.mark.parametrize(
+    ("cli", "make_launcher", "options_field"),
+    [
+        ("claude", ClaudeLauncher, "claude_options"),
+        ("copilot", CopilotLauncher, "copilot_options"),
+        ("pi", PiLauncher, "pi_options"),
+    ],
+)
+async def test_a_chat_scan_opens_each_issue_in_the_chat_view_in_its_worktree(
+    tmp_path, cli, make_launcher, options_field,
+):
+    inst, worktrees, sessions = _instance(
+        tmp_path, cli=cli, launcher=make_launcher(), source=_FakeSource([_issue()]),
+        initial_prompt=_PROMPT, ui="chat",
+        workspace=replace(_workspace(tmp_path), linear_api_key="lin_api_secret"),
+    )
+
+    await inst._scan_once()
+
+    worktree = (tmp_path / "worktrees" / "gh-7-fix-the-login-crash").as_posix()
+    assert worktrees.created == ["gh-7-fix-the-login-crash"]
+    [config] = sessions.configs
+    assert (config.ui, config.kind, config.cwd) == ("chat", SessionKind(cli), worktree)
+    # The chat opens the worktree the scan made, not the workspace root, and
+    # starts there without asking.
+    assert config.chat_launch_target.path == worktree
+    assert config.trust_folder is True
+    # A GitHub issue is third-party text: its agent must not hold the Linear key.
+    assert config.chat_launch_target.linear_api_key is None
+    options = getattr(config, options_field)
+    # The chat sends the first message itself; nothing goes on a command line.
+    assert options.initial_prompt == _EXPECTED_MESSAGE
+    if cli == "claude":
+        assert options.worktree is False
+    [item] = await inst.list_workitems()
+    assert (item.id, item.worktree_path) == ("#7", worktree)
+    assert _issue_events(inst)[-1] == ("#7", "session_spawn", "ok")
+
+
+@pytest.mark.parametrize(
+    ("source_kind", "gh_installed", "appended"),
+    [("github", True, True), ("github", False, False), ("linear", True, False)],
+    ids=["github", "github-gh-missing", "linear"],
+)
+async def test_a_chat_scan_hands_its_gh_folder_to_the_chat_session_path(
+    tmp_path, monkeypatch, source_kind, gh_installed, appended,
+):
+    async def ready(_gh, _path):
+        return {"problem": None, "host": "github.com", "repo": "acme/app",
+                "repo_url": "https://github.com/acme/app"}
+
+    monkeypatch.setattr(sources, "github_status", ready)
+    gh_dir = tmp_path / "gh-bin"
+    gh = _Gh(str(gh_dir / "gh") if gh_installed else None)
+    source = (
+        GitHubIssueSource(gh, "/srv/app", GitHubScanFilter(labels=["ai"]))
+        if source_kind == "github" else _linear_source("Steps to reproduce")
+    )
+    await source.connect()
+    inst, _, sessions = _instance(
+        tmp_path, cli="pi", launcher=PiLauncher(), source=source, ui="chat",
+    )
+
+    await inst._scan_once()
+
+    # The chat agent is started by the session manager, not from this env:
+    # the folder travels on the config for it to add to PATH.
+    [config] = sessions.configs
+    assert config.ui == "chat"
+    assert config.chat_path_append == (str(gh_dir) if appended else None)
+
+
+async def test_a_completed_cycle_announces_when_the_next_one_starts(tmp_path):
+    inst, _, _ = _instance(
+        tmp_path, cli="pi", launcher=PiLauncher(), source=_FakeSource([_issue()]),
+        interval_seconds=900,
+    )
+
+    before = datetime.now(timezone.utc)
+    await inst._scan_once()
+    after = datetime.now(timezone.utc)
+
+    # Clients count down from this event; it was null after the first cycle.
+    phases = [e["payload"] for e in inst.get_status()["recent_events"] if e["type"] == "phase"]
+    assert phases[-1]["phase"] == "scan_completed"
+    next_at = datetime.fromisoformat(phases[-1]["next_scan_at"])
+    assert before + timedelta(seconds=900) <= next_at <= after + timedelta(seconds=900)

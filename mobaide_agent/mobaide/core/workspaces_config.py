@@ -66,6 +66,20 @@ class GitHubScanFilter:
 
 
 AUTO_SCAN_SOURCES = ("linear", "github")
+# How an Auto Scan opens each issue's session: the terminal or the chat view.
+AUTO_SCAN_UIS = ("terminal", "chat")
+# The wait between two Auto Scan cycles a client may choose, in minutes.
+AUTO_SCAN_INTERVAL_MIN_MINUTES = 1
+AUTO_SCAN_INTERVAL_MAX_MINUTES = 1440
+
+
+def valid_auto_scan_interval(value: object) -> int | None:
+    """``value`` when it is a whole number of minutes a scan may wait, else ``None``."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if AUTO_SCAN_INTERVAL_MIN_MINUTES <= value <= AUTO_SCAN_INTERVAL_MAX_MINUTES:
+        return value
+    return None
 
 # The launch options a workspace remembers per agent kind for Auto Scan, with
 # the JSON type each takes: ``bool``, ``text`` (a string or ``null``) or
@@ -128,7 +142,9 @@ class WorkspaceConfig:
 
     The last Auto Scan start also leaves ``auto_scan_source`` (``linear`` or
     ``github``), ``auto_scan_cli`` (the agent kind), the source's filter and,
-    in ``auto_scan_options``, that agent's launch options (by agent kind).
+    in ``auto_scan_options``, that agent's launch options (by agent kind),
+    ``auto_scan_ui`` (``terminal`` or ``chat``) and
+    ``auto_scan_interval_minutes`` (the wait between cycles).
     ``linear_filter_set`` is ``False`` while the Linear filter holds only the
     legacy defaults nobody chose; ``auto_scan_filter`` then still carries them
     for clients and scans that predate the choice.
@@ -146,13 +162,19 @@ class WorkspaceConfig:
     auto_scan_source: str | None = None
     auto_scan_cli: str | None = None
     auto_scan_options: dict[str, dict[str, object]] = field(default_factory=dict)
+    auto_scan_ui: str | None = None
+    auto_scan_interval_minutes: int | None = None
 
 
 __all__ = [
+    "AUTO_SCAN_INTERVAL_MAX_MINUTES",
+    "AUTO_SCAN_INTERVAL_MIN_MINUTES",
     "AUTO_SCAN_OPTION_FIELDS",
     "AUTO_SCAN_SOURCES",
+    "AUTO_SCAN_UIS",
     "AutoScanFilter",
     "GitHubScanFilter",
     "WorkspaceConfig",
     "clean_auto_scan_options",
+    "valid_auto_scan_interval",
 ]

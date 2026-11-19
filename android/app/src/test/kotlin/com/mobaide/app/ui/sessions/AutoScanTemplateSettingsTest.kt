@@ -1,8 +1,12 @@
 package com.mobaide.app.ui.sessions
 
 import com.mobaide.app.data.network.dto.AUTO_SCAN_SOURCE_GITHUB
+import com.mobaide.app.data.network.dto.AUTO_SCAN_UI_CHAT
+import com.mobaide.app.data.network.dto.AUTO_SCAN_UI_TERMINAL
+import com.mobaide.app.data.network.dto.AutoScanCapability
 import com.mobaide.app.data.network.dto.AutoScanTemplateSettingsDto
 import com.mobaide.app.data.network.dto.AutoScanTemplatesResponse
+import com.mobaide.app.data.network.dto.ChatSupport
 import com.mobaide.app.data.network.dto.CopilotScanOptionsDto
 import com.mobaide.app.data.network.dto.JunieScanOptionsDto
 import com.mobaide.app.data.network.dto.WorkspaceInfo
@@ -161,6 +165,71 @@ class AutoScanTemplateSettingsTest {
         assertNull(saved.codex_options)
         assertEquals(CopilotScanOptionsDto(allow_all = false), saved.copilot_options)
         assertEquals("codex", saved.cli)
+    }
+
+    @Test
+    fun seededViewAndInterval_comeBack_andUnusableOnesKeepTheStepsChoice() {
+        val saved = json.decodeFromJsonElement(WorkspaceInfo.serializer(), wire("ProjectInfo", "auto_scan_choices"))
+            .auto_scan!!
+
+        val seeded = CreateSessionUiState().withAutoScanSettings(saved.asTemplateSettings(prompt = null))
+
+        assertEquals(AUTO_SCAN_UI_CHAT to 15, seeded.autoScan.ui to seeded.autoScan.intervalMinutes)
+        // A template from another client, or a hand-edited one, keeps the step's choice.
+        listOf(
+            AutoScanTemplateSettingsDto(ui = "web", interval_minutes = 0),
+            AutoScanTemplateSettingsDto(ui = "Chat", interval_minutes = 1441),
+        ).forEach { unusable ->
+            val kept = seeded.withAutoScanSettings(unusable)
+            assertEquals(AUTO_SCAN_UI_CHAT to 15, kept.autoScan.ui to kept.autoScan.intervalMinutes)
+        }
+    }
+
+    @Test
+    fun startSendsTheChat_onlyOnceTheProbeShowsTheAgentsChatView_butATemplateKeepsTheChosenView() {
+        // The PC refuses a chat scan for an agent without a chat view.
+        fun state(chat: ChatSupport?, ui: String = AUTO_SCAN_UI_CHAT) = CreateSessionUiState(
+            autoScanCapability = AutoScanCapability(
+                sources = listOf(AUTO_SCAN_SOURCE_GITHUB), clis = listOf("codex"), githubSetup = true,
+            ),
+            codexChat = chat,
+            autoScan = AutoScanWizardState(
+                source = AUTO_SCAN_SOURCE_GITHUB, cli = "codex", ui = ui, intervalMinutes = 240,
+            ),
+        )
+
+        assertEquals(AUTO_SCAN_UI_CHAT, state(ChatSupport.Available(resume = true)).autoScanUi)
+        assertEquals(AUTO_SCAN_UI_TERMINAL, state(chat = null).autoScanUi)
+        assertEquals(AUTO_SCAN_UI_TERMINAL, state(ChatSupport.Unavailable).autoScanUi)
+        assertEquals(AUTO_SCAN_UI_TERMINAL, state(ChatSupport.AgentOutdated).autoScanUi)
+        assertEquals(
+            AUTO_SCAN_UI_TERMINAL, state(ChatSupport.Available(resume = true), AUTO_SCAN_UI_TERMINAL).autoScanUi,
+        )
+        // A template keeps the chosen view even while the probe has no chat view yet.
+        assertEquals(AUTO_SCAN_UI_CHAT, state(chat = null).autoScanTemplateSettings().ui)
+        assertEquals(
+            AUTO_SCAN_UI_TERMINAL,
+            state(ChatSupport.Available(resume = true), AUTO_SCAN_UI_TERMINAL).autoScanTemplateSettings().ui,
+        )
+        assertEquals(240, state(chat = null).autoScanTemplateSettings().interval_minutes)
+    }
+
+    @Test
+    fun codexAgentDefaultEffort_staysNull_throughATemplateAndBack() {
+        val dialled = CreateSessionUiState(
+            autoScan = AutoScanWizardState(
+                source = AUTO_SCAN_SOURCE_GITHUB,
+                cli = "codex",
+                agents = AutoScanAgentBuckets(codex = CodexScanBucket(reasoningEffort = null)),
+            ),
+        )
+
+        val settings = throughTheWire(dialled.autoScanTemplateSettings())
+        // The fresh step starts at "high"; null is Codex's own setting, not "no choice".
+        val applied = CreateSessionUiState().withAutoScanSettings(settings)
+
+        assertNull(settings.codex_options!!.reasoning_effort)
+        assertNull(applied.autoScan.agents.codex.reasoningEffort)
     }
 
     @Test

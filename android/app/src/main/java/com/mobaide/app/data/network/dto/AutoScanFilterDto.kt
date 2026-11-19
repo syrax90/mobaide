@@ -66,6 +66,8 @@ data class GitHubScanFilterDto(
 data class AutoScanSettingsDto(
     val source: String? = null,
     val cli: String? = null,
+    val ui: String? = null,
+    val interval_minutes: Int? = null,
     val linear_filter: AutoScanFilterDto? = null,
     val github_filter: GitHubScanFilterDto? = null,
     @Serializable(with = LenientClaudeScanOptions::class)

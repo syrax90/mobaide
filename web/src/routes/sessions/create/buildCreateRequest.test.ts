@@ -11,7 +11,12 @@ import {
   buildStartScanRequest,
   type CreateSessionRequest,
 } from './buildCreateRequest';
-import { INITIAL_WIZARD_STATE, type WizardMode, type WizardState } from './wizardState';
+import {
+  INITIAL_WIZARD_STATE,
+  type AutoScanUi,
+  type WizardMode,
+  type WizardState,
+} from './wizardState';
 
 // `satisfies`, not a `WizardMode` annotation: the literal type is what keeps the
 // mode tables below exhaustive rather than open-ended template-literal keys.
@@ -461,7 +466,11 @@ describe('buildStartScanRequest — agent with capabilities.autoscan', () => {
     done_state: 'Shipped',
     removal_label: 'bot',
   };
-  const withSetup = (setup: Partial<WizardState['autoScanSetup']>, prompt = 'scan the backlog') =>
+  const withSetup = (
+    setup: Partial<WizardState['autoScanSetup']>,
+    prompt = 'scan the backlog',
+    autoScanChat?: ChatSupport,
+  ) =>
     buildStartScanRequest({
       state: {
         ...POPULATED,
@@ -483,6 +492,7 @@ describe('buildStartScanRequest — agent with capabilities.autoscan', () => {
       mode: 'auto_scan',
       workspace: gitWorkspace,
       autoScan,
+      autoScanChat,
     });
 
   it('names every choice and sends only the chosen source’s filter', () => {
@@ -505,6 +515,8 @@ describe('buildStartScanRequest — agent with capabilities.autoscan', () => {
         reasoning_effort: 'high',
         full_auto: true,
       },
+      ui: 'terminal',
+      interval_minutes: 5,
     });
     expect(withSetup({ source: 'linear' })).toMatchObject({ linear_filter: linearFilter });
     expect(withSetup({ source: 'linear' })).not.toHaveProperty('github_filter');
@@ -522,6 +534,23 @@ describe('buildStartScanRequest — agent with capabilities.autoscan', () => {
     expect(withSetup({ source: null })).toBeNull();
     expect(withSetup({ cli: null })).toBeNull();
     expect(withSetup({ cli: 'aider' })).toBeNull();
+  });
+
+  // The PC refuses a chat scan for an agent without a chat view, so the chat
+  // is sent only once the probe has shown one.
+  it.each<[string, AutoScanUi, ChatSupport | undefined, AutoScanUi]>([
+    ['chat chosen and available', 'chat', { kind: 'available', resume: true, live: true }, 'chat'],
+    ['chat probe still out', 'chat', undefined, 'terminal'],
+    ['no chat for the agent on this PC', 'chat', { kind: 'unavailable' }, 'terminal'],
+    ['agent predates chat', 'chat', { kind: 'outdated' }, 'terminal'],
+    ['terminal chosen', 'terminal', { kind: 'available', resume: true, live: true }, 'terminal'],
+  ])('sends the session view: %s', (_name, ui, chat, sent) => {
+    expect(withSetup({ ui }, 'scan', chat)?.ui).toBe(sent);
+  });
+
+  it('sends the chosen time between scans', () => {
+    expect(withSetup({ intervalMinutes: 240 })?.interval_minutes).toBe(240);
+    expect(withSetup({ cli: 'claude', intervalMinutes: 1440 })?.interval_minutes).toBe(1440);
   });
 
   it('keeps the legacy Linear + Claude body for an agent without the capability', () => {

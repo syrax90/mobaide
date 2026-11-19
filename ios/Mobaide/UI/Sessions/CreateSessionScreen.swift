@@ -394,7 +394,14 @@ private struct CreateSessionContent: View {
             guard !isReordering else { return }
             model.selectMode(mode)
         } label: {
-            HStack {
+            HStack(spacing: 12) {
+                if let icon = Self.modeIcon(mode) {
+                    Image(systemName: icon)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(model.isEnabled(mode) ? colors.accent : colors.gray)
+                        .frame(width: 24)
+                        .accessibilityHidden(true)
+                }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(model.modeTitle(mode))
                         .foregroundStyle(model.isEnabled(mode) ? colors.text : colors.gray)
@@ -409,6 +416,15 @@ private struct CreateSessionContent: View {
             }
         }
         .disabled(!model.isEnabled(mode) && !isReordering)
+    }
+
+    /// The leading symbol of a built-in mode row; the agent rows have none.
+    private static func modeIcon(_ mode: CreateSessionModel.Mode) -> String? {
+        switch mode {
+        case .shell: return "terminal"
+        case .autoScan: return "target"
+        default: return nil
+        }
     }
 
     /// Trailing disclosure chevron: tapping a mode row commits and moves on
@@ -550,10 +566,20 @@ private struct CreateSessionContent: View {
                 onDelete: { templateToDelete = $0 }
             )
             AutoScanHowItWorksSection(setup: setup)
-            AutoScanSourceSections(setup: setup, setupStarting: model.githubSetupStarting) { action in
+            AutoScanSourceSections(
+                setup: setup,
+                setupStarting: model.githubSetupStarting,
+                tipsHidden: Binding(
+                    get: { model.autoScanTipsHidden },
+                    set: { model.setAutoScanTipsHidden($0) }
+                )
+            ) { action in
                 Task { await model.runGitHubSetup(action) }
             }
             AutoScanAgentSection(setup: setup)
+            // Before the options: choosing Chat hides Claude's Focus view row,
+            // which must not move these rows under the finger.
+            AutoScanSessionViewSection(setup: setup)
             autoScanAgentOptions
             autoScanInstructionsSection
             autoScanStartSection
@@ -589,10 +615,7 @@ private struct CreateSessionContent: View {
                         get: { setup.codexOptions.model },
                         set: { model.setAutoScanCodexModel($0) }
                     ),
-                    effort: Binding(
-                        get: { setup.codexOptions.reasoning_effort ?? "high" },
-                        set: { setup.codexOptions.reasoning_effort = $0 }
-                    ),
+                    optionalEffort: $setup.codexOptions.reasoning_effort,
                     modelOptions: model.codexModelOptions(selected: setup.codexOptions.model),
                     advertisedEfforts: model.codexEfforts(for: setup.codexOptions.model)
                 )
@@ -682,7 +705,10 @@ private struct CreateSessionContent: View {
                 ultracode: model.autoScanClaudeUltracode
             )
             Toggle("Plan mode", isOn: $model.autoScanPlanMode)
-            focusViewToggle($model.autoScanFocusMode)
+            // Focus view only shapes Claude Code's terminal app.
+            if legacy || model.autoScanSetup.effectiveSessionView == .terminal {
+                focusViewToggle($model.autoScanFocusMode)
+            }
             Toggle("Skip permissions", isOn: $model.autoScanSkipPermissions)
             if !model.autoScanSkipPermissions {
                 Text(Self.mayAskText)
@@ -726,8 +752,9 @@ private struct CreateSessionContent: View {
                     .foregroundStyle(colors.textMuted)
             }
             .padding(.vertical, 4)
+            AutoScanIntervalRows(setup: model.autoScanSetup)
         } header: {
-            AutoScanStepHeader(4, "Instructions")
+            AutoScanStepHeader(4, "Instructions and schedule")
         }
     }
 

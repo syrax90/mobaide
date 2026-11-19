@@ -249,6 +249,11 @@
           "status": {
             "title": "Status",
             "type": "string"
+          },
+          "ui": {
+            "default": "terminal",
+            "title": "Ui",
+            "type": "string"
           }
         },
         "required": [
@@ -337,6 +342,11 @@
           },
           "status": {
             "title": "Status",
+            "type": "string"
+          },
+          "ui": {
+            "default": "terminal",
+            "title": "Ui",
             "type": "string"
           }
         },
@@ -470,6 +480,19 @@
               }
             ]
           },
+          "interval_minutes": {
+            "anyOf": [
+              {
+                "maximum": 1440.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval Minutes"
+          },
           "junie_options": {
             "anyOf": [
               {
@@ -514,6 +537,21 @@
               }
             ],
             "title": "Source"
+          },
+          "ui": {
+            "anyOf": [
+              {
+                "enum": [
+                  "terminal",
+                  "chat"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ui"
           }
         },
         "title": "AutoScanSettingsModel",
@@ -643,6 +681,19 @@
             ],
             "title": "Initial Prompt"
           },
+          "interval_minutes": {
+            "anyOf": [
+              {
+                "maximum": 1440.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval Minutes"
+          },
           "junie_options": {
             "anyOf": [
               {
@@ -687,6 +738,21 @@
               }
             ],
             "title": "Source"
+          },
+          "ui": {
+            "anyOf": [
+              {
+                "enum": [
+                  "terminal",
+                  "chat"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ui"
           }
         },
         "title": "AutoScanTemplateSettings",
@@ -3908,7 +3974,7 @@
         "type": "object"
       },
       "StartScanRequest": {
-        "description": "``POST /api/autoscan/start``.\n\n``source`` absent is an older client: Linear, Claude Code, the stored\nfilter. A newer client sends every choice: ``source``, ``cli``, the\nsource's filter, the chosen agent's options (``claude_options``,\n``codex_options``, \u2026; Pi has none), ``initial_prompt`` (``\"\"`` clears\nthe saved prompt) and, when the workspace has none, ``linear_api_key``.\nThe options of other agents are ignored.",
+        "description": "``POST /api/autoscan/start``.\n\n``source`` absent is an older client: Linear, Claude Code, the stored\nfilter. A newer client sends every choice: ``source``, ``cli``, the\nsource's filter, the chosen agent's options (``claude_options``,\n``codex_options``, \u2026; Pi has none), ``ui``, ``interval_minutes``,\n``initial_prompt`` (``\"\"`` clears the saved prompt) and, when the\nworkspace has none, ``linear_api_key``. The options of other agents are\nignored.",
         "properties": {
           "antigravity_options": {
             "anyOf": [
@@ -4003,6 +4069,19 @@
             ],
             "title": "Initial Prompt"
           },
+          "interval_minutes": {
+            "anyOf": [
+              {
+                "maximum": 1440.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval Minutes"
+          },
           "junie_options": {
             "anyOf": [
               {
@@ -4064,6 +4143,21 @@
               }
             ],
             "title": "Source"
+          },
+          "ui": {
+            "anyOf": [
+              {
+                "enum": [
+                  "terminal",
+                  "chat"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ui"
           }
         },
         "required": [

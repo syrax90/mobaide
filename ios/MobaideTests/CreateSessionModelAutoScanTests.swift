@@ -328,6 +328,16 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         XCTAssertEqual(fresh.skipPermissions, claudeStep.2)
     }
 
+    func testAutoScanCodexAgentDefaultEffortSurvivesAModelSwitch() {
+        let model = makeModel(autoScanRepo: makeAutoScanRepo())
+        model.autoScanSetup.codexOptions.reasoning_effort = nil
+
+        model.setAutoScanCodexModel("gpt-5.5")
+
+        XCTAssertEqual(model.autoScanSetup.codexOptions.model, "gpt-5.5")
+        XCTAssertNil(model.autoScanSetup.codexOptions.reasoning_effort, "Agent default fits every model")
+    }
+
     func testAutoScanOptionsCarryTogglesAndDropBlankPrompts() {
         let model = makeModel(autoScanRepo: makeAutoScanRepo())
         model.autoScanSkipPermissions = false

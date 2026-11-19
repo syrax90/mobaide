@@ -16,6 +16,8 @@ import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.AUTO_SCAN_SOURCE_GITHUB
 import com.mobaide.app.data.network.dto.AUTO_SCAN_SOURCE_LINEAR
+import com.mobaide.app.data.network.dto.AUTO_SCAN_UI_CHAT
+import com.mobaide.app.data.network.dto.AUTO_SCAN_UI_TERMINAL
 import com.mobaide.app.data.network.dto.AntigravityOptionsModel
 import com.mobaide.app.data.network.dto.AutoScanCapability
 import com.mobaide.app.data.network.dto.AutoScanTemplateSettingsDto
@@ -286,6 +288,8 @@ data class CreateSessionUiState(
     val autoScan: AutoScanWizardState = AutoScanWizardState(),
     // The PC's Auto Scan templates; not reset when the step re-seeds.
     val autoScanTemplates: AutoScanTemplatesUi = AutoScanTemplatesUi(),
+    // The user hid the label tips on this device.
+    val autoScanTipsHidden: Boolean = false,
     // Codex launch options (CodexConfig step). Defaults reflect the "Auto" preset.
     val codexModel: String? = null,
     val codexSandbox: String = "workspace-write",
@@ -641,6 +645,27 @@ fun CreateSessionUiState.cliAvailability(kind: String): Boolean? = when (kind) {
     else -> null
 }
 
+/** `capabilities.chat` for [kind] from the ModePick probe; null = not probed yet. */
+fun CreateSessionUiState.chatSupport(kind: String): ChatSupport? = when (kind) {
+    "claude" -> claudeChat
+    "codex" -> codexChat
+    "antigravity" -> antigravityChat
+    "opencode" -> opencodeChat
+    "copilot" -> copilotChat
+    "cursor" -> cursorChat
+    "junie" -> junieChat
+    "pi" -> piChat
+    else -> null
+}
+
+/** The chosen Auto Scan agent can open its sessions in the chat view on this PC. */
+val CreateSessionUiState.autoScanChatAvailable: Boolean
+    get() = autoScanCli?.let { chatSupport(it) } is ChatSupport.Available
+
+/** The session view a start sends: the choice, or Terminal while the agent has no chat view. */
+val CreateSessionUiState.autoScanUi: String
+    get() = if (autoScan.ui == AUTO_SCAN_UI_CHAT && autoScanChatAvailable) AUTO_SCAN_UI_CHAT else AUTO_SCAN_UI_TERMINAL
+
 /** The Auto Scan agent, when the agent offers it; a remembered kind it no longer lists is no choice. */
 val CreateSessionUiState.autoScanCli: String?
     get() = autoScan.cli?.takeIf { cli -> autoScanCapability?.clis?.contains(cli) == true }
@@ -708,6 +733,10 @@ fun CreateSessionUiState.autoScanTemplateSettings(): AutoScanTemplateSettingsDto
     return AutoScanTemplateSettingsDto(
         source = wizard.source,
         cli = cli,
+        // The view the user chose: a template may run on a PC where the
+        // agent has the chat view. A start sends the effective one.
+        ui = wizard.ui,
+        interval_minutes = wizard.intervalMinutes,
         initial_prompt = initialPrompt,
         linear_filter = wizard.linearFilter.toDraftDto(),
         github_filter = wizard.githubFilter.toDto(),
@@ -737,6 +766,9 @@ fun CreateSessionUiState.withAutoScanSettings(settings: AutoScanTemplateSettings
                 ?.takeIf { it == AUTO_SCAN_SOURCE_GITHUB || it == AUTO_SCAN_SOURCE_LINEAR }
                 ?: autoScan.source,
             cli = settings.cli ?: autoScan.cli,
+            ui = autoScanUiOrNull(settings.ui) ?: autoScan.ui,
+            intervalMinutes = settings.interval_minutes?.takeIf { it in AUTO_SCAN_INTERVAL_RANGE }
+                ?: autoScan.intervalMinutes,
             linearFilter = settings.linear_filter?.let(LinearFilterDraft::from) ?: autoScan.linearFilter,
             githubFilter = settings.github_filter?.let(GitHubFilterDraft::from) ?: autoScan.githubFilter,
             agents = autoScan.agents.applied(settings),
@@ -840,6 +872,11 @@ class CreateSessionViewModel @Inject constructor(
     val navigateToSetupSession: Flow<String> = _navigateToSetupSession.receiveAsFlow()
 
     init {
+        viewModelScope.launch {
+            preferencesStore.autoScanTipsHidden.collect { hidden ->
+                _uiState.update { it.copy(autoScanTipsHidden = hidden) }
+            }
+        }
         viewModelScope.launch {
             // Pre-fill the Claude reasoning controls from the last successful
             // launch (mirrors the last-used-workspace pre-fill below).
@@ -1582,11 +1619,20 @@ class CreateSessionViewModel @Inject constructor(
     fun setAutoScanCodexModel(v: String?) {
         val details = _uiState.value.codexModelDetails
         updateAutoScanCodex {
-            it.copy(model = v, reasoningEffort = codexEffortForModel(v, it.reasoningEffort, details))
+            it.copy(model = v, reasoningEffort = it.reasoningEffort?.let { e -> codexEffortForModel(v, e, details) })
         }
     }
 
-    fun setAutoScanCodexReasoningEffort(v: String) = updateAutoScanCodex { it.copy(reasoningEffort = v) }
+    fun setAutoScanCodexReasoningEffort(v: String?) = updateAutoScanCodex { it.copy(reasoningEffort = v) }
+
+    fun setAutoScanUi(ui: String) = updateAutoScan { it.copy(ui = ui, startError = null) }
+
+    fun setAutoScanInterval(minutes: Int) = updateAutoScan { it.copy(intervalMinutes = minutes, startError = null) }
+
+    fun setAutoScanTipsHidden(hidden: Boolean) {
+        _uiState.update { it.copy(autoScanTipsHidden = hidden) }
+        viewModelScope.launch { preferencesStore.setAutoScanTipsHidden(hidden) }
+    }
     fun setAutoScanCodexSandbox(v: String) = updateAutoScanCodex { it.copy(sandbox = v) }
     fun setAutoScanCodexApproval(v: String) = updateAutoScanCodex { it.copy(approval = v) }
 
@@ -1994,6 +2040,8 @@ class CreateSessionViewModel @Inject constructor(
             workspace_name = workspaceName,
             source = source,
             cli = cli,
+            ui = state.autoScanUi,
+            interval_minutes = options.interval_minutes,
             initial_prompt = state.initialPrompt,
             claude_options = if (claude) state.autoScanClaudeOptions(initialPrompt = null) else null,
             codex_options = options.codex_options,

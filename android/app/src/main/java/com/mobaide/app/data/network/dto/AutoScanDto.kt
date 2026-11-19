@@ -19,6 +19,8 @@ data class AutoScanInstanceDto(
     // Older agents scan Linear with Claude Code only.
     val source: String = AUTO_SCAN_SOURCE_LINEAR,
     val cli: String = "claude",
+    // "chat" opens each issue's session in the chat view.
+    val ui: String = AUTO_SCAN_UI_TERMINAL,
 )
 
 @Serializable
@@ -34,7 +36,7 @@ data class AutoScanListResponse(
 /**
  * `POST /api/autoscan/start`. An older client sends only the workspace and
  * [claude_options]. A client of an agent with `capabilities.autoscan` sends
- * every choice: [source], [cli], the chosen source's filter, [initial_prompt]
+ * every choice: [source], [cli], [ui], [interval_minutes], the chosen source's filter, [initial_prompt]
  * (`""` clears the saved prompt) and the chosen agent's options only:
  * [claude_options] (without the prompt) for Claude Code, `<kind>_options` for
  * the others, none for Pi.
@@ -50,6 +52,8 @@ data class StartScanRequest(
     val copilot_options: CopilotScanOptionsDto? = null,
     val cursor_options: CursorScanOptionsDto? = null,
     val junie_options: JunieScanOptionsDto? = null,
+    val ui: String? = null,
+    val interval_minutes: Int? = null,
     val source: String? = null,
     val cli: String? = null,
     val initial_prompt: String? = null,
@@ -57,6 +61,8 @@ data class StartScanRequest(
     val github_filter: GitHubScanFilterDto? = null,
 )
 
+const val AUTO_SCAN_UI_TERMINAL = "terminal"
+const val AUTO_SCAN_UI_CHAT = "chat"
 const val AUTO_SCAN_SOURCE_LINEAR = "linear"
 const val AUTO_SCAN_SOURCE_GITHUB = "github"
 

@@ -145,6 +145,22 @@ export interface GitBucket {
 
 export type AutoScanSource = 'linear' | 'github';
 
+/** How a scan opens each issue's session. */
+export type AutoScanUi = 'terminal' | 'chat';
+
+/** The wait between two scan cycles, in minutes, when nothing else is chosen. */
+export const AUTO_SCAN_DEFAULT_INTERVAL_MINUTES = 5;
+/** `interval_minutes` bounds on the wire. */
+export const AUTO_SCAN_INTERVAL_MIN_MINUTES = 1;
+export const AUTO_SCAN_INTERVAL_MAX_MINUTES = 1440;
+
+function validInterval(value: number | null | undefined): number | null {
+  if (typeof value !== 'number' || !Number.isInteger(value)) return null;
+  return value >= AUTO_SCAN_INTERVAL_MIN_MINUTES && value <= AUTO_SCAN_INTERVAL_MAX_MINUTES
+    ? value
+    : null;
+}
+
 /** The GitHub filter as the wizard edits it: blank text is "not set". */
 export interface GitHubFilterDraft {
   labels: string[];
@@ -169,6 +185,10 @@ export interface AutoScanSetup {
   /** Empty strings and lists are "not chosen yet"; `filterError` names what is missing. */
   linearFilter: AutoScanFilter;
   githubFilter: GitHubFilterDraft;
+  /** Terminal or chat view for each issue's session; the wire's `ui`. */
+  ui: AutoScanUi;
+  /** Minutes between two scan cycles; the wire's `interval_minutes`. */
+  intervalMinutes: number;
 }
 
 /**
@@ -176,8 +196,8 @@ export interface AutoScanSetup {
  * normal-session buckets for the reason `autoScan` is separate from `claude`:
  * a scan runs unattended, so its "run without asking" switches start on, and
  * editing one here must never change a normal session's options. The
- * `terminalUi` fields are unused here — a scan session is always a terminal.
- * Pi has no options.
+ * `terminalUi` fields are unused here: the view is `AutoScanSetup.ui`, one
+ * choice for every agent. Pi has no options.
  */
 export interface AutoScanAgentBuckets {
   codex: CodexBucket;
@@ -346,6 +366,8 @@ export const INITIAL_WIZARD_STATE: WizardState = {
     cli: null,
     linearFilter: EMPTY_LINEAR_FILTER,
     githubFilter: EMPTY_GITHUB_FILTER,
+    ui: 'terminal',
+    intervalMinutes: AUTO_SCAN_DEFAULT_INTERVAL_MINUTES,
   },
   autoScanAgents: AUTO_SCAN_AGENT_DEFAULTS,
 };
@@ -526,6 +548,8 @@ export interface AntigravityScanOptionsInput {
 export interface AutoScanSettingsInput {
   source?: string | null;
   cli?: string | null;
+  ui?: string | null;
+  interval_minutes?: number | null;
   initial_prompt?: string | null;
   linear_filter?: AutoScanLinearFilterInput | null;
   github_filter?: AutoScanGitHubFilterInput | null;
@@ -612,6 +636,8 @@ export function applyAutoScanSettings(
   const source =
     settings.source === 'linear' || settings.source === 'github' ? settings.source : null;
   const cli = settings.cli?.trim() ?? '';
+  const ui = settings.ui === 'terminal' || settings.ui === 'chat' ? settings.ui : null;
+  const interval = validInterval(settings.interval_minutes);
   const prompt = settings.initial_prompt;
   const claude =
     prompt === undefined || prompt === null
@@ -626,6 +652,8 @@ export function applyAutoScanSettings(
       ...setup,
       source: source ?? setup.source,
       cli: cli !== '' ? cli : setup.cli,
+      ui: ui ?? setup.ui,
+      intervalMinutes: interval ?? setup.intervalMinutes,
       linearFilter:
         settings.linear_filter != null
           ? linearFilterFromInput(settings.linear_filter)
@@ -741,6 +769,8 @@ export type WizardAction =
   | { type: 'applyAutoScanSettings'; settings: AutoScanSettingsInput }
   | { type: 'setAutoScanSource'; source: AutoScanSource }
   | { type: 'setAutoScanCli'; cli: string }
+  | { type: 'setAutoScanUi'; ui: AutoScanUi }
+  | { type: 'setAutoScanInterval'; minutes: number }
   | { type: 'setAutoScanLinearFilter'; filter: AutoScanFilter }
   | { type: 'setAutoScanGitHubFilter'; filter: GitHubFilterDraft };
 
@@ -1046,6 +1076,8 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
             cli: null,
             linearFilter: EMPTY_LINEAR_FILTER,
             githubFilter: EMPTY_GITHUB_FILTER,
+            ui: 'terminal',
+            intervalMinutes: AUTO_SCAN_DEFAULT_INTERVAL_MINUTES,
           },
           autoScanAgents: AUTO_SCAN_AGENT_DEFAULTS,
         },
@@ -1071,6 +1103,15 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
 
     case 'setAutoScanCli':
       return { ...state, autoScanSetup: { ...state.autoScanSetup, cli: action.cli } };
+
+    case 'setAutoScanUi':
+      return { ...state, autoScanSetup: { ...state.autoScanSetup, ui: action.ui } };
+
+    case 'setAutoScanInterval': {
+      const minutes = validInterval(action.minutes);
+      if (minutes === null) return state;
+      return { ...state, autoScanSetup: { ...state.autoScanSetup, intervalMinutes: minutes } };
+    }
 
     case 'setAutoScanLinearFilter':
       return { ...state, autoScanSetup: { ...state.autoScanSetup, linearFilter: action.filter } };

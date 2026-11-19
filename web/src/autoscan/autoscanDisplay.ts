@@ -88,11 +88,15 @@ export function autoScanSourceName(source: string): string {
 }
 
 /**
- * "GitHub · Codex": where a scan finds issues and which agent runs them. An
- * older agent sends neither field and always scans Linear with Claude Code.
+ * "GitHub · Codex": where a scan finds issues and which agent runs them, plus
+ * "· Chat" when its sessions open in the chat view. An older agent sends none
+ * of these fields and always scans Linear with Claude Code in the terminal.
  */
-export function scanSourceAgentLabel(scan: Pick<AutoScanInstance, 'source' | 'cli'>): string {
-  return `${autoScanSourceName(scan.source)} · ${autoScanAgentName(scan.cli)}`;
+export function scanSourceAgentLabel(
+  scan: Pick<AutoScanInstance, 'source' | 'cli'> & { ui?: string },
+): string {
+  const label = `${autoScanSourceName(scan.source)} · ${autoScanAgentName(scan.cli)}`;
+  return scan.ui === 'chat' ? `${label} · Chat` : label;
 }
 
 export function phaseTone(status: PhaseStatus): AutoScanTone {

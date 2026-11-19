@@ -20,10 +20,43 @@ struct CodexAutonomyRows: View {
 
 struct CodexModelEffortRows: View {
     let model: Binding<String?>
-    let effort: Binding<String>
+    /// nil is "Agent default": no reasoning-effort override.
+    let effort: Binding<String?>
     /// With the keep-selected repair already applied (`codexModelOptions(selected:)`).
     let modelOptions: [String]
     let advertisedEfforts: [String]
+    /// Offers "Agent default" (a nil effort) first.
+    let offersAgentDefault: Bool
+
+    init(
+        model: Binding<String?>,
+        effort: Binding<String>,
+        modelOptions: [String],
+        advertisedEfforts: [String]
+    ) {
+        self.model = model
+        self.effort = Binding(
+            get: { effort.wrappedValue },
+            set: { if let value = $0 { effort.wrappedValue = value } }
+        )
+        self.modelOptions = modelOptions
+        self.advertisedEfforts = advertisedEfforts
+        self.offersAgentDefault = false
+    }
+
+    /// Auto Scan's rows: the effort may be "Agent default".
+    init(
+        model: Binding<String?>,
+        optionalEffort: Binding<String?>,
+        modelOptions: [String],
+        advertisedEfforts: [String]
+    ) {
+        self.model = model
+        self.effort = optionalEffort
+        self.modelOptions = modelOptions
+        self.advertisedEfforts = advertisedEfforts
+        self.offersAgentDefault = true
+    }
 
     var body: some View {
         Picker("Model", selection: model) {
@@ -33,10 +66,14 @@ struct CodexModelEffortRows: View {
         // Keep-selected repair: a restored or late-probe effort outside the
         // advertised set must stay in the options, or the Picker renders blank
         // while the request still sends the value.
-        let options = advertisedEfforts.contains(effort.wrappedValue)
-            ? advertisedEfforts : advertisedEfforts + [effort.wrappedValue]
+        let selected = effort.wrappedValue
+        let options = selected.map { advertisedEfforts.contains($0) ? advertisedEfforts : advertisedEfforts + [$0] }
+            ?? advertisedEfforts
         Picker("Reasoning effort", selection: effort) {
-            ForEach(options, id: \.self) { Text($0).tag($0) }
+            if offersAgentDefault {
+                Text("Agent default").tag(String?.none)
+            }
+            ForEach(options, id: \.self) { Text($0).tag(String?.some($0)) }
         }
     }
 }

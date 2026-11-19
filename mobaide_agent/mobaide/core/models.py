@@ -158,6 +158,14 @@ class SessionConfig:
     # one started by running the CLI in a terminal) to open instead of a new
     # one. The value is the agent's own session id from ``session/list``.
     chat_resume_id: str | None = None
+    # Chat sessions only, set in the agent (never from a client): the workspace
+    # to launch against instead of the stored one (Auto Scan moves its path to
+    # the issue's worktree), and whether the folder is trusted without asking.
+    chat_launch_target: object | None = None
+    trust_folder: bool = False
+    # Chat sessions only, set in the agent: a folder to add at the end of the
+    # agent's PATH (Auto Scan's ``gh``).
+    chat_path_append: str | None = None
 
 
 @dataclass
