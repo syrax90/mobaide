@@ -1,13 +1,17 @@
 import Foundation
 import Observation
 
-/// Issue source, filter and agent choices of the wizard's Auto Scan step, for
-/// an agent that advertises `capabilities.autoscan`. An older agent keeps the
-/// Linear + Claude Code panel `CreateSessionModel` drives on its own.
+/// Issue source, filter, agent and agent-option choices of the wizard's Auto
+/// Scan step, and its templates, for an agent that advertises
+/// `capabilities.autoscan`. An older agent keeps the Linear + Claude Code panel
+/// `CreateSessionModel` drives on its own.
 ///
 /// The choices are seeded once per workspace from `WorkspaceInfo.auto_scan` (a
 /// nil filter seeds empty fields) and live as long as the wizard, so a trip to
-/// the GitHub setup terminal and back keeps every edit.
+/// the GitHub setup terminal and back keeps every edit. Seeding and applying a
+/// template both run `apply(_:)`; Claude Code's options and the initial prompt
+/// live on `CreateSessionModel` (its older-agent panel uses them too), which
+/// connects them through `applyClaudeOptions` and `applyInitialPrompt`.
 @MainActor
 @Observable
 final class AutoScanSetupModel {
@@ -37,10 +41,20 @@ final class AutoScanSetupModel {
         case failed(String)
     }
 
+    enum TemplatesState: Equatable {
+        case idle
+        case loading
+        case loaded
+        case failed(String)
+    }
+
     static let maxGitHubLabels = 20
+    static let maxGitHubIssueTypes = 20
     static let maxGitHubLabelLength = 100
     static let maxInitialPromptLength = 32_000
-    private static let maxLabelSuggestions = 30
+    static let maxTemplateNameLength = 60
+    /// Above this many repository labels a search field filters them.
+    static let maxLabelSuggestions = 30
 
     /// nil for an agent without the capability, and until a probe answers.
     private(set) var capability: AutoScanCapability?
@@ -58,14 +72,44 @@ final class AutoScanSetupModel {
     private(set) var githubStatus: GitHubStatusState = .idle
     private(set) var githubChecking = false
     private(set) var githubRepoLabels: [GitHubLabelDto] = []
+    private(set) var githubRepoIssueTypes: [GitHubIssueTypeDto] = []
+    /// The repository's labels and issue types have answered at least once.
+    private(set) var githubLabelsLoaded = false
     private(set) var githubRepoLabelsError: String?
     private(set) var githubLabels: [String] = []
-    var githubLabelDraft = "" {
-        didSet { if githubLabelDraft != oldValue { githubLabelError = nil } }
-    }
+    /// Filters the repository's labels; it never adds a name.
+    var githubLabelSearch = ""
     private(set) var githubLabelError: String?
     var githubAssignee = ""
     var githubActiveLabel = ""
+    private(set) var githubIssueTypes: [String] = []
+
+    // Agent options (Claude Code's live on `CreateSessionModel`). Defaults are
+    // Auto Scan's: a scan runs unattended, so each agent runs without asking.
+    var codexOptions = CodexScanOptionsDto()
+    var antigravityOptions = AntigravityScanOptionsDto()
+    /// The text the user types; `antigravityOptions.add_dirs` is parsed from it.
+    var antigravityAddDirsDraft = ""
+    var opencodeOptions = OpenCodeScanOptionsDto()
+    var copilotOptions = CopilotScanOptionsDto()
+    var cursorOptions = CursorScanOptionsDto()
+    var junieOptions = JunieScanOptionsDto()
+
+    /// Set by `CreateSessionModel`: applies a template's or a workspace's Claude
+    /// Code options and a template's initial prompt.
+    var applyClaudeOptions: ((ClaudeScanOptionsDto) -> Void)?
+    var applyInitialPrompt: ((String) -> Void)?
+
+    // Templates
+    private(set) var templates: [AutoScanTemplateDto] = []
+    private(set) var templatesState: TemplatesState = .idle
+    /// The template the choices came from, until another is applied or saved.
+    private(set) var appliedTemplateName: String?
+    /// "Applied …" / "Saved …", shown under the template picker.
+    private(set) var templateNotice: String?
+    private(set) var templateActionError: String?
+    private(set) var savingTemplate = false
+    private(set) var deletingTemplateIds: Set<String> = []
 
     // Linear
     var linearTriggerStates: Set<String> = []
@@ -134,28 +178,40 @@ final class AutoScanSetupModel {
         self.workspace = workspace
         guard seededFor != workspace.name else { return }
         seededFor = workspace.name
-        let saved = workspace.auto_scan
-        source = saved?.source.flatMap(Source.init(rawValue:))
-        cli = saved?.cli
+        source = nil
+        cli = nil
 
-        githubLabels = saved?.github_filter?.labels ?? []
-        githubAssignee = saved?.github_filter?.assignee ?? ""
-        githubActiveLabel = saved?.github_filter?.active_label ?? ""
-        githubLabelDraft = ""
+        githubLabels = []
+        githubAssignee = ""
+        githubActiveLabel = ""
+        githubIssueTypes = []
+        githubLabelSearch = ""
         githubLabelError = nil
         statusGeneration += 1
         labelsGeneration += 1
         githubStatus = .idle
         githubChecking = false
         githubRepoLabels = []
+        githubRepoIssueTypes = []
+        githubLabelsLoaded = false
         githubRepoLabelsError = nil
 
-        let linear = saved?.linear_filter
-        linearTriggerStates = Set(linear?.state_names ?? [])
-        linearTriggerLabels = Set(linear?.label_names ?? [])
-        linearActiveState = linear?.active_state ?? ""
-        linearDoneState = linear?.done_state ?? ""
-        linearRemovalLabel = linear?.removal_label ?? ""
+        linearTriggerStates = []
+        linearTriggerLabels = []
+        linearActiveState = ""
+        linearDoneState = ""
+        linearRemovalLabel = ""
+        codexOptions = CodexScanOptionsDto()
+        antigravityOptions = AntigravityScanOptionsDto()
+        antigravityAddDirsDraft = ""
+        opencodeOptions = OpenCodeScanOptionsDto()
+        copilotOptions = CopilotScanOptionsDto()
+        cursorOptions = CursorScanOptionsDto()
+        junieOptions = JunieScanOptionsDto()
+        appliedTemplateName = nil
+        templateNotice = nil
+        templateActionError = nil
+        apply(workspace.auto_scan ?? AutoScanSettingsDto())
         linearGeneration += 1
         linearMetadataLoadedFor = nil
         linearMetadataLoading = false
@@ -184,8 +240,10 @@ final class AutoScanSetupModel {
     }
 
     /// `GET /api/autoscan/github/status`, then the repository's labels once a
-    /// scan can start. The last answer stays on screen while a re-check runs.
-    func refreshGitHubStatus() async {
+    /// scan can start: the first time, and on every `userAsked` check (Check
+    /// again), so a label created on GitHub meanwhile shows up. The last answer
+    /// stays on screen while a re-check runs.
+    func refreshGitHubStatus(userAsked: Bool = false) async {
         guard let name = workspace?.name else { return }
         statusGeneration += 1
         let generation = statusGeneration
@@ -197,7 +255,7 @@ final class AutoScanSetupModel {
             guard generation == statusGeneration else { return }
             githubStatus = .loaded(status)
             githubChecking = false
-            if status.problem == nil, githubRepoLabels.isEmpty {
+            if status.problem == nil, userAsked || githubRepoLabels.isEmpty {
                 await loadGitHubLabels()
             }
         } catch {
@@ -212,6 +270,7 @@ final class AutoScanSetupModel {
         }
     }
 
+    /// The repository's labels and issue types; `Try again` calls it too.
     func loadGitHubLabels() async {
         guard let name = workspace?.name else { return }
         labelsGeneration += 1
@@ -221,22 +280,27 @@ final class AutoScanSetupModel {
             let response = try await agentAPI.getGitHubScanLabels(workspaceName: name)
             guard generation == labelsGeneration else { return }
             githubRepoLabels = response.labels
+            githubRepoIssueTypes = response.issue_types
+            githubLabelsLoaded = true
         } catch {
             guard generation == labelsGeneration, !Task.isCancelled else { return }
             githubRepoLabelsError = Self.detail(of: error) ?? "Couldn't load the repository's labels."
         }
     }
 
-    /// The repository's labels not chosen yet, filtered by the typed text.
+    /// More repository labels than the chips show: the search field appears.
+    var githubLabelSearchShown: Bool { githubRepoLabels.count > Self.maxLabelSuggestions }
+
+    /// The repository's labels not chosen yet, filtered by the search text.
     private var githubLabelCandidates: [GitHubLabelDto] {
-        let query = githubLabelDraft.trimmingCharacters(in: .whitespaces).lowercased()
+        let query = githubLabelSearch.trimmingCharacters(in: .whitespaces).lowercased()
         return githubRepoLabels.filter { label in
             !githubLabels.contains(label.name)
                 && (query.isEmpty || label.name.lowercased().contains(query))
         }
     }
 
-    /// The first matching labels shown as chips; the rest are found by typing.
+    /// The first matching labels shown as chips; the rest are found by searching.
     var githubLabelSuggestions: [GitHubLabelDto] {
         Array(githubLabelCandidates.prefix(Self.maxLabelSuggestions))
     }
@@ -246,7 +310,7 @@ final class AutoScanSetupModel {
         max(0, githubLabelCandidates.count - Self.maxLabelSuggestions)
     }
 
-    /// Adds a trigger label with the agent's rules: trimmed, no comma (`gh`
+    /// Picks up a repository label, with the agent's rules: no comma (`gh`
     /// splits option values on commas), at most 100 characters, 20 labels.
     func addGitHubLabel(_ raw: String) {
         let label = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -257,17 +321,12 @@ final class AutoScanSetupModel {
         }
         if !githubLabels.contains(label) {
             guard githubLabels.count < Self.maxGitHubLabels else {
-                githubLabelError = "You can add at most \(Self.maxGitHubLabels) labels."
+                githubLabelError = "You can pick up at most \(Self.maxGitHubLabels) labels."
                 return
             }
             githubLabels.append(label)
         }
-        githubLabelDraft = ""
         githubLabelError = nil
-    }
-
-    func submitGitHubLabelDraft() {
-        addGitHubLabel(githubLabelDraft)
     }
 
     func removeGitHubLabel(_ label: String) {
@@ -275,12 +334,286 @@ final class AutoScanSetupModel {
         githubLabelError = nil
     }
 
+    /// The repository's issue types, then any chosen one it does not list (from
+    /// a template, say), so it can still be unchosen.
+    var githubIssueTypeOptions: [String] {
+        let listed = githubRepoIssueTypes.map(\.name)
+        let extra = githubIssueTypes.filter { chosen in
+            !listed.contains { $0.caseInsensitiveCompare(chosen) == .orderedSame }
+        }
+        return listed + extra
+    }
+
+    func isGitHubIssueTypeChosen(_ name: String) -> Bool {
+        githubIssueTypes.contains { $0.caseInsensitiveCompare(name) == .orderedSame }
+    }
+
+    func toggleGitHubIssueType(_ name: String) {
+        if isGitHubIssueTypeChosen(name) {
+            githubIssueTypes.removeAll { $0.caseInsensitiveCompare(name) == .orderedSame }
+        } else if githubIssueTypes.count < Self.maxGitHubIssueTypes {
+            githubIssueTypes.append(name)
+        }
+    }
+
     var githubFilter: GitHubScanFilterDto {
         GitHubScanFilterDto(
             labels: githubLabels,
             assignee: Self.blankToNil(githubAssignee),
-            active_label: Self.blankToNil(githubActiveLabel)
+            active_label: Self.blankToNil(githubActiveLabel),
+            issue_types: githubIssueTypes
         )
+    }
+
+    // MARK: - Agent options
+
+    func setAntigravitySkipPermissions(_ on: Bool) {
+        antigravityOptions.skip_permissions = on
+        if on { antigravityOptions.sandbox = false }
+    }
+
+    func setAntigravitySandbox(_ on: Bool) {
+        antigravityOptions.sandbox = on
+        if on { antigravityOptions.skip_permissions = false }
+    }
+
+    /// The Antigravity options as sent: `add_dirs` parsed from the draft.
+    var antigravityOptionsForStart: AntigravityScanOptionsDto {
+        var options = antigravityOptions
+        options.add_dirs = CreateSessionModel.parseAddDirs(antigravityAddDirsDraft)
+        return options
+    }
+
+    /// Whether the chosen agent's "run without asking" switch is off, so it
+    /// may stop and wait for an approval. Codex with approval `never` never asks.
+    func agentMayAsk(_ kind: String) -> Bool {
+        switch kind {
+        case "codex": return !codexOptions.full_auto && codexOptions.approval != "never"
+        case "antigravity": return !antigravityOptions.skip_permissions
+        case "opencode": return !opencodeOptions.auto_approve
+        case "copilot": return !copilotOptions.allow_all
+        case "cursor": return !cursorOptions.force
+        case "junie": return !junieOptions.brave
+        default: return false
+        }
+    }
+
+    // MARK: - Settings (seeding, templates)
+
+    /// Applies saved choices: every non-nil field replaces the current one.
+    /// The one path for a workspace's saved choices and for a template.
+    func apply(_ settings: AutoScanSettingsDto) {
+        if let saved = settings.source.flatMap(Source.init(rawValue:)) { source = saved }
+        if let saved = settings.cli { cli = saved }
+        if let github = settings.github_filter {
+            githubLabels = Array(github.labels.prefix(Self.maxGitHubLabels))
+            githubAssignee = github.assignee ?? ""
+            githubActiveLabel = github.active_label ?? ""
+            githubIssueTypes = github.issue_types
+            githubLabelError = nil
+        }
+        if let linear = settings.linear_filter {
+            linearTriggerStates = Set(linear.state_names)
+            linearTriggerLabels = Set(linear.label_names)
+            linearActiveState = linear.active_state
+            linearDoneState = linear.done_state
+            linearRemovalLabel = linear.removal_label
+        }
+        if var codex = settings.codex_options {
+            // This client has no "agent default" effort to show.
+            if codex.reasoning_effort == nil { codex.reasoning_effort = "high" }
+            codexOptions = codex
+        }
+        if let antigravity = settings.antigravity_options {
+            antigravityOptions = antigravity
+            if antigravity.skip_permissions { antigravityOptions.sandbox = false }
+            antigravityAddDirsDraft = antigravity.add_dirs.joined(separator: "\n")
+        }
+        if let options = settings.opencode_options { opencodeOptions = options }
+        if let options = settings.copilot_options { copilotOptions = options }
+        if let options = settings.cursor_options { cursorOptions = options }
+        if let options = settings.junie_options { junieOptions = options }
+        if let options = settings.claude_options { applyClaudeOptions?(options) }
+        if let prompt = settings.initial_prompt { applyInitialPrompt?(prompt) }
+    }
+
+    /// The current choices as a template keeps them: both filters as they
+    /// stand (possibly incomplete) and only the chosen agent's options.
+    func templateSettings(claudeOptions: ClaudeScanOptionsDto, initialPrompt: String) -> AutoScanSettingsDto {
+        AutoScanSettingsDto(
+            source: source?.rawValue,
+            cli: cli,
+            initial_prompt: initialPrompt,
+            linear_filter: linearFilter,
+            github_filter: githubFilter,
+            claude_options: cli == "claude" ? claudeOptions : nil,
+            codex_options: cli == "codex" ? codexOptions : nil,
+            antigravity_options: cli == "antigravity" ? antigravityOptionsForStart : nil,
+            opencode_options: cli == "opencode" ? opencodeOptions : nil,
+            copilot_options: cli == "copilot" ? copilotOptions : nil,
+            cursor_options: cli == "cursor" ? cursorOptions : nil,
+            junie_options: cli == "junie" ? junieOptions : nil
+        )
+    }
+
+    // MARK: - Templates
+
+    /// Once per wizard; `force` reads again (Try again).
+    func loadTemplates(force: Bool = false) async {
+        guard isAvailable else { return }
+        switch templatesState {
+        case .loading: return
+        case .loaded where !force: return
+        default: break
+        }
+        templatesState = .loading
+        do {
+            templates = try await agentAPI.getAutoScanTemplates().templates
+            templatesState = .loaded
+        } catch {
+            if Task.isCancelled {
+                templatesState = .idle
+                return
+            }
+            templatesState = .failed(Self.detail(of: error) ?? "Couldn't load the templates.")
+        }
+    }
+
+    /// An old save or delete error must not outlive the sheet or reappear in it.
+    func clearTemplateActionError() {
+        templateActionError = nil
+    }
+
+    func applyTemplate(_ template: AutoScanTemplateDto) {
+        apply(template.settings)
+        appliedTemplateName = template.name
+        templateNotice = "Applied “\(template.name)”."
+        templateActionError = nil
+    }
+
+    /// Saving needs the list: without it a same-name save would replace a
+    /// template with no "Replaces …" warning.
+    var canSaveTemplate: Bool { templatesState == .loaded && !savingTemplate }
+
+    /// Runs of white space become one space, as the agent stores the name.
+    static func normalizedTemplateName(_ raw: String) -> String {
+        raw.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    /// The template a save under `name` would replace (ignoring case and extra
+    /// spaces), or nil.
+    func existingTemplate(named name: String) -> AutoScanTemplateDto? {
+        let key = Self.normalizedTemplateName(name).lowercased()
+        guard !key.isEmpty else { return nil }
+        return templates.first { Self.normalizedTemplateName($0.name).lowercased() == key }
+    }
+
+    /// Why `name` cannot be saved, or nil.
+    static func templateNameError(_ name: String) -> String? {
+        let normalized = normalizedTemplateName(name)
+        if normalized.isEmpty { return "Type a name." }
+        // The agent counts code points.
+        if normalized.unicodeScalars.count > maxTemplateNameLength {
+            return "A name can have at most \(maxTemplateNameLength) characters."
+        }
+        return nil
+    }
+
+    /// What the agent's template models would refuse in `settings`, naming the
+    /// field; nil when it can be saved. A half-made filter is fine, and so is a
+    /// label to add that is also a trigger label (Start blocks that one).
+    static func templateSettingsError(_ settings: AutoScanSettingsDto) -> String? {
+        if let github = settings.github_filter {
+            for label in github.labels {
+                if label.contains(",") { return "A label to pick up cannot contain a comma." }
+                if label.unicodeScalars.count > maxGitHubLabelLength {
+                    return "A label to pick up can have at most \(maxGitHubLabelLength) characters."
+                }
+            }
+            if let active = github.active_label {
+                if active.contains(",") { return "The label to add cannot contain a comma." }
+                if active.unicodeScalars.count > maxGitHubLabelLength {
+                    return "The label to add can have at most \(maxGitHubLabelLength) characters."
+                }
+            }
+            if github.issue_types.contains(where: { $0.unicodeScalars.count > maxGitHubLabelLength }) {
+                return "An issue type can have at most \(maxGitHubLabelLength) characters."
+            }
+            if (github.assignee ?? "").unicodeScalars.count > maxGitHubLabelLength {
+                return "The assignee can have at most \(maxGitHubLabelLength) characters."
+            }
+        }
+        if (settings.initial_prompt ?? "").unicodeScalars.count > maxInitialPromptLength {
+            return "The instructions can have at most 32,000 characters."
+        }
+        if settings.cli == "antigravity",
+           let dirs = settings.antigravity_options?.add_dirs,
+           let error = CreateSessionModel.addDirsError(dirs.joined(separator: "\n")) {
+            return "Additional directories: \(error)."
+        }
+        return nil
+    }
+
+    /// Saves `settings` as `name`; on failure the error stays in
+    /// `templateActionError` and the answer is false.
+    func saveTemplate(name: String, settings: AutoScanSettingsDto) async -> Bool {
+        let normalized = Self.normalizedTemplateName(name)
+        guard Self.templateNameError(normalized) == nil, !savingTemplate else { return false }
+        if let error = Self.templateSettingsError(settings) {
+            templateActionError = error
+            return false
+        }
+        savingTemplate = true
+        templateActionError = nil
+        defer { savingTemplate = false }
+        do {
+            let response = try await agentAPI.saveAutoScanTemplate(
+                SaveAutoScanTemplateRequest(name: normalized, settings: settings)
+            )
+            templates = response.templates
+            templatesState = .loaded
+            appliedTemplateName = normalized
+            templateNotice = "Saved “\(normalized)”."
+            return true
+        } catch let apiError as APIError where apiError.code == 422 {
+            templateActionError = Self.detail(of: apiError)
+                ?? "The PC did not accept these settings. Check the filter and the agent options."
+            return false
+        } catch {
+            templateActionError = Self.detail(of: error) ?? Self.httpFallback(error, "Couldn't save the template.")
+            return false
+        }
+    }
+
+    func deleteTemplate(_ template: AutoScanTemplateDto) async {
+        guard !deletingTemplateIds.contains(template.id) else { return }
+        deletingTemplateIds.insert(template.id)
+        templateActionError = nil
+        defer { deletingTemplateIds.remove(template.id) }
+        do {
+            templates = try await agentAPI.deleteAutoScanTemplate(id: template.id).templates
+            forgetAppliedTemplate(template)
+        } catch let apiError as APIError where apiError.code == 404 {
+            // Another client deleted it first: the result is the same.
+            templates.removeAll { $0.id == template.id }
+            forgetAppliedTemplate(template)
+        } catch {
+            templateActionError = Self.detail(of: error) ?? Self.httpFallback(error, "Couldn't delete the template.")
+        }
+    }
+
+    private func forgetAppliedTemplate(_ template: AutoScanTemplateDto) {
+        guard appliedTemplateName == template.name else { return }
+        appliedTemplateName = nil
+        templateNotice = nil
+    }
+
+    /// "GitHub · Codex": where a template looks and which agent it runs.
+    static func templateSummary(_ template: AutoScanTemplateDto) -> String {
+        var parts: [String] = []
+        if let source = template.settings.source { parts.append(AutoScanDisplay.sourceName(source)) }
+        if let cli = template.settings.cli { parts.append(AutoScanDisplay.agentName(cli)) }
+        return parts.joined(separator: " · ")
     }
 
     // MARK: - Linear
@@ -378,7 +711,7 @@ final class AutoScanSetupModel {
     func startBlocker(prompt: String) -> String? {
         if let blocker = startBlocker { return blocker }
         if prompt.unicodeScalars.count > Self.maxInitialPromptLength {
-            return "The initial prompt can have at most 32,000 characters."
+            return "The instructions can have at most 32,000 characters."
         }
         return nil
     }
@@ -397,7 +730,7 @@ final class AutoScanSetupModel {
             case .loaded(let status):
                 if status.problem != nil { return "Set up GitHub above, then tap Check again." }
             }
-            if githubLabels.isEmpty { return "Add at least one label to pick up." }
+            if githubLabels.isEmpty { return "Choose at least one label to pick up." }
             let assignee = githubAssignee.trimmingCharacters(in: .whitespacesAndNewlines)
             if assignee.unicodeScalars.count > Self.maxGitHubLabelLength {
                 return "The assignee can have at most \(Self.maxGitHubLabelLength) characters."
@@ -421,25 +754,31 @@ final class AutoScanSetupModel {
         guard isAgentAvailable(cli) else {
             return "\(AutoScanDisplay.agentName(cli)) is not installed on the PC."
         }
+        if cli == "antigravity", let error = CreateSessionModel.addDirsError(antigravityAddDirsDraft) {
+            return "Additional directories: \(error)."
+        }
         return nil
     }
 
-    /// The start body: every choice, the chosen source's filter only, Claude
-    /// Code's options only for Claude Code and `auto_approve` for the others.
+    /// The start body: every choice, the chosen source's filter only and the
+    /// chosen agent's options only (Pi has none).
     func startRequest(
         workspaceName: String,
         claudeOptions: ClaudeOptionsModel,
-        autoApprove: Bool,
         initialPrompt: String
     ) -> StartScanRequest? {
         guard let source, let cli else { return nil }
-        let isClaude = cli == "claude"
         return StartScanRequest(
             workspace_name: workspaceName,
-            claude_options: isClaude ? claudeOptions : nil,
+            claude_options: cli == "claude" ? claudeOptions : nil,
+            codex_options: cli == "codex" ? codexOptions : nil,
+            antigravity_options: cli == "antigravity" ? antigravityOptionsForStart : nil,
+            opencode_options: cli == "opencode" ? opencodeOptions : nil,
+            copilot_options: cli == "copilot" ? copilotOptions : nil,
+            cursor_options: cli == "cursor" ? cursorOptions : nil,
+            junie_options: cli == "junie" ? junieOptions : nil,
             source: source.rawValue,
             cli: cli,
-            auto_approve: isClaude ? nil : autoApprove,
             initial_prompt: initialPrompt,
             linear_filter: source == .linear ? linearFilter : nil,
             github_filter: source == .github ? githubFilter : nil
@@ -460,5 +799,10 @@ final class AutoScanSetupModel {
     private static func detail(of error: Error) -> String? {
         guard let apiError = error as? APIError else { return nil }
         return ConflictDetail.stringOrNil(from: apiError.errorBody)
+    }
+
+    private static func httpFallback(_ error: Error, _ message: String) -> String {
+        guard let apiError = error as? APIError else { return message }
+        return "\(message) (HTTP \(apiError.code))"
     }
 }

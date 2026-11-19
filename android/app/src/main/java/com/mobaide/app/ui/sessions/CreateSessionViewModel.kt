@@ -18,18 +18,24 @@ import com.mobaide.app.data.network.dto.AUTO_SCAN_SOURCE_GITHUB
 import com.mobaide.app.data.network.dto.AUTO_SCAN_SOURCE_LINEAR
 import com.mobaide.app.data.network.dto.AntigravityOptionsModel
 import com.mobaide.app.data.network.dto.AutoScanCapability
+import com.mobaide.app.data.network.dto.AutoScanTemplateSettingsDto
 import com.mobaide.app.data.network.dto.ChatStoredSession
 import com.mobaide.app.data.network.dto.ChatSupport
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
+import com.mobaide.app.data.network.dto.ClaudeScanOptionsDto
 import com.mobaide.app.data.network.dto.CodexOptionsModel
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.CliModelDetail
+import com.mobaide.app.data.network.dto.CopilotScanOptionsDto
+import com.mobaide.app.data.network.dto.CursorScanOptionsDto
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.data.network.dto.GitHubSetupRequest
 import com.mobaide.app.data.network.dto.OpenCodeOptionsModel
 import com.mobaide.app.data.network.dto.CopilotOptionsModel
 import com.mobaide.app.data.network.dto.CursorOptionsModel
 import com.mobaide.app.data.network.dto.JunieOptionsModel
+import com.mobaide.app.data.network.dto.JunieScanOptionsDto
+import com.mobaide.app.data.network.dto.OpenCodeScanOptionsDto
 import com.mobaide.app.data.network.dto.PiOptionsModel
 import com.mobaide.app.data.network.dto.WorkspaceInfo
 import com.mobaide.app.data.network.dto.SessionResponse
@@ -46,6 +52,7 @@ import com.mobaide.app.data.network.dto.cliModelsPending
 import com.mobaide.app.data.network.dto.gitCapability
 import com.mobaide.app.data.repository.AutoScanRejectedException
 import com.mobaide.app.data.repository.AutoScanRepository
+import com.mobaide.app.data.repository.AutoScanTemplateException
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.GitRepository
 import com.mobaide.app.data.repository.LinearMetadataRepository
@@ -277,6 +284,8 @@ data class CreateSessionUiState(
     val autoScanProbed: Boolean = false,
     // The Auto Scan step's source, filter and agent choices (newer agents).
     val autoScan: AutoScanWizardState = AutoScanWizardState(),
+    // The PC's Auto Scan templates; not reset when the step re-seeds.
+    val autoScanTemplates: AutoScanTemplatesUi = AutoScanTemplatesUi(),
     // Codex launch options (CodexConfig step). Defaults reflect the "Auto" preset.
     val codexModel: String? = null,
     val codexSandbox: String = "workspace-write",
@@ -401,12 +410,7 @@ val CreateSessionUiState.effectiveBaseBranch: String?
  * via the Advanced controls (so the segmented control highlights nothing).
  */
 val CreateSessionUiState.codexPreset: CodexAutonomyPreset?
-    get() = when {
-        codexFullAuto -> CodexAutonomyPreset.FullAccess
-        codexSandbox == "read-only" && codexApproval == "on-request" -> CodexAutonomyPreset.ReadOnly
-        codexSandbox == "workspace-write" && codexApproval == "on-request" -> CodexAutonomyPreset.Auto
-        else -> null
-    }
+    get() = codexPresetOf(codexSandbox, codexApproval, codexFullAuto)
 
 /**
  * Effort levels offered for a Codex [model]: the agent-advertised per-model set
@@ -544,7 +548,6 @@ private fun CreateSessionUiState.toAutoScanLaunchPrefs() = ClaudeLaunchPrefs(
     planMode = autoScanPlanMode,
     debug = autoScanClaudeDebug,
     focusMode = autoScanFocusMode,
-    autoApprove = autoScan.autoApprove,
 )
 
 /** Snapshot of the Codex launch controls for persistence / re-defaulting. */
@@ -660,7 +663,7 @@ val CreateSessionUiState.autoScanStartBlocker: String?
                         else -> "Checking GitHub on the PC…"
                     }
                 }
-                if (wizard.githubFilter.labels.isEmpty()) return "Add at least one label to pick up."
+                if (wizard.githubFilter.labels.isEmpty()) return "Choose at least one label to pick up."
                 if (!wizard.githubFilter.isValid) return "Fix the GitHub filter above."
             }
             else -> {
@@ -670,10 +673,118 @@ val CreateSessionUiState.autoScanStartBlocker: String?
         }
         val cli = autoScanCli ?: return "Choose the AI agent."
         if (cliAvailability(cli) != true) return "${autoScanAgentName(cli)} is not installed on the PC."
+        if (cli == "antigravity" && wizard.agents.antigravity.addDirsError != null) {
+            return "Fix the additional directories above."
+        }
         if (initialPrompt.length > AUTO_SCAN_PROMPT_MAX) {
-            return "The initial prompt can have at most 32,000 characters."
+            return "The instructions can have at most 32,000 characters."
         }
         return null
+    }
+
+/** The Claude Code options an Auto Scan keeps, from the Auto Scan bucket. */
+fun CreateSessionUiState.autoScanClaudeScanOptions() = ClaudeScanOptionsDto(
+    plan_mode = autoScanPlanMode,
+    no_memory = autoScanNoMemory,
+    skip_permissions = autoScanSkipPermissions,
+    model = autoScanClaudeModel,
+    effort = autoScanClaudeEffort,
+    fast_mode = autoScanClaudeFastMode,
+    ultracode = autoScanClaudeUltracode,
+    append_system_prompt = autoScanClaudeAppendSystemPrompt.takeIf { it.isNotBlank() },
+    debug = autoScanClaudeDebug,
+    focus_mode = autoScanFocusMode,
+)
+
+/**
+ * The Auto Scan step's choices as template settings: both filters as drafts,
+ * the prompt as typed, and the options of the chosen agent only. The start
+ * request takes its agent options from here too.
+ */
+fun CreateSessionUiState.autoScanTemplateSettings(): AutoScanTemplateSettingsDto {
+    val wizard = autoScan
+    val cli = wizard.cli
+    val agents = wizard.agents
+    return AutoScanTemplateSettingsDto(
+        source = wizard.source,
+        cli = cli,
+        initial_prompt = initialPrompt,
+        linear_filter = wizard.linearFilter.toDraftDto(),
+        github_filter = wizard.githubFilter.toDto(),
+        claude_options = autoScanClaudeScanOptions().takeIf { cli == "claude" },
+        codex_options = agents.codex.toDto().takeIf { cli == "codex" },
+        antigravity_options = agents.antigravity.toDto().takeIf { cli == "antigravity" },
+        opencode_options = OpenCodeScanOptionsDto(agents.opencodeAutoApprove).takeIf { cli == "opencode" },
+        copilot_options = CopilotScanOptionsDto(agents.copilotAllowAll).takeIf { cli == "copilot" },
+        cursor_options = CursorScanOptionsDto(agents.cursorForce).takeIf { cli == "cursor" },
+        junie_options = JunieScanOptionsDto(agents.juniePlanMode, agents.junieBrave).takeIf { cli == "junie" },
+    )
+}
+
+/**
+ * The state with [settings] applied: each non-null field replaces the choice
+ * it names, an options object its agent's Auto Scan bucket. Seeding a
+ * workspace's saved choices and applying a template both go through here.
+ */
+fun CreateSessionUiState.withAutoScanSettings(settings: AutoScanTemplateSettingsDto): CreateSessionUiState {
+    val claude = settings.claude_options
+    val claudeModel = if (claude != null) claude.model else autoScanClaudeModel
+    val claudeEffort = claude?.effort ?: autoScanClaudeEffort
+    return copy(
+        initialPrompt = settings.initial_prompt ?: initialPrompt,
+        autoScan = autoScan.copy(
+            source = settings.source
+                ?.takeIf { it == AUTO_SCAN_SOURCE_GITHUB || it == AUTO_SCAN_SOURCE_LINEAR }
+                ?: autoScan.source,
+            cli = settings.cli ?: autoScan.cli,
+            linearFilter = settings.linear_filter?.let(LinearFilterDraft::from) ?: autoScan.linearFilter,
+            githubFilter = settings.github_filter?.let(GitHubFilterDraft::from) ?: autoScan.githubFilter,
+            agents = autoScan.agents.applied(settings),
+            startError = null,
+        ),
+        autoScanPlanMode = claude?.plan_mode ?: autoScanPlanMode,
+        autoScanNoMemory = claude?.no_memory ?: autoScanNoMemory,
+        autoScanSkipPermissions = claude?.skip_permissions ?: autoScanSkipPermissions,
+        autoScanClaudeModel = claudeModel,
+        autoScanClaudeEffort = claudeEffort.takeIf { it in CreateSessionViewModel.claudeEffortsFor(claudeModel) }
+            ?: "high",
+        autoScanClaudeFastMode = claude?.fast_mode ?: autoScanClaudeFastMode,
+        autoScanClaudeUltracode = claude?.ultracode ?: autoScanClaudeUltracode,
+        autoScanClaudeDebug = claude?.debug ?: autoScanClaudeDebug,
+        autoScanFocusMode = claude?.focus_mode ?: autoScanFocusMode,
+        autoScanClaudeAppendSystemPrompt = claude?.let { it.append_system_prompt.orEmpty() }
+            ?: autoScanClaudeAppendSystemPrompt,
+    )
+}
+
+/**
+ * Why the step's choices cannot be saved as a template, or null: only what the
+ * agent's draft models refuse. A half-made filter, or a label to add that is
+ * also a trigger label, can still be saved.
+ */
+val CreateSessionUiState.autoScanTemplateSaveBlocker: String?
+    get() {
+        val wizard = autoScan
+        val filter = wizard.githubFilter
+        val labels = filter.labels.map { it.trim() }
+        val active = filter.activeLabel.trim()
+        val addDirsError = wizard.agents.antigravity.addDirsError.takeIf { wizard.cli == "antigravity" }
+        return when {
+            labels.any { ',' in it } -> "A label to pick up cannot contain a comma."
+            labels.any { it.length > GITHUB_LABEL_MAX } ->
+                "A label to pick up can have at most $GITHUB_LABEL_MAX characters."
+            ',' in active -> "The label to add cannot contain a comma."
+            active.length > GITHUB_LABEL_MAX ->
+                "The label to add can have at most $GITHUB_LABEL_MAX characters."
+            filter.issueTypes.any { it.trim().length > GITHUB_LABEL_MAX } ->
+                "An issue type can have at most $GITHUB_LABEL_MAX characters."
+            filter.assignee.trim().length > GITHUB_LABEL_MAX ->
+                "The assignee can have at most $GITHUB_LABEL_MAX characters."
+            initialPrompt.length > AUTO_SCAN_PROMPT_MAX ->
+                "The instructions can have at most 32,000 characters."
+            addDirsError != null -> "Additional directories: ${addDirsError.removeSuffix(".")}."
+            else -> null
+        }
     }
 
 /**
@@ -764,7 +875,6 @@ class CreateSessionViewModel @Inject constructor(
                         autoScanPlanMode = saved.planMode,
                         autoScanClaudeDebug = saved.debug,
                         autoScanFocusMode = saved.focusMode,
-                        autoScan = it.autoScan.copy(autoApprove = saved.autoApprove),
                     )
                 }
             }
@@ -1207,6 +1317,7 @@ class CreateSessionViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val version = sessionRepository.getAgentVersion()
+                val hadAutoScanCapability = _uiState.value.autoScanCapability != null
                 val codexDetails = version.cliModelDetails("codex")
                 // models_pending: the agent's startup enumeration was still
                 // warming when it answered, so absent details are provisional
@@ -1259,6 +1370,14 @@ class CreateSessionViewModel @Inject constructor(
                     )
                 }
                 ensureBaseBranches()
+                // The step can open before the probe answers; its templates
+                // need the capability, so they load once it arrives.
+                val now = _uiState.value
+                if (!hadAutoScanCapability && now.autoScanCapability != null &&
+                    now.step == CreateSessionStep.AutoScanConfig
+                ) {
+                    loadAutoScanTemplates()
+                }
                 if (!pending) {
                     warmupRetriesLeft = WARMUP_MAX_RETRIES
                 } else if (warmupRetriesLeft > 0) {
@@ -1386,7 +1505,12 @@ class CreateSessionViewModel @Inject constructor(
         }
     }
 
-    fun selectAutoScanMode() = _uiState.update {
+    fun selectAutoScanMode() {
+        seedAutoScanStep()
+        loadAutoScanTemplates()
+    }
+
+    private fun seedAutoScanStep() = _uiState.update {
         // An older agent runs Claude Code only.
         if (it.autoScanCapability == null && !it.claudeEnabled) return@update it
         val workspaceName = it.selectedWorkspaceName
@@ -1404,7 +1528,7 @@ class CreateSessionViewModel @Inject constructor(
                 ?.let { name -> it.workspaces.firstOrNull { p -> p.name == name } }
             val saved = workspace?.auto_scan
             cancelAutoScanLoads()
-            it.copy(
+            val seeded = it.copy(
                 step = CreateSessionStep.AutoScanConfig,
                 autoScanConfigInitializedFor = workspaceName,
                 // A newer agent picks the source's own default for an empty
@@ -1414,16 +1538,10 @@ class CreateSessionViewModel @Inject constructor(
                 } else {
                     workspace?.auto_scan_prompt ?: autoScanRepository.getAutoScanPrompt() ?: ""
                 },
-                autoScan = AutoScanWizardState(
-                    source = saved?.source?.takeIf { s ->
-                        s == AUTO_SCAN_SOURCE_GITHUB || s == AUTO_SCAN_SOURCE_LINEAR
-                    },
-                    cli = saved?.cli,
-                    autoApprove = it.autoScan.autoApprove,
-                    linearFilter = LinearFilterDraft.from(saved?.linear_filter),
-                    githubFilter = GitHubFilterDraft.from(saved?.github_filter),
-                ),
+                autoScan = AutoScanWizardState(),
+                autoScanTemplates = it.autoScanTemplates.copy(appliedName = null, message = null),
             )
+            if (saved != null) seeded.withAutoScanSettings(saved.asTemplateSettings(prompt = null)) else seeded
         }
     }
 
@@ -1450,7 +1568,173 @@ class CreateSessionViewModel @Inject constructor(
 
     fun setAutoScanCli(cli: String) = updateAutoScan { it.copy(cli = cli, startError = null) }
 
-    fun setAutoScanAutoApprove(v: Boolean) = updateAutoScan { it.copy(autoApprove = v) }
+    private fun updateAutoScanAgents(mutator: (AutoScanAgentBuckets) -> AutoScanAgentBuckets) =
+        updateAutoScan { it.copy(agents = mutator(it.agents), startError = null) }
+
+    private fun updateAutoScanCodex(mutator: (CodexScanBucket) -> CodexScanBucket) =
+        updateAutoScanAgents { it.copy(codex = mutator(it.codex)) }
+
+    private fun updateAutoScanAntigravity(mutator: (AntigravityScanBucket) -> AntigravityScanBucket) =
+        updateAutoScanAgents { it.copy(antigravity = mutator(it.antigravity)) }
+
+    fun selectAutoScanCodexPreset(preset: CodexAutonomyPreset) = updateAutoScanCodex { it.withPreset(preset) }
+
+    fun setAutoScanCodexModel(v: String?) {
+        val details = _uiState.value.codexModelDetails
+        updateAutoScanCodex {
+            it.copy(model = v, reasoningEffort = codexEffortForModel(v, it.reasoningEffort, details))
+        }
+    }
+
+    fun setAutoScanCodexReasoningEffort(v: String) = updateAutoScanCodex { it.copy(reasoningEffort = v) }
+    fun setAutoScanCodexSandbox(v: String) = updateAutoScanCodex { it.copy(sandbox = v) }
+    fun setAutoScanCodexApproval(v: String) = updateAutoScanCodex { it.copy(approval = v) }
+
+    fun setAutoScanAntigravityModel(v: String?) = updateAutoScanAntigravity { it.copy(model = v) }
+    fun setAutoScanAntigravityAddDirsDraft(v: String) = updateAutoScanAntigravity { it.copy(addDirsDraft = v) }
+
+    /** Same mutual exclusion as [setAntigravitySkipPermissions]. */
+    fun setAutoScanAntigravitySkipPermissions(v: Boolean) = updateAutoScanAntigravity {
+        if (v) it.copy(skipPermissions = true, sandbox = false) else it.copy(skipPermissions = false)
+    }
+
+    fun setAutoScanAntigravitySandbox(v: Boolean) = updateAutoScanAntigravity {
+        if (v) it.copy(sandbox = true, skipPermissions = false) else it.copy(sandbox = false)
+    }
+
+    fun setAutoScanOpenCodeAutoApprove(v: Boolean) = updateAutoScanAgents { it.copy(opencodeAutoApprove = v) }
+    fun setAutoScanCopilotAllowAll(v: Boolean) = updateAutoScanAgents { it.copy(copilotAllowAll = v) }
+    fun setAutoScanCursorForce(v: Boolean) = updateAutoScanAgents { it.copy(cursorForce = v) }
+    fun setAutoScanJuniePlanMode(v: Boolean) = updateAutoScanAgents { it.copy(juniePlanMode = v) }
+    fun setAutoScanJunieBrave(v: Boolean) = updateAutoScanAgents { it.copy(junieBrave = v) }
+
+    private fun updateAutoScanTemplates(mutator: (AutoScanTemplatesUi) -> AutoScanTemplatesUi) =
+        _uiState.update { it.copy(autoScanTemplates = mutator(it.autoScanTemplates)) }
+
+    private var templatesJob: Job? = null
+
+    /** Read the PC's templates; [force] reloads after a failure ("Retry"). */
+    fun loadAutoScanTemplates(force: Boolean = false) {
+        val state = _uiState.value
+        if (state.autoScanCapability == null) return
+        if (!force && state.autoScanTemplates.loading) return
+        templatesJob?.cancel()
+        updateAutoScanTemplates { it.copy(loading = true, loadError = null) }
+        templatesJob = viewModelScope.launch {
+            try {
+                val templates = autoScanRepository.templates()
+                updateAutoScanTemplates { it.copy(templates = templates, loading = false, loaded = true) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val detail = (e as? AutoScanTemplateException)?.detail
+                updateAutoScanTemplates {
+                    it.copy(loading = false, loadError = detail ?: "Could not load the templates.")
+                }
+            }
+        }
+    }
+
+    /** Replace the step's choices with the template's; it applies at once. */
+    fun applyAutoScanTemplate(templateId: String) {
+        val template = _uiState.value.autoScanTemplates.templates.firstOrNull { it.id == templateId } ?: return
+        _uiState.update {
+            it.withAutoScanSettings(template.settings).copy(
+                autoScanTemplates = it.autoScanTemplates.copy(
+                    appliedName = template.name,
+                    message = "Applied “${template.name}”.",
+                    saveError = null,
+                    deleteError = null,
+                ),
+            )
+        }
+    }
+
+    fun deleteAutoScanTemplate(templateId: String) {
+        val template = _uiState.value.autoScanTemplates.templates.firstOrNull { it.id == templateId } ?: return
+        updateAutoScanTemplates { it.copy(deleteError = null, message = null) }
+        viewModelScope.launch {
+            try {
+                val templates = autoScanRepository.deleteTemplate(templateId)
+                updateAutoScanTemplates {
+                    it.copy(
+                        templates = templates,
+                        loaded = true,
+                        appliedName = it.appliedName.takeUnless { name -> name == template.name },
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val refused = e as? AutoScanTemplateException
+                updateAutoScanTemplates {
+                    if (refused?.status == 404) {
+                        // Another device deleted it first: the result is the same.
+                        it.copy(
+                            templates = it.templates.filterNot { t -> t.id == templateId },
+                            appliedName = it.appliedName.takeUnless { name -> name == template.name },
+                        )
+                    } else {
+                        it.copy(deleteError = refused?.detail ?: "Could not delete “${template.name}”.")
+                    }
+                }
+            }
+        }
+    }
+
+    /** Only once the list is loaded: the dialog must know which names a save would replace. */
+    fun openAutoScanTemplateSave() = updateAutoScanTemplates {
+        if (!it.canSave) it else it.copy(saveDialogOpen = true, saveError = null, message = null)
+    }
+
+    fun dismissAutoScanTemplateSave() = updateAutoScanTemplates {
+        if (it.saving) it else it.copy(saveDialogOpen = false, saveError = null)
+    }
+
+    /** Save the step's choices as [name]; a template of the same name is replaced. */
+    fun saveAutoScanTemplate(name: String) {
+        val state = _uiState.value
+        if (state.autoScanTemplates.saving || !state.autoScanTemplates.loaded) return
+        val clean = name.trim().split(Regex("\\s+")).joinToString(" ")
+        val error = when {
+            clean.isEmpty() -> "Enter a name."
+            clean.length > TEMPLATE_NAME_MAX -> "A name can have at most $TEMPLATE_NAME_MAX characters."
+            else -> state.autoScanTemplateSaveBlocker
+        }
+        if (error != null) {
+            updateAutoScanTemplates { it.copy(saveError = error) }
+            return
+        }
+        val settings = state.autoScanTemplateSettings()
+        updateAutoScanTemplates { it.copy(saving = true, saveError = null) }
+        viewModelScope.launch {
+            try {
+                val templates = autoScanRepository.saveTemplate(clean, settings)
+                updateAutoScanTemplates {
+                    it.copy(
+                        templates = templates,
+                        loaded = true,
+                        saving = false,
+                        saveDialogOpen = false,
+                        appliedName = clean,
+                        message = "Saved “$clean”.",
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val refused = e as? AutoScanTemplateException
+                val message = refused?.detail ?: if (refused?.status == 422) {
+                    "The PC did not accept these settings. Check the filter and the agent options."
+                } else {
+                    "Could not save the template."
+                }
+                updateAutoScanTemplates {
+                    it.copy(saving = false, saveError = message)
+                }
+            }
+        }
+    }
 
     private fun updateLinearFilter(mutator: (LinearFilterDraft) -> LinearFilterDraft) = updateAutoScan {
         it.copy(linearFilter = mutator(it.linearFilter), linearFilterTouched = true, startError = null)
@@ -1592,8 +1876,14 @@ class CreateSessionViewModel @Inject constructor(
         }
         githubLabelsJob = viewModelScope.launch {
             try {
-                val labels = autoScanRepository.githubLabels(workspace)
-                updateAutoScanFor(workspace) { it.copy(githubLabels = labels, githubLabelsLoading = false) }
+                val response = autoScanRepository.githubLabels(workspace)
+                updateAutoScanFor(workspace) {
+                    it.copy(
+                        githubLabels = response.labels,
+                        githubIssueTypes = response.issue_types,
+                        githubLabelsLoading = false,
+                    )
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1612,36 +1902,38 @@ class CreateSessionViewModel @Inject constructor(
         when {
             name in labels -> it.copy(
                 githubFilter = it.githubFilter.copy(labels = labels - name),
-                githubLabelDraftError = null,
+                githubLabelLimitError = null,
                 startError = null,
             )
-            labels.size >= GITHUB_LABELS_MAX -> it.copy(githubLabelDraftError = "You can pick up to $GITHUB_LABELS_MAX labels.")
+            labels.size >= GITHUB_LABELS_MAX -> it.copy(githubLabelLimitError = "You can pick up to $GITHUB_LABELS_MAX labels.")
             else -> it.copy(
                 githubFilter = it.githubFilter.copy(labels = labels + name),
-                githubLabelDraftError = null,
+                githubLabelLimitError = null,
                 startError = null,
             )
         }
     }
 
-    fun setAutoScanGitHubLabelDraft(v: String) =
-        updateAutoScan { it.copy(githubLabelDraft = v, githubLabelDraftError = null) }
+    fun setAutoScanGitHubLabelQuery(v: String) = updateAutoScan { it.copy(githubLabelQuery = v) }
 
-    /** Add the typed label to the filter; a repository label need not exist yet for this. */
-    fun addAutoScanGitHubLabelDraft() = updateAutoScan {
-        val name = it.githubLabelDraft.trim()
-        val labels = it.githubFilter.labels
-        val error = githubLabelError(name)
-            ?: "You can pick up to $GITHUB_LABELS_MAX labels.".takeIf { name !in labels && labels.size >= GITHUB_LABELS_MAX }
+    /** "Try again" after the repository's labels failed to load. */
+    fun retryGitHubLabels() {
+        val workspace = _uiState.value.autoScanConfigInitializedFor ?: return
+        loadGitHubLabels(workspace, force = true)
+    }
+
+    fun toggleAutoScanGitHubIssueType(name: String) = updateAutoScan {
+        val types = it.githubFilter.issueTypes
+        val chosen = types.any { type -> type.equals(name, ignoreCase = true) }
         when {
-            name.isEmpty() -> it
-            error != null -> it.copy(githubLabelDraftError = error)
-            else -> it.copy(
-                githubFilter = it.githubFilter.copy(labels = if (name in labels) labels else labels + name),
-                githubLabelDraft = "",
-                githubLabelDraftError = null,
+            chosen -> it.copy(
+                githubFilter = it.githubFilter.copy(
+                    issueTypes = types.filterNot { type -> type.equals(name, ignoreCase = true) },
+                ),
                 startError = null,
             )
+            types.size >= GITHUB_ISSUE_TYPES_MAX -> it
+            else -> it.copy(githubFilter = it.githubFilter.copy(issueTypes = types + name), startError = null)
         }
     }
 
@@ -1697,13 +1989,19 @@ class CreateSessionViewModel @Inject constructor(
         val source = wizard.source ?: return
         val cli = state.autoScanCli ?: return
         val claude = cli == "claude"
+        val options = state.autoScanTemplateSettings()
         val request = StartScanRequest(
             workspace_name = workspaceName,
             source = source,
             cli = cli,
             initial_prompt = state.initialPrompt,
-            auto_approve = if (claude) null else wizard.autoApprove,
             claude_options = if (claude) state.autoScanClaudeOptions(initialPrompt = null) else null,
+            codex_options = options.codex_options,
+            antigravity_options = options.antigravity_options,
+            opencode_options = options.opencode_options,
+            copilot_options = options.copilot_options,
+            cursor_options = options.cursor_options,
+            junie_options = options.junie_options,
             linear_filter = wizard.linearFilter.toDto().takeIf { source == AUTO_SCAN_SOURCE_LINEAR },
             github_filter = wizard.githubFilter.toDto().takeIf { source == AUTO_SCAN_SOURCE_GITHUB },
         )
@@ -1949,19 +2247,10 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     fun setCodexModel(v: String?) = _uiState.update { state ->
-        // Same clamp as setClaudeModel, with the target upgraded from a
-        // hardcoded "high" to the catalog's per-model default. A model without
-        // a catalog entry (or the null Default model) keeps the effort — its
-        // capabilities are unknown, so never downshift on a guess.
-        val detail = v?.let { m -> state.codexModelDetails?.firstOrNull { it.id == m } }
-        val effort = when {
-            detail == null || state.codexReasoningEffort in detail.efforts ->
-                state.codexReasoningEffort
-            else -> detail.defaultEffort
-                ?: "high".takeIf { it in detail.efforts }
-                ?: detail.efforts.first()
-        }
-        state.copy(codexModel = v, codexReasoningEffort = effort)
+        state.copy(
+            codexModel = v,
+            codexReasoningEffort = codexEffortForModel(v, state.codexReasoningEffort, state.codexModelDetails),
+        )
     }
     fun setCodexReasoningEffort(v: String) = _uiState.update { it.copy(codexReasoningEffort = v) }
     fun setCodexSandbox(v: String) = _uiState.update { it.copy(codexSandbox = v) }
@@ -2139,7 +2428,7 @@ class CreateSessionViewModel @Inject constructor(
         model = antigravityModel?.takeIf { it.isNotBlank() },
         skip_permissions = antigravitySkipPermissions,
         sandbox = antigravitySandbox,
-        add_dirs = parseAddDirs(antigravityAddDirsDraft),
+        add_dirs = parseAntigravityAddDirs(antigravityAddDirsDraft),
         worktree = worktree,
         branch_name = branchName,
         base_branch = baseBranch,
@@ -2241,7 +2530,7 @@ class CreateSessionViewModel @Inject constructor(
 
     fun submitAntigravity() {
         val state = _uiState.value
-        if (state.submitting) return
+        if (state.submitting || antigravityAddDirsError(state.antigravityAddDirsDraft) != null) return
         val antigravityOptions = state.antigravityOptions(
             worktree = state.worktree,
             branchName = state.branchName.takeIf { it.isNotBlank() },
@@ -2875,10 +3164,6 @@ class CreateSessionViewModel @Inject constructor(
         Json.parseToJsonElement(body)
             .jsonObject["agent_update_required"]?.jsonPrimitive?.booleanOrNull == true
     }.getOrDefault(false)
-
-    /** Splits the additional-directories draft on newlines/commas into a clean list. */
-    private fun parseAddDirs(draft: String): List<String> =
-        draft.split('\n', ',').map { it.trim() }.filter { it.isNotEmpty() }
 
     /** Login-failure text that never echoes the submitted key (the agent already
      *  sanitizes its `detail`). */

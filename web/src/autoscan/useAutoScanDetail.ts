@@ -72,6 +72,8 @@ export interface AutoScanDetailHandle {
   declined: boolean;
   /** Clear the latch and try once more — the banner's retry. */
   retry: () => void;
+  /** A Stop this screen sent succeeded: show the scan stopped even if its event is missed. */
+  markStopped: () => void;
 }
 
 export function useAutoScanDetail(agentId: string, workspaceName: string): AutoScanDetailHandle {
@@ -249,7 +251,11 @@ export function useAutoScanDetail(agentId: string, workspaceName: string): AutoS
     channelRef.current?.connect();
   }, []);
 
-  return { state, declined, retry };
+  const markStopped = useCallback(() => {
+    dispatch([{ kind: 'stopped' }]);
+  }, []);
+
+  return { state, declined, retry, markStopped };
 }
 
 /**

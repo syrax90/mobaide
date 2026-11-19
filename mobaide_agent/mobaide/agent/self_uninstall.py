@@ -87,6 +87,10 @@ PREFIX_ENTRIES: tuple[str, ...] = (
     # The folders trusted for Junie chat sessions (JUNIE_TRUST_RECORD in
     # mobaide/acp/agents.py).
     "junie-trusted-folders.json",
+    # The Auto Scan templates (mobaide/agent/autoscan/templates.py) and the
+    # copy kept of an unreadable templates file.
+    "autoscan_templates.json",
+    "autoscan_templates.json.bak",
     *VOICE_PREFIX_ENTRIES,
     # The transcript-cleanup work dir: only its prompt file.
     "voice-cleanup",

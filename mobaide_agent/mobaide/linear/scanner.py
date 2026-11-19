@@ -46,6 +46,7 @@ from mobaide.core import (
 )
 from mobaide.core.cli_launcher import CliLauncher, probe_cli_available
 from mobaide.core.opencode_launcher import INITIAL_PROMPT_MAX
+from mobaide.core.workspaces_config import AUTO_SCAN_OPTION_FIELDS
 from mobaide.core.workspaces_store import safe_path_exists
 from mobaide.github.gh import GhCli
 
@@ -123,40 +124,57 @@ class AutoScanStart:
     ``source`` ``None`` marks an older client: it scans Linear with the stored
     filter (or the legacy defaults) and runs Claude Code. Filters and the
     Linear key, when present, are saved on the workspace before the scan
-    starts, and so are ``source`` and ``cli``. ``initial_prompt`` ``None``
-    keeps the saved prompt; ``""`` clears it.
+    starts, and so are ``source``, ``cli`` and ``agent_options``.
+    ``agent_options`` are the chosen agent's options (the fields
+    ``AUTO_SCAN_OPTION_FIELDS`` lists); ``None`` runs an agent other than
+    Claude Code without asking (``_SCAN_DEFAULTS``). ``initial_prompt``
+    ``None`` keeps the saved prompt; ``""`` clears it.
     """
 
     source: str | None = None
     cli: str | None = None
-    auto_approve: bool = True
+    agent_options: Mapping[str, object] | None = None
     initial_prompt: str | None = None
     linear_filter: AutoScanFilter | None = None
     github_filter: GitHubScanFilter | None = None
     linear_api_key: str | None = None
 
 
-def _agent_options(cli: str, auto_approve: bool, prompt: str):
-    """The launch options of a non-Claude agent for one issue.
+_AGENT_OPTION_TYPES = {
+    "codex": CodexOptions,
+    "antigravity": AntigravityOptions,
+    "opencode": OpenCodeOptions,
+    "copilot": CopilotOptions,
+    "cursor": CursorOptions,
+    "junie": JunieOptions,
+    "pi": PiOptions,
+}
 
-    ``auto_approve`` maps onto the agent's own "run without asking" switch;
-    Pi has none (it never asks).
-    """
-    if cli == "codex":
-        return CodexOptions(full_auto=auto_approve, initial_prompt=prompt)
-    if cli == "antigravity":
-        return AntigravityOptions(skip_permissions=auto_approve, initial_prompt=prompt)
-    if cli == "opencode":
-        return OpenCodeOptions(auto_approve=auto_approve, initial_prompt=prompt)
-    if cli == "copilot":
-        return CopilotOptions(allow_all=auto_approve, initial_prompt=prompt)
-    if cli == "cursor":
-        return CursorOptions(force=auto_approve, initial_prompt=prompt)
-    if cli == "junie":
-        return JunieOptions(brave=auto_approve, initial_prompt=prompt)
-    if cli == "pi":
-        return PiOptions(initial_prompt=prompt)
-    raise ValueError(f"unknown agent kind {cli!r}")
+# Each agent's own "run without asking" switch, for a start that sent no
+# options for it. Pi has none: it never asks.
+_SCAN_DEFAULTS: dict[str, dict[str, object]] = {
+    "codex": {"full_auto": True},
+    "antigravity": {"skip_permissions": True},
+    "opencode": {"auto_approve": True},
+    "copilot": {"allow_all": True},
+    "cursor": {"force": True},
+    "junie": {"brave": True},
+    "pi": {},
+}
+
+
+def _agent_options(cli: str, options: Mapping[str, object] | None, prompt: str):
+    """The launch options of a non-Claude agent for one issue: the client's
+    ``options`` (the fields an Auto Scan keeps), or ``_SCAN_DEFAULTS``."""
+    option_type = _AGENT_OPTION_TYPES.get(cli)
+    if option_type is None:
+        raise ValueError(f"unknown agent kind {cli!r}")
+    allowed = AUTO_SCAN_OPTION_FIELDS.get(cli, {})
+    chosen = _SCAN_DEFAULTS[cli] if options is None else options
+    values = {key: value for key, value in chosen.items() if key in allowed}
+    if "add_dirs" in values:
+        values["add_dirs"] = tuple(values["add_dirs"])  # type: ignore[arg-type]
+    return option_type(**values, initial_prompt=prompt)
 
 
 def _through_cmd_shim(launcher: CliLauncher) -> bool:
@@ -223,7 +241,7 @@ class AutoScanInstance:
         source: IssueSource | None = None,
         cli: str = "claude",
         launchers: Mapping[str, CliLauncher] | None = None,
-        auto_approve: bool = True,
+        agent_options: Mapping[str, object] | None = None,
         initial_prompt: str | None = None,
     ) -> None:
         if client_options is not None and not isinstance(
@@ -252,7 +270,7 @@ class AutoScanInstance:
         self._source: IssueSource = source
         self._cli = cli
         self._launchers: Mapping[str, CliLauncher] = launchers or {"claude": launcher}
-        self._auto_approve = auto_approve
+        self._agent_options = dict(agent_options) if agent_options is not None else None
         self._prompt = self._resolve_prompt(initial_prompt)
 
         # Per-workspace persistent record of issues whose worktrees have been
@@ -768,7 +786,7 @@ class AutoScanInstance:
         await self._track_workitem(issue, slug, str(cwd))
 
         try:
-            options = _agent_options(self._cli, self._auto_approve, prompt)
+            options = _agent_options(self._cli, self._agent_options, prompt)
             spec = await launcher.build(
                 replace(workspace, path=str(cwd)), options, session_id=session_id,
             )
@@ -1108,7 +1126,7 @@ class AutoScanSessionManager:
                     source=source,
                     cli=cli,
                     launchers=self._launchers,
-                    auto_approve=req.auto_approve,
+                    agent_options=req.agent_options if cli != "claude" else None,
                     initial_prompt=req.initial_prompt,
                 )
                 await instance.start()
@@ -1141,13 +1159,20 @@ class AutoScanSessionManager:
         )
 
     def _save_choices(self, workspace_name: str, req: AutoScanStart) -> bool:
-        """Save the client's source, agent, filters and Linear key on the workspace."""
+        """Save the client's source, agent, the agent's options, filters and
+        Linear key on the workspace."""
+        cli = req.cli or "claude"
         patch = WorkspaceUpdatePatch(
             linear_api_key=req.linear_api_key or None,
             auto_scan_filter=req.linear_filter,
             github_scan_filter=req.github_filter,
             auto_scan_source=req.source,
-            auto_scan_cli=(req.cli or "claude") if req.source is not None else None,
+            auto_scan_cli=cli if req.source is not None else None,
+            auto_scan_options=(
+                {cli: dict(req.agent_options)}
+                if req.source is not None and req.agent_options is not None
+                else None
+            ),
         )
         if patch == WorkspaceUpdatePatch():
             return False

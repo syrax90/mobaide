@@ -224,13 +224,7 @@ final class CreateSessionModel {
     /// The autonomy preset the sandbox / approval pair matches; nil for a
     /// hand-picked pair (Android `codexPreset`, web `codexPreset`).
     var codexPreset: CodexAutonomyPreset? {
-        if codexFullAuto { return .fullAccess }
-        guard codexApproval == "on-request" else { return nil }
-        switch codexSandbox {
-        case "read-only": return .readOnly
-        case "workspace-write": return .auto
-        default: return nil
-        }
+        CodexAutonomyPreset.matching(sandbox: codexSandbox, approval: codexApproval, fullAuto: codexFullAuto)
     }
 
     func applyCodexPreset(_ preset: CodexAutonomyPreset) {
@@ -255,9 +249,6 @@ final class CreateSessionModel {
     /// would strand it (Android `autoScanSkipPermissions = true`).
     var autoScanSkipPermissions = true
     var autoScanNoMemory = false
-    /// The "run without asking" switch of the agents other than Claude Code.
-    /// Defaults ON for the same reason as `autoScanSkipPermissions`.
-    var autoScanAutoApprove = true
     var autoScanInitialPrompt = ""
     private(set) var autoScanStarting = false
     /// The agent's `detail` for a refused start (400), shown next to Start.
@@ -400,6 +391,8 @@ final class CreateSessionModel {
         self.modeOrder = customAgentTypesRepository.currentModeOrder
         self.activeScans = autoScanRepository.currentScans
         applyPrefill()
+        autoScanSetup.applyClaudeOptions = { [weak self] in self?.applyAutoScanClaudeOptions($0) }
+        autoScanSetup.applyInitialPrompt = { [weak self] in self?.autoScanInitialPrompt = $0 }
     }
 
     func navEvents() -> AsyncStream<String> { navBroadcaster.subscribe(replayLatest: false) }
@@ -692,10 +685,10 @@ final class CreateSessionModel {
     /// the options, or the SwiftUI Picker — which renders selection by tag —
     /// shows no selection while `buildRequest()` still submits the hidden
     /// value. Mirrors the effort picker's append and web's `modelOptions`.
-    var codexModelOptions: [String] {
-        guard let selected = codexModel, !codexModels.contains(selected) else {
-            return codexModels
-        }
+    var codexModelOptions: [String] { codexModelOptions(selected: codexModel) }
+
+    func codexModelOptions(selected: String?) -> [String] {
+        guard let selected, !codexModels.contains(selected) else { return codexModels }
         return codexModels + [selected]
     }
 
@@ -721,11 +714,24 @@ final class CreateSessionModel {
     /// different effort than the field displays.
     func setCodexModel(_ model: String?) {
         codexModel = model
+        codexReasoningEffort = codexEffort(afterSwitchingTo: model, from: codexReasoningEffort)
+    }
+
+    /// `setCodexModel` for Auto Scan's own Codex options.
+    func setAutoScanCodexModel(_ model: String?) {
+        autoScanSetup.codexOptions.model = model
+        autoScanSetup.codexOptions.reasoning_effort = codexEffort(
+            afterSwitchingTo: model,
+            from: autoScanSetup.codexOptions.reasoning_effort ?? "high"
+        )
+    }
+
+    private func codexEffort(afterSwitchingTo model: String?, from effort: String) -> String {
         guard let model,
               let detail = codexModelDetails?.first(where: { $0.id == model }),
-              !detail.efforts.contains(codexReasoningEffort)
-        else { return }
-        codexReasoningEffort = detail.defaultEffort
+              !detail.efforts.contains(effort)
+        else { return effort }
+        return detail.defaultEffort
             ?? (detail.efforts.contains("high") ? "high" : detail.efforts[0])
     }
 
@@ -1509,7 +1515,6 @@ final class CreateSessionModel {
                   let built = autoScanSetup.startRequest(
                       workspaceName: workspaceName,
                       claudeOptions: autoScanClaudeOptions(includesPrompt: false),
-                      autoApprove: autoScanAutoApprove,
                       initialPrompt: Self.blankToNil(autoScanInitialPrompt) ?? ""
                   )
             else { return }
@@ -1576,6 +1581,9 @@ final class CreateSessionModel {
         return autoScanSetup.workspace?.name
     }
 
+    /// The `.task(id:)` key that loads the PC's Auto Scan templates.
+    var showsAutoScanTemplates: Bool { showsAutoScanSetup }
+
     private var showsAutoScanSetup: Bool {
         step == .config && mode == .autoScan && autoScanSetup.isAvailable
     }
@@ -1607,6 +1615,45 @@ final class CreateSessionModel {
         )
     }
 
+    /// Claude Code's Auto Scan options as a template or the workspace keeps them.
+    func autoScanClaudeScanOptions() -> ClaudeScanOptionsDto {
+        ClaudeScanOptionsDto(
+            plan_mode: autoScanPlanMode,
+            no_memory: autoScanNoMemory,
+            skip_permissions: autoScanSkipPermissions,
+            model: effectiveAutoScanModel,
+            effort: effectiveAutoScanEffort,
+            fast_mode: autoScanClaudeFastMode,
+            ultracode: autoScanClaudeUltracode,
+            append_system_prompt: Self.blankToNil(autoScanClaudeAppendSystemPrompt),
+            debug: autoScanClaudeDebug,
+            focus_mode: autoScanFocusMode
+        )
+    }
+
+    /// Claude Code's half of `AutoScanSetupModel.apply(_:)`.
+    private func applyAutoScanClaudeOptions(_ options: ClaudeScanOptionsDto) {
+        autoScanClaudeModel = options.model
+        if let effort = options.effort { autoScanClaudeEffort = effort }
+        autoScanPlanMode = options.plan_mode
+        autoScanNoMemory = options.no_memory
+        autoScanSkipPermissions = options.skip_permissions
+        autoScanClaudeFastMode = options.fast_mode
+        autoScanClaudeUltracode = options.ultracode
+        autoScanClaudeAppendSystemPrompt = options.append_system_prompt ?? ""
+        autoScanClaudeDebug = options.debug
+        if let focus = options.focus_mode { autoScanFocusMode = focus }
+    }
+
+    /// Saves the current Auto Scan choices as the template `name`.
+    func saveAutoScanTemplate(name: String) async -> Bool {
+        let settings = autoScanSetup.templateSettings(
+            claudeOptions: autoScanClaudeScanOptions(),
+            initialPrompt: autoScanInitialPrompt
+        )
+        return await autoScanSetup.saveTemplate(name: name, settings: settings)
+    }
+
     private func autoScanLaunchPrefs() -> ClaudeLaunchPrefs {
         ClaudeLaunchPrefs(
             model: effectiveAutoScanModel,
@@ -1618,8 +1665,7 @@ final class CreateSessionModel {
             noMemory: autoScanNoMemory,
             planMode: autoScanPlanMode,
             debug: autoScanClaudeDebug,
-            focusMode: autoScanFocusMode,
-            autoApprove: autoScanAutoApprove
+            focusMode: autoScanFocusMode
         )
     }
 
@@ -2130,7 +2176,6 @@ final class CreateSessionModel {
             autoScanPlanMode = autoScan.planMode
             autoScanClaudeDebug = autoScan.debug
             autoScanFocusMode = autoScan.focusMode
-            autoScanAutoApprove = autoScan.autoApprove
         }
         if let codex = preferencesStore.getLastUsedCodexOptions() {
             codexModel = codex.model
@@ -2196,6 +2241,11 @@ final class CreateSessionModel {
             .filter { !$0.isEmpty }
     }
 
+    /// The agent refuses a directory that looks like a flag (`-…`).
+    static func addDirsError(_ input: String) -> String? {
+        parseAddDirs(input).contains { $0.hasPrefix("-") } ? "Directories must not start with \"-\"" : nil
+    }
+
     static func validateCustomPath(_ input: String) -> String? {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return "Path is required" }
@@ -2236,4 +2286,16 @@ enum CodexAutonomyPreset: CaseIterable {
     }
 
     var approval: String { self == .fullAccess ? "never" : "on-request" }
+
+    /// The preset a sandbox / approval pair matches; nil for a hand-picked pair
+    /// (Android `codexPreset`, web `codexPreset`).
+    static func matching(sandbox: String, approval: String, fullAuto: Bool) -> CodexAutonomyPreset? {
+        if fullAuto { return .fullAccess }
+        guard approval == "on-request" else { return nil }
+        switch sandbox {
+        case "read-only": return .readOnly
+        case "workspace-write": return .auto
+        default: return nil
+        }
+    }
 }

@@ -4,7 +4,6 @@ import {
   CLAUDE_PREFS_DEFAULTS,
   CODEX_PREFS_DEFAULTS,
   JUNIE_PREFS_DEFAULTS,
-  type AutoScanLaunchPrefs,
   type ClaudeLaunchPrefs,
   type LaunchPrefs,
 } from '../../../stores/launchPrefsStore';
@@ -39,11 +38,6 @@ const claudePrefs = (over: Partial<ClaudeLaunchPrefs> = {}): ClaudeLaunchPrefs =
   ...over,
 });
 
-const autoScanPrefs = (over: Partial<ClaudeLaunchPrefs> = {}): AutoScanLaunchPrefs => ({
-  ...claudePrefs(over),
-  autoApprove: true,
-});
-
 /** Narrows the tagged snapshot so a Claude bucket can be fed back through `applyLaunchPrefs`. */
 function claudeSnapshot(state: WizardState, mode: WizardMode): ClaudeLaunchPrefs {
   const snapshot = launchPrefsFromState(state, mode);
@@ -74,7 +68,7 @@ describe('applyLaunchPrefs', () => {
 
     const scanOnly = applyLaunchPrefs(INITIAL_WIZARD_STATE, {
       ...NEVER_LAUNCHED,
-      autoScan: autoScanPrefs({ skipPermissions: false, planMode: true }),
+      autoScan: claudePrefs({ skipPermissions: false, planMode: true }),
     });
 
     // A stored `false` has to beat the `true` default, or the flag could never
@@ -83,23 +77,11 @@ describe('applyLaunchPrefs', () => {
     expect(scanOnly.claude).toEqual(INITIAL_WIZARD_STATE.claude);
   });
 
-  it('restores the Auto Scan auto-approve switch, and keeps its default for a never-launched bucket', () => {
-    const off = applyLaunchPrefs(INITIAL_WIZARD_STATE, {
-      ...NEVER_LAUNCHED,
-      autoScan: { ...autoScanPrefs(), autoApprove: false },
-    });
-
-    expect(off.autoScanSetup.autoApprove).toBe(false);
-    expect(applyLaunchPrefs(INITIAL_WIZARD_STATE, NEVER_LAUNCHED).autoScanSetup).toEqual(
-      INITIAL_WIZARD_STATE.autoScanSetup,
-    );
-  });
-
   it('restores Plan mode into Auto Scan only', () => {
     const seeded = applyLaunchPrefs(INITIAL_WIZARD_STATE, {
       ...NEVER_LAUNCHED,
       claude: claudePrefs({ planMode: true, noMemory: true }),
-      autoScan: autoScanPrefs({ planMode: true }),
+      autoScan: claudePrefs({ planMode: true }),
     });
 
     expect(seeded.autoScan.planMode).toBe(true);
@@ -168,7 +150,7 @@ describe('applyLaunchPrefs', () => {
 
     const seeded = applyLaunchPrefs(base, {
       claude: claudePrefs({ model: 'opus' }),
-      autoScan: autoScanPrefs({ debug: true }),
+      autoScan: claudePrefs({ debug: true }),
       codex: null,
       antigravity: { model: null, skipPermissions: false, sandbox: true, terminalUi: false },
       opencode: null,
@@ -325,7 +307,7 @@ describe('launchPrefsFromState', () => {
     });
     expect(launchPrefsFromState(dialled, 'auto_scan')).toEqual({
       kind: 'autoScan',
-      prefs: { ...claudePrefs({ skipPermissions: true, debug: true }), autoApprove: true },
+      prefs: claudePrefs({ skipPermissions: true, debug: true }),
     });
     expect(launchPrefsFromState(dialled, 'codex')).toEqual({
       kind: 'codex',
@@ -430,7 +412,7 @@ describe('launchPrefsFromState', () => {
     const restored = applyLaunchPrefs(INITIAL_WIZARD_STATE, {
       ...NEVER_LAUNCHED,
       claude,
-      autoScan: { ...autoScan, autoApprove: true, focusMode: false },
+      autoScan: { ...autoScan, focusMode: false },
     });
 
     expect(restored.claude.focusMode).toBe(false);
@@ -497,10 +479,6 @@ describe('the two sets of defaults', () => {
     // unattended). Making the store's constant match this projection would
     // silently flip that flag for a Claude blob missing the key.
     expect(autoScan).not.toEqual(CLAUDE_PREFS_DEFAULTS);
-    expect(autoScan).toEqual({
-      ...CLAUDE_PREFS_DEFAULTS,
-      skipPermissions: true,
-      autoApprove: true,
-    });
+    expect(autoScan).toEqual({ ...CLAUDE_PREFS_DEFAULTS, skipPermissions: true });
   });
 });

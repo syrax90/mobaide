@@ -6171,45 +6171,259 @@ body:has(dialog[open]) {
   overflow-wrap: anywhere;
 }
 
-/* ---- create wizard: Auto Scan sources and agents ---- */
+/* ---- create wizard: Auto Scan ---- */
 
-/* A radio group inside an `.option-group`: the legend wears the group's
-   heading style, since the group is what the heading names. */
-.choice-group {
+.autoscan-intro {
+  margin-top: -0.75rem;
+}
+
+/* A numbered step: the plate the step's controls sit on. The option panels it
+   shares with the normal session render their own plates; inside a step those
+   flatten, so a step reads as one card rather than cards in a card. */
+.autoscan-step {
+  gap: 1rem;
+}
+
+.autoscan-step .option-group {
+  padding: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.autoscan-step-title.autoscan-step-title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.9rem;
+  color: var(--accent);
+}
+
+/* The ordinal as a filled brand square, like `.setup-step-ordinal`. */
+.autoscan-step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6rem;
+  min-height: 1.6rem;
+  background: var(--brand);
+  color: #fff;
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  line-height: 1;
+}
+
+/* Source and agent choices: a radio group drawn as cards. */
+.autoscan-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.5rem;
   min-width: 0;
   margin: 0;
   padding: 0;
   border: 0;
 }
 
-.choice-group legend {
-  margin-bottom: 0.4rem;
+.autoscan-choices-grid {
+  grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));
+}
+
+.autoscan-choices > legend.field-hint {
+  margin-bottom: 0.5rem;
   padding: 0;
+}
+
+.autoscan-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.7rem 0.85rem;
+  background: var(--bg);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
+  cursor: pointer;
+  transition: box-shadow 120ms linear, background 120ms linear;
+}
+
+.autoscan-choice:hover {
+  box-shadow: inset 0 0 0 2px var(--rule);
+}
+
+.autoscan-choice:has(input:checked) {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--brand-2);
+}
+
+.autoscan-choice-disabled,
+.autoscan-choice-disabled:hover {
+  color: var(--text-muted);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+.autoscan-choice-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.autoscan-choice-text small {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* A titled note: an info ring in the accent, an important one in the warning
+   colour. The mark is decoration; the title carries the meaning. */
+.autoscan-callout {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.75rem;
+  padding: 0.9rem 1rem;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.autoscan-callout-important {
+  box-shadow: inset 0 0 0 2px var(--warning);
+}
+
+.autoscan-callout-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  background: var(--brand);
+  color: #fff;
+  font-family: var(--font-chrome);
+  font-size: 0.85rem;
+}
+
+.autoscan-callout-important .autoscan-callout-mark {
+  background: var(--warning);
+  color: var(--bg);
+}
+
+.autoscan-callout-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.autoscan-callout-body p {
+  margin: 0;
+}
+
+.autoscan-callout-title {
   font-family: var(--font-chrome);
   font-size: var(--pix-sm);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--text-muted);
+  color: var(--accent);
 }
 
-.choice-group > .field-hint {
-  margin-bottom: 0.25rem;
+.autoscan-callout-important .autoscan-callout-title {
+  color: var(--warning);
 }
 
-.radio-row-disabled {
+.autoscan-callout-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.autoscan-tip {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
   color: var(--text-muted);
-  cursor: not-allowed;
+  background: var(--bg);
+  box-shadow: inset 2px 0 0 0 var(--rule);
+}
+
+.autoscan-tip-title {
+  margin: 0 0 0.25rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.autoscan-tip ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.autoscan-tip code,
+.autoscan-callout code {
+  font-family: var(--font-code);
+  font-size: 0.85em;
+  color: var(--text);
+}
+
+/* Under a "run without asking" switch while it is off. */
+.autoscan-ask-hint {
+  margin: -0.35rem 0 0;
+  padding-left: 1.6rem;
+  font-size: 0.8rem;
+  color: var(--warning);
+}
+
+/* Under a row of presets rather than a checkbox: no label to line up with. */
+.autoscan-ask-hint-flush {
+  margin-top: 0;
+  padding-left: 0;
+}
+
+.autoscan-github-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
 }
 
 .autoscan-github-status {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  flex: 1 1 18rem;
+  min-width: 0;
 }
 
 .autoscan-github-status p {
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+.autoscan-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.autoscan-status-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1.3rem;
+  height: 1.3rem;
+  margin-top: 0.15rem;
+  font-family: var(--font-chrome);
+  font-size: 0.75rem;
+  box-shadow: inset 0 0 0 2px currentColor;
+}
+
+.autoscan-status-ok .autoscan-status-mark {
+  color: var(--ok);
+}
+
+.autoscan-status-warning .autoscan-status-mark {
+  color: var(--warning);
 }
 
 .autoscan-github-action {
@@ -6224,19 +6438,83 @@ body:has(dialog[open]) {
   overflow-wrap: anywhere;
 }
 
-/* The field and its button stack, so an error under the field never pushes
-   the button out of line; a form only so Enter adds or saves. */
-.autoscan-label-add,
+.autoscan-chip-group {
+  margin: 0;
+}
+
+.autoscan-chip-group legend {
+  margin-bottom: 0.25rem;
+}
+
+.autoscan-chip-group .field {
+  margin: 0.35rem 0;
+}
+
+.autoscan-type-swatch {
+  display: inline-block;
+  width: 0.65rem;
+  height: 0.65rem;
+  flex: none;
+}
+
+.autoscan-inline-error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* The key field and its button stack, so an error under the field never pushes
+   the button out of line; a form only so Enter saves. */
 .autoscan-key-form {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
 }
 
-.autoscan-label-add .field,
 .autoscan-key-form .field {
   align-self: stretch;
   margin-bottom: 0.5rem;
+}
+
+.autoscan-templates {
+  box-shadow: inset 0 0 0 2px var(--brand-2);
+}
+
+.autoscan-templates-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.autoscan-template-picker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: min(18rem, 100%);
+  max-width: 100%;
+}
+
+.autoscan-template-picker-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.autoscan-template-notice:empty {
+  display: none;
+}
+
+.autoscan-template-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.autoscan-template-form h2 {
+  margin-bottom: 0;
 }
 
 /* ---- create wizard: "Continue a session" ---- */

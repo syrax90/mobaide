@@ -119,6 +119,8 @@ export const queryKeys = {
     ['agent', agentId, 'autoscan-github', workspaceName, 'status'] as const,
   githubLabels: (agentId: string, workspaceName: string) =>
     ['agent', agentId, 'autoscan-github', workspaceName, 'labels'] as const,
+  /** The Auto Scan templates saved on the PC; its own segment for the same reason. */
+  autoscanTemplates: (agentId: string) => ['agent', agentId, 'autoscan-templates'] as const,
   /** Which CLIs the agent has installed, and the models each advertises. */
   agentCapabilities: (agentId: string) => ['agent', agentId, 'capabilities'] as const,
   /**

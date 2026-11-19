@@ -121,15 +121,20 @@ extension AutoScanListResponse {
 
 /// `POST /api/autoscan/start`. An older client sends only `project_name` and
 /// `claude_options`; a client of an agent with `capabilities.autoscan` sends
-/// every choice: `source`, `cli`, that source's filter, `initial_prompt` (`""`
-/// clears the saved prompt) and, for agents other than Claude Code,
-/// `auto_approve`. Nil fields stay off the wire.
+/// every choice: `source`, `cli`, that source's filter, the chosen agent's
+/// options (Pi has none) and `initial_prompt` (`""` clears the saved prompt).
+/// Nil fields stay off the wire.
 struct StartScanRequest: Codable, Equatable, Sendable {
     let workspace_name: String
     let claude_options: ClaudeOptionsModel?
+    let codex_options: CodexScanOptionsDto?
+    let antigravity_options: AntigravityScanOptionsDto?
+    let opencode_options: OpenCodeScanOptionsDto?
+    let copilot_options: CopilotScanOptionsDto?
+    let cursor_options: CursorScanOptionsDto?
+    let junie_options: JunieScanOptionsDto?
     let source: String?
     let cli: String?
-    let auto_approve: Bool?
     let initial_prompt: String?
     let linear_filter: AutoScanFilterDto?
     let github_filter: GitHubScanFilterDto?
@@ -138,9 +143,14 @@ struct StartScanRequest: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case workspace_name = "project_name"
         case claude_options
+        case codex_options
+        case antigravity_options
+        case opencode_options
+        case copilot_options
+        case cursor_options
+        case junie_options
         case source
         case cli
-        case auto_approve
         case initial_prompt
         case linear_filter
         case github_filter
@@ -150,9 +160,14 @@ struct StartScanRequest: Codable, Equatable, Sendable {
     init(
         workspace_name: String,
         claude_options: ClaudeOptionsModel? = nil,
+        codex_options: CodexScanOptionsDto? = nil,
+        antigravity_options: AntigravityScanOptionsDto? = nil,
+        opencode_options: OpenCodeScanOptionsDto? = nil,
+        copilot_options: CopilotScanOptionsDto? = nil,
+        cursor_options: CursorScanOptionsDto? = nil,
+        junie_options: JunieScanOptionsDto? = nil,
         source: String? = nil,
         cli: String? = nil,
-        auto_approve: Bool? = nil,
         initial_prompt: String? = nil,
         linear_filter: AutoScanFilterDto? = nil,
         github_filter: GitHubScanFilterDto? = nil,
@@ -160,9 +175,14 @@ struct StartScanRequest: Codable, Equatable, Sendable {
     ) {
         self.workspace_name = workspace_name
         self.claude_options = claude_options
+        self.codex_options = codex_options
+        self.antigravity_options = antigravity_options
+        self.opencode_options = opencode_options
+        self.copilot_options = copilot_options
+        self.cursor_options = cursor_options
+        self.junie_options = junie_options
         self.source = source
         self.cli = cli
-        self.auto_approve = auto_approve
         self.initial_prompt = initial_prompt
         self.linear_filter = linear_filter
         self.github_filter = github_filter
@@ -273,16 +293,89 @@ extension GitHubLabelDto {
     }
 }
 
-/// `GET /api/autoscan/github/labels`.
+/// A GitHub issue type of the repository (Bug, Task, Feature…). `color` is
+/// GitHub's color name (`RED`, `BLUE`…).
+struct GitHubIssueTypeDto: Codable, Equatable, Sendable {
+    let name: String
+    let color: String
+    let description: String
+
+    init(name: String, color: String = "", description: String = "") {
+        self.name = name
+        self.color = color
+        self.description = description
+    }
+}
+
+extension GitHubIssueTypeDto {
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        color = try container.decodeIfPresent(String.self, forKey: .color) ?? ""
+        description = try container.decodeIfPresent(String.self, forKey: .description) ?? ""
+    }
+}
+
+/// `GET /api/autoscan/github/labels`: the repository's labels and its issue
+/// types (empty when it has none or GitHub did not say).
 struct GitHubLabelsResponse: Codable, Equatable, Sendable {
     let labels: [GitHubLabelDto]
+    let issue_types: [GitHubIssueTypeDto]
+
+    init(labels: [GitHubLabelDto], issue_types: [GitHubIssueTypeDto] = []) {
+        self.labels = labels
+        self.issue_types = issue_types
+    }
 }
 
 extension GitHubLabelsResponse {
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         labels = try container.decodeIfPresent([GitHubLabelDto].self, forKey: .labels) ?? []
+        issue_types = try container.decodeIfPresent([GitHubIssueTypeDto].self, forKey: .issue_types) ?? []
     }
+}
+
+/// A named set of Auto Scan choices saved on the PC (`GET /api/autoscan/templates`).
+struct AutoScanTemplateDto: Codable, Equatable, Sendable, Identifiable {
+    let id: String
+    let name: String
+    let updated_at: String
+    let settings: AutoScanSettingsDto
+}
+
+extension AutoScanTemplateDto {
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        updated_at = try container.decodeIfPresent(String.self, forKey: .updated_at) ?? ""
+        settings = try container.decodeIfPresent(AutoScanSettingsDto.self, forKey: .settings) ?? AutoScanSettingsDto()
+    }
+}
+
+/// Every template of the PC, sorted by name: the answer of the list, save and
+/// delete routes.
+struct AutoScanTemplatesResponse: Codable, Equatable, Sendable {
+    let templates: [AutoScanTemplateDto]
+
+    init(templates: [AutoScanTemplateDto] = []) {
+        self.templates = templates
+    }
+}
+
+extension AutoScanTemplatesResponse {
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        templates = try container.decodeIfPresent([AutoScanTemplateDto].self, forKey: .templates) ?? []
+    }
+}
+
+/// `POST /api/autoscan/templates`: a template with the same name (ignoring
+/// case) is replaced.
+struct SaveAutoScanTemplateRequest: Codable, Equatable, Sendable {
+    let name: String
+    let settings: AutoScanSettingsDto
 }
 
 enum GitHubSetupAction: String, Codable, Sendable {

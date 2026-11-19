@@ -471,8 +471,12 @@ describe('buildStartScanRequest — agent with capabilities.autoscan', () => {
           source: 'github',
           cli: 'codex',
           linearFilter,
-          githubFilter: { labels: [' ai-ready '], assignee: '  ', activeLabel: ' doing ' },
-          autoApprove: true,
+          githubFilter: {
+            labels: [' ai-ready '],
+            assignee: '  ',
+            activeLabel: ' doing ',
+            issueTypes: [],
+          },
           ...setup,
         },
       },
@@ -486,20 +490,31 @@ describe('buildStartScanRequest — agent with capabilities.autoscan', () => {
       project_name: 'mobaide',
       source: 'github',
       cli: 'codex',
-      github_filter: { labels: ['ai-ready'], assignee: null, active_label: 'doing' },
+      github_filter: {
+        labels: ['ai-ready'],
+        assignee: null,
+        active_label: 'doing',
+        issue_types: [],
+      },
       // "" is sent: it clears the prompt the workspace saved.
       initial_prompt: '',
-      auto_approve: true,
+      codex_options: {
+        model: null,
+        sandbox: 'workspace-write',
+        approval: 'never',
+        reasoning_effort: 'high',
+        full_auto: true,
+      },
     });
     expect(withSetup({ source: 'linear' })).toMatchObject({ linear_filter: linearFilter });
     expect(withSetup({ source: 'linear' })).not.toHaveProperty('github_filter');
   });
 
-  it('gives Claude Code its own options and mirrors Skip permissions into auto_approve', () => {
-    const request = withSetup({ cli: 'claude', autoApprove: true });
+  it('gives Claude Code its own options and sends no other agent’s', () => {
+    const request = withSetup({ cli: 'claude' });
 
     expect(request?.claude_options).toMatchObject({ worktree: true, skip_permissions: false });
-    expect(request?.auto_approve).toBe(false);
+    expect(request).not.toHaveProperty('codex_options');
     expect(withSetup({ cli: 'codex' })).not.toHaveProperty('claude_options');
   });
 

@@ -1363,7 +1363,16 @@ class TestAutoScanChoicesRoundTrip:
             "source": "github",
             "cli": "codex",
             "linear_filter": None,
-            "github_filter": {"labels": ["ai", "bot"], "assignee": "@me", "active_label": None},
+            "github_filter": {
+                "labels": ["ai", "bot"], "assignee": "@me", "active_label": None,
+                "issue_types": [],
+            },
+            **{
+                f"{kind}_options": None
+                for kind in (
+                    "claude", "codex", "antigravity", "opencode", "copilot", "cursor", "junie",
+                )
+            },
         }
 
     def test_unusable_stored_choices_load_as_unset(self, tmp_path):

@@ -2,7 +2,7 @@
   "components": {
     "schemas": {
       "AntigravityOptionsModel": {
-        "description": "Wire DTO for Antigravity CLI launch options (see :class:`AntigravityOptions`).\n\n``model`` is free-form ``str`` \u2014 like the Claude/Codex DTOs \u2014 carrying the\nfull display name ``agy models`` prints (e.g. ``Gemini 3.1 Pro (Low)``);\nthe launcher forwards it verbatim as a single argv element.\n``skip_permissions`` (``--dangerously-skip-permissions``) and ``sandbox``\nare mutually exclusive \u2014 skip-permissions auto-approves ``bypassSandbox``\nactions, silently defeating the sandbox (google-antigravity/antigravity-cli\n#36) \u2014 so the combination is rejected with a 422 at the wire boundary. To\nkeep that guard airtight, ``model`` and each ``add_dirs`` entry (both\nforwarded verbatim as argv elements) are rejected when they look like a CLI\nflag (leading ``-``): otherwise a value such as\n``add_dirs=[\"--dangerously-skip-permissions\"]`` could smuggle the blocked\nflag past the pair check. No legitimate value is affected \u2014 model names\nstart with a letter and directories with ``/`` or a drive letter.\n``protected_namespaces=()`` silences pydantic's ``model_*`` guard for the\nlegitimately-named ``model`` field.",
+        "description": "Wire DTO for Antigravity CLI launch options (see :class:`AntigravityOptions`).",
         "properties": {
           "add_dirs": {
             "default": [],
@@ -62,6 +62,83 @@
           }
         },
         "title": "AntigravityOptionsModel",
+        "type": "object"
+      },
+      "AntigravityScanOptionsModel": {
+        "description": "The Antigravity options an Auto Scan keeps (see :class:`AntigravityOptionsModel`).\n\n``model`` is free-form ``str`` \u2014 like the Claude/Codex DTOs \u2014 carrying the\nfull display name ``agy models`` prints (e.g. ``Gemini 3.1 Pro (Low)``);\nthe launcher forwards it verbatim as a single argv element.\n``skip_permissions`` (``--dangerously-skip-permissions``) and ``sandbox``\nare mutually exclusive \u2014 skip-permissions auto-approves ``bypassSandbox``\nactions, silently defeating the sandbox (google-antigravity/antigravity-cli\n#36) \u2014 so the combination is rejected with a 422 at the wire boundary. To\nkeep that guard airtight, ``model`` and each ``add_dirs`` entry (both\nforwarded verbatim as argv elements) are rejected when they look like a CLI\nflag (leading ``-``): otherwise a value such as\n``add_dirs=[\"--dangerously-skip-permissions\"]`` could smuggle the blocked\nflag past the pair check. No legitimate value is affected \u2014 model names\nstart with a letter and directories with ``/`` or a drive letter.\n``protected_namespaces=()`` silences pydantic's ``model_*`` guard for the\nlegitimately-named ``model`` field.",
+        "properties": {
+          "add_dirs": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Add Dirs",
+            "type": "array"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "sandbox": {
+            "default": false,
+            "title": "Sandbox",
+            "type": "boolean"
+          },
+          "skip_permissions": {
+            "default": false,
+            "title": "Skip Permissions",
+            "type": "boolean"
+          }
+        },
+        "title": "AntigravityScanOptionsModel",
+        "type": "object"
+      },
+      "AutoScanFilterDraftModel": {
+        "description": "A Linear filter as a template keeps it: the fields of\n:class:`AutoScanFilterModel`, any of which may still be empty.",
+        "properties": {
+          "active_state": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Active State",
+            "type": "string"
+          },
+          "done_state": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Done State",
+            "type": "string"
+          },
+          "label_names": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Label Names",
+            "type": "array"
+          },
+          "removal_label": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Removal Label",
+            "type": "string"
+          },
+          "state_names": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "State Names",
+            "type": "array"
+          }
+        },
+        "title": "AutoScanFilterDraftModel",
         "type": "object"
       },
       "AutoScanFilterModel": {
@@ -320,8 +397,28 @@
         "type": "object"
       },
       "AutoScanSettingsModel": {
-        "description": "The last Auto Scan choices of a workspace, for the wizard to show again.\n\nEvery field is ``null`` until a scan start (or, for ``linear_filter``, an\nolder client's workspace form) sets it. A ``null`` filter means nobody\nchose one: the wizard starts with empty fields.",
+        "description": "The last Auto Scan choices of a workspace, for the wizard to show again.\n\nEvery field is ``null`` until a scan start (or, for ``linear_filter``, an\nolder client's workspace form) sets it. A ``null`` filter means nobody\nchose one: the wizard starts with empty fields. ``<kind>_options`` are\nthe options of the last start with that agent.",
         "properties": {
+          "antigravity_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AntigravityScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "claude_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClaudeScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "cli": {
             "anyOf": [
               {
@@ -333,6 +430,36 @@
             ],
             "title": "Cli"
           },
+          "codex_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CodexScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "copilot_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CopilotScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cursor_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CursorScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "github_filter": {
             "anyOf": [
               {
@@ -343,10 +470,30 @@
               }
             ]
           },
+          "junie_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JunieScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "linear_filter": {
             "anyOf": [
               {
                 "$ref": "#/components/schemas/AutoScanFilterModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "opencode_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpenCodeScanOptionsModel"
               },
               {
                 "type": "null"
@@ -370,6 +517,196 @@
           }
         },
         "title": "AutoScanSettingsModel",
+        "type": "object"
+      },
+      "AutoScanTemplate": {
+        "description": "A named set of Auto Scan choices saved on this PC.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/AutoScanTemplateSettings"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "updated_at",
+          "settings"
+        ],
+        "title": "AutoScanTemplate",
+        "type": "object"
+      },
+      "AutoScanTemplateSettings": {
+        "description": "The Auto Scan choices a template keeps; every field may be ``null``.\n\nThe filters may be incomplete (a GitHub filter without labels, for one):\nthe wizard asks for what is missing before a scan starts. A template\nnever keeps a Linear API key.",
+        "properties": {
+          "antigravity_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AntigravityScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "claude_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClaudeScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cli": {
+            "anyOf": [
+              {
+                "enum": [
+                  "claude",
+                  "codex",
+                  "antigravity",
+                  "opencode",
+                  "copilot",
+                  "cursor",
+                  "junie",
+                  "pi"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cli"
+          },
+          "codex_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CodexScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "copilot_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CopilotScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cursor_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CursorScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "github_filter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitHubScanFilterDraftModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "initial_prompt": {
+            "anyOf": [
+              {
+                "maxLength": 32000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Initial Prompt"
+          },
+          "junie_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JunieScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "linear_filter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AutoScanFilterDraftModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "opencode_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpenCodeScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "linear",
+                  "github"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "title": "AutoScanTemplateSettings",
+        "type": "object"
+      },
+      "AutoScanTemplatesResponse": {
+        "description": "Every template of this PC, sorted by name.",
+        "properties": {
+          "templates": {
+            "items": {
+              "$ref": "#/components/schemas/AutoScanTemplate"
+            },
+            "title": "Templates",
+            "type": "array"
+          }
+        },
+        "required": [
+          "templates"
+        ],
+        "title": "AutoScanTemplatesResponse",
         "type": "object"
       },
       "ChatStoredSession": {
@@ -457,7 +794,7 @@
         "type": "object"
       },
       "ClaudeOptionsModel": {
-        "description": "Wire DTO for Claude CLI launch options (see :class:`ClaudeOptions`).\n\n``effort`` is ``Literal``-typed so an invalid level is rejected with a 422 at\nthe wire boundary; ``model`` stays free-form (the client curates the alias\nlist). ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for\nthe legitimately-named ``model`` field.",
+        "description": "Wire DTO for Claude CLI launch options (see :class:`ClaudeOptions`).",
         "properties": {
           "append_system_prompt": {
             "anyOf": [
@@ -604,6 +941,94 @@
         "title": "ClaudeOptionsModel",
         "type": "object"
       },
+      "ClaudeScanOptionsModel": {
+        "description": "The Claude options an Auto Scan keeps (saved per workspace and in\ntemplates): every launch option but the per-launch prompt, worktree and\nnaming fields.\n\n``effort`` is ``Literal``-typed so an invalid level is rejected with a 422 at\nthe wire boundary; ``model`` stays free-form (the client curates the alias\nlist). ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for\nthe legitimately-named ``model`` field.",
+        "properties": {
+          "append_system_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Append System Prompt"
+          },
+          "debug": {
+            "default": false,
+            "title": "Debug",
+            "type": "boolean"
+          },
+          "effort": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effort"
+          },
+          "fast_mode": {
+            "default": false,
+            "title": "Fast Mode",
+            "type": "boolean"
+          },
+          "focus_mode": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Focus Mode"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "no_memory": {
+            "default": false,
+            "title": "No Memory",
+            "type": "boolean"
+          },
+          "plan_mode": {
+            "default": false,
+            "title": "Plan Mode",
+            "type": "boolean"
+          },
+          "skip_permissions": {
+            "default": true,
+            "title": "Skip Permissions",
+            "type": "boolean"
+          },
+          "ultracode": {
+            "default": false,
+            "title": "Ultracode",
+            "type": "boolean"
+          }
+        },
+        "title": "ClaudeScanOptionsModel",
+        "type": "object"
+      },
       "CodexLoginRequest": {
         "description": "API-key login payload.\n\nThe key is a :class:`pydantic.SecretStr` so it is auto-redacted in logs and\n``repr``; it is piped to ``codex login --with-api-key`` via stdin and never\npersisted by the agent (Codex writes its own ``auth.json``).",
         "properties": {
@@ -635,7 +1060,7 @@
         "type": "object"
       },
       "CodexOptionsModel": {
-        "description": "Wire DTO for Codex CLI launch options (see :class:`CodexOptions`).\n\n``sandbox`` and ``approval`` are ``Literal``-typed so an invalid value is\nrejected with a 422 at the wire boundary rather than producing a broken\n``codex`` argv. ``reasoning_effort`` is free-form like ``model``: the\nvocabulary is enumerated per-model at runtime and advertised via\n``capabilities.cli.codex.model_details``, so a closed Literal would 422\nvalues the agent itself just advertised whenever the Codex catalog grows.\nThe value is embedded after ``=`` inside a single exec'd argv element\n(``-c model_reasoning_effort=<v>``), so there is no flag-smuggling path.\n``protected_namespaces=()`` silences pydantic's ``model_*`` guard for the\nlegitimately-named ``model`` field.",
+        "description": "Wire DTO for Codex CLI launch options (see :class:`CodexOptions`).",
         "properties": {
           "approval": {
             "default": "never",
@@ -727,8 +1152,63 @@
         "title": "CodexOptionsModel",
         "type": "object"
       },
+      "CodexScanOptionsModel": {
+        "description": "The Codex options an Auto Scan keeps (see :class:`CodexOptionsModel`).\n\n``sandbox`` and ``approval`` are ``Literal``-typed so an invalid value is\nrejected with a 422 at the wire boundary rather than producing a broken\n``codex`` argv. ``reasoning_effort`` is free-form like ``model``: the\nvocabulary is enumerated per-model at runtime and advertised via\n``capabilities.cli.codex.model_details``, so a closed Literal would 422\nvalues the agent itself just advertised whenever the Codex catalog grows.\nThe value is embedded after ``=`` inside a single exec'd argv element\n(``-c model_reasoning_effort=<v>``), so there is no flag-smuggling path.\n``protected_namespaces=()`` silences pydantic's ``model_*`` guard for the\nlegitimately-named ``model`` field.",
+        "properties": {
+          "approval": {
+            "default": "never",
+            "enum": [
+              "untrusted",
+              "on-request",
+              "never"
+            ],
+            "title": "Approval",
+            "type": "string"
+          },
+          "full_auto": {
+            "default": false,
+            "title": "Full Auto",
+            "type": "boolean"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "high",
+            "title": "Reasoning Effort"
+          },
+          "sandbox": {
+            "default": "workspace-write",
+            "enum": [
+              "read-only",
+              "workspace-write",
+              "danger-full-access"
+            ],
+            "title": "Sandbox",
+            "type": "string"
+          }
+        },
+        "title": "CodexScanOptionsModel",
+        "type": "object"
+      },
       "CopilotOptionsModel": {
-        "description": "Wire DTO for GitHub Copilot CLI launch options (see :class:`CopilotOptions`).\n\n``allow_all`` is Copilot's ``--allow-all``: it runs tools and uses paths\nand URLs without asking.",
+        "description": "Wire DTO for GitHub Copilot CLI launch options (see :class:`CopilotOptions`).",
         "properties": {
           "allow_all": {
             "default": false,
@@ -764,6 +1244,18 @@
           }
         },
         "title": "CopilotOptionsModel",
+        "type": "object"
+      },
+      "CopilotScanOptionsModel": {
+        "description": "The GitHub Copilot options an Auto Scan keeps.\n\n``allow_all`` is Copilot's ``--allow-all``: it runs tools and uses paths\nand URLs without asking.",
+        "properties": {
+          "allow_all": {
+            "default": false,
+            "title": "Allow All",
+            "type": "boolean"
+          }
+        },
+        "title": "CopilotScanOptionsModel",
         "type": "object"
       },
       "CreateSessionRequest": {
@@ -1001,7 +1493,7 @@
         "type": "object"
       },
       "CursorOptionsModel": {
-        "description": "Wire DTO for Cursor CLI launch options (see :class:`CursorOptions`).\n\n``force`` is Cursor's ``--force`` (\"Run Everything\"): it runs commands\nwithout asking, except the ones its settings deny.",
+        "description": "Wire DTO for Cursor CLI launch options (see :class:`CursorOptions`).",
         "properties": {
           "base_branch": {
             "anyOf": [
@@ -1037,6 +1529,18 @@
           }
         },
         "title": "CursorOptionsModel",
+        "type": "object"
+      },
+      "CursorScanOptionsModel": {
+        "description": "The Cursor options an Auto Scan keeps.\n\n``force`` is Cursor's ``--force`` (\"Run Everything\"): it runs commands\nwithout asking, except the ones its settings deny.",
+        "properties": {
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          }
+        },
+        "title": "CursorScanOptionsModel",
         "type": "object"
       },
       "FsDirsResponse": {
@@ -1876,6 +2380,30 @@
         "title": "GitHead",
         "type": "object"
       },
+      "GitHubIssueTypeModel": {
+        "description": "A GitHub issue type of the repository (Bug, Task, Feature\u2026).\n\n``color`` is GitHub's color name (``RED``, ``BLUE``\u2026), ``\"\"`` when unknown.",
+        "properties": {
+          "color": {
+            "default": "",
+            "title": "Color",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "GitHubIssueTypeModel",
+        "type": "object"
+      },
       "GitHubLabelModel": {
         "properties": {
           "color": {
@@ -1895,7 +2423,16 @@
         "type": "object"
       },
       "GitHubLabelsResponse": {
+        "description": "``GET /api/autoscan/github/labels``: what a GitHub filter can pick.\n\n``issue_types`` is empty when the repository has none or GitHub did not\nsay (an older GitHub Enterprise Server, for example).",
         "properties": {
+          "issue_types": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/GitHubIssueTypeModel"
+            },
+            "title": "Issue Types",
+            "type": "array"
+          },
           "labels": {
             "items": {
               "$ref": "#/components/schemas/GitHubLabelModel"
@@ -1910,8 +2447,8 @@
         "title": "GitHubLabelsResponse",
         "type": "object"
       },
-      "GitHubScanFilterModel": {
-        "description": "Per-workspace GitHub filter for Auto Scan Mode.\n\nMirrors :class:`mobaide.core.workspaces_config.GitHubScanFilter`.\n``labels`` holds 1\u201320 distinct label names; a blank ``assignee`` or\n``active_label`` is ``null``.",
+      "GitHubScanFilterDraftModel": {
+        "description": "A GitHub filter as a template keeps it: like\n:class:`GitHubScanFilterModel`, but ``labels`` may still be empty.",
         "properties": {
           "active_label": {
             "anyOf": [
@@ -1936,6 +2473,61 @@
               }
             ],
             "title": "Assignee"
+          },
+          "issue_types": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Issue Types",
+            "type": "array"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Labels",
+            "type": "array"
+          }
+        },
+        "title": "GitHubScanFilterDraftModel",
+        "type": "object"
+      },
+      "GitHubScanFilterModel": {
+        "description": "Per-workspace GitHub filter for Auto Scan Mode.\n\nMirrors :class:`mobaide.core.workspaces_config.GitHubScanFilter`.\n``labels`` holds 1\u201320 distinct label names; a blank ``assignee`` or\n``active_label`` is ``null``. ``issue_types`` holds up to 20 GitHub issue\ntype names (distinct, ignoring case); empty takes every type.",
+        "properties": {
+          "active_label": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Label"
+          },
+          "assignee": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee"
+          },
+          "issue_types": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Issue Types",
+            "type": "array"
           },
           "labels": {
             "items": {
@@ -2865,7 +3457,7 @@
         "type": "object"
       },
       "JunieOptionsModel": {
-        "description": "Wire DTO for Junie CLI launch options (see :class:`JunieOptions`).\n\n``plan_mode`` starts the session in Junie's Plan mode. ``brave`` is\nJunie's ``--brave``: Brave mode for this session only, which runs\ncommands without asking.",
+        "description": "Wire DTO for Junie CLI launch options (see :class:`JunieOptions`).",
         "properties": {
           "base_branch": {
             "anyOf": [
@@ -2908,6 +3500,23 @@
         "title": "JunieOptionsModel",
         "type": "object"
       },
+      "JunieScanOptionsModel": {
+        "description": "The Junie options an Auto Scan keeps.\n\n``plan_mode`` starts the session in Junie's Plan mode. ``brave`` is\nJunie's ``--brave``: Brave mode for this session only, which runs\ncommands without asking.",
+        "properties": {
+          "brave": {
+            "default": false,
+            "title": "Brave",
+            "type": "boolean"
+          },
+          "plan_mode": {
+            "default": false,
+            "title": "Plan Mode",
+            "type": "boolean"
+          }
+        },
+        "title": "JunieScanOptionsModel",
+        "type": "object"
+      },
       "LinearLabelModel": {
         "description": "Linear label discovered via the per-workspace API key.",
         "properties": {
@@ -2947,7 +3556,7 @@
         "type": "object"
       },
       "OpenCodeOptionsModel": {
-        "description": "Wire DTO for OpenCode CLI launch options (see :class:`OpenCodeOptions`).\n\n``auto_approve`` is OpenCode's ``--auto``: it accepts every permission\nrequest that the user's OpenCode rules do not deny. ``initial_prompt`` is\nthe first message; it travels as one argv element, so its length is capped.\n``connect`` starts a terminal session that runs ``opencode auth login``\n(sign in to a model provider) in place of an OpenCode session.",
+        "description": "Wire DTO for OpenCode CLI launch options (see :class:`OpenCodeOptions`).\n\n``initial_prompt`` is the first message; it travels as one argv element,\nso its length is capped. ``connect`` starts a terminal session that runs\n``opencode auth login`` (sign in to a model provider) in place of an\nOpenCode session.",
         "properties": {
           "auto_approve": {
             "default": false,
@@ -3000,6 +3609,18 @@
           }
         },
         "title": "OpenCodeOptionsModel",
+        "type": "object"
+      },
+      "OpenCodeScanOptionsModel": {
+        "description": "The OpenCode options an Auto Scan keeps.\n\n``auto_approve`` is OpenCode's ``--auto``: it accepts every permission\nrequest that the user's OpenCode rules do not deny.",
+        "properties": {
+          "auto_approve": {
+            "default": false,
+            "title": "Auto Approve",
+            "type": "boolean"
+          }
+        },
+        "title": "OpenCodeScanOptionsModel",
         "type": "object"
       },
       "PiOptionsModel": {
@@ -3107,6 +3728,25 @@
           "project_name"
         ],
         "title": "RunNowResponse",
+        "type": "object"
+      },
+      "SaveTemplateRequest": {
+        "description": "``POST /api/autoscan/templates``: save ``settings`` under ``name``.\n\nA template with the same name (ignoring case) is replaced and keeps its\nid. Runs of white space in the name become one space.",
+        "properties": {
+          "name": {
+            "maxLength": 200,
+            "title": "Name",
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/AutoScanTemplateSettings"
+          }
+        },
+        "required": [
+          "name",
+          "settings"
+        ],
+        "title": "SaveTemplateRequest",
         "type": "object"
       },
       "ScrollbackResponse": {
@@ -3268,12 +3908,17 @@
         "type": "object"
       },
       "StartScanRequest": {
-        "description": "``POST /api/autoscan/start``.\n\n``source`` absent is an older client: Linear, Claude Code, the stored\nfilter. A newer client sends every choice: ``source``, ``cli``, the\nsource's filter, ``auto_approve`` (agents other than Claude; Claude takes\n``claude_options.skip_permissions``), ``initial_prompt`` (``\"\"`` clears\nthe saved prompt) and, when the workspace has none, ``linear_api_key``.",
+        "description": "``POST /api/autoscan/start``.\n\n``source`` absent is an older client: Linear, Claude Code, the stored\nfilter. A newer client sends every choice: ``source``, ``cli``, the\nsource's filter, the chosen agent's options (``claude_options``,\n``codex_options``, \u2026; Pi has none), ``initial_prompt`` (``\"\"`` clears\nthe saved prompt) and, when the workspace has none, ``linear_api_key``.\nThe options of other agents are ignored.",
         "properties": {
-          "auto_approve": {
-            "default": true,
-            "title": "Auto Approve",
-            "type": "boolean"
+          "antigravity_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AntigravityScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "claude_options": {
             "anyOf": [
@@ -3306,6 +3951,36 @@
             ],
             "title": "Cli"
           },
+          "codex_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CodexScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "copilot_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CopilotScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cursor_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CursorScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "github_filter": {
             "anyOf": [
               {
@@ -3328,6 +4003,16 @@
             ],
             "title": "Initial Prompt"
           },
+          "junie_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JunieScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "linear_api_key": {
             "anyOf": [
               {
@@ -3345,6 +4030,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/AutoScanFilterModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "opencode_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpenCodeScanOptionsModel"
               },
               {
                 "type": "null"
@@ -4367,7 +5062,7 @@
     },
     "/api/autoscan/github/labels": {
       "get": {
-        "description": "Labels of the workspace's GitHub repository.",
+        "description": "Labels and issue types of the workspace's GitHub repository.",
         "operationId": "github_labels_api_autoscan_github_labels_get",
         "parameters": [
           {
@@ -4680,6 +5375,111 @@
           }
         },
         "summary": "Stop Scan",
+        "tags": [
+          "autoscan"
+        ]
+      }
+    },
+    "/api/autoscan/templates": {
+      "get": {
+        "description": "The Auto Scan templates saved on this PC, sorted by name.",
+        "operationId": "get_templates_api_autoscan_templates_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoScanTemplatesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Templates",
+        "tags": [
+          "autoscan"
+        ]
+      },
+      "post": {
+        "description": "Save a template; one with the same name (ignoring case) is replaced.\n409 when a new name would pass the cap. Answers every template.",
+        "operationId": "post_template_api_autoscan_templates_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveTemplateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoScanTemplatesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Template",
+        "tags": [
+          "autoscan"
+        ]
+      }
+    },
+    "/api/autoscan/templates/{template_id}": {
+      "delete": {
+        "description": "Delete a template; answers every template left.",
+        "operationId": "remove_template_api_autoscan_templates__template_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoScanTemplatesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Template",
         "tags": [
           "autoscan"
         ]

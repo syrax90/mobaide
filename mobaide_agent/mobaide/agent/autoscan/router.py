@@ -23,15 +23,26 @@ from ..sessions.models import SessionResponse
 from .models import (
     AutoScanInstanceStatusResponse,
     AutoScanListResponse,
+    AutoScanTemplatesResponse,
     GitHubLabelsResponse,
     GitHubSetupRequest,
     GitHubStatusResponse,
     RunNowRequest,
     RunNowResponse,
+    SaveTemplateRequest,
     StartScanRequest,
     StopScanRequest,
 )
-from .service import github_labels_for, github_status_for, start_github_setup
+from .service import (
+    delete_template,
+    github_labels_for,
+    github_status_for,
+    list_templates,
+    save_template,
+    start_github_setup,
+    template_not_found,
+)
+from .templates import TemplateLimitError
 from .stream import run_autoscan_stream
 
 logger = get_logger(__name__)
@@ -149,14 +160,40 @@ async def github_status(
 async def github_labels(
     request: Request, workspace_name: str = Query(..., alias="project_name"),
 ) -> GitHubLabelsResponse:
-    """Labels of the workspace's GitHub repository."""
+    """Labels and issue types of the workspace's GitHub repository."""
     try:
-        labels = await github_labels_for(request.app.state, workspace_name)
+        return await github_labels_for(request.app.state, workspace_name)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc).strip("'"))
     except AutoScanSourceError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-    return GitHubLabelsResponse(labels=labels)
+
+
+@router.get("/templates", response_model=AutoScanTemplatesResponse)
+async def get_templates(request: Request) -> AutoScanTemplatesResponse:
+    """The Auto Scan templates saved on this PC, sorted by name."""
+    return list_templates(request.app.state)
+
+
+@router.post("/templates", response_model=AutoScanTemplatesResponse)
+async def post_template(body: SaveTemplateRequest, request: Request) -> AutoScanTemplatesResponse:
+    """Save a template; one with the same name (ignoring case) is replaced.
+    409 when a new name would pass the cap. Answers every template."""
+    try:
+        return save_template(request.app.state, body)
+    except TemplateLimitError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+
+@router.delete("/templates/{template_id}", response_model=AutoScanTemplatesResponse)
+async def remove_template(template_id: str, request: Request) -> AutoScanTemplatesResponse:
+    """Delete a template; answers every template left."""
+    try:
+        return delete_template(request.app.state, template_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=template_not_found(template_id),
+        )
 
 
 @router.post(

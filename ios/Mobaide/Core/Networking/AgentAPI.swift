@@ -413,6 +413,19 @@ struct AgentAPI: Sendable {
         return try await execute(method: "GET", url: "\(try await base())/api/autoscan/github/labels\(query)")
     }
 
+    func getAutoScanTemplates() async throws -> AutoScanTemplatesResponse {
+        try await execute(method: "GET", url: "\(try await base())/api/autoscan/templates")
+    }
+
+    func saveAutoScanTemplate(_ request: SaveAutoScanTemplateRequest) async throws -> AutoScanTemplatesResponse {
+        try await execute(method: "POST", url: "\(try await base())/api/autoscan/templates", body: request)
+    }
+
+    func deleteAutoScanTemplate(id: String) async throws -> AutoScanTemplatesResponse {
+        let segment = Self.encodePathSegment(id)
+        return try await execute(method: "DELETE", url: "\(try await base())/api/autoscan/templates/\(segment)")
+    }
+
     /// `POST /api/autoscan/github/setup` — answers with the terminal session
     /// that runs the installer or `gh auth login`.
     func startGitHubSetup(_ request: GitHubSetupRequest) async throws -> SessionResponse {

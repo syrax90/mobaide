@@ -117,7 +117,7 @@ def _workspace(tmp_path: Path, *, saved_prompt: str | None = None) -> WorkspaceC
 
 def _instance(
     tmp_path: Path, *, cli: str, launcher, source: _FakeSource,
-    auto_approve: bool = True, initial_prompt: str | None = None,
+    agent_options: dict[str, object] | None = None, initial_prompt: str | None = None,
     workspace: WorkspaceConfig | None = None,
     worktrees: _FakeWorktrees | None = None,
 ):
@@ -143,7 +143,7 @@ def _instance(
         source=source,
         cli=cli,
         launchers={cli: launcher},
-        auto_approve=auto_approve,
+        agent_options=agent_options,
         initial_prompt=initial_prompt,
     )
     return inst, worktrees, sessions
@@ -194,7 +194,7 @@ async def test_agent_runs_the_issue_in_its_own_worktree(
     source = _FakeSource([_issue()])
     inst, worktrees, sessions = _instance(
         tmp_path, cli=cli, launcher=make_launcher(), source=source,
-        auto_approve=auto_approve, initial_prompt=_PROMPT,
+        agent_options=None if auto_approve else {}, initial_prompt=_PROMPT,
     )
 
     await inst._scan_once()

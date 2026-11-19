@@ -91,10 +91,11 @@ fun AutoScanDetailScreen(
             modifier = Modifier.fillMaxSize().padding(padding),
         ) {
             HeaderCard(
-                statusText = ui.instance?.status ?: ui.connection.name,
+                statusText = if (ui.stopped) "stopped" else ui.instance?.status ?: ui.connection.name,
                 sourceAndAgent = ui.instance?.sourceAndAgent,
                 nextScanAtIso = ui.nextScanAt,
                 cycleNumber = ui.cycleNumber,
+                showControls = !ui.stopped,
                 onRunNow = viewModel::runNow,
                 onStop = viewModel::stop,
             )
@@ -123,6 +124,7 @@ private fun HeaderCard(
     sourceAndAgent: String?,
     nextScanAtIso: String?,
     cycleNumber: Int,
+    showControls: Boolean,
     onRunNow: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -153,12 +155,12 @@ private fun HeaderCard(
                         .testTag("autoscan_detail_source_agent"),
                 )
             }
-            CountdownText(
+            if (showControls) CountdownText(
                 nextScanAtIso = nextScanAtIso,
                 modifier = Modifier.padding(top = 6.dp),
                 style = MaterialTheme.typography.bodyMedium,
             )
-            Row(
+            if (showControls) Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -166,7 +168,7 @@ private fun HeaderCard(
                     Icon(Icons.Default.PlayArrow, contentDescription = null)
                     Text("Run Now", modifier = Modifier.padding(start = 4.dp))
                 }
-                PixelButton(onClick = onStop) {
+                PixelButton(onClick = onStop, style = PixelButtonStyle.Danger) {
                     Icon(Icons.Default.Stop, contentDescription = null)
                     Text("Stop", modifier = Modifier.padding(start = 4.dp))
                 }

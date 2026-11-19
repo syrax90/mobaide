@@ -257,16 +257,19 @@ The wire details are in [PROTOCOL.md](../PROTOCOL.md).
 
 Auto Scan watches an issue source for matching issues. It creates a git worktree for each issue and launches an AI agent session to work on it. The wire contract is in [PROTOCOL.md](../PROTOCOL.md) ("Delta 2026-11-18: Auto Scan sources and agents").
 
-- **Issue source.** The wizard asks for the source: GitHub or Linear.
-- **GitHub.** The scan reads the open issues of the workspace's own GitHub repository. An issue matches when it has any trigger label (case-insensitive). Starting work removes the trigger labels and adds an optional "label to add". The label to add must not be one of the trigger labels: the agent rejects such a filter with `422`, and the clients block Start. A closed issue counts as done, and its worktree is removed without `--force`.
+- **Issue source.** The wizard is four numbered sections: 1 Where to find issues, 2 Which issues, 3 AI agent, 4 Instructions. A "How Auto Scan works" callout and a Templates card sit above them.
+- **GitHub.** The scan reads the open issues of the workspace's own GitHub repository. An issue matches when it has any trigger label (case-insensitive). Starting work removes the trigger labels and adds an optional "label to add". The label to add must not be one of the trigger labels: the agent rejects such a filter with `422`, and the clients block Start. A closed issue counts as done, and its worktree is removed without `--force`. The wizard says that each issue runs in its own git worktree, and that the worktree is removed when the issue is closed (GitHub) or reaches Done (Linear).
+- **How issues are picked up.** The wizard shows tips: use a dedicated label such as `auto-scan`, avoid common labels, keep the label out of issue templates and workflows, and use one label per kind of work with a template for each.
+- **Issue types.** A GitHub filter can also match issue types (Bug, Task, Feature and so on). The agent lists the types of the repository with the labels.
+- **Templates.** The wizard saves the Auto Scan settings as named templates and applies them later. The agent stores them in `autoscan_templates.json` (up to 50, shared by all workspaces).
 - **GitHub CLI.** The wizard shows the `gh` status. **Install GitHub CLI** and **Sign in to GitHub** open a setup terminal on top of the wizard. The agent runs the installer (brew, winget, apt-get, dnf, pacman or zypper) or `gh auth login`.
 - **Linear.** The scan uses the workspace's Linear API key. The wizard has a **Save key** action and a Linear filter.
 - **Filters.** Filters start empty, with no built-in defaults. The last choices are remembered per workspace on the agent (`auto_scan` in the workspace record).
 - **AI agent.** The user picks the agent that runs each issue: Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot, Cursor, Junie or Pi. Before the first claim the agent checks that the CLI is installed, and that Codex is signed in.
 - **Initial prompt.** The first prompt is the instruction plus the issue title, URL and description.
 - **Remembered choices.** The wizard remembers the last-used launch options on-device, in a bucket separate from the Claude Code sheet.
-- **Permissions.** Claude Code has its own options, with Skip permissions as a live toggle (default ON). Other agents get **Run without asking for permission (dangerous)**, ON by default and remembered on the device. Switched OFF, the scan pauses at permission prompts and raises the normal attention notification.
-- **Card and detail.** The Auto Scan card and detail screen show "Source · Agent".
+- **Permissions.** Claude Code has its own options, with Skip permissions as a live toggle (default ON). Each agent shows the same options as its normal New session screen, without the worktree checkbox, because every issue gets a worktree and the session starts at once. The options are remembered per workspace on the agent (`auto_scan.<kind>_options`). Where the permission option is switched OFF, the scan pauses at permission prompts and raises the normal attention notification.
+- **Card and detail.** The Auto Scan card and detail screen show "Source · Agent". After Stop, the detail screen shows "Stopped".
 - **Older agents.** An agent without `capabilities.autoscan` keeps the Linear and Claude panel, with an "Update Mobaide on your PC" note. The workspace form shows the Auto Scan filter section only for those agents.
 
 ## Reconnection

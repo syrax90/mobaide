@@ -11,6 +11,10 @@ export type StartScanRequest = components['schemas']['StartScanRequest'];
 export type RunNowResponse = components['schemas']['RunNowResponse'];
 export type GitHubStatus = components['schemas']['GitHubStatusResponse'];
 export type GitHubLabel = components['schemas']['GitHubLabelModel'];
+export type GitHubIssueType = components['schemas']['GitHubIssueTypeModel'];
+export type GitHubLabelsResponse = components['schemas']['GitHubLabelsResponse'];
+export type AutoScanTemplate = components['schemas']['AutoScanTemplate'];
+export type AutoScanTemplateSettings = components['schemas']['AutoScanTemplateSettings'];
 export type GitHubSetupAction = components['schemas']['GitHubSetupRequest']['action'];
 
 /**
@@ -104,17 +108,62 @@ export async function getGitHubStatus(
   return data;
 }
 
-/** The repository's labels (up to 200), for the label picker. 400 when `gh` cannot read them. */
+/**
+ * The repository's labels (up to 200) and its GitHub issue types, for the
+ * filter's pickers. 400 when `gh` cannot read the labels; the issue types are
+ * empty when the repository has none or GitHub did not say.
+ */
 export async function listGitHubLabels(
   agentId: string,
   workspaceName: string,
-): Promise<GitHubLabel[]> {
+): Promise<GitHubLabelsResponse> {
   const { data, error, response } = await createAgentClient(agentId).GET(
     '/api/autoscan/github/labels',
     { params: { query: { project_name: workspaceName } } },
   );
   if (error !== undefined || data === undefined) throw toApiError(response, error);
-  return data.labels;
+  // `issue_types` came later in the same unreleased delta; read it defensively.
+  return { labels: data.labels, issue_types: data.issue_types ?? [] };
+}
+
+/** The Auto Scan templates saved on the PC, sorted by name. */
+export async function listAutoScanTemplates(agentId: string): Promise<AutoScanTemplate[]> {
+  const { data, error, response } = await createAgentClient(agentId).GET(
+    '/api/autoscan/templates',
+  );
+  if (error !== undefined || data === undefined) throw toApiError(response, error);
+  return data.templates;
+}
+
+/**
+ * Save `settings` as the template `name`; one with the same name (ignoring
+ * case) is replaced. Answers every template. 409 when the PC already holds
+ * the most templates it keeps.
+ */
+export async function saveAutoScanTemplate(
+  agentId: string,
+  name: string,
+  settings: AutoScanTemplateSettings,
+): Promise<AutoScanTemplate[]> {
+  const { data, error, response } = await createAgentClient(agentId).POST(
+    '/api/autoscan/templates',
+    { body: { name, settings } },
+  );
+  if (error !== undefined || data === undefined) throw toApiError(response, error);
+  return data.templates;
+}
+
+/** Delete a template; answers every template left. */
+export async function deleteAutoScanTemplate(
+  agentId: string,
+  templateId: string,
+): Promise<AutoScanTemplate[]> {
+  const { data, error, response } = await createAgentClient(agentId).DELETE(
+    '/api/autoscan/templates/{template_id}',
+    { params: { path: { template_id: templateId } } },
+  );
+  if (error !== undefined || data === undefined) throw toApiError(response, error);
+  return data.templates;
 }
 
 /**

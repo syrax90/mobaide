@@ -29,6 +29,7 @@ export function LinearSourcePanel({ hasLinearKey, filter, sources, dispatch }: L
       loading={sources.linearLoading}
       error={sources.linear?.failed === true ? 'Couldn’t load Linear labels/states.' : null}
       showErrors={false}
+      showWorktreeNote={false}
       onChange={(next) => {
         dispatch({ type: 'setAutoScanLinearFilter', filter: next });
       }}

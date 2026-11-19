@@ -6,8 +6,8 @@ import kotlinx.serialization.Serializable
  * Persisted last-used Claude launch selections, re-applied to the create-session
  * wizard on the next launch (mirrors the last-used-workspace pre-fill in
  * [PreferencesStore]). Backs two independent per-kind buckets — Claude Code and
- * Auto Scan — so each mode remembers its own choices; [planMode] and
- * [autoApprove] are meaningful only in the Auto Scan bucket. Stored as a single JSON blob; lenient decoding
+ * Auto Scan — so each mode remembers its own choices; [planMode] is meaningful
+ * only in the Auto Scan bucket. Stored as a single JSON blob; lenient decoding
  * tolerates added fields so an older cached blob never crashes a newer build.
  */
 @Serializable
@@ -25,7 +25,4 @@ data class ClaudeLaunchPrefs(
     val focusMode: Boolean = true,
     // Claude Code only: the classic terminal instead of the chat view. Older blobs decode to off.
     val terminalUi: Boolean = false,
-    // Auto Scan bucket only: the "run without asking" switch of the agents
-    // other than Claude Code. Defaults ON because scans usually run unattended.
-    val autoApprove: Boolean = true,
 )

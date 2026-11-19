@@ -9,10 +9,13 @@ import com.mobaide.app.data.network.dto.AUTO_SCAN_SOURCE_LINEAR
 import com.mobaide.app.data.network.dto.AutoScanCapability
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.network.dto.AutoScanListResponse
+import com.mobaide.app.data.network.dto.AutoScanTemplateDto
+import com.mobaide.app.data.network.dto.AutoScanTemplateSettingsDto
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
-import com.mobaide.app.data.network.dto.GitHubLabelDto
+import com.mobaide.app.data.network.dto.GitHubLabelsResponse
 import com.mobaide.app.data.network.dto.GitHubStatusDto
 import com.mobaide.app.data.network.dto.RunNowResponse
+import com.mobaide.app.data.network.dto.SaveAutoScanTemplateRequest
 import com.mobaide.app.data.network.dto.StartScanRequest
 import com.mobaide.app.data.network.dto.autoScanCapability
 import kotlinx.coroutines.CoroutineScope
@@ -40,6 +43,13 @@ class AutoScanCapacityException(val maxScans: Int) :
 
 /** A `400` from the agent: a choice is missing or the source or agent is not usable. */
 class AutoScanRejectedException(val detail: String) : Exception(detail)
+
+/**
+ * A template call the agent refused; [detail] is its words when it gave some
+ * (e.g. the cap), [status] the HTTP status.
+ */
+class AutoScanTemplateException(val detail: String?, val status: Int) :
+    Exception(detail ?: "Template request failed")
 
 /** The `detail` of an agent error body, or null when the body has none. */
 internal fun apiErrorDetail(body: String): String? = runCatching {
@@ -196,9 +206,28 @@ class AutoScanRepository(
     suspend fun githubStatus(workspaceName: String): GitHubStatusDto =
         restApi.getGitHubStatus(workspaceName)
 
-    /** The labels of the workspace's GitHub repository. */
-    suspend fun githubLabels(workspaceName: String): List<GitHubLabelDto> =
-        restApi.getGitHubLabels(workspaceName).labels
+    /** The labels and issue types of the workspace's GitHub repository. */
+    suspend fun githubLabels(workspaceName: String): GitHubLabelsResponse =
+        restApi.getGitHubLabels(workspaceName)
+
+    /** The PC's Auto Scan templates, sorted by name. */
+    suspend fun templates(): List<AutoScanTemplateDto> =
+        templateCall { restApi.getAutoScanTemplates().templates }
+
+    /** Save [settings] as [name]; a template of the same name is replaced. Throws [AutoScanTemplateException]. */
+    suspend fun saveTemplate(name: String, settings: AutoScanTemplateSettingsDto): List<AutoScanTemplateDto> =
+        templateCall { restApi.saveAutoScanTemplate(SaveAutoScanTemplateRequest(name, settings)).templates }
+
+    suspend fun deleteTemplate(templateId: String): List<AutoScanTemplateDto> =
+        templateCall { restApi.deleteAutoScanTemplate(templateId).templates }
+
+    // Every answer is the whole list, so the caller replaces its copy with it.
+    private suspend fun templateCall(call: suspend () -> List<AutoScanTemplateDto>): List<AutoScanTemplateDto> =
+        try {
+            call()
+        } catch (e: ApiException) {
+            throw AutoScanTemplateException(apiErrorDetail(e.errorBody), e.code)
+        }
 
     /**
      * Open a WebSocket stream subscribed to a single workspace, causing the server

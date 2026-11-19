@@ -16,8 +16,10 @@ from mobaide.core.opencode_launcher import INITIAL_PROMPT_MAX, OpenCodeOptions
 from mobaide.core.pi_launcher import PiOptions
 
 
-class ClaudeOptionsModel(BaseModel):
-    """Wire DTO for Claude CLI launch options (see :class:`ClaudeOptions`).
+class ClaudeScanOptionsModel(BaseModel):
+    """The Claude options an Auto Scan keeps (saved per workspace and in
+    templates): every launch option but the per-launch prompt, worktree and
+    naming fields.
 
     ``effort`` is ``Literal``-typed so an invalid level is rejected with a 422 at
     the wire boundary; ``model`` stays free-form (the client curates the alias
@@ -34,12 +36,6 @@ class ClaudeOptionsModel(BaseModel):
     # UI's own toggle now starts off, to keep old-client/new-agent pairings
     # (and vice versa) from silently flipping an omitted field's meaning.
     skip_permissions: bool = True
-    initial_prompt: str | None = None
-    worktree: bool = False
-    branch_name: str | None = None
-    base_branch: str | None = None
-    identifier: str | None = None
-    title: str | None = None
     model: str | None = None
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
     fast_mode: bool = False
@@ -48,12 +44,23 @@ class ClaudeOptionsModel(BaseModel):
     debug: bool = False
     focus_mode: bool | None = None
 
+
+class ClaudeOptionsModel(ClaudeScanOptionsModel):
+    """Wire DTO for Claude CLI launch options (see :class:`ClaudeOptions`)."""
+
+    initial_prompt: str | None = None
+    worktree: bool = False
+    branch_name: str | None = None
+    base_branch: str | None = None
+    identifier: str | None = None
+    title: str | None = None
+
     def to_options(self) -> ClaudeOptions:
         return ClaudeOptions(**self.model_dump())
 
 
-class CodexOptionsModel(BaseModel):
-    """Wire DTO for Codex CLI launch options (see :class:`CodexOptions`).
+class CodexScanOptionsModel(BaseModel):
+    """The Codex options an Auto Scan keeps (see :class:`CodexOptionsModel`).
 
     ``sandbox`` and ``approval`` are ``Literal``-typed so an invalid value is
     rejected with a 422 at the wire boundary rather than producing a broken
@@ -76,6 +83,11 @@ class CodexOptionsModel(BaseModel):
     approval: Literal["untrusted", "on-request", "never"] = "never"
     reasoning_effort: str | None = "high"
     full_auto: bool = False
+
+
+class CodexOptionsModel(CodexScanOptionsModel):
+    """Wire DTO for Codex CLI launch options (see :class:`CodexOptions`)."""
+
     initial_prompt: str | None = None
     worktree: bool = False
     branch_name: str | None = None
@@ -85,8 +97,8 @@ class CodexOptionsModel(BaseModel):
         return CodexOptions(**self.model_dump())
 
 
-class AntigravityOptionsModel(BaseModel):
-    """Wire DTO for Antigravity CLI launch options (see :class:`AntigravityOptions`).
+class AntigravityScanOptionsModel(BaseModel):
+    """The Antigravity options an Auto Scan keeps (see :class:`AntigravityOptionsModel`).
 
     ``model`` is free-form ``str`` — like the Claude/Codex DTOs — carrying the
     full display name ``agy models`` prints (e.g. ``Gemini 3.1 Pro (Low)``);
@@ -111,12 +123,9 @@ class AntigravityOptionsModel(BaseModel):
     skip_permissions: bool = False
     sandbox: bool = False
     add_dirs: list[str] = []
-    worktree: bool = False
-    branch_name: str | None = None
-    base_branch: str | None = None
 
     @model_validator(mode="after")
-    def _reject_sandboxed_skip_permissions(self) -> "AntigravityOptionsModel":
+    def _reject_sandboxed_skip_permissions(self) -> "AntigravityScanOptionsModel":
         if self.skip_permissions and self.sandbox:
             raise ValueError(
                 "skip_permissions and sandbox are mutually exclusive: "
@@ -129,23 +138,39 @@ class AntigravityOptionsModel(BaseModel):
             raise ValueError("add_dirs entries must not look like CLI flags (leading '-')")
         return self
 
+
+class AntigravityOptionsModel(AntigravityScanOptionsModel):
+    """Wire DTO for Antigravity CLI launch options (see :class:`AntigravityOptions`)."""
+
+    worktree: bool = False
+    branch_name: str | None = None
+    base_branch: str | None = None
+
     def to_options(self) -> AntigravityOptions:
         data = self.model_dump()
         data["add_dirs"] = tuple(data["add_dirs"])
         return AntigravityOptions(**data)
 
 
-class OpenCodeOptionsModel(BaseModel):
-    """Wire DTO for OpenCode CLI launch options (see :class:`OpenCodeOptions`).
+class OpenCodeScanOptionsModel(BaseModel):
+    """The OpenCode options an Auto Scan keeps.
 
     ``auto_approve`` is OpenCode's ``--auto``: it accepts every permission
-    request that the user's OpenCode rules do not deny. ``initial_prompt`` is
-    the first message; it travels as one argv element, so its length is capped.
-    ``connect`` starts a terminal session that runs ``opencode auth login``
-    (sign in to a model provider) in place of an OpenCode session.
+    request that the user's OpenCode rules do not deny.
     """
 
     auto_approve: bool = False
+
+
+class OpenCodeOptionsModel(OpenCodeScanOptionsModel):
+    """Wire DTO for OpenCode CLI launch options (see :class:`OpenCodeOptions`).
+
+    ``initial_prompt`` is the first message; it travels as one argv element,
+    so its length is capped. ``connect`` starts a terminal session that runs
+    ``opencode auth login`` (sign in to a model provider) in place of an
+    OpenCode session.
+    """
+
     initial_prompt: str | None = Field(default=None, max_length=INITIAL_PROMPT_MAX)
     connect: bool = False
     worktree: bool = False
@@ -156,14 +181,19 @@ class OpenCodeOptionsModel(BaseModel):
         return OpenCodeOptions(**self.model_dump())
 
 
-class CopilotOptionsModel(BaseModel):
-    """Wire DTO for GitHub Copilot CLI launch options (see :class:`CopilotOptions`).
+class CopilotScanOptionsModel(BaseModel):
+    """The GitHub Copilot options an Auto Scan keeps.
 
     ``allow_all`` is Copilot's ``--allow-all``: it runs tools and uses paths
     and URLs without asking.
     """
 
     allow_all: bool = False
+
+
+class CopilotOptionsModel(CopilotScanOptionsModel):
+    """Wire DTO for GitHub Copilot CLI launch options (see :class:`CopilotOptions`)."""
+
     worktree: bool = False
     branch_name: str | None = None
     base_branch: str | None = None
@@ -172,14 +202,19 @@ class CopilotOptionsModel(BaseModel):
         return CopilotOptions(**self.model_dump())
 
 
-class CursorOptionsModel(BaseModel):
-    """Wire DTO for Cursor CLI launch options (see :class:`CursorOptions`).
+class CursorScanOptionsModel(BaseModel):
+    """The Cursor options an Auto Scan keeps.
 
     ``force`` is Cursor's ``--force`` ("Run Everything"): it runs commands
     without asking, except the ones its settings deny.
     """
 
     force: bool = False
+
+
+class CursorOptionsModel(CursorScanOptionsModel):
+    """Wire DTO for Cursor CLI launch options (see :class:`CursorOptions`)."""
+
     worktree: bool = False
     branch_name: str | None = None
     base_branch: str | None = None
@@ -188,8 +223,8 @@ class CursorOptionsModel(BaseModel):
         return CursorOptions(**self.model_dump())
 
 
-class JunieOptionsModel(BaseModel):
-    """Wire DTO for Junie CLI launch options (see :class:`JunieOptions`).
+class JunieScanOptionsModel(BaseModel):
+    """The Junie options an Auto Scan keeps.
 
     ``plan_mode`` starts the session in Junie's Plan mode. ``brave`` is
     Junie's ``--brave``: Brave mode for this session only, which runs
@@ -198,6 +233,11 @@ class JunieOptionsModel(BaseModel):
 
     plan_mode: bool = False
     brave: bool = False
+
+
+class JunieOptionsModel(JunieScanOptionsModel):
+    """Wire DTO for Junie CLI launch options (see :class:`JunieOptions`)."""
+
     worktree: bool = False
     branch_name: str | None = None
     base_branch: str | None = None

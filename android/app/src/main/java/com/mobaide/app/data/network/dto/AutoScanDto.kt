@@ -35,17 +35,23 @@ data class AutoScanListResponse(
  * `POST /api/autoscan/start`. An older client sends only the workspace and
  * [claude_options]. A client of an agent with `capabilities.autoscan` sends
  * every choice: [source], [cli], the chosen source's filter, [initial_prompt]
- * (`""` clears the saved prompt), [auto_approve] for agents other than Claude
- * Code, and [claude_options] (without the prompt) only for Claude Code.
+ * (`""` clears the saved prompt) and the chosen agent's options only:
+ * [claude_options] (without the prompt) for Claude Code, `<kind>_options` for
+ * the others, none for Pi.
  */
 @Serializable
 data class StartScanRequest(
     @SerialName("project_name")
     val workspace_name: String,
     val claude_options: ClaudeOptionsModel? = null,
+    val codex_options: CodexScanOptionsDto? = null,
+    val antigravity_options: AntigravityScanOptionsDto? = null,
+    val opencode_options: OpenCodeScanOptionsDto? = null,
+    val copilot_options: CopilotScanOptionsDto? = null,
+    val cursor_options: CursorScanOptionsDto? = null,
+    val junie_options: JunieScanOptionsDto? = null,
     val source: String? = null,
     val cli: String? = null,
-    val auto_approve: Boolean? = null,
     val initial_prompt: String? = null,
     val linear_filter: AutoScanFilterDto? = null,
     val github_filter: GitHubScanFilterDto? = null,
@@ -79,9 +85,19 @@ data class GitHubLabelDto(
     val color: String = "",
 )
 
+/** A GitHub issue type of the repository (Bug, Task, Feature…); [color] is GitHub's name, e.g. `RED`. */
+@Serializable
+data class GitHubIssueTypeDto(
+    val name: String,
+    val color: String = "",
+    val description: String = "",
+)
+
+/** `GET /api/autoscan/github/labels`; [issue_types] is empty when the repository has none. */
 @Serializable
 data class GitHubLabelsResponse(
     val labels: List<GitHubLabelDto> = emptyList(),
+    val issue_types: List<GitHubIssueTypeDto> = emptyList(),
 )
 
 /** `POST /api/autoscan/github/setup`; [action] is `install` or `sign_in`. */

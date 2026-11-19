@@ -13,11 +13,22 @@
       "name": "github_source_other_agent",
       "wire": {
         "project_name": "p",
+        "codex_options": { "model": "gpt-5.5", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": "high", "full_auto": false },
         "source": "github",
         "cli": "codex",
-        "auto_approve": false,
         "initial_prompt": "",
-        "github_filter": { "labels": ["ai-ready", "bot"], "assignee": "@me", "active_label": "ai-doing" }
+        "github_filter": { "labels": ["ai-ready", "bot"], "assignee": "@me", "active_label": "ai-doing", "issue_types": ["Bug", "Task"] }
+      }
+    },
+    {
+      "name": "github_source_junie_plan",
+      "wire": {
+        "project_name": "p",
+        "junie_options": { "plan_mode": true, "brave": false },
+        "source": "github",
+        "cli": "junie",
+        "initial_prompt": "Plan first.",
+        "github_filter": { "labels": ["auto-scan"], "issue_types": [] }
       }
     },
     {

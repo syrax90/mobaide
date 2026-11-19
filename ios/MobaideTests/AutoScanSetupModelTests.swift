@@ -31,14 +31,14 @@ final class AutoScanSetupModelTests: XCTestCase {
         try FixtureLoader.decodeCase(WorkspaceInfo.self, path: "dto/agent/ProjectInfo.json", name: name)
     }
 
+    private static let readyGitHubStatus =
+        #"{"installed":true,"version":"2.83.0","signed_in":true,"account":"octocat","host":"github.com","repo":"acme/app","repo_url":"https://github.com/acme/app","problem":null,"can_install":false,"install_command":null}"#
+
     /// The saved GitHub choices, with the PC's `gh` checked and ready.
-    private func checkedGitHubModel() async throws -> AutoScanSetupModel {
+    private func checkedGitHubModel(labels: String = #"{"labels":[]}"#) async throws -> AutoScanSetupModel {
         StubURLProtocol.reset()
-        StubURLProtocol.enqueue(
-            status: 200,
-            body: #"{"installed":true,"version":"2.83.0","signed_in":true,"account":"octocat","host":"github.com","repo":"acme/app","repo_url":"https://github.com/acme/app","problem":null,"can_install":false,"install_command":null}"#
-        )
-        StubURLProtocol.enqueue(status: 200, body: #"{"labels":[]}"#)
+        StubURLProtocol.enqueue(status: 200, body: Self.readyGitHubStatus)
+        StubURLProtocol.enqueue(status: 200, body: labels)
         let model = AutoScanSetupModel(
             agentAPI: AgentAPI(
                 baseURL: { "http://agent.example.com" },
@@ -83,7 +83,11 @@ final class AutoScanSetupModelTests: XCTestCase {
 
         XCTAssertEqual(model.source, .github)
         XCTAssertEqual(model.cli, "codex")
-        XCTAssertEqual(model.githubFilter, GitHubScanFilterDto(labels: ["ai-ready", "bot"], assignee: "@me"))
+        XCTAssertEqual(
+            model.githubFilter,
+            GitHubScanFilterDto(labels: ["ai-ready", "bot"], assignee: "@me", issue_types: ["Bug"])
+        )
+        XCTAssertEqual(model.codexOptions.model, "gpt-5.5")
         XCTAssertEqual(model.linearTriggerStates, ["Todo"])
         XCTAssertEqual(model.linearDoneState, "Shipped")
 
@@ -160,16 +164,32 @@ final class AutoScanSetupModelTests: XCTestCase {
         XCTAssertNotNil(model.startBlocker(prompt: String(repeating: "p", count: 32_001)))
     }
 
+    /// A label created on GitHub after the step opened can only be picked
+    /// once Check again reads the list again.
+    func testCheckAgainReadsTheRepositoryLabelsAgain() async throws {
+        let model = try await checkedGitHubModel(labels: #"{"labels":[{"name":"bug","color":"d73a4a"}]}"#)
+        StubURLProtocol.enqueue(status: 200, body: Self.readyGitHubStatus)
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"labels":[{"name":"bug","color":"d73a4a"},{"name":"auto-scan","color":"0e8a16"}]}"#
+        )
+
+        await model.refreshGitHubStatus(userAsked: true)
+
+        XCTAssertEqual(model.githubRepoLabels.map(\.name), ["bug", "auto-scan"])
+    }
+
     func testTheGitHubStartBodyEncodesToTheFixtureWire() throws {
         let model = try makeModel()
         model.prepare(for: try workspace("auto_scan_choices"))
         model.githubActiveLabel = " ai-doing "
+        model.toggleGitHubIssueType("Task")
+        model.codexOptions.full_auto = false
 
         let request = try XCTUnwrap(
             model.startRequest(
                 workspaceName: "p",
                 claudeOptions: ClaudeOptionsModel(),
-                autoApprove: false,
                 initialPrompt: ""
             )
         )
@@ -192,7 +212,6 @@ final class AutoScanSetupModelTests: XCTestCase {
             model.startRequest(
                 workspaceName: "proj",
                 claudeOptions: ClaudeOptionsModel(skip_permissions: false),
-                autoApprove: true,
                 initialPrompt: "Fix it."
             )
         )
@@ -200,6 +219,194 @@ final class AutoScanSetupModelTests: XCTestCase {
         XCTAssertNil(request.github_filter)
         XCTAssertEqual(request.linear_filter?.state_names, ["Todo"])
         XCTAssertEqual(request.claude_options?.skip_permissions, false)
-        XCTAssertNil(request.auto_approve, "Claude Code reads claude_options.skip_permissions")
+        XCTAssertNil(request.codex_options, "only the chosen agent's options are sent")
+    }
+
+    func testATemplateBringsBackTheChoicesAndKeepsOnlyTheChosenAgentsOptions() throws {
+        let dialled = try makeModel()
+        dialled.prepare(for: try workspace("auto_scan_nothing_chosen"))
+        dialled.source = .github
+        dialled.cli = "junie"
+        // A template may keep a filter the step still has to finish.
+        dialled.githubAssignee = " @me "
+        dialled.toggleGitHubIssueType("Bug")
+        dialled.junieOptions = JunieScanOptionsDto(plan_mode: true, brave: false)
+        dialled.codexOptions.sandbox = "read-only"
+        let other = try makeModel()
+        other.prepare(for: try workspace("auto_scan_choices"))
+        var appliedPrompt: String?
+        other.applyInitialPrompt = { appliedPrompt = $0 }
+
+        let captured = dialled.templateSettings(claudeOptions: ClaudeScanOptionsDto(), initialPrompt: "Fix it.")
+        let settings = try WireJSON.decoder().decode(
+            AutoScanSettingsDto.self,
+            from: WireJSON.encoder().encode(captured)
+        )
+        other.apply(settings)
+
+        XCTAssertEqual(settings.junie_options, JunieScanOptionsDto(plan_mode: true, brave: false))
+        XCTAssertNil(settings.codex_options)
+        XCTAssertNil(settings.claude_options)
+        XCTAssertEqual(other.source, .github)
+        XCTAssertEqual(other.cli, "junie")
+        XCTAssertEqual(other.githubFilter, GitHubScanFilterDto(labels: [], assignee: "@me", issue_types: ["Bug"]))
+        XCTAssertEqual(appliedPrompt, "Fix it.")
+        XCTAssertEqual(other.junieOptions, JunieScanOptionsDto(plan_mode: true, brave: false))
+        // Options the template does not hold stay as the step had them.
+        XCTAssertEqual(other.codexOptions.model, "gpt-5.5")
+    }
+
+    func testAnAgentWithoutSavedOptionsRunsWithoutAskingAndAnotherWorkspaceStartsOver() throws {
+        let model = try makeModel()
+        model.prepare(for: try workspace("auto_scan_choices"))
+
+        XCTAssertEqual(model.copilotOptions, CopilotScanOptionsDto(allow_all: false))
+        XCTAssertEqual(model.cursorOptions, CursorScanOptionsDto(force: true))
+        XCTAssertTrue(model.junieOptions.brave)
+
+        model.junieOptions.brave = false
+        model.prepare(for: try workspace("auto_scan_nothing_chosen"))
+
+        XCTAssertEqual(model.codexOptions, CodexScanOptionsDto())
+        XCTAssertEqual(model.copilotOptions, CopilotScanOptionsDto(allow_all: true))
+        XCTAssertTrue(model.junieOptions.brave)
+    }
+
+    func testOptionsTheClientCannotReadDecodeAsNilAndTheWorkspaceStillDecodes() throws {
+        let json = #"""
+        {"name": "alpha", "path": "/p/alpha", "auto_scan": {
+          "source": "github", "cli": "codex",
+          "codex_options": {"full_auto": [1]},
+          "copilot_options": {"allow_all": false}
+        }}
+        """#
+
+        let workspace = try WireJSON.decoder().decode(WorkspaceInfo.self, from: Data(json.utf8))
+
+        let saved = try XCTUnwrap(workspace.auto_scan)
+        XCTAssertNil(saved.codex_options)
+        XCTAssertEqual(saved.copilot_options, CopilotScanOptionsDto(allow_all: false))
+        XCTAssertEqual(saved.cli, "codex")
+    }
+
+    func testTemplatesLoadFromThePCAndNamesMatchTheWayThePCMatchesThem() async throws {
+        StubURLProtocol.reset()
+        let wire = try FixtureLoader.wireData(
+            path: "dto/agent/AutoScanTemplatesResponse.json",
+            case: "two_templates"
+        )
+        StubURLProtocol.enqueue(status: 200, body: String(decoding: wire, as: UTF8.self))
+        let model = AutoScanSetupModel(
+            agentAPI: AgentAPI(
+                baseURL: { "http://agent.example.com" },
+                tokens: FakeAgentTokens(token: AgentToken(value: "tok")),
+                client: HTTPClient(session: HTTPClient.makeSession(protocolClasses: [StubURLProtocol.self]))
+            )
+        )
+        model.applyProbe(
+            try FixtureLoader.decodeCase(
+                VersionInfoResponse.self,
+                path: "dto/agent/VersionInfoResponse.json",
+                name: "autoscan_capability"
+            )
+        )
+
+        // Without the list a same-name save would replace a template unwarned.
+        XCTAssertFalse(model.canSaveTemplate)
+
+        await model.loadTemplates()
+
+        XCTAssertEqual(model.templatesState, .loaded)
+        XCTAssertTrue(model.canSaveTemplate)
+        XCTAssertEqual(model.existingTemplate(named: "  small \t BUGS ")?.id, "0f9e8d7c6b5a")
+        XCTAssertNil(model.existingTemplate(named: "Small bug"))
+        XCTAssertNil(AutoScanSetupModel.templateNameError(" " + String(repeating: "x", count: 60) + " "))
+        XCTAssertNotNil(AutoScanSetupModel.templateNameError(" \n "))
+        XCTAssertNotNil(AutoScanSetupModel.templateNameError(String(repeating: "x", count: 61)))
+    }
+
+    /// The PC counts code points, not what Swift calls characters: a family
+    /// emoji is one `Character` but seven code points.
+    func testATemplateNameIsCountedTheWayThePCCountsIt() {
+        let family = "👨‍👩‍👧‍👦"
+        XCTAssertEqual(family.count, 1)
+        XCTAssertEqual(family.unicodeScalars.count, 7)
+
+        XCTAssertNil(AutoScanSetupModel.templateNameError(String(repeating: family, count: 8) + "xxxx"))
+        XCTAssertNotNil(AutoScanSetupModel.templateNameError(String(repeating: family, count: 8) + "xxxxx"))
+    }
+
+    /// A template may keep what Start refuses (no label yet, a label to add
+    /// that is also a trigger label); only what the PC refuses blocks a save.
+    func testATemplateSaveIsBlockedOnlyForWhatThePCRefuses() throws {
+        let model = try makeModel()
+        model.prepare(for: try workspace("auto_scan_nothing_chosen"))
+        model.source = .github
+        model.cli = "codex"
+        model.antigravityAddDirsDraft = "-x"
+        func saveError(prompt: String = "") -> String? {
+            AutoScanSetupModel.templateSettingsError(
+                model.templateSettings(claudeOptions: ClaudeScanOptionsDto(), initialPrompt: prompt)
+            )
+        }
+        let long = String(repeating: "x", count: 101)
+
+        XCTAssertNil(saveError(), "no label yet, and the directories of an agent not chosen")
+        model.addGitHubLabel("ai-ready")
+        model.githubActiveLabel = " AI-Ready "
+        XCTAssertNil(saveError())
+        XCTAssertNil(saveError(prompt: String(repeating: "p", count: 32_000)))
+        XCTAssertNotNil(saveError(prompt: String(repeating: "p", count: 32_001)))
+
+        for rejected in ["in,progress", long] {
+            model.githubActiveLabel = rejected
+            XCTAssertNotNil(saveError(), rejected)
+        }
+        model.githubActiveLabel = ""
+        model.githubAssignee = long
+        XCTAssertNotNil(saveError())
+        model.githubAssignee = ""
+        model.toggleGitHubIssueType(long)
+        XCTAssertNotNil(saveError())
+        model.toggleGitHubIssueType(long)
+        XCTAssertNil(saveError())
+
+        model.cli = "antigravity"
+        XCTAssertNotNil(saveError())
+    }
+
+    /// Another client deleted the template first: the PC answers 404 and the
+    /// result is the same as a delete.
+    func testATemplateAlreadyGoneOnThePCIsDroppedWithoutAnError() async throws {
+        StubURLProtocol.reset()
+        let wire = try FixtureLoader.wireData(
+            path: "dto/agent/AutoScanTemplatesResponse.json",
+            case: "two_templates"
+        )
+        StubURLProtocol.enqueue(status: 200, body: String(decoding: wire, as: UTF8.self))
+        StubURLProtocol.enqueue(status: 404, body: #"{"detail":"Template '0f9e8d7c6b5a' not found"}"#)
+        let model = AutoScanSetupModel(
+            agentAPI: AgentAPI(
+                baseURL: { "http://agent.example.com" },
+                tokens: FakeAgentTokens(token: AgentToken(value: "tok")),
+                client: HTTPClient(session: HTTPClient.makeSession(protocolClasses: [StubURLProtocol.self]))
+            )
+        )
+        model.applyProbe(
+            try FixtureLoader.decodeCase(
+                VersionInfoResponse.self,
+                path: "dto/agent/VersionInfoResponse.json",
+                name: "autoscan_capability"
+            )
+        )
+        await model.loadTemplates()
+        let smallBugs = try XCTUnwrap(model.templates.first { $0.id == "0f9e8d7c6b5a" })
+        model.applyTemplate(smallBugs)
+
+        await model.deleteTemplate(smallBugs)
+
+        XCTAssertEqual(model.templates.map(\.id), ["a1b2c3d4e5f6"])
+        XCTAssertNil(model.appliedTemplateName)
+        XCTAssertNil(model.templateActionError)
     }
 }

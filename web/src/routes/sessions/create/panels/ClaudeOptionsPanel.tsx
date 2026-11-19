@@ -9,14 +9,13 @@ import {
   type ClaudeEffort,
   type WizardAction,
 } from '../wizardState';
+import { ScanAskHint } from './ScanAskHint';
 
 interface ClaudeOptionsPanelProps {
   bucket: ClaudeBucket;
   bucketId: ClaudeBucketId;
   models: readonly string[] | null;
   dispatch: (action: WizardAction) => void;
-  /** Auto Scan explains what turning it off costs; the Claude branch does not. */
-  skipPermissionsHint?: string;
   /** False when the session opens in the chat view, whose Focus view is in its ⋯ menu. */
   showTerminalOptions?: boolean;
 }
@@ -60,7 +59,6 @@ export function ClaudeOptionsPanel({
   bucketId,
   models,
   dispatch,
-  skipPermissionsHint,
   showTerminalOptions = true,
 }: ClaudeOptionsPanelProps) {
   const efforts = claudeEffortsFor(effectiveClaudeModel(bucket));
@@ -112,11 +110,12 @@ export function ClaudeOptionsPanel({
       <CheckboxField
         label="Skip permissions"
         checked={bucket.skipPermissions}
-        hint={skipPermissionsHint}
         onChange={(value) => {
           dispatch({ type: 'setClaudeFlag', bucket: bucketId, flag: 'skipPermissions', value });
         }}
       />
+      {/* Auto Scan says what turning it off costs; the Claude Code branch does not. */}
+      <ScanAskHint show={bucketId === 'autoScan' && !bucket.skipPermissions} />
     </div>
   );
 }

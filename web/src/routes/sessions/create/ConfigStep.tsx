@@ -27,6 +27,7 @@ import { WorktreeSection } from './panels/WorktreeSection';
 import { chatAgentKind, terminalUiOf, usesChatView, type ChatAgentKind } from './buildCreateRequest';
 import { autoScanAgentOptions, autoScanBlocker, autoScanSources } from './autoScanSetup';
 import type { AutoScanSourcesView } from './useAutoScanSources';
+import type { AutoScanTemplatesView } from './useAutoScanTemplates';
 import { effectiveWorktreeBase } from './worktreeBase';
 import {
   addDirsError,
@@ -70,6 +71,8 @@ interface ConfigStepProps {
   capabilitiesPending?: boolean;
   /** What the PC says about the chosen Auto Scan source (newer agents only). */
   autoScanSources?: AutoScanSourcesView;
+  /** The Auto Scan templates saved on the PC (newer agents only). */
+  autoScanTemplates?: AutoScanTemplatesView;
 }
 
 export function modeTitle(
@@ -94,7 +97,7 @@ export function modeTitle(
     case 'pi':
       return 'Pi session';
     case 'auto_scan':
-      return 'Auto Scan mode';
+      return 'Auto Scan';
     case 'shell':
       return 'Terminal session';
     default: {
@@ -142,6 +145,7 @@ export function ConfigStep({
   onConnectProvider,
   capabilitiesPending = false,
   autoScanSources: sourcesView,
+  autoScanTemplates,
 }: ConfigStepProps) {
   const startHintId = useId();
   const chatKind = chatAgentKind(mode);
@@ -196,6 +200,7 @@ export function ConfigStep({
           agents: scan.agents,
           github: scan.view.github,
           hasLinearKey: scan.workspace.has_linear_key,
+          antigravityAddDirs: state.autoScanAgents.antigravity.addDirsDraft,
         });
 
   // The server 422s a flag-shaped directory, so refuse the launch rather than
@@ -293,8 +298,14 @@ export function ConfigStep({
             state={state}
             sources={scan.sources}
             agents={scan.agents}
-            claudeModels={cliModels(capabilities, 'claude')}
+            models={{
+              claude: cliModels(capabilities, 'claude'),
+              codex: cliModels(capabilities, 'codex'),
+              codexDetails: cliModelDetails(capabilities, 'codex'),
+              antigravity: cliModels(capabilities, 'antigravity'),
+            }}
             sourcesView={scan.view}
+            templates={autoScanTemplates}
             submitting={submitting}
             dispatch={dispatch}
           />

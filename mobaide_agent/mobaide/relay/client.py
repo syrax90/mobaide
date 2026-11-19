@@ -128,13 +128,19 @@ from mobaide.linear.rate_limiter import LinearRateLimiter
 from mobaide.agent.autoscan.models import (
     AUTOSCAN_CAPABILITIES,
     GitHubSetupRequest,
+    SaveTemplateRequest,
     StartScanRequest,
 )
 from mobaide.agent.autoscan.service import (
+    delete_template,
     github_labels_for,
     github_status_for,
+    list_templates,
+    save_template,
     start_github_setup,
+    template_not_found,
 )
+from mobaide.agent.autoscan.templates import TemplateLimitError
 from mobaide.linear.sources import AutoScanSourceError
 from mobaide.agent.autoscan.stream import run_autoscan_stream
 from mobaide.agent.codex.models import CodexLoginRequest
@@ -257,6 +263,8 @@ MAX_CHAT_PROXY_TASKS = 8
 MAX_AUTOSCAN_PROXY_TASKS = 4
 _AUTOSCAN_PROXY_TIMEOUT = 25.0
 _AUTOSCAN_GITHUB_PREFIX = "/api/autoscan/github/"
+_AUTOSCAN_TEMPLATES = "/api/autoscan/templates"
+_AUTOSCAN_TEMPLATE_ROUTE = re.compile(r"^/api/autoscan/templates/([^/]+)$")
 _LINEAR_DISCOVERY_ROUTE = re.compile(r"^/api/projects/[^/]+/linear/(labels|states)$")
 _VOICE_ROUTE = re.compile(r"^/api/voice/(status|install|install/cancel|model|dictations|cleanup|cleanup/settings)$")
 _VOICE_DICTATION_ROUTE = re.compile(r"^/api/voice/dictations/([^/]+)(?:/(audio|finish))?$")
@@ -1539,10 +1547,7 @@ class RelayClient:
             if method == "GET" and path == "/api/autoscan/github/labels":
                 name = (query or {}).get("project_name") or ""
                 labels = await github_labels_for(self._app_state, name)
-                return {
-                    "status": 200,
-                    "body": {"labels": [label.model_dump() for label in labels]},
-                }
+                return {"status": 200, "body": labels.model_dump()}
             if method == "POST" and path == "/api/autoscan/github/setup":
                 try:
                     parsed = GitHubSetupRequest.model_validate(body or {})
@@ -1565,6 +1570,34 @@ class RelayClient:
             return {"status": 400, "body": {"detail": str(exc)}}
         except MaxSessionsError as exc:
             return {"status": 409, "body": {"detail": str(exc)}}
+        return None
+
+    def _dispatch_autoscan_templates(
+        self, method: str, path: str, body: dict | None,
+    ) -> dict | None:
+        """The ``/api/autoscan/templates`` routes, with the REST router's
+        status codes; ``None`` for any other route."""
+        if path == _AUTOSCAN_TEMPLATES:
+            if method == "GET":
+                return {"status": 200, "body": list_templates(self._app_state).model_dump()}
+            if method == "POST":
+                try:
+                    parsed = SaveTemplateRequest.model_validate(body or {})
+                except ValidationError as exc:
+                    return {"status": 422, "body": {"detail": _scrub_validation_errors(exc)}}
+                try:
+                    saved = save_template(self._app_state, parsed)
+                except TemplateLimitError as exc:
+                    return {"status": 409, "body": {"detail": str(exc)}}
+                return {"status": 200, "body": saved.model_dump()}
+            return None
+        match = _AUTOSCAN_TEMPLATE_ROUTE.match(path)
+        if match is not None and method == "DELETE":
+            try:
+                left = delete_template(self._app_state, match.group(1))
+            except KeyError:
+                return {"status": 404, "body": {"detail": template_not_found(match.group(1))}}
+            return {"status": 200, "body": left.model_dump()}
         return None
 
     async def _handle_proxy_request(
@@ -2030,6 +2063,10 @@ class RelayClient:
         github_resp = await self._dispatch_autoscan_github(method, path, body, query, ws)
         if github_resp is not None:
             return github_resp
+
+        templates_resp = self._dispatch_autoscan_templates(method, path, body)
+        if templates_resp is not None:
+            return templates_resp
 
         if method == "POST" and path == "/api/autoscan/stop":
             mgr = getattr(self._app_state, "autoscan_manager", None)

@@ -31,10 +31,17 @@ _GH_BIN_ENV_VAR = "MOBAIDE_GH_BIN"
 # ``gh`` calls run at once.
 _GH_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mobaide-gh")
 _TIMEOUT = 20.0
+# The issue types are optional for the wizard: a slow answer must not hold
+# its labels past the relay's 25 s proxy timeout.
+_ISSUE_TYPES_TIMEOUT = 8.0
 _MAX_ERROR = 300
 _ISSUE_LIMIT = 50
 _LABEL_LIMIT = 200
 _ACCOUNT_RE = re.compile(r"(?:account|as)\s+([A-Za-z0-9-]+)")
+_ISSUE_TYPES_QUERY = (
+    "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) "
+    "{ issueTypes(first: 50) { nodes { name color description isEnabled } } } }"
+)
 
 
 class GhBinaryNotFoundError(CliBinaryNotFoundError):
@@ -72,6 +79,9 @@ class GhIssue:
     body: str
     url: str
     labels: tuple[str, ...]
+    # The GitHub issue type (Bug, Task…); ``None`` when the issue has none or
+    # the list was read without types.
+    issue_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -181,8 +191,10 @@ class GhCli:
 
         return await asyncio.get_running_loop().run_in_executor(_GH_POOL, call)
 
-    async def _run_ok(self, args: list[str], *, cwd: str | None = None) -> str:
-        rc, out, err = await self._run(args, cwd=cwd)
+    async def _run_ok(
+        self, args: list[str], *, cwd: str | None = None, timeout: float = _TIMEOUT,
+    ) -> str:
+        rc, out, err = await self._run(args, cwd=cwd, timeout=timeout)
         if rc != 0:
             raise GhError(_short_error(err, out))
         return out
@@ -227,17 +239,34 @@ class GhCli:
 
     async def list_issues(
         self, repo: GitHubRepo, *, label: str, assignee: str | None,
+        issue_type: str | None = None, with_types: bool = False,
     ) -> list[GhIssue]:
+        """Open issues with ``label`` and, when ``issue_type`` is set, of that
+        issue type. GitHub filters the type, so issues of other types do not
+        use up the ``_ISSUE_LIMIT`` rows. ``issue_type`` or ``with_types`` also
+        reads each issue's type. Types need a gh that knows ``--type`` and the
+        ``issueType`` field."""
+        reads_types = bool(issue_type) or with_types
         # ``--flag=value`` forms: a user-chosen value that starts with ``-``
         # can never be read as another flag.
+        fields = "number,title,body,url,labels" + (",issueType" if reads_types else "")
         args = [
             "issue", "list", "--repo", repo.selector, "--state", "open",
             f"--label={label}", "--limit", str(_ISSUE_LIMIT),
-            "--json", "number,title,body,url,labels",
+            "--json", fields,
         ]
         if assignee:
             args.append(f"--assignee={assignee}")
-        out = await self._run_ok(args)
+        if issue_type:
+            args.append(f"--type={issue_type}")
+        rc, out, err = await self._run(args)
+        if rc != 0:
+            if reads_types and ("issueType" in err or "--type" in err):
+                raise GhError(
+                    "This GitHub CLI (gh) cannot filter by issue type. "
+                    "Update gh on the PC, or clear the issue types."
+                )
+            raise GhError(_short_error(err, out))
         try:
             rows = json.loads(out)
         except ValueError as exc:
@@ -251,6 +280,8 @@ class GhCli:
                 for item in row.get("labels") or []
                 if isinstance(item, dict) and item.get("name")
             )
+            issue_type = row.get("issueType")
+            type_name = issue_type.get("name") if isinstance(issue_type, dict) else None
             issues.append(
                 GhIssue(
                     number=row["number"],
@@ -258,6 +289,7 @@ class GhCli:
                     body=str(row.get("body") or ""),
                     url=str(row.get("url") or ""),
                     labels=labels,
+                    issue_type=type_name if isinstance(type_name, str) and type_name else None,
                 )
             )
         return issues
@@ -295,8 +327,35 @@ class GhCli:
             raise GhError("gh returned an unexpected label list") from exc
         if not isinstance(rows, list):
             return []
+        # gh splits a label option's value on commas, so a scan can never
+        # filter on such a label: it is not offered.
         return [
             {"name": str(row["name"]), "color": str(row.get("color") or "")}
             for row in rows
-            if isinstance(row, dict) and row.get("name")
+            if isinstance(row, dict) and row.get("name") and "," not in str(row["name"])
+        ]
+
+    async def list_issue_types(self, repo: GitHubRepo) -> list[dict[str, str]]:
+        """The enabled issue types of ``repo`` (Bug, Task, Feature…)."""
+        owner, _, name = repo.name_with_owner.partition("/")
+        out = await self._run_ok(
+            [
+                "api", "graphql", "--hostname", repo.host,
+                "-f", f"query={_ISSUE_TYPES_QUERY}",
+                "-f", f"owner={owner}", "-f", f"name={name}",
+            ],
+            timeout=_ISSUE_TYPES_TIMEOUT,
+        )
+        try:
+            nodes = json.loads(out)["data"]["repository"]["issueTypes"]["nodes"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise GhError("gh returned an unexpected issue type list") from exc
+        return [
+            {
+                "name": str(node["name"]),
+                "color": str(node.get("color") or ""),
+                "description": str(node.get("description") or ""),
+            }
+            for node in (nodes if isinstance(nodes, list) else [])
+            if isinstance(node, dict) and node.get("name") and node.get("isEnabled", True)
         ]

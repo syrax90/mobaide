@@ -21,6 +21,11 @@ from .models import LinearIssue
 from .workitems import ActiveWorkItem
 
 
+# Above this many (label, issue type) pairs a cycle asks once per label and
+# filters the types itself: each pair is a GitHub search.
+_MAX_TYPED_QUERIES = 10
+
+
 class AutoScanSourceError(Exception):
     """The scan cannot start; the message tells the user what to fix."""
 
@@ -152,7 +157,8 @@ class LinearIssueSource:
 
 
 class GitHubIssueSource:
-    """Open issues of the workspace's GitHub repository, matched by label.
+    """Open issues of the workspace's GitHub repository, matched by label and,
+    when the filter names issue types, by type.
 
     Taking an issue removes its trigger labels (and adds ``active_label``),
     so it stops matching. When GitHub refuses the removal, the issue would
@@ -192,9 +198,10 @@ class GitHubIssueSource:
 
     def describe(self) -> str:
         repo = self._repo.name_with_owner if self._repo else "?"
+        types = list(self.filter.issue_types) or "*"
         return (
             f"repo={repo} labels={list(self.filter.labels)} "
-            f"assignee={self.filter.assignee or '*'}"
+            f"assignee={self.filter.assignee or '*'} types={types}"
         )
 
     def _triggers(self) -> set[str]:
@@ -209,11 +216,24 @@ class GitHubIssueSource:
     async def fetch(self) -> list[ScanIssue]:
         repo = self._require_repo()
         triggers = self._triggers()
+        types = {name.casefold() for name in self.filter.issue_types}
         found: dict[int, GhIssue] = {}
-        for label in self.filter.labels:
+        labels = list(self.filter.labels)
+        typed = 0 < len(labels) * len(self.filter.issue_types) <= _MAX_TYPED_QUERIES
+        queries = [
+            (label, issue_type)
+            for label in labels
+            for issue_type in (self.filter.issue_types if typed else [None])
+        ]
+        for label, issue_type in queries:
             for issue in await self._gh.list_issues(
                 repo, label=label, assignee=self.filter.assignee,
+                issue_type=issue_type, with_types=bool(types),
             ):
+                # GitHub's search matched the type already; its index can lag
+                # behind a type change, and the answer's type is current.
+                if types and (issue.issue_type or "").casefold() not in types:
+                    continue
                 # The label search can lag behind a claim; the labels in the
                 # answer are current, so an issue already taken is left out.
                 if any(name.casefold() in triggers for name in issue.labels):

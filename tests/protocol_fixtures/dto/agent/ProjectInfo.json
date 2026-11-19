@@ -79,7 +79,14 @@
           "source": "github",
           "cli": "codex",
           "linear_filter": { "state_names": ["Todo"], "label_names": ["bot"], "active_state": "Doing", "done_state": "Shipped", "removal_label": "bot" },
-          "github_filter": { "labels": ["ai-ready", "bot"], "assignee": "@me", "active_label": null }
+          "github_filter": { "labels": ["ai-ready", "bot"], "assignee": "@me", "active_label": null, "issue_types": ["Bug"] },
+          "claude_options": { "plan_mode": false, "no_memory": false, "skip_permissions": true, "model": "opus", "effort": "high", "fast_mode": false, "ultracode": false, "append_system_prompt": null, "debug": false, "focus_mode": true },
+          "codex_options": { "model": "gpt-5.5", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": "high", "full_auto": true },
+          "antigravity_options": null,
+          "opencode_options": null,
+          "copilot_options": { "allow_all": false },
+          "cursor_options": null,
+          "junie_options": null
         }
       },
       "decoded_canonical": {
@@ -95,7 +102,10 @@
           "source": "github",
           "cli": "codex",
           "linear_filter": { "state_names": ["Todo"], "label_names": ["bot"], "active_state": "Doing", "done_state": "Shipped", "removal_label": "bot" },
-          "github_filter": { "labels": ["ai-ready", "bot"], "assignee": "@me" }
+          "github_filter": { "labels": ["ai-ready", "bot"], "assignee": "@me", "issue_types": ["Bug"] },
+          "claude_options": { "plan_mode": false, "no_memory": false, "skip_permissions": true, "model": "opus", "effort": "high", "fast_mode": false, "ultracode": false, "debug": false, "focus_mode": true },
+          "codex_options": { "model": "gpt-5.5", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": "high", "full_auto": true },
+          "copilot_options": { "allow_all": false }
         }
       }
     },
@@ -112,7 +122,11 @@
         "path_exists": true,
         "auto_scan_filter": { "state_names": ["Proposals"], "label_names": ["AutoPipeline"], "active_state": "In Progress", "done_state": "Done", "removal_label": "AutoPipeline" },
         "auto_scan_prompt": null,
-        "auto_scan": { "source": null, "cli": null, "linear_filter": null, "github_filter": null }
+        "auto_scan": {
+          "source": null, "cli": null, "linear_filter": null, "github_filter": null,
+          "claude_options": null, "codex_options": null, "antigravity_options": null, "opencode_options": null,
+          "copilot_options": null, "cursor_options": null, "junie_options": null
+        }
       },
       "decoded_canonical": {
         "name": "p",

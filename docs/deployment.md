@@ -1137,7 +1137,7 @@ The option appears only when the agent's build reported that it can uninstall it
 1. The relay sends the agent an `agent_uninstall` order. An online agent gets it at once. An offline agent gets it the next time it connects with its old credentials, within 30 days.
 2. The agent blanks `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` in `<prefix>/mobaide_agent/.env`, so it can never reconnect, even if the rest fails.
 3. The agent removes itself.
-   - It deletes only the known install entries (`releases/`, `trust/`, `mobaide_agent/`, `run/`, `state/`, `logs/`, `svc/`, `bin/`, `current_version`, logs, `users.json`, `projects.json`, `voice/`, …) and then the prefix itself if that left it empty.
+   - It deletes only the known install entries (`releases/`, `trust/`, `mobaide_agent/`, `run/`, `state/`, `logs/`, `svc/`, `bin/`, `current_version`, logs, `users.json`, `projects.json`, `autoscan_templates.json`, `voice/`, …) and then the prefix itself if that left it empty.
    - It never runs a blanket `rm -rf` of a prefix that `MOBAIDE_AGENT_PREFIX` may have pointed somewhere shared.
    - First it stops voice input and deletes the voice model and runtime itself, on every OS. A voice dir moved by `MOBAIDE_VOICE_DIR` (or reached through a symlinked `voice/`) loses only what `mobaide-agent voice remove` deletes plus `settings.json` and `.lock`, and is then removed if it is left empty.
    - **Linux:** the agent runs unprivileged, so it only drops `<prefix>/run/uninstall-requested`.

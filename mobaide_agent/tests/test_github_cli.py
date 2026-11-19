@@ -176,6 +176,25 @@ class TestGhCliCalls:
         assert auth == expected
         assert run.args == calls
 
+    async def test_labels_with_a_comma_are_not_offered(self, monkeypatch):
+        # gh splits a ``--label`` value on commas, so a scan could never pick
+        # up an issue by such a label.
+        rows = [
+            {"name": "ai-ready", "color": "0E8A16"},
+            {"name": "needs triage, maybe", "color": "D93F0B"},
+            {"name": "bug", "color": "D73A4A"},
+        ]
+        monkeypatch.setattr(gh_module.subprocess, "run", _ScriptedRun([(0, json.dumps(rows), "")]))
+        repo = GitHubRepo(host="github.com", name_with_owner="acme/app",
+                          url="https://github.com/acme/app")
+
+        labels = await _PinnedGh().list_labels(repo)
+
+        assert labels == [
+            {"name": "ai-ready", "color": "0E8A16"},
+            {"name": "bug", "color": "D73A4A"},
+        ]
+
     async def test_gh_answers_while_the_default_executor_is_full(self, monkeypatch):
         """Every open terminal session holds a blocked read there."""
         monkeypatch.setattr(

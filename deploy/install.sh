@@ -1013,7 +1013,8 @@ if cd -P -- "\$PREFIX" 2>/dev/null && [ "\$(pwd -P)" = "\$PREFIX" ]; then
     rm -rf --one-file-system -- releases trust mobaide_agent run state logs svc bin \\
         current_version current_version.tmp .boot_journal agent.env \\
         agent.out.log agent.err.log users.json projects.json acp-adapters \\
-        junie-trusted-folders.json voice voice-fake voice-cleanup voice-cleanup-cursor
+        junie-trusted-folders.json autoscan_templates.json autoscan_templates.json.bak \\
+        voice voice-fake voice-cleanup voice-cleanup-cursor
     cd /
     rmdir -- "\$PREFIX" 2>/dev/null || true
 fi

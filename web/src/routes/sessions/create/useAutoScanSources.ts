@@ -13,6 +13,7 @@ import {
   getGitHubStatus,
   listGitHubLabels,
   startGitHubSetup,
+  type GitHubIssueType,
   type GitHubLabel,
   type GitHubSetupAction,
 } from '../../../api/autoscanRepository';
@@ -29,6 +30,8 @@ import type { AutoScanSource } from './wizardState';
 export interface GitHubLabelsView {
   status: 'idle' | 'loading' | 'ready' | 'error';
   labels: readonly GitHubLabel[];
+  /** The repository's GitHub issue types; empty when it has none. */
+  issueTypes: readonly GitHubIssueType[];
   error: string | null;
 }
 
@@ -38,6 +41,7 @@ export interface AutoScanSourcesView {
   githubChecking: boolean;
   githubLabels: GitHubLabelsView;
   checkGitHub: () => void;
+  retryGitHubLabels: () => void;
   /** `null` while the agent has no setup route (`capabilities.autoscan.github_setup`). */
   openGitHubSetup: ((action: GitHubSetupAction) => void) | null;
   githubSetupPending: boolean;
@@ -100,12 +104,17 @@ export function useAutoScanSources(input: {
         : { kind: 'loading' };
 
   const githubLabels: GitHubLabelsView = !(githubActive && ready)
-    ? { status: 'idle', labels: [], error: null }
+    ? { status: 'idle', labels: [], issueTypes: [], error: null }
     : labels.data !== undefined
-      ? { status: 'ready', labels: labels.data, error: null }
+      ? {
+          status: 'ready',
+          labels: labels.data.labels,
+          issueTypes: labels.data.issue_types,
+          error: null,
+        }
       : labels.isError
-        ? { status: 'error', labels: [], error: failureMessage(labels.error) }
-        : { status: 'loading', labels: [], error: null };
+        ? { status: 'error', labels: [], issueTypes: [], error: failureMessage(labels.error) }
+        : { status: 'loading', labels: [], issueTypes: [], error: null };
 
   const setup = useMutation({
     mutationFn: (action: GitHubSetupAction) => startGitHubSetup(agentId, workspaceName, action),
@@ -147,8 +156,16 @@ export function useAutoScanSources(input: {
     github,
     githubChecking: status.isFetching,
     githubLabels,
+    // Also the labels: a label made on GitHub after the wizard opened can only
+    // be picked once the list is read again.
     checkGitHub: () => {
       void status.refetch();
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.githubLabels(agentId, workspaceName),
+      });
+    },
+    retryGitHubLabels: () => {
+      void labels.refetch();
     },
     openGitHubSetup: input.githubSetup
       ? (action) => {

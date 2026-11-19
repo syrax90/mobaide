@@ -76,12 +76,6 @@ export function applyLaunchPrefs(base: WizardState, prefs: LaunchPrefs): WizardS
     ...base,
     claude: restoreClaudeBucket(base.claude, prefs.claude, 'claude'),
     autoScan: restoreClaudeBucket(base.autoScan, prefs.autoScan, 'autoScan'),
-    // Only the on-device switch: the source, agent and filters are the agent's
-    // per-workspace memory and are seeded from `workspace.auto_scan` instead.
-    autoScanSetup:
-      prefs.autoScan === null
-        ? base.autoScanSetup
-        : { ...base.autoScanSetup, autoApprove: prefs.autoScan.autoApprove },
     codex:
       prefs.codex === null
         ? base.codex
@@ -173,10 +167,7 @@ export function launchPrefsFromState(
     case 'claude':
       return { kind: 'claude', prefs: claudePrefsFrom(state.claude) };
     case 'auto_scan':
-      return {
-        kind: 'autoScan',
-        prefs: { ...claudePrefsFrom(state.autoScan), autoApprove: state.autoScanSetup.autoApprove },
-      };
+      return { kind: 'autoScan', prefs: claudePrefsFrom(state.autoScan) };
     case 'codex':
       // Listed rather than spread, like the other three: a spread satisfies the
       // target type without an excess-property check, so a field added to

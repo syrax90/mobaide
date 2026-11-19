@@ -5,10 +5,12 @@ import type { ChatSupport } from '../../../../protocol/dto/agentVersion';
 import {
   addDirsError,
   ANTIGRAVITY_MODELS,
+  type AgentBucketTarget,
   type AntigravityBucket,
   type WizardAction,
 } from '../wizardState';
 import { modelOptions } from './ClaudeOptionsPanel';
+import { ScanAskHint } from './ScanAskHint';
 import { TerminalUiField } from './TerminalUiField';
 
 interface AntigravityOptionsPanelProps {
@@ -17,6 +19,8 @@ interface AntigravityOptionsPanelProps {
   dispatch: (action: WizardAction) => void;
   /** Shows the Terminal UI toggle, gated on this PC's chat support for Antigravity. */
   chat?: ChatSupport;
+  /** Auto Scan edits its own copy of the options. */
+  target?: AgentBucketTarget;
 }
 
 export function AntigravityOptionsPanel({
@@ -24,6 +28,7 @@ export function AntigravityOptionsPanel({
   models,
   dispatch,
   chat,
+  target,
 }: AntigravityOptionsPanelProps) {
   return (
     <div className="option-group">
@@ -32,7 +37,7 @@ export function AntigravityOptionsPanel({
         value={bucket.model}
         options={modelOptions(models, ANTIGRAVITY_MODELS, bucket.model, 'Auto')}
         onChange={(model) => {
-          dispatch({ type: 'setAntigravityModel', model });
+          dispatch({ type: 'setAntigravityModel', model, target });
         }}
       />
       {/*
@@ -45,15 +50,16 @@ export function AntigravityOptionsPanel({
         checked={bucket.skipPermissions}
         disabled={bucket.sandbox}
         onChange={(value) => {
-          dispatch({ type: 'setAntigravitySkipPermissions', value });
+          dispatch({ type: 'setAntigravitySkipPermissions', value, target });
         }}
       />
+      <ScanAskHint show={target === 'autoScan' && !bucket.skipPermissions} />
       <CheckboxField
         label="Sandbox"
         checked={bucket.sandbox}
         disabled={bucket.skipPermissions}
         onChange={(value) => {
-          dispatch({ type: 'setAntigravitySandbox', value });
+          dispatch({ type: 'setAntigravitySandbox', value, target });
         }}
       />
       <TextAreaField
@@ -63,7 +69,7 @@ export function AntigravityOptionsPanel({
         hint="One per line, or comma-separated."
         error={addDirsError(bucket.addDirsDraft) ?? undefined}
         onChange={(draft) => {
-          dispatch({ type: 'setAntigravityAddDirs', draft });
+          dispatch({ type: 'setAntigravityAddDirs', draft, target });
         }}
       />
       {chat !== undefined && (

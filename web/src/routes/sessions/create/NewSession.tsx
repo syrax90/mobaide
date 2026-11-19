@@ -73,6 +73,7 @@ import {
 import { ResumeSessionDialog } from './ResumeSessionDialog';
 import { parkAutoScanDraft, takeAutoScanDraft } from './autoScanDraft';
 import { useAutoScanSources } from './useAutoScanSources';
+import { useAutoScanTemplates } from './useAutoScanTemplates';
 import {
   classifyAutoScanError,
   classifyCreateError,
@@ -313,6 +314,14 @@ export function NewSession() {
   // probe has not answered: ConfigStep waits on `capabilities.isPending`.
   const scanCapability = useMemo(() => autoScanCapability(capabilities.data), [capabilities.data]);
 
+  const autoScanTemplates = useAutoScanTemplates(
+    resolvedAgentId,
+    resolvedAgentId !== '' &&
+      location.step === 'config' &&
+      location.mode === 'auto_scan' &&
+      scanCapability !== null,
+  );
+
   const autoScanSources = useAutoScanSources({
     agentId: resolvedAgentId,
     workspace,
@@ -331,6 +340,7 @@ export function NewSession() {
         parkAutoScanDraft(resolvedAgentId, workspace.name, {
           setup: state.autoScanSetup,
           bucket: state.autoScan,
+          agents: state.autoScanAgents,
         });
       }
       // Seeded before navigating, as `create.onSuccess` does, so the terminal
@@ -578,6 +588,21 @@ export function NewSession() {
     });
     dispatch({ type: 'seedAutoScanSetup', workspaceName: workspace.name, saved: workspace.auto_scan });
   }, [location.mode, workspace, resolvedAgentId]);
+
+  // Each step starts at the top of the page: a long step left scrolled down
+  // would otherwise open the next one in the middle (the Auto Scan intro and
+  // templates sit at its top). Only on a change, never on mount, and not when
+  // the page is already there.
+  const shownStep = useRef(location.step);
+  useEffect(() => {
+    if (shownStep.current === location.step) return;
+    shownStep.current = location.step;
+    if (window.scrollY === 0) return;
+    window.scrollTo({
+      top: 0,
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    });
+  }, [location.step]);
 
   // Pre-select the workspace the last session was launched against — iOS's
   // `applyWorkspacePrefill`, translated to the model where the URL owns the
@@ -1009,6 +1034,7 @@ export function NewSession() {
           onConnectProvider={connectProvider}
           capabilitiesPending={capabilities.isPending}
           autoScanSources={scanCapability !== null ? autoScanSources : undefined}
+          autoScanTemplates={scanCapability !== null ? autoScanTemplates : undefined}
         />
       ) : null}
 

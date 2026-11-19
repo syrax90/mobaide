@@ -1,8 +1,246 @@
 import SwiftUI
 
-/// The Auto Scan step's issue-source sections for an agent with
-/// `capabilities.autoscan`: the source choice, then the GitHub status and
-/// filter, or the Linear key and filter.
+// The Auto Scan step for an agent with `capabilities.autoscan`, top to bottom:
+// intro, templates, "How Auto Scan works", then four numbered steps (where to
+// find issues, which issues, AI agent, instructions). The agent options and
+// the instructions live in `CreateSessionScreen`, which owns their buckets.
+
+/// "1  Where to find issues": a numbered step heading.
+struct AutoScanStepHeader: View {
+    let number: Int
+    let title: String
+
+    /// Scaled: the ordinal is Dynamic Type text (`PixelNumberedStep`).
+    @ScaledMetric(relativeTo: .caption) private var side: CGFloat = 20
+
+    init(_ number: Int, _ title: String) {
+        self.number = number
+        self.title = title
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("\(number)")
+                .chromeText()
+                .foregroundStyle(.white)
+                .frame(minWidth: side, minHeight: side)
+                .background(MobaideColorScheme.brand)
+                .pixelRing(MobaideColorScheme.brand2)
+            Text(title).sectionHeading()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// A tinted, ringed note that fills its list row: `info` explains, `attention`
+/// says what matters most, `tip` suggests.
+struct AutoScanCallout: View {
+    enum Kind {
+        case info, attention, tip
+    }
+
+    let kind: Kind
+    var title: String?
+    let lines: [String]
+    /// Lines shown as a bulleted list.
+    var bulleted = false
+
+    @Environment(\.mobaideColors) private var colors
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(tint)
+                .frame(width: 22)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                if let title {
+                    Text(title)
+                        .chromeText()
+                        .foregroundStyle(tint)
+                }
+                ForEach(lines, id: \.self) { line in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        if bulleted {
+                            Text("•").font(.footnote).foregroundStyle(tint)
+                        }
+                        Text(line)
+                            .font(.footnote)
+                            .foregroundStyle(kind == .tip ? colors.textMuted : colors.text)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(PixelMetrics.cardInsets)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(kind == .tip ? colors.bg2 : colors.surface)
+        .pixelRing(kind == .tip ? colors.rule : tint)
+        .listRowInsets(EdgeInsets())
+        .accessibilityElement(children: .combine)
+    }
+
+    private var icon: String {
+        switch kind {
+        case .info: return "info.square.fill"
+        case .attention: return "exclamationmark.square.fill"
+        case .tip: return "lightbulb"
+        }
+    }
+
+    private var tint: Color {
+        switch kind {
+        case .info: return colors.accent
+        case .attention: return colors.warning
+        case .tip: return colors.textMuted
+        }
+    }
+}
+
+struct AutoScanIntroSection: View {
+    @Environment(\.mobaideColors) private var colors
+
+    var body: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Auto Scan").pageTitle()
+                Text("An AI agent picks up matching issues one by one and works on each in its own session.")
+                    .font(.footnote)
+                    .foregroundStyle(colors.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+}
+
+/// The template picker: apply a saved set of choices, delete one, or save the
+/// current choices. Errors stay here and never block Start.
+struct AutoScanTemplatesSection: View {
+    @Bindable var setup: AutoScanSetupModel
+    let onSave: () -> Void
+    let onDelete: (AutoScanTemplateDto) -> Void
+
+    @Environment(\.mobaideColors) private var colors
+
+    var body: some View {
+        Section {
+            HStack(spacing: 12) {
+                Text("Template")
+                Spacer(minLength: 8)
+                Menu {
+                    Section {
+                        ForEach(setup.templates) { template in
+                            Button {
+                                setup.applyTemplate(template)
+                            } label: {
+                                Text(template.name)
+                                Text(AutoScanSetupModel.templateSummary(template))
+                            }
+                        }
+                    }
+                    Menu("Delete a template") {
+                        ForEach(setup.templates) { template in
+                            Button(template.name, role: .destructive) { onDelete(template) }
+                                .disabled(setup.deletingTemplateIds.contains(template.id))
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(setup.appliedTemplateName ?? "Choose a template")
+                            .lineLimit(1)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption)
+                    }
+                    .foregroundStyle(setup.templates.isEmpty ? colors.gray : colors.accent)
+                }
+                .disabled(setup.templates.isEmpty)
+            }
+            statusRows
+            Button("Save as template…", action: onSave)
+                .buttonStyle(.pixelSmall)
+                .disabled(!setup.canSaveTemplate)
+        } header: {
+            PixelSectionHeader("Templates")
+        }
+    }
+
+    @ViewBuilder
+    private var statusRows: some View {
+        switch setup.templatesState {
+        case .idle, .loading:
+            HStack(spacing: 10) {
+                PixelLoadingBlock(width: 7, height: 13)
+                Text("Loading templates…")
+                    .font(.footnote)
+                    .foregroundStyle(colors.textMuted)
+            }
+        case .failed(let message):
+            HStack(spacing: 10) {
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(colors.danger)
+                Spacer()
+                Button("Retry") { Task { await setup.loadTemplates(force: true) } }
+                    .buttonStyle(.pixelSmall)
+            }
+        case .loaded:
+            if setup.templates.isEmpty {
+                Text("No templates yet. Set up a scan, then save it as a template.")
+                    .font(.footnote)
+                    .foregroundStyle(colors.textMuted)
+            }
+        }
+        if let notice = setup.templateNotice {
+            Text(notice)
+                .font(.footnote)
+                .foregroundStyle(colors.ok)
+        }
+        if let error = setup.templateActionError {
+            Text(error)
+                .font(.footnote)
+                .foregroundStyle(colors.danger)
+        }
+    }
+}
+
+/// Where each issue runs and when its worktree goes, said once for the step.
+struct AutoScanHowItWorksSection: View {
+    let setup: AutoScanSetupModel
+
+    var body: some View {
+        Section {
+            AutoScanCallout(kind: .info, title: "How Auto Scan works", lines: lines)
+        }
+    }
+
+    private var lines: [String] {
+        let isGit = setup.workspace?.is_git != false
+        var lines = [
+            isGit
+                ? "Each issue runs in its own git worktree and branch, so the agent's work never touches your working copy."
+                : "This folder is not a git repository, so each issue runs in the folder itself.",
+            "Each session starts at once with the issue as its prompt. You get a notification when it needs you.",
+        ]
+        guard isGit else { return lines }
+        switch setup.source {
+        case .github?:
+            lines.append("When an issue is closed, its worktree is removed. A worktree with uncommitted changes is kept.")
+        case .linear?:
+            let done = setup.linearDoneState.trimmingCharacters(in: .whitespacesAndNewlines)
+            lines.append("When an issue moves to “\(done.isEmpty ? "Done" : done)”, its worktree is removed.")
+        case nil:
+            break
+        }
+        return lines
+    }
+}
+
+/// Steps 1 and 2: the source choice, then the GitHub status and filter, or the
+/// Linear key and filter.
 struct AutoScanSourceSections: View {
     @Bindable var setup: AutoScanSetupModel
     let setupStarting: Bool
@@ -23,14 +261,14 @@ struct AutoScanSourceSections: View {
                 }
             }
         } header: {
-            PixelSectionHeader("Issue source")
+            AutoScanStepHeader(1, "Where to find issues")
         }
-        .pixelFormSection()
 
         switch setup.source {
         case .github?:
             githubStatusSection
-            githubFilterSection
+            githubPickUpSections
+            githubMoreFilterSection
         case .linear?:
             if setup.hasLinearKey {
                 linearFilterSection
@@ -38,7 +276,13 @@ struct AutoScanSourceSections: View {
                 linearKeySection
             }
         case nil:
-            EmptyView()
+            Section {
+                Text("Choose where to find issues first.")
+                    .font(.footnote)
+                    .foregroundStyle(colors.textMuted)
+            } header: {
+                AutoScanStepHeader(2, "Which issues")
+            }
         }
     }
 
@@ -56,25 +300,32 @@ struct AutoScanSourceSections: View {
                         .foregroundStyle(colors.textMuted)
                 }
             case .failed(let message):
-                Text(message)
-                    .font(.footnote)
-                    .foregroundStyle(colors.danger)
+                statusLine(message, ok: false, tone: colors.danger)
             case .loaded(let status):
                 githubStatusRows(status)
             }
             checkAgainRow
         } header: {
-            PixelSectionHeader("GitHub")
+            AutoScanStepHeader(2, "Which issues")
         }
-        .pixelFormSection()
+    }
+
+    private func statusLine(_ text: String, ok: Bool, tone: Color) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: ok ? "checkmark.square.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(tone)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(ok ? colors.text : tone)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     @ViewBuilder
     private func githubStatusRows(_ status: GitHubStatusResponse) -> some View {
         if !status.installed {
-            Text(status.problem ?? "GitHub CLI (gh) is not installed on the PC.")
-                .font(.footnote)
-                .foregroundStyle(colors.warning)
+            statusLine(status.problem ?? "GitHub CLI (gh) is not installed on the PC.", ok: false, tone: colors.warning)
             if status.can_install, setup.canRunGitHubSetup {
                 VStack(alignment: .leading, spacing: 6) {
                     setupButton("Install GitHub CLI", action: .install)
@@ -90,9 +341,7 @@ struct AutoScanSourceSections: View {
                     .foregroundStyle(colors.textMuted)
             }
         } else if let problem = status.problem {
-            Text(problem)
-                .font(.footnote)
-                .foregroundStyle(colors.warning)
+            statusLine(problem, ok: false, tone: colors.warning)
             if !status.signed_in, status.host?.contains("github") == true {
                 if setup.canRunGitHubSetup {
                     setupButton("Sign in to GitHub", action: .signIn)
@@ -103,9 +352,7 @@ struct AutoScanSourceSections: View {
                 }
             }
         } else {
-            Text(readyText(status))
-                .font(.footnote)
-                .foregroundStyle(colors.text)
+            statusLine(readyText(status), ok: true, tone: colors.ok)
         }
     }
 
@@ -134,7 +381,7 @@ struct AutoScanSourceSections: View {
     private var checkAgainRow: some View {
         HStack(spacing: 10) {
             Button("Check again") {
-                Task { await setup.refreshGitHubStatus() }
+                Task { await setup.refreshGitHubStatus(userAsked: true) }
             }
             .buttonStyle(.pixelSmall)
             .disabled(setup.githubChecking)
@@ -145,10 +392,40 @@ struct AutoScanSourceSections: View {
         }
     }
 
+    /// The pick-up rule, a tip, the trigger labels and the issue types.
     @ViewBuilder
-    private var githubFilterSection: some View {
+    private var githubPickUpSections: some View {
+        Section {
+            AutoScanCallout(
+                kind: .attention,
+                title: "How issues are picked up",
+                lines: [
+                    "An open issue with any of these labels is picked up. When work starts, the scan removes the label, so each issue runs only once. Add the label again to run the issue again.",
+                ]
+            )
+        }
+        Section {
+            AutoScanCallout(
+                kind: .tip,
+                title: "Tips",
+                lines: [
+                    "Create a dedicated label, for example auto-scan, and add it only to the issues an agent should solve.",
+                    "Avoid common labels such as bug: every open issue with them would start a session.",
+                    "Keep the label out of issue templates and workflows that label new issues, or anyone who opens an issue could start a session on your PC.",
+                    "Use one label per kind of work, such as auto-scan-small and auto-scan-complex, and save a template for each.",
+                ],
+                bulleted: true
+            )
+        }
         Section {
             labelsField
+            issueTypesField
+        }
+    }
+
+    @ViewBuilder
+    private var githubMoreFilterSection: some View {
+        Section {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Assigned to").sectionHeading()
                 TextField("Anyone", text: $setup.githubAssignee)
@@ -184,14 +461,11 @@ struct AutoScanSourceSections: View {
                     .font(.caption)
                     .foregroundStyle(colors.textMuted)
             }
-        } header: {
-            PixelSectionHeader("GitHub filter")
-        } footer: {
-            PixelSectionFooter("When an issue is closed, its worktree is removed.")
         }
-        .pixelFormSection()
     }
 
+    /// The chosen labels (also ones the repository does not list, so they can
+    /// be unchosen), then the repository's other labels to pick from.
     private var labelsField: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Labels to pick up").sectionHeading()
@@ -208,19 +482,12 @@ struct AutoScanSourceSections: View {
                     }
                 }
             }
-            HStack(spacing: 8) {
-                TextField("Add a label", text: $setup.githubLabelDraft)
+            if setup.githubLabelSearchShown {
+                TextField("Search the repository's labels", text: $setup.githubLabelSearch)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
-                    .submitLabel(.done)
-                    .onSubmit { setup.submitGitHubLabelDraft() }
-                    .pixelField(isInvalid: setup.githubLabelError != nil)
-                Button("Add") { setup.submitGitHubLabelDraft() }
-                    .buttonStyle(.pixelSmall)
-                    .disabled(setup.githubLabelDraft.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            if let error = setup.githubLabelError {
-                Text(error).font(.caption).foregroundStyle(colors.danger)
+                    .submitLabel(.search)
+                    .pixelField()
             }
             let suggestions = setup.githubLabelSuggestions
             if !suggestions.isEmpty {
@@ -232,23 +499,74 @@ struct AutoScanSourceSections: View {
                             PixelChip("+ \(label.name)", .verbatim(checked: false))
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Add label \(label.name)")
+                        .disabled(setup.githubLabels.count >= AutoScanSetupModel.maxGitHubLabels)
+                        .accessibilityLabel("Pick up label \(label.name)")
                     }
                 }
             }
             let hidden = setup.githubHiddenLabelSuggestionCount
             if hidden > 0 {
-                Text("\(hidden) more \(hidden == 1 ? "label" : "labels"): type to find them.")
+                Text("\(hidden) more \(hidden == 1 ? "label" : "labels"): search to find them.")
                     .font(.caption)
                     .foregroundStyle(colors.textMuted)
             }
-            if let error = setup.githubRepoLabelsError {
-                Text(error).font(.caption).foregroundStyle(colors.warning)
+            if setup.githubLabelsLoaded, setup.githubRepoLabels.isEmpty {
+                Text("This repository has no labels yet. Create one on GitHub, then tap Check again.")
+                    .font(.caption)
+                    .foregroundStyle(colors.textMuted)
             }
-            Text("An open issue with any of these labels is picked up. The scan removes the label when it starts, so each issue runs once.")
+            if setup.githubLabels.count >= AutoScanSetupModel.maxGitHubLabels {
+                Text("You can pick up at most \(AutoScanSetupModel.maxGitHubLabels) labels.")
+                    .font(.caption)
+                    .foregroundStyle(colors.textMuted)
+            }
+            if let error = setup.githubLabelError {
+                Text(error).font(.caption).foregroundStyle(colors.danger)
+            }
+            if let error = setup.githubRepoLabelsError {
+                HStack(spacing: 10) {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(colors.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    Button("Try again") { Task { await setup.loadGitHubLabels() } }
+                        .buttonStyle(.pixelSmall)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var issueTypesField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Issue types").sectionHeading()
+            Text("Only issues of the chosen types are picked up. None chosen: any type.")
                 .font(.caption)
                 .foregroundStyle(colors.textMuted)
+            let options = setup.githubIssueTypeOptions
+            if !options.isEmpty {
+                ChipFlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
+                    ForEach(options, id: \.self) { name in
+                        let chosen = setup.isGitHubIssueTypeChosen(name)
+                        Button {
+                            setup.toggleGitHubIssueType(name)
+                        } label: {
+                            PixelChip(chosen ? "\(name)  ✓" : name, .verbatim(checked: chosen))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(name)
+                        .accessibilityAddTraits(chosen ? .isSelected : [])
+                    }
+                }
+            }
+            if setup.githubLabelsLoaded, setup.githubRepoIssueTypes.isEmpty {
+                Text("This repository has no issue types.")
+                    .font(.caption)
+                    .foregroundStyle(colors.textMuted)
+            }
         }
+        .padding(.vertical, 4)
     }
 
     // MARK: - Linear
@@ -281,11 +599,10 @@ struct AutoScanSourceSections: View {
                 Text(error).font(.caption).foregroundStyle(colors.danger)
             }
         } header: {
-            PixelSectionHeader("Linear")
+            AutoScanStepHeader(2, "Which issues")
         } footer: {
             PixelSectionFooter("This workspace has no Linear API key. The key is saved on the PC with the workspace.")
         }
-        .pixelFormSection()
     }
 
     @ViewBuilder
@@ -305,7 +622,7 @@ struct AutoScanSourceSections: View {
             )
         } header: {
             HStack {
-                PixelSectionHeader("Linear filter")
+                AutoScanStepHeader(2, "Which issues")
                 Spacer()
                 Button {
                     Task { await setup.loadLinearMetadata(force: true) }
@@ -316,12 +633,11 @@ struct AutoScanSourceSections: View {
                 .accessibilityLabel("Reload Linear labels and states")
             }
         }
-        .pixelFormSection()
     }
 }
 
-/// The Auto Scan step's agent choice: the kinds `capabilities.autoscan`
-/// lists; one the PC does not have is shown but cannot be picked.
+/// Step 3's agent choice: the kinds `capabilities.autoscan` lists; one the PC
+/// does not have is shown but cannot be picked.
 struct AutoScanAgentSection: View {
     @Bindable var setup: AutoScanSetupModel
 
@@ -339,9 +655,83 @@ struct AutoScanAgentSection: View {
                 .disabled(!available)
             }
         } header: {
-            PixelSectionHeader("AI agent")
+            AutoScanStepHeader(3, "AI agent")
         }
-        .pixelFormSection()
+    }
+}
+
+/// "Save as template…": the name, and whether the save replaces a template.
+struct AutoScanSaveTemplateSheet: View {
+    let setup: AutoScanSetupModel
+    let onSave: (String) async -> Bool
+
+    @State private var name: String
+    @FocusState private var focused: Bool
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.mobaideColors) private var colors
+
+    init(setup: AutoScanSetupModel, onSave: @escaping (String) async -> Bool) {
+        self.setup = setup
+        self.onSave = onSave
+        _name = State(initialValue: setup.appliedTemplateName ?? "")
+    }
+
+    var body: some View {
+        let replacing = setup.existingTemplate(named: name)
+        let lengthError = AutoScanSetupModel.normalizedTemplateName(name).unicodeScalars.count
+            > AutoScanSetupModel.maxTemplateNameLength
+            ? AutoScanSetupModel.templateNameError(name) : nil
+        NavigationStack {
+            List {
+                Section {
+                    TextField("Name", text: $name)
+                        .focused($focused)
+                        .submitLabel(.done)
+                        .onSubmit { save() }
+                        .pixelField(isInvalid: lengthError != nil)
+                    if let lengthError {
+                        Text(lengthError).font(.footnote).foregroundStyle(colors.danger)
+                    } else if let replacing {
+                        Text("Replaces the template “\(replacing.name)”.")
+                            .font(.footnote)
+                            .foregroundStyle(colors.warning)
+                    } else {
+                        Text("Saves the source, filter, agent, its options and the instructions on your PC.")
+                            .font(.footnote)
+                            .foregroundStyle(colors.textMuted)
+                    }
+                    if let error = setup.templateActionError {
+                        Text(error).font(.footnote).foregroundStyle(colors.danger)
+                    }
+                } header: {
+                    PixelSectionHeader("Template name")
+                }
+                .pixelFormSection()
+            }
+            .pixelForm()
+            .navigationTitle("Save as template")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(replacing == nil ? "Save" : "Replace") { save() }
+                        .disabled(AutoScanSetupModel.templateNameError(name) != nil || setup.savingTemplate)
+                }
+            }
+        }
+        .presentationDetents([.medium])
+        .pixelSheet()
+        .onAppear { focused = true }
+    }
+
+    private func save() {
+        guard AutoScanSetupModel.templateNameError(name) == nil, !setup.savingTemplate else { return }
+        let chosen = name
+        Task {
+            if await onSave(chosen) { dismiss() }
+        }
     }
 }
 

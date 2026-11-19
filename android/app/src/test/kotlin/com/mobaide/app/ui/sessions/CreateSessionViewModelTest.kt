@@ -13,6 +13,7 @@ import com.mobaide.app.data.local.PiLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.RestApi
+import com.mobaide.app.data.network.dto.AutoScanTemplateDto
 import com.mobaide.app.data.network.dto.ChatStoredSession
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CliModelDetail
@@ -27,6 +28,7 @@ import com.mobaide.app.data.network.dto.VersionInfoResponse
 import com.mobaide.app.data.network.dto.WorktreeBaseRef
 import com.mobaide.app.data.network.dto.WorktreeBasesResponse
 import com.mobaide.app.data.repository.AutoScanRepository
+import com.mobaide.app.data.repository.AutoScanTemplateException
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.GitRepository
 import com.mobaide.app.data.repository.LinearMetadataRepository
@@ -691,6 +693,117 @@ class CreateSessionViewModelTest {
 
         assertNotNull(vm.uiState.value.autoScanCapability)
         assertEquals("", vm.uiState.value.initialPrompt)
+    }
+
+    @Test
+    fun autoScanStep_openedBeforeTheCapabilityProbe_loadsTemplatesOnceItArrives_andOnlyThenOffersSave() = runTest {
+        val fx = newFixture()
+        coEvery { fx.autoScanRepo.templates() } returns listOf(AutoScanTemplateDto(id = "t1", name = "Small bugs"))
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
+        vm.selectAutoScanMode()
+        advanceUntilIdle()
+
+        // Without the list the dialog could not say that a name replaces a template.
+        vm.openAutoScanTemplateSave()
+        assertEquals(CreateSessionStep.AutoScanConfig, vm.uiState.value.step)
+        assertFalse(vm.uiState.value.autoScanTemplates.saveDialogOpen)
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns VersionInfoResponse(
+            name = "mobaide_agent",
+            server_version = "0.2.16",
+            protocol_versions = listOf(7),
+            min_client_version = 5,
+            capabilities = Json.parseToJsonElement(
+                """{"autoscan":{"sources":["linear","github"],"clis":["claude"],"github_setup":true}}""",
+            ).jsonObject,
+        )
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+        vm.openAutoScanTemplateSave()
+
+        val templates = vm.uiState.value.autoScanTemplates
+        assertEquals(listOf("Small bugs"), templates.templates.map { it.name })
+        assertTrue(templates.saveDialogOpen)
+    }
+
+    @Test
+    fun deleteAutoScanTemplate_alreadyGoneOnThePc_dropsItWithoutAnError() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns VersionInfoResponse(
+            name = "mobaide_agent",
+            server_version = "0.2.16",
+            protocol_versions = listOf(7),
+            min_client_version = 5,
+            capabilities = Json.parseToJsonElement(
+                """{"autoscan":{"sources":["linear","github"],"clis":["claude"],"github_setup":true}}""",
+            ).jsonObject,
+        )
+        coEvery { fx.autoScanRepo.templates() } returns listOf(
+            AutoScanTemplateDto(id = "t1", name = "Small bugs"),
+            AutoScanTemplateDto(id = "t2", name = "Complex"),
+        )
+        // Another device deleted it first.
+        coEvery { fx.autoScanRepo.deleteTemplate("t1") } throws
+            AutoScanTemplateException(detail = "Template 't1' not found", status = 404)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+        vm.selectAutoScanMode()
+        advanceUntilIdle()
+        vm.applyAutoScanTemplate("t1")
+
+        vm.deleteAutoScanTemplate("t1")
+        advanceUntilIdle()
+
+        val templates = vm.uiState.value.autoScanTemplates
+        assertEquals(listOf("t2"), templates.templates.map { it.id })
+        assertNull(templates.appliedName)
+        assertNull(templates.deleteError)
+    }
+
+    @Test
+    fun saveAutoScanTemplate_refusedWithoutADetail_keepsTheDialogOpenWithTheSettingsHint() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns VersionInfoResponse(
+            name = "mobaide_agent",
+            server_version = "0.2.16",
+            protocol_versions = listOf(7),
+            min_client_version = 5,
+            capabilities = Json.parseToJsonElement(
+                """{"autoscan":{"sources":["linear","github"],"clis":["claude"],"github_setup":true}}""",
+            ).jsonObject,
+        )
+        coEvery { fx.autoScanRepo.templates() } returns listOf(AutoScanTemplateDto(id = "t1", name = "Small bugs"))
+        // The agent's 422 `detail` is a list of field errors, not a text to show.
+        coEvery { fx.autoScanRepo.saveTemplate(any(), any()) } throws
+            AutoScanTemplateException(detail = null, status = 422)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+        vm.selectAutoScanMode()
+        advanceUntilIdle()
+        vm.openAutoScanTemplateSave()
+
+        vm.saveAutoScanTemplate("Complex")
+        advanceUntilIdle()
+
+        val templates = vm.uiState.value.autoScanTemplates
+        assertEquals(
+            "The PC did not accept these settings. Check the filter and the agent options.",
+            templates.saveError,
+        )
+        assertTrue(templates.saveDialogOpen)
+        assertFalse(templates.saving)
+        assertEquals(listOf("t1"), templates.templates.map { it.id })
     }
 
     @Test

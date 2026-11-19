@@ -33,9 +33,11 @@ function renderPanel(
     githubLabels: {
       status: repoLabels.length > 0 ? 'ready' : 'idle',
       labels: repoLabels.map((name) => ({ name, color: '' })),
+      issueTypes: [],
       error: null,
     },
     checkGitHub: () => undefined,
+    retryGitHubLabels: () => undefined,
     openGitHubSetup: (action) => {
       opened.push(action);
     },
@@ -50,7 +52,7 @@ function renderPanel(
   };
   render(
     <GitHubSourcePanel
-      filter={{ labels: chosen, assignee: '', activeLabel }}
+      filter={{ labels: chosen, assignee: '', activeLabel, issueTypes: [] }}
       sources={sources}
       submitting={false}
       dispatch={() => undefined}
@@ -102,18 +104,18 @@ describe('GitHubSourcePanel — label chips', () => {
     renderPanel(SIGNED_IN, { repoLabels: REPO_LABELS, chosen: CHOSEN });
 
     expect(chips()).toEqual([...range(1, 30), 'label-40', 'custom']);
-    expect(screen.getByText('9 more labels: type to find them.')).toBeInTheDocument();
+    expect(screen.getByText('9 more labels: search to find them.')).toBeInTheDocument();
   });
 
-  it('filters the unchosen labels by any part of the typed text, ignoring case', () => {
+  it('filters the unchosen labels by any part of the searched text, ignoring case', () => {
     renderPanel(SIGNED_IN, { repoLabels: REPO_LABELS, chosen: CHOSEN });
 
-    fireEvent.change(screen.getByRole('combobox', { name: 'Add a label' }), {
+    fireEvent.change(screen.getByRole('textbox', { name: 'Find a label' }), {
       target: { value: 'EL-3' },
     });
 
     expect(chips()).toEqual([...range(30, 39), 'label-40', 'custom']);
-    expect(screen.queryByText(/more labels: type to find them/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/more labels: search to find them/)).not.toBeInTheDocument();
   });
 });
 

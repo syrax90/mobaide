@@ -91,6 +91,7 @@ from .sessions.router import chat_router
 from .sessions.router import router as sessions_router
 from .events import EventBus
 from .autoscan.models import AUTOSCAN_CAPABILITIES
+from .autoscan.templates import TEMPLATES_FILE_NAME, AutoScanTemplatesStore
 from .fs.models import FS_CAPABILITIES
 from .fs.router import router as fs_router
 from .update_check import (
@@ -787,6 +788,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     workspaces_store = WorkspacesStore(config.projects_store_path)
     workspaces_store.load(seed_json=config.projects)
     app.state.workspaces_store = workspaces_store
+    app.state.autoscan_templates = AutoScanTemplatesStore(
+        Path(config.projects_store_path).with_name(TEMPLATES_FILE_NAME)
+    )
 
     # Worktree manager is always wired so Standard-mode sessions can create
     # worktrees regardless of whether auto-scan is configured. The worktree

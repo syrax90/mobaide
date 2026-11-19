@@ -78,6 +78,8 @@ def _make_install(prefix: Path) -> Path:
     (prefix / "junie-trusted-folders.json").write_text(
         '{"folders": ["/home/me/app"]}', encoding="utf-8"
     )
+    (prefix / "autoscan_templates.json").write_text("[]", encoding="utf-8")
+    (prefix / "autoscan_templates.json.bak").write_text("{not json", encoding="utf-8")
     _make_voice_root(prefix / "voice")
     (prefix / "notes.txt").write_text("mine", encoding="utf-8")
     (prefix / "backups").mkdir()

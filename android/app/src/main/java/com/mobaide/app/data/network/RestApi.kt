@@ -2,6 +2,7 @@ package com.mobaide.app.data.network
 
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.network.dto.AutoScanListResponse
+import com.mobaide.app.data.network.dto.AutoScanTemplatesResponse
 import com.mobaide.app.data.network.dto.ChatStoredSessionsResponse
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CodexLoginRequest
@@ -37,6 +38,7 @@ import com.mobaide.app.data.network.dto.GitRebaseResponse
 import com.mobaide.app.data.network.dto.GitStatusResponse
 import com.mobaide.app.data.network.dto.LinearLabelDto
 import com.mobaide.app.data.network.dto.LinearStateDto
+import com.mobaide.app.data.network.dto.SaveAutoScanTemplateRequest
 import com.mobaide.app.data.network.dto.WorkspaceInfo
 import com.mobaide.app.data.network.dto.WorkspaceOrderRequest
 import com.mobaide.app.data.network.dto.WorkspaceUpdate
@@ -547,6 +549,28 @@ class RestApi(
 
     suspend fun getGitHubLabels(workspaceName: String): GitHubLabelsResponse =
         execute(Request.Builder().url(autoScanGitHubUrl("labels", workspaceName)).get().build())
+
+    suspend fun getAutoScanTemplates(): AutoScanTemplatesResponse =
+        execute(Request.Builder().url(autoScanTemplatesUrl()).get().build())
+
+    suspend fun saveAutoScanTemplate(body: SaveAutoScanTemplateRequest): AutoScanTemplatesResponse =
+        execute(
+            Request.Builder()
+                .url(autoScanTemplatesUrl())
+                .post(json.encodeToString(body).toRequestBody(jsonMediaType))
+                .build(),
+        )
+
+    suspend fun deleteAutoScanTemplate(templateId: String): AutoScanTemplatesResponse =
+        execute(Request.Builder().url(autoScanTemplatesUrl(templateId)).delete().build())
+
+    private fun autoScanTemplatesUrl(templateId: String? = null): HttpUrl =
+        baseUrl().toHttpUrl().newBuilder()
+            .addPathSegment("api")
+            .addPathSegment("autoscan")
+            .addPathSegment("templates")
+            .apply { templateId?.let(::addPathSegment) }
+            .build()
 
     suspend fun startGitHubSetup(body: GitHubSetupRequest): SessionResponse {
         val request = Request.Builder()

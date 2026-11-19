@@ -1,5 +1,7 @@
 package com.mobaide.app.data.network.dto
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 
 /**
@@ -25,22 +27,40 @@ data class AutoScanFilterDto(
 )
 
 /**
+ * The Linear filter as an Auto Scan template keeps it: any field may still be
+ * empty. Every field is always sent: the agent's draft defaults are empty, so
+ * a field the client left out because it equals a Kotlin default would be lost.
+ */
+@OptIn(ExperimentalSerializationApi::class)
+@Serializable
+data class AutoScanFilterDraftDto(
+    @EncodeDefault val state_names: List<String> = emptyList(),
+    @EncodeDefault val label_names: List<String> = emptyList(),
+    @EncodeDefault val active_state: String = "",
+    @EncodeDefault val done_state: String = "",
+    @EncodeDefault val removal_label: String = "",
+)
+
+/**
  * Per-workspace Auto Scan GitHub filter. An open issue that carries any of
  * [labels] (1–20 names, no commas) is picked up; [assignee] null takes any
  * assignee (`@me` is the signed-in `gh` account); [active_label] is added when
- * the scan takes the issue.
+ * the scan takes the issue. A non-empty [issue_types] also requires the issue
+ * to have one of these GitHub issue types. In a template [labels] may be empty.
  */
 @Serializable
 data class GitHubScanFilterDto(
     val labels: List<String> = emptyList(),
     val assignee: String? = null,
     val active_label: String? = null,
+    val issue_types: List<String> = emptyList(),
 )
 
 /**
  * The workspace's last Auto Scan choices (`auto_scan` on the workspace). Each
  * field is null until a scan start chose it; a null filter means the wizard
- * starts with empty fields. Absent on older agents.
+ * starts with empty fields. `<kind>_options` are the options of the last start
+ * with that agent; one the client cannot read is null. Absent on older agents.
  */
 @Serializable
 data class AutoScanSettingsDto(
@@ -48,6 +68,20 @@ data class AutoScanSettingsDto(
     val cli: String? = null,
     val linear_filter: AutoScanFilterDto? = null,
     val github_filter: GitHubScanFilterDto? = null,
+    @Serializable(with = LenientClaudeScanOptions::class)
+    val claude_options: ClaudeScanOptionsDto? = null,
+    @Serializable(with = LenientCodexScanOptions::class)
+    val codex_options: CodexScanOptionsDto? = null,
+    @Serializable(with = LenientAntigravityScanOptions::class)
+    val antigravity_options: AntigravityScanOptionsDto? = null,
+    @Serializable(with = LenientOpenCodeScanOptions::class)
+    val opencode_options: OpenCodeScanOptionsDto? = null,
+    @Serializable(with = LenientCopilotScanOptions::class)
+    val copilot_options: CopilotScanOptionsDto? = null,
+    @Serializable(with = LenientCursorScanOptions::class)
+    val cursor_options: CursorScanOptionsDto? = null,
+    @Serializable(with = LenientJunieScanOptions::class)
+    val junie_options: JunieScanOptionsDto? = null,
 )
 
 /** A Linear label discovered for the workspace's API key. */

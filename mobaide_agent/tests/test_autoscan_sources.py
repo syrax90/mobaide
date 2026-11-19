@@ -33,7 +33,7 @@ class _FakeRepository:
         self.closed: set[int] = set()
         self.refuse_removal = refuse_removal or set()
 
-    async def list_issues(self, repo, *, label, assignee):
+    async def list_issues(self, repo, *, label, assignee, issue_type=None, with_types=False):
         return [
             GhIssue(
                 number=number, title=f"Issue {number}", body="", labels=tuple(sorted(names)),
@@ -175,7 +175,7 @@ class _SearchIndexRepository(_FakeRepository):
         super().__init__(labels)
         self.indexed = {number: set(names) for number, names in labels.items()}
 
-    async def list_issues(self, repo, *, label, assignee):
+    async def list_issues(self, repo, *, label, assignee, issue_type=None, with_types=False):
         return [
             GhIssue(
                 number=number, title=f"Issue {number}", body="",

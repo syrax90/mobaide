@@ -15,6 +15,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from mobaide.agent.autoscan.models import StartScanRequest
+from mobaide.agent.sessions.models import ClaudeScanOptionsModel, CopilotScanOptionsModel
+from mobaide.agent.workspaces.models import WorkspaceReadModel
 from mobaide.core import SessionManager, WorkspaceRecord, WorkspacesStore, codex_launcher
 from mobaide.core.cli_launcher import CliBinaryNotFoundError
 from mobaide.core.codex_launcher import CodexLauncher
@@ -112,7 +114,7 @@ async def test_github_start_remembers_every_choice(tmp_path):
     instance = await mgr.start(
         "alpha",
         request=AutoScanStart(
-            source="github", cli="copilot", auto_approve=False,
+            source="github", cli="copilot", agent_options={},
             initial_prompt="Fix it.", github_filter=_GITHUB,
         ),
     )
@@ -122,7 +124,17 @@ async def test_github_start_remembers_every_choice(tmp_path):
         "source": "github",
         "cli": "copilot",
         "linear_filter": None,
-        "github_filter": {"labels": ["ai-ready"], "assignee": "@me", "active_label": "ai-doing"},
+        "github_filter": {
+            "labels": ["ai-ready"], "assignee": "@me", "active_label": "ai-doing",
+            "issue_types": [],
+        },
+        "claude_options": None,
+        "codex_options": None,
+        "antigravity_options": None,
+        "opencode_options": None,
+        "copilot_options": {},
+        "cursor_options": None,
+        "junie_options": None,
     }
     snap = store.get("alpha")
     assert snap is not None and snap.auto_scan_prompt == "Fix it."
@@ -270,3 +282,42 @@ async def test_codex_must_be_signed_in_on_the_pc_to_start(tmp_path, monkeypatch,
     with pytest.raises(AutoScanSourceError, match=r"^Codex is not signed in on the PC\."):
         await mgr.start("alpha", request=request)
     assert mgr.get("alpha") is None
+
+
+async def test_each_agent_kind_keeps_the_options_of_its_last_start(tmp_path):
+    store = _make_store(tmp_path)
+    mgr = _make_manager(store, _RecordingEventBus())
+    claude = StartScanRequest.model_validate({
+        "project_name": "alpha", "source": "github", "cli": "claude",
+        "claude_options": {"model": "opus", "plan_mode": True, "initial_prompt": "x",
+                           "worktree": True, "branch_name": "b"},
+    })
+    copilot = StartScanRequest.model_validate({
+        "project_name": "alpha", "source": "github", "cli": "copilot",
+        "copilot_options": {"allow_all": False}, "codex_options": {"full_auto": True},
+        "github_filter": {"labels": ["ai-ready"]},
+    })
+
+    # Refused (no labels yet), but the choices are still remembered.
+    with pytest.raises(AutoScanSourceError):
+        await mgr.start("alpha", request=claude.to_start())
+    await mgr.start("alpha", request=copilot.to_start())
+
+    [row] = store.list_public()
+    saved = WorkspaceReadModel.model_validate(row).auto_scan
+    assert saved.claude_options == ClaudeScanOptionsModel(model="opus", plan_mode=True)
+    assert saved.copilot_options == CopilotScanOptionsModel(allow_all=False)
+    # Options sent for an agent the start did not choose are not saved.
+    assert saved.codex_options is None
+
+
+async def test_an_older_client_start_saves_no_agent_options(tmp_path):
+    store = _make_store(tmp_path, key="lin_api_test")
+    mgr = _make_manager(store, _RecordingEventBus())
+    wire = StartScanRequest.model_validate(
+        {"project_name": "alpha", "claude_options": {"model": "opus"}},
+    )
+
+    await mgr.start("alpha", request=wire.to_start())
+
+    assert _saved(store)["claude_options"] is None

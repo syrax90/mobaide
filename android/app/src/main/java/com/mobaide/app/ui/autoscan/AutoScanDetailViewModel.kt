@@ -81,6 +81,8 @@ class AutoScanDetailViewModel @Inject constructor(
         val isPausedAutoscroll: Boolean = false,
         val connection: ConnectionState = ConnectionState.Connecting,
         val lastSeq: Long = 0L,
+        // Stop succeeded: the agent no longer lists the scan, so no event updates the header.
+        val stopped: Boolean = false,
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -141,6 +143,8 @@ class AutoScanDetailViewModel @Inject constructor(
                         nextScanAt = instance?.next_scan_at,
                         cycleNumber = instance?.cycle_number ?: it.cycleNumber,
                         connection = ConnectionState.Replaying,
+                        // A scan started again elsewhere is listed again.
+                        stopped = it.stopped && instance == null,
                     )
                 }
                 frame.events[workspaceName]?.forEach { reduceEvent(it) }
@@ -279,7 +283,12 @@ class AutoScanDetailViewModel @Inject constructor(
 
     fun stop() {
         viewModelScope.launch {
-            try { repository.stopScan(workspaceName) } catch (_: Exception) { }
+            try {
+                repository.stopScan(workspaceName)
+                _ui.update { it.copy(stopped = true, nextScanAt = null) }
+            } catch (_: Exception) {
+                // Repository already emitted an AutoScanUiEvent.Error.
+            }
         }
     }
 

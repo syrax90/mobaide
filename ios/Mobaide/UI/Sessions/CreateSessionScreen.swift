@@ -31,6 +31,9 @@ private struct CreateSessionContent: View {
     @State private var junieAdvancedExpanded = false
     @State private var piAdvancedExpanded = false
     @State private var autoScanAdvancedExpanded = false
+    @State private var autoScanCodexAdvancedExpanded = false
+    @State private var saveTemplateShown = false
+    @State private var templateToDelete: AutoScanTemplateDto?
     @State private var showContinueSession = false
     @State private var pendingContinue: ChatStoredSession?
     @State private var baseBranchPickerShown = false
@@ -114,6 +117,32 @@ private struct CreateSessionContent: View {
         .task(id: model.autoScanLinearLoadKey) {
             guard model.autoScanLinearLoadKey != nil else { return }
             await model.autoScanSetup.loadLinearMetadata()
+        }
+        .task(id: model.showsAutoScanTemplates) {
+            guard model.showsAutoScanTemplates else { return }
+            await model.autoScanSetup.loadTemplates()
+        }
+        .sheet(isPresented: $saveTemplateShown, onDismiss: {
+            model.autoScanSetup.clearTemplateActionError()
+        }) {
+            AutoScanSaveTemplateSheet(setup: model.autoScanSetup) { name in
+                await model.saveAutoScanTemplate(name: name)
+            }
+        }
+        .alert(
+            "Delete template “\(templateToDelete?.name ?? "")”?",
+            isPresented: Binding(
+                get: { templateToDelete != nil },
+                set: { if !$0 { templateToDelete = nil } }
+            ),
+            presenting: templateToDelete
+        ) { template in
+            Button("Delete", role: .destructive) {
+                Task { await model.autoScanSetup.deleteTemplate(template) }
+            }
+            Button("Cancel", role: .cancel) { templateToDelete = nil }
+        } message: { _ in
+            Text("Scans that are running keep their choices.")
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await model.recheckGitHub() } }
@@ -494,9 +523,10 @@ private struct CreateSessionContent: View {
         }
     }
 
-    /// An agent with `capabilities.autoscan` gets the source, filter and agent
-    /// choices; an older one keeps the Linear + Claude Code panel. The step
-    /// waits for the probe so it does not switch panels under the user.
+    /// An agent with `capabilities.autoscan` gets the templates, the source,
+    /// filter, agent and agent-option choices; an older one keeps the Linear +
+    /// Claude Code panel. The step waits for the probe so it does not switch
+    /// panels under the user.
     @ViewBuilder
     private var autoScanConfig: some View {
         let setup = model.autoScanSetup
@@ -510,81 +540,161 @@ private struct CreateSessionContent: View {
                 }
             }
         } else if setup.isAvailable {
+            AutoScanIntroSection()
+            AutoScanTemplatesSection(
+                setup: setup,
+                onSave: {
+                    model.autoScanSetup.clearTemplateActionError()
+                    saveTemplateShown = true
+                },
+                onDelete: { templateToDelete = $0 }
+            )
+            AutoScanHowItWorksSection(setup: setup)
             AutoScanSourceSections(setup: setup, setupStarting: model.githubSetupStarting) { action in
                 Task { await model.runGitHubSetup(action) }
             }
             AutoScanAgentSection(setup: setup)
             autoScanAgentOptions
-            autoScanPromptSection(showsHint: true)
+            autoScanInstructionsSection
             autoScanStartSection
         } else {
-            autoScanClaudeSections
-            autoScanPromptSection(showsHint: false)
+            autoScanClaudeSections(legacy: true)
+            autoScanPromptSection
             autoScanStartSection
         }
     }
 
+    /// The chosen agent's options, from Auto Scan's own buckets; the controls
+    /// are a normal session's, without the chat, worktree and sign-in parts.
     @ViewBuilder
     private var autoScanAgentOptions: some View {
-        @Bindable var model = model
-        switch model.autoScanSetup.cli {
+        @Bindable var setup = model.autoScanSetup
+        switch setup.cli {
         case "claude"?:
-            autoScanClaudeSections
-        case "pi"?:
+            autoScanClaudeSections(legacy: false)
+        case "codex"?:
             Section {
+                CodexAutonomyRows(preset: setup.codexOptions.preset) { setup.codexOptions.apply($0) }
+                mayAskHint("codex")
+            } header: {
+                PixelSectionHeader("Codex autonomy")
+            } footer: {
+                if setup.codexOptions.preset == nil {
+                    PixelSectionFooter("Custom sandbox/approval set in Advanced.")
+                }
+            }
+            Section(header: PixelSectionHeader("Codex")) {
+                CodexModelEffortRows(
+                    model: Binding(
+                        get: { setup.codexOptions.model },
+                        set: { model.setAutoScanCodexModel($0) }
+                    ),
+                    effort: Binding(
+                        get: { setup.codexOptions.reasoning_effort ?? "high" },
+                        set: { setup.codexOptions.reasoning_effort = $0 }
+                    ),
+                    modelOptions: model.codexModelOptions(selected: setup.codexOptions.model),
+                    advertisedEfforts: model.codexEfforts(for: setup.codexOptions.model)
+                )
+            }
+            Section {
+                DisclosureGroup("Advanced", isExpanded: $autoScanCodexAdvancedExpanded) {
+                    CodexSandboxApprovalRows(
+                        sandbox: $setup.codexOptions.sandbox,
+                        approval: $setup.codexOptions.approval,
+                        fullAuto: setup.codexOptions.full_auto
+                    )
+                }
+            }
+        case "antigravity"?:
+            Section(header: PixelSectionHeader("Antigravity")) {
+                AntigravityOptionRows(
+                    model: $setup.antigravityOptions.model,
+                    models: model.antigravityModels,
+                    skipPermissions: Binding(
+                        get: { setup.antigravityOptions.skip_permissions },
+                        set: { setup.setAntigravitySkipPermissions($0) }
+                    ),
+                    sandbox: Binding(
+                        get: { setup.antigravityOptions.sandbox },
+                        set: { setup.setAntigravitySandbox($0) }
+                    ),
+                    addDirs: $setup.antigravityAddDirsDraft,
+                    skipPermissionsHint: setup.agentMayAsk("antigravity") ? Self.mayAskText : nil
+                )
+            }
+        case "opencode"?:
+            Section(header: PixelSectionHeader("OpenCode")) {
+                OpenCodeOptionRows(autoApprove: $setup.opencodeOptions.auto_approve)
+                mayAskHint("opencode")
+            }
+        case "copilot"?:
+            Section(header: PixelSectionHeader("GitHub Copilot")) {
+                CopilotOptionRows(allowAll: $setup.copilotOptions.allow_all)
+                mayAskHint("copilot")
+            }
+        case "cursor"?:
+            Section(header: PixelSectionHeader("Cursor")) {
+                CursorOptionRows(force: $setup.cursorOptions.force)
+                mayAskHint("cursor")
+            }
+        case "junie"?:
+            Section(header: PixelSectionHeader("Junie")) {
+                JunieOptionRows(planMode: $setup.junieOptions.plan_mode, brave: $setup.junieOptions.brave)
+                mayAskHint("junie")
+            }
+        case "pi"?:
+            Section(header: PixelSectionHeader("Pi")) {
                 Text("Pi runs its tools without asking.")
                     .font(.footnote)
                     .foregroundStyle(colors.textMuted)
-            } header: {
-                PixelSectionHeader("Pi")
-            } footer: {
-                PixelSectionFooter(Self.autoScanWorktreeNote)
             }
-        case let kind?:
-            Section {
-                Toggle("Run without asking for permission (dangerous)", isOn: $model.autoScanAutoApprove)
-                Text("When on, the agent runs commands without asking (Codex also without its sandbox). When off, it may stop and wait for your approval in its session; Codex never asks and stays in its sandbox.")
-                    .font(.footnote)
-                    .foregroundStyle(colors.textMuted)
-            } header: {
-                PixelSectionHeader(AutoScanDisplay.agentName(kind))
-            } footer: {
-                PixelSectionFooter(Self.autoScanWorktreeNote)
-            }
+        case .some:
+            EmptyView()
         case nil:
             EmptyView()
         }
     }
 
-    private static let autoScanWorktreeNote = "Each issue runs in its own git worktree, so its changes stay isolated from your working copy."
+    private static let mayAskText = "When off, the agent may stop and wait for your approval. You get a notification and can open the session to approve."
+    /// Codex has no on/off switch: its presets decide whether it asks.
+    private static let codexMayAskText = "Without Full access, Codex may stop and wait for your approval. You get a notification and can open the session to approve."
 
-    /// Claude Code's options for Auto Scan, from the Auto Scan bucket.
     @ViewBuilder
-    private var autoScanClaudeSections: some View {
+    private func mayAskHint(_ kind: String) -> some View {
+        if model.autoScanSetup.agentMayAsk(kind) {
+            Text(kind == "codex" ? Self.codexMayAskText : Self.mayAskText)
+                .font(.footnote)
+                .foregroundStyle(colors.warning)
+        }
+    }
+
+    /// Claude Code's options for Auto Scan, from the Auto Scan bucket. `legacy`
+    /// is the older-agent panel, which still says where each issue runs.
+    @ViewBuilder
+    private func autoScanClaudeSections(legacy: Bool) -> some View {
         @Bindable var model = model
-        Section(header: PixelSectionHeader("Claude")) {
+        Section {
             claudeModelAndEffortPickers(
                 claudeModel: $model.autoScanClaudeModel,
                 effort: $model.autoScanClaudeEffort,
                 fastMode: model.autoScanClaudeFastMode,
                 ultracode: model.autoScanClaudeUltracode
             )
-        }
-
-        Section {
             Toggle("Plan mode", isOn: $model.autoScanPlanMode)
             focusViewToggle($model.autoScanFocusMode)
             Toggle("Skip permissions", isOn: $model.autoScanSkipPermissions)
-            // Shown in both states: this defaults ON, so leaving the caption to
-            // the off-state would let an unattended permission-bypassing scan
-            // start with no explanation at all.
-            Text("When off, the scan pauses at permission prompts — you'll get a notification and can open the session to approve.")
-                .font(.footnote)
-                .foregroundStyle(colors.textMuted)
+            if !model.autoScanSkipPermissions {
+                Text(Self.mayAskText)
+                    .font(.footnote)
+                    .foregroundStyle(colors.warning)
+            }
         } header: {
-            PixelSectionHeader("Auto Scan")
+            PixelSectionHeader(legacy ? "Claude" : "Claude Code")
         } footer: {
-            PixelSectionFooter("Each matching issue runs in its own git worktree, so its changes stay isolated from your working copy. Non-git workspaces run in the workspace directory.")
+            if legacy {
+                PixelSectionFooter("Each matching issue runs in its own git worktree, so its changes stay isolated from your working copy. Non-git workspaces run in the workspace directory.")
+            }
         }
 
         claudeAdvancedOptions(
@@ -599,8 +709,31 @@ private struct CreateSessionContent: View {
         )
     }
 
+    /// Step 4 for an agent with `capabilities.autoscan`.
     @ViewBuilder
-    private func autoScanPromptSection(showsHint: Bool) -> some View {
+    private var autoScanInstructionsSection: some View {
+        @Bindable var model = model
+        Section {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Instructions for the agent (optional)").sectionHeading()
+                TextField("For example: add a test for each fix.", text: $model.autoScanInitialPrompt, axis: .vertical)
+                    .lineLimit(3...8)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .pixelField()
+                Text("Your playbook for every issue. The issue's title, link and description are added after it.")
+                    .font(.caption)
+                    .foregroundStyle(colors.textMuted)
+            }
+            .padding(.vertical, 4)
+        } header: {
+            AutoScanStepHeader(4, "Instructions")
+        }
+    }
+
+    /// The older-agent panel's prompt.
+    @ViewBuilder
+    private var autoScanPromptSection: some View {
         @Bindable var model = model
         Section {
             TextField("Sent to each spawned session", text: $model.autoScanInitialPrompt, axis: .vertical)
@@ -610,13 +743,6 @@ private struct CreateSessionContent: View {
                 .pixelField()
         } header: {
             PixelSectionHeader("Initial prompt")
-        } footer: {
-            if showsHint {
-                PixelSectionFooter(
-                    "The issue's title, link and description are added after your prompt. "
-                        + "Leave it empty to use the default prompt of the issue source."
-                )
-            }
         }
     }
 
@@ -827,11 +953,7 @@ private struct CreateSessionContent: View {
         // Sandbox and approval live under Advanced, so the preset rows show
         // which one the current pair matches (none for a hand-picked pair).
         Section {
-            ForEach(CodexAutonomyPreset.allCases, id: \.self) { preset in
-                selectableRow(preset.title, subtitle: preset.subtitle, selected: model.codexPreset == preset) {
-                    model.applyCodexPreset(preset)
-                }
-            }
+            CodexAutonomyRows(preset: model.codexPreset) { model.applyCodexPreset($0) }
         } header: {
             PixelSectionHeader("Autonomy")
         } footer: {
@@ -843,25 +965,12 @@ private struct CreateSessionContent: View {
             // Routed through setCodexModel (not a bare binding) so a stranded
             // effort re-defaults when the new model's advertised set lacks it —
             // the setAntigravitySkipPermissions Binding precedent.
-            Picker("Model", selection: Binding(
-                get: { model.codexModel },
-                set: { model.setCodexModel($0) }
-            )) {
-                Text("Default").tag(String?.none)
-                // codexModelOptions, not codexModels: a restored model missing
-                // from the list needs its tag or the Picker renders unselected
-                // while the request still sends it.
-                ForEach(model.codexModelOptions, id: \.self) { Text($0).tag(String?.some($0)) }
-            }
-            // Keep-selected repair: a restored-prefs or late-probe effort
-            // outside the advertised set must stay in the options, or the
-            // Picker renders blank while the request still sends the value.
-            let advertisedEfforts = model.codexEfforts(for: model.codexModel)
-            let effortOptions = advertisedEfforts.contains(model.codexReasoningEffort)
-                ? advertisedEfforts : advertisedEfforts + [model.codexReasoningEffort]
-            Picker("Reasoning effort", selection: $model.codexReasoningEffort) {
-                ForEach(effortOptions, id: \.self) { Text($0).tag($0) }
-            }
+            CodexModelEffortRows(
+                model: Binding(get: { model.codexModel }, set: { model.setCodexModel($0) }),
+                effort: $model.codexReasoningEffort,
+                modelOptions: model.codexModelOptions,
+                advertisedEfforts: model.codexEfforts(for: model.codexModel)
+            )
         }
         continueSessionSection(agentName: "Codex")
     }
@@ -879,19 +988,11 @@ private struct CreateSessionContent: View {
                     ),
                     unavailableReason: model.codexChatUnavailableReason
                 )
-                Picker("Sandbox", selection: $model.codexSandbox) {
-                    ForEach(CreateSessionModel.codexSandboxes, id: \.self) { Text($0).tag($0) }
-                }
-                .disabled(model.codexFullAuto)
-                Picker("Approval", selection: $model.codexApproval) {
-                    ForEach(CreateSessionModel.codexApprovals, id: \.self) { Text($0).tag($0) }
-                }
-                .disabled(model.codexFullAuto)
-                if model.codexFullAuto {
-                    Text("Sandbox and approval are ignored in Full-access (--yolo).")
-                        .font(.footnote)
-                        .foregroundStyle(colors.textMuted)
-                }
+                CodexSandboxApprovalRows(
+                    sandbox: $model.codexSandbox,
+                    approval: $model.codexApproval,
+                    fullAuto: model.codexFullAuto
+                )
             }
         }
     }
@@ -900,23 +1001,19 @@ private struct CreateSessionContent: View {
     private var antigravityConfig: some View {
         @Bindable var model = model
         Section(header: PixelSectionHeader("Antigravity")) {
-            Picker("Model", selection: $model.antigravityModel) {
-                Text("Auto").tag(String?.none)
-                ForEach(model.antigravityModels, id: \.self) { Text($0).tag(String?.some($0)) }
-            }
-            Toggle("Skip permissions (dangerous)", isOn: Binding(
-                get: { model.antigravitySkipPermissions },
-                set: { model.setAntigravitySkipPermissions($0) }
-            ))
-            Toggle("Sandbox", isOn: Binding(
-                get: { model.antigravitySandbox },
-                set: { model.setAntigravitySandbox($0) }
-            ))
-            TextField("Additional directories", text: $model.antigravityAddDirs, axis: .vertical)
-                .lineLimit(1...4)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .pixelField()
+            AntigravityOptionRows(
+                model: $model.antigravityModel,
+                models: model.antigravityModels,
+                skipPermissions: Binding(
+                    get: { model.antigravitySkipPermissions },
+                    set: { model.setAntigravitySkipPermissions($0) }
+                ),
+                sandbox: Binding(
+                    get: { model.antigravitySandbox },
+                    set: { model.setAntigravitySandbox($0) }
+                ),
+                addDirs: $model.antigravityAddDirs
+            )
         }
         continueSessionSection(
             agentName: "Antigravity",
@@ -944,10 +1041,7 @@ private struct CreateSessionContent: View {
     private var opencodeConfig: some View {
         @Bindable var model = model
         Section(header: PixelSectionHeader("OpenCode")) {
-            Toggle("Auto-approve permissions (dangerous)", isOn: $model.opencodeAutoApprove)
-            Text("OpenCode accepts every request that your rules do not deny.")
-                .font(.footnote)
-                .foregroundStyle(colors.textMuted)
+            OpenCodeOptionRows(autoApprove: $model.opencodeAutoApprove)
         }
         continueSessionSection(
             agentName: "OpenCode",
@@ -983,10 +1077,7 @@ private struct CreateSessionContent: View {
     private var copilotConfig: some View {
         @Bindable var model = model
         Section(header: PixelSectionHeader("GitHub Copilot")) {
-            Toggle("Allow all tools, paths and URLs (dangerous)", isOn: $model.copilotAllowAll)
-            Text("When on, Copilot does not ask before it runs commands, edits files or opens URLs.")
-                .font(.footnote)
-                .foregroundStyle(colors.textMuted)
+            CopilotOptionRows(allowAll: $model.copilotAllowAll)
         }
         continueSessionSection(agentName: "GitHub Copilot")
     }
@@ -1042,10 +1133,7 @@ private struct CreateSessionContent: View {
     private var cursorConfig: some View {
         @Bindable var model = model
         Section(header: PixelSectionHeader("Cursor")) {
-            Toggle("Run everything without asking (dangerous)", isOn: $model.cursorForce)
-            Text("When on, Cursor runs commands without asking, except commands that its settings deny.")
-                .font(.footnote)
-                .foregroundStyle(colors.textMuted)
+            CursorOptionRows(force: $model.cursorForce)
         }
         continueSessionSection(
             agentName: "Cursor",
@@ -1073,18 +1161,7 @@ private struct CreateSessionContent: View {
     private var junieConfig: some View {
         @Bindable var model = model
         Section(header: PixelSectionHeader("Junie")) {
-            Toggle("Start in Plan mode", isOn: $model.juniePlanMode)
-            Text("Junie prepares a plan and asks you to approve it before it changes your files.")
-                .font(.footnote)
-                .foregroundStyle(colors.textMuted)
-            Toggle("Brave mode (dangerous)", isOn: $model.junieBrave)
-            Text(
-                model.junieBrave
-                    ? "Junie runs all commands without asking, in this session only."
-                    : "Junie uses its own Brave setting. By default it asks before commands that are not safe."
-            )
-            .font(.footnote)
-            .foregroundStyle(colors.textMuted)
+            JunieOptionRows(planMode: $model.juniePlanMode, brave: $model.junieBrave)
         }
         continueSessionSection(
             agentName: "Junie",

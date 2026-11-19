@@ -15,10 +15,12 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePath
 
 from .workspaces_config import (
+    AUTO_SCAN_OPTION_FIELDS,
     AUTO_SCAN_SOURCES,
     AutoScanFilter,
     GitHubScanFilter,
     WorkspaceConfig,
+    clean_auto_scan_options,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,6 +94,8 @@ class WorkspaceRecord:
     # Source (``linear`` / ``github``) and agent kind of the last scan start.
     auto_scan_source: str | None = None
     auto_scan_cli: str | None = None
+    # Auto Scan launch options by agent kind, from the last start with each.
+    auto_scan_options: dict[str, dict[str, object]] = field(default_factory=dict)
     # Base branch of the last worktree a client created in this workspace;
     # agent-private, so every client and device preselects the same one.
     last_worktree_base: str | None = None
@@ -113,6 +117,8 @@ class WorkspaceUpdatePatch:
       so the engine-wide default prompt is used), any other string replaces.
     * ``github_scan_filter``, ``auto_scan_source``, ``auto_scan_cli``:
       ``None`` keeps, a value replaces.
+    * ``auto_scan_options``: ``None`` keeps; each agent kind it names gets
+      those options, the other kinds keep theirs.
     """
 
     name: str | None = None
@@ -125,6 +131,7 @@ class WorkspaceUpdatePatch:
     github_scan_filter: GitHubScanFilter | None = None
     auto_scan_source: str | None = None
     auto_scan_cli: str | None = None
+    auto_scan_options: dict[str, dict[str, object]] | None = None
 
 
 class WorkspacesStore:
@@ -315,6 +322,12 @@ class WorkspacesStore:
             if patch.auto_scan_cli is not None:
                 record.auto_scan_cli = patch.auto_scan_cli
 
+            if patch.auto_scan_options is not None:
+                record.auto_scan_options = {
+                    **record.auto_scan_options,
+                    **_options_from_dict(patch.auto_scan_options),
+                }
+
             if new_name != record.name:
                 self._workspaces.pop(record.name)
                 record.name = new_name
@@ -479,6 +492,14 @@ def _usable_active_label(labels: list[str], active: str | None) -> str | None:
     return active
 
 
+def _clean_issue_types(value: object) -> list[str]:
+    """Distinct issue type names, ignoring case, in their first spelling."""
+    seen: dict[str, str] = {}
+    for name in _clean_labels(value):
+        seen.setdefault(name.casefold(), name)
+    return list(seen.values())
+
+
 def _github_filter_from_dict(data: object) -> GitHubScanFilter | None:
     """Parse a stored ``github_scan_filter``; ``None`` when absent or unusable."""
     if not isinstance(data, dict):
@@ -490,6 +511,7 @@ def _github_filter_from_dict(data: object) -> GitHubScanFilter | None:
         labels=labels,
         assignee=_optional_text(data.get("assignee")),
         active_label=_usable_active_label(labels, _optional_text(data.get("active_label"))),
+        issue_types=_clean_issue_types(data.get("issue_types")),
     )
 
 
@@ -498,7 +520,20 @@ def _github_filter_to_dict(f: GitHubScanFilter) -> dict[str, object]:
         "labels": list(f.labels),
         "assignee": f.assignee,
         "active_label": _usable_active_label(list(f.labels), f.active_label),
+        "issue_types": list(f.issue_types),
     }
+
+
+def _options_from_dict(data: object) -> dict[str, dict[str, object]]:
+    """Stored Auto Scan options by agent kind, unknown kinds and fields dropped."""
+    if not isinstance(data, dict):
+        return {}
+    options: dict[str, dict[str, object]] = {}
+    for cli in AUTO_SCAN_OPTION_FIELDS:
+        clean = clean_auto_scan_options(cli, data.get(cli))
+        if clean is not None:
+            options[cli] = clean
+    return options
 
 
 def _stored_source(value: object) -> str | None:
@@ -543,6 +578,7 @@ def _record_from_dict(data: object) -> WorkspaceRecord | None:
         github_scan_filter=_github_filter_from_dict(data.get("github_scan_filter")),
         auto_scan_source=source,
         auto_scan_cli=_stored_cli(data.get("auto_scan_cli")),
+        auto_scan_options=_options_from_dict(data.get("auto_scan_options")),
         last_worktree_base=(
             last_base if isinstance(last_base, str) and last_base else None
         ),
@@ -571,6 +607,8 @@ def _record_to_dict(r: WorkspaceRecord) -> dict[str, object]:
         d["auto_scan_source"] = r.auto_scan_source
     if r.auto_scan_cli is not None:
         d["auto_scan_cli"] = r.auto_scan_cli
+    if r.auto_scan_options:
+        d["auto_scan_options"] = {cli: dict(o) for cli, o in r.auto_scan_options.items()}
     if r.last_worktree_base is not None:
         d["last_worktree_base"] = r.last_worktree_base
     return d
@@ -589,6 +627,7 @@ def _record_to_config(r: WorkspaceRecord) -> WorkspaceConfig:
         github_scan_filter=r.github_scan_filter,
         auto_scan_source=r.auto_scan_source,
         auto_scan_cli=r.auto_scan_cli,
+        auto_scan_options={cli: dict(o) for cli, o in r.auto_scan_options.items()},
     )
 
 
@@ -618,6 +657,12 @@ def _record_to_public(r: WorkspaceRecord) -> dict[str, object]:
                 if r.github_scan_filter is not None
                 else None
             ),
+            **{
+                f"{cli}_options": (
+                    dict(r.auto_scan_options[cli]) if cli in r.auto_scan_options else None
+                )
+                for cli in AUTO_SCAN_OPTION_FIELDS
+            },
         },
     }
 

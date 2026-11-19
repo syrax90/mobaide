@@ -19,6 +19,8 @@ interface AutoScanFilterSectionProps {
    * button names the first missing choice instead.
    */
   showErrors?: boolean;
+  /** Off where the page already says how worktrees work (the Auto Scan wizard). */
+  showWorktreeNote?: boolean;
 }
 
 /**
@@ -62,6 +64,7 @@ export function AutoScanFilterSection({
   onRefresh,
   title = 'Auto Scan filters',
   showErrors = true,
+  showWorktreeNote = true,
 }: AutoScanFilterSectionProps) {
   const labelOptions = orderedUnion(
     labels.map((label) => label.name),
@@ -94,11 +97,13 @@ export function AutoScanFilterSection({
         </button>
       </div>
 
-      <p className="field-hint">
-        Each matching issue runs in its own git worktree (branched per Linear issue), so
-        its changes stay isolated from your working copy. Workspaces that aren&rsquo;t git
-        repositories run in the workspace directory directly.
-      </p>
+      {showWorktreeNote && (
+        <p className="field-hint">
+          Each matching issue runs in its own git worktree (branched per Linear issue), so
+          its changes stay isolated from your working copy. Workspaces that aren&rsquo;t git
+          repositories run in the workspace directory directly.
+        </p>
+      )}
 
       {error !== null && <p className="field-error">{error}</p>}
 

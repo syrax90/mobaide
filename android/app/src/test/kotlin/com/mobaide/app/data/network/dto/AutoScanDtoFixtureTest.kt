@@ -63,7 +63,18 @@ class AutoScanDtoFixtureTest {
                     done_state = "Shipped",
                     removal_label = "bot",
                 ),
-                github_filter = GitHubScanFilterDto(labels = listOf("ai-ready", "bot"), assignee = "@me"),
+                github_filter = GitHubScanFilterDto(
+                    labels = listOf("ai-ready", "bot"),
+                    assignee = "@me",
+                    issue_types = listOf("Bug"),
+                ),
+                claude_options = ClaudeScanOptionsDto(
+                    model = "opus",
+                    effort = "high",
+                    focus_mode = true,
+                ),
+                codex_options = CodexScanOptionsDto(model = "gpt-5.5"),
+                copilot_options = CopilotScanOptionsDto(allow_all = false),
             ),
             workspace("auto_scan_choices").auto_scan,
         )
@@ -91,13 +102,14 @@ class AutoScanDtoFixtureTest {
             workspace_name = "p",
             source = "github",
             cli = "codex",
-            auto_approve = false,
+            codex_options = CodexScanOptionsDto(model = "gpt-5.5", full_auto = false),
             // "" is sent on purpose: it clears the prompt the workspace saved.
             initial_prompt = "",
             github_filter = GitHubScanFilterDto(
                 labels = listOf("ai-ready", "bot"),
                 assignee = "@me",
                 active_label = "ai-doing",
+                issue_types = listOf("Bug", "Task"),
             ),
         )
 
