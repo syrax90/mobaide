@@ -57,6 +57,8 @@ final class AutoScanDetailModel {
     private(set) var newLineCount = 0
     private(set) var isPausedAutoscroll = false
     private(set) var connection: DetailConnection = .connecting
+    /// The scan was stopped (here or elsewhere) while the screen was open.
+    private(set) var stopped = false
 
     private let repository: AutoScanRepository
     private var lastSeq: Int64 = 0
@@ -72,7 +74,7 @@ final class AutoScanDetailModel {
         Self.phaseOrder.map { ($0, phases[$0] ?? PhaseState()) }
     }
 
-    var statusText: String { instance?.status ?? connection.rawValue }
+    var statusText: String { stopped ? "stopped" : (instance?.status ?? connection.rawValue) }
 
     func errors() -> AsyncStream<AutoScanUiError> { repository.errors() }
 
@@ -92,7 +94,14 @@ final class AutoScanDetailModel {
     }
 
     func stopScan() async {
-        try? await repository.stopScan(workspaceName: workspaceName)
+        guard (try? await repository.stopScan(workspaceName: workspaceName)) != nil else { return }
+        markStopped()
+    }
+
+    private func markStopped() {
+        stopped = true
+        activePhase = nil
+        nextScanAt = nil
     }
 
     func setPaused(_ paused: Bool) {
@@ -116,6 +125,8 @@ final class AutoScanDetailModel {
         case .snapshot(let scans, let events):
             let match = scans.first { $0.workspace_name == workspaceName }
             instance = match
+            // A running instance in the snapshot: started again elsewhere.
+            if match != nil { stopped = false }
             nextScanAt = match?.next_scan_at
             if let cycle = match?.cycle_number { cycleNumber = cycle }
             connection = .replaying
@@ -180,7 +191,7 @@ final class AutoScanDetailModel {
                 appendLog(AttributedString("no matching issues — skipping remaining stages"))
             }
         case "scan_stopped":
-            activePhase = nil
+            markStopped()
             appendLog(AttributedString("--- Scan stopped ---"))
         default:
             break

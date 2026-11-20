@@ -111,6 +111,9 @@ data class WorkspaceFormState(
     val availableStates: List<LinearStateDto> = emptyList(),
     val filterMetadataLoading: Boolean = false,
     val filterMetadataError: String? = null,
+    // true = the agent has `capabilities.autoscan`, so the filter is chosen in
+    // the new-session wizard; false = an older agent; null = not probed yet.
+    val autoScanFilterInWizard: Boolean? = null,
 
     val touched: Set<Field> = emptySet(),
     val submitAttempted: Boolean = false,
@@ -130,12 +133,15 @@ data class WorkspaceFormState(
 
     val isEdit: Boolean get() = editing != null
 
-    /** Whether the Auto Scan filter section should render at all. The filter
-     *  is only meaningful for workspaces with a Linear API key; otherwise the
-     *  scanner cannot start regardless of the filter values. */
+    /** Whether the Auto Scan filter section should render at all: only for an
+     *  older agent (a newer one takes the filter in the new-session wizard),
+     *  and only for workspaces with a Linear API key, without which that
+     *  agent's scanner cannot start regardless of the filter values. */
     val showAutoScanFilterSection: Boolean
-        get() = linearApiKey.isNotBlank() ||
-            clearLinearKey.not() && (editing?.has_linear_key == true)
+        get() = autoScanFilterInWizard == false && (
+            linearApiKey.isNotBlank() ||
+                clearLinearKey.not() && (editing?.has_linear_key == true)
+            )
 
     private fun fieldVisible(field: Field): Boolean =
         submitAttempted || field in touched
@@ -244,7 +250,9 @@ data class WorkspaceFormState(
         linear_api_key = linearApiKey.ifBlank { null },
         conda_env = condaEnv.ifBlank { null },
         default_flags = flags.associate { it.key to it.toJsonElement() },
-        auto_scan_filter = currentFilterDto(),
+        // Untouched = no choice: an older agent stores its own defaults, which
+        // equal the form's, and a newer one leaves the filter to the wizard.
+        auto_scan_filter = if (filterDirty) currentFilterDto() else null,
     )
 
     /**

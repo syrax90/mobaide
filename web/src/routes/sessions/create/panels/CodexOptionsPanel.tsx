@@ -1,6 +1,6 @@
 import { SelectField } from '../../../../components/form/SelectField';
 import { CODEX_APPROVALS, CODEX_SANDBOXES } from '../../../../protocol/dto/sessionCreate';
-import type { ChatSupport, CliModelDetail } from '../../../../protocol/dto/agentVersion';
+import type { CliModelDetail } from '../../../../protocol/dto/agentVersion';
 import {
   CODEX_MODELS,
   codexEffortsFor,
@@ -8,19 +8,21 @@ import {
   type CodexApproval,
   type CodexBucket,
   type CodexPreset,
+  type AgentBucketTarget,
   type CodexSandbox,
   type WizardAction,
 } from '../wizardState';
+import { AUTO_SCAN_CODEX_ASK_HINT } from '../autoScanSetup';
 import { modelOptions } from './ClaudeOptionsPanel';
-import { TerminalUiField } from './TerminalUiField';
+import { ScanAskHint } from './ScanAskHint';
 
 interface CodexOptionsPanelProps {
   bucket: CodexBucket;
   models: readonly string[] | null;
   modelDetails: readonly CliModelDetail[] | null;
   dispatch: (action: WizardAction) => void;
-  /** Shows the Terminal UI toggle, gated on this PC's chat support for Codex. */
-  chat?: ChatSupport;
+  /** Auto Scan edits its own copy of the options. */
+  target?: AgentBucketTarget;
 }
 
 const PRESETS: readonly { preset: CodexPreset; label: string; description: string }[] = [
@@ -46,7 +48,7 @@ export function CodexOptionsPanel({
   models,
   modelDetails,
   dispatch,
-  chat,
+  target,
 }: CodexOptionsPanelProps) {
   const active = codexPreset(bucket);
   const efforts = codexEffortsFor(modelDetails, bucket.model);
@@ -69,7 +71,7 @@ export function CodexOptionsPanel({
             className={`preset-card${active === entry.preset ? ' preset-card-active' : ''}`}
             aria-pressed={active === entry.preset}
             onClick={() => {
-              dispatch({ type: 'setCodexPreset', preset: entry.preset });
+              dispatch({ type: 'setCodexPreset', preset: entry.preset, target });
             }}
           >
             <span className="preset-title">{entry.label}</span>
@@ -80,6 +82,12 @@ export function CodexOptionsPanel({
       {active === null && (
         <p className="field-hint">Custom sandbox/approval set in Advanced.</p>
       )}
+      {/* Approval `never` does not ask, even without Full access. */}
+      <ScanAskHint
+        show={target === 'autoScan' && !bucket.fullAuto && bucket.approval !== 'never'}
+        text={AUTO_SCAN_CODEX_ASK_HINT}
+        flush
+      />
 
       <SelectField
         label="Model"
@@ -92,6 +100,7 @@ export function CodexOptionsPanel({
             detail: model !== null
               ? (modelDetails?.find((detail) => detail.id === model) ?? null)
               : null,
+            target,
           });
         }}
       />
@@ -105,22 +114,12 @@ export function CodexOptionsPanel({
           ...effortOptions.map((effort) => ({ value: effort, label: effort })),
         ]}
         onChange={(effort) => {
-          dispatch({ type: 'setCodexReasoningEffort', effort });
+          dispatch({ type: 'setCodexReasoningEffort', effort, target });
         }}
       />
 
       <details className="advanced advanced-stack">
         <summary>Advanced</summary>
-        {chat !== undefined && (
-          <TerminalUiField
-            chat={chat}
-            agent="codex"
-            checked={bucket.terminalUi}
-            onChange={(value) => {
-              dispatch({ type: 'setCodexTerminalUi', value });
-            }}
-          />
-        )}
         <SelectField
           label="Sandbox"
           value={bucket.sandbox}
@@ -133,7 +132,7 @@ export function CodexOptionsPanel({
           }
           onChange={(sandbox) => {
             if (sandbox !== null) {
-              dispatch({ type: 'setCodexSandbox', sandbox: sandbox as CodexSandbox });
+              dispatch({ type: 'setCodexSandbox', sandbox: sandbox as CodexSandbox, target });
             }
           }}
         />
@@ -144,7 +143,11 @@ export function CodexOptionsPanel({
           disabled={bucket.fullAuto}
           onChange={(approval) => {
             if (approval !== null) {
-              dispatch({ type: 'setCodexApproval', approval: approval as CodexApproval });
+              dispatch({
+                type: 'setCodexApproval',
+                approval: approval as CodexApproval,
+                target,
+              });
             }
           }}
         />

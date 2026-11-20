@@ -8,14 +8,14 @@ final class AutoScanDetailModelTests: XCTestCase {
         func refreshedToken() async -> String? { nil }
     }
 
-    private func makeModel(workspaceName: String = "p") -> AutoScanDetailModel {
+    private func makeModel(workspaceName: String = "p", agentAPI: AgentAPI? = nil) -> AutoScanDetailModel {
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
         let bus = AgentEventBus(
             webSocketFactory: .live(transportFactory: FakeWebSocketTransportFactory(), sleeper: RecordingSleeper()),
             sessionManager: harness.sessionManager,
             tokenStore: harness.tokenStore
         )
-        let agentAPI = AgentAPI(baseURL: { "https://agent.test" }, tokens: StubAgentTokens())
+        let agentAPI = agentAPI ?? AgentAPI(baseURL: { "https://agent.test" }, tokens: StubAgentTokens())
         let wsClient = AutoScanWsClient(
             webSocketFactory: .live(transportFactory: FakeWebSocketTransportFactory(), sleeper: RecordingSleeper()),
             urlProvider: { nil },
@@ -169,6 +169,49 @@ final class AutoScanDetailModelTests: XCTestCase {
         model.resumeAutoscroll()
         XCTAssertFalse(model.isPausedAutoscroll)
         XCTAssertEqual(model.newLineCount, 0)
+    }
+
+    // MARK: - Stop
+
+    /// The PC answers `POST /api/autoscan/stop` with `stopAnswer`.
+    private func runningModelStopped(withAnswer stopAnswer: Int) async -> AutoScanDetailModel {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(status: stopAnswer, body: #"{"detail":"x"}"#)
+        let model = makeModel(
+            agentAPI: AgentAPI(
+                baseURL: { "http://agent.example.com" },
+                tokens: FakeAgentTokens(token: AgentToken(value: "tok")),
+                client: HTTPClient(session: HTTPClient.makeSession(protocolClasses: [StubURLProtocol.self]))
+            )
+        )
+        await model.handle(.snapshot(scans: [instance(cycle: 2, next: "T1")], events: [:]))
+        await model.stopScan()
+        return model
+    }
+
+    func testASuccessfulStopShowsStoppedUntilASnapshotListsTheScanAgain() async {
+        let model = await runningModelStopped(withAnswer: 200)
+
+        // The agent no longer lists the scan, so no event would update the header.
+        XCTAssertTrue(model.stopped)
+        XCTAssertEqual(model.statusText, "stopped")
+        XCTAssertNil(model.nextScanAt)
+
+        // A reconnect while the scan is still gone keeps it stopped.
+        await model.handle(.snapshot(scans: [], events: [:]))
+        XCTAssertTrue(model.stopped)
+
+        // The scan was started again elsewhere.
+        await model.handle(.snapshot(scans: [instance(cycle: 3)], events: [:]))
+        XCTAssertFalse(model.stopped)
+        XCTAssertEqual(model.statusText, "scanning")
+    }
+
+    func testAFailedStopKeepsTheScanControls() async {
+        let model = await runningModelStopped(withAnswer: 500)
+
+        XCTAssertFalse(model.stopped)
+        XCTAssertEqual(model.nextScanAt, "T1")
     }
 }
 

@@ -185,15 +185,20 @@ describe('buildModeCards', () => {
     expect(card(cards({ capabilities: capabilities({}) }), 'pi').enabled).toBe(true);
   });
 
-  it('gates Auto Scan on both the Claude CLI and a Linear key', () => {
-    const missingKey = cards({ workspace: workspace({ has_linear_key: false }) });
+  it('gates Auto Scan on both the Claude CLI and a Linear key on an agent from before sources', () => {
+    // No `capabilities.autoscan`: that agent scans Linear with Claude only.
+    const older = capabilities({ claude: { available: true } });
+    const missingKey = cards({
+      capabilities: older,
+      workspace: workspace({ has_linear_key: false }),
+    });
     const missingClaude = cards({ capabilities: capabilities({ claude: { available: false } }) });
     const missingBoth = cards({
       capabilities: capabilities({ claude: { available: false } }),
       workspace: null,
     });
 
-    expect(card(cards({}), 'auto_scan')).toMatchObject({
+    expect(card(cards({ capabilities: older }), 'auto_scan')).toMatchObject({
       enabled: true,
       disabledReason: undefined,
     });
@@ -207,6 +212,19 @@ describe('buildModeCards', () => {
     expect(card(missingBoth, 'auto_scan').disabledReason).toBe(
       "Auto Scan needs the Claude CLI, which isn't installed on the agent.",
     );
+  });
+});
+
+describe('buildModeCards — Auto Scan before the probe answers', () => {
+  it('stays on for a saved workspace without a Linear key and off without a workspace', () => {
+    // Optimistic like every other card: the source and agent are chosen later.
+    const noKey = cards({ workspace: workspace({ has_linear_key: false }) });
+
+    expect(card(noKey, 'auto_scan')).toMatchObject({ enabled: true, disabledReason: undefined });
+    expect(card(cards({ workspace: null }), 'auto_scan')).toMatchObject({
+      enabled: false,
+      disabledReason: 'Auto Scan needs a saved workspace.',
+    });
   });
 });
 

@@ -39,6 +39,14 @@ async def test_get_version(client) -> None:
             "junie": {"available": True},
             "pi": {"available": True},
         },
+        "autoscan": {
+            "sources": ["linear", "github"],
+            "clis": [
+                "claude", "codex", "antigravity", "opencode",
+                "copilot", "cursor", "junie", "pi",
+            ],
+            "github_setup": True,
+        },
         "git": {
             "changes": True,
             "stage": True,

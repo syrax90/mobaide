@@ -3,18 +3,22 @@ import { TextAreaField } from '../../../../components/form/TextAreaField';
 import type { ChatSupport } from '../../../../protocol/dto/agentVersion';
 import { claudeTerminalUi } from '../buildCreateRequest';
 import type { ClaudeBucket, ClaudeBucketId, WizardAction } from '../wizardState';
-import { chatBlocked, TerminalUiField } from './TerminalUiField';
+import { chatBlocked } from './SessionViewField';
 
 export const CLAUDE_CODE_MODE_HINT =
   'Experimental. Claude writes JavaScript that makes several tool calls in one step. ' +
-  'Runs in the terminal UI only. Claude Code asks you to confirm until you accept; ' +
+  'Sessions open in the terminal. Claude Code asks you to confirm until you accept; ' +
   'turn Code Mode off here to stop the question.';
+
+/** Under "Open sessions in" while Claude Code Mode holds the session in the terminal. */
+export const CLAUDE_CODE_MODE_CHAT_NOTE =
+  'Code Mode runs only in the terminal. Turn it off under Advanced to use the chat.';
 
 interface ClaudeAdvancedPanelProps {
   bucket: ClaudeBucket;
   bucketId: ClaudeBucketId;
   dispatch: (action: WizardAction) => void;
-  /** Claude Code only: shows the Terminal UI toggle, gated on this PC's chat support. */
+  /** Claude Code only: this PC's chat support, which hides Debug logging in the chat view. */
   chat?: ChatSupport;
 }
 
@@ -26,7 +30,7 @@ export function ClaudeAdvancedPanel({ bucket, bucketId, dispatch, chat }: Claude
     <div className="option-group">
       <details className="advanced advanced-stack">
         <summary>Advanced</summary>
-        {/* Next to Terminal UI, which it turns on: Code Mode runs only there. */}
+        {/* Claude Code only: Auto Scan never uses Code Mode. */}
         {chat !== undefined && (
           <CheckboxField
             label="Code Mode"
@@ -34,17 +38,6 @@ export function ClaudeAdvancedPanel({ bucket, bucketId, dispatch, chat }: Claude
             hint={CLAUDE_CODE_MODE_HINT}
             onChange={(value) => {
               dispatch({ type: 'setClaudeFlag', bucket: bucketId, flag: 'codeMode', value });
-            }}
-          />
-        )}
-        {chat !== undefined && (
-          <TerminalUiField
-            chat={chat}
-            agent="claude"
-            checked={bucket.terminalUi}
-            requiredBy={bucket.codeMode ? 'Code Mode runs in the terminal UI only.' : undefined}
-            onChange={(value) => {
-              dispatch({ type: 'setClaudeFlag', bucket: bucketId, flag: 'terminalUi', value });
             }}
           />
         )}

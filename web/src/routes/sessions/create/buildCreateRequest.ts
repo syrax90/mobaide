@@ -16,7 +16,9 @@
  */
 import type { components } from '../../../api/generated/agent';
 import type { WorkspaceSummary } from '../../../api/workspaceRepository';
-import type { ChatSupport } from '../../../protocol/dto/agentVersion';
+import type { AutoScanCapability, ChatSupport } from '../../../protocol/dto/agentVersion';
+import type { AutoScanFilter } from '../../../protocol/dto/workspaces';
+import { isAutoScanAgentId } from '../../../autoscan/autoscanDisplay';
 import type { ChatStoredSession } from '../../../protocol/dto/chatSessions';
 import {
   effectiveClaudeEffort,
@@ -24,11 +26,14 @@ import {
   isCustomMode,
   parseAddDirs,
   type AntigravityBucket,
+  type AutoScanSetup,
+  type AutoScanUi,
   type ClaudeBucket,
   type CodexBucket,
   type OpenCodeBucket,
   type CopilotBucket,
   type CursorBucket,
+  type GitHubFilterDraft,
   type JunieBucket,
   type PiBucket,
   type WizardMode,
@@ -45,6 +50,12 @@ type CopilotOptions = components['schemas']['CopilotOptionsModel'];
 type CursorOptions = components['schemas']['CursorOptionsModel'];
 type JunieOptions = components['schemas']['JunieOptionsModel'];
 type PiOptions = components['schemas']['PiOptionsModel'];
+type LinearFilterWire = components['schemas']['AutoScanFilterModel'];
+type GitHubFilterWire = components['schemas']['GitHubScanFilterModel'];
+export type AutoScanTemplateSettings = components['schemas']['AutoScanTemplateSettings'];
+type ClaudeScanOptions = components['schemas']['ClaudeScanOptionsModel'];
+type CodexScanOptions = components['schemas']['CodexScanOptionsModel'];
+type AntigravityScanOptions = components['schemas']['AntigravityScanOptionsModel'];
 
 export interface BuildContext {
   state: WizardState;
@@ -58,6 +69,21 @@ export interface BuildContext {
    * the agent's default. Sent only when a worktree is really requested.
    */
   worktreeBase?: string | null;
+  /**
+   * `capabilities.autoscan`. Absent or `null` is an agent from before the
+   * Auto Scan sources delta, which gets the legacy Linear + Claude request.
+   */
+  autoScan?: AutoScanCapability | null;
+  /** `capabilities.chat` for the agent the Auto Scan wizard has chosen. */
+  autoScanChat?: ChatSupport;
+}
+
+/**
+ * The view an Auto Scan opens each issue's session in: the chat only when it
+ * was chosen and the PC is known to have a chat view for the agent.
+ */
+export function autoScanUi(setup: AutoScanSetup, chat: ChatSupport | undefined): AutoScanUi {
+  return setup.ui === 'chat' && chat?.kind === 'available' ? 'chat' : 'terminal';
 }
 
 /**
@@ -104,7 +130,7 @@ export function chatAgentKind(mode: WizardMode | null): ChatAgentKind | null {
     : null;
 }
 
-/** The kind's "Terminal UI" toggle. */
+/** Whether the kind's "Open sessions in" choice is Terminal. */
 export function terminalUiOf(state: WizardState, kind: ChatAgentKind): boolean {
   switch (kind) {
     case 'claude':
@@ -491,22 +517,185 @@ export function buildConnectRequest(context: BuildContext): CreateSessionRequest
   };
 }
 
-/** `null` unless the mode is `auto_scan` against a stored workspace. */
+/** Claude Code's options for a scan start: the full launch model, worktree on. */
+function scanClaudeOptions(bucket: ClaudeBucket): ClaudeOptions {
+  return claudeOptions(bucket, {
+    // Hardcoded: the scanner branches a worktree per issue so concurrent
+    // issues stay isolated. No branch name — it names them.
+    worktree: true,
+    branchName: undefined,
+    // The scanner picks its own start point; the wizard's picker never shows.
+    baseBranch: null,
+  });
+}
+
+/** Listed field by field, so no extra key a looser draft carries reaches the wire. */
+function linearFilterWire(filter: AutoScanFilter): LinearFilterWire {
+  return {
+    state_names: [...filter.state_names],
+    label_names: [...filter.label_names],
+    active_state: filter.active_state,
+    done_state: filter.done_state,
+    removal_label: filter.removal_label,
+  };
+}
+
+/** Trimmed, with a blank assignee or label to add sent as `null` (not set). */
+function githubFilterWire(filter: GitHubFilterDraft): GitHubFilterWire {
+  const assignee = filter.assignee.trim();
+  const activeLabel = filter.activeLabel.trim();
+  return {
+    labels: filter.labels.map((label) => label.trim()),
+    assignee: assignee === '' ? null : assignee,
+    active_label: activeLabel === '' ? null : activeLabel,
+    issue_types: filter.issueTypes.map((type) => type.trim()).filter((type) => type !== ''),
+  };
+}
+
+/*
+ * The options Auto Scan keeps for each agent (PROTOCOL.md, "Agent options"):
+ * the session fields minus worktree, branch, prompt and sign-in. Every field
+ * is listed, as in the session builders, so none falls back to a wire default.
+ */
+function claudeScanOptions(bucket: ClaudeBucket): ClaudeScanOptions {
+  return {
+    plan_mode: bucket.planMode,
+    no_memory: bucket.noMemory,
+    skip_permissions: bucket.skipPermissions,
+    model: effectiveClaudeModel(bucket),
+    effort: effectiveClaudeEffort(bucket),
+    fast_mode: bucket.fastMode,
+    ultracode: bucket.ultracode,
+    append_system_prompt: blankToUndefined(bucket.appendSystemPrompt) ?? null,
+    debug: bucket.debug,
+    focus_mode: bucket.focusMode,
+  };
+}
+
+function codexScanOptions(bucket: CodexBucket): CodexScanOptions {
+  return {
+    model: bucket.model,
+    sandbox: bucket.sandbox,
+    approval: bucket.approval,
+    reasoning_effort: bucket.reasoningEffort,
+    full_auto: bucket.fullAuto,
+  };
+}
+
+function antigravityScanOptions(bucket: AntigravityBucket): AntigravityScanOptions {
+  return {
+    model: bucket.model,
+    skip_permissions: bucket.skipPermissions,
+    sandbox: bucket.sandbox,
+    add_dirs: parseAddDirs(bucket.addDirsDraft),
+  };
+}
+
+/**
+ * The chosen non-Claude agent's options, under its wire key. Pi has none, and
+ * Claude Code's go in `claude_options`, which the start and a template fill
+ * differently.
+ */
+function scanAgentOptions(
+  state: WizardState,
+  cli: string,
+): Pick<
+  StartScanRequest,
+  | 'codex_options'
+  | 'antigravity_options'
+  | 'opencode_options'
+  | 'copilot_options'
+  | 'cursor_options'
+  | 'junie_options'
+> {
+  const agents = state.autoScanAgents;
+  switch (cli) {
+    case 'codex':
+      return { codex_options: codexScanOptions(agents.codex) };
+    case 'antigravity':
+      return { antigravity_options: antigravityScanOptions(agents.antigravity) };
+    case 'opencode':
+      return { opencode_options: { auto_approve: agents.opencode.autoApprove } };
+    case 'copilot':
+      return { copilot_options: { allow_all: agents.copilot.allowAll } };
+    case 'cursor':
+      return { cursor_options: { force: agents.cursor.force } };
+    case 'junie':
+      return { junie_options: { plan_mode: agents.junie.planMode, brave: agents.junie.brave } };
+    default:
+      return {};
+  }
+}
+
+/**
+ * `null` unless the mode is `auto_scan` against a stored workspace — and, for
+ * an agent with `capabilities.autoscan`, until a source and an agent are
+ * chosen (the wizard keeps Start disabled until then).
+ *
+ * The newer request names every choice: `source`, `cli`, `ui`,
+ * `interval_minutes`, only the chosen source's filter, only the chosen
+ * agent's options, and `initial_prompt` at
+ * the top level, where `""` clears the prompt the workspace saved. A start
+ * without the agent's options would run it without asking, so they are
+ * always sent.
+ */
 export function buildStartScanRequest(context: BuildContext): StartScanRequest | null {
   const { state, mode } = context;
   if (mode !== 'auto_scan' || state.selection.kind !== 'stored') return null;
+
+  const capability = context.autoScan ?? null;
+  if (capability === null) {
+    return {
+      project_name: state.selection.name,
+      claude_options: {
+        ...scanClaudeOptions(state.autoScan),
+        initial_prompt: blankToUndefined(state.autoScan.initialPrompt),
+      },
+    };
+  }
+
+  const { source, cli, linearFilter, githubFilter } = state.autoScanSetup;
+  if (source === null || cli === null || !isAutoScanAgentId(cli)) return null;
   return {
     project_name: state.selection.name,
-    claude_options: {
-      ...claudeOptions(state.autoScan, {
-        // Hardcoded: the scanner branches a worktree per Linear issue so
-        // concurrent issues stay isolated. No branch name — it names them.
-        worktree: true,
-        branchName: undefined,
-        // The scanner picks its own start point; the wizard's picker never shows.
-        baseBranch: null,
-      }),
-      initial_prompt: blankToUndefined(state.autoScan.initialPrompt),
-    },
+    source,
+    cli,
+    ...(source === 'github'
+      ? { github_filter: githubFilterWire(githubFilter) }
+      : { linear_filter: linearFilterWire(linearFilter) }),
+    initial_prompt: state.autoScan.initialPrompt,
+    ui: autoScanUi(state.autoScanSetup, context.autoScanChat),
+    interval_minutes: state.autoScanSetup.intervalMinutes,
+    ...(cli === 'claude'
+      ? { claude_options: scanClaudeOptions(state.autoScan) }
+      : scanAgentOptions(state, cli)),
+  };
+}
+
+/**
+ * The wizard's current Auto Scan choices as a template's `settings`: the
+ * source, the agent, the view, the time between scans, the prompt, both filters as they stand (a template may
+ * hold a half-made filter), and only the chosen agent's options. Never the
+ * Linear key. `applyAutoScanSettings` is the reverse.
+ */
+export function autoScanTemplateSettings(state: WizardState): AutoScanTemplateSettings {
+  const { source, cli, linearFilter, githubFilter } = state.autoScanSetup;
+  const agent = cli !== null && isAutoScanAgentId(cli) ? cli : null;
+  return {
+    source,
+    cli: agent,
+    ui: state.autoScanSetup.ui,
+    interval_minutes: state.autoScanSetup.intervalMinutes,
+    initial_prompt: state.autoScan.initialPrompt,
+    linear_filter: linearFilterWire(linearFilter),
+    github_filter: githubFilterWire(githubFilter),
+    claude_options: agent === 'claude' ? claudeScanOptions(state.autoScan) : null,
+    codex_options: null,
+    antigravity_options: null,
+    opencode_options: null,
+    copilot_options: null,
+    cursor_options: null,
+    junie_options: null,
+    ...(agent !== null && agent !== 'claude' ? scanAgentOptions(state, agent) : {}),
   };
 }

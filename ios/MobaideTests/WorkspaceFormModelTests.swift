@@ -100,11 +100,23 @@ final class WorkspaceFormModelTests: XCTestCase {
         XCTAssertNil(body.linear_api_key)
         XCTAssertNil(body.conda_env)
         XCTAssertEqual(body.default_flags, [:])
-        XCTAssertNotNil(body.auto_scan_filter)
+        XCTAssertNil(body.auto_scan_filter, "an agent not probed, or a newer one, leaves the filter to the wizard")
 
         let object = try wireObject(body)
         XCTAssertEqual(object["default_flags"], .object([:]), "empty default_flags is always serialized on create")
         XCTAssertNil(object["linear_api_key"], "a blank key is omitted, never sent as null")
+    }
+
+    func testCreateBodySendsTheFilterOnlyForAnAgentThatTakesItInTheForm() {
+        let model = WorkspaceFormModel(mode: .create, repository: makeRepo())
+        model.name = "p"
+        model.path = "/x"
+
+        model.setAutoScanFilterInForm(true)
+        XCTAssertNotNil(model.toCreateBody().auto_scan_filter)
+
+        model.setAutoScanFilterInForm(false)
+        XCTAssertNil(model.toCreateBody().auto_scan_filter)
     }
 
     // MARK: - Validation

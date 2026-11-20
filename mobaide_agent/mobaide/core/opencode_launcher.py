@@ -47,8 +47,9 @@ _CONFIG_ENV_VAR = "OPENCODE_CONFIG_CONTENT"
 # Mode and refuses to start with a ``permissions`` key.
 _CODE_MODE_OFF_RULE = {"action": "execute", "resource": "*", "effect": "deny"}
 _CODE_MODE_MIN_MAJOR = 2
-# Longest first prompt handed to ``--prompt``: far above a real prompt, far
-# below the argv limit of any supported OS.
+# Longest first prompt handed to ``--prompt``: far above a real prompt, and
+# within one argv element on POSIX (Windows caps the whole command line at
+# 32,767 characters, so Auto Scan uses a smaller budget there).
 INITIAL_PROMPT_MAX = 32_000
 
 

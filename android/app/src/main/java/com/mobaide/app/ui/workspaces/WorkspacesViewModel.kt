@@ -12,6 +12,7 @@ import com.mobaide.app.data.repository.WorkspacesRepository
 import com.mobaide.app.ui.common.PathSuggestionsController
 import com.mobaide.app.ui.common.PathSuggestionsUi
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.coroutineScope
@@ -129,15 +130,35 @@ class WorkspacesViewModel @Inject constructor(
     fun openCreateSheet() {
         _uiState.update { it.copy(form = WorkspaceFormState.forCreate()) }
         pathSuggestions.probe()
+        probeAutoScanFilterPlace()
     }
 
     fun openEditSheet(workspace: WorkspaceInfo) {
         _uiState.update { it.copy(form = WorkspaceFormState.forEdit(workspace)) }
         pathSuggestions.probe()
+        probeAutoScanFilterPlace()
         if (workspace.has_linear_key) {
             // Workspace has an API key — fetch fresh labels/states. SWR: cached
             // values render immediately if present, fresh ones overwrite.
             loadFilterMetadata(workspace.name, forceRefresh = false)
+        }
+    }
+
+    /**
+     * Whether the agent takes the Auto Scan filter in the new-session wizard
+     * (`capabilities.autoscan`). A failed probe reads as an older agent, so
+     * the form keeps the section it always had.
+     */
+    private fun probeAutoScanFilterPlace() {
+        viewModelScope.launch {
+            val inWizard = try {
+                autoScanRepository.capability() != null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                false
+            }
+            updateForm { it.copy(autoScanFilterInWizard = inWizard) }
         }
     }
 
@@ -413,7 +434,9 @@ class WorkspacesViewModel @Inject constructor(
             linear_api_key = null,
             conda_env = conda_env,
             default_flags = default_flags,
-            auto_scan_filter = auto_scan_filter,
+            // A newer agent sends the legacy defaults while nobody chose a
+            // filter; re-creating with them would make them a choice.
+            auto_scan_filter = if (auto_scan != null) auto_scan.linear_filter else auto_scan_filter,
         )
 
     fun reorder(newNameOrder: List<String>) {

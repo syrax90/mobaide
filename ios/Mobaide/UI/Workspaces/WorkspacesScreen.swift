@@ -18,6 +18,9 @@ private struct WorkspacesContent: View {
     @State private var model: WorkspacesListModel
     @State private var toast: ToastMessage?
     @State private var sheet: WorkspaceFormMode?
+    /// `capabilities.autoscan`: the agent can scan GitHub issues too, so
+    /// every workspace gets the Auto Scan shortcut, not only Linear-keyed ones.
+    @State private var autoScanAnyWorkspace = false
 
     @Environment(Router.self) private var router
 
@@ -55,6 +58,9 @@ private struct WorkspacesContent: View {
             .task { await model.seed() }
             .task { await model.observeWorkspaces() }
             .task { await model.observeConnection() }
+            .task {
+                autoScanAnyWorkspace = (try? await container.agentAPI.getAgentVersion())?.autoScanCapability != nil
+            }
             .onChange(of: model.message) { _, newValue in
                 if let newValue {
                     toast = ToastMessage(text: newValue)
@@ -91,10 +97,11 @@ private struct WorkspacesContent: View {
         }
     }
 
-    /// Tap edits; swipe deletes. Only a Linear-keyed workspace also carries the
-    /// Auto Scan shortcut — the modifier is attached conditionally rather than
-    /// left to render an empty menu, which would still swallow the long press
-    /// on every other row.
+    /// Tap edits; swipe deletes. A workspace that can scan (Linear-keyed, or any
+    /// workspace on an agent that also scans GitHub) carries the Auto Scan
+    /// shortcut — the modifier is attached conditionally rather than left to
+    /// render an empty menu, which would still swallow the long press on every
+    /// other row.
     @ViewBuilder
     private func workspaceRow(_ workspace: WorkspaceInfo) -> some View {
         let row = Button {
@@ -111,7 +118,7 @@ private struct WorkspacesContent: View {
             }
         }
 
-        if workspace.has_linear_key {
+        if workspace.has_linear_key || autoScanAnyWorkspace {
             row.contextMenu {
                 Button {
                     router.navigate(to: .createAutoScan(workspaceName: workspace.name))

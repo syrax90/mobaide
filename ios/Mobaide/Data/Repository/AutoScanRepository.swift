@@ -79,22 +79,39 @@ final class AutoScanRepository {
     // MARK: - Optimistic mutations (rolled back on failure)
 
     func startScan(workspaceName: String, claudeOptions: ClaudeOptionsModel? = nil) async throws {
+        try await startScan(StartScanRequest(workspace_name: workspaceName, claude_options: claudeOptions))
+    }
+
+    func startScan(_ request: StartScanRequest) async throws {
+        let workspaceName = request.workspace_name
         let previous = currentList
         if !currentList.scans.contains(where: { $0.workspace_name == workspaceName }) {
             let now = Date().timeIntervalSince1970
             let placeholder = AutoScanInstanceDto(
-                workspace_name: workspaceName, status: "starting", started_at: now, last_activity_at: now
+                workspace_name: workspaceName,
+                status: "starting",
+                started_at: now,
+                last_activity_at: now,
+                source: request.source ?? "linear",
+                cli: request.cli ?? "claude"
             )
             setScans(currentList.scans + [placeholder])
         }
         do {
-            try await agentAPI.startAutoScan(workspaceName: workspaceName, claudeOptions: claudeOptions)
+            try await agentAPI.startAutoScan(request)
         } catch let error as APIError where error.code == 409 {
             rollback(previous, message: "Auto scan is already running for \(workspaceName).")
             throw AutoScanStartError.alreadyRunning(workspaceName: workspaceName)
         } catch let error as APIError where error.code == 429 {
             rollback(previous, message: "Auto scan capacity reached (max \(previous.max_scans)).")
             throw AutoScanStartError.capacity(maxScans: previous.max_scans)
+        } catch let error as APIError where error.code == 400 {
+            // The wizard shows the detail next to its Start button, so no toast.
+            setList(previous)
+            throw AutoScanStartError.rejected(
+                detail: ConflictDetail.stringOrNil(from: error.errorBody)
+                    ?? "The PC refused to start the scan (HTTP 400)."
+            )
         } catch {
             rollback(previous, message: "Failed to start auto scan for \(workspaceName).")
             throw error
@@ -163,7 +180,9 @@ private extension AutoScanInstanceDto {
             scan_interval_seconds: scan_interval_seconds,
             next_scan_at: nextScanAt,
             cycle_number: cycle_number,
-            current_seq: current_seq
+            current_seq: current_seq,
+            source: source,
+            cli: cli
         )
     }
 }

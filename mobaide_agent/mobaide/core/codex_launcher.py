@@ -367,9 +367,16 @@ class CodexLauncher:
             # argv is exec'd directly (never through a shell).
             argv += ["-c", f"model_reasoning_effort={options.reasoning_effort}"]
         if options.initial_prompt:
-            # Codex takes the initial prompt as a trailing positional argument.
-            argv.append(options.initial_prompt)
+            # Codex takes the initial prompt as a trailing positional argument;
+            # after ``--`` a prompt that starts with ``-`` stays a prompt.
+            argv += ["--", options.initial_prompt]
         return argv
+
+    async def ensure_auth(self, target: LaunchTarget) -> None:
+        """Raise ``CodexAuthRequiredError`` when a session for ``target`` would
+        start at Codex's login screen — the same check ``build`` runs."""
+        if not await codex_auth_present(self._resolve_binary(), self._build_env(target)):
+            raise CodexAuthRequiredError()
 
     async def _resolve_cwd(self, target: LaunchTarget, options: CodexOptions) -> str:
         # A workspace session runs in the workspace root, or — when worktree=True — in

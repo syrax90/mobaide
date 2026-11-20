@@ -32,6 +32,18 @@ def _cheap_bcrypt(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_github_enterprise_probe(monkeypatch):
+    """No test reaches a real host: a remote without "github" in its name is
+    not GitHub unless a test says otherwise."""
+    from mobaide.github import setup
+
+    async def answers_as_github(host: str) -> bool:
+        return False
+
+    monkeypatch.setattr(setup, "answers_as_github", answers_as_github)
+
+
+@pytest.fixture(autouse=True)
 def _pin_claude_binary(monkeypatch):
     """Pin the resolver to the literal string ``"claude"`` for every test.
 

@@ -1,7 +1,6 @@
 import { CheckboxField } from '../../../../components/form/CheckboxField';
-import type { ChatSupport } from '../../../../protocol/dto/agentVersion';
-import type { OpenCodeBucket, WizardAction } from '../wizardState';
-import { TerminalUiField } from './TerminalUiField';
+import type { AgentBucketTarget, OpenCodeBucket, WizardAction } from '../wizardState';
+import { ScanAskHint } from './ScanAskHint';
 
 export const OPENCODE_CODE_MODE_HINT =
   'OpenCode 2 calls MCP tools from JavaScript, several in one step. ' +
@@ -10,8 +9,8 @@ export const OPENCODE_CODE_MODE_HINT =
 interface OpenCodeOptionsPanelProps {
   bucket: OpenCodeBucket;
   dispatch: (action: WizardAction) => void;
-  /** Shows the Terminal UI toggle, gated on this PC's chat support for OpenCode. */
-  chat?: ChatSupport;
+  /** Auto Scan edits its own copy of the options. */
+  target?: AgentBucketTarget;
 }
 
 /**
@@ -19,7 +18,7 @@ interface OpenCodeOptionsPanelProps {
  * session (the chat's chips, or the terminal UI's own lists). Code Mode starts
  * on, as in OpenCode itself.
  */
-export function OpenCodeOptionsPanel({ bucket, dispatch, chat }: OpenCodeOptionsPanelProps) {
+export function OpenCodeOptionsPanel({ bucket, dispatch, target }: OpenCodeOptionsPanelProps) {
   return (
     <div className="option-group">
       <CheckboxField
@@ -27,30 +26,21 @@ export function OpenCodeOptionsPanel({ bucket, dispatch, chat }: OpenCodeOptions
         checked={bucket.autoApprove}
         hint="OpenCode accepts every request that your rules do not deny."
         onChange={(value) => {
-          dispatch({ type: 'setOpenCodeAutoApprove', value });
+          dispatch({ type: 'setOpenCodeAutoApprove', value, target });
         }}
       />
-      <CheckboxField
-        label="Code Mode"
-        checked={bucket.codeMode}
-        hint={OPENCODE_CODE_MODE_HINT}
-        onChange={(value) => {
-          dispatch({ type: 'setOpenCodeCodeMode', value });
-        }}
-      />
-      {chat !== undefined && (
-        <details className="advanced advanced-stack">
-          <summary>Advanced</summary>
-          <TerminalUiField
-            chat={chat}
-            agent="opencode"
-            checked={bucket.terminalUi}
-            onChange={(value) => {
-              dispatch({ type: 'setOpenCodeTerminalUi', value });
-            }}
-          />
-        </details>
+      {/* Per launch: an Auto Scan keeps no Code Mode choice. */}
+      {target !== 'autoScan' && (
+        <CheckboxField
+          label="Code Mode"
+          checked={bucket.codeMode}
+          hint={OPENCODE_CODE_MODE_HINT}
+          onChange={(value) => {
+            dispatch({ type: 'setOpenCodeCodeMode', value });
+          }}
+        />
       )}
+      <ScanAskHint show={target === 'autoScan' && !bucket.autoApprove} />
     </div>
   );
 }

@@ -85,6 +85,8 @@ class PiOptions:
     worktree: bool = False
     branch_name: str | None = None
     base_branch: str | None = None
+    # First message, after ``--`` (Auto Scan only).
+    initial_prompt: str | None = None
     # Adds Pi's built-in ``codemode`` tool (the model writes JavaScript that
     # calls the other tools). Off leaves the user's own ``defaultTools``.
     code_mode: bool = False
@@ -131,6 +133,9 @@ class PiLauncher:
         if options.code_mode:
             await self.check_code_mode_version(env)
             argv += PI_CODE_MODE_ARGS
+        if options.initial_prompt:
+            # After ``--`` a prompt that starts with ``-`` stays a message.
+            argv += ["--", options.initial_prompt]
         cwd = await self.resolve_cwd(target, options)
         return LaunchSpec(argv=argv, cwd=cwd, env=env, created_files=[])
 

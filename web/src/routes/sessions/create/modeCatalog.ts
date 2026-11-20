@@ -5,6 +5,7 @@
  * clients read identically.
  */
 import {
+  autoScanCapability,
   cliAvailable,
   cliKnown,
   type AgentVersionInfo,
@@ -54,6 +55,9 @@ const BUILT_IN_COPY: Readonly<Record<BuiltInMode, { title: string; subtitle: str
   },
   shell: { title: 'Terminal', subtitle: 'Bash / cmd in the chosen directory' },
 };
+
+/** The Auto Scan card's subtitle for an agent that scans GitHub or Linear with any agent. */
+const AUTO_SCAN_SUBTITLE = 'Scan GitHub or Linear issues and launch agent sessions.';
 
 const MISSING_CLI: Readonly<Record<string, string>> = {
   claude: 'Claude CLI is not installed on the agent.',
@@ -189,7 +193,25 @@ export function buildModeCards(input: {
         };
       }
       case 'auto_scan': {
-        // Auto Scan drives Claude against Linear issues, so it needs both.
+        // An agent with `capabilities.autoscan` — or one whose probe has not
+        // answered yet, read optimistically like every other card — scans
+        // GitHub or Linear with any agent, chosen in the config step. All it
+        // needs here is a stored workspace to remember the choices on.
+        // Treating "not answered" as the legacy rule would also make the
+        // wizard's URL clamp bounce a keyless workspace back to this step
+        // each time the wizard remounts, as it does on the way back from the
+        // GitHub setup terminal.
+        if (input.capabilities === undefined || autoScanCapability(input.capabilities) !== null) {
+          const enabled = input.workspace !== null;
+          return {
+            mode,
+            ...copy,
+            subtitle: AUTO_SCAN_SUBTITLE,
+            enabled,
+            disabledReason: enabled ? undefined : 'Auto Scan needs a saved workspace.',
+          };
+        }
+        // An older agent drives Claude against Linear issues, so it needs both.
         const hasLinearKey = input.workspace?.has_linear_key === true;
         const enabled = claudeEnabled && hasLinearKey;
         return {

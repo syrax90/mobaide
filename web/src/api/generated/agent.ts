@@ -71,6 +71,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/autoscan/github/labels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Github Labels
+         * @description Labels and issue types of the workspace's GitHub repository.
+         */
+        get: operations["github_labels_api_autoscan_github_labels_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/autoscan/github/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Github Setup
+         * @description Open a terminal session that installs (``install``) or signs in
+         *     (``sign_in``) the GitHub CLI; the response is the new session.
+         */
+        post: operations["github_setup_api_autoscan_github_setup_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/autoscan/github/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Github Status
+         * @description What a GitHub scan of the workspace still needs (``gh``, sign-in, repo).
+         */
+        get: operations["github_status_api_autoscan_github_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/autoscan/list": {
         parameters: {
             query?: never;
@@ -122,7 +183,8 @@ export interface paths {
         put?: never;
         /**
          * Start Scan
-         * @description Start an auto scan for a workspace. 409 if already running, 429 if at cap.
+         * @description Start an auto scan for a workspace. 409 if already running, 429 if at
+         *     cap, 400 when a choice is missing or the source or agent is not usable.
          */
         post: operations["start_scan_api_autoscan_start_post"];
         delete?: never;
@@ -160,6 +222,51 @@ export interface paths {
         /** Stop Scan */
         post: operations["stop_scan_api_autoscan_stop_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/autoscan/templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Templates
+         * @description The Auto Scan templates saved on this PC, sorted by name.
+         */
+        get: operations["get_templates_api_autoscan_templates_get"];
+        put?: never;
+        /**
+         * Post Template
+         * @description Save a template; one with the same name (ignoring case) is replaced.
+         *     409 when a new name would pass the cap. Answers every template.
+         */
+        post: operations["post_template_api_autoscan_templates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/autoscan/templates/{template_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove Template
+         * @description Delete a template; answers every template left.
+         */
+        delete: operations["remove_template_api_autoscan_templates__template_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1157,22 +1264,6 @@ export interface components {
         /**
          * AntigravityOptionsModel
          * @description Wire DTO for Antigravity CLI launch options (see :class:`AntigravityOptions`).
-         *
-         *     ``model`` is free-form ``str`` — like the Claude/Codex DTOs — carrying the
-         *     full display name ``agy models`` prints (e.g. ``Gemini 3.1 Pro (Low)``);
-         *     the launcher forwards it verbatim as a single argv element.
-         *     ``skip_permissions`` (``--dangerously-skip-permissions``) and ``sandbox``
-         *     are mutually exclusive — skip-permissions auto-approves ``bypassSandbox``
-         *     actions, silently defeating the sandbox (google-antigravity/antigravity-cli
-         *     #36) — so the combination is rejected with a 422 at the wire boundary. To
-         *     keep that guard airtight, ``model`` and each ``add_dirs`` entry (both
-         *     forwarded verbatim as argv elements) are rejected when they look like a CLI
-         *     flag (leading ``-``): otherwise a value such as
-         *     ``add_dirs=["--dangerously-skip-permissions"]`` could smuggle the blocked
-         *     flag past the pair check. No legitimate value is affected — model names
-         *     start with a letter and directories with ``/`` or a drive letter.
-         *     ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for the
-         *     legitimately-named ``model`` field.
          */
         AntigravityOptionsModel: {
             /**
@@ -1201,6 +1292,71 @@ export interface components {
              * @default false
              */
             worktree: boolean;
+        };
+        /**
+         * AntigravityScanOptionsModel
+         * @description The Antigravity options an Auto Scan keeps (see :class:`AntigravityOptionsModel`).
+         *
+         *     ``model`` is free-form ``str`` — like the Claude/Codex DTOs — carrying the
+         *     full display name ``agy models`` prints (e.g. ``Gemini 3.1 Pro (Low)``);
+         *     the launcher forwards it verbatim as a single argv element.
+         *     ``skip_permissions`` (``--dangerously-skip-permissions``) and ``sandbox``
+         *     are mutually exclusive — skip-permissions auto-approves ``bypassSandbox``
+         *     actions, silently defeating the sandbox (google-antigravity/antigravity-cli
+         *     #36) — so the combination is rejected with a 422 at the wire boundary. To
+         *     keep that guard airtight, ``model`` and each ``add_dirs`` entry (both
+         *     forwarded verbatim as argv elements) are rejected when they look like a CLI
+         *     flag (leading ``-``): otherwise a value such as
+         *     ``add_dirs=["--dangerously-skip-permissions"]`` could smuggle the blocked
+         *     flag past the pair check. No legitimate value is affected — model names
+         *     start with a letter and directories with ``/`` or a drive letter.
+         *     ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for the
+         *     legitimately-named ``model`` field.
+         */
+        AntigravityScanOptionsModel: {
+            /**
+             * Add Dirs
+             * @default []
+             */
+            add_dirs: string[];
+            /** Model */
+            model?: string | null;
+            /**
+             * Sandbox
+             * @default false
+             */
+            sandbox: boolean;
+            /**
+             * Skip Permissions
+             * @default false
+             */
+            skip_permissions: boolean;
+        };
+        /**
+         * AutoScanFilterDraftModel
+         * @description A Linear filter as a template keeps it: the fields of
+         *     :class:`AutoScanFilterModel`, any of which may still be empty.
+         */
+        AutoScanFilterDraftModel: {
+            /**
+             * Active State
+             * @default
+             */
+            active_state: string;
+            /**
+             * Done State
+             * @default
+             */
+            done_state: string;
+            /** Label Names */
+            label_names?: string[];
+            /**
+             * Removal Label
+             * @default
+             */
+            removal_label: string;
+            /** State Names */
+            state_names?: string[];
         };
         /**
          * AutoScanFilterModel
@@ -1238,6 +1394,11 @@ export interface components {
         /** AutoScanInstanceDto */
         AutoScanInstanceDto: {
             /**
+             * Cli
+             * @default claude
+             */
+            cli: string;
+            /**
              * Current Seq
              * @default 0
              */
@@ -1259,13 +1420,28 @@ export interface components {
             project_name: string;
             /** Scan Interval Seconds */
             scan_interval_seconds: number;
+            /**
+             * Source
+             * @default linear
+             */
+            source: string;
             /** Started At */
             started_at: number;
             /** Status */
             status: string;
+            /**
+             * Ui
+             * @default terminal
+             */
+            ui: string;
         };
         /** AutoScanInstanceStatusResponse */
         AutoScanInstanceStatusResponse: {
+            /**
+             * Cli
+             * @default claude
+             */
+            cli: string;
             /**
              * Current Seq
              * @default 0
@@ -1295,10 +1471,20 @@ export interface components {
             }[];
             /** Scan Interval Seconds */
             scan_interval_seconds: number;
+            /**
+             * Source
+             * @default linear
+             */
+            source: string;
             /** Started At */
             started_at: number;
             /** Status */
             status: string;
+            /**
+             * Ui
+             * @default terminal
+             */
+            ui: string;
         };
         /** AutoScanListResponse */
         AutoScanListResponse: {
@@ -1312,6 +1498,84 @@ export interface components {
             max_scans: number;
             /** Scans */
             scans: components["schemas"]["AutoScanInstanceDto"][];
+        };
+        /**
+         * AutoScanSettingsModel
+         * @description The last Auto Scan choices of a workspace, for the wizard to show again.
+         *
+         *     Every field is ``null`` until a scan start (or, for ``linear_filter``, an
+         *     older client's workspace form) sets it. A ``null`` filter means nobody
+         *     chose one: the wizard starts with empty fields. ``<kind>_options`` are
+         *     the options of the last start with that agent.
+         */
+        AutoScanSettingsModel: {
+            antigravity_options?: components["schemas"]["AntigravityScanOptionsModel"] | null;
+            claude_options?: components["schemas"]["ClaudeScanOptionsModel"] | null;
+            /** Cli */
+            cli?: string | null;
+            codex_options?: components["schemas"]["CodexScanOptionsModel"] | null;
+            copilot_options?: components["schemas"]["CopilotScanOptionsModel"] | null;
+            cursor_options?: components["schemas"]["CursorScanOptionsModel"] | null;
+            github_filter?: components["schemas"]["GitHubScanFilterModel"] | null;
+            /** Interval Minutes */
+            interval_minutes?: number | null;
+            junie_options?: components["schemas"]["JunieScanOptionsModel"] | null;
+            linear_filter?: components["schemas"]["AutoScanFilterModel"] | null;
+            opencode_options?: components["schemas"]["OpenCodeScanOptionsModel"] | null;
+            /** Source */
+            source?: ("linear" | "github") | null;
+            /** Ui */
+            ui?: ("terminal" | "chat") | null;
+        };
+        /**
+         * AutoScanTemplate
+         * @description A named set of Auto Scan choices saved on this PC.
+         */
+        AutoScanTemplate: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            settings: components["schemas"]["AutoScanTemplateSettings"];
+            /** Updated At */
+            updated_at: string;
+        };
+        /**
+         * AutoScanTemplateSettings
+         * @description The Auto Scan choices a template keeps; every field may be ``null``.
+         *
+         *     The filters may be incomplete (a GitHub filter without labels, for one):
+         *     the wizard asks for what is missing before a scan starts. A template
+         *     never keeps a Linear API key.
+         */
+        AutoScanTemplateSettings: {
+            antigravity_options?: components["schemas"]["AntigravityScanOptionsModel"] | null;
+            claude_options?: components["schemas"]["ClaudeScanOptionsModel"] | null;
+            /** Cli */
+            cli?: ("claude" | "codex" | "antigravity" | "opencode" | "copilot" | "cursor" | "junie" | "pi") | null;
+            codex_options?: components["schemas"]["CodexScanOptionsModel"] | null;
+            copilot_options?: components["schemas"]["CopilotScanOptionsModel"] | null;
+            cursor_options?: components["schemas"]["CursorScanOptionsModel"] | null;
+            github_filter?: components["schemas"]["GitHubScanFilterDraftModel"] | null;
+            /** Initial Prompt */
+            initial_prompt?: string | null;
+            /** Interval Minutes */
+            interval_minutes?: number | null;
+            junie_options?: components["schemas"]["JunieScanOptionsModel"] | null;
+            linear_filter?: components["schemas"]["AutoScanFilterDraftModel"] | null;
+            opencode_options?: components["schemas"]["OpenCodeScanOptionsModel"] | null;
+            /** Source */
+            source?: ("linear" | "github") | null;
+            /** Ui */
+            ui?: ("terminal" | "chat") | null;
+        };
+        /**
+         * AutoScanTemplatesResponse
+         * @description Every template of this PC, sorted by name.
+         */
+        AutoScanTemplatesResponse: {
+            /** Templates */
+            templates: components["schemas"]["AutoScanTemplate"][];
         };
         /**
          * ChatStoredSession
@@ -1345,10 +1609,7 @@ export interface components {
          * ClaudeOptionsModel
          * @description Wire DTO for Claude CLI launch options (see :class:`ClaudeOptions`).
          *
-         *     ``effort`` is ``Literal``-typed so an invalid level is rejected with a 422 at
-         *     the wire boundary; ``model`` stays free-form (the client curates the alias
-         *     list). ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for
-         *     the legitimately-named ``model`` field.
+         *     ``code_mode`` is a per-launch choice, so an Auto Scan does not keep it.
          */
         ClaudeOptionsModel: {
             /** Append System Prompt */
@@ -1411,6 +1672,57 @@ export interface components {
             worktree: boolean;
         };
         /**
+         * ClaudeScanOptionsModel
+         * @description The Claude options an Auto Scan keeps (saved per workspace and in
+         *     templates): every launch option but the per-launch prompt, worktree and
+         *     naming fields.
+         *
+         *     ``effort`` is ``Literal``-typed so an invalid level is rejected with a 422 at
+         *     the wire boundary; ``model`` stays free-form (the client curates the alias
+         *     list). ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for
+         *     the legitimately-named ``model`` field.
+         */
+        ClaudeScanOptionsModel: {
+            /** Append System Prompt */
+            append_system_prompt?: string | null;
+            /**
+             * Debug
+             * @default false
+             */
+            debug: boolean;
+            /** Effort */
+            effort?: ("low" | "medium" | "high" | "xhigh" | "max") | null;
+            /**
+             * Fast Mode
+             * @default false
+             */
+            fast_mode: boolean;
+            /** Focus Mode */
+            focus_mode?: boolean | null;
+            /** Model */
+            model?: string | null;
+            /**
+             * No Memory
+             * @default false
+             */
+            no_memory: boolean;
+            /**
+             * Plan Mode
+             * @default false
+             */
+            plan_mode: boolean;
+            /**
+             * Skip Permissions
+             * @default true
+             */
+            skip_permissions: boolean;
+            /**
+             * Ultracode
+             * @default false
+             */
+            ultracode: boolean;
+        };
+        /**
          * CodexLoginRequest
          * @description API-key login payload.
          *
@@ -1433,17 +1745,6 @@ export interface components {
         /**
          * CodexOptionsModel
          * @description Wire DTO for Codex CLI launch options (see :class:`CodexOptions`).
-         *
-         *     ``sandbox`` and ``approval`` are ``Literal``-typed so an invalid value is
-         *     rejected with a 422 at the wire boundary rather than producing a broken
-         *     ``codex`` argv. ``reasoning_effort`` is free-form like ``model``: the
-         *     vocabulary is enumerated per-model at runtime and advertised via
-         *     ``capabilities.cli.codex.model_details``, so a closed Literal would 422
-         *     values the agent itself just advertised whenever the Codex catalog grows.
-         *     The value is embedded after ``=`` inside a single exec'd argv element
-         *     (``-c model_reasoning_effort=<v>``), so there is no flag-smuggling path.
-         *     ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for the
-         *     legitimately-named ``model`` field.
          */
         CodexOptionsModel: {
             /**
@@ -1483,11 +1784,49 @@ export interface components {
             worktree: boolean;
         };
         /**
+         * CodexScanOptionsModel
+         * @description The Codex options an Auto Scan keeps (see :class:`CodexOptionsModel`).
+         *
+         *     ``sandbox`` and ``approval`` are ``Literal``-typed so an invalid value is
+         *     rejected with a 422 at the wire boundary rather than producing a broken
+         *     ``codex`` argv. ``reasoning_effort`` is free-form like ``model``: the
+         *     vocabulary is enumerated per-model at runtime and advertised via
+         *     ``capabilities.cli.codex.model_details``, so a closed Literal would 422
+         *     values the agent itself just advertised whenever the Codex catalog grows.
+         *     The value is embedded after ``=`` inside a single exec'd argv element
+         *     (``-c model_reasoning_effort=<v>``), so there is no flag-smuggling path.
+         *     ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for the
+         *     legitimately-named ``model`` field.
+         */
+        CodexScanOptionsModel: {
+            /**
+             * Approval
+             * @default never
+             * @enum {string}
+             */
+            approval: "untrusted" | "on-request" | "never";
+            /**
+             * Full Auto
+             * @default false
+             */
+            full_auto: boolean;
+            /** Model */
+            model?: string | null;
+            /**
+             * Reasoning Effort
+             * @default high
+             */
+            reasoning_effort: string | null;
+            /**
+             * Sandbox
+             * @default workspace-write
+             * @enum {string}
+             */
+            sandbox: "read-only" | "workspace-write" | "danger-full-access";
+        };
+        /**
          * CopilotOptionsModel
          * @description Wire DTO for GitHub Copilot CLI launch options (see :class:`CopilotOptions`).
-         *
-         *     ``allow_all`` is Copilot's ``--allow-all``: it runs tools and uses paths
-         *     and URLs without asking.
          */
         CopilotOptionsModel: {
             /**
@@ -1504,6 +1843,20 @@ export interface components {
              * @default false
              */
             worktree: boolean;
+        };
+        /**
+         * CopilotScanOptionsModel
+         * @description The GitHub Copilot options an Auto Scan keeps.
+         *
+         *     ``allow_all`` is Copilot's ``--allow-all``: it runs tools and uses paths
+         *     and URLs without asking.
+         */
+        CopilotScanOptionsModel: {
+            /**
+             * Allow All
+             * @default false
+             */
+            allow_all: boolean;
         };
         /** CreateSessionRequest */
         CreateSessionRequest: {
@@ -1558,9 +1911,6 @@ export interface components {
         /**
          * CursorOptionsModel
          * @description Wire DTO for Cursor CLI launch options (see :class:`CursorOptions`).
-         *
-         *     ``force`` is Cursor's ``--force`` ("Run Everything"): it runs commands
-         *     without asking, except the ones its settings deny.
          */
         CursorOptionsModel: {
             /** Base Branch */
@@ -1577,6 +1927,20 @@ export interface components {
              * @default false
              */
             worktree: boolean;
+        };
+        /**
+         * CursorScanOptionsModel
+         * @description The Cursor options an Auto Scan keeps.
+         *
+         *     ``force`` is Cursor's ``--force`` ("Run Everything"): it runs commands
+         *     without asking, except the ones its settings deny.
+         */
+        CursorScanOptionsModel: {
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
         };
         /**
          * FsDirsResponse
@@ -2030,6 +2394,145 @@ export interface components {
             short_oid?: string | null;
         };
         /**
+         * GitHubIssueTypeModel
+         * @description A GitHub issue type of the repository (Bug, Task, Feature…).
+         *
+         *     ``color`` is GitHub's color name (``RED``, ``BLUE``…), ``""`` when unknown.
+         */
+        GitHubIssueTypeModel: {
+            /**
+             * Color
+             * @default
+             */
+            color: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Name */
+            name: string;
+        };
+        /** GitHubLabelModel */
+        GitHubLabelModel: {
+            /**
+             * Color
+             * @default
+             */
+            color: string;
+            /** Name */
+            name: string;
+        };
+        /**
+         * GitHubLabelsResponse
+         * @description ``GET /api/autoscan/github/labels``: what a GitHub filter can pick.
+         *
+         *     ``issue_types`` is empty when the repository has none or GitHub did not
+         *     say (an older GitHub Enterprise Server, for example).
+         */
+        GitHubLabelsResponse: {
+            /**
+             * Issue Types
+             * @default []
+             */
+            issue_types: components["schemas"]["GitHubIssueTypeModel"][];
+            /** Labels */
+            labels: components["schemas"]["GitHubLabelModel"][];
+        };
+        /**
+         * GitHubScanFilterDraftModel
+         * @description A GitHub filter as a template keeps it: like
+         *     :class:`GitHubScanFilterModel`, but ``labels`` may still be empty.
+         */
+        GitHubScanFilterDraftModel: {
+            /** Active Label */
+            active_label?: string | null;
+            /** Assignee */
+            assignee?: string | null;
+            /** Issue Types */
+            issue_types?: string[];
+            /** Labels */
+            labels?: string[];
+        };
+        /**
+         * GitHubScanFilterModel
+         * @description Per-workspace GitHub filter for Auto Scan Mode.
+         *
+         *     Mirrors :class:`mobaide.core.workspaces_config.GitHubScanFilter`.
+         *     ``labels`` holds 1–20 distinct label names; a blank ``assignee`` or
+         *     ``active_label`` is ``null``. ``issue_types`` holds up to 20 GitHub issue
+         *     type names (distinct, ignoring case); empty takes every type.
+         */
+        GitHubScanFilterModel: {
+            /** Active Label */
+            active_label?: string | null;
+            /** Assignee */
+            assignee?: string | null;
+            /** Issue Types */
+            issue_types?: string[];
+            /** Labels */
+            labels: string[];
+        };
+        /**
+         * GitHubSetupRequest
+         * @description ``POST /api/autoscan/github/setup``: open a terminal session that
+         *     installs the GitHub CLI (``install``) or signs it in (``sign_in``).
+         */
+        GitHubSetupRequest: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "install" | "sign_in";
+            /**
+             * Cols
+             * @default 80
+             */
+            cols: number;
+            /** Project Name */
+            project_name: string;
+            /**
+             * Rows
+             * @default 24
+             */
+            rows: number;
+        };
+        /**
+         * GitHubStatusResponse
+         * @description ``GET /api/autoscan/github/status``: what a GitHub scan still needs.
+         *
+         *     ``problem`` is the first blocking reason in plain words, ``null`` when a
+         *     scan can start. ``github_host`` says whether ``host`` is GitHub
+         *     (github.com or an Enterprise Server), so signing in can help; ``null``
+         *     before a host is known. ``can_install`` says whether ``POST
+         *     /api/autoscan/github/setup`` with ``action: "install"`` knows an
+         *     installer for this PC; ``install_command`` is that command as text.
+         */
+        GitHubStatusResponse: {
+            /** Account */
+            account?: string | null;
+            /** Can Install */
+            can_install: boolean;
+            /** Github Host */
+            github_host?: boolean | null;
+            /** Host */
+            host?: string | null;
+            /** Install Command */
+            install_command?: string | null;
+            /** Installed */
+            installed: boolean;
+            /** Problem */
+            problem?: string | null;
+            /** Repo */
+            repo?: string | null;
+            /** Repo Url */
+            repo_url?: string | null;
+            /** Signed In */
+            signed_in: boolean;
+            /** Version */
+            version?: string | null;
+        };
+        /**
          * GitItemRead
          * @description One row in the unified git management list.
          *
@@ -2364,10 +2867,6 @@ export interface components {
         /**
          * JunieOptionsModel
          * @description Wire DTO for Junie CLI launch options (see :class:`JunieOptions`).
-         *
-         *     ``plan_mode`` starts the session in Junie's Plan mode. ``brave`` is
-         *     Junie's ``--brave``: Brave mode for this session only, which runs
-         *     commands without asking.
          */
         JunieOptionsModel: {
             /** Base Branch */
@@ -2389,6 +2888,26 @@ export interface components {
              * @default false
              */
             worktree: boolean;
+        };
+        /**
+         * JunieScanOptionsModel
+         * @description The Junie options an Auto Scan keeps.
+         *
+         *     ``plan_mode`` starts the session in Junie's Plan mode. ``brave`` is
+         *     Junie's ``--brave``: Brave mode for this session only, which runs
+         *     commands without asking.
+         */
+        JunieScanOptionsModel: {
+            /**
+             * Brave
+             * @default false
+             */
+            brave: boolean;
+            /**
+             * Plan Mode
+             * @default false
+             */
+            plan_mode: boolean;
         };
         /**
          * LinearLabelModel
@@ -2424,13 +2943,11 @@ export interface components {
          * OpenCodeOptionsModel
          * @description Wire DTO for OpenCode CLI launch options (see :class:`OpenCodeOptions`).
          *
-         *     ``auto_approve`` is OpenCode's ``--auto``: it accepts every permission
-         *     request that the user's OpenCode rules do not deny. ``initial_prompt`` is
-         *     the first message; it travels as one argv element, so its length is capped.
-         *     ``connect`` starts a terminal session that runs ``opencode auth login``
-         *     (sign in to a model provider) in place of an OpenCode session.
-         *     ``code_mode`` defaults to on, like OpenCode 2 itself, so an older client
-         *     changes nothing.
+         *     ``initial_prompt`` is the first message; it travels as one argv element,
+         *     so its length is capped. ``connect`` starts a terminal session that runs
+         *     ``opencode auth login`` (sign in to a model provider) in place of an
+         *     OpenCode session. ``code_mode`` defaults to on, like OpenCode 2 itself,
+         *     so an older client changes nothing.
          */
         OpenCodeOptionsModel: {
             /**
@@ -2459,6 +2976,20 @@ export interface components {
              * @default false
              */
             worktree: boolean;
+        };
+        /**
+         * OpenCodeScanOptionsModel
+         * @description The OpenCode options an Auto Scan keeps.
+         *
+         *     ``auto_approve`` is OpenCode's ``--auto``: it accepts every permission
+         *     request that the user's OpenCode rules do not deny.
+         */
+        OpenCodeScanOptionsModel: {
+            /**
+             * Auto Approve
+             * @default false
+             */
+            auto_approve: boolean;
         };
         /**
          * PiOptionsModel
@@ -2506,6 +3037,18 @@ export interface components {
             ok: boolean;
             /** Project Name */
             project_name: string;
+        };
+        /**
+         * SaveTemplateRequest
+         * @description ``POST /api/autoscan/templates``: save ``settings`` under ``name``.
+         *
+         *     A template with the same name (ignoring case) is replaced and keeps its
+         *     id. Runs of white space in the name become one space.
+         */
+        SaveTemplateRequest: {
+            /** Name */
+            name: string;
+            settings: components["schemas"]["AutoScanTemplateSettings"];
         };
         /** ScrollbackResponse */
         ScrollbackResponse: {
@@ -2562,11 +3105,42 @@ export interface components {
             /** Worktree Branch */
             worktree_branch?: string | null;
         };
-        /** StartScanRequest */
+        /**
+         * StartScanRequest
+         * @description ``POST /api/autoscan/start``.
+         *
+         *     ``source`` absent is an older client: Linear, Claude Code, the stored
+         *     filter. A newer client sends every choice: ``source``, ``cli``, the
+         *     source's filter, the chosen agent's options (``claude_options``,
+         *     ``codex_options``, …; Pi has none), ``ui``, ``interval_minutes``,
+         *     ``initial_prompt`` (``""`` clears the saved prompt) and, when the
+         *     workspace has none, ``linear_api_key``. The options of other agents are
+         *     ignored.
+         */
         StartScanRequest: {
+            antigravity_options?: components["schemas"]["AntigravityScanOptionsModel"] | null;
             claude_options?: components["schemas"]["ClaudeOptionsModel"] | null;
+            /** Cli */
+            cli?: ("claude" | "codex" | "antigravity" | "opencode" | "copilot" | "cursor" | "junie" | "pi") | null;
+            codex_options?: components["schemas"]["CodexScanOptionsModel"] | null;
+            copilot_options?: components["schemas"]["CopilotScanOptionsModel"] | null;
+            cursor_options?: components["schemas"]["CursorScanOptionsModel"] | null;
+            github_filter?: components["schemas"]["GitHubScanFilterModel"] | null;
+            /** Initial Prompt */
+            initial_prompt?: string | null;
+            /** Interval Minutes */
+            interval_minutes?: number | null;
+            junie_options?: components["schemas"]["JunieScanOptionsModel"] | null;
+            /** Linear Api Key */
+            linear_api_key?: string | null;
+            linear_filter?: components["schemas"]["AutoScanFilterModel"] | null;
+            opencode_options?: components["schemas"]["OpenCodeScanOptionsModel"] | null;
             /** Project Name */
             project_name: string;
+            /** Source */
+            source?: ("linear" | "github") | null;
+            /** Ui */
+            ui?: ("terminal" | "chat") | null;
         };
         /** StopScanRequest */
         StopScanRequest: {
@@ -2778,6 +3352,7 @@ export interface components {
          * @description Client-safe view of a single workspace.
          */
         WorkspaceReadModel: {
+            auto_scan?: components["schemas"]["AutoScanSettingsModel"];
             auto_scan_filter?: components["schemas"]["AutoScanFilterModel"];
             /** Auto Scan Prompt */
             auto_scan_prompt?: string | null;
@@ -2983,6 +3558,101 @@ export interface operations {
             };
         };
     };
+    github_labels_api_autoscan_github_labels_get: {
+        parameters: {
+            query: {
+                project_name: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubLabelsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    github_setup_api_autoscan_github_setup_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitHubSetupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    github_status_api_autoscan_github_status_get: {
+        parameters: {
+            query: {
+                project_name: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_scans_api_autoscan_list_get: {
         parameters: {
             query?: never;
@@ -3124,6 +3794,90 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_templates_api_autoscan_templates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoScanTemplatesResponse"];
+                };
+            };
+        };
+    };
+    post_template_api_autoscan_templates_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveTemplateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoScanTemplatesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_template_api_autoscan_templates__template_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoScanTemplatesResponse"];
                 };
             };
             /** @description Validation Error */

@@ -10,6 +10,10 @@ interface BaseTextFieldProps {
   error?: string;
   hint?: string;
   disabled?: boolean;
+  /** The id of a `<datalist>` whose entries the browser offers as suggestions. */
+  list?: string;
+  /** Off for names and identifiers that must be typed verbatim. */
+  spellCheck?: boolean;
 }
 
 /**
@@ -34,6 +38,8 @@ export function TextField({
   error,
   hint,
   disabled,
+  list,
+  spellCheck,
   registration,
   value,
   onChange,
@@ -67,6 +73,8 @@ export function TextField({
         autoComplete={autoComplete}
         autoFocus={autoFocus}
         disabled={disabled}
+        list={list}
+        spellCheck={spellCheck}
         aria-invalid={error !== undefined}
         aria-describedby={describedBy}
         {...controlled}

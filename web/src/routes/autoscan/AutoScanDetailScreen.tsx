@@ -9,6 +9,7 @@ import {
   issueTone,
   phaseLabel,
   phaseTone,
+  scanSourceAgentLabel,
 } from '../../autoscan/autoscanDisplay';
 import { orderedPhases } from '../../autoscan/autoscanModel';
 import { useAutoScanDetail, useSecondTicker } from '../../autoscan/useAutoScanDetail';
@@ -42,7 +43,7 @@ const CONNECTION_LABELS: Readonly<Record<string, string>> = {
 
 function AutoScanDetail({ agentId, workspaceName }: { agentId: string; workspaceName: string }) {
   const queryClient = useQueryClient();
-  const { state, declined, retry } = useAutoScanDetail(agentId, workspaceName);
+  const { state, declined, retry, markStopped } = useAutoScanDetail(agentId, workspaceName);
 
   // Not for this screen's own state — `state.instance` comes from the
   // `ws/autoscan` snapshot alone, so the chip and counts only move when the
@@ -58,7 +59,9 @@ function AutoScanDetail({ agentId, workspaceName }: { agentId: string; workspace
   });
   const online = agents.data?.find((agent) => agent.agentId === agentId)?.online ?? false;
 
-  const status = state.instance?.status;
+  // Stopped wins over the last instance row, as on iOS and Android: after a
+  // Stop the row can linger until the next snapshot.
+  const status = state.stopped ? 'stopped' : state.instance?.status;
 
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: queryKeys.autoscan(agentId) });
@@ -71,7 +74,12 @@ function AutoScanDetail({ agentId, workspaceName }: { agentId: string; workspace
 
   const stop = useMutation({
     mutationFn: () => stopAutoScan(agentId, workspaceName),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      // Locally as well, as Android does: the stream's `scan_stopped` can be
+      // missed (the socket was reconnecting), and Run now / Stop would 404.
+      markStopped();
+      return invalidate();
+    },
     onError: scanFailureHandler('stop', invalidate),
   });
 
@@ -88,31 +96,34 @@ function AutoScanDetail({ agentId, workspaceName }: { agentId: string; workspace
             {status === undefined
               ? (CONNECTION_LABELS[state.connection] ?? state.connection)
               : autoScanStatusLabel(status)}
-            {state.cycleNumber > 0 && ` · Cycle ${String(state.cycleNumber)}`}
+            {state.cycleNumber > 0 && ` · cycle #${String(state.cycleNumber)}`}
           </p>
         </div>
-        <div className="button-row">
-          <button
-            type="button"
-            className="button"
-            disabled={busy || !online}
-            onClick={() => {
-              runNow.mutate();
-            }}
-          >
-            Run now
-          </button>
-          <button
-            type="button"
-            className="button button-danger"
-            disabled={busy || !online}
-            onClick={() => {
-              stop.mutate();
-            }}
-          >
-            Stop
-          </button>
-        </div>
+        {/* A stopped scan has nothing to run or stop: both would 404. */}
+        {!state.stopped && (
+          <div className="button-row">
+            <button
+              type="button"
+              className="button"
+              disabled={busy || !online}
+              onClick={() => {
+                runNow.mutate();
+              }}
+            >
+              Run now
+            </button>
+            <button
+              type="button"
+              className="button button-danger"
+              disabled={busy || !online}
+              onClick={() => {
+                stop.mutate();
+              }}
+            >
+              Stop
+            </button>
+          </div>
+        )}
       </header>
 
       {!online && <p className="empty-state">This agent is offline.</p>}
@@ -140,7 +151,10 @@ function AutoScanDetail({ agentId, workspaceName }: { agentId: string; workspace
             ? (CONNECTION_LABELS[state.connection] ?? state.connection)
             : autoScanStatusLabel(status)}
         </span>
-        <AutoScanCountdown nextScanAt={state.nextScanAt} />
+        {!state.stopped && <AutoScanCountdown nextScanAt={state.nextScanAt} />}
+        {state.instance !== undefined && (
+          <span className="page-note">{scanSourceAgentLabel(state.instance)}</span>
+        )}
         {state.instance !== undefined && (
           <span className="page-note">Processed: {state.instance.processed_count}</span>
         )}

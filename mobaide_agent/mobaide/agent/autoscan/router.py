@@ -3,11 +3,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, status
 from starlette.websockets import WebSocketDisconnect
 
+from mobaide.core import MaxSessionsError
 from mobaide.linear.scanner import (
     AutoScanAlreadyRunning,
     AutoScanCapacityReached,
     AutoScanSessionManager,
 )
+from mobaide.linear.sources import AutoScanSourceError
 
 from ..auth.dependencies import WebSocketAuthError, get_current_user, ws_authenticate
 from ..logging import get_logger
@@ -17,14 +19,30 @@ from ..ws.logging import (
     log_ws_disconnect,
     log_ws_error,
 )
+from ..sessions.models import SessionResponse
 from .models import (
     AutoScanInstanceStatusResponse,
     AutoScanListResponse,
+    AutoScanTemplatesResponse,
+    GitHubLabelsResponse,
+    GitHubSetupRequest,
+    GitHubStatusResponse,
     RunNowRequest,
     RunNowResponse,
+    SaveTemplateRequest,
     StartScanRequest,
     StopScanRequest,
 )
+from .service import (
+    delete_template,
+    github_labels_for,
+    github_status_for,
+    list_templates,
+    save_template,
+    start_github_setup,
+    template_not_found,
+)
+from .templates import TemplateLimitError
 from .stream import run_autoscan_stream
 
 logger = get_logger(__name__)
@@ -49,7 +67,8 @@ def _get_manager(request: Request) -> AutoScanSessionManager:
 
 @router.post("/start", status_code=status.HTTP_200_OK)
 async def start_scan(body: StartScanRequest, request: Request) -> dict:
-    """Start an auto scan for a workspace. 409 if already running, 429 if at cap."""
+    """Start an auto scan for a workspace. 409 if already running, 429 if at
+    cap, 400 when a choice is missing or the source or agent is not usable."""
     mgr = _get_manager(request)
     claude_options = (
         body.claude_options.to_options()
@@ -57,7 +76,11 @@ async def start_scan(body: StartScanRequest, request: Request) -> dict:
         else None
     )
     try:
-        instance = await mgr.start(body.project_name, client_options=claude_options)
+        instance = await mgr.start(
+            body.project_name, client_options=claude_options, request=body.to_start(),
+        )
+    except AutoScanSourceError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except AutoScanAlreadyRunning as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     except AutoScanCapacityReached as exc:
@@ -120,6 +143,82 @@ async def scan_status(
             detail=f"No active auto scan for workspace '{workspace_name}'",
         )
     return AutoScanInstanceStatusResponse(**instance.get_status())
+
+
+@router.get("/github/status", response_model=GitHubStatusResponse)
+async def github_status(
+    request: Request, workspace_name: str = Query(..., alias="project_name"),
+) -> GitHubStatusResponse:
+    """What a GitHub scan of the workspace still needs (``gh``, sign-in, repo)."""
+    try:
+        return await github_status_for(request.app.state, workspace_name)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc).strip("'"))
+
+
+@router.get("/github/labels", response_model=GitHubLabelsResponse)
+async def github_labels(
+    request: Request, workspace_name: str = Query(..., alias="project_name"),
+) -> GitHubLabelsResponse:
+    """Labels and issue types of the workspace's GitHub repository."""
+    try:
+        return await github_labels_for(request.app.state, workspace_name)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc).strip("'"))
+    except AutoScanSourceError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@router.get("/templates", response_model=AutoScanTemplatesResponse)
+async def get_templates(request: Request) -> AutoScanTemplatesResponse:
+    """The Auto Scan templates saved on this PC, sorted by name."""
+    return list_templates(request.app.state)
+
+
+@router.post("/templates", response_model=AutoScanTemplatesResponse)
+async def post_template(body: SaveTemplateRequest, request: Request) -> AutoScanTemplatesResponse:
+    """Save a template; one with the same name (ignoring case) is replaced.
+    409 when a new name would pass the cap. Answers every template."""
+    try:
+        return save_template(request.app.state, body)
+    except TemplateLimitError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+
+@router.delete("/templates/{template_id}", response_model=AutoScanTemplatesResponse)
+async def remove_template(template_id: str, request: Request) -> AutoScanTemplatesResponse:
+    """Delete a template; answers every template left."""
+    try:
+        return delete_template(request.app.state, template_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=template_not_found(template_id),
+        )
+
+
+@router.post(
+    "/github/setup", response_model=SessionResponse, status_code=status.HTTP_201_CREATED,
+)
+async def github_setup(body: GitHubSetupRequest, request: Request) -> SessionResponse:
+    """Open a terminal session that installs (``install``) or signs in
+    (``sign_in``) the GitHub CLI; the response is the new session."""
+    try:
+        info = await start_github_setup(
+            request.app.state, body.project_name, body.action, body.rows, body.cols,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc).strip("'"))
+    except AutoScanSourceError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except MaxSessionsError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    except OSError as exc:
+        # A missing workspace folder: the same 400 the relay answers.
+        detail = exc.strerror or "cannot start the setup session"
+        if exc.filename:
+            detail = f"{detail}: {exc.filename}"
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+    return SessionResponse.from_info(info)
 
 
 ws_router = APIRouter(tags=["autoscan-ws"])

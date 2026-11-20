@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.outlined.History
@@ -113,6 +114,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mobaide.app.data.network.dto.AUTO_SCAN_UI_CHAT
 import com.mobaide.app.data.network.dto.ChatSupport
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.ui.common.pathBrowseHint
@@ -132,6 +134,8 @@ fun CreateSessionScreen(
     onBack: () -> Unit,
     onSessionCreated: (String) -> Unit,
     onAutoScanStarted: (String) -> Unit,
+    // The GitHub setup terminal: opened on top of the wizard so Back returns to it.
+    onSetupSessionOpened: (String) -> Unit = onSessionCreated,
     chatResumeViewModel: ChatResumeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -152,6 +156,9 @@ fun CreateSessionScreen(
     }
     LaunchedEffect(viewModel) {
         viewModel.navigateToAutoScan.collect { workspaceName -> onAutoScanStarted(workspaceName) }
+    }
+    LaunchedEffect(viewModel) {
+        viewModel.navigateToSetupSession.collect { sessionId -> onSetupSessionOpened(sessionId) }
     }
     LaunchedEffect(viewModel) {
         viewModel.transientMessages.collect { msg -> snackbar.showSnackbar(msg) }
@@ -213,7 +220,7 @@ fun CreateSessionScreen(
                             CreateSessionStep.CursorConfig -> "Cursor session"
                             CreateSessionStep.JunieConfig -> "Junie session"
                             CreateSessionStep.PiConfig -> "Pi session"
-                            CreateSessionStep.AutoScanConfig -> "Auto Scan mode"
+                            CreateSessionStep.AutoScanConfig -> "Auto Scan"
                             // TerminalConfig is shared between Terminal mode and
                             // custom agent types — title by the selected mode.
                             CreateSessionStep.TerminalConfig ->
@@ -1256,6 +1263,9 @@ private fun BuiltInModeCard(
         )
         CreateSessionMode.AutoScan -> Pair(
             when {
+                state.autoScanCapability != null ->
+                    if (state.autoScanEnabled) "Scan GitHub or Linear issues and launch agent sessions."
+                    else "Auto Scan needs a saved workspace."
                 !state.claudeEnabled -> "Auto Scan needs the Claude CLI, which isn't installed on the agent."
                 !state.autoScanEnabled -> "Auto Scan needs a Linear API key for this workspace."
                 else -> "Scan Linear for matching issues and launch sessions."
@@ -1280,16 +1290,22 @@ private fun BuiltInModeCard(
         ListItem(
             headlineContent = { Text(builtInModeTitle(mode)) },
             supportingContent = { Text(subtitle) },
-            leadingContent = if (mode == CreateSessionMode.CustomShell) {
-                { Icon(imageVector = Icons.Filled.Terminal, contentDescription = null) }
-            } else {
-                null
+            leadingContent = when (mode) {
+                CreateSessionMode.CustomShell -> {
+                    { Icon(imageVector = Icons.Filled.Terminal, contentDescription = null) }
+                }
+                CreateSessionMode.AutoScan -> {
+                    { Icon(imageVector = Icons.Filled.Radar, contentDescription = null) }
+                }
+                else -> null
             },
             trailingContent = { ModeChevron() },
             colors = listColorsFor(available),
         )
     }
 }
+
+private const val CODEX_EFFORT_AGENT_DEFAULT = "Agent default"
 
 /** Trailing disclosure chevron: tapping a mode card commits and moves on. */
 @Composable
@@ -1395,6 +1411,11 @@ private fun StandardConfigSection(
     viewModel: CreateSessionViewModel,
     onContinueSession: () -> Unit,
 ) {
+    AgentSessionViewField(
+        terminalUi = state.claudeTerminalUi,
+        lockedHint = state.claudeChatLockedHint,
+        onTerminalUiChange = viewModel::toggleTerminalUi,
+    )
     if (state.claudeResumeAvailable) {
         ContinueSessionCard(
             subtitle = "Open a Claude Code session started on your PC, for example in a terminal.",
@@ -1431,16 +1452,10 @@ private fun StandardConfigSection(
         onAppendSystemPromptChange = viewModel::setClaudeAppendSystemPrompt,
         showDebug = !state.claudeUsesChat,
         leadingContent = {
-            // Next to Terminal UI, which it turns on: Code Mode runs only there.
             CodeModeToggle(
                 checked = state.claudeCodeMode,
                 hint = CLAUDE_CODE_MODE_HINT,
                 onChange = viewModel::toggleClaudeCodeMode,
-            )
-            TerminalUiToggle(
-                checked = state.claudeTerminalUi,
-                lockedHint = state.claudeTerminalUiLockedHint,
-                onChange = viewModel::toggleTerminalUi,
             )
         },
     )
@@ -1506,7 +1521,7 @@ private fun AdvancedSection(content: @Composable () -> Unit) {
 
 private const val CLAUDE_CODE_MODE_HINT =
     "Experimental. Claude writes JavaScript that makes several tool calls in one step. " +
-        "Runs in the terminal UI only. Claude Code asks you to confirm until you accept; " +
+        "Sessions open in the terminal. Claude Code asks you to confirm until you accept; " +
         "turn Code Mode off here to stop the question."
 private const val OPENCODE_CODE_MODE_HINT =
     "OpenCode 2 calls MCP tools from JavaScript, several in one step. " +
@@ -1525,20 +1540,56 @@ private fun CodeModeToggle(checked: Boolean, hint: String, onChange: (Boolean) -
     )
 }
 
-/** "Terminal UI" under Advanced: the classic terminal instead of the chat view. */
+/** "Open sessions in" for an agent session: Chat is the same choice as Terminal UI off. */
 @Composable
-private fun TerminalUiToggle(checked: Boolean, lockedHint: String?, onChange: (Boolean) -> Unit) {
-    ToggleRow(
-        label = "Terminal UI",
-        checked = checked || lockedHint != null,
-        onChange = onChange,
-        enabled = lockedHint == null,
+private fun AgentSessionViewField(terminalUi: Boolean, lockedHint: String?, onTerminalUiChange: (Boolean) -> Unit) {
+    SessionViewField(
+        chatSelected = !terminalUi && lockedHint == null,
+        chatEnabled = lockedHint == null,
+        onSelect = { chat -> onTerminalUiChange(!chat) },
+        hint = lockedHint,
     )
-    Text(
-        text = lockedHint ?: "Use the classic terminal instead of the chat view.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+}
+
+/**
+ * "Open sessions in": Chat or Terminal, shared by the agent steps and Auto
+ * Scan. A disabled Chat shows Terminal selected.
+ */
+@Composable
+internal fun SessionViewField(
+    chatSelected: Boolean,
+    chatEnabled: Boolean,
+    onSelect: (chat: Boolean) -> Unit,
+    hint: String? = null,
+    hintModifier: Modifier = Modifier,
+    testTag: String = "session_view",
+) {
+    Text("Open sessions in", style = MaterialTheme.typography.labelLarge)
+    SingleChoiceSegmentedButtonRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(testTag),
+    ) {
+        listOf(true to "Chat", false to "Terminal").forEach { (chat, label) ->
+            SegmentedButton(
+                selected = chatSelected == chat,
+                onClick = { onSelect(chat) },
+                enabled = !chat || chatEnabled,
+                shape = RectangleShape,
+                colors = pixelSegmentedButtonColors(),
+                icon = {},
+                modifier = Modifier.testTag(if (chat) "${testTag}_chat" else "${testTag}_terminal"),
+            ) { Text(label) }
+        }
+    }
+    hint?.let {
+        Text(
+            text = it,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = hintModifier,
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1551,6 +1602,11 @@ private fun CodexConfigSection(
 ) {
     val preset = state.codexPreset
 
+    AgentSessionViewField(
+        terminalUi = state.codexTerminalUi,
+        lockedHint = state.codexChatUnavailableHint,
+        onTerminalUiChange = viewModel::toggleCodexTerminalUi,
+    )
     if (state.codexResumeAvailable) {
         ContinueSessionCard(
             subtitle = "Open a Codex session started on your PC, for example in a terminal.",
@@ -1558,6 +1614,62 @@ private fun CodexConfigSection(
         )
     }
 
+    CodexOptionControls(
+        preset = preset,
+        models = state.codexModels?.takeIf { it.isNotEmpty() } ?: CreateSessionViewModel.CODEX_MODELS,
+        model = state.codexModel,
+        effort = state.codexReasoningEffort,
+        efforts = state.codexEffortsFor(state.codexModel),
+        sandbox = state.codexSandbox,
+        approval = state.codexApproval,
+        fullAuto = state.codexFullAuto,
+        onPreset = viewModel::selectCodexPreset,
+        onModel = viewModel::setCodexModel,
+        onEffort = viewModel::setCodexReasoningEffort,
+        onSandbox = viewModel::setCodexSandbox,
+        onApproval = viewModel::setCodexApproval,
+    )
+
+    if (showWorktreeToggle) {
+        ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
+
+        if (state.worktree) WorktreeBranchFields(state, viewModel)
+    }
+
+    PixelButton(
+        style = PixelButtonStyle.Primary,
+        onClick = viewModel::submitCodex,
+        enabled = state.selection !is WorkspaceSelection.None && !state.submitting,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (state.submitting) "Creating…" else "Create session")
+    }
+}
+
+/**
+ * Codex's launch controls — autonomy presets, model, reasoning effort and the
+ * Advanced sandbox/approval — shared by the Codex step and Auto Scan, which
+ * keep their own values.
+ */
+@Composable
+internal fun CodexOptionControls(
+    preset: CodexAutonomyPreset?,
+    models: List<String>,
+    model: String?,
+    effort: String?,
+    efforts: List<String>,
+    sandbox: String,
+    approval: String,
+    fullAuto: Boolean,
+    onPreset: (CodexAutonomyPreset) -> Unit,
+    onModel: (String?) -> Unit,
+    onEffort: (String) -> Unit,
+    onSandbox: (String) -> Unit,
+    onApproval: (String) -> Unit,
+    autonomyHint: String? = null,
+    // Offers "Agent default" (a null effort: Codex uses its own setting).
+    onAgentDefaultEffort: (() -> Unit)? = null,
+) {
     Text("Autonomy", style = MaterialTheme.typography.labelLarge)
     val presets = listOf(
         CodexAutonomyPreset.ReadOnly to "Read-only",
@@ -1565,10 +1677,10 @@ private fun CodexConfigSection(
         CodexAutonomyPreset.FullAccess to "Full-access",
     )
     SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-        presets.forEachIndexed { index, (value, label) ->
+        presets.forEach { (value, label) ->
             SegmentedButton(
                 selected = preset == value,
-                onClick = { viewModel.selectCodexPreset(value) },
+                onClick = { onPreset(value) },
                 shape = RectangleShape,
                 colors = pixelSegmentedButtonColors(),
                 icon = {},
@@ -1585,30 +1697,26 @@ private fun CodexConfigSection(
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+    autonomyHint?.let { AskHint(it) }
 
     CliModelDropdown(
-        models = state.codexModels?.takeIf { it.isNotEmpty() }
-            ?: CreateSessionViewModel.CODEX_MODELS,
-        selected = state.codexModel,
+        models = models,
+        selected = model,
         defaultLabel = "Default",
-        onSelect = viewModel::setCodexModel,
+        onSelect = onModel,
     )
 
     // A dropdown, not the old 4-button segmented row: the agent-advertised
     // per-model sets run to 6 levels (low…ultra), which segments would truncate
     // on phone width.
     CodexEffortDropdown(
-        state = state,
-        onSelect = viewModel::setCodexReasoningEffort,
+        selected = effort,
+        advertised = efforts,
+        onSelect = onEffort,
+        onAgentDefault = onAgentDefaultEffort,
     )
 
     AdvancedSection {
-        val fullAuto = state.codexFullAuto
-        TerminalUiToggle(
-            checked = state.codexTerminalUi,
-            lockedHint = state.codexChatUnavailableHint,
-            onChange = viewModel::toggleCodexTerminalUi,
-        )
         Text("Sandbox (-s)", style = MaterialTheme.typography.labelLarge)
         val sandboxes = listOf(
             "read-only" to "Read-only",
@@ -1616,10 +1724,10 @@ private fun CodexConfigSection(
             "danger-full-access" to "Full",
         )
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-            sandboxes.forEachIndexed { index, (value, label) ->
+            sandboxes.forEach { (value, label) ->
                 SegmentedButton(
-                    selected = state.codexSandbox == value,
-                    onClick = { viewModel.setCodexSandbox(value) },
+                    selected = sandbox == value,
+                    onClick = { onSandbox(value) },
                     enabled = !fullAuto,
                     shape = RectangleShape,
                     colors = pixelSegmentedButtonColors(),
@@ -1634,10 +1742,10 @@ private fun CodexConfigSection(
             "never" to "Never",
         )
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-            approvals.forEachIndexed { index, (value, label) ->
+            approvals.forEach { (value, label) ->
                 SegmentedButton(
-                    selected = state.codexApproval == value,
-                    onClick = { viewModel.setCodexApproval(value) },
+                    selected = approval == value,
+                    onClick = { onApproval(value) },
                     enabled = !fullAuto,
                     shape = RectangleShape,
                     colors = pixelSegmentedButtonColors(),
@@ -1652,21 +1760,6 @@ private fun CodexConfigSection(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-    }
-
-    if (showWorktreeToggle) {
-        ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
-
-        if (state.worktree) WorktreeBranchFields(state, viewModel)
-    }
-
-    PixelButton(
-        style = PixelButtonStyle.Primary,
-        onClick = viewModel::submitCodex,
-        enabled = state.selection !is WorkspaceSelection.None && !state.submitting,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Text(if (state.submitting) "Creating…" else "Create session")
     }
 }
 
@@ -1730,6 +1823,11 @@ private fun AntigravityConfigSection(
     viewModel: CreateSessionViewModel,
     onContinueSession: () -> Unit,
 ) {
+    AgentSessionViewField(
+        terminalUi = state.antigravityTerminalUi,
+        lockedHint = state.antigravityChatUnavailableHint,
+        onTerminalUiChange = viewModel::toggleAntigravityTerminalUi,
+    )
     if (state.antigravityResumeAvailable) {
         ContinueSessionCard(
             subtitle = "Open an Antigravity conversation started on your PC, for example with agy in a terminal.",
@@ -1737,32 +1835,80 @@ private fun AntigravityConfigSection(
         )
     }
 
+    AntigravityOptionControls(
+        models = state.antigravityModels?.takeIf { it.isNotEmpty() } ?: CreateSessionViewModel.ANTIGRAVITY_MODELS,
+        model = state.antigravityModel,
+        skipPermissions = state.antigravitySkipPermissions,
+        sandbox = state.antigravitySandbox,
+        addDirsDraft = state.antigravityAddDirsDraft,
+        addDirsError = antigravityAddDirsError(state.antigravityAddDirsDraft),
+        onModel = viewModel::setAntigravityModel,
+        onSkipPermissions = viewModel::setAntigravitySkipPermissions,
+        onSandbox = viewModel::setAntigravitySandbox,
+        onAddDirsChange = viewModel::setAntigravityAddDirsDraft,
+    )
+
+    if (showWorktreeToggle) {
+        ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
+
+        if (state.worktree) WorktreeBranchFields(state, viewModel)
+    }
+
+    PixelButton(
+        style = PixelButtonStyle.Primary,
+        onClick = viewModel::submitAntigravity,
+        enabled = state.selection !is WorkspaceSelection.None && !state.submitting &&
+            antigravityAddDirsError(state.antigravityAddDirsDraft) == null,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (state.submitting) "Creating…" else "Create session")
+    }
+}
+
+/**
+ * Antigravity's launch controls, shared by the Antigravity step and Auto Scan.
+ * Skip permissions and Sandbox exclude each other; the setters enforce it.
+ */
+@Composable
+internal fun AntigravityOptionControls(
+    models: List<String>,
+    model: String?,
+    skipPermissions: Boolean,
+    sandbox: Boolean,
+    addDirsDraft: String,
+    addDirsError: String?,
+    onModel: (String?) -> Unit,
+    onSkipPermissions: (Boolean) -> Unit,
+    onSandbox: (Boolean) -> Unit,
+    onAddDirsChange: (String) -> Unit,
+    skipPermissionsHint: String? = null,
+) {
     CliModelDropdown(
-        models = state.antigravityModels?.takeIf { it.isNotEmpty() }
-            ?: CreateSessionViewModel.ANTIGRAVITY_MODELS,
-        selected = state.antigravityModel,
+        models = models,
+        selected = model,
         defaultLabel = "Auto",
-        onSelect = viewModel::setAntigravityModel,
+        onSelect = onModel,
     )
 
     Text("Permissions", style = MaterialTheme.typography.labelLarge)
     ToggleRow(
         label = "Skip permissions (dangerous)",
-        checked = state.antigravitySkipPermissions,
-        onChange = viewModel::setAntigravitySkipPermissions,
-        enabled = !state.antigravitySandbox,
+        checked = skipPermissions,
+        onChange = onSkipPermissions,
+        enabled = !sandbox,
     )
+    skipPermissionsHint?.let { AskHint(it) }
     ToggleRow(
         label = "Sandbox",
-        checked = state.antigravitySandbox,
-        onChange = viewModel::setAntigravitySandbox,
-        enabled = !state.antigravitySkipPermissions,
+        checked = sandbox,
+        onChange = onSandbox,
+        enabled = !skipPermissions,
     )
     Text(
         text = when {
-            state.antigravitySkipPermissions ->
+            skipPermissions ->
                 "Auto-approves every tool permission request (--dangerously-skip-permissions)."
-            state.antigravitySandbox ->
+            sandbox ->
                 "Runs with terminal restrictions enabled (--sandbox)."
             else ->
                 "Interactive approvals (agy default). Skip permissions and Sandbox " +
@@ -1774,39 +1920,17 @@ private fun AntigravityConfigSection(
 
     OutlinedTextField(
         colors = PixelTextFieldDefaults.colors(),
-        value = state.antigravityAddDirsDraft,
-        onValueChange = viewModel::setAntigravityAddDirsDraft,
+        value = addDirsDraft,
+        onValueChange = onAddDirsChange,
         label = { Text("Additional directories (one per line, optional)") },
-        supportingText = { Text("Each is added to the workspace.") },
+        isError = addDirsError != null,
+        supportingText = { Text(addDirsError ?: "Each is added to the workspace.") },
         keyboardOptions = KeyboardOptions(
             capitalization = KeyboardCapitalization.None,
             autoCorrectEnabled = false,
         ),
         modifier = Modifier.fillMaxWidth(),
     )
-
-    if (showWorktreeToggle) {
-        ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
-
-        if (state.worktree) WorktreeBranchFields(state, viewModel)
-    }
-
-    AdvancedSection {
-        TerminalUiToggle(
-            checked = state.antigravityTerminalUi,
-            lockedHint = state.antigravityChatUnavailableHint,
-            onChange = viewModel::toggleAntigravityTerminalUi,
-        )
-    }
-
-    PixelButton(
-        style = PixelButtonStyle.Primary,
-        onClick = viewModel::submitAntigravity,
-        enabled = state.selection !is WorkspaceSelection.None && !state.submitting,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Text(if (state.submitting) "Creating…" else "Create session")
-    }
 }
 
 @Composable
@@ -1816,6 +1940,11 @@ private fun OpenCodeConfigSection(
     viewModel: CreateSessionViewModel,
     onContinueSession: () -> Unit,
 ) {
+    AgentSessionViewField(
+        terminalUi = state.opencodeTerminalUi,
+        lockedHint = state.opencodeChatUnavailableHint,
+        onTerminalUiChange = viewModel::toggleOpenCodeTerminalUi,
+    )
     if (state.opencodeResumeAvailable) {
         ContinueSessionCard(
             subtitle = "Open an OpenCode session started on your PC, for example in a terminal.",
@@ -1827,17 +1956,7 @@ private fun OpenCodeConfigSection(
         onClick = viewModel::connectOpenCodeProvider,
     )
 
-    Text("Permissions", style = MaterialTheme.typography.labelLarge)
-    ToggleRow(
-        label = "Auto-approve permissions (dangerous)",
-        checked = state.opencodeAutoApprove,
-        onChange = viewModel::setOpenCodeAutoApprove,
-    )
-    Text(
-        text = "OpenCode accepts every request that your rules do not deny.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+    OpenCodePermissionControls(state.opencodeAutoApprove, viewModel::setOpenCodeAutoApprove)
     Text("Tools", style = MaterialTheme.typography.labelLarge)
     CodeModeToggle(
         checked = state.opencodeCodeMode,
@@ -1849,14 +1968,6 @@ private fun OpenCodeConfigSection(
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
 
         if (state.worktree) WorktreeBranchFields(state, viewModel)
-    }
-
-    AdvancedSection {
-        TerminalUiToggle(
-            checked = state.opencodeTerminalUi,
-            lockedHint = state.opencodeChatUnavailableHint,
-            onChange = viewModel::toggleOpenCodeTerminalUi,
-        )
     }
 
     PixelButton(
@@ -1876,6 +1987,11 @@ private fun CopilotConfigSection(
     viewModel: CreateSessionViewModel,
     onContinueSession: () -> Unit,
 ) {
+    AgentSessionViewField(
+        terminalUi = state.copilotTerminalUi,
+        lockedHint = state.copilotChatUnavailableHint,
+        onTerminalUiChange = viewModel::toggleCopilotTerminalUi,
+    )
     if (state.copilotResumeAvailable) {
         ContinueSessionCard(
             subtitle = "Open a GitHub Copilot session started on your PC, for example in a terminal.",
@@ -1883,30 +1999,12 @@ private fun CopilotConfigSection(
         )
     }
 
-    Text("Permissions", style = MaterialTheme.typography.labelLarge)
-    ToggleRow(
-        label = "Allow all tools, paths and URLs (dangerous)",
-        checked = state.copilotAllowAll,
-        onChange = viewModel::setCopilotAllowAll,
-    )
-    Text(
-        text = "When on, Copilot does not ask before it runs commands, edits files or opens URLs.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+    CopilotPermissionControls(state.copilotAllowAll, viewModel::setCopilotAllowAll)
 
     if (showWorktreeToggle) {
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
 
         if (state.worktree) WorktreeBranchFields(state, viewModel)
-    }
-
-    AdvancedSection {
-        TerminalUiToggle(
-            checked = state.copilotTerminalUi,
-            lockedHint = state.copilotChatUnavailableHint,
-            onChange = viewModel::toggleCopilotTerminalUi,
-        )
     }
 
     PixelButton(
@@ -1926,6 +2024,11 @@ private fun CursorConfigSection(
     viewModel: CreateSessionViewModel,
     onContinueSession: () -> Unit,
 ) {
+    AgentSessionViewField(
+        terminalUi = state.cursorTerminalUi,
+        lockedHint = state.cursorChatUnavailableHint,
+        onTerminalUiChange = viewModel::toggleCursorTerminalUi,
+    )
     if (state.cursorResumeAvailable) {
         ContinueSessionCard(
             subtitle = "Open a Cursor chat session stored on your PC. Sessions from Cursor’s terminal UI " +
@@ -1934,30 +2037,12 @@ private fun CursorConfigSection(
         )
     }
 
-    Text("Permissions", style = MaterialTheme.typography.labelLarge)
-    ToggleRow(
-        label = "Run everything without asking (dangerous)",
-        checked = state.cursorForce,
-        onChange = viewModel::setCursorForce,
-    )
-    Text(
-        text = "When on, Cursor runs commands without asking, except commands that its settings deny.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+    CursorPermissionControls(state.cursorForce, viewModel::setCursorForce)
 
     if (showWorktreeToggle) {
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
 
         if (state.worktree) WorktreeBranchFields(state, viewModel)
-    }
-
-    AdvancedSection {
-        TerminalUiToggle(
-            checked = state.cursorTerminalUi,
-            lockedHint = state.cursorChatUnavailableHint,
-            onChange = viewModel::toggleCursorTerminalUi,
-        )
     }
 
     PixelButton(
@@ -1977,6 +2062,11 @@ private fun JunieConfigSection(
     viewModel: CreateSessionViewModel,
     onContinueSession: () -> Unit,
 ) {
+    AgentSessionViewField(
+        terminalUi = state.junieTerminalUi,
+        lockedHint = state.junieChatUnavailableHint,
+        onTerminalUiChange = viewModel::toggleJunieTerminalUi,
+    )
     if (state.junieResumeAvailable) {
         ContinueSessionCard(
             subtitle = "Open a Junie session stored on your PC, also one you started in Junie’s terminal UI.",
@@ -1984,46 +2074,17 @@ private fun JunieConfigSection(
         )
     }
 
-    Text("Mode", style = MaterialTheme.typography.labelLarge)
-    ToggleRow(
-        label = "Start in Plan mode",
-        checked = state.juniePlanMode,
-        onChange = viewModel::setJuniePlanMode,
-    )
-    Text(
-        text = "Junie prepares a plan and asks you to approve it before it changes your files.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-
-    Text("Permissions", style = MaterialTheme.typography.labelLarge)
-    ToggleRow(
-        label = "Brave mode (dangerous)",
-        checked = state.junieBrave,
-        onChange = viewModel::setJunieBrave,
-    )
-    Text(
-        text = if (state.junieBrave) {
-            "Junie runs all commands without asking, in this session only."
-        } else {
-            "Junie uses its own Brave setting. By default it asks before commands that are not safe."
-        },
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    JunieOptionControls(
+        planMode = state.juniePlanMode,
+        brave = state.junieBrave,
+        onPlanModeChange = viewModel::setJuniePlanMode,
+        onBraveChange = viewModel::setJunieBrave,
     )
 
     if (showWorktreeToggle) {
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
 
         if (state.worktree) WorktreeBranchFields(state, viewModel)
-    }
-
-    AdvancedSection {
-        TerminalUiToggle(
-            checked = state.junieTerminalUi,
-            lockedHint = state.junieChatUnavailableHint,
-            onChange = viewModel::toggleJunieTerminalUi,
-        )
     }
 
     PixelButton(
@@ -2036,6 +2097,91 @@ private fun JunieConfigSection(
     }
 }
 
+/** OpenCode's `--auto` switch, shared by the OpenCode step and Auto Scan. */
+@Composable
+internal fun OpenCodePermissionControls(autoApprove: Boolean, onChange: (Boolean) -> Unit) {
+    Text("Permissions", style = MaterialTheme.typography.labelLarge)
+    ToggleRow(
+        label = "Auto-approve permissions (dangerous)",
+        checked = autoApprove,
+        onChange = onChange,
+    )
+    Text(
+        text = "OpenCode accepts every request that your rules do not deny.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+/** Copilot's `--allow-all` switch, shared by the Copilot step and Auto Scan. */
+@Composable
+internal fun CopilotPermissionControls(allowAll: Boolean, onChange: (Boolean) -> Unit) {
+    Text("Permissions", style = MaterialTheme.typography.labelLarge)
+    ToggleRow(
+        label = "Allow all tools, paths and URLs (dangerous)",
+        checked = allowAll,
+        onChange = onChange,
+    )
+    Text(
+        text = "When on, Copilot does not ask before it runs commands, edits files or opens URLs.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+/** Cursor's `--force` switch, shared by the Cursor step and Auto Scan. */
+@Composable
+internal fun CursorPermissionControls(force: Boolean, onChange: (Boolean) -> Unit) {
+    Text("Permissions", style = MaterialTheme.typography.labelLarge)
+    ToggleRow(
+        label = "Run everything without asking (dangerous)",
+        checked = force,
+        onChange = onChange,
+    )
+    Text(
+        text = "When on, Cursor runs commands without asking, except commands that its settings deny.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+/** Junie's Plan mode and Brave mode, shared by the Junie step and Auto Scan. */
+@Composable
+internal fun JunieOptionControls(
+    planMode: Boolean,
+    brave: Boolean,
+    onPlanModeChange: (Boolean) -> Unit,
+    onBraveChange: (Boolean) -> Unit,
+) {
+    Text("Mode", style = MaterialTheme.typography.labelLarge)
+    ToggleRow(
+        label = "Start in Plan mode",
+        checked = planMode,
+        onChange = onPlanModeChange,
+    )
+    Text(
+        text = "Junie prepares a plan and asks you to approve it before it changes your files.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    Text("Permissions", style = MaterialTheme.typography.labelLarge)
+    ToggleRow(
+        label = "Brave mode (dangerous)",
+        checked = brave,
+        onChange = onBraveChange,
+    )
+    Text(
+        text = if (brave) {
+            "Junie runs all commands without asking, in this session only."
+        } else {
+            "Junie uses its own Brave setting. By default it asks before commands that are not safe."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
 @Composable
 private fun PiConfigSection(
     state: CreateSessionUiState,
@@ -2043,6 +2189,11 @@ private fun PiConfigSection(
     viewModel: CreateSessionViewModel,
     onContinueSession: () -> Unit,
 ) {
+    AgentSessionViewField(
+        terminalUi = state.piTerminalUi,
+        lockedHint = state.piChatUnavailableHint,
+        onTerminalUiChange = viewModel::togglePiTerminalUi,
+    )
     if (state.piResumeAvailable) {
         ContinueSessionCard(
             subtitle = "Open a Pi session started on your PC, for example in a terminal.",
@@ -2070,14 +2221,6 @@ private fun PiConfigSection(
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
 
         if (state.worktree) WorktreeBranchFields(state, viewModel)
-    }
-
-    AdvancedSection {
-        TerminalUiToggle(
-            checked = state.piTerminalUi,
-            lockedHint = state.piChatUnavailableHint,
-            onChange = viewModel::togglePiTerminalUi,
-        )
     }
 
     PixelButton(
@@ -2156,10 +2299,10 @@ private fun ClaudeAdvancedOptions(
     onDebugToggle: (Boolean) -> Unit,
     onAppendSystemPromptChange: (String) -> Unit,
     showDebug: Boolean = true,
-    leadingContent: (@Composable () -> Unit)? = null,
+    leadingContent: @Composable () -> Unit = {},
 ) {
     AdvancedSection {
-        leadingContent?.invoke()
+        leadingContent()
         ToggleRow("No memory", noMemory, onNoMemoryToggle)
         ToggleRow("Fast mode (Opus only)", fastMode, onFastModeToggle)
         ToggleRow("ultracode", ultracode, onUltracodeToggle)
@@ -2277,23 +2420,23 @@ private fun ClaudeEffortDropdown(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CodexEffortDropdown(
-    state: CreateSessionUiState,
+    selected: String?,
+    advertised: List<String>,
     onSelect: (String) -> Unit,
+    onAgentDefault: (() -> Unit)? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val advertised = state.codexEffortsFor(state.codexModel)
     // Keep-selected repair: a restored-prefs or late-probe effort outside the
     // advertised set must stay in the menu, or the field would display a value
     // its own options cannot reproduce while the request still sends it.
-    val options = if (state.codexReasoningEffort in advertised) advertised
-    else advertised + state.codexReasoningEffort
+    val options = if (selected == null || selected in advertised) advertised else advertised + selected
     ExposedDropdownMenuBox(
         expanded = expanded,
         onExpandedChange = { expanded = !expanded },
     ) {
         OutlinedTextField(
             colors = PixelTextFieldDefaults.colors(),
-            value = state.codexReasoningEffort.replaceFirstChar { it.uppercase() },
+            value = selected?.replaceFirstChar { it.uppercase() } ?: CODEX_EFFORT_AGENT_DEFAULT,
             onValueChange = {},
             readOnly = true,
             label = { Text("Reasoning effort") },
@@ -2304,6 +2447,15 @@ private fun CodexEffortDropdown(
             expanded = expanded,
             onDismissRequest = { expanded = false },
         ) {
+            if (onAgentDefault != null) {
+                DropdownMenuItem(
+                    text = { Text(CODEX_EFFORT_AGENT_DEFAULT) },
+                    onClick = {
+                        onAgentDefault()
+                        expanded = false
+                    },
+                )
+            }
             options.forEach { effort ->
                 DropdownMenuItem(
                     text = { Text(effort.replaceFirstChar { it.uppercase() }) },
@@ -2381,6 +2533,39 @@ private fun AutoScanConfigSection(
     state: CreateSessionUiState,
     viewModel: CreateSessionViewModel,
 ) {
+    val capability = state.autoScanCapability
+    if (capability != null) {
+        AutoScanWizardSection(state = state, capability = capability, viewModel = viewModel)
+        return
+    }
+    if (state.autoScanProbed) {
+        Text(
+            text = "Update Mobaide on your PC to scan GitHub issues and choose the agent.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("autoscan_update_agent_note"),
+        )
+    }
+    AutoScanClaudeOptions(state = state, viewModel = viewModel)
+
+    AutoScanInitialPromptField(state.initialPrompt, viewModel::setInitialPrompt)
+
+    PixelButton(
+        style = PixelButtonStyle.Primary,
+        onClick = viewModel::submitAutoScan,
+        enabled = state.selectedWorkspaceName != null && !state.autoScanStarting,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (state.autoScanStarting) "Starting…" else "Start Auto Scan")
+    }
+}
+
+/** Claude Code's Auto Scan options, from the Auto Scan launch-prefs bucket. */
+@Composable
+internal fun AutoScanClaudeOptions(
+    state: CreateSessionUiState,
+    viewModel: CreateSessionViewModel,
+) {
     ClaudeOptionControls(
         model = state.autoScanClaudeModel,
         effort = state.autoScanClaudeEffort,
@@ -2390,18 +2575,13 @@ private fun AutoScanConfigSection(
         onEffortSelect = viewModel::setAutoScanClaudeEffort,
     )
     ToggleRow("Plan mode", state.autoScanPlanMode, viewModel::toggleAutoScanPlanMode)
-    FocusViewToggle(state.autoScanFocusMode, viewModel::toggleAutoScanFocusMode)
+    if (state.autoScanUi != AUTO_SCAN_UI_CHAT) FocusViewToggle(state.autoScanFocusMode, viewModel::toggleAutoScanFocusMode)
     ToggleRow(
         "Skip permissions",
         state.autoScanSkipPermissions,
         viewModel::toggleAutoScanSkipPermissions,
     )
-    Text(
-        text = "When off, the scan pauses at permission prompts — you'll get a " +
-            "notification and can open the session to approve.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+    if (!state.autoScanSkipPermissions) AskHint(RUN_WITHOUT_ASKING_OFF_HINT)
     ClaudeAdvancedOptions(
         noMemory = state.autoScanNoMemory,
         fastMode = state.autoScanClaudeFastMode,
@@ -2414,13 +2594,33 @@ private fun AutoScanConfigSection(
         onDebugToggle = viewModel::toggleAutoScanClaudeDebug,
         onAppendSystemPromptChange = viewModel::setAutoScanClaudeAppendSystemPrompt,
     )
+}
 
+/** What a scan costs when its agent may ask before acting, in the attention colour. */
+@Composable
+internal fun AskHint(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.pixel.warning,
+        modifier = modifier,
+    )
+}
+
+@Composable
+internal fun AutoScanInitialPromptField(
+    value: String,
+    onChange: (String) -> Unit,
+    label: String = "Initial prompt (optional)",
+) {
     OutlinedTextField(
         colors = PixelTextFieldDefaults.colors(),
-        value = state.initialPrompt,
-        onValueChange = viewModel::setInitialPrompt,
-        label = { Text("Initial prompt (optional)") },
-        modifier = Modifier.fillMaxWidth(),
+        value = value,
+        onValueChange = onChange,
+        label = { Text(label) },
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("autoscan_initial_prompt"),
         minLines = 3,
         maxLines = 8,
         keyboardOptions = KeyboardOptions(
@@ -2428,19 +2628,10 @@ private fun AutoScanConfigSection(
             autoCorrectEnabled = false,
         ),
     )
-
-    PixelButton(
-        style = PixelButtonStyle.Primary,
-        onClick = viewModel::submitAutoScan,
-        enabled = state.selectedWorkspaceName != null && !state.autoScanStarting,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Text(if (state.autoScanStarting) "Starting…" else "Start Auto Scan")
-    }
 }
 
 @Composable
-private fun ToggleRow(
+internal fun ToggleRow(
     label: String,
     checked: Boolean,
     onChange: (Boolean) -> Unit,

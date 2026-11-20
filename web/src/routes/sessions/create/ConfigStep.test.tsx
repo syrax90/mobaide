@@ -55,7 +55,14 @@ function renderStep(
   return actions;
 }
 
-const advancedSummary = (): Element => screen.getByText('Advanced', { selector: 'summary' });
+const terminalChoice = (): HTMLElement => screen.getByRole('radio', { name: /^Terminal/ });
+const chatChoice = (): HTMLElement => screen.getByRole('radio', { name: /^Chat/ });
+
+/** Terminal is held: chosen, and Chat cannot be picked. */
+function expectTerminalHeld(): void {
+  expect(terminalChoice()).toBeChecked();
+  expect(chatChoice()).toBeDisabled();
+}
 
 afterEach(() => {
   cleanup();
@@ -117,12 +124,10 @@ function versionWithChat(chat: Record<string, unknown>): AgentVersionInfo {
 describe('ConfigStep — Codex chat view', () => {
   const CODEX_RESUMES = versionWithChat({ codex: { resume: true, live: true } });
 
-  it('holds Terminal UI on where the PC has no Codex chat', () => {
+  it('holds Terminal where the PC has no Codex chat', () => {
     renderStep('codex', STATE, versionWithChat({ claude: { resume: true } }));
 
-    const toggle = screen.getByLabelText('Terminal UI');
-    expect(toggle).toBeChecked();
-    expect(toggle).toBeDisabled();
+    expectTerminalHeld();
     expect(screen.getByText('The chat view needs Node.js on your PC.')).toBeInTheDocument();
   });
 
@@ -148,27 +153,24 @@ describe('ConfigStep — Codex chat view', () => {
 });
 
 describe('ConfigStep — Antigravity chat view', () => {
-  it('keeps Terminal UI in a collapsed Advanced, off by default', () => {
+  it('shows Open sessions in with Chat first and chosen by default', () => {
     const actions = renderStep('antigravity');
 
-    const details = advancedSummary().closest('details');
-    expect(details).not.toHaveAttribute('open');
-    const toggle = screen.getByLabelText('Terminal UI');
-    expect(details?.contains(toggle)).toBe(true);
-    expect(toggle).not.toBeChecked();
-    expect(toggle).toBeEnabled();
+    const radios = screen.getAllByRole('radio');
+    expect(radios.indexOf(chatChoice())).toBeLessThan(radios.indexOf(terminalChoice()));
+    expect(chatChoice()).toBeChecked();
+    expect(chatChoice()).toBeEnabled();
+    expect(screen.queryByText('Advanced', { selector: 'summary' })).not.toBeInTheDocument();
 
-    fireEvent.click(toggle);
+    fireEvent.click(terminalChoice());
 
     expect(actions).toContainEqual({ type: 'setAntigravityTerminalUi', value: true });
   });
 
-  it('holds Terminal UI on where the PC has no Antigravity chat, and says how to get it', () => {
+  it('holds Terminal where the PC has no Antigravity chat, and says how to get it', () => {
     renderStep('antigravity', STATE, versionWithChat({ claude: { resume: true } }));
 
-    const toggle = screen.getByLabelText('Terminal UI');
-    expect(toggle).toBeChecked();
-    expect(toggle).toBeDisabled();
+    expectTerminalHeld();
     expect(
       screen.getByText(
         'The chat view needs a newer Antigravity CLI on your PC: run agy update there.',
@@ -190,26 +192,19 @@ describe('ConfigStep — OpenCode', () => {
     expect(actions).toEqual([{ type: 'setOpenCodeAutoApprove', value: true }]);
   });
 
-  it('keeps Terminal UI in a collapsed Advanced and writes it to the OpenCode bucket', () => {
+  it('writes the Terminal choice to the OpenCode bucket', () => {
     const actions = renderStep('opencode');
 
-    const details = advancedSummary().closest('details');
-    expect(details).not.toHaveAttribute('open');
-    const toggle = screen.getByLabelText('Terminal UI');
-    expect(details?.contains(toggle)).toBe(true);
-    expect(toggle).not.toBeChecked();
-
-    fireEvent.click(toggle);
+    expect(chatChoice()).toBeChecked();
+    fireEvent.click(terminalChoice());
 
     expect(actions).toEqual([{ type: 'setOpenCodeTerminalUi', value: true }]);
   });
 
-  it('holds Terminal UI on where the PC has no OpenCode chat', () => {
+  it('holds Terminal where the PC has no OpenCode chat', () => {
     renderStep('opencode', STATE, versionWithChat({ claude: { resume: true } }));
 
-    const toggle = screen.getByLabelText('Terminal UI');
-    expect(toggle).toBeChecked();
-    expect(toggle).toBeDisabled();
+    expectTerminalHeld();
   });
 
   it('offers to continue an OpenCode session where the PC can resume one', () => {
@@ -225,22 +220,20 @@ describe('ConfigStep — OpenCode', () => {
 });
 
 describe('ConfigStep — Pi', () => {
-  it('writes the Terminal UI toggle to the Pi bucket only', () => {
+  it('writes the Terminal choice to the Pi bucket only', () => {
     const actions = renderStep('pi');
 
-    fireEvent.click(screen.getByLabelText('Terminal UI'));
+    fireEvent.click(terminalChoice());
 
     const next = actions.reduce(wizardReducer, STATE);
     expect(next.pi).toEqual({ terminalUi: true, codeMode: false });
     expect({ ...next, pi: STATE.pi }).toEqual(STATE);
   });
 
-  it('holds Terminal UI on where the PC has no Pi chat', () => {
+  it('holds Terminal where the PC has no Pi chat', () => {
     renderStep('pi', STATE, versionWithChat({ copilot: { resume: true } }));
 
-    const toggle = screen.getByLabelText('Terminal UI');
-    expect(toggle).toBeChecked();
-    expect(toggle).toBeDisabled();
+    expectTerminalHeld();
   });
 
   it('offers to continue a Pi session only where the PC can resume one', () => {
@@ -266,7 +259,7 @@ describe('ConfigStep — Code Mode', () => {
     const actions = renderStep('claude', STATE, CLAUDE_CHAT);
 
     const toggle = screen.getByLabelText('Code Mode');
-    expect(advancedSummary().closest('details')?.contains(toggle)).toBe(true);
+    expect(screen.getByText('Advanced').closest('details')?.contains(toggle)).toBe(true);
     expect(toggle).not.toBeChecked();
 
     fireEvent.click(toggle);
@@ -279,7 +272,7 @@ describe('ConfigStep — Code Mode', () => {
     });
   });
 
-  it('holds Terminal UI on while Claude Code Mode is on, and offers no Continue', () => {
+  it('holds Terminal while Claude Code Mode is on, and offers no Continue', () => {
     renderStep(
       'claude',
       { ...STATE, claude: { ...STATE.claude, codeMode: true } },
@@ -287,20 +280,22 @@ describe('ConfigStep — Code Mode', () => {
       () => undefined,
     );
 
-    const terminal = screen.getByLabelText('Terminal UI');
-    expect(terminal).toBeChecked();
-    expect(terminal).toBeDisabled();
-    expect(screen.getByText('Code Mode runs in the terminal UI only.')).toBeInTheDocument();
+    expect(terminalChoice()).toBeChecked();
+    expect(chatChoice()).toBeDisabled();
+    expect(
+      screen.getByText(
+        'Code Mode runs only in the terminal. Turn it off under Advanced to use the chat.',
+      ),
+    ).toBeInTheDocument();
     // A Continue opens the chat view, where Claude Code has no Code Mode.
     expect(screen.queryByText('Continue a session…')).not.toBeInTheDocument();
   });
 
-  it('gives Terminal UI back to the user once Claude Code Mode is off', () => {
+  it('gives the Chat choice back to the user once Claude Code Mode is off', () => {
     renderStep('claude', STATE, CLAUDE_CHAT, () => undefined);
 
-    const terminal = screen.getByLabelText('Terminal UI');
-    expect(terminal).not.toBeChecked();
-    expect(terminal).toBeEnabled();
+    expect(chatChoice()).toBeChecked();
+    expect(chatChoice()).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Continue a session…' })).toBeEnabled();
   });
 
@@ -338,25 +333,23 @@ describe('ConfigStep — Code Mode', () => {
 });
 
 describe('ConfigStep — GitHub Copilot', () => {
-  it('writes the allow-all and Terminal UI toggles to the Copilot bucket only', () => {
+  it('writes the allow-all and Terminal choices to the Copilot bucket only', () => {
     const actions = renderStep('copilot');
 
     const allowAll = screen.getByLabelText(/^Allow all tools, paths and URLs/);
     expect(allowAll).not.toBeChecked();
     fireEvent.click(allowAll);
-    fireEvent.click(screen.getByLabelText('Terminal UI'));
+    fireEvent.click(terminalChoice());
 
     const next = actions.reduce(wizardReducer, STATE);
     expect(next.copilot).toEqual({ allowAll: true, terminalUi: true });
     expect({ ...next, copilot: STATE.copilot }).toEqual(STATE);
   });
 
-  it('holds Terminal UI on where the PC has no Copilot chat', () => {
+  it('holds Terminal where the PC has no Copilot chat', () => {
     renderStep('copilot', STATE, versionWithChat({ claude: { resume: true } }));
 
-    const toggle = screen.getByLabelText('Terminal UI');
-    expect(toggle).toBeChecked();
-    expect(toggle).toBeDisabled();
+    expectTerminalHeld();
   });
 
   it('offers to continue a Copilot session only where the PC can resume one', () => {
@@ -380,13 +373,13 @@ describe('ConfigStep — GitHub Copilot', () => {
 });
 
 describe('ConfigStep — Cursor', () => {
-  it('writes the run-everything and Terminal UI toggles to the Cursor bucket only', () => {
+  it('writes the run-everything and Terminal choices to the Cursor bucket only', () => {
     const actions = renderStep('cursor');
 
     const force = screen.getByLabelText(/^Run everything without asking/);
     expect(force).not.toBeChecked();
     fireEvent.click(force);
-    fireEvent.click(screen.getByLabelText('Terminal UI'));
+    fireEvent.click(terminalChoice());
 
     const next = actions.reduce(wizardReducer, STATE);
     expect(next.cursor).toEqual({ force: true, terminalUi: true });
@@ -399,12 +392,10 @@ describe('ConfigStep — Cursor', () => {
     expect(screen.queryByLabelText('Model')).not.toBeInTheDocument();
   });
 
-  it('holds Terminal UI on where the PC has no Cursor chat', () => {
+  it('holds Terminal where the PC has no Cursor chat', () => {
     renderStep('cursor', STATE, versionWithChat({ claude: { resume: true } }));
 
-    const toggle = screen.getByLabelText('Terminal UI');
-    expect(toggle).toBeChecked();
-    expect(toggle).toBeDisabled();
+    expectTerminalHeld();
   });
 
   it('offers to continue a Cursor session only where the PC can resume one', () => {

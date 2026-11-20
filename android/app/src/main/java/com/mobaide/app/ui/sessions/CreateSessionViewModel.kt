@@ -14,22 +14,37 @@ import com.mobaide.app.data.local.JunieLaunchPrefs
 import com.mobaide.app.data.local.PiLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
+import com.mobaide.app.data.network.dto.AUTO_SCAN_SOURCE_GITHUB
+import com.mobaide.app.data.network.dto.AUTO_SCAN_SOURCE_LINEAR
+import com.mobaide.app.data.network.dto.AUTO_SCAN_UI_CHAT
+import com.mobaide.app.data.network.dto.AUTO_SCAN_UI_TERMINAL
 import com.mobaide.app.data.network.dto.AntigravityOptionsModel
+import com.mobaide.app.data.network.dto.AutoScanCapability
+import com.mobaide.app.data.network.dto.AutoScanTemplateSettingsDto
 import com.mobaide.app.data.network.dto.ChatStoredSession
 import com.mobaide.app.data.network.dto.ChatSupport
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
+import com.mobaide.app.data.network.dto.ClaudeScanOptionsDto
 import com.mobaide.app.data.network.dto.CodexOptionsModel
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.CliModelDetail
+import com.mobaide.app.data.network.dto.CopilotScanOptionsDto
+import com.mobaide.app.data.network.dto.CursorScanOptionsDto
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
+import com.mobaide.app.data.network.dto.GitHubSetupRequest
 import com.mobaide.app.data.network.dto.OpenCodeOptionsModel
 import com.mobaide.app.data.network.dto.CopilotOptionsModel
 import com.mobaide.app.data.network.dto.CursorOptionsModel
 import com.mobaide.app.data.network.dto.JunieOptionsModel
+import com.mobaide.app.data.network.dto.JunieScanOptionsDto
+import com.mobaide.app.data.network.dto.OpenCodeScanOptionsDto
 import com.mobaide.app.data.network.dto.PiOptionsModel
 import com.mobaide.app.data.network.dto.WorkspaceInfo
 import com.mobaide.app.data.network.dto.SessionResponse
+import com.mobaide.app.data.network.dto.StartScanRequest
+import com.mobaide.app.data.network.dto.WorkspaceUpdate
 import com.mobaide.app.data.network.dto.WorktreeBasesResponse
+import com.mobaide.app.data.network.dto.autoScanCapability
 import com.mobaide.app.data.network.dto.chatSupport
 import com.mobaide.app.data.network.dto.cliAvailable
 import com.mobaide.app.data.network.dto.cliKnown
@@ -37,18 +52,29 @@ import com.mobaide.app.data.network.dto.cliModelDetails
 import com.mobaide.app.data.network.dto.cliModels
 import com.mobaide.app.data.network.dto.cliModelsPending
 import com.mobaide.app.data.network.dto.gitCapability
+import com.mobaide.app.data.repository.AutoScanRejectedException
 import com.mobaide.app.data.repository.AutoScanRepository
+import com.mobaide.app.data.repository.AutoScanTemplateException
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.GitRepository
+import com.mobaide.app.data.repository.LinearMetadataRepository
+import com.mobaide.app.data.repository.MetadataResult
 import com.mobaide.app.data.repository.PathSuggestionRepository
+import com.mobaide.app.data.repository.WorkspaceConflictException
 import com.mobaide.app.data.repository.WorkspacesRepository
+import com.mobaide.app.data.repository.apiErrorDetail
 import com.mobaide.app.data.repository.SessionRepository
+import com.mobaide.app.ui.autoscan.autoScanAgentName
 import com.mobaide.app.ui.common.PathSuggestionsController
 import com.mobaide.app.ui.common.PathSuggestionsUi
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -56,6 +82,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -255,6 +282,17 @@ data class CreateSessionUiState(
     val autoScanClaudeDebug: Boolean = false,
     val autoScanFocusMode: Boolean = true,
     val autoScanClaudeAppendSystemPrompt: String = "",
+    // capabilities.autoscan from the ModePick probe. null = an agent that
+    // predates it (Linear and Claude Code only) or no answer yet.
+    val autoScanCapability: AutoScanCapability? = null,
+    // The ModePick probe answered, so a null capability means an older agent.
+    val autoScanProbed: Boolean = false,
+    // The Auto Scan step's source, filter and agent choices (newer agents).
+    val autoScan: AutoScanWizardState = AutoScanWizardState(),
+    // The PC's Auto Scan templates; not reset when the step re-seeds.
+    val autoScanTemplates: AutoScanTemplatesUi = AutoScanTemplatesUi(),
+    // The user hid the label tips on this device.
+    val autoScanTipsHidden: Boolean = false,
     // Codex launch options (CodexConfig step). Defaults reflect the "Auto" preset.
     val codexModel: String? = null,
     val codexSandbox: String = "workspace-write",
@@ -383,12 +421,7 @@ val CreateSessionUiState.effectiveBaseBranch: String?
  * via the Advanced controls (so the segmented control highlights nothing).
  */
 val CreateSessionUiState.codexPreset: CodexAutonomyPreset?
-    get() = when {
-        codexFullAuto -> CodexAutonomyPreset.FullAccess
-        codexSandbox == "read-only" && codexApproval == "on-request" -> CodexAutonomyPreset.ReadOnly
-        codexSandbox == "workspace-write" && codexApproval == "on-request" -> CodexAutonomyPreset.Auto
-        else -> null
-    }
+    get() = codexPresetOf(codexSandbox, codexApproval, codexFullAuto)
 
 /**
  * Effort levels offered for a Codex [model]: the agent-advertised per-model set
@@ -402,13 +435,13 @@ fun CreateSessionUiState.codexEffortsFor(model: String?): List<String> =
         ?: CreateSessionViewModel.REASONING_EFFORTS
 
 /**
- * Whether a session starts in the chat view: the Terminal UI toggle is off and
+ * Whether a session starts in the chat view: Chat is chosen under Open sessions in and
  * the PC is not known to lack chat support (unknown = the agent decides).
  */
 private fun usesChat(terminalUi: Boolean, chat: ChatSupport?): Boolean =
     !terminalUi && (chat == null || chat is ChatSupport.Available)
 
-/** Why a Terminal UI toggle is locked on, or null while the chat view is possible. */
+/** Why Chat cannot be chosen under Open sessions in, or null while the chat view is possible. */
 fun chatUnavailableHint(chat: ChatSupport?, kind: String = "claude"): String? = when (chat) {
     ChatSupport.AgentOutdated -> "Update Mobaide on your PC to use the chat view."
     ChatSupport.Unavailable -> when (kind) {
@@ -428,10 +461,10 @@ val CreateSessionUiState.claudeUsesChat: Boolean
 
 val CreateSessionUiState.claudeChatUnavailableHint: String? get() = chatUnavailableHint(claudeChat)
 
-/** Why the Claude Terminal UI toggle is locked on, or null while the user picks it. */
-val CreateSessionUiState.claudeTerminalUiLockedHint: String?
+/** Why Chat is locked off for Claude Code, or null while the user picks the view. */
+val CreateSessionUiState.claudeChatLockedHint: String?
     get() = claudeChatUnavailableHint
-        ?: if (claudeCodeMode) "Code Mode runs in the terminal UI only." else null
+        ?: if (claudeCodeMode) "Code Mode runs only in the terminal. Turn it off under Advanced to use the chat." else null
 
 /** "Continue a session" is offered: chat view, and the agent can list stored sessions. */
 val CreateSessionUiState.claudeResumeAvailable: Boolean
@@ -599,14 +632,208 @@ val CreateSessionUiState.cursorEnabled: Boolean get() = cursorAvailable != false
 val CreateSessionUiState.junieEnabled: Boolean get() = junieAvailable != false && junieKnown
 val CreateSessionUiState.piEnabled: Boolean get() = piAvailable != false && piKnown
 
+/** The selected stored workspace; null for a custom path or no selection. */
+val CreateSessionUiState.selectedWorkspace: WorkspaceInfo?
+    get() = selectedWorkspaceName?.let { name -> workspaces.firstOrNull { it.name == name } }
+
 /**
- * Auto Scan additionally needs a Linear API key on the selected stored workspace
- * — the agent scans Linear for that workspace's issues. A custom path or no
- * selection can never satisfy it.
+ * Auto Scan needs a stored workspace. An agent with `capabilities.autoscan`
+ * chooses the source and agent in the wizard; an older one scans Linear with
+ * Claude Code only, so it also needs the Claude CLI and the workspace's
+ * Linear API key.
  */
 val CreateSessionUiState.autoScanEnabled: Boolean
-    get() = claudeEnabled &&
-        workspaces.firstOrNull { it.name == selectedWorkspaceName }?.has_linear_key == true
+    get() {
+        val workspace = selectedWorkspace ?: return false
+        return autoScanCapability != null || (claudeEnabled && workspace.has_linear_key)
+    }
+
+/** `capabilities.cli.<kind>.available` from the ModePick probe; null = unknown. */
+fun CreateSessionUiState.cliAvailability(kind: String): Boolean? = when (kind) {
+    "claude" -> claudeAvailable
+    "codex" -> codexAvailable
+    "antigravity" -> antigravityAvailable
+    "opencode" -> opencodeAvailable
+    "copilot" -> copilotAvailable
+    "cursor" -> cursorAvailable
+    "junie" -> junieAvailable
+    "pi" -> piAvailable
+    else -> null
+}
+
+/** `capabilities.chat` for [kind] from the ModePick probe; null = not probed yet. */
+fun CreateSessionUiState.chatSupport(kind: String): ChatSupport? = when (kind) {
+    "claude" -> claudeChat
+    "codex" -> codexChat
+    "antigravity" -> antigravityChat
+    "opencode" -> opencodeChat
+    "copilot" -> copilotChat
+    "cursor" -> cursorChat
+    "junie" -> junieChat
+    "pi" -> piChat
+    else -> null
+}
+
+/** The chosen Auto Scan agent can open its sessions in the chat view on this PC. */
+val CreateSessionUiState.autoScanChatAvailable: Boolean
+    get() = autoScanCli?.let { chatSupport(it) } is ChatSupport.Available
+
+/** The session view a start sends: the choice, or Terminal while the agent has no chat view. */
+val CreateSessionUiState.autoScanUi: String
+    get() = if (autoScan.ui == AUTO_SCAN_UI_CHAT && autoScanChatAvailable) AUTO_SCAN_UI_CHAT else AUTO_SCAN_UI_TERMINAL
+
+/** The Auto Scan agent, when the agent offers it; a remembered kind it no longer lists is no choice. */
+val CreateSessionUiState.autoScanCli: String?
+    get() = autoScan.cli?.takeIf { cli -> autoScanCapability?.clis?.contains(cli) == true }
+
+/**
+ * Why Start Auto Scan is disabled on a newer agent, in the order the step asks
+ * for the choices; null when the scan can start.
+ */
+val CreateSessionUiState.autoScanStartBlocker: String?
+    get() {
+        val workspace = selectedWorkspace ?: return "Choose a saved workspace."
+        val wizard = autoScan
+        when (wizard.source) {
+            null -> return "Choose where to find issues."
+            AUTO_SCAN_SOURCE_GITHUB -> {
+                if (!wizard.githubReady) {
+                    return when {
+                        wizard.githubStatus != null -> "Solve the GitHub problem above, then tap Check again."
+                        wizard.githubStatusError != null -> "Could not check GitHub. Tap Check again."
+                        else -> "Checking GitHub on the PC…"
+                    }
+                }
+                if (wizard.githubFilter.labels.isEmpty()) return "Choose at least one label to pick up."
+                if (!wizard.githubFilter.isValid) return "Fix the GitHub filter above."
+            }
+            else -> {
+                if (!workspace.has_linear_key) return "Save a Linear API key first."
+                if (!wizard.linearFilter.isValid) return "Fill in the Linear filter above."
+            }
+        }
+        val cli = autoScanCli ?: return "Choose the AI agent."
+        if (cliAvailability(cli) != true) return "${autoScanAgentName(cli)} is not installed on the PC."
+        if (cli == "antigravity" && wizard.agents.antigravity.addDirsError != null) {
+            return "Fix the additional directories above."
+        }
+        if (initialPrompt.length > AUTO_SCAN_PROMPT_MAX) {
+            return "The instructions can have at most 32,000 characters."
+        }
+        return null
+    }
+
+/** The Claude Code options an Auto Scan keeps, from the Auto Scan bucket. */
+fun CreateSessionUiState.autoScanClaudeScanOptions() = ClaudeScanOptionsDto(
+    plan_mode = autoScanPlanMode,
+    no_memory = autoScanNoMemory,
+    skip_permissions = autoScanSkipPermissions,
+    model = autoScanClaudeModel,
+    effort = autoScanClaudeEffort,
+    fast_mode = autoScanClaudeFastMode,
+    ultracode = autoScanClaudeUltracode,
+    append_system_prompt = autoScanClaudeAppendSystemPrompt.takeIf { it.isNotBlank() },
+    debug = autoScanClaudeDebug,
+    focus_mode = autoScanFocusMode,
+)
+
+/**
+ * The Auto Scan step's choices as template settings: both filters as drafts,
+ * the prompt as typed, and the options of the chosen agent only. The start
+ * request takes its agent options from here too.
+ */
+fun CreateSessionUiState.autoScanTemplateSettings(): AutoScanTemplateSettingsDto {
+    val wizard = autoScan
+    val cli = wizard.cli
+    val agents = wizard.agents
+    return AutoScanTemplateSettingsDto(
+        source = wizard.source,
+        cli = cli,
+        // The view the user chose: a template may run on a PC where the
+        // agent has the chat view. A start sends the effective one.
+        ui = wizard.ui,
+        interval_minutes = wizard.intervalMinutes,
+        initial_prompt = initialPrompt,
+        linear_filter = wizard.linearFilter.toDraftDto(),
+        github_filter = wizard.githubFilter.toDto(),
+        claude_options = autoScanClaudeScanOptions().takeIf { cli == "claude" },
+        codex_options = agents.codex.toDto().takeIf { cli == "codex" },
+        antigravity_options = agents.antigravity.toDto().takeIf { cli == "antigravity" },
+        opencode_options = OpenCodeScanOptionsDto(agents.opencodeAutoApprove).takeIf { cli == "opencode" },
+        copilot_options = CopilotScanOptionsDto(agents.copilotAllowAll).takeIf { cli == "copilot" },
+        cursor_options = CursorScanOptionsDto(agents.cursorForce).takeIf { cli == "cursor" },
+        junie_options = JunieScanOptionsDto(agents.juniePlanMode, agents.junieBrave).takeIf { cli == "junie" },
+    )
+}
+
+/**
+ * The state with [settings] applied: each non-null field replaces the choice
+ * it names, an options object its agent's Auto Scan bucket. Seeding a
+ * workspace's saved choices and applying a template both go through here.
+ */
+fun CreateSessionUiState.withAutoScanSettings(settings: AutoScanTemplateSettingsDto): CreateSessionUiState {
+    val claude = settings.claude_options
+    val claudeModel = if (claude != null) claude.model else autoScanClaudeModel
+    val claudeEffort = claude?.effort ?: autoScanClaudeEffort
+    return copy(
+        initialPrompt = settings.initial_prompt ?: initialPrompt,
+        autoScan = autoScan.copy(
+            source = settings.source
+                ?.takeIf { it == AUTO_SCAN_SOURCE_GITHUB || it == AUTO_SCAN_SOURCE_LINEAR }
+                ?: autoScan.source,
+            cli = settings.cli ?: autoScan.cli,
+            ui = autoScanUiOrNull(settings.ui) ?: autoScan.ui,
+            intervalMinutes = settings.interval_minutes?.takeIf { it in AUTO_SCAN_INTERVAL_RANGE }
+                ?: autoScan.intervalMinutes,
+            linearFilter = settings.linear_filter?.let(LinearFilterDraft::from) ?: autoScan.linearFilter,
+            githubFilter = settings.github_filter?.let(GitHubFilterDraft::from) ?: autoScan.githubFilter,
+            agents = autoScan.agents.applied(settings),
+            startError = null,
+        ),
+        autoScanPlanMode = claude?.plan_mode ?: autoScanPlanMode,
+        autoScanNoMemory = claude?.no_memory ?: autoScanNoMemory,
+        autoScanSkipPermissions = claude?.skip_permissions ?: autoScanSkipPermissions,
+        autoScanClaudeModel = claudeModel,
+        autoScanClaudeEffort = claudeEffort.takeIf { it in CreateSessionViewModel.claudeEffortsFor(claudeModel) }
+            ?: "high",
+        autoScanClaudeFastMode = claude?.fast_mode ?: autoScanClaudeFastMode,
+        autoScanClaudeUltracode = claude?.ultracode ?: autoScanClaudeUltracode,
+        autoScanClaudeDebug = claude?.debug ?: autoScanClaudeDebug,
+        autoScanFocusMode = claude?.focus_mode ?: autoScanFocusMode,
+        autoScanClaudeAppendSystemPrompt = claude?.let { it.append_system_prompt.orEmpty() }
+            ?: autoScanClaudeAppendSystemPrompt,
+    )
+}
+
+/**
+ * Why the step's choices cannot be saved as a template, or null: only what the
+ * agent's draft models refuse. A half-made filter, or a label to add that is
+ * also a trigger label, can still be saved.
+ */
+val CreateSessionUiState.autoScanTemplateSaveBlocker: String?
+    get() {
+        val wizard = autoScan
+        val filter = wizard.githubFilter
+        val labels = filter.labels.map { it.trim() }
+        val active = filter.activeLabel.trim()
+        val addDirsError = wizard.agents.antigravity.addDirsError.takeIf { wizard.cli == "antigravity" }
+        return when {
+            labels.any { ',' in it } -> "A label to pick up cannot contain a comma."
+            labels.any { it.length > GITHUB_LABEL_MAX } ->
+                "A label to pick up can have at most $GITHUB_LABEL_MAX characters."
+            ',' in active -> "The label to add cannot contain a comma."
+            active.length > GITHUB_LABEL_MAX ->
+                "The label to add can have at most $GITHUB_LABEL_MAX characters."
+            filter.issueTypes.any { it.trim().length > GITHUB_LABEL_MAX } ->
+                "An issue type can have at most $GITHUB_LABEL_MAX characters."
+            filter.assignee.trim().length > GITHUB_LABEL_MAX ->
+                "The assignee can have at most $GITHUB_LABEL_MAX characters."
+            initialPrompt.length > AUTO_SCAN_PROMPT_MAX ->
+                "The instructions can have at most 32,000 characters."
+            addDirsError != null -> "Additional directories: ${addDirsError.removeSuffix(".")}."
+            else -> null
+        }
+    }
 
 /**
  * Whether tapping this mode-picker card can commit. Terminal and custom agent
@@ -637,6 +864,7 @@ class CreateSessionViewModel @Inject constructor(
     private val customAgentTypesRepository: CustomAgentTypesRepository,
     pathSuggestionRepository: PathSuggestionRepository,
     private val gitRepository: GitRepository,
+    private val linearMetadataRepository: LinearMetadataRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(CreateSessionUiState())
@@ -654,7 +882,17 @@ class CreateSessionViewModel @Inject constructor(
     private val _transientMessages = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val transientMessages: SharedFlow<String> = _transientMessages.asSharedFlow()
 
+    // The GitHub setup terminal opens on top of the wizard, which stays on the
+    // back stack so its choices survive the round trip.
+    private val _navigateToSetupSession = Channel<String>(Channel.BUFFERED)
+    val navigateToSetupSession: Flow<String> = _navigateToSetupSession.receiveAsFlow()
+
     init {
+        viewModelScope.launch {
+            preferencesStore.autoScanTipsHidden.collect { hidden ->
+                _uiState.update { it.copy(autoScanTipsHidden = hidden) }
+            }
+        }
         viewModelScope.launch {
             // Pre-fill the Claude reasoning controls from the last successful
             // launch (mirrors the last-used-workspace pre-fill below).
@@ -1134,6 +1372,7 @@ class CreateSessionViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val version = sessionRepository.getAgentVersion()
+                val hadAutoScanCapability = _uiState.value.autoScanCapability != null
                 val codexDetails = version.cliModelDetails("codex")
                 // models_pending: the agent's startup enumeration was still
                 // warming when it answered, so absent details are provisional
@@ -1171,6 +1410,8 @@ class CreateSessionViewModel @Inject constructor(
                         antigravityModels = version.cliModels("antigravity"),
                         codexModelDetails = codexDetails,
                         worktreeBaseSupported = version.gitCapability("worktree_base"),
+                        autoScanCapability = version.autoScanCapability(),
+                        autoScanProbed = true,
                         codexReasoningEffort = if (pending) {
                             it.codexReasoningEffort
                         } else {
@@ -1184,6 +1425,14 @@ class CreateSessionViewModel @Inject constructor(
                     )
                 }
                 ensureBaseBranches()
+                // The step can open before the probe answers; its templates
+                // need the capability, so they load once it arrives.
+                val now = _uiState.value
+                if (!hadAutoScanCapability && now.autoScanCapability != null &&
+                    now.step == CreateSessionStep.AutoScanConfig
+                ) {
+                    loadAutoScanTemplates()
+                }
                 if (!pending) {
                     warmupRetriesLeft = WARMUP_MAX_RETRIES
                 } else if (warmupRetriesLeft > 0) {
@@ -1311,8 +1560,14 @@ class CreateSessionViewModel @Inject constructor(
         }
     }
 
-    fun selectAutoScanMode() = _uiState.update {
-        if (!it.claudeEnabled) return@update it
+    fun selectAutoScanMode() {
+        seedAutoScanStep()
+        loadAutoScanTemplates()
+    }
+
+    private fun seedAutoScanStep() = _uiState.update {
+        // An older agent runs Claude Code only.
+        if (it.autoScanCapability == null && !it.claudeEnabled) return@update it
         val workspaceName = it.selectedWorkspaceName
         if (workspaceName != null && it.autoScanConfigInitializedFor == workspaceName) {
             // Already seeded for this workspace — keep the user's in-flight edits.
@@ -1322,36 +1577,545 @@ class CreateSessionViewModel @Inject constructor(
             // the last entry: (re-)seed from this workspace's last-saved Auto Scan
             // prompt (persisted server-side on the previous scan start, delivered
             // via WorkspaceInfo); fall back to the agent-wide default, then empty.
-            val savedPrompt = workspaceName
+            // The source, agent and filters come from the workspace's last scan
+            // start; a filter nobody chose starts empty.
+            val workspace = workspaceName
                 ?.let { name -> it.workspaces.firstOrNull { p -> p.name == name } }
-                ?.auto_scan_prompt
-            it.copy(
+            val saved = workspace?.auto_scan
+            cancelAutoScanLoads()
+            val seeded = it.copy(
                 step = CreateSessionStep.AutoScanConfig,
                 autoScanConfigInitializedFor = workspaceName,
-                initialPrompt = savedPrompt ?: autoScanRepository.getAutoScanPrompt() ?: "",
+                // A newer agent picks the source's own default for an empty
+                // prompt; the agent-wide default only fits Linear.
+                initialPrompt = if (it.autoScanCapability != null) {
+                    workspace?.auto_scan_prompt ?: ""
+                } else {
+                    workspace?.auto_scan_prompt ?: autoScanRepository.getAutoScanPrompt() ?: ""
+                },
+                autoScan = AutoScanWizardState(),
+                autoScanTemplates = it.autoScanTemplates.copy(appliedName = null, message = null),
+            )
+            if (saved != null) seeded.withAutoScanSettings(saved.asTemplateSettings(prompt = null)) else seeded
+        }
+    }
+
+    private var githubStatusJob: Job? = null
+    private var githubLabelsJob: Job? = null
+    private var linearMetadataJob: Job? = null
+
+    private fun cancelAutoScanLoads() {
+        githubStatusJob?.cancel()
+        githubLabelsJob?.cancel()
+        linearMetadataJob?.cancel()
+    }
+
+    private fun updateAutoScan(mutator: (AutoScanWizardState) -> AutoScanWizardState) =
+        _uiState.update { it.copy(autoScan = mutator(it.autoScan)) }
+
+    /** Applies [mutator] only while the Auto Scan step is still seeded for [workspace]. */
+    private fun updateAutoScanFor(workspace: String, mutator: (AutoScanWizardState) -> AutoScanWizardState) =
+        _uiState.update {
+            if (it.autoScanConfigInitializedFor == workspace) it.copy(autoScan = mutator(it.autoScan)) else it
+        }
+
+    fun setAutoScanSource(source: String) = updateAutoScan { it.copy(source = source, startError = null) }
+
+    fun setAutoScanCli(cli: String) = updateAutoScan { it.copy(cli = cli, startError = null) }
+
+    private fun updateAutoScanAgents(mutator: (AutoScanAgentBuckets) -> AutoScanAgentBuckets) =
+        updateAutoScan { it.copy(agents = mutator(it.agents), startError = null) }
+
+    private fun updateAutoScanCodex(mutator: (CodexScanBucket) -> CodexScanBucket) =
+        updateAutoScanAgents { it.copy(codex = mutator(it.codex)) }
+
+    private fun updateAutoScanAntigravity(mutator: (AntigravityScanBucket) -> AntigravityScanBucket) =
+        updateAutoScanAgents { it.copy(antigravity = mutator(it.antigravity)) }
+
+    fun selectAutoScanCodexPreset(preset: CodexAutonomyPreset) = updateAutoScanCodex { it.withPreset(preset) }
+
+    fun setAutoScanCodexModel(v: String?) {
+        val details = _uiState.value.codexModelDetails
+        updateAutoScanCodex {
+            it.copy(model = v, reasoningEffort = it.reasoningEffort?.let { e -> codexEffortForModel(v, e, details) })
+        }
+    }
+
+    fun setAutoScanCodexReasoningEffort(v: String?) = updateAutoScanCodex { it.copy(reasoningEffort = v) }
+
+    fun setAutoScanUi(ui: String) = updateAutoScan { it.copy(ui = ui, startError = null) }
+
+    fun setAutoScanInterval(minutes: Int) = updateAutoScan { it.copy(intervalMinutes = minutes, startError = null) }
+
+    fun setAutoScanTipsHidden(hidden: Boolean) {
+        _uiState.update { it.copy(autoScanTipsHidden = hidden) }
+        viewModelScope.launch { preferencesStore.setAutoScanTipsHidden(hidden) }
+    }
+    fun setAutoScanCodexSandbox(v: String) = updateAutoScanCodex { it.copy(sandbox = v) }
+    fun setAutoScanCodexApproval(v: String) = updateAutoScanCodex { it.copy(approval = v) }
+
+    fun setAutoScanAntigravityModel(v: String?) = updateAutoScanAntigravity { it.copy(model = v) }
+    fun setAutoScanAntigravityAddDirsDraft(v: String) = updateAutoScanAntigravity { it.copy(addDirsDraft = v) }
+
+    /** Same mutual exclusion as [setAntigravitySkipPermissions]. */
+    fun setAutoScanAntigravitySkipPermissions(v: Boolean) = updateAutoScanAntigravity {
+        if (v) it.copy(skipPermissions = true, sandbox = false) else it.copy(skipPermissions = false)
+    }
+
+    fun setAutoScanAntigravitySandbox(v: Boolean) = updateAutoScanAntigravity {
+        if (v) it.copy(sandbox = true, skipPermissions = false) else it.copy(sandbox = false)
+    }
+
+    fun setAutoScanOpenCodeAutoApprove(v: Boolean) = updateAutoScanAgents { it.copy(opencodeAutoApprove = v) }
+    fun setAutoScanCopilotAllowAll(v: Boolean) = updateAutoScanAgents { it.copy(copilotAllowAll = v) }
+    fun setAutoScanCursorForce(v: Boolean) = updateAutoScanAgents { it.copy(cursorForce = v) }
+    fun setAutoScanJuniePlanMode(v: Boolean) = updateAutoScanAgents { it.copy(juniePlanMode = v) }
+    fun setAutoScanJunieBrave(v: Boolean) = updateAutoScanAgents { it.copy(junieBrave = v) }
+
+    private fun updateAutoScanTemplates(mutator: (AutoScanTemplatesUi) -> AutoScanTemplatesUi) =
+        _uiState.update { it.copy(autoScanTemplates = mutator(it.autoScanTemplates)) }
+
+    private var templatesJob: Job? = null
+
+    /** Read the PC's templates; [force] reloads after a failure ("Retry"). */
+    fun loadAutoScanTemplates(force: Boolean = false) {
+        val state = _uiState.value
+        if (state.autoScanCapability == null) return
+        if (!force && state.autoScanTemplates.loading) return
+        templatesJob?.cancel()
+        updateAutoScanTemplates { it.copy(loading = true, loadError = null) }
+        templatesJob = viewModelScope.launch {
+            try {
+                val templates = autoScanRepository.templates()
+                updateAutoScanTemplates { it.copy(templates = templates, loading = false, loaded = true) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val detail = (e as? AutoScanTemplateException)?.detail
+                updateAutoScanTemplates {
+                    it.copy(loading = false, loadError = detail ?: "Could not load the templates.")
+                }
+            }
+        }
+    }
+
+    /** Replace the step's choices with the template's; it applies at once. */
+    fun applyAutoScanTemplate(templateId: String) {
+        val template = _uiState.value.autoScanTemplates.templates.firstOrNull { it.id == templateId } ?: return
+        _uiState.update {
+            it.withAutoScanSettings(template.settings).copy(
+                autoScanTemplates = it.autoScanTemplates.copy(
+                    appliedName = template.name,
+                    message = "Applied “${template.name}”.",
+                    saveError = null,
+                    deleteError = null,
+                ),
             )
         }
     }
 
+    fun deleteAutoScanTemplate(templateId: String) {
+        val template = _uiState.value.autoScanTemplates.templates.firstOrNull { it.id == templateId } ?: return
+        updateAutoScanTemplates { it.copy(deleteError = null, message = null) }
+        viewModelScope.launch {
+            try {
+                val templates = autoScanRepository.deleteTemplate(templateId)
+                updateAutoScanTemplates {
+                    it.copy(
+                        templates = templates,
+                        loaded = true,
+                        appliedName = it.appliedName.takeUnless { name -> name == template.name },
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val refused = e as? AutoScanTemplateException
+                updateAutoScanTemplates {
+                    if (refused?.status == 404) {
+                        // Another device deleted it first: the result is the same.
+                        it.copy(
+                            templates = it.templates.filterNot { t -> t.id == templateId },
+                            appliedName = it.appliedName.takeUnless { name -> name == template.name },
+                        )
+                    } else {
+                        it.copy(deleteError = refused?.detail ?: "Could not delete “${template.name}”.")
+                    }
+                }
+            }
+        }
+    }
+
+    /** Only once the list is loaded: the dialog must know which names a save would replace. */
+    fun openAutoScanTemplateSave() = updateAutoScanTemplates {
+        if (!it.canSave) it else it.copy(saveDialogOpen = true, saveError = null, message = null)
+    }
+
+    fun dismissAutoScanTemplateSave() = updateAutoScanTemplates {
+        if (it.saving) it else it.copy(saveDialogOpen = false, saveError = null)
+    }
+
+    /** Save the step's choices as [name]; a template of the same name is replaced. */
+    fun saveAutoScanTemplate(name: String) {
+        val state = _uiState.value
+        if (state.autoScanTemplates.saving || !state.autoScanTemplates.loaded) return
+        val clean = name.trim().split(Regex("\\s+")).joinToString(" ")
+        val error = when {
+            clean.isEmpty() -> "Enter a name."
+            clean.length > TEMPLATE_NAME_MAX -> "A name can have at most $TEMPLATE_NAME_MAX characters."
+            else -> state.autoScanTemplateSaveBlocker
+        }
+        if (error != null) {
+            updateAutoScanTemplates { it.copy(saveError = error) }
+            return
+        }
+        val settings = state.autoScanTemplateSettings()
+        updateAutoScanTemplates { it.copy(saving = true, saveError = null) }
+        viewModelScope.launch {
+            try {
+                val templates = autoScanRepository.saveTemplate(clean, settings)
+                updateAutoScanTemplates {
+                    it.copy(
+                        templates = templates,
+                        loaded = true,
+                        saving = false,
+                        saveDialogOpen = false,
+                        appliedName = clean,
+                        message = "Saved “$clean”.",
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val refused = e as? AutoScanTemplateException
+                val message = refused?.detail ?: if (refused?.status == 422) {
+                    "The PC did not accept these settings. Check the filter and the agent options."
+                } else {
+                    "Could not save the template."
+                }
+                updateAutoScanTemplates {
+                    it.copy(saving = false, saveError = message)
+                }
+            }
+        }
+    }
+
+    private fun updateLinearFilter(mutator: (LinearFilterDraft) -> LinearFilterDraft) = updateAutoScan {
+        it.copy(linearFilter = mutator(it.linearFilter), linearFilterTouched = true, startError = null)
+    }
+
+    fun toggleAutoScanLinearLabel(name: String) = updateLinearFilter {
+        it.copy(triggerLabels = if (name in it.triggerLabels) it.triggerLabels - name else it.triggerLabels + name)
+    }
+
+    fun toggleAutoScanLinearState(name: String) = updateLinearFilter {
+        it.copy(triggerStates = if (name in it.triggerStates) it.triggerStates - name else it.triggerStates + name)
+    }
+
+    fun setAutoScanLinearActiveState(v: String) = updateLinearFilter { it.copy(activeState = v) }
+
+    fun setAutoScanLinearDoneState(v: String) = updateLinearFilter { it.copy(doneState = v) }
+
+    fun setAutoScanLinearRemovalLabel(v: String) = updateLinearFilter { it.copy(removalLabel = v) }
+
+    fun setAutoScanLinearKeyDraft(v: String) = updateAutoScan { it.copy(linearKeyDraft = v, linearKeyError = null) }
+
+    fun toggleAutoScanLinearKeyVisible() = updateAutoScan { it.copy(linearKeyVisible = !it.linearKeyVisible) }
+
+    /**
+     * Save the typed Linear API key on the workspace (`PUT /api/projects/{name}`),
+     * then load its labels and states. The answer is the updated workspace,
+     * taken at once like [reorderWorkspaces] does; `projects.changed` follows.
+     */
+    fun saveAutoScanLinearKey() {
+        val state = _uiState.value
+        val workspace = state.selectedWorkspaceName ?: return
+        val key = state.autoScan.linearKeyDraft.trim()
+        if (key.isEmpty() || state.autoScan.linearKeySaving) return
+        updateAutoScan { it.copy(linearKeySaving = true, linearKeyError = null) }
+        viewModelScope.launch {
+            try {
+                val updated = workspacesRepository.updateWorkspace(workspace, WorkspaceUpdate(linear_api_key = key))
+                serverWorkspaces = serverWorkspaces.map { if (it.name == workspace) updated else it }
+                _uiState.update {
+                    it.copy(
+                        workspaces = displayWorkspaces(),
+                        autoScan = it.autoScan.copy(
+                            linearKeyDraft = "",
+                            linearKeyVisible = false,
+                            linearKeySaving = false,
+                        ),
+                    )
+                }
+                loadLinearMetadata(force = true)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val message = when (e) {
+                    is WorkspaceConflictException -> e.detail
+                    is ApiException -> apiErrorDetail(e.errorBody) ?: "HTTP ${e.code}"
+                    else -> e.message ?: "unknown error"
+                }
+                updateAutoScan { it.copy(linearKeySaving = false, linearKeyError = "Could not save the key: $message") }
+            }
+        }
+    }
+
+    /**
+     * Load the Linear labels and states of the selected workspace once per
+     * workspace; [force] reloads (the panel's refresh button, a new key).
+     */
+    fun loadLinearMetadata(force: Boolean = false) {
+        val state = _uiState.value
+        val workspace = state.selectedWorkspace ?: return
+        if (!workspace.has_linear_key) return
+        val name = workspace.name
+        if (!force && state.autoScan.linearMetadataFor == name) return
+        linearMetadataJob?.cancel()
+        updateAutoScan {
+            it.copy(linearMetadataLoading = true, linearMetadataError = null, linearMetadataFor = name)
+        }
+        linearMetadataJob = viewModelScope.launch {
+            val (labels, states) = coroutineScope {
+                val labels = async { linearMetadataRepository.getLabels(name, force) }
+                val states = async { linearMetadataRepository.getStates(name, force) }
+                labels.await() to states.await()
+            }
+            updateAutoScanFor(name) {
+                it.copy(
+                    linearLabels = labels.itemsOrCached(),
+                    linearStates = states.itemsOrCached(),
+                    linearMetadataLoading = false,
+                    linearMetadataError = listOfNotNull(
+                        (labels as? MetadataResult.Error)?.message,
+                        (states as? MetadataResult.Error)?.message,
+                    ).firstOrNull(),
+                )
+            }
+        }
+    }
+
+    private fun <T> MetadataResult<T>.itemsOrCached(): List<T> = when (this) {
+        is MetadataResult.Cached -> items
+        is MetadataResult.Fresh -> items
+        is MetadataResult.Error -> cached
+    }
+
+    /**
+     * Ask the PC what a GitHub scan still needs (`gh` installed, signed in, a
+     * GitHub repository). Runs each time the GitHub panel shows, so a return
+     * from the setup terminal or the app's return to the foreground re-checks.
+     * [userAsked] ("Check again") also reloads the repository's labels.
+     */
+    fun refreshGitHubStatus(userAsked: Boolean = false) {
+        val state = _uiState.value
+        val workspace = state.selectedWorkspaceName ?: return
+        if (state.autoScanConfigInitializedFor != workspace) return
+        githubStatusJob?.cancel()
+        updateAutoScan { it.copy(githubStatusLoading = true, githubStatusError = null) }
+        githubStatusJob = viewModelScope.launch {
+            try {
+                val status = autoScanRepository.githubStatus(workspace)
+                updateAutoScanFor(workspace) { it.copy(githubStatus = status, githubStatusLoading = false) }
+                if (status.problem == null) loadGitHubLabels(workspace, force = userAsked)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                updateAutoScanFor(workspace) {
+                    it.copy(
+                        githubStatusLoading = false,
+                        githubStatusError = errorText(e, "Could not check GitHub on the PC."),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun loadGitHubLabels(workspace: String, force: Boolean) {
+        val current = _uiState.value.autoScan
+        if (!force && current.githubLabelsFor == workspace && current.githubLabelsError == null) return
+        githubLabelsJob?.cancel()
+        updateAutoScanFor(workspace) {
+            it.copy(githubLabelsLoading = true, githubLabelsError = null, githubLabelsFor = workspace)
+        }
+        githubLabelsJob = viewModelScope.launch {
+            try {
+                val response = autoScanRepository.githubLabels(workspace)
+                updateAutoScanFor(workspace) {
+                    it.copy(
+                        githubLabels = response.labels,
+                        githubIssueTypes = response.issue_types,
+                        githubLabelsLoading = false,
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                updateAutoScanFor(workspace) {
+                    it.copy(
+                        githubLabelsLoading = false,
+                        githubLabelsError = errorText(e, "Could not load the repository's labels."),
+                    )
+                }
+            }
+        }
+    }
+
+    fun toggleAutoScanGitHubLabel(name: String) = updateAutoScan {
+        val labels = it.githubFilter.labels
+        when {
+            name in labels -> it.copy(
+                githubFilter = it.githubFilter.copy(labels = labels - name),
+                githubLabelLimitError = null,
+                startError = null,
+            )
+            labels.size >= GITHUB_LABELS_MAX -> it.copy(githubLabelLimitError = "You can pick up to $GITHUB_LABELS_MAX labels.")
+            else -> it.copy(
+                githubFilter = it.githubFilter.copy(labels = labels + name),
+                githubLabelLimitError = null,
+                startError = null,
+            )
+        }
+    }
+
+    fun setAutoScanGitHubLabelQuery(v: String) = updateAutoScan { it.copy(githubLabelQuery = v) }
+
+    /** "Try again" after the repository's labels failed to load. */
+    fun retryGitHubLabels() {
+        val workspace = _uiState.value.autoScanConfigInitializedFor ?: return
+        loadGitHubLabels(workspace, force = true)
+    }
+
+    fun toggleAutoScanGitHubIssueType(name: String) = updateAutoScan {
+        val types = it.githubFilter.issueTypes
+        val chosen = types.any { type -> type.equals(name, ignoreCase = true) }
+        when {
+            chosen -> it.copy(
+                githubFilter = it.githubFilter.copy(
+                    issueTypes = types.filterNot { type -> type.equals(name, ignoreCase = true) },
+                ),
+                startError = null,
+            )
+            types.size >= GITHUB_ISSUE_TYPES_MAX -> it
+            else -> it.copy(githubFilter = it.githubFilter.copy(issueTypes = types + name), startError = null)
+        }
+    }
+
+    fun setAutoScanGitHubAssignee(v: String) =
+        updateAutoScan { it.copy(githubFilter = it.githubFilter.copy(assignee = v), startError = null) }
+
+    fun setAutoScanGitHubActiveLabel(v: String) =
+        updateAutoScan { it.copy(githubFilter = it.githubFilter.copy(activeLabel = v), startError = null) }
+
+    /**
+     * Open the terminal session that installs ([action] `install`) or signs in
+     * (`sign_in`) the GitHub CLI on the PC. It opens on top of the wizard;
+     * back from it returns here and the panel re-checks.
+     */
+    fun startGitHubSetup(action: String) {
+        val state = _uiState.value
+        val workspace = state.selectedWorkspaceName ?: return
+        if (state.autoScan.githubSetupStarting) return
+        updateAutoScan { it.copy(githubSetupStarting = true, githubSetupError = null) }
+        viewModelScope.launch {
+            try {
+                val session = sessionRepository.startGitHubSetup(
+                    GitHubSetupRequest(workspace_name = workspace, action = action),
+                )
+                updateAutoScan { it.copy(githubSetupStarting = false) }
+                _navigateToSetupSession.trySend(session.session_id)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                updateAutoScan {
+                    it.copy(
+                        githubSetupStarting = false,
+                        githubSetupError = errorText(e, "Could not open the terminal on the PC."),
+                    )
+                }
+            }
+        }
+    }
+
+    /** The agent's `detail` for an HTTP error, else [fallback]. */
+    private fun errorText(e: Exception, fallback: String): String =
+        (e as? ApiException)?.let { apiErrorDetail(it.errorBody) } ?: fallback
+
     fun submitAutoScan() {
         val state = _uiState.value
+        if (state.autoScanCapability == null) {
+            submitLegacyAutoScan(state)
+            return
+        }
+        if (state.autoScanStarting || state.autoScanStartBlocker != null) return
+        val workspaceName = state.selectedWorkspaceName ?: return
+        val wizard = state.autoScan
+        val source = wizard.source ?: return
+        val cli = state.autoScanCli ?: return
+        val claude = cli == "claude"
+        val options = state.autoScanTemplateSettings()
+        val request = StartScanRequest(
+            workspace_name = workspaceName,
+            source = source,
+            cli = cli,
+            ui = state.autoScanUi,
+            interval_minutes = options.interval_minutes,
+            initial_prompt = state.initialPrompt,
+            claude_options = if (claude) state.autoScanClaudeOptions(initialPrompt = null) else null,
+            codex_options = options.codex_options,
+            antigravity_options = options.antigravity_options,
+            opencode_options = options.opencode_options,
+            copilot_options = options.copilot_options,
+            cursor_options = options.cursor_options,
+            junie_options = options.junie_options,
+            linear_filter = wizard.linearFilter.toDto().takeIf { source == AUTO_SCAN_SOURCE_LINEAR },
+            github_filter = wizard.githubFilter.toDto().takeIf { source == AUTO_SCAN_SOURCE_GITHUB },
+        )
+        _uiState.update { it.copy(autoScanStarting = true, autoScan = it.autoScan.copy(startError = null)) }
+        viewModelScope.launch {
+            try {
+                autoScanRepository.startScan(request)
+                preferencesStore.setLastUsedWorkspaceName(workspaceName)
+                preferencesStore.setLastUsedAutoScanOptions(state.toAutoScanLaunchPrefs())
+                _uiState.update { it.copy(autoScanStarting = false) }
+                _navigateToAutoScan.tryEmit(workspaceName)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val message = when (e) {
+                    is AutoScanRejectedException -> e.detail
+                    else -> "Failed to start Auto Scan: ${e.message}"
+                }
+                _uiState.update {
+                    it.copy(autoScanStarting = false, autoScan = it.autoScan.copy(startError = message))
+                }
+            }
+        }
+    }
+
+    private fun CreateSessionUiState.autoScanClaudeOptions(initialPrompt: String?) = ClaudeOptionsModel(
+        plan_mode = autoScanPlanMode,
+        no_memory = autoScanNoMemory,
+        skip_permissions = autoScanSkipPermissions,
+        model = autoScanClaudeModel,
+        effort = autoScanClaudeEffort,
+        fast_mode = autoScanClaudeFastMode,
+        ultracode = autoScanClaudeUltracode,
+        debug = autoScanClaudeDebug,
+        focus_mode = autoScanFocusMode,
+        append_system_prompt = autoScanClaudeAppendSystemPrompt.takeIf { it.isNotBlank() },
+        worktree = true,
+        initial_prompt = initialPrompt,
+    )
+
+    /** An agent without `capabilities.autoscan`: Linear, Claude Code, the workspace's stored filter. */
+    private fun submitLegacyAutoScan(state: CreateSessionUiState) {
         val workspaceName = (state.selection as? WorkspaceSelection.Stored)?.name ?: return
         viewModelScope.launch {
             _uiState.update { it.copy(autoScanStarting = true) }
             try {
-                val options = ClaudeOptionsModel(
-                    plan_mode = state.autoScanPlanMode,
-                    no_memory = state.autoScanNoMemory,
-                    skip_permissions = state.autoScanSkipPermissions,
-                    model = state.autoScanClaudeModel,
-                    effort = state.autoScanClaudeEffort,
-                    fast_mode = state.autoScanClaudeFastMode,
-                    ultracode = state.autoScanClaudeUltracode,
-                    debug = state.autoScanClaudeDebug,
-                    focus_mode = state.autoScanFocusMode,
-                    append_system_prompt = state.autoScanClaudeAppendSystemPrompt.takeIf { it.isNotBlank() },
-                    worktree = true,
-                    initial_prompt = state.initialPrompt.takeIf { it.isNotBlank() },
+                val options = state.autoScanClaudeOptions(
+                    initialPrompt = state.initialPrompt.takeIf { it.isNotBlank() },
                 )
                 autoScanRepository.startScan(workspaceName, options)
                 preferencesStore.setLastUsedWorkspaceName(workspaceName)
@@ -1551,19 +2315,10 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     fun setCodexModel(v: String?) = _uiState.update { state ->
-        // Same clamp as setClaudeModel, with the target upgraded from a
-        // hardcoded "high" to the catalog's per-model default. A model without
-        // a catalog entry (or the null Default model) keeps the effort — its
-        // capabilities are unknown, so never downshift on a guess.
-        val detail = v?.let { m -> state.codexModelDetails?.firstOrNull { it.id == m } }
-        val effort = when {
-            detail == null || state.codexReasoningEffort in detail.efforts ->
-                state.codexReasoningEffort
-            else -> detail.defaultEffort
-                ?: "high".takeIf { it in detail.efforts }
-                ?: detail.efforts.first()
-        }
-        state.copy(codexModel = v, codexReasoningEffort = effort)
+        state.copy(
+            codexModel = v,
+            codexReasoningEffort = codexEffortForModel(v, state.codexReasoningEffort, state.codexModelDetails),
+        )
     }
     fun setCodexReasoningEffort(v: String) = _uiState.update { it.copy(codexReasoningEffort = v) }
     fun setCodexSandbox(v: String) = _uiState.update { it.copy(codexSandbox = v) }
@@ -1744,7 +2499,7 @@ class CreateSessionViewModel @Inject constructor(
         model = antigravityModel?.takeIf { it.isNotBlank() },
         skip_permissions = antigravitySkipPermissions,
         sandbox = antigravitySandbox,
-        add_dirs = parseAddDirs(antigravityAddDirsDraft),
+        add_dirs = parseAntigravityAddDirs(antigravityAddDirsDraft),
         worktree = worktree,
         branch_name = branchName,
         base_branch = baseBranch,
@@ -1848,7 +2603,7 @@ class CreateSessionViewModel @Inject constructor(
 
     fun submitAntigravity() {
         val state = _uiState.value
-        if (state.submitting) return
+        if (state.submitting || antigravityAddDirsError(state.antigravityAddDirsDraft) != null) return
         val antigravityOptions = state.antigravityOptions(
             worktree = state.worktree,
             branchName = state.branchName.takeIf { it.isNotBlank() },
@@ -2403,7 +3158,7 @@ class CreateSessionViewModel @Inject constructor(
                     _uiState.update {
                         it.copy(
                             submitting = false,
-                            error = "$detail. Turn on Terminal UI under Advanced to use the classic terminal.",
+                            error = "$detail. Choose Terminal under Open sessions in to use the classic terminal.",
                         )
                     }
                 } else if (e is ApiException && isAgentUpdateRequired(e.errorBody)) {
@@ -2482,10 +3237,6 @@ class CreateSessionViewModel @Inject constructor(
         Json.parseToJsonElement(body)
             .jsonObject["agent_update_required"]?.jsonPrimitive?.booleanOrNull == true
     }.getOrDefault(false)
-
-    /** Splits the additional-directories draft on newlines/commas into a clean list. */
-    private fun parseAddDirs(draft: String): List<String> =
-        draft.split('\n', ',').map { it.trim() }.filter { it.isNotEmpty() }
 
     /** Login-failure text that never echoes the submitted key (the agent already
      *  sanitizes its `detail`). */

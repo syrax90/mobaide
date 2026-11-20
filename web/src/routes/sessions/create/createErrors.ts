@@ -97,7 +97,7 @@ export function classifyCreateError(
     const detail = errorDetailString(body) ?? 'The chat view is not available on this PC.';
     return {
       kind: 'chatUnavailable',
-      message: `${detail} Turn on Terminal UI under Advanced to use the classic terminal.`,
+      message: `${detail} Choose Terminal under Open sessions in to use the classic terminal.`,
     };
   }
 
@@ -125,8 +125,18 @@ export function classifyAutoScanError(error: unknown): string {
     if (error.status === 409) return 'A scan is already running for this workspace.';
     if (error.status === 429) return 'The agent is at its auto-scan limit.';
     if (error.status === 404) return error.message;
+    // A missing choice, or a source or agent the PC cannot use: the agent's own
+    // sentence already says what to fix.
+    if (error.status === 400) return errorDetailString(error.body) ?? error.message;
   }
   return `Failed to start Auto Scan: ${describe(error)}`;
+}
+
+/** The GitHub setup terminal's failures: no known installer, `gh` missing, the session cap. */
+export function githubSetupErrorMessage(error: unknown): string {
+  const detail = isApiError(error) ? errorDetailString(error.body) : null;
+  if (detail !== null) return detail;
+  return `Could not open the terminal: ${describe(error)}`;
 }
 
 export function codexLoginErrorMessage(error: unknown): string {

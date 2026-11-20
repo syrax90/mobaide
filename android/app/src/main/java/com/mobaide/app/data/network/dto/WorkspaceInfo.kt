@@ -20,4 +20,6 @@ data class WorkspaceInfo(
     // Per-workspace Auto Scan initial prompt, saved on scan start so the create-
     // session wizard can pre-seed it. `null` means "use the agent's default".
     val auto_scan_prompt: String? = null,
+    // The last Auto Scan choices; null from an agent that predates them.
+    val auto_scan: AutoScanSettingsDto? = null,
 )

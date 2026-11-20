@@ -84,6 +84,7 @@ enum FixtureRegistry {
         "AutoScanInstanceDto": runner(AutoScanInstanceDto.self),
         "AutoScanListResponse": runner(AutoScanListResponse.self),
         "StartScanRequest": runner(StartScanRequest.self),
+        "AutoScanTemplatesResponse": runner(AutoScanTemplatesResponse.self),
         "StopScanRequest": runner(StopScanRequest.self),
         "RunNowRequest": runner(RunNowRequest.self),
         "RunNowResponse": runner(RunNowResponse.self),

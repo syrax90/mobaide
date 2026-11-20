@@ -65,9 +65,15 @@ export type DetailConnection = 'connecting' | 'replaying' | 'connected' | 'disco
 
 /**
  * Socket state is not on the wire — the agent sends only `snapshot`,
- * `caught_up` and `event` — so the channel's open/close is folded in here.
+ * `caught_up` and `event` — so the channel's open/close is folded in here, and
+ * so is `stopped`: a Stop this screen made succeed, in case its `scan_stopped`
+ * event never arrives.
  */
-export type DetailFrame = { kind: 'connected' } | { kind: 'disconnected' } | AutoScanFrame;
+export type DetailFrame =
+  | { kind: 'connected' }
+  | { kind: 'disconnected' }
+  | { kind: 'stopped' }
+  | AutoScanFrame;
 
 export interface AutoScanDetailState {
   readonly workspaceName: string;
@@ -79,6 +85,11 @@ export interface AutoScanDetailState {
   readonly recentIssues: readonly IssueRow[];
   readonly logLines: readonly LogLine[];
   readonly connection: DetailConnection;
+  /**
+   * The scan was stopped — here or elsewhere — while the screen was open. A
+   * later snapshot that lists the scan again (started elsewhere) clears it.
+   */
+  readonly stopped: boolean;
   /** Reduction cursor; also what a reconnect resumes from. */
   readonly lastSeq: bigint;
   readonly nextLogId: number;
@@ -102,6 +113,7 @@ export function initialAutoScanDetailState(workspaceName: string): AutoScanDetai
     recentIssues: [],
     logLines: [],
     connection: 'connecting',
+    stopped: false,
     lastSeq: 0n,
     nextLogId: 0,
   };
@@ -153,6 +165,7 @@ interface Draft {
   recentIssues: IssueRow[];
   logLines: LogLine[];
   connection: DetailConnection;
+  stopped: boolean;
   lastSeq: bigint;
   nextLogId: number;
   changed: boolean;
@@ -165,6 +178,7 @@ function toDraft(state: AutoScanDetailState): Draft {
     recentIssues: [...state.recentIssues],
     logLines: [...state.logLines],
     connection: state.connection,
+    stopped: state.stopped,
     lastSeq: state.lastSeq,
     nextLogId: state.nextLogId,
     changed: false,
@@ -187,12 +201,21 @@ function fromDraft(state: AutoScanDetailState, draft: Draft): AutoScanDetailStat
     recentIssues: draft.recentIssues,
     logLines: draft.logLines,
     connection: draft.connection,
+    stopped: draft.stopped,
     lastSeq: draft.lastSeq,
     nextLogId: draft.nextLogId,
     ...(draft.instance !== undefined && { instance: draft.instance }),
     ...(draft.nextScanAt !== undefined && { nextScanAt: draft.nextScanAt }),
     ...(draft.activePhase !== undefined && { activePhase: draft.activePhase }),
   };
+}
+
+/** iOS `markStopped`: no next cycle to count down to, no phase running. */
+function markStopped(draft: Draft): void {
+  draft.stopped = true;
+  draft.nextScanAt = undefined;
+  draft.activePhase = undefined;
+  draft.changed = true;
 }
 
 function appendLog(draft: Draft, text: string, ansi = false): void {
@@ -227,7 +250,7 @@ function reducePhase(draft: Draft, payload: Extract<ScanPayload, { type: 'phase'
       break;
     }
     case 'scan_stopped':
-      draft.activePhase = undefined;
+      markStopped(draft);
       appendLog(draft, '--- Scan stopped ---');
       break;
     default:
@@ -303,6 +326,9 @@ function reduceFrame(draft: Draft, state: AutoScanDetailState, frame: DetailFram
       draft.connection = 'disconnected';
       draft.changed = true;
       break;
+    case 'stopped':
+      markStopped(draft);
+      break;
     case 'snapshot': {
       // `scans` is `unknown[]` on the frame — the wire layer deliberately stops
       // short of modelling it — so each row is validated here rather than cast.
@@ -320,7 +346,11 @@ function reduceFrame(draft: Draft, state: AutoScanDetailState, frame: DetailFram
       // events, so a missing row must not reset it.
       draft.instance = match;
       draft.nextScanAt = match?.next_scan_at;
-      if (match !== undefined) draft.cycleNumber = match.cycle_number;
+      if (match !== undefined) {
+        draft.cycleNumber = match.cycle_number;
+        // Listed again: started again elsewhere, as iOS reads it.
+        draft.stopped = false;
+      }
 
       draft.connection = 'replaying';
       draft.changed = true;

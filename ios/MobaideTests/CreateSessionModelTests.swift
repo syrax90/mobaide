@@ -251,7 +251,7 @@ final class CreateSessionModelTests: XCTestCase {
 
         XCTAssertEqual(
             model.error,
-            "The chat view needs Node.js 22 or later on the PC. Turn on Terminal UI under Advanced to use the classic terminal."
+            "The chat view needs Node.js 22 or later on the PC. Choose Terminal under Open sessions in to use the classic terminal."
         )
         XCTAssertFalse(model.submitting)
     }
@@ -1063,14 +1063,14 @@ final class CreateSessionModelTests: XCTestCase {
         model.mode = .standard
         XCTAssertTrue(model.claudeUsesChat)
         XCTAssertTrue(model.canContinueSession)
-        XCTAssertNil(model.claudeCodeModeTerminalNote)
+        XCTAssertNil(model.claudeCodeModeChatNote)
         XCTAssertEqual(try XCTUnwrap(model.buildRequest(mode: .standard)).claude_options?.code_mode, false)
 
         model.claudeCodeMode = true
 
-        XCTAssertFalse(model.claudeUsesChat, "Code Mode runs in the terminal UI only")
+        XCTAssertFalse(model.claudeUsesChat, "Code Mode runs only in the terminal")
         XCTAssertFalse(model.canContinueSession, "a Continue opens the chat view")
-        XCTAssertEqual(model.claudeCodeModeTerminalNote, "Code Mode runs in the terminal UI only.")
+        XCTAssertEqual(model.claudeCodeModeChatNote, "Code Mode runs only in the terminal. Turn it off under Advanced to use the chat.")
         let request = try XCTUnwrap(model.buildRequest(mode: .standard))
         XCTAssertEqual(request.ui, "terminal")
         XCTAssertEqual(request.claude_options?.code_mode, true)

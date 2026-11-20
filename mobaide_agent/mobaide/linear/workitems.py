@@ -22,19 +22,28 @@ logger = get_logger(__name__)
 
 @dataclass
 class ActiveWorkItem:
-    """A Linear issue being worked on by auto-scan.
+    """An issue being worked on by auto-scan.
 
     Persisted to ``active_workitems.json`` so the scanner can later
-    (once the issue reaches the configured Done state) remove the
-    associated git worktree.
+    (once the issue is done in its tracker) remove the associated git
+    worktree. Only a scan of the same ``source`` checks an item.
     """
 
-    id: str  # Human-readable identifier, e.g. "TEAM-31"
-    uuid: str  # Internal UUID used for single-issue API queries
+    id: str  # Human-readable identifier, e.g. "TEAM-31" or "#42"
+    uuid: str  # Tracker key for single-issue queries: Linear UUID, GitHub number
     slug: str  # Worktree directory name
     worktree_path: str
     project_root: str
     added_at: str  # ISO8601 UTC
+    source: str = "linear"
+    # GitHub only: the ``--repo`` selector the issue number belongs to.
+    repo: str = ""
+
+    @property
+    def identity(self) -> tuple[str, str, str]:
+        """What makes two items the same issue: ``id`` repeats across sources,
+        and a GitHub number repeats across repositories."""
+        return (self.source, self.repo, self.id)
 
     @classmethod
     def from_dict(cls, data: dict) -> "ActiveWorkItem":
@@ -48,6 +57,8 @@ class ActiveWorkItem:
             worktree_path=normalize_workspace_path(str(data["worktree_path"])),
             project_root=normalize_workspace_path(str(data["project_root"])),
             added_at=str(data["added_at"]),
+            source=str(data.get("source") or "linear"),
+            repo=str(data.get("repo") or ""),
         )
 
 
@@ -138,7 +149,7 @@ class ActiveWorkItemsStore:
         self._path.write_text(payload, encoding="utf-8")
 
     async def add(self, item: ActiveWorkItem) -> bool:
-        """Add ``item`` if no existing entry shares its ``id``.
+        """Add ``item`` if no existing entry shares its ``identity``.
 
         Returns True when the item was persisted, False when it was a
         duplicate. A duplicate is not an error — it just means the
@@ -146,7 +157,7 @@ class ActiveWorkItemsStore:
         """
         async with self._lock:
             items = self._read_unlocked()
-            if any(existing.id == item.id for existing in items):
+            if any(existing.identity == item.identity for existing in items):
                 logger.info(
                     "autoscan.workitem.duplicate id=%s — already tracked, skipping",
                     item.id,
@@ -166,20 +177,20 @@ class ActiveWorkItemsStore:
         )
         return True
 
-    async def remove(self, item_id: str) -> bool:
-        """Remove the entry whose ``id == item_id``.
+    async def remove(self, item: ActiveWorkItem) -> bool:
+        """Remove the entry with ``item``'s ``identity``.
 
         Returns True if an entry was removed, False if none matched.
         """
         async with self._lock:
             items = self._read_unlocked()
-            kept = [i for i in items if i.id != item_id]
+            kept = [i for i in items if i.identity != item.identity]
             if len(kept) == len(items):
                 return False
             self._write_unlocked(kept)
         audit_event(
             "audit.autoscan.workitem.removed",
-            target=item_id,
+            target=item.id,
             outcome="ok",
         )
         return True

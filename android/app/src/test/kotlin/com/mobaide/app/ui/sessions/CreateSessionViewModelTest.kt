@@ -13,6 +13,7 @@ import com.mobaide.app.data.local.PiLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.RestApi
+import com.mobaide.app.data.network.dto.AutoScanTemplateDto
 import com.mobaide.app.data.network.dto.ChatStoredSession
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CliModelDetail
@@ -27,8 +28,10 @@ import com.mobaide.app.data.network.dto.VersionInfoResponse
 import com.mobaide.app.data.network.dto.WorktreeBaseRef
 import com.mobaide.app.data.network.dto.WorktreeBasesResponse
 import com.mobaide.app.data.repository.AutoScanRepository
+import com.mobaide.app.data.repository.AutoScanTemplateException
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.GitRepository
+import com.mobaide.app.data.repository.LinearMetadataRepository
 import com.mobaide.app.data.repository.PathSuggestionRepository
 import com.mobaide.app.data.repository.WorkspacesRepository
 import com.mobaide.app.data.repository.SessionRepository
@@ -174,6 +177,7 @@ class CreateSessionViewModelTest {
             workspacesRepo, sessionRepo, autoScanRepo, prefs, tokenStore, customTypesRepo,
             PathSuggestionRepository(restApi, tokenStore),
             gitRepo,
+            mockk<LinearMetadataRepository>(relaxed = true),
         )
 
     // ---- Wizard step flow --------------------------------------------------
@@ -657,6 +661,149 @@ class CreateSessionViewModelTest {
         vm.selectAutoScanMode()
 
         assertEquals("agent wide default", vm.uiState.value.initialPrompt)
+    }
+
+    @Test
+    fun selectAutoScanMode_agentWithAutoScanCapability_neverSeedsTheLinearOnlyAgentDefault() = runTest {
+        // The agent-wide default is a Linear prompt; a newer agent picks the
+        // chosen source's own default when the prompt is left empty.
+        val fx = newFixture(
+            initialWorkspaces = listOf(
+                WorkspaceInfo(name = "alpha", path = "/p/alpha", is_git = true, auto_scan_prompt = null),
+            ),
+            autoScanPrompt = "agent wide default",
+        )
+        coEvery { fx.sessionRepo.getAgentVersion() } returns VersionInfoResponse(
+            name = "mobaide_agent",
+            server_version = "0.2.16",
+            protocol_versions = listOf(7),
+            min_client_version = 5,
+            capabilities = Json.parseToJsonElement(
+                """{"autoscan":{"sources":["linear","github"],"clis":["claude"],"github_setup":true}}""",
+            ).jsonObject,
+        )
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        vm.selectAutoScanMode()
+
+        assertNotNull(vm.uiState.value.autoScanCapability)
+        assertEquals("", vm.uiState.value.initialPrompt)
+    }
+
+    @Test
+    fun autoScanStep_openedBeforeTheCapabilityProbe_loadsTemplatesOnceItArrives_andOnlyThenOffersSave() = runTest {
+        val fx = newFixture()
+        coEvery { fx.autoScanRepo.templates() } returns listOf(AutoScanTemplateDto(id = "t1", name = "Small bugs"))
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
+        vm.selectAutoScanMode()
+        advanceUntilIdle()
+
+        // Without the list the dialog could not say that a name replaces a template.
+        vm.openAutoScanTemplateSave()
+        assertEquals(CreateSessionStep.AutoScanConfig, vm.uiState.value.step)
+        assertFalse(vm.uiState.value.autoScanTemplates.saveDialogOpen)
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns VersionInfoResponse(
+            name = "mobaide_agent",
+            server_version = "0.2.16",
+            protocol_versions = listOf(7),
+            min_client_version = 5,
+            capabilities = Json.parseToJsonElement(
+                """{"autoscan":{"sources":["linear","github"],"clis":["claude"],"github_setup":true}}""",
+            ).jsonObject,
+        )
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+        vm.openAutoScanTemplateSave()
+
+        val templates = vm.uiState.value.autoScanTemplates
+        assertEquals(listOf("Small bugs"), templates.templates.map { it.name })
+        assertTrue(templates.saveDialogOpen)
+    }
+
+    @Test
+    fun deleteAutoScanTemplate_alreadyGoneOnThePc_dropsItWithoutAnError() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns VersionInfoResponse(
+            name = "mobaide_agent",
+            server_version = "0.2.16",
+            protocol_versions = listOf(7),
+            min_client_version = 5,
+            capabilities = Json.parseToJsonElement(
+                """{"autoscan":{"sources":["linear","github"],"clis":["claude"],"github_setup":true}}""",
+            ).jsonObject,
+        )
+        coEvery { fx.autoScanRepo.templates() } returns listOf(
+            AutoScanTemplateDto(id = "t1", name = "Small bugs"),
+            AutoScanTemplateDto(id = "t2", name = "Complex"),
+        )
+        // Another device deleted it first.
+        coEvery { fx.autoScanRepo.deleteTemplate("t1") } throws
+            AutoScanTemplateException(detail = "Template 't1' not found", status = 404)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+        vm.selectAutoScanMode()
+        advanceUntilIdle()
+        vm.applyAutoScanTemplate("t1")
+
+        vm.deleteAutoScanTemplate("t1")
+        advanceUntilIdle()
+
+        val templates = vm.uiState.value.autoScanTemplates
+        assertEquals(listOf("t2"), templates.templates.map { it.id })
+        assertNull(templates.appliedName)
+        assertNull(templates.deleteError)
+    }
+
+    @Test
+    fun saveAutoScanTemplate_refusedWithoutADetail_keepsTheDialogOpenWithTheSettingsHint() = runTest {
+        val fx = newFixture()
+        coEvery { fx.sessionRepo.getAgentVersion() } returns VersionInfoResponse(
+            name = "mobaide_agent",
+            server_version = "0.2.16",
+            protocol_versions = listOf(7),
+            min_client_version = 5,
+            capabilities = Json.parseToJsonElement(
+                """{"autoscan":{"sources":["linear","github"],"clis":["claude"],"github_setup":true}}""",
+            ).jsonObject,
+        )
+        coEvery { fx.autoScanRepo.templates() } returns listOf(AutoScanTemplateDto(id = "t1", name = "Small bugs"))
+        // The agent's 422 `detail` is a list of field errors, not a text to show.
+        coEvery { fx.autoScanRepo.saveTemplate(any(), any()) } throws
+            AutoScanTemplateException(detail = null, status = 422)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+        vm.selectAutoScanMode()
+        advanceUntilIdle()
+        vm.openAutoScanTemplateSave()
+
+        vm.saveAutoScanTemplate("Complex")
+        advanceUntilIdle()
+
+        val templates = vm.uiState.value.autoScanTemplates
+        assertEquals(
+            "The PC did not accept these settings. Check the filter and the agent options.",
+            templates.saveError,
+        )
+        assertTrue(templates.saveDialogOpen)
+        assertFalse(templates.saving)
+        assertEquals(listOf("t1"), templates.templates.map { it.id })
     }
 
     @Test
@@ -4887,13 +5034,16 @@ class CreateSessionViewModelTest {
         val prefsSlot = slot<ClaudeLaunchPrefs>()
         coEvery { fx.prefs.setLastUsedClaudeOptions(capture(prefsSlot)) } just Runs
         assertTrue(vm.uiState.value.claudeUsesChat)
-        assertNull(vm.uiState.value.claudeTerminalUiLockedHint)
+        assertNull(vm.uiState.value.claudeChatLockedHint)
 
         vm.toggleClaudeCodeMode(true)
 
         val s = vm.uiState.value
-        assertFalse("Code Mode runs in the terminal UI only", s.claudeUsesChat)
-        assertEquals("Code Mode runs in the terminal UI only.", s.claudeTerminalUiLockedHint)
+        assertFalse("Code Mode runs only in the terminal", s.claudeUsesChat)
+        assertEquals(
+            "Code Mode runs only in the terminal. Turn it off under Advanced to use the chat.",
+            s.claudeChatLockedHint,
+        )
         assertFalse("a Continue opens the chat view", s.claudeResumeAvailable)
 
         vm.submit()

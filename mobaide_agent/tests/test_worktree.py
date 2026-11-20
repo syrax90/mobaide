@@ -380,3 +380,25 @@ class TestCreateWorktreeReopensBranchWorktree:
 
         with pytest.raises(WorktreeCreationError, match="already used by worktree"):
             await _manager().create_worktree("topic", linked, branch_name="topic")
+
+
+@requires_git
+@pytest.mark.parametrize("dirty", [True, False], ids=["uncommitted-edit", "clean"])
+async def test_unforced_cleanup_keeps_a_worktree_with_uncommitted_work(tmp_path, dirty):
+    repo = init_repo(str(tmp_path / "project"))
+    linked = str(tmp_path / "worktrees" / "gh-7")
+    run_git_sync(repo, "worktree", "add", "-q", "-b", "gh-7", linked)
+    if dirty:
+        with open(os.path.join(linked, "keep.txt"), "a", encoding="utf-8") as fh:
+            fh.write("unsaved\n")
+    manager = WorktreeManager(
+        worktrees_dir=str(tmp_path / "worktrees"),
+        legacy_worktree_base="mobaide_worktree",
+        branch_prefix="feature/mobaide",
+        main_branch="main",
+    )
+
+    removed = await manager.cleanup_worktree(linked, repo, force=False)
+
+    assert removed is not dirty
+    assert os.path.isdir(linked) is dirty

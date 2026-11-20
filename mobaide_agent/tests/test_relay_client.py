@@ -1901,7 +1901,11 @@ class TestProxyAutoscanStart:
         )
 
         assert result["status"] == 200
-        mgr.start.assert_awaited_once_with("p", client_options=None)
+        from mobaide.linear.scanner import AutoScanStart
+
+        mgr.start.assert_awaited_once_with(
+            "p", client_options=None, request=AutoScanStart(),
+        )
 
     async def test_invalid_claude_options_returns_422_and_never_calls_mgr(
         self, client, mock_app_state,
@@ -3648,6 +3652,7 @@ class TestProxyVersionCapabilities:
         assertion that pins DIRECT/RELAY parity. If the relay branch ever
         hand-rolls the shape instead of calling the shared builder, this fails.
         """
+        from mobaide.agent.autoscan.models import AUTOSCAN_CAPABILITIES
         from mobaide.core.cli_launcher import build_cli_capabilities
         from mobaide.voice.models import VOICE_CAPABILITIES
 
@@ -3665,6 +3670,7 @@ class TestProxyVersionCapabilities:
         expected = build_cli_capabilities(mock_app_state.cli_launchers)
         assert result["body"]["capabilities"] == {
             "cli": expected,
+            "autoscan": AUTOSCAN_CAPABILITIES,
             "git": {
                 "changes": True,
                 "stage": True,

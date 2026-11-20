@@ -42,7 +42,7 @@ from .opencode_launcher import (
     OpenCodeLauncher,
     OpenCodeOptions,
 )
-from .workspaces_config import AutoScanFilter, WorkspaceConfig
+from .workspaces_config import AutoScanFilter, GitHubScanFilter, WorkspaceConfig
 from .workspaces_store import (
     WorkspaceRecord,
     WorkspacesStore,
@@ -95,6 +95,7 @@ __all__ = [
     "PiBinaryNotFoundError",
     "LaunchSpec",
     "AutoScanFilter",
+    "GitHubScanFilter",
     "WorkspaceConfig",
     "WorkspaceRecord",
     "WorkspacesStore",

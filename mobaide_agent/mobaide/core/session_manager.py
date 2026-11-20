@@ -23,7 +23,7 @@ from .claude_launcher import (
     ClaudeOptions,
     check_cwd_exists,
 )
-from .cli_launcher import CliLauncher
+from .cli_launcher import CliLauncher, append_path_dir
 from .codex_launcher import CodexLauncher, CodexOptions
 from .copilot_launcher import CopilotLauncher, CopilotOptions
 from .cursor_launcher import CursorLauncher, CursorOptions
@@ -239,7 +239,9 @@ class SessionManager:
             from dataclasses import replace
 
             options = replace(options, worktree=False)
-        if config.project_name is not None:
+        if config.chat_launch_target is not None:
+            target = config.chat_launch_target
+        elif config.project_name is not None:
             if self._workspaces_store is None:
                 raise ValueError("workspace_name set but agent has no workspaces store")
             workspace = self._workspaces_store.get(config.project_name)
@@ -251,6 +253,10 @@ class SessionManager:
                 raise ValueError("cwd is required for a session without a workspace")
             target = AdHocLaunch(cwd=config.cwd)
         plan = await spec.prepare(target, options)
+        if config.trust_folder:
+            plan.trust = None
+        if config.chat_path_append:
+            append_path_dir(plan.env, config.chat_path_append)
         if config.project_name is not None and options is not None and getattr(options, "worktree", False):
             self._remember_worktree_base(config.project_name, options.base_branch)
             config.worktree_branch = await self._worktree_branch(target.path, plan.cwd)

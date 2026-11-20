@@ -292,6 +292,10 @@ fun AppNavigation(
                 onAutoScanStarted = { workspaceName ->
                     navController.navigateFromCreate(Routes.autoScanDetail(workspaceName))
                 },
+                // Pushed, not navigateFromCreate: Back returns to the wizard with its choices.
+                onSetupSessionOpened = { sessionId ->
+                    navController.navigate(Routes.sessionDetail(sessionId))
+                },
             )
         }
 

@@ -6,6 +6,9 @@ import Foundation
 enum AutoScanStartError: Error, Equatable, Sendable {
     case alreadyRunning(workspaceName: String)   // HTTP 409
     case capacity(maxScans: Int)               // HTTP 429
+    /// HTTP 400: a missing choice or an unusable source or agent; `detail` is
+    /// the agent's own words, shown next to the Start button.
+    case rejected(detail: String)
 }
 
 /// A one-shot user-facing error surfaced by the repository after an optimistic

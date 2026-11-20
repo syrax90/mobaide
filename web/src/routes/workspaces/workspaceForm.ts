@@ -95,16 +95,25 @@ function sameFilter(a: AutoScanFilter, b: AutoScanFilter): boolean {
   );
 }
 
-/** `POST /api/projects`. Blank optionals are omitted rather than sent empty. */
-export function buildWorkspaceWrite(state: WorkspaceFormState): WorkspaceWriteBody {
+/**
+ * `POST /api/projects`. Blank optionals are omitted rather than sent empty.
+ *
+ * `includeFilter: false` is for an agent with `capabilities.autoscan`, where
+ * the filter is chosen in the Auto Scan wizard: a filter sent here would be
+ * stored as chosen and pre-fill the wizard with values nobody picked.
+ */
+export function buildWorkspaceWrite(
+  state: WorkspaceFormState,
+  { includeFilter = true }: { includeFilter?: boolean } = {},
+): WorkspaceWriteBody {
   const body: WorkspaceWriteBody = {
     name: state.name.trim(),
     path: state.path.trim(),
     // Required on create, and an empty map is meaningful: it is what "this
     // workspace passes no flags" looks like on the wire.
     default_flags: flagsToWire(state.flags),
-    auto_scan_filter: state.filter,
   };
+  if (includeFilter) body.auto_scan_filter = state.filter;
   const key = state.linearApiKey.trim();
   if (key !== '') body.linear_api_key = state.linearApiKey;
   const conda = state.condaEnv.trim();
