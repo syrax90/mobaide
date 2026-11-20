@@ -86,6 +86,7 @@ class SessionCreateDtoFixtureTest {
             OpenCodeOptionsModel(
                 auto_approve = true,
                 connect = true,
+                code_mode = false,
                 worktree = true,
                 branch_name = "b",
                 base_branch = "origin/main",
@@ -256,7 +257,7 @@ class SessionCreateDtoFixtureTest {
         assertEquals("origin/main", full.base_branch)
         assertBaseBranchEncodes(PiOptionsModel.serializer(), full, "origin/main")
         val encoded = allKeysJson.encodeToJsonElement(PiOptionsModel.serializer(), full) as JsonObject
-        assertEquals(setOf("worktree", "branch_name", "base_branch"), encoded.keys)
+        assertEquals(setOf("code_mode", "worktree", "branch_name", "base_branch"), encoded.keys)
         assertEquals(PiOptionsModel(worktree = false), decoded.getValue("empty_defaults_materialize"))
     }
 

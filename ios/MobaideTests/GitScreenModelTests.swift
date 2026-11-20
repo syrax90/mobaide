@@ -828,7 +828,8 @@ final class GitScreenModelTests: XCTestCase {
 
         await tick(sleeper)
         await tick(sleeper)
-        await waitUntil { StubURLProtocol.requests.count == 3 && !model.isDeleting }
+        // The GET counts as sent before its reply is applied: wait for the load too.
+        await waitUntil { StubURLProtocol.requests.count == 3 && !model.isDeleting && !model.isLoading }
 
         XCTAssertEqual(StubURLProtocol.requests.last?.httpMethod, "GET")
         XCTAssertEqual(StubURLProtocol.requests.last?.url?.path.hasSuffix("/git/items"), true)
