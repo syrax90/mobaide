@@ -4,6 +4,7 @@ itself is covered in ``test_git_delete_jobs.py``; here the registry is a fake
 that records the batches it was given."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -157,6 +158,61 @@ async def test_stops_without_removing_anything(
 
     assert sessions.stopped == [("s1", False)]
     assert registry.started == []
+
+
+class _FakeAutoScanManager:
+    def __init__(self) -> None:
+        self.released: list[tuple[str, str]] = []
+
+    async def release_worktree(self, workspace_name: str, worktree_path: str) -> int:
+        self.released.append((workspace_name, worktree_path))
+        return 1
+
+
+def _autoscan_info(cwd: str) -> SessionInfo:
+    # Auto Scan launches with a cwd, not a project_name: the workspace comes
+    # from worktree_workspace.
+    return replace(_info(cwd, "feature/mobaide/cla-8"), project_name=None, worktree_workspace="repo")
+
+
+async def test_auto_scan_session_removes_its_worktree_and_releases_the_work_item(
+    registry, layout,
+):
+    sessions = _FakeSessionManager(_autoscan_info(layout.worktree))
+    autoscan = _FakeAutoScanManager()
+    app_state = _app_state(layout, _FakeWorktreeManager(), sessions)
+    app_state.autoscan_manager = autoscan
+
+    await _stop(sessions, app_state)
+
+    assert len(registry.started) == 1
+    job = registry.started[0]
+    assert job["items"] == [
+        GitDeleteItem(
+            kind="branch_with_worktree", branch="feature/mobaide/cla-8",
+            worktree_path=layout.worktree, force=True,
+        ),
+    ]
+    assert job["workspace_name"] == "repo"
+    # The Auto Scan work item still owns this path; its busy check must not
+    # refuse a removal the user confirmed.
+    assert job["autoscan_manager"] is None
+    assert autoscan.released == [("repo", layout.worktree)]
+
+
+async def test_refused_job_keeps_the_auto_scan_work_item(monkeypatch, layout):
+    monkeypatch.setattr(
+        stop_module, "delete_job_registry", _FakeRegistry(error=GitRefusedError("busy")),
+    )
+    sessions = _FakeSessionManager(_autoscan_info(layout.worktree))
+    autoscan = _FakeAutoScanManager()
+    app_state = _app_state(layout, _FakeWorktreeManager(), sessions)
+    app_state.autoscan_manager = autoscan
+
+    await _stop(sessions, app_state)
+
+    assert sessions.stopped == [("s1", False)]
+    assert autoscan.released == []
 
 
 async def test_refused_job_still_reports_the_stop_as_done(monkeypatch, layout):

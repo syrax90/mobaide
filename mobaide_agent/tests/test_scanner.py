@@ -1458,3 +1458,120 @@ class TestPerWorkspaceFilter:
 
         await inst._cleanup_completed_worktrees()
         assert inst._source.filter.done_state == "Released"
+
+
+class TestAutoScanWorktreeRemovalOffer:
+    """Clients offer "remove the worktree" on stop only when the session has
+    a ``worktree_branch``. Auto Scan launches without a project_name, so it
+    must set the branch and the owning workspace itself."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("branch", "expected_workspace"),
+        [
+            pytest.param("feature/mobaide/cla-8", "test-workspace", id="issue_worktree"),
+            pytest.param(None, None, id="workspace_folder"),
+        ],
+    )
+    async def test_terminal_session_carries_the_worktree_branch(
+        self, tmp_path, branch, expected_workspace,
+    ):
+        from mobaide.core.models import SessionConfig
+
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+        sess_mgr = AsyncMock()
+        sess_mgr.create_session.return_value = MagicMock(pid=1)
+        wt_mgr = AsyncMock()
+        wt_mgr.linked_worktree_branch.return_value = branch
+
+        inst = _make_instance(
+            tmp_path, client=client, session_manager=sess_mgr, worktree_mgr=wt_mgr,
+            launcher=_launcher_with_worktree(str(tmp_path / "worktree")),
+        )
+
+        await inst._process_issue(ScanIssue.from_linear(_make_issue()))
+
+        call = sess_mgr.create_session.await_args
+        config: SessionConfig = call.args[0] if call.args else call.kwargs["config"]
+        assert config.worktree_branch == branch
+        assert config.worktree_workspace == expected_workspace
+
+    @pytest.mark.asyncio
+    async def test_branch_lookup_failure_still_launches_without_the_offer(self, tmp_path):
+        from mobaide.core.models import SessionConfig
+
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+        sess_mgr = AsyncMock()
+        sess_mgr.create_session.return_value = MagicMock(pid=1)
+        wt_mgr = AsyncMock()
+        wt_mgr.linked_worktree_branch.side_effect = RuntimeError("git failed")
+
+        inst = _make_instance(
+            tmp_path, client=client, session_manager=sess_mgr, worktree_mgr=wt_mgr,
+            launcher=_launcher_with_worktree(str(tmp_path / "worktree")),
+        )
+
+        await inst._process_issue(ScanIssue.from_linear(_make_issue()))
+
+        call = sess_mgr.create_session.await_args
+        config: SessionConfig = call.args[0] if call.args else call.kwargs["config"]
+        assert config.worktree_branch is None
+        assert config.worktree_workspace is None
+
+
+class TestReleaseWorktree:
+    """Stopping a session with "remove the worktree" releases its work item,
+    so no later scan cycle retries removing a worktree that is gone."""
+
+    @pytest.mark.asyncio
+    async def test_running_scan_drops_the_item_and_its_count(self, tmp_path):
+        from mobaide.linear.workitems import ActiveWorkItem, now_iso_utc
+
+        inst = _make_instance(tmp_path)
+        items = [
+            ActiveWorkItem(
+                id=f"CLA-{n}", uuid=f"u-{n}", slug=f"cla-{n}",
+                worktree_path=str(tmp_path / f"wt-{n}"),
+                project_root=str(tmp_path / "repo"), added_at=now_iso_utc(),
+            )
+            for n in (1, 2)
+        ]
+        await inst._workitems_store.write(items)
+        inst._active_workitem_count = 2
+
+        assert await inst.release_worktree(str(tmp_path / "wt-1")) == 1
+
+        assert [i.id for i in await inst._workitems_store.read()] == ["CLA-2"]
+        assert inst.to_dto()["processed_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_manager_releases_from_disk_when_no_scan_runs(self, tmp_path):
+        from mobaide.linear.scanner import AutoScanSessionManager
+        from mobaide.linear.workitems import (
+            ActiveWorkItem,
+            ActiveWorkItemsStore,
+            active_workitems_path,
+            now_iso_utc,
+        )
+
+        config = _make_config(tmp_path)
+        store = ActiveWorkItemsStore(active_workitems_path(config.state_dir, "test-workspace"))
+        await store.write([
+            ActiveWorkItem(
+                id="CLA-1", uuid="u-1", slug="cla-1",
+                worktree_path=str(tmp_path / "wt-1"),
+                project_root=str(tmp_path / "repo"), added_at=now_iso_utc(),
+            ),
+        ])
+        mgr = AutoScanSessionManager(
+            config, AsyncMock(spec=SessionManager),
+            cast("WorkspacesStore", _FakeWorkspacesStore(None)),
+            launcher=AsyncMock(), gh=AsyncMock(), worktree_mgr=AsyncMock(),
+        )
+
+        assert await mgr.release_worktree("test-workspace", str(tmp_path / "wt-1")) == 1
+        assert await store.read() == []
