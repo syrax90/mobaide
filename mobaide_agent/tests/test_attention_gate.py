@@ -792,6 +792,44 @@ class TestSettle:
         assert session.activity == [*before, "idle"]
 
 
+class TestInterrupted:
+    """Esc or Ctrl+C ends a Claude Code turn with no ``Stop`` and no
+    ``idle_prompt``; ``interrupted`` is told so from the transcript. The user
+    pressed the key, so nothing alerts, and a late ``idle_prompt`` neither."""
+
+    async def test_interrupted_turn_ends_idle_and_a_late_idle_stays_silent(
+        self, session, scheduler,
+    ) -> None:
+        gate = _gate(session)
+        gate.handle(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1"})
+        gate.handle(HookKind.TOOL, {"prompt_id": "p1"})
+
+        gate.interrupted()
+
+        assert session.activity == ["working", "working", "idle"]
+        assert scheduler.elapse() == 0
+        assert session.calls == []
+
+        gate.handle(HookKind.IDLE, {"prompt_id": "p1"})
+
+        assert scheduler.elapse() == 0
+        assert session.calls == []
+        assert session.activity[-1] == "idle"
+
+    async def test_work_the_last_stop_listed_still_stands(
+        self, session, scheduler,
+    ) -> None:
+        gate = _gate(session)
+        gate.handle(HookKind.STOP, _stop("p1", _task("t1", "shell")))
+        gate.handle(HookKind.TOOL, {"prompt_id": "p1"})
+
+        gate.interrupted()
+
+        assert session.activity == ["waiting", "working", "waiting"]
+        assert scheduler.elapse() == 0
+        assert session.calls == []
+
+
 class TestStopLost:
     """``stop_lost`` ends a turn that is known to be over but sent no ``Stop``
     (a lost hook, a local command). It knows nothing new about background

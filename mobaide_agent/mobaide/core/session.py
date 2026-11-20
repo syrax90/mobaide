@@ -12,6 +12,7 @@ from typing import Any
 
 from .attention_dedupe import SHARED_THREAD_APPS, SharedTurnDedupe, real_cwd
 from .attention_gate import AttentionGate, HookKind
+from .interrupt_watch import INTERRUPT_KEYS, InterruptWatch
 from .da_responder import DaResponder
 from .macos_access import full_disk_access
 from .models import SessionConfig, SessionEvent, SessionInfo, SessionKind, SessionState
@@ -142,6 +143,14 @@ HOOK_DRIVEN_KINDS = frozenset({SessionKind.CLAUDE.value, SessionKind.AUTO_SCAN.v
 # DEC 1004 focus-in / focus-out reports a client emulator writes on its own.
 _FOCUS_REPORTS = frozenset({b"\x1b[I", b"\x1b[O"})
 
+# Hooks after which a pending interrupt watch has nothing left to decide: the
+# turn ended by itself, a new one began, or the session ended. ``PreToolUse``
+# is not one: a call already on its way when the user pressed Esc can land
+# after the key.
+_TURN_BOUNDARY_HOOKS = frozenset(
+    {HookKind.PROMPT_SUBMIT, HookKind.STOP, HookKind.IDLE, HookKind.END},
+)
+
 # Upper bound on joining each background task (reader, title, stall) during
 # teardown. The reader may be parked in an uncancellable os.read() inside the
 # thread pool; we cancel and wait at most this long, then abandon it rather
@@ -216,6 +225,9 @@ class TerminalSession:
             current_attention=lambda: self._attention,
             quiet_seconds=config.attention_quiet_seconds,
         )
+        # Esc or Ctrl+C ends a Claude Code turn with no hook at all; this
+        # confirms such an interrupt from the transcript.
+        self._interrupt_watch = InterruptWatch(self._on_turn_interrupted)
         # The hookless sessions' source: OSC 7501 reports from the CLI. The
         # responder answers the support query so CLIs that ask first report.
         self._status_tap: ProgramStatusTap | None = None
@@ -523,9 +535,16 @@ class TerminalSession:
         would then mute every later turn. A prompt submission proves the
         composer is live, so any badge still standing is stale by construction.
         """
+        self._interrupt_watch.note_transcript(payload.get("transcript_path"))
+        if kind in _TURN_BOUNDARY_HOOKS:
+            self._interrupt_watch.cancel()
         self._attention_gate.handle(kind, payload)
         if kind is HookKind.PROMPT_SUBMIT:
             self.clear_attention()
+
+    def _on_turn_interrupted(self) -> None:
+        logger.info("Session %s: turn interrupted by the user", self.session_id)
+        self._attention_gate.interrupted()
 
     def mute_attention_window(self) -> None:
         """Mute a pending debounce without forgetting the turn.
@@ -551,6 +570,7 @@ class TerminalSession:
     def cancel_attention_window(self) -> None:
         """Drop every pending alert window outright: the session is stopping."""
         self._attention_gate.cancel()
+        self._interrupt_watch.cancel()
         if self._status_gate is not None:
             self._status_gate.cancel()
 
@@ -677,6 +697,8 @@ class TerminalSession:
         else:
             self.mute_attention_window()
         self.clear_attention()
+        if data in INTERRUPT_KEYS and self._activity == "working":
+            self._interrupt_watch.arm()
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._backend.write, data)
 

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, call, patch
 
@@ -1473,6 +1475,129 @@ class TestClaudeHookActivity:
         session._state = state
 
         assert session.to_info().activity is None
+
+
+class _TickingClock:
+    """Moves one second per deadline check, so an armed watch ends in a few polls."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def monotonic(self) -> float:
+        self.now += 1.0
+        return self.now
+
+
+_INTERRUPT_ENTRY = {
+    "type": "user",
+    "message": {
+        "role": "user",
+        "content": [{"type": "text", "text": "[Request interrupted by user for tool use]"}],
+    },
+}
+
+
+@pytest.mark.timeout(15)
+class TestEscInterrupt:
+    """An Esc that interrupts a turn fires no hook; the session learns it from
+    the transcript entry the CLI writes. An Esc that only closes a menu writes
+    none, so a session still at work keeps ``working``."""
+
+    @pytest.fixture
+    def transcript(self, tmp_path, monkeypatch) -> Path:
+        from mobaide.core import interrupt_watch
+
+        monkeypatch.setattr(interrupt_watch, "time", _TickingClock())
+        path = tmp_path / "session.jsonl"
+        path.write_text('{"type":"user","message":{"content":"go"}}\n')
+        return path
+
+    @staticmethod
+    def _working_session(transcript: Path) -> tuple[TerminalSession, _ScriptedPtyBackend]:
+        from mobaide.core.interrupt_watch import InterruptWatch
+
+        backend = _ScriptedPtyBackend([])
+        session = _running_hook_session(60.0, backend)
+        session._interrupt_watch = InterruptWatch(
+            session._on_turn_interrupted, window_seconds=5, poll_seconds=0,
+        )
+        payload = {"prompt_id": "p1", "transcript_path": str(transcript)}
+        session.on_claude_hook(HookKind.PROMPT_SUBMIT, payload)
+        session.on_claude_hook(HookKind.TOOL, payload)
+        assert session.to_info().activity == "working"
+        return session, backend
+
+    @staticmethod
+    async def _run_out(session: TerminalSession) -> None:
+        task = session._interrupt_watch._task
+        assert task is not None
+        await asyncio.wait({task}, timeout=5)
+
+    @pytest.mark.parametrize("key", [b"\x1b", b"\x03"])
+    async def test_interrupt_key_and_entry_end_the_turn_without_an_alert(
+        self, transcript, key,
+    ) -> None:
+        session, backend = self._working_session(transcript)
+
+        await session.write(key)
+        with transcript.open("a") as handle:
+            handle.write(json.dumps(_INTERRUPT_ENTRY) + "\n")
+        await self._run_out(session)
+
+        info = session.to_info()
+        assert info.activity == "idle"
+        assert info.attention is None
+        assert backend._writes == [key]
+
+    async def test_esc_with_no_entry_keeps_the_session_working(
+        self, transcript,
+    ) -> None:
+        # A long tool call the Esc did not interrupt (it closed a menu).
+        session, _ = self._working_session(transcript)
+
+        await session.write(b"\x1b")
+        await self._run_out(session)
+
+        assert session.to_info().activity == "working"
+
+    async def test_a_new_prompt_cancels_the_watch(self, transcript) -> None:
+        session, _ = self._working_session(transcript)
+        await session.write(b"\x1b")
+        task = session._interrupt_watch._task
+
+        session.on_claude_hook(
+            HookKind.PROMPT_SUBMIT,
+            {"prompt_id": "p2", "transcript_path": str(transcript)},
+        )
+        with transcript.open("a") as handle:
+            handle.write(json.dumps(_INTERRUPT_ENTRY) + "\n")
+        await asyncio.wait({task}, timeout=5)
+
+        assert session.to_info().activity == "working"
+
+    @pytest.mark.parametrize(
+        "data", [b"\x1b[A", b"\x1b[<64;10;5M", b"\x1b[I", b"x"],
+        ids=["arrow-scroll", "sgr-wheel", "focus-in", "text"],
+    )
+    async def test_other_writes_do_not_arm_the_watch(self, transcript, data) -> None:
+        session, _ = self._working_session(transcript)
+
+        await session.write(data)
+
+        assert not session._interrupt_watch.active
+
+    async def test_esc_while_not_working_does_not_arm_the_watch(
+        self, transcript,
+    ) -> None:
+        session, _ = self._working_session(transcript)
+        session.on_claude_hook(
+            HookKind.IDLE, {"prompt_id": "p1", "transcript_path": str(transcript)},
+        )
+        assert session.to_info().activity == "idle"
+
+        await session.write(b"\x1b")
+
+        assert not session._interrupt_watch.active
 
 
 @pytest.mark.timeout(15)
