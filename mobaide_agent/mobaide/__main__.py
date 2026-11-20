@@ -430,6 +430,11 @@ def _run_agent() -> None:
         # logs (mirrors central_server/__main__.py). The in-app structured
         # middleware logs method/path/status without the query string.
         access_log=False,
+        # Without this, uvicorn's default dictConfig gives the "uvicorn"
+        # loggers their own plain-text handler with propagate=False, so their
+        # records skip configure_logging's redaction. The WebSocket handshake
+        # line ("WebSocket /path?token=…" [accepted]) is one of them.
+        log_config=None,
     )
     server = uvicorn.Server(config)
     # A staged update stops this server through ``request_restart`` and the
