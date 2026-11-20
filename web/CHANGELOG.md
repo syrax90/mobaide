@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.29](https://github.com/syrax90/mobaide/compare/web-v0.1.28...web-v0.1.29) (2026-11-20)
+
+
+### Features
+
+* **agent,android,ios,web:** include Code Mode in Auto Scan ([#925](https://github.com/syrax90/mobaide/issues/925)) ([c54a267](https://github.com/syrax90/mobaide/commit/c54a267b9037650478a92c7ac42371c738d16ba9))
+
+
+### Bug Fixes
+
+* **agent,android,ios,web:** offer Debug logging in the Claude Code chat view ([#933](https://github.com/syrax90/mobaide/issues/933)) ([213af24](https://github.com/syrax90/mobaide/commit/213af2452bbe458eb34aa67b0cc8dc2a5cd4d81b))
+* **agent,android,ios,web:** remap the retired Codex untrusted approval to on-request ([#928](https://github.com/syrax90/mobaide/issues/928)) ([eafdc4a](https://github.com/syrax90/mobaide/commit/eafdc4afd7cad2e8c1631d49e0cdf1d3b3886829))
+* **agent,android,ios,web:** send the chosen effort with Ultracode on ([#927](https://github.com/syrax90/mobaide/issues/927)) ([ab6870f](https://github.com/syrax90/mobaide/commit/ab6870ff153ae80a62abc2a64c33cce837760f0a))
+* **agent:** count the issues an Auto Scan has taken in "Processed" ([#932](https://github.com/syrax90/mobaide/issues/932)) ([54a03cd](https://github.com/syrax90/mobaide/commit/54a03cd10133a19dc8d3dcca60a9061ca02cef83))
+* **android,ios,web:** let Chat be chosen with Claude Code Mode on ([#931](https://github.com/syrax90/mobaide/issues/931)) ([96e4c53](https://github.com/syrax90/mobaide/commit/96e4c5330e38cd5292c2009400c1d6e4d5f550a9))
+
 ## [0.1.28](https://github.com/syrax90/mobaide/compare/web-v0.1.27...web-v0.1.28) (2026-11-20)
 
 
