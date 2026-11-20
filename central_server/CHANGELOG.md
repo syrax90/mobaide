@@ -1,5 +1,12 @@
 # central_server Changelog
 
+## [0.2.28](https://github.com/syrax90/mobaide/compare/server-v0.2.27...server-v0.2.28) (2026-11-20)
+
+
+### Features
+
+* **server:** name more agents in page titles and add sitemap lastmod ([#918](https://github.com/syrax90/mobaide/issues/918)) ([8a30a1a](https://github.com/syrax90/mobaide/commit/8a30a1ac5f585ad62d1a21683fb563e4d41d77ca))
+
 ## [0.2.27](https://github.com/syrax90/mobaide/compare/server-v0.2.26...server-v0.2.27) (2026-11-17)
 
 

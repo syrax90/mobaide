@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.7](https://github.com/syrax90/mobaide/compare/ios-v1.1.6...ios-v1.1.7) (2026-11-20)
+
+
+### Features
+
+* **agent,android,ios,web:** offer to remove the worktree when a session stops ([#915](https://github.com/syrax90/mobaide/issues/915)) ([17a24c5](https://github.com/syrax90/mobaide/commit/17a24c553a9a9cec3720207fd4251364b8fad40d))
+* **agent,android,ios,web:** scan GitHub issues and run any agent in Auto Scan ([#914](https://github.com/syrax90/mobaide/issues/914)) ([2ac31b0](https://github.com/syrax90/mobaide/commit/2ac31b0d55b0bb2ce803809c387088ca505930d2))
+* **agent,android,ios,web:** support Code Mode for Claude Code, Pi and OpenCode ([#919](https://github.com/syrax90/mobaide/issues/919)) ([4e7326f](https://github.com/syrax90/mobaide/commit/4e7326f867131cb17edd0dd11c8e2d2436b7f60c))
+
 ## [1.1.6](https://github.com/syrax90/mobaide/compare/ios-v1.1.5...ios-v1.1.6) (2026-11-18)
 
 
