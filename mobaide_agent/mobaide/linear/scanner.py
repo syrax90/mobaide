@@ -673,6 +673,11 @@ class AutoScanInstance:
             return replace(self._workspace_config, linear_api_key=None)
         return self._workspace_config
 
+    def _source_repo(self) -> str:
+        if isinstance(self._source, GitHubIssueSource) and self._source.repo is not None:
+            return self._source.repo.selector
+        return ""
+
     async def _track_workitem(self, issue: ScanIssue, slug: str, cwd: str) -> None:
         workspace = self._workspace_config
         if not self._config.auto_remove_worktrees or cwd == workspace.path:
@@ -687,6 +692,7 @@ class AutoScanInstance:
                     project_root=workspace.path,
                     added_at=now_iso_utc(),
                     source=self._source.kind,
+                    repo=self._source_repo(),
                 )
             )
             if added:

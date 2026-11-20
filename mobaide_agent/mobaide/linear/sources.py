@@ -301,6 +301,10 @@ class GitHubIssueSource:
 
     async def is_done(self, item: ActiveWorkItem) -> bool | None:
         repo = self._require_repo()
+        # Issue numbers are per repository: after the workspace's default
+        # repository changes, an older item's number names another issue.
+        if item.repo and item.repo != repo.selector:
+            return None
         try:
             number = int(item.uuid)
         except ValueError:

@@ -24,6 +24,7 @@ import {
   EMPTY_GITHUB_FILTER,
   EMPTY_LINEAR_FILTER,
   INITIAL_WIZARD_STATE,
+  autoScanSeedKey,
   wizardReducer,
   type AutoScanSetup,
   type GitHubFilterDraft,
@@ -82,7 +83,7 @@ describe('capabilities.autoscan', () => {
 describe('seeding the Auto Scan choices', () => {
   it('pre-fills what the workspace saved', () => {
     const state = reduce([
-      { type: 'seedAutoScanSetup', workspaceName: 'proj', saved: savedChoices('auto_scan_choices') },
+      { type: 'seedAutoScanSetup', seedKey: 'proj', saved: savedChoices('auto_scan_choices') },
     ]);
 
     expect(state.autoScanSetup).toMatchObject({
@@ -101,7 +102,7 @@ describe('seeding the Auto Scan choices', () => {
 
   it('starts every choice empty when nothing was chosen, never at the legacy defaults', () => {
     const state = reduce([
-      { type: 'seedAutoScanSetup', workspaceName: 'p', saved: savedChoices('auto_scan_nothing_chosen') },
+      { type: 'seedAutoScanSetup', seedKey: 'p', saved: savedChoices('auto_scan_nothing_chosen') },
     ]);
 
     expect(state.autoScanSetup).toMatchObject({
@@ -115,10 +116,10 @@ describe('seeding the Auto Scan choices', () => {
   it('pre-fills the saved session view and time between scans, and a new workspace starts at the defaults', () => {
     const saved = savedChoices('auto_scan_choices');
     const seeded = reduce([
-      { type: 'seedAutoScanSetup', workspaceName: 'proj', saved: saved && { ...saved, ui: 'terminal' } },
+      { type: 'seedAutoScanSetup', seedKey: 'proj', saved: saved && { ...saved, ui: 'terminal' } },
     ]);
     const other = reduce(
-      [{ type: 'seedAutoScanSetup', workspaceName: 'other', saved: undefined }],
+      [{ type: 'seedAutoScanSetup', seedKey: 'other', saved: undefined }],
       seeded,
     );
 
@@ -135,14 +136,14 @@ describe('seeding the Auto Scan choices', () => {
   it('keeps edits for the same workspace and re-seeds for another one', () => {
     const saved = savedChoices('auto_scan_choices');
     const edited = reduce([
-      { type: 'seedAutoScanSetup', workspaceName: 'proj', saved },
+      { type: 'seedAutoScanSetup', seedKey: 'proj', saved },
       { type: 'setAutoScanSource', source: 'linear' },
       { type: 'setAutoScanCli', cli: 'pi' },
     ]);
 
-    const again = reduce([{ type: 'seedAutoScanSetup', workspaceName: 'proj', saved }], edited);
+    const again = reduce([{ type: 'seedAutoScanSetup', seedKey: 'proj', saved }], edited);
     const other = reduce(
-      [{ type: 'seedAutoScanSetup', workspaceName: 'other', saved: undefined }],
+      [{ type: 'seedAutoScanSetup', seedKey: 'other', saved: undefined }],
       edited,
     );
 
@@ -150,9 +151,25 @@ describe('seeding the Auto Scan choices', () => {
     expect([other.autoScanSetup.source, other.autoScanSetup.cli]).toEqual([null, null]);
   });
 
+  it('re-seeds a workspace of the same name on another agent', () => {
+    const saved = savedChoices('auto_scan_choices');
+    const first = reduce([
+      { type: 'seedAutoScanSetup', seedKey: autoScanSeedKey('agent-a', 'proj'), saved: undefined },
+      { type: 'setAutoScanCli', cli: 'pi' },
+    ]);
+
+    const second = reduce(
+      [{ type: 'seedAutoScanSetup', seedKey: autoScanSeedKey('agent-b', 'proj'), saved }],
+      first,
+    );
+
+    expect(second.autoScanSetup.cli).toBe(saved?.cli ?? null);
+    expect(second.autoScanSetup.cli).not.toBe('pi');
+  });
+
   it('lets a draft parked for the GitHub setup terminal win over the saved choices', () => {
     const parked = reduce([
-      { type: 'seedAutoScanSetup', workspaceName: 'proj', saved: undefined },
+      { type: 'seedAutoScanSetup', seedKey: 'proj', saved: undefined },
       { type: 'setAutoScanSource', source: 'github' },
       { type: 'setAutoScanCli', cli: 'cursor' },
       {
@@ -171,8 +188,8 @@ describe('seeding the Auto Scan choices', () => {
     const draft = takeAutoScanDraft('agent-1', 'proj');
     if (draft === null) throw new Error('the parked draft was lost');
     const restored = reduce([
-      { type: 'restoreAutoScanDraft', workspaceName: 'proj', draft },
-      { type: 'seedAutoScanSetup', workspaceName: 'proj', saved: savedChoices('auto_scan_choices') },
+      { type: 'restoreAutoScanDraft', seedKey: 'proj', draft },
+      { type: 'seedAutoScanSetup', seedKey: 'proj', saved: savedChoices('auto_scan_choices') },
     ]);
 
     expect(restored.autoScanSetup).toMatchObject({
@@ -244,7 +261,7 @@ describe('autoScanBlocker', () => {
 describe('Auto Scan agent options', () => {
   it('seeds each agent from its saved options, and one with none runs without asking', () => {
     const state = reduce([
-      { type: 'seedAutoScanSetup', workspaceName: 'proj', saved: savedChoices('auto_scan_choices') },
+      { type: 'seedAutoScanSetup', seedKey: 'proj', saved: savedChoices('auto_scan_choices') },
     ]);
 
     expect(state.autoScanAgents.codex).toEqual({
@@ -263,12 +280,12 @@ describe('Auto Scan agent options', () => {
 
   it('drops the edits of one workspace when another one is seeded', () => {
     const edited = reduce([
-      { type: 'seedAutoScanSetup', workspaceName: 'proj', saved: undefined },
+      { type: 'seedAutoScanSetup', seedKey: 'proj', saved: undefined },
       { type: 'setCopilotAllowAll', value: false, target: 'autoScan' },
     ]);
 
     const other = reduce(
-      [{ type: 'seedAutoScanSetup', workspaceName: 'other', saved: undefined }],
+      [{ type: 'seedAutoScanSetup', seedKey: 'other', saved: undefined }],
       edited,
     );
 
@@ -313,7 +330,7 @@ describe('Auto Scan templates', () => {
 
   it('brings back the same choices and keeps only the chosen agent’s options', () => {
     const dialled = reduce([
-      { type: 'seedAutoScanSetup', workspaceName: 'proj', saved: undefined },
+      { type: 'seedAutoScanSetup', seedKey: 'proj', saved: undefined },
       { type: 'setAutoScanSource', source: 'github' },
       { type: 'setAutoScanCli', cli: 'junie' },
       // A template may keep a filter the wizard still has to finish.
@@ -327,7 +344,7 @@ describe('Auto Scan templates', () => {
       { type: 'setCodexSandbox', sandbox: 'read-only', target: 'autoScan' },
     ]);
     const other = reduce([
-      { type: 'seedAutoScanSetup', workspaceName: 'other', saved: savedChoices('auto_scan_choices') },
+      { type: 'seedAutoScanSetup', seedKey: 'other', saved: savedChoices('auto_scan_choices') },
     ]);
 
     const settings = throughTheWire(autoScanTemplateSettings(dialled));

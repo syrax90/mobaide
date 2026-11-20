@@ -80,10 +80,10 @@ async def _connected(
     return source
 
 
-def _item(number: str) -> ActiveWorkItem:
+def _item(number: str, repo: str = "") -> ActiveWorkItem:
     return ActiveWorkItem(
         id=f"#{number}", uuid=number, slug=f"gh-{number}", worktree_path=f"/wt/{number}",
-        project_root="/srv/app", added_at=now_iso_utc(), source="github",
+        project_root="/srv/app", added_at=now_iso_utc(), source="github", repo=repo,
     )
 
 
@@ -150,6 +150,15 @@ async def test_an_issue_is_done_once_it_is_closed():
     assert await source.is_done(_item("7")) is True
     assert await source.is_done(_item("99")) is None
     assert await source.is_done(_item("TEAM-1")) is None
+
+
+async def test_an_issue_of_another_repository_is_never_judged_done():
+    repo = _FakeRepository({7: set()})
+    repo.closed.add(7)
+    source = await _connected(repo, labels=["ai"])
+
+    assert await source.is_done(_item("7", repo="acme/app")) is True
+    assert await source.is_done(_item("7", repo="acme/other")) is None
 
 
 async def test_connect_refuses_a_workspace_github_cannot_scan(monkeypatch):

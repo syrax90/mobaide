@@ -763,9 +763,9 @@ export type WizardAction =
   | { type: 'setWorktree'; value: boolean }
   | { type: 'setBranchName'; value: string }
   | { type: 'setWorktreeBase'; pick: WorktreeBasePick }
-  | { type: 'seedAutoScanPrompt'; workspaceName: string; prompt: string }
-  | { type: 'seedAutoScanSetup'; workspaceName: string; saved: AutoScanSettings | undefined }
-  | { type: 'restoreAutoScanDraft'; workspaceName: string; draft: AutoScanDraft }
+  | { type: 'seedAutoScanPrompt'; seedKey: string; prompt: string }
+  | { type: 'seedAutoScanSetup'; seedKey: string; saved: AutoScanSettings | undefined }
+  | { type: 'restoreAutoScanDraft'; seedKey: string; draft: AutoScanDraft }
   | { type: 'applyAutoScanSettings'; settings: AutoScanSettingsInput }
   | { type: 'setAutoScanSource'; source: AutoScanSource }
   | { type: 'setAutoScanCli'; cli: string }
@@ -799,6 +799,14 @@ function withAgentBucket<K extends keyof AutoScanAgentBuckets>(
   }
   const session: AutoScanAgentBuckets = state;
   return { ...state, [kind]: update(session[kind]) };
+}
+
+/**
+ * The Auto Scan seed identity: workspace names repeat across agents, and the
+ * wizard stays mounted when the route switches to another agent.
+ */
+export function autoScanSeedKey(agentId: string, workspaceName: string): string {
+  return JSON.stringify([agentId, workspaceName]);
 }
 
 /**
@@ -1054,24 +1062,24 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
       return { ...state, worktreeBasePick: action.pick };
 
     case 'seedAutoScanPrompt':
-      // Seeded once per workspace: re-entering the step must not discard edits,
-      // but changing workspace must re-seed from the new workspace's saved prompt.
-      if (state.autoScanPromptSeededFor === action.workspaceName) return state;
+      // Seeded once per agent and workspace (`autoScanSeedKey`): re-entering the
+      // step must not discard edits, but another agent or workspace re-seeds.
+      if (state.autoScanPromptSeededFor === action.seedKey) return state;
       return {
         ...applyAutoScanSettings(state, { initial_prompt: action.prompt }),
-        autoScanPromptSeededFor: action.workspaceName,
+        autoScanPromptSeededFor: action.seedKey,
       };
 
     // Same once-per-workspace rule as the prompt. A choice the agent never saved
     // stays unset — no legacy filter defaults, no default source or agent — and
     // an agent whose options were never saved gets the Auto Scan defaults.
     case 'seedAutoScanSetup':
-      if (state.autoScanSetup.seededFor === action.workspaceName) return state;
+      if (state.autoScanSetup.seededFor === action.seedKey) return state;
       return applyAutoScanSettings(
         {
           ...state,
           autoScanSetup: {
-            seededFor: action.workspaceName,
+            seededFor: action.seedKey,
             source: null,
             cli: null,
             linearFilter: EMPTY_LINEAR_FILTER,
@@ -1090,8 +1098,8 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
       return {
         ...state,
         autoScan: action.draft.bucket,
-        autoScanPromptSeededFor: action.workspaceName,
-        autoScanSetup: { ...action.draft.setup, seededFor: action.workspaceName },
+        autoScanPromptSeededFor: action.seedKey,
+        autoScanSetup: { ...action.draft.setup, seededFor: action.seedKey },
         autoScanAgents: action.draft.agents,
       };
 

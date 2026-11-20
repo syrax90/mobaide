@@ -36,6 +36,8 @@ class ActiveWorkItem:
     project_root: str
     added_at: str  # ISO8601 UTC
     source: str = "linear"
+    # GitHub only: the ``--repo`` selector the issue number belongs to.
+    repo: str = ""
 
     @classmethod
     def from_dict(cls, data: dict) -> "ActiveWorkItem":
@@ -50,6 +52,7 @@ class ActiveWorkItem:
             project_root=normalize_workspace_path(str(data["project_root"])),
             added_at=str(data["added_at"]),
             source=str(data.get("source") or "linear"),
+            repo=str(data.get("repo") or ""),
         )
 
 

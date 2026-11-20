@@ -84,6 +84,7 @@ import { applyLaunchPrefs, launchPrefsFromState } from './launchPrefs';
 import { applyModeOrder, buildModeCards } from './modeCatalog';
 import {
   INITIAL_WIZARD_STATE,
+  autoScanSeedKey,
   isCustomMode,
   validateCustomPath,
   wizardReducer,
@@ -572,21 +573,18 @@ export function NewSession() {
     dispatch({ type: 'reconcileCodexEffort', details: codexDetails });
   }, [codexDetails]);
 
-  // Seeded once per workspace, so re-entering the step never discards edits.
+  // Seeded once per agent and workspace, so re-entering the step never discards edits.
   // A draft parked on the way to the GitHub setup terminal wins over the
   // agent's saved choices: it is newer, and it was never saved anywhere.
   useEffect(() => {
     if (location.mode !== 'auto_scan' || workspace === null) return;
+    const seedKey = autoScanSeedKey(resolvedAgentId, workspace.name);
     const parked = takeAutoScanDraft(resolvedAgentId, workspace.name);
     if (parked !== null) {
-      dispatch({ type: 'restoreAutoScanDraft', workspaceName: workspace.name, draft: parked });
+      dispatch({ type: 'restoreAutoScanDraft', seedKey, draft: parked });
     }
-    dispatch({
-      type: 'seedAutoScanPrompt',
-      workspaceName: workspace.name,
-      prompt: workspace.auto_scan_prompt ?? '',
-    });
-    dispatch({ type: 'seedAutoScanSetup', workspaceName: workspace.name, saved: workspace.auto_scan });
+    dispatch({ type: 'seedAutoScanPrompt', seedKey, prompt: workspace.auto_scan_prompt ?? '' });
+    dispatch({ type: 'seedAutoScanSetup', seedKey, saved: workspace.auto_scan });
   }, [location.mode, workspace, resolvedAgentId]);
 
   // Each step starts at the top of the page: a long step left scrolled down
