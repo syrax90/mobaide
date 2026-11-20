@@ -41,6 +41,7 @@ from .agents import ChatLaunchPlan, ConfigIntent
 from .install import INSTALL_POOL, PROBE_POOL, AdapterInstallError
 from .presence import PresenceHold
 from .rpc import (
+    CANCEL_REQUEST_METHOD,
     ERR_AUTH_REQUIRED,
     ERR_METHOD_NOT_FOUND,
     AcpConnection,
@@ -2393,6 +2394,20 @@ class ChatSession:
         self._set_attention("awaiting_permission")
         try:
             return await future
+        except asyncio.CancelledError as exc:
+            # The agent's $/cancel_request can land after the user answered
+            # but before this task woke up: the answer wins. Any other cancel
+            # (Stop, restart, close) still ends the task.
+            task = asyncio.current_task()
+            if (
+                exc.args == (CANCEL_REQUEST_METHOD,)
+                and future.done()
+                and not future.cancelled()
+                and task is not None
+            ):
+                task.uncancel()
+                return future.result()
+            raise
         finally:
             self._drop_request(key)
 

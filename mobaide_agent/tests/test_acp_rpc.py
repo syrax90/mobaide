@@ -1,7 +1,10 @@
 """``AcpConnection.close``: the stdout reader reaps the process and reports
 its exit; ``close`` returns once that exit is handled, and kills a process
 that outlives the grace period. Every caller waits for the same close, and
-commands the agent left running in its process group die with it."""
+commands the agent left running in its process group die with it.
+
+``$/cancel_request``: the agent cancels one of its own open requests; the
+handler is cancelled and the agent gets ``-32800``."""
 from __future__ import annotations
 
 import asyncio
@@ -41,13 +44,14 @@ def _connection(
     script: str,
     exits: list[int | None],
     on_notification: Any = lambda _method, _params: None,
+    on_request: Any = _no_requests,
 ) -> AcpConnection:
     return AcpConnection(
         [sys.executable, "-c", script],
         cwd=None,
         env=None,
         on_notification=on_notification,
-        on_request=_no_requests,
+        on_request=on_request,
         on_exit=exits.append,
         name="acp-test",
     )
@@ -133,6 +137,122 @@ class TestClose:
             assert _gone(child_pid)
         finally:
             _kill_if_alive(child_pid)
+
+
+# Every message without a method (a reply to the agent's request) is sent
+# back as a ``reply`` notification. The client's ``hold`` handler sends a
+# ``held`` notification, so the agent cancels only a request in progress.
+CANCELS_ITS_REQUESTS = r"""
+import json, sys
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+def cancel(params):
+    send({"method": "$/cancel_request", "params": params})
+
+def next_message():
+    msg = json.loads(sys.stdin.readline())
+    if "method" not in msg:
+        send({"method": "reply", "params": msg})
+    return msg
+
+send({"id": 2, "method": "quick", "params": {}})
+next_message()
+cancel({"requestId": 2})
+send({"id": 1, "method": "hold", "params": {}})
+send({"id": "s", "method": "hold", "params": {}})
+held = 0
+while held < 2:
+    held += next_message().get("method") == "held"
+for params in ({"requestId": True}, {"requestId": "1"}, {"requestId": 99},
+               {"requestId": [1]}, {}, [1]):
+    cancel(params)
+cancel({"requestId": "s"})
+next_message()
+cancel({"requestId": 1})
+next_message()
+for _ in sys.stdin:
+    pass
+"""
+
+ECHOES_REPLIES = r"""
+import json, sys
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "method" not in msg:
+        sys.stdout.write(json.dumps({"jsonrpc": "2.0", "method": "reply", "params": msg}) + "\n")
+        sys.stdout.flush()
+"""
+
+CANCELLED = {"code": -32800, "message": "Request cancelled"}
+
+
+class TestCancelRequest:
+    async def test_cancels_only_the_named_open_request(self):
+        exits: list[int | None] = []
+        notifications: list[str] = []
+        replies: list[dict[str, Any]] = []
+        done: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        conn: AcpConnection
+
+        def on_notification(method: str, params: Any) -> None:
+            notifications.append(method)
+            if method == "reply":
+                replies.append(params)
+                if len(replies) == 3 and not done.done():
+                    done.set_result(None)
+
+        async def on_request(method: str, params: Any) -> Any:
+            if method == "quick":
+                return {"ok": True}
+            conn.notify("held", {})
+            await asyncio.get_running_loop().create_future()
+
+        conn = _connection(CANCELS_ITS_REQUESTS, exits, on_notification, on_request)
+        await conn.start()
+        try:
+            await asyncio.wait_for(done, timeout=10.0)
+        finally:
+            await conn.close(grace=10.0)
+
+        # ``True``, ``"1"`` and the malformed cancels left request 1 open:
+        # "s" is the first to be cancelled.
+        assert replies == [
+            {"jsonrpc": "2.0", "id": 2, "result": {"ok": True}},
+            {"jsonrpc": "2.0", "id": "s", "error": CANCELLED},
+            {"jsonrpc": "2.0", "id": 1, "error": CANCELLED},
+        ]
+        assert "$/cancel_request" not in notifications
+
+    async def test_a_cancel_right_behind_its_request_still_gets_a_reply(self):
+        # Both lines reach the loop before the handler task has started.
+        exits: list[int | None] = []
+        replies: list[dict[str, Any]] = []
+        replied: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+        def on_notification(method: str, params: Any) -> None:
+            if method == "reply":
+                replies.append(params)
+                if not replied.done():
+                    replied.set_result(None)
+
+        async def on_request(method: str, params: Any) -> Any:
+            await asyncio.get_running_loop().create_future()
+
+        conn = _connection(ECHOES_REPLIES, exits, on_notification, on_request)
+        await conn.start()
+        try:
+            conn._dispatch({"jsonrpc": "2.0", "id": 5, "method": "hold", "params": {}})
+            conn._dispatch(
+                {"jsonrpc": "2.0", "method": "$/cancel_request", "params": {"requestId": 5}}
+            )
+            await asyncio.wait_for(replied, timeout=10.0)
+        finally:
+            await conn.close(grace=10.0)
+
+        assert replies == [{"jsonrpc": "2.0", "id": 5, "error": CANCELLED}]
 
 
 def _gone(pid: int) -> bool:

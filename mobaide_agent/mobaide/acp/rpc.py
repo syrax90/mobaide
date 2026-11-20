@@ -40,10 +40,27 @@ ERR_INTERNAL = -32603
 ERR_AUTH_REQUIRED = -32000
 ERR_NOT_FOUND = -32002
 ERR_CANCELLED = -32800
+CANCEL_REQUEST_METHOD = "$/cancel_request"
 
 # Spawning and killing processes block; they run here, not in the default
 # executor, which running PTY sessions can fill with blocked reads.
 _PROC_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="acp-proc")
+
+
+def _id_key(raw: Any) -> Any:
+    """Dict key for a JSON-RPC id. ``True`` must not match the id ``1``, and an
+    unhashable id (not valid JSON-RPC) gets a key that matches nothing."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, str)):
+        return (type(raw).__name__, id(raw))
+    return raw
+
+
+def _cancelled_reply(msg_id: Any) -> dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        "id": msg_id,
+        "error": {"code": ERR_CANCELLED, "message": "Request cancelled"},
+    }
 
 
 def _kill_and_wait(proc: subprocess.Popen[bytes]) -> None:
@@ -119,7 +136,8 @@ class AcpConnection:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ids = itertools.count(1)
         self._pending: dict[int, asyncio.Future[Any]] = {}
-        self._inbound_tasks: set[asyncio.Task[None]] = set()
+        # Keyed by the raw JSON-RPC id, so ``$/cancel_request`` finds them.
+        self._inbound: dict[Any, asyncio.Task[None]] = {}
         self._out_queue: queue.Queue[bytes | None] = queue.Queue()
         self._stderr_tail: collections.deque[str] = collections.deque(
             maxlen=STDERR_TAIL_LINES
@@ -235,7 +253,7 @@ class AcpConnection:
             if proc.poll() is None:
                 # stdout closed but the process lives on: kill it.
                 await loop.run_in_executor(_PROC_POOL, _kill_tree, proc)
-        for task in list(self._inbound_tasks):
+        for task in list(self._inbound.values()):
             task.cancel()
 
     def _send(self, message: dict[str, Any]) -> None:
@@ -344,14 +362,41 @@ class AcpConnection:
             return
         params = message.get("params")
         if msg_id is None:
+            if method == CANCEL_REQUEST_METHOD:
+                self._cancel_inbound(params)
+                return
             try:
                 self._on_notification(str(method), params)
             except Exception:
                 logger.exception("acp.notification_handler_failed method=%s", method)
             return
         task = asyncio.ensure_future(self._serve_request(msg_id, str(method), params))
-        self._inbound_tasks.add(task)
-        task.add_done_callback(self._inbound_tasks.discard)
+        key = _id_key(msg_id)
+        self._inbound[key] = task
+        task.add_done_callback(partial(self._forget_inbound, key, msg_id))
+
+    def _forget_inbound(self, key: Any, msg_id: Any, task: asyncio.Task[None]) -> None:
+        # A reused id may already name a newer task.
+        if self._inbound.get(key) is task:
+            del self._inbound[key]
+        if task.cancelled() and not self._exited and not self._closed:
+            # Cancelled before its first step, so _serve_request never ran
+            # its except: the agent still needs its reply.
+            self._send(_cancelled_reply(msg_id))
+
+    def _cancel_inbound(self, params: Any) -> None:
+        """Cancel the agent's open request named by ``$/cancel_request``.
+
+        The handler sees ``CancelledError`` and :meth:`_serve_request` replies
+        ``-32800``. An unknown or finished id is a no-op, as the spec asks.
+        """
+        req_id = params.get("requestId") if isinstance(params, dict) else None
+        task = self._inbound.get(_id_key(req_id))
+        if task is None:
+            logger.debug("acp.cancel_request_unknown name=%s id=%r", self._name, req_id)
+            return
+        # The message tells the handler this cancel came from the agent.
+        task.cancel(CANCEL_REQUEST_METHOD)
 
     async def _serve_request(self, msg_id: Any, method: str, params: Any) -> None:
         try:
@@ -360,11 +405,7 @@ class AcpConnection:
         except AcpRpcError as exc:
             reply = {"jsonrpc": "2.0", "id": msg_id, "error": exc.to_wire()}
         except asyncio.CancelledError:
-            reply = {
-                "jsonrpc": "2.0",
-                "id": msg_id,
-                "error": {"code": ERR_CANCELLED, "message": "Request cancelled"},
-            }
+            reply = _cancelled_reply(msg_id)
         except Exception as exc:
             logger.exception("acp.request_handler_failed method=%s", method)
             reply = {

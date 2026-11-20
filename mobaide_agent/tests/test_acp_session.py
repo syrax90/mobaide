@@ -1201,6 +1201,147 @@ class TestRequests:
         )
 
 
+# A prompt asks a permission (id 900) and a form question (id 901) and never
+# ends. The agent sends ``$/cancel_request`` for 900 once the file
+# ``<argv[1]>.permission`` exists, then for 901 once ``<argv[1]>.form``
+# exists. Each reply is shown as agent text: "<id> <error code or answer>".
+CANCELS_ITS_CARDS_AGENT = r"""
+import json, os, sys, threading, time
+release = sys.argv[1]
+lock = threading.Lock()
+
+def send(message):
+    with lock:
+        sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+        sys.stdout.flush()
+
+def cancel_when_released():
+    for suffix, req_id in ((".permission", 900), (".form", 901)):
+        while not os.path.exists(release + suffix):
+            time.sleep(0.02)
+        send({"method": "$/cancel_request", "params": {"requestId": req_id}})
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method is None:
+        error = msg.get("error")
+        answer = error["code"] if error else msg.get("result")
+        send({"method": "session/update", "params": {"sessionId": "cards", "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": f"{msg['id']} {json.dumps(answer)}\n"}}}})
+        continue
+    if "id" not in msg:
+        continue
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentCapabilities": {}}
+    elif method == "session/new":
+        result = {"sessionId": "cards"}
+    elif method == "session/prompt":
+        send({"id": 900, "method": "session/request_permission", "params": {
+            "sessionId": "cards",
+            "toolCall": {"toolCallId": "t1", "title": "git push", "kind": "execute"},
+            "options": [
+                {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                {"optionId": "reject", "name": "Reject", "kind": "reject_once"},
+            ]}})
+        send({"id": 901, "method": "elicitation/create", "params": {
+            "sessionId": "cards", "mode": "form", "message": "Which branch?",
+            "requestedSchema": {"type": "object", "properties": {
+                "branch": {"type": "string", "title": "Branch"}}}}})
+        threading.Thread(target=cancel_when_released, daemon=True).start()
+        continue
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+
+
+def _cancels_its_cards_agent(release) -> list[str]:
+    return [sys.executable, "-c", CANCELS_ITS_CARDS_AGENT, str(release)]
+
+
+class TestAgentCancelsRequest:
+    """``$/cancel_request`` from the agent: the card it names goes away."""
+
+    async def _both_cards(self, m: TimelineMirror) -> dict[str, dict[str, Any]]:
+        await m.command("prompt", text="go")
+        await m.until(lambda: len(m.state.get("requests") or []) == 2)
+        await m.until(lambda: "awaiting_permission" in m.attention)
+        return {request["kind"]: request for request in m.state["requests"]}
+
+    async def test_each_cancelled_card_goes_and_the_last_clears_the_alert(
+        self, open_chat, tmp_path
+    ):
+        release = tmp_path / "release"
+        m = await open_chat(argv=_cancels_its_cards_agent(release))
+        cards = await self._both_cards(m)
+
+        Path(f"{release}.permission").touch()
+        await m.until(lambda: any("900 -32800" in text for text in m.texts("agent")))
+
+        assert m.state["requests"] == [cards["form"]]
+        assert m.session.to_info().attention == "awaiting_permission"
+
+        Path(f"{release}.form").touch()
+        await m.until(lambda: any("901 -32800" in text for text in m.texts("agent")))
+
+        assert m.state["requests"] == []
+        assert m.session.to_info().attention is None
+        assert m.attention[-1] is None
+        late = await m.command("respond", request_id=cards["form"]["id"], action="decline")
+        assert late["error"] == "This request was already answered"
+
+    async def test_an_answer_given_before_the_cancel_is_handled_wins(self, open_chat, tmp_path):
+        m = await open_chat(argv=_cancels_its_cards_agent(tmp_path / "release"))
+        cards = await self._both_cards(m)
+        conn = m.session._conn
+        assert conn is not None
+        handler = conn._inbound[900]
+
+        # In one loop tick: the answer resolves the card, then the agent's
+        # cancel reaches the handler before it wakes up.
+        await m.session.handle_command(
+            orjson.dumps({"op": "respond", "request_id": cards["permission"]["id"],
+                          "option_id": "allow"})
+        )
+        assert not handler.done()
+        conn._dispatch(
+            {"jsonrpc": "2.0", "method": "$/cancel_request", "params": {"requestId": 900}}
+        )
+        await m.until(lambda: any(text.startswith("900 ") for text in m.texts("agent")))
+
+        agent_text = "".join(m.texts("agent"))
+        assert '900 {"outcome": {"outcome": "selected", "optionId": "allow"}}' in agent_text
+        assert "-32800" not in agent_text
+        assert m.state["requests"] == [cards["form"]]
+
+    async def test_a_local_cancel_after_the_answer_still_ends_the_handler(
+        self, open_chat, tmp_path
+    ):
+        """Only the agent's ``$/cancel_request`` lets an answer win. Stop,
+        restart and close cancel without that message and must still end the
+        task, or the work they cancel goes on."""
+        m = await open_chat(argv=_cancels_its_cards_agent(tmp_path / "release"))
+        cards = await self._both_cards(m)
+        conn = m.session._conn
+        assert conn is not None
+        handler = conn._inbound[900]
+
+        await m.session.handle_command(
+            orjson.dumps({"op": "respond", "request_id": cards["permission"]["id"],
+                          "option_id": "allow"})
+        )
+        assert not handler.done()
+        handler.cancel()
+        await m.until(lambda: any(text.startswith("900 ") for text in m.texts("agent")))
+
+        agent_text = "".join(m.texts("agent"))
+        assert "900 -32800" in agent_text
+        assert '"optionId": "allow"' not in agent_text
+
+
 # Asks one permission whose only options are ``allow_always`` and
 # ``reject_once``, then echoes the option the client chose.
 NO_ALLOW_ONCE_AGENT = r"""
