@@ -19,7 +19,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -27,6 +27,7 @@ from mobaide.agent._env_writer import atomic_write
 from mobaide.core.codex_auth import codex_login_with_api_key, sanitize_codex_output
 from mobaide.core.claude_launcher import CLAUDE_SESSION_PRESET_ENV
 from mobaide.core.hook_settings import HOOK_TOKEN_ENV
+from mobaide.core.pi_launcher import PI_CODE_MODE_ARGS
 from mobaide.core.cli_launcher import (
     WINDOWS_NO_WINDOW,
     CliBinaryNotFoundError,
@@ -762,6 +763,8 @@ class ClaudeChatSpec(_AdapterSpec):
 
     async def prepare(self, target: LaunchTarget, options: ClaudeOptions) -> ChatLaunchPlan:
         self._launch(os.environ)  # fail before the launcher creates a worktree
+        # Claude Code offers Code Mode in its terminal UI only.
+        options = replace(options, code_mode=False)
         spec = await self._launcher.build(target, options, session_id=None)
         env = self._adapter_env(spec.env)
         argv, ensure = self._launch(env)
@@ -1128,9 +1131,11 @@ class OpenCodeChatSpec(_ChatSpecBase):
         # Before the launcher can create a worktree.
         argv = self._argv()
         cwd = await self._launcher.resolve_cwd(target, options)
+        env = self._launcher.build_env(target)
+        await self._launcher.apply_code_mode(env, options)
         return ChatLaunchPlan(
             argv=argv,
-            env=self._launcher.build_env(target),
+            env=env,
             cwd=cwd,
             initial_prompt=options.initial_prompt or None,
             process_cwd=os.path.expanduser("~"),
@@ -1450,8 +1455,13 @@ class PiChatSpec(_ChatSpecBase):
         # Before the launcher can create a worktree.
         argv = self._argv()
         fake = argv == fake_agent_argv(self.fake_flavor)
-        cwd = await self._launcher.resolve_cwd(target, options)
         env = self._launcher.build_env(target)
+        if options.code_mode and self._fixed_command() is None:
+            # Before the worktree, like the missing-binary check.
+            await self._launcher.check_code_mode_version(env)
+            # The bridge passes these on to every ``pi`` it starts.
+            argv = [*argv, *PI_CODE_MODE_ARGS]
+        cwd = await self._launcher.resolve_cwd(target, options)
         return ChatLaunchPlan(
             argv=argv,
             env=env,

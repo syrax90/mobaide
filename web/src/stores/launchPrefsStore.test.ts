@@ -23,6 +23,9 @@ const CLAUDE_BLOB = {
   terminalUi: true,
 };
 
+/** What a stored Claude blob reads back as: the blob plus the default of the key it never carried. */
+const CLAUDE_PREFS = { ...CLAUDE_BLOB, codeMode: false };
+
 const CODEX_BLOB = {
   model: 'gpt-5.4',
   sandbox: 'read-only',
@@ -47,6 +50,8 @@ const JUNIE_BLOB = { planMode: true, brave: true, terminalUi: true };
 
 const PI_BLOB = { terminalUi: true };
 
+const PI_PREFS = { terminalUi: true, codeMode: false };
+
 const CLAUDE_DEFAULTS = {
   model: null,
   effort: 'high',
@@ -59,6 +64,7 @@ const CLAUDE_DEFAULTS = {
   debug: false,
   focusMode: true,
   terminalUi: false,
+  codeMode: false,
 } as const;
 
 async function rehydrateWith(state: Record<string, unknown>) {
@@ -98,7 +104,7 @@ describe('hydration', () => {
       lastProjectName: 'mobaide',
     });
 
-    expect(prefs.claude).toEqual(CLAUDE_BLOB);
+    expect(prefs.claude).toEqual(CLAUDE_PREFS);
     expect(prefs.codex).toEqual(CODEX_BLOB);
     expect(prefs.antigravity).toEqual(ANTIGRAVITY_BLOB);
     expect(prefs.lastWorkspaceName).toBe('mobaide');
@@ -142,10 +148,11 @@ describe('hydration', () => {
 
   it('restores the OpenCode bucket, with the defaults for keys the blob never carried', async () => {
     expect((await rehydrateWith({ opencode: { autoApprove: true, terminalUi: true } })).opencode)
-      .toEqual({ autoApprove: true, terminalUi: true });
+      .toEqual({ autoApprove: true, terminalUi: true, codeMode: true });
     expect((await rehydrateWith({ opencode: {} })).opencode).toEqual({
       autoApprove: false,
       terminalUi: false,
+      codeMode: true,
     });
   });
 
@@ -185,7 +192,7 @@ describe('hydration', () => {
 
     expect(prefs.claude).toBeNull();
     expect(prefs.antigravity).toBeNull();
-    expect(prefs.autoScan).toEqual(CLAUDE_BLOB);
+    expect(prefs.autoScan).toEqual(CLAUDE_PREFS);
   });
 
   it('voids the bucket for an enum value outside the wire vocabulary', async () => {
@@ -254,8 +261,8 @@ describe('hydration', () => {
   });
 
   it('restores the Pi bucket, defaults a missing key and voids a wrong-typed one', async () => {
-    expect((await rehydrateWith({ pi: PI_BLOB })).pi).toEqual(PI_BLOB);
-    expect((await rehydrateWith({ pi: {} })).pi).toEqual({ terminalUi: false });
+    expect((await rehydrateWith({ pi: PI_BLOB })).pi).toEqual(PI_PREFS);
+    expect((await rehydrateWith({ pi: {} })).pi).toEqual({ terminalUi: false, codeMode: false });
     expect((await rehydrateWith({ pi: { terminalUi: 'yes' } })).pi).toBeNull();
     expect((await rehydrateWith({ pi: [PI_BLOB] })).pi).toBeNull();
     expect((await rehydrateWith({ copilot: COPILOT_BLOB })).pi).toBeNull();
@@ -286,7 +293,7 @@ describe('hydration', () => {
     await rehydrateWith({ claude: CLAUDE_BLOB, worktree: true, lastAgentId: 'a1' });
 
     const state = useLaunchPrefsStore.getState();
-    expect(state.claude).toEqual(CLAUDE_BLOB);
+    expect(state.claude).toEqual(CLAUDE_PREFS);
     expect('worktree' in state).toBe(false);
     expect('lastAgentId' in state).toBe(false);
   });
@@ -310,6 +317,46 @@ describe('hydration', () => {
     });
     useLaunchPrefsStore.getState().setLastWorkspaceName('mobaide');
     expect(readLaunchPrefs().lastWorkspaceName).toBe('mobaide');
+  });
+});
+
+describe('Code Mode hydration', () => {
+  it('restores each agent’s own default for a blob saved before the toggle existed', async () => {
+    // CLAUDE_BLOB, PI_BLOB and this OpenCode blob all predate `codeMode`.
+    const prefs = await rehydrateWith({
+      claude: CLAUDE_BLOB,
+      opencode: { autoApprove: true, terminalUi: false },
+      pi: PI_BLOB,
+    });
+
+    expect(prefs.claude?.codeMode).toBe(false);
+    // On, like OpenCode 2 itself: an upgrade must not turn it off.
+    expect(prefs.opencode?.codeMode).toBe(true);
+    expect(prefs.pi?.codeMode).toBe(false);
+  });
+
+  it('keeps a stored choice that differs from the default', async () => {
+    const prefs = await rehydrateWith({
+      claude: { ...CLAUDE_BLOB, codeMode: true },
+      opencode: { autoApprove: false, terminalUi: false, codeMode: false },
+      pi: { ...PI_BLOB, codeMode: true },
+    });
+
+    expect(prefs.claude?.codeMode).toBe(true);
+    expect(prefs.opencode?.codeMode).toBe(false);
+    expect(prefs.pi?.codeMode).toBe(true);
+  });
+
+  it('voids the bucket for a wrong-typed codeMode rather than coercing it', async () => {
+    const prefs = await rehydrateWith({
+      claude: { ...CLAUDE_BLOB, codeMode: 'on' },
+      opencode: { autoApprove: false, terminalUi: false, codeMode: 0 },
+      pi: { ...PI_BLOB, codeMode: 'yes' },
+    });
+
+    expect(prefs.claude).toBeNull();
+    expect(prefs.opencode).toBeNull();
+    expect(prefs.pi).toBeNull();
   });
 });
 
@@ -387,7 +434,7 @@ describe('Junie writes', () => {
 
 describe('Pi writes', () => {
   it('files the Pi snapshot under its own slot and reads it back', async () => {
-    useLaunchPrefsStore.getState().setLaunchPrefs({ kind: 'pi', prefs: PI_BLOB });
+    useLaunchPrefsStore.getState().setLaunchPrefs({ kind: 'pi', prefs: PI_PREFS });
     const written = window.localStorage.getItem(STORAGE_KEY);
 
     useLaunchPrefsStore.setState({ pi: null });
@@ -395,7 +442,7 @@ describe('Pi writes', () => {
     await useLaunchPrefsStore.persist.rehydrate();
 
     const prefs = readLaunchPrefs();
-    expect(prefs.pi).toEqual(PI_BLOB);
+    expect(prefs.pi).toEqual(PI_PREFS);
     expect(prefs.copilot).toBeNull();
     expect(prefs.claude).toBeNull();
   });

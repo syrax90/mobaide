@@ -95,10 +95,13 @@ def _hook_url(session_id: str, port: int, kind: HookKind) -> str:
     )
 
 
-def _build_settings(session_id: str, port: int, token: str) -> dict:
+def _build_settings(session_id: str, port: int, token: str, *, fail_open: bool = False) -> dict:
     def hook(kind: HookKind, timeout: int = _HOOK_TIMEOUT_SECONDS) -> dict:
         url = f"{_hook_url(session_id, port, kind)}&token={quote(token, safe='')}"
-        return {"type": "http", "url": url, "timeout": timeout}
+        entry: dict = {"type": "http", "url": url, "timeout": timeout}
+        if fail_open:
+            entry["onFailure"] = "continue"
+        return entry
 
     return {
         "hooks": {
@@ -158,13 +161,23 @@ def chat_hook_settings(session_id: str, port: int) -> dict:
 
 
 def write_session_hooks(
-    session_id: str, port: int, token: str, extra: dict | None = None,
+    session_id: str,
+    port: int,
+    token: str,
+    extra: dict | None = None,
+    *,
+    fail_open: bool = False,
 ) -> Path:
     """Write the per-session hook settings file and return its path.
 
     ``extra`` keys (e.g. ``{"fastMode": True}`` / ``{"ultracode": True}``) are
     merged into the document at the top level alongside ``hooks`` so a Claude
     launch carries a single ``--settings`` flag rather than two.
+
+    ``fail_open`` is for a Code Mode session: there a hook that fails or times
+    out refuses the tool call, so a stalled or restarting agent would block
+    Claude's work. ``onFailure`` needs Claude Code 2.1.295, older than Code
+    Mode itself; an older CLI would stop at an "invalid settings" dialog.
 
     The file embeds the per-agent token in its hook URLs, so it is created
     atomically with owner-only permissions (0600) instead of written then
@@ -185,7 +198,7 @@ def write_session_hooks(
     except OSError:
         pass  # best-effort (no-op on Windows)
     target = _settings_path(port, session_id)
-    settings = _build_settings(session_id, port, token)
+    settings = _build_settings(session_id, port, token, fail_open=fail_open)
     if extra:
         settings.update(extra)
     payload = json.dumps(settings, indent=2)

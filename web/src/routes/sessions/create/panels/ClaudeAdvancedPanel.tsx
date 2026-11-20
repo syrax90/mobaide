@@ -1,8 +1,18 @@
 import { CheckboxField } from '../../../../components/form/CheckboxField';
 import { TextAreaField } from '../../../../components/form/TextAreaField';
 import type { ChatSupport } from '../../../../protocol/dto/agentVersion';
+import { claudeTerminalUi } from '../buildCreateRequest';
 import type { ClaudeBucket, ClaudeBucketId, WizardAction } from '../wizardState';
 import { chatBlocked } from './SessionViewField';
+
+export const CLAUDE_CODE_MODE_HINT =
+  'Experimental. Claude writes JavaScript that makes several tool calls in one step. ' +
+  'Sessions open in the terminal. Claude Code asks you to confirm until you accept; ' +
+  'turn Code Mode off here to stop the question.';
+
+/** Under "Open sessions in" while Claude Code Mode holds the session in the terminal. */
+export const CLAUDE_CODE_MODE_CHAT_NOTE =
+  'Code Mode runs only in the terminal. Turn it off under Advanced to use the chat.';
 
 interface ClaudeAdvancedPanelProps {
   bucket: ClaudeBucket;
@@ -15,11 +25,22 @@ interface ClaudeAdvancedPanelProps {
 /** Collapsed-by-default Claude flags, matching both mobile clients' "Advanced" expander. */
 export function ClaudeAdvancedPanel({ bucket, bucketId, dispatch, chat }: ClaudeAdvancedPanelProps) {
   // Debug output lands in the terminal, so it is offered only when there is one.
-  const terminal = chat === undefined || bucket.terminalUi || chatBlocked(chat);
+  const terminal = chat === undefined || claudeTerminalUi(bucket) || chatBlocked(chat);
   return (
     <div className="option-group">
       <details className="advanced advanced-stack">
         <summary>Advanced</summary>
+        {/* Claude Code only: Auto Scan never uses Code Mode. */}
+        {chat !== undefined && (
+          <CheckboxField
+            label="Code Mode"
+            checked={bucket.codeMode}
+            hint={CLAUDE_CODE_MODE_HINT}
+            onChange={(value) => {
+              dispatch({ type: 'setClaudeFlag', bucket: bucketId, flag: 'codeMode', value });
+            }}
+          />
+        )}
         <CheckboxField
           label="No memory"
           checked={bucket.noMemory}

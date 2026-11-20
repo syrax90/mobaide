@@ -1,13 +1,16 @@
 """Launcher for the OpenCode CLI (``opencode``).
 
 Needs no hooks, workspace files or sign-in probe; terminal sessions get attention
-from the OSC 7501 status reports that OpenCode 2 writes. Only ``--auto`` and
-``--prompt`` are used: both OpenCode lines accept them, and OpenCode 2 has no
-``--model`` or ``--agent`` flag for its TUI.
+from the OSC 7501 status reports that OpenCode 2 writes. ``--auto`` and
+``--prompt`` are used because both OpenCode lines accept them; OpenCode 2 has
+no ``--model`` or ``--agent`` flag for its TUI. ``--standalone`` (OpenCode 2
+only) is added when the session turns Code Mode off.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
 import sys
 from dataclasses import dataclass
@@ -18,6 +21,7 @@ from .cli_launcher import (
     CliBinaryNotFoundError,
     LaunchSpec,
     LaunchTarget,
+    cli_version,
     conda_env_bin,
     posix_npm_fallbacks,
     prepend_path_dir,
@@ -30,9 +34,19 @@ from .workspaces_config import WorkspaceConfig
 if TYPE_CHECKING:
     from mobaide.linear.worktree import WorktreeManager
 
+logger = logging.getLogger(__name__)
+
 _OPENCODE_BIN_ENV_VAR = "MOBAIDE_OPENCODE_BIN"
 # Inline JSON that OpenCode 2 merges over the user's ``cli.json`` (TUI settings).
 _CLI_CONFIG_ENV_VAR = "OPENCODE_CLI_CONFIG_CONTENT"
+# Inline JSON that OpenCode merges over the user's ``opencode.json``. Its
+# ``permissions`` list is appended to the user's own rules.
+_CONFIG_ENV_VAR = "OPENCODE_CONFIG_CONTENT"
+# OpenCode 2 runs MCP tools through Code Mode (its ``execute`` tool) by
+# default; denying ``execute`` turns Code Mode off. OpenCode 1 has no Code
+# Mode and refuses to start with a ``permissions`` key.
+_CODE_MODE_OFF_RULE = {"action": "execute", "resource": "*", "effect": "deny"}
+_CODE_MODE_MIN_MAJOR = 2
 # Longest first prompt handed to ``--prompt``: far above a real prompt, and
 # within one argv element on POSIX (Windows caps the whole command line at
 # 32,767 characters, so Auto Scan uses a smaller budget there).
@@ -107,6 +121,27 @@ def _turn_tabs_off(env: dict[str, str]) -> None:
     env[_CLI_CONFIG_ENV_VAR] = json.dumps(settings)
 
 
+def _turn_code_mode_off(env: dict[str, str]) -> bool:
+    """Add the rule that turns Code Mode off to the inline config, next to
+    whatever the user has put there. False when the user's value cannot take it."""
+    raw = env.get(_CONFIG_ENV_VAR, "")
+    try:
+        config = json.loads(raw) if raw.strip() else {}
+    except ValueError:
+        config = None
+    rules = config.get("permissions", []) if isinstance(config, dict) else None
+    if not isinstance(config, dict) or not isinstance(rules, list):
+        logger.warning(
+            "opencode_launcher.code_mode_off_skipped: %s is not a JSON object "
+            "with a permissions list",
+            _CONFIG_ENV_VAR,
+        )
+        return False
+    config["permissions"] = [*rules, _CODE_MODE_OFF_RULE]
+    env[_CONFIG_ENV_VAR] = json.dumps(config)
+    return True
+
+
 @dataclass(frozen=True)
 class OpenCodeOptions:
     """OpenCode CLI launch options.
@@ -121,6 +156,9 @@ class OpenCodeOptions:
     auto_approve: bool = False
     initial_prompt: str | None = None
     connect: bool = False
+    # OpenCode 2's Code Mode, on by default there; False turns it off for
+    # this session.
+    code_mode: bool = True
     # Worktree intent for a stored git workspace, resolved by ``resolve_cwd``
     # exactly like Codex; ignored for ad-hoc launches.
     worktree: bool = False
@@ -166,6 +204,11 @@ class OpenCodeLauncher:
         argv = self._build_argv(options)
         env = self.build_env(target)
         _turn_tabs_off(env)
+        if await self.apply_code_mode(env, options):
+            # The TUI otherwise reads its settings from the background service
+            # that every OpenCode TUI on the PC shares: the rule would reach
+            # the other sessions, or none if the service already runs.
+            argv.insert(1, "--standalone")
         cwd = await self.resolve_cwd(target, options)
         # Parts of OpenCode take the folder from ``PWD``, not from the real cwd.
         env["PWD"] = cwd
@@ -195,6 +238,21 @@ class OpenCodeLauncher:
             worktree_mgr=self._worktree_mgr,
             fallback_prefix="opencode-session",
         )
+
+    async def apply_code_mode(self, env: dict[str, str], options: OpenCodeOptions) -> bool:
+        """Turn Code Mode off in ``env`` when the options ask for it and the
+        installed OpenCode has it. True when ``env`` got the rule."""
+        if options.code_mode or options.connect:
+            return False
+        try:
+            binary = self.resolve_binary()
+        except CliBinaryNotFoundError:
+            return False
+        version = await asyncio.to_thread(cli_version, binary, env)
+        if version is None:
+            logger.warning("opencode_launcher.code_mode_off_skipped: version unknown")
+            return False
+        return version[0] >= _CODE_MODE_MIN_MAJOR and _turn_code_mode_off(env)
 
     def build_env(self, target: LaunchTarget) -> dict[str, str]:
         """The environment of an OpenCode process for ``target``. Does not

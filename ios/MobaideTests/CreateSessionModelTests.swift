@@ -1055,6 +1055,113 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertNil(request.pi_options?.branch_name)
     }
 
+    // MARK: - Code Mode
+
+    func testClaudeCodeModeLocksTheTerminalUIAndIsSentOnlyWithIt() async throws {
+        let model = await modelWithChat(#"{"claude":{"resume":true,"live":true}}"#)
+        model.selection = .stored("a")
+        model.mode = .standard
+        XCTAssertTrue(model.claudeUsesChat)
+        XCTAssertTrue(model.canContinueSession)
+        XCTAssertNil(model.claudeCodeModeChatNote)
+        XCTAssertEqual(try XCTUnwrap(model.buildRequest(mode: .standard)).claude_options?.code_mode, false)
+
+        model.claudeCodeMode = true
+
+        XCTAssertFalse(model.claudeUsesChat, "Code Mode runs only in the terminal")
+        XCTAssertFalse(model.canContinueSession, "a Continue opens the chat view")
+        XCTAssertEqual(model.claudeCodeModeChatNote, "Code Mode runs only in the terminal. Turn it off under Advanced to use the chat.")
+        let request = try XCTUnwrap(model.buildRequest(mode: .standard))
+        XCTAssertEqual(request.ui, "terminal")
+        XCTAssertEqual(request.claude_options?.code_mode, true)
+    }
+
+    func testClaudeContinueAndAutoScanNeverSendCodeMode() {
+        let model = makeModel()
+        model.mode = .standard
+        model.selection = .stored("a")
+        model.claudeCodeMode = true
+        let stored = ChatStoredSession(
+            session_id: "external-3333", cwd: "/srv/other", title: nil, updated_at: nil, open_session_id: nil
+        )
+
+        let request = model.continueRequest(for: stored)
+
+        XCTAssertEqual(request.ui, "chat")
+        XCTAssertEqual(request.claude_options?.code_mode, false, "the agent refuses it in the chat view")
+        XCTAssertEqual(model.autoScanClaudeOptions().code_mode, false)
+    }
+
+    func testOpenCodeCodeModeIsOnByDefaultAndOffIsSent() throws {
+        let model = makeModel()
+        model.selection = .stored("a")
+        XCTAssertEqual(try XCTUnwrap(model.buildRequest(mode: .opencode)).opencode_options?.code_mode, true)
+
+        model.opencodeCodeMode = false
+
+        XCTAssertEqual(try XCTUnwrap(model.buildRequest(mode: .opencode)).opencode_options?.code_mode, false)
+    }
+
+    func testPiCodeModeIsOffByDefaultAndOnReachesALaunchAndAContinue() throws {
+        let model = makeModel()
+        model.mode = .pi
+        model.selection = .stored("a")
+        XCTAssertEqual(try XCTUnwrap(model.buildRequest(mode: .pi)).pi_options?.code_mode, false)
+
+        model.piCodeMode = true
+        let stored = ChatStoredSession(
+            session_id: "external-4444", cwd: "/srv/other", title: nil, updated_at: nil, open_session_id: nil
+        )
+
+        XCTAssertEqual(try XCTUnwrap(model.buildRequest(mode: .pi)).pi_options?.code_mode, true)
+        XCTAssertEqual(model.continueRequest(for: stored).pi_options?.code_mode, true)
+    }
+
+    func testCreateRemembersEachCodeModeChoiceForTheNextWizard() async throws {
+        StubURLProtocol.reset()
+        let prefs = isolatedPrefs()
+        let launches: [(CreateSessionModel.Mode, (CreateSessionModel) -> Void)] = [
+            (.standard, { $0.claudeCodeMode = true }),
+            (.opencode, { $0.opencodeCodeMode = false }),
+            (.pi, { $0.piCodeMode = true }),
+        ]
+        for (mode, set) in launches {
+            let model = stubbedModel(prefs: prefs)
+            model.selection = .stored("a")
+            model.mode = mode
+            set(model)
+            StubURLProtocol.enqueue(
+                status: 200,
+                body: #"{"session_id":"s-new","state":"starting","created_at":"t"}"#
+            )
+            await model.create()
+            XCTAssertNil(model.error)
+        }
+
+        let bodies = try createBodies()
+        XCTAssertEqual(bodies.count, 3)
+        XCTAssertEqual(bodies[0]["ui"] as? String, "terminal")
+        XCTAssertEqual((bodies[0]["claude_options"] as? [String: Any])?["code_mode"] as? Bool, true)
+        XCTAssertEqual((bodies[1]["opencode_options"] as? [String: Any])?["code_mode"] as? Bool, false)
+        XCTAssertEqual((bodies[2]["pi_options"] as? [String: Any])?["code_mode"] as? Bool, true)
+        let next = makeModel(prefs: prefs)
+        XCTAssertTrue(next.claudeCodeMode)
+        XCTAssertFalse(next.opencodeCodeMode)
+        XCTAssertTrue(next.piCodeMode)
+    }
+
+    func testLaunchPrefsSavedBeforeCodeModeRestoreEachAgentsDefault() throws {
+        let decoder = JSONDecoder()
+
+        let claude = try decoder.decode(ClaudeLaunchPrefs.self, from: Data(#"{"effort":"high"}"#.utf8))
+        let opencode = try decoder.decode(OpenCodeLaunchPrefs.self, from: Data(#"{"autoApprove":true}"#.utf8))
+        let pi = try decoder.decode(PiLaunchPrefs.self, from: Data(#"{"terminalUI":true}"#.utf8))
+
+        XCTAssertFalse(claude.codeMode)
+        XCTAssertTrue(opencode.codeMode, "an upgrade must not turn OpenCode's Code Mode off")
+        XCTAssertFalse(pi.codeMode)
+    }
+
     // MARK: - Codex continue after the Codex sign-in
 
     private let externalSession = ChatStoredSession(

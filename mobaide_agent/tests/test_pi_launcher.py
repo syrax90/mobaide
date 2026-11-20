@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from mobaide.core import pi_launcher
+from mobaide.core import cli_launcher, pi_launcher
 from mobaide.core.claude_launcher import AdHocLaunch
 from mobaide.core.pi_launcher import PiBinaryNotFoundError, PiLauncher, PiOptions
 from mobaide.core.workspaces_config import WorkspaceConfig
@@ -31,6 +31,72 @@ async def test_argv_is_bare_pi_whatever_the_options(tmp_path: Path):
     assert spec.argv == ["pi"]
     assert spec.cwd == str(tmp_path)
     assert spec.created_files == []
+
+
+def _pi_reports(monkeypatch, version):
+    """Pin what ``pi --version`` reports, without running a CLI."""
+    asked: list[tuple[str, dict[str, str] | None]] = []
+
+    def _version(cli_bin, env=None):
+        asked.append((cli_bin, env))
+        return version
+
+    monkeypatch.setattr(cli_launcher, "cli_version", _version)
+    return asked
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "version", [(1, 1, 0), (2, 0, 0), None], ids=["minimum", "newer", "unknown"],
+)
+async def test_code_mode_adds_the_codemode_tool_to_the_user_s_own_tools(
+    tmp_path: Path, monkeypatch, version,
+):
+    """``+name`` adds to the tools the user picked in Pi instead of replacing
+    them. A version that cannot be read does not block the launch."""
+    _pi_reports(monkeypatch, version)
+
+    spec = await PiLauncher().build(_make_workspace(str(tmp_path)), PiOptions(code_mode=True))
+
+    assert spec.argv == ["pi", "--tools", "+codemode"]
+
+
+@pytest.mark.asyncio
+async def test_code_mode_off_runs_no_version_check(tmp_path: Path, monkeypatch):
+    asked = _pi_reports(monkeypatch, (1, 0, 0))
+
+    spec = await PiLauncher().build(_make_workspace(str(tmp_path)), PiOptions())
+
+    assert spec.argv == ["pi"]
+    assert asked == []
+
+
+@pytest.mark.asyncio
+async def test_code_mode_on_an_older_pi_fails_before_the_worktree(tmp_path: Path, monkeypatch):
+    """An older Pi reads ``+codemode`` as its whole tool list and drops its
+    default tools: the user must learn what to do, and no worktree may be left."""
+    (tmp_path / ".git").mkdir()
+    binary = os.path.join("/opt", "pi", "bin", "pi")
+    monkeypatch.setattr(pi_launcher, "_resolve_pi_binary", lambda *_a, **_k: binary)
+    monkeypatch.setenv("PATH", "/usr/bin")
+    asked = _pi_reports(monkeypatch, (1, 0, 9))
+    mgr = _RecordingWorktreeMgr()
+
+    with pytest.raises(ValueError) as excinfo:
+        await PiLauncher(worktree_mgr=mgr).build(  # type: ignore[arg-type]
+            _make_workspace(str(tmp_path)), PiOptions(code_mode=True, worktree=True),
+        )
+
+    message = str(excinfo.value)
+    assert "1.1.0" in message
+    assert "1.0.9" in message
+    assert "pi update" in message
+    assert mgr.calls == []
+    # The launch env: an npm Pi finds its ``node`` only on that PATH.
+    [(cli_bin, env)] = asked
+    assert cli_bin == binary
+    assert env is not None
+    assert env["PATH"].split(os.pathsep) == [os.path.join("/opt", "pi", "bin"), "/usr/bin"]
 
 
 @pytest.mark.asyncio

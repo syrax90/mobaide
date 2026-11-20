@@ -6,10 +6,13 @@ struct OpenCodeLaunchPrefs: Codable, Equatable, Sendable {
     let autoApprove: Bool
     /// The classic terminal instead of the chat view.
     let terminalUI: Bool
+    /// OpenCode 2's Code Mode: on by default, like OpenCode itself.
+    let codeMode: Bool
 
-    init(autoApprove: Bool = false, terminalUI: Bool = false) {
+    init(autoApprove: Bool = false, terminalUI: Bool = false, codeMode: Bool = true) {
         self.autoApprove = autoApprove
         self.terminalUI = terminalUI
+        self.codeMode = codeMode
     }
 }
 
@@ -18,5 +21,6 @@ extension OpenCodeLaunchPrefs {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         autoApprove = try container.decodeIfPresent(Bool.self, forKey: .autoApprove) ?? false
         terminalUI = try container.decodeIfPresent(Bool.self, forKey: .terminalUI) ?? false
+        codeMode = try container.decodeIfPresent(Bool.self, forKey: .codeMode) ?? true
     }
 }

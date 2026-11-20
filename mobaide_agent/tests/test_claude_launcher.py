@@ -731,3 +731,171 @@ def test_resolve_binary_honours_override(monkeypatch, tmp_path):
     launcher = ClaudeLauncher(claude_bin_override=override_path)
     assert launcher.resolve_binary() == override_path
     assert captured["override"] == override_path
+
+
+# Code Mode: one env var, on a Claude Code new enough to read it.
+
+
+def _claude_reports(monkeypatch, version):
+    """Pin what ``claude --version`` reports, without running a CLI."""
+    from mobaide.core import cli_launcher
+
+    asked: list[tuple[str, dict[str, str] | None]] = []
+
+    def _version(cli_bin, env=None):
+        asked.append((cli_bin, env))
+        return version
+
+    monkeypatch.setattr(cli_launcher, "cli_version", _version)
+    return asked
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "version", [(2, 1, 323), (3, 0, 0), None], ids=["minimum", "newer", "unknown"],
+)
+async def test_code_mode_turns_the_experiment_on(tmp_path: Path, monkeypatch, version):
+    """A version that cannot be read does not block the launch."""
+    from mobaide.core.claude_launcher import CODE_MODE_ENV
+
+    monkeypatch.delenv(CODE_MODE_ENV, raising=False)
+    _claude_reports(monkeypatch, version)
+
+    spec = await ClaudeLauncher().build(
+        _make_workspace(str(tmp_path)), ClaudeOptions(code_mode=True),
+    )
+
+    assert spec.env[CODE_MODE_ENV] == "1"
+    assert spec.argv == ["claude", "--dangerously-skip-permissions"]
+
+
+@pytest.mark.asyncio
+async def test_code_mode_off_sets_nothing_and_runs_no_version_check(
+    tmp_path: Path, monkeypatch,
+):
+    from mobaide.core.claude_launcher import CODE_MODE_ENV
+
+    monkeypatch.delenv(CODE_MODE_ENV, raising=False)
+    asked = _claude_reports(monkeypatch, (1, 0, 0))
+
+    spec = await ClaudeLauncher().build(_make_workspace(str(tmp_path)), ClaudeOptions())
+
+    assert CODE_MODE_ENV not in spec.env
+    assert asked == []
+
+
+@pytest.mark.asyncio
+async def test_code_mode_on_an_older_claude_fails_with_what_to_do(
+    tmp_path: Path, monkeypatch, _isolated_hooks_tempdir,
+):
+    """An older Claude Code ignores the variable and says nothing: the user
+    must learn why Code Mode is missing, and no hooks file may be left."""
+    _claude_reports(monkeypatch, (2, 1, 322))
+    launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
+
+    with pytest.raises(ValueError) as excinfo:
+        await launcher.build(
+            _make_workspace(str(tmp_path)), ClaudeOptions(code_mode=True), session_id="sid-old",
+        )
+
+    message = str(excinfo.value)
+    assert "2.1.323" in message
+    assert "2.1.322" in message
+    assert "claude update" in message
+    assert not (tmp_path / "mobaide_hooks_9001" / "sid-old.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_code_mode_version_check_finds_the_node_next_to_an_npm_claude(
+    tmp_path: Path, monkeypatch,
+):
+    """An npm install of Claude Code is a Node script whose ``node`` sits
+    next to it; without that folder on ``PATH`` the check reads no version."""
+    import os
+
+    from mobaide.core import claude_launcher
+
+    binary = os.path.join("/opt", "claude", "bin", "claude")
+    monkeypatch.setattr(claude_launcher, "_resolve_claude_binary", lambda *_a, **_k: binary)
+    monkeypatch.setenv("PATH", "/usr/bin")
+    asked = _claude_reports(monkeypatch, (2, 1, 323))
+
+    await ClaudeLauncher().build(_make_workspace(str(tmp_path)), ClaudeOptions(code_mode=True))
+
+    [(cli_bin, env)] = asked
+    assert cli_bin == binary
+    assert env is not None
+    assert env["PATH"].split(os.pathsep) == [os.path.join("/opt", "claude", "bin"), "/usr/bin"]
+
+
+@pytest.mark.asyncio
+async def test_code_mode_version_check_runs_with_the_workspace_conda_env(
+    tmp_path: Path, monkeypatch,
+):
+    """The gate asks ``--version`` with the env the session launches with, so
+    a ``node`` from the workspace's conda env is found there too."""
+    import os
+
+    from mobaide.core import claude_launcher
+
+    binary = os.path.join("/opt", "claude", "bin", "claude")
+    monkeypatch.setattr(claude_launcher, "_resolve_claude_binary", lambda *_a, **_k: binary)
+    monkeypatch.setattr(claude_launcher, "conda_env_bin", lambda _env: "/conda/envs/web/bin")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    asked = _claude_reports(monkeypatch, (2, 1, 323))
+
+    spec = await ClaudeLauncher().build(
+        _make_workspace(str(tmp_path), conda="web"), ClaudeOptions(code_mode=True),
+    )
+
+    [(_, env)] = asked
+    assert env is not None
+    assert env["PATH"].split(os.pathsep) == [
+        os.path.join("/opt", "claude", "bin"), "/conda/envs/web/bin", "/usr/bin",
+    ]
+    assert env == spec.env
+
+
+def _hooks_doc(spec) -> dict:
+    settings_path = spec.argv[spec.argv.index("--settings") + 1]
+    return json.loads(Path(settings_path).read_text(encoding="utf-8"))
+
+
+def _all_hooks(doc: dict) -> list[dict]:
+    return [
+        hook
+        for entries in doc["hooks"].values()
+        for entry in entries
+        for hook in entry["hooks"]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_code_mode_hooks_fail_open(tmp_path: Path, monkeypatch, _isolated_hooks_tempdir):
+    """In Code Mode a hook that fails or times out refuses the tool call: a
+    stalled agent must not block Claude's work."""
+    _claude_reports(monkeypatch, (2, 1, 323))
+    launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
+
+    spec = await launcher.build(
+        _make_workspace(str(tmp_path)), ClaudeOptions(code_mode=True), session_id="sid-cm",
+    )
+
+    hooks = _all_hooks(_hooks_doc(spec))
+    assert hooks
+    assert all(hook["onFailure"] == "continue" for hook in hooks)
+
+
+@pytest.mark.asyncio
+async def test_hooks_without_code_mode_carry_no_on_failure_key(
+    tmp_path: Path, _isolated_hooks_tempdir,
+):
+    """An older Claude Code stops at an "invalid settings" dialog on a key it
+    does not know: only Code Mode, which needs a newer CLI, may write it."""
+    launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
+
+    spec = await launcher.build(
+        _make_workspace(str(tmp_path)), ClaudeOptions(), session_id="sid-plain",
+    )
+
+    assert all("onFailure" not in hook for hook in _all_hooks(_hooks_doc(spec)))

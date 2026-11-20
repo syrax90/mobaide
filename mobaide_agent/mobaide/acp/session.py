@@ -256,6 +256,9 @@ class ChatSession:
         self._todos = cx.TodoList()
         # Replayed Cursor plans whose text is already shown: tool call id → title.
         self._stored_plans: dict[str, str] = {}
+        # Code Mode scripts of tool calls still running: tool call id → code.
+        # Later updates of the call do not repeat its input.
+        self._scripts: dict[str, str] = {}
         # Running commands whose latest output waits for its next frame.
         self._output_touches: dict[str, asyncio.TimerHandle] = {}
         self._presence_hold: PresenceHold | None = None
@@ -588,6 +591,7 @@ class ChatSession:
         tl.patch_state(status="starting", error=None, urgent=True)
         self._todos.clear()
         self._stored_plans.clear()
+        self._scripts.clear()
         try:
             init = await conn.request(
                 "initialize",
@@ -2034,7 +2038,16 @@ class ChatSession:
         is_new = item is None
         if item is None:
             item = nz.new_tool_item(tool_id)
+        script = nz.code_mode_script(update) or self._scripts.get(tool_id)
+        if script is not None:
+            nz.drop_script(item, script)
         nz.merge_tool_update(item, update, markdown_titles=self._plan.markdown_titles)
+        if script is not None:
+            nz.show_script(item, script)
+            if item["status"] in nz.TERMINAL_TOOL_STATUSES:
+                self._scripts.pop(tool_id, None)
+            else:
+                self._scripts[tool_id] = script
         self._last_tool_id = tool_id
         deferred = self._apply_console(tool_id, item, update)
         self._current_agent_item = self._current_thought_item = self._current_user_item = None
@@ -2331,6 +2344,9 @@ class ChatSession:
         if item is None:
             item = nz.new_tool_item("preview")
             nz.merge_tool_update(item, tool_call, markdown_titles=self._plan.markdown_titles)
+            script = nz.code_mode_script(tool_call)
+            if script is not None:
+                nz.show_script(item, script)
         public = {
             "kind": "permission",
             "tool_call_id": tool_id,

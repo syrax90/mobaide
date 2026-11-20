@@ -54,6 +54,8 @@ function restoreClaudeBucket(
     initialPrompt: base.initialPrompt,
     // Auto Scan always runs in the terminal and has no such toggle.
     terminalUi: bucketId === 'claude' ? saved.terminalUi : base.terminalUi,
+    // Claude Code only, like the Terminal UI toggle it goes with.
+    codeMode: bucketId === 'claude' ? saved.codeMode : base.codeMode,
   };
   // Display-only clamp, and the one place web improves on mobile: the effort
   // ladder narrows with the model, and both mobile clients restore the stored
@@ -104,7 +106,11 @@ export function applyLaunchPrefs(base: WizardState, prefs: LaunchPrefs): WizardS
     opencode:
       prefs.opencode === null
         ? base.opencode
-        : { autoApprove: prefs.opencode.autoApprove, terminalUi: prefs.opencode.terminalUi },
+        : {
+            autoApprove: prefs.opencode.autoApprove,
+            terminalUi: prefs.opencode.terminalUi,
+            codeMode: prefs.opencode.codeMode,
+          },
     copilot:
       prefs.copilot === null
         ? base.copilot
@@ -124,7 +130,7 @@ export function applyLaunchPrefs(base: WizardState, prefs: LaunchPrefs): WizardS
     pi:
       prefs.pi === null
         ? base.pi
-        : { terminalUi: prefs.pi.terminalUi },
+        : { terminalUi: prefs.pi.terminalUi, codeMode: prefs.pi.codeMode },
   };
 }
 
@@ -144,6 +150,7 @@ function claudePrefsFrom(bucket: ClaudeBucket): ClaudeLaunchPrefs {
     debug: bucket.debug,
     focusMode: bucket.focusMode,
     terminalUi: bucket.terminalUi,
+    codeMode: bucket.codeMode,
   };
 }
 
@@ -199,6 +206,7 @@ export function launchPrefsFromState(
         prefs: {
           autoApprove: state.opencode.autoApprove,
           terminalUi: state.opencode.terminalUi,
+          codeMode: state.opencode.codeMode,
         },
       };
     case 'copilot':
@@ -229,7 +237,7 @@ export function launchPrefsFromState(
     case 'pi':
       return {
         kind: 'pi',
-        prefs: { terminalUi: state.pi.terminalUi },
+        prefs: { terminalUi: state.pi.terminalUi, codeMode: state.pi.codeMode },
       };
     default:
       return null;

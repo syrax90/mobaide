@@ -88,15 +88,24 @@ interface SessionViewFieldProps {
   chat: ChatSupport;
   agent: ChatAgentKind;
   terminalUi: boolean;
+  /** Why a launch option holds Terminal, for example Claude Code Mode. */
+  lockedBy?: string;
   onChange: (terminalUi: boolean) => void;
 }
 
 /**
  * "Open sessions in" for a new agent session. Terminal is held while the chat
- * view cannot start on this PC.
+ * view cannot start on this PC, or while `lockedBy` is set.
  */
-export function SessionViewField({ chat, agent, terminalUi, onChange }: SessionViewFieldProps) {
-  const blocked = chatBlocked(chat);
+export function SessionViewField({
+  chat,
+  agent,
+  terminalUi,
+  lockedBy,
+  onChange,
+}: SessionViewFieldProps) {
+  const unavailable = chatBlocked(chat);
+  const blocked = unavailable || lockedBy !== undefined;
   return (
     <div className="option-group">
       <SessionViewChoice
@@ -106,7 +115,9 @@ export function SessionViewField({ chat, agent, terminalUi, onChange }: SessionV
           onChange(view === 'terminal');
         }}
       >
-        {blocked && <p className="field-hint">{terminalUiHint(chat, agent)}</p>}
+        {blocked && (
+          <p className="field-hint">{unavailable ? terminalUiHint(chat, agent) : lockedBy}</p>
+        )}
       </SessionViewChoice>
     </div>
   );

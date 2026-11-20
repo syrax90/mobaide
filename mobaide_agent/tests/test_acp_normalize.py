@@ -809,6 +809,132 @@ class TestMergeToolUpdate:
         assert item["content"] == []
 
 
+_SCRIPT = 'const a = await tools.read({path: "a.py"});\nawait tools.bash({command: "pytest"});\n'
+
+
+def _code_mode_call(**fields):
+    return {"rawInput": {"code": _SCRIPT}, "status": "in_progress", **fields}
+
+
+class TestCodeModeScript:
+    @pytest.mark.parametrize(
+        "update",
+        [
+            _code_mode_call(title="codemode"),
+            _code_mode_call(name="execute", title="Run JavaScript"),
+            _code_mode_call(title=" CodeMode "),
+        ],
+        ids=["pi-bridge-title", "opencode-name", "case-and-space"],
+    )
+    def test_a_code_mode_call_gives_its_script(self, update):
+        assert nz.code_mode_script(update) == _SCRIPT
+
+    @pytest.mark.parametrize(
+        "update",
+        [
+            _code_mode_call(title="Write", kind="edit"),
+            {"title": "codemode", "rawInput": {"code": "  \n"}},
+            {"title": "codemode", "rawInput": {"code": 42}},
+            {"title": "codemode", "rawInput": "tools.read()"},
+            {"title": "codemode"},
+        ],
+        ids=["other-tool-with-code", "blank-code", "code-not-text", "input-not-object", "no-input"],
+    )
+    def test_any_other_update_gives_none(self, update):
+        assert nz.code_mode_script(update) is None
+
+    def test_shows_the_tools_it_calls_and_the_script_below_its_output(self):
+        item = nz.new_tool_item("call-1")
+        update = _code_mode_call(
+            title="codemode",
+            content=[{"type": "content", "content": {"type": "text", "text": "4 passed"}}],
+        )
+        nz.merge_tool_update(item, update)
+
+        nz.show_script(item, _SCRIPT)
+
+        assert item["title"] == nz.CODE_MODE_TITLE == "Run script"
+        assert item["subtitle"] == "Calls read, bash"
+        # The script is in the content: the input would repeat it as JSON.
+        assert item["input"] is None
+        assert item["content"] == [
+            {"type": "text", "text": "4 passed"},
+            {"type": "text", "text": "```js\n" + _SCRIPT.rstrip("\n") + "\n```"},
+        ]
+
+    @pytest.mark.parametrize(
+        ("code", "subtitle"),
+        [
+            ("tools.read(); tools.read(); tools.grep()", "Calls read, grep"),
+            (
+                "tools.a(); tools.b(); tools.c(); tools.d(); tools.e(); tools.f()",
+                "Calls a, b, c, d and 2 more",
+            ),
+            ("await tools.github.search_issues ({q: 1})", "Calls github.search_issues"),
+            ("await tools.mcp.github.search({q: 1})", "Calls mcp.github.search"),
+            (
+                'await tools["github-mcp"].search_issues({}); await tools[\'web\']({})',
+                "Calls github-mcp.search_issues, web",
+            ),
+            (
+                "const { read, bash: sh } = tools;\nawait read({}); await sh({})",
+                "Calls read, bash",
+            ),
+            (
+                'tools.grep(); const {read} = tools; tools["a-b"].c(); tools.grep(); read()',
+                "Calls grep, read, a-b.c",
+            ),
+            ("console.log(1 + 1)", None),
+        ],
+        ids=[
+            "each-tool-once", "first-four", "namespaced-mcp-tool", "nested-namespace",
+            "bracket-keys", "destructuring-with-alias", "mixed-forms-in-first-use-order",
+            "no-tool-call",
+        ],
+    )
+    def test_subtitle_names_the_called_tools(self, code, subtitle):
+        item = nz.new_tool_item("call-1")
+
+        nz.show_script(item, code)
+
+        assert item["subtitle"] == subtitle
+
+    def test_no_backtick_run_in_the_script_can_close_its_fence(self):
+        code = "const md = `x ``` y`;\nconst t = `a`;"
+        item = nz.new_tool_item("call-1")
+
+        nz.show_script(item, code)
+
+        text = item["content"][-1]["text"]
+        assert text == "````js\n" + code + "\n````"
+
+    def test_a_full_output_keeps_the_script_as_the_last_part(self):
+        item = nz.new_tool_item("call-1")
+        item["content"] = [{"type": "text", "text": f"part {i}"} for i in range(nz.TOOL_PARTS_MAX)]
+
+        nz.show_script(item, _SCRIPT)
+
+        assert len(item["content"]) == nz.TOOL_PARTS_MAX
+        assert item["content"][-1]["text"].startswith("```js\n")
+
+    def test_drop_then_show_around_each_merge_never_repeats_the_script(self):
+        item = nz.new_tool_item("call-1")
+        nz.merge_tool_update(item, _code_mode_call(title="codemode"))
+        nz.show_script(item, _SCRIPT)
+
+        nz.drop_script(item, _SCRIPT)
+        nz.merge_tool_update(item, {"status": "failed", "rawOutput": "ReferenceError: x"})
+        nz.show_script(item, _SCRIPT)
+
+        # The error shows: the script part, which is text too, was out of the
+        # way when the merge looked for a text part.
+        assert item["content"] == [
+            {"type": "text", "text": "ReferenceError: x"},
+            {"type": "text", "text": "```js\n" + _SCRIPT.rstrip("\n") + "\n```"},
+        ]
+        assert item["status"] == "failed"
+
+
 class TestConfigOptions:
     def test_select_and_boolean_options(self):
         options = nz.config_options(

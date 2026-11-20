@@ -5012,4 +5012,161 @@ class CreateSessionViewModelTest {
         assertFalse(slot.captured.claude_options!!.worktree)
         assertNull(slot.captured.claude_options!!.base_branch)
     }
+
+    private fun TestScope.claudeChatVm(fx: Fixture): CreateSessionViewModel {
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            chatVersion("""{"claude":{"resume":true,"live":true}}""")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+        vm.selectWorkspace("alpha")
+        return vm
+    }
+
+    @Test
+    fun claudeCodeMode_locksTheTerminalUi_hidesContinue_andSendsItWithTheTerminal() = runTest {
+        val fx = newFixture()
+        val vm = claudeChatVm(fx)
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-code-mode", "starting", "2026-11-20T00:00:00Z")
+        val prefsSlot = slot<ClaudeLaunchPrefs>()
+        coEvery { fx.prefs.setLastUsedClaudeOptions(capture(prefsSlot)) } just Runs
+        assertTrue(vm.uiState.value.claudeUsesChat)
+        assertNull(vm.uiState.value.claudeChatLockedHint)
+
+        vm.toggleClaudeCodeMode(true)
+
+        val s = vm.uiState.value
+        assertFalse("Code Mode runs only in the terminal", s.claudeUsesChat)
+        assertEquals(
+            "Code Mode runs only in the terminal. Turn it off under Advanced to use the chat.",
+            s.claudeChatLockedHint,
+        )
+        assertFalse("a Continue opens the chat view", s.claudeResumeAvailable)
+
+        vm.submit()
+        advanceUntilIdle()
+
+        assertEquals(SessionResponse.UI_TERMINAL, requestSlot.captured.ui)
+        assertTrue(requestSlot.captured.claude_options!!.code_mode)
+        assertTrue(prefsSlot.captured.codeMode)
+        assertFalse(
+            "the user's own Terminal UI choice is kept apart from Code Mode",
+            prefsSlot.captured.terminalUi,
+        )
+    }
+
+    @Test
+    fun claudeCodeModeOff_opensTheChatView_andSendsItOff() = runTest {
+        val fx = newFixture()
+        val vm = claudeChatVm(fx)
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-chat", "starting", "2026-11-20T00:00:00Z")
+
+        vm.toggleClaudeCodeMode(true)
+        vm.toggleClaudeCodeMode(false)
+        vm.submit()
+        advanceUntilIdle()
+
+        assertEquals(SessionResponse.UI_CHAT, requestSlot.captured.ui)
+        assertFalse(requestSlot.captured.claude_options!!.code_mode)
+    }
+
+    @Test
+    fun resumeChatSession_claude_neverSendsCodeMode() = runTest {
+        val fx = newFixture()
+        val vm = claudeChatVm(fx)
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-resumed", "starting", "2026-11-20T00:00:00Z")
+
+        vm.toggleClaudeCodeMode(true)
+        vm.resumeChatSession("claude", ChatStoredSession(session_id = "external-3333", cwd = "/p/alpha"))
+        advanceUntilIdle()
+
+        assertEquals(SessionResponse.UI_CHAT, requestSlot.captured.ui)
+        assertFalse(
+            "the agent refuses Claude Code Mode in the chat view",
+            requestSlot.captured.claude_options!!.code_mode,
+        )
+    }
+
+    @Test
+    fun submitAutoScan_neverSendsTheClaudeCodeMode() = runTest {
+        val fx = newFixture(autoScanPrompt = "seed")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val optsSlot = slot<ClaudeOptionsModel>()
+        coEvery { fx.autoScanRepo.startScan("alpha", capture(optsSlot)) } just Runs
+
+        vm.toggleClaudeCodeMode(true)
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
+        vm.selectAutoScanMode()
+        vm.submitAutoScan()
+        advanceUntilIdle()
+
+        assertFalse(optsSlot.captured.code_mode)
+    }
+
+    @Test
+    fun submitOpenCode_codeMode_defaultsOn_andOffIsSentAndRemembered() = runTest {
+        val (byDefault, savedDefault) = opencodeSubmit(newFixture())
+        val (off, savedOff) = opencodeSubmit(newFixture()) { it.setOpenCodeCodeMode(false) }
+
+        assertTrue("on, like OpenCode 2 itself", byDefault.opencode_options!!.code_mode)
+        assertTrue(savedDefault.codeMode)
+        assertFalse(off.opencode_options!!.code_mode)
+        assertFalse(savedOff.codeMode)
+    }
+
+    @Test
+    fun submitPi_codeMode_defaultsOff_andOnIsSentAndRemembered() = runTest {
+        val (byDefault, savedDefault) = piSubmit(newFixture())
+        val (on, savedOn) = piSubmit(newFixture()) { it.setPiCodeMode(true) }
+
+        assertFalse(byDefault.pi_options!!.code_mode)
+        assertFalse(savedDefault.codeMode)
+        assertTrue(on.pi_options!!.code_mode)
+        assertTrue(savedOn.codeMode)
+    }
+
+    @Test
+    fun resumeChatSession_pi_keepsCodeMode() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-pi-resumed", "starting", "2026-11-20T00:00:00Z")
+
+        vm.selectWorkspace("alpha")
+        vm.confirmWorkspace()
+        vm.selectPiMode()
+        vm.setPiCodeMode(true)
+        vm.resumeChatSession("pi", ChatStoredSession(session_id = "external-4444", cwd = "/p/alpha"))
+        advanceUntilIdle()
+
+        assertEquals("pi", requestSlot.captured.cli)
+        assertTrue("Pi runs Code Mode in the chat view too", requestSlot.captured.pi_options!!.code_mode)
+    }
+
+    @Test
+    fun init_restoresEachCodeModeChoiceIntoItsOwnAgent() = runTest {
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedClaudeOptions() } returns ClaudeLaunchPrefs(codeMode = true)
+        coEvery { fx.prefs.getLastUsedOpenCodeOptions() } returns OpenCodeLaunchPrefs(codeMode = false)
+        coEvery { fx.prefs.getLastUsedPiOptions() } returns PiLaunchPrefs(codeMode = true)
+
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertTrue(s.claudeCodeMode)
+        assertFalse(s.opencodeCodeMode)
+        assertTrue(s.piCodeMode)
+    }
 }

@@ -11,4 +11,6 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class PiLaunchPrefs(
     val terminalUi: Boolean = false,
+    // Pi's codemode tool.
+    val codeMode: Boolean = false,
 )

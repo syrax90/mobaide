@@ -16,6 +16,7 @@ import glob
 import logging
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -469,6 +470,71 @@ async def warm_cli_model_caches(launchers: Mapping[str, CliLauncher]) -> None:
             await list_models()
         except Exception:
             logger.warning("model enumeration failed for %s", cli_id, exc_info=True)
+
+
+_VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
+_VERSION_TIMEOUT = 10.0
+# (path, mtime_ns) → parsed version: an update replaces the file, so a new
+# mtime asks again.
+_version_cache: dict[tuple[str, int], tuple[int, int, int] | None] = {}
+
+
+def cli_version(
+    cli_bin: str, env: Mapping[str, str] | None = None
+) -> tuple[int, int, int] | None:
+    """``<cli> --version`` parsed to ``(major, minor, patch)``; None when the
+    CLI cannot run or prints no version. Blocking: call it off the event loop.
+    ``env`` should be the launch environment: an npm install is a Node script
+    that finds ``node`` only on the PATH the launcher builds."""
+    try:
+        key = (cli_bin, os.stat(cli_bin).st_mtime_ns)
+    except OSError:
+        return None
+    if key in _version_cache:
+        return _version_cache[key]
+    try:
+        done = subprocess.run(
+            shim_safe_argv(cli_bin, "--version"),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=_VERSION_TIMEOUT,
+            creationflags=WINDOWS_NO_WINDOW,
+            env=dict(env) if env is not None else None,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    match = _VERSION_RE.search(done.stdout.decode("utf-8", "replace"))
+    version = (
+        (int(match.group(1)), int(match.group(2)), int(match.group(3) or 0))
+        if done.returncode == 0 and match is not None
+        else None
+    )
+    _version_cache[key] = version
+    return version
+
+
+def _version_text(version: tuple[int, int, int]) -> str:
+    return ".".join(str(part) for part in version)
+
+
+async def require_code_mode_version(
+    cli_bin: str,
+    env: Mapping[str, str],
+    minimum: tuple[int, int, int],
+    *,
+    product: str,
+    update_command: str,
+) -> None:
+    """Refuse Code Mode with a clear message on a CLI older than ``minimum``.
+    A version that cannot be read does not block the launch."""
+    version = await asyncio.to_thread(cli_version, cli_bin, env)
+    if version is not None and version < minimum:
+        raise ValueError(
+            f"Code Mode needs {product} {_version_text(minimum)} or later. "
+            f"This PC has {_version_text(version)}: run `{update_command}` there, "
+            "or turn Code Mode off."
+        )
 
 
 def prepend_path_dir(env: dict[str, str], directory: str) -> None:

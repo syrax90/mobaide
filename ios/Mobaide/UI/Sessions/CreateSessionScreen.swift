@@ -18,6 +18,16 @@ struct CreateSessionScreen: View {
 }
 
 private struct CreateSessionContent: View {
+    static let claudeCodeModeHint =
+        "Experimental. Claude writes JavaScript that makes several tool calls in one step. "
+        + "Sessions open in the terminal. Claude Code asks you to confirm until you accept; "
+        + "turn Code Mode off here to stop the question."
+    static let opencodeCodeModeHint =
+        "OpenCode 2 calls MCP tools from JavaScript, several in one step. "
+        + "Turn it off to have the model call each tool directly."
+    static let piCodeModeHint =
+        "Adds Pi's codemode tool: the model writes JavaScript that calls several tools in one step."
+
     @State private var model: CreateSessionModel
     @State private var toast: ToastMessage?
     @State private var workspaceSheet: WorkspaceFormMode?
@@ -701,6 +711,7 @@ private struct CreateSessionContent: View {
 
         claudeAdvancedOptions(
             isExpanded: $autoScanAdvancedExpanded,
+            codeMode: nil,
             showsDebug: true,
             noMemory: $model.autoScanNoMemory,
             fastMode: $model.autoScanClaudeFastMode,
@@ -788,7 +799,7 @@ private struct CreateSessionContent: View {
         sessionViewSection(
             $model.terminalUI,
             usesChat: model.claudeUsesChat,
-            unavailableReason: model.chatUnavailableReason
+            unavailableReason: model.chatUnavailableReason ?? model.claudeCodeModeChatNote
         )
         Section(header: PixelSectionHeader("Claude")) {
             claudeModelAndEffortPickers(
@@ -870,12 +881,22 @@ private struct CreateSessionContent: View {
         )
     }
 
+    /// "Code Mode": the agent writes JavaScript that makes several tool calls in one step.
+    @ViewBuilder
+    private func codeModeToggle(_ isOn: Binding<Bool>, hint: String) -> some View {
+        Toggle("Code Mode", isOn: isOn)
+        Text(hint)
+            .font(.footnote)
+            .foregroundStyle(colors.textMuted)
+    }
+
     /// Rendered after the Worktree section, so the main options stay on top.
     @ViewBuilder
     private var claudeAdvancedSection: some View {
         @Bindable var model = model
         claudeAdvancedOptions(
             isExpanded: $claudeAdvancedExpanded,
+            codeMode: $model.claudeCodeMode,
             showsDebug: !model.claudeUsesChat,
             noMemory: $model.noMemory,
             fastMode: $model.claudeFastMode,
@@ -917,10 +938,12 @@ private struct CreateSessionContent: View {
     }
 
     /// Collapsed-by-default "Advanced" section shared by the Claude Code and
-    /// Auto Scan steps (Android: `ClaudeAdvancedOptions`).
+    /// Auto Scan steps (Android: `ClaudeAdvancedOptions`). Auto Scan passes
+    /// nil for `codeMode`: it never uses Code Mode.
     @ViewBuilder
     private func claudeAdvancedOptions(
         isExpanded: Binding<Bool>,
+        codeMode: Binding<Bool>?,
         showsDebug: Bool,
         noMemory: Binding<Bool>,
         fastMode: Binding<Bool>,
@@ -930,6 +953,9 @@ private struct CreateSessionContent: View {
     ) -> some View {
         Section {
             DisclosureGroup("Advanced", isExpanded: isExpanded) {
+                if let codeMode {
+                    codeModeToggle(codeMode, hint: Self.claudeCodeModeHint)
+                }
                 Toggle("No memory", isOn: noMemory)
                 Toggle("Fast mode (Opus only)", isOn: fastMode)
                 Toggle("Ultracode", isOn: ultracode)
@@ -1035,6 +1061,7 @@ private struct CreateSessionContent: View {
         )
         Section(header: PixelSectionHeader("OpenCode")) {
             OpenCodeOptionRows(autoApprove: $model.opencodeAutoApprove)
+            codeModeToggle($model.opencodeCodeMode, hint: Self.opencodeCodeModeHint)
         }
         continueSessionSection(
             agentName: "OpenCode",
@@ -1081,6 +1108,7 @@ private struct CreateSessionContent: View {
             )
             .font(.footnote)
             .foregroundStyle(colors.textMuted)
+            codeModeToggle($model.piCodeMode, hint: Self.piCodeModeHint)
         }
         continueSessionSection(agentName: "Pi")
     }

@@ -52,6 +52,7 @@ const POPULATED: WizardState = {
     planMode: true,
     initialPrompt: 'claude prompt',
     terminalUi: false,
+    codeMode: false,
   },
   autoScan: {
     model: 'haiku',
@@ -66,6 +67,7 @@ const POPULATED: WizardState = {
     planMode: false,
     initialPrompt: 'scan the backlog',
     terminalUi: false,
+    codeMode: false,
   },
   codex: {
     model: 'gpt-5.4',
@@ -82,11 +84,11 @@ const POPULATED: WizardState = {
     addDirsDraft: '/one, /two\n/three',
     terminalUi: false,
   },
-  opencode: { autoApprove: true, terminalUi: false },
+  opencode: { autoApprove: true, terminalUi: false, codeMode: true },
   copilot: { allowAll: true, terminalUi: false },
   cursor: { force: true, terminalUi: false },
   junie: { planMode: true, brave: true, terminalUi: false },
-  pi: { terminalUi: false },
+  pi: { terminalUi: false, codeMode: false },
   git: { worktree: true, branchName: 'feature/x' },
   autoScanPromptSeededFor: gitWorkspace.name,
 };
@@ -202,6 +204,7 @@ const CLAUDE_BOOLEANS: Record<
   fast_mode: true,
   ultracode: true,
   debug: true,
+  code_mode: true,
   worktree: true,
 };
 
@@ -218,7 +221,7 @@ const ANTIGRAVITY_BOOLEANS: Record<
 const OPENCODE_BOOLEANS: Record<
   RequiredBooleans<components['schemas']['OpenCodeOptionsModel']>,
   true
-> = { auto_approve: true, connect: true, worktree: true };
+> = { auto_approve: true, connect: true, code_mode: true, worktree: true };
 
 const COPILOT_BOOLEANS: Record<
   RequiredBooleans<components['schemas']['CopilotOptionsModel']>,
@@ -236,6 +239,7 @@ const JUNIE_BOOLEANS: Record<
 > = { plan_mode: true, brave: true, worktree: true };
 
 const PI_BOOLEANS: Record<RequiredBooleans<components['schemas']['PiOptionsModel']>, true> = {
+  code_mode: true,
   worktree: true,
 };
 
@@ -799,7 +803,7 @@ describe('Pi — chat view', () => {
     ['agent predates chat', false, { kind: 'outdated' }, 'terminal'],
   ])('%s', (_name, terminalUi, chat, ui) => {
     const request = buildCreateRequest({
-      state: { ...POPULATED, pi: { terminalUi } },
+      state: { ...POPULATED, pi: { terminalUi, codeMode: false } },
       mode: 'pi',
       workspace: gitWorkspace,
       chat,
@@ -809,6 +813,7 @@ describe('Pi — chat view', () => {
     expect(request?.ui).toBe(ui);
     expect(request?.worktree).toBe(false);
     expect(request?.pi_options).toEqual({
+      code_mode: false,
       worktree: true,
       branch_name: 'feature/x',
       base_branch: null,
@@ -910,6 +915,7 @@ describe('buildResumeRequest', () => {
     expect(request.opencode_options).toEqual({
       auto_approve: true,
       connect: false,
+      code_mode: true,
       worktree: false,
       branch_name: undefined,
       base_branch: null,
@@ -933,6 +939,7 @@ describe('buildResumeRequest', () => {
       worktree: false,
     });
     expect(request.pi_options).toEqual({
+      code_mode: false,
       worktree: false,
       branch_name: undefined,
       base_branch: null,
@@ -1033,7 +1040,7 @@ describe('buildResumeRequest', () => {
 });
 
 describe('buildConnectRequest', () => {
-  const SIGN_IN = { auto_approve: false, connect: true, worktree: false };
+  const SIGN_IN = { auto_approve: false, connect: true, code_mode: true, worktree: false };
 
   it('asks for a bare terminal sign-in in the workspace, whatever the wizard holds', () => {
     // `opencode auth login` is not an agent session: auto-approve, the
@@ -1145,5 +1152,113 @@ describe('base_branch', () => {
     });
 
     expect(scan?.claude_options?.base_branch).toBeNull();
+  });
+});
+
+describe('Code Mode', () => {
+  const AVAILABLE: ChatSupport = { kind: 'available', resume: true, live: true };
+  const FRESH: WizardState = {
+    ...INITIAL_WIZARD_STATE,
+    selection: { kind: 'stored', name: gitWorkspace.name },
+  };
+  const CLAUDE_CODE_MODE: WizardState = {
+    ...FRESH,
+    claude: { ...FRESH.claude, codeMode: true },
+  };
+  const stored: ChatStoredSession = {
+    session_id: 'external-3333',
+    cwd: gitWorkspace.path,
+    title: 'Refactor the parser',
+    updated_at: '2026-11-20T10:00:00Z',
+    open_session_id: undefined,
+    open_elsewhere: undefined,
+  };
+
+  it('opens Claude Code in the terminal, the one place it runs Code Mode', () => {
+    const request = buildCreateRequest({
+      state: CLAUDE_CODE_MODE,
+      mode: 'claude',
+      workspace: gitWorkspace,
+      chat: AVAILABLE,
+    });
+
+    expect(request?.ui).toBe('terminal');
+    expect(request?.claude_options?.code_mode).toBe(true);
+  });
+
+  it('sends Claude Code Mode off explicitly by default, in the chat view', () => {
+    const request = buildCreateRequest({
+      state: FRESH,
+      mode: 'claude',
+      workspace: gitWorkspace,
+      chat: AVAILABLE,
+    });
+
+    expect(request?.ui).toBe('chat');
+    expect(request?.claude_options?.code_mode).toBe(false);
+  });
+
+  it('never sends Claude Code Mode with a Continue, which is always a chat', () => {
+    const request = buildResumeRequest(
+      { state: CLAUDE_CODE_MODE, mode: 'claude', workspace: gitWorkspace },
+      'claude',
+      stored,
+    );
+
+    expect(request.ui).toBe('chat');
+    expect(request.claude_options?.code_mode).toBe(false);
+  });
+
+  it('never sends Code Mode with an Auto Scan, whatever the buckets hold', () => {
+    const scan = buildStartScanRequest({
+      state: { ...CLAUDE_CODE_MODE, autoScan: { ...FRESH.autoScan, codeMode: true } },
+      mode: 'auto_scan',
+      workspace: gitWorkspace,
+    });
+
+    expect(scan?.claude_options?.code_mode).toBe(false);
+  });
+
+  it('sends OpenCode Code Mode on by default and off when the user turns it off', () => {
+    expect(build('opencode', FRESH).opencode_options?.code_mode).toBe(true);
+    expect(
+      build('opencode', { ...FRESH, opencode: { ...FRESH.opencode, codeMode: false } })
+        .opencode_options?.code_mode,
+    ).toBe(false);
+  });
+
+  it('sends Pi Code Mode off by default, and on with a launch and a Continue', () => {
+    const on: WizardState = { ...FRESH, pi: { ...FRESH.pi, codeMode: true } };
+
+    expect(build('pi', FRESH).pi_options?.code_mode).toBe(false);
+    expect(build('pi', on).pi_options?.code_mode).toBe(true);
+    expect(
+      buildResumeRequest({ state: on, mode: 'pi', workspace: gitWorkspace }, 'pi', stored)
+        .pi_options?.code_mode,
+    ).toBe(true);
+  });
+
+  // `createSession` re-parses every body through the strict wire schema, so a
+  // key the schema does not know fails the launch before it is sent.
+  it.each<[string, () => CreateSessionRequest, (wire: CreateSessionRequest) => unknown]>([
+    [
+      'Claude Code',
+      () => build('claude', CLAUDE_CODE_MODE),
+      (wire) => wire.claude_options?.code_mode,
+    ],
+    [
+      'OpenCode',
+      () => build('opencode', FRESH),
+      (wire) => wire.opencode_options?.code_mode,
+    ],
+    [
+      'Pi',
+      () => build('pi', { ...FRESH, pi: { ...FRESH.pi, codeMode: true } }),
+      (wire) => wire.pi_options?.code_mode,
+    ],
+  ])('keeps %s Code Mode through the strict wire schema', (_agent, request, codeMode) => {
+    const wire = createSessionRequestSchema.parse(request()) as CreateSessionRequest;
+
+    expect(codeMode(wire)).toBe(true);
   });
 });

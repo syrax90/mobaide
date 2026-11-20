@@ -18,6 +18,7 @@ from .cli_launcher import (
     conda_env_bin,
     posix_npm_fallbacks,
     prepend_path_dir,
+    require_code_mode_version,
     resolve_cli_binary,
     resolve_standard_worktree_cwd,
     windows_npm_fallbacks,
@@ -86,6 +87,16 @@ class PiOptions:
     base_branch: str | None = None
     # First message, after ``--`` (Auto Scan only).
     initial_prompt: str | None = None
+    # Adds Pi's built-in ``codemode`` tool (the model writes JavaScript that
+    # calls the other tools). Off leaves the user's own ``defaultTools``.
+    code_mode: bool = False
+
+
+# Only ``+name`` entries: Pi then adds to the user's tool selection
+# instead of replacing it. Pi reads them so from 1.1.0; an older Pi takes
+# the list as the whole selection and would drop its default tools.
+PI_CODE_MODE_ARGS = ("--tools", "+codemode")
+PI_CODE_MODE_MIN_VERSION = (1, 1, 0)
 
 
 class PiLauncher:
@@ -118,12 +129,27 @@ class PiLauncher:
         # ``session_id`` is accepted for ``CliLauncher`` parity but unused:
         # Pi has no per-session hooks.
         argv = [self.resolve_binary()]
+        env = self.build_env(target)
+        if options.code_mode:
+            await self.check_code_mode_version(env)
+            argv += PI_CODE_MODE_ARGS
         if options.initial_prompt:
             # After ``--`` a prompt that starts with ``-`` stays a message.
             argv += ["--", options.initial_prompt]
-        env = self.build_env(target)
         cwd = await self.resolve_cwd(target, options)
         return LaunchSpec(argv=argv, cwd=cwd, env=env, created_files=[])
+
+    async def check_code_mode_version(self, env: dict[str, str]) -> None:
+        """Fail with a clear message on a Pi that would read
+        :data:`PI_CODE_MODE_ARGS` as its whole tool list. A version that
+        cannot be read does not block the launch."""
+        await require_code_mode_version(
+            self.resolve_binary(),
+            env,
+            PI_CODE_MODE_MIN_VERSION,
+            product="Pi",
+            update_command="pi update",
+        )
 
     async def resolve_cwd(self, target: LaunchTarget, options: PiOptions) -> str:
         """The session folder: the workspace root, a new git worktree when

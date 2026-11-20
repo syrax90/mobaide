@@ -1726,6 +1726,16 @@ class RelayClient:
                 "status": 400,
                 "body": {"detail": detail},
             }
+        except ValueError as exc:
+            # The REST router answers a launch the request cannot have with
+            # 400 too (a Code Mode that needs a newer Claude Code).
+            logger.warning("relay.proxy_request_invalid path=%s: %s", path, exc)
+            resp = {
+                "type": "proxy_response",
+                "request_id": request_id,
+                "status": 400,
+                "body": {"detail": str(exc)},
+            }
         except Exception as exc:
             logger.warning("relay.proxy_request_failed path=%s: %s", path, exc)
             resp = {

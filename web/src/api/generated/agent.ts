@@ -1608,6 +1608,8 @@ export interface components {
         /**
          * ClaudeOptionsModel
          * @description Wire DTO for Claude CLI launch options (see :class:`ClaudeOptions`).
+         *
+         *     ``code_mode`` is a per-launch choice, so an Auto Scan does not keep it.
          */
         ClaudeOptionsModel: {
             /** Append System Prompt */
@@ -1616,6 +1618,11 @@ export interface components {
             base_branch?: string | null;
             /** Branch Name */
             branch_name?: string | null;
+            /**
+             * Code Mode
+             * @default false
+             */
+            code_mode: boolean;
             /**
              * Debug
              * @default false
@@ -2939,7 +2946,8 @@ export interface components {
          *     ``initial_prompt`` is the first message; it travels as one argv element,
          *     so its length is capped. ``connect`` starts a terminal session that runs
          *     ``opencode auth login`` (sign in to a model provider) in place of an
-         *     OpenCode session.
+         *     OpenCode session. ``code_mode`` defaults to on, like OpenCode 2 itself,
+         *     so an older client changes nothing.
          */
         OpenCodeOptionsModel: {
             /**
@@ -2951,6 +2959,11 @@ export interface components {
             base_branch?: string | null;
             /** Branch Name */
             branch_name?: string | null;
+            /**
+             * Code Mode
+             * @default true
+             */
+            code_mode: boolean;
             /**
              * Connect
              * @default false
@@ -2987,6 +3000,11 @@ export interface components {
             base_branch?: string | null;
             /** Branch Name */
             branch_name?: string | null;
+            /**
+             * Code Mode
+             * @default false
+             */
+            code_mode: boolean;
             /**
              * Worktree
              * @default false

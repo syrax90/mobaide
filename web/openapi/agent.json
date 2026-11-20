@@ -860,7 +860,7 @@
         "type": "object"
       },
       "ClaudeOptionsModel": {
-        "description": "Wire DTO for Claude CLI launch options (see :class:`ClaudeOptions`).",
+        "description": "Wire DTO for Claude CLI launch options (see :class:`ClaudeOptions`).\n\n``code_mode`` is a per-launch choice, so an Auto Scan does not keep it.",
         "properties": {
           "append_system_prompt": {
             "anyOf": [
@@ -894,6 +894,11 @@
               }
             ],
             "title": "Branch Name"
+          },
+          "code_mode": {
+            "default": false,
+            "title": "Code Mode",
+            "type": "boolean"
           },
           "debug": {
             "default": false,
@@ -3681,7 +3686,7 @@
         "type": "object"
       },
       "OpenCodeOptionsModel": {
-        "description": "Wire DTO for OpenCode CLI launch options (see :class:`OpenCodeOptions`).\n\n``initial_prompt`` is the first message; it travels as one argv element,\nso its length is capped. ``connect`` starts a terminal session that runs\n``opencode auth login`` (sign in to a model provider) in place of an\nOpenCode session.",
+        "description": "Wire DTO for OpenCode CLI launch options (see :class:`OpenCodeOptions`).\n\n``initial_prompt`` is the first message; it travels as one argv element,\nso its length is capped. ``connect`` starts a terminal session that runs\n``opencode auth login`` (sign in to a model provider) in place of an\nOpenCode session. ``code_mode`` defaults to on, like OpenCode 2 itself,\nso an older client changes nothing.",
         "properties": {
           "auto_approve": {
             "default": false,
@@ -3709,6 +3714,11 @@
               }
             ],
             "title": "Branch Name"
+          },
+          "code_mode": {
+            "default": true,
+            "title": "Code Mode",
+            "type": "boolean"
           },
           "connect": {
             "default": false,
@@ -3772,6 +3782,11 @@
               }
             ],
             "title": "Branch Name"
+          },
+          "code_mode": {
+            "default": false,
+            "title": "Code Mode",
+            "type": "boolean"
           },
           "worktree": {
             "default": false,

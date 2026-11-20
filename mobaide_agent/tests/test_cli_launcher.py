@@ -9,15 +9,19 @@ startup warm task), and the ``shim_safe_argv`` Windows-shim wrapper.
 """
 from __future__ import annotations
 
+import os
+import stat
 import subprocess
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from mobaide.core import cli_launcher
 from mobaide.core.cli_launcher import (
     CliBinaryNotFoundError,
     await_model_cache_warmup,
     build_cli_capabilities,
+    cli_version,
     probe_cli_available,
     shim_safe_argv,
     warm_cli_model_caches,
@@ -331,6 +335,130 @@ class TestShimSafeArgv:
         """The wrap is win32-only: a POSIX file that merely ends in ``.cmd``
         must not be routed through a (nonexistent) ``cmd`` builtin."""
         assert shim_safe_argv("/opt/fake.cmd", "models") == ["/opt/fake.cmd", "models"]
+
+
+def _fake_cli(path, body: str):
+    """A POSIX script standing in for ``<cli> --version``."""
+    path.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return str(path)
+
+
+@skip_if_not_linux
+class TestCliVersion:
+    """``cli_version`` gates Code Mode: Claude Code refuses it below a minimum
+    version and OpenCode 1 refuses the rule that turns it off."""
+
+    @pytest.mark.parametrize(
+        ("output", "version"),
+        [
+            ("2.1.323 (Claude Code)", (2, 1, 323)),
+            ("opencode 1.4", (1, 4, 0)),
+            ("v0.70.2-beta.1", (0, 70, 2)),
+        ],
+        ids=["claude-style", "no-patch", "prefixed"],
+    )
+    def test_reads_the_first_version_in_the_output(self, tmp_path, output, version):
+        cli = _fake_cli(tmp_path / "cli", f'echo "{output}"\n')
+
+        assert cli_version(cli) == version
+
+    @pytest.mark.parametrize(
+        "body",
+        ['echo "1.2.3"; exit 1\n', 'echo "no version here"\n'],
+        ids=["failed-run", "no-version"],
+    )
+    def test_none_when_the_cli_reports_no_version(self, tmp_path, body):
+        assert cli_version(_fake_cli(tmp_path / "cli", body)) is None
+
+    def test_none_for_a_missing_cli(self, tmp_path):
+        assert cli_version(str(tmp_path / "gone")) is None
+
+    def test_runs_the_cli_with_the_launch_env(self, tmp_path):
+        """An npm install is a Node script: its ``node`` is found only on the
+        PATH the launcher builds, not on the agent's own PATH."""
+        node_dir = tmp_path / "node-bin"
+        node_dir.mkdir()
+        _fake_cli(node_dir / "mobaide-fake-node", 'echo "4.5.6"\n')
+        cli = tmp_path / "cli"
+        cli.write_text("#!/usr/bin/env mobaide-fake-node\n", encoding="utf-8")
+        cli.chmod(cli.stat().st_mode | stat.S_IXUSR)
+        env = {**os.environ, "PATH": f"{node_dir}{os.pathsep}/usr/bin{os.pathsep}/bin"}
+
+        assert cli_version(str(cli), env) == (4, 5, 6)
+
+    def test_asks_again_only_after_the_cli_file_changes(self, tmp_path):
+        """An update replaces the file: a new mtime must not reuse the
+        version of the CLI it replaced."""
+        runs = tmp_path / "runs"
+        cli = _fake_cli(tmp_path / "cli", f'echo run >> "{runs}"\necho "1.0.0"\n')
+
+        assert cli_version(cli) == (1, 0, 0)
+        assert cli_version(cli) == (1, 0, 0)
+        assert runs.read_text().count("run") == 1
+
+        mtime = os.stat(cli).st_mtime_ns
+        os.utime(cli, ns=(mtime + 1_000_000_000, mtime + 1_000_000_000))
+
+        assert cli_version(cli) == (1, 0, 0)
+        assert runs.read_text().count("run") == 2
+
+
+class TestRequireCodeModeVersion:
+    """The shared Code Mode gate: a CLI older than the minimum stops the
+    launch with what to do; a version that cannot be read does not."""
+
+    @staticmethod
+    def _reports(monkeypatch, version):
+        asked: list[tuple[str, dict[str, str] | None]] = []
+
+        def _version(cli_bin, env=None):
+            asked.append((cli_bin, env))
+            return version
+
+        monkeypatch.setattr(cli_launcher, "cli_version", _version)
+        return asked
+
+    async def test_an_older_cli_fails_with_the_versions_and_the_update_command(
+        self, monkeypatch,
+    ):
+        self._reports(monkeypatch, (1, 0, 9))
+
+        with pytest.raises(ValueError) as excinfo:
+            await cli_launcher.require_code_mode_version(
+                "/opt/pi", {"PATH": "/opt"}, (1, 1, 0),
+                product="Pi", update_command="pi update",
+            )
+
+        assert str(excinfo.value) == (
+            "Code Mode needs Pi 1.1.0 or later. This PC has 1.0.9: "
+            "run `pi update` there, or turn Code Mode off."
+        )
+
+    @pytest.mark.parametrize(
+        "version", [(2, 1, 323), (2, 2, 0), None], ids=["minimum", "newer", "unknown"],
+    )
+    async def test_passes_the_minimum_a_newer_or_an_unknown_version(
+        self, monkeypatch, version,
+    ):
+        self._reports(monkeypatch, version)
+
+        await cli_launcher.require_code_mode_version(
+            "/opt/claude", {}, (2, 1, 323),
+            product="Claude Code", update_command="claude update",
+        )
+
+    async def test_asks_the_given_binary_with_the_launch_env(self, monkeypatch):
+        """The launch env carries the PATH an npm install needs for ``node``."""
+        asked = self._reports(monkeypatch, (9, 0, 0))
+        env = {"PATH": "/opt/node/bin"}
+
+        await cli_launcher.require_code_mode_version(
+            "/opt/claude", env, (2, 1, 323),
+            product="Claude Code", update_command="claude update",
+        )
+
+        assert asked == [("/opt/claude", env)]
 
 
 class TestProbeWithRealLaunchers:

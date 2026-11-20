@@ -63,6 +63,11 @@ export const claudeOptionsSchema = z.strictObject({
    * agent leaves the CLI's own view setting alone. Clients always send a bool.
    */
   focus_mode: z.boolean().nullish(),
+  /**
+   * Claude Code's experimental Code Mode. The agent refuses it with
+   * `ui: 'chat'`: Claude Code offers it in the terminal UI only.
+   */
+  code_mode: z.boolean().default(false),
 });
 
 export const codexOptionsSchema = z.strictObject({
@@ -117,6 +122,8 @@ export const opencodeOptionsSchema = z.strictObject({
   auto_approve: z.boolean().default(false),
   initial_prompt: optionalWireString(),
   connect: z.boolean().default(false),
+  /** OpenCode 2's Code Mode; the wire default is on, like OpenCode itself. */
+  code_mode: z.boolean().default(true),
   worktree: z.boolean().default(false),
   branch_name: optionalWireString(),
   base_branch: optionalWireString(),
@@ -145,6 +152,8 @@ export const junieOptionsSchema = z.strictObject({
 });
 
 export const piOptionsSchema = z.strictObject({
+  /** Adds Pi's `codemode` tool for the session. */
+  code_mode: z.boolean().default(false),
   worktree: z.boolean().default(false),
   branch_name: optionalWireString(),
   base_branch: optionalWireString(),

@@ -26,6 +26,7 @@ from .cli_launcher import (
     conda_env_bin,
     posix_npm_fallbacks,
     prepend_path_dir,
+    require_code_mode_version,
     resolve_cli_binary,
     resolve_standard_worktree_cwd,
     windows_npm_fallbacks,
@@ -130,6 +131,10 @@ class ClaudeOptions:
     # (explicit, so a sticky host-side /focus can't override the client's
     # choice), None (older client) → no viewMode key, CLI behaviour unchanged.
     focus_mode: bool | None = None
+    # Claude Code's experimental Code Mode (Claude writes JavaScript that makes
+    # several tool calls in one step). Terminal UI only: Claude Code does not
+    # offer it through the Agent SDK that the chat view runs on.
+    code_mode: bool = False
 
 
 _LINEAR_MCP_TEMPLATE = {
@@ -160,6 +165,10 @@ _LOCAL_SETTINGS_TEMPLATE = {
 CLAUDE_SESSION_PRESET_ENV: dict[str, str] = {
     "ENABLE_PROMPT_CACHING_1H": "1",
 }
+
+# A "0" in the user's ~/.claude/settings.json or managed settings still wins.
+CODE_MODE_ENV = "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE"
+CODE_MODE_MIN_VERSION = (2, 1, 323)
 
 
 class ClaudeLauncher:
@@ -216,12 +225,23 @@ class ClaudeLauncher:
         # (``SessionManager``) and the Auto Scan scanner; whenever the launcher
         # is hook-capable the session gets attention hooks and can raise
         # notifications.
+        env = self._build_env(target, options, session_id)
+        if options.code_mode:
+            # An older Claude Code starts without Code Mode and says nothing.
+            await require_code_mode_version(
+                self._resolve_binary(),
+                env,
+                CODE_MODE_MIN_VERSION,
+                product="Claude Code",
+                update_command="claude update",
+            )
         cli_settings = self._cli_settings(options)
-        hooks_path = self._maybe_write_hooks(session_id, cli_settings)
+        hooks_path = self._maybe_write_hooks(
+            session_id, cli_settings, fail_open=options.code_mode,
+        )
         try:
             argv = self._build_argv(options, hooks_path, cli_settings)
             cwd = await self._resolve_cwd(target, options)
-            env = self._build_env(target, options, session_id)
             created = self._write_workspace_files(target, cwd)
         except BaseException:
             # A build that dies after the hooks write (missing CLI binary,
@@ -254,7 +274,7 @@ class ClaudeLauncher:
         return settings
 
     def _maybe_write_hooks(
-        self, session_id: str | None, extra: dict | None = None,
+        self, session_id: str | None, extra: dict | None = None, *, fail_open: bool = False,
     ) -> Path | None:
         """Write the per-session attention-hook settings file, if configured.
 
@@ -270,6 +290,7 @@ class ClaudeLauncher:
         try:
             return write_session_hooks(
                 session_id, self._hook_port, self._hook_token, extra=extra,
+                fail_open=fail_open,
             )
         except OSError:
             logger.warning(
@@ -347,6 +368,8 @@ class ClaudeLauncher:
             env["LINEAR_API_KEY"] = target.linear_api_key
         if options.no_memory:
             env["CLAUDE_NO_MEMORY"] = "1"
+        if options.code_mode:
+            env[CODE_MODE_ENV] = "1"
         env.setdefault("TERM", "xterm-256color")
         env["PYTHONIOENCODING"] = "utf-8"
 

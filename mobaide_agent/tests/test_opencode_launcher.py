@@ -196,6 +196,153 @@ def test_build_env_works_without_the_binary(tmp_path: Path, monkeypatch):
     assert env["PATH"] == "/usr/bin"
 
 
+# Code Mode
+
+
+_CODE_MODE_OFF = {"action": "execute", "resource": "*", "effect": "deny"}
+
+
+def _opencode_reports(monkeypatch, version):
+    """Pin what ``opencode --version`` reports, without running a CLI."""
+    asked: list[tuple[str, dict[str, str] | None]] = []
+
+    def _version(cli_bin, env=None):
+        asked.append((cli_bin, env))
+        return version
+
+    monkeypatch.setattr(opencode_launcher, "cli_version", _version)
+    return asked
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("own", "expected"),
+    [
+        (None, {"permissions": [_CODE_MODE_OFF]}),
+        (
+            '{"model": "anthropic/x", "permissions": [{"action": "bash", "effect": "ask"}]}',
+            {
+                "model": "anthropic/x",
+                "permissions": [{"action": "bash", "effect": "ask"}, _CODE_MODE_OFF],
+            },
+        ),
+    ],
+    ids=["unset", "after-own-rules"],
+)
+async def test_code_mode_off_denies_execute_on_opencode_2(
+    tmp_path: Path, monkeypatch, own, expected,
+):
+    """OpenCode appends the inline rules to the user's own, so the user's
+    config and rules stay as they were."""
+    if own is None:
+        monkeypatch.delenv("OPENCODE_CONFIG_CONTENT", raising=False)
+    else:
+        monkeypatch.setenv("OPENCODE_CONFIG_CONTENT", own)
+    _opencode_reports(monkeypatch, (2, 0, 1))
+
+    spec = await OpenCodeLauncher().build(
+        _make_workspace(str(tmp_path)), OpenCodeOptions(code_mode=False),
+    )
+
+    assert json.loads(spec.env["OPENCODE_CONFIG_CONTENT"]) == expected
+
+
+@pytest.mark.asyncio
+async def test_code_mode_off_runs_the_tui_on_its_own_server(tmp_path: Path, monkeypatch):
+    """The TUI otherwise reads its settings from the background service that
+    every OpenCode TUI on the PC shares: the rule would reach the other
+    sessions, or none at all when the service already runs."""
+    monkeypatch.delenv("OPENCODE_CONFIG_CONTENT", raising=False)
+    _opencode_reports(monkeypatch, (2, 0, 1))
+
+    spec = await OpenCodeLauncher().build(
+        _make_workspace(str(tmp_path)),
+        OpenCodeOptions(code_mode=False, auto_approve=True, initial_prompt="fix it"),
+    )
+
+    assert spec.argv == ["opencode", "--standalone", "--auto", "--prompt=fix it"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "version", [(1, 9, 9), None], ids=["opencode-1-refuses-the-key", "version-unknown"],
+)
+async def test_code_mode_off_leaves_the_config_alone_without_opencode_2(
+    tmp_path: Path, monkeypatch, version,
+):
+    monkeypatch.delenv("OPENCODE_CONFIG_CONTENT", raising=False)
+    _opencode_reports(monkeypatch, version)
+
+    spec = await OpenCodeLauncher().build(
+        _make_workspace(str(tmp_path)), OpenCodeOptions(code_mode=False),
+    )
+
+    assert "OPENCODE_CONFIG_CONTENT" not in spec.env
+    assert "--standalone" not in spec.argv
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "own", ["{not json", "[1, 2]", '{"permissions": {"execute": "deny"}}'],
+    ids=["unreadable", "not-an-object", "permissions-not-a-list"],
+)
+async def test_code_mode_off_leaves_an_unusable_own_config_alone(
+    tmp_path: Path, monkeypatch, own,
+):
+    monkeypatch.setenv("OPENCODE_CONFIG_CONTENT", own)
+    _opencode_reports(monkeypatch, (2, 0, 0))
+
+    spec = await OpenCodeLauncher().build(
+        _make_workspace(str(tmp_path)), OpenCodeOptions(code_mode=False),
+    )
+
+    assert spec.env["OPENCODE_CONFIG_CONTENT"] == own
+    assert "--standalone" not in spec.argv
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "options",
+    [OpenCodeOptions(), OpenCodeOptions(code_mode=False, connect=True)],
+    ids=["code-mode-on", "sign-in"],
+)
+async def test_code_mode_rule_only_for_a_session_that_turns_it_off(
+    tmp_path: Path, monkeypatch, options,
+):
+    """Code Mode on is OpenCode's own default, and a sign-in is not an agent
+    session: neither runs ``opencode --version``."""
+    monkeypatch.delenv("OPENCODE_CONFIG_CONTENT", raising=False)
+    asked = _opencode_reports(monkeypatch, (2, 0, 0))
+
+    spec = await OpenCodeLauncher().build(_make_workspace(str(tmp_path)), options)
+
+    assert "OPENCODE_CONFIG_CONTENT" not in spec.env
+    assert "--standalone" not in spec.argv
+    assert asked == []
+
+
+@pytest.mark.asyncio
+async def test_code_mode_version_check_finds_the_node_next_to_an_npm_opencode(
+    tmp_path: Path, monkeypatch,
+):
+    """An npm install of OpenCode is a Node script whose ``node`` sits next
+    to it; without that folder on ``PATH`` the check reads no version."""
+    binary = os.path.join("/opt", "opencode", "bin", "opencode")
+    monkeypatch.setattr(opencode_launcher, "_resolve_opencode_binary", lambda *_a, **_k: binary)
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.delenv("OPENCODE_CONFIG_CONTENT", raising=False)
+    asked = _opencode_reports(monkeypatch, (2, 0, 0))
+
+    await OpenCodeLauncher().build(
+        _make_workspace(str(tmp_path)), OpenCodeOptions(code_mode=False),
+    )
+
+    [(cli_bin, env)] = asked
+    assert cli_bin == binary
+    assert env is not None
+    assert env["PATH"].split(os.pathsep) == [os.path.join("/opt", "opencode", "bin"), "/usr/bin"]
+
+
 # cwd
 
 
