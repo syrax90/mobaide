@@ -25,8 +25,7 @@ import { optionalWireNumber, optionalWireString } from '../wireSchema';
  * out: this field is display-only, and the cursor that must not lose precision
  * is the per-event `seq` in `autoscanFrames.ts`, which stays `bigint` end to end.
  *
- * `processed_count` counts this workspace's active work items, not issues seen in
- * a cycle — the agent keeps the name for DTO compatibility.
+ * `processed_count` counts the issues this scan has taken since it started.
  */
 export const autoScanInstanceSchema = z.looseObject({
   project_name: z.string(),

@@ -85,28 +85,6 @@ class TestStoreReadWrite:
         assert items[0].id == "CLA-1"
 
 
-class TestStorePeekCount:
-    """peek_count() is a synchronous best-effort accessor used by
-    AutoScanInstance.to_dto() to prime the in-memory cache without
-    awaiting the async lock. It must never raise and must reflect the
-    on-disk state whenever the file is readable."""
-
-    def test_peek_count_returns_zero_when_file_corrupt(self, tmp_path):
-        path = tmp_path / "items.json"
-        path.write_text("{not json", encoding="utf-8")
-        store = ActiveWorkItemsStore(path)
-        assert store.peek_count() == 0
-
-    @pytest.mark.asyncio
-    async def test_peek_count_matches_async_count_after_write(self, tmp_path):
-        store = ActiveWorkItemsStore(tmp_path / "items.json")
-        await store.write([_item("CLA-1", "u1"), _item("CLA-2", "u2"), _item("CLA-3", "u3")])
-        assert store.peek_count() == 3
-        # And it must stay consistent with the async count() — the two
-        # accessors must not drift.
-        assert store.peek_count() == await store.count()
-
-
 class TestStoreAddRemove:
     @pytest.mark.asyncio
     async def test_add_persists_new_item(self, tmp_path):

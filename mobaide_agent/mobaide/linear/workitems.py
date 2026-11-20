@@ -227,16 +227,3 @@ class ActiveWorkItemsStore:
     async def count(self) -> int:
         async with self._lock:
             return len(self._read_unlocked())
-
-    def peek_count(self) -> int:
-        """Synchronous best-effort size read.
-
-        Intended for DTO renderers where an ``async`` context is
-        unavailable (e.g. ``AutoScanInstance.to_dto``). Does NOT take
-        the lock — a concurrent ``write`` may produce a slightly stale
-        number, which is acceptable for status reporting.
-        """
-        try:
-            return len(self._read_unlocked())
-        except Exception:
-            return 0
