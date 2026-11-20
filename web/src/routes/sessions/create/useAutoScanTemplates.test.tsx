@@ -4,21 +4,25 @@ import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AutoScanTemplate } from '../../../api/autoscanRepository';
 import { ApiError } from '../../../api/errors';
+import { queryKeys } from '../../../lib/queryKeys';
 
 // The collaborator is the repository: the list read answers `api.saved`, and
 // a delete fails with `api.deleteError` when one is set.
 const api = vi.hoisted(() => ({
   saved: [] as AutoScanTemplate[],
   deleteError: null as ApiError | null,
+  // Set to hold a delete's answer until the test releases it.
+  deleteGate: null as Promise<void> | null,
 }));
 
 vi.mock('../../../api/autoscanRepository', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../api/autoscanRepository')>()),
   listAutoScanTemplates: (): Promise<AutoScanTemplate[]> => Promise.resolve(api.saved),
-  deleteAutoScanTemplate: (_agentId: string, templateId: string): Promise<AutoScanTemplate[]> =>
-    api.deleteError !== null
-      ? Promise.reject(api.deleteError)
-      : Promise.resolve(api.saved.filter((template) => template.id !== templateId)),
+  deleteAutoScanTemplate: async (_agentId: string, templateId: string): Promise<AutoScanTemplate[]> => {
+    await api.deleteGate;
+    if (api.deleteError !== null) throw api.deleteError;
+    return api.saved.filter((template) => template.id !== templateId);
+  },
 }));
 
 const { useAutoScanTemplates } = await import('./useAutoScanTemplates');
@@ -52,6 +56,36 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   api.saved = [SMALL_BUGS, COMPLEX];
   api.deleteError = null;
+  api.deleteGate = null;
+});
+
+describe('useAutoScanTemplates — switching agents', () => {
+  // The page stays mounted across agents' routes: a delete that answers
+  // after the switch belongs to the PC it was sent to.
+  it('writes a late answer to the list of the agent that sent it', async () => {
+    let release = (): void => undefined;
+    api.deleteGate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const hook = renderHook(({ agentId }) => useAutoScanTemplates(agentId, true), {
+      wrapper,
+      initialProps: { agentId: 'a1' },
+    });
+    await waitFor(() => {
+      expect(hook.result.current.status).toBe('ready');
+    });
+
+    const pending = hook.result.current.remove('t1');
+    hook.rerender({ agentId: 'a2' });
+    await waitFor(() => {
+      expect(hook.result.current.status).toBe('ready');
+    });
+    release();
+    await pending;
+
+    expect(client.getQueryData(queryKeys.autoscanTemplates('a1'))).toEqual([COMPLEX]);
+    expect(client.getQueryData(queryKeys.autoscanTemplates('a2'))).toEqual([SMALL_BUGS, COMPLEX]);
+  });
 });
 
 describe('useAutoScanTemplates — delete', () => {

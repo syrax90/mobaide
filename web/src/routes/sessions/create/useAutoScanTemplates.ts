@@ -58,17 +58,25 @@ export function useAutoScanTemplates(agentId: string, enabled: boolean): AutoSca
     meta: { silent: true },
   });
 
-  const write = (templates: AutoScanTemplate[]) => {
-    queryClient.setQueryData<AutoScanTemplate[]>(key, templates);
+  // The page stays mounted when the route switches to another agent, and a
+  // pending mutation then runs this render's callbacks: the agent travels in
+  // the variables, so the answer lands in the list of the PC that sent it.
+  const write = (forAgent: string, templates: AutoScanTemplate[]) => {
+    queryClient.setQueryData<AutoScanTemplate[]>(queryKeys.autoscanTemplates(forAgent), templates);
   };
   const save = useMutation({
-    mutationFn: (input: { name: string; settings: AutoScanTemplateSettings }) =>
-      saveAutoScanTemplate(agentId, input.name, input.settings),
-    onSuccess: write,
+    mutationFn: (input: { agentId: string; name: string; settings: AutoScanTemplateSettings }) =>
+      saveAutoScanTemplate(input.agentId, input.name, input.settings),
+    onSuccess: (templates, input) => {
+      write(input.agentId, templates);
+    },
   });
   const remove = useMutation({
-    mutationFn: (templateId: string) => deleteAutoScanTemplate(agentId, templateId),
-    onSuccess: write,
+    mutationFn: (input: { agentId: string; templateId: string }) =>
+      deleteAutoScanTemplate(input.agentId, input.templateId),
+    onSuccess: (templates, input) => {
+      write(input.agentId, templates);
+    },
   });
 
   const rethrow = (error: unknown): never => {
@@ -82,16 +90,16 @@ export function useAutoScanTemplates(agentId: string, enabled: boolean): AutoSca
     retryLoad: () => {
       void list.refetch();
     },
-    save: (name, settings) => save.mutateAsync({ name, settings }).catch(rethrow),
+    save: (name, settings) => save.mutateAsync({ agentId, name, settings }).catch(rethrow),
     saving: save.isPending,
     remove: (templateId) =>
-      remove.mutateAsync(templateId).catch((error: unknown) => {
+      remove.mutateAsync({ agentId, templateId }).catch((error: unknown) => {
         if (!(isApiError(error) && error.status === 404)) return rethrow(error);
         // Already gone: drop it here as well, and say nothing about it.
         const left = (queryClient.getQueryData<AutoScanTemplate[]>(key) ?? []).filter(
           (template) => template.id !== templateId,
         );
-        write(left);
+        write(agentId, left);
         return left;
       }),
     deleting: remove.isPending,

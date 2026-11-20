@@ -1067,7 +1067,7 @@ class AutoScanInstance:
                 )
                 kept += 1
                 continue
-            if await self._workitems_store.remove(item.id):
+            if await self._workitems_store.remove(item):
                 self._active_workitem_count = max(
                     0, self._active_workitem_count - 1,
                 )
