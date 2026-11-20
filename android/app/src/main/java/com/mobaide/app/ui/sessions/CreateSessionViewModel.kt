@@ -38,6 +38,7 @@ import com.mobaide.app.data.network.dto.CursorOptionsModel
 import com.mobaide.app.data.network.dto.JunieOptionsModel
 import com.mobaide.app.data.network.dto.JunieScanOptionsDto
 import com.mobaide.app.data.network.dto.OpenCodeScanOptionsDto
+import com.mobaide.app.data.network.dto.PiScanOptionsDto
 import com.mobaide.app.data.network.dto.PiOptionsModel
 import com.mobaide.app.data.network.dto.WorkspaceInfo
 import com.mobaide.app.data.network.dto.SessionResponse
@@ -280,6 +281,8 @@ data class CreateSessionUiState(
     val autoScanClaudeFastMode: Boolean = false,
     val autoScanClaudeUltracode: Boolean = false,
     val autoScanClaudeDebug: Boolean = false,
+    // Claude Code Mode for scans: forces the Terminal view, as in the Claude step.
+    val autoScanClaudeCodeMode: Boolean = false,
     val autoScanFocusMode: Boolean = true,
     val autoScanClaudeAppendSystemPrompt: String = "",
     // capabilities.autoscan from the ModePick probe. null = an agent that
@@ -464,7 +467,10 @@ val CreateSessionUiState.claudeChatUnavailableHint: String? get() = chatUnavaila
 /** Why Chat is locked off for Claude Code, or null while the user picks the view. */
 val CreateSessionUiState.claudeChatLockedHint: String?
     get() = claudeChatUnavailableHint
-        ?: if (claudeCodeMode) "Code Mode runs only in the terminal. Turn it off under Advanced to use the chat." else null
+        ?: CLAUDE_CODE_MODE_TERMINAL_HINT.takeIf { claudeCodeMode }
+
+private const val CLAUDE_CODE_MODE_TERMINAL_HINT =
+    "Code Mode runs only in the terminal. Turn it off under Advanced to use the chat."
 
 /** "Continue a session" is offered: chat view, and the agent can list stored sessions. */
 val CreateSessionUiState.claudeResumeAvailable: Boolean
@@ -566,6 +572,7 @@ private fun CreateSessionUiState.toAutoScanLaunchPrefs() = ClaudeLaunchPrefs(
     planMode = autoScanPlanMode,
     debug = autoScanClaudeDebug,
     focusMode = autoScanFocusMode,
+    codeMode = autoScanClaudeCodeMode,
 )
 
 /** Snapshot of the Codex launch controls for persistence / re-defaulting. */
@@ -680,7 +687,15 @@ val CreateSessionUiState.autoScanChatAvailable: Boolean
 
 /** The session view a start sends: the choice, or Terminal while the agent has no chat view. */
 val CreateSessionUiState.autoScanUi: String
-    get() = if (autoScan.ui == AUTO_SCAN_UI_CHAT && autoScanChatAvailable) AUTO_SCAN_UI_CHAT else AUTO_SCAN_UI_TERMINAL
+    get() = if (autoScan.ui == AUTO_SCAN_UI_CHAT && autoScanChatAvailable && autoScanChatLockedHint == null) {
+        AUTO_SCAN_UI_CHAT
+    } else {
+        AUTO_SCAN_UI_TERMINAL
+    }
+
+/** Why Chat is locked off by the chosen options, or null: Claude Code Mode runs only in the terminal. */
+val CreateSessionUiState.autoScanChatLockedHint: String?
+    get() = CLAUDE_CODE_MODE_TERMINAL_HINT.takeIf { autoScanCli == "claude" && autoScanClaudeCodeMode }
 
 /** The Auto Scan agent, when the agent offers it; a remembered kind it no longer lists is no choice. */
 val CreateSessionUiState.autoScanCli: String?
@@ -735,6 +750,7 @@ fun CreateSessionUiState.autoScanClaudeScanOptions() = ClaudeScanOptionsDto(
     append_system_prompt = autoScanClaudeAppendSystemPrompt.takeIf { it.isNotBlank() },
     debug = autoScanClaudeDebug,
     focus_mode = autoScanFocusMode,
+    code_mode = autoScanClaudeCodeMode,
 )
 
 /**
@@ -759,10 +775,12 @@ fun CreateSessionUiState.autoScanTemplateSettings(): AutoScanTemplateSettingsDto
         claude_options = autoScanClaudeScanOptions().takeIf { cli == "claude" },
         codex_options = agents.codex.toDto().takeIf { cli == "codex" },
         antigravity_options = agents.antigravity.toDto().takeIf { cli == "antigravity" },
-        opencode_options = OpenCodeScanOptionsDto(agents.opencodeAutoApprove).takeIf { cli == "opencode" },
+        opencode_options = OpenCodeScanOptionsDto(agents.opencodeAutoApprove, agents.opencodeCodeMode)
+            .takeIf { cli == "opencode" },
         copilot_options = CopilotScanOptionsDto(agents.copilotAllowAll).takeIf { cli == "copilot" },
         cursor_options = CursorScanOptionsDto(agents.cursorForce).takeIf { cli == "cursor" },
         junie_options = JunieScanOptionsDto(agents.juniePlanMode, agents.junieBrave).takeIf { cli == "junie" },
+        pi_options = PiScanOptionsDto(agents.piCodeMode).takeIf { cli == "pi" },
     )
 }
 
@@ -800,6 +818,7 @@ fun CreateSessionUiState.withAutoScanSettings(settings: AutoScanTemplateSettings
         autoScanClaudeUltracode = claude?.ultracode ?: autoScanClaudeUltracode,
         autoScanClaudeDebug = claude?.debug ?: autoScanClaudeDebug,
         autoScanFocusMode = claude?.focus_mode ?: autoScanFocusMode,
+        autoScanClaudeCodeMode = claude?.code_mode ?: autoScanClaudeCodeMode,
         autoScanClaudeAppendSystemPrompt = claude?.let { it.append_system_prompt.orEmpty() }
             ?: autoScanClaudeAppendSystemPrompt,
     )
@@ -929,6 +948,7 @@ class CreateSessionViewModel @Inject constructor(
                         autoScanPlanMode = saved.planMode,
                         autoScanClaudeDebug = saved.debug,
                         autoScanFocusMode = saved.focusMode,
+                        autoScanClaudeCodeMode = saved.codeMode,
                     )
                 }
             }
@@ -1672,6 +1692,10 @@ class CreateSessionViewModel @Inject constructor(
     fun setAutoScanJuniePlanMode(v: Boolean) = updateAutoScanAgents { it.copy(juniePlanMode = v) }
     fun setAutoScanJunieBrave(v: Boolean) = updateAutoScanAgents { it.copy(junieBrave = v) }
 
+    fun setAutoScanOpenCodeCodeMode(v: Boolean) = updateAutoScanAgents { it.copy(opencodeCodeMode = v) }
+
+    fun setAutoScanPiCodeMode(v: Boolean) = updateAutoScanAgents { it.copy(piCodeMode = v) }
+
     private fun updateAutoScanTemplates(mutator: (AutoScanTemplatesUi) -> AutoScanTemplatesUi) =
         _uiState.update { it.copy(autoScanTemplates = mutator(it.autoScanTemplates)) }
 
@@ -2068,6 +2092,7 @@ class CreateSessionViewModel @Inject constructor(
             copilot_options = options.copilot_options,
             cursor_options = options.cursor_options,
             junie_options = options.junie_options,
+            pi_options = options.pi_options,
             linear_filter = wizard.linearFilter.toDto().takeIf { source == AUTO_SCAN_SOURCE_LINEAR },
             github_filter = wizard.githubFilter.toDto().takeIf { source == AUTO_SCAN_SOURCE_GITHUB },
         )
@@ -2104,6 +2129,7 @@ class CreateSessionViewModel @Inject constructor(
         debug = autoScanClaudeDebug,
         focus_mode = autoScanFocusMode,
         append_system_prompt = autoScanClaudeAppendSystemPrompt.takeIf { it.isNotBlank() },
+        code_mode = autoScanClaudeCodeMode && autoScanUi != AUTO_SCAN_UI_CHAT,
         worktree = true,
         initial_prompt = initialPrompt,
     )
@@ -2223,6 +2249,9 @@ class CreateSessionViewModel @Inject constructor(
 
     fun toggleAutoScanClaudeDebug(v: Boolean) =
         _uiState.update { it.copy(autoScanClaudeDebug = v) }
+
+    fun toggleAutoScanClaudeCodeMode(v: Boolean) =
+        _uiState.update { it.copy(autoScanClaudeCodeMode = v, autoScan = it.autoScan.copy(startError = null)) }
 
     fun setAutoScanClaudeAppendSystemPrompt(v: String) =
         _uiState.update { it.copy(autoScanClaudeAppendSystemPrompt = v) }

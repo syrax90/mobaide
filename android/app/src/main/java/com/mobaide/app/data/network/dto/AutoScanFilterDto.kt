@@ -84,6 +84,8 @@ data class AutoScanSettingsDto(
     val cursor_options: CursorScanOptionsDto? = null,
     @Serializable(with = LenientJunieScanOptions::class)
     val junie_options: JunieScanOptionsDto? = null,
+    @Serializable(with = LenientPiScanOptions::class)
+    val pi_options: PiScanOptionsDto? = null,
 )
 
 /** A Linear label discovered for the workspace's API key. */

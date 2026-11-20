@@ -19,7 +19,8 @@ from mobaide.core.pi_launcher import PiOptions
 class ClaudeScanOptionsModel(BaseModel):
     """The Claude options an Auto Scan keeps (saved per workspace and in
     templates): every launch option but the per-launch prompt, worktree and
-    naming fields.
+    naming fields. ``code_mode`` works only in the terminal UI: a chat
+    session ignores it.
 
     ``effort`` is ``Literal``-typed so an invalid level is rejected with a 422 at
     the wire boundary; ``model`` stays free-form (the client curates the alias
@@ -43,16 +44,13 @@ class ClaudeScanOptionsModel(BaseModel):
     append_system_prompt: str | None = None
     debug: bool = False
     focus_mode: bool | None = None
+    code_mode: bool = False
 
 
 class ClaudeOptionsModel(ClaudeScanOptionsModel):
-    """Wire DTO for Claude CLI launch options (see :class:`ClaudeOptions`).
-
-    ``code_mode`` is a per-launch choice, so an Auto Scan does not keep it.
-    """
+    """Wire DTO for Claude CLI launch options (see :class:`ClaudeOptions`)."""
 
     initial_prompt: str | None = None
-    code_mode: bool = False
     worktree: bool = False
     branch_name: str | None = None
     base_branch: str | None = None
@@ -160,10 +158,13 @@ class OpenCodeScanOptionsModel(BaseModel):
     """The OpenCode options an Auto Scan keeps.
 
     ``auto_approve`` is OpenCode's ``--auto``: it accepts every permission
-    request that the user's OpenCode rules do not deny.
+    request that the user's OpenCode rules do not deny. ``code_mode``
+    defaults to on, like OpenCode 2 itself, so an older client changes
+    nothing.
     """
 
     auto_approve: bool = False
+    code_mode: bool = True
 
 
 class OpenCodeOptionsModel(OpenCodeScanOptionsModel):
@@ -172,13 +173,11 @@ class OpenCodeOptionsModel(OpenCodeScanOptionsModel):
     ``initial_prompt`` is the first message; it travels as one argv element,
     so its length is capped. ``connect`` starts a terminal session that runs
     ``opencode auth login`` (sign in to a model provider) in place of an
-    OpenCode session. ``code_mode`` defaults to on, like OpenCode 2 itself,
-    so an older client changes nothing.
+    OpenCode session.
     """
 
     initial_prompt: str | None = Field(default=None, max_length=INITIAL_PROMPT_MAX)
     connect: bool = False
-    code_mode: bool = True
     worktree: bool = False
     branch_name: str | None = None
     base_branch: str | None = None
@@ -252,13 +251,21 @@ class JunieOptionsModel(JunieScanOptionsModel):
         return JunieOptions(**self.model_dump())
 
 
-class PiOptionsModel(BaseModel):
+class PiScanOptionsModel(BaseModel):
+    """The Pi options an Auto Scan keeps.
+
+    ``code_mode`` adds Pi's ``codemode`` tool (Pi 1.1.0 or later).
+    """
+
+    code_mode: bool = False
+
+
+class PiOptionsModel(PiScanOptionsModel):
     """Wire DTO for Pi launch options (see :class:`PiOptions`)."""
 
     worktree: bool = False
     branch_name: str | None = None
     base_branch: str | None = None
-    code_mode: bool = False
 
     def to_options(self) -> PiOptions:
         return PiOptions(**self.model_dump())

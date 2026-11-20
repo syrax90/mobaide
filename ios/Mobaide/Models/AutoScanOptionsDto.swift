@@ -16,6 +16,8 @@ struct ClaudeScanOptionsDto: Codable, Equatable, Sendable {
     var append_system_prompt: String?
     var debug: Bool
     var focus_mode: Bool?
+    /// Terminal UI only: a chat scan ignores it.
+    var code_mode: Bool
 
     init(
         plan_mode: Bool = false,
@@ -27,7 +29,8 @@ struct ClaudeScanOptionsDto: Codable, Equatable, Sendable {
         ultracode: Bool = false,
         append_system_prompt: String? = nil,
         debug: Bool = false,
-        focus_mode: Bool? = nil
+        focus_mode: Bool? = nil,
+        code_mode: Bool = false
     ) {
         self.plan_mode = plan_mode
         self.no_memory = no_memory
@@ -39,6 +42,7 @@ struct ClaudeScanOptionsDto: Codable, Equatable, Sendable {
         self.append_system_prompt = append_system_prompt
         self.debug = debug
         self.focus_mode = focus_mode
+        self.code_mode = code_mode
     }
 }
 
@@ -55,6 +59,7 @@ extension ClaudeScanOptionsDto {
         append_system_prompt = try container.decodeIfPresent(String.self, forKey: .append_system_prompt)
         debug = try container.decodeIfPresent(Bool.self, forKey: .debug) ?? false
         focus_mode = try container.decodeIfPresent(Bool.self, forKey: .focus_mode)
+        code_mode = try container.decodeIfPresent(Bool.self, forKey: .code_mode) ?? false
     }
 }
 
@@ -147,14 +152,20 @@ extension AntigravityScanOptionsDto {
     }
 }
 
+/// `code_mode` is on by default, like OpenCode 2 itself.
 struct OpenCodeScanOptionsDto: Codable, Equatable, Sendable {
     var auto_approve: Bool
+    var code_mode: Bool
 
-    init(auto_approve: Bool = true) { self.auto_approve = auto_approve }
+    init(auto_approve: Bool = true, code_mode: Bool = true) {
+        self.auto_approve = auto_approve
+        self.code_mode = code_mode
+    }
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         auto_approve = try container.decodeIfPresent(Bool.self, forKey: .auto_approve) ?? false
+        code_mode = try container.decodeIfPresent(Bool.self, forKey: .code_mode) ?? true
     }
 }
 
@@ -193,5 +204,16 @@ struct JunieScanOptionsDto: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         plan_mode = try container.decodeIfPresent(Bool.self, forKey: .plan_mode) ?? false
         brave = try container.decodeIfPresent(Bool.self, forKey: .brave) ?? false
+    }
+}
+
+struct PiScanOptionsDto: Codable, Equatable, Sendable {
+    var code_mode: Bool
+
+    init(code_mode: Bool = false) { self.code_mode = code_mode }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        code_mode = try container.decodeIfPresent(Bool.self, forKey: .code_mode) ?? false
     }
 }

@@ -636,6 +636,7 @@ private struct CreateSessionContent: View {
             Section(header: PixelSectionHeader("OpenCode")) {
                 OpenCodeOptionRows(autoApprove: $setup.opencodeOptions.auto_approve)
                 mayAskHint("opencode")
+                codeModeToggle($setup.opencodeOptions.code_mode, hint: Self.opencodeCodeModeHint)
             }
         case "copilot"?:
             Section(header: PixelSectionHeader("GitHub Copilot")) {
@@ -657,6 +658,7 @@ private struct CreateSessionContent: View {
                 Text("Pi runs its tools without asking.")
                     .font(.footnote)
                     .foregroundStyle(colors.textMuted)
+                codeModeToggle($setup.piOptions.code_mode, hint: Self.piCodeModeHint)
             }
         case .some:
             EmptyView()
@@ -711,7 +713,10 @@ private struct CreateSessionContent: View {
 
         claudeAdvancedOptions(
             isExpanded: $autoScanAdvancedExpanded,
-            codeMode: nil,
+            codeMode: legacy ? nil : Binding(
+                get: { model.autoScanSetup.claudeCodeMode },
+                set: { model.autoScanSetup.claudeCodeMode = $0 }
+            ),
             showsDebug: true,
             noMemory: $model.autoScanNoMemory,
             fastMode: $model.autoScanClaudeFastMode,
@@ -938,8 +943,8 @@ private struct CreateSessionContent: View {
     }
 
     /// Collapsed-by-default "Advanced" section shared by the Claude Code and
-    /// Auto Scan steps (Android: `ClaudeAdvancedOptions`). Auto Scan passes
-    /// nil for `codeMode`: it never uses Code Mode.
+    /// Auto Scan steps (Android: `ClaudeAdvancedOptions`). The older-agent
+    /// Auto Scan panel passes nil for `codeMode`.
     @ViewBuilder
     private func claudeAdvancedOptions(
         isExpanded: Binding<Bool>,

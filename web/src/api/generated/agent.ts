@@ -1522,6 +1522,7 @@ export interface components {
             junie_options?: components["schemas"]["JunieScanOptionsModel"] | null;
             linear_filter?: components["schemas"]["AutoScanFilterModel"] | null;
             opencode_options?: components["schemas"]["OpenCodeScanOptionsModel"] | null;
+            pi_options?: components["schemas"]["PiScanOptionsModel"] | null;
             /** Source */
             source?: ("linear" | "github") | null;
             /** Ui */
@@ -1564,6 +1565,7 @@ export interface components {
             junie_options?: components["schemas"]["JunieScanOptionsModel"] | null;
             linear_filter?: components["schemas"]["AutoScanFilterDraftModel"] | null;
             opencode_options?: components["schemas"]["OpenCodeScanOptionsModel"] | null;
+            pi_options?: components["schemas"]["PiScanOptionsModel"] | null;
             /** Source */
             source?: ("linear" | "github") | null;
             /** Ui */
@@ -1608,8 +1610,6 @@ export interface components {
         /**
          * ClaudeOptionsModel
          * @description Wire DTO for Claude CLI launch options (see :class:`ClaudeOptions`).
-         *
-         *     ``code_mode`` is a per-launch choice, so an Auto Scan does not keep it.
          */
         ClaudeOptionsModel: {
             /** Append System Prompt */
@@ -1675,7 +1675,8 @@ export interface components {
          * ClaudeScanOptionsModel
          * @description The Claude options an Auto Scan keeps (saved per workspace and in
          *     templates): every launch option but the per-launch prompt, worktree and
-         *     naming fields.
+         *     naming fields. ``code_mode`` works only in the terminal UI: a chat
+         *     session ignores it.
          *
          *     ``effort`` is ``Literal``-typed so an invalid level is rejected with a 422 at
          *     the wire boundary; ``model`` stays free-form (the client curates the alias
@@ -1685,6 +1686,11 @@ export interface components {
         ClaudeScanOptionsModel: {
             /** Append System Prompt */
             append_system_prompt?: string | null;
+            /**
+             * Code Mode
+             * @default false
+             */
+            code_mode: boolean;
             /**
              * Debug
              * @default false
@@ -2946,8 +2952,7 @@ export interface components {
          *     ``initial_prompt`` is the first message; it travels as one argv element,
          *     so its length is capped. ``connect`` starts a terminal session that runs
          *     ``opencode auth login`` (sign in to a model provider) in place of an
-         *     OpenCode session. ``code_mode`` defaults to on, like OpenCode 2 itself,
-         *     so an older client changes nothing.
+         *     OpenCode session.
          */
         OpenCodeOptionsModel: {
             /**
@@ -2982,7 +2987,9 @@ export interface components {
          * @description The OpenCode options an Auto Scan keeps.
          *
          *     ``auto_approve`` is OpenCode's ``--auto``: it accepts every permission
-         *     request that the user's OpenCode rules do not deny.
+         *     request that the user's OpenCode rules do not deny. ``code_mode``
+         *     defaults to on, like OpenCode 2 itself, so an older client changes
+         *     nothing.
          */
         OpenCodeScanOptionsModel: {
             /**
@@ -2990,6 +2997,11 @@ export interface components {
              * @default false
              */
             auto_approve: boolean;
+            /**
+             * Code Mode
+             * @default true
+             */
+            code_mode: boolean;
         };
         /**
          * PiOptionsModel
@@ -3010,6 +3022,19 @@ export interface components {
              * @default false
              */
             worktree: boolean;
+        };
+        /**
+         * PiScanOptionsModel
+         * @description The Pi options an Auto Scan keeps.
+         *
+         *     ``code_mode`` adds Pi's ``codemode`` tool (Pi 1.1.0 or later).
+         */
+        PiScanOptionsModel: {
+            /**
+             * Code Mode
+             * @default false
+             */
+            code_mode: boolean;
         };
         /** RefreshRequest */
         RefreshRequest: {
@@ -3112,7 +3137,7 @@ export interface components {
          *     ``source`` absent is an older client: Linear, Claude Code, the stored
          *     filter. A newer client sends every choice: ``source``, ``cli``, the
          *     source's filter, the chosen agent's options (``claude_options``,
-         *     ``codex_options``, …; Pi has none), ``ui``, ``interval_minutes``,
+         *     ``codex_options``, …), ``ui``, ``interval_minutes``,
          *     ``initial_prompt`` (``""`` clears the saved prompt) and, when the
          *     workspace has none, ``linear_api_key``. The options of other agents are
          *     ignored.
@@ -3135,6 +3160,7 @@ export interface components {
             linear_api_key?: string | null;
             linear_filter?: components["schemas"]["AutoScanFilterModel"] | null;
             opencode_options?: components["schemas"]["OpenCodeScanOptionsModel"] | null;
+            pi_options?: components["schemas"]["PiScanOptionsModel"] | null;
             /** Project Name */
             project_name: string;
             /** Source */

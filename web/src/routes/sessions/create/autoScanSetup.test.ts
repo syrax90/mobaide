@@ -388,6 +388,28 @@ describe('Auto Scan templates', () => {
     expect(applied.claude).toEqual(INITIAL_WIZARD_STATE.claude);
   });
 
+  it.each([
+    ['claude', { type: 'setClaudeFlag', bucket: 'autoScan', flag: 'codeMode', value: true }],
+    ['opencode', { type: 'setOpenCodeCodeMode', value: false, target: 'autoScan' }],
+    ['pi', { type: 'setPiCodeMode', value: true, target: 'autoScan' }],
+  ] as const)('brings back %s Code Mode', (cli, action) => {
+    const dialled = reduce([{ type: 'setAutoScanCli', cli }, action]);
+
+    const settings = throughTheWire(autoScanTemplateSettings(dialled));
+    const applied = wizardReducer(INITIAL_WIZARD_STATE, { type: 'applyAutoScanSettings', settings });
+
+    const codeMode = (state: typeof applied) =>
+      cli === 'claude' ? state.autoScan.codeMode : state.autoScanAgents[cli].codeMode;
+    expect(codeMode(applied)).toBe(codeMode(dialled));
+    expect(codeMode(applied)).not.toBe(codeMode(INITIAL_WIZARD_STATE));
+    // A normal session's options never change.
+    expect([applied.claude, applied.opencode, applied.pi]).toEqual([
+      INITIAL_WIZARD_STATE.claude,
+      INITIAL_WIZARD_STATE.opencode,
+      INITIAL_WIZARD_STATE.pi,
+    ]);
+  });
+
   it('brings back the session view and time between scans, and ignores ones the wizard cannot offer', () => {
     const dialled = reduce([
       { type: 'setAutoScanUi', ui: 'chat' },

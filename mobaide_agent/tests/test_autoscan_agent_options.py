@@ -24,11 +24,13 @@ from mobaide.agent.sessions.models import (
     CursorScanOptionsModel,
     JunieScanOptionsModel,
     OpenCodeScanOptionsModel,
+    PiScanOptionsModel,
 )
 from mobaide.core import SessionManager, WorkspaceRecord, WorkspacesStore, codex_launcher
 from mobaide.core.antigravity_launcher import AntigravityLauncher
 from mobaide.core.codex_launcher import CodexLauncher
 from mobaide.core.junie_launcher import JunieLauncher
+from mobaide.core.pi_launcher import PiLauncher
 from mobaide.core.workspaces_config import AUTO_SCAN_OPTION_FIELDS, WorkspaceConfig
 from mobaide.core.workspaces_store import WorkspaceUpdatePatch
 from mobaide.linear import scanner
@@ -48,6 +50,7 @@ from mobaide.linear.worktree import WorktreeManager, WorktreeResult
         ("copilot", CopilotScanOptionsModel),
         ("cursor", CursorScanOptionsModel),
         ("junie", JunieScanOptionsModel),
+        ("pi", PiScanOptionsModel),
     ],
 )
 def test_the_store_keeps_every_option_the_wire_model_has(cli, model):
@@ -66,10 +69,11 @@ def test_the_store_keeps_every_option_the_wire_model_has(cli, model):
         ),
         pytest.param(
             {"cli": "claude", "claude_options": {
-                "model": "opus", "plan_mode": True, "initial_prompt": "x", "worktree": True,
-                "branch_name": "b", "base_branch": "main", "identifier": "i", "title": "t",
+                "model": "opus", "plan_mode": True, "code_mode": True, "initial_prompt": "x",
+                "worktree": True, "branch_name": "b", "base_branch": "main", "identifier": "i",
+                "title": "t",
             }},
-            ClaudeScanOptionsModel(model="opus", plan_mode=True).model_dump(),
+            ClaudeScanOptionsModel(model="opus", plan_mode=True, code_mode=True).model_dump(),
             id="claude-without-the-per-launch-fields",
         ),
         pytest.param(
@@ -212,6 +216,10 @@ def _has(command: list[str], *args: str) -> bool:
                      id="junie-none-sent-runs-without-asking"),
         pytest.param("junie", JunieLauncher, {"plan_mode": True, "brave": False},
                      [("--plan",)], [("--brave",)], id="junie-chosen-options"),
+        pytest.param("pi", PiLauncher, None, [], [("--tools", "+codemode")],
+                     id="pi-none-sent-runs-without-code-mode"),
+        pytest.param("pi", PiLauncher, {"code_mode": True}, [("--tools", "+codemode")], [],
+                     id="pi-code-mode"),
     ],
 )
 async def test_each_issue_session_runs_with_the_agents_scan_options(

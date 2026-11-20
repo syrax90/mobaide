@@ -113,6 +113,33 @@ class AutoScanTemplateSettingsTest {
     }
 
     @Test
+    fun codeMode_travelsThroughATemplate_forClaudeOpenCodeAndPi_andClaudesForcesTheTerminal() {
+        fun dialled(cli: String) = CreateSessionUiState(
+            autoScanCapability = AutoScanCapability(
+                sources = listOf(AUTO_SCAN_SOURCE_GITHUB), clis = listOf(cli), githubSetup = true,
+            ),
+            claudeChat = ChatSupport.Available(resume = true),
+            autoScan = AutoScanWizardState(
+                source = AUTO_SCAN_SOURCE_GITHUB, cli = cli, ui = AUTO_SCAN_UI_CHAT,
+                agents = AutoScanAgentBuckets(opencodeCodeMode = false, piCodeMode = true),
+            ),
+            autoScanClaudeCodeMode = true,
+        )
+        val fresh = CreateSessionUiState()
+
+        val claude = fresh.withAutoScanSettings(throughTheWire(dialled("claude").autoScanTemplateSettings()))
+        val opencode = fresh.withAutoScanSettings(throughTheWire(dialled("opencode").autoScanTemplateSettings()))
+        val pi = fresh.withAutoScanSettings(throughTheWire(dialled("pi").autoScanTemplateSettings()))
+
+        assertEquals(true, claude.autoScanClaudeCodeMode)
+        assertEquals(false, opencode.autoScan.agents.opencodeCodeMode)
+        assertEquals(true, pi.autoScan.agents.piCodeMode)
+        // Claude Code Mode runs only in the terminal; the template keeps the chosen view.
+        assertEquals(AUTO_SCAN_UI_TERMINAL, dialled("claude").autoScanUi)
+        assertEquals(AUTO_SCAN_UI_CHAT, dialled("claude").autoScanTemplateSettings().ui)
+    }
+
+    @Test
     fun seedingSavedChoices_givesAnAgentWithoutSavedOptionsTheRunWithoutAskingDefaults() {
         val saved = json.decodeFromJsonElement(WorkspaceInfo.serializer(), wire("ProjectInfo", "auto_scan_choices"))
             .auto_scan!!

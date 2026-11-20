@@ -1519,19 +1519,19 @@ private fun AdvancedSection(content: @Composable () -> Unit) {
     if (expanded) content()
 }
 
-private const val CLAUDE_CODE_MODE_HINT =
+internal const val CLAUDE_CODE_MODE_HINT =
     "Experimental. Claude writes JavaScript that makes several tool calls in one step. " +
         "Sessions open in the terminal. Claude Code asks you to confirm until you accept; " +
         "turn Code Mode off here to stop the question."
-private const val OPENCODE_CODE_MODE_HINT =
+internal const val OPENCODE_CODE_MODE_HINT =
     "OpenCode 2 calls MCP tools from JavaScript, several in one step. " +
         "Turn it off to have the model call each tool directly."
-private const val PI_CODE_MODE_HINT =
+internal const val PI_CODE_MODE_HINT =
     "Adds Pi's codemode tool: the model writes JavaScript that calls several tools in one step."
 
 /** "Code Mode": the agent writes JavaScript that makes several tool calls in one step. */
 @Composable
-private fun CodeModeToggle(checked: Boolean, hint: String, onChange: (Boolean) -> Unit) {
+internal fun CodeModeToggle(checked: Boolean, hint: String, onChange: (Boolean) -> Unit) {
     ToggleRow("Code Mode", checked, onChange)
     Text(
         text = hint,
@@ -2593,6 +2593,13 @@ internal fun AutoScanClaudeOptions(
         onUltracodeToggle = viewModel::toggleAutoScanClaudeUltracode,
         onDebugToggle = viewModel::toggleAutoScanClaudeDebug,
         onAppendSystemPromptChange = viewModel::setAutoScanClaudeAppendSystemPrompt,
+        leadingContent = {
+            CodeModeToggle(
+                checked = state.autoScanClaudeCodeMode,
+                hint = CLAUDE_CODE_MODE_HINT,
+                onChange = viewModel::toggleAutoScanClaudeCodeMode,
+            )
+        },
     )
 }
 

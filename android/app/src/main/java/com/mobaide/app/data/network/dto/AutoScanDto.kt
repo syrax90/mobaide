@@ -39,7 +39,7 @@ data class AutoScanListResponse(
  * every choice: [source], [cli], [ui], [interval_minutes], the chosen source's filter, [initial_prompt]
  * (`""` clears the saved prompt) and the chosen agent's options only:
  * [claude_options] (without the prompt) for Claude Code, `<kind>_options` for
- * the others, none for Pi.
+ * the others.
  */
 @Serializable
 data class StartScanRequest(
@@ -52,6 +52,7 @@ data class StartScanRequest(
     val copilot_options: CopilotScanOptionsDto? = null,
     val cursor_options: CursorScanOptionsDto? = null,
     val junie_options: JunieScanOptionsDto? = null,
+    val pi_options: PiScanOptionsDto? = null,
     val ui: String? = null,
     val interval_minutes: Int? = null,
     val source: String? = null,

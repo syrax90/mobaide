@@ -36,6 +36,17 @@
       }
     },
     {
+      "name": "github_source_pi_code_mode",
+      "wire": {
+        "project_name": "p",
+        "pi_options": { "code_mode": true },
+        "ui": "terminal",
+        "source": "github",
+        "cli": "pi",
+        "github_filter": { "labels": ["auto-scan"], "issue_types": [] }
+      }
+    },
+    {
       "name": "linear_source_claude",
       "wire": {
         "project_name": "p",

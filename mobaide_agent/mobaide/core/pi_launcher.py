@@ -151,6 +151,11 @@ class PiLauncher:
             update_command="pi update",
         )
 
+    async def check_code_mode(self, target: LaunchTarget) -> None:
+        """:meth:`check_code_mode_version` with the environment a session
+        for ``target`` gets."""
+        await self.check_code_mode_version(self.build_env(target))
+
     async def resolve_cwd(self, target: LaunchTarget, options: PiOptions) -> str:
         """The session folder: the workspace root, a new git worktree when
         ``worktree`` is set on a stored git workspace, or the bare ad-hoc cwd."""

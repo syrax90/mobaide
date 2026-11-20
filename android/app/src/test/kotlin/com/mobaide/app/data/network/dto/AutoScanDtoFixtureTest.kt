@@ -4,6 +4,7 @@ import com.mobaide.app.testing.ProtocolFixtures
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -74,9 +75,12 @@ class AutoScanDtoFixtureTest {
                     model = "opus",
                     effort = "high",
                     focus_mode = true,
+                    code_mode = true,
                 ),
                 codex_options = CodexScanOptionsDto(model = "gpt-5.5"),
+                opencode_options = OpenCodeScanOptionsDto(auto_approve = true, code_mode = false),
                 copilot_options = CopilotScanOptionsDto(allow_all = false),
+                pi_options = PiScanOptionsDto(code_mode = true),
             ),
             workspace("auto_scan_choices").auto_scan,
         )
@@ -120,6 +124,26 @@ class AutoScanDtoFixtureTest {
         assertEquals(
             wire("StartScanRequest", "github_source_other_agent"),
             json.encodeToJsonElement(StartScanRequest.serializer(), request),
+        )
+    }
+
+    @Test
+    fun startScanRequest_piCodeMode_matchesTheFixtureWire() {
+        val request = StartScanRequest(
+            workspace_name = "p",
+            source = "github",
+            cli = "pi",
+            ui = "terminal",
+            pi_options = PiScanOptionsDto(code_mode = true),
+            github_filter = GitHubScanFilterDto(labels = listOf("auto-scan")),
+        )
+
+        val fixture = wire("StartScanRequest", "github_source_pi_code_mode")
+
+        assertEquals(json.decodeFromJsonElement(StartScanRequest.serializer(), fixture), request)
+        assertEquals(
+            fixture["pi_options"],
+            json.encodeToJsonElement(StartScanRequest.serializer(), request).jsonObject["pi_options"],
         )
     }
 }

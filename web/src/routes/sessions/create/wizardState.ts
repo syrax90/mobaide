@@ -206,7 +206,7 @@ export interface AutoScanSetup {
  * a scan runs unattended, so its "run without asking" switches start on, and
  * editing one here must never change a normal session's options. The
  * `terminalUi` fields are unused here: the view is `AutoScanSetup.ui`, one
- * choice for every agent. Pi has no options.
+ * choice for every agent.
  */
 export interface AutoScanAgentBuckets {
   codex: CodexBucket;
@@ -215,6 +215,7 @@ export interface AutoScanAgentBuckets {
   copilot: CopilotBucket;
   cursor: CursorBucket;
   junie: JunieBucket;
+  pi: PiBucket;
 }
 
 /** Which copy of an agent's options an action edits: the normal session's, or Auto Scan's. */
@@ -328,11 +329,11 @@ export const AUTO_SCAN_AGENT_DEFAULTS: AutoScanAgentBuckets = {
     addDirsDraft: '',
     terminalUi: false,
   },
-  // Code Mode is per launch: an Auto Scan never sends it.
   opencode: { autoApprove: true, terminalUi: false, codeMode: true },
   copilot: { allowAll: true, terminalUi: false },
   cursor: { force: true, terminalUi: false },
   junie: { planMode: false, brave: true, terminalUi: false },
+  pi: { terminalUi: false, codeMode: false },
 };
 
 export const INITIAL_WIZARD_STATE: WizardState = {
@@ -539,6 +540,7 @@ export interface ClaudeScanOptionsInput {
   append_system_prompt?: string | null;
   debug?: boolean | null;
   focus_mode?: boolean | null;
+  code_mode?: boolean | null;
 }
 
 export interface CodexScanOptionsInput {
@@ -567,10 +569,11 @@ export interface AutoScanSettingsInput {
   claude_options?: ClaudeScanOptionsInput | null;
   codex_options?: CodexScanOptionsInput | null;
   antigravity_options?: AntigravityScanOptionsInput | null;
-  opencode_options?: { auto_approve?: boolean | null } | null;
+  opencode_options?: { auto_approve?: boolean | null; code_mode?: boolean | null } | null;
   copilot_options?: { allow_all?: boolean | null } | null;
   cursor_options?: { force?: boolean | null } | null;
   junie_options?: { plan_mode?: boolean | null; brave?: boolean | null } | null;
+  pi_options?: { code_mode?: boolean | null } | null;
 }
 
 function linearFilterFromInput(filter: AutoScanLinearFilterInput): AutoScanFilter {
@@ -601,6 +604,7 @@ function claudeFromScan(bucket: ClaudeBucket, options: ClaudeScanOptionsInput): 
     skipPermissions: options.skip_permissions ?? true,
     noMemory: options.no_memory ?? false,
     planMode: options.plan_mode ?? false,
+    codeMode: options.code_mode ?? false,
   };
   return { ...next, effort: effectiveClaudeEffort(next) };
 }
@@ -655,7 +659,7 @@ export function applyAutoScanSettings(
       ? state.autoScan
       : { ...state.autoScan, initialPrompt: prompt };
   const { opencode_options: opencode, copilot_options: copilot } = settings;
-  const { cursor_options: cursor, junie_options: junie } = settings;
+  const { cursor_options: cursor, junie_options: junie, pi_options: pi } = settings;
   return {
     ...state,
     autoScan: settings.claude_options != null ? claudeFromScan(claude, settings.claude_options) : claude,
@@ -685,6 +689,7 @@ export function applyAutoScanSettings(
           ? {
               ...AUTO_SCAN_AGENT_DEFAULTS.opencode,
               autoApprove: opencode.auto_approve ?? AUTO_SCAN_AGENT_DEFAULTS.opencode.autoApprove,
+              codeMode: opencode.code_mode ?? AUTO_SCAN_AGENT_DEFAULTS.opencode.codeMode,
             }
           : agents.opencode,
       copilot:
@@ -706,6 +711,13 @@ export function applyAutoScanSettings(
               terminalUi: false,
             }
           : agents.junie,
+      pi:
+        pi != null
+          ? {
+              ...AUTO_SCAN_AGENT_DEFAULTS.pi,
+              codeMode: pi.code_mode ?? AUTO_SCAN_AGENT_DEFAULTS.pi.codeMode,
+            }
+          : agents.pi,
     },
   };
 }
@@ -764,7 +776,7 @@ export type WizardAction =
   | { type: 'setAntigravityTerminalUi'; value: boolean }
   | { type: 'setOpenCodeAutoApprove'; value: boolean; target?: AgentBucketTarget }
   | { type: 'setOpenCodeTerminalUi'; value: boolean }
-  | { type: 'setOpenCodeCodeMode'; value: boolean }
+  | { type: 'setOpenCodeCodeMode'; value: boolean; target?: AgentBucketTarget }
   | { type: 'setCopilotAllowAll'; value: boolean; target?: AgentBucketTarget }
   | { type: 'setCopilotTerminalUi'; value: boolean }
   | { type: 'setCursorForce'; value: boolean; target?: AgentBucketTarget }
@@ -773,7 +785,7 @@ export type WizardAction =
   | { type: 'setJunieBrave'; value: boolean; target?: AgentBucketTarget }
   | { type: 'setJunieTerminalUi'; value: boolean }
   | { type: 'setPiTerminalUi'; value: boolean }
-  | { type: 'setPiCodeMode'; value: boolean }
+  | { type: 'setPiCodeMode'; value: boolean; target?: AgentBucketTarget }
   | { type: 'setWorktree'; value: boolean }
   | { type: 'setBranchName'; value: string }
   | { type: 'setWorktreeBase'; pick: WorktreeBasePick }
@@ -912,14 +924,19 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         effort: action.effort,
       }));
 
-    case 'setClaudeFlag':
-      return withClaudeBucket(state, action.bucket, (bucket) => {
+    case 'setClaudeFlag': {
+      const next = withClaudeBucket(state, action.bucket, (bucket) => {
         const next = { ...bucket, [action.flag]: action.value };
         // Fast mode is Opus-only, so turning it on picks the model. Turning it
         // off leaves that choice in place rather than guessing what to restore.
         if (action.flag === 'fastMode' && action.value) next.model = 'opus';
         return next;
       });
+      // Claude Code Mode runs only in the terminal, so the scan opens there.
+      return action.bucket === 'autoScan' && action.flag === 'codeMode' && action.value
+        ? { ...next, autoScanSetup: { ...next.autoScanSetup, ui: 'terminal' } }
+        : next;
+    }
 
     case 'setClaudeText':
       return withClaudeBucket(state, action.bucket, (bucket) => ({
@@ -1031,7 +1048,10 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
       return { ...state, opencode: { ...state.opencode, terminalUi: action.value } };
 
     case 'setOpenCodeCodeMode':
-      return { ...state, opencode: { ...state.opencode, codeMode: action.value } };
+      return withAgentBucket(state, 'opencode', action.target, (opencode) => ({
+        ...opencode,
+        codeMode: action.value,
+      }));
 
     case 'setCopilotAllowAll':
       return withAgentBucket(state, 'copilot', action.target, (copilot) => ({
@@ -1070,7 +1090,10 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
       return { ...state, pi: { ...state.pi, terminalUi: action.value } };
 
     case 'setPiCodeMode':
-      return { ...state, pi: { ...state.pi, codeMode: action.value } };
+      return withAgentBucket(state, 'pi', action.target, (pi) => ({
+        ...pi,
+        codeMode: action.value,
+      }));
 
     case 'setWorktree':
       return { ...state, git: { ...state.git, worktree: action.value } };

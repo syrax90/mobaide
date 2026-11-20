@@ -523,6 +523,16 @@
               }
             ]
           },
+          "pi_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PiScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "source": {
             "anyOf": [
               {
@@ -724,6 +734,16 @@
               }
             ]
           },
+          "pi_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PiScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "source": {
             "anyOf": [
               {
@@ -860,7 +880,7 @@
         "type": "object"
       },
       "ClaudeOptionsModel": {
-        "description": "Wire DTO for Claude CLI launch options (see :class:`ClaudeOptions`).\n\n``code_mode`` is a per-launch choice, so an Auto Scan does not keep it.",
+        "description": "Wire DTO for Claude CLI launch options (see :class:`ClaudeOptions`).",
         "properties": {
           "append_system_prompt": {
             "anyOf": [
@@ -1013,7 +1033,7 @@
         "type": "object"
       },
       "ClaudeScanOptionsModel": {
-        "description": "The Claude options an Auto Scan keeps (saved per workspace and in\ntemplates): every launch option but the per-launch prompt, worktree and\nnaming fields.\n\n``effort`` is ``Literal``-typed so an invalid level is rejected with a 422 at\nthe wire boundary; ``model`` stays free-form (the client curates the alias\nlist). ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for\nthe legitimately-named ``model`` field.",
+        "description": "The Claude options an Auto Scan keeps (saved per workspace and in\ntemplates): every launch option but the per-launch prompt, worktree and\nnaming fields. ``code_mode`` works only in the terminal UI: a chat\nsession ignores it.\n\n``effort`` is ``Literal``-typed so an invalid level is rejected with a 422 at\nthe wire boundary; ``model`` stays free-form (the client curates the alias\nlist). ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for\nthe legitimately-named ``model`` field.",
         "properties": {
           "append_system_prompt": {
             "anyOf": [
@@ -1025,6 +1045,11 @@
               }
             ],
             "title": "Append System Prompt"
+          },
+          "code_mode": {
+            "default": false,
+            "title": "Code Mode",
+            "type": "boolean"
           },
           "debug": {
             "default": false,
@@ -3686,7 +3711,7 @@
         "type": "object"
       },
       "OpenCodeOptionsModel": {
-        "description": "Wire DTO for OpenCode CLI launch options (see :class:`OpenCodeOptions`).\n\n``initial_prompt`` is the first message; it travels as one argv element,\nso its length is capped. ``connect`` starts a terminal session that runs\n``opencode auth login`` (sign in to a model provider) in place of an\nOpenCode session. ``code_mode`` defaults to on, like OpenCode 2 itself,\nso an older client changes nothing.",
+        "description": "Wire DTO for OpenCode CLI launch options (see :class:`OpenCodeOptions`).\n\n``initial_prompt`` is the first message; it travels as one argv element,\nso its length is capped. ``connect`` starts a terminal session that runs\n``opencode auth login`` (sign in to a model provider) in place of an\nOpenCode session.",
         "properties": {
           "auto_approve": {
             "default": false,
@@ -3747,11 +3772,16 @@
         "type": "object"
       },
       "OpenCodeScanOptionsModel": {
-        "description": "The OpenCode options an Auto Scan keeps.\n\n``auto_approve`` is OpenCode's ``--auto``: it accepts every permission\nrequest that the user's OpenCode rules do not deny.",
+        "description": "The OpenCode options an Auto Scan keeps.\n\n``auto_approve`` is OpenCode's ``--auto``: it accepts every permission\nrequest that the user's OpenCode rules do not deny. ``code_mode``\ndefaults to on, like OpenCode 2 itself, so an older client changes\nnothing.",
         "properties": {
           "auto_approve": {
             "default": false,
             "title": "Auto Approve",
+            "type": "boolean"
+          },
+          "code_mode": {
+            "default": true,
+            "title": "Code Mode",
             "type": "boolean"
           }
         },
@@ -3795,6 +3825,18 @@
           }
         },
         "title": "PiOptionsModel",
+        "type": "object"
+      },
+      "PiScanOptionsModel": {
+        "description": "The Pi options an Auto Scan keeps.\n\n``code_mode`` adds Pi's ``codemode`` tool (Pi 1.1.0 or later).",
+        "properties": {
+          "code_mode": {
+            "default": false,
+            "title": "Code Mode",
+            "type": "boolean"
+          }
+        },
+        "title": "PiScanOptionsModel",
         "type": "object"
       },
       "RefreshRequest": {
@@ -4059,7 +4101,7 @@
         "type": "object"
       },
       "StartScanRequest": {
-        "description": "``POST /api/autoscan/start``.\n\n``source`` absent is an older client: Linear, Claude Code, the stored\nfilter. A newer client sends every choice: ``source``, ``cli``, the\nsource's filter, the chosen agent's options (``claude_options``,\n``codex_options``, \u2026; Pi has none), ``ui``, ``interval_minutes``,\n``initial_prompt`` (``\"\"`` clears the saved prompt) and, when the\nworkspace has none, ``linear_api_key``. The options of other agents are\nignored.",
+        "description": "``POST /api/autoscan/start``.\n\n``source`` absent is an older client: Linear, Claude Code, the stored\nfilter. A newer client sends every choice: ``source``, ``cli``, the\nsource's filter, the chosen agent's options (``claude_options``,\n``codex_options``, \u2026), ``ui``, ``interval_minutes``,\n``initial_prompt`` (``\"\"`` clears the saved prompt) and, when the\nworkspace has none, ``linear_api_key``. The options of other agents are\nignored.",
         "properties": {
           "antigravity_options": {
             "anyOf": [
@@ -4204,6 +4246,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/OpenCodeScanOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pi_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PiScanOptionsModel"
               },
               {
                 "type": "null"

@@ -76,6 +76,7 @@ export const claudeScanOptionsSchema = z.looseObject({
   append_system_prompt: optionalWireString(),
   debug: optionalWireBoolean(),
   focus_mode: optionalWireBoolean(),
+  code_mode: optionalWireBoolean(),
 });
 
 export const codexScanOptionsSchema = z.looseObject({
@@ -94,13 +95,17 @@ export const antigravityScanOptionsSchema = z.looseObject({
   add_dirs: z.array(z.string()).optional(),
 });
 
-export const opencodeScanOptionsSchema = z.looseObject({ auto_approve: optionalWireBoolean() });
+export const opencodeScanOptionsSchema = z.looseObject({
+  auto_approve: optionalWireBoolean(),
+  code_mode: optionalWireBoolean(),
+});
 export const copilotScanOptionsSchema = z.looseObject({ allow_all: optionalWireBoolean() });
 export const cursorScanOptionsSchema = z.looseObject({ force: optionalWireBoolean() });
 export const junieScanOptionsSchema = z.looseObject({
   plan_mode: optionalWireBoolean(),
   brave: optionalWireBoolean(),
 });
+export const piScanOptionsSchema = z.looseObject({ code_mode: optionalWireBoolean() });
 
 /**
  * One agent's options inside `auto_scan`. A value this client cannot read (a
@@ -133,7 +138,7 @@ export const autoScanSettingsSchema = z.looseObject({
   interval_minutes: optionalWireNumber(),
   linear_filter: autoScanFilterSchema.nullish().transform((value) => value ?? undefined),
   github_filter: githubScanFilterSchema.nullish().transform((value) => value ?? undefined),
-  /** The options of the last start with each agent; Pi has none. */
+  /** The options of the last start with each agent. */
   claude_options: lenientOptions(claudeScanOptionsSchema),
   codex_options: lenientOptions(codexScanOptionsSchema),
   antigravity_options: lenientOptions(antigravityScanOptionsSchema),
@@ -141,6 +146,7 @@ export const autoScanSettingsSchema = z.looseObject({
   copilot_options: lenientOptions(copilotScanOptionsSchema),
   cursor_options: lenientOptions(cursorScanOptionsSchema),
   junie_options: lenientOptions(junieScanOptionsSchema),
+  pi_options: lenientOptions(piScanOptionsSchema),
 });
 
 /**

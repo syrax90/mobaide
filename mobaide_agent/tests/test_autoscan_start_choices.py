@@ -135,6 +135,7 @@ async def test_github_start_remembers_every_choice(tmp_path):
         "copilot_options": {},
         "cursor_options": None,
         "junie_options": None,
+        "pi_options": None,
         "ui": None,
         "interval_minutes": None,
     }
@@ -323,6 +324,57 @@ async def test_an_older_client_start_saves_no_agent_options(tmp_path):
     await mgr.start("alpha", request=wire.to_start())
 
     assert _saved(store)["claude_options"] is None
+
+
+class _OldCodeModeAgent(_Agent):
+    """An installed agent too old for Code Mode."""
+
+    def __init__(self) -> None:
+        super().__init__(installed=True)
+        self.checked = 0
+
+    async def check_code_mode(self, target) -> None:  # noqa: ANN001
+        self.checked += 1
+        raise ValueError("Code Mode needs Pi 1.1.0 or later.")
+
+
+@pytest.mark.parametrize(
+    ("cli", "wire", "refused"),
+    [
+        pytest.param("pi", {"pi_options": {"code_mode": True}}, True, id="pi-code-mode"),
+        pytest.param("pi", {"pi_options": {"code_mode": False}}, False, id="pi-off"),
+        pytest.param("claude", {"claude_options": {"code_mode": True}, "ui": "terminal"}, True,
+                     id="claude-terminal"),
+        # A Claude chat ignores Code Mode, so its version does not matter.
+        pytest.param("claude", {"claude_options": {"code_mode": True}, "ui": "chat"}, False,
+                     id="claude-chat"),
+    ],
+)
+async def test_code_mode_on_a_too_old_agent_refuses_the_start(tmp_path, cli, wire, refused):
+    store = _make_store(tmp_path)
+    agent = _OldCodeModeAgent()
+    chat = _ChatSessions({cli: _ChatAgent(True)})
+    mgr = _make_manager(
+        store, _RecordingEventBus(), agents={cli: agent},
+        session_manager=chat,
+    )
+    request = StartScanRequest.model_validate({
+        "project_name": "alpha", "source": "github", "cli": cli,
+        "github_filter": {"labels": ["ai-ready"]}, **wire,
+    })
+
+    # As the router does: Claude's launch options travel on their own.
+    claude = request.claude_options.to_options() if request.claude_options else None
+
+    if refused:
+        with pytest.raises(AutoScanSourceError, match="Code Mode needs"):
+            await mgr.start("alpha", client_options=claude, request=request.to_start())
+        assert mgr.get("alpha") is None
+    else:
+        await mgr.start("alpha", client_options=claude, request=request.to_start())
+        assert agent.checked == 0
+    # The choice is remembered either way, so the wizard shows it again.
+    assert _saved(store)[f"{cli}_options"]["code_mode"] is wire[f"{cli}_options"]["code_mode"]
 
 
 class _ChatAgent:

@@ -82,13 +82,14 @@
           "interval_minutes": 15,
           "linear_filter": { "state_names": ["Todo"], "label_names": ["bot"], "active_state": "Doing", "done_state": "Shipped", "removal_label": "bot" },
           "github_filter": { "labels": ["ai-ready", "bot"], "assignee": "@me", "active_label": null, "issue_types": ["Bug"] },
-          "claude_options": { "plan_mode": false, "no_memory": false, "skip_permissions": true, "model": "opus", "effort": "high", "fast_mode": false, "ultracode": false, "append_system_prompt": null, "debug": false, "focus_mode": true },
+          "claude_options": { "plan_mode": false, "no_memory": false, "skip_permissions": true, "model": "opus", "effort": "high", "fast_mode": false, "ultracode": false, "append_system_prompt": null, "debug": false, "focus_mode": true, "code_mode": true },
           "codex_options": { "model": "gpt-5.5", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": "high", "full_auto": true },
           "antigravity_options": null,
-          "opencode_options": null,
+          "opencode_options": { "auto_approve": true, "code_mode": false },
           "copilot_options": { "allow_all": false },
           "cursor_options": null,
-          "junie_options": null
+          "junie_options": null,
+          "pi_options": { "code_mode": true }
         }
       },
       "decoded_canonical": {
@@ -107,9 +108,11 @@
           "interval_minutes": 15,
           "linear_filter": { "state_names": ["Todo"], "label_names": ["bot"], "active_state": "Doing", "done_state": "Shipped", "removal_label": "bot" },
           "github_filter": { "labels": ["ai-ready", "bot"], "assignee": "@me", "issue_types": ["Bug"] },
-          "claude_options": { "plan_mode": false, "no_memory": false, "skip_permissions": true, "model": "opus", "effort": "high", "fast_mode": false, "ultracode": false, "debug": false, "focus_mode": true },
+          "claude_options": { "plan_mode": false, "no_memory": false, "skip_permissions": true, "model": "opus", "effort": "high", "fast_mode": false, "ultracode": false, "debug": false, "focus_mode": true, "code_mode": true },
           "codex_options": { "model": "gpt-5.5", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": "high", "full_auto": true },
-          "copilot_options": { "allow_all": false }
+          "opencode_options": { "auto_approve": true, "code_mode": false },
+          "copilot_options": { "allow_all": false },
+          "pi_options": { "code_mode": true }
         }
       }
     },
@@ -129,7 +132,7 @@
         "auto_scan": {
           "source": null, "cli": null, "ui": null, "interval_minutes": null, "linear_filter": null, "github_filter": null,
           "claude_options": null, "codex_options": null, "antigravity_options": null, "opencode_options": null,
-          "copilot_options": null, "cursor_options": null, "junie_options": null
+          "copilot_options": null, "cursor_options": null, "junie_options": null, "pi_options": null
         }
       },
       "decoded_canonical": {

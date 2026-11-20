@@ -33,6 +33,8 @@ data class ClaudeScanOptionsDto(
     @EncodeDefault val debug: Boolean = false,
     // null leaves Claude Code's view alone.
     @EncodeDefault val focus_mode: Boolean? = null,
+    // Terminal UI only: the agent ignores it in a chat scan.
+    @EncodeDefault val code_mode: Boolean = false,
 )
 
 @Serializable
@@ -54,7 +56,10 @@ data class AntigravityScanOptionsDto(
 )
 
 @Serializable
-data class OpenCodeScanOptionsDto(@EncodeDefault val auto_approve: Boolean = true)
+data class OpenCodeScanOptionsDto(
+    @EncodeDefault val auto_approve: Boolean = true,
+    @EncodeDefault val code_mode: Boolean = true,
+)
 
 @Serializable
 data class CopilotScanOptionsDto(@EncodeDefault val allow_all: Boolean = true)
@@ -67,6 +72,9 @@ data class JunieScanOptionsDto(
     @EncodeDefault val plan_mode: Boolean = false,
     @EncodeDefault val brave: Boolean = true,
 )
+
+@Serializable
+data class PiScanOptionsDto(@EncodeDefault val code_mode: Boolean = false)
 
 /**
  * Decodes an options object the client cannot read as null, so one bad value
@@ -95,6 +103,7 @@ object LenientOpenCodeScanOptions : LenientObjectSerializer<OpenCodeScanOptionsD
 object LenientCopilotScanOptions : LenientObjectSerializer<CopilotScanOptionsDto>(CopilotScanOptionsDto.serializer())
 object LenientCursorScanOptions : LenientObjectSerializer<CursorScanOptionsDto>(CursorScanOptionsDto.serializer())
 object LenientJunieScanOptions : LenientObjectSerializer<JunieScanOptionsDto>(JunieScanOptionsDto.serializer())
+object LenientPiScanOptions : LenientObjectSerializer<PiScanOptionsDto>(PiScanOptionsDto.serializer())
 
 /**
  * The Auto Scan choices a template keeps; every field may be null. The
@@ -124,6 +133,8 @@ data class AutoScanTemplateSettingsDto(
     val cursor_options: CursorScanOptionsDto? = null,
     @Serializable(with = LenientJunieScanOptions::class)
     val junie_options: JunieScanOptionsDto? = null,
+    @Serializable(with = LenientPiScanOptions::class)
+    val pi_options: PiScanOptionsDto? = null,
 )
 
 /** A named set of Auto Scan choices saved on the PC. */

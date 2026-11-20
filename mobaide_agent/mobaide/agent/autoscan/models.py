@@ -35,7 +35,7 @@ class StartScanRequest(AutoScanAgentOptionsModel):
     ``source`` absent is an older client: Linear, Claude Code, the stored
     filter. A newer client sends every choice: ``source``, ``cli``, the
     source's filter, the chosen agent's options (``claude_options``,
-    ``codex_options``, …; Pi has none), ``ui``, ``interval_minutes``,
+    ``codex_options``, …), ``ui``, ``interval_minutes``,
     ``initial_prompt`` (``""`` clears the saved prompt) and, when the
     workspace has none, ``linear_api_key``. The options of other agents are
     ignored.

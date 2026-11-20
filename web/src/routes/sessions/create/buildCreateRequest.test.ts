@@ -552,6 +552,35 @@ describe('buildStartScanRequest — agent with capabilities.autoscan', () => {
     expect(withSetup({ ui }, 'scan', chat)?.ui).toBe(sent);
   });
 
+  it('sends each agent’s Code Mode, and Claude Code Mode holds the terminal', () => {
+    const scan = (cli: string, state: Partial<WizardState>) =>
+      buildStartScanRequest({
+        state: {
+          ...POPULATED,
+          ...state,
+          autoScanSetup: { ...POPULATED.autoScanSetup, source: 'github', cli, ui: 'chat' },
+        },
+        mode: 'auto_scan',
+        workspace: gitWorkspace,
+        autoScan,
+        autoScanChat: { kind: 'available', resume: true, live: true },
+      });
+    const agents = POPULATED.autoScanAgents;
+
+    const claude = scan('claude', { autoScan: { ...POPULATED.autoScan, codeMode: true } });
+    expect([claude?.claude_options?.code_mode, claude?.ui]).toEqual([true, 'terminal']);
+    expect(scan('claude', {})?.ui).toBe('chat');
+    expect(scan('opencode', {})?.opencode_options?.code_mode).toBe(true);
+    expect(
+      scan('opencode', { autoScanAgents: { ...agents, opencode: { ...agents.opencode, codeMode: false } } })
+        ?.opencode_options?.code_mode,
+    ).toBe(false);
+    expect(scan('pi', {})?.pi_options).toEqual({ code_mode: false });
+    expect(
+      scan('pi', { autoScanAgents: { ...agents, pi: { ...agents.pi, codeMode: true } } })?.pi_options,
+    ).toEqual({ code_mode: true });
+  });
+
   it('sends the chosen time between scans', () => {
     expect(withSetup({ intervalMinutes: 240 })?.interval_minutes).toBe(240);
     expect(withSetup({ cli: 'claude', intervalMinutes: 1440 })?.interval_minutes).toBe(1440);
@@ -1209,7 +1238,7 @@ describe('Code Mode', () => {
     expect(request.claude_options?.code_mode).toBe(false);
   });
 
-  it('never sends Code Mode with an Auto Scan, whatever the buckets hold', () => {
+  it('never sends Code Mode with an older agent’s Auto Scan, whatever the buckets hold', () => {
     const scan = buildStartScanRequest({
       state: { ...CLAUDE_CODE_MODE, autoScan: { ...FRESH.autoScan, codeMode: true } },
       mode: 'auto_scan',

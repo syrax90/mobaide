@@ -117,6 +117,11 @@ final class AutoScanSetupModel {
     var copilotOptions = CopilotScanOptionsDto()
     var cursorOptions = CursorScanOptionsDto()
     var junieOptions = JunieScanOptionsDto()
+    var piOptions = PiScanOptionsDto()
+    /// Claude Code's Code Mode. Here, not with Claude's other options on
+    /// `CreateSessionModel`, because it also decides the session view: it runs
+    /// in the terminal only.
+    var claudeCodeMode = false
 
     /// Set by `CreateSessionModel`: applies a template's or a workspace's Claude
     /// Code options and a template's initial prompt.
@@ -202,12 +207,14 @@ final class AutoScanSetupModel {
         guard let capability = chatCapabilities[kind] else {
             return "Checking the chat view on the PC…"
         }
-        return CreateSessionModel.chatUnavailableReason(capability, kind: kind)
+        if let reason = CreateSessionModel.chatUnavailableReason(capability, kind: kind) { return reason }
+        return kind == "claude" && claudeCodeMode ? CreateSessionModel.claudeCodeModeChatNoteText : nil
     }
 
     /// The chosen view, or the terminal for an agent without the chat view.
     var effectiveSessionView: SessionView {
-        guard sessionView == .chat, let cli, isChatAvailable(cli) else { return .terminal }
+        guard sessionView == .chat, let cli, isChatAvailable(cli),
+              !(cli == "claude" && claudeCodeMode) else { return .terminal }
         return .chat
     }
 
@@ -272,6 +279,7 @@ final class AutoScanSetupModel {
         copilotOptions = CopilotScanOptionsDto()
         cursorOptions = CursorScanOptionsDto()
         junieOptions = JunieScanOptionsDto()
+        piOptions = PiScanOptionsDto()
         appliedTemplateName = nil
         templateNotice = nil
         templateActionError = nil
@@ -497,7 +505,11 @@ final class AutoScanSetupModel {
         if let options = settings.copilot_options { copilotOptions = options }
         if let options = settings.cursor_options { cursorOptions = options }
         if let options = settings.junie_options { junieOptions = options }
-        if let options = settings.claude_options { applyClaudeOptions?(options) }
+        if let options = settings.pi_options { piOptions = options }
+        if let options = settings.claude_options {
+            claudeCodeMode = options.code_mode
+            applyClaudeOptions?(options)
+        }
         if let prompt = settings.initial_prompt { applyInitialPrompt?(prompt) }
     }
 
@@ -520,7 +532,8 @@ final class AutoScanSetupModel {
             opencode_options: cli == "opencode" ? opencodeOptions : nil,
             copilot_options: cli == "copilot" ? copilotOptions : nil,
             cursor_options: cli == "cursor" ? cursorOptions : nil,
-            junie_options: cli == "junie" ? junieOptions : nil
+            junie_options: cli == "junie" ? junieOptions : nil,
+            pi_options: cli == "pi" ? piOptions : nil
         )
     }
 
@@ -829,7 +842,7 @@ final class AutoScanSetupModel {
     }
 
     /// The start body: every choice, the chosen source's filter only and the
-    /// chosen agent's options only (Pi has none).
+    /// chosen agent's options only.
     func startRequest(
         workspaceName: String,
         claudeOptions: ClaudeOptionsModel,
@@ -845,6 +858,7 @@ final class AutoScanSetupModel {
             copilot_options: cli == "copilot" ? copilotOptions : nil,
             cursor_options: cli == "cursor" ? cursorOptions : nil,
             junie_options: cli == "junie" ? junieOptions : nil,
+            pi_options: cli == "pi" ? piOptions : nil,
             ui: effectiveSessionView.rawValue,
             interval_minutes: intervalMinutes,
             source: source.rawValue,
