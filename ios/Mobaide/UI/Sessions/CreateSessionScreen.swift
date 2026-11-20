@@ -717,7 +717,7 @@ private struct CreateSessionContent: View {
                 get: { model.autoScanSetup.claudeCodeMode },
                 set: { model.autoScanSetup.claudeCodeMode = $0 }
             ),
-            showsDebug: true,
+            chatView: model.autoScanSetup.effectiveSessionView != .terminal,
             noMemory: $model.autoScanNoMemory,
             fastMode: $model.autoScanClaudeFastMode,
             ultracode: $model.autoScanClaudeUltracode,
@@ -901,7 +901,7 @@ private struct CreateSessionContent: View {
         claudeAdvancedOptions(
             isExpanded: $claudeAdvancedExpanded,
             codeMode: model.claudeUsesChat ? nil : $model.claudeCodeMode,
-            showsDebug: !model.claudeUsesChat,
+            chatView: model.claudeUsesChat,
             noMemory: $model.noMemory,
             fastMode: $model.claudeFastMode,
             ultracode: $model.claudeUltracode,
@@ -946,7 +946,7 @@ private struct CreateSessionContent: View {
     private func claudeAdvancedOptions(
         isExpanded: Binding<Bool>,
         codeMode: Binding<Bool>?,
-        showsDebug: Bool,
+        chatView: Bool,
         noMemory: Binding<Bool>,
         fastMode: Binding<Bool>,
         ultracode: Binding<Bool>,
@@ -961,12 +961,12 @@ private struct CreateSessionContent: View {
                 Toggle("No memory", isOn: noMemory)
                 Toggle("Fast mode (Opus only)", isOn: fastMode)
                 Toggle("Ultracode", isOn: ultracode)
-                if showsDebug {
-                    Toggle("Debug logging", isOn: debug)
-                    Text("Claude Code prints verbose diagnostics into the terminal.")
-                        .font(.footnote)
-                        .foregroundStyle(colors.textMuted)
-                }
+                Toggle("Debug logging", isOn: debug)
+                Text(chatView
+                    ? "Claude Code writes verbose diagnostics to ~/.claude/debug/ on this PC."
+                    : "Claude Code prints verbose diagnostics into the terminal.")
+                    .font(.footnote)
+                    .foregroundStyle(colors.textMuted)
                 TextField("Append system prompt", text: appendSystemPrompt, axis: .vertical)
                     .lineLimit(1...4)
                     .autocorrectionDisabled()

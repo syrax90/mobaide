@@ -4848,6 +4848,24 @@ class TestClaudeHooks:
             expected = {"claudeCode": {"options": {"settings": settings}}}
         assert _setup_params(log).get("_meta") == expected
 
+    @pytest.mark.parametrize("port", [HOOK_PORT, None], ids=["hook-port", "no-hook-port"])
+    async def test_sdk_options_go_to_the_agent_with_the_hook_settings(
+        self, open_chat, tmp_path, port
+    ):
+        log = tmp_path / "agent.log"
+
+        m = await open_chat(
+            argv=_params_agent(log, advertises_dirs=False),
+            hook_port=port,
+            claude_sdk_options={"debug": True},
+        )
+
+        assert m.status == "ready"
+        expected: dict[str, Any] = {"debug": True}
+        if port is not None:
+            expected["settings"] = chat_hook_settings(m.session.session_id, port)
+        assert _setup_params(log)["_meta"] == {"claudeCode": {"options": expected}}
+
     @pytest.mark.parametrize(
         ("left_behind", "activity"), [("workflow", "working"), ("shell", "waiting")]
     )

@@ -68,7 +68,7 @@ afterEach(() => {
   cleanup();
 });
 
-/** Focus view and Debug logging exist only for a session that opens in the terminal. */
+/** Focus view exists only for a session that opens in the terminal. */
 const TERMINAL_STATE: WizardState = { ...STATE, claude: { ...STATE.claude, terminalUi: true } };
 
 describe('ConfigStep — Claude Code layout', () => {
@@ -89,6 +89,29 @@ describe('ConfigStep — Claude Code layout', () => {
       flag: 'focusMode',
       value: false,
     });
+  });
+});
+
+describe('ConfigStep — Claude Code debug logging', () => {
+  it('offers Debug logging in the chat view, with the log file as its hint', () => {
+    const actions = renderStep('claude');
+
+    expect(screen.getByText(/~\/\.claude\/debug\//)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Debug logging'));
+
+    expect(actions).toContainEqual({
+      type: 'setClaudeFlag',
+      bucket: 'claude',
+      flag: 'debug',
+      value: true,
+    });
+  });
+
+  it('keeps the terminal hint for a session that opens in the terminal', () => {
+    renderStep('claude', TERMINAL_STATE);
+
+    expect(screen.getByLabelText('Debug logging')).toBeInTheDocument();
+    expect(screen.getByText(/into the terminal/)).toBeInTheDocument();
   });
 });
 

@@ -9,17 +9,22 @@ export const CLAUDE_CODE_MODE_HINT =
   'Terminal only. Claude Code asks you to confirm until you accept; ' +
   'turn Code Mode off here to stop the question.';
 
+const DEBUG_TERMINAL_HINT = 'Claude Code prints verbose diagnostics into the terminal.';
+export const DEBUG_CHAT_HINT = 'Claude Code writes verbose diagnostics to ~/.claude/debug/ on this PC.';
+
 interface ClaudeAdvancedPanelProps {
   bucket: ClaudeBucket;
   bucketId: ClaudeBucketId;
   dispatch: (action: WizardAction) => void;
-  /** Claude Code only: this PC's chat support, which hides Debug logging in the chat view. */
+  /** Claude Code only: this PC's chat support, which hides Code Mode in the chat view. */
   chat?: ChatSupport;
   /**
    * Offer Code Mode without `chat`: Auto Scan, whose view is chosen apart from
    * this bucket; it passes false for the chat view, which hides Code Mode like Focus view.
    */
   codeMode?: boolean;
+  /** Auto Scan only: whether its sessions open in the chat view. */
+  chatView?: boolean;
 }
 
 /** Collapsed-by-default Claude flags, matching both mobile clients' "Advanced" expander. */
@@ -29,9 +34,10 @@ export function ClaudeAdvancedPanel({
   dispatch,
   chat,
   codeMode = chat !== undefined,
+  chatView,
 }: ClaudeAdvancedPanelProps) {
-  // Debug output lands in the terminal, so it is offered only when there is one.
   const terminal = chat === undefined || bucket.terminalUi || chatBlocked(chat);
+  const inChat = chatView ?? !terminal;
   return (
     <div className="option-group">
       <details className="advanced advanced-stack">
@@ -68,16 +74,14 @@ export function ClaudeAdvancedPanel({
             dispatch({ type: 'setClaudeFlag', bucket: bucketId, flag: 'ultracode', value });
           }}
         />
-        {terminal && (
-          <CheckboxField
-            label="Debug logging"
-            checked={bucket.debug}
-            hint="Claude Code prints verbose diagnostics into the terminal."
-            onChange={(value) => {
-              dispatch({ type: 'setClaudeFlag', bucket: bucketId, flag: 'debug', value });
-            }}
-          />
-        )}
+        <CheckboxField
+          label="Debug logging"
+          checked={bucket.debug}
+          hint={inChat ? DEBUG_CHAT_HINT : DEBUG_TERMINAL_HINT}
+          onChange={(value) => {
+            dispatch({ type: 'setClaudeFlag', bucket: bucketId, flag: 'debug', value });
+          }}
+        />
         <TextAreaField
           label="Append system prompt (optional)"
           value={bucket.appendSystemPrompt}

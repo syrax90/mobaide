@@ -255,6 +255,9 @@ class ChatLaunchPlan:
     # the ``session/prompt`` answer cannot: work a turn leaves behind, and
     # turns the agent starts itself.
     hook_port: int | None = None
+    # Agent SDK options for claude-agent-acp, sent as
+    # ``_meta.claudeCode.options`` with ``session/new`` and ``session/load``.
+    claude_sdk_options: Mapping[str, Any] = field(default_factory=dict)
 
 
 class ChatAgentSpec(Protocol):
@@ -792,6 +795,8 @@ class ClaudeChatSpec(_AdapterSpec):
                 self._claude_bin(), spec.env, fake=self.uses_fake_agent()
             ),
             hook_port=hook_endpoint[0] if hook_endpoint is not None else None,
+            # With no terminal, Claude Code writes the log to ~/.claude/debug/.
+            claude_sdk_options={"debug": True} if options.debug else {},
         )
 
     def _claude_bin(self) -> str | None:

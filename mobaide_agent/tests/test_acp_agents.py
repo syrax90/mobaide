@@ -517,6 +517,17 @@ class TestPrepare:
         assert plan.env.get("MOBAIDE_HOOK_TOKEN") == token
         assert not any("tok-1" in arg for arg in plan.argv)
 
+    @pytest.mark.parametrize(("debug", "expected"), [(True, {"debug": True}), (False, {})])
+    async def test_debug_logging_goes_to_the_adapter_as_an_sdk_option(
+        self, bin_dir, debug, expected
+    ):
+        # The chat has no terminal: Claude Code writes the log to ~/.claude/debug/.
+        spec = ClaudeChatSpec(FakeLauncher(), command_override="adapter")
+
+        plan = await spec.prepare(AdHocLaunch(cwd="/work"), ClaudeOptions(debug=debug))
+
+        assert plan.claude_sdk_options == expected
+
     async def test_catalog_plan_runs_in_home_with_the_claude_preset(self, bin_dir):
         spec = ClaudeChatSpec(FakeLauncher(), command_override="adapter")
 

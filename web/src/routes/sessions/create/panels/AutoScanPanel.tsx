@@ -341,6 +341,7 @@ function AgentOptions({
             bucketId="autoScan"
             dispatch={dispatch}
             codeMode={!inChat}
+            chatView={inChat}
           />
         </>
       );
