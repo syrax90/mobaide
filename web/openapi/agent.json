@@ -1161,7 +1161,6 @@
           "approval": {
             "default": "never",
             "enum": [
-              "untrusted",
               "on-request",
               "never"
             ],
@@ -1249,12 +1248,11 @@
         "type": "object"
       },
       "CodexScanOptionsModel": {
-        "description": "The Codex options an Auto Scan keeps (see :class:`CodexOptionsModel`).\n\n``sandbox`` and ``approval`` are ``Literal``-typed so an invalid value is\nrejected with a 422 at the wire boundary rather than producing a broken\n``codex`` argv. ``reasoning_effort`` is free-form like ``model``: the\nvocabulary is enumerated per-model at runtime and advertised via\n``capabilities.cli.codex.model_details``, so a closed Literal would 422\nvalues the agent itself just advertised whenever the Codex catalog grows.\nThe value is embedded after ``=`` inside a single exec'd argv element\n(``-c model_reasoning_effort=<v>``), so there is no flag-smuggling path.\n``protected_namespaces=()`` silences pydantic's ``model_*`` guard for the\nlegitimately-named ``model`` field.",
+        "description": "The Codex options an Auto Scan keeps (see :class:`CodexOptionsModel`).\n\n``sandbox`` and ``approval`` are ``Literal``-typed so an invalid value is\nrejected with a 422 at the wire boundary rather than producing a broken\n``codex`` argv. ``reasoning_effort`` is free-form like ``model``: the\nvocabulary is enumerated per-model at runtime and advertised via\n``capabilities.cli.codex.model_details``, so a closed Literal would 422\nvalues the agent itself just advertised whenever the Codex catalog grows.\nThe value is embedded after ``=`` inside a single exec'd argv element\n(``-c model_reasoning_effort=<v>``), so there is no flag-smuggling path.\n``protected_namespaces=()`` silences pydantic's ``model_*`` guard for the\nlegitimately-named ``model`` field.\n\n``approval`` still accepts the retired ``untrusted`` and reads it as\n``on-request``: released clients and saved settings keep sending it.",
         "properties": {
           "approval": {
             "default": "never",
             "enum": [
-              "untrusted",
               "on-request",
               "never"
             ],

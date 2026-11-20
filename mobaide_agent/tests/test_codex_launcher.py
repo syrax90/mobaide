@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from mobaide.agent.sessions.models import CodexOptionsModel
 from mobaide.core import codex_auth, codex_launcher
 from mobaide.core.claude_launcher import AdHocLaunch
 from mobaide.core.codex_launcher import (
@@ -92,6 +93,28 @@ async def test_argv_prompt_that_looks_like_a_flag_stays_the_prompt(tmp_path: Pat
     )
     assert spec.argv[-2:] == ["--", prompt]
     assert spec.argv.count(prompt) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "options",
+    [
+        pytest.param(
+            lambda: CodexOptionsModel.model_validate({"approval": "untrusted"}).to_options(),
+            id="wire-payload",
+        ),
+        pytest.param(lambda: CodexOptions(approval="untrusted"), id="restored-options"),
+    ],
+)
+async def test_argv_retired_untrusted_approval_launches_as_on_request(tmp_path: Path, options):
+    """Codex 0.149 rejects ``--ask-for-approval untrusted``. Released clients
+    still send it, and saved Auto Scan options and restored sessions reach
+    ``CodexOptions`` without the wire model, so both paths must launch with
+    ``on-request``."""
+    spec = await CodexLauncher().build(_make_workspace(str(tmp_path)), options())
+    i = spec.argv.index("--ask-for-approval")
+    assert spec.argv[i + 1] == "on-request"
+    assert "untrusted" not in spec.argv
 
 
 # ---------------------------------------------------------------------------

@@ -114,7 +114,7 @@ final class CreateSessionModel {
     ]
     static let reasoningEfforts = ["minimal", "low", "medium", "high"]
     static let codexSandboxes = ["read-only", "workspace-write", "danger-full-access"]
-    static let codexApprovals = ["untrusted", "on-request", "never"]
+    static let codexApprovals = ["on-request", "never"]
 
     private(set) var step: Step = .workspaceSelect
     private(set) var workspaces: [WorkspaceInfo] = [] {

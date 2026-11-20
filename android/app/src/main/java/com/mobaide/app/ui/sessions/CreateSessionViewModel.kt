@@ -7,6 +7,7 @@ import com.mobaide.app.data.fs.PathCompletion
 import com.mobaide.app.data.local.AntigravityLaunchPrefs
 import com.mobaide.app.data.local.ClaudeLaunchPrefs
 import com.mobaide.app.data.local.CodexLaunchPrefs
+import com.mobaide.app.data.local.currentCodexApproval
 import com.mobaide.app.data.local.OpenCodeLaunchPrefs
 import com.mobaide.app.data.local.CopilotLaunchPrefs
 import com.mobaide.app.data.local.CursorLaunchPrefs
@@ -959,7 +960,7 @@ class CreateSessionViewModel @Inject constructor(
                     it.copy(
                         codexModel = saved.model,
                         codexSandbox = saved.sandbox,
-                        codexApproval = saved.approval,
+                        codexApproval = currentCodexApproval(saved.approval),
                         codexFullAuto = saved.fullAuto,
                         codexTerminalUi = saved.terminalUi,
                         // The DataStore read races the ModePick capability

@@ -341,7 +341,11 @@ function sanitizeCodexPrefs(raw: unknown): CodexLaunchPrefs | null {
   if (!isRecord(raw)) return null;
   const model = field(raw, 'model', CODEX_PREFS_DEFAULTS.model, isNullableString);
   const sandbox = field(raw, 'sandbox', CODEX_PREFS_DEFAULTS.sandbox, isCodexSandbox);
-  const approval = field(raw, 'approval', CODEX_PREFS_DEFAULTS.approval, isCodexApproval);
+  // Codex retired `untrusted`; keep the rest of an older blob and read it as `on-request`.
+  const approval =
+    raw.approval === 'untrusted'
+      ? 'on-request'
+      : field(raw, 'approval', CODEX_PREFS_DEFAULTS.approval, isCodexApproval);
   const fullAuto = field(raw, 'fullAuto', CODEX_PREFS_DEFAULTS.fullAuto, isBoolean);
   const reasoningEffort = field(
     raw,

@@ -22,7 +22,17 @@ import { optionalWireString } from '../wireSchema';
 
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export const CODEX_SANDBOXES = ['read-only', 'workspace-write', 'danger-full-access'] as const;
-export const CODEX_APPROVALS = ['untrusted', 'on-request', 'never'] as const;
+export const CODEX_APPROVALS = ['on-request', 'never'] as const;
+
+/**
+ * Codex 0.149 retired the `untrusted` approval and rejects it at launch. An
+ * older agent can still return it in saved Auto Scan settings; read it as
+ * `on-request`, the nearest policy that still asks.
+ */
+export const codexApprovalSchema = z.preprocess(
+  (value) => (value === 'untrusted' ? 'on-request' : value),
+  z.enum(CODEX_APPROVALS),
+);
 export const CODEX_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high'] as const;
 export const SESSION_UIS = ['terminal', 'chat'] as const;
 

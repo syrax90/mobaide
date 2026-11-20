@@ -536,6 +536,21 @@ class CreateSessionViewModelTest {
     }
 
     @Test
+    fun init_restoresRetiredUntrustedCodexApprovalAsOnRequest() = runTest {
+        // Codex 0.149 rejects `untrusted` at launch; prefs saved before it must not resubmit it.
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedCodexOptions() } returns
+            CodexLaunchPrefs(sandbox = "read-only", approval = "untrusted", reasoningEffort = "medium")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertEquals("on-request", s.codexApproval)
+        assertEquals("read-only", s.codexSandbox)
+        assertEquals("medium", s.codexReasoningEffort)
+    }
+
+    @Test
     fun submit_blankBranchName_sendsNullBranchName() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()

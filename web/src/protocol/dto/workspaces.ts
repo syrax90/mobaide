@@ -9,7 +9,7 @@
  */
 import { z } from 'zod';
 import { optionalWireBoolean, optionalWireNumber, optionalWireString } from '../wireSchema';
-import { CLAUDE_EFFORTS, CODEX_APPROVALS, CODEX_SANDBOXES } from './sessionCreate';
+import { CLAUDE_EFFORTS, CODEX_SANDBOXES, codexApprovalSchema } from './sessionCreate';
 
 /**
  * A `default_flags` value. Heterogeneous on the wire by design
@@ -82,7 +82,7 @@ export const claudeScanOptionsSchema = z.looseObject({
 export const codexScanOptionsSchema = z.looseObject({
   model: optionalWireString(),
   sandbox: z.enum(CODEX_SANDBOXES).optional(),
-  approval: z.enum(CODEX_APPROVALS).optional(),
+  approval: codexApprovalSchema.optional(),
   /** Three-state, as in `codexOptionsSchema`: `null` is "Agent default". */
   reasoning_effort: z.string().nullable().optional(),
   full_auto: optionalWireBoolean(),

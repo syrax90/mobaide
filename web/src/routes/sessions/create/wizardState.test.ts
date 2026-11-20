@@ -217,7 +217,7 @@ describe('wizardReducer', () => {
   it('moves only full_auto for the full-access preset', () => {
     const advanced = reduce([
       { type: 'setCodexSandbox', sandbox: 'read-only' },
-      { type: 'setCodexApproval', approval: 'untrusted' },
+      { type: 'setCodexApproval', approval: 'never' },
     ]);
     const full = reduce([{ type: 'setCodexPreset', preset: 'fullAccess' }], advanced);
 
@@ -226,7 +226,7 @@ describe('wizardReducer', () => {
     expect(full.codex).toMatchObject({
       fullAuto: true,
       sandbox: 'read-only',
-      approval: 'untrusted',
+      approval: 'never',
     });
     expect(reduce([{ type: 'setCodexPreset', preset: 'readOnly' }], full).codex).toMatchObject({
       fullAuto: false,
