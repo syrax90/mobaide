@@ -85,6 +85,9 @@ The last ``Stop`` payload is the authority on which of the three applies:
   leaves the PTY running at an idle prompt.
 * a user keystroke (``mute``) — the pending window still elapses into ``idle``,
   but raises no alert: the user is plainly present.
+* ``interrupted`` — Esc or Ctrl+C ended the turn, which fires no ``Stop`` and
+  no ``idle_prompt``. Activity goes to what the last ``Stop`` listed, else
+  ``idle``; no alert, and a late ``idle_prompt`` stays silent too.
 
 A chat session (``mobaide.acp.session``) drives three more entries, for ends
 and starts that its ACP connection knows better than any hook:
@@ -439,6 +442,17 @@ class AttentionGate:
         """
         self.reset_turn()
         self._on_activity("idle")
+
+    def interrupted(self) -> None:
+        """End a turn the user interrupted in a terminal session.
+
+        Claude Code sends no ``Stop`` and no ``idle_prompt`` for it. The user
+        pressed the key, so nothing alerts, now or on a late ``idle_prompt``.
+        What the last ``Stop`` listed still stands.
+        """
+        self.cancel()
+        self._settled = True
+        self._on_activity(self._parked_activity or "idle")
 
     def stop_lost(self) -> None:
         """End a turn that is known to be over but sent no ``Stop`` hook.
