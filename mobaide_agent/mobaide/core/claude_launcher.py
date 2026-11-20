@@ -15,6 +15,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from .cli_launcher import (
@@ -227,14 +228,7 @@ class ClaudeLauncher:
         # notifications.
         env = self._build_env(target, options, session_id)
         if options.code_mode:
-            # An older Claude Code starts without Code Mode and says nothing.
-            await require_code_mode_version(
-                self._resolve_binary(),
-                env,
-                CODE_MODE_MIN_VERSION,
-                product="Claude Code",
-                update_command="claude update",
-            )
+            await self.check_code_mode_version(env)
         cli_settings = self._cli_settings(options)
         hooks_path = self._maybe_write_hooks(
             session_id, cli_settings, fail_open=options.code_mode,
@@ -347,6 +341,25 @@ class ClaudeLauncher:
         if options.initial_prompt:
             argv += ["--", options.initial_prompt]
         return argv
+
+    async def check_code_mode_version(self, env: Mapping[str, str]) -> None:
+        """Fail with a clear message on a Claude Code too old for Code Mode:
+        it would start without Code Mode and say nothing. A version that
+        cannot be read does not block the launch."""
+        await require_code_mode_version(
+            self._resolve_binary(),
+            env,
+            CODE_MODE_MIN_VERSION,
+            product="Claude Code",
+            update_command="claude update",
+        )
+
+    async def check_code_mode(self, target: LaunchTarget) -> None:
+        """:meth:`check_code_mode_version` with the environment a session
+        for ``target`` gets."""
+        await self.check_code_mode_version(
+            self._build_env(target, ClaudeOptions(code_mode=True)),
+        )
 
     def _build_env(
         self,

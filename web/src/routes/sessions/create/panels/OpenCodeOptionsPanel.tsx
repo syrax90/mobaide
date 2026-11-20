@@ -29,17 +29,14 @@ export function OpenCodeOptionsPanel({ bucket, dispatch, target }: OpenCodeOptio
           dispatch({ type: 'setOpenCodeAutoApprove', value, target });
         }}
       />
-      {/* Per launch: an Auto Scan keeps no Code Mode choice. */}
-      {target !== 'autoScan' && (
-        <CheckboxField
-          label="Code Mode"
-          checked={bucket.codeMode}
-          hint={OPENCODE_CODE_MODE_HINT}
-          onChange={(value) => {
-            dispatch({ type: 'setOpenCodeCodeMode', value });
-          }}
-        />
-      )}
+      <CheckboxField
+        label="Code Mode"
+        checked={bucket.codeMode}
+        hint={OPENCODE_CODE_MODE_HINT}
+        onChange={(value) => {
+          dispatch({ type: 'setOpenCodeCodeMode', value, target });
+        }}
+      />
       <ScanAskHint show={target === 'autoScan' && !bucket.autoApprove} />
     </div>
   );

@@ -120,6 +120,7 @@ struct AutoScanSettingsDto: Codable, Equatable, Sendable {
     var copilot_options: CopilotScanOptionsDto?
     var cursor_options: CursorScanOptionsDto?
     var junie_options: JunieScanOptionsDto?
+    var pi_options: PiScanOptionsDto?
 
     init(
         source: String? = nil,
@@ -135,7 +136,8 @@ struct AutoScanSettingsDto: Codable, Equatable, Sendable {
         opencode_options: OpenCodeScanOptionsDto? = nil,
         copilot_options: CopilotScanOptionsDto? = nil,
         cursor_options: CursorScanOptionsDto? = nil,
-        junie_options: JunieScanOptionsDto? = nil
+        junie_options: JunieScanOptionsDto? = nil,
+        pi_options: PiScanOptionsDto? = nil
     ) {
         self.source = source
         self.cli = cli
@@ -151,6 +153,7 @@ struct AutoScanSettingsDto: Codable, Equatable, Sendable {
         self.copilot_options = copilot_options
         self.cursor_options = cursor_options
         self.junie_options = junie_options
+        self.pi_options = pi_options
     }
 }
 
@@ -173,5 +176,6 @@ extension AutoScanSettingsDto {
         copilot_options = try? container.decodeIfPresent(CopilotScanOptionsDto.self, forKey: .copilot_options)
         cursor_options = try? container.decodeIfPresent(CursorScanOptionsDto.self, forKey: .cursor_options)
         junie_options = try? container.decodeIfPresent(JunieScanOptionsDto.self, forKey: .junie_options)
+        pi_options = try? container.decodeIfPresent(PiScanOptionsDto.self, forKey: .pi_options)
     }
 }

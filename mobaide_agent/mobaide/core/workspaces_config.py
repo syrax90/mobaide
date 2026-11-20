@@ -90,6 +90,7 @@ AUTO_SCAN_OPTION_FIELDS: dict[str, dict[str, str]] = {
         "plan_mode": "bool", "no_memory": "bool", "skip_permissions": "bool",
         "model": "text", "effort": "text", "fast_mode": "bool", "ultracode": "bool",
         "append_system_prompt": "text", "debug": "bool", "focus_mode": "bool",
+        "code_mode": "bool",
     },
     "codex": {
         "model": "text", "sandbox": "text", "approval": "text",
@@ -98,10 +99,11 @@ AUTO_SCAN_OPTION_FIELDS: dict[str, dict[str, str]] = {
     "antigravity": {
         "model": "text", "skip_permissions": "bool", "sandbox": "bool", "add_dirs": "texts",
     },
-    "opencode": {"auto_approve": "bool"},
+    "opencode": {"auto_approve": "bool", "code_mode": "bool"},
     "copilot": {"allow_all": "bool"},
     "cursor": {"force": "bool"},
     "junie": {"plan_mode": "bool", "brave": "bool"},
+    "pi": {"code_mode": "bool"},
 }
 
 

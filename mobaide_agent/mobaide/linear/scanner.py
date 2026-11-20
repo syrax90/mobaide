@@ -1301,6 +1301,7 @@ class AutoScanSessionManager:
                 ui = req.ui or "terminal"
                 source = self._build_source(workspace, req)
                 await self._check_agent(cli, workspace, ui)
+                await self._check_code_mode(cli, workspace, ui, client_options, req)
                 instance = AutoScanInstance(
                     workspace_name=workspace_name,
                     workspace_config=workspace,
@@ -1428,6 +1429,33 @@ class AutoScanSessionManager:
                 await ensure_auth(workspace)
             except CliAuthRequiredError as exc:
                 raise AutoScanSourceError(f"{name} is not signed in on the PC. {exc}") from exc
+
+    async def _check_code_mode(
+        self,
+        cli: str,
+        workspace: WorkspaceConfig,
+        ui: str,
+        client_options: ClaudeOptions | None,
+        req: AutoScanStart,
+    ) -> None:
+        """Refuse a start whose agent is too old for the chosen Code Mode,
+        before any issue is claimed. A chat with Claude Code ignores Code
+        Mode, and OpenCode 1 has none to turn on."""
+        if cli == "claude":
+            wanted = ui == "terminal" and client_options is not None and client_options.code_mode
+        elif cli == "pi":
+            wanted = bool((req.agent_options or {}).get("code_mode"))
+        else:
+            return
+        check = getattr(self._launchers.get(cli), "check_code_mode", None)
+        if not wanted or check is None:
+            return
+        try:
+            await check(workspace)
+        except CliBinaryNotFoundError:
+            return
+        except ValueError as exc:
+            raise AutoScanSourceError(str(exc)) from exc
 
     def _chat_available(self, cli: str) -> bool:
         spec = getattr(self._session_manager, "chat_agents", {}).get(cli)

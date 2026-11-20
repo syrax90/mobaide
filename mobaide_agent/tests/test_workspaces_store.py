@@ -1370,7 +1370,7 @@ class TestAutoScanChoicesRoundTrip:
             **{
                 f"{kind}_options": None
                 for kind in (
-                    "claude", "codex", "antigravity", "opencode", "copilot", "cursor", "junie",
+                    "claude", "codex", "antigravity", "opencode", "copilot", "cursor", "junie", "pi",
                 )
             },
             "ui": None,

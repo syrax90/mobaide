@@ -435,8 +435,11 @@ final class CreateSessionModel {
 
     /// Why Code Mode keeps Claude Code out of the chat view; nil while it is off.
     var claudeCodeModeChatNote: String? {
-        claudeCodeMode ? "Code Mode runs only in the terminal. Turn it off under Advanced to use the chat." : nil
+        claudeCodeMode ? Self.claudeCodeModeChatNoteText : nil
     }
+
+    static let claudeCodeModeChatNoteText =
+        "Code Mode runs only in the terminal. Turn it off under Advanced to use the chat."
 
     var chatUnavailableReason: String? { Self.chatUnavailableReason(chatCapability) }
 
@@ -1633,7 +1636,10 @@ final class CreateSessionModel {
             ultracode: autoScanClaudeUltracode,
             append_system_prompt: Self.blankToNil(autoScanClaudeAppendSystemPrompt),
             debug: autoScanClaudeDebug,
-            focus_mode: autoScanFocusMode
+            focus_mode: autoScanFocusMode,
+            // The older-agent panel has no Code Mode toggle.
+            code_mode: autoScanSetup.isAvailable && autoScanSetup.claudeCodeMode
+                && autoScanSetup.effectiveSessionView == .terminal
         )
     }
 
@@ -1649,7 +1655,8 @@ final class CreateSessionModel {
             ultracode: autoScanClaudeUltracode,
             append_system_prompt: Self.blankToNil(autoScanClaudeAppendSystemPrompt),
             debug: autoScanClaudeDebug,
-            focus_mode: autoScanFocusMode
+            focus_mode: autoScanFocusMode,
+            code_mode: autoScanSetup.claudeCodeMode
         )
     }
 
@@ -1687,7 +1694,8 @@ final class CreateSessionModel {
             noMemory: autoScanNoMemory,
             planMode: autoScanPlanMode,
             debug: autoScanClaudeDebug,
-            focusMode: autoScanFocusMode
+            focusMode: autoScanFocusMode,
+            codeMode: autoScanSetup.claudeCodeMode
         )
     }
 
@@ -2216,6 +2224,7 @@ final class CreateSessionModel {
             autoScanPlanMode = autoScan.planMode
             autoScanClaudeDebug = autoScan.debug
             autoScanFocusMode = autoScan.focusMode
+            autoScanSetup.claudeCodeMode = autoScan.codeMode
         }
         if let codex = preferencesStore.getLastUsedCodexOptions() {
             codexModel = codex.model

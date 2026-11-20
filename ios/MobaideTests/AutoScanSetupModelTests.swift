@@ -306,6 +306,37 @@ final class AutoScanSetupModelTests: XCTestCase {
         return model
     }
 
+    func testSavedCodeModeSeedsEachAgentAndClaudeCodeModeKeepsTheTerminal() throws {
+        // The workspace saved Code Mode on for Claude Code and Pi, off for
+        // OpenCode, and the chat view.
+        let wire = Data(#"""
+        {"name":"mobaide_agent","server_version":"0.3.34","protocol_versions":[6,7],"min_client_version":6,
+         "capabilities":{"cli":{"claude":{"available":true},"pi":{"available":true}},
+          "autoscan":{"sources":["linear","github"],"clis":["claude","pi"],"github_setup":true},
+          "chat":{"claude":{"resume":true},"pi":{"resume":true}}}}
+        """#.utf8)
+        let model = AutoScanSetupModel(
+            agentAPI: AgentAPI(baseURL: { "https://agent.test" }, tokens: StubAgentTokens())
+        )
+        model.applyProbe(try WireJSON.decoder().decode(VersionInfoResponse.self, from: wire))
+        model.prepare(for: try workspace("auto_scan_choices"))
+
+        XCTAssertTrue(model.claudeCodeMode)
+        XCTAssertFalse(model.opencodeOptions.code_mode)
+        model.cli = "claude"
+        // Claude Code has Code Mode in the terminal only.
+        XCTAssertEqual(model.effectiveSessionView, .terminal)
+        XCTAssertNotNil(model.chatUnavailableReason("claude"))
+
+        model.cli = "pi"
+        let request = try XCTUnwrap(
+            model.startRequest(workspaceName: "p", claudeOptions: ClaudeOptionsModel(), initialPrompt: "")
+        )
+        XCTAssertEqual(request.pi_options, PiScanOptionsDto(code_mode: true))
+        XCTAssertEqual(request.ui, "chat")
+        XCTAssertNil(request.claude_options)
+    }
+
     func testTheStartSendsTheChatOnlyOnceTheProbeShowsTheAgentsChatView() throws {
         // The workspace saved Codex in the chat view, 15 minutes apart.
         let withChat = try probedModel(codexChat: true)

@@ -128,7 +128,7 @@ extension AutoScanListResponse {
 /// `POST /api/autoscan/start`. An older client sends only `project_name` and
 /// `claude_options`; a client of an agent with `capabilities.autoscan` sends
 /// every choice: `source`, `cli`, that source's filter, the chosen agent's
-/// options (Pi has none), `ui` (`terminal` / `chat`), `interval_minutes`
+/// options, `ui` (`terminal` / `chat`), `interval_minutes`
 /// (1–1440) and `initial_prompt` (`""` clears the saved prompt).
 /// Nil fields stay off the wire.
 struct StartScanRequest: Codable, Equatable, Sendable {
@@ -140,6 +140,7 @@ struct StartScanRequest: Codable, Equatable, Sendable {
     let copilot_options: CopilotScanOptionsDto?
     let cursor_options: CursorScanOptionsDto?
     let junie_options: JunieScanOptionsDto?
+    let pi_options: PiScanOptionsDto?
     let ui: String?
     let interval_minutes: Int?
     let source: String?
@@ -158,6 +159,7 @@ struct StartScanRequest: Codable, Equatable, Sendable {
         case copilot_options
         case cursor_options
         case junie_options
+        case pi_options
         case ui
         case interval_minutes
         case source
@@ -177,6 +179,7 @@ struct StartScanRequest: Codable, Equatable, Sendable {
         copilot_options: CopilotScanOptionsDto? = nil,
         cursor_options: CursorScanOptionsDto? = nil,
         junie_options: JunieScanOptionsDto? = nil,
+        pi_options: PiScanOptionsDto? = nil,
         ui: String? = nil,
         interval_minutes: Int? = nil,
         source: String? = nil,
@@ -194,6 +197,7 @@ struct StartScanRequest: Codable, Equatable, Sendable {
         self.copilot_options = copilot_options
         self.cursor_options = cursor_options
         self.junie_options = junie_options
+        self.pi_options = pi_options
         self.ui = ui
         self.interval_minutes = interval_minutes
         self.source = source

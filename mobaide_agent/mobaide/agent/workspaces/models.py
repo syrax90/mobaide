@@ -42,6 +42,7 @@ from ..sessions.models import (
     CursorScanOptionsModel,
     JunieScanOptionsModel,
     OpenCodeScanOptionsModel,
+    PiScanOptionsModel,
 )
 
 _LABEL_MAX = 100
@@ -222,7 +223,7 @@ class AutoScanFilterDraftModel(BaseModel):
 
 class AutoScanAgentOptionsModel(BaseModel):
     """The Auto Scan launch options of each agent kind; ``null`` for a kind
-    nobody chose options for. Pi has none.
+    nobody chose options for.
 
     ``ui`` is how each issue's session opens: ``terminal`` or ``chat`` (the
     chat view; only for agents ``capabilities.chat`` lists). ``null`` means
@@ -242,6 +243,7 @@ class AutoScanAgentOptionsModel(BaseModel):
     copilot_options: CopilotScanOptionsModel | None = None
     cursor_options: CursorScanOptionsModel | None = None
     junie_options: JunieScanOptionsModel | None = None
+    pi_options: PiScanOptionsModel | None = None
 
 
 class AutoScanSettingsModel(AutoScanAgentOptionsModel):
@@ -260,7 +262,7 @@ class AutoScanSettingsModel(AutoScanAgentOptionsModel):
 
     @field_validator(
         "claude_options", "codex_options", "antigravity_options", "opencode_options",
-        "copilot_options", "cursor_options", "junie_options",
+        "copilot_options", "cursor_options", "junie_options", "pi_options",
         mode="wrap",
     )
     @classmethod

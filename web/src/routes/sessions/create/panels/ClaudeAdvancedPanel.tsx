@@ -20,18 +20,26 @@ interface ClaudeAdvancedPanelProps {
   dispatch: (action: WizardAction) => void;
   /** Claude Code only: this PC's chat support, which hides Debug logging in the chat view. */
   chat?: ChatSupport;
+  /** Offer Code Mode without `chat`: Auto Scan, whose view is chosen apart from this bucket. */
+  codeMode?: boolean;
 }
 
 /** Collapsed-by-default Claude flags, matching both mobile clients' "Advanced" expander. */
-export function ClaudeAdvancedPanel({ bucket, bucketId, dispatch, chat }: ClaudeAdvancedPanelProps) {
+export function ClaudeAdvancedPanel({
+  bucket,
+  bucketId,
+  dispatch,
+  chat,
+  codeMode = chat !== undefined,
+}: ClaudeAdvancedPanelProps) {
   // Debug output lands in the terminal, so it is offered only when there is one.
   const terminal = chat === undefined || claudeTerminalUi(bucket) || chatBlocked(chat);
   return (
     <div className="option-group">
       <details className="advanced advanced-stack">
         <summary>Advanced</summary>
-        {/* Claude Code only: Auto Scan never uses Code Mode. */}
-        {chat !== undefined && (
+        {/* Not for an older agent's Auto Scan, which cannot keep it. */}
+        {codeMode && (
           <CheckboxField
             label="Code Mode"
             checked={bucket.codeMode}

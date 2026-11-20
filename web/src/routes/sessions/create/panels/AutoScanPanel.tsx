@@ -11,12 +11,13 @@ import {
   autoScanIntervalLabel,
   type AutoScanAgentOption,
 } from '../autoScanSetup';
+import { autoScanCodeModeLocksTerminal } from '../buildCreateRequest';
 import type { AutoScanSourcesView } from '../useAutoScanSources';
 import type { AutoScanTemplatesView } from '../useAutoScanTemplates';
 import type { AutoScanSource, AutoScanUi, WizardAction, WizardState } from '../wizardState';
 import { AntigravityOptionsPanel } from './AntigravityOptionsPanel';
 import { AutoScanTemplatesPanel } from './AutoScanTemplatesPanel';
-import { ClaudeAdvancedPanel } from './ClaudeAdvancedPanel';
+import { CLAUDE_CODE_MODE_CHAT_NOTE, ClaudeAdvancedPanel } from './ClaudeAdvancedPanel';
 import { ClaudeOptionsPanel } from './ClaudeOptionsPanel';
 import { CodexOptionsPanel } from './CodexOptionsPanel';
 import { CopilotOptionsPanel } from './CopilotOptionsPanel';
@@ -25,6 +26,7 @@ import { GitHubSourcePanel } from './GitHubSourcePanel';
 import { JunieOptionsPanel } from './JunieOptionsPanel';
 import { LinearSourcePanel } from './LinearSourcePanel';
 import { OpenCodeOptionsPanel } from './OpenCodeOptionsPanel';
+import { PiOptionsPanel } from './PiOptionsPanel';
 import { ScanCallout } from './ScanCallout';
 import { SessionViewChoice, terminalUiHint } from './SessionViewField';
 
@@ -76,6 +78,7 @@ export function AutoScanPanel({
   const agentName = useId();
   const setup = state.autoScanSetup;
   const chosenAgent = agents.find((entry) => entry.id === setup.cli);
+  const codeModeLock = autoScanCodeModeLocksTerminal(state);
 
   return (
     <>
@@ -163,12 +166,13 @@ export function AutoScanPanel({
         <AutoScanSessionView
           agent={chosenAgent}
           ui={setup.ui}
+          codeModeLock={codeModeLock}
           dispatch={dispatch}
         />
         <AgentOptions
           state={state}
           models={models}
-          inChat={setup.ui === 'chat' && chosenAgent?.chat === true}
+          inChat={setup.ui === 'chat' && chosenAgent?.chat === true && !codeModeLock}
           dispatch={dispatch}
         />
       </ScanStep>
@@ -213,18 +217,22 @@ export function AutoScanPanel({
 function AutoScanSessionView({
   agent,
   ui,
+  codeModeLock,
   dispatch,
 }: {
   agent: AutoScanAgentOption | undefined;
   ui: AutoScanUi;
+  /** Claude Code Mode holds the terminal. */
+  codeModeLock: boolean;
   dispatch: (action: WizardAction) => void;
 }) {
   if (agent === undefined) return null;
-  const shown: AutoScanUi = ui === 'chat' && agent.chat ? 'chat' : 'terminal';
+  const chatEnabled = agent.chat && !codeModeLock;
+  const shown: AutoScanUi = ui === 'chat' && chatEnabled ? 'chat' : 'terminal';
   return (
     <SessionViewChoice
       view={shown}
-      chatEnabled={agent.chat}
+      chatEnabled={chatEnabled}
       onChange={(view) => {
         dispatch({ type: 'setAutoScanUi', ui: view });
       }}
@@ -236,6 +244,7 @@ function AutoScanSessionView({
             : terminalUiHint(agent.chatSupport, agent.id)}
         </p>
       )}
+      {agent.chat && codeModeLock && <p className="field-hint">{CLAUDE_CODE_MODE_CHAT_NOTE}</p>}
       {agent.chat && agent.id === 'junie' && shown === 'terminal' && (
         <p className="field-hint">{AUTO_SCAN_JUNIE_TRUST_HINT}</p>
       )}
@@ -334,7 +343,12 @@ function AgentOptions({
             showTerminalOptions={!inChat}
             dispatch={dispatch}
           />
-          <ClaudeAdvancedPanel bucket={state.autoScan} bucketId="autoScan" dispatch={dispatch} />
+          <ClaudeAdvancedPanel
+            bucket={state.autoScan}
+            bucketId="autoScan"
+            dispatch={dispatch}
+            codeMode
+          />
         </>
       );
     case 'codex':
@@ -365,7 +379,7 @@ function AgentOptions({
     case 'junie':
       return <JunieOptionsPanel bucket={agents.junie} dispatch={dispatch} target="autoScan" />;
     case 'pi':
-      return <p className="field-hint">Pi runs its tools without asking.</p>;
+      return <PiOptionsPanel bucket={agents.pi} dispatch={dispatch} target="autoScan" />;
     default:
       return null;
   }

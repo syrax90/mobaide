@@ -125,6 +125,19 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-20: Code Mode in Auto Scan
+
+Additive delta within proto-v7 (2026-11-20): **Auto Scan keeps `code_mode`, and Pi gets an options object. No version bump; `central_server` is untouched.**
+
+| Where | Change |
+|-------|--------|
+| `claude_options.code_mode` | Now kept by Auto Scan (workspace `auto_scan.claude_options`, templates). Used only with `ui: "terminal"`; a chat ignores it. |
+| `opencode_options.code_mode` | Now kept by Auto Scan. Default `true`, as before. |
+| `pi_options` | New Auto Scan options object `{code_mode}` (default `false`) on `POST /api/autoscan/start`, workspace `auto_scan.pi_options` and template `settings.pi_options`. |
+
+* `POST /api/autoscan/start` with Code Mode on and a Claude Code (terminal UI) or Pi that is too old answers `400` with the Code Mode version message, before any issue is claimed. A version that cannot be read does not block the start.
+* Old agents ignore `pi_options` and keep `code_mode` out of the saved choices. Old clients send no `code_mode`: Claude and Pi scans run without Code Mode and OpenCode scans with it, as before.
+
 ### Delta 2026-11-20: Code Mode
 
 Additive delta within proto-v7 (2026-11-20): **one boolean in three options blocks. No version bump; `central_server` is untouched.**
@@ -162,7 +175,7 @@ Auto Scan can now scan the open issues of the workspace's **GitHub** repository 
 |-------|--------|
 | `capabilities.autoscan` | `{"sources": ["linear", "github"], "clis": [8 kinds], "github_setup": true}`. An agent without it scans Linear only, runs Claude Code only and has none of the routes below. |
 | `POST /api/autoscan/start` | New optional fields: `source` (`linear` / `github`), `cli` (`claude`, `codex`, `antigravity`, `opencode`, `copilot`, `cursor`, `junie`, `pi`; absent = `claude`), the chosen agent's options (see **Agent options**), `ui` (`terminal` / `chat`; absent = `terminal`), `interval_minutes` (1–1440; absent = the agent's default, 5 minutes), `initial_prompt` (≤ 32,000 chars; `""` or a blank text clears the saved prompt), `linear_filter` (the `AutoScanFilter` shape), `github_filter`, `linear_api_key`. A missing filter or Linear key, or a source or agent that cannot be used (not installed, Codex not signed in, no chat view for it on this PC with `ui: "chat"`), answers `400` with a `detail` to show. |
-| Workspace dict (`GET /api/projects`, `projects.changed`) | New `auto_scan`: `{"source", "cli", "ui", "interval_minutes", "linear_filter", "github_filter", "claude_options", "codex_options", "antigravity_options", "opencode_options", "copilot_options", "cursor_options", "junie_options"}`, each `null` until chosen. `<kind>_options` are the options of the last start with that agent. `auto_scan_filter` stays for older clients (legacy defaults while unset). |
+| Workspace dict (`GET /api/projects`, `projects.changed`) | New `auto_scan`: `{"source", "cli", "ui", "interval_minutes", "linear_filter", "github_filter", "claude_options", "codex_options", "antigravity_options", "opencode_options", "copilot_options", "cursor_options", "junie_options", "pi_options"}`, each `null` until chosen. `<kind>_options` are the options of the last start with that agent. `auto_scan_filter` stays for older clients (legacy defaults while unset). |
 | `AutoScanInstanceDto` | New `source` (default `linear`), `cli` (default `claude`) and `ui` (default `terminal`). `scan_interval_seconds` is the scan's own wait between cycles. |
 | `GET /api/autoscan/github/status?project_name=` | `{installed, version, signed_in, account, host, repo, repo_url, problem, can_install, install_command}`. `problem` is the first blocking reason in plain words, `null` when a scan can start. `host` is the host to sign in to; it is `null` for a folder that is not a git repository or has no remote, where signing in cannot help. Clients offer **Sign in to GitHub** only when `signed_in` is false and `host` contains `github`. `404` for an unknown workspace. |
 | `GET /api/autoscan/github/labels?project_name=` | `{"labels": [{"name", "color"}], "issue_types": [{"name", "color", "description"}]}` of the repository (up to 200 labels; a label whose name has a comma is left out, since `gh` cannot filter on it). `issue_types` are the repository's enabled GitHub issue types (Bug, Task, Feature…; `color` is GitHub's color name such as `RED`); empty when it has none or GitHub did not say. `400` with `detail` when `gh` cannot read the labels. |
@@ -173,21 +186,22 @@ Auto Scan can now scan the open issues of the workspace's **GitHub** repository 
 
 **`github_filter`** is `{labels: [1–20 names], assignee: string | null, active_label: string | null, issue_types: [0–20 names]}`. Label names are trimmed, deduplicated, at most 100 characters and contain no comma (`gh` splits option values on commas). A blank `assignee` or `active_label` is `null`. `active_label` must not be one of `labels` (ignoring case): adding it would make the issue match again, so such a filter answers `422`, and a scan with an older stored filter does not add it. `issue_types` (default `[]`) are GitHub issue type names, trimmed and deduplicated ignoring case; when not empty, only an issue whose type is one of them (ignoring case) is taken, and an issue with no type is not. The scan asks GitHub for each trigger label and chosen type (`gh issue list --label <l> --type <t>`, which uses GitHub search), so issues of other types do not fill the 50-issue window; above 10 such pairs it asks once per label for up to 300 issues and drops the other types itself. This needs a `gh` that knows `--type` and the `issueType` JSON field; with an older one the cycle fails with an error that says to update `gh`.
 
-**Agent options.** `claude_options` (the session `ClaudeOptionsModel`), `codex_options`, `antigravity_options`, `opencode_options`, `copilot_options`, `cursor_options`, `junie_options`. Only the chosen agent's object is used; Pi has none. Each has the fields of the session options of that agent that an Auto Scan keeps — never the worktree, branch, prompt or sign-in fields, since each issue gets its own worktree and starts at once with its prompt:
+**Agent options.** `claude_options` (the session `ClaudeOptionsModel`), `codex_options`, `antigravity_options`, `opencode_options`, `copilot_options`, `cursor_options`, `junie_options`, `pi_options`. Only the chosen agent's object is used. Each has the fields of the session options of that agent that an Auto Scan keeps — never the worktree, branch, prompt or sign-in fields, since each issue gets its own worktree and starts at once with its prompt:
 
 | Agent | Fields (same names, values and checks as in `POST /api/sessions`) |
 |-------|------|
-| Claude Code | `model`, `effort`, `plan_mode`, `skip_permissions`, `no_memory`, `fast_mode`, `ultracode`, `append_system_prompt`, `debug`, `focus_mode` |
+| Claude Code | `model`, `effort`, `plan_mode`, `skip_permissions`, `no_memory`, `fast_mode`, `ultracode`, `append_system_prompt`, `debug`, `focus_mode`, `code_mode` |
 | Codex | `model`, `reasoning_effort`, `sandbox`, `approval`, `full_auto` |
 | Antigravity | `model`, `skip_permissions`, `sandbox`, `add_dirs` (not both `skip_permissions` and `sandbox`) |
-| OpenCode | `auto_approve` |
+| OpenCode | `auto_approve`, `code_mode` |
 | GitHub Copilot | `allow_all` |
 | Cursor | `force` |
 | Junie | `plan_mode`, `brave` |
+| Pi | `code_mode` |
 
 A start without the chosen agent's object runs it without asking: Codex `full_auto`, Antigravity `skip_permissions`, OpenCode `auto_approve`, Copilot `allow_all`, Cursor `force`, Junie `brave`. The start saves the object on the workspace (`auto_scan.<kind>_options`) with the other choices. An object a newer agent no longer accepts reads as `null`.
 
-**`AutoScanTemplate`** is `{id, name, updated_at, settings}`. `updated_at` is ISO 8601 UTC. `settings` has `source`, `cli`, `ui`, `interval_minutes`, `initial_prompt` and the seven `<kind>_options`, each possibly `null`, plus `linear_filter` and `github_filter` as drafts: the same fields, but any may still be empty (a GitHub filter without labels, a Linear filter with blank states), so a template can hold a half-made filter. A template never holds a Linear API key. The templates live in `autoscan_templates.json` next to the agent's workspaces file. An entry this agent does not accept (one a newer agent wrote, for example) is left out of the answers but kept in the file; a file that is not a JSON list is moved to `autoscan_templates.json.bak` before the next save.
+**`AutoScanTemplate`** is `{id, name, updated_at, settings}`. `updated_at` is ISO 8601 UTC. `settings` has `source`, `cli`, `ui`, `interval_minutes`, `initial_prompt` and the eight `<kind>_options`, each possibly `null`, plus `linear_filter` and `github_filter` as drafts: the same fields, but any may still be empty (a GitHub filter without labels, a Linear filter with blank states), so a template can hold a half-made filter. A template never holds a Linear API key. The templates live in `autoscan_templates.json` next to the agent's workspaces file. An entry this agent does not accept (one a newer agent wrote, for example) is left out of the answers but kept in the file; a file that is not a JSON list is moved to `autoscan_templates.json.bak` before the next save.
 
 * A GitHub scan takes the open issues that carry any of `labels` (and, when `assignee` is set, are assigned to it; `@me` is the signed-in `gh` account). Label names match without regard to case, as on GitHub. Taking an issue adds `active_label` (the `state_update` step) and removes the trigger labels it has, in the issue's own spelling (the `label_removal` step), so it is not taken again; an issue whose current labels no longer include a trigger label is skipped even when the label search still lists it. When GitHub refuses the removal, the scan skips the issue until it restarts. A **closed** issue is done: its worktree is removed without `--force`, so git keeps a worktree with uncommitted changes and the scan tries again next cycle (anyone who opened an issue can close it).
 * Issue events keep their shape. GitHub identifiers are `#<number>`; worktree folders and branches use `gh-<number>-<title words>`.

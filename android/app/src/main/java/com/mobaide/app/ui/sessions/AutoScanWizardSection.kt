@@ -191,6 +191,7 @@ internal fun AutoScanWizardSection(
             cli = cli,
             chatAvailable = state.autoScanChatAvailable,
             chatSupport = state.chatSupport(cli),
+            lockedHint = state.autoScanChatLockedHint,
             selected = state.autoScanUi,
             onSelect = viewModel::setAutoScanUi,
         )
@@ -278,6 +279,8 @@ private fun AutoScanAgentOptions(
         "opencode" -> {
             OpenCodePermissionControls(agents.opencodeAutoApprove, viewModel::setAutoScanOpenCodeAutoApprove)
             if (!agents.opencodeAutoApprove) AskHint(RUN_WITHOUT_ASKING_OFF_HINT)
+            Text("Tools", style = MaterialTheme.typography.labelLarge)
+            CodeModeToggle(agents.opencodeCodeMode, OPENCODE_CODE_MODE_HINT, viewModel::setAutoScanOpenCodeCodeMode)
         }
         "copilot" -> {
             CopilotPermissionControls(agents.copilotAllowAll, viewModel::setAutoScanCopilotAllowAll)
@@ -296,7 +299,11 @@ private fun AutoScanAgentOptions(
             )
             if (!agents.junieBrave) AskHint(RUN_WITHOUT_ASKING_OFF_HINT)
         }
-        "pi" -> Hint("Pi runs its tools without asking.")
+        "pi" -> {
+            Hint("Pi runs its tools without asking.")
+            Text("Tools", style = MaterialTheme.typography.labelLarge)
+            CodeModeToggle(agents.piCodeMode, PI_CODE_MODE_HINT, viewModel::setAutoScanPiCodeMode)
+        }
     }
 }
 
@@ -898,17 +905,19 @@ private fun AutoScanSessionViewField(
     cli: String,
     chatAvailable: Boolean,
     chatSupport: ChatSupport?,
+    lockedHint: String?,
     selected: String,
     onSelect: (String) -> Unit,
 ) {
     val junieTrust = chatAvailable && cli == "junie" && selected == AUTO_SCAN_UI_TERMINAL
     SessionViewField(
         chatSelected = selected == AUTO_SCAN_UI_CHAT,
-        chatEnabled = chatAvailable,
+        chatEnabled = chatAvailable && lockedHint == null,
         onSelect = { chat -> onSelect(if (chat) AUTO_SCAN_UI_CHAT else AUTO_SCAN_UI_TERMINAL) },
         hint = when {
             // The probe has not answered yet: the shared hint knows only its answers.
             !chatAvailable -> chatUnavailableHint(chatSupport, cli) ?: "Checking the chat view on the PC…"
+            lockedHint != null -> lockedHint
             junieTrust -> "Junie asks to trust a new worktree unless you trusted the workspace folder in Junie. " +
                 "Trust it once in Junie, or use Chat."
             else -> null

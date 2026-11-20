@@ -193,16 +193,18 @@ data class AntigravityScanBucket(
 /**
  * The Auto Scan options of the agents other than Claude Code, apart from the
  * normal-session ones. Defaults run without asking, as the agent does for a
- * start that names no options; Pi has none.
+ * start that names no options. Code Mode defaults match the new-session wizard.
  */
 data class AutoScanAgentBuckets(
     val codex: CodexScanBucket = CodexScanBucket(),
     val antigravity: AntigravityScanBucket = AntigravityScanBucket(),
     val opencodeAutoApprove: Boolean = true,
+    val opencodeCodeMode: Boolean = true,
     val copilotAllowAll: Boolean = true,
     val cursorForce: Boolean = true,
     val juniePlanMode: Boolean = false,
     val junieBrave: Boolean = true,
+    val piCodeMode: Boolean = false,
 )
 
 /** The additional-directories draft as a list: one per line, or comma-separated. */
@@ -249,6 +251,7 @@ fun AutoScanSettingsDto.asTemplateSettings(prompt: String?) = AutoScanTemplateSe
     copilot_options = copilot_options,
     cursor_options = cursor_options,
     junie_options = junie_options,
+    pi_options = pi_options,
 )
 
 /** The template's buckets with each option object it carries taking over its agent's bucket. */
@@ -256,10 +259,12 @@ fun AutoScanAgentBuckets.applied(settings: AutoScanTemplateSettingsDto) = AutoSc
     codex = settings.codex_options?.let(codex::applied) ?: codex,
     antigravity = settings.antigravity_options?.let(AntigravityScanBucket::from) ?: antigravity,
     opencodeAutoApprove = settings.opencode_options?.auto_approve ?: opencodeAutoApprove,
+    opencodeCodeMode = settings.opencode_options?.code_mode ?: opencodeCodeMode,
     copilotAllowAll = settings.copilot_options?.allow_all ?: copilotAllowAll,
     cursorForce = settings.cursor_options?.force ?: cursorForce,
     juniePlanMode = settings.junie_options?.plan_mode ?: juniePlanMode,
     junieBrave = settings.junie_options?.brave ?: junieBrave,
+    piCodeMode = settings.pi_options?.code_mode ?: piCodeMode,
 )
 
 /** "GitHub · Codex": a template's source and agent, for its picker entry. */

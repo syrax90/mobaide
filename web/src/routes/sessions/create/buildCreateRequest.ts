@@ -26,7 +26,6 @@ import {
   isCustomMode,
   parseAddDirs,
   type AntigravityBucket,
-  type AutoScanSetup,
   type AutoScanUi,
   type ClaudeBucket,
   type CodexBucket,
@@ -78,12 +77,19 @@ export interface BuildContext {
   autoScanChat?: ChatSupport;
 }
 
+/** Claude Code Mode runs only in the terminal, so it holds an Auto Scan there. */
+export function autoScanCodeModeLocksTerminal(state: WizardState): boolean {
+  return state.autoScanSetup.cli === 'claude' && state.autoScan.codeMode;
+}
+
 /**
  * The view an Auto Scan opens each issue's session in: the chat only when it
- * was chosen and the PC is known to have a chat view for the agent.
+ * was chosen, the PC is known to have a chat view for the agent, and Claude
+ * Code Mode does not hold the terminal.
  */
-export function autoScanUi(setup: AutoScanSetup, chat: ChatSupport | undefined): AutoScanUi {
-  return setup.ui === 'chat' && chat?.kind === 'available' ? 'chat' : 'terminal';
+export function autoScanUi(state: WizardState, chat: ChatSupport | undefined): AutoScanUi {
+  if (autoScanCodeModeLocksTerminal(state)) return 'terminal';
+  return state.autoScanSetup.ui === 'chat' && chat?.kind === 'available' ? 'chat' : 'terminal';
 }
 
 /**
@@ -187,7 +193,7 @@ function placement({ state, workspace, worktreeBase }: BuildContext): Placement 
 
 /**
  * `codeMode` is passed by the caller: Claude Code has it in the terminal UI
- * only, and Auto Scan and Continue never send it.
+ * only, and Continue and an older agent's Auto Scan never send it.
  */
 function claudeOptions(
   bucket: ClaudeBucket,
@@ -518,15 +524,19 @@ export function buildConnectRequest(context: BuildContext): CreateSessionRequest
 }
 
 /** Claude Code's options for a scan start: the full launch model, worktree on. */
-function scanClaudeOptions(bucket: ClaudeBucket): ClaudeOptions {
-  return claudeOptions(bucket, {
-    // Hardcoded: the scanner branches a worktree per issue so concurrent
-    // issues stay isolated. No branch name — it names them.
-    worktree: true,
-    branchName: undefined,
-    // The scanner picks its own start point; the wizard's picker never shows.
-    baseBranch: null,
-  });
+function scanClaudeOptions(bucket: ClaudeBucket, codeMode = false): ClaudeOptions {
+  return claudeOptions(
+    bucket,
+    {
+      // Hardcoded: the scanner branches a worktree per issue so concurrent
+      // issues stay isolated. No branch name — it names them.
+      worktree: true,
+      branchName: undefined,
+      // The scanner picks its own start point; the wizard's picker never shows.
+      baseBranch: null,
+    },
+    codeMode,
+  );
 }
 
 /** Listed field by field, so no extra key a looser draft carries reaches the wire. */
@@ -569,6 +579,7 @@ function claudeScanOptions(bucket: ClaudeBucket): ClaudeScanOptions {
     append_system_prompt: blankToUndefined(bucket.appendSystemPrompt) ?? null,
     debug: bucket.debug,
     focus_mode: bucket.focusMode,
+    code_mode: bucket.codeMode,
   };
 }
 
@@ -592,9 +603,8 @@ function antigravityScanOptions(bucket: AntigravityBucket): AntigravityScanOptio
 }
 
 /**
- * The chosen non-Claude agent's options, under its wire key. Pi has none, and
- * Claude Code's go in `claude_options`, which the start and a template fill
- * differently.
+ * The chosen non-Claude agent's options, under its wire key. Claude Code's go
+ * in `claude_options`, which the start and a template fill differently.
  */
 function scanAgentOptions(
   state: WizardState,
@@ -607,6 +617,7 @@ function scanAgentOptions(
   | 'copilot_options'
   | 'cursor_options'
   | 'junie_options'
+  | 'pi_options'
 > {
   const agents = state.autoScanAgents;
   switch (cli) {
@@ -615,13 +626,20 @@ function scanAgentOptions(
     case 'antigravity':
       return { antigravity_options: antigravityScanOptions(agents.antigravity) };
     case 'opencode':
-      return { opencode_options: { auto_approve: agents.opencode.autoApprove } };
+      return {
+        opencode_options: {
+          auto_approve: agents.opencode.autoApprove,
+          code_mode: agents.opencode.codeMode,
+        },
+      };
     case 'copilot':
       return { copilot_options: { allow_all: agents.copilot.allowAll } };
     case 'cursor':
       return { cursor_options: { force: agents.cursor.force } };
     case 'junie':
       return { junie_options: { plan_mode: agents.junie.planMode, brave: agents.junie.brave } };
+    case 'pi':
+      return { pi_options: { code_mode: agents.pi.codeMode } };
     default:
       return {};
   }
@@ -664,10 +682,10 @@ export function buildStartScanRequest(context: BuildContext): StartScanRequest |
       ? { github_filter: githubFilterWire(githubFilter) }
       : { linear_filter: linearFilterWire(linearFilter) }),
     initial_prompt: state.autoScan.initialPrompt,
-    ui: autoScanUi(state.autoScanSetup, context.autoScanChat),
+    ui: autoScanUi(state, context.autoScanChat),
     interval_minutes: state.autoScanSetup.intervalMinutes,
     ...(cli === 'claude'
-      ? { claude_options: scanClaudeOptions(state.autoScan) }
+      ? { claude_options: scanClaudeOptions(state.autoScan, state.autoScan.codeMode) }
       : scanAgentOptions(state, cli)),
   };
 }
@@ -696,6 +714,7 @@ export function autoScanTemplateSettings(state: WizardState): AutoScanTemplateSe
     copilot_options: null,
     cursor_options: null,
     junie_options: null,
+    pi_options: null,
     ...(agent !== null && agent !== 'claude' ? scanAgentOptions(state, agent) : {}),
   };
 }
