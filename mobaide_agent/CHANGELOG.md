@@ -1,5 +1,12 @@
 # mobaide_agent Changelog
 
+## [0.3.33](https://github.com/syrax90/mobaide/compare/agent-v0.3.32...agent-v0.3.33) (2026-11-20)
+
+
+### Bug Fixes
+
+* **agent:** redact WebSocket tokens in uvicorn log lines ([#922](https://github.com/syrax90/mobaide/issues/922)) ([1fed4fc](https://github.com/syrax90/mobaide/commit/1fed4fc1d185515b73b87a7f4f50fbd874551c7f))
+
 ## [0.3.32](https://github.com/syrax90/mobaide/compare/agent-v0.3.31...agent-v0.3.32) (2026-11-20)
 
 
