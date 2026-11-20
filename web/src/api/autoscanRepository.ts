@@ -5,9 +5,17 @@ import {
   autoScanListResponseSchema,
   type AutoScanListResponse,
 } from '../protocol/dto/autoscan';
+import { sessionResponseSchema, type SessionResponse } from '../protocol/dto/session';
 
 export type StartScanRequest = components['schemas']['StartScanRequest'];
 export type RunNowResponse = components['schemas']['RunNowResponse'];
+export type GitHubStatus = components['schemas']['GitHubStatusResponse'];
+export type GitHubLabel = components['schemas']['GitHubLabelModel'];
+export type GitHubIssueType = components['schemas']['GitHubIssueTypeModel'];
+export type GitHubLabelsResponse = components['schemas']['GitHubLabelsResponse'];
+export type AutoScanTemplate = components['schemas']['AutoScanTemplate'];
+export type AutoScanTemplateSettings = components['schemas']['AutoScanTemplateSettings'];
+export type GitHubSetupAction = components['schemas']['GitHubSetupRequest']['action'];
 
 /**
  * Start an Auto Scan for a workspace.
@@ -78,4 +86,100 @@ export async function runAutoScanNow(
   );
   if (error !== undefined || data === undefined) throw toApiError(response, error);
   return data;
+}
+
+/**
+ * What a GitHub scan of the workspace still needs: `gh` installed, signed in,
+ * and a GitHub repository in the workspace folder. `problem` is the first
+ * blocking reason in plain words, `null` once a scan can start.
+ *
+ * Runs `gh` on the PC on every call, so callers fetch it only while GitHub is
+ * the chosen source.
+ */
+export async function getGitHubStatus(
+  agentId: string,
+  workspaceName: string,
+): Promise<GitHubStatus> {
+  const { data, error, response } = await createAgentClient(agentId).GET(
+    '/api/autoscan/github/status',
+    { params: { query: { project_name: workspaceName } } },
+  );
+  if (error !== undefined || data === undefined) throw toApiError(response, error);
+  return data;
+}
+
+/**
+ * The repository's labels (up to 200) and its GitHub issue types, for the
+ * filter's pickers. 400 when `gh` cannot read the labels; the issue types are
+ * empty when the repository has none or GitHub did not say.
+ */
+export async function listGitHubLabels(
+  agentId: string,
+  workspaceName: string,
+): Promise<GitHubLabelsResponse> {
+  const { data, error, response } = await createAgentClient(agentId).GET(
+    '/api/autoscan/github/labels',
+    { params: { query: { project_name: workspaceName } } },
+  );
+  if (error !== undefined || data === undefined) throw toApiError(response, error);
+  // `issue_types` came later in the same unreleased delta; read it defensively.
+  return { labels: data.labels, issue_types: data.issue_types ?? [] };
+}
+
+/** The Auto Scan templates saved on the PC, sorted by name. */
+export async function listAutoScanTemplates(agentId: string): Promise<AutoScanTemplate[]> {
+  const { data, error, response } = await createAgentClient(agentId).GET(
+    '/api/autoscan/templates',
+  );
+  if (error !== undefined || data === undefined) throw toApiError(response, error);
+  return data.templates;
+}
+
+/**
+ * Save `settings` as the template `name`; one with the same name (ignoring
+ * case) is replaced. Answers every template. 409 when the PC already holds
+ * the most templates it keeps.
+ */
+export async function saveAutoScanTemplate(
+  agentId: string,
+  name: string,
+  settings: AutoScanTemplateSettings,
+): Promise<AutoScanTemplate[]> {
+  const { data, error, response } = await createAgentClient(agentId).POST(
+    '/api/autoscan/templates',
+    { body: { name, settings } },
+  );
+  if (error !== undefined || data === undefined) throw toApiError(response, error);
+  return data.templates;
+}
+
+/** Delete a template; answers every template left. */
+export async function deleteAutoScanTemplate(
+  agentId: string,
+  templateId: string,
+): Promise<AutoScanTemplate[]> {
+  const { data, error, response } = await createAgentClient(agentId).DELETE(
+    '/api/autoscan/templates/{template_id}',
+    { params: { path: { template_id: templateId } } },
+  );
+  if (error !== undefined || data === undefined) throw toApiError(response, error);
+  return data.templates;
+}
+
+/**
+ * Open a terminal session on the PC that installs the GitHub CLI (`install`) or
+ * runs `gh auth login` (`sign_in`) in the workspace folder. The answer is an
+ * ordinary session, decoded like `createSession`'s so it can seed the list.
+ */
+export async function startGitHubSetup(
+  agentId: string,
+  workspaceName: string,
+  action: GitHubSetupAction,
+): Promise<SessionResponse> {
+  const { data, error, response } = await createAgentClient(agentId).POST(
+    '/api/autoscan/github/setup',
+    { body: { project_name: workspaceName, action, rows: 24, cols: 80 } },
+  );
+  if (error !== undefined || data === undefined) throw toApiError(response, error);
+  return sessionResponseSchema.parse(data);
 }

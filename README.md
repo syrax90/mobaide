@@ -44,13 +44,13 @@
 ## Features
 
 - **A chat view built for the phone.** Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot, Cursor, Junie and Pi sessions open as a native chat: Markdown answers, one card per tool call with its diff, approval buttons, questions, plan progress, mode and model chips. It runs over the [Agent Client Protocol](https://agentclientprotocol.com), and it can continue a Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot, Junie or Pi session you started in a terminal on your computer, or an earlier Cursor chat session. Codex chats stay in sync with a session open in a terminal.
-- **A real terminal, not a log tail.** Full two-way PTY, so TUIs behave: arrow keys, Ctrl-C, plan mode, approval prompts. A rolling buffer of recent output replays after a dropped connection. Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot, Cursor, Junie and Pi sessions offer it under Advanced as Terminal UI; raw shells and custom agents always use it.
+- **A real terminal, not a log tail.** Full two-way PTY, so TUIs behave: arrow keys, Ctrl-C, plan mode, approval prompts. A rolling buffer of recent output replays after a dropped connection. Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot, Cursor, Junie and Pi sessions offer it as Terminal under Open sessions in; raw shells and custom agents always use it.
 - **Your agents, your options.** Launch Claude Code, Codex CLI or Antigravity CLI with their own model, effort, sandbox and approval settings, OpenCode or Pi with the model you pick inside the session, GitHub Copilot CLI with its allow-all choice, Cursor CLI with its run-everything choice, or Junie CLI in Plan or Brave mode. Open a raw shell, or define an agent from any command your shell can run.
 - **Several sessions at once.** Keep a Claude Code run, a Codex review and a shell side by side, each with its own state.
 - **[Voice input](#voice-input).** Dictate prompts instead of thumb-typing them. Your own computer does the transcription, in 25 languages. Opt-in, and the audio is never stored.
 - **Git from your phone.** Read diffs, stage, commit, fetch, pull, push, rebase, resolve conflicts and manage branches. Git runs on your machine, with the credentials it already has.
 - **Optional Git worktrees.** Start any session in its own worktree so parallel runs do not collide. Opt-in per launch, Git workspaces only.
-- **Auto Scan.** Watch [Linear](https://linear.app) for matching issues and launch a Claude Code session in a new worktree for each one.
+- **Auto Scan.** Watch GitHub issues or [Linear](https://linear.app) for matching issues and launch the AI agent you pick in a new worktree for each one.
 - **Notifications.** Get an alert when a session needs your approval, finishes a turn or ends. A Cursor or Junie session sends the first two from the chat view only.
 - **Prompt templates and shortcuts.** Save prompts and reuse them in any session. Build custom key chords as buttons on the mobile control bar. Both sync across your devices.
 - **Set up once.** The agent installs as an OS service, restarts itself if it dies, and updates itself from signed releases.

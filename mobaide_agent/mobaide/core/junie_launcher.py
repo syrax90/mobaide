@@ -99,6 +99,9 @@ class JunieOptions:
     worktree: bool = False
     branch_name: str | None = None
     base_branch: str | None = None
+    # First message, sent with ``--prompt`` (Auto Scan only): Junie starts
+    # interactive with it already submitted.
+    initial_prompt: str | None = None
 
 
 class JunieLauncher:
@@ -141,6 +144,10 @@ class JunieLauncher:
             argv.append("--plan")
         if options.brave:
             argv.append("--brave")
+        if options.initial_prompt:
+            # One element with ``=``: a prompt that starts with ``-`` can
+            # never be read as another flag.
+            argv.append(f"--prompt={options.initial_prompt}")
         return argv
 
     async def resolve_cwd(self, target: LaunchTarget, options: JunieOptions) -> str:

@@ -15,6 +15,7 @@ from httpx import ASGITransport, AsyncClient
 from mobaide.agent.app import create_app
 from mobaide.agent.config import AgentConfig
 from mobaide.core import WorkspaceRecord, workspaces_store
+from mobaide.core.workspaces_config import GitHubScanFilter
 
 from .conftest import TEST_JWT_SECRET, TEST_USERNAME
 
@@ -97,6 +98,27 @@ class TestListWorkspaces:
         by_name = {p["name"]: p for p in body}
         assert by_name["alpha"]["has_linear_key"] is True
         assert by_name["beta"]["has_linear_key"] is False
+
+    async def test_lists_a_github_filter_saved_before_the_active_label_check(
+        self, app_with_workspaces, client_with_workspaces, auth_headers_p, tmp_path,
+    ):
+        # An older agent saved an active label that is also a trigger label;
+        # a scan start now refuses the pair, but the workspaces still list.
+        app_with_workspaces.state.workspaces_store.create(
+            WorkspaceRecord(
+                name="gamma",
+                path=str(tmp_path / "gamma"),
+                github_scan_filter=GitHubScanFilter(labels=["ai"], active_label="AI"),
+                auto_scan_source="github",
+            ),
+        )
+
+        resp = await client_with_workspaces.get(
+            "/api/projects", headers=auth_headers_p,
+        )
+
+        assert resp.status_code == 200
+        assert {p["name"] for p in resp.json()} == {"alpha", "beta", "gamma"}
 
     async def test_requires_auth(self, client_with_workspaces):
         resp = await client_with_workspaces.get("/api/projects")

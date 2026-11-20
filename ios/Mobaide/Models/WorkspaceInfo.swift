@@ -13,6 +13,8 @@ struct WorkspaceInfo: Codable, Equatable, Sendable {
     let path_exists: Bool
     let auto_scan_filter: AutoScanFilterDto
     let auto_scan_prompt: String?
+    /// nil from an agent without `capabilities.autoscan`.
+    let auto_scan: AutoScanSettingsDto?
 
     init(
         name: String,
@@ -24,7 +26,8 @@ struct WorkspaceInfo: Codable, Equatable, Sendable {
         order: Int = 0,
         path_exists: Bool = true,
         auto_scan_filter: AutoScanFilterDto = AutoScanFilterDto(),
-        auto_scan_prompt: String? = nil
+        auto_scan_prompt: String? = nil,
+        auto_scan: AutoScanSettingsDto? = nil
     ) {
         self.name = name
         self.path = path
@@ -36,6 +39,7 @@ struct WorkspaceInfo: Codable, Equatable, Sendable {
         self.path_exists = path_exists
         self.auto_scan_filter = auto_scan_filter
         self.auto_scan_prompt = auto_scan_prompt
+        self.auto_scan = auto_scan
     }
 }
 
@@ -52,5 +56,6 @@ extension WorkspaceInfo {
         path_exists = try container.decodeIfPresent(Bool.self, forKey: .path_exists) ?? true
         auto_scan_filter = try container.decodeIfPresent(AutoScanFilterDto.self, forKey: .auto_scan_filter) ?? AutoScanFilterDto()
         auto_scan_prompt = try container.decodeIfPresent(String.self, forKey: .auto_scan_prompt)
+        auto_scan = try container.decodeIfPresent(AutoScanSettingsDto.self, forKey: .auto_scan)
     }
 }

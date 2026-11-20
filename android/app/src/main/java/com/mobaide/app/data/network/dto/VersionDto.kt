@@ -214,3 +214,30 @@ fun VersionInfoResponse.chatSupport(kind: String): ChatSupport {
     }.getOrNull() == true
     return ChatSupport.Available(resume = flag("resume"), live = flag("live"))
 }
+
+/**
+ * `capabilities.autoscan`: the issue sources and agents Auto Scan offers, and
+ * whether the GitHub setup route exists.
+ */
+data class AutoScanCapability(
+    val sources: List<String>,
+    val clis: List<String>,
+    val githubSetup: Boolean,
+)
+
+/**
+ * The agent's Auto Scan options, or null for an agent that predates the key:
+ * it scans Linear only, runs Claude Code only and has no GitHub routes.
+ */
+fun VersionInfoResponse.autoScanCapability(): AutoScanCapability? = runCatching {
+    val autoscan = capabilities["autoscan"] as? JsonObject ?: return@runCatching null
+    fun strings(key: String): List<String> = (autoscan[key] as? JsonArray)
+        ?.mapNotNull { item -> (item as? JsonPrimitive)?.takeIf { it.isString }?.content }
+        .orEmpty()
+    AutoScanCapability(
+        sources = strings("sources"),
+        clis = strings("clis"),
+        githubSetup = (autoscan["github_setup"] as? JsonPrimitive)
+            ?.let { !it.isString && it.booleanOrNull == true } == true,
+    )
+}.getOrNull()

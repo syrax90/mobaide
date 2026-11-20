@@ -295,6 +295,49 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         XCTAssertEqual(options.effort, "high")
     }
 
+    func testAClaudeTemplateRestoresTheAutoScanBucketAndLeavesTheClaudeStepAlone() throws {
+        let dialled = makeModel(autoScanRepo: makeAutoScanRepo())
+        dialled.autoScanSetup.source = .github
+        dialled.autoScanSetup.cli = "claude"
+        dialled.autoScanClaudeModel = "sonnet"
+        dialled.autoScanClaudeEffort = "low"
+        dialled.autoScanPlanMode = true
+        dialled.autoScanSkipPermissions = false
+        dialled.autoScanInitialPrompt = "Plan first."
+        let fresh = makeModel(autoScanRepo: makeAutoScanRepo())
+        let claudeStep = (fresh.claudeModel, fresh.claudeEffort, fresh.skipPermissions)
+
+        let captured = dialled.autoScanSetup.templateSettings(
+            claudeOptions: dialled.autoScanClaudeScanOptions(),
+            initialPrompt: dialled.autoScanInitialPrompt
+        )
+        let settings = try WireJSON.decoder().decode(
+            AutoScanSettingsDto.self,
+            from: WireJSON.encoder().encode(captured)
+        )
+        fresh.autoScanSetup.apply(settings)
+
+        XCTAssertNil(settings.codex_options)
+        XCTAssertEqual(fresh.autoScanClaudeModel, "sonnet")
+        XCTAssertEqual(fresh.autoScanClaudeEffort, "low")
+        XCTAssertTrue(fresh.autoScanPlanMode)
+        XCTAssertFalse(fresh.autoScanSkipPermissions)
+        XCTAssertEqual(fresh.autoScanInitialPrompt, "Plan first.")
+        XCTAssertEqual(fresh.claudeModel, claudeStep.0)
+        XCTAssertEqual(fresh.claudeEffort, claudeStep.1)
+        XCTAssertEqual(fresh.skipPermissions, claudeStep.2)
+    }
+
+    func testAutoScanCodexAgentDefaultEffortSurvivesAModelSwitch() {
+        let model = makeModel(autoScanRepo: makeAutoScanRepo())
+        model.autoScanSetup.codexOptions.reasoning_effort = nil
+
+        model.setAutoScanCodexModel("gpt-5.5")
+
+        XCTAssertEqual(model.autoScanSetup.codexOptions.model, "gpt-5.5")
+        XCTAssertNil(model.autoScanSetup.codexOptions.reasoning_effort, "Agent default fits every model")
+    }
+
     func testAutoScanOptionsCarryTogglesAndDropBlankPrompts() {
         let model = makeModel(autoScanRepo: makeAutoScanRepo())
         model.autoScanSkipPermissions = false

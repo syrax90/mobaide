@@ -52,6 +52,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -90,9 +91,11 @@ fun AutoScanDetailScreen(
             modifier = Modifier.fillMaxSize().padding(padding),
         ) {
             HeaderCard(
-                statusText = ui.instance?.status ?: ui.connection.name,
+                statusText = if (ui.stopped) "stopped" else ui.instance?.status ?: ui.connection.name,
+                sourceAndAgent = ui.instance?.sourceAndAgent,
                 nextScanAtIso = ui.nextScanAt,
                 cycleNumber = ui.cycleNumber,
+                showControls = !ui.stopped,
                 onRunNow = viewModel::runNow,
                 onStop = viewModel::stop,
             )
@@ -118,8 +121,10 @@ fun AutoScanDetailScreen(
 @Composable
 private fun HeaderCard(
     statusText: String,
+    sourceAndAgent: String?,
     nextScanAtIso: String?,
     cycleNumber: Int,
+    showControls: Boolean,
     onRunNow: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -140,12 +145,22 @@ private fun HeaderCard(
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
-            CountdownText(
+            if (sourceAndAgent != null) {
+                Text(
+                    text = sourceAndAgent,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .padding(top = 4.dp)
+                        .testTag("autoscan_detail_source_agent"),
+                )
+            }
+            if (showControls) CountdownText(
                 nextScanAtIso = nextScanAtIso,
                 modifier = Modifier.padding(top = 6.dp),
                 style = MaterialTheme.typography.bodyMedium,
             )
-            Row(
+            if (showControls) Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -153,7 +168,7 @@ private fun HeaderCard(
                     Icon(Icons.Default.PlayArrow, contentDescription = null)
                     Text("Run Now", modifier = Modifier.padding(start = 4.dp))
                 }
-                PixelButton(onClick = onStop) {
+                PixelButton(onClick = onStop, style = PixelButtonStyle.Danger) {
                     Icon(Icons.Default.Stop, contentDescription = null)
                     Text("Stop", modifier = Modifier.padding(start = 4.dp))
                 }

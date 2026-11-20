@@ -14,7 +14,16 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath
 
-from .workspaces_config import AutoScanFilter, WorkspaceConfig
+from .workspaces_config import (
+    AUTO_SCAN_OPTION_FIELDS,
+    AUTO_SCAN_SOURCES,
+    AUTO_SCAN_UIS,
+    AutoScanFilter,
+    GitHubScanFilter,
+    WorkspaceConfig,
+    clean_auto_scan_options,
+    valid_auto_scan_interval,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +88,20 @@ class WorkspaceRecord:
     conda_env: str | None = None
     default_flags: dict[str, object] = field(default_factory=dict)
     order: int = 0
-    auto_scan_filter: AutoScanFilter = field(default_factory=AutoScanFilter)
+    # ``None`` until someone chooses a Linear filter (a scan start or an
+    # older client's workspace form); readers then see the legacy defaults.
+    auto_scan_filter: AutoScanFilter | None = None
     auto_scan_prompt: str | None = None
+    github_scan_filter: GitHubScanFilter | None = None
+    # Source (``linear`` / ``github``) and agent kind of the last scan start.
+    auto_scan_source: str | None = None
+    auto_scan_cli: str | None = None
+    # Auto Scan launch options by agent kind, from the last start with each.
+    auto_scan_options: dict[str, dict[str, object]] = field(default_factory=dict)
+    # Session view (``terminal`` / ``chat``) and minutes between cycles of the
+    # last scan start.
+    auto_scan_ui: str | None = None
+    auto_scan_interval_minutes: int | None = None
     # Base branch of the last worktree a client created in this workspace;
     # agent-private, so every client and device preselects the same one.
     last_worktree_base: str | None = None
@@ -100,6 +121,11 @@ class WorkspaceUpdatePatch:
     * ``auto_scan_filter``: ``None`` keeps, a filter replaces wholesale.
     * ``auto_scan_prompt``: ``None`` keeps, ``""`` clears (stored as ``None``,
       so the engine-wide default prompt is used), any other string replaces.
+    * ``github_scan_filter``, ``auto_scan_source``, ``auto_scan_cli``,
+      ``auto_scan_ui``, ``auto_scan_interval_minutes``: ``None`` keeps, a
+      value replaces.
+    * ``auto_scan_options``: ``None`` keeps; each agent kind it names gets
+      those options, the other kinds keep theirs.
     """
 
     name: str | None = None
@@ -109,6 +135,12 @@ class WorkspaceUpdatePatch:
     default_flags: dict[str, object] | None = None
     auto_scan_filter: AutoScanFilter | None = None
     auto_scan_prompt: str | None = None
+    github_scan_filter: GitHubScanFilter | None = None
+    auto_scan_source: str | None = None
+    auto_scan_cli: str | None = None
+    auto_scan_options: dict[str, dict[str, object]] | None = None
+    auto_scan_ui: str | None = None
+    auto_scan_interval_minutes: int | None = None
 
 
 class WorkspacesStore:
@@ -290,6 +322,29 @@ class WorkspacesStore:
                     None if patch.auto_scan_prompt == "" else patch.auto_scan_prompt
                 )
 
+            if patch.github_scan_filter is not None:
+                record.github_scan_filter = patch.github_scan_filter
+
+            if patch.auto_scan_source is not None:
+                record.auto_scan_source = patch.auto_scan_source
+
+            if patch.auto_scan_cli is not None:
+                record.auto_scan_cli = patch.auto_scan_cli
+
+            if patch.auto_scan_options is not None:
+                record.auto_scan_options = {
+                    **record.auto_scan_options,
+                    **_options_from_dict(patch.auto_scan_options),
+                }
+
+            if patch.auto_scan_ui is not None:
+                record.auto_scan_ui = _stored_ui(patch.auto_scan_ui)
+
+            if patch.auto_scan_interval_minutes is not None:
+                record.auto_scan_interval_minutes = valid_auto_scan_interval(
+                    patch.auto_scan_interval_minutes
+                )
+
             if new_name != record.name:
                 self._workspaces.pop(record.name)
                 record.name = new_name
@@ -413,6 +468,103 @@ def _filter_to_dict(f: AutoScanFilter) -> dict[str, object]:
     }
 
 
+def _stored_linear_filter(data: dict, has_key: bool, source: str | None) -> AutoScanFilter | None:
+    """The chosen Linear filter of a stored record, ``None`` when nobody chose one.
+
+    Earlier agents wrote the legacy defaults into every record. Those count
+    as chosen only where a Linear scan could have used them: the workspace
+    has a Linear key, or its last scan was a Linear one.
+    """
+    raw = data.get("auto_scan_filter")
+    if not isinstance(raw, dict):
+        return None
+    parsed = _filter_from_dict(raw)
+    if parsed == _FILTER_DEFAULTS and not has_key and source != "linear":
+        return None
+    return parsed
+
+
+def _clean_labels(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    seen: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip() and item.strip() not in seen:
+            seen.append(item.strip())
+    return seen
+
+
+def _optional_text(value: object) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _usable_active_label(labels: list[str], active: str | None) -> str | None:
+    """``active`` unless it is one of the trigger labels (ignoring case).
+
+    Mirrors the wire check — such a label would make the issue match again —
+    so a filter saved before that check still lists and saves cleanly.
+    """
+    if active is not None and active.casefold() in {label.casefold() for label in labels}:
+        return None
+    return active
+
+
+def _clean_issue_types(value: object) -> list[str]:
+    """Distinct issue type names, ignoring case, in their first spelling."""
+    seen: dict[str, str] = {}
+    for name in _clean_labels(value):
+        seen.setdefault(name.casefold(), name)
+    return list(seen.values())
+
+
+def _github_filter_from_dict(data: object) -> GitHubScanFilter | None:
+    """Parse a stored ``github_scan_filter``; ``None`` when absent or unusable."""
+    if not isinstance(data, dict):
+        return None
+    labels = _clean_labels(data.get("labels"))
+    if not labels:
+        return None
+    return GitHubScanFilter(
+        labels=labels,
+        assignee=_optional_text(data.get("assignee")),
+        active_label=_usable_active_label(labels, _optional_text(data.get("active_label"))),
+        issue_types=_clean_issue_types(data.get("issue_types")),
+    )
+
+
+def _github_filter_to_dict(f: GitHubScanFilter) -> dict[str, object]:
+    return {
+        "labels": list(f.labels),
+        "assignee": f.assignee,
+        "active_label": _usable_active_label(list(f.labels), f.active_label),
+        "issue_types": list(f.issue_types),
+    }
+
+
+def _options_from_dict(data: object) -> dict[str, dict[str, object]]:
+    """Stored Auto Scan options by agent kind, unknown kinds and fields dropped."""
+    if not isinstance(data, dict):
+        return {}
+    options: dict[str, dict[str, object]] = {}
+    for cli in AUTO_SCAN_OPTION_FIELDS:
+        clean = clean_auto_scan_options(cli, data.get(cli))
+        if clean is not None:
+            options[cli] = clean
+    return options
+
+
+def _stored_source(value: object) -> str | None:
+    return value if isinstance(value, str) and value in AUTO_SCAN_SOURCES else None
+
+
+def _stored_ui(value: object) -> str | None:
+    return value if isinstance(value, str) and value in AUTO_SCAN_UIS else None
+
+
+def _stored_cli(value: object) -> str | None:
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def _record_from_dict(data: object) -> WorkspaceRecord | None:
     """Parse one stored record. Returns ``None`` if invalid."""
     if not isinstance(data, dict):
@@ -433,15 +585,25 @@ def _record_from_dict(data: object) -> WorkspaceRecord | None:
     order = data.get("order")
     prompt = data.get("auto_scan_prompt")
     last_base = data.get("last_worktree_base")
+    key = api_key if isinstance(api_key, str) else None
+    source = _stored_source(data.get("auto_scan_source"))
     return WorkspaceRecord(
         name=name,
         path=normalized_path,
-        linear_api_key=api_key if isinstance(api_key, str) else None,
+        linear_api_key=key,
         conda_env=conda_env if isinstance(conda_env, str) else None,
         default_flags=default_flags if isinstance(default_flags, dict) else {},
         order=order if isinstance(order, int) else 0,
-        auto_scan_filter=_filter_from_dict(data.get("auto_scan_filter")),
+        auto_scan_filter=_stored_linear_filter(data, bool(key), source),
         auto_scan_prompt=prompt if isinstance(prompt, str) and prompt.strip() else None,
+        github_scan_filter=_github_filter_from_dict(data.get("github_scan_filter")),
+        auto_scan_source=source,
+        auto_scan_cli=_stored_cli(data.get("auto_scan_cli")),
+        auto_scan_options=_options_from_dict(data.get("auto_scan_options")),
+        auto_scan_ui=_stored_ui(data.get("auto_scan_ui")),
+        auto_scan_interval_minutes=valid_auto_scan_interval(
+            data.get("auto_scan_interval_minutes")
+        ),
         last_worktree_base=(
             last_base if isinstance(last_base, str) and last_base else None
         ),
@@ -462,7 +624,20 @@ def _record_to_dict(r: WorkspaceRecord) -> dict[str, object]:
         d["default_flags"] = dict(r.default_flags)
     if r.auto_scan_prompt is not None:
         d["auto_scan_prompt"] = r.auto_scan_prompt
-    d["auto_scan_filter"] = _filter_to_dict(r.auto_scan_filter)
+    if r.auto_scan_filter is not None:
+        d["auto_scan_filter"] = _filter_to_dict(r.auto_scan_filter)
+    if r.github_scan_filter is not None:
+        d["github_scan_filter"] = _github_filter_to_dict(r.github_scan_filter)
+    if r.auto_scan_source is not None:
+        d["auto_scan_source"] = r.auto_scan_source
+    if r.auto_scan_cli is not None:
+        d["auto_scan_cli"] = r.auto_scan_cli
+    if r.auto_scan_options:
+        d["auto_scan_options"] = {cli: dict(o) for cli, o in r.auto_scan_options.items()}
+    if r.auto_scan_ui is not None:
+        d["auto_scan_ui"] = r.auto_scan_ui
+    if r.auto_scan_interval_minutes is not None:
+        d["auto_scan_interval_minutes"] = r.auto_scan_interval_minutes
     if r.last_worktree_base is not None:
         d["last_worktree_base"] = r.last_worktree_base
     return d
@@ -475,8 +650,15 @@ def _record_to_config(r: WorkspaceRecord) -> WorkspaceConfig:
         linear_api_key=r.linear_api_key,
         conda_env=r.conda_env,
         default_flags=dict(r.default_flags),
-        auto_scan_filter=r.auto_scan_filter,
+        auto_scan_filter=r.auto_scan_filter or _FILTER_DEFAULTS,
         auto_scan_prompt=r.auto_scan_prompt,
+        linear_filter_set=r.auto_scan_filter is not None,
+        github_scan_filter=r.github_scan_filter,
+        auto_scan_source=r.auto_scan_source,
+        auto_scan_cli=r.auto_scan_cli,
+        auto_scan_options={cli: dict(o) for cli, o in r.auto_scan_options.items()},
+        auto_scan_ui=r.auto_scan_ui,
+        auto_scan_interval_minutes=r.auto_scan_interval_minutes,
     )
 
 
@@ -491,8 +673,30 @@ def _record_to_public(r: WorkspaceRecord) -> dict[str, object]:
         "has_linear_key": r.linear_api_key is not None,
         "is_git": safe_path_exists(p / ".git"),
         "path_exists": safe_path_exists(p),
-        "auto_scan_filter": _filter_to_dict(r.auto_scan_filter),
+        "auto_scan_filter": _filter_to_dict(r.auto_scan_filter or _FILTER_DEFAULTS),
         "auto_scan_prompt": r.auto_scan_prompt,
+        "auto_scan": {
+            "source": r.auto_scan_source,
+            "cli": r.auto_scan_cli,
+            "ui": r.auto_scan_ui,
+            "interval_minutes": r.auto_scan_interval_minutes,
+            "linear_filter": (
+                _filter_to_dict(r.auto_scan_filter)
+                if r.auto_scan_filter is not None
+                else None
+            ),
+            "github_filter": (
+                _github_filter_to_dict(r.github_scan_filter)
+                if r.github_scan_filter is not None
+                else None
+            ),
+            **{
+                f"{cli}_options": (
+                    dict(r.auto_scan_options[cli]) if cli in r.auto_scan_options else None
+                )
+                for cli in AUTO_SCAN_OPTION_FIELDS
+            },
+        },
     }
 
 
@@ -539,16 +743,17 @@ def _seed_from_env(raw: str | None = None) -> list[WorkspaceRecord]:
         conda_env = value.get("conda_env")
         default_flags = value.get("default_flags") or {}
         prompt = value.get("auto_scan_prompt")
+        key = api_key if isinstance(api_key, str) else None
         records.append(
             WorkspaceRecord(
                 name=name,
                 path=normalized_path,
-                linear_api_key=api_key if isinstance(api_key, str) else None,
+                linear_api_key=key,
                 conda_env=conda_env if isinstance(conda_env, str) else None,
                 default_flags=(
                     default_flags if isinstance(default_flags, dict) else {}
                 ),
-                auto_scan_filter=_filter_from_dict(value.get("auto_scan_filter")),
+                auto_scan_filter=_stored_linear_filter(value, bool(key), None),
                 auto_scan_prompt=(
                     prompt if isinstance(prompt, str) and prompt.strip() else None
                 ),

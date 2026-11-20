@@ -33,8 +33,9 @@ if TYPE_CHECKING:
 _OPENCODE_BIN_ENV_VAR = "MOBAIDE_OPENCODE_BIN"
 # Inline JSON that OpenCode 2 merges over the user's ``cli.json`` (TUI settings).
 _CLI_CONFIG_ENV_VAR = "OPENCODE_CLI_CONFIG_CONTENT"
-# Longest first prompt handed to ``--prompt``: far above a real prompt, far
-# below the argv limit of any supported OS.
+# Longest first prompt handed to ``--prompt``: far above a real prompt, and
+# within one argv element on POSIX (Windows caps the whole command line at
+# 32,767 characters, so Auto Scan uses a smaller budget there).
 INITIAL_PROMPT_MAX = 32_000
 
 

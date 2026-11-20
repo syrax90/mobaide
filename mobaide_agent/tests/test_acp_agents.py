@@ -2228,3 +2228,60 @@ class TestPiPrepare:
         assert plan.argv == [sys.executable, "-I", pi_bridge.__file__, "/opt/pi/bin/pi"]
         assert plan.env["PATH"].split(os.pathsep) == ["/opt/pi/bin", str(bin_dir)]
         assert plan.cwd == os.path.expanduser("~")
+
+
+class TestChatFirstMessage:
+    """An Auto Scan chat hands the issue to the agent as its first message."""
+
+    @pytest.mark.parametrize(
+        ("make_spec", "make_options"),
+        [
+            pytest.param(
+                lambda tmp_path, agy_bin: AntigravityChatSpec(
+                    FakeAgyLauncher(str(agy_bin)), command_override="agy acp",
+                    app_data_dir=tmp_path / "agy-data",
+                ),
+                AntigravityOptions, id="antigravity",
+            ),
+            pytest.param(
+                lambda tmp_path, _bin: CopilotChatSpec(
+                    FakeCopilotLauncher(env={"COPILOT_HOME": str(tmp_path / "copilot-home")})
+                ),
+                CopilotOptions, id="copilot",
+            ),
+            pytest.param(
+                lambda tmp_path, _bin: CursorChatSpec(
+                    FakeCursorLauncher(env={"CURSOR_DATA_DIR": str(tmp_path / "cursor-data")})
+                ),
+                CursorOptions, id="cursor",
+            ),
+            pytest.param(
+                lambda tmp_path, _bin: JunieChatSpec(
+                    FakeJunieLauncher(env={"JUNIE_HOME": str(tmp_path / "junie-home")})
+                ),
+                JunieOptions, id="junie",
+            ),
+            pytest.param(
+                lambda tmp_path, _bin: PiChatSpec(
+                    FakePiLauncher(env={"PI_CODING_AGENT_DIR": str(tmp_path / "pi-agent")})
+                ),
+                PiOptions, id="pi",
+            ),
+        ],
+    )
+    async def test_the_initial_prompt_reaches_the_plan(
+        self, tmp_path, monkeypatch, agy_bin, make_spec, make_options
+    ):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        workspace = tmp_path / "work" / "gh-7"
+        workspace.mkdir(parents=True)
+        spec = make_spec(tmp_path, agy_bin)
+
+        plan = await spec.prepare(
+            AdHocLaunch(cwd=str(workspace)), make_options(initial_prompt="Fix issue #7")
+        )
+
+        assert plan.initial_prompt == "Fix issue #7"

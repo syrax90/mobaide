@@ -13,7 +13,7 @@ from typing import cast
 import pytest
 
 from mobaide.core import workspaces_store
-from mobaide.core.workspaces_config import AutoScanFilter, WorkspaceConfig
+from mobaide.core.workspaces_config import AutoScanFilter, GitHubScanFilter, WorkspaceConfig
 from mobaide.core.workspaces_store import (
     WorkspaceRecord,
     WorkspacesStore,
@@ -1274,3 +1274,168 @@ class TestSeedFromEnvParsesAutoScanPrompt:
 
         assert len(records) == 1
         assert records[0].auto_scan_prompt == "env prompt"
+
+
+_LEGACY_FILTER = {
+    "state_names": ["Proposals"],
+    "label_names": ["AutoPipeline"],
+    "active_state": "In Progress",
+    "done_state": "Done",
+    "removal_label": "AutoPipeline",
+}
+
+
+class TestUnchosenLinearFilter:
+    """Earlier agents wrote the legacy defaults into every record. Those count
+    as a chosen Linear filter only where a Linear scan could have used them;
+    elsewhere the wizard must start with empty fields, while older clients
+    still read the defaults from ``auto_scan_filter``."""
+
+    @pytest.mark.parametrize(
+        ("extra", "chosen"),
+        [
+            pytest.param({}, False, id="defaults-without-key"),
+            pytest.param({"linear_api_key": "lin"}, True, id="defaults-with-key"),
+            pytest.param({"auto_scan_source": "linear"}, True, id="defaults-after-a-linear-scan"),
+            pytest.param({"auto_scan_source": "github"}, False, id="defaults-after-a-github-scan"),
+            pytest.param(
+                {"auto_scan_filter": {**_LEGACY_FILTER, "done_state": "Shipped"}}, True,
+                id="edited-filter-without-key",
+            ),
+        ],
+    )
+    def test_legacy_default_filter_on_disk(self, tmp_path, extra, chosen):
+        path = tmp_path / "projects.json"
+        row = {"name": "alpha", "path": "C:/alpha", "order": 0, "auto_scan_filter": _LEGACY_FILTER}
+        path.write_text(json.dumps([{**row, **extra}]))
+
+        store = WorkspacesStore(str(path))
+        store.load()
+
+        snap = store.get("alpha")
+        assert snap is not None
+        assert snap.linear_filter_set is chosen
+        public = cast("dict", store.list_public()[0])
+        assert (public["auto_scan"]["linear_filter"] is not None) is chosen
+        assert public["auto_scan_filter"]["state_names"]  # older clients still get a filter
+
+    def test_workspace_created_without_a_filter_stays_unchosen_after_reload(self, tmp_path):
+        path = tmp_path / "projects.json"
+        store = WorkspacesStore(str(path))
+        store.load()
+        store.create(WorkspaceRecord(name="alpha", path="C:/alpha", linear_api_key="lin"))
+        store.update("alpha", WorkspaceUpdatePatch(conda_env="ml"))
+
+        reloaded = WorkspacesStore(str(path))
+        reloaded.load()
+
+        assert "auto_scan_filter" not in json.loads(path.read_text())[0]
+        snap = reloaded.get("alpha")
+        assert snap is not None
+        assert snap.linear_filter_set is False
+        assert snap.auto_scan_filter == AutoScanFilter()
+
+
+class TestAutoScanChoicesRoundTrip:
+    def test_choices_survive_reload_and_unrelated_patches(self, tmp_path):
+        path = tmp_path / "projects.json"
+        store = WorkspacesStore(str(path))
+        store.load()
+        store.create(WorkspaceRecord(name="alpha", path="C:/alpha"))
+        store.update(
+            "alpha",
+            WorkspaceUpdatePatch(
+                github_scan_filter=GitHubScanFilter(labels=["ai", "bot"], assignee="@me"),
+                auto_scan_source="github",
+                auto_scan_cli="codex",
+            ),
+        )
+        store.update("alpha", WorkspaceUpdatePatch(conda_env="ml", auto_scan_prompt="go"))
+
+        reloaded = WorkspacesStore(str(path))
+        reloaded.load()
+
+        snap = reloaded.get("alpha")
+        assert snap is not None
+        assert snap.github_scan_filter == GitHubScanFilter(labels=["ai", "bot"], assignee="@me")
+        assert (snap.auto_scan_source, snap.auto_scan_cli) == ("github", "codex")
+        assert cast("dict", reloaded.list_public()[0])["auto_scan"] == {
+            "source": "github",
+            "cli": "codex",
+            "linear_filter": None,
+            "github_filter": {
+                "labels": ["ai", "bot"], "assignee": "@me", "active_label": None,
+                "issue_types": [],
+            },
+            **{
+                f"{kind}_options": None
+                for kind in (
+                    "claude", "codex", "antigravity", "opencode", "copilot", "cursor", "junie",
+                )
+            },
+            "ui": None,
+            "interval_minutes": None,
+        }
+
+    def test_unusable_stored_choices_load_as_unset(self, tmp_path):
+        path = tmp_path / "projects.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "alpha", "path": "C:/alpha", "order": 0,
+                        "github_scan_filter": {"labels": [" ai ", "ai", 3, " "], "assignee": "  "},
+                        "auto_scan_source": "jira",
+                        "auto_scan_cli": " ",
+                    },
+                    {
+                        "name": "beta", "path": "C:/beta", "order": 1,
+                        "github_scan_filter": {"labels": [], "active_label": "x"},
+                    },
+                ],
+            ),
+        )
+
+        store = WorkspacesStore(str(path))
+        store.load()
+
+        alpha = store.get("alpha")
+        beta = store.get("beta")
+        assert alpha is not None and beta is not None
+        assert alpha.github_scan_filter == GitHubScanFilter(labels=["ai"])
+        assert (alpha.auto_scan_source, alpha.auto_scan_cli) == (None, None)
+        assert beta.github_scan_filter is None
+
+    @pytest.mark.parametrize(
+        ("ui", "interval", "loaded"),
+        [
+            pytest.param("chat", 1440, ("chat", 1440), id="usable"),
+            pytest.param("web", 0, (None, None), id="unknown-view-and-no-wait"),
+            pytest.param(" chat", 1441, (None, None), id="padded-view-and-over-a-day"),
+            pytest.param(None, True, (None, None), id="json-true-is-not-a-minute"),
+            pytest.param(None, 15.5, (None, None), id="part-minute"),
+        ],
+    )
+    def test_stored_view_and_interval_load_only_when_usable(self, tmp_path, ui, interval, loaded):
+        """A hand-edited file must not hand a scan a view it cannot open or
+        a wait outside 1 to 1440 minutes."""
+        path = tmp_path / "projects.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "alpha", "path": "C:/alpha", "order": 0,
+                        "auto_scan_ui": ui, "auto_scan_interval_minutes": interval,
+                    },
+                ],
+            ),
+        )
+
+        store = WorkspacesStore(str(path))
+        store.load()
+
+        alpha = store.get("alpha")
+        assert alpha is not None
+        assert (alpha.auto_scan_ui, alpha.auto_scan_interval_minutes) == loaded
+        saved = cast("dict", store.list_public()[0])["auto_scan"]
+        assert (saved["ui"], saved["interval_minutes"]) == loaded

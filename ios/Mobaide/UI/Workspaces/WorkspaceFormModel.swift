@@ -108,6 +108,11 @@ final class WorkspaceFormModel {
     var doneState = "Done"
     var removalLabel = "AutoPipeline"
 
+    /// Whether the Linear Auto Scan filter is edited here: true for an agent
+    /// without `capabilities.autoscan`. A newer agent takes the filter from
+    /// the New Session wizard; nil until the probe answers (or when it fails).
+    private(set) var autoScanFilterInForm: Bool?
+
     private(set) var discoveredLabels: [LinearLabelDto] = []
     private(set) var discoveredStates: [LinearStateDto] = []
     private(set) var metadataLoading = false
@@ -204,29 +209,11 @@ final class WorkspaceFormModel {
     // MARK: - Chip option lists (union of discovered + selected, order-stable)
 
     var labelOptions: [String] {
-        orderedUnion(discoveredLabels.map(\.name), Array(triggerLabels), [removalLabel])
+        LinearFilterOptions.labels(discovered: discoveredLabels, selected: triggerLabels, extra: [removalLabel])
     }
 
     var stateOptions: [LinearStateDto] {
-        var seen = Set<String>()
-        var result: [LinearStateDto] = []
-        let extras = triggerStates.map { LinearStateDto(name: $0) }
-            + [activeState, doneState].map { LinearStateDto(name: $0) }
-        for state in discoveredStates + extras where !state.name.isEmpty {
-            if seen.insert(state.name).inserted { result.append(state) }
-        }
-        return result
-    }
-
-    private func orderedUnion(_ groups: [String]...) -> [String] {
-        var seen = Set<String>()
-        var result: [String] = []
-        for group in groups {
-            for value in group where !value.isEmpty {
-                if seen.insert(value).inserted { result.append(value) }
-            }
-        }
-        return result
+        LinearFilterOptions.states(discovered: discoveredStates, selected: triggerStates, extra: [activeState, doneState])
     }
 
     // MARK: - Dirty tracking
@@ -247,10 +234,16 @@ final class WorkspaceFormModel {
     }
 
     /// The auto-scan filter section only matters once the workspace has a Linear
-    /// key (existing or newly typed), matching Android `showAutoScanFilterSection`.
+    /// key (existing or newly typed), matching Android `showAutoScanFilterSection`,
+    /// and only for an agent that takes the filter from this form.
     var showsFilterSection: Bool {
-        !linearApiKey.trimmingCharacters(in: .whitespaces).isEmpty
+        guard autoScanFilterInForm == true else { return false }
+        return !linearApiKey.trimmingCharacters(in: .whitespaces).isEmpty
             || (!clearLinearKey && editing?.has_linear_key == true)
+    }
+
+    func setAutoScanFilterInForm(_ inForm: Bool?) {
+        autoScanFilterInForm = inForm
     }
 
     // MARK: - Validation
@@ -320,7 +313,8 @@ final class WorkspaceFormModel {
             linear_api_key: blankToNil(linearApiKey),
             conda_env: blankToNil(condaEnv),
             default_flags: flagsMap(),
-            auto_scan_filter: currentFilterDto()
+            // A newer agent leaves the filter unset until a scan start chooses one.
+            auto_scan_filter: autoScanFilterInForm == true ? currentFilterDto() : nil
         )
     }
 
@@ -411,7 +405,9 @@ final class WorkspaceFormModel {
     // MARK: - Linear metadata
 
     func loadMetadataIfNeeded() async {
-        guard editing?.has_linear_key == true, discoveredLabels.isEmpty, discoveredStates.isEmpty else { return }
+        guard autoScanFilterInForm == true, editing?.has_linear_key == true,
+              discoveredLabels.isEmpty, discoveredStates.isEmpty
+        else { return }
         await loadMetadata(forceRefresh: false)
     }
 

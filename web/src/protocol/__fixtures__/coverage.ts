@@ -123,6 +123,8 @@ export const COVERED_FIXTURES: readonly string[] = [
 
 /** Fixture files no TypeScript test reads yet, each with the milestone that will. */
 export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
+  // REST-only: the wizard fetches templates when it opens; no socket carries them.
+  'dto/agent/AutoScanTemplatesResponse.json': OWNER.generated,
   'dto/agent/CodexLoginRequest.json': OWNER.generated,
   'dto/agent/CodexLoginResponse.json': OWNER.generated,
   'dto/agent/ForceUpdateResponse.json': OWNER.agentUpdate,

@@ -26,7 +26,14 @@ export type { WorkspaceInfo } from '../protocol/dto/workspaces';
  */
 export type WorkspaceSummary = Pick<
   WorkspaceInfo,
-  'name' | 'path' | 'order' | 'has_linear_key' | 'is_git' | 'path_exists' | 'auto_scan_prompt'
+  | 'name'
+  | 'path'
+  | 'order'
+  | 'has_linear_key'
+  | 'is_git'
+  | 'path_exists'
+  | 'auto_scan_prompt'
+  | 'auto_scan'
 >;
 
 export type WorkspaceWriteBody = components['schemas']['WorkspaceWriteModel'];

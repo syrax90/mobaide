@@ -53,6 +53,52 @@ export function autoScanStatusLabel(status: string): string {
   }
 }
 
+/** The agents an Auto Scan can run, in the wizard's order, with their display names. */
+export const AUTO_SCAN_AGENTS = [
+  { id: 'claude', name: 'Claude Code' },
+  { id: 'codex', name: 'Codex' },
+  { id: 'antigravity', name: 'Antigravity' },
+  { id: 'opencode', name: 'OpenCode' },
+  { id: 'copilot', name: 'GitHub Copilot' },
+  { id: 'cursor', name: 'Cursor' },
+  { id: 'junie', name: 'Junie' },
+  { id: 'pi', name: 'Pi' },
+] as const;
+
+export type AutoScanAgentId = (typeof AUTO_SCAN_AGENTS)[number]['id'];
+
+export function isAutoScanAgentId(value: string): value is AutoScanAgentId {
+  return AUTO_SCAN_AGENTS.some((agent) => agent.id === value);
+}
+
+/** An agent kind's display name; a kind this client does not know shows as sent. */
+export function autoScanAgentName(cli: string): string {
+  return AUTO_SCAN_AGENTS.find((agent) => agent.id === cli)?.name ?? cli;
+}
+
+export function autoScanSourceName(source: string): string {
+  switch (source) {
+    case 'github':
+      return 'GitHub';
+    case 'linear':
+      return 'Linear';
+    default:
+      return source;
+  }
+}
+
+/**
+ * "GitHub · Codex": where a scan finds issues and which agent runs them, plus
+ * "· Chat" when its sessions open in the chat view. An older agent sends none
+ * of these fields and always scans Linear with Claude Code in the terminal.
+ */
+export function scanSourceAgentLabel(
+  scan: Pick<AutoScanInstance, 'source' | 'cli'> & { ui?: string },
+): string {
+  const label = `${autoScanSourceName(scan.source)} · ${autoScanAgentName(scan.cli)}`;
+  return scan.ui === 'chat' ? `${label} · Chat` : label;
+}
+
 export function phaseTone(status: PhaseStatus): AutoScanTone {
   switch (status) {
     case 'active':

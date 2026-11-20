@@ -51,6 +51,24 @@
       }
     },
     {
+      "name": "autoscan_capability",
+      "wire": {
+        "name": "mobaide_agent",
+        "server_version": "0.3.30",
+        "protocol_versions": [6, 7],
+        "min_client_version": 6,
+        "capabilities": {
+          "cli": { "claude": { "available": true }, "codex": { "available": true }, "pi": { "available": false } },
+          "autoscan": {
+            "sources": ["linear", "github"],
+            "clis": ["claude", "codex", "antigravity", "opencode", "copilot", "cursor", "junie", "pi"],
+            "github_setup": true
+          }
+        },
+        "latest_agent_version": "0.3.30"
+      }
+    },
+    {
       "name": "missing_capabilities_defaults_to_empty_object",
       "wire": { "name": "central", "server_version": "1.0.0", "protocol_versions": [6], "min_client_version": 6 },
       "decoded_canonical": { "name": "central", "server_version": "1.0.0", "protocol_versions": [6], "min_client_version": 6, "capabilities": {} }

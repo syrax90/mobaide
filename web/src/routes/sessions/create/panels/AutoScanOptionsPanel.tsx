@@ -31,7 +31,6 @@ export function AutoScanOptionsPanel({
         bucketId="autoScan"
         models={models}
         dispatch={dispatch}
-        skipPermissionsHint="When off, the scan pauses at permission prompts — you'll get a notification and can open the session to approve."
       />
 
       <ClaudeAdvancedPanel bucket={bucket} bucketId="autoScan" dispatch={dispatch} />

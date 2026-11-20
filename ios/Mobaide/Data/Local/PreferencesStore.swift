@@ -21,6 +21,7 @@ struct PreferencesStore: @unchecked Sendable {
     static let keyTerminalStaticColumns = "terminal_static_columns"
     static let keyVoiceCleanupNoticeSeen = "voice_cleanup_notice_seen"
     static let keyChatFocusView = "chat_focus_view"
+    static let keyAutoScanTipsHidden = "autoscan_tips_hidden"
     // Device-local, not account-scoped (device backups carry them): no sign-out
     // sweep touches them, since the store's quota follows the device's store
     // account, not the Mobaide one.
@@ -226,6 +227,15 @@ struct PreferencesStore: @unchecked Sendable {
 
     func setChatFocusView(_ on: Bool) {
         defaults.set(on, forKey: Self.keyChatFocusView)
+    }
+
+    /// The Auto Scan wizard's tips were hidden on this device.
+    func isAutoScanTipsHidden() -> Bool {
+        defaults.bool(forKey: Self.keyAutoScanTipsHidden)
+    }
+
+    func setAutoScanTipsHidden(_ hidden: Bool) {
+        defaults.set(hidden, forKey: Self.keyAutoScanTipsHidden)
     }
 
     func getCachedLinearLabels(workspaceName: String) -> [LinearLabelDto] {

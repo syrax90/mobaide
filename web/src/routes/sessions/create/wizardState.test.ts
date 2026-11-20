@@ -363,18 +363,18 @@ describe('wizardReducer', () => {
   });
 
   it('seeds the Auto Scan prompt once per workspace', () => {
-    const seeded = reduce([{ type: 'seedAutoScanPrompt', workspaceName: 'a', prompt: 'from a' }]);
+    const seeded = reduce([{ type: 'seedAutoScanPrompt', seedKey: 'a', prompt: 'from a' }]);
     const edited = reduce(
       [{ type: 'setClaudeText', bucket: 'autoScan', field: 'initialPrompt', value: 'mine' }],
       seeded,
     );
 
     expect(
-      reduce([{ type: 'seedAutoScanPrompt', workspaceName: 'a', prompt: 'from a' }], edited).autoScan
+      reduce([{ type: 'seedAutoScanPrompt', seedKey: 'a', prompt: 'from a' }], edited).autoScan
         .initialPrompt,
     ).toBe('mine');
     expect(
-      reduce([{ type: 'seedAutoScanPrompt', workspaceName: 'b', prompt: 'from b' }], edited).autoScan
+      reduce([{ type: 'seedAutoScanPrompt', seedKey: 'b', prompt: 'from b' }], edited).autoScan
         .initialPrompt,
     ).toBe('from b');
   });

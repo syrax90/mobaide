@@ -8,6 +8,43 @@
         "project_name": "p",
         "claude_options": { "plan_mode": false, "no_memory": false, "skip_permissions": true, "worktree": false, "fast_mode": false, "ultracode": false, "model": "opus", "debug": false, "focus_mode": true }
       }
+    },
+    {
+      "name": "github_source_other_agent",
+      "wire": {
+        "project_name": "p",
+        "codex_options": { "model": "gpt-5.5", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": null, "full_auto": false },
+        "ui": "chat",
+        "interval_minutes": 15,
+        "source": "github",
+        "cli": "codex",
+        "initial_prompt": "",
+        "github_filter": { "labels": ["ai-ready", "bot"], "assignee": "@me", "active_label": "ai-doing", "issue_types": ["Bug", "Task"] }
+      }
+    },
+    {
+      "name": "github_source_junie_plan",
+      "wire": {
+        "project_name": "p",
+        "junie_options": { "plan_mode": true, "brave": false },
+        "ui": "terminal",
+        "interval_minutes": 1440,
+        "source": "github",
+        "cli": "junie",
+        "initial_prompt": "Plan first.",
+        "github_filter": { "labels": ["auto-scan"], "issue_types": [] }
+      }
+    },
+    {
+      "name": "linear_source_claude",
+      "wire": {
+        "project_name": "p",
+        "claude_options": { "plan_mode": false, "no_memory": false, "skip_permissions": true, "worktree": true, "fast_mode": false, "ultracode": false, "model": "opus", "debug": false, "focus_mode": true },
+        "source": "linear",
+        "cli": "claude",
+        "initial_prompt": "Fix it.",
+        "linear_filter": { "state_names": ["Todo"], "label_names": ["bot"], "active_state": "Doing", "done_state": "Shipped", "removal_label": "bot" }
+      }
     }
   ]
 }

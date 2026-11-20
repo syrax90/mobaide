@@ -8,7 +8,8 @@
  * byte-for-byte.
  */
 import { z } from 'zod';
-import { optionalWireString } from '../wireSchema';
+import { optionalWireBoolean, optionalWireNumber, optionalWireString } from '../wireSchema';
+import { CLAUDE_EFFORTS, CODEX_APPROVALS, CODEX_SANDBOXES } from './sessionCreate';
 
 /**
  * A `default_flags` value. Heterogeneous on the wire by design
@@ -44,6 +45,105 @@ export const autoScanFilterSchema = z.looseObject({
 });
 
 /**
+ * The per-workspace GitHub filter (`GitHubScanFilterModel`): 1–20 trigger
+ * labels, an optional assignee (`@me` is the signed-in `gh` account), an
+ * optional label the scan adds when it takes an issue, and the GitHub issue
+ * types to take (empty: any type).
+ */
+export const githubScanFilterSchema = z.looseObject({
+  labels: z.array(z.string()).default([]),
+  assignee: optionalWireString(),
+  active_label: optionalWireString(),
+  issue_types: z.array(z.string()).default([]),
+});
+
+/*
+ * The Auto Scan options of each agent (`<Kind>ScanOptionsModel`): the session
+ * options an Auto Scan keeps. Every field is optional here — the agent sends
+ * them all, and the wizard fills a missing one from its own defaults.
+ */
+export const claudeScanOptionsSchema = z.looseObject({
+  plan_mode: optionalWireBoolean(),
+  no_memory: optionalWireBoolean(),
+  skip_permissions: optionalWireBoolean(),
+  model: optionalWireString(),
+  effort: z
+    .enum(CLAUDE_EFFORTS)
+    .nullish()
+    .transform((value) => value ?? undefined),
+  fast_mode: optionalWireBoolean(),
+  ultracode: optionalWireBoolean(),
+  append_system_prompt: optionalWireString(),
+  debug: optionalWireBoolean(),
+  focus_mode: optionalWireBoolean(),
+});
+
+export const codexScanOptionsSchema = z.looseObject({
+  model: optionalWireString(),
+  sandbox: z.enum(CODEX_SANDBOXES).optional(),
+  approval: z.enum(CODEX_APPROVALS).optional(),
+  /** Three-state, as in `codexOptionsSchema`: `null` is "Agent default". */
+  reasoning_effort: z.string().nullable().optional(),
+  full_auto: optionalWireBoolean(),
+});
+
+export const antigravityScanOptionsSchema = z.looseObject({
+  model: optionalWireString(),
+  skip_permissions: optionalWireBoolean(),
+  sandbox: optionalWireBoolean(),
+  add_dirs: z.array(z.string()).optional(),
+});
+
+export const opencodeScanOptionsSchema = z.looseObject({ auto_approve: optionalWireBoolean() });
+export const copilotScanOptionsSchema = z.looseObject({ allow_all: optionalWireBoolean() });
+export const cursorScanOptionsSchema = z.looseObject({ force: optionalWireBoolean() });
+export const junieScanOptionsSchema = z.looseObject({
+  plan_mode: optionalWireBoolean(),
+  brave: optionalWireBoolean(),
+});
+
+/**
+ * One agent's options inside `auto_scan`. A value this client cannot read (a
+ * newer agent's effort level, say) makes only that object `undefined`: the
+ * wizard then uses its defaults for that agent, and the workspace list still
+ * decodes.
+ */
+function lenientOptions<T extends z.ZodType>(schema: T) {
+  return schema
+    .nullish()
+    .transform((value) => value ?? undefined)
+    .catch(undefined);
+}
+
+/**
+ * `auto_scan`: the last Auto Scan choices of a workspace, for the wizard to
+ * pre-fill (Delta 2026-11-18). Every field is absent or `null` until a scan
+ * start sets it, and a `null` filter means nobody chose one, so the wizard
+ * starts that filter empty rather than at the legacy defaults.
+ *
+ * `source` and `cli` stay open strings, as every kind on the wire does; the
+ * wizard ignores a value it does not offer.
+ */
+export const autoScanSettingsSchema = z.looseObject({
+  source: optionalWireString(),
+  cli: optionalWireString(),
+  /** `terminal` or `chat`; an open string, the wizard ignores a value it does not offer. */
+  ui: optionalWireString(),
+  /** Minutes between two scan cycles. */
+  interval_minutes: optionalWireNumber(),
+  linear_filter: autoScanFilterSchema.nullish().transform((value) => value ?? undefined),
+  github_filter: githubScanFilterSchema.nullish().transform((value) => value ?? undefined),
+  /** The options of the last start with each agent; Pi has none. */
+  claude_options: lenientOptions(claudeScanOptionsSchema),
+  codex_options: lenientOptions(codexScanOptionsSchema),
+  antigravity_options: lenientOptions(antigravityScanOptionsSchema),
+  opencode_options: lenientOptions(opencodeScanOptionsSchema),
+  copilot_options: lenientOptions(copilotScanOptionsSchema),
+  cursor_options: lenientOptions(cursorScanOptionsSchema),
+  junie_options: lenientOptions(junieScanOptionsSchema),
+});
+
+/**
  * One workspace as the agent publishes it (`WorkspaceReadModel` /
  * `workspaces_store._record_to_public`).
  *
@@ -63,10 +163,17 @@ export const workspaceInfoSchema = z.looseObject({
   auto_scan_filter: autoScanFilterSchema.default(defaultAutoScanFilter),
   /** Seeded by the previous scan start; `null` means "use the engine default". */
   auto_scan_prompt: optionalWireString(),
+  /** Absent on an agent from before the delta, which the wizard reads as "nothing chosen". */
+  auto_scan: autoScanSettingsSchema
+    .nullish()
+    .transform((value) => value ?? undefined)
+    .optional(),
 });
 
 export type WorkspaceInfo = z.infer<typeof workspaceInfoSchema>;
 export type AutoScanFilter = z.infer<typeof autoScanFilterSchema>;
+export type GitHubScanFilter = z.infer<typeof githubScanFilterSchema>;
+export type AutoScanSettings = z.infer<typeof autoScanSettingsSchema>;
 export type FlagValue = z.infer<typeof flagValueSchema>;
 
 /**

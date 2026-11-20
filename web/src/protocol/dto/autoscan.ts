@@ -43,6 +43,14 @@ export const autoScanInstanceSchema = z.looseObject({
     .union([z.number(), z.bigint()])
     .nullish()
     .transform((value) => (value === null || value === undefined ? 0 : Number(value))),
+  /**
+   * Where the scan finds issues and which agent runs them (Delta 2026-11-18).
+   * Absent on an older agent, which scans Linear with Claude Code.
+   */
+  source: z.string().default('linear'),
+  cli: z.string().default('claude'),
+  /** `terminal` or `chat`: how the scan opens each issue's session. Open string. */
+  ui: z.string().default('terminal'),
 });
 
 /**

@@ -1,0 +1,87 @@
+{
+  "type": "AutoScanTemplatesResponse",
+  "cases": [
+    { "name": "empty", "wire": { "templates": [] } },
+    {
+      "name": "two_templates",
+      "wire": {
+        "templates": [
+          {
+            "id": "a1b2c3d4e5f6",
+            "name": "Complex features",
+            "updated_at": "2026-11-19T10:00:00+00:00",
+            "settings": {
+              "ui": "chat",
+              "interval_minutes": 60,
+              "claude_options": { "plan_mode": true, "no_memory": false, "skip_permissions": true, "model": "opus", "effort": "max", "fast_mode": false, "ultracode": true, "append_system_prompt": null, "debug": false, "focus_mode": null },
+              "codex_options": null,
+              "antigravity_options": null,
+              "opencode_options": null,
+              "copilot_options": null,
+              "cursor_options": null,
+              "junie_options": null,
+              "source": "github",
+              "cli": "claude",
+              "initial_prompt": "Plan the change, then implement it with tests.",
+              "linear_filter": null,
+              "github_filter": { "labels": ["auto-scan-complex"], "assignee": null, "active_label": "in-progress", "issue_types": ["Feature"] }
+            }
+          },
+          {
+            "id": "0f9e8d7c6b5a",
+            "name": "Small bugs",
+            "updated_at": "2026-11-19T09:30:00+00:00",
+            "settings": {
+              "ui": "terminal",
+              "interval_minutes": null,
+              "claude_options": null,
+              "codex_options": { "model": "gpt-5.5-mini", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": "low", "full_auto": true },
+              "antigravity_options": null,
+              "opencode_options": null,
+              "copilot_options": null,
+              "cursor_options": null,
+              "junie_options": null,
+              "source": "github",
+              "cli": "codex",
+              "initial_prompt": "",
+              "linear_filter": { "state_names": [], "label_names": [], "active_state": "", "done_state": "", "removal_label": "" },
+              "github_filter": { "labels": [], "assignee": "@me", "active_label": null, "issue_types": ["Bug"] }
+            }
+          }
+        ]
+      },
+      "decoded_canonical": {
+        "templates": [
+          {
+            "id": "a1b2c3d4e5f6",
+            "name": "Complex features",
+            "updated_at": "2026-11-19T10:00:00+00:00",
+            "settings": {
+              "ui": "chat",
+              "interval_minutes": 60,
+              "claude_options": { "plan_mode": true, "no_memory": false, "skip_permissions": true, "model": "opus", "effort": "max", "fast_mode": false, "ultracode": true, "debug": false },
+              "source": "github",
+              "cli": "claude",
+              "initial_prompt": "Plan the change, then implement it with tests.",
+              "github_filter": { "labels": ["auto-scan-complex"], "active_label": "in-progress", "issue_types": ["Feature"] }
+            }
+          },
+          {
+            "id": "0f9e8d7c6b5a",
+            "name": "Small bugs",
+            "updated_at": "2026-11-19T09:30:00+00:00",
+            "settings": {
+              "ui": "terminal",
+              "codex_options": { "model": "gpt-5.5-mini", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": "low", "full_auto": true },
+              "source": "github",
+              "cli": "codex",
+              "initial_prompt": "",
+              "linear_filter": { "state_names": [], "label_names": [], "active_state": "", "done_state": "", "removal_label": "" },
+              "github_filter": { "labels": [], "assignee": "@me", "issue_types": ["Bug"] }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

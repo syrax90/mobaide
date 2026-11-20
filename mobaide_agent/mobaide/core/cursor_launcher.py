@@ -104,6 +104,8 @@ class CursorOptions:
     worktree: bool = False
     branch_name: str | None = None
     base_branch: str | None = None
+    # First message, the positional ``prompt`` (Auto Scan only).
+    initial_prompt: str | None = None
 
 
 class CursorLauncher:
@@ -144,6 +146,9 @@ class CursorLauncher:
         argv = [self.resolve_binary()]
         if options.force:
             argv.append("--force")
+        if options.initial_prompt:
+            # After ``--`` a prompt that starts with ``-`` stays a prompt.
+            argv += ["--", options.initial_prompt]
         return argv
 
     async def resolve_cwd(self, target: LaunchTarget, options: CursorOptions) -> str:

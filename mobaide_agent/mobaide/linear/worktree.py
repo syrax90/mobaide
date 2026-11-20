@@ -747,17 +747,19 @@ class WorktreeManager:
         return None
 
     @log_call(name="worktree.cleanup_worktree", log_args=("path",))
-    async def cleanup_worktree(self, path: str, workspace_root: str) -> bool:
+    async def cleanup_worktree(
+        self, path: str, workspace_root: str, *, force: bool = True,
+    ) -> bool:
         """Remove a git worktree.
 
-        Uses ``--force`` and silently swallows failures by design — auto-scan
-        relies on this contract for retry-on-next-cycle semantics. New
-        callers that need failure propagation should use ``remove_worktree``.
+        Uses ``--force`` unless ``force`` is false (git then keeps a worktree
+        with uncommitted changes), and silently swallows failures by design —
+        auto-scan relies on this contract for retry-on-next-cycle semantics.
+        New callers that need failure propagation should use ``remove_worktree``.
         """
+        args = ["worktree", "remove", path, *(["--force"] if force else [])]
         async with self._lock_for(workspace_root):
-            rc, _, stderr = await _run_git(
-                "worktree", "remove", path, "--force", cwd=workspace_root
-            )
+            rc, _, stderr = await _run_git(*args, cwd=workspace_root)
             if rc != 0:
                 logger.error("Failed to remove worktree %s: %s", path, stderr.strip())
                 return False

@@ -11,7 +11,12 @@ import {
   buildStartScanRequest,
   type CreateSessionRequest,
 } from './buildCreateRequest';
-import { INITIAL_WIZARD_STATE, type WizardMode, type WizardState } from './wizardState';
+import {
+  INITIAL_WIZARD_STATE,
+  type AutoScanUi,
+  type WizardMode,
+  type WizardState,
+} from './wizardState';
 
 // `satisfies`, not a `WizardMode` annotation: the literal type is what keeps the
 // mode tables below exhaustive rather than open-ended template-literal keys.
@@ -445,6 +450,119 @@ describe('buildStartScanRequest', () => {
         state: { ...POPULATED, selection: { kind: 'customPath', path: '/tmp/scratch' } },
       }),
     ).toBeNull();
+  });
+});
+
+describe('buildStartScanRequest — agent with capabilities.autoscan', () => {
+  const autoScan = {
+    sources: ['linear', 'github'],
+    clis: ['claude', 'codex', 'antigravity', 'opencode', 'copilot', 'cursor', 'junie', 'pi'],
+    githubSetup: true,
+  };
+  const linearFilter = {
+    state_names: ['Todo'],
+    label_names: ['bot'],
+    active_state: 'Doing',
+    done_state: 'Shipped',
+    removal_label: 'bot',
+  };
+  const withSetup = (
+    setup: Partial<WizardState['autoScanSetup']>,
+    prompt = 'scan the backlog',
+    autoScanChat?: ChatSupport,
+  ) =>
+    buildStartScanRequest({
+      state: {
+        ...POPULATED,
+        autoScan: { ...POPULATED.autoScan, initialPrompt: prompt, skipPermissions: false },
+        autoScanSetup: {
+          ...POPULATED.autoScanSetup,
+          source: 'github',
+          cli: 'codex',
+          linearFilter,
+          githubFilter: {
+            labels: [' ai-ready '],
+            assignee: '  ',
+            activeLabel: ' doing ',
+            issueTypes: [],
+          },
+          ...setup,
+        },
+      },
+      mode: 'auto_scan',
+      workspace: gitWorkspace,
+      autoScan,
+      autoScanChat,
+    });
+
+  it('names every choice and sends only the chosen source’s filter', () => {
+    expect(withSetup({}, '')).toEqual({
+      project_name: 'mobaide',
+      source: 'github',
+      cli: 'codex',
+      github_filter: {
+        labels: ['ai-ready'],
+        assignee: null,
+        active_label: 'doing',
+        issue_types: [],
+      },
+      // "" is sent: it clears the prompt the workspace saved.
+      initial_prompt: '',
+      codex_options: {
+        model: null,
+        sandbox: 'workspace-write',
+        approval: 'never',
+        reasoning_effort: 'high',
+        full_auto: true,
+      },
+      ui: 'terminal',
+      interval_minutes: 5,
+    });
+    expect(withSetup({ source: 'linear' })).toMatchObject({ linear_filter: linearFilter });
+    expect(withSetup({ source: 'linear' })).not.toHaveProperty('github_filter');
+  });
+
+  it('gives Claude Code its own options and sends no other agent’s', () => {
+    const request = withSetup({ cli: 'claude' });
+
+    expect(request?.claude_options).toMatchObject({ worktree: true, skip_permissions: false });
+    expect(request).not.toHaveProperty('codex_options');
+    expect(withSetup({ cli: 'codex' })).not.toHaveProperty('claude_options');
+  });
+
+  it('builds nothing until a source and a known agent are chosen', () => {
+    expect(withSetup({ source: null })).toBeNull();
+    expect(withSetup({ cli: null })).toBeNull();
+    expect(withSetup({ cli: 'aider' })).toBeNull();
+  });
+
+  // The PC refuses a chat scan for an agent without a chat view, so the chat
+  // is sent only once the probe has shown one.
+  it.each<[string, AutoScanUi, ChatSupport | undefined, AutoScanUi]>([
+    ['chat chosen and available', 'chat', { kind: 'available', resume: true, live: true }, 'chat'],
+    ['chat probe still out', 'chat', undefined, 'terminal'],
+    ['no chat for the agent on this PC', 'chat', { kind: 'unavailable' }, 'terminal'],
+    ['agent predates chat', 'chat', { kind: 'outdated' }, 'terminal'],
+    ['terminal chosen', 'terminal', { kind: 'available', resume: true, live: true }, 'terminal'],
+  ])('sends the session view: %s', (_name, ui, chat, sent) => {
+    expect(withSetup({ ui }, 'scan', chat)?.ui).toBe(sent);
+  });
+
+  it('sends the chosen time between scans', () => {
+    expect(withSetup({ intervalMinutes: 240 })?.interval_minutes).toBe(240);
+    expect(withSetup({ cli: 'claude', intervalMinutes: 1440 })?.interval_minutes).toBe(1440);
+  });
+
+  it('keeps the legacy Linear + Claude body for an agent without the capability', () => {
+    const request = buildStartScanRequest({
+      state: { ...POPULATED, autoScanSetup: { ...POPULATED.autoScanSetup, source: 'github', cli: 'codex' } },
+      mode: 'auto_scan',
+      workspace: gitWorkspace,
+    });
+
+    expect(request).not.toHaveProperty('source');
+    expect(request).not.toHaveProperty('cli');
+    expect(request?.claude_options?.initial_prompt).toBe('scan the backlog');
   });
 });
 

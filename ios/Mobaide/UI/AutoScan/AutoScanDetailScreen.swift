@@ -75,12 +75,19 @@ private struct AutoScanDetailContent: View {
                 }
                 Spacer()
             }
-            CountdownView(nextScanAt: model.nextScanAt)
-            HStack(spacing: 12) {
-                Button("Run Now") { Task { await model.runNow() } }
-                    .buttonStyle(.pixelPrimary)
-                Button("Stop") { Task { await model.stopScan() } }
-                    .buttonStyle(.pixelDanger)
+            if let instance = model.instance {
+                Text(AutoScanDisplay.sourceAndAgent(instance))
+                    .font(.subheadline)
+                    .foregroundStyle(colors.textMuted)
+            }
+            if !model.stopped {
+                CountdownView(nextScanAt: model.nextScanAt)
+                HStack(spacing: 12) {
+                    Button("Run Now") { Task { await model.runNow() } }
+                        .buttonStyle(.pixelPrimary)
+                    Button("Stop") { Task { await model.stopScan() } }
+                        .buttonStyle(.pixelDanger)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

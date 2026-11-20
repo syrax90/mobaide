@@ -90,6 +90,8 @@ class CopilotOptions:
     worktree: bool = False
     branch_name: str | None = None
     base_branch: str | None = None
+    # First message, sent with ``--interactive`` (Auto Scan only).
+    initial_prompt: str | None = None
 
 
 class CopilotLauncher:
@@ -130,6 +132,10 @@ class CopilotLauncher:
         argv = [self.resolve_binary()]
         if options.allow_all:
             argv.append("--allow-all")
+        if options.initial_prompt:
+            # One element with ``=``: a prompt that starts with ``-`` can
+            # never be read as another flag.
+            argv.append(f"--interactive={options.initial_prompt}")
         return argv
 
     async def resolve_cwd(self, target: LaunchTarget, options: CopilotOptions) -> str:

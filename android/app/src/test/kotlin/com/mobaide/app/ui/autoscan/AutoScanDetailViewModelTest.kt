@@ -385,6 +385,48 @@ class AutoScanDetailViewModelTest {
         assertEquals("2026-04-11T03:00:00Z", vm.uiState.value.nextScanAt)
     }
 
+    @Test
+    fun stop_success_showsStopped_untilASnapshotListsTheScanAgain() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        fx.frames.tryEmit(AutoScanWsClient.Frame.Snapshot(scans = listOf(instance()), events = emptyMap()))
+        advanceUntilIdle()
+
+        vm.stop()
+        advanceUntilIdle()
+
+        // The agent no longer lists the scan, so no event would update the header.
+        assertTrue(vm.uiState.value.stopped)
+        assertNull(vm.uiState.value.nextScanAt)
+
+        // A reconnect while the scan is still gone keeps it stopped.
+        fx.frames.tryEmit(AutoScanWsClient.Frame.Snapshot(scans = emptyList(), events = emptyMap()))
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.stopped)
+
+        // The scan was started again elsewhere.
+        fx.frames.tryEmit(AutoScanWsClient.Frame.Snapshot(scans = listOf(instance()), events = emptyMap()))
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.stopped)
+    }
+
+    @Test
+    fun stop_failure_keepsTheScanControls() = runTest {
+        val fx = newFixture()
+        coEvery { fx.repository.stopScan(WORKSPACE) } throws RuntimeException("offline")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        fx.frames.tryEmit(AutoScanWsClient.Frame.Snapshot(scans = listOf(instance()), events = emptyMap()))
+        advanceUntilIdle()
+
+        vm.stop()
+        advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.stopped)
+        assertEquals("2026-04-11T01:00:00Z", vm.uiState.value.nextScanAt)
+    }
+
     companion object {
         private const val WORKSPACE = "alpha"
     }

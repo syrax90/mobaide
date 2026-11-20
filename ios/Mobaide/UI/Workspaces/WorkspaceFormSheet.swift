@@ -26,6 +26,7 @@ private struct WorkspaceFormContent: View {
 
     private let onOpenGit: (String) -> Void
     private let onCreated: (WorkspaceInfo) -> Void
+    private let agentAPI: AgentAPI
 
     init(
         mode: WorkspaceFormMode,
@@ -37,6 +38,7 @@ private struct WorkspaceFormContent: View {
         _pathSuggestions = State(initialValue: PathSuggestionsModel(repository: container.pathSuggestionRepository))
         self.onOpenGit = onOpenGit
         self.onCreated = onCreated
+        self.agentAPI = container.agentAPI
     }
 
     var body: some View {
@@ -86,7 +88,11 @@ private struct WorkspaceFormContent: View {
             }
             .interactiveDismissDisabled(model.isDirty)
             .toast($toast)
-            .task { await model.loadMetadataIfNeeded() }
+            .task {
+                let version = try? await agentAPI.getAgentVersion()
+                model.setAutoScanFilterInForm(version.map { $0.autoScanCapability == nil })
+                await model.loadMetadataIfNeeded()
+            }
             .onAppear { pathSuggestions.probe() }
             .onChange(of: model.message) { _, newValue in
                 if let newValue {
@@ -200,40 +206,19 @@ private struct WorkspaceFormContent: View {
     private func filterSection(_ model: WorkspaceFormModel) -> some View {
         @Bindable var model = model
         Section {
-            if model.metadataLoading {
-                PixelLoadingBlock()
-            }
-            if let error = model.metadataError {
-                HStack {
-                    Text(error).font(.caption).foregroundStyle(colors.danger)
-                    Spacer()
-                    Button("Retry") { Task { await model.refreshMetadata() } }
-                        .buttonStyle(.pixelSmall)
-                }
-            }
-
-            chipGroup(title: "Trigger labels", error: model.submitAttempted ? triggerLabelsError(model) : nil) {
-                ForEach(model.labelOptions, id: \.self) { label in
-                    SelectableChip(text: label, isSelected: model.triggerLabels.contains(label)) {
-                        toggle(&model.triggerLabels, label)
-                    }
-                }
-            }
-            chipGroup(title: "Trigger states", error: model.submitAttempted ? triggerStatesError(model) : nil) {
-                ForEach(model.stateOptions, id: \.name) { state in
-                    SelectableChip(
-                        text: state.name,
-                        glyph: stateGlyph(state.type),
-                        isSelected: model.triggerStates.contains(state.name)
-                    ) {
-                        toggle(&model.triggerStates, state.name)
-                    }
-                }
-            }
-
-            singleSelect("Active state", selection: $model.activeState, options: model.stateOptions.map(\.name))
-            singleSelect("Done state", selection: $model.doneState, options: model.stateOptions.map(\.name))
-            singleSelect("Removal label", selection: $model.removalLabel, options: model.labelOptions)
+            LinearScanFilterEditor(
+                triggerLabels: $model.triggerLabels,
+                triggerStates: $model.triggerStates,
+                activeState: $model.activeState,
+                doneState: $model.doneState,
+                removalLabel: $model.removalLabel,
+                labelOptions: model.labelOptions,
+                stateOptions: model.stateOptions,
+                loading: model.metadataLoading,
+                error: model.metadataError,
+                showsErrors: model.submitAttempted,
+                onRetry: { Task { await model.refreshMetadata() } }
+            )
         } header: {
             HStack {
                 PixelSectionHeader("Auto-scan filter")
@@ -251,14 +236,6 @@ private struct WorkspaceFormContent: View {
 
     // MARK: - Helpers
 
-    private func triggerLabelsError(_ model: WorkspaceFormModel) -> String? {
-        model.triggerLabels.isEmpty ? "Select at least one trigger label" : nil
-    }
-
-    private func triggerStatesError(_ model: WorkspaceFormModel) -> String? {
-        model.triggerStates.isEmpty ? "Select at least one trigger state" : nil
-    }
-
     @ViewBuilder
     private func fieldWithError(error: String?, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -266,45 +243,6 @@ private struct WorkspaceFormContent: View {
             if let error {
                 Text(error).font(.caption).foregroundStyle(colors.danger)
             }
-        }
-    }
-
-    @ViewBuilder
-    private func chipGroup(title: String, error: String?, @ViewBuilder chips: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).sectionHeading()
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) { chips() }
-            }
-            if let error {
-                Text(error).font(.caption).foregroundStyle(colors.danger)
-            }
-        }
-    }
-
-    private func singleSelect(_ label: String, selection: Binding<String>, options: [String]) -> some View {
-        Menu {
-            ForEach(options, id: \.self) { option in
-                Button(option) { selection.wrappedValue = option }
-            }
-        } label: {
-            LabeledContent(label, value: selection.wrappedValue.isEmpty ? "Select" : selection.wrappedValue)
-        }
-    }
-
-    private func toggle(_ set: inout Set<String>, _ value: String) {
-        if set.contains(value) { set.remove(value) } else { set.insert(value) }
-    }
-
-    private func stateGlyph(_ type: String) -> String {
-        switch type {
-        case "backlog": return "◴"
-        case "unstarted": return "○"
-        case "started": return "◐"
-        case "completed": return "●"
-        case "canceled": return "⊘"
-        case "triage": return "△"
-        default: return "·"
         }
     }
 }
@@ -367,24 +305,5 @@ private struct FlagRow: View {
                 .autocorrectionDisabled()
                 .pixelField(isInvalid: valueError != nil)
         }
-    }
-}
-
-private struct SelectableChip: View {
-    let text: String
-    var glyph: String?
-    let isSelected: Bool
-    let onTap: () -> Void
-
-    @Environment(\.mobaideColors) private var colors
-
-    var body: some View {
-        Button(action: onTap) {
-            PixelChip(glyph.map { "\($0) \(text)" } ?? text, .verbatim(checked: isSelected))
-                .padding(.bottom, 2)
-        }
-        .buttonStyle(.plain)
-        .transaction { $0.animation = nil }
-        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 }

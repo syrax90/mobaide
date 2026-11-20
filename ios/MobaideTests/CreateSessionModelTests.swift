@@ -251,7 +251,7 @@ final class CreateSessionModelTests: XCTestCase {
 
         XCTAssertEqual(
             model.error,
-            "The chat view needs Node.js 22 or later on the PC. Turn on Terminal UI under Advanced to use the classic terminal."
+            "The chat view needs Node.js 22 or later on the PC. Choose Terminal under Open sessions in to use the classic terminal."
         )
         XCTAssertFalse(model.submitting)
     }

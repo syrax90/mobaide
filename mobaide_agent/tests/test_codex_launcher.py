@@ -75,13 +75,23 @@ async def test_argv_full_auto_omits_sandbox_and_approval(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_argv_initial_prompt_is_trailing_positional(tmp_path: Path):
-    """Codex takes the prompt as a trailing positional — no ``--`` separator
-    (unlike Claude)."""
+    """Codex takes the prompt as the trailing positional, after ``--``."""
     spec = await CodexLauncher().build(
         _make_workspace(str(tmp_path)), CodexOptions(initial_prompt="do the thing"),
     )
-    assert spec.argv[-1] == "do the thing"
-    assert "--" not in spec.argv
+    assert spec.argv[-2:] == ["--", "do the thing"]
+
+
+@pytest.mark.asyncio
+async def test_argv_prompt_that_looks_like_a_flag_stays_the_prompt(tmp_path: Path):
+    """Auto Scan puts third-party issue text in the prompt: after ``--`` a
+    prompt that starts with ``-`` can never become a Codex option."""
+    prompt = "--dangerously-bypass-approvals-and-sandbox fix it"
+    spec = await CodexLauncher().build(
+        _make_workspace(str(tmp_path)), CodexOptions(initial_prompt=prompt),
+    )
+    assert spec.argv[-2:] == ["--", prompt]
+    assert spec.argv.count(prompt) == 1
 
 
 # ---------------------------------------------------------------------------

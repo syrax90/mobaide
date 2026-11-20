@@ -25,6 +25,7 @@ from mobaide.linear.models import (
     LinearIssue,
 )
 from mobaide.linear.scanner import AutoScanInstance
+from mobaide.linear.sources import ScanIssue
 
 
 def _make_config(tmp_path, *, auto_remove_worktrees: bool = True) -> AutoScanConfig:
@@ -97,7 +98,7 @@ def _make_instance(
     tmp_path, *,
     client=None, worktree_mgr=None, session_manager=None,
     launcher=None, config=None, workspace_config=None,
-    workspaces_store=None,
+    workspaces_store=None, client_options=None,
 ) -> AutoScanInstance:
     workspace_config = workspace_config or _make_workspace_config(tmp_path)
     store = workspaces_store or _FakeWorkspacesStore(workspace_config)
@@ -110,6 +111,7 @@ def _make_instance(
         client=client or AsyncMock(),
         worktree_mgr=worktree_mgr or AsyncMock(),
         workspaces_store=cast("WorkspacesStore", store),
+        client_options=client_options,
     )
 
 
@@ -267,7 +269,7 @@ class TestProcessIssueEmitsPerStepEvents:
             launcher=launcher,
         )
 
-        await inst._process_issue(_make_issue())
+        await inst._process_issue(ScanIssue.from_linear(_make_issue()))
 
         steps = [
             (e.payload["step"], e.payload["status"])
@@ -315,7 +317,7 @@ class TestProcessIssueEmitsPerStepEvents:
             launcher=launcher,
         )
 
-        await inst._process_issue(_make_issue())
+        await inst._process_issue(ScanIssue.from_linear(_make_issue()))
 
         steps = [
             (e.payload["step"], e.payload["status"])
@@ -359,7 +361,7 @@ class TestProcessIssueSetsSessionKindAutoScan:
             launcher=launcher,
         )
 
-        await inst._process_issue(_make_issue())
+        await inst._process_issue(ScanIssue.from_linear(_make_issue()))
 
         # create_session is called exactly once with a SessionConfig whose
         # kind is AUTO_SCAN — not the CLAUDE default that the dataclass
@@ -416,7 +418,7 @@ class TestClaudeBinaryNotFoundHandling:
         )
 
         with pytest.raises(ClaudeBinaryNotFoundError):
-            await inst._process_issue(_make_issue(identifier="CLA-MISS"))
+            await inst._process_issue(ScanIssue.from_linear(_make_issue(identifier="CLA-MISS")))
 
         steps = [
             (e.payload["step"], e.payload["status"], e.payload.get("error"))
@@ -516,7 +518,7 @@ class TestProcessIssueForwardsClientOptions:
         # when it spawns a session for a matching issue.
         inst._client_options = ClaudeOptions(effort="low", model="opus")
 
-        await inst._process_issue(_make_issue(issue_id="uuid-off", identifier="CLA-OFF"))
+        await inst._process_issue(ScanIssue.from_linear(_make_issue(issue_id="uuid-off", identifier="CLA-OFF")))
 
         # launcher.build was called with (workspace, options). Pull the
         # second positional arg regardless of whether it was passed by
@@ -554,7 +556,7 @@ class TestProcessIssueForwardsClientOptions:
         )
         inst._client_options = ClaudeOptions(skip_permissions=False)
 
-        await inst._process_issue(_make_issue(issue_id="uuid-noskip", identifier="CLA-NOSKIP"))
+        await inst._process_issue(ScanIssue.from_linear(_make_issue(issue_id="uuid-noskip", identifier="CLA-NOSKIP")))
 
         call = launcher.build.await_args
         forwarded = call.args[1] if len(call.args) > 1 else call.kwargs["options"]
@@ -586,7 +588,7 @@ class TestProcessIssueForwardsClientOptions:
         )
         assert inst._client_options is None
 
-        await inst._process_issue(_make_issue(issue_id="uuid-bypass", identifier="CLA-BYPASS"))
+        await inst._process_issue(ScanIssue.from_linear(_make_issue(issue_id="uuid-bypass", identifier="CLA-BYPASS")))
 
         call = launcher.build.await_args
         forwarded = call.args[1] if len(call.args) > 1 else call.kwargs["options"]
@@ -616,7 +618,7 @@ class TestProcessIssueForwardsClientOptions:
         )
         inst._client_options = ClaudeOptions(worktree=False)
 
-        await inst._process_issue(_make_issue(issue_id="uuid-nowt", identifier="CLA-NOWT"))
+        await inst._process_issue(ScanIssue.from_linear(_make_issue(issue_id="uuid-nowt", identifier="CLA-NOWT")))
 
         call = launcher.build.await_args
         forwarded = call.args[1] if len(call.args) > 1 else call.kwargs["options"]
@@ -662,11 +664,13 @@ class TestProcessIssueForwardsClientOptions:
         )
         assert inst._client_options is None  # optionless start
 
-        await inst._process_issue(_make_issue(issue_id="uuid-pp", identifier="CLA-PP"))
+        await inst._process_issue(ScanIssue.from_linear(_make_issue(issue_id="uuid-pp", identifier="CLA-PP")))
 
         call = launcher.build.await_args
         forwarded = call.args[1] if len(call.args) > 1 else call.kwargs["options"]
-        assert forwarded.initial_prompt == "WORKSPACE SAVED PROMPT"
+        assert forwarded.initial_prompt == (
+            "WORKSPACE SAVED PROMPT\n\nLinear issue CLA-PP: Test issue"
+        )
 
     @pytest.mark.asyncio
     async def test_process_issue_client_prompt_wins_over_workspace_prompt(
@@ -696,14 +700,16 @@ class TestProcessIssueForwardsClientOptions:
             tmp_path, client=client,
             session_manager=sess_mgr, launcher=launcher,
             workspace_config=workspace_config,
+            client_options=ClaudeOptions(initial_prompt="PER SCAN PROMPT"),
         )
-        inst._client_options = ClaudeOptions(initial_prompt="PER SCAN PROMPT")
 
-        await inst._process_issue(_make_issue(issue_id="uuid-cp", identifier="CLA-CP"))
+        await inst._process_issue(ScanIssue.from_linear(_make_issue(issue_id="uuid-cp", identifier="CLA-CP")))
 
         call = launcher.build.await_args
         forwarded = call.args[1] if len(call.args) > 1 else call.kwargs["options"]
-        assert forwarded.initial_prompt == "PER SCAN PROMPT"
+        assert forwarded.initial_prompt == (
+            "PER SCAN PROMPT\n\nLinear issue CLA-CP: Test issue"
+        )
 
 
 class TestProcessIssueSessionIdLifecycle:
@@ -740,7 +746,7 @@ class TestProcessIssueSessionIdLifecycle:
             session_manager=sess_mgr, launcher=launcher,
         )
 
-        await inst._process_issue(_make_issue(issue_id="uuid-sid", identifier="CLA-SID"))
+        await inst._process_issue(ScanIssue.from_linear(_make_issue(issue_id="uuid-sid", identifier="CLA-SID")))
 
         build_call = launcher.build.await_args
         session_id = build_call.kwargs["session_id"]
@@ -768,7 +774,7 @@ class TestProcessIssueSessionIdLifecycle:
             session_manager=sess_mgr, launcher=launcher,
         )
 
-        await inst._process_issue(_make_issue(issue_id="uuid-df", identifier="CLA-DF"))
+        await inst._process_issue(ScanIssue.from_linear(_make_issue(issue_id="uuid-df", identifier="CLA-DF")))
 
         session_id = launcher.build.await_args.kwargs["session_id"]
         launcher.discard_session_hooks.assert_called_once_with(session_id)
@@ -801,7 +807,7 @@ class TestWorktreeCleanup:
             session_manager=sess_mgr, launcher=launcher,
         )
 
-        await inst._process_issue(_make_issue(issue_id="uuid-1", identifier="CLA-100"))
+        await inst._process_issue(ScanIssue.from_linear(_make_issue(issue_id="uuid-1", identifier="CLA-100")))
 
         items = await inst._workitems_store.read()
         assert len(items) == 1
@@ -830,8 +836,8 @@ class TestWorktreeCleanup:
         )
 
         issue = _make_issue(issue_id="uuid-x", identifier="CLA-200")
-        await inst._process_issue(issue)
-        await inst._process_issue(issue)
+        await inst._process_issue(ScanIssue.from_linear(issue))
+        await inst._process_issue(ScanIssue.from_linear(issue))
 
         items = await inst._workitems_store.read()
         assert len(items) == 1
@@ -859,7 +865,7 @@ class TestWorktreeCleanup:
             session_manager=sess_mgr, launcher=launcher,
         )
 
-        await inst._process_issue(_make_issue(issue_id="uuid-noWT", identifier="CLA-noWT"))
+        await inst._process_issue(ScanIssue.from_linear(_make_issue(issue_id="uuid-noWT", identifier="CLA-noWT")))
 
         assert await inst._workitems_store.count() == 0
         sess_mgr.create_session.assert_not_awaited()
@@ -888,6 +894,7 @@ class TestWorktreeCleanup:
 
         wt_mgr.cleanup_worktree.assert_awaited_once_with(
             Path(tmp_path / "wt-7").as_posix(), Path(tmp_path / "repo").as_posix(),
+            force=True,
         )
         assert await inst._workitems_store.count() == 0
 
@@ -1078,7 +1085,7 @@ class TestWorktreeCleanup:
             session_manager=sess_mgr, launcher=launcher, config=config,
         )
 
-        await inst._process_issue(_make_issue(issue_id="uuid-dis", identifier="CLA-DIS"))
+        await inst._process_issue(ScanIssue.from_linear(_make_issue(issue_id="uuid-dis", identifier="CLA-DIS")))
 
         assert await inst._workitems_store.count() == 0
 
@@ -1111,13 +1118,13 @@ class TestProcessedCountDTO:
         )
         assert inst.to_dto()["processed_count"] == 0
 
-        await inst._process_issue(_make_issue(issue_id="u1", identifier="CLA-1"))
-        await inst._process_issue(_make_issue(issue_id="u2", identifier="CLA-2"))
+        await inst._process_issue(ScanIssue.from_linear(_make_issue(issue_id="u1", identifier="CLA-1")))
+        await inst._process_issue(ScanIssue.from_linear(_make_issue(issue_id="u2", identifier="CLA-2")))
         assert inst.to_dto()["processed_count"] == 2
 
         # Re-processing an already-tracked issue must NOT double-count
         # (dedup happens inside the store).
-        await inst._process_issue(_make_issue(issue_id="u1", identifier="CLA-1"))
+        await inst._process_issue(ScanIssue.from_linear(_make_issue(issue_id="u1", identifier="CLA-1")))
         assert inst.to_dto()["processed_count"] == 2
 
         # Clean up one via the Done-state path.
@@ -1358,7 +1365,7 @@ class TestPerWorkspaceFilter:
             ],
         )
 
-        await inst._process_issue(issue)
+        await inst._process_issue(ScanIssue.from_linear(issue))
 
         # update_issue_state was called with the "Doing" state's id, not
         # the historical "In Progress".
@@ -1398,7 +1405,7 @@ class TestPerWorkspaceFilter:
             ],
         )
 
-        await inst._process_issue(issue)
+        await inst._process_issue(ScanIssue.from_linear(issue))
 
         assert client.remove_issue_label.await_count == 1
         called_label = client.remove_issue_label.await_args.args[1]
@@ -1450,4 +1457,4 @@ class TestPerWorkspaceFilter:
         inst = _make_instance(tmp_path, workspace_config=workspace_config)
 
         await inst._cleanup_completed_worktrees()
-        assert inst._filter.done_state == "Released"
+        assert inst._source.filter.done_state == "Released"

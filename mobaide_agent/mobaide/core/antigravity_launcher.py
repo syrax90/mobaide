@@ -154,6 +154,8 @@ class AntigravityOptions:
     worktree: bool = False
     branch_name: str | None = None
     base_branch: str | None = None
+    # First message, sent with ``--prompt-interactive`` (Auto Scan only).
+    initial_prompt: str | None = None
 
     def __post_init__(self) -> None:
         if self.skip_permissions and self.sandbox:
@@ -259,6 +261,10 @@ class AntigravityLauncher:
             argv.append("--sandbox")
         for directory in options.add_dirs:
             argv += ["--add-dir", directory]
+        if options.initial_prompt:
+            # One element with ``=``: a prompt that starts with ``-`` can
+            # never be read as another flag.
+            argv.append(f"--prompt-interactive={options.initial_prompt}")
         return argv
 
     async def _resolve_cwd(

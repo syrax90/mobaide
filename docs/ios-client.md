@@ -498,6 +498,11 @@ OSC 52 is write-direction and live-only, matching Android.
 The create-session wizard has a fifth **Auto Scan** mode card, between
 Antigravity and Terminal.
 
+- Newer agents (`capabilities.autoscan`) use the source-and-agent wizard in
+  [features.md](features.md#auto-scan-mode): issue source, GitHub status or
+  Linear key, filter, AI agent, agent options, initial prompt. The notes below
+  describe the older Linear + Claude flow, which stays for agents without the
+  capability.
 - It is enabled only when the selected stored workspace carries a Linear API key
   and the Claude CLI is installed; otherwise it is greyed out with the reason. A
   custom path has no stored workspace, so it can never satisfy it.

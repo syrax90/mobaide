@@ -1,5 +1,6 @@
 import { useId } from 'react';
 import { useDragReorder } from '../../../lib/useDragReorder';
+import { RadarIcon, TerminalIcon } from '../../chat/ChatIcons';
 import { DragHandle, REORDER_HINT } from './DragHandle';
 import type { ModeCard } from './modeCatalog';
 import type { WizardMode } from './wizardState';
@@ -53,24 +54,27 @@ export function ModeStep({
               */}
               <button
                 type="button"
-                className="mode-card"
+                className={`mode-card${modeIcon(card.mode) !== null ? ' mode-card-with-icon' : ''}`}
                 aria-disabled={!card.enabled}
                 aria-describedby={card.disabledReason !== undefined ? reasonId : undefined}
                 onClick={() => {
                   if (card.enabled) onSelect(card.mode);
                 }}
               >
-                <span className="mode-title">{card.title}</span>
-                {card.command !== undefined ? (
-                  <span className="mode-command">{card.command}</span>
-                ) : (
-                  <span className="mode-subtitle">{card.subtitle}</span>
-                )}
-                {card.disabledReason !== undefined && (
-                  <span className="mode-subtitle-warning" id={reasonId}>
-                    {card.disabledReason}
-                  </span>
-                )}
+                {modeIcon(card.mode)}
+                <span className="mode-text">
+                  <span className="mode-title">{card.title}</span>
+                  {card.command !== undefined ? (
+                    <span className="mode-command">{card.command}</span>
+                  ) : (
+                    <span className="mode-subtitle">{card.subtitle}</span>
+                  )}
+                  {card.disabledReason !== undefined && (
+                    <span className="mode-subtitle-warning" id={reasonId}>
+                      {card.disabledReason}
+                    </span>
+                  )}
+                </span>
               </button>
               {card.command !== undefined && (
                 <button
@@ -103,4 +107,16 @@ export function ModeStep({
       </div>
     </div>
   );
+}
+
+/** The leading glyph of a mode card, as on Android: Terminal and Auto Scan have one. */
+function modeIcon(mode: WizardMode) {
+  switch (mode) {
+    case 'shell':
+      return <TerminalIcon className="chat-icon mode-icon" />;
+    case 'auto_scan':
+      return <RadarIcon className="chat-icon mode-icon" />;
+    default:
+      return null;
+  }
 }

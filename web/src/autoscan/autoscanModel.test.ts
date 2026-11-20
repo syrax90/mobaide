@@ -225,6 +225,59 @@ describe('snapshot', () => {
   });
 });
 
+describe('stopped', () => {
+  const listed = (nextScanAt: string): DetailFrame => ({
+    kind: 'snapshot',
+    scans: [
+      {
+        project_name: WORKSPACE,
+        status: 'scanning',
+        started_at: 1,
+        last_activity_at: 1,
+        cycle_number: 5,
+        next_scan_at: nextScanAt,
+      },
+    ],
+    events: {},
+  });
+  const scanning = () =>
+    drive([
+      listed('2026-07-08T12:05:00Z'),
+      frame(event(1n, 'phase', { phase: 'scan_started', cycle_number: 5 })),
+    ]);
+
+  it.each<[string, DetailFrame]>([
+    [
+      'a scan_stopped event',
+      frame(event(2n, 'phase', { phase: 'scan_stopped', cycle_number: 5, next_scan_at: null })),
+    ],
+    // The Stop this screen sent succeeded, but its event may never arrive.
+    ['a local stopped frame', { kind: 'stopped' }],
+  ])('%s leaves no countdown and no phase running', (_, stop) => {
+    const before = scanning();
+    expect(before.activePhase).toBe('scan');
+
+    const after = reduceAutoScanFrame(before, stop);
+
+    expect(after.stopped).toBe(true);
+    expect(after.nextScanAt).toBeUndefined();
+    expect(after.activePhase).toBeUndefined();
+  });
+
+  it('is cleared only by a snapshot that lists the scan again', () => {
+    const stopped = reduceAutoScanFrame(scanning(), { kind: 'stopped' });
+
+    // A reconnect while the scan stays stopped: the agent no longer lists it.
+    const reconnected = reduceAutoScanFrame(stopped, { kind: 'snapshot', scans: [], events: {} });
+    expect(reconnected.stopped).toBe(true);
+
+    // Started again elsewhere.
+    const restarted = reduceAutoScanFrame(reconnected, listed('2026-07-08T12:10:00Z'));
+    expect(restarted.stopped).toBe(false);
+    expect(restarted.nextScanAt).toBe('2026-07-08T12:10:00Z');
+  });
+});
+
 describe('phase timeline', () => {
   it('renders in the fixed order regardless of arrival order', () => {
     const state = drive([

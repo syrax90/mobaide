@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import PureWindowsPath
 
 import pytest
@@ -126,12 +127,23 @@ class TestStoreAddRemove:
         assert items[0].uuid == "u-old"
 
     @pytest.mark.asyncio
+    async def test_the_same_github_number_in_two_repositories_is_two_items(self, tmp_path):
+        store = ActiveWorkItemsStore(tmp_path / "items.json")
+        upstream = replace(_item("#42", uuid="42"), source="github", repo="acme/app")
+        fork = replace(upstream, repo="octocat/app", worktree_path="/tmp/wt/fork-42")
+
+        assert await store.add(upstream) is True
+        assert await store.add(fork) is True
+        assert await store.remove(upstream) is True
+        assert [i.repo for i in await store.read()] == ["octocat/app"]
+
+    @pytest.mark.asyncio
     async def test_remove_drops_matching_id(self, tmp_path):
         store = ActiveWorkItemsStore(tmp_path / "items.json")
         await store.add(_item("CLA-1"))
         await store.add(_item("CLA-2"))
 
-        removed = await store.remove("CLA-1")
+        removed = await store.remove(_item("CLA-1"))
         assert removed is True
 
         remaining = await store.read()

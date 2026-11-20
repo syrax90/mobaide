@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { fetchAgentCapabilities } from '../../api/agentCapabilities';
 import {
   createWorkspace,
-  listLinearLabels,
-  listLinearStates,
   updateWorkspace,
   type WorkspaceInfo,
 } from '../../api/workspaceRepository';
 import { conflictDetailString, isConflict } from '../../api/conflicts';
 import { isApiError } from '../../api/errors';
 import { queryKeys } from '../../lib/queryKeys';
+import { autoScanCapability, type AgentVersionInfo } from '../../protocol/dto/agentVersion';
 import { autoScanFilterSchema, type AutoScanFilter } from '../../protocol/dto/workspaces';
 import { Modal } from '../../components/Modal';
 import { PasswordField } from '../../components/form/PasswordField';
@@ -19,6 +19,7 @@ import { TextField } from '../../components/form/TextField';
 import { AutoScanFilterSection } from './AutoScanFilterSection';
 import { FlagsEditor } from './FlagsEditor';
 import { flagEntriesFrom, type FlagEntry } from './flagEntry';
+import { useLinearMetadata } from './useLinearMetadata';
 import {
   buildWorkspaceUpdate,
   buildWorkspaceWrite,
@@ -100,35 +101,43 @@ export function WorkspaceFormDialog({
     if (!filterTouched) setFilter(editing?.auto_scan_filter ?? DEFAULT_FILTER);
   }, [editing, filterTouched]);
 
+  // An agent with `capabilities.autoscan` chooses the filter in the Auto Scan
+  // wizard, so the section here is for older agents only. Until the probe
+  // answers (or when it fails) the form keeps the older behaviour.
+  const scanInWizard = useQuery({
+    queryKey: queryKeys.agentAutoScanSupport(agentId),
+    queryFn: async () => autoScanCapability(await fetchAgentCapabilities(agentId)) !== null,
+    enabled: agentId !== '',
+    // The wizard has usually probed `/api/version` already; reuse its answer.
+    initialData: () => {
+      const info = queryClient.getQueryData<AgentVersionInfo>(
+        queryKeys.agentCapabilities(agentId),
+      );
+      return info === undefined ? undefined : autoScanCapability(info) !== null;
+    },
+    initialDataUpdatedAt: () =>
+      queryClient.getQueryState(queryKeys.agentCapabilities(agentId))?.dataUpdatedAt,
+    meta: { silent: true },
+  });
+  const filterInWizard = scanInWizard.data === true;
+
   const linearApiKey = form.watch('linearApiKey');
   const clearLinearKey = form.watch('clearLinearKey');
-  const showFilter = showsFilterSection({ linearApiKey, clearLinearKey }, editing);
+  const showFilter =
+    !filterInWizard && showsFilterSection({ linearApiKey, clearLinearKey }, editing);
 
-  const metadata = useQuery({
-    queryKey: queryKeys.linearMetadata(agentId, editing?.name ?? ''),
-    queryFn: async () => {
-      const name = editing?.name ?? '';
-      try {
-        const [labels, states] = await Promise.all([
-          listLinearLabels(agentId, name),
-          listLinearStates(agentId, name),
-        ]);
-        return { labels, states, failed: false };
-      } catch {
-        // Swallowed rather than thrown: a rejected query trips the global
-        // error toast, and a Linear outage should degrade the chip lists to
-        // "what this workspace already selects", not shout at the user.
-        return { labels: [], states: [], failed: true };
-      }
-    },
-    enabled: editing?.has_linear_key === true,
-  });
+  const metadata = useLinearMetadata(
+    agentId,
+    editing?.name ?? '',
+    !filterInWizard && editing?.has_linear_key === true,
+  );
 
   const save = useMutation({
     mutationFn: async (submitted: {
       values: WorkspaceFormValues;
       flags: FlagEntry[];
       filter: AutoScanFilter;
+      filterInWizard: boolean;
     }) => {
       const draft = {
         ...submitted.values,
@@ -136,7 +145,10 @@ export function WorkspaceFormDialog({
         filter: submitted.filter,
       };
       if (editing === null) {
-        return createWorkspace(agentId, buildWorkspaceWrite(draft));
+        return createWorkspace(
+          agentId,
+          buildWorkspaceWrite(draft, { includeFilter: !submitted.filterInWizard }),
+        );
       }
       await updateWorkspace(agentId, editing.name, buildWorkspaceUpdate(editing, draft));
       return null;
@@ -188,7 +200,7 @@ export function WorkspaceFormDialog({
         onSubmit={(event) => {
           event.preventDefault();
           if (!submittable) return;
-          save.mutate({ values: form.getValues(), flags, filter });
+          save.mutate({ values: form.getValues(), flags, filter, filterInWizard });
         }}
       >
         <TextField

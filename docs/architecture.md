@@ -69,7 +69,7 @@ Chat sessions run the coding agent through an [Agent Client Protocol](https://ag
 | `mobaide_agent/mobaide/core/` | Python 3.12+ | PTY backend abstraction, session manager, domain models |
 | `mobaide_agent/mobaide/acp/` | Python 3.12+ | Chat sessions: ACP client over stdio, agent launch specs, timeline, stored-session listing |
 | `mobaide_agent/mobaide/agent/` | FastAPI | WebSocket endpoints, JWT auth, REST API |
-| `mobaide_agent/mobaide/linear/` | Python (gql) | Linear GraphQL client, Auto Scan engine, worktree manager |
+| `mobaide_agent/mobaide/linear/` | Python (gql) | Linear GraphQL client, Auto Scan engine (Linear and GitHub sources), worktree manager |
 | `android/` | Kotlin / Compose | Android app — OkHttp WebSocket client, multi-session UI, terminal view |
 | `ios/` | Swift / SwiftUI | iOS app — wire DTOs, REST clients, reconnecting WebSocket core, terminal framing, SwiftUI screens |
 | `web/` | React 19 / TypeScript / Vite | Web client — SPA shell, typed OpenAPI clients for the relay and agent APIs, wire protocol core, reconnecting WebSocket manager, terminal screen (xterm.js 6) |
