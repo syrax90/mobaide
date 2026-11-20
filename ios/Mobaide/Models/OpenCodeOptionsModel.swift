@@ -3,6 +3,8 @@ import Foundation
 struct OpenCodeOptionsModel: Codable, Equatable, Sendable {
     let auto_approve: Bool
     let connect: Bool
+    // OpenCode 2's Code Mode; on by default there, false turns it off for the session.
+    let code_mode: Bool
     let worktree: Bool
     let branch_name: String?
     let base_branch: String?
@@ -10,12 +12,14 @@ struct OpenCodeOptionsModel: Codable, Equatable, Sendable {
     init(
         auto_approve: Bool = false,
         connect: Bool = false,
+        code_mode: Bool = true,
         worktree: Bool = false,
         branch_name: String? = nil,
         base_branch: String? = nil
     ) {
         self.auto_approve = auto_approve
         self.connect = connect
+        self.code_mode = code_mode
         self.worktree = worktree
         self.branch_name = branch_name
         self.base_branch = base_branch
@@ -27,6 +31,7 @@ extension OpenCodeOptionsModel {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         auto_approve = try container.decodeIfPresent(Bool.self, forKey: .auto_approve) ?? false
         connect = try container.decodeIfPresent(Bool.self, forKey: .connect) ?? false
+        code_mode = try container.decodeIfPresent(Bool.self, forKey: .code_mode) ?? true
         worktree = try container.decodeIfPresent(Bool.self, forKey: .worktree) ?? false
         branch_name = try container.decodeIfPresent(String.self, forKey: .branch_name)
         base_branch = try container.decodeIfPresent(String.self, forKey: .base_branch)

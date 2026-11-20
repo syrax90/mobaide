@@ -36,20 +36,30 @@ interface TerminalUiFieldProps {
   agent: ChatAgentKind;
   checked: boolean;
   onChange: (value: boolean) => void;
+  /** Why another option keeps the terminal on; the toggle is then locked on. */
+  requiredBy?: string;
 }
 
 /**
  * "Terminal UI" under an agent's Advanced options: the classic terminal
- * instead of the chat view. Locked on while the chat view cannot start.
+ * instead of the chat view. Locked on while the chat view cannot start, or
+ * while an option that runs only in the terminal is on.
  */
-export function TerminalUiField({ chat, agent, checked, onChange }: TerminalUiFieldProps) {
+export function TerminalUiField({
+  chat,
+  agent,
+  checked,
+  onChange,
+  requiredBy,
+}: TerminalUiFieldProps) {
   const blocked = chatBlocked(chat);
+  const locked = blocked || requiredBy !== undefined;
   return (
     <CheckboxField
       label="Terminal UI"
-      checked={checked || blocked}
-      disabled={blocked}
-      hint={terminalUiHint(chat, agent)}
+      checked={checked || locked}
+      disabled={locked}
+      hint={blocked || requiredBy === undefined ? terminalUiHint(chat, agent) : requiredBy}
       onChange={onChange}
     />
   );

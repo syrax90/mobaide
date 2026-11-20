@@ -51,6 +51,50 @@ def test_focus_mode_wire_absence_is_none_and_survives_the_hop_to_claude_options(
         assert opts.focus_mode is value
 
 
+class TestCodeModeWire:
+    """``code_mode`` on the wire: each agent's default, and Claude Code's
+    terminal-only rule enforced at the boundary (422)."""
+
+    def test_each_agent_s_wire_default_survives_the_hop_to_its_options(self):
+        from mobaide.agent.sessions.models import OpenCodeOptionsModel, PiOptionsModel
+
+        # OpenCode 2 runs Code Mode by default: a client that predates the
+        # toggle must change nothing.
+        assert OpenCodeOptionsModel.model_validate({}).to_options().code_mode is True
+        assert PiOptionsModel.model_validate({}).to_options().code_mode is False
+        assert ClaudeOptionsModel.model_validate({}).to_options().code_mode is False
+        assert OpenCodeOptionsModel.model_validate({"code_mode": False}).to_options().code_mode is False
+        assert PiOptionsModel.model_validate({"code_mode": True}).to_options().code_mode is True
+        assert ClaudeOptionsModel.model_validate({"code_mode": True}).to_options().code_mode is True
+
+    def test_claude_code_mode_in_the_chat_view_is_refused(self):
+        import pydantic
+
+        from mobaide.agent.sessions.models import CreateSessionRequest
+
+        with pytest.raises(pydantic.ValidationError) as excinfo:
+            CreateSessionRequest.model_validate(
+                {"cli": "claude", "ui": "chat", "claude_options": {"code_mode": True}}
+            )
+
+        assert "terminal UI" in str(excinfo.value)
+
+    @pytest.mark.parametrize(
+        "wire",
+        [
+            {"cli": "claude", "ui": "terminal", "claude_options": {"code_mode": True}},
+            {"cli": "claude", "ui": "chat", "claude_options": {"code_mode": False}},
+            {"cli": "pi", "ui": "chat", "pi_options": {"code_mode": True}},
+            {"cli": "opencode", "ui": "chat", "opencode_options": {"code_mode": True}},
+        ],
+        ids=["claude-terminal", "claude-chat-without", "pi-chat", "opencode-chat"],
+    )
+    def test_code_mode_is_accepted_where_the_agent_runs_it(self, wire):
+        from mobaide.agent.sessions.models import CreateSessionRequest
+
+        CreateSessionRequest.model_validate(wire)
+
+
 class TestSessionToWireDictKind:
     """``session_to_wire_dict`` must serialise the ``kind`` field through
     ``info.kind.value`` so SHELL and AUTO_SCAN sessions don't silently wire

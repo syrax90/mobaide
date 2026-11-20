@@ -213,14 +213,24 @@ class FakeJunieLauncher:
 
 
 class FakePiLauncher:
-    """The three ``PiLauncher`` calls a chat spec makes."""
+    """The ``PiLauncher`` calls a chat spec makes."""
 
     def __init__(
-        self, binary: str | None = "/opt/pi/bin/pi", env: dict[str, str] | None = None
+        self,
+        binary: str | None = "/opt/pi/bin/pi",
+        env: dict[str, str] | None = None,
+        version_error: str | None = None,
     ) -> None:
         self.binary = binary
         self.env = env or {}
+        self.version_error = version_error
         self.resolved: list[tuple[object, PiOptions]] = []
+        self.version_checks: list[dict[str, str]] = []
+
+    async def check_code_mode_version(self, env: dict[str, str]) -> None:
+        self.version_checks.append(env)
+        if self.version_error is not None:
+            raise ValueError(self.version_error)
 
     def resolve_binary(self) -> str:
         if self.binary is None:
@@ -1119,6 +1129,9 @@ class FakeOpenCodeLauncher:
 
     def build_env(self, target) -> dict[str, str]:
         return {"PATH": "/usr/bin", "LAUNCHER": "1"}
+
+    async def apply_code_mode(self, env, options) -> None:
+        return None
 
     async def resolve_cwd(self, target, options) -> str:
         self.resolved.append((target, options))
@@ -2228,3 +2241,94 @@ class TestPiPrepare:
         assert plan.argv == [sys.executable, "-I", pi_bridge.__file__, "/opt/pi/bin/pi"]
         assert plan.env["PATH"].split(os.pathsep) == ["/opt/pi/bin", str(bin_dir)]
         assert plan.cwd == os.path.expanduser("~")
+
+
+class TestCodeModePrepare:
+    async def test_claude_chat_never_asks_claude_code_for_code_mode(self, bin_dir):
+        """Claude Code offers Code Mode in its terminal UI only; the chat
+        runs through the Agent SDK, so the launcher must not turn it on (nor
+        refuse an older CLI for it)."""
+        launcher = FakeLauncher()
+        spec = ClaudeChatSpec(launcher, command_override="adapter")
+
+        await spec.prepare(AdHocLaunch(cwd="/work"), ClaudeOptions(code_mode=True, model="smart"))
+
+        [(_target, built, _session_id)] = launcher.built
+        assert built.code_mode is False
+        assert built.model == "smart"
+
+    async def test_opencode_chat_turns_code_mode_off_like_the_terminal(
+        self, tmp_path, monkeypatch
+    ):
+        from mobaide.core import opencode_launcher
+        from mobaide.core.opencode_launcher import OpenCodeLauncher
+
+        monkeypatch.delenv(agents.OPENCODE_ACP_COMMAND_ENV, raising=False)
+        monkeypatch.delenv("OPENCODE_CONFIG_CONTENT", raising=False)
+        monkeypatch.setattr(opencode_launcher, "cli_version", lambda _bin, _env=None: (2, 1, 0))
+        spec = OpenCodeChatSpec(OpenCodeLauncher())
+
+        off = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), OpenCodeOptions(code_mode=False))
+        on = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), OpenCodeOptions())
+
+        assert json.loads(off.env["OPENCODE_CONFIG_CONTENT"]) == {
+            "permissions": [{"action": "execute", "resource": "*", "effect": "deny"}]
+        }
+        assert "OPENCODE_CONFIG_CONTENT" not in on.env
+
+    async def test_pi_chat_bridge_starts_pi_with_the_codemode_tool(self, tmp_path):
+        """The bridge passes the arguments after Pi's path on to every ``pi``
+        it starts, so Code Mode reaches the chat too."""
+        spec = PiChatSpec(FakePiLauncher())
+
+        on = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), PiOptions(code_mode=True))
+        off = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), PiOptions())
+
+        bridge = [sys.executable, "-I", pi_bridge.__file__, "/opt/pi/bin/pi"]
+        assert on.argv == [*bridge, "--tools", "+codemode"]
+        assert off.argv == bridge
+
+    async def test_pi_chat_with_a_command_override_gets_no_extra_arguments(self, tmp_path):
+        """An override is a whole command of the user's own, not Pi's path."""
+        spec = PiChatSpec(FakePiLauncher(), command_override="custom-pi-server --stdio")
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), PiOptions(code_mode=True))
+
+        assert plan.argv == ["custom-pi-server", "--stdio"]
+
+    async def test_pi_chat_checks_the_pi_version_only_for_code_mode(self, tmp_path):
+        launcher = FakePiLauncher(env={"FROM_LAUNCHER": "1"})
+        spec = PiChatSpec(launcher)
+
+        await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), PiOptions())
+        assert launcher.version_checks == []
+
+        await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), PiOptions(code_mode=True))
+        # The launch env, so an npm Pi finds its ``node``.
+        [env] = launcher.version_checks
+        assert env["FROM_LAUNCHER"] == "1"
+
+    async def test_pi_chat_on_an_older_pi_fails_before_the_worktree(self, tmp_path):
+        launcher = FakePiLauncher(version_error="Code Mode needs Pi 1.1.0 or later.")
+        spec = PiChatSpec(launcher)
+
+        with pytest.raises(ValueError, match="Pi 1.1.0"):
+            await spec.prepare(
+                AdHocLaunch(cwd=str(tmp_path)), PiOptions(code_mode=True, worktree=True)
+            )
+
+        assert launcher.resolved == []
+
+    @pytest.mark.parametrize("fixed", ["override", "fake-agent"])
+    async def test_pi_chat_with_a_fixed_command_checks_no_pi_version(self, tmp_path, fixed):
+        """The fixed command is not the Pi this launcher found."""
+        launcher = FakePiLauncher(version_error="must not be asked")
+        spec = (
+            PiChatSpec(launcher, command_override="custom-pi-server --stdio")
+            if fixed == "override"
+            else PiChatSpec(launcher, test_mode=True)
+        )
+
+        await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), PiOptions(code_mode=True))
+
+        assert launcher.version_checks == []

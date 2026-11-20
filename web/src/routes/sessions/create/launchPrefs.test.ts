@@ -4,6 +4,8 @@ import {
   CLAUDE_PREFS_DEFAULTS,
   CODEX_PREFS_DEFAULTS,
   JUNIE_PREFS_DEFAULTS,
+  OPENCODE_PREFS_DEFAULTS,
+  PI_PREFS_DEFAULTS,
   type ClaudeLaunchPrefs,
   type LaunchPrefs,
 } from '../../../stores/launchPrefsStore';
@@ -35,6 +37,7 @@ const claudePrefs = (over: Partial<ClaudeLaunchPrefs> = {}): ClaudeLaunchPrefs =
   debug: false,
   focusMode: true,
   terminalUi: false,
+  codeMode: false,
   ...over,
 });
 
@@ -339,13 +342,13 @@ describe('launchPrefsFromState', () => {
   it('round-trips the OpenCode bucket and touches no other', () => {
     const state: WizardState = {
       ...dialled,
-      opencode: { autoApprove: true, terminalUi: true },
+      opencode: { autoApprove: true, terminalUi: true, codeMode: true },
     };
 
     const snapshot = launchPrefsFromState(state, 'opencode');
     expect(snapshot).toEqual({
       kind: 'opencode',
-      prefs: { autoApprove: true, terminalUi: true },
+      prefs: { autoApprove: true, terminalUi: true, codeMode: true },
     });
     if (snapshot?.kind !== 'opencode') throw new Error('expected the OpenCode bucket');
 
@@ -353,7 +356,11 @@ describe('launchPrefsFromState', () => {
       ...NEVER_LAUNCHED,
       opencode: snapshot.prefs,
     });
-    expect(restored.opencode).toEqual({ autoApprove: true, terminalUi: true });
+    expect(restored.opencode).toEqual({
+      autoApprove: true,
+      terminalUi: true,
+      codeMode: true,
+    });
     expect({ ...restored, opencode: INITIAL_WIZARD_STATE.opencode }).toEqual(
       INITIAL_WIZARD_STATE,
     );
@@ -423,29 +430,32 @@ describe('launchPrefsFromState', () => {
 describe('the Pi bucket', () => {
   const dialled: WizardState = {
     ...INITIAL_WIZARD_STATE,
-    pi: { terminalUi: true },
+    pi: { terminalUi: true, codeMode: false },
     git: { worktree: true, branchName: 'wip' },
   };
 
   it('is filed under its own kind, without the per-session git fields', () => {
     expect(launchPrefsFromState(dialled, 'pi')).toEqual({
       kind: 'pi',
-      prefs: { terminalUi: true },
+      prefs: { terminalUi: true, codeMode: false },
     });
   });
 
   it('is restored into Pi only', () => {
     const seeded = applyLaunchPrefs(INITIAL_WIZARD_STATE, {
       ...NEVER_LAUNCHED,
-      pi: { terminalUi: true },
+      pi: { terminalUi: true, codeMode: false },
     });
 
-    expect(seeded.pi).toEqual({ terminalUi: true });
+    expect(seeded.pi).toEqual({ terminalUi: true, codeMode: false });
     expect({ ...seeded, pi: INITIAL_WIZARD_STATE.pi }).toEqual(INITIAL_WIZARD_STATE);
   });
 
   it('keeps what the wizard holds for a profile that never launched Pi', () => {
-    expect(applyLaunchPrefs(dialled, NEVER_LAUNCHED).pi).toEqual({ terminalUi: true });
+    expect(applyLaunchPrefs(dialled, NEVER_LAUNCHED).pi).toEqual({
+      terminalUi: true,
+      codeMode: false,
+    });
   });
 });
 
@@ -480,5 +490,58 @@ describe('the two sets of defaults', () => {
     // silently flip that flag for a Claude blob missing the key.
     expect(autoScan).not.toEqual(CLAUDE_PREFS_DEFAULTS);
     expect(autoScan).toEqual({ ...CLAUDE_PREFS_DEFAULTS, skipPermissions: true });
+  });
+});
+
+describe('Code Mode prefs', () => {
+  it('remembers Claude Code Mode for Claude Code only, never for Auto Scan', () => {
+    const state: WizardState = {
+      ...INITIAL_WIZARD_STATE,
+      claude: { ...INITIAL_WIZARD_STATE.claude, codeMode: true },
+    };
+
+    expect(claudeSnapshot(state, 'claude').codeMode).toBe(true);
+    expect(claudeSnapshot(state, 'auto_scan').codeMode).toBe(false);
+
+    // A blob with the flag on in both buckets still restores it into Claude only.
+    const restored = applyLaunchPrefs(INITIAL_WIZARD_STATE, {
+      ...NEVER_LAUNCHED,
+      claude: claudePrefs({ codeMode: true }),
+      autoScan: claudePrefs({ codeMode: true }),
+    });
+
+    expect(restored.claude.codeMode).toBe(true);
+    expect(restored.autoScan.codeMode).toBe(false);
+  });
+
+  it('round-trips the OpenCode and Pi choices in their own buckets', () => {
+    const state: WizardState = {
+      ...INITIAL_WIZARD_STATE,
+      opencode: { ...INITIAL_WIZARD_STATE.opencode, codeMode: false },
+      pi: { ...INITIAL_WIZARD_STATE.pi, codeMode: true },
+    };
+    const opencode = launchPrefsFromState(state, 'opencode');
+    const pi = launchPrefsFromState(state, 'pi');
+    if (opencode?.kind !== 'opencode' || pi?.kind !== 'pi') {
+      throw new Error('expected the OpenCode and Pi buckets');
+    }
+
+    const restored = applyLaunchPrefs(INITIAL_WIZARD_STATE, {
+      ...NEVER_LAUNCHED,
+      opencode: opencode.prefs,
+      pi: pi.prefs,
+    });
+
+    expect(restored.opencode.codeMode).toBe(false);
+    expect(restored.pi.codeMode).toBe(true);
+  });
+
+  it('starts OpenCode with Code Mode on and Pi with it off, as each agent does', () => {
+    expect(launchPrefsFromState(INITIAL_WIZARD_STATE, 'opencode')?.prefs).toEqual(
+      OPENCODE_PREFS_DEFAULTS,
+    );
+    expect(launchPrefsFromState(INITIAL_WIZARD_STATE, 'pi')?.prefs).toEqual(PI_PREFS_DEFAULTS);
+    expect(OPENCODE_PREFS_DEFAULTS.codeMode).toBe(true);
+    expect(PI_PREFS_DEFAULTS.codeMode).toBe(false);
   });
 });

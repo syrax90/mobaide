@@ -2260,6 +2260,100 @@ class TestCommandOutput:
         assert "b1" not in output("b") and "b2" in output("b")
 
 
+_CODE = 'await tools.bash({command: "make"});\n'
+_SCRIPT_PART = {"type": "text", "text": '```js\nawait tools.bash({command: "make"});\n```'}
+
+
+def _text_update(tool: str, text: str, **fields: Any) -> dict[str, Any]:
+    return {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": tool,
+        **fields,
+        "content": [{"type": "content", "content": {"type": "text", "text": text}}],
+    }
+
+
+class TestCodeModeScripts:
+    """A Code Mode call (Pi's ``codemode``, OpenCode's ``execute``) shows as a
+    script: later updates do not repeat its input, so the session keeps it."""
+
+    _START = {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "cm-1",
+        "title": "codemode",
+        "kind": "other",
+        "status": "in_progress",
+        "rawInput": {"code": _CODE},
+    }
+
+    async def test_the_script_stays_below_the_output_of_each_later_update(self, open_chat):
+        m = await open_chat(argv=MINI_AGENT_ARGV)
+        _agent_sends(m, self._START)
+        await m.until(lambda: "cm-1" in m.items)
+
+        assert m.items["cm-1"]["title"] == "Run script"
+        assert m.items["cm-1"]["subtitle"] == "Calls bash"
+        assert m.items["cm-1"]["content"] == [_SCRIPT_PART]
+
+        _agent_sends(m, _text_update("cm-1", "building", title="codemode"))
+        _agent_sends(m, _text_update("cm-1", "built", status="completed"))
+        await m.until(lambda: m.items["cm-1"]["status"] == "completed")
+
+        tool = m.items["cm-1"]
+        assert tool["title"] == "Run script"
+        assert tool["input"] is None
+        assert tool["content"] == [{"type": "text", "text": "built"}, _SCRIPT_PART]
+
+    async def test_a_failed_script_shows_its_error_and_the_script(self, open_chat):
+        m = await open_chat(argv=MINI_AGENT_ARGV)
+        _agent_sends(m, self._START)
+        await m.until(lambda: "cm-1" in m.items)
+
+        _agent_sends(
+            m,
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "cm-1",
+                "status": "failed",
+                "rawOutput": "ReferenceError: x is not defined",
+            },
+        )
+        await m.until(lambda: m.items["cm-1"]["status"] == "failed")
+
+        assert m.items["cm-1"]["content"] == [
+            {"type": "text", "text": "ReferenceError: x is not defined"},
+            _SCRIPT_PART,
+        ]
+
+    async def test_a_permission_request_for_a_script_shows_the_script(self, open_chat):
+        m = await open_chat(argv=CLIENT_REQUEST_AGENT_ARGV)
+        call = {
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "asks",
+                "toolCall": {
+                    "toolCallId": "cm-2",
+                    "title": "execute",
+                    "name": "execute",
+                    "kind": "other",
+                    "rawInput": {"code": _CODE},
+                },
+                "options": [
+                    {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                    {"optionId": "reject", "name": "Reject", "kind": "reject_once"},
+                ],
+            },
+        }
+
+        await m.command("prompt", text=orjson.dumps(call).decode())
+        await m.until(lambda: bool(m.state.get("requests")))
+
+        request = m.state["requests"][0]
+        assert (request["kind"], request["title"]) == ("permission", "Run script")
+        assert request["subtitle"] == "Calls bash"
+        assert request["content"] == [_SCRIPT_PART]
+
+
 class TestSharedHost:
     @pytest.mark.parametrize(
         ("shared", "busy", "sent"),

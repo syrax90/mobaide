@@ -77,6 +77,11 @@ export interface ClaudeBucket {
   initialPrompt: string;
   /** Claude Code only: the classic terminal instead of the chat view. */
   terminalUi: boolean;
+  /**
+   * Claude Code only: the experimental Code Mode. It runs in the terminal UI
+   * only, so it also opens the session there.
+   */
+  codeMode: boolean;
 }
 
 export interface CodexBucket {
@@ -103,6 +108,8 @@ export interface OpenCodeBucket {
   autoApprove: boolean;
   /** The classic terminal instead of the chat view. */
   terminalUi: boolean;
+  /** OpenCode 2's Code Mode (MCP tools called from JavaScript); on in OpenCode by default. */
+  codeMode: boolean;
 }
 
 export interface CopilotBucket {
@@ -132,6 +139,8 @@ export interface JunieBucket {
 export interface PiBucket {
   /** The classic terminal instead of the chat view. */
   terminalUi: boolean;
+  /** Pi's `codemode` tool: the model writes JavaScript that calls the other tools. */
+  codeMode: boolean;
 }
 
 export interface GitBucket {
@@ -189,6 +198,7 @@ const CLAUDE_DEFAULTS: ClaudeBucket = {
   planMode: false,
   initialPrompt: '',
   terminalUi: false,
+  codeMode: false,
 };
 
 export const INITIAL_WIZARD_STATE: WizardState = {
@@ -219,11 +229,11 @@ export const INITIAL_WIZARD_STATE: WizardState = {
     addDirsDraft: '',
     terminalUi: false,
   },
-  opencode: { autoApprove: false, terminalUi: false },
+  opencode: { autoApprove: false, terminalUi: false, codeMode: true },
   copilot: { allowAll: false, terminalUi: false },
   cursor: { force: false, terminalUi: false },
   junie: { planMode: false, brave: false, terminalUi: false },
-  pi: { terminalUi: false },
+  pi: { terminalUi: false, codeMode: false },
   git: { worktree: false, branchName: '' },
   worktreeBasePick: null,
   autoScanPromptSeededFor: null,
@@ -371,7 +381,8 @@ export type WizardAction =
         | 'skipPermissions'
         | 'noMemory'
         | 'planMode'
-        | 'terminalUi';
+        | 'terminalUi'
+        | 'codeMode';
       value: boolean;
     }
   | {
@@ -394,6 +405,7 @@ export type WizardAction =
   | { type: 'setAntigravityTerminalUi'; value: boolean }
   | { type: 'setOpenCodeAutoApprove'; value: boolean }
   | { type: 'setOpenCodeTerminalUi'; value: boolean }
+  | { type: 'setOpenCodeCodeMode'; value: boolean }
   | { type: 'setCopilotAllowAll'; value: boolean }
   | { type: 'setCopilotTerminalUi'; value: boolean }
   | { type: 'setCursorForce'; value: boolean }
@@ -402,6 +414,7 @@ export type WizardAction =
   | { type: 'setJunieBrave'; value: boolean }
   | { type: 'setJunieTerminalUi'; value: boolean }
   | { type: 'setPiTerminalUi'; value: boolean }
+  | { type: 'setPiCodeMode'; value: boolean }
   | { type: 'setWorktree'; value: boolean }
   | { type: 'setBranchName'; value: string }
   | { type: 'setWorktreeBase'; pick: WorktreeBasePick }
@@ -617,6 +630,9 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
     case 'setOpenCodeTerminalUi':
       return { ...state, opencode: { ...state.opencode, terminalUi: action.value } };
 
+    case 'setOpenCodeCodeMode':
+      return { ...state, opencode: { ...state.opencode, codeMode: action.value } };
+
     case 'setCopilotAllowAll':
       return { ...state, copilot: { ...state.copilot, allowAll: action.value } };
 
@@ -640,6 +656,9 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
 
     case 'setPiTerminalUi':
       return { ...state, pi: { ...state.pi, terminalUi: action.value } };
+
+    case 'setPiCodeMode':
+      return { ...state, pi: { ...state.pi, codeMode: action.value } };
 
     case 'setWorktree':
       return { ...state, git: { ...state.git, worktree: action.value } };

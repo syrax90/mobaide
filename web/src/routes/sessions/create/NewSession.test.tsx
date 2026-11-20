@@ -150,6 +150,7 @@ const CLAUDE_AT_DEFAULTS = {
   debug: false,
   focusMode: true,
   terminalUi: false,
+  codeMode: false,
 };
 
 const workspace = (name: string): WorkspaceInfo =>
@@ -573,7 +574,7 @@ describe('NewSession OpenCode provider sign-in', () => {
     rows: 24,
     cols: 80,
     cli: 'opencode',
-    opencode_options: { auto_approve: false, connect: true, worktree: false },
+    opencode_options: { auto_approve: false, connect: true, code_mode: true, worktree: false },
     worktree: false,
     ui: 'terminal',
   };

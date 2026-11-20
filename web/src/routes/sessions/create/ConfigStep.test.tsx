@@ -231,7 +231,7 @@ describe('ConfigStep — Pi', () => {
     fireEvent.click(screen.getByLabelText('Terminal UI'));
 
     const next = actions.reduce(wizardReducer, STATE);
-    expect(next.pi).toEqual({ terminalUi: true });
+    expect(next.pi).toEqual({ terminalUi: true, codeMode: false });
     expect({ ...next, pi: STATE.pi }).toEqual(STATE);
   });
 
@@ -250,12 +250,90 @@ describe('ConfigStep — Pi', () => {
     expect(screen.getByRole('button', { name: 'Continue a session…' })).toBeEnabled();
     cleanup();
 
-    renderStep('pi', { ...STATE, pi: { terminalUi: true } }, resumes, () => undefined);
+    renderStep('pi', { ...STATE, pi: { terminalUi: true, codeMode: false } }, resumes, () => undefined);
     expect(screen.queryByText('Continue a session…')).not.toBeInTheDocument();
     cleanup();
 
     renderStep('pi', STATE, versionWithChat({ pi: { resume: false, live: false } }), () => undefined);
     expect(screen.queryByText('Continue a session…')).not.toBeInTheDocument();
+  });
+});
+
+describe('ConfigStep — Code Mode', () => {
+  const CLAUDE_CHAT = versionWithChat({ claude: { resume: true, live: true } });
+
+  it('writes Claude Code Mode to the Claude bucket from its Advanced section', () => {
+    const actions = renderStep('claude', STATE, CLAUDE_CHAT);
+
+    const toggle = screen.getByLabelText('Code Mode');
+    expect(advancedSummary().closest('details')?.contains(toggle)).toBe(true);
+    expect(toggle).not.toBeChecked();
+
+    fireEvent.click(toggle);
+
+    expect(actions).toContainEqual({
+      type: 'setClaudeFlag',
+      bucket: 'claude',
+      flag: 'codeMode',
+      value: true,
+    });
+  });
+
+  it('holds Terminal UI on while Claude Code Mode is on, and offers no Continue', () => {
+    renderStep(
+      'claude',
+      { ...STATE, claude: { ...STATE.claude, codeMode: true } },
+      CLAUDE_CHAT,
+      () => undefined,
+    );
+
+    const terminal = screen.getByLabelText('Terminal UI');
+    expect(terminal).toBeChecked();
+    expect(terminal).toBeDisabled();
+    expect(screen.getByText('Code Mode runs in the terminal UI only.')).toBeInTheDocument();
+    // A Continue opens the chat view, where Claude Code has no Code Mode.
+    expect(screen.queryByText('Continue a session…')).not.toBeInTheDocument();
+  });
+
+  it('gives Terminal UI back to the user once Claude Code Mode is off', () => {
+    renderStep('claude', STATE, CLAUDE_CHAT, () => undefined);
+
+    const terminal = screen.getByLabelText('Terminal UI');
+    expect(terminal).not.toBeChecked();
+    expect(terminal).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Continue a session…' })).toBeEnabled();
+  });
+
+  it('offers no Code Mode for an Auto Scan', () => {
+    renderStep('auto_scan', STATE, CLAUDE_CHAT);
+
+    expect(screen.queryByLabelText('Code Mode')).not.toBeInTheDocument();
+  });
+
+  it('shows OpenCode Code Mode on by default and writes it to the OpenCode bucket', () => {
+    const actions = renderStep('opencode');
+
+    const toggle = screen.getByLabelText('Code Mode');
+    expect(toggle).toBeChecked();
+
+    fireEvent.click(toggle);
+
+    const next = actions.reduce(wizardReducer, STATE);
+    expect(next.opencode.codeMode).toBe(false);
+    expect({ ...next, opencode: STATE.opencode }).toEqual(STATE);
+  });
+
+  it('shows Pi Code Mode off by default and writes it to the Pi bucket', () => {
+    const actions = renderStep('pi');
+
+    const toggle = screen.getByLabelText('Code Mode');
+    expect(toggle).not.toBeChecked();
+
+    fireEvent.click(toggle);
+
+    const next = actions.reduce(wizardReducer, STATE);
+    expect(next.pi.codeMode).toBe(true);
+    expect({ ...next, pi: STATE.pi }).toEqual(STATE);
   });
 });
 

@@ -1431,9 +1431,15 @@ private fun StandardConfigSection(
         onAppendSystemPromptChange = viewModel::setClaudeAppendSystemPrompt,
         showDebug = !state.claudeUsesChat,
         leadingContent = {
+            // Next to Terminal UI, which it turns on: Code Mode runs only there.
+            CodeModeToggle(
+                checked = state.claudeCodeMode,
+                hint = CLAUDE_CODE_MODE_HINT,
+                onChange = viewModel::toggleClaudeCodeMode,
+            )
             TerminalUiToggle(
                 checked = state.claudeTerminalUi,
-                lockedHint = state.claudeChatUnavailableHint,
+                lockedHint = state.claudeTerminalUiLockedHint,
                 onChange = viewModel::toggleTerminalUi,
             )
         },
@@ -1496,6 +1502,27 @@ private fun AdvancedSection(content: @Composable () -> Unit) {
         Text("Advanced")
     }
     if (expanded) content()
+}
+
+private const val CLAUDE_CODE_MODE_HINT =
+    "Experimental. Claude writes JavaScript that makes several tool calls in one step. " +
+        "Runs in the terminal UI only. Claude Code asks you to confirm until you accept; " +
+        "turn Code Mode off here to stop the question."
+private const val OPENCODE_CODE_MODE_HINT =
+    "OpenCode 2 calls MCP tools from JavaScript, several in one step. " +
+        "Turn it off to have the model call each tool directly."
+private const val PI_CODE_MODE_HINT =
+    "Adds Pi's codemode tool: the model writes JavaScript that calls several tools in one step."
+
+/** "Code Mode": the agent writes JavaScript that makes several tool calls in one step. */
+@Composable
+private fun CodeModeToggle(checked: Boolean, hint: String, onChange: (Boolean) -> Unit) {
+    ToggleRow("Code Mode", checked, onChange)
+    Text(
+        text = hint,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 /** "Terminal UI" under Advanced: the classic terminal instead of the chat view. */
@@ -1811,6 +1838,12 @@ private fun OpenCodeConfigSection(
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+    Text("Tools", style = MaterialTheme.typography.labelLarge)
+    CodeModeToggle(
+        checked = state.opencodeCodeMode,
+        hint = OPENCODE_CODE_MODE_HINT,
+        onChange = viewModel::setOpenCodeCodeMode,
+    )
 
     if (showWorktreeToggle) {
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
@@ -2017,14 +2050,20 @@ private fun PiConfigSection(
         )
     }
 
-    // Pi has no option to set at launch: say what a user of the other agents
-    // would look for here.
+    // Pi has no approval mode: say what a user of the other agents would look
+    // for here.
     Text("Permissions", style = MaterialTheme.typography.labelLarge)
     Text(
         text = "Pi runs commands and edits files without asking. " +
             "Pick the model and the thinking level inside the session.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Text("Tools", style = MaterialTheme.typography.labelLarge)
+    CodeModeToggle(
+        checked = state.piCodeMode,
+        hint = PI_CODE_MODE_HINT,
+        onChange = viewModel::setPiCodeMode,
     )
 
     if (showWorktreeToggle) {

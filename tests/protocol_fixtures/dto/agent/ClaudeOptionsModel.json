@@ -19,7 +19,8 @@
         "ultracode": true,
         "append_system_prompt": "be careful",
         "debug": true,
-        "focus_mode": true
+        "focus_mode": true,
+        "code_mode": true
       }
     },
     {
@@ -32,7 +33,8 @@
         "worktree": false,
         "fast_mode": false,
         "ultracode": false,
-        "debug": false
+        "debug": false,
+        "code_mode": false
       }
     }
   ]

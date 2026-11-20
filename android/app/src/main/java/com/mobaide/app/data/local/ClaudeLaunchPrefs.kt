@@ -25,4 +25,6 @@ data class ClaudeLaunchPrefs(
     val focusMode: Boolean = true,
     // Claude Code only: the classic terminal instead of the chat view. Older blobs decode to off.
     val terminalUi: Boolean = false,
+    // Claude Code only: the experimental Code Mode, which also opens the terminal UI.
+    val codeMode: Boolean = false,
 )

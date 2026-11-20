@@ -203,6 +203,9 @@ final class CreateSessionModel {
     /// Off by default: a Claude Code session opens in the chat view whenever
     /// the agent can run it.
     var terminalUI = false
+    /// Claude Code's experimental Code Mode. It runs in the terminal UI only,
+    /// so it also opens the session there.
+    var claudeCodeMode = false
     /// `capabilities.chat.claude`; nil until the probe answers, and chat is
     /// then assumed available (the agent decides).
     private(set) var chatCapability: ChatCapability?
@@ -272,6 +275,9 @@ final class CreateSessionModel {
 
     // OpenCode
     var opencodeAutoApprove = false
+    /// OpenCode 2's Code Mode (MCP tools called from JavaScript); on in
+    /// OpenCode by default.
+    var opencodeCodeMode = true
     /// Off by default: an OpenCode session opens in the chat view whenever the
     /// agent can run it.
     var opencodeTerminalUI = false
@@ -307,6 +313,8 @@ final class CreateSessionModel {
     /// Off by default: a Pi session opens in the chat view whenever the
     /// agent can run it.
     var piTerminalUI = false
+    /// Pi's codemode tool: the model writes JavaScript that calls the other tools.
+    var piCodeMode = false
     /// `capabilities.chat.pi`; nil until the probe answers.
     private(set) var piChatCapability: ChatCapability?
 
@@ -403,7 +411,12 @@ final class CreateSessionModel {
     var chatUnavailable: Bool { chatCapability.map { !$0.isAvailable } ?? false }
 
     /// The Claude Code session will open in the chat view.
-    var claudeUsesChat: Bool { !terminalUI && !chatUnavailable }
+    var claudeUsesChat: Bool { !terminalUI && !claudeCodeMode && !chatUnavailable }
+
+    /// Why Code Mode keeps the Claude Terminal UI toggle on; nil while it is off.
+    var claudeCodeModeTerminalNote: String? {
+        claudeCodeMode ? "Code Mode runs in the terminal UI only." : nil
+    }
 
     var chatUnavailableReason: String? { Self.chatUnavailableReason(chatCapability) }
 
@@ -1556,7 +1569,12 @@ final class CreateSessionModel {
             return CreateSessionRequest(
                 cwd: cwd,
                 workspace_name: workspaceName,
-                claude_options: claudeOptions(worktree: effectiveWorktree, branchName: effectiveBranch, baseBranch: effectiveBase),
+                claude_options: claudeOptions(
+                    worktree: effectiveWorktree,
+                    branchName: effectiveBranch,
+                    baseBranch: effectiveBase,
+                    codeMode: claudeCodeMode && !claudeUsesChat
+                ),
                 ui: claudeUsesChat ? "chat" : "terminal"
             )
         case .codex:
@@ -1638,7 +1656,14 @@ final class CreateSessionModel {
         }
     }
 
-    private func claudeOptions(worktree: Bool, branchName: String?, baseBranch: String? = nil) -> ClaudeOptionsModel {
+    /// `codeMode` comes from the caller: Claude Code has it in the terminal UI
+    /// only, so Continue (always the chat view) never sends it.
+    private func claudeOptions(
+        worktree: Bool,
+        branchName: String?,
+        baseBranch: String? = nil,
+        codeMode: Bool = false
+    ) -> ClaudeOptionsModel {
         ClaudeOptionsModel(
             no_memory: noMemory,
             skip_permissions: skipPermissions,
@@ -1651,7 +1676,8 @@ final class CreateSessionModel {
             ultracode: claudeUltracode,
             append_system_prompt: Self.blankToNil(claudeAppendSystemPrompt),
             debug: claudeDebug,
-            focus_mode: focusMode
+            focus_mode: focusMode,
+            code_mode: codeMode
         )
     }
 
@@ -1683,6 +1709,7 @@ final class CreateSessionModel {
     private func opencodeOptions(worktree: Bool, branchName: String?, baseBranch: String? = nil) -> OpenCodeOptionsModel {
         OpenCodeOptionsModel(
             auto_approve: opencodeAutoApprove,
+            code_mode: opencodeCodeMode,
             worktree: worktree,
             branch_name: branchName,
             base_branch: baseBranch
@@ -1749,6 +1776,7 @@ final class CreateSessionModel {
 
     private func piOptions(worktree: Bool, branchName: String?, baseBranch: String? = nil) -> PiOptionsModel {
         PiOptionsModel(
+            code_mode: piCodeMode,
             worktree: worktree,
             branch_name: branchName,
             base_branch: baseBranch
@@ -1927,7 +1955,8 @@ final class CreateSessionModel {
             noMemory: noMemory,
             debug: claudeDebug,
             focusMode: focusMode,
-            terminalUI: terminalUI
+            terminalUI: terminalUI,
+            codeMode: claudeCodeMode
         )
     }
 
@@ -1974,7 +2003,8 @@ final class CreateSessionModel {
         case .opencode:
             preferencesStore.setLastUsedOpenCodeOptions(OpenCodeLaunchPrefs(
                 autoApprove: opencodeAutoApprove,
-                terminalUI: opencodeTerminalUI
+                terminalUI: opencodeTerminalUI,
+                codeMode: opencodeCodeMode
             ))
         case .copilot:
             preferencesStore.setLastUsedCopilotOptions(CopilotLaunchPrefs(
@@ -1993,7 +2023,7 @@ final class CreateSessionModel {
                 terminalUI: junieTerminalUI
             ))
         case .pi:
-            preferencesStore.setLastUsedPiOptions(PiLaunchPrefs(terminalUI: piTerminalUI))
+            preferencesStore.setLastUsedPiOptions(PiLaunchPrefs(terminalUI: piTerminalUI, codeMode: piCodeMode))
         // Auto Scan persists its own bucket from `startAutoScan`, which never
         // routes through `create()`.
         case .autoScan, .shell, .custom:
@@ -2015,6 +2045,7 @@ final class CreateSessionModel {
             claudeDebug = claude.debug
             focusMode = claude.focusMode
             terminalUI = claude.terminalUI
+            claudeCodeMode = claude.codeMode
         }
         if let autoScan = preferencesStore.getLastUsedAutoScanOptions() {
             autoScanClaudeModel = autoScan.model
@@ -2045,6 +2076,7 @@ final class CreateSessionModel {
         if let opencode = preferencesStore.getLastUsedOpenCodeOptions() {
             opencodeAutoApprove = opencode.autoApprove
             opencodeTerminalUI = opencode.terminalUI
+            opencodeCodeMode = opencode.codeMode
         }
         if let copilot = preferencesStore.getLastUsedCopilotOptions() {
             copilotAllowAll = copilot.allowAll
@@ -2061,6 +2093,7 @@ final class CreateSessionModel {
         }
         if let pi = preferencesStore.getLastUsedPiOptions() {
             piTerminalUI = pi.terminalUI
+            piCodeMode = pi.codeMode
         }
     }
 

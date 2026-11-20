@@ -18,6 +18,16 @@ struct CreateSessionScreen: View {
 }
 
 private struct CreateSessionContent: View {
+    static let claudeCodeModeHint =
+        "Experimental. Claude writes JavaScript that makes several tool calls in one step. "
+        + "Runs in the terminal UI only. Claude Code asks you to confirm until you accept; "
+        + "turn Code Mode off here to stop the question."
+    static let opencodeCodeModeHint =
+        "OpenCode 2 calls MCP tools from JavaScript, several in one step. "
+        + "Turn it off to have the model call each tool directly."
+    static let piCodeModeHint =
+        "Adds Pi's codemode tool: the model writes JavaScript that calls several tools in one step."
+
     @State private var model: CreateSessionModel
     @State private var toast: ToastMessage?
     @State private var workspaceSheet: WorkspaceFormMode?
@@ -505,6 +515,7 @@ private struct CreateSessionContent: View {
         claudeAdvancedOptions(
             isExpanded: $autoScanAdvancedExpanded,
             terminalUI: nil,
+            codeMode: nil,
             showsDebug: true,
             noMemory: $model.autoScanNoMemory,
             fastMode: $model.autoScanClaudeFastMode,
@@ -611,13 +622,28 @@ private struct CreateSessionContent: View {
     }
 
     /// "Terminal UI" under Advanced: the classic terminal instead of the chat view.
+    /// `requiredBy` names an option that runs only in the terminal and so
+    /// keeps the toggle on.
     @ViewBuilder
-    private func terminalUIToggle(_ isOn: Binding<Bool>, unavailableReason: String?) -> some View {
+    private func terminalUIToggle(
+        _ isOn: Binding<Bool>,
+        unavailableReason: String?,
+        requiredBy: String? = nil
+    ) -> some View {
         Toggle("Terminal UI", isOn: isOn)
-            .disabled(unavailableReason != nil)
-        Text(unavailableReason ?? "Use the classic terminal instead of the chat view.")
+            .disabled(unavailableReason != nil || requiredBy != nil)
+        Text(unavailableReason ?? requiredBy ?? "Use the classic terminal instead of the chat view.")
             .font(.footnote)
             .foregroundStyle(unavailableReason != nil ? colors.warning : colors.textMuted)
+    }
+
+    /// "Code Mode": the agent writes JavaScript that makes several tool calls in one step.
+    @ViewBuilder
+    private func codeModeToggle(_ isOn: Binding<Bool>, hint: String) -> some View {
+        Toggle("Code Mode", isOn: isOn)
+        Text(hint)
+            .font(.footnote)
+            .foregroundStyle(colors.textMuted)
     }
 
     /// Rendered after the Worktree section, so the main options stay on top.
@@ -627,9 +653,10 @@ private struct CreateSessionContent: View {
         claudeAdvancedOptions(
             isExpanded: $claudeAdvancedExpanded,
             terminalUI: Binding(
-                get: { model.terminalUI || model.chatUnavailable },
+                get: { model.terminalUI || model.chatUnavailable || model.claudeCodeMode },
                 set: { model.terminalUI = $0 }
             ),
+            codeMode: $model.claudeCodeMode,
             showsDebug: !model.claudeUsesChat,
             noMemory: $model.noMemory,
             fastMode: $model.claudeFastMode,
@@ -673,11 +700,12 @@ private struct CreateSessionContent: View {
     /// Collapsed-by-default "Advanced" section shared by the Claude Code and
     /// Auto Scan steps (Android: `ClaudeAdvancedOptions`). `terminalUI` is the
     /// Claude Code step's chat / terminal choice; Auto Scan always runs in the
-    /// terminal and passes nil.
+    /// terminal and passes nil, for `codeMode` too.
     @ViewBuilder
     private func claudeAdvancedOptions(
         isExpanded: Binding<Bool>,
         terminalUI: Binding<Bool>?,
+        codeMode: Binding<Bool>?,
         showsDebug: Bool,
         noMemory: Binding<Bool>,
         fastMode: Binding<Bool>,
@@ -687,8 +715,16 @@ private struct CreateSessionContent: View {
     ) -> some View {
         Section {
             DisclosureGroup("Advanced", isExpanded: isExpanded) {
+                // Next to Terminal UI, which it turns on: Code Mode runs only there.
+                if let codeMode {
+                    codeModeToggle(codeMode, hint: Self.claudeCodeModeHint)
+                }
                 if let terminalUI {
-                    terminalUIToggle(terminalUI, unavailableReason: model.chatUnavailableReason)
+                    terminalUIToggle(
+                        terminalUI,
+                        unavailableReason: model.chatUnavailableReason,
+                        requiredBy: model.claudeCodeModeTerminalNote
+                    )
                 }
                 Toggle("No memory", isOn: noMemory)
                 Toggle("Fast mode (Opus only)", isOn: fastMode)
@@ -835,6 +871,7 @@ private struct CreateSessionContent: View {
             Text("OpenCode accepts every request that your rules do not deny.")
                 .font(.footnote)
                 .foregroundStyle(colors.textMuted)
+            codeModeToggle($model.opencodeCodeMode, hint: Self.opencodeCodeModeHint)
         }
         continueSessionSection(
             agentName: "OpenCode",
@@ -894,10 +931,11 @@ private struct CreateSessionContent: View {
         }
     }
 
-    /// Pi has no option to set at launch: say what a user of the other agents
-    /// would look for here.
+    /// Pi has no approval mode: say what a user of the other agents would
+    /// look for here.
     @ViewBuilder
     private var piConfig: some View {
+        @Bindable var model = model
         Section(header: PixelSectionHeader("Pi")) {
             Text(
                 "Pi runs commands and edits files without asking. "
@@ -905,6 +943,7 @@ private struct CreateSessionContent: View {
             )
             .font(.footnote)
             .foregroundStyle(colors.textMuted)
+            codeModeToggle($model.piCodeMode, hint: Self.piCodeModeHint)
         }
         continueSessionSection(agentName: "Pi")
     }

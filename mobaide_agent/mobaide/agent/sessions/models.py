@@ -47,6 +47,7 @@ class ClaudeOptionsModel(BaseModel):
     append_system_prompt: str | None = None
     debug: bool = False
     focus_mode: bool | None = None
+    code_mode: bool = False
 
     def to_options(self) -> ClaudeOptions:
         return ClaudeOptions(**self.model_dump())
@@ -143,11 +144,14 @@ class OpenCodeOptionsModel(BaseModel):
     the first message; it travels as one argv element, so its length is capped.
     ``connect`` starts a terminal session that runs ``opencode auth login``
     (sign in to a model provider) in place of an OpenCode session.
+    ``code_mode`` defaults to on, like OpenCode 2 itself, so an older client
+    changes nothing.
     """
 
     auto_approve: bool = False
     initial_prompt: str | None = Field(default=None, max_length=INITIAL_PROMPT_MAX)
     connect: bool = False
+    code_mode: bool = True
     worktree: bool = False
     branch_name: str | None = None
     base_branch: str | None = None
@@ -212,6 +216,7 @@ class PiOptionsModel(BaseModel):
     worktree: bool = False
     branch_name: str | None = None
     base_branch: str | None = None
+    code_mode: bool = False
 
     def to_options(self) -> PiOptions:
         return PiOptions(**self.model_dump())
@@ -263,6 +268,15 @@ class CreateSessionRequest(BaseModel):
     chat_resume_id: str | None = Field(
         default=None, max_length=CHAT_RESUME_ID_MAX, pattern=CHAT_RESUME_ID_PATTERN
     )
+
+    @model_validator(mode="after")
+    def _claude_code_mode_needs_terminal(self) -> CreateSessionRequest:
+        if self.ui == "chat" and self.claude_options is not None and self.claude_options.code_mode:
+            raise ValueError(
+                "Code Mode for Claude Code works only in the terminal UI: "
+                "turn on Terminal UI or turn Code Mode off"
+            )
+        return self
 
 
 class SessionResponse(BaseModel):

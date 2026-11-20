@@ -4,6 +4,7 @@
     {
       "name": "full",
       "wire": {
+        "code_mode": true,
         "worktree": true,
         "branch_name": "b",
         "base_branch": "origin/main"
@@ -12,7 +13,7 @@
     {
       "name": "empty_defaults_materialize",
       "wire": {},
-      "decoded_canonical": { "worktree": false }
+      "decoded_canonical": { "code_mode": false, "worktree": false }
     }
   ]
 }

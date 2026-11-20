@@ -12,4 +12,6 @@ import kotlinx.serialization.Serializable
 data class OpenCodeLaunchPrefs(
     val autoApprove: Boolean = false,
     val terminalUi: Boolean = false,
+    // OpenCode 2's Code Mode: on by default, like OpenCode itself.
+    val codeMode: Boolean = true,
 )

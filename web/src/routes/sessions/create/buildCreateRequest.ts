@@ -30,6 +30,7 @@ import {
   type CopilotBucket,
   type CursorBucket,
   type JunieBucket,
+  type PiBucket,
   type WizardMode,
   type WizardState,
 } from './wizardState';
@@ -70,8 +71,13 @@ export function usesChatView(terminalUi: boolean, chat: ChatSupport | undefined)
   return kind === 'available' || kind === 'unknown';
 }
 
+/** Claude Code's Terminal UI, also implied by Code Mode, which runs only there. */
+export function claudeTerminalUi(bucket: ClaudeBucket): boolean {
+  return bucket.terminalUi || bucket.codeMode;
+}
+
 export function claudeUsesChat(bucket: ClaudeBucket, chat: ChatSupport | undefined): boolean {
-  return usesChatView(bucket.terminalUi, chat);
+  return usesChatView(claudeTerminalUi(bucket), chat);
 }
 
 /** The agent kinds whose sessions can open in the chat view. */
@@ -102,7 +108,7 @@ export function chatAgentKind(mode: WizardMode | null): ChatAgentKind | null {
 export function terminalUiOf(state: WizardState, kind: ChatAgentKind): boolean {
   switch (kind) {
     case 'claude':
-      return state.claude.terminalUi;
+      return claudeTerminalUi(state.claude);
     case 'codex':
       return state.codex.terminalUi;
     case 'antigravity':
@@ -153,9 +159,14 @@ function placement({ state, workspace, worktreeBase }: BuildContext): Placement 
   };
 }
 
+/**
+ * `codeMode` is passed by the caller: Claude Code has it in the terminal UI
+ * only, and Auto Scan and Continue never send it.
+ */
 function claudeOptions(
   bucket: ClaudeBucket,
   extras: { worktree: boolean; branchName: string | undefined; baseBranch: string | null },
+  codeMode = false,
 ): ClaudeOptions {
   return {
     plan_mode: bucket.planMode,
@@ -170,6 +181,7 @@ function claudeOptions(
     ultracode: bucket.ultracode,
     debug: bucket.debug,
     focus_mode: bucket.focusMode,
+    code_mode: codeMode,
     append_system_prompt: blankToUndefined(bucket.appendSystemPrompt),
   };
 }
@@ -212,6 +224,7 @@ function opencodeOptions(
   return {
     auto_approve: bucket.autoApprove,
     connect: false,
+    code_mode: bucket.codeMode,
     worktree: extras.worktree,
     branch_name: extras.branchName,
     base_branch: extras.baseBranch,
@@ -255,12 +268,12 @@ function junieOptions(
   };
 }
 
-function piOptions(extras: {
-  worktree: boolean;
-  branchName: string | undefined;
-  baseBranch: string | null;
-}): PiOptions {
+function piOptions(
+  bucket: PiBucket,
+  extras: { worktree: boolean; branchName: string | undefined; baseBranch: string | null },
+): PiOptions {
   return {
+    code_mode: bucket.codeMode,
     worktree: extras.worktree,
     branch_name: extras.branchName,
     base_branch: extras.baseBranch,
@@ -282,18 +295,23 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
   };
 
   if (mode === 'claude') {
+    const chat = claudeUsesChat(state.claude, context.chat);
     return {
       ...base,
       cli: 'claude',
-      claude_options: claudeOptions(state.claude, {
-        worktree: place.worktree,
-        branchName: place.branchName,
-        baseBranch: place.baseBranch,
-      }),
+      claude_options: claudeOptions(
+        state.claude,
+        {
+          worktree: place.worktree,
+          branchName: place.branchName,
+          baseBranch: place.baseBranch,
+        },
+        state.claude.codeMode && !chat,
+      ),
       // Managed CLIs carry worktree intent inside their own options block; the
       // top-level flag is only read on the shell path.
       worktree: false,
-      ui: claudeUsesChat(state.claude, context.chat) ? 'chat' : 'terminal',
+      ui: chat ? 'chat' : 'terminal',
     };
   }
 
@@ -385,7 +403,7 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
     return {
       ...base,
       cli: 'pi',
-      pi_options: piOptions({
+      pi_options: piOptions(state.pi, {
         worktree: place.worktree,
         branchName: place.branchName,
         baseBranch: place.baseBranch,
@@ -439,7 +457,7 @@ export function buildResumeRequest(
               : kind === 'junie'
                 ? { cli: 'junie', junie_options: junieOptions(state.junie, noWorktree) }
                 : kind === 'pi'
-                  ? { cli: 'pi', pi_options: piOptions(noWorktree) }
+                  ? { cli: 'pi', pi_options: piOptions(state.pi, noWorktree) }
                   : { cli: 'claude', claude_options: claudeOptions(state.claude, noWorktree) };
   return {
     project_name: sameFolder ? workspace.name : undefined,
@@ -467,7 +485,7 @@ export function buildConnectRequest(context: BuildContext): CreateSessionRequest
     rows: 24,
     cols: 80,
     cli: 'opencode',
-    opencode_options: { auto_approve: false, connect: true, worktree: false },
+    opencode_options: { auto_approve: false, connect: true, code_mode: true, worktree: false },
     worktree: false,
     ui: 'terminal',
   };

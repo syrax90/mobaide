@@ -46,6 +46,8 @@ export interface ClaudeLaunchPrefs {
   focusMode: boolean;
   /** Claude Code's "Terminal UI" toggle; a blob from before it existed reads as off. */
   terminalUi: boolean;
+  /** Claude Code's experimental Code Mode; only the Claude Code bucket uses it. */
+  codeMode: boolean;
 }
 
 /** Android `CodexLaunchPrefs`, iOS `CodexLaunchPrefs`. */
@@ -79,6 +81,8 @@ export interface AntigravityLaunchPrefs {
 export interface OpenCodeLaunchPrefs {
   autoApprove: boolean;
   terminalUi: boolean;
+  /** OpenCode 2's Code Mode; on by default, like OpenCode itself. */
+  codeMode: boolean;
 }
 
 /** Android `CopilotLaunchPrefs`, iOS `CopilotLaunchPrefs`. */
@@ -103,6 +107,8 @@ export interface JunieLaunchPrefs {
 /** Android `PiLaunchPrefs`, iOS `PiLaunchPrefs`. */
 export interface PiLaunchPrefs {
   terminalUi: boolean;
+  /** Pi's `codemode` tool. */
+  codeMode: boolean;
 }
 
 /**
@@ -168,6 +174,7 @@ export const CLAUDE_PREFS_DEFAULTS: ClaudeLaunchPrefs = {
   // On for both buckets, so a blob saved before the toggle existed restores focus view.
   focusMode: true,
   terminalUi: false,
+  codeMode: false,
 };
 
 export const CODEX_PREFS_DEFAULTS: CodexLaunchPrefs = {
@@ -189,6 +196,7 @@ export const ANTIGRAVITY_PREFS_DEFAULTS: AntigravityLaunchPrefs = {
 export const OPENCODE_PREFS_DEFAULTS: OpenCodeLaunchPrefs = {
   autoApprove: false,
   terminalUi: false,
+  codeMode: true,
 };
 
 export const COPILOT_PREFS_DEFAULTS: CopilotLaunchPrefs = {
@@ -209,6 +217,7 @@ export const JUNIE_PREFS_DEFAULTS: JunieLaunchPrefs = {
 
 export const PI_PREFS_DEFAULTS: PiLaunchPrefs = {
   terminalUi: false,
+  codeMode: false,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -295,6 +304,7 @@ function sanitizeClaudePrefs(raw: unknown): ClaudeLaunchPrefs | null {
   const debug = field(raw, 'debug', CLAUDE_PREFS_DEFAULTS.debug, isBoolean);
   const focusMode = field(raw, 'focusMode', CLAUDE_PREFS_DEFAULTS.focusMode, isBoolean);
   const terminalUi = field(raw, 'terminalUi', CLAUDE_PREFS_DEFAULTS.terminalUi, isBoolean);
+  const codeMode = field(raw, 'codeMode', CLAUDE_PREFS_DEFAULTS.codeMode, isBoolean);
   if (
     model === undefined ||
     effort === undefined ||
@@ -306,7 +316,8 @@ function sanitizeClaudePrefs(raw: unknown): ClaudeLaunchPrefs | null {
     planMode === undefined ||
     debug === undefined ||
     focusMode === undefined ||
-    terminalUi === undefined
+    terminalUi === undefined ||
+    codeMode === undefined
   ) {
     return null;
   }
@@ -322,6 +333,7 @@ function sanitizeClaudePrefs(raw: unknown): ClaudeLaunchPrefs | null {
     debug,
     focusMode,
     terminalUi,
+    codeMode,
   };
 }
 
@@ -380,8 +392,9 @@ function sanitizeOpenCodePrefs(raw: unknown): OpenCodeLaunchPrefs | null {
   if (!isRecord(raw)) return null;
   const autoApprove = field(raw, 'autoApprove', OPENCODE_PREFS_DEFAULTS.autoApprove, isBoolean);
   const terminalUi = field(raw, 'terminalUi', OPENCODE_PREFS_DEFAULTS.terminalUi, isBoolean);
-  if (autoApprove === undefined || terminalUi === undefined) return null;
-  return { autoApprove, terminalUi };
+  const codeMode = field(raw, 'codeMode', OPENCODE_PREFS_DEFAULTS.codeMode, isBoolean);
+  if (autoApprove === undefined || terminalUi === undefined || codeMode === undefined) return null;
+  return { autoApprove, terminalUi, codeMode };
 }
 
 function sanitizeCopilotPrefs(raw: unknown): CopilotLaunchPrefs | null {
@@ -412,8 +425,9 @@ function sanitizeJuniePrefs(raw: unknown): JunieLaunchPrefs | null {
 function sanitizePiPrefs(raw: unknown): PiLaunchPrefs | null {
   if (!isRecord(raw)) return null;
   const terminalUi = field(raw, 'terminalUi', PI_PREFS_DEFAULTS.terminalUi, isBoolean);
-  if (terminalUi === undefined) return null;
-  return { terminalUi };
+  const codeMode = field(raw, 'codeMode', PI_PREFS_DEFAULTS.codeMode, isBoolean);
+  if (terminalUi === undefined || codeMode === undefined) return null;
+  return { terminalUi, codeMode };
 }
 
 /**

@@ -125,6 +125,21 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-20: Code Mode
+
+Additive delta within proto-v7 (2026-11-20): **one boolean in three options blocks. No version bump; `central_server` is untouched.**
+
+| Where | Change |
+|-------|--------|
+| `claude_options.code_mode` | `bool`, default `false`. Sets `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1`. Needs Claude Code 2.1.323 or later. Terminal UI only. |
+| `opencode_options.code_mode` | `bool`, default `true`. `false` appends `{"action":"execute","resource":"*","effect":"deny"}` to `OPENCODE_CONFIG_CONTENT` and, in the terminal UI, runs `opencode --standalone`. OpenCode 1 is unchanged. |
+| `pi_options.code_mode` | `bool`, default `false`. Adds `--tools +codemode`, in terminal sessions and in the chat bridge. Needs Pi 1.1.0 or later. |
+
+* `ui: "chat"` with `claude_options.code_mode: true` answers `422` ("Code Mode for Claude Code works only in the terminal UI").
+* A Code Mode launch on a CLI that is too old answers `400` ("Code Mode needs <CLI> <min> or later. This PC has X: run `<cli> update` there, or turn Code Mode off."). The relay proxy now maps a launcher `ValueError` to `400` (it was `500`).
+* In Code Mode sessions, Mobaide's Claude hooks carry `"onFailure": "continue"`. A `0` in the user's `settings.json` or managed settings still wins.
+* Clients show a **Code Mode** toggle per agent and remember it per device (launch prefs key `codeMode`). Old agents ignore the unknown field.
+
 ### Delta 2026-11-19: remove a session's worktree when it stops
 
 Additive delta within proto-v7 (2026-11-19): **one session field, one stop query parameter. No version bump; `central_server` is untouched.**

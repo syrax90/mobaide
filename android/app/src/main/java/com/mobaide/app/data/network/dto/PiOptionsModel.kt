@@ -8,6 +8,8 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 data class PiOptionsModel(
+    // Adds Pi's codemode tool for the session.
+    val code_mode: Boolean = false,
     val worktree: Boolean = false,
     val branch_name: String? = null,
     // The ref the new worktree starts from; null = the agent's default branch.

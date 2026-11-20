@@ -991,6 +991,36 @@ class TestHandleProxyRequestPathErrors:
 # -- _dispatch_proxy: POST /api/codex/login ------------------------------------
 
 
+class TestHandleProxyRequestInvalidLaunch:
+    async def test_a_launch_the_launcher_refuses_returns_400_with_its_reason(
+        self, client, mock_session_manager
+    ):
+        """Mirrors the REST router: a phone on the relay sees why the launch
+        was refused (here, Code Mode on a Claude Code that is too old), not
+        a 500."""
+        reason = (
+            "Code Mode needs Claude Code 2.1.323 or later. This PC has 2.1.300: "
+            "run `claude update` there, or turn Code Mode off."
+        )
+        mock_session_manager.create_session = AsyncMock(side_effect=ValueError(reason))
+        ws = AsyncMock()
+        ctrl = {
+            "type": "proxy_request",
+            "request_id": "req-code-mode",
+            "method": "POST",
+            "path": "/api/sessions",
+            "body": {"cli": "claude", "ui": "terminal", "claude_options": {"code_mode": True}},
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "proxy_response"
+        assert resp["request_id"] == "req-code-mode"
+        assert resp["status"] == 400
+        assert resp["body"] == {"detail": reason}
+
+
 class TestDispatchProxyCodexLogin:
     """``POST /api/codex/login`` proxied through the relay mirrors the direct
     HTTP handler: 503 when Codex isn't configured, 422 on a malformed body

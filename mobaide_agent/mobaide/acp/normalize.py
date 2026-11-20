@@ -467,6 +467,94 @@ def merge_tool_update(
         item["subtitle"] = _one_line(item["locations"][0]["path"])
 
 
+# Tools that run a JavaScript program calling the agent's other tools: Pi's
+# ``codemode`` and OpenCode's ``execute`` (Code Mode). Both take ``code``.
+_CODE_MODE_TOOLS = frozenset({"codemode", "execute"})
+CODE_MODE_TITLE = "Run script"
+# The ways a script reaches a tool: ``tools.read(…)``, ``tools["ns-name"].tool``
+# and ``const { read, bash } = tools``.
+_SCRIPT_TOOL = re.compile(
+    r"\btools(?P<path>(?:\.[A-Za-z_$][\w$]*)+)"
+    r"""|\btools\[\s*(?P<q>["'])(?P<key>[^"'\n]+)(?P=q)\s*\](?P<rest>(?:\.[A-Za-z_$][\w$]*)*)"""
+    r"|\{(?P<names>[^{}]*)\}\s*=\s*tools\b"
+)
+_JS_NAME = re.compile(r"[A-Za-z_$][\w$]*")
+_SCRIPT_CALLS_SHOWN = 4
+
+
+def code_mode_script(update: Mapping[str, Any]) -> str | None:
+    """The script of a Code Mode tool call, or None for any other update.
+
+    The tool is known by ``name`` (OpenCode sends it) or by its title (the
+    Pi bridge uses the tool name as the title)."""
+    raw_input = update.get("rawInput")
+    code = raw_input.get("code") if isinstance(raw_input, Mapping) else None
+    if not isinstance(code, str) or not code.strip():
+        return None
+    names = {
+        value.strip().lower()
+        for value in (update.get("name"), update.get("title"))
+        if isinstance(value, str)
+    }
+    return code if names & _CODE_MODE_TOOLS else None
+
+
+def _script_part(code: str) -> dict[str, Any]:
+    """The script as a Markdown code block, with a fence no line can close."""
+    code, truncated = cap_text(code.rstrip("\n"), TEXT_PART_MAX - 64)
+    longest = max((len(run) for run in re.findall(r"`+", code)), default=0)
+    fence = "`" * max(3, longest + 1)
+    part: dict[str, Any] = {"type": "text", "text": f"{fence}js\n{code}\n{fence}"}
+    if truncated:
+        part["truncated"] = True
+    return part
+
+
+def _script_tools(code: str) -> list[str]:
+    """The tools a script names, in order of first use."""
+    names: list[str] = []
+    for match in _SCRIPT_TOOL.finditer(code):
+        if match.group("path"):
+            names.append(match.group("path")[1:])
+        elif match.group("key"):
+            names.append(match.group("key") + (match.group("rest") or ""))
+        else:
+            for entry in match.group("names").split(","):
+                name = entry.split(":", 1)[0].strip()
+                if _JS_NAME.fullmatch(name):
+                    names.append(name)
+    return list(dict.fromkeys(names))
+
+
+def _script_summary(code: str) -> str | None:
+    """``Calls read, bash`` from the tools a script names."""
+    names = _script_tools(code)
+    if not names:
+        return None
+    shown = ", ".join(names[:_SCRIPT_CALLS_SHOWN])
+    more = len(names) - _SCRIPT_CALLS_SHOWN
+    return _one_line(f"Calls {shown}" + (f" and {more} more" if more > 0 else ""))
+
+
+def show_script(item: dict[str, Any], code: str) -> None:
+    """Show a Code Mode tool call as what it is: a script, its output first
+    and the code below it. Run after each :func:`merge_tool_update`, which
+    replaces the content and the title the agent sends."""
+    item["title"] = CODE_MODE_TITLE
+    item["subtitle"] = _script_summary(code)
+    # The script is in the content; the raw input would repeat it as JSON.
+    item["input"] = None
+    drop_script(item, code)
+    item["content"] = [*item["content"][: TOOL_PARTS_MAX - 1], _script_part(code)]
+
+
+def drop_script(item: dict[str, Any], code: str) -> None:
+    """Take the script part out again, so that the next update sees the
+    output alone (a failed call shows its error only when it has no text)."""
+    script = _script_part(code)
+    item["content"] = [part for part in item["content"] if part != script]
+
+
 def _whole_output(raw_output: Any) -> bool:
     """Whether a ``rawOutput`` carries the whole output of a command in
     ``output`` (Junie, which puts a shortened copy in ``content``)."""

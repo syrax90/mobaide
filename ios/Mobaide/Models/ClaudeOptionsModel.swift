@@ -18,6 +18,8 @@ struct ClaudeOptionsModel: Codable, Equatable, Sendable {
     let debug: Bool
     // nil leaves Claude Code's view alone; the UI always sends true or false.
     let focus_mode: Bool?
+    // Claude Code's experimental Code Mode; the agent accepts it only with the terminal UI.
+    let code_mode: Bool
 
     init(
         plan_mode: Bool = false,
@@ -38,7 +40,8 @@ struct ClaudeOptionsModel: Codable, Equatable, Sendable {
         ultracode: Bool = false,
         append_system_prompt: String? = nil,
         debug: Bool = false,
-        focus_mode: Bool? = nil
+        focus_mode: Bool? = nil,
+        code_mode: Bool = false
     ) {
         self.plan_mode = plan_mode
         self.no_memory = no_memory
@@ -56,6 +59,7 @@ struct ClaudeOptionsModel: Codable, Equatable, Sendable {
         self.append_system_prompt = append_system_prompt
         self.debug = debug
         self.focus_mode = focus_mode
+        self.code_mode = code_mode
     }
 }
 
@@ -78,5 +82,6 @@ extension ClaudeOptionsModel {
         append_system_prompt = try container.decodeIfPresent(String.self, forKey: .append_system_prompt)
         debug = try container.decodeIfPresent(Bool.self, forKey: .debug) ?? false
         focus_mode = try container.decodeIfPresent(Bool.self, forKey: .focus_mode)
+        code_mode = try container.decodeIfPresent(Bool.self, forKey: .code_mode) ?? false
     }
 }

@@ -3,6 +3,10 @@ import type { ChatSupport } from '../../../../protocol/dto/agentVersion';
 import type { OpenCodeBucket, WizardAction } from '../wizardState';
 import { TerminalUiField } from './TerminalUiField';
 
+export const OPENCODE_CODE_MODE_HINT =
+  'OpenCode 2 calls MCP tools from JavaScript, several in one step. ' +
+  'Turn it off to have the model call each tool directly.';
+
 interface OpenCodeOptionsPanelProps {
   bucket: OpenCodeBucket;
   dispatch: (action: WizardAction) => void;
@@ -12,7 +16,8 @@ interface OpenCodeOptionsPanelProps {
 
 /**
  * OpenCode has no model or agent option at launch: both are picked inside the
- * session (the chat's chips, or the terminal UI's own lists).
+ * session (the chat's chips, or the terminal UI's own lists). Code Mode starts
+ * on, as in OpenCode itself.
  */
 export function OpenCodeOptionsPanel({ bucket, dispatch, chat }: OpenCodeOptionsPanelProps) {
   return (
@@ -23,6 +28,14 @@ export function OpenCodeOptionsPanel({ bucket, dispatch, chat }: OpenCodeOptions
         hint="OpenCode accepts every request that your rules do not deny."
         onChange={(value) => {
           dispatch({ type: 'setOpenCodeAutoApprove', value });
+        }}
+      />
+      <CheckboxField
+        label="Code Mode"
+        checked={bucket.codeMode}
+        hint={OPENCODE_CODE_MODE_HINT}
+        onChange={(value) => {
+          dispatch({ type: 'setOpenCodeCodeMode', value });
         }}
       />
       {chat !== undefined && (

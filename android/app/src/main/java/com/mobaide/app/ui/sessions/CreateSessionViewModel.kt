@@ -234,6 +234,9 @@ data class CreateSessionUiState(
     val claudeAppendSystemPrompt: String = "",
     // Claude Code only: start the classic terminal instead of the chat view.
     val claudeTerminalUi: Boolean = false,
+    // Claude Code only: the experimental Code Mode. It runs in the terminal UI
+    // only, so it also opens the session there.
+    val claudeCodeMode: Boolean = false,
     // capabilities.chat for Claude from the ModePick probe; null = not probed yet.
     val claudeChat: ChatSupport? = null,
     // Auto Scan's own copies of the Claude controls: each kind remembers its
@@ -275,6 +278,8 @@ data class CreateSessionUiState(
     // capabilities.chat for Antigravity from the ModePick probe; null = not probed yet.
     val antigravityChat: ChatSupport? = null,
     val opencodeAutoApprove: Boolean = false,
+    // OpenCode 2's Code Mode (MCP tools called from JavaScript); on in OpenCode by default.
+    val opencodeCodeMode: Boolean = true,
     // OpenCode: start the classic terminal instead of the chat view.
     val opencodeTerminalUi: Boolean = false,
     // capabilities.chat for OpenCode from the ModePick probe; null = not probed yet.
@@ -297,6 +302,8 @@ data class CreateSessionUiState(
     val junieChat: ChatSupport? = null,
     // Pi: start the classic terminal instead of the chat view.
     val piTerminalUi: Boolean = false,
+    // Pi's codemode tool: the model writes JavaScript that calls the other tools.
+    val piCodeMode: Boolean = false,
     // capabilities.chat for Pi from the ModePick probe; null = not probed yet.
     val piChat: ChatSupport? = null,
     val initialPrompt: String = "",
@@ -416,9 +423,15 @@ fun chatUnavailableHint(chat: ChatSupport?, kind: String = "claude"): String? = 
     else -> null
 }
 
-val CreateSessionUiState.claudeUsesChat: Boolean get() = usesChat(claudeTerminalUi, claudeChat)
+val CreateSessionUiState.claudeUsesChat: Boolean
+    get() = usesChat(claudeTerminalUi || claudeCodeMode, claudeChat)
 
 val CreateSessionUiState.claudeChatUnavailableHint: String? get() = chatUnavailableHint(claudeChat)
+
+/** Why the Claude Terminal UI toggle is locked on, or null while the user picks it. */
+val CreateSessionUiState.claudeTerminalUiLockedHint: String?
+    get() = claudeChatUnavailableHint
+        ?: if (claudeCodeMode) "Code Mode runs in the terminal UI only." else null
 
 /** "Continue a session" is offered: chat view, and the agent can list stored sessions. */
 val CreateSessionUiState.claudeResumeAvailable: Boolean
@@ -505,6 +518,7 @@ private fun CreateSessionUiState.toClaudeLaunchPrefs() = ClaudeLaunchPrefs(
     debug = claudeDebug,
     focusMode = focusMode,
     terminalUi = claudeTerminalUi,
+    codeMode = claudeCodeMode,
 )
 
 /** Snapshot of the Auto Scan launch controls for its own per-kind bucket. */
@@ -543,6 +557,7 @@ private fun CreateSessionUiState.toAntigravityLaunchPrefs() = AntigravityLaunchP
 private fun CreateSessionUiState.toOpenCodeLaunchPrefs() = OpenCodeLaunchPrefs(
     autoApprove = opencodeAutoApprove,
     terminalUi = opencodeTerminalUi,
+    codeMode = opencodeCodeMode,
 )
 
 /** Snapshot of the Copilot launch controls for persistence / re-defaulting. */
@@ -567,6 +582,7 @@ private fun CreateSessionUiState.toJunieLaunchPrefs() = JunieLaunchPrefs(
 /** Snapshot of the Pi launch controls for persistence / re-defaulting. */
 private fun CreateSessionUiState.toPiLaunchPrefs() = PiLaunchPrefs(
     terminalUi = piTerminalUi,
+    codeMode = piCodeMode,
 )
 
 /**
@@ -655,6 +671,7 @@ class CreateSessionViewModel @Inject constructor(
                         claudeDebug = saved.debug,
                         focusMode = saved.focusMode,
                         claudeTerminalUi = saved.terminalUi,
+                        claudeCodeMode = saved.codeMode,
                     )
                 }
             }
@@ -721,6 +738,7 @@ class CreateSessionViewModel @Inject constructor(
                     it.copy(
                         opencodeAutoApprove = saved.autoApprove,
                         opencodeTerminalUi = saved.terminalUi,
+                        opencodeCodeMode = saved.codeMode,
                     )
                 }
             }
@@ -754,7 +772,7 @@ class CreateSessionViewModel @Inject constructor(
             }
             // Same pre-fill for the Pi launch controls.
             preferencesStore.getLastUsedPiOptions()?.let { saved ->
-                _uiState.update { it.copy(piTerminalUi = saved.terminalUi) }
+                _uiState.update { it.copy(piTerminalUi = saved.terminalUi, piCodeMode = saved.codeMode) }
             }
         }
 
@@ -1375,6 +1393,7 @@ class CreateSessionViewModel @Inject constructor(
     fun toggleSkipPermissions(v: Boolean) = _uiState.update { it.copy(skipPermissions = v) }
     fun toggleFocusMode(v: Boolean) = _uiState.update { it.copy(focusMode = v) }
     fun toggleTerminalUi(v: Boolean) = _uiState.update { it.copy(claudeTerminalUi = v) }
+    fun toggleClaudeCodeMode(v: Boolean) = _uiState.update { it.copy(claudeCodeMode = v) }
 
     fun toggleCodexTerminalUi(v: Boolean) = _uiState.update { it.copy(codexTerminalUi = v) }
 
@@ -1389,6 +1408,7 @@ class CreateSessionViewModel @Inject constructor(
     fun toggleJunieTerminalUi(v: Boolean) = _uiState.update { it.copy(junieTerminalUi = v) }
 
     fun togglePiTerminalUi(v: Boolean) = _uiState.update { it.copy(piTerminalUi = v) }
+    fun setPiCodeMode(v: Boolean) = _uiState.update { it.copy(piCodeMode = v) }
     fun setClaudeModel(v: String?) = _uiState.update {
         // Clamp the effort if the new model doesn't support the current level
         // (e.g. xhigh/max → high when switching to haiku, the only capped model).
@@ -1571,6 +1591,7 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     fun setOpenCodeAutoApprove(v: Boolean) = _uiState.update { it.copy(opencodeAutoApprove = v) }
+    fun setOpenCodeCodeMode(v: Boolean) = _uiState.update { it.copy(opencodeCodeMode = v) }
 
     fun setCopilotAllowAll(v: Boolean) = _uiState.update { it.copy(copilotAllowAll = v) }
 
@@ -1595,6 +1616,8 @@ class CreateSessionViewModel @Inject constructor(
             ultracode = state.claudeUltracode,
             debug = state.claudeDebug,
             focus_mode = state.focusMode,
+            // Never with the chat view: the agent rejects Code Mode there.
+            code_mode = state.claudeCodeMode && !state.claudeUsesChat,
             append_system_prompt = state.claudeAppendSystemPrompt.takeIf { it.isNotBlank() },
             worktree = state.worktree,
             branch_name = state.branchName.takeIf { it.isNotBlank() },
@@ -1673,7 +1696,7 @@ class CreateSessionViewModel @Inject constructor(
         } else if (kind == "pi") {
             base.copy(
                 cli = "pi",
-                pi_options = piOptions(worktree = false, branchName = null),
+                pi_options = state.piOptions(worktree = false, branchName = null),
             )
         } else {
             base.copy(
@@ -1733,6 +1756,7 @@ class CreateSessionViewModel @Inject constructor(
         baseBranch: String? = null,
     ) = OpenCodeOptionsModel(
         auto_approve = opencodeAutoApprove,
+        code_mode = opencodeCodeMode,
         worktree = worktree,
         branch_name = branchName,
         base_branch = baseBranch,
@@ -1772,11 +1796,12 @@ class CreateSessionViewModel @Inject constructor(
         base_branch = baseBranch,
     )
 
-    private fun piOptions(
+    private fun CreateSessionUiState.piOptions(
         worktree: Boolean,
         branchName: String?,
         baseBranch: String? = null,
     ) = PiOptionsModel(
+        code_mode = piCodeMode,
         worktree = worktree,
         branch_name = branchName,
         base_branch = baseBranch,
@@ -2038,7 +2063,7 @@ class CreateSessionViewModel @Inject constructor(
     fun submitPi() {
         val state = _uiState.value
         if (state.submitting) return
-        val piOptions = piOptions(
+        val piOptions = state.piOptions(
             worktree = state.worktree,
             branchName = state.branchName.takeIf { it.isNotBlank() },
             baseBranch = state.effectiveBaseBranch,

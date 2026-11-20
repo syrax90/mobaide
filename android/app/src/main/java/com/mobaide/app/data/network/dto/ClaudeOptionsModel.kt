@@ -33,4 +33,6 @@ data class ClaudeOptionsModel(
     // null (the wire default) means "leave Claude Code's view alone", so both
     // explicit true (viewMode focus) and false (viewMode default) are emitted.
     val focus_mode: Boolean? = null,
+    // Claude Code's experimental Code Mode; the agent accepts it only with the terminal UI.
+    val code_mode: Boolean = false,
 )

@@ -149,6 +149,25 @@ class TestWriteSessionHooksExtra:
         assert set(_registrations(doc)) == set(EXPECTED_REGISTRATIONS)
 
 
+class TestWriteSessionHooksFailOpen:
+    def test_fail_open_makes_every_hook_continue_on_failure(self):
+        # In a Code Mode session a hook that fails or times out refuses the
+        # tool call, so every hook must let Claude go on.
+        path = hook_settings.write_session_hooks(
+            "sid-1", port=9001, token="tok", fail_open=True,
+        )
+        registrations = _registrations(_load(path))
+        assert set(registrations) == set(EXPECTED_REGISTRATIONS)
+        assert all(hook["onFailure"] == "continue" for hook in registrations.values())
+
+    def test_default_writes_no_on_failure_key(self):
+        # ``onFailure`` needs Claude Code 2.1.295; an older CLI shows a
+        # blocking invalid-settings dialog for a key it does not know.
+        path = hook_settings.write_session_hooks("sid-1", port=9001, token="tok")
+        for hook in _registrations(_load(path)).values():
+            assert "onFailure" not in hook
+
+
 class TestChatHookSettings:
     def test_registers_only_the_turn_hooks_for_the_session(self, tmp_path):
         # The ACP adapter reports a permission request and the agent's exit
@@ -168,6 +187,7 @@ class TestChatHookSettings:
             parts = urlsplit(hook["url"])
             assert (parts.hostname, parts.port, parts.path) == ("127.0.0.1", 9100, "/internal/hook")
             assert parse_qs(parts.query)["session_id"] == ["a&b=c d"]
+            assert "onFailure" not in hook
         assert list(tmp_path.iterdir()) == []
 
     def test_the_token_is_a_header_the_cli_fills_from_its_environment(self):
