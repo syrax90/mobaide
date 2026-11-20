@@ -73,6 +73,14 @@ def active_workitems_path(state_dir: str | os.PathLike, workspace_name: str) -> 
     return (Path(state_dir) / _slug_workspace_name(workspace_name) / "active_workitems.json").resolve()
 
 
+def _path_key(path: str) -> str | None:
+    try:
+        normalized = normalize_workspace_path(path)
+    except ValueError:
+        return None
+    return os.path.normcase(os.path.realpath(normalized))
+
+
 def now_iso_utc() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -194,6 +202,27 @@ class ActiveWorkItemsStore:
             outcome="ok",
         )
         return True
+
+    async def remove_at_path(self, worktree_path: str) -> int:
+        """Remove every entry whose worktree is ``worktree_path``; returns
+        how many went."""
+        target = _path_key(worktree_path)
+        if target is None:
+            return 0
+        async with self._lock:
+            items = self._read_unlocked()
+            gone = [i for i in items if _path_key(i.worktree_path) == target]
+            if not gone:
+                return 0
+            self._write_unlocked([i for i in items if i not in gone])
+        for item in gone:
+            audit_event(
+                "audit.autoscan.workitem.removed",
+                target=item.id,
+                outcome="ok",
+                worktree_path=item.worktree_path,
+            )
+        return len(gone)
 
     async def count(self) -> int:
         async with self._lock:

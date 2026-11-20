@@ -139,7 +139,11 @@ class SessionConfig:
     base_branch: str | None = None
     # Set by ``SessionManager`` when it ran the session in a worktree it made
     # (or reused) for a ``worktree`` request: the branch checked out there.
+    # Auto Scan sets it for the issue worktree it made.
     worktree_branch: str | None = None
+    # The workspace that owns the worktree when ``project_name`` is not set
+    # (Auto Scan sessions launch without one). Agent-side only, never sent.
+    worktree_workspace: str | None = None
     # Seconds after spawn to wait before flagging a session that produced
     # essentially no output (< STARTUP_STALL_MIN_BYTES) as stalled — almost
     # always a macOS file-access (TCC) modal blocking the child invisibly on the
@@ -209,6 +213,8 @@ class SessionInfo:
     # (see ``SessionConfig.worktree_branch``); ``None`` otherwise. Clients offer
     # to remove the worktree and this branch when the session stops.
     worktree_branch: str | None = None
+    # See ``SessionConfig.worktree_workspace``; not part of the wire DTO.
+    worktree_workspace: str | None = None
 
 
 @dataclass

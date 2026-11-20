@@ -150,6 +150,19 @@ class TestStoreAddRemove:
         assert [i.id for i in remaining] == ["CLA-2"]
 
 
+    @pytest.mark.asyncio
+    async def test_remove_at_path_drops_only_items_at_that_worktree(self, tmp_path):
+        store = ActiveWorkItemsStore(tmp_path / "items.json")
+        here = replace(_item("CLA-1", "u1"), worktree_path=str(tmp_path / "wt" / "cla-1"))
+        other = replace(_item("CLA-2", "u2"), worktree_path=str(tmp_path / "wt" / "cla-2"))
+        await store.write([here, other])
+
+        assert await store.remove_at_path(str(tmp_path / "wt" / "cla-1") + "/") == 1
+        assert [i.id for i in await store.read()] == ["CLA-2"]
+        assert await store.remove_at_path(str(tmp_path / "wt" / "gone")) == 0
+        assert [i.id for i in await store.read()] == ["CLA-2"]
+
+
 class TestStoreConcurrency:
     @pytest.mark.asyncio
     async def test_concurrent_adds_serialise_under_lock(self, tmp_path):

@@ -850,4 +850,5 @@ class TerminalSession:
             exit_reason=self._exit_reason,
             activity=self._activity if self._state == SessionState.RUNNING else None,
             worktree_branch=self._config.worktree_branch,
+            worktree_workspace=self._config.worktree_workspace,
         )

@@ -41,7 +41,8 @@ async def stop_session(
 async def _start_worktree_removal(info: SessionInfo, *, app_state: Any, actor: str | None) -> None:
     store = getattr(app_state, "workspaces_store", None)
     manager = getattr(app_state, "worktree_manager", None)
-    workspace = store.get(info.project_name or "") if store is not None else None
+    workspace_name = info.project_name or info.worktree_workspace or ""
+    workspace = store.get(workspace_name) if store is not None else None
     if (
         workspace is None
         or manager is None
@@ -60,14 +61,17 @@ async def _start_worktree_removal(info: SessionInfo, *, app_state: Any, actor: s
         worktree_path=info.cwd,
         force=True,
     )
+    autoscan_manager = getattr(app_state, "autoscan_manager", None)
     try:
+        # No Auto Scan busy check: an Auto Scan work item only waits for its
+        # issue to be done to remove this worktree, and the user removes it now.
         await delete_job_registry.start(
             GitDeleteRequest(items=[item]),
             workspace_name=workspace.name,
             workspace_root=workspace.path,
             manager=manager,
             session_manager=getattr(app_state, "session_manager", None),
-            autoscan_manager=getattr(app_state, "autoscan_manager", None),
+            autoscan_manager=None,
             event_bus=getattr(app_state, "event_bus", None),
             actor=actor,
         )
@@ -76,3 +80,11 @@ async def _start_worktree_removal(info: SessionInfo, *, app_state: Any, actor: s
         logger.warning(
             "session.worktree_removal_refused", session_id=info.session_id, exc_info=True,
         )
+        return
+    if autoscan_manager is not None:
+        try:
+            await autoscan_manager.release_worktree(workspace.name, info.cwd)
+        except Exception:
+            logger.warning(
+                "session.autoscan_release_failed", session_id=info.session_id, exc_info=True,
+            )

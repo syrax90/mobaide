@@ -366,6 +366,13 @@ class AutoScanInstance:
         """
         return await self._workitems_store.read()
 
+    async def release_worktree(self, worktree_path: str) -> int:
+        """Stop tracking the work items at ``worktree_path``: the user
+        removes that worktree, so no later cycle has to. Returns the count."""
+        released = await self._workitems_store.remove_at_path(worktree_path)
+        self._active_workitem_count = max(0, self._active_workitem_count - released)
+        return released
+
     @property
     def source_kind(self) -> str:
         return self._source.kind
@@ -755,7 +762,18 @@ class AutoScanInstance:
         tool_dir = getattr(self._source, "tool_dir", None)
         return tool_dir() if tool_dir is not None else None
 
-    def _terminal_config(
+    async def _worktree_branch(self, cwd: str) -> str | None:
+        """The branch of the issue worktree at ``cwd``, so the session can
+        offer to remove it on stop; ``None`` for the workspace folder."""
+        try:
+            return await self._worktree_mgr.linked_worktree_branch(
+                self._workspace_config.path, cwd,
+            )
+        except Exception:
+            logger.warning("autoscan.worktree_branch_failed cwd=%s", cwd, exc_info=True)
+            return None
+
+    async def _terminal_config(
         self, session_id: str, spec, kind: SessionKind,
     ) -> SessionConfig:
         env = spec.env
@@ -763,8 +781,11 @@ class AutoScanInstance:
         if directory and env is not None:
             env = dict(env)
             append_path_dir(env, directory)
+        branch = await self._worktree_branch(str(spec.cwd)) if spec.cwd else None
         return SessionConfig(
             session_id=session_id, command=spec.argv, cwd=spec.cwd, env=env, kind=kind,
+            worktree_branch=branch,
+            worktree_workspace=self._workspace_name if branch else None,
         )
 
     async def _spawn(
@@ -867,7 +888,8 @@ class AutoScanInstance:
 
         await self._track_workitem(issue, slug, str(spec.cwd))
         if not await self._spawn(
-            issue, session_id, self._terminal_config(session_id, spec, SessionKind.AUTO_SCAN),
+            issue, session_id,
+            await self._terminal_config(session_id, spec, SessionKind.AUTO_SCAN),
             trust_env=spec.env if spec.env is not None else os.environ,
         ):
             # The SessionEnd hook that normally deletes the hooks settings
@@ -901,7 +923,8 @@ class AutoScanInstance:
             )
             return
         await self._spawn(
-            issue, session_id, self._terminal_config(session_id, spec, SessionKind(self._cli)),
+            issue, session_id,
+            await self._terminal_config(session_id, spec, SessionKind(self._cli)),
             trust_env=spec.env if spec.env is not None else os.environ,
         )
 
@@ -968,6 +991,7 @@ class AutoScanInstance:
             except Exception as exc:
                 self._emit_issue(issue, "session_spawn", "failed", error=str(exc))
                 return
+        branch = await self._worktree_branch(cwd)
         config = SessionConfig(
             session_id=session_id,
             command=[],
@@ -979,6 +1003,8 @@ class AutoScanInstance:
             # folder that is not a git repository.
             trust_folder=os.path.realpath(cwd) != os.path.realpath(self._workspace_config.path),
             chat_path_append=self._tool_dir(),
+            worktree_branch=branch,
+            worktree_workspace=self._workspace_name if branch else None,
             **options,  # type: ignore[arg-type]
         )
         # The record too, not only the skipped question: some agents (Pi,
@@ -1242,6 +1268,16 @@ class AutoScanSessionManager:
         for inst in self._scans.values():
             result[inst.project_name] = await inst.list_workitems()
         return result
+
+    async def release_worktree(self, workspace_name: str, worktree_path: str) -> int:
+        """Stop tracking the work items of ``workspace_name`` at
+        ``worktree_path``, also when no scan of that workspace runs now: a
+        later scan would otherwise retry removing a worktree that is gone."""
+        instance = self._scans.get(workspace_name)
+        if instance is not None:
+            return await instance.release_worktree(worktree_path)
+        store = ActiveWorkItemsStore(active_workitems_path(self._config.state_dir, workspace_name))
+        return await store.remove_at_path(worktree_path)
 
     def list(self) -> list[dict]:
         return [inst.to_dto() for inst in self._scans.values()]
