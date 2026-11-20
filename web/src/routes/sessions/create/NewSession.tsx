@@ -333,30 +333,36 @@ export function NewSession() {
       workspace !== null,
     source: state.autoScanSetup.source,
     githubSetup: scanCapability?.githubSetup === true,
-    onSetupSession: (session) => {
-      // Park the choices first: leaving unmounts the reducer, and Back from
-      // the terminal (or the next Auto Scan for this workspace in this tab)
-      // takes them back.
-      if (workspace !== null) {
-        parkAutoScanDraft(resolvedAgentId, workspace.name, {
-          setup: state.autoScanSetup,
-          bucket: state.autoScan,
-          agents: state.autoScanAgents,
-        });
-      }
+    onSetupSession: (session, origin) => {
       // Seeded before navigating, as `create.onSuccess` does, so the terminal
       // does not take the not-yet-listed session for an ended one.
       queryClient.setQueryData<SessionResponse[]>(
-        queryKeys.sessions(resolvedAgentId),
+        queryKeys.sessions(origin.agentId),
         (current) => upsertSession(current ?? [], session),
       );
-      void queryClient.invalidateQueries({ queryKey: queryKeys.sessions(resolvedAgentId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.sessions(origin.agentId) });
+      // The user moved to another agent or workspace meanwhile: the choices on
+      // screen are not the ones this terminal is for, and the move stands.
+      if (origin.agentId !== resolvedAgentId || origin.workspaceName !== workspace?.name) {
+        useToastStore
+          .getState()
+          .show('The GitHub setup terminal opened. Find it in the sessions list.', 'info');
+        return;
+      }
+      // Park the choices first: leaving unmounts the reducer, and Back from
+      // the terminal (or the next Auto Scan for this workspace in this tab)
+      // takes them back.
+      parkAutoScanDraft(origin.agentId, origin.workspaceName, {
+        setup: state.autoScanSetup,
+        bucket: state.autoScan,
+        agents: state.autoScanAgents,
+      });
       useToastStore
         .getState()
         .show('When the command is done, go back to continue with Auto Scan.', 'info');
       // A push, unlike a launch: Back must return to this wizard, which then
       // checks GitHub again on mount.
-      void navigate(terminalPath(resolvedAgentId, session.session_id));
+      void navigate(terminalPath(origin.agentId, session.session_id));
     },
   });
 

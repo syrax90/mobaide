@@ -54,6 +54,12 @@ export interface AutoScanSourcesView {
   linearKeyError: string | null;
 }
 
+/** The PC and workspace a setup or key save was sent for. */
+export interface AutoScanSourceOrigin {
+  agentId: string;
+  workspaceName: string;
+}
+
 function failureMessage(error: unknown): string {
   if (isApiError(error)) return errorDetailString(error.body) ?? error.message;
   return error instanceof Error ? error.message : String(error);
@@ -66,8 +72,12 @@ export function useAutoScanSources(input: {
   active: boolean;
   source: AutoScanSource | null;
   githubSetup: boolean;
-  /** The setup terminal opened; the wizard parks its draft and shows the session. */
-  onSetupSession: (session: SessionResponse) => void;
+  /**
+   * The setup terminal opened on `origin`. The page stays mounted when the
+   * route switches to another agent or workspace meanwhile, so `origin` can
+   * differ from the one on screen.
+   */
+  onSetupSession: (session: SessionResponse, origin: AutoScanSourceOrigin) => void;
 }): AutoScanSourcesView {
   const { agentId, workspace, active, source } = input;
   const queryClient = useQueryClient();
@@ -116,38 +126,50 @@ export function useAutoScanSources(input: {
         ? { status: 'error', labels: [], issueTypes: [], error: failureMessage(labels.error) }
         : { status: 'loading', labels: [], issueTypes: [], error: null };
 
+  // The page stays mounted when the route switches to another agent, and a
+  // pending mutation then runs this render's callbacks: the origin travels in
+  // the variables, so each answer lands on the PC and workspace that sent it.
   const setup = useMutation({
-    mutationFn: (action: GitHubSetupAction) => startGitHubSetup(agentId, workspaceName, action),
-    onSuccess: (session) => {
-      input.onSetupSession(session);
+    mutationFn: (vars: AutoScanSourceOrigin & { action: GitHubSetupAction }) =>
+      startGitHubSetup(vars.agentId, vars.workspaceName, vars.action),
+    onSuccess: (session, vars) => {
+      input.onSetupSession(session, { agentId: vars.agentId, workspaceName: vars.workspaceName });
     },
   });
 
   const hasKey = workspace?.has_linear_key === true;
   const linear = useLinearMetadata(agentId, workspaceName, active && source === 'linear' && hasKey);
 
-  // Kept outside the mutation, which resets as soon as it settles.
-  const [linearKeyError, setLinearKeyError] = useState<string | null>(null);
+  // Kept outside the mutation, which resets as soon as it settles, and shown
+  // only on the workspace it is about.
+  const [linearKeyFailure, setLinearKeyFailure] = useState<
+    (AutoScanSourceOrigin & { message: string }) | null
+  >(null);
   const linearKey = useMutation({
-    mutationFn: (key: string) => updateWorkspace(agentId, workspaceName, { linear_api_key: key }),
+    mutationFn: (vars: AutoScanSourceOrigin & { key: string }) =>
+      updateWorkspace(vars.agentId, vars.workspaceName, { linear_api_key: vars.key }),
     // The variables are the plaintext key: drop the entry as soon as it settles,
     // as the workspace form's save does.
     gcTime: 0,
     onSettled: () => {
       linearKey.reset();
     },
-    onError: (error) => {
-      setLinearKeyError(`Save failed: ${failureMessage(error)}`);
+    onError: (error, vars) => {
+      setLinearKeyFailure({
+        agentId: vars.agentId,
+        workspaceName: vars.workspaceName,
+        message: `Save failed: ${failureMessage(error)}`,
+      });
     },
-    onSuccess: async (updated) => {
+    onSuccess: async (updated, vars) => {
       // Seeded so the panel turns into the filter at once; the
       // `projects.changed` echo replaces it idempotently.
-      queryClient.setQueryData<WorkspaceInfo[]>(queryKeys.workspaces(agentId), (current) =>
+      queryClient.setQueryData<WorkspaceInfo[]>(queryKeys.workspaces(vars.agentId), (current) =>
         upsertWorkspace(current ?? [], updated),
       );
       // A lookup from before the key existed failed; read again with it.
       await queryClient.invalidateQueries({
-        queryKey: queryKeys.linearMetadata(agentId, workspaceName),
+        queryKey: queryKeys.linearMetadata(vars.agentId, vars.workspaceName),
       });
     },
   });
@@ -169,7 +191,7 @@ export function useAutoScanSources(input: {
     },
     openGitHubSetup: input.githubSetup
       ? (action) => {
-          setup.mutate(action);
+          setup.mutate({ agentId, workspaceName, action });
         }
       : null,
     githubSetupPending: setup.isPending,
@@ -180,10 +202,13 @@ export function useAutoScanSources(input: {
       void linear.refetch();
     },
     saveLinearKey: (key) => {
-      setLinearKeyError(null);
-      linearKey.mutate(key);
+      setLinearKeyFailure(null);
+      linearKey.mutate({ agentId, workspaceName, key });
     },
     linearKeySaving: linearKey.isPending,
-    linearKeyError,
+    linearKeyError:
+      linearKeyFailure?.agentId === agentId && linearKeyFailure.workspaceName === workspaceName
+        ? linearKeyFailure.message
+        : null,
   };
 }
