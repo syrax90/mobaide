@@ -762,22 +762,20 @@ final class CreateSessionModel {
 
     var effectiveClaudeModel: String? { claudeFastMode ? "opus" : claudeModel }
 
-    /// Ultracode always forces `xhigh` (Android parity). Otherwise the
-    /// user-selected effort is clamped to the set valid for the effective model,
+    /// The user-selected effort, clamped to the set valid for the effective model,
     /// so switching to haiku (the only capped model, offering just `low`/`medium`/
     /// `high`) never submits an unsupported effort. `high` is valid for every model.
+    /// Ultracode leaves the effort unchanged, as Claude Code's `/effort` toggle does.
     var effectiveClaudeEffort: String {
-        if claudeUltracode { return "xhigh" }
-        return claudeEfforts(for: effectiveClaudeModel).contains(claudeEffort) ? claudeEffort : "high"
+        claudeEfforts(for: effectiveClaudeModel).contains(claudeEffort) ? claudeEffort : "high"
     }
 
-    /// Same fast-mode / ultracode rules as the Claude Code bucket, applied to
+    /// Same fast-mode and effort rules as the Claude Code bucket, applied to
     /// Auto Scan's own selections.
     var effectiveAutoScanModel: String? { autoScanClaudeFastMode ? "opus" : autoScanClaudeModel }
 
     var effectiveAutoScanEffort: String {
-        if autoScanClaudeUltracode { return "xhigh" }
-        return claudeEfforts(for: effectiveAutoScanModel).contains(autoScanClaudeEffort)
+        claudeEfforts(for: effectiveAutoScanModel).contains(autoScanClaudeEffort)
             ? autoScanClaudeEffort : "high"
     }
 

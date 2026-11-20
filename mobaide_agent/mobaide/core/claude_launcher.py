@@ -332,9 +332,9 @@ class ClaudeLauncher:
         # Every explicit level is emitted, "high" included: with no flag the CLI
         # uses the operator's persisted effortLevel / per-model default, which
         # is not reliably "high". None (no client choice) leaves that default
-        # alone. ultracode internally drives xhigh and is redundant with
-        # --effort (precedence undocumented), so it suppresses an explicit effort.
-        if options.effort and not options.ultracode:
+        # alone. Since Claude Code 2.1.284 ultracode is a separate toggle that
+        # leaves the effort unchanged, so the chosen level is sent with it too.
+        if options.effort:
             argv += ["--effort", options.effort]
         if options.append_system_prompt:
             argv += ["--append-system-prompt", options.append_system_prompt]

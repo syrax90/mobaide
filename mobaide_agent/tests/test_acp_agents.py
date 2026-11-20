@@ -553,11 +553,15 @@ class TestClaudeConfigIntents:
             ConfigIntent(True, option_id="fast"),
         ]
 
-    def test_ultracode_replaces_effort(self):
+    def test_ultracode_keeps_effort(self):
+        # Ultracode is a separate toggle that leaves the effort unchanged.
         intents = claude_config_intents(
             ClaudeOptions(skip_permissions=False, effort="high", ultracode=True)
         )
-        assert intents == [ConfigIntent(True, option_id="ultracode")]
+        assert intents == [
+            ConfigIntent("high", category="thought_level"),
+            ConfigIntent(True, option_id="ultracode"),
+        ]
 
 
 class _StubSpec:

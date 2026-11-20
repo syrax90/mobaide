@@ -287,6 +287,17 @@ describe('NewSession launch prefs', () => {
     expect(screen.getByLabelText('Append system prompt (optional)')).toHaveValue('be terse');
   });
 
+  it('keeps the Effort picker usable with Ultracode on', async () => {
+    // Ultracode is a separate toggle that leaves the effort unchanged, so the
+    // picker must not lock the selection the agent now sends with it.
+    await seedPrefs({ claude: { ...CLAUDE_AT_DEFAULTS, effort: 'medium', ultracode: true } });
+
+    await renderWizard('?step=config&mode=claude&workspace=alpha');
+
+    expect(screen.getByLabelText('Effort')).toBeEnabled();
+    expect(screen.getByLabelText('Effort')).toHaveValue('medium');
+  });
+
   it('completes a launch whose preference writes storage refuses', async () => {
     await renderWizard('?step=config&mode=claude&workspace=alpha');
     fireEvent.click(screen.getByLabelText('Skip permissions'));

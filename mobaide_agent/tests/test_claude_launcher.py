@@ -124,15 +124,18 @@ async def test_argv_explicit_effort_emitted(tmp_path: Path, effort):
 
 
 @pytest.mark.asyncio
-async def test_argv_ultracode_suppresses_effort(tmp_path: Path):
-    """ultracode internally drives xhigh and is redundant with --effort, so an
-    explicit effort is suppressed when ultracode is on."""
+async def test_argv_ultracode_keeps_chosen_effort(tmp_path: Path):
+    """Since Claude Code 2.1.284 ultracode is a separate toggle that leaves the
+    effort unchanged. Dropping --effort used to hand an ultracode session to the
+    operator's persisted level instead of the one the user picked."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
         _make_workspace(str(tmp_path)),
-        ClaudeOptions(effort="max", ultracode=True),
+        ClaudeOptions(effort="xhigh", ultracode=True),
     )
-    assert "--effort" not in spec.argv
+    assert spec.argv[spec.argv.index("--effort") + 1] == "xhigh"
+    payload = json.loads(spec.argv[spec.argv.index("--settings") + 1])
+    assert payload == {"ultracode": True}
 
 
 @pytest.mark.asyncio

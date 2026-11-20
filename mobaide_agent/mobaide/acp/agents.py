@@ -1490,7 +1490,7 @@ def claude_config_intents(options: ClaudeOptions) -> list[ConfigIntent]:
         intents.append(ConfigIntent("bypassPermissions", category="mode"))
     if options.model:
         intents.append(ConfigIntent(options.model, category="model"))
-    if options.effort and not options.ultracode:
+    if options.effort:
         intents.append(ConfigIntent(options.effort, category="thought_level"))
     if options.fast_mode:
         intents.append(ConfigIntent(True, option_id="fast"))
