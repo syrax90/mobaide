@@ -306,7 +306,7 @@ final class AutoScanSetupModelTests: XCTestCase {
         return model
     }
 
-    func testSavedCodeModeSeedsEachAgentAndClaudeCodeModeKeepsTheTerminal() throws {
+    func testSavedCodeModeSeedsEachAgentAndClaudeCodeModeKeepsTheChatView() throws {
         // The workspace saved Code Mode on for Claude Code and Pi, off for
         // OpenCode, and the chat view.
         let wire = Data(#"""
@@ -324,9 +324,9 @@ final class AutoScanSetupModelTests: XCTestCase {
         XCTAssertTrue(model.claudeCodeMode)
         XCTAssertFalse(model.opencodeOptions.code_mode)
         model.cli = "claude"
-        // Claude Code has Code Mode in the terminal only.
-        XCTAssertEqual(model.effectiveSessionView, .terminal)
-        XCTAssertNotNil(model.chatUnavailableReason("claude"))
+        // Code Mode does not lock Claude Code's chat view; the chat view ignores it.
+        XCTAssertEqual(model.effectiveSessionView, .chat)
+        XCTAssertNil(model.chatUnavailableReason("claude"))
 
         model.cli = "pi"
         let request = try XCTUnwrap(

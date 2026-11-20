@@ -118,9 +118,8 @@ final class AutoScanSetupModel {
     var cursorOptions = CursorScanOptionsDto()
     var junieOptions = JunieScanOptionsDto()
     var piOptions = PiScanOptionsDto()
-    /// Claude Code's Code Mode. Here, not with Claude's other options on
-    /// `CreateSessionModel`, because it also decides the session view: it runs
-    /// in the terminal only.
+    /// Claude Code's Code Mode. It is sent only with the terminal view; the
+    /// chat view hides it, like Focus view.
     var claudeCodeMode = false
 
     /// Set by `CreateSessionModel`: applies a template's or a workspace's Claude
@@ -207,14 +206,12 @@ final class AutoScanSetupModel {
         guard let capability = chatCapabilities[kind] else {
             return "Checking the chat view on the PC…"
         }
-        if let reason = CreateSessionModel.chatUnavailableReason(capability, kind: kind) { return reason }
-        return kind == "claude" && claudeCodeMode ? CreateSessionModel.claudeCodeModeChatNoteText : nil
+        return CreateSessionModel.chatUnavailableReason(capability, kind: kind)
     }
 
     /// The chosen view, or the terminal for an agent without the chat view.
     var effectiveSessionView: SessionView {
-        guard sessionView == .chat, let cli, isChatAvailable(cli),
-              !(cli == "claude" && claudeCodeMode) else { return .terminal }
+        guard sessionView == .chat, let cli, isChatAvailable(cli) else { return .terminal }
         return .chat
     }
 

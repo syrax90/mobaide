@@ -186,12 +186,11 @@ internal fun AutoScanWizardSection(
     )
     if (cli != null) {
         // Before the options: choosing Chat hides some of them (Claude's
-        // Focus view), which must not move this control under the finger.
+        // Focus view and Code Mode), which must not move this control under the finger.
         AutoScanSessionViewField(
             cli = cli,
             chatAvailable = state.autoScanChatAvailable,
             chatSupport = state.chatSupport(cli),
-            lockedHint = state.autoScanChatLockedHint,
             selected = state.autoScanUi,
             onSelect = viewModel::setAutoScanUi,
         )
@@ -905,19 +904,17 @@ private fun AutoScanSessionViewField(
     cli: String,
     chatAvailable: Boolean,
     chatSupport: ChatSupport?,
-    lockedHint: String?,
     selected: String,
     onSelect: (String) -> Unit,
 ) {
     val junieTrust = chatAvailable && cli == "junie" && selected == AUTO_SCAN_UI_TERMINAL
     SessionViewField(
         chatSelected = selected == AUTO_SCAN_UI_CHAT,
-        chatEnabled = chatAvailable && lockedHint == null,
+        chatEnabled = chatAvailable,
         onSelect = { chat -> onSelect(if (chat) AUTO_SCAN_UI_CHAT else AUTO_SCAN_UI_TERMINAL) },
         hint = when {
             // The probe has not answered yet: the shared hint knows only its answers.
             !chatAvailable -> chatUnavailableHint(chatSupport, cli) ?: "Checking the chat view on the PC…"
-            lockedHint != null -> lockedHint
             junieTrust -> "Junie asks to trust a new worktree unless you trusted the workspace folder in Junie. " +
                 "Trust it once in Junie, or use Chat."
             else -> null

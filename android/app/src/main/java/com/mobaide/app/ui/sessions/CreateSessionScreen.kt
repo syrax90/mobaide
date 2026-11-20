@@ -1413,7 +1413,7 @@ private fun StandardConfigSection(
 ) {
     AgentSessionViewField(
         terminalUi = state.claudeTerminalUi,
-        lockedHint = state.claudeChatLockedHint,
+        lockedHint = state.claudeChatUnavailableHint,
         onTerminalUiChange = viewModel::toggleTerminalUi,
     )
     if (state.claudeResumeAvailable) {
@@ -1452,11 +1452,14 @@ private fun StandardConfigSection(
         onAppendSystemPromptChange = viewModel::setClaudeAppendSystemPrompt,
         showDebug = !state.claudeUsesChat,
         leadingContent = {
-            CodeModeToggle(
-                checked = state.claudeCodeMode,
-                hint = CLAUDE_CODE_MODE_HINT,
-                onChange = viewModel::toggleClaudeCodeMode,
-            )
+            // Like Focus view: Code Mode is a terminal option, so the chat view hides it.
+            if (!state.claudeUsesChat) {
+                CodeModeToggle(
+                    checked = state.claudeCodeMode,
+                    hint = CLAUDE_CODE_MODE_HINT,
+                    onChange = viewModel::toggleClaudeCodeMode,
+                )
+            }
         },
     )
 
@@ -1521,7 +1524,7 @@ private fun AdvancedSection(content: @Composable () -> Unit) {
 
 internal const val CLAUDE_CODE_MODE_HINT =
     "Experimental. Claude writes JavaScript that makes several tool calls in one step. " +
-        "Sessions open in the terminal. Claude Code asks you to confirm until you accept; " +
+        "Terminal only. Claude Code asks you to confirm until you accept; " +
         "turn Code Mode off here to stop the question."
 internal const val OPENCODE_CODE_MODE_HINT =
     "OpenCode 2 calls MCP tools from JavaScript, several in one step. " +
@@ -2594,11 +2597,13 @@ internal fun AutoScanClaudeOptions(
         onDebugToggle = viewModel::toggleAutoScanClaudeDebug,
         onAppendSystemPromptChange = viewModel::setAutoScanClaudeAppendSystemPrompt,
         leadingContent = {
-            CodeModeToggle(
-                checked = state.autoScanClaudeCodeMode,
-                hint = CLAUDE_CODE_MODE_HINT,
-                onChange = viewModel::toggleAutoScanClaudeCodeMode,
-            )
+            if (state.autoScanUi != AUTO_SCAN_UI_CHAT) {
+                CodeModeToggle(
+                    checked = state.autoScanClaudeCodeMode,
+                    hint = CLAUDE_CODE_MODE_HINT,
+                    onChange = viewModel::toggleAutoScanClaudeCodeMode,
+                )
+            }
         },
     )
 }

@@ -11,13 +11,12 @@ import {
   autoScanIntervalLabel,
   type AutoScanAgentOption,
 } from '../autoScanSetup';
-import { autoScanCodeModeLocksTerminal } from '../buildCreateRequest';
 import type { AutoScanSourcesView } from '../useAutoScanSources';
 import type { AutoScanTemplatesView } from '../useAutoScanTemplates';
 import type { AutoScanSource, AutoScanUi, WizardAction, WizardState } from '../wizardState';
 import { AntigravityOptionsPanel } from './AntigravityOptionsPanel';
 import { AutoScanTemplatesPanel } from './AutoScanTemplatesPanel';
-import { CLAUDE_CODE_MODE_CHAT_NOTE, ClaudeAdvancedPanel } from './ClaudeAdvancedPanel';
+import { ClaudeAdvancedPanel } from './ClaudeAdvancedPanel';
 import { ClaudeOptionsPanel } from './ClaudeOptionsPanel';
 import { CodexOptionsPanel } from './CodexOptionsPanel';
 import { CopilotOptionsPanel } from './CopilotOptionsPanel';
@@ -78,7 +77,6 @@ export function AutoScanPanel({
   const agentName = useId();
   const setup = state.autoScanSetup;
   const chosenAgent = agents.find((entry) => entry.id === setup.cli);
-  const codeModeLock = autoScanCodeModeLocksTerminal(state);
 
   return (
     <>
@@ -166,13 +164,12 @@ export function AutoScanPanel({
         <AutoScanSessionView
           agent={chosenAgent}
           ui={setup.ui}
-          codeModeLock={codeModeLock}
           dispatch={dispatch}
         />
         <AgentOptions
           state={state}
           models={models}
-          inChat={setup.ui === 'chat' && chosenAgent?.chat === true && !codeModeLock}
+          inChat={setup.ui === 'chat' && chosenAgent?.chat === true}
           dispatch={dispatch}
         />
       </ScanStep>
@@ -217,17 +214,14 @@ export function AutoScanPanel({
 function AutoScanSessionView({
   agent,
   ui,
-  codeModeLock,
   dispatch,
 }: {
   agent: AutoScanAgentOption | undefined;
   ui: AutoScanUi;
-  /** Claude Code Mode holds the terminal. */
-  codeModeLock: boolean;
   dispatch: (action: WizardAction) => void;
 }) {
   if (agent === undefined) return null;
-  const chatEnabled = agent.chat && !codeModeLock;
+  const chatEnabled = agent.chat;
   const shown: AutoScanUi = ui === 'chat' && chatEnabled ? 'chat' : 'terminal';
   return (
     <SessionViewChoice
@@ -244,7 +238,6 @@ function AutoScanSessionView({
             : terminalUiHint(agent.chatSupport, agent.id)}
         </p>
       )}
-      {agent.chat && codeModeLock && <p className="field-hint">{CLAUDE_CODE_MODE_CHAT_NOTE}</p>}
       {agent.chat && agent.id === 'junie' && shown === 'terminal' && (
         <p className="field-hint">{AUTO_SCAN_JUNIE_TRUST_HINT}</p>
       )}
@@ -347,7 +340,7 @@ function AgentOptions({
             bucket={state.autoScan}
             bucketId="autoScan"
             dispatch={dispatch}
-            codeMode
+            codeMode={!inChat}
           />
         </>
       );

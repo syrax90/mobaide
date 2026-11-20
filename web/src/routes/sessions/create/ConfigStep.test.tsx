@@ -256,7 +256,11 @@ describe('ConfigStep — Code Mode', () => {
   const CLAUDE_CHAT = versionWithChat({ claude: { resume: true, live: true } });
 
   it('writes Claude Code Mode to the Claude bucket from its Advanced section', () => {
-    const actions = renderStep('claude', STATE, CLAUDE_CHAT);
+    const actions = renderStep(
+      'claude',
+      { ...STATE, claude: { ...STATE.claude, terminalUi: true } },
+      CLAUDE_CHAT,
+    );
 
     const toggle = screen.getByLabelText('Code Mode');
     expect(screen.getByText('Advanced').closest('details')?.contains(toggle)).toBe(true);
@@ -272,7 +276,7 @@ describe('ConfigStep — Code Mode', () => {
     });
   });
 
-  it('holds Terminal while Claude Code Mode is on, and offers no Continue', () => {
+  it('keeps the Chat choice with Claude Code Mode on, and hides Code Mode in the chat view', () => {
     renderStep(
       'claude',
       { ...STATE, claude: { ...STATE.claude, codeMode: true } },
@@ -280,23 +284,10 @@ describe('ConfigStep — Code Mode', () => {
       () => undefined,
     );
 
-    expect(terminalChoice()).toBeChecked();
-    expect(chatChoice()).toBeDisabled();
-    expect(
-      screen.getByText(
-        'Code Mode runs only in the terminal. Turn it off under Advanced to use the chat.',
-      ),
-    ).toBeInTheDocument();
-    // A Continue opens the chat view, where Claude Code has no Code Mode.
-    expect(screen.queryByText('Continue a session…')).not.toBeInTheDocument();
-  });
-
-  it('gives the Chat choice back to the user once Claude Code Mode is off', () => {
-    renderStep('claude', STATE, CLAUDE_CHAT, () => undefined);
-
     expect(chatChoice()).toBeChecked();
     expect(chatChoice()).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Continue a session…' })).toBeEnabled();
+    expect(screen.queryByLabelText('Code Mode')).not.toBeInTheDocument();
   });
 
   it('offers no Code Mode for an Auto Scan', () => {

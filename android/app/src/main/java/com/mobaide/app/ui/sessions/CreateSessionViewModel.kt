@@ -460,17 +460,9 @@ fun chatUnavailableHint(chat: ChatSupport?, kind: String = "claude"): String? = 
 }
 
 val CreateSessionUiState.claudeUsesChat: Boolean
-    get() = usesChat(claudeTerminalUi || claudeCodeMode, claudeChat)
+    get() = usesChat(claudeTerminalUi, claudeChat)
 
 val CreateSessionUiState.claudeChatUnavailableHint: String? get() = chatUnavailableHint(claudeChat)
-
-/** Why Chat is locked off for Claude Code, or null while the user picks the view. */
-val CreateSessionUiState.claudeChatLockedHint: String?
-    get() = claudeChatUnavailableHint
-        ?: CLAUDE_CODE_MODE_TERMINAL_HINT.takeIf { claudeCodeMode }
-
-private const val CLAUDE_CODE_MODE_TERMINAL_HINT =
-    "Code Mode runs only in the terminal. Turn it off under Advanced to use the chat."
 
 /** "Continue a session" is offered: chat view, and the agent can list stored sessions. */
 val CreateSessionUiState.claudeResumeAvailable: Boolean
@@ -687,15 +679,11 @@ val CreateSessionUiState.autoScanChatAvailable: Boolean
 
 /** The session view a start sends: the choice, or Terminal while the agent has no chat view. */
 val CreateSessionUiState.autoScanUi: String
-    get() = if (autoScan.ui == AUTO_SCAN_UI_CHAT && autoScanChatAvailable && autoScanChatLockedHint == null) {
+    get() = if (autoScan.ui == AUTO_SCAN_UI_CHAT && autoScanChatAvailable) {
         AUTO_SCAN_UI_CHAT
     } else {
         AUTO_SCAN_UI_TERMINAL
     }
-
-/** Why Chat is locked off by the chosen options, or null: Claude Code Mode runs only in the terminal. */
-val CreateSessionUiState.autoScanChatLockedHint: String?
-    get() = CLAUDE_CODE_MODE_TERMINAL_HINT.takeIf { autoScanCli == "claude" && autoScanClaudeCodeMode }
 
 /** The Auto Scan agent, when the agent offers it; a remembered kind it no longer lists is no choice. */
 val CreateSessionUiState.autoScanCli: String?

@@ -552,7 +552,7 @@ describe('buildStartScanRequest — agent with capabilities.autoscan', () => {
     expect(withSetup({ ui }, 'scan', chat)?.ui).toBe(sent);
   });
 
-  it('sends each agent’s Code Mode, and Claude Code Mode holds the terminal', () => {
+  it('sends each agent’s Code Mode, and the chat view ignores Claude Code Mode', () => {
     const scan = (cli: string, state: Partial<WizardState>) =>
       buildStartScanRequest({
         state: {
@@ -568,8 +568,19 @@ describe('buildStartScanRequest — agent with capabilities.autoscan', () => {
     const agents = POPULATED.autoScanAgents;
 
     const claude = scan('claude', { autoScan: { ...POPULATED.autoScan, codeMode: true } });
-    expect([claude?.claude_options?.code_mode, claude?.ui]).toEqual([true, 'terminal']);
-    expect(scan('claude', {})?.ui).toBe('chat');
+    expect([claude?.claude_options?.code_mode, claude?.ui]).toEqual([false, 'chat']);
+    const terminal = buildStartScanRequest({
+      state: {
+        ...POPULATED,
+        autoScan: { ...POPULATED.autoScan, codeMode: true },
+        autoScanSetup: { ...POPULATED.autoScanSetup, source: 'github', cli: 'claude', ui: 'terminal' },
+      },
+      mode: 'auto_scan',
+      workspace: gitWorkspace,
+      autoScan,
+      autoScanChat: { kind: 'available', resume: true, live: true },
+    });
+    expect([terminal?.claude_options?.code_mode, terminal?.ui]).toEqual([true, 'terminal']);
     expect(scan('opencode', {})?.opencode_options?.code_mode).toBe(true);
     expect(
       scan('opencode', { autoScanAgents: { ...agents, opencode: { ...agents.opencode, codeMode: false } } })
@@ -1203,16 +1214,22 @@ describe('Code Mode', () => {
     open_elsewhere: undefined,
   };
 
-  it('opens Claude Code in the terminal, the one place it runs Code Mode', () => {
-    const request = buildCreateRequest({
+  it('sends Claude Code Mode only with the terminal; the chat view ignores it', () => {
+    const chat = buildCreateRequest({
       state: CLAUDE_CODE_MODE,
       mode: 'claude',
       workspace: gitWorkspace,
       chat: AVAILABLE,
     });
+    const terminal = buildCreateRequest({
+      state: { ...CLAUDE_CODE_MODE, claude: { ...CLAUDE_CODE_MODE.claude, terminalUi: true } },
+      mode: 'claude',
+      workspace: gitWorkspace,
+      chat: AVAILABLE,
+    });
 
-    expect(request?.ui).toBe('terminal');
-    expect(request?.claude_options?.code_mode).toBe(true);
+    expect([chat?.ui, chat?.claude_options?.code_mode]).toEqual(['chat', false]);
+    expect([terminal?.ui, terminal?.claude_options?.code_mode]).toEqual(['terminal', true]);
   });
 
   it('sends Claude Code Mode off explicitly by default, in the chat view', () => {
@@ -1272,7 +1289,11 @@ describe('Code Mode', () => {
   it.each<[string, () => CreateSessionRequest, (wire: CreateSessionRequest) => unknown]>([
     [
       'Claude Code',
-      () => build('claude', CLAUDE_CODE_MODE),
+      () =>
+        build('claude', {
+          ...CLAUDE_CODE_MODE,
+          claude: { ...CLAUDE_CODE_MODE.claude, terminalUi: true },
+        }),
       (wire) => wire.claude_options?.code_mode,
     ],
     [

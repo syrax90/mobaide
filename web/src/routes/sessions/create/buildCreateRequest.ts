@@ -77,18 +77,11 @@ export interface BuildContext {
   autoScanChat?: ChatSupport;
 }
 
-/** Claude Code Mode runs only in the terminal, so it holds an Auto Scan there. */
-export function autoScanCodeModeLocksTerminal(state: WizardState): boolean {
-  return state.autoScanSetup.cli === 'claude' && state.autoScan.codeMode;
-}
-
 /**
  * The view an Auto Scan opens each issue's session in: the chat only when it
- * was chosen, the PC is known to have a chat view for the agent, and Claude
- * Code Mode does not hold the terminal.
+ * was chosen and the PC is known to have a chat view for the agent.
  */
 export function autoScanUi(state: WizardState, chat: ChatSupport | undefined): AutoScanUi {
-  if (autoScanCodeModeLocksTerminal(state)) return 'terminal';
   return state.autoScanSetup.ui === 'chat' && chat?.kind === 'available' ? 'chat' : 'terminal';
 }
 
@@ -103,13 +96,8 @@ export function usesChatView(terminalUi: boolean, chat: ChatSupport | undefined)
   return kind === 'available' || kind === 'unknown';
 }
 
-/** Claude Code's Terminal UI, also implied by Code Mode, which runs only there. */
-export function claudeTerminalUi(bucket: ClaudeBucket): boolean {
-  return bucket.terminalUi || bucket.codeMode;
-}
-
 export function claudeUsesChat(bucket: ClaudeBucket, chat: ChatSupport | undefined): boolean {
-  return usesChatView(claudeTerminalUi(bucket), chat);
+  return usesChatView(bucket.terminalUi, chat);
 }
 
 /** The agent kinds whose sessions can open in the chat view. */
@@ -140,7 +128,7 @@ export function chatAgentKind(mode: WizardMode | null): ChatAgentKind | null {
 export function terminalUiOf(state: WizardState, kind: ChatAgentKind): boolean {
   switch (kind) {
     case 'claude':
-      return claudeTerminalUi(state.claude);
+      return state.claude.terminalUi;
     case 'codex':
       return state.codex.terminalUi;
     case 'antigravity':
@@ -685,7 +673,12 @@ export function buildStartScanRequest(context: BuildContext): StartScanRequest |
     ui: autoScanUi(state, context.autoScanChat),
     interval_minutes: state.autoScanSetup.intervalMinutes,
     ...(cli === 'claude'
-      ? { claude_options: scanClaudeOptions(state.autoScan, state.autoScan.codeMode) }
+      ? {
+          claude_options: scanClaudeOptions(
+            state.autoScan,
+            state.autoScan.codeMode && autoScanUi(state, context.autoScanChat) === 'terminal',
+          ),
+        }
       : scanAgentOptions(state, cli)),
   };
 }
