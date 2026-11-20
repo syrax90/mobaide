@@ -191,10 +191,10 @@ class SessionListViewModel @Inject constructor(
         }
     }
 
-    fun deleteSession(sessionId: String, force: Boolean = false) {
+    fun deleteSession(sessionId: String, force: Boolean = false, removeWorktree: Boolean = false) {
         viewModelScope.launch {
             try {
-                sessionRepository.deleteSession(sessionId, force)
+                sessionRepository.deleteSession(sessionId, force, removeWorktree)
             } catch (e: ApiException) {
                 // A 404 means the session is already gone, so the stop the user
                 // asked for has happened (the panel's rule).

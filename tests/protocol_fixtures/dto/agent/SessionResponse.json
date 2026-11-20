@@ -131,6 +131,38 @@
         "ui": "terminal",
         "activity": "working"
       }
+    },
+    {
+      "name": "worktree_branch",
+      "wire": {
+        "session_id": "s8",
+        "state": "running",
+        "created_at": "2026-11-19T12:00:00Z",
+        "pid": 99,
+        "command": ["claude"],
+        "cwd": "/home/user/.mobaide/worktrees/proj/feature-x",
+        "title": null,
+        "project_name": "proj",
+        "kind": "claude",
+        "kind_label": null,
+        "attention": null,
+        "exit_reason": null,
+        "ui": "terminal",
+        "activity": null,
+        "worktree_branch": "feature/x"
+      },
+      "decoded_canonical": {
+        "session_id": "s8",
+        "state": "running",
+        "created_at": "2026-11-19T12:00:00Z",
+        "pid": 99,
+        "command": ["claude"],
+        "cwd": "/home/user/.mobaide/worktrees/proj/feature-x",
+        "project_name": "proj",
+        "kind": "claude",
+        "ui": "terminal",
+        "worktree_branch": "feature/x"
+      }
     }
   ]
 }

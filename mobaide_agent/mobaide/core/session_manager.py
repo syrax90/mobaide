@@ -259,6 +259,7 @@ class SessionManager:
             append_path_dir(plan.env, config.chat_path_append)
         if config.project_name is not None and options is not None and getattr(options, "worktree", False):
             self._remember_worktree_base(config.project_name, options.base_branch)
+            config.worktree_branch = await self._worktree_branch(target.path, plan.cwd)
         config.command = plan.argv
         config.cwd = plan.cwd
         config.env = plan.env
@@ -400,6 +401,7 @@ class SessionManager:
         config.env = spec.env
         if options.worktree:
             self._remember_worktree_base(workspace.name, options.base_branch)
+            config.worktree_branch = await self._worktree_branch(workspace.path, spec.cwd)
 
     def _remember_worktree_base(self, workspace_name: str, base: str | None) -> None:
         if self._workspaces_store is None:
@@ -409,6 +411,17 @@ class SessionManager:
             self._workspaces_store.set_last_worktree_base(workspace_name, base)
         except OSError:
             logger.warning("session_manager.remember_worktree_base_failed", exc_info=True)
+
+    async def _worktree_branch(self, workspace_path: str, cwd: str | None) -> str | None:
+        """The branch of the linked worktree a ``worktree`` request put the
+        session in; ``None`` when it fell back to the workspace root."""
+        if cwd is None or self._worktree_mgr is None:
+            return None
+        try:
+            return await self._worktree_mgr.linked_worktree_branch(workspace_path, cwd)
+        except Exception:
+            logger.warning("session_manager.worktree_branch_failed", exc_info=True)
+            return None
 
     async def _apply_adhoc_launch(self, config: SessionConfig) -> None:
         """Build an ad-hoc managed-CLI launch against ``config.cwd`` and overwrite command/cwd/env in place.
@@ -450,6 +463,7 @@ class SessionManager:
                 workspace.path, config.branch_name, config.base_branch,
             )
             self._remember_worktree_base(workspace.name, config.base_branch)
+            config.worktree_branch = await self._worktree_branch(workspace.path, config.cwd)
         else:
             config.cwd = workspace.path
 

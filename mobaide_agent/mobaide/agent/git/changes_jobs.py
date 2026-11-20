@@ -392,6 +392,21 @@ class GitJob:
             logger.exception("git.job.publish_failed")
 
 
+def prune_finished(jobs: dict[str, Any]) -> None:
+    """Drop finished jobs older than ``FINISHED_TTL``, then the oldest past
+    ``MAX_FINISHED``; running jobs (``finished_at is None``) always stay."""
+    now = time.monotonic()
+    finished = sorted(
+        (job for job in jobs.values() if job.finished_at is not None),
+        key=lambda job: job.finished_at,
+    )
+    keep = [job for job in finished if now - job.finished_at <= FINISHED_TTL]
+    drop = [job for job in finished if now - job.finished_at > FINISHED_TTL]
+    drop += keep[: max(0, len(keep) - MAX_FINISHED)]
+    for job in drop:
+        jobs.pop(job.job_id, None)
+
+
 class GitJobRegistry:
     """All jobs the agent knows: the running one per toplevel plus finished
     ones kept for ``FINISHED_TTL`` so a client can reconcile after a missed
@@ -476,15 +491,7 @@ class GitJobRegistry:
         return job
 
     def _prune(self) -> None:
-        now = time.monotonic()
-        finished = sorted(
-            (job for job in self._jobs.values() if job.finished_at is not None),
-            key=lambda job: job.finished_at or 0.0,
-        )
-        stale = [job for job in finished if now - (job.finished_at or 0.0) > FINISHED_TTL]
-        overflow = max(0, len(finished) - len(stale) - MAX_FINISHED)
-        for job in stale + [job for job in finished if job not in stale][:overflow]:
-            self._jobs.pop(job.job_id, None)
+        prune_finished(self._jobs)
 
     async def _run(self, job: GitJob, key: str) -> None:
         try:

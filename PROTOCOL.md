@@ -125,6 +125,18 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-19: remove a session's worktree when it stops
+
+Additive delta within proto-v7 (2026-11-19): **one session field, one stop query parameter. No version bump; `central_server` is untouched.**
+
+| Where | Change |
+|-------|--------|
+| `SessionResponse.worktree_branch` (REST list, `sessions.changed`, `session.updated`) | `str \| null`. The local branch of the linked worktree the agent made (or reused) for a `worktree: true` create. `null` when the session runs anywhere else, when the create fell back to the workspace root, or when the worktree HEAD was detached. |
+| `DELETE /api/sessions/{id}?remove_worktree=true` (both transports) | After the stop, the agent removes that worktree and its local branch with `force` (uncommitted changes and unmerged commits are lost). It deletes the `worktree_branch` the client showed, even when the worktree has another branch checked out by then, so a branch the user did not confirm is never deleted. The removal runs as a background delete job (see *workspace Git delete jobs*) and publishes `git.changed`. The answer stays `204` and does not wait for the job. |
+
+* The removal is best effort: the stop has already succeeded. When the busy guard refuses (another session or auto-scan item works in the same worktree) or 8 jobs already run, the agent logs it and keeps the worktree. It never removes the workspace root. For every workspace Git delete (this one and the Git screen's), a session or auto-scan item in a sub-folder of a worktree now counts as a holder too, because it loses its working directory when the worktree goes.
+* Clients offer the removal in the Stop / Force Stop confirmation only when `worktree_branch` is set, as a checkbox that is never pre-checked (iOS: a sheet, because a confirmation dialog cannot host a toggle). While another session in the list has the same `cwd`, the checkbox is disabled and says why, because the busy guard would refuse the removal. Older agents never send the field, so no client offers it to them.
+
 ### Delta 2026-11-18: Auto Scan sources and agents
 
 Additive delta within proto-v7 (2026-11-18, extended 2026-11-19 before release): **one capability, six routes, new optional fields. No version bump; `central_server` is untouched** (its proxy forwards any `/api/...` path).
@@ -179,6 +191,24 @@ A start without the chosen agent's object runs it without asking: Codex `full_au
 * `interval_minutes` sets the wait after each cycle for this scan only; `run-now` still starts a cycle at once.
 * Remembered choices: a start saves `source`, `cli`, `ui`, `interval_minutes`, the chosen agent's options, the sent filter and `linear_api_key` on the workspace before the scan starts, also when the start then fails; a start that `409`s or `429`s saves nothing. The prompt is saved once the scan runs. A workspace created without a filter has `auto_scan.linear_filter: null`. An earlier agent wrote the legacy defaults into every workspace; those load as `null` unless the workspace has a Linear key or its last scan was a Linear one.
 * An older client (no `source`) starts a Linear scan with the stored filter, or the legacy defaults, and Claude Code, as before.
+
+### Delta 2026-11-18: workspace Git delete jobs
+
+Additive delta within proto-v7 (2026-11-18): **two workspace Git routes, one capability key, one earlier `force_required`. No version bump; `central_server` is untouched.**
+
+`POST …/git/items:delete` removes the worktrees one by one inside one request. A large batch outlasted the relay's 30 s budget: the client lost the results, and with them the force prompt for unmerged branches. The relay reader also awaited the batch inline, so the whole tunnel (even the Git screen's own list) froze until it ended.
+
+| Where | Change |
+|-------|--------|
+| `POST /api/projects/{name}/git/delete-jobs` | Body `GitDeleteRequest`. The busy guard runs first and answers the same `409 {detail: {busy_by}}` as `items:delete`. Then `202 GitDeleteJobResponse` at once. `409 {detail: {code: "too_many_jobs"}}` while 8 jobs run on the agent. |
+| `GET /api/projects/{name}/git/delete-jobs/{job_id}` | `200 GitDeleteJobResponse`. `404 {detail: {code: "job_not_found"}}` for an unknown id (the agent restarted, or the job finished more than 10 minutes ago; at most 100 finished jobs are kept). |
+| `GitDeleteJobResponse` | `job_id`, `status` (`running` \| `done`), `total`, `completed` (items processed so far), `results` (`null` while running, then the same per-item results as `items:delete`, in request order). A batch that fails unexpectedly ends `done` with an `error` result for every item, and `git.changed` is published so the list shows the truth. |
+| `capabilities.git.delete_jobs` | `true` on agents with the two routes. Clients use the job and poll it every second. They reload the list when the job ends `done` (a relay reconnect can drop the agent's single `git.changed`). They give up at once on `404`, or after 2 minutes with no successful poll (a relay reconnect must not lose the results), and then reload the list too. Without the key they keep `items:delete`. One batch runs at a time per screen. |
+| `branch_with_worktree` without `force` | The agent checks whether `git branch -d` would refuse the branch (git's own rule: merged into its upstream when that ref resolves, else into `HEAD`) **before** it removes the worktree. An unmerged branch answers `force_required` and leaves the worktree in place, so the force confirmation removes both. Earlier agents removed the worktree first and kept the branch. |
+
+* The job runs `items:delete`'s batch logic unchanged: the same order, audit events and one `git.changed` when anything changed. It is not cancellable.
+* The relay now runs `POST …/items:delete` aside from the tunnel reader (at most 4 at a time, else `503`), so older clients no longer freeze the tunnel. Their request can still time out at the central server; the agent finishes the batch and publishes `git.changed`.
+* Golden fixture: new ``tests/protocol_fixtures/dto/agent/GitDeleteJobResponse.json``.
 
 ### Delta 2026-11-18: new conversation in a chat session
 

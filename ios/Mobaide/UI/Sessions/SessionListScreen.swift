@@ -47,20 +47,10 @@ private struct SessionListContent: View {
                 }
             }
             .refreshable { await model.refresh() }
-            .confirmationDialog(
-                "Stop session?",
-                isPresented: killPresented,
-                presenting: pendingKill
-            ) { session in
-                Button("Stop", role: .destructive) {
-                    Task { await model.deleteSession(session.session_id, force: false) }
-                }
-                Button("Force Stop", role: .destructive) {
-                    Task { await model.deleteSession(session.session_id, force: true) }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: { session in
-                Text("Stop “\(SessionDisplay.dialogLabel(session, customTypeNames: model.customTypeNames))”?")
+            .stopSessionConfirm(pending: $pendingKill, sessions: model.sessions) { session in
+                SessionDisplay.dialogLabel(session, customTypeNames: model.customTypeNames)
+            } onStop: { session, force, removeWorktree in
+                Task { await model.deleteSession(session.session_id, force: force, removeWorktree: removeWorktree) }
             }
             .toast($toast)
             .task { await model.observeSessions() }
@@ -141,13 +131,6 @@ private struct SessionListContent: View {
             }
             .pixelList()
         }
-    }
-
-    private var killPresented: Binding<Bool> {
-        Binding(
-            get: { pendingKill != nil },
-            set: { if !$0 { pendingKill = nil } }
-        )
     }
 }
 

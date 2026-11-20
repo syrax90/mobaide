@@ -1,0 +1,7 @@
+{
+  "type": "GitDeleteJobResponse",
+  "cases": [
+    { "name": "running", "wire": { "job_id": "j1", "status": "running", "total": 3, "completed": 1, "results": null }, "decoded_canonical": { "job_id": "j1", "status": "running", "total": 3, "completed": 1 } },
+    { "name": "done", "wire": { "job_id": "j1", "status": "done", "total": 1, "completed": 1, "results": [ { "kind": "branch_with_worktree", "target": "b", "ok": false, "error": "force_required", "error_detail": "error: the branch 'b' is not fully merged" } ] } }
+  ]
+}

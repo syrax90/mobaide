@@ -19,6 +19,7 @@ const ALL_GIT: GitCapabilities = {
   rebase: true,
   resolve: true,
   deleteRemote: true,
+  deleteJobs: true,
   conflicts: true,
 };
 

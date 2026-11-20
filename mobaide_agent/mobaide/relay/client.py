@@ -18,6 +18,7 @@ import struct
 import sys
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -106,6 +107,8 @@ from mobaide.agent.git.changes_service import (
 from mobaide.agent.git.changes_service import (
     http_error_for as git_changes_http_error_for,
 )
+from mobaide.agent.git.delete_jobs import delete_job_registry
+from mobaide.agent.sessions.stop import stop_session as stop_session_and_worktree
 from mobaide.agent.git.models import (
     BusyByResponse,
     GitBranchCreateRequest,
@@ -266,6 +269,11 @@ _AUTOSCAN_GITHUB_PREFIX = "/api/autoscan/github/"
 _AUTOSCAN_TEMPLATES = "/api/autoscan/templates"
 _AUTOSCAN_TEMPLATE_ROUTE = re.compile(r"^/api/autoscan/templates/([^/]+)$")
 _LINEAR_DISCOVERY_ROUTE = re.compile(r"^/api/projects/[^/]+/linear/(labels|states)$")
+# The synchronous workspace delete batch runs aside too: removing many
+# worktrees takes minutes, and an inline await freezes the whole tunnel —
+# even the Git screen's own list request — until it ends.
+_GIT_ITEMS_DELETE_ROUTE = re.compile(r"^/api/projects/[^/]+/git/items:delete$")
+MAX_GIT_PROXY_TASKS = 4
 _VOICE_ROUTE = re.compile(r"^/api/voice/(status|install|install/cancel|model|dictations|cleanup|cleanup/settings)$")
 _VOICE_DICTATION_ROUTE = re.compile(r"^/api/voice/dictations/([^/]+)(?:/(audio|finish))?$")
 
@@ -505,6 +513,8 @@ class RelayClient:
         # same reason (the first one starts the agent process).
         self._chat_proxy_tasks: set[asyncio.Task] = set()
         self._autoscan_proxy_tasks: set[asyncio.Task] = set()
+        # In-flight ``POST /api/projects/{name}/git/items:delete`` batches.
+        self._git_proxy_tasks: set[asyncio.Task] = set()
 
         # Latest manifest pointer received from central_server (auth_ok or a
         # mid-connection ``agent_manifest_update`` control frame). Consumed by
@@ -548,6 +558,7 @@ class RelayClient:
             *self._voice_proxy_tasks,
             *self._chat_proxy_tasks,
             *self._autoscan_proxy_tasks,
+            *self._git_proxy_tasks,
         ]:
             task.cancel()
         if self._task and not self._task.done():
@@ -871,6 +882,8 @@ class RelayClient:
                 or _LINEAR_DISCOVERY_ROUTE.match(path)
             ):
                 self._spawn_autoscan_proxy(ctrl, ws)
+            elif _GIT_ITEMS_DELETE_ROUTE.match(path):
+                self._spawn_git_proxy(ctrl)
             else:
                 await self._handle_proxy_request(ctrl, ws)
 
@@ -1947,9 +1960,17 @@ class RelayClient:
         if m and method == "DELETE":
             session_id = m.group(1)
             force = (query or {}).get("force", "false").lower() == "true"
+            remove_worktree = (
+                (query or {}).get("remove_worktree", "false").lower() == "true"
+            )
             try:
-                await self._session_manager.stop_session(
-                    session_id, force=force
+                await stop_session_and_worktree(
+                    self._session_manager,
+                    session_id,
+                    force=force,
+                    remove_worktree=remove_worktree,
+                    app_state=self._app_state,
+                    actor=None,
                 )
                 return {"status": 204, "body": None}
             except KeyError:
@@ -2274,12 +2295,15 @@ class RelayClient:
         """
         match = re.match(
             r"^/api/projects/([^/]+)/git/"
-            r"(items|items:delete|branches|checkout|worktree-bases)$",
+            r"(items|items:delete|branches|checkout|worktree-bases|delete-jobs"
+            r"|delete-jobs/([^/]+))$",
             path,
         )
         if match is None:
             return None
-        name, route = match.group(1), match.group(2)
+        name, route, job_id = match.group(1), match.group(2), match.group(3)
+        if job_id is not None:
+            route = "delete-jobs/{job_id}"
         is_items = route == "items"
 
         store = getattr(self._app_state, "workspaces_store", None)
@@ -2343,8 +2367,19 @@ class RelayClient:
                 return {"status": mapped[0], "body": mapped[1]}
             return {"status": 200, "body": bases.model_dump()}
 
+        if route == "delete-jobs/{job_id}" and method == "GET":
+            try:
+                job = delete_job_registry.get(job_id or "")
+            except Exception as exc:
+                mapped = git_changes_http_error_for(exc)
+                if mapped is None:
+                    raise
+                return {"status": mapped[0], "body": mapped[1]}
+            return {"status": 200, "body": job.model_dump()}
+
         post_routes = {
             "items:delete": (GitDeleteRequest, delete_git_items),
+            "delete-jobs": (GitDeleteRequest, delete_job_registry.start),
             "branches": (GitBranchCreateRequest, create_branch),
             "checkout": (GitCheckoutRequest, checkout_ref),
         }
@@ -2386,7 +2421,8 @@ class RelayClient:
                 if mapped is None:
                     raise
                 return {"status": mapped[0], "body": mapped[1]}
-            return {"status": 200, "body": resp.model_dump()}
+            status_code = 202 if route == "delete-jobs" else 200
+            return {"status": status_code, "body": resp.model_dump()}
 
         return None
 
@@ -2547,39 +2583,50 @@ class RelayClient:
             return {"status": mapped[0], "body": mapped[1]}
         return {"status": 200, "body": resp.model_dump(mode="json")}
 
-    def _spawn_voice_proxy(self, ctrl: dict) -> None:
-        if len(self._voice_proxy_tasks) >= MAX_VOICE_PROXY_TASKS:
+    def _spawn_aside(
+        self,
+        ctrl: dict,
+        tasks: set[asyncio.Task],
+        limit: int,
+        run: Callable[[dict], Awaitable[None]],
+        name: str,
+        busy_detail: Any = "Too many requests in flight",
+    ) -> None:
+        """Run a slow proxy route aside from the tunnel reader, so it never
+        holds up other frames; past ``limit`` in flight it answers 503."""
+        if len(tasks) >= limit:
             coro = self._send_proxy_result(
-                ctrl,
-                {
-                    "status": 503,
-                    "body": {
-                        "detail": {
-                            "code": "voice_busy",
-                            "message": "Too many voice requests are in flight.",
-                        }
-                    },
-                },
+                ctrl, {"status": 503, "body": {"detail": busy_detail}},
             )
         else:
-            coro = self._run_voice_proxy(ctrl)
-        task = asyncio.create_task(coro, name="relay-voice-proxy")
-        self._voice_proxy_tasks.add(task)
-        task.add_done_callback(self._voice_proxy_tasks.discard)
+            coro = run(ctrl)
+        task = asyncio.create_task(coro, name=name)
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+    def _spawn_voice_proxy(self, ctrl: dict) -> None:
+        self._spawn_aside(
+            ctrl,
+            self._voice_proxy_tasks,
+            MAX_VOICE_PROXY_TASKS,
+            self._run_voice_proxy,
+            "relay-voice-proxy",
+            busy_detail={
+                "code": "voice_busy",
+                "message": "Too many voice requests are in flight.",
+            },
+        )
 
     def _spawn_autoscan_proxy(self, ctrl: dict, ws: ClientConnection) -> None:
         """Run an Auto Scan route aside from the tunnel reader: each call to
         GitHub or Linear can take seconds."""
-        if len(self._autoscan_proxy_tasks) >= MAX_AUTOSCAN_PROXY_TASKS:
-            coro = self._send_proxy_result(
-                ctrl,
-                {"status": 503, "body": {"detail": "Too many requests in flight"}},
-            )
-        else:
-            coro = self._run_autoscan_proxy(ctrl, ws)
-        task = asyncio.create_task(coro, name="relay-autoscan-proxy")
-        self._autoscan_proxy_tasks.add(task)
-        task.add_done_callback(self._autoscan_proxy_tasks.discard)
+        self._spawn_aside(
+            ctrl,
+            self._autoscan_proxy_tasks,
+            MAX_AUTOSCAN_PROXY_TASKS,
+            lambda c: self._run_autoscan_proxy(c, ws),
+            "relay-autoscan-proxy",
+        )
 
     async def _run_autoscan_proxy(self, ctrl: dict, ws: ClientConnection) -> None:
         try:
@@ -2597,18 +2644,41 @@ class RelayClient:
         await self._send_proxy_result(ctrl, result)
 
     def _spawn_chat_proxy(self, ctrl: dict) -> None:
-        """Run a stored-chat-sessions listing aside from the tunnel reader:
-        its first call starts the agent process, which takes seconds."""
-        if len(self._chat_proxy_tasks) >= MAX_CHAT_PROXY_TASKS:
-            coro = self._send_proxy_result(
-                ctrl,
-                {"status": 503, "body": {"detail": "Too many requests in flight"}},
+        """A stored-chat-sessions listing: its first call starts the agent
+        process, which takes seconds."""
+        self._spawn_aside(
+            ctrl,
+            self._chat_proxy_tasks,
+            MAX_CHAT_PROXY_TASKS,
+            self._run_chat_proxy,
+            "relay-chat-proxy",
+        )
+
+    def _spawn_git_proxy(self, ctrl: dict) -> None:
+        self._spawn_aside(
+            ctrl,
+            self._git_proxy_tasks,
+            MAX_GIT_PROXY_TASKS,
+            self._run_git_proxy,
+            "relay-git-proxy",
+        )
+
+    async def _run_git_proxy(self, ctrl: dict) -> None:
+        method = str(ctrl.get("method", "GET")).upper()
+        path = str(ctrl.get("path", ""))
+        try:
+            result = await self._dispatch_git(
+                method, path, ctrl.get("body"), ctrl.get("query"),
             )
-        else:
-            coro = self._run_chat_proxy(ctrl)
-        task = asyncio.create_task(coro, name="relay-chat-proxy")
-        self._chat_proxy_tasks.add(task)
-        task.add_done_callback(self._chat_proxy_tasks.discard)
+            if result is None:
+                result = {
+                    "status": 404,
+                    "body": {"detail": f"Unknown proxy route: {method} {path}"},
+                }
+        except Exception as exc:
+            logger.warning("relay.proxy_request_failed path=%s: %s", path, exc)
+            result = {"status": 500, "body": {"detail": str(exc)}}
+        await self._send_proxy_result(ctrl, result)
 
     async def _run_chat_proxy(self, ctrl: dict) -> None:
         method = str(ctrl.get("method", "GET")).upper()

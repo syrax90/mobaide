@@ -87,6 +87,7 @@ TAR_EXCLUDES = (
     "--exclude=*.db-journal",
     "--exclude=*.db-wal",
     "--exclude=*.db-shm",
+    "--exclude=site_lastmod.json",
     "--exclude=.venv",
     "--exclude=venv",
 )

@@ -480,6 +480,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{name}/git/delete-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Delete Job Endpoint
+         * @description Start ``body`` as a background delete job and answer its first
+         *     snapshot. The busy guard runs first and refuses the batch whole with
+         *     the same 409 as ``POST /items:delete``; ``409 too_many_jobs`` past the
+         *     agent's running-job cap.
+         */
+        post: operations["start_delete_job_endpoint_api_projects__name__git_delete_jobs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{name}/git/delete-jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Delete Job Endpoint
+         * @description The job's current snapshot; ``404 job_not_found`` for an unknown id.
+         */
+        get: operations["get_delete_job_endpoint_api_projects__name__git_delete_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{name}/git/items": {
         parameters: {
             query?: never;
@@ -638,7 +681,8 @@ export interface paths {
         post?: never;
         /**
          * Stop Session
-         * @description Stop a session by ID.
+         * @description Stop a session by ID; ``remove_worktree`` also removes the worktree
+         *     the agent made for it and that worktree's local branch, in the background.
          */
         delete: operations["stop_session_api_sessions__session_id__delete"];
         options?: never;
@@ -2153,6 +2197,30 @@ export interface components {
             /** Worktree Path */
             worktree_path?: string | null;
         };
+        /**
+         * GitDeleteJobResponse
+         * @description A delete batch run as a background job (``POST /delete-jobs``,
+         *     ``GET /delete-jobs/{job_id}``).
+         *
+         *     ``completed`` counts the items processed so far out of ``total``.
+         *     ``results`` stays ``null`` while ``status`` is ``running`` and then holds
+         *     the same per-item outcomes, in request order, as ``POST /items:delete``.
+         */
+        GitDeleteJobResponse: {
+            /** Completed */
+            completed: number;
+            /** Job Id */
+            job_id: string;
+            /** Results */
+            results: components["schemas"]["GitDeleteResultItem"][] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "done";
+            /** Total */
+            total: number;
+        };
         /** GitDeleteRequest */
         GitDeleteRequest: {
             /** Items */
@@ -2169,7 +2237,9 @@ export interface components {
          *
          *     ``error`` codes:
          *         * ``force_required`` — branch is unmerged, or worktree holds
-         *           modified/untracked files; retry with ``force=True``.
+         *           modified/untracked files; retry with ``force=True``. For
+         *           ``branch_with_worktree`` an unmerged branch is reported before
+         *           the worktree is touched, so the retry removes both.
          *         * ``locked`` — worktree is locked.
          *         * ``not_found`` — branch or worktree no longer exists.
          *         * ``invalid`` — request payload missing the required identifier.
@@ -3014,6 +3084,8 @@ export interface components {
              * @default terminal
              */
             ui: string;
+            /** Worktree Branch */
+            worktree_branch?: string | null;
         };
         /**
          * StartScanRequest
@@ -4175,6 +4247,73 @@ export interface operations {
             };
         };
     };
+    start_delete_job_endpoint_api_projects__name__git_delete_jobs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitDeleteJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_delete_job_endpoint_api_projects__name__git_delete_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitDeleteJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_git_items_endpoint_api_projects__name__git_items_get: {
         parameters: {
             query?: {
@@ -4393,6 +4532,7 @@ export interface operations {
         parameters: {
             query?: {
                 force?: boolean;
+                remove_worktree?: boolean;
             };
             header?: never;
             path: {

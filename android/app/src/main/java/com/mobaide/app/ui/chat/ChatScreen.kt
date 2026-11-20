@@ -93,6 +93,7 @@ import com.mobaide.app.ui.sessions.panel.StopSessionDialog
 import com.mobaide.app.ui.sessions.panel.edgeSwipeToOpen
 import com.mobaide.app.ui.sessions.sessionKindLabel
 import com.mobaide.app.ui.sessions.sessionTitle
+import com.mobaide.app.ui.sessions.worktreeInUse
 import com.mobaide.app.ui.terminal.FullScreenInputSheet
 import com.mobaide.app.ui.terminal.SaveTemplateDialog
 import com.mobaide.app.ui.terminal.TemplatesPickerSheet
@@ -322,7 +323,11 @@ fun ChatScreen(
                                         enabled = ui.canStartNew,
                                         onClick = {
                                             closeMenu()
-                                            confirmNewConversation = true
+                                            if (ui.newConversationNeedsConfirm) {
+                                                confirmNewConversation = true
+                                            } else {
+                                                viewModel.newConversation()
+                                            }
                                         },
                                     )
                                 }
@@ -531,8 +536,10 @@ fun ChatScreen(
     if (closeSelf) {
         StopSessionDialog(
             label = header.title,
-            onStop = { force ->
-                panelViewModel.stopSession(viewModel.sessionId, force)
+            worktreeBranch = header.worktreeBranch,
+            worktreeInUse = worktreeInUse(viewModel.sessionId, header.cwd, panelState.sessions),
+            onStop = { force, removeWorktree ->
+                panelViewModel.stopSession(viewModel.sessionId, force, removeWorktree)
                 closeSelf = false
             },
             onDismiss = { closeSelf = false },
@@ -555,8 +562,10 @@ fun ChatScreen(
     stopTarget?.let { target ->
         StopSessionDialog(
             label = sessionTitle(target, sessionKindLabel(target, panelState.customTypeNames)),
-            onStop = { force ->
-                panelViewModel.stopSession(target.session_id, force)
+            worktreeBranch = target.worktree_branch,
+            worktreeInUse = worktreeInUse(target.session_id, target.cwd, panelState.sessions),
+            onStop = { force, removeWorktree ->
+                panelViewModel.stopSession(target.session_id, force, removeWorktree)
                 stopTarget = null
             },
             onDismiss = { stopTarget = null },

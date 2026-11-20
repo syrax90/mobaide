@@ -101,7 +101,7 @@ final class SessionsPanelModel {
     /// success needs no refetch here. One stop at a time: the panel disables
     /// every stop control while one is in flight, and a second call returns
     /// nil. A 404 means the session is already gone, so it counts as stopped.
-    func stopSession(_ id: String, force: Bool) async throws -> StoppedSession? {
+    func stopSession(_ id: String, force: Bool, removeWorktree: Bool = false) async throws -> StoppedSession? {
         guard stoppingSessionId == nil else { return nil }
         stoppingSessionId = id
         defer { stoppingSessionId = nil }
@@ -109,7 +109,7 @@ final class SessionsPanelModel {
         // stopped row before the stop resolves.
         let snapshot = sessionRepository.currentSessions
         do {
-            try await sessionRepository.deleteSession(id: id, force: force)
+            try await sessionRepository.deleteSession(id: id, force: force, removeWorktree: removeWorktree)
         } catch let error as APIError where error.code == 404 {}
         return StoppedSession(nextSessionId: Self.nearestOpenSessionId(
             snapshot: snapshot,

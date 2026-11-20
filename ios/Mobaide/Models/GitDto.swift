@@ -198,6 +198,22 @@ struct GitDeleteResponse: Codable, Equatable, Sendable {
     let results: [GitDeleteResultItem]
 }
 
+/// A delete batch run as an agent background job (`capabilities.git.delete_jobs`).
+/// `results` is nil while `status` is `running`, then holds the same per-item
+/// outcomes, in request order, as `POST /items:delete`.
+struct GitDeleteJobResponse: Codable, Equatable, Sendable {
+    let job_id: String
+    let status: String
+    let total: Int
+    let completed: Int
+    let results: [GitDeleteResultItem]?
+
+    static let statusRunning = "running"
+    static let statusDone = "done"
+
+    var isRunning: Bool { status != Self.statusDone }
+}
+
 struct BusyHolder: Codable, Equatable, Sendable {
     let kind: String
     let session_id: String?

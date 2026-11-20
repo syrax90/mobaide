@@ -24,6 +24,7 @@ import com.mobaide.app.data.network.dto.GitHubStatusDto
 import com.mobaide.app.data.network.dto.GitCheckoutRequest
 import com.mobaide.app.data.network.dto.GitBranchResponse
 import com.mobaide.app.data.network.dto.GitBranchCreateRequest
+import com.mobaide.app.data.network.dto.GitDeleteJobResponse
 import com.mobaide.app.data.network.dto.GitDeleteResponse
 import com.mobaide.app.data.network.dto.GitDiffResponse
 import com.mobaide.app.data.network.dto.GitDiscardRequest
@@ -187,9 +188,17 @@ class RestApi(
         return execute(request)
     }
 
-    suspend fun deleteSession(sessionId: String, force: Boolean = false): Unit {
+    suspend fun deleteSession(
+        sessionId: String,
+        force: Boolean = false,
+        removeWorktree: Boolean = false,
+    ): Unit {
+        val query = buildList {
+            if (force) add("force=true")
+            if (removeWorktree) add("remove_worktree=true")
+        }
         val url = "${baseUrl()}/api/sessions/$sessionId" +
-            if (force) "?force=true" else ""
+            if (query.isEmpty()) "" else query.joinToString("&", prefix = "?")
         val request = Request.Builder()
             .url(url)
             .delete()
@@ -331,6 +340,20 @@ class RestApi(
             .post(payload)
             .build()
         return execute(request)
+    }
+
+    suspend fun startGitDeleteJob(
+        workspaceName: String,
+        body: GitDeleteRequest,
+    ): GitDeleteJobResponse {
+        val payload = json.encodeToString(body).toRequestBody(jsonMediaType)
+        val url = workspaceGitUrl(workspaceName, "delete-jobs").build()
+        return execute(Request.Builder().url(url).post(payload).build())
+    }
+
+    suspend fun getGitDeleteJob(workspaceName: String, jobId: String): GitDeleteJobResponse {
+        val url = workspaceGitUrl(workspaceName, "delete-jobs").addPathSegment(jobId).build()
+        return executeCancellable(Request.Builder().url(url).get().build())
     }
 
     suspend fun getSessionGitStatus(sessionId: String, etag: String?): GitStatusResponse {

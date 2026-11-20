@@ -24,6 +24,7 @@ from mobaide.agent.git.models import (
     GitDeleteRequest,
 )
 from mobaide.agent.git.changes_service import resolve_repo_dirs
+from mobaide.agent.git.delete_jobs import delete_job_registry
 from mobaide.agent.git.service import (
     GitItemBusyError,
     _build_items,
@@ -304,6 +305,27 @@ class TestBusyHolders:
             autoscan_manager=None,
         )
         assert result == []
+
+    async def test_session_in_subfolder_matches_but_prefix_sibling_does_not(self, tmp_path):
+        # Removing the worktree takes a sub-folder cwd with it; a sibling
+        # that only shares the string prefix must stay untouched.
+        wt_dir = tmp_path / "feat"
+        (wt_dir / "src" / "pkg").mkdir(parents=True)
+        sibling = tmp_path / "feat-2"
+        sibling.mkdir()
+        canonical = os.path.normcase(os.path.realpath(str(wt_dir)))
+        sessions = [
+            types.SimpleNamespace(session_id="s-sub", cwd=str(wt_dir / "src" / "pkg")),
+            types.SimpleNamespace(session_id="s-sibling", cwd=str(sibling)),
+        ]
+        session_manager = types.SimpleNamespace(list_sessions=lambda: sessions)
+
+        result = await _busy_holders(
+            {canonical},
+            session_manager=session_manager,
+            autoscan_manager=None,
+        )
+        assert [(h.kind, h.session_id) for h in result] == [("session", "s-sub")]
 
 
     async def test_autoscan_workitem_match(self, tmp_path):
@@ -824,6 +846,180 @@ class TestGitRouterEndpoints:
         items = resp3.json()["items"]
         assert all(i.get("worktree_path") != topic_wt for i in items)
         assert all(i.get("branch") != "topic" for i in items)
+
+    async def test_unmerged_branch_with_worktree_keeps_worktree_until_forced(
+        self, client_git, auth_headers_g, real_repo,
+    ):
+        """Regression: the worktree used to be removed before ``git branch -d``
+        refused the unmerged branch, so the forced retry no longer saw a
+        worktree row and the branch was left behind. The refusal must come
+        before anything is removed, and the forced retry must remove both."""
+        topic_wt = os.path.join(real_repo, "wt", "topic")
+        with open(os.path.join(topic_wt, "work.txt"), "w", encoding="utf-8") as fh:
+            fh.write("unmerged work")
+        _run_git_sync(topic_wt, "add", "work.txt")
+        _run_git_sync(topic_wt, "commit", "-m", "unmerged")
+        item = {
+            "kind": "branch_with_worktree",
+            "branch": "topic",
+            "worktree_path": topic_wt,
+        }
+
+        resp = await client_git.post(
+            "/api/projects/alpha/git/items:delete",
+            headers=auth_headers_g,
+            json={"items": [item]},
+        )
+
+        assert resp.status_code == 200, resp.text
+        result = resp.json()["results"][0]
+        assert (result["ok"], result["error"], result["target"]) == (
+            False, "force_required", "topic",
+        )
+        assert "not fully merged" in result["error_detail"]
+        assert os.path.isdir(topic_wt)
+
+        forced = await client_git.post(
+            "/api/projects/alpha/git/items:delete",
+            headers=auth_headers_g,
+            json={"items": [{**item, "force": True}]},
+        )
+
+        assert forced.status_code == 200, forced.text
+        assert forced.json()["results"][0]["ok"] is True
+        listing = await client_git.get(
+            "/api/projects/alpha/git/items", headers=auth_headers_g,
+        )
+        items = listing.json()["items"]
+        assert all(i.get("worktree_path") != topic_wt for i in items)
+        assert all(i.get("branch") != "topic" for i in items)
+        assert not os.path.exists(topic_wt)
+
+    async def test_branch_merged_into_its_upstream_deletes_without_force(
+        self, client_git, auth_headers_g, real_repo,
+    ):
+        """git's own rule: a branch with a resolvable upstream counts as
+        merged when the upstream holds it, even if HEAD does not. The
+        pre-check must not demand force where ``git branch -d`` would not."""
+        topic_wt = os.path.join(real_repo, "wt", "topic")
+        with open(os.path.join(topic_wt, "pushed.txt"), "w", encoding="utf-8") as fh:
+            fh.write("pushed work")
+        _run_git_sync(topic_wt, "add", "pushed.txt")
+        _run_git_sync(topic_wt, "commit", "-m", "pushed")
+        _run_git_sync(real_repo, "remote", "add", "origin", os.path.join(real_repo, "nowhere"))
+        _run_git_sync(real_repo, "update-ref", "refs/remotes/origin/topic", "refs/heads/topic")
+        _run_git_sync(real_repo, "config", "branch.topic.remote", "origin")
+        _run_git_sync(real_repo, "config", "branch.topic.merge", "refs/heads/topic")
+
+        resp = await client_git.post(
+            "/api/projects/alpha/git/items:delete",
+            headers=auth_headers_g,
+            json={"items": [{
+                "kind": "branch_with_worktree",
+                "branch": "topic",
+                "worktree_path": topic_wt,
+            }]},
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["results"][0]["ok"] is True, resp.text
+        assert not os.path.exists(topic_wt)
+
+
+@requires_git
+class TestGitDeleteJobEndpoints:
+    """``POST /delete-jobs`` answers 202 at once and the batch finishes in
+    the background; ``GET /delete-jobs/{id}`` serves the snapshot the clients
+    poll until ``done``."""
+
+    @pytest.fixture(autouse=True)
+    async def _fresh_registry(self):
+        delete_job_registry.reset()
+        yield
+        await delete_job_registry.shutdown()
+        delete_job_registry.reset()
+
+    async def _poll_until_done(self, client, headers, job_id: str) -> dict:
+        for _ in range(500):
+            resp = await client.get(
+                f"/api/projects/alpha/git/delete-jobs/{job_id}", headers=headers,
+            )
+            assert resp.status_code == 200, resp.text
+            if resp.json()["status"] == "done":
+                return resp.json()
+            await asyncio.sleep(0.01)
+        raise AssertionError("delete job never finished")
+
+    async def test_job_runs_the_batch_and_serves_results_in_request_order(
+        self, client_git, auth_headers_g, real_repo,
+    ):
+        topic_wt = os.path.join(real_repo, "wt", "topic")
+        items = [
+            {"kind": "branch_with_worktree", "branch": "topic", "worktree_path": topic_wt},
+            {"kind": "branch_only", "branch": "stale"},
+            {"kind": "branch_only", "branch": "missing"},
+        ]
+
+        started = await client_git.post(
+            "/api/projects/alpha/git/delete-jobs",
+            headers=auth_headers_g,
+            json={"items": items},
+        )
+
+        assert started.status_code == 202, started.text
+        first = started.json()
+        assert first["total"] == 3
+        assert first["status"] in ("running", "done")
+        done = await self._poll_until_done(client_git, auth_headers_g, first["job_id"])
+        assert done["job_id"] == first["job_id"]
+        assert (done["total"], done["completed"]) == (3, 3)
+        assert [(r["target"], r["ok"]) for r in done["results"]] == [
+            ("topic", True), ("stale", True), ("missing", False),
+        ]
+        listing = await client_git.get(
+            "/api/projects/alpha/git/items", headers=auth_headers_g,
+        )
+        branches = {i.get("branch") for i in listing.json()["items"]}
+        assert "topic" not in branches and "stale" not in branches
+        assert not os.path.exists(topic_wt)
+
+    async def test_busy_batch_is_refused_whole_before_any_job_starts(
+        self, client_git, auth_headers_g, app_with_git, real_repo,
+    ):
+        topic_wt = os.path.join(real_repo, "wt", "topic")
+        session = types.SimpleNamespace(session_id="s-busy", cwd=topic_wt)
+        original_list = app_with_git.state.session_manager.list_sessions
+        app_with_git.state.session_manager.list_sessions = (  # type: ignore[method-assign]
+            lambda: [session]
+        )
+        try:
+            resp = await client_git.post(
+                "/api/projects/alpha/git/delete-jobs",
+                headers=auth_headers_g,
+                json={"items": [
+                    {"kind": "branch_only", "branch": "stale"},
+                    {"kind": "branch_with_worktree", "branch": "topic",
+                     "worktree_path": topic_wt},
+                ]},
+            )
+        finally:
+            app_with_git.state.session_manager.list_sessions = original_list  # type: ignore[method-assign]
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["busy_by"][0]["session_id"] == "s-busy"
+        assert delete_job_registry._jobs == {}
+        listing = await client_git.get(
+            "/api/projects/alpha/git/items", headers=auth_headers_g,
+        )
+        assert "stale" in {i.get("branch") for i in listing.json()["items"]}
+
+    async def test_unknown_job_is_a_coded_404(self, client_git, auth_headers_g):
+        resp = await client_git.get(
+            "/api/projects/alpha/git/delete-jobs/nope", headers=auth_headers_g,
+        )
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == {"code": "job_not_found"}
 
 
 class TestGitBranchEndpoints:

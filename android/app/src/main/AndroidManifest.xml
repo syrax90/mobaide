@@ -14,6 +14,22 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!--
+        play-services-code-scanner merges a portrait-locked activity, which
+        implies a required android.hardware.screen.portrait and hides the app
+        from landscape-only devices on Play.
+    -->
+    <uses-feature
+        android:name="android.hardware.screen.portrait"
+        android:required="false" />
+    <!--
+        RECORD_AUDIO implies a required microphone; voice input is optional and
+        AudioRecordRecorder reports MIC_UNAVAILABLE on devices without one.
+    -->
+    <uses-feature
+        android:name="android.hardware.microphone"
+        android:required="false" />
+
+    <!--
         Package visibility (API 30+): declare the email-app intent so the
         Support screen's resolveActivity() guard reports an email client
         accurately instead of always returning null.

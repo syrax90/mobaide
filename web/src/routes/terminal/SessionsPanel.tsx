@@ -20,6 +20,7 @@ import {
   sessionDialogLabel,
   sessionKindLabel,
   sessionTitle,
+  worktreeInUse,
 } from '../sessions/sessionDisplay';
 import { newSessionPath, terminalPath } from '../sessions/terminalPath';
 import { useStopSession } from '../sessions/useStopSession';
@@ -328,10 +329,12 @@ export function SessionsPanel({
       {stopTarget !== null && (
         <StopSessionDialog
           label={sessionDialogLabel(stopTarget, names)}
+          worktreeBranch={stopTarget.worktree_branch}
+          worktreeInUse={worktreeInUse(stopTarget, sessions.data)}
           busy={stop.isPending}
-          onStop={(force) => {
+          onStop={(force, removeWorktree) => {
             stopSnapshot.current = sessions.data ?? [];
-            stop.mutate({ sessionId: stopTarget.session_id, force });
+            stop.mutate({ sessionId: stopTarget.session_id, force, removeWorktree });
           }}
           onCancel={() => {
             setStopTarget(null);

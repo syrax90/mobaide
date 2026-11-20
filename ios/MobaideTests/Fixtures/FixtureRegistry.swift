@@ -127,6 +127,7 @@ enum FixtureRegistry {
         "GitDeleteRequest": runner(GitDeleteRequest.self),
         "GitDeleteResultItem": runner(GitDeleteResultItem.self),
         "GitDeleteResponse": runner(GitDeleteResponse.self),
+        "GitDeleteJobResponse": runner(GitDeleteJobResponse.self),
         "BusyHolder": runner(BusyHolder.self),
         "BusyByResponse": runner(BusyByResponse.self),
         "GitBranchCreateRequest": runner(GitBranchCreateRequest.self),

@@ -71,6 +71,10 @@ data class ChatUiState(
     val offersNewConversation: Boolean
         get() = state.newConversation && !sessionClosed
 
+    /** Ask first only when a new conversation would stop a turn or drop queued messages. */
+    val newConversationNeedsConfirm: Boolean
+        get() = running || state.queue.isNotEmpty()
+
     val canStartNew: Boolean
         get() = offersNewConversation && live && !restarting && !startingNew &&
             state.status in NEW_CONVERSATION_STATUSES

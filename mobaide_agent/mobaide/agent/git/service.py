@@ -426,10 +426,16 @@ async def _busy_holders(
     session_manager: Any | None,
     autoscan_manager: Any | None,
 ) -> list[BusyHolder]:
-    """Return every session / auto-scan work item whose path is in ``affected``."""
+    """Return every session / auto-scan work item at or below a path in
+    ``affected``: a session in a sub-folder of a worktree also loses its
+    working directory when the worktree goes."""
     if not affected:
         return []
-    return await _holders(session_manager, autoscan_manager, affected.__contains__)
+    return await _holders(
+        session_manager,
+        autoscan_manager,
+        lambda norm: any(_within(norm, path) for path in affected),
+    )
 
 
 def _within(path: str, root: str) -> bool:
@@ -483,6 +489,47 @@ def _worktree_error_code(exc: WorktreeRemoveError) -> str:
     if any(p in exc.stderr for p in _LOCKED_PATTERNS):
         return "locked"
     return "error"
+
+
+async def _branch_unmerged(workspace_root: str, branch: str) -> bool:
+    """Whether ``git branch -d`` is certain to refuse ``branch`` as not fully
+    merged. Mirrors git's own rule: merged into its upstream when that ref
+    resolves, else into ``HEAD``. Any doubt answers ``False`` and leaves the
+    verdict to ``git branch -d`` itself."""
+    ref = _REFS_HEADS + branch
+    try:
+        listed = await run_git(
+            ["for-each-ref", "--format=%(refname)%00%(upstream)", ref],
+            cwd=workspace_root, timeout=_QUICK_TIMEOUT, max_bytes=_SMALL_OUTPUT,
+        )
+        if listed.rc != 0 or listed.timed_out:
+            return False
+        upstream = next(
+            (
+                fields[1]
+                for fields in (line.split("\0") for line in _lines(listed.stdout))
+                if len(fields) == 2 and fields[0] == ref
+            ),
+            None,
+        )
+        if upstream is None:
+            return False
+        reference = "HEAD"
+        if upstream:
+            resolved = await run_git(
+                ["rev-parse", "-q", "--verify", f"{upstream}^{{commit}}"],
+                cwd=workspace_root, timeout=_QUICK_TIMEOUT, max_bytes=_SMALL_OUTPUT,
+            )
+            if resolved.rc == 0 and not resolved.timed_out:
+                reference = upstream
+        check = await run_git(
+            ["merge-base", "--is-ancestor", ref, reference],
+            cwd=workspace_root, timeout=_QUICK_TIMEOUT, max_bytes=_SMALL_OUTPUT,
+        )
+    except Exception:
+        logger.debug("git.merge_precheck_failed", exc_info=True)
+        return False
+    return check.rc == 1 and not check.timed_out
 
 
 async def _delete_one(
@@ -542,6 +589,12 @@ async def _delete_one(
             return _result(kind=item.kind, target=target, ok=False, error="invalid"), False
         worktree_already_gone = not os.path.exists(item.worktree_path)
         if not worktree_already_gone:
+            if not item.force and await _branch_unmerged(ctx.workspace_root, item.branch):
+                return _result(
+                    kind=item.kind, target=item.branch, ok=False,
+                    error="force_required",
+                    error_detail=f"error: the branch '{item.branch}' is not fully merged",
+                ), False
             try:
                 await ctx.manager.remove_worktree(
                     ctx.workspace_root, item.worktree_path, force=item.force,
@@ -777,7 +830,22 @@ def _publish_git_changed(
         logger.exception("git.publish_failed")
 
 
-async def delete_git_items(
+async def check_delete_busy(
+    request: GitDeleteRequest,
+    session_manager: Any | None,
+    autoscan_manager: Any | None,
+) -> None:
+    """Raise :class:`GitItemBusyError` if any worktree path in the batch is
+    held by a session or auto-scan work item — the whole batch is refused
+    before anything is deleted, and the transports map it to HTTP 409."""
+    busy = await _busy_holders(
+        _affected_paths(request.items), session_manager, autoscan_manager
+    )
+    if busy:
+        raise GitItemBusyError(busy_by=busy)
+
+
+async def run_delete_batch(
     request: GitDeleteRequest,
     *,
     workspace_name: str,
@@ -787,21 +855,16 @@ async def delete_git_items(
     autoscan_manager: Any | None,
     event_bus: Any | None,
     actor: str | None,
+    on_progress: Callable[[int], None] | None = None,
 ) -> GitDeleteResponse:
-    """Process a delete batch atomically with respect to busy-guard.
+    """Process an already guarded delete batch.
 
-    Raises :class:`GitItemBusyError` if any worktree path in the batch is
-    held by a session or auto-scan work item — the entire batch is rejected
-    and the caller maps to HTTP 409. Otherwise each local item is processed
-    in order under the manager's per-repo lock while the ``remote_branch``
-    items are pushed alongside; per-item failures are recorded in the
-    response, at the item's position, without aborting the batch.
+    Each local item is processed in order under the manager's per-repo lock
+    while the ``remote_branch`` items are pushed alongside; per-item
+    failures are recorded in the response, at the item's position, without
+    aborting the batch. ``on_progress`` receives the number of items that
+    just finished.
     """
-    affected = _affected_paths(request.items)
-    busy = await _busy_holders(affected, session_manager, autoscan_manager)
-    if busy:
-        raise GitItemBusyError(busy_by=busy)
-
     ctx = _RepoContext(
         workspace_name=workspace_name,
         workspace_root=workspace_root,
@@ -815,12 +878,17 @@ async def delete_git_items(
     remote = [(i, item) for i, item in enumerate(request.items) if item.kind == "remote_branch"]
     slots: list[GitDeleteResultItem | None] = [None] * len(request.items)
 
+    def progressed(count: int) -> None:
+        if on_progress is not None and count:
+            on_progress(count)
+
     async def delete_local() -> bool:
         changed = False
         for index, item in local:
             result, did_change = await _delete_one(item, ctx)
             slots[index] = result
             changed = changed or did_change
+            progressed(1)
         return changed
 
     async def delete_remote() -> bool:
@@ -829,6 +897,7 @@ async def delete_git_items(
         outcomes = await _delete_remote_items(remote, ctx)
         for index, result in outcomes:
             slots[index] = result
+        progressed(len(outcomes))
         return any(result.ok for _, result in outcomes)
 
     local_changed, remote_changed = await asyncio.gather(delete_local(), delete_remote())
@@ -841,6 +910,33 @@ async def delete_git_items(
         )
 
     return GitDeleteResponse(results=results)
+
+
+async def delete_git_items(
+    request: GitDeleteRequest,
+    *,
+    workspace_name: str,
+    workspace_root: str,
+    manager: WorktreeManager,
+    session_manager: Any | None,
+    autoscan_manager: Any | None,
+    event_bus: Any | None,
+    actor: str | None,
+) -> GitDeleteResponse:
+    """Guard, then process a delete batch inside the request
+    (``POST /items:delete``); :mod:`.delete_jobs` runs the same batch as a
+    background job."""
+    await check_delete_busy(request, session_manager, autoscan_manager)
+    return await run_delete_batch(
+        request,
+        workspace_name=workspace_name,
+        workspace_root=workspace_root,
+        manager=manager,
+        session_manager=session_manager,
+        autoscan_manager=autoscan_manager,
+        event_bus=event_bus,
+        actor=actor,
+    )
 
 
 def _validate_branch_name(name: str) -> None:

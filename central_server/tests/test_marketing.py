@@ -11,12 +11,18 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from central_server.app import create_app
-from central_server.marketing.loader import asset_version, render_landing
+from central_server.marketing.loader import (
+    LASTMOD_STATE_FILENAME,
+    asset_version,
+    render_landing,
+    stamp_lastmod,
+)
 from central_server.static_files import resolve_static_dir
 
 # Byte-identical to ``security_headers._LANDING_CSP`` and to
@@ -306,6 +312,49 @@ class TestCrawlerFiles:
         ]
         assert f"{config.site_base_url}/" in locs
         assert f"{config.site_base_url}/voice-input" in locs
+
+
+class TestSitemapLastmod:
+    """Google trusts ``lastmod`` only while it stays accurate: it must move when
+    a deploy changes a page's text, and never on a plain restart."""
+
+    def test_lastmod_moves_only_when_the_page_text_changes(
+        self, tmp_path
+    ) -> None:
+        state = tmp_path / "site_lastmod.json"
+        day1 = datetime(2026, 11, 19, 10, 0, tzinfo=UTC)
+        day2 = datetime(2026, 11, 20, 10, 0, tzinfo=UTC)
+        day3 = datetime(2026, 11, 21, 10, 0, tzinfo=UTC)
+        pages = {"/": "<a href=/s.css?v=aaa>one</a>", "/p": "policy"}
+
+        assert stamp_lastmod(state, pages, day1) == {
+            "/": "2026-11-19T10:00:00+00:00",
+            "/p": "2026-11-19T10:00:00+00:00",
+        }
+        # A restart, and a CSS-only change that moves the ``?v=`` hash.
+        restarted = {**pages, "/": "<a href=/s.css?v=bbb>one</a>"}
+        assert stamp_lastmod(state, restarted, day2) == {
+            "/": "2026-11-19T10:00:00+00:00",
+            "/p": "2026-11-19T10:00:00+00:00",
+        }
+        changed = {**restarted, "/": "<a href=/s.css?v=bbb>two</a>"}
+        assert stamp_lastmod(state, changed, day3) == {
+            "/": "2026-11-21T10:00:00+00:00",
+            "/p": "2026-11-19T10:00:00+00:00",
+        }
+
+        state.write_text("{not json")
+        assert set(stamp_lastmod(state, changed, day3).values()) == {
+            "2026-11-21T10:00:00+00:00"
+        }
+
+    async def test_every_sitemap_url_carries_a_lastmod(
+        self, client, config
+    ) -> None:
+        root = ET.fromstring((await client.get("/sitemap.xml")).text)
+        for url in root.findall("{*}url"):
+            assert url.findtext("{*}lastmod"), url.findtext("{*}loc")
+        assert (Path(config.db_path).parent / LASTMOD_STATE_FILENAME).is_file()
 
 
 class TestAssetVersion:

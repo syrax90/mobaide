@@ -439,6 +439,7 @@ const ALL_GIT: GitCapabilities = {
   rebase: true,
   resolve: true,
   deleteRemote: true,
+  deleteJobs: true,
   conflicts: true,
 };
 const NO_ACTIONS = { stage: false, unstage: false, discard: false, resolve: false };
@@ -523,6 +524,7 @@ describe('rowActions', () => {
       rebase: false,
       resolve: false,
       deleteRemote: false,
+      deleteJobs: false,
       conflicts: false,
     };
     const stageOnly: GitCapabilities = {
@@ -536,6 +538,7 @@ describe('rowActions', () => {
       rebase: false,
       resolve: false,
       deleteRemote: false,
+      deleteJobs: false,
       conflicts: false,
     };
 
@@ -661,6 +664,7 @@ describe('sectionAction', () => {
         rebase: false,
         resolve: false,
         deleteRemote: false,
+        deleteJobs: false,
         conflicts: false,
       }),
     ).toBeNull();
@@ -701,6 +705,7 @@ const NO_SYNC: GitCapabilities = {
   rebase: false,
   resolve: false,
   deleteRemote: false,
+  deleteJobs: false,
   conflicts: false,
 };
 

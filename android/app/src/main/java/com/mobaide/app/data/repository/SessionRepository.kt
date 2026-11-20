@@ -103,8 +103,12 @@ class SessionRepository(
      *  (like [codexLogin]) rather than a cached StateFlow with an event subscription. */
     suspend fun getAgentVersion(): VersionInfoResponse = restApi.getAgentVersion()
 
-    suspend fun deleteSession(sessionId: String, force: Boolean = false) {
-        restApi.deleteSession(sessionId, force)
+    suspend fun deleteSession(
+        sessionId: String,
+        force: Boolean = false,
+        removeWorktree: Boolean = false,
+    ) {
+        restApi.deleteSession(sessionId, force, removeWorktree)
     }
 
     suspend fun getScrollback(sessionId: String, lines: Int = 1000): ScrollbackResponse =

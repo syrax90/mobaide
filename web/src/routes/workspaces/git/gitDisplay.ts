@@ -265,6 +265,19 @@ export function remoteDeleteMessage(refs: readonly string[]): string {
   );
 }
 
+/** A delete batch in flight: items processed so far out of the batch. */
+export interface DeleteProgress {
+  completed: number;
+  total: number;
+}
+
+/** The status line shown while a delete batch runs, identical on all three clients. */
+export function deleteProgressMessage({ completed, total }: DeleteProgress): string {
+  return completed > 0
+    ? `Deleting… ${String(completed)} of ${String(total)} done`
+    : `Deleting ${String(total)} item(s)…`;
+}
+
 export function forceDeleteMessage(refs: readonly string[]): string {
   return (
     "These items have unmerged commits or uncommitted changes and can't be deleted " +

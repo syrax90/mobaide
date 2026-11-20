@@ -100,7 +100,9 @@ class GitDeleteResultItem(BaseModel):
 
     ``error`` codes:
         * ``force_required`` — branch is unmerged, or worktree holds
-          modified/untracked files; retry with ``force=True``.
+          modified/untracked files; retry with ``force=True``. For
+          ``branch_with_worktree`` an unmerged branch is reported before
+          the worktree is touched, so the retry removes both.
         * ``locked`` — worktree is locked.
         * ``not_found`` — branch or worktree no longer exists.
         * ``invalid`` — request payload missing the required identifier.
@@ -121,6 +123,22 @@ class GitDeleteResultItem(BaseModel):
 
 class GitDeleteResponse(BaseModel):
     results: list[GitDeleteResultItem]
+
+
+class GitDeleteJobResponse(BaseModel):
+    """A delete batch run as a background job (``POST /delete-jobs``,
+    ``GET /delete-jobs/{job_id}``).
+
+    ``completed`` counts the items processed so far out of ``total``.
+    ``results`` stays ``null`` while ``status`` is ``running`` and then holds
+    the same per-item outcomes, in request order, as ``POST /items:delete``.
+    """
+
+    job_id: str
+    status: Literal["running", "done"]
+    total: int
+    completed: int
+    results: list[GitDeleteResultItem] | None
 
 
 class BusyHolder(BaseModel):

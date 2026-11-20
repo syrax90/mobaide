@@ -26,6 +26,7 @@ from .models import (
     ScrollbackResponse,
     SessionResponse,
 )
+from .stop import stop_session as stop_session_and_worktree
 
 logger = get_logger(__name__)
 
@@ -281,11 +282,20 @@ async def stop_session(
     session_id: str,
     request: Request,
     force: bool = False,
+    remove_worktree: bool = False,
 ) -> None:
-    """Stop a session by ID."""
+    """Stop a session by ID; ``remove_worktree`` also removes the worktree
+    the agent made for it and that worktree's local branch, in the background."""
     manager = _get_manager(request)
     try:
-        await manager.stop_session(session_id, force=force)
+        await stop_session_and_worktree(
+            manager,
+            session_id,
+            force=force,
+            remove_worktree=remove_worktree,
+            app_state=request.app.state,
+            actor=getattr(request.state, "username", None),
+        )
     except KeyError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -304,6 +314,7 @@ async def stop_session(
         target=session_id,
         outcome="ok",
         force=force,
+        remove_worktree=remove_worktree,
     )
 
 

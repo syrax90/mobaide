@@ -125,6 +125,9 @@ data class SessionResponse(
     // background work, "idle" between turns, null when the agent cannot tell
     // (Codex, Antigravity and Terminal PTY sessions).
     val activity: String? = null,
+    // Local branch of the worktree the agent made for this session; null when
+    // the session does not run in one. The stop dialog offers removing both.
+    val worktree_branch: String? = null,
 ) {
     val isChat: Boolean get() = ui == UI_CHAT
 
