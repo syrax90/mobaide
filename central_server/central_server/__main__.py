@@ -20,6 +20,11 @@ def main() -> None:
         host=app.state.config.host,
         port=app.state.config.port,
         access_log=False,
+        # Without this, uvicorn's default dictConfig gives the "uvicorn"
+        # loggers their own plain-text handler with propagate=False, so their
+        # records skip configure_logging's redaction. The WebSocket handshake
+        # line ("WebSocket /path?token=…" [accepted]) is one of them.
+        log_config=None,
         # Pinned rather than "auto" so ws_per_message_deflate below is
         # guaranteed to reach an implementation that honours it, and so a
         # future uvicorn auto-resolution change cannot silently regress the
