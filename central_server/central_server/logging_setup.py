@@ -42,11 +42,15 @@ _SENSITIVE_KEYS = frozenset(
 
 _JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}")
 _BEARER_RE = re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]+")
+_QUERY_SECRET_RE = re.compile(
+    r"(?i)([?&](?:token|access_token|refresh_token|ticket)=)[^&#\s\"']+"
+)
 
 
 def _scrub_string(value: str) -> str:
     value = _JWT_RE.sub(REDACTED, value)
     value = _BEARER_RE.sub("Bearer " + REDACTED, value)
+    value = _QUERY_SECRET_RE.sub(r"\1" + REDACTED, value)
     return value
 
 
