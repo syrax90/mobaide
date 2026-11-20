@@ -1449,7 +1449,7 @@ private fun StandardConfigSection(
         onUltracodeToggle = viewModel::toggleClaudeUltracode,
         onDebugToggle = viewModel::toggleClaudeDebug,
         onAppendSystemPromptChange = viewModel::setClaudeAppendSystemPrompt,
-        showDebug = !state.claudeUsesChat,
+        chatView = state.claudeUsesChat,
         leadingContent = {
             // Like Focus view: Code Mode is a terminal option, so the chat view hides it.
             if (!state.claudeUsesChat) {
@@ -2277,6 +2277,9 @@ private fun FocusViewToggle(checked: Boolean, onToggle: (Boolean) -> Unit) {
     )
 }
 
+private const val DEBUG_TERMINAL_HINT = "Claude Code prints verbose diagnostics into the terminal."
+private const val DEBUG_CHAT_HINT = "Claude Code writes verbose diagnostics to ~/.claude/debug/ on this PC."
+
 /** Collapsed-by-default expander for the less common Claude flags, shared by the Standard and Auto Scan steps. */
 @Composable
 private fun ClaudeAdvancedOptions(
@@ -2290,7 +2293,7 @@ private fun ClaudeAdvancedOptions(
     onUltracodeToggle: (Boolean) -> Unit,
     onDebugToggle: (Boolean) -> Unit,
     onAppendSystemPromptChange: (String) -> Unit,
-    showDebug: Boolean = true,
+    chatView: Boolean = false,
     leadingContent: @Composable () -> Unit = {},
 ) {
     AdvancedSection {
@@ -2298,14 +2301,12 @@ private fun ClaudeAdvancedOptions(
         ToggleRow("No memory", noMemory, onNoMemoryToggle)
         ToggleRow("Fast mode (Opus only)", fastMode, onFastModeToggle)
         ToggleRow("Ultracode", ultracode, onUltracodeToggle)
-        if (showDebug) {
-            ToggleRow("Debug logging", debug, onDebugToggle)
-            Text(
-                text = "Claude Code prints verbose diagnostics into the terminal.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        ToggleRow("Debug logging", debug, onDebugToggle)
+        Text(
+            text = if (chatView) DEBUG_CHAT_HINT else DEBUG_TERMINAL_HINT,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         OutlinedTextField(
             colors = PixelTextFieldDefaults.colors(),
             value = appendSystemPrompt,
@@ -2582,6 +2583,7 @@ internal fun AutoScanClaudeOptions(
         onUltracodeToggle = viewModel::toggleAutoScanClaudeUltracode,
         onDebugToggle = viewModel::toggleAutoScanClaudeDebug,
         onAppendSystemPromptChange = viewModel::setAutoScanClaudeAppendSystemPrompt,
+        chatView = state.autoScanUi == AUTO_SCAN_UI_CHAT,
         leadingContent = {
             if (state.autoScanUi != AUTO_SCAN_UI_CHAT) {
                 CodeModeToggle(

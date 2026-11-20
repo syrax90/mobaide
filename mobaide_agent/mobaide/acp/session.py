@@ -633,11 +633,13 @@ class ChatSession:
             if not await self._ensure_trusted():
                 return
             setup_params: dict[str, Any] = {"cwd": self._plan.cwd, "mcpServers": []}
+            sdk_options = dict(self._plan.claude_sdk_options)
             if self._plan.hook_port is not None:
                 # claude-agent-acp hands these settings to the CLI as its
                 # ``--settings`` tier, for a new and for a loaded session.
-                settings = chat_hook_settings(self.session_id, self._plan.hook_port)
-                setup_params["_meta"] = {"claudeCode": {"options": {"settings": settings}}}
+                sdk_options["settings"] = chat_hook_settings(self.session_id, self._plan.hook_port)
+            if sdk_options:
+                setup_params["_meta"] = {"claudeCode": {"options": sdk_options}}
             if self._plan.additional_dirs and self._session_cap("additionalDirectories"):
                 setup_params["additionalDirectories"] = list(self._plan.additional_dirs)
             if self._plan.system_prompt_append and self._session_cap("systemPrompt"):
