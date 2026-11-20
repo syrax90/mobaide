@@ -33,9 +33,17 @@ extension CodexLaunchPrefs {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         model = try container.decodeIfPresent(String.self, forKey: .model)
         sandbox = try container.decodeIfPresent(String.self, forKey: .sandbox) ?? "workspace-write"
-        approval = try container.decodeIfPresent(String.self, forKey: .approval) ?? "on-request"
+        approval = currentCodexApproval(
+            try container.decodeIfPresent(String.self, forKey: .approval) ?? "on-request"
+        )
         fullAuto = try container.decodeIfPresent(Bool.self, forKey: .fullAuto) ?? false
         reasoningEffort = try container.decodeIfPresent(String.self, forKey: .reasoningEffort) ?? "high"
         terminalUI = try container.decodeIfPresent(Bool.self, forKey: .terminalUI) ?? false
     }
+}
+
+/// `approval` with the `untrusted` policy, which Codex 0.149 retired and now
+/// rejects at launch, read as `on-request`, the nearest policy that still asks.
+func currentCodexApproval(_ approval: String) -> String {
+    approval == "untrusted" ? "on-request" : approval
 }

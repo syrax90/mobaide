@@ -195,6 +195,27 @@ class AutoScanTemplateSettingsTest {
     }
 
     @Test
+    fun savedCodexOptionsWithRetiredUntrustedApproval_seedAsOnRequest() {
+        val workspace = json.decodeFromString(
+            WorkspaceInfo.serializer(),
+            """
+            {"name": "alpha", "path": "/p/alpha", "auto_scan": {
+              "source": "github", "cli": "codex",
+              "codex_options": {"sandbox": "read-only", "approval": "untrusted", "full_auto": false}
+            }}
+            """.trimIndent(),
+        )
+
+        val seeded = CreateSessionUiState()
+            .withAutoScanSettings(workspace.auto_scan!!.asTemplateSettings(prompt = null))
+
+        assertEquals(
+            CodexScanBucket(sandbox = "read-only", approval = "on-request", fullAuto = false),
+            seeded.autoScan.agents.codex,
+        )
+    }
+
+    @Test
     fun seededViewAndInterval_comeBack_andUnusableOnesKeepTheStepsChoice() {
         val saved = json.decodeFromJsonElement(WorkspaceInfo.serializer(), wire("ProjectInfo", "auto_scan_choices"))
             .auto_scan!!

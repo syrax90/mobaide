@@ -213,6 +213,17 @@ def _parse_codex_models(output: str) -> tuple[list[str], list[CodexModelInfo]] |
     return models, details
 
 
+# Codex 0.149 dropped the ``untrusted`` approval policy and rejects it at
+# launch. Released clients and saved Auto Scan options still carry it;
+# ``on-request`` is the nearest policy that still asks, in every Codex version.
+RETIRED_CODEX_APPROVALS = {"untrusted": "on-request"}
+
+
+def current_codex_approval(approval: str) -> str:
+    """``approval`` with a retired Codex policy replaced by its successor."""
+    return RETIRED_CODEX_APPROVALS.get(approval, approval)
+
+
 @dataclass(frozen=True)
 class CodexOptions:
     """Codex CLI launch options.
@@ -360,7 +371,7 @@ class CodexLauncher:
             argv.append("--dangerously-bypass-approvals-and-sandbox")
         else:
             argv += ["--sandbox", options.sandbox]
-            argv += ["--ask-for-approval", options.approval]
+            argv += ["--ask-for-approval", current_codex_approval(options.approval)]
         if options.reasoning_effort:
             # ``-c key=value`` config override; the value parses as TOML, else as
             # a literal string — so no quoting is needed for a bare word, and the

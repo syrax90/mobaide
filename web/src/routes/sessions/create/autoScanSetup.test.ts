@@ -322,6 +322,24 @@ describe('Auto Scan agent options', () => {
     expect(workspace.auto_scan?.copilot_options).toEqual({ allow_all: false });
     expect(workspace.auto_scan?.cli).toBe('codex');
   });
+
+  it('reads Codex options saved with the retired untrusted approval as on-request', () => {
+    const workspace = workspaceInfoSchema.parse({
+      name: 'proj',
+      path: '/srv/proj',
+      auto_scan: {
+        source: 'github',
+        cli: 'codex',
+        codex_options: { sandbox: 'read-only', approval: 'untrusted', full_auto: false },
+      },
+    });
+
+    expect(workspace.auto_scan?.codex_options).toMatchObject({
+      sandbox: 'read-only',
+      approval: 'on-request',
+      full_auto: false,
+    });
+  });
 });
 
 describe('Auto Scan templates', () => {

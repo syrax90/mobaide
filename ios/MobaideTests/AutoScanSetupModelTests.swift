@@ -291,6 +291,22 @@ final class AutoScanSetupModelTests: XCTestCase {
         XCTAssertEqual(saved.cli, "codex")
     }
 
+    func testSavedCodexOptionsWithRetiredUntrustedApprovalDecodeAsOnRequest() throws {
+        let json = #"""
+        {"name": "alpha", "path": "/p/alpha", "auto_scan": {
+          "source": "github", "cli": "codex",
+          "codex_options": {"sandbox": "read-only", "approval": "untrusted", "full_auto": false}
+        }}
+        """#
+
+        let workspace = try WireJSON.decoder().decode(WorkspaceInfo.self, from: Data(json.utf8))
+
+        let codex = try XCTUnwrap(workspace.auto_scan?.codex_options)
+        XCTAssertEqual(codex.approval, "on-request")
+        XCTAssertEqual(codex.sandbox, "read-only")
+        XCTAssertFalse(codex.full_auto)
+    }
+
     /// The fixture probe, plus `capabilities.chat` listing Codex when `codexChat`.
     private func probedModel(codexChat: Bool) throws -> AutoScanSetupModel {
         let chat = codexChat ? #","chat":{"codex":{"resume":true}}"# : ""

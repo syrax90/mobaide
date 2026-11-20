@@ -118,7 +118,9 @@ extension CodexScanOptionsDto {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         model = try container.decodeIfPresent(String.self, forKey: .model)
         sandbox = try container.decodeIfPresent(String.self, forKey: .sandbox) ?? "workspace-write"
-        approval = try container.decodeIfPresent(String.self, forKey: .approval) ?? "never"
+        approval = currentCodexApproval(
+            try container.decodeIfPresent(String.self, forKey: .approval) ?? "never"
+        )
         reasoning_effort = container.contains(.reasoning_effort)
             ? try container.decodeIfPresent(String.self, forKey: .reasoning_effort)
             : "high"

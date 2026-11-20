@@ -1758,7 +1758,7 @@ export interface components {
              * @default never
              * @enum {string}
              */
-            approval: "untrusted" | "on-request" | "never";
+            approval: "on-request" | "never";
             /** Base Branch */
             base_branch?: string | null;
             /** Branch Name */
@@ -1803,6 +1803,9 @@ export interface components {
          *     (``-c model_reasoning_effort=<v>``), so there is no flag-smuggling path.
          *     ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for the
          *     legitimately-named ``model`` field.
+         *
+         *     ``approval`` still accepts the retired ``untrusted`` and reads it as
+         *     ``on-request``: released clients and saved settings keep sending it.
          */
         CodexScanOptionsModel: {
             /**
@@ -1810,7 +1813,7 @@ export interface components {
              * @default never
              * @enum {string}
              */
-            approval: "untrusted" | "on-request" | "never";
+            approval: "on-request" | "never";
             /**
              * Full Auto
              * @default false

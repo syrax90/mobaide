@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from mobaide.acp.wire import CHAT_RESUME_ID_MAX, CHAT_RESUME_ID_PATTERN
 from mobaide.core.antigravity_launcher import AntigravityOptions, agy_model_name
 from mobaide.core.claude_launcher import ClaudeOptions
-from mobaide.core.codex_launcher import CodexOptions
+from mobaide.core.codex_launcher import CodexOptions, current_codex_approval
 from mobaide.core.copilot_launcher import CopilotOptions
 from mobaide.core.cursor_launcher import CursorOptions
 from mobaide.core.junie_launcher import JunieOptions
@@ -74,6 +74,9 @@ class CodexScanOptionsModel(BaseModel):
     (``-c model_reasoning_effort=<v>``), so there is no flag-smuggling path.
     ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for the
     legitimately-named ``model`` field.
+
+    ``approval`` still accepts the retired ``untrusted`` and reads it as
+    ``on-request``: released clients and saved settings keep sending it.
     """
 
     model_config = ConfigDict(protected_namespaces=())
@@ -82,9 +85,14 @@ class CodexScanOptionsModel(BaseModel):
     sandbox: Literal["read-only", "workspace-write", "danger-full-access"] = (
         "workspace-write"
     )
-    approval: Literal["untrusted", "on-request", "never"] = "never"
+    approval: Literal["on-request", "never"] = "never"
     reasoning_effort: str | None = "high"
     full_auto: bool = False
+
+    @field_validator("approval", mode="before")
+    @classmethod
+    def _remap_retired_approval(cls, value: object) -> object:
+        return current_codex_approval(value) if isinstance(value, str) else value
 
 
 class CodexOptionsModel(CodexScanOptionsModel):

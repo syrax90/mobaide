@@ -1736,7 +1736,6 @@ internal fun CodexOptionControls(
         }
         Text("Approval (-a)", style = MaterialTheme.typography.labelLarge)
         val approvals = listOf(
-            "untrusted" to "Untrusted",
             "on-request" to "On-request",
             "never" to "Never",
         )

@@ -19,3 +19,10 @@ data class CodexLaunchPrefs(
     // The classic terminal instead of the chat view. Older blobs decode to off.
     val terminalUi: Boolean = false,
 )
+
+/**
+ * [approval] with the `untrusted` policy, which Codex 0.149 retired and now
+ * rejects at launch, read as `on-request`, the nearest policy that still asks.
+ */
+fun currentCodexApproval(approval: String): String =
+    if (approval == "untrusted") "on-request" else approval

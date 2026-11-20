@@ -1646,7 +1646,7 @@ The ``create_session`` control message (and the ``POST /api/sessions`` body prox
 |-------|--------|
 | ``model`` | str\|null |
 | ``sandbox`` | ``read-only`` \| ``workspace-write`` \| ``danger-full-access`` |
-| ``approval`` | ``untrusted`` \| ``on-request`` \| ``never`` |
+| ``approval`` | ``on-request`` \| ``never``. Codex 0.149 retired ``untrusted``; the agent still accepts it (also in saved Auto Scan options) and reads it as ``on-request``. |
 | ``reasoning_effort`` | ``minimal`` \| ``low`` \| ``medium`` \| ``high`` \| null |
 | ``full_auto`` | bool — Codex ``--dangerously-bypass-approvals-and-sandbox`` |
 | ``initial_prompt`` | str\|null |

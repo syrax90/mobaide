@@ -142,6 +142,12 @@ describe('hydration', () => {
     expect(prefs.codex).toEqual({ ...CODEX_BLOB, terminalUi: false });
   });
 
+  it('restores a Codex blob saved with the retired untrusted approval as on-request', async () => {
+    const prefs = await rehydrateWith({ codex: { ...CODEX_BLOB, approval: 'untrusted' } });
+
+    expect(prefs.codex).toEqual({ ...CODEX_BLOB, approval: 'on-request' });
+  });
+
   it('voids the Codex bucket for a wrong-typed terminalUi', async () => {
     expect((await rehydrateWith({ codex: { ...CODEX_BLOB, terminalUi: 'on' } })).codex).toBeNull();
   });

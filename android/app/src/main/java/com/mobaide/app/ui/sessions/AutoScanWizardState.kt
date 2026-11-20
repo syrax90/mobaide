@@ -1,5 +1,6 @@
 package com.mobaide.app.ui.sessions
 
+import com.mobaide.app.data.local.currentCodexApproval
 import com.mobaide.app.data.network.dto.AUTO_SCAN_UI_CHAT
 import com.mobaide.app.data.network.dto.AUTO_SCAN_UI_TERMINAL
 import com.mobaide.app.data.network.dto.AntigravityScanOptionsDto
@@ -158,7 +159,7 @@ data class CodexScanBucket(
     fun applied(dto: CodexScanOptionsDto) = CodexScanBucket(
         model = dto.model,
         sandbox = dto.sandbox,
-        approval = dto.approval,
+        approval = currentCodexApproval(dto.approval),
         reasoningEffort = dto.reasoning_effort,
         fullAuto = dto.full_auto,
     )
