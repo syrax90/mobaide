@@ -20,7 +20,7 @@ struct CreateSessionScreen: View {
 private struct CreateSessionContent: View {
     static let claudeCodeModeHint =
         "Experimental. Claude writes JavaScript that makes several tool calls in one step. "
-        + "Sessions open in the terminal. Claude Code asks you to confirm until you accept; "
+        + "Terminal only. Claude Code asks you to confirm until you accept; "
         + "turn Code Mode off here to stop the question."
     static let opencodeCodeModeHint =
         "OpenCode 2 calls MCP tools from JavaScript, several in one step. "
@@ -712,7 +712,8 @@ private struct CreateSessionContent: View {
 
         claudeAdvancedOptions(
             isExpanded: $autoScanAdvancedExpanded,
-            codeMode: legacy ? nil : Binding(
+            // Like Focus view: Code Mode is a terminal option, so the chat view hides it.
+            codeMode: legacy || model.autoScanSetup.effectiveSessionView != .terminal ? nil : Binding(
                 get: { model.autoScanSetup.claudeCodeMode },
                 set: { model.autoScanSetup.claudeCodeMode = $0 }
             ),
@@ -803,7 +804,7 @@ private struct CreateSessionContent: View {
         sessionViewSection(
             $model.terminalUI,
             usesChat: model.claudeUsesChat,
-            unavailableReason: model.chatUnavailableReason ?? model.claudeCodeModeChatNote
+            unavailableReason: model.chatUnavailableReason
         )
         Section(header: PixelSectionHeader("Claude")) {
             claudeModelAndEffortPickers(
@@ -899,7 +900,7 @@ private struct CreateSessionContent: View {
         @Bindable var model = model
         claudeAdvancedOptions(
             isExpanded: $claudeAdvancedExpanded,
-            codeMode: $model.claudeCodeMode,
+            codeMode: model.claudeUsesChat ? nil : $model.claudeCodeMode,
             showsDebug: !model.claudeUsesChat,
             noMemory: $model.noMemory,
             fastMode: $model.claudeFastMode,
@@ -940,7 +941,7 @@ private struct CreateSessionContent: View {
 
     /// Collapsed-by-default "Advanced" section shared by the Claude Code and
     /// Auto Scan steps (Android: `ClaudeAdvancedOptions`). The older-agent
-    /// Auto Scan panel passes nil for `codeMode`.
+    /// Auto Scan panel and the chat view pass nil for `codeMode`.
     @ViewBuilder
     private func claudeAdvancedOptions(
         isExpanded: Binding<Bool>,

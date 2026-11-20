@@ -431,15 +431,7 @@ final class CreateSessionModel {
     var chatUnavailable: Bool { chatCapability.map { !$0.isAvailable } ?? false }
 
     /// The Claude Code session will open in the chat view.
-    var claudeUsesChat: Bool { !terminalUI && !claudeCodeMode && !chatUnavailable }
-
-    /// Why Code Mode keeps Claude Code out of the chat view; nil while it is off.
-    var claudeCodeModeChatNote: String? {
-        claudeCodeMode ? Self.claudeCodeModeChatNoteText : nil
-    }
-
-    static let claudeCodeModeChatNoteText =
-        "Code Mode runs only in the terminal. Turn it off under Advanced to use the chat."
+    var claudeUsesChat: Bool { !terminalUI && !chatUnavailable }
 
     var chatUnavailableReason: String? { Self.chatUnavailableReason(chatCapability) }
 

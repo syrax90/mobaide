@@ -113,7 +113,7 @@ class AutoScanTemplateSettingsTest {
     }
 
     @Test
-    fun codeMode_travelsThroughATemplate_forClaudeOpenCodeAndPi_andClaudesForcesTheTerminal() {
+    fun codeMode_travelsThroughATemplate_forClaudeOpenCodeAndPi_andClaudesKeepsTheChatView() {
         fun dialled(cli: String) = CreateSessionUiState(
             autoScanCapability = AutoScanCapability(
                 sources = listOf(AUTO_SCAN_SOURCE_GITHUB), clis = listOf(cli), githubSetup = true,
@@ -134,8 +134,8 @@ class AutoScanTemplateSettingsTest {
         assertEquals(true, claude.autoScanClaudeCodeMode)
         assertEquals(false, opencode.autoScan.agents.opencodeCodeMode)
         assertEquals(true, pi.autoScan.agents.piCodeMode)
-        // Claude Code Mode runs only in the terminal; the template keeps the chosen view.
-        assertEquals(AUTO_SCAN_UI_TERMINAL, dialled("claude").autoScanUi)
+        // Claude Code Mode does not lock the chat view; the chat view ignores it.
+        assertEquals(AUTO_SCAN_UI_CHAT, dialled("claude").autoScanUi)
         assertEquals(AUTO_SCAN_UI_CHAT, dialled("claude").autoScanTemplateSettings().ui)
     }
 

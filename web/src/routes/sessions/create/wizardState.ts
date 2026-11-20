@@ -920,19 +920,14 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         effort: action.effort,
       }));
 
-    case 'setClaudeFlag': {
-      const next = withClaudeBucket(state, action.bucket, (bucket) => {
+    case 'setClaudeFlag':
+      return withClaudeBucket(state, action.bucket, (bucket) => {
         const next = { ...bucket, [action.flag]: action.value };
         // Fast mode is Opus-only, so turning it on picks the model. Turning it
         // off leaves that choice in place rather than guessing what to restore.
         if (action.flag === 'fastMode' && action.value) next.model = 'opus';
         return next;
       });
-      // Claude Code Mode runs only in the terminal, so the scan opens there.
-      return action.bucket === 'autoScan' && action.flag === 'codeMode' && action.value
-        ? { ...next, autoScanSetup: { ...next.autoScanSetup, ui: 'terminal' } }
-        : next;
-    }
 
     case 'setClaudeText':
       return withClaudeBucket(state, action.bucket, (bucket) => ({

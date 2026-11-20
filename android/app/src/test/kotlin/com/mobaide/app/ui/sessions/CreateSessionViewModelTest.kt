@@ -5040,37 +5040,35 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun claudeCodeMode_locksTheTerminalUi_hidesContinue_andSendsItWithTheTerminal() = runTest {
+    fun claudeCodeMode_keepsTheChatView_andIsSentOnlyWithTheTerminal() = runTest {
         val fx = newFixture()
         val vm = claudeChatVm(fx)
-        val requestSlot = slot<CreateSessionRequest>()
-        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+        val requests = mutableListOf<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requests)) } returns
             SessionResponse("sess-code-mode", "starting", "2026-11-20T00:00:00Z")
         val prefsSlot = slot<ClaudeLaunchPrefs>()
         coEvery { fx.prefs.setLastUsedClaudeOptions(capture(prefsSlot)) } just Runs
-        assertTrue(vm.uiState.value.claudeUsesChat)
-        assertNull(vm.uiState.value.claudeChatLockedHint)
 
         vm.toggleClaudeCodeMode(true)
 
         val s = vm.uiState.value
-        assertFalse("Code Mode runs only in the terminal", s.claudeUsesChat)
-        assertEquals(
-            "Code Mode runs only in the terminal. Turn it off under Advanced to use the chat.",
-            s.claudeChatLockedHint,
-        )
-        assertFalse("a Continue opens the chat view", s.claudeResumeAvailable)
+        assertTrue("Code Mode does not lock the chat view", s.claudeUsesChat)
+        assertNull(s.claudeChatUnavailableHint)
+        assertTrue(s.claudeResumeAvailable)
 
         vm.submit()
         advanceUntilIdle()
 
-        assertEquals(SessionResponse.UI_TERMINAL, requestSlot.captured.ui)
-        assertTrue(requestSlot.captured.claude_options!!.code_mode)
-        assertTrue(prefsSlot.captured.codeMode)
-        assertFalse(
-            "the user's own Terminal UI choice is kept apart from Code Mode",
-            prefsSlot.captured.terminalUi,
-        )
+        assertEquals(SessionResponse.UI_CHAT, requests.last().ui)
+        assertFalse("the chat view ignores Code Mode", requests.last().claude_options!!.code_mode)
+        assertTrue("the choice is kept for the terminal", prefsSlot.captured.codeMode)
+
+        vm.toggleTerminalUi(true)
+        vm.submit()
+        advanceUntilIdle()
+
+        assertEquals(SessionResponse.UI_TERMINAL, requests.last().ui)
+        assertTrue(requests.last().claude_options!!.code_mode)
     }
 
     @Test

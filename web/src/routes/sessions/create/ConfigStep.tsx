@@ -14,7 +14,7 @@ import type { CustomAgentType } from '../../../api/customAgentTypeRepository';
 import { AntigravityOptionsPanel } from './panels/AntigravityOptionsPanel';
 import { AutoScanOptionsPanel } from './panels/AutoScanOptionsPanel';
 import { AutoScanPanel } from './panels/AutoScanPanel';
-import { CLAUDE_CODE_MODE_CHAT_NOTE, ClaudeAdvancedPanel } from './panels/ClaudeAdvancedPanel';
+import { ClaudeAdvancedPanel } from './panels/ClaudeAdvancedPanel';
 import { ClaudeOptionsPanel } from './panels/ClaudeOptionsPanel';
 import { CodexOptionsPanel } from './panels/CodexOptionsPanel';
 import { OpenCodeOptionsPanel } from './panels/OpenCodeOptionsPanel';
@@ -242,9 +242,6 @@ export function ConfigStep({
           chat={chat}
           agent={chatKind}
           terminalUi={terminalUiOf(state, chatKind)}
-          lockedBy={
-            chatKind === 'claude' && state.claude.codeMode ? CLAUDE_CODE_MODE_CHAT_NOTE : undefined
-          }
           onChange={(value) => {
             dispatch(terminalUiAction(chatKind, value));
           }}

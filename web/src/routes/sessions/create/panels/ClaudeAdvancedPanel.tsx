@@ -1,18 +1,13 @@
 import { CheckboxField } from '../../../../components/form/CheckboxField';
 import { TextAreaField } from '../../../../components/form/TextAreaField';
 import type { ChatSupport } from '../../../../protocol/dto/agentVersion';
-import { claudeTerminalUi } from '../buildCreateRequest';
 import type { ClaudeBucket, ClaudeBucketId, WizardAction } from '../wizardState';
 import { chatBlocked } from './SessionViewField';
 
 export const CLAUDE_CODE_MODE_HINT =
   'Experimental. Claude writes JavaScript that makes several tool calls in one step. ' +
-  'Sessions open in the terminal. Claude Code asks you to confirm until you accept; ' +
+  'Terminal only. Claude Code asks you to confirm until you accept; ' +
   'turn Code Mode off here to stop the question.';
-
-/** Under "Open sessions in" while Claude Code Mode holds the session in the terminal. */
-export const CLAUDE_CODE_MODE_CHAT_NOTE =
-  'Code Mode runs only in the terminal. Turn it off under Advanced to use the chat.';
 
 interface ClaudeAdvancedPanelProps {
   bucket: ClaudeBucket;
@@ -20,7 +15,10 @@ interface ClaudeAdvancedPanelProps {
   dispatch: (action: WizardAction) => void;
   /** Claude Code only: this PC's chat support, which hides Debug logging in the chat view. */
   chat?: ChatSupport;
-  /** Offer Code Mode without `chat`: Auto Scan, whose view is chosen apart from this bucket. */
+  /**
+   * Offer Code Mode without `chat`: Auto Scan, whose view is chosen apart from
+   * this bucket; it passes false for the chat view, which hides Code Mode like Focus view.
+   */
   codeMode?: boolean;
 }
 
@@ -33,13 +31,13 @@ export function ClaudeAdvancedPanel({
   codeMode = chat !== undefined,
 }: ClaudeAdvancedPanelProps) {
   // Debug output lands in the terminal, so it is offered only when there is one.
-  const terminal = chat === undefined || claudeTerminalUi(bucket) || chatBlocked(chat);
+  const terminal = chat === undefined || bucket.terminalUi || chatBlocked(chat);
   return (
     <div className="option-group">
       <details className="advanced advanced-stack">
         <summary>Advanced</summary>
         {/* Not for an older agent's Auto Scan, which cannot keep it. */}
-        {codeMode && (
+        {codeMode && terminal && (
           <CheckboxField
             label="Code Mode"
             checked={bucket.codeMode}

@@ -1059,20 +1059,23 @@ final class CreateSessionModelTests: XCTestCase {
 
     // MARK: - Code Mode
 
-    func testClaudeCodeModeLocksTheTerminalUIAndIsSentOnlyWithIt() async throws {
+    func testClaudeCodeModeKeepsTheChatViewAndIsSentOnlyWithTheTerminal() async throws {
         let model = await modelWithChat(#"{"claude":{"resume":true,"live":true}}"#)
         model.selection = .stored("a")
         model.mode = .standard
         XCTAssertTrue(model.claudeUsesChat)
         XCTAssertTrue(model.canContinueSession)
-        XCTAssertNil(model.claudeCodeModeChatNote)
         XCTAssertEqual(try XCTUnwrap(model.buildRequest(mode: .standard)).claude_options?.code_mode, false)
 
         model.claudeCodeMode = true
 
-        XCTAssertFalse(model.claudeUsesChat, "Code Mode runs only in the terminal")
-        XCTAssertFalse(model.canContinueSession, "a Continue opens the chat view")
-        XCTAssertEqual(model.claudeCodeModeChatNote, "Code Mode runs only in the terminal. Turn it off under Advanced to use the chat.")
+        XCTAssertTrue(model.claudeUsesChat, "Code Mode does not lock the chat view")
+        XCTAssertTrue(model.canContinueSession)
+        let chatRequest = try XCTUnwrap(model.buildRequest(mode: .standard))
+        XCTAssertEqual(chatRequest.ui, "chat")
+        XCTAssertEqual(chatRequest.claude_options?.code_mode, false, "the chat view ignores Code Mode")
+
+        model.terminalUI = true
         let request = try XCTUnwrap(model.buildRequest(mode: .standard))
         XCTAssertEqual(request.ui, "terminal")
         XCTAssertEqual(request.claude_options?.code_mode, true)
@@ -1123,7 +1126,7 @@ final class CreateSessionModelTests: XCTestCase {
         StubURLProtocol.reset()
         let prefs = isolatedPrefs()
         let launches: [(CreateSessionModel.Mode, (CreateSessionModel) -> Void)] = [
-            (.standard, { $0.claudeCodeMode = true }),
+            (.standard, { $0.terminalUI = true; $0.claudeCodeMode = true }),
             (.opencode, { $0.opencodeCodeMode = false }),
             (.pi, { $0.piCodeMode = true }),
         ]
