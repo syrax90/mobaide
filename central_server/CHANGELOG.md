@@ -1,5 +1,12 @@
 # central_server Changelog
 
+## [0.2.29](https://github.com/syrax90/mobaide/compare/server-v0.2.28...server-v0.2.29) (2026-11-20)
+
+
+### Bug Fixes
+
+* **server:** redact WebSocket tokens in uvicorn log lines ([#920](https://github.com/syrax90/mobaide/issues/920)) ([174c597](https://github.com/syrax90/mobaide/commit/174c59764ab85e401a2caf4d341bce91e4918cae))
+
 ## [0.2.28](https://github.com/syrax90/mobaide/compare/server-v0.2.27...server-v0.2.28) (2026-11-20)
 
 
