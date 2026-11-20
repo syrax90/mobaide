@@ -995,8 +995,7 @@ private fun GitHubStatusBlock(
                         status == null && error != null -> ErrorText(error)
                         status == null -> Text("Checking GitHub on the PC…")
                         !status.installed -> Text(status.problem ?: "GitHub CLI (gh) is not installed on the PC.")
-                        // The agent sets `host` for any remote; only a GitHub host can be signed in to.
-                        !status.signed_in && status.host?.contains("github") == true ->
+                        status.offersSignIn ->
                             Text(status.problem ?: "GitHub CLI is not signed in on the PC.")
                         status.problem != null -> Text(status.problem)
                         else -> {
@@ -1019,7 +1018,7 @@ private fun GitHubStatusBlock(
                 } else {
                     Hint("Install it from cli.github.com, then tap Check again.")
                 }
-                !status.signed_in && status.host?.contains("github") == true -> if (setupAvailable) {
+                status.offersSignIn -> if (setupAvailable) {
                     PixelButton(
                         style = PixelButtonStyle.Primary,
                         onClick = { onSetup("sign_in") },

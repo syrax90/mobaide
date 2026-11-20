@@ -2425,7 +2425,9 @@ export interface components {
          * @description ``GET /api/autoscan/github/status``: what a GitHub scan still needs.
          *
          *     ``problem`` is the first blocking reason in plain words, ``null`` when a
-         *     scan can start. ``can_install`` says whether ``POST
+         *     scan can start. ``github_host`` says whether ``host`` is GitHub
+         *     (github.com or an Enterprise Server), so signing in can help; ``null``
+         *     before a host is known. ``can_install`` says whether ``POST
          *     /api/autoscan/github/setup`` with ``action: "install"`` knows an
          *     installer for this PC; ``install_command`` is that command as text.
          */
@@ -2434,6 +2436,8 @@ export interface components {
             account?: string | null;
             /** Can Install */
             can_install: boolean;
+            /** Github Host */
+            github_host?: boolean | null;
             /** Host */
             host?: string | null;
             /** Install Command */

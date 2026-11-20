@@ -81,9 +81,15 @@ data class GitHubStatusDto(
     val repo: String? = null,
     val repo_url: String? = null,
     val problem: String? = null,
+    // Null from an agent that predates it: then the host's name decides.
+    val github_host: Boolean? = null,
     val can_install: Boolean = false,
     val install_command: String? = null,
-)
+) {
+    /** Signing in can help: the remote is on GitHub (github.com or an Enterprise Server). */
+    val offersSignIn: Boolean
+        get() = !signed_in && (github_host ?: (host?.contains("github") == true))
+}
 
 @Serializable
 data class GitHubLabelDto(

@@ -15,8 +15,11 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+import urllib.error
+import urllib.request
 from urllib.parse import urlsplit
 
+from mobaide import _http
 from mobaide.core.cli_launcher import WINDOWS_NO_WINDOW
 from mobaide.core.git_exec import GitCwdMissingError, GitUnavailableError, run_git
 from mobaide.core.shell import login_shell_path
@@ -164,6 +167,27 @@ def github_host(hosts: list[str]) -> str | None:
     return next((h for h in hosts if "github" in h), hosts[0] if hosts else None)
 
 
+# Response headers only GitHub (github.com or Enterprise Server) sends.
+_GITHUB_HEADERS = ("X-GitHub-Request-Id", "X-GitHub-Enterprise-Version")
+
+
+async def answers_as_github(host: str) -> bool:
+    """Whether ``host`` is a GitHub Enterprise Server: its API answers with
+    GitHub's headers even without a token (a 401 in private mode too)."""
+
+    def probe() -> bool:
+        try:
+            with _http.urlopen(f"https://{host}/api/v3/meta", timeout=5.0) as response:
+                headers = response.headers
+        except urllib.error.HTTPError as exc:
+            headers = exc.headers
+        except (OSError, ValueError):
+            return False
+        return any(headers.get(name) for name in _GITHUB_HEADERS)
+
+    return await asyncio.to_thread(probe)
+
+
 async def remote_hosts(path: str) -> list[str]:
     """Hosts of the folder's git remotes, ``origin`` first, with ssh aliases
     resolved the way ``gh`` resolves them."""
@@ -204,6 +228,7 @@ async def github_status(gh: GhCli, workspace_path: str) -> dict[str, object]:
         "repo": None,
         "repo_url": None,
         "problem": None,
+        "github_host": None,
         "can_install": command is not None,
         "install_command": command.display if command is not None else None,
     }
@@ -216,7 +241,7 @@ async def github_status(gh: GhCli, workspace_path: str) -> dict[str, object]:
     status["version"] = await gh.version()
 
     # ``host`` stays ``None`` without a git repository or a remote. Any remote
-    # sets it, GitHub or not; clients offer sign-in only for a GitHub host.
+    # sets it, GitHub or not; clients offer sign-in only where ``github_host``.
     if not os.path.exists(os.path.join(workspace_path, ".git")):
         status["problem"] = "This workspace is not a git repository."
         return status
@@ -230,11 +255,15 @@ async def github_status(gh: GhCli, workspace_path: str) -> dict[str, object]:
     status["signed_in"] = auth.signed_in
     status["account"] = auth.account
     if not auth.signed_in:
-        if "github" not in host:
+        # An Enterprise Server may have any name: ask the host itself.
+        is_github = "github" in host or await answers_as_github(host)
+        status["github_host"] = is_github
+        if not is_github:
             status["problem"] = f"The repository's remote is on {host}, not on GitHub."
         else:
             status["problem"] = auth.detail or f"GitHub CLI is not signed in to {host}."
         return status
+    status["github_host"] = True
     try:
         repo = await gh.repo_of(workspace_path)
     except GhError as exc:

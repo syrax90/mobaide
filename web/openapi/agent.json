@@ -2649,7 +2649,7 @@
         "type": "object"
       },
       "GitHubStatusResponse": {
-        "description": "``GET /api/autoscan/github/status``: what a GitHub scan still needs.\n\n``problem`` is the first blocking reason in plain words, ``null`` when a\nscan can start. ``can_install`` says whether ``POST\n/api/autoscan/github/setup`` with ``action: \"install\"`` knows an\ninstaller for this PC; ``install_command`` is that command as text.",
+        "description": "``GET /api/autoscan/github/status``: what a GitHub scan still needs.\n\n``problem`` is the first blocking reason in plain words, ``null`` when a\nscan can start. ``github_host`` says whether ``host`` is GitHub\n(github.com or an Enterprise Server), so signing in can help; ``null``\nbefore a host is known. ``can_install`` says whether ``POST\n/api/autoscan/github/setup`` with ``action: \"install\"`` knows an\ninstaller for this PC; ``install_command`` is that command as text.",
         "properties": {
           "account": {
             "anyOf": [
@@ -2665,6 +2665,17 @@
           "can_install": {
             "title": "Can Install",
             "type": "boolean"
+          },
+          "github_host": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Github Host"
           },
           "host": {
             "anyOf": [

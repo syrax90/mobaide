@@ -427,13 +427,21 @@ _GITHUB_ORIGIN = ("origin", "https://github.com/acme/app.git")
         ),
         pytest.param(
             _repo_with(("origin", "git@gitlab.com:acme/app.git")), _FakeGh(signed_in=False),
-            {"host": "gitlab.com", "signed_in": False, "repo": None, "blocked": True},
+            {"host": "gitlab.com", "signed_in": False, "github_host": False, "repo": None,
+             "blocked": True},
             id="remote-not-on-github",
         ),
         pytest.param(
             _repo_with(_GITHUB_ORIGIN), _FakeGh(signed_in=False),
-            {"host": "github.com", "signed_in": False, "repo": None, "blocked": True},
+            {"host": "github.com", "signed_in": False, "github_host": True, "repo": None,
+             "blocked": True},
             id="not-signed-in",
+        ),
+        pytest.param(
+            _repo_with(("origin", "git@ghe.example.com:acme/app.git")), _FakeGh(signed_in=False),
+            {"host": "ghe.example.com", "signed_in": False, "github_host": True, "repo": None,
+             "blocked": True},
+            id="enterprise-host-without-github-in-its-name",
         ),
         pytest.param(
             _repo_with(_GITHUB_ORIGIN), _FakeGh(repo_error="no GitHub repository here"),
@@ -456,6 +464,11 @@ async def test_github_status_names_the_first_blocker(
     monkeypatch, tmp_path, make_folder, fake, expected,
 ):
     monkeypatch.setattr(setup, "install_command", lambda: None)
+
+    async def answers_as_github(host: str) -> bool:
+        return host == "ghe.example.com"
+
+    monkeypatch.setattr(setup, "answers_as_github", answers_as_github)
     folder = make_folder(tmp_path)
 
     status = await setup.github_status(fake, folder)

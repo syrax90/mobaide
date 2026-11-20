@@ -246,8 +246,15 @@ struct GitHubStatusResponse: Codable, Equatable, Sendable {
     let repo: String?
     let repo_url: String?
     let problem: String?
+    /// Nil from an agent that predates it: then the host's name decides.
+    let github_host: Bool?
     let can_install: Bool
     let install_command: String?
+
+    /// Signing in can help: the remote is on GitHub (github.com or an Enterprise Server).
+    var offersSignIn: Bool {
+        !signed_in && (github_host ?? (host?.contains("github") == true))
+    }
 
     init(
         installed: Bool = false,
@@ -258,6 +265,7 @@ struct GitHubStatusResponse: Codable, Equatable, Sendable {
         repo: String? = nil,
         repo_url: String? = nil,
         problem: String? = nil,
+        github_host: Bool? = nil,
         can_install: Bool = false,
         install_command: String? = nil
     ) {
@@ -269,6 +277,7 @@ struct GitHubStatusResponse: Codable, Equatable, Sendable {
         self.repo = repo
         self.repo_url = repo_url
         self.problem = problem
+        self.github_host = github_host
         self.can_install = can_install
         self.install_command = install_command
     }
@@ -285,6 +294,7 @@ extension GitHubStatusResponse {
         repo = try container.decodeIfPresent(String.self, forKey: .repo)
         repo_url = try container.decodeIfPresent(String.self, forKey: .repo_url)
         problem = try container.decodeIfPresent(String.self, forKey: .problem)
+        github_host = try container.decodeIfPresent(Bool.self, forKey: .github_host)
         can_install = try container.decodeIfPresent(Bool.self, forKey: .can_install) ?? false
         install_command = try container.decodeIfPresent(String.self, forKey: .install_command)
     }

@@ -238,8 +238,10 @@ function GitHubStatusLines({
     );
   }
 
-  // The agent names a host only where signing in can fix the problem.
-  if (!status.signed_in && (status.host ?? '').includes('github')) {
+  // Signing in helps only on a GitHub host. An older agent sends no
+  // `github_host`, so fall back to the host's name.
+  const githubHost = status.github_host ?? (status.host ?? '').includes('github');
+  if (!status.signed_in && githubHost) {
     return (
       <>
         <StatusLine tone="warning">

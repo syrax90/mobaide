@@ -345,7 +345,7 @@ struct AutoScanSourceSections: View {
             }
         } else if let problem = status.problem {
             statusLine(problem, ok: false, tone: colors.warning)
-            if !status.signed_in, status.host?.contains("github") == true {
+            if status.offersSignIn {
                 if setup.canRunGitHubSetup {
                     setupButton("Sign in to GitHub", action: .signIn)
                 } else {
