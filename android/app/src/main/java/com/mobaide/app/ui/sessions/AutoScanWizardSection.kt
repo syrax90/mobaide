@@ -42,8 +42,6 @@ import androidx.compose.material3.InputChipDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -96,7 +94,6 @@ import com.mobaide.app.ui.common.pixel.PixelRadio
 import com.mobaide.app.ui.common.pixel.PixelTextButton
 import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import com.mobaide.app.ui.common.pixel.pixelFrame
-import com.mobaide.app.ui.common.pixel.pixelSegmentedButtonColors
 import com.mobaide.app.ui.theme.MobaideTheme
 import com.mobaide.app.ui.theme.pixel
 
@@ -893,7 +890,7 @@ private fun LabelTip(hidden: Boolean, onHiddenChange: (Boolean) -> Unit) {
 }
 
 /**
- * Terminal or Chat for each issue's session. Chat is offered only when the
+ * Chat or Terminal for each issue's session. Chat is offered only when the
  * chosen agent has the chat view on this PC.
  */
 @Composable
@@ -904,37 +901,21 @@ private fun AutoScanSessionViewField(
     selected: String,
     onSelect: (String) -> Unit,
 ) {
-    Text("Open sessions in", style = MaterialTheme.typography.labelLarge)
-    SingleChoiceSegmentedButtonRow(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("autoscan_session_view"),
-    ) {
-        listOf(AUTO_SCAN_UI_TERMINAL to "Terminal", AUTO_SCAN_UI_CHAT to "Chat").forEach { (value, label) ->
-            SegmentedButton(
-                selected = selected == value,
-                onClick = { onSelect(value) },
-                enabled = value == AUTO_SCAN_UI_TERMINAL || chatAvailable,
-                shape = RectangleShape,
-                colors = pixelSegmentedButtonColors(),
-                icon = {},
-                modifier = Modifier.testTag("autoscan_session_view_$value"),
-            ) { Text(label) }
-        }
-    }
-    if (!chatAvailable) {
-        // The probe has not answered yet: the shared hint knows only its answers.
-        Hint(
-            chatUnavailableHint(chatSupport, cli)
-                ?: "Checking the chat view on the PC…",
-        )
-    } else if (cli == "junie" && selected == AUTO_SCAN_UI_TERMINAL) {
-        Hint(
-            "Junie asks to trust a new worktree unless you trusted the workspace folder in Junie. " +
-                "Trust it once in Junie, or use Chat.",
-            Modifier.testTag("autoscan_junie_trust_hint"),
-        )
-    }
+    val junieTrust = chatAvailable && cli == "junie" && selected == AUTO_SCAN_UI_TERMINAL
+    SessionViewField(
+        chatSelected = selected == AUTO_SCAN_UI_CHAT,
+        chatEnabled = chatAvailable,
+        onSelect = { chat -> onSelect(if (chat) AUTO_SCAN_UI_CHAT else AUTO_SCAN_UI_TERMINAL) },
+        hint = when {
+            // The probe has not answered yet: the shared hint knows only its answers.
+            !chatAvailable -> chatUnavailableHint(chatSupport, cli) ?: "Checking the chat view on the PC…"
+            junieTrust -> "Junie asks to trust a new worktree unless you trusted the workspace folder in Junie. " +
+                "Trust it once in Junie, or use Chat."
+            else -> null
+        },
+        hintModifier = if (junieTrust) Modifier.testTag("autoscan_junie_trust_hint") else Modifier,
+        testTag = "autoscan_session_view",
+    )
 }
 
 /** The wait between two scans; a saved value outside the list still shows. */

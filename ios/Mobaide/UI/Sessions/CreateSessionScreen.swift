@@ -24,12 +24,6 @@ private struct CreateSessionContent: View {
     @State private var pathSuggestions: PathSuggestionsModel
     @State private var claudeAdvancedExpanded = false
     @State private var codexAdvancedExpanded = false
-    @State private var antigravityAdvancedExpanded = false
-    @State private var opencodeAdvancedExpanded = false
-    @State private var copilotAdvancedExpanded = false
-    @State private var cursorAdvancedExpanded = false
-    @State private var junieAdvancedExpanded = false
-    @State private var piAdvancedExpanded = false
     @State private var autoScanAdvancedExpanded = false
     @State private var autoScanCodexAdvancedExpanded = false
     @State private var saveTemplateShown = false
@@ -504,24 +498,6 @@ private struct CreateSessionContent: View {
             if model.mode == .codex {
                 codexAdvancedSection
             }
-            if model.mode == .antigravity {
-                antigravityAdvancedSection
-            }
-            if model.mode == .opencode {
-                opencodeAdvancedSection
-            }
-            if model.mode == .copilot {
-                copilotAdvancedSection
-            }
-            if model.mode == .cursor {
-                cursorAdvancedSection
-            }
-            if model.mode == .junie {
-                junieAdvancedSection
-            }
-            if model.mode == .pi {
-                piAdvancedSection
-            }
             Section {
                 Button {
                     Task { await model.create() }
@@ -725,7 +701,6 @@ private struct CreateSessionContent: View {
 
         claudeAdvancedOptions(
             isExpanded: $autoScanAdvancedExpanded,
-            terminalUI: nil,
             showsDebug: true,
             noMemory: $model.autoScanNoMemory,
             fastMode: $model.autoScanClaudeFastMode,
@@ -810,6 +785,11 @@ private struct CreateSessionContent: View {
     @ViewBuilder
     private var claudeConfig: some View {
         @Bindable var model = model
+        sessionViewSection(
+            $model.terminalUI,
+            usesChat: model.claudeUsesChat,
+            unavailableReason: model.chatUnavailableReason
+        )
         Section(header: PixelSectionHeader("Claude")) {
             claudeModelAndEffortPickers(
                 claudeModel: $model.claudeModel,
@@ -876,14 +856,18 @@ private struct CreateSessionContent: View {
         }
     }
 
-    /// "Terminal UI" under Advanced: the classic terminal instead of the chat view.
-    @ViewBuilder
-    private func terminalUIToggle(_ isOn: Binding<Bool>, unavailableReason: String?) -> some View {
-        Toggle("Terminal UI", isOn: isOn)
-            .disabled(unavailableReason != nil)
-        Text(unavailableReason ?? "Use the classic terminal instead of the chat view.")
-            .font(.footnote)
-            .foregroundStyle(unavailableReason != nil ? colors.warning : colors.textMuted)
+    /// "Open sessions in" for a normal agent session: Chat is `terminalUI`
+    /// off. Placed first, so choosing a view never moves the rows below it.
+    private func sessionViewSection(
+        _ terminalUI: Binding<Bool>,
+        usesChat: Bool,
+        unavailableReason: String?
+    ) -> some View {
+        SessionViewChooserSection(
+            chatSelected: usesChat,
+            chatUnavailableReason: unavailableReason,
+            onChoose: { terminalUI.wrappedValue = !$0 }
+        )
     }
 
     /// Rendered after the Worktree section, so the main options stay on top.
@@ -892,10 +876,6 @@ private struct CreateSessionContent: View {
         @Bindable var model = model
         claudeAdvancedOptions(
             isExpanded: $claudeAdvancedExpanded,
-            terminalUI: Binding(
-                get: { model.terminalUI || model.chatUnavailable },
-                set: { model.terminalUI = $0 }
-            ),
             showsDebug: !model.claudeUsesChat,
             noMemory: $model.noMemory,
             fastMode: $model.claudeFastMode,
@@ -937,13 +917,10 @@ private struct CreateSessionContent: View {
     }
 
     /// Collapsed-by-default "Advanced" section shared by the Claude Code and
-    /// Auto Scan steps (Android: `ClaudeAdvancedOptions`). `terminalUI` is the
-    /// Claude Code step's chat / terminal choice; Auto Scan always runs in the
-    /// terminal and passes nil.
+    /// Auto Scan steps (Android: `ClaudeAdvancedOptions`).
     @ViewBuilder
     private func claudeAdvancedOptions(
         isExpanded: Binding<Bool>,
-        terminalUI: Binding<Bool>?,
         showsDebug: Bool,
         noMemory: Binding<Bool>,
         fastMode: Binding<Bool>,
@@ -953,9 +930,6 @@ private struct CreateSessionContent: View {
     ) -> some View {
         Section {
             DisclosureGroup("Advanced", isExpanded: isExpanded) {
-                if let terminalUI {
-                    terminalUIToggle(terminalUI, unavailableReason: model.chatUnavailableReason)
-                }
                 Toggle("No memory", isOn: noMemory)
                 Toggle("Fast mode (Opus only)", isOn: fastMode)
                 Toggle("Ultracode", isOn: ultracode)
@@ -977,6 +951,11 @@ private struct CreateSessionContent: View {
     @ViewBuilder
     private var codexConfig: some View {
         @Bindable var model = model
+        sessionViewSection(
+            $model.codexTerminalUI,
+            usesChat: model.codexUsesChat,
+            unavailableReason: model.codexChatUnavailableReason
+        )
         // Sandbox and approval live under Advanced, so the preset rows show
         // which one the current pair matches (none for a hand-picked pair).
         Section {
@@ -1008,13 +987,6 @@ private struct CreateSessionContent: View {
         @Bindable var model = model
         Section {
             DisclosureGroup("Advanced", isExpanded: $codexAdvancedExpanded) {
-                terminalUIToggle(
-                    Binding(
-                        get: { model.codexTerminalUI || model.codexChatUnavailable },
-                        set: { model.codexTerminalUI = $0 }
-                    ),
-                    unavailableReason: model.codexChatUnavailableReason
-                )
                 CodexSandboxApprovalRows(
                     sandbox: $model.codexSandbox,
                     approval: $model.codexApproval,
@@ -1027,6 +999,11 @@ private struct CreateSessionContent: View {
     @ViewBuilder
     private var antigravityConfig: some View {
         @Bindable var model = model
+        sessionViewSection(
+            $model.antigravityTerminalUI,
+            usesChat: model.antigravityUsesChat,
+            unavailableReason: model.antigravityChatUnavailableReason
+        )
         Section(header: PixelSectionHeader("Antigravity")) {
             AntigravityOptionRows(
                 model: $model.antigravityModel,
@@ -1048,25 +1025,14 @@ private struct CreateSessionContent: View {
         )
     }
 
-    /// Collapsed like the Codex one; rendered after the Worktree section.
-    @ViewBuilder
-    private var antigravityAdvancedSection: some View {
-        Section {
-            DisclosureGroup("Advanced", isExpanded: $antigravityAdvancedExpanded) {
-                terminalUIToggle(
-                    Binding(
-                        get: { model.antigravityTerminalUI || model.antigravityChatUnavailable },
-                        set: { model.antigravityTerminalUI = $0 }
-                    ),
-                    unavailableReason: model.antigravityChatUnavailableReason
-                )
-            }
-        }
-    }
-
     @ViewBuilder
     private var opencodeConfig: some View {
         @Bindable var model = model
+        sessionViewSection(
+            $model.opencodeTerminalUI,
+            usesChat: model.opencodeUsesChat,
+            unavailableReason: model.opencodeChatUnavailableReason
+        )
         Section(header: PixelSectionHeader("OpenCode")) {
             OpenCodeOptionRows(autoApprove: $model.opencodeAutoApprove)
         }
@@ -1084,51 +1050,30 @@ private struct CreateSessionContent: View {
         }
     }
 
-    /// Collapsed like the Codex one; rendered after the Worktree section.
-    @ViewBuilder
-    private var opencodeAdvancedSection: some View {
-        Section {
-            DisclosureGroup("Advanced", isExpanded: $opencodeAdvancedExpanded) {
-                terminalUIToggle(
-                    Binding(
-                        get: { model.opencodeTerminalUI || model.opencodeChatUnavailable },
-                        set: { model.opencodeTerminalUI = $0 }
-                    ),
-                    unavailableReason: model.opencodeChatUnavailableReason
-                )
-            }
-        }
-    }
-
     @ViewBuilder
     private var copilotConfig: some View {
         @Bindable var model = model
+        sessionViewSection(
+            $model.copilotTerminalUI,
+            usesChat: model.copilotUsesChat,
+            unavailableReason: model.copilotChatUnavailableReason
+        )
         Section(header: PixelSectionHeader("GitHub Copilot")) {
             CopilotOptionRows(allowAll: $model.copilotAllowAll)
         }
         continueSessionSection(agentName: "GitHub Copilot")
     }
 
-    /// Collapsed like the Codex one; rendered after the Worktree section.
-    @ViewBuilder
-    private var copilotAdvancedSection: some View {
-        Section {
-            DisclosureGroup("Advanced", isExpanded: $copilotAdvancedExpanded) {
-                terminalUIToggle(
-                    Binding(
-                        get: { model.copilotTerminalUI || model.copilotChatUnavailable },
-                        set: { model.copilotTerminalUI = $0 }
-                    ),
-                    unavailableReason: model.copilotChatUnavailableReason
-                )
-            }
-        }
-    }
-
     /// Pi has no option to set at launch: say what a user of the other agents
     /// would look for here.
     @ViewBuilder
     private var piConfig: some View {
+        @Bindable var model = model
+        sessionViewSection(
+            $model.piTerminalUI,
+            usesChat: model.piUsesChat,
+            unavailableReason: model.piChatUnavailableReason
+        )
         Section(header: PixelSectionHeader("Pi")) {
             Text(
                 "Pi runs commands and edits files without asking. "
@@ -1140,25 +1085,14 @@ private struct CreateSessionContent: View {
         continueSessionSection(agentName: "Pi")
     }
 
-    /// Collapsed like the Codex one; rendered after the Worktree section.
-    @ViewBuilder
-    private var piAdvancedSection: some View {
-        Section {
-            DisclosureGroup("Advanced", isExpanded: $piAdvancedExpanded) {
-                terminalUIToggle(
-                    Binding(
-                        get: { model.piTerminalUI || model.piChatUnavailable },
-                        set: { model.piTerminalUI = $0 }
-                    ),
-                    unavailableReason: model.piChatUnavailableReason
-                )
-            }
-        }
-    }
-
     @ViewBuilder
     private var cursorConfig: some View {
         @Bindable var model = model
+        sessionViewSection(
+            $model.cursorTerminalUI,
+            usesChat: model.cursorUsesChat,
+            unavailableReason: model.cursorChatUnavailableReason
+        )
         Section(header: PixelSectionHeader("Cursor")) {
             CursorOptionRows(force: $model.cursorForce)
         }
@@ -1168,25 +1102,14 @@ private struct CreateSessionContent: View {
         )
     }
 
-    /// Collapsed like the Codex one; rendered after the Worktree section.
-    @ViewBuilder
-    private var cursorAdvancedSection: some View {
-        Section {
-            DisclosureGroup("Advanced", isExpanded: $cursorAdvancedExpanded) {
-                terminalUIToggle(
-                    Binding(
-                        get: { model.cursorTerminalUI || model.cursorChatUnavailable },
-                        set: { model.cursorTerminalUI = $0 }
-                    ),
-                    unavailableReason: model.cursorChatUnavailableReason
-                )
-            }
-        }
-    }
-
     @ViewBuilder
     private var junieConfig: some View {
         @Bindable var model = model
+        sessionViewSection(
+            $model.junieTerminalUI,
+            usesChat: model.junieUsesChat,
+            unavailableReason: model.junieChatUnavailableReason
+        )
         Section(header: PixelSectionHeader("Junie")) {
             JunieOptionRows(planMode: $model.juniePlanMode, brave: $model.junieBrave)
         }
@@ -1194,22 +1117,6 @@ private struct CreateSessionContent: View {
             agentName: "Junie",
             hint: "Open a Junie session stored on your PC, also one you started in Junie’s terminal UI."
         )
-    }
-
-    /// Collapsed like the Codex one; rendered after the Worktree section.
-    @ViewBuilder
-    private var junieAdvancedSection: some View {
-        Section {
-            DisclosureGroup("Advanced", isExpanded: $junieAdvancedExpanded) {
-                terminalUIToggle(
-                    Binding(
-                        get: { model.junieTerminalUI || model.junieChatUnavailable },
-                        set: { model.junieTerminalUI = $0 }
-                    ),
-                    unavailableReason: model.junieChatUnavailableReason
-                )
-            }
-        }
     }
 
     @ViewBuilder

@@ -1,14 +1,10 @@
 import { CheckboxField } from '../../../../components/form/CheckboxField';
-import type { ChatSupport } from '../../../../protocol/dto/agentVersion';
 import type { AgentBucketTarget, JunieBucket, WizardAction } from '../wizardState';
 import { ScanAskHint } from './ScanAskHint';
-import { TerminalUiField } from './TerminalUiField';
 
 interface JunieOptionsPanelProps {
   bucket: JunieBucket;
   dispatch: (action: WizardAction) => void;
-  /** Shows the Terminal UI toggle, gated on this PC's chat support for Junie. */
-  chat?: ChatSupport;
   /** Auto Scan edits its own copy of the options. */
   target?: AgentBucketTarget;
 }
@@ -17,7 +13,7 @@ interface JunieOptionsPanelProps {
  * Junie has no model option at launch: the model and its effort are picked
  * inside the session.
  */
-export function JunieOptionsPanel({ bucket, dispatch, chat, target }: JunieOptionsPanelProps) {
+export function JunieOptionsPanel({ bucket, dispatch, target }: JunieOptionsPanelProps) {
   return (
     <div className="option-group">
       <CheckboxField
@@ -41,19 +37,6 @@ export function JunieOptionsPanel({ bucket, dispatch, chat, target }: JunieOptio
         }}
       />
       <ScanAskHint show={target === 'autoScan' && !bucket.brave} />
-      {chat !== undefined && (
-        <details className="advanced advanced-stack">
-          <summary>Advanced</summary>
-          <TerminalUiField
-            chat={chat}
-            agent="junie"
-            checked={bucket.terminalUi}
-            onChange={(value) => {
-              dispatch({ type: 'setJunieTerminalUi', value });
-            }}
-          />
-        </details>
-      )}
     </div>
   );
 }

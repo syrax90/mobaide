@@ -428,13 +428,13 @@ fun CreateSessionUiState.codexEffortsFor(model: String?): List<String> =
         ?: CreateSessionViewModel.REASONING_EFFORTS
 
 /**
- * Whether a session starts in the chat view: the Terminal UI toggle is off and
+ * Whether a session starts in the chat view: Chat is chosen under Open sessions in and
  * the PC is not known to lack chat support (unknown = the agent decides).
  */
 private fun usesChat(terminalUi: Boolean, chat: ChatSupport?): Boolean =
     !terminalUi && (chat == null || chat is ChatSupport.Available)
 
-/** Why a Terminal UI toggle is locked on, or null while the chat view is possible. */
+/** Why Chat cannot be chosen under Open sessions in, or null while the chat view is possible. */
 fun chatUnavailableHint(chat: ChatSupport?, kind: String = "claude"): String? = when (chat) {
     ChatSupport.AgentOutdated -> "Update Mobaide on your PC to use the chat view."
     ChatSupport.Unavailable -> when (kind) {
@@ -3133,7 +3133,7 @@ class CreateSessionViewModel @Inject constructor(
                     _uiState.update {
                         it.copy(
                             submitting = false,
-                            error = "$detail. Turn on Terminal UI under Advanced to use the classic terminal.",
+                            error = "$detail. Choose Terminal under Open sessions in to use the classic terminal.",
                         )
                     }
                 } else if (e is ApiException && isAgentUpdateRequired(e.errorBody)) {

@@ -686,33 +686,17 @@ struct AutoScanSessionViewSection: View {
 
     var body: some View {
         if let cli = setup.cli {
-            let chatAvailable = setup.isChatAvailable(cli)
             let view = setup.effectiveSessionView
-            Section {
-                SelectableRow(
-                    title: AutoScanSetupModel.SessionView.terminal.title,
-                    subtitle: "The agent's own terminal app.",
-                    selected: view == .terminal
-                ) {
-                    setup.sessionView = .terminal
-                }
-                SelectableRow(
-                    title: AutoScanSetupModel.SessionView.chat.title,
-                    subtitle: chatAvailable
-                        ? "Messages, tool steps and approvals in the app."
-                        : setup.chatUnavailableReason(cli),
-                    selected: view == .chat
-                ) {
-                    setup.sessionView = .chat
-                }
-                .disabled(!chatAvailable)
-                if chatAvailable, cli == "junie", view == .terminal {
+            SessionViewChooserSection(
+                chatSelected: view == .chat,
+                chatUnavailableReason: setup.chatUnavailableReason(cli),
+                onChoose: { setup.sessionView = $0 ? .chat : .terminal }
+            ) {
+                if setup.isChatAvailable(cli), cli == "junie", view == .terminal {
                     Text("Junie asks to trust a new worktree unless you trusted the workspace folder in Junie. Trust it once in Junie, or use Chat.")
                         .font(.footnote)
                         .foregroundStyle(colors.warning)
                 }
-            } header: {
-                PixelSectionHeader("Open sessions in")
             }
         }
     }

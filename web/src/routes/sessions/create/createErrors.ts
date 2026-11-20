@@ -97,7 +97,7 @@ export function classifyCreateError(
     const detail = errorDetailString(body) ?? 'The chat view is not available on this PC.';
     return {
       kind: 'chatUnavailable',
-      message: `${detail} Turn on Terminal UI under Advanced to use the classic terminal.`,
+      message: `${detail} Choose Terminal under Open sessions in to use the classic terminal.`,
     };
   }
 

@@ -346,7 +346,7 @@ final class AutoScanSetupModelTests: XCTestCase {
         XCTAssertEqual(model.intervalMinutes, 15)
 
         model.prepare(for: try workspace("auto_scan_nothing_chosen"))
-        XCTAssertEqual(model.sessionView, .terminal)
+        XCTAssertEqual(model.sessionView, .chat)
         XCTAssertEqual(model.intervalMinutes, AutoScanSetupModel.defaultIntervalMinutes)
     }
 

@@ -418,8 +418,8 @@ final class CreateSessionModel {
 
     var claudeEnabled: Bool { claudeAvailable != false }
 
-    /// The agent is known not to run the chat view, so the Terminal UI toggle
-    /// is locked on.
+    /// The agent is known not to run the chat view, so "Open sessions in"
+    /// disables Chat and shows Terminal.
     var chatUnavailable: Bool { chatCapability.map { !$0.isAvailable } ?? false }
 
     /// The Claude Code session will open in the chat view.
@@ -2069,7 +2069,7 @@ final class CreateSessionModel {
     }
 
     static func chatUnavailableMessage(_ detail: String?) -> String {
-        let hint = "Turn on Terminal UI under Advanced to use the classic terminal."
+        let hint = "Choose Terminal under Open sessions in to use the classic terminal."
         guard let detail, !detail.isEmpty else { return "The chat view is not available. " + hint }
         return detail.hasSuffix(".") ? "\(detail) \(hint)" : "\(detail). \(hint)"
     }

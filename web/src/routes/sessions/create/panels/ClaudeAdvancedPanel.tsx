@@ -2,13 +2,13 @@ import { CheckboxField } from '../../../../components/form/CheckboxField';
 import { TextAreaField } from '../../../../components/form/TextAreaField';
 import type { ChatSupport } from '../../../../protocol/dto/agentVersion';
 import type { ClaudeBucket, ClaudeBucketId, WizardAction } from '../wizardState';
-import { chatBlocked, TerminalUiField } from './TerminalUiField';
+import { chatBlocked } from './SessionViewField';
 
 interface ClaudeAdvancedPanelProps {
   bucket: ClaudeBucket;
   bucketId: ClaudeBucketId;
   dispatch: (action: WizardAction) => void;
-  /** Claude Code only: shows the Terminal UI toggle, gated on this PC's chat support. */
+  /** Claude Code only: this PC's chat support, which hides Debug logging in the chat view. */
   chat?: ChatSupport;
 }
 
@@ -20,16 +20,6 @@ export function ClaudeAdvancedPanel({ bucket, bucketId, dispatch, chat }: Claude
     <div className="option-group">
       <details className="advanced advanced-stack">
         <summary>Advanced</summary>
-        {chat !== undefined && (
-          <TerminalUiField
-            chat={chat}
-            agent="claude"
-            checked={bucket.terminalUi}
-            onChange={(value) => {
-              dispatch({ type: 'setClaudeFlag', bucket: bucketId, flag: 'terminalUi', value });
-            }}
-          />
-        )}
         <CheckboxField
           label="No memory"
           checked={bucket.noMemory}

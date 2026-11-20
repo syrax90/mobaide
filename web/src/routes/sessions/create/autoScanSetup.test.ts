@@ -113,17 +113,21 @@ describe('seeding the Auto Scan choices', () => {
   });
 
   it('pre-fills the saved session view and time between scans, and a new workspace starts at the defaults', () => {
+    const saved = savedChoices('auto_scan_choices');
     const seeded = reduce([
-      { type: 'seedAutoScanSetup', workspaceName: 'proj', saved: savedChoices('auto_scan_choices') },
+      { type: 'seedAutoScanSetup', workspaceName: 'proj', saved: saved && { ...saved, ui: 'terminal' } },
     ]);
     const other = reduce(
       [{ type: 'seedAutoScanSetup', workspaceName: 'other', saved: undefined }],
       seeded,
     );
 
-    expect([seeded.autoScanSetup.ui, seeded.autoScanSetup.intervalMinutes]).toEqual(['chat', 15]);
-    expect([other.autoScanSetup.ui, other.autoScanSetup.intervalMinutes]).toEqual([
+    expect([seeded.autoScanSetup.ui, seeded.autoScanSetup.intervalMinutes]).toEqual([
       'terminal',
+      15,
+    ]);
+    expect([other.autoScanSetup.ui, other.autoScanSetup.intervalMinutes]).toEqual([
+      'chat',
       AUTO_SCAN_DEFAULT_INTERVAL_MINUTES,
     ]);
   });

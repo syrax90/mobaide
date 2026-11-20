@@ -332,7 +332,7 @@ data class AutoScanWizardState(
     val cli: String? = null,
     val agents: AutoScanAgentBuckets = AutoScanAgentBuckets(),
     // The session view the user chose; Terminal is sent while the agent has no chat view.
-    val ui: String = AUTO_SCAN_UI_TERMINAL,
+    val ui: String = AUTO_SCAN_UI_CHAT,
     val intervalMinutes: Int = AUTO_SCAN_INTERVAL_DEFAULT,
     val linearFilter: LinearFilterDraft = LinearFilterDraft(),
     val linearFilterTouched: Boolean = false,

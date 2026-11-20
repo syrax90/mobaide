@@ -1411,6 +1411,11 @@ private fun StandardConfigSection(
     viewModel: CreateSessionViewModel,
     onContinueSession: () -> Unit,
 ) {
+    AgentSessionViewField(
+        terminalUi = state.claudeTerminalUi,
+        lockedHint = state.claudeChatUnavailableHint,
+        onTerminalUiChange = viewModel::toggleTerminalUi,
+    )
     if (state.claudeResumeAvailable) {
         ContinueSessionCard(
             subtitle = "Open a Claude Code session started on your PC, for example in a terminal.",
@@ -1446,13 +1451,6 @@ private fun StandardConfigSection(
         onDebugToggle = viewModel::toggleClaudeDebug,
         onAppendSystemPromptChange = viewModel::setClaudeAppendSystemPrompt,
         showDebug = !state.claudeUsesChat,
-        leadingContent = {
-            TerminalUiToggle(
-                checked = state.claudeTerminalUi,
-                lockedHint = state.claudeChatUnavailableHint,
-                onChange = viewModel::toggleTerminalUi,
-            )
-        },
     )
 
     PixelButton(
@@ -1514,20 +1512,56 @@ private fun AdvancedSection(content: @Composable () -> Unit) {
     if (expanded) content()
 }
 
-/** "Terminal UI" under Advanced: the classic terminal instead of the chat view. */
+/** "Open sessions in" for an agent session: Chat is the same choice as Terminal UI off. */
 @Composable
-private fun TerminalUiToggle(checked: Boolean, lockedHint: String?, onChange: (Boolean) -> Unit) {
-    ToggleRow(
-        label = "Terminal UI",
-        checked = checked || lockedHint != null,
-        onChange = onChange,
-        enabled = lockedHint == null,
+private fun AgentSessionViewField(terminalUi: Boolean, lockedHint: String?, onTerminalUiChange: (Boolean) -> Unit) {
+    SessionViewField(
+        chatSelected = !terminalUi && lockedHint == null,
+        chatEnabled = lockedHint == null,
+        onSelect = { chat -> onTerminalUiChange(!chat) },
+        hint = lockedHint,
     )
-    Text(
-        text = lockedHint ?: "Use the classic terminal instead of the chat view.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+}
+
+/**
+ * "Open sessions in": Chat or Terminal, shared by the agent steps and Auto
+ * Scan. A disabled Chat shows Terminal selected.
+ */
+@Composable
+internal fun SessionViewField(
+    chatSelected: Boolean,
+    chatEnabled: Boolean,
+    onSelect: (chat: Boolean) -> Unit,
+    hint: String? = null,
+    hintModifier: Modifier = Modifier,
+    testTag: String = "session_view",
+) {
+    Text("Open sessions in", style = MaterialTheme.typography.labelLarge)
+    SingleChoiceSegmentedButtonRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(testTag),
+    ) {
+        listOf(true to "Chat", false to "Terminal").forEach { (chat, label) ->
+            SegmentedButton(
+                selected = chatSelected == chat,
+                onClick = { onSelect(chat) },
+                enabled = !chat || chatEnabled,
+                shape = RectangleShape,
+                colors = pixelSegmentedButtonColors(),
+                icon = {},
+                modifier = Modifier.testTag(if (chat) "${testTag}_chat" else "${testTag}_terminal"),
+            ) { Text(label) }
+        }
+    }
+    hint?.let {
+        Text(
+            text = it,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = hintModifier,
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1540,6 +1574,11 @@ private fun CodexConfigSection(
 ) {
     val preset = state.codexPreset
 
+    AgentSessionViewField(
+        terminalUi = state.codexTerminalUi,
+        lockedHint = state.codexChatUnavailableHint,
+        onTerminalUiChange = viewModel::toggleCodexTerminalUi,
+    )
     if (state.codexResumeAvailable) {
         ContinueSessionCard(
             subtitle = "Open a Codex session started on your PC, for example in a terminal.",
@@ -1561,13 +1600,6 @@ private fun CodexConfigSection(
         onEffort = viewModel::setCodexReasoningEffort,
         onSandbox = viewModel::setCodexSandbox,
         onApproval = viewModel::setCodexApproval,
-        advancedLeading = {
-            TerminalUiToggle(
-                checked = state.codexTerminalUi,
-                lockedHint = state.codexChatUnavailableHint,
-                onChange = viewModel::toggleCodexTerminalUi,
-            )
-        },
     )
 
     if (showWorktreeToggle) {
@@ -1589,7 +1621,7 @@ private fun CodexConfigSection(
 /**
  * Codex's launch controls — autonomy presets, model, reasoning effort and the
  * Advanced sandbox/approval — shared by the Codex step and Auto Scan, which
- * keep their own values. [advancedLeading] goes first under Advanced.
+ * keep their own values.
  */
 @Composable
 internal fun CodexOptionControls(
@@ -1606,7 +1638,6 @@ internal fun CodexOptionControls(
     onEffort: (String) -> Unit,
     onSandbox: (String) -> Unit,
     onApproval: (String) -> Unit,
-    advancedLeading: (@Composable () -> Unit)? = null,
     autonomyHint: String? = null,
     // Offers "Agent default" (a null effort: Codex uses its own setting).
     onAgentDefaultEffort: (() -> Unit)? = null,
@@ -1658,7 +1689,6 @@ internal fun CodexOptionControls(
     )
 
     AdvancedSection {
-        advancedLeading?.invoke()
         Text("Sandbox (-s)", style = MaterialTheme.typography.labelLarge)
         val sandboxes = listOf(
             "read-only" to "Read-only",
@@ -1765,6 +1795,11 @@ private fun AntigravityConfigSection(
     viewModel: CreateSessionViewModel,
     onContinueSession: () -> Unit,
 ) {
+    AgentSessionViewField(
+        terminalUi = state.antigravityTerminalUi,
+        lockedHint = state.antigravityChatUnavailableHint,
+        onTerminalUiChange = viewModel::toggleAntigravityTerminalUi,
+    )
     if (state.antigravityResumeAvailable) {
         ContinueSessionCard(
             subtitle = "Open an Antigravity conversation started on your PC, for example with agy in a terminal.",
@@ -1789,14 +1824,6 @@ private fun AntigravityConfigSection(
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
 
         if (state.worktree) WorktreeBranchFields(state, viewModel)
-    }
-
-    AdvancedSection {
-        TerminalUiToggle(
-            checked = state.antigravityTerminalUi,
-            lockedHint = state.antigravityChatUnavailableHint,
-            onChange = viewModel::toggleAntigravityTerminalUi,
-        )
     }
 
     PixelButton(
@@ -1885,6 +1912,11 @@ private fun OpenCodeConfigSection(
     viewModel: CreateSessionViewModel,
     onContinueSession: () -> Unit,
 ) {
+    AgentSessionViewField(
+        terminalUi = state.opencodeTerminalUi,
+        lockedHint = state.opencodeChatUnavailableHint,
+        onTerminalUiChange = viewModel::toggleOpenCodeTerminalUi,
+    )
     if (state.opencodeResumeAvailable) {
         ContinueSessionCard(
             subtitle = "Open an OpenCode session started on your PC, for example in a terminal.",
@@ -1904,14 +1936,6 @@ private fun OpenCodeConfigSection(
         if (state.worktree) WorktreeBranchFields(state, viewModel)
     }
 
-    AdvancedSection {
-        TerminalUiToggle(
-            checked = state.opencodeTerminalUi,
-            lockedHint = state.opencodeChatUnavailableHint,
-            onChange = viewModel::toggleOpenCodeTerminalUi,
-        )
-    }
-
     PixelButton(
         style = PixelButtonStyle.Primary,
         onClick = viewModel::submitOpenCode,
@@ -1929,6 +1953,11 @@ private fun CopilotConfigSection(
     viewModel: CreateSessionViewModel,
     onContinueSession: () -> Unit,
 ) {
+    AgentSessionViewField(
+        terminalUi = state.copilotTerminalUi,
+        lockedHint = state.copilotChatUnavailableHint,
+        onTerminalUiChange = viewModel::toggleCopilotTerminalUi,
+    )
     if (state.copilotResumeAvailable) {
         ContinueSessionCard(
             subtitle = "Open a GitHub Copilot session started on your PC, for example in a terminal.",
@@ -1942,14 +1971,6 @@ private fun CopilotConfigSection(
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
 
         if (state.worktree) WorktreeBranchFields(state, viewModel)
-    }
-
-    AdvancedSection {
-        TerminalUiToggle(
-            checked = state.copilotTerminalUi,
-            lockedHint = state.copilotChatUnavailableHint,
-            onChange = viewModel::toggleCopilotTerminalUi,
-        )
     }
 
     PixelButton(
@@ -1969,6 +1990,11 @@ private fun CursorConfigSection(
     viewModel: CreateSessionViewModel,
     onContinueSession: () -> Unit,
 ) {
+    AgentSessionViewField(
+        terminalUi = state.cursorTerminalUi,
+        lockedHint = state.cursorChatUnavailableHint,
+        onTerminalUiChange = viewModel::toggleCursorTerminalUi,
+    )
     if (state.cursorResumeAvailable) {
         ContinueSessionCard(
             subtitle = "Open a Cursor chat session stored on your PC. Sessions from Cursor’s terminal UI " +
@@ -1983,14 +2009,6 @@ private fun CursorConfigSection(
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
 
         if (state.worktree) WorktreeBranchFields(state, viewModel)
-    }
-
-    AdvancedSection {
-        TerminalUiToggle(
-            checked = state.cursorTerminalUi,
-            lockedHint = state.cursorChatUnavailableHint,
-            onChange = viewModel::toggleCursorTerminalUi,
-        )
     }
 
     PixelButton(
@@ -2010,6 +2028,11 @@ private fun JunieConfigSection(
     viewModel: CreateSessionViewModel,
     onContinueSession: () -> Unit,
 ) {
+    AgentSessionViewField(
+        terminalUi = state.junieTerminalUi,
+        lockedHint = state.junieChatUnavailableHint,
+        onTerminalUiChange = viewModel::toggleJunieTerminalUi,
+    )
     if (state.junieResumeAvailable) {
         ContinueSessionCard(
             subtitle = "Open a Junie session stored on your PC, also one you started in Junie’s terminal UI.",
@@ -2028,14 +2051,6 @@ private fun JunieConfigSection(
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
 
         if (state.worktree) WorktreeBranchFields(state, viewModel)
-    }
-
-    AdvancedSection {
-        TerminalUiToggle(
-            checked = state.junieTerminalUi,
-            lockedHint = state.junieChatUnavailableHint,
-            onChange = viewModel::toggleJunieTerminalUi,
-        )
     }
 
     PixelButton(
@@ -2140,6 +2155,11 @@ private fun PiConfigSection(
     viewModel: CreateSessionViewModel,
     onContinueSession: () -> Unit,
 ) {
+    AgentSessionViewField(
+        terminalUi = state.piTerminalUi,
+        lockedHint = state.piChatUnavailableHint,
+        onTerminalUiChange = viewModel::togglePiTerminalUi,
+    )
     if (state.piResumeAvailable) {
         ContinueSessionCard(
             subtitle = "Open a Pi session started on your PC, for example in a terminal.",
@@ -2161,14 +2181,6 @@ private fun PiConfigSection(
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
 
         if (state.worktree) WorktreeBranchFields(state, viewModel)
-    }
-
-    AdvancedSection {
-        TerminalUiToggle(
-            checked = state.piTerminalUi,
-            lockedHint = state.piChatUnavailableHint,
-            onChange = viewModel::togglePiTerminalUi,
-        )
     }
 
     PixelButton(
@@ -2247,10 +2259,8 @@ private fun ClaudeAdvancedOptions(
     onDebugToggle: (Boolean) -> Unit,
     onAppendSystemPromptChange: (String) -> Unit,
     showDebug: Boolean = true,
-    leadingContent: (@Composable () -> Unit)? = null,
 ) {
     AdvancedSection {
-        leadingContent?.invoke()
         ToggleRow("No memory", noMemory, onNoMemoryToggle)
         ToggleRow("Fast mode (Opus only)", fastMode, onFastModeToggle)
         ToggleRow("ultracode", ultracode, onUltracodeToggle)

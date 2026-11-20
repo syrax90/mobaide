@@ -22,6 +22,7 @@ import { CopilotOptionsPanel } from './panels/CopilotOptionsPanel';
 import { CursorOptionsPanel } from './panels/CursorOptionsPanel';
 import { JunieOptionsPanel } from './panels/JunieOptionsPanel';
 import { PiOptionsPanel } from './panels/PiOptionsPanel';
+import { SessionViewField } from './panels/SessionViewField';
 import type { BaseBranchStatus } from './panels/BaseBranchPicker';
 import { WorktreeSection } from './panels/WorktreeSection';
 import { chatAgentKind, terminalUiOf, usesChatView, type ChatAgentKind } from './buildCreateRequest';
@@ -104,6 +105,28 @@ export function modeTitle(
       const id = customSessionTypeId(mode);
       return customTypes.find((type) => type.id === id)?.name ?? 'Terminal session';
     }
+  }
+}
+
+/** The wizard action that stores a "Terminal" or "Chat" pick for an agent. */
+function terminalUiAction(kind: ChatAgentKind, value: boolean): WizardAction {
+  switch (kind) {
+    case 'claude':
+      return { type: 'setClaudeFlag', bucket: 'claude', flag: 'terminalUi', value };
+    case 'codex':
+      return { type: 'setCodexTerminalUi', value };
+    case 'antigravity':
+      return { type: 'setAntigravityTerminalUi', value };
+    case 'opencode':
+      return { type: 'setOpenCodeTerminalUi', value };
+    case 'copilot':
+      return { type: 'setCopilotTerminalUi', value };
+    case 'cursor':
+      return { type: 'setCursorTerminalUi', value };
+    case 'junie':
+      return { type: 'setJunieTerminalUi', value };
+    case 'pi':
+      return { type: 'setPiTerminalUi', value };
   }
 }
 
@@ -214,6 +237,17 @@ export function ConfigStep({
     <div className="wizard-body">
       <h2>{modeTitle(mode, customTypes)}</h2>
 
+      {chatKind !== null && (
+        <SessionViewField
+          chat={chat}
+          agent={chatKind}
+          terminalUi={terminalUiOf(state, chatKind)}
+          onChange={(value) => {
+            dispatch(terminalUiAction(chatKind, value));
+          }}
+        />
+      )}
+
       {canResume && onContinueSession !== undefined && (
         <div className="option-group resume-entry">
           <div className="resume-entry-text">
@@ -246,14 +280,12 @@ export function ConfigStep({
           models={cliModels(capabilities, 'codex')}
           modelDetails={cliModelDetails(capabilities, 'codex')}
           dispatch={dispatch}
-          chat={chat}
         />
       )}
       {mode === 'antigravity' && (
         <AntigravityOptionsPanel
           bucket={state.antigravity}
           models={cliModels(capabilities, 'antigravity')}
-          chat={chat}
           dispatch={dispatch}
         />
       )}
@@ -277,19 +309,19 @@ export function ConfigStep({
         </div>
       )}
       {mode === 'opencode' && (
-        <OpenCodeOptionsPanel bucket={state.opencode} chat={chat} dispatch={dispatch} />
+        <OpenCodeOptionsPanel bucket={state.opencode} dispatch={dispatch} />
       )}
       {mode === 'copilot' && (
-        <CopilotOptionsPanel bucket={state.copilot} chat={chat} dispatch={dispatch} />
+        <CopilotOptionsPanel bucket={state.copilot} dispatch={dispatch} />
       )}
       {mode === 'cursor' && (
-        <CursorOptionsPanel bucket={state.cursor} chat={chat} dispatch={dispatch} />
+        <CursorOptionsPanel bucket={state.cursor} dispatch={dispatch} />
       )}
       {mode === 'junie' && (
-        <JunieOptionsPanel bucket={state.junie} chat={chat} dispatch={dispatch} />
+        <JunieOptionsPanel bucket={state.junie} dispatch={dispatch} />
       )}
       {mode === 'pi' && (
-        <PiOptionsPanel bucket={state.pi} chat={chat} dispatch={dispatch} />
+        <PiOptionsPanel />
       )}
       {mode === 'auto_scan' &&
         (scan !== null ? (

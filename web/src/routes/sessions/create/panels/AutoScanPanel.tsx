@@ -26,7 +26,7 @@ import { JunieOptionsPanel } from './JunieOptionsPanel';
 import { LinearSourcePanel } from './LinearSourcePanel';
 import { OpenCodeOptionsPanel } from './OpenCodeOptionsPanel';
 import { ScanCallout } from './ScanCallout';
-import { terminalUiHint } from './TerminalUiField';
+import { SessionViewChoice, terminalUiHint } from './SessionViewField';
 
 const SOURCE_HINTS: Readonly<Record<AutoScanSource, string>> = {
   github: 'Open issues of this workspace’s GitHub repository, read with the GitHub CLI (gh) on the PC.',
@@ -160,7 +160,7 @@ export function AutoScanPanel({
           ))}
         </fieldset>
         {/* Before the options: choosing Chat hides some of them, which must not move this. */}
-        <SessionViewChoice
+        <AutoScanSessionView
           agent={chosenAgent}
           ui={setup.ui}
           dispatch={dispatch}
@@ -210,7 +210,7 @@ export function AutoScanPanel({
  * offered only for an agent the PC has a chat view for; otherwise Terminal
  * shows as chosen, and that is what the start sends.
  */
-function SessionViewChoice({
+function AutoScanSessionView({
   agent,
   ui,
   dispatch,
@@ -219,39 +219,16 @@ function SessionViewChoice({
   ui: AutoScanUi;
   dispatch: (action: WizardAction) => void;
 }) {
-  const name = useId();
   if (agent === undefined) return null;
   const shown: AutoScanUi = ui === 'chat' && agent.chat ? 'chat' : 'terminal';
-  const choices: readonly { value: AutoScanUi; title: string; hint: string }[] = [
-    { value: 'terminal', title: 'Terminal', hint: "The agent's own terminal app." },
-    { value: 'chat', title: 'Chat', hint: 'Messages, tool steps and approvals in the app.' },
-  ];
   return (
-    <fieldset className="autoscan-choices">
-      <legend className="field-label">Open sessions in</legend>
-      {choices.map((choice) => {
-        const disabled = choice.value === 'chat' && !agent.chat;
-        return (
-          <label
-            key={choice.value}
-            className={`autoscan-choice${disabled ? ' autoscan-choice-disabled' : ''}`}
-          >
-            <input
-              type="radio"
-              name={name}
-              checked={shown === choice.value}
-              disabled={disabled}
-              onChange={() => {
-                dispatch({ type: 'setAutoScanUi', ui: choice.value });
-              }}
-            />
-            <span className="autoscan-choice-text">
-              <strong>{choice.title}</strong>
-              <small>{choice.hint}</small>
-            </span>
-          </label>
-        );
-      })}
+    <SessionViewChoice
+      view={shown}
+      chatEnabled={agent.chat}
+      onChange={(view) => {
+        dispatch({ type: 'setAutoScanUi', ui: view });
+      }}
+    >
       {!agent.chat && (
         <p className="field-hint">
           {agent.chatSupport.kind === 'unknown'
@@ -262,7 +239,7 @@ function SessionViewChoice({
       {agent.chat && agent.id === 'junie' && shown === 'terminal' && (
         <p className="field-hint">{AUTO_SCAN_JUNIE_TRUST_HINT}</p>
       )}
-    </fieldset>
+    </SessionViewChoice>
   );
 }
 

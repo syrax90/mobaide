@@ -88,7 +88,7 @@ final class AutoScanSetupModel {
     var source: Source?
     var cli: String?
     /// The chosen view; `effectiveSessionView` is the one a start sends.
-    var sessionView: SessionView = .terminal
+    var sessionView: SessionView = .chat
     var intervalMinutes = AutoScanSetupModel.defaultIntervalMinutes
 
     // GitHub
@@ -242,7 +242,7 @@ final class AutoScanSetupModel {
         seededFor = workspace.name
         source = nil
         cli = nil
-        sessionView = .terminal
+        sessionView = .chat
         intervalMinutes = Self.defaultIntervalMinutes
 
         githubLabels = []

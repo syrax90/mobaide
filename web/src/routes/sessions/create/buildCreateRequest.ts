@@ -124,7 +124,7 @@ export function chatAgentKind(mode: WizardMode | null): ChatAgentKind | null {
     : null;
 }
 
-/** The kind's "Terminal UI" toggle. */
+/** Whether the kind's "Open sessions in" choice is Terminal. */
 export function terminalUiOf(state: WizardState, kind: ChatAgentKind): boolean {
   switch (kind) {
     case 'claude':
