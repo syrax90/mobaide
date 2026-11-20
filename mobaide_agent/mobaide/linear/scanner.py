@@ -313,10 +313,7 @@ class AutoScanInstance:
         self._workitems_store = ActiveWorkItemsStore(
             active_workitems_path(config.state_dir, workspace_name)
         )
-        # Cache of ``len(workitems_store)`` kept in sync by every add/remove
-        # call in this class. Primed lazily from disk on first read to cover
-        # the case where the store was populated in a previous process.
-        self._active_workitem_count: int = self._workitems_store.peek_count()
+        self._issues_processed: int = 0
         self._status = ScanStatus.IDLE
         self._poll_task: asyncio.Task[None] | None = None
         self._last_scan_time: float | None = None
@@ -341,14 +338,8 @@ class AutoScanInstance:
 
     @property
     def processed_count(self) -> int:
-        """Number of currently tracked active work items for this workspace.
-
-        Name kept for DTO compatibility with the Android client, which
-        reads ``processed_count`` from the auto-scan status payload. The
-        value is updated in-memory at every add/remove to avoid a
-        synchronous disk read on the status-rendering hot path.
-        """
-        return self._active_workitem_count
+        """Issues this scan has taken since it started, over all cycles."""
+        return self._issues_processed
 
     @property
     def current_seq(self) -> int:
@@ -369,9 +360,7 @@ class AutoScanInstance:
     async def release_worktree(self, worktree_path: str) -> int:
         """Stop tracking the work items at ``worktree_path``: the user
         removes that worktree, so no later cycle has to. Returns the count."""
-        released = await self._workitems_store.remove_at_path(worktree_path)
-        self._active_workitem_count = max(0, self._active_workitem_count - released)
-        return released
+        return await self._workitems_store.remove_at_path(worktree_path)
 
     @property
     def source_kind(self) -> str:
@@ -591,6 +580,7 @@ class AutoScanInstance:
                     self._emit_error(f"Aborting scan cycle: {exc}")
                     break
                 processed_count += 1
+                self._issues_processed += 1
         else:
             logger.info(
                 "autoscan.no_matches workspace=%s source=%s %s",
@@ -690,7 +680,7 @@ class AutoScanInstance:
         if not self._config.auto_remove_worktrees or cwd == workspace.path:
             return
         try:
-            added = await self._workitems_store.add(
+            await self._workitems_store.add(
                 ActiveWorkItem(
                     id=issue.identifier,
                     uuid=issue.key,
@@ -702,8 +692,6 @@ class AutoScanInstance:
                     repo=self._source_repo(),
                 )
             )
-            if added:
-                self._active_workitem_count += 1
         except Exception:
             logger.exception(
                 "autoscan.workitem.persist_failed id=%s", issue.identifier,
@@ -1093,10 +1081,7 @@ class AutoScanInstance:
                 )
                 kept += 1
                 continue
-            if await self._workitems_store.remove(item):
-                self._active_workitem_count = max(
-                    0, self._active_workitem_count - 1,
-                )
+            await self._workitems_store.remove(item)
             removed += 1
 
         logger.info(

@@ -1091,116 +1091,49 @@ class TestWorktreeCleanup:
 
 
 class TestProcessedCountDTO:
-    """The DTO field ``processed_count`` was repurposed: it now reflects
-    the number of active work items currently tracked for this workspace.
-    The Android client reads this field — its meaning must not silently
-    drift. The implementation caches the count in-memory and updates it
-    via ``_process_issue`` (increment) and ``_cleanup_completed_worktrees``
-    (decrement); this test exercises both paths end-to-end."""
+    """``processed_count`` is the client's "Processed: N": every issue this
+    scan has taken, over all cycles. It once counted the workspace's tracked
+    work items instead, so it showed items from earlier runs, skipped issues
+    without a worktree, and fell when an issue reached Done."""
 
     @pytest.mark.asyncio
-    async def test_processed_count_tracks_add_and_cleanup(self, tmp_path):
+    async def test_counts_taken_issues_across_cycles_not_work_items(self, tmp_path):
+        from mobaide.linear.workitems import ActiveWorkItem, now_iso_utc
+
         client = AsyncMock()
+        client.get_auto_scan_issues.side_effect = [
+            [_make_issue(issue_id="u1", identifier="CLA-1"),
+             _make_issue(issue_id="u2", identifier="CLA-2")],
+            [_make_issue(issue_id="u3", identifier="CLA-3")],
+        ]
         client.update_issue_state.return_value = True
         client.remove_issue_label.return_value = True
-
+        client.get_issue_state.return_value = IssueState(id="s-done", name="Done")
         wt_mgr = AsyncMock()
         wt_mgr.cleanup_worktree.return_value = True
-
         sess_mgr = AsyncMock()
         sess_mgr.create_session.return_value = MagicMock(pid=1)
-
-        launcher = _launcher_with_worktree(str(tmp_path / "wt"))
-
+        # The workspace is no git repository: no worktree, no work item.
+        launcher = _launcher_with_worktree(str(tmp_path / "repo"))
         inst = _make_instance(
             tmp_path, client=client, worktree_mgr=wt_mgr,
             session_manager=sess_mgr, launcher=launcher,
         )
+        # A work item left by an earlier run must not count.
+        await inst._workitems_store.write([ActiveWorkItem(
+            id="CLA-OLD", uuid="u-old", slug="cla-old",
+            worktree_path=str(tmp_path / "wt-old"),
+            project_root=Path(tmp_path / "repo").as_posix(), added_at=now_iso_utc(),
+        )])
         assert inst.to_dto()["processed_count"] == 0
 
-        await inst._process_issue(ScanIssue.from_linear(_make_issue(issue_id="u1", identifier="CLA-1")))
-        await inst._process_issue(ScanIssue.from_linear(_make_issue(issue_id="u2", identifier="CLA-2")))
+        await inst._scan_once()
         assert inst.to_dto()["processed_count"] == 2
+        # Cleanup removed the old item; the count must not fall.
+        assert await inst._workitems_store.count() == 0
 
-        # Re-processing an already-tracked issue must NOT double-count
-        # (dedup happens inside the store).
-        await inst._process_issue(ScanIssue.from_linear(_make_issue(issue_id="u1", identifier="CLA-1")))
-        assert inst.to_dto()["processed_count"] == 2
-
-        # Clean up one via the Done-state path.
-        client.get_issue_state.side_effect = [
-            IssueState(id="s1", name="Done"),
-            IssueState(id="s2", name="In Progress"),
-        ]
-        await inst._cleanup_completed_worktrees()
-        assert inst.to_dto()["processed_count"] == 1
-
-    @pytest.mark.asyncio
-    async def test_processed_count_not_decremented_when_cleanup_fails(self, tmp_path):
-        """The cache must only decrement when ``store.remove()`` actually
-        dropped an entry. If the Linear query fails, the worktree removal
-        fails, or the state is not Done, the cached count must stay put —
-        otherwise a long-running agent with transient cleanup errors
-        would report ``processed_count=0`` while the store still holds
-        items."""
-        from mobaide.linear.workitems import ActiveWorkItem, now_iso_utc
-
-        # Seed one item that cleanup will attempt and fail to remove.
-        client = AsyncMock()
-        client.get_issue_state.return_value = IssueState(id="s-done", name="Done")
-
-        wt_mgr = AsyncMock()
-        wt_mgr.cleanup_worktree.return_value = False  # removal fails
-
-        inst = _make_instance(tmp_path, client=client, worktree_mgr=wt_mgr)
-
-        item = ActiveWorkItem(
-            id="CLA-STUCK", uuid="u-stuck", slug="cla-stuck",
-            worktree_path=str(tmp_path / "wt-stuck"),
-            project_root=str(tmp_path / "repo"),
-            added_at=now_iso_utc(),
-        )
-        await inst._workitems_store.write([item])
-        # Simulate the cache being primed by a prior process/cycle.
-        inst._active_workitem_count = 1
-
-        await inst._cleanup_completed_worktrees()
-
-        # Store still has the item AND the cached count is unchanged.
-        assert await inst._workitems_store.count() == 1
-        assert inst.processed_count == 1
-        assert inst.to_dto()["processed_count"] == 1
-
-    @pytest.mark.asyncio
-    async def test_processed_count_primed_from_disk_on_construction(self, tmp_path):
-        """When the agent restarts, the cache must reflect items already
-        persisted by a previous process, not start at zero."""
-        from mobaide.linear.workitems import (
-            ActiveWorkItem,
-            ActiveWorkItemsStore,
-            active_workitems_path,
-            now_iso_utc,
-        )
-
-        state_dir = tmp_path / "state"
-        pre_store = ActiveWorkItemsStore(
-            active_workitems_path(state_dir, "test-workspace")
-        )
-        await pre_store.write([
-            ActiveWorkItem(
-                id="CLA-PRIOR", uuid="u-prior", slug="cla-prior",
-                worktree_path=str(tmp_path / "wt-prior"),
-                project_root=str(tmp_path / "repo"),
-                added_at=now_iso_utc(),
-            ),
-        ])
-
-        config = _make_config(tmp_path)
-        # Point config at the pre-populated state dir.
-        config = config.model_copy(update={"state_dir": str(state_dir)})
-
-        inst = _make_instance(tmp_path, config=config)
-        assert inst.to_dto()["processed_count"] == 1
+        await inst._scan_once()
+        assert inst.to_dto()["processed_count"] == 3
 
 
 class TestClientOptionsTypeGuard:
@@ -1528,7 +1461,7 @@ class TestReleaseWorktree:
     so no later scan cycle retries removing a worktree that is gone."""
 
     @pytest.mark.asyncio
-    async def test_running_scan_drops_the_item_and_its_count(self, tmp_path):
+    async def test_running_scan_drops_the_item(self, tmp_path):
         from mobaide.linear.workitems import ActiveWorkItem, now_iso_utc
 
         inst = _make_instance(tmp_path)
@@ -1541,12 +1474,10 @@ class TestReleaseWorktree:
             for n in (1, 2)
         ]
         await inst._workitems_store.write(items)
-        inst._active_workitem_count = 2
 
         assert await inst.release_worktree(str(tmp_path / "wt-1")) == 1
 
         assert [i.id for i in await inst._workitems_store.read()] == ["CLA-2"]
-        assert inst.to_dto()["processed_count"] == 1
 
     @pytest.mark.asyncio
     async def test_manager_releases_from_disk_when_no_scan_runs(self, tmp_path):
