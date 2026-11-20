@@ -8,6 +8,7 @@ everything after the claim: the worktree, the agent session, the events.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -248,6 +249,11 @@ class GitHubIssueSource:
                 # answer are current, so an issue already taken is left out.
                 if any(name.casefold() in triggers for name in issue.labels):
                     found.setdefault(issue.number, issue)
+        # Issue numbers are per repository: the worktree name carries a short
+        # repository hash, so another repository's issue with the same number
+        # and title cannot reuse this one's worktree. Not the name itself: a
+        # long one would push the number out of the slug's word limit.
+        repo_tag = hashlib.sha1(repo.selector.lower().encode()).hexdigest()[:6]
         return [
             ScanIssue(
                 key=str(issue.number),
@@ -255,7 +261,7 @@ class GitHubIssueSource:
                 title=issue.title,
                 description=issue.body or None,
                 url=issue.url or None,
-                slug_seed=f"gh-{issue.number}",
+                slug_seed=f"gh-{issue.number}-{repo_tag}",
                 raw=issue,
             )
             for number, issue in sorted(found.items())

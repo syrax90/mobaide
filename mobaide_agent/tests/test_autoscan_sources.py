@@ -17,6 +17,7 @@ from mobaide.github.gh import GhCli, GhError, GhIssue
 from mobaide.linear import sources
 from mobaide.linear.sources import AutoScanSourceError, GitHubIssueSource, ScanIssue
 from mobaide.linear.workitems import ActiveWorkItem, now_iso_utc
+from mobaide.linear.worktree import convert_to_worktree_slug
 
 _READY = {
     "installed": True, "version": "2.83.0", "signed_in": True, "account": "octocat",
@@ -93,9 +94,7 @@ async def test_fetch_finds_each_issue_once_across_trigger_labels():
 
     issues = await source.fetch()
 
-    assert [(i.key, i.identifier, i.slug_seed) for i in issues] == [
-        ("1", "#1", "gh-1"), ("3", "#3", "gh-3"), ("5", "#5", "gh-5"),
-    ]
+    assert [(i.key, i.identifier) for i in issues] == [("1", "#1"), ("3", "#3"), ("5", "#5")]
     assert issues[1].url == "https://github.com/acme/app/issues/3"
 
 
@@ -139,6 +138,24 @@ async def test_refused_label_removal_skips_the_issue_until_the_scan_restarts():
     assert [i.key for i in await source.fetch()] == ["2"]  # ...but this scan skips it.
     restarted = await _connected(repo, labels=["ai"])
     assert [i.key for i in await restarted.fetch()] == ["1", "2"]
+
+
+async def test_the_same_issue_number_in_another_repository_gets_its_own_worktree(monkeypatch):
+    upstream = await _connected(_FakeRepository({7: {"ai"}}), labels=["ai"])
+
+    async def fork(_gh, _path):
+        return {**_READY, "repo": "octocat/app", "repo_url": "https://github.com/octocat/app"}
+
+    monkeypatch.setattr(sources, "github_status", fork)
+    forked = await _connected(_FakeRepository({7: {"ai"}}), labels=["ai"])
+
+    [a], [b] = await upstream.fetch(), await forked.fetch()
+    # Same number and title: only the repository keeps the worktrees apart.
+    assert (a.identifier, a.title) == (b.identifier, b.title)
+    assert convert_to_worktree_slug(a.slug_seed, a.title) != convert_to_worktree_slug(
+        b.slug_seed, b.title,
+    )
+    assert convert_to_worktree_slug(a.slug_seed, a.title).startswith("gh-7-")
 
 
 async def test_an_issue_is_done_once_it_is_closed():
