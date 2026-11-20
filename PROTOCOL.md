@@ -661,6 +661,7 @@ Chat sessions use the same `/ws/session/{id}` and `CH_SESSION_IO` channel. Two f
 | `session/prompt`, `session/cancel`, `session/update` | Turns and the timeline. |
 | `session/set_config_option`, `session/set_mode` | Mode, model, effort and other options. |
 | `session/request_permission`, `elicitation/create` (form) | Approval cards and question forms (Claude's AskUserQuestion). |
+| `$/cancel_request` (from the agent) | Cancels the agent's open request with that `requestId`: its card leaves `requests`, `awaiting_permission` clears when no card is left, and the reply is error `-32800`. An answer the user already gave wins. An unknown or finished id is ignored. |
 
 An agent run over ACP skips its own "trust this folder?" prompt. So before `session/new` or `session/load`, the PC agent checks the agent's trust record (for Claude Code, `projects[<folder or a parent>].hasTrustDialogAccepted` in `~/.claude.json`, real paths only, and parents only up to the enclosing git repository root — stricter than the CLI, which walks every parent). For a folder that is not trusted, it publishes a `permission` request (`tool_call_id: null`, options `trust` / `decline`) in the normal `requests` state. `trust` records the trust the way the CLI does and continues; for the home folder, a folder above it or a root it records nothing, and the trust lasts for this session only (Restart does not ask again). `decline` ends the start with an error that offers Restart. The adapter process itself runs in the home folder (how it is installed: Delta 2026-11-08).
 
