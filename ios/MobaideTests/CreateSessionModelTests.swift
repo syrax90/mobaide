@@ -103,12 +103,14 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(request.claude_options?.fast_mode, true)
     }
 
-    func testClaudeUltracodeLocksXhighEffort() throws {
+    func testClaudeUltracodeKeepsSelectedEffort() throws {
         let model = makeModel()
         model.selection = .stored("a")
+        model.claudeEffort = "medium"
         model.claudeUltracode = true
         let request = try XCTUnwrap(model.buildRequest(mode: .standard))
-        XCTAssertEqual(request.claude_options?.effort, "xhigh")
+        XCTAssertEqual(request.claude_options?.effort, "medium", "Ultracode leaves the effort unchanged")
+        XCTAssertEqual(request.claude_options?.ultracode, true)
     }
 
     func testClaudeDebugReachesTheRequestOnlyWhenToggledOn() throws {

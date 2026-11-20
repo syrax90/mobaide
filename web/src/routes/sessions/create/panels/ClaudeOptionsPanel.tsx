@@ -79,8 +79,6 @@ export function ClaudeOptionsPanel({
         label="Effort"
         value={bucket.effort}
         options={efforts.map((effort) => ({ value: effort, label: effort }))}
-        // Ultracode makes the agent omit --effort entirely.
-        disabled={bucket.ultracode}
         onChange={(effort) => {
           if (effort !== null) {
             dispatch({ type: 'setClaudeEffort', bucket: bucketId, effort: effort as ClaudeEffort });

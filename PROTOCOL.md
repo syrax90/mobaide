@@ -1516,7 +1516,7 @@ The ``create_session`` control message (the ``POST /api/sessions`` body proxied 
 | Field | Type | Notes |
 |-------|------|-------|
 | ``model`` | str\|null | A curated Claude alias (``opus`` \| ``sonnet`` \| ``haiku`` \| ``fable``) or null for the account default. Free-form on the server (the client curates the list); emitted as ``--model <alias>``. |
-| ``effort`` | ``low`` \| ``medium`` \| ``high`` \| ``xhigh`` \| ``max`` \| null | Every non-null level is emitted as ``--effort <level>`` (``high`` included); null emits no flag; suppressed entirely when ``ultracode`` is on. |
+| ``effort`` | ``low`` \| ``medium`` \| ``high`` \| ``xhigh`` \| ``max`` \| null | Every non-null level is emitted as ``--effort <level>`` (``high`` included); null emits no flag. Also emitted when ``ultracode`` is on: since Claude Code 2.1.284 Ultracode leaves the effort unchanged. |
 | ``fast_mode`` | bool | Opus-only fast mode. See the ``--settings`` note below. |
 | ``ultracode`` | bool | See the ``--settings`` note below. |
 | ``append_system_prompt`` | str\|null | Emitted as ``--append-system-prompt <text>``. |

@@ -1426,7 +1426,6 @@ private fun StandardConfigSection(
         model = state.claudeModel,
         effort = state.claudeEffort,
         fastMode = state.claudeFastMode,
-        ultracode = state.claudeUltracode,
         onModelSelect = viewModel::setClaudeModel,
         onEffortSelect = viewModel::setClaudeEffort,
     )
@@ -2243,7 +2242,6 @@ private fun ClaudeOptionControls(
     model: String?,
     effort: String,
     fastMode: Boolean,
-    ultracode: Boolean,
     onModelSelect: (String?) -> Unit,
     onEffortSelect: (String) -> Unit,
 ) {
@@ -2263,16 +2261,8 @@ private fun ClaudeOptionControls(
     ClaudeEffortDropdown(
         selected = effort,
         model = model,
-        enabled = !ultracode,
         onSelect = onEffortSelect,
     )
-    if (ultracode) {
-        Text(
-            text = "ultracode runs at xhigh.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
 }
 
 @Composable
@@ -2305,7 +2295,7 @@ private fun ClaudeAdvancedOptions(
         leadingContent()
         ToggleRow("No memory", noMemory, onNoMemoryToggle)
         ToggleRow("Fast mode (Opus only)", fastMode, onFastModeToggle)
-        ToggleRow("ultracode", ultracode, onUltracodeToggle)
+        ToggleRow("Ultracode", ultracode, onUltracodeToggle)
         if (showDebug) {
             ToggleRow("Debug logging", debug, onDebugToggle)
             Text(
@@ -2381,27 +2371,25 @@ private fun ClaudeModelDropdown(
 private fun ClaudeEffortDropdown(
     selected: String,
     model: String?,
-    enabled: Boolean,
     onSelect: (String) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val options = CreateSessionViewModel.claudeEffortsFor(model)
     ExposedDropdownMenuBox(
-        expanded = expanded && enabled,
-        onExpandedChange = { if (enabled) expanded = !expanded },
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded },
     ) {
         OutlinedTextField(
             colors = PixelTextFieldDefaults.colors(),
             value = selected.replaceFirstChar { it.uppercase() },
             onValueChange = {},
             readOnly = true,
-            enabled = enabled,
             label = { Text("Effort") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier.menuAnchor().fillMaxWidth(),
         )
         DropdownMenu(
-            expanded = expanded && enabled,
+            expanded = expanded,
             onDismissRequest = { expanded = false },
         ) {
             options.forEach { effort ->
@@ -2570,7 +2558,6 @@ internal fun AutoScanClaudeOptions(
         model = state.autoScanClaudeModel,
         effort = state.autoScanClaudeEffort,
         fastMode = state.autoScanClaudeFastMode,
-        ultracode = state.autoScanClaudeUltracode,
         onModelSelect = viewModel::setAutoScanClaudeModel,
         onEffortSelect = viewModel::setAutoScanClaudeEffort,
     )

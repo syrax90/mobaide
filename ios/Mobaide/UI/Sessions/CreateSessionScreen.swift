@@ -689,8 +689,7 @@ private struct CreateSessionContent: View {
             claudeModelAndEffortPickers(
                 claudeModel: $model.autoScanClaudeModel,
                 effort: $model.autoScanClaudeEffort,
-                fastMode: model.autoScanClaudeFastMode,
-                ultracode: model.autoScanClaudeUltracode
+                fastMode: model.autoScanClaudeFastMode
             )
             Toggle("Plan mode", isOn: $model.autoScanPlanMode)
             // Focus view only shapes Claude Code's terminal app.
@@ -810,8 +809,7 @@ private struct CreateSessionContent: View {
             claudeModelAndEffortPickers(
                 claudeModel: $model.claudeModel,
                 effort: $model.claudeEffort,
-                fastMode: model.claudeFastMode,
-                ultracode: model.claudeUltracode
+                fastMode: model.claudeFastMode
             )
             // Focus view only shapes Claude Code's terminal TUI.
             if !model.claudeUsesChat {
@@ -919,7 +917,7 @@ private struct CreateSessionContent: View {
             .foregroundStyle(colors.textMuted)
     }
 
-    /// Model + Effort pickers with their fast-mode / ultracode interlocks.
+    /// Model + Effort pickers with the fast-mode model interlock.
     /// Shared by the Claude Code and Auto Scan config steps, which drive the
     /// same controls from separate option buckets (Android shares these as
     /// `ClaudeOptionControls`).
@@ -927,8 +925,7 @@ private struct CreateSessionContent: View {
     private func claudeModelAndEffortPickers(
         claudeModel: Binding<String?>,
         effort: Binding<String>,
-        fastMode: Bool,
-        ultracode: Bool
+        fastMode: Bool
     ) -> some View {
         Picker("Model", selection: claudeModel) {
             Text("Default").tag(String?.none)
@@ -939,7 +936,6 @@ private struct CreateSessionContent: View {
         Picker("Effort", selection: effort) {
             ForEach(model.claudeEfforts(for: claudeModel.wrappedValue), id: \.self) { Text($0).tag($0) }
         }
-        .disabled(ultracode)
     }
 
     /// Collapsed-by-default "Advanced" section shared by the Claude Code and

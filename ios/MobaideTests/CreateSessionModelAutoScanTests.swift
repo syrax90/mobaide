@@ -356,7 +356,7 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         XCTAssertTrue(options.worktree)
     }
 
-    func testAutoScanFastModeAndUltracodeOverrideModelAndEffort() {
+    func testAutoScanFastModeOverridesModelAndUltracodeKeepsEffort() {
         let model = makeModel(autoScanRepo: makeAutoScanRepo())
         model.autoScanClaudeModel = "haiku"
         model.autoScanClaudeEffort = "max"
@@ -367,7 +367,7 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         let options = model.autoScanClaudeOptions()
 
         XCTAssertEqual(options.model, "opus")
-        XCTAssertEqual(options.effort, "xhigh")
+        XCTAssertEqual(options.effort, "max", "opus serves max; Ultracode leaves the effort unchanged")
         XCTAssertTrue(options.fast_mode)
         XCTAssertTrue(options.ultracode)
     }

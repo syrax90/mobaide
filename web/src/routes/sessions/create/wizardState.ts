@@ -428,12 +428,8 @@ export function effectiveClaudeModel(bucket: ClaudeBucket): string | null {
 }
 
 /**
- * Clamp only.
- *
- * iOS forces `"xhigh"` whenever Ultracode is on, but the agent omits `--effort`
- * entirely in that case (`core/claude_launcher.py`), so the override buys
- * nothing on the wire and loses the user's selection when Ultracode goes back
- * off. Android's behaviour — send what was selected — is the one to keep.
+ * Clamp only. Ultracode does not change the effort: the agent sends the
+ * selected level with it, as Claude Code's own `/effort` toggle does.
  */
 export function effectiveClaudeEffort(bucket: ClaudeBucket): ClaudeEffort {
   const allowed = claudeEffortsFor(effectiveClaudeModel(bucket));
