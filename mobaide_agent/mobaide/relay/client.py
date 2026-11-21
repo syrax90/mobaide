@@ -27,6 +27,7 @@ import certifi
 import orjson
 import websockets
 from websockets.asyncio.client import ClientConnection
+from websockets.protocol import State
 
 from mobaide.core.cli_launcher import (
     await_model_cache_warmup,
@@ -274,6 +275,10 @@ _LINEAR_DISCOVERY_ROUTE = re.compile(r"^/api/projects/[^/]+/linear/(labels|state
 # even the Git screen's own list request — until it ends.
 _GIT_ITEMS_DELETE_ROUTE = re.compile(r"^/api/projects/[^/]+/git/items:delete$")
 MAX_GIT_PROXY_TASKS = 4
+# Session creation runs aside as well: a worktree create fetches from the
+# remote and holds the repo lock, and an inline await would freeze input to
+# every session and the pings until it ends.
+MAX_SESSION_CREATE_TASKS = 8
 _VOICE_ROUTE = re.compile(r"^/api/voice/(status|install|install/cancel|model|dictations|cleanup|cleanup/settings)$")
 _VOICE_DICTATION_ROUTE = re.compile(r"^/api/voice/dictations/([^/]+)(?:/(audio|finish))?$")
 
@@ -515,6 +520,9 @@ class RelayClient:
         self._autoscan_proxy_tasks: set[asyncio.Task] = set()
         # In-flight ``POST /api/projects/{name}/git/items:delete`` batches.
         self._git_proxy_tasks: set[asyncio.Task] = set()
+        # In-flight session creates (``POST /api/sessions`` and the legacy
+        # ``create_session`` control message).
+        self._session_create_tasks: set[asyncio.Task] = set()
 
         # Latest manifest pointer received from central_server (auth_ok or a
         # mid-connection ``agent_manifest_update`` control frame). Consumed by
@@ -559,6 +567,7 @@ class RelayClient:
             *self._chat_proxy_tasks,
             *self._autoscan_proxy_tasks,
             *self._git_proxy_tasks,
+            *self._session_create_tasks,
         ]:
             task.cancel()
         if self._task and not self._task.done():
@@ -865,7 +874,7 @@ class RelayClient:
             await self._send_heartbeat(ws)
 
         elif msg_type == "create_session":
-            await self._handle_create_session(ctrl, ws)
+            self._spawn_legacy_session_create(ctrl, ws)
 
         elif msg_type == "stop_session":
             await self._handle_stop_session(ctrl, ws)
@@ -884,6 +893,11 @@ class RelayClient:
                 self._spawn_autoscan_proxy(ctrl, ws)
             elif _GIT_ITEMS_DELETE_ROUTE.match(path):
                 self._spawn_git_proxy(ctrl)
+            elif (
+                path == "/api/sessions"
+                and str(ctrl.get("method", "GET")).upper() == "POST"
+            ):
+                self._spawn_session_create(ctrl, ws)
             else:
                 await self._handle_proxy_request(ctrl, ws)
 
@@ -1167,7 +1181,7 @@ class RelayClient:
                     "session_id": session_id,
                     "error": f"Invalid claude_options: {exc}",
                 }
-                await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+                await self._send_control_live(resp, ws)
                 return
 
         codex_options = None
@@ -1187,7 +1201,7 @@ class RelayClient:
                     "session_id": session_id,
                     "error": f"Invalid codex_options: {exc}",
                 }
-                await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+                await self._send_control_live(resp, ws)
                 return
 
         antigravity_options = None
@@ -1207,7 +1221,7 @@ class RelayClient:
                     "session_id": session_id,
                     "error": f"Invalid antigravity_options: {exc}",
                 }
-                await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+                await self._send_control_live(resp, ws)
                 return
 
         opencode_options = None
@@ -1227,7 +1241,7 @@ class RelayClient:
                     "session_id": session_id,
                     "error": f"Invalid opencode_options: {exc}",
                 }
-                await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+                await self._send_control_live(resp, ws)
                 return
 
         copilot_options = None
@@ -1247,7 +1261,7 @@ class RelayClient:
                     "session_id": session_id,
                     "error": f"Invalid copilot_options: {exc}",
                 }
-                await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+                await self._send_control_live(resp, ws)
                 return
 
         cursor_options = None
@@ -1267,7 +1281,7 @@ class RelayClient:
                     "session_id": session_id,
                     "error": f"Invalid cursor_options: {exc}",
                 }
-                await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+                await self._send_control_live(resp, ws)
                 return
 
         junie_options = None
@@ -1287,7 +1301,7 @@ class RelayClient:
                     "session_id": session_id,
                     "error": f"Invalid junie_options: {exc}",
                 }
-                await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+                await self._send_control_live(resp, ws)
                 return
 
         pi_options = None
@@ -1307,7 +1321,7 @@ class RelayClient:
                     "session_id": session_id,
                     "error": f"Invalid pi_options: {exc}",
                 }
-                await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+                await self._send_control_live(resp, ws)
                 return
 
         ctrl_cwd = ctrl.get("cwd")
@@ -1324,7 +1338,7 @@ class RelayClient:
                     "session_id": session_id,
                     "error": err,
                 }
-                await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+                await self._send_control_live(resp, ws)
                 return
         try:
             (
@@ -1364,7 +1378,7 @@ class RelayClient:
                 "session_id": session_id,
                 "error": str(exc),
             }
-            await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+            await self._send_control_live(resp, ws)
             return
         resolved_name = ctrl.get("resolved_name")
         raw_resume = ctrl.get("chat_resume_id")
@@ -1382,7 +1396,7 @@ class RelayClient:
                 "session_id": session_id,
                 "error": chat_error,
             }
-            await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+            await self._send_control_live(resp, ws)
             return
         config = SessionConfig(
             session_id=session_id,
@@ -1416,7 +1430,7 @@ class RelayClient:
             session = await self._session_manager.create_session(config)
             # Bridge is auto-created via _watch_session_changes, but ensure
             # it's bridged immediately.
-            self._bridge_session(session, ws)
+            self._bridge_on_live_tunnel(session, ws)
             resp = {
                 "type": "session_created",
                 "session_id": session.session_id,
@@ -1512,7 +1526,7 @@ class RelayClient:
                 "session_id": session_id,
                 "error": str(exc),
             }
-        await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+        await self._send_control_live(resp, ws)
 
     async def _handle_stop_session(
         self, ctrl: dict, ws: ClientConnection
@@ -1575,7 +1589,7 @@ class RelayClient:
                 )
                 session = await self._session_manager.get_session(info.session_id)
                 if session is not None:
-                    self._bridge_session(session, self._ws or ws)
+                    self._bridge_on_live_tunnel(session, ws)
                 return {"status": 201, "body": session_to_wire_dict(info)}
         except KeyError as exc:
             return {"status": 404, "body": {"detail": str(exc).strip("'")}}
@@ -1959,7 +1973,7 @@ class RelayClient:
                 chat_resume_id=parsed.chat_resume_id,
             )
             session = await self._session_manager.create_session(config)
-            self._bridge_session(session, ws)
+            self._bridge_on_live_tunnel(session, ws)
             info = session.to_info()
             return {
                 "status": 201,
@@ -2613,6 +2627,52 @@ class RelayClient:
         task = asyncio.create_task(coro, name=name)
         tasks.add(task)
         task.add_done_callback(tasks.discard)
+
+    def _spawn_session_create(self, ctrl: dict, ws: ClientConnection) -> None:
+        self._spawn_aside(
+            ctrl,
+            self._session_create_tasks,
+            MAX_SESSION_CREATE_TASKS,
+            lambda c: self._run_session_create(c, ws),
+            "relay-session-create",
+            busy_detail="Too many sessions are starting. Try again in a moment.",
+        )
+
+    async def _run_session_create(self, ctrl: dict, ws: ClientConnection) -> None:
+        resp = await self._proxy_response(ctrl, ws)
+        await self._send_proxy_result(
+            ctrl, {"status": resp.get("status", 200), "body": resp.get("body")},
+        )
+
+    def _spawn_legacy_session_create(self, ctrl: dict, ws: ClientConnection) -> None:
+        if len(self._session_create_tasks) >= MAX_SESSION_CREATE_TASKS:
+            coro = self._send_control_live({
+                "type": "session_create_failed",
+                "session_id": ctrl.get("session_id", ""),
+                "error": "Too many sessions are starting. Try again in a moment.",
+            }, ws)
+        else:
+            coro = self._handle_create_session(ctrl, ws)
+        task = asyncio.create_task(coro, name="relay-legacy-session-create")
+        self._session_create_tasks.add(task)
+        task.add_done_callback(self._session_create_tasks.discard)
+
+    async def _send_control_live(self, msg: dict, ws: ClientConnection) -> None:
+        target = self._ws if self._ws is not None else ws
+        try:
+            await target.send(encode(CH_CONTROL, "", json.dumps(msg).encode()))
+        except Exception as exc:
+            logger.info("relay.control_send_failed type=%s: %s", msg.get("type"), exc)
+
+    def _bridge_on_live_tunnel(self, session: Any, ws: ClientConnection) -> None:
+        """Bridge on the live tunnel, never a closed one.
+
+        A stale entry on a closed tunnel would stop ``_bridge_existing_sessions``
+        bridging the session on the next one, so a closed tunnel is skipped."""
+        live = self._ws if self._ws is not None else ws
+        if getattr(live, "state", None) in (State.CLOSING, State.CLOSED):
+            return
+        self._bridge_session(session, live)
 
     def _spawn_voice_proxy(self, ctrl: dict) -> None:
         self._spawn_aside(

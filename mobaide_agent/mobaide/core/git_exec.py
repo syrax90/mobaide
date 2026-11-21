@@ -1,10 +1,9 @@
 """Hardened ``git`` runner for the session git API (status/diff reads, the
 stage/unstage/discard/commit mutations and the fetch/pull/push jobs).
 
-Distinct from :func:`mobaide.linear.worktree._run_git` on purpose: that
-helper's argv and kwargs are pinned by its callers and tests, and it has no
-timeout, no output cap and no environment scrubbing. This runner is the one
-the Changes viewer relies on, so it is bounded on every axis:
+:func:`mobaide.linear.worktree._run_git` reuses :func:`run_capped` and
+:data:`NO_PROMPT_ENV` without the argv prefix. This runner is the one the
+Changes viewer relies on, so it is bounded on every axis:
 
 * bytes only — text mode would rewrite CRLF inside diff content;
 * an optional ``stdin`` payload is fed by its own writer thread, so a
@@ -59,6 +58,14 @@ _FORCED_ENV = {
     "LC_ALL": "C",
     "GIT_TERMINAL_PROMPT": "0",
     "GIT_OPTIONAL_LOCKS": "0",
+}
+# Credential helpers and ssh-agent keep working; everything that would wait
+# on a person at the host is switched off, so a network command can only
+# succeed or fail fast — never hang on a prompt nobody can see from the phone.
+NO_PROMPT_ENV: Mapping[str, str] = {
+    "GIT_ASKPASS": "",
+    "SSH_ASKPASS_REQUIRE": "never",
+    "GCM_INTERACTIVE": "never",
 }
 GIT_ARGV_PREFIX: tuple[str, ...] = (
     "--no-optional-locks",

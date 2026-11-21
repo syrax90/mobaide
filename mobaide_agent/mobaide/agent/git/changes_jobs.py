@@ -28,7 +28,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from mobaide.core.git_exec import ProcessHandle, run_git
+from mobaide.core.git_exec import NO_PROMPT_ENV, ProcessHandle, run_git
 
 from .changes_models import (
     BYTE_LIMIT,
@@ -65,14 +65,6 @@ _TAIL_LINES = 50
 _PARTIAL_CAP = 4096
 _CANCEL_SETTLE = 3.0
 _SHUTDOWN_TIMEOUT = 10.0
-# Credential helpers and ssh-agent keep working; everything that would wait
-# on a person at the host is switched off, so a job can only succeed or
-# fail fast — never hang on a prompt nobody can see from the phone.
-_JOB_ENV = {
-    "GIT_ASKPASS": "",
-    "SSH_ASKPASS_REQUIRE": "never",
-    "GCM_INTERACTIVE": "never",
-}
 
 _REMOTE_PREFIX = "remote: "
 _PROGRESS_RE = re.compile(
@@ -569,7 +561,7 @@ class GitJobRegistry:
             cwd=toplevel,
             timeout=JOB_TIMEOUT,
             max_bytes=BYTE_LIMIT,
-            env_extra=_JOB_ENV,
+            env_extra=NO_PROMPT_ENV,
             handle=job.handle,
             on_stderr=job.stderr_callback(asyncio.get_running_loop()),
         )
