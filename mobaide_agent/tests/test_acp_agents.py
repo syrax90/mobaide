@@ -648,7 +648,7 @@ class TestPinnedInstallOnFirstUse:
 
         argv = plan.ensure_argv()
 
-        entry = adapters / "codex-acp-2.5.0" / "node_modules" / "@agentclientprotocol" / "codex-acp"
+        entry = adapters / agents.CODEX_ADAPTER.folder_name / "node_modules" / "@agentclientprotocol" / "codex-acp"
         assert argv == [node, str((entry / "dist" / "index.js").resolve())]
         # The next session starts at once.
         assert spec.command() == argv

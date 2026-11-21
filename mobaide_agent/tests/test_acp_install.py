@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import sys
 import time
@@ -17,12 +18,13 @@ import psutil
 import pytest
 
 from mobaide.acp import install as install_mod
+from mobaide.acp.agents import CODEX_ADAPTER
 from mobaide.acp.install import AdapterInstaller, AdapterInstallError, NpmAdapter
 from tests.conftest import skip_if_not_linux
 
 pytestmark = skip_if_not_linux
 
-ADAPTER = NpmAdapter("@agentclientprotocol/codex-acp", "2.5.0", "codex-acp")
+ADAPTER = NpmAdapter(CODEX_ADAPTER.package, CODEX_ADAPTER.version, CODEX_ADAPTER.bin_name)
 
 # Fake ``npm install --prefix <dir> <package>@<version>``: logs argv, cwd and
 # inherited npm_config_* names, then lays out the package. Env knobs: FAKE_NPM_BIN
@@ -131,16 +133,16 @@ class TestInstall:
 
         entry = installer.install(npm, env)
 
-        assert entry == (_package_dir(root / "codex-acp-2.5.0") / "dist" / "index.js").resolve()
-        assert (root / "codex-acp-2.5.0" / install_mod.INSTALLED_MARKER).read_text() == "2.5.0"
+        assert entry == (_package_dir(root / ADAPTER.folder_name) / "dist" / "index.js").resolve()
+        assert (root / ADAPTER.folder_name / install_mod.INSTALLED_MARKER).read_text() == ADAPTER.version
         [call] = _calls(log)
         argv = call["argv"]
         assert argv[0] == "install"
-        assert argv[-1] == "@agentclientprotocol/codex-acp@2.5.0"
+        assert argv[-1] == ADAPTER.spec
         assert {"--ignore-scripts", "--omit=optional"} <= set(argv)
         staging = Path(argv[argv.index("--prefix") + 1])
         assert staging.parent == root
-        assert staging.name.startswith(f".staging-codex-acp-2.5.0-{os.getpid()}-")
+        assert staging.name.startswith(f".staging-{ADAPTER.folder_name}-{os.getpid()}-")
         assert os.path.realpath(call["cwd"]) == os.path.realpath(root)
         assert call["npm_config"] == [
             "NPM_CONFIG_OMIT",
@@ -174,7 +176,7 @@ class TestInstall:
 
     def test_an_install_without_the_marker_is_done_again(self, npm, root, log):
         """A copy that an interrupted install left behind is never run."""
-        half = root / "codex-acp-2.5.0"
+        half = root / ADAPTER.folder_name
         package = _package_dir(half)
         (package / "dist").mkdir(parents=True)
         (package / "dist" / "index.js").write_text("// partial\n", encoding="utf-8")
@@ -203,12 +205,12 @@ class TestInstall:
 
     def test_a_bin_given_as_the_package_name_string_is_accepted(self, root, tmp_path):
         """``"bin": "cli.js"`` is npm's short form for a bin named like the package."""
-        done = root / "codex-acp-2.5.0"
+        done = root / ADAPTER.folder_name
         package = _package_dir(done)
         package.mkdir(parents=True)
         (package / "cli.js").write_text("// adapter\n", encoding="utf-8")
         (package / "package.json").write_text(json.dumps({"bin": "cli.js"}), encoding="utf-8")
-        (done / install_mod.INSTALLED_MARKER).write_text("2.5.0", encoding="utf-8")
+        (done / install_mod.INSTALLED_MARKER).write_text(ADAPTER.version, encoding="utf-8")
 
         assert AdapterInstaller(ADAPTER, root).entry() == (package / "cli.js").resolve()
 
@@ -235,14 +237,14 @@ class TestBinMustStayInsideThePackage:
     def test_a_bin_symlinked_out_of_the_package_is_not_run(self, root, tmp_path):
         outside = tmp_path / "outside.js"
         outside.write_text("// not the adapter\n", encoding="utf-8")
-        done = root / "codex-acp-2.5.0"
+        done = root / ADAPTER.folder_name
         package = _package_dir(done)
         (package / "dist").mkdir(parents=True)
         (package / "dist" / "index.js").symlink_to(outside)
         (package / "package.json").write_text(
             json.dumps({"bin": {"codex-acp": "dist/index.js"}}), encoding="utf-8"
         )
-        (done / install_mod.INSTALLED_MARKER).write_text("2.5.0", encoding="utf-8")
+        (done / install_mod.INSTALLED_MARKER).write_text(ADAPTER.version, encoding="utf-8")
 
         assert AdapterInstaller(ADAPTER, root).entry() is None
 
@@ -263,7 +265,7 @@ class TestFailures:
             installer.install(npm, npm_env(log, ADAPTER.bin_name, FAKE_NPM_FAIL="1"))
 
         assert str(excinfo.value) == (
-            "Could not download @agentclientprotocol/codex-acp@2.5.0: "
+            f"Could not download {ADAPTER.spec}: "
             "npm ERR! 404 Not Found - GET https://registry.npmjs.org/x"
         )
         assert os.listdir(root) == []
@@ -293,7 +295,7 @@ class TestFailures:
         installer = AdapterInstaller(ADAPTER, blocker / "acp-adapters")
 
         with pytest.raises(
-            AdapterInstallError, match=r"^Could not install @agentclientprotocol/codex-acp@2\.5\.0: "
+            AdapterInstallError, match=rf"^Could not install {re.escape(ADAPTER.spec)}: "
         ):
             installer.install(npm, npm_env(log, ADAPTER.bin_name))
 
@@ -322,8 +324,8 @@ class TestStaleStaging:
         process runs right now."""
         old = time.time() - install_mod.STALE_STAGING_SECONDS - 60
         names = {
-            "stale": ".staging-codex-acp-2.5.0-111-deadbeef",
-            "fresh": ".staging-codex-acp-2.5.0-222-cafebabe",
+            "stale": f".staging-{ADAPTER.folder_name}-111-deadbeef",
+            "fresh": f".staging-{ADAPTER.folder_name}-222-cafebabe",
             "other": ".staging-claude-agent-acp-0.101.0-333-0badf00d",
         }
         for key, name in names.items():
@@ -335,7 +337,7 @@ class TestStaleStaging:
         AdapterInstaller(ADAPTER, root).install(npm, npm_env(log, ADAPTER.bin_name))
 
         assert sorted(os.listdir(root)) == sorted(
-            [names["fresh"], names["other"], "codex-acp-2.5.0"]
+            [names["fresh"], names["other"], ADAPTER.folder_name]
         )
 
 
@@ -349,6 +351,6 @@ class TestPrune:
 
         assert sorted(os.listdir(root)) == [
             "claude-agent-acp-0.101.0",
-            "codex-acp-2.5.0",
+            ADAPTER.folder_name,
             "codex-acp-extra-1.0.0",
         ]

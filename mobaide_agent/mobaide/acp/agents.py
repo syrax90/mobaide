@@ -79,7 +79,7 @@ CLAUDE_ADAPTER = NpmAdapter(
     "@agentclientprotocol/claude-agent-acp", "0.108.1", "claude-agent-acp", "2026-11-19T00:00:00Z"
 )
 CODEX_ADAPTER = NpmAdapter(
-    "@agentclientprotocol/codex-acp", "2.5.0", "codex-acp", "2026-10-30T00:00:00Z"
+    "@agentclientprotocol/codex-acp", "2.7.0", "codex-acp", "2026-11-17T00:00:00Z"
 )
 CLAUDE_ACP_PACKAGE = CLAUDE_ADAPTER.spec
 CLAUDE_ACP_BIN = CLAUDE_ADAPTER.bin_name

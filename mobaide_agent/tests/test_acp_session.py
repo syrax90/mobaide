@@ -7,7 +7,8 @@ opening a stored session, the adapter install on first
 use, Send now (steering), command output (and how often it is re-sent),
 signing in from the chat (``sign_in`` and ``/login``),
 turns that another app on the PC runs in a shared Codex session (a Stop it
-never answers, a turn already running when the chat opens), extra folders
+never answers, a turn already running when the chat opens), Codex's async
+questions (a card that does not hold the turn), extra folders
 (``additionalDirectories``), the Antigravity model name resolved into the
 session's options, Antigravity's "conversation already open" lock,
 Cursor's own requests (questions, a plan to accept or to start, tasks), and
@@ -38,6 +39,7 @@ import pytest
 from mobaide.acp import session as session_mod
 from mobaide.acp import signin
 from mobaide.acp.agents import (
+    CODEX_ADAPTER,
     FAKE_SIGNED_OUT_ENV,
     JUNIE_BRAVE_OPTION,
     JUNIE_ERROR_HINTS,
@@ -1978,7 +1980,7 @@ class TestAdapterInstall:
     @pytest.mark.parametrize(
         "failure",
         [
-            AdapterInstallError("Could not download @agentclientprotocol/codex-acp@2.5.0: E404"),
+            AdapterInstallError(f"Could not download {CODEX_ADAPTER.spec}: E404"),
             RuntimeError("the adapter folder is locked"),
         ],
         ids=["install-error", "unexpected-error"],
@@ -1995,7 +1997,7 @@ class TestAdapterInstall:
 
     async def test_a_failed_install_shows_the_error_and_restart_tries_again(self, open_chat):
         outcomes: list[Any] = [
-            AdapterInstallError("Could not download @agentclientprotocol/codex-acp@2.5.0: E404"),
+            AdapterInstallError(f"Could not download {CODEX_ADAPTER.spec}: E404"),
             fake_agent_argv(),
         ]
 
@@ -2007,7 +2009,7 @@ class TestAdapterInstall:
 
         m = await open_chat(ensure_argv=ensure)
 
-        message = "Could not download @agentclientprotocol/codex-acp@2.5.0: E404"
+        message = f"Could not download {CODEX_ADAPTER.spec}: E404"
         assert m.status == "error"
         assert m.state["error"] == message
         assert m.texts("error") == [message]
@@ -2208,6 +2210,60 @@ class TestExternalTurns:
         await m.until(_turn_done(m, "echo hello"))
         assert m.texts("user") == ["hello"]
         assert m.state["queue"] == []
+
+
+class TestCodexAsyncQuestion:
+    """codex-acp relays ``request_user_input_async`` as a form
+    (``_meta.codex.delivery: "async"``) that does not hold the turn: the
+    card shows while Codex works on, and goes when the turn ends."""
+
+    async def test_the_card_shows_while_the_turn_runs_and_the_answer_goes_back(
+        self, open_chat, monkeypatch
+    ):
+        monkeypatch.setenv("MOBAIDE_FAKE_ACP_ASYNC_WORK", "30")
+        m = await open_chat(argv=fake_agent_argv("codex"))
+        await m.command("prompt", text="async question")
+        await m.until(lambda: bool(m.state.get("requests")))
+        (request,) = m.state["requests"]
+
+        assert request["kind"] == "form"
+        assert [f["key"] for f in request["fields"]] == ["question_0", "question_0_note"]
+        await m.until(lambda: "awaiting_permission" in m.attention)
+        before = "".join(m.texts("agent")).count("Working")
+        await m.until(lambda: "".join(m.texts("agent")).count("Working") > before)
+        assert m.status == "running"
+
+        ok = await m.command(
+            "respond",
+            request_id=request["id"],
+            action="accept",
+            values={"question_0": "Production", "question_0_note": "after the tests"},
+        )
+
+        assert ok["ok"] is True
+        said = 'Using your answer: {"question_0": "Production", "question_0_note": "after the tests"}'
+        await m.until(lambda: m.status == "ready" and _says(m, said))
+        assert m.state["requests"] == []
+
+    async def test_an_unanswered_card_is_withdrawn_when_the_turn_ends(self, open_chat, monkeypatch):
+        monkeypatch.setenv("MOBAIDE_FAKE_ACP_ASYNC_WORK", "0.3")
+        m = await open_chat(argv=fake_agent_argv("codex"))
+
+        await m.command("prompt", text="async question")
+        await m.until(lambda: m.status == "ready" and _says(m, "No answer came, so I used Staging."))
+
+        assert _asked(m.frames)
+        assert m.state["requests"] == []
+        assert m.session.to_info().attention != "awaiting_permission"
+        request_id = next(
+            ev["patch"]["requests"][0]["id"]
+            for f in m.frames
+            if f["t"] == "events"
+            for ev in f["events"]
+            if ev["type"] == "state" and ev["patch"].get("requests")
+        )
+        late = await m.command("respond", request_id=request_id, action="decline")
+        assert late["error"] == "This request was already answered"
 
 
 def _sent_items(m: TimelineMirror, item_id: str) -> list[dict[str, Any]]:

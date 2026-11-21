@@ -17,6 +17,11 @@ prompt text picks the scenario:
 * ``permission`` — a command that waits for approval;
 * ``question`` — a form with single choice, multiple choice and text (the
   Cursor flavor asks with ``cursor/ask_question``);
+* ``async question`` — the Codex flavor asks the way codex-acp relays
+  ``request_user_input_async``: the question as an agent message, then a
+  form (``_meta.codex.delivery: "async"``) that does not hold the turn. The
+  turn works on, uses an accepted answer, and when it ends unanswered
+  withdraws the form with ``$/cancel_request``;
 * ``plan`` — a plan that progresses step by step (the Cursor flavor asks to
   accept it with ``cursor/create_plan``, then reports its tasks with
   ``cursor/update_todos``; in Plan mode it stops after the accept, and the
@@ -61,6 +66,8 @@ from typing import Any
 
 # How long the ``background`` scenario's work runs on after the answer.
 WAKE_DELAY = float(os.environ.get("MOBAIDE_FAKE_ACP_WAKE_DELAY") or 1.0)
+# How long the ``async question`` scenario works before it gives up on an answer.
+ASYNC_QUESTION_WORK = float(os.environ.get("MOBAIDE_FAKE_ACP_ASYNC_WORK") or 3.0)
 
 MODES = [
     {"value": "default", "name": "Ask first", "description": "Ask before edits and commands"},
@@ -796,6 +803,8 @@ class FakeAgent:
             ok = await self.tools(sid)
         elif "permission" in lower:
             ok = await self.permission(sid)
+        elif self.codex and "async question" in lower:
+            ok = await self.async_question(sid)
         elif "question" in lower:
             ok = await (self.cursor_question(sid) if self.cursor else self.question(sid))
         elif self.cursor and lower.startswith("implement the plan"):
@@ -1083,6 +1092,47 @@ class FakeAgent:
             return await self.stream(sid, f"No problem — you chose to {action or 'skip'} the question.")
         content = (result or {}).get("content") or {}
         return await self.stream(sid, f"Got it: {json.dumps(content, sort_keys=True)}")
+
+    async def async_question(self, sid: str) -> bool:
+        ok = await self.stream(sid, "Which environment should I deploy to? Staging or Production.")
+        if not ok:
+            return False
+        req_id = self.next_id + 1
+        answer = asyncio.ensure_future(self.call("elicitation/create", {
+            "sessionId": sid,
+            "mode": "form",
+            "message": "Codex keeps working while you answer. An answer sent after it finishes is not delivered.",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "question_0": {"type": "string", "title": "Which environment?", "oneOf": [
+                        {"const": "Staging", "title": "Staging"},
+                        {"const": "Production", "title": "Production"},
+                        {"const": "None of the above", "title": "None of the above",
+                         "description": "Provide a different answer in the note field."},
+                    ], "_meta": {"codex": {"isOther": True, "isSecret": False}}},
+                    "question_0_note": {"type": "string", "title": "Additional answer or note",
+                                        "_meta": {"codex": {"questionId": "question_0", "role": "user_note",
+                                                            "isSecret": False}}},
+                },
+            },
+            "_meta": {"codex": {"delivery": "async"}},
+        }))
+        deadline = self.loop.time() + ASYNC_QUESTION_WORK
+        while not answer.done() and self.loop.time() < deadline:
+            if not await self.stream(sid, "Working… ", delay=0.05):
+                break
+        if not answer.done():
+            # As codex-acp: the turn that asked ends, so its form is withdrawn.
+            self.send({"jsonrpc": "2.0", "method": "$/cancel_request", "params": {"requestId": req_id}})
+            if self.stopped(sid):
+                return False
+            return await self.stream(sid, "No answer came, so I used Staging.")
+        result = answer.result() or {}
+        if result.get("action") != "accept":
+            return await self.stream(sid, "No answer, so I used Staging.")
+        content = result.get("content") or {}
+        return await self.stream(sid, f"Using your answer: {json.dumps(content, sort_keys=True)}")
 
     async def cursor_question(self, sid: str) -> bool:
         result = await self.call("cursor/ask_question", {
