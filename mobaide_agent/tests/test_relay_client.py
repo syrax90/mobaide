@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from websockets.protocol import State
 
 from mobaide.relay.client import (
     FRAME_EXECUTE,
@@ -25,6 +26,7 @@ from mobaide.relay.client import (
     FRAME_RESIZE,
     FRAME_STATE,
     FRAME_SUBMIT,
+    MAX_SESSION_CREATE_TASKS,
     UNKNOWN_SESSION_NOTIFY_CAP,
     RelayClient,
     _STATE_MAP,
@@ -50,7 +52,7 @@ from mobaide.core import (
     CodexAuthRequiredError,
     CodexBinaryNotFoundError,
 )
-from mobaide.core.models import SessionKind, SessionState
+from mobaide.core.models import SessionInfo, SessionKind, SessionState
 
 
 def _assert_real_signature(fn, await_args) -> None:
@@ -96,6 +98,14 @@ def _mock_iter_ring_chunks(ring: bytes, chunk_size: int | None = None):
         return iter(ring[i : i + cs] for i in range(0, len(ring), cs))
 
     return factory
+
+
+async def _create_settled(client: RelayClient, payload: bytes, ws) -> None:
+    """Hand a control frame to the reader with ``ws`` as the live tunnel and
+    wait for the session creates it started aside to send their replies."""
+    client._ws = ws
+    await client._handle_control(payload, ws)
+    await asyncio.gather(*client._session_create_tasks)
 
 
 # -- _state_frame helper -------------------------------------------------------
@@ -186,7 +196,7 @@ class TestHandleControl:
         payload = json.dumps(ctrl).encode()
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(payload, ws)
+            await _create_settled(client, payload, ws)
 
         # Verify response was sent
         ws.send.assert_called_once()
@@ -206,7 +216,7 @@ class TestHandleControl:
         ctrl = {"type": "create_session", "session_id": "fail-sess"}
         payload = json.dumps(ctrl).encode()
 
-        await client._handle_control(payload, ws)
+        await _create_settled(client, payload, ws)
 
         ws.send.assert_called_once()
         resp_bytes = ws.send.call_args[0][0]
@@ -248,7 +258,7 @@ class TestHandleControl:
         payload = json.dumps(ctrl).encode()
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(payload, ws)
+            await _create_settled(client, payload, ws)
 
         cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
         assert isinstance(cfg.claude_options, ClaudeOptions)
@@ -279,7 +289,7 @@ class TestHandleControl:
         }
         payload = json.dumps(ctrl).encode()
 
-        await client._handle_control(payload, ws)
+        await _create_settled(client, payload, ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "session_create_failed"
@@ -746,7 +756,7 @@ class TestHandleCreateSessionPathErrors:
         ws = AsyncMock()
         ctrl = {"type": "create_session", "session_id": "bad-path-sess"}
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         ws.send.assert_called_once()
         sent_bytes = ws.send.call_args[0][0]
@@ -779,7 +789,7 @@ class TestHandleCreateSessionPathErrors:
         ws = AsyncMock()
         ctrl = {"type": "create_session", "session_id": "denied-sess"}
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         sent_bytes = ws.send.call_args[0][0]
         _, _, payload = decode(sent_bytes)
@@ -808,7 +818,7 @@ class TestHandleCreateSessionPathErrors:
         ws = AsyncMock()
         ctrl = {"type": "create_session", "session_id": "no-cli-sess"}
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "session_create_failed"
@@ -835,7 +845,7 @@ class TestHandleCreateSessionPathErrors:
         ws = AsyncMock()
         ctrl = {"type": "create_session", "session_id": "no-auth-sess"}
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "session_create_failed"
@@ -879,7 +889,7 @@ class TestHandleProxyRequestPathErrors:
             "body": {},
         }
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         sent_bytes = ws.send.call_args[0][0]
         _, _, payload = decode(sent_bytes)
@@ -918,7 +928,7 @@ class TestHandleProxyRequestPathErrors:
             "body": {},
         }
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "proxy_response"
@@ -951,7 +961,7 @@ class TestHandleProxyRequestPathErrors:
             "body": {},
         }
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "proxy_response"
@@ -978,7 +988,7 @@ class TestHandleProxyRequestPathErrors:
             "body": {},
         }
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "proxy_response"
@@ -1012,7 +1022,7 @@ class TestHandleProxyRequestInvalidLaunch:
             "body": {"cli": "claude", "ui": "terminal", "claude_options": {"code_mode": True}},
         }
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "proxy_response"
@@ -2167,7 +2177,7 @@ class TestHandleCreateSessionAdHocPathValidation:
             "session_id": "adhoc-missing",
             "cwd": str(missing),
         }
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "session_create_failed"
@@ -2195,7 +2205,7 @@ class TestHandleCreateSessionAdHocPathValidation:
             "cwd": "relative/should/be/ignored",
         }
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(json.dumps(ctrl).encode(), ws)
+            await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         # Validation was skipped — create_session was called.
         mock_session_manager.create_session.assert_awaited_once()
@@ -2221,7 +2231,7 @@ class TestHandleCreateSessionAdHocPathValidation:
             "claude_options": {},
         }
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(json.dumps(ctrl).encode(), ws)
+            await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         mock_session_manager.create_session.assert_awaited_once()
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
@@ -3279,7 +3289,7 @@ class TestHandleCreateSessionCodex:
         payload = json.dumps(ctrl).encode()
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(payload, ws)
+            await _create_settled(client, payload, ws)
 
         cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
         assert cfg.kind is SessionKind.CODEX
@@ -3318,7 +3328,7 @@ class TestHandleCreateSessionCodex:
         }
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(json.dumps(ctrl).encode(), ws)
+            await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
         assert cfg.kind is SessionKind.CODEX
@@ -3340,7 +3350,7 @@ class TestHandleCreateSessionCodex:
             "codex_options": {"sandbox": "nope"},
         }
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "session_create_failed"
@@ -3369,7 +3379,7 @@ class TestHandleCreateSessionCodex:
             "cli": "codex",
         }
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "session_create_failed"
@@ -3409,7 +3419,7 @@ class TestHandleCreateSessionChat:
         ws = AsyncMock()
         ctrl = {"type": "create_session", "session_id": "chat-sess", **fields}
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp == {"type": "session_create_failed", "session_id": "chat-sess", "error": error}
@@ -3437,7 +3447,7 @@ class TestHandleCreateSessionChat:
         }
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(json.dumps(ctrl).encode(), ws)
+            await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         assert [(c.ui, c.chat_resume_id) for c in captured] == [("chat", "0b4e7c2a-11f0:main.v2")]
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
@@ -3503,7 +3513,7 @@ class TestHandleProxyRequestCodex:
         }
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(json.dumps(ctrl).encode(), ws)
+            await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         cfg = captured["config"]
         assert cfg.kind is SessionKind.CODEX
@@ -3539,7 +3549,7 @@ class TestHandleProxyRequestCodex:
             "body": {"cli": "codex", "codex_options": {}},
         }
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "proxy_response"
@@ -3759,7 +3769,7 @@ class TestHandleCreateSessionAntigravity:
         payload = json.dumps(ctrl).encode()
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(payload, ws)
+            await _create_settled(client, payload, ws)
 
         cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
         assert cfg.kind is SessionKind.ANTIGRAVITY
@@ -3839,7 +3849,7 @@ class TestHandleProxyRequestAntigravity:
         }
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(json.dumps(ctrl).encode(), ws)
+            await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         cfg = captured["config"]
         assert cfg.kind is SessionKind.ANTIGRAVITY
@@ -3892,7 +3902,7 @@ class TestHandleCreateSessionOpenCode:
         payload = json.dumps(ctrl).encode()
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(payload, ws)
+            await _create_settled(client, payload, ws)
 
         cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
         assert cfg.kind is SessionKind.OPENCODE
@@ -3926,7 +3936,7 @@ class TestHandleCreateSessionOpenCode:
             "opencode_options": block,
         }
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "session_create_failed"
@@ -3953,7 +3963,7 @@ class TestHandleCreateSessionOpenCode:
             "cli": "opencode",
         }
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "session_create_failed"
@@ -4033,7 +4043,7 @@ class TestHandleProxyRequestOpenCode:
             "body": {"cli": "opencode", "opencode_options": {}},
         }
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "proxy_response"
@@ -4084,7 +4094,7 @@ class TestHandleCreateSessionCopilot:
         payload = json.dumps(ctrl).encode()
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(payload, ws)
+            await _create_settled(client, payload, ws)
 
         cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
         assert cfg.kind is SessionKind.COPILOT
@@ -4163,7 +4173,7 @@ class TestHandleProxyRequestCopilot:
         }
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(json.dumps(ctrl).encode(), ws)
+            await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         cfg = captured["config"]
         assert cfg.kind is SessionKind.COPILOT
@@ -4224,7 +4234,7 @@ class TestHandleCreateSessionCursor:
         payload = json.dumps(ctrl).encode()
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(payload, ws)
+            await _create_settled(client, payload, ws)
 
         cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
         assert cfg.kind is SessionKind.CURSOR
@@ -4262,7 +4272,7 @@ class TestHandleCreateSessionCursor:
         ctrl = {"type": "create_session", "session_id": "cursor-infer", "cursor_options": {}}
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(json.dumps(ctrl).encode(), ws)
+            await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         assert captured["config"].kind is SessionKind.CURSOR
         assert captured["config"].cursor_options == CursorOptions()
@@ -4287,7 +4297,7 @@ class TestHandleCreateSessionCursor:
             "cursor_options": block,
         }
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "session_create_failed"
@@ -4358,7 +4368,7 @@ class TestHandleProxyRequestCursor:
         }
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(json.dumps(ctrl).encode(), ws)
+            await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         cfg = captured["config"]
         assert cfg.kind is SessionKind.CURSOR
@@ -4420,7 +4430,7 @@ class TestHandleCreateSessionJunie:
         }
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(json.dumps(ctrl).encode(), ws)
+            await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         cfg = captured["config"]
         assert cfg.kind is SessionKind.JUNIE
@@ -4454,7 +4464,7 @@ class TestHandleCreateSessionJunie:
             "junie_options": block,
         }
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "session_create_failed"
@@ -4521,7 +4531,7 @@ class TestHandleProxyRequestJunie:
         }
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(json.dumps(ctrl).encode(), ws)
+            await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         cfg = captured["config"]
         assert cfg.kind is SessionKind.JUNIE
@@ -4672,7 +4682,7 @@ class TestHandleCreateSessionCustomKind:
         }
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(json.dumps(ctrl).encode(), ws)
+            await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
         assert cfg.kind == CUSTOM_KIND
@@ -4696,7 +4706,7 @@ class TestHandleCreateSessionCustomKind:
             "cli": CUSTOM_KIND,
         }
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
+        await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "session_create_failed"
@@ -4767,7 +4777,7 @@ class TestHandleCreateSessionPi:
         payload = json.dumps(ctrl).encode()
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(payload, ws)
+            await _create_settled(client, payload, ws)
 
         cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
         assert cfg.kind is SessionKind.PI
@@ -4795,7 +4805,7 @@ class TestHandleCreateSessionPi:
         }
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(json.dumps(ctrl).encode(), ws)
+            await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         mock_session_manager.create_session.assert_not_awaited()
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
@@ -4864,7 +4874,7 @@ class TestHandleProxyRequestPi:
         }
 
         with patch.object(client, "_bridge_session"):
-            await client._handle_control(json.dumps(ctrl).encode(), ws)
+            await _create_settled(client, json.dumps(ctrl).encode(), ws)
 
         cfg = captured["config"]
         assert cfg.kind is SessionKind.PI
@@ -4949,3 +4959,177 @@ class TestDispatchProxyStopSessionRemoveWorktree:
         assert [item.branch for item in worktree_session.items] == (
             ["feature/x"] if removes else []
         )
+
+
+class _SlowCreates:
+    """``SessionManager.create_session`` stand-in that holds every create
+    until ``opened`` is set, the way a worktree fetch on a dead network does."""
+
+    def __init__(self) -> None:
+        self.opened = asyncio.Event()
+        self.entered = 0
+        self.cancelled = 0
+
+    async def __call__(self, config):
+        self.entered += 1
+        sid = f"sid-{self.entered}"
+        try:
+            await self.opened.wait()
+        except asyncio.CancelledError:
+            self.cancelled += 1
+            raise
+        info = SessionInfo(
+            session_id=sid, state=SessionState.RUNNING,
+            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            pid=4242, command=["/bin/bash"], cwd="/tmp",
+        )
+        session = MagicMock()
+        session.session_id = sid
+        session.pid = 4242
+        session.to_info.return_value = info
+        return session
+
+
+def _proxy_create(request_id: str) -> bytes:
+    return json.dumps({
+        "type": "proxy_request", "request_id": request_id,
+        "method": "POST", "path": "/api/sessions", "body": {},
+    }).encode()
+
+
+def _legacy_create(session_id: str) -> bytes:
+    return json.dumps({"type": "create_session", "session_id": session_id}).encode()
+
+
+def _control_replies(ws) -> list[dict]:
+    replies = []
+    for call in ws.send.call_args_list:
+        ch, _, payload = decode(call.args[0])
+        if ch == CH_CONTROL:
+            replies.append(json.loads(payload))
+    return replies
+
+
+class TestSessionCreateRunsAside:
+    """A create can wait on a worktree fetch; awaited on the tunnel reader it
+    froze input to every session and the pings until it ended."""
+
+    @pytest.fixture
+    async def tunnel(self, client, mock_session_manager):
+        creates = _SlowCreates()
+        mock_session_manager.create_session = creates
+        bridged: dict[str, object] = {}
+        client._bridge_session = lambda session, ws: bridged.setdefault(session.session_id, ws)
+        ws = AsyncMock()
+        client._ws = ws
+        yield client, ws, creates, bridged
+        creates.opened.set()
+        await client.stop()
+
+    @pytest.mark.parametrize(
+        ("frame", "expected"),
+        [pytest.param(_proxy_create("r-1"), ("proxy_response", 201), id="post-api-sessions"),
+         pytest.param(_legacy_create("s-1"), ("session_created", None), id="create-session-control")],
+    )
+    async def test_a_slow_create_does_not_hold_up_the_tunnel_reader(
+        self, tunnel, frame, expected,
+    ):
+        client, ws, creates, _ = tunnel
+
+        await asyncio.wait_for(client._handle_control(frame, ws), 1)
+        await _wait_until(lambda: creates.entered == 1)
+        assert _control_replies(ws) == []
+
+        creates.opened.set()
+        await _wait_until(lambda: len(_control_replies(ws)) == 1)
+        (reply,) = _control_replies(ws)
+        assert (reply["type"], reply.get("status")) == expected
+
+    async def test_creates_beyond_the_in_flight_cap_are_refused(self, tunnel):
+        client, ws, creates, _ = tunnel
+        for i in range(MAX_SESSION_CREATE_TASKS):
+            await client._handle_control(_proxy_create(f"r-{i}"), ws)
+        await _wait_until(lambda: creates.entered == MAX_SESSION_CREATE_TASKS)
+
+        await client._handle_control(_proxy_create("r-over"), ws)
+        await client._handle_control(_legacy_create("s-over"), ws)
+        await _wait_until(lambda: len(_control_replies(ws)) == 2)
+
+        proxy_reply, legacy_reply = sorted(_control_replies(ws), key=lambda r: r["type"])
+        assert (proxy_reply["request_id"], proxy_reply["status"]) == ("r-over", 503)
+        assert (legacy_reply["type"], legacy_reply["session_id"]) == (
+            "session_create_failed", "s-over",
+        )
+        assert creates.entered == MAX_SESSION_CREATE_TASKS
+
+    @pytest.mark.parametrize(
+        "frame",
+        [pytest.param(_proxy_create("r-1"), id="post-api-sessions"),
+         pytest.param(_legacy_create("s-1"), id="create-session-control")],
+    )
+    async def test_a_create_that_outlives_a_reconnect_bridges_and_replies_on_the_new_tunnel(
+        self, tunnel, frame,
+    ):
+        client, old_ws, creates, bridged = tunnel
+        await client._handle_control(frame, old_ws)
+        await _wait_until(lambda: creates.entered == 1)
+
+        new_ws = AsyncMock()
+        client._ws = new_ws
+        creates.opened.set()
+        await _wait_until(lambda: len(_control_replies(new_ws)) == 1)
+
+        assert bridged == {"sid-1": new_ws}
+        assert _control_replies(old_ws) == []
+
+    async def test_a_create_refused_after_a_reconnect_replies_on_the_new_tunnel(
+        self, tunnel,
+    ):
+        client, old_ws, creates, _ = tunnel
+        frame = json.dumps({
+            "type": "create_session", "session_id": "s-1", "claude_options": {"model": 5},
+        }).encode()
+        await client._handle_control(frame, old_ws)
+
+        new_ws = AsyncMock()
+        client._ws = new_ws
+        await asyncio.gather(*client._session_create_tasks)
+
+        (reply,) = _control_replies(new_ws)
+        assert (reply["type"], reply["session_id"]) == ("session_create_failed", "s-1")
+        assert _control_replies(old_ws) == []
+        assert creates.entered == 0
+
+    # After a failed auth ``_ws`` can still point at the closed tunnel.
+    @pytest.mark.parametrize("live_ws", ["none", "closed"])
+    async def test_a_create_that_ends_between_tunnels_leaves_the_bridge_to_the_next_one(
+        self, tunnel, mock_session_manager, live_ws,
+    ):
+        client, old_ws, creates, bridged = tunnel
+        await client._handle_control(_proxy_create("r-1"), old_ws)
+        await _wait_until(lambda: creates.entered == 1)
+
+        client._ws = None if live_ws == "none" else old_ws
+        old_ws.state = State.CLOSED
+        creates.opened.set()
+        await asyncio.gather(*client._session_create_tasks)
+        assert bridged == {}
+
+        # A bridge entry pinned to the closed tunnel would make the next
+        # connection skip this session and its output would never arrive.
+        session = MagicMock(session_id="sid-1")
+        mock_session_manager.list_sessions = MagicMock(return_value=[session])
+        mock_session_manager.get_session = AsyncMock(return_value=session)
+        new_ws = AsyncMock()
+        await client._bridge_existing_sessions(new_ws)
+        assert bridged == {"sid-1": new_ws}
+
+    async def test_stop_cancels_in_flight_creates(self, tunnel):
+        client, ws, creates, _ = tunnel
+        await client._handle_control(_proxy_create("r-1"), ws)
+        await client._handle_control(_legacy_create("s-1"), ws)
+        await _wait_until(lambda: creates.entered == 2)
+
+        await client.stop()
+
+        await _wait_until(lambda: creates.cancelled == 2)
