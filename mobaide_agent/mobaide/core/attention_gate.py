@@ -100,7 +100,8 @@ and starts that its ACP connection knows better than any hook:
 * ``note_stop`` — a ``Stop`` whose turn is followed by the next prompt at
   once: only what it listed is recorded.
 
-``stop_failure`` is ignored here; only a chat session reads it.
+``stop_failure`` is ignored here; a chat session and a Junie terminal session
+read it themselves.
 
 Long-lived tasks. A dev server never completes, so every ``Stop`` after it
 starts lists it, and a session that ran one would never alert again. A passive

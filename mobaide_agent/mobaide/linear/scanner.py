@@ -910,11 +910,16 @@ class AutoScanInstance:
                 issue.identifier, self._cli, exc_info=True,
             )
             return
-        await self._spawn(
+        if not await self._spawn(
             issue, session_id,
             await self._terminal_config(session_id, spec, SessionKind(self._cli)),
             trust_env=spec.env if spec.env is not None else os.environ,
-        )
+        ):
+            # A launcher with hooks (Junie) wrote a hook config no SessionEnd
+            # will delete.
+            discard = getattr(launcher, "discard_session_hooks", None)
+            if discard is not None:
+                discard(session_id)
 
     async def _create_worktree(self, issue: ScanIssue, slug: str) -> str | None:
         """The issue's worktree (``<branch_prefix>/<slug>``), or the workspace

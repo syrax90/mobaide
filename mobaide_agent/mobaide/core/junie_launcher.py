@@ -1,13 +1,20 @@
 """Launcher for the Junie CLI (``junie``), JetBrains' coding agent.
 
-Needs no hooks and no sign-in probe: a signed-out terminal session shows
-Junie's own welcome screen. Junie's terminal UI reports state only to terminal
-apps it recognizes, so a terminal session raises no "your turn" alert; a chat does.
+Needs no sign-in probe: a signed-out terminal session shows Junie's own welcome
+screen. A terminal session raises its "your turn", approval and activity alerts
+through Junie's command hooks: the launcher passes a per-session hook config
+with ``--config-location`` (see :func:`.hook_settings.write_junie_session_hooks`).
+That flag adds to the user's own ``~/.junie/config.json`` rather than replacing
+it. A Junie without the flag, and Windows, launch with no hooks.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import sys
+import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -16,18 +23,32 @@ from .cli_launcher import (
     CliBinaryNotFoundError,
     LaunchSpec,
     LaunchTarget,
+    cli_help_text,
     conda_env_bin,
     prepend_path_dir,
     resolve_cli_binary,
     resolve_standard_worktree_cwd,
 )
+from .hook_settings import HOOK_TOKEN_ENV, remove_session_hooks, write_junie_session_hooks
 from .workspaces_config import WorkspaceConfig
 
 if TYPE_CHECKING:
     from mobaide.linear.worktree import WorktreeManager
 
+logger = logging.getLogger(__name__)
+
 _JUNIE_BIN_ENV_VAR = "MOBAIDE_JUNIE_BIN"
 _JUNIE_BIN_NAME = "junie"
+
+# An older Junie exits with "no such option" on this flag, so the launcher
+# reads ``--help`` before it adds the flag.
+_CONFIG_LOCATION_FLAG = "--config-location"
+# The JVM starts in about a second; the shim may apply a pending update first.
+_HELP_PROBE_TIMEOUT_SECONDS = 20.0
+# How long a "no flag" or failed probe stands. The shim path does not change
+# when Junie updates itself (it switches a ``current`` link), so a negative
+# answer must expire; a positive one stays, since a newer Junie keeps the flag.
+_HELP_PROBE_RETRY_SECONDS = 300.0
 
 
 class JunieBinaryNotFoundError(CliBinaryNotFoundError):
@@ -111,10 +132,22 @@ class JunieLauncher:
         self,
         junie_bin_override: str | None = None,
         worktree_mgr: WorktreeManager | None = None,
+        hook_port: int | None = None,
+        hook_token: str | None = None,
     ) -> None:
         self._junie_bin_override = junie_bin_override
         self._worktree_mgr = worktree_mgr
         self._resolved_binary: str | None = None
+        # When both are set, terminal sessions get attention hooks that post
+        # to the agent's ``/internal/hook`` endpoint.
+        self._hook_port = hook_port
+        self._hook_token = hook_token
+        # Binary paths whose ``--help`` lists the flag, and the monotonic time
+        # until which a negative or failed probe stands.
+        self._config_flag_supported: set[str] = set()
+        self._config_flag_retry_at: dict[str, float] = {}
+        # One probe at a time: concurrent launches wait for its answer.
+        self._config_flag_lock = asyncio.Lock()
 
     def resolve_binary(self) -> str:
         """The resolved ``junie`` binary (honours the configured override),
@@ -131,12 +164,84 @@ class JunieLauncher:
         options: JunieOptions,
         session_id: str | None = None,
     ) -> LaunchSpec:
-        # ``session_id`` is accepted for ``CliLauncher`` parity but unused:
-        # Junie has no per-session hooks.
         argv = self._build_argv(options)
         env = self.build_env(target)
-        cwd = await self.resolve_cwd(target, options)
-        return LaunchSpec(argv=argv, cwd=cwd, env=env, created_files=[])
+        hooks_path = await self._maybe_write_hooks(session_id, env)
+        try:
+            cwd = await self.resolve_cwd(target, options)
+        except BaseException:
+            # The session manager deletes the file when a session goes; a
+            # session that never spawned never gets there.
+            if hooks_path is not None and session_id is not None:
+                self.discard_session_hooks(session_id)
+            raise
+        created: list[str] = []
+        if hooks_path is not None and session_id is not None:
+            argv.insert(1, f"{_CONFIG_LOCATION_FLAG}={hooks_path}")
+            env["MOBAIDE_SESSION_ID"] = session_id
+            env[HOOK_TOKEN_ENV] = self._hook_token or ""
+            created.append(str(hooks_path))
+        return LaunchSpec(argv=argv, cwd=cwd, env=env, created_files=created)
+
+    async def _maybe_write_hooks(
+        self, session_id: str | None, env: Mapping[str, str],
+    ) -> Path | None:
+        """Write the session's hook config, or ``None`` to launch without hooks.
+
+        No hooks without a session id or a hook endpoint, on Windows (its
+        ``cmd /c`` quoting is unproven), on a Junie without
+        ``--config-location``, or when the write fails: the session still runs.
+        """
+        if not session_id or self._hook_port is None or not self._hook_token:
+            return None
+        if sys.platform == "win32":
+            return None
+        if not await self.supports_config_location(env):
+            return None
+        try:
+            return write_junie_session_hooks(session_id, self._hook_port)
+        except OSError:
+            logger.warning(
+                "junie_launcher.hook_config_write_failed session=%s",
+                session_id,
+                exc_info=True,
+            )
+            return None
+
+    def discard_session_hooks(self, session_id: str) -> None:
+        """Best-effort removal of a session's hook config: when the session
+        goes, or when it was built but never spawned."""
+        if self._hook_port is None:
+            return
+        remove_session_hooks(session_id, self._hook_port)
+
+    async def supports_config_location(self, env: Mapping[str, str]) -> bool:
+        """Whether the resolved ``junie`` lists ``--config-location`` in its
+        help. A negative or failed probe is asked again after
+        ``_HELP_PROBE_RETRY_SECONDS``."""
+        try:
+            binary = self.resolve_binary()
+        except CliBinaryNotFoundError:
+            return False
+        async with self._config_flag_lock:
+            if binary in self._config_flag_supported:
+                return True
+            if time.monotonic() < self._config_flag_retry_at.get(binary, 0.0):
+                return False
+            help_text = await asyncio.to_thread(
+                cli_help_text, binary, env, _HELP_PROBE_TIMEOUT_SECONDS,
+            )
+            if help_text is not None and _CONFIG_LOCATION_FLAG in help_text:
+                self._config_flag_supported.add(binary)
+                return True
+            logger.info(
+                "junie_launcher.no_config_location binary=%s probe_failed=%s",
+                binary, help_text is None,
+            )
+            self._config_flag_retry_at[binary] = (
+                time.monotonic() + _HELP_PROBE_RETRY_SECONDS
+            )
+            return False
 
     def _build_argv(self, options: JunieOptions) -> list[str]:
         argv = [self.resolve_binary()]
