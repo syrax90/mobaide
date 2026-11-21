@@ -13,6 +13,11 @@ each other's files. These tests redirect that temp dir into ``tmp_path`` via
 from __future__ import annotations
 
 import json
+import os
+import shlex
+import stat
+import sys
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -233,3 +238,113 @@ class TestSweepHooksDir:
         hook_settings.write_session_hooks("x", port=9001, token="tok")
         hook_settings.sweep_hooks_dir(port=9001)
         assert keep.exists()
+
+
+# Every Junie event the config wires, and the gate kind its command posts. No
+# ``SessionEnd``: Junie fires it on ``/restart`` too, and the relaunched Junie
+# would run with the session's hooks gone.
+EXPECTED_JUNIE_HOOKS = {
+    "UserPromptSubmit": "prompt_submit",
+    "PreToolUse": "tool",
+    "PermissionRequest": "permission",
+    "Stop": "stop",
+    "StopFailure": "stop_failure",
+}
+
+
+def _junie_hooks(doc: dict) -> dict[str, dict]:
+    """Flatten a Junie config into ``event -> the single hook dict``."""
+    flat: dict[str, dict] = {}
+    for event, entries in doc["hooks"].items():
+        [entry] = entries
+        [hook] = entry["hooks"]
+        flat[event] = hook
+    return flat
+
+
+class TestWriteJunieSessionHooks:
+    def test_each_event_runs_the_poster_with_its_session_and_kind(self):
+        # The command is a shell line: a session id with spaces or shell
+        # metacharacters must reach the poster as one argument.
+        path = hook_settings.write_junie_session_hooks("a b;c", port=9100)
+
+        hooks = _junie_hooks(_load(path))
+        assert set(hooks) == set(EXPECTED_JUNIE_HOOKS)
+        assert Path(hook_settings.JUNIE_HOOK_POST_SCRIPT).is_file()
+        for event, hook in hooks.items():
+            assert hook["type"] == "command"
+            assert shlex.split(hook["command"]) == [
+                sys.executable, "-I", hook_settings.JUNIE_HOOK_POST_SCRIPT,
+                "9100", "a b;c", EXPECTED_JUNIE_HOOKS[event],
+            ]
+
+    def test_every_hook_is_async(self):
+        # A sync ``PermissionRequest`` hook that exits 0 approves the action
+        # with no dialog, and the poster always exits 0. Any entry without
+        # ``async`` would let Junie run a command the user never approved.
+        doc = hook_settings.junie_hook_config("sid-1", port=9100)
+
+        for event, entries in doc["hooks"].items():
+            for entry in entries:
+                for hook in entry["hooks"]:
+                    assert hook.get("async") is True, event
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
+    def test_file_is_owner_only_and_removed_with_the_session(self):
+        # The session manager's cleanup and the startup sweep find the file by
+        # the same path as a Claude settings file.
+        path = hook_settings.write_junie_session_hooks("sid-1", port=9001)
+
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        hook_settings.remove_session_hooks("sid-1", port=9001)
+        assert not path.exists()
+
+
+def _write_claude() -> Path:
+    return hook_settings.write_session_hooks("sid-1", port=9001, token="tok")
+
+
+def _write_junie() -> Path:
+    return hook_settings.write_junie_session_hooks("sid-1", port=9001)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks and owners")
+@pytest.mark.parametrize("write", [_write_claude, _write_junie], ids=["claude", "junie"])
+class TestHooksDirectoryOwnership:
+    """The hooks dir sits in the shared ``/tmp``. Its files name the commands
+    Junie runs and the token URLs Claude posts to, so another local user must
+    not be able to read or redirect them. The launchers treat ``OSError`` as
+    "launch without hooks"."""
+
+    def test_a_symlinked_hooks_dir_is_refused(self, tmp_path, write):
+        elsewhere = tmp_path / "planted"
+        elsewhere.mkdir()
+        (tmp_path / "mobaide_hooks_9001").symlink_to(elsewhere, target_is_directory=True)
+
+        with pytest.raises(OSError):
+            write()
+
+        assert list(elsewhere.iterdir()) == []
+
+    def test_a_hooks_dir_of_another_user_is_refused(self, tmp_path, monkeypatch, write):
+        hooks_dir = tmp_path / "mobaide_hooks_9001"
+        hooks_dir.mkdir()
+        other_uid = os.getuid() + 1
+        monkeypatch.setattr(hook_settings.os, "getuid", lambda: other_uid)
+
+        with pytest.raises(OSError):
+            write()
+
+        assert list(hooks_dir.iterdir()) == []
+
+    def test_a_planted_symlink_in_place_of_the_file_is_not_followed(self, tmp_path, write):
+        hooks_dir = tmp_path / "mobaide_hooks_9001"
+        hooks_dir.mkdir(mode=0o700)
+        victim = tmp_path / "victim"
+        victim.write_text("keep", encoding="utf-8")
+        (hooks_dir / "sid-1.json").symlink_to(victim)
+
+        with pytest.raises(OSError):
+            write()
+
+        assert victim.read_text(encoding="utf-8") == "keep"

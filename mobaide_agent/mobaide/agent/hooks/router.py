@@ -1,7 +1,9 @@
-"""Local-only endpoint that turns Claude Code hooks into attention state.
+"""Local-only endpoint that turns Claude Code and Junie hooks into attention state.
 
 The agent spawns each interactive ``claude`` with a per-session ``--settings``
-file (see :mod:`mobaide.core.hook_settings`) whose ``http`` hooks POST here. The
+file (see :mod:`mobaide.core.hook_settings`) whose ``http`` hooks POST here. A
+Junie terminal session's ``command`` hooks run :mod:`mobaide.core.junie_hook_post`,
+which posts here with the token in a header. The
 ``session_id``, a per-agent ``token`` and the gate-facing ``hook`` kind are query
 params baked into the hook URL at spawn, so every hook routes to exactly the
 right :class:`TerminalSession` even under concurrent sessions sharing a cwd, and

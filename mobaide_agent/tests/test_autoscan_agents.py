@@ -17,7 +17,7 @@ from typing import cast
 import pytest
 
 from mobaide.core import SessionKind, SessionManager, WorkspacesStore
-from mobaide.core import claude_launcher, codex_launcher, pi_launcher
+from mobaide.core import claude_launcher, codex_launcher, hook_settings, junie_launcher, pi_launcher
 from mobaide.core.antigravity_launcher import AntigravityLauncher
 from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError, ClaudeLauncher
 from mobaide.core.cli_launcher import CliBinaryNotFoundError, LaunchSpec
@@ -218,6 +218,48 @@ async def test_agent_runs_the_issue_in_its_own_worktree(
         assert (approve_flag in config.command) is auto_approve
     [item] = await inst.list_workitems()
     assert (item.id, item.uuid, item.source) == ("#7", "7", "github")
+
+
+class _FailingSessions:
+    def __init__(self) -> None:
+        self.hook_files_at_spawn: list[bool] = []
+
+    async def create_session(self, config):
+        [flag] = [arg for arg in config.command if arg.startswith("--config-location=")]
+        self.hook_files_at_spawn.append(Path(flag.split("=", 1)[1]).is_file())
+        raise RuntimeError("pty spawn failed")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows Junie sessions run without hooks")
+async def test_a_junie_session_that_fails_to_spawn_leaves_no_hook_config(
+    tmp_path, monkeypatch,
+):
+    # The session manager deletes the file when a session goes, and a session
+    # that never spawned never gets there.
+    binary = tmp_path / "bin" / "junie"
+    binary.parent.mkdir()
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    hooks_tmp = tmp_path / "tmp"
+    hooks_tmp.mkdir()
+
+    def lists_the_flag(*_args) -> str:
+        return "  --config-location=<path>\n"
+
+    monkeypatch.setattr(junie_launcher, "_resolve_junie_binary", lambda *_a, **_kw: str(binary))
+    monkeypatch.setattr(junie_launcher, "cli_help_text", lists_the_flag)
+    monkeypatch.setattr(hook_settings.tempfile, "gettempdir", lambda: str(hooks_tmp))
+    inst, _worktrees, _sessions = _instance(
+        tmp_path, cli="junie", launcher=JunieLauncher(hook_port=9100, hook_token="tok"),
+        source=_FakeSource([_issue()]),
+    )
+    sessions = _FailingSessions()
+    inst._session_manager = cast("SessionManager", sessions)
+
+    await inst._scan_once()
+
+    assert sessions.hook_files_at_spawn == [True]
+    assert list(hooks_tmp.rglob("*.json")) == []
+    assert ("#7", "session_spawn", "failed") in _issue_events(inst)
 
 
 async def test_missing_agent_creates_no_worktree_and_ends_the_cycle(tmp_path, monkeypatch):

@@ -786,6 +786,18 @@ class TestClaudeHookAttention:
         assert session.to_info().attention is None
         assert _drain_attention_events(session) == []
 
+    async def test_a_failed_turn_goes_idle_and_raises_turn_failed(self) -> None:
+        # Junie sends ``StopFailure`` instead of ``Stop`` for a turn that
+        # ended on an API error; the row must stop spinning and the user hear.
+        session = _running_hook_session(0.0)
+        session.on_claude_hook(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1"})
+        session.on_claude_hook(HookKind.STOP_FAILURE, {"error": "rate_limit"})
+
+        info = session.to_info()
+        assert info.activity == "idle"
+        assert info.attention == "turn_failed"
+        assert [e.attention for e in _drain_attention_events(session)] == ["turn_failed"]
+
     async def test_session_end_hook_records_the_exit_reason(self) -> None:
         session = _running_hook_session(0.0)
         session.on_claude_hook(HookKind.END, {"reason": "clear"})
@@ -1085,7 +1097,9 @@ class TestProgramStatusAttention:
         assert await _read_script(session, backend) == [reason]
 
     @pytest.mark.parametrize(
-        "kind", [SessionKind.CLAUDE, SessionKind.AUTO_SCAN], ids=["claude", "auto_scan"],
+        "kind",
+        [SessionKind.CLAUDE, SessionKind.AUTO_SCAN, SessionKind.JUNIE],
+        ids=["claude", "auto_scan", "junie"],
     )
     async def test_hook_driven_sessions_ignore_reports(self, kind) -> None:
         # Claude Code reports through OSC 7501 too once a terminal answers its

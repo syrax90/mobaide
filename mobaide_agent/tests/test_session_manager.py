@@ -11,7 +11,8 @@ from mobaide.core.claude_launcher import AdHocLaunch, ClaudeOptions, LaunchSpec
 from mobaide.core.codex_launcher import CodexOptions
 from mobaide.core.copilot_launcher import CopilotOptions
 from mobaide.core.cursor_launcher import CursorOptions
-from mobaide.core.junie_launcher import JunieOptions
+from mobaide.core import hook_settings
+from mobaide.core.junie_launcher import JunieLauncher, JunieOptions
 from mobaide.core.models import SessionConfig, SessionKind, SessionState
 from mobaide.core.opencode_launcher import OpenCodeOptions
 from mobaide.core.pi_launcher import PiOptions
@@ -1501,5 +1502,60 @@ class TestPiLaunchBranching:
 
             claude_launcher.build.assert_not_awaited()
             assert mgr.list_sessions() == []
+        finally:
+            await mgr.shutdown()
+
+
+class TestJunieHookConfigCleanup:
+    """Junie fires ``SessionEnd`` on ``/restart`` too, and the shim then
+    relaunches it with the same ``--config-location``, so the manager, not
+    that hook, deletes the file when the session goes. A Claude session's file
+    at the same path is the hook router's to delete."""
+
+    @pytest.fixture(autouse=True)
+    def _hooks_tmp(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(hook_settings.tempfile, "gettempdir", lambda: str(tmp_path))
+
+    @staticmethod
+    def _manager() -> SessionManager:
+        return SessionManager(
+            junie_launcher=JunieLauncher(hook_port=9100, hook_token="tok"),
+            backend_factory=FakePtyBackend,
+        )
+
+    @pytest.mark.parametrize(
+        ("kind", "removed"),
+        [(SessionKind.JUNIE, True), (SessionKind.CLAUDE, False)],
+        ids=["junie", "claude"],
+    )
+    async def test_stopping_a_session(self, kind, removed) -> None:
+        path = hook_settings.write_junie_session_hooks("s1", 9100)
+        mgr = self._manager()
+        try:
+            config = _make_config("s1")
+            config.kind = kind
+            await mgr.create_session(config)
+
+            await mgr.stop_session("s1")
+
+            assert path.exists() is not removed
+        finally:
+            await mgr.shutdown()
+
+    async def test_a_crashed_junie_session_is_cleaned_up(self) -> None:
+        from mobaide.core.session import TerminalSession
+
+        path = hook_settings.write_junie_session_hooks("s1", 9100)
+        mgr = self._manager()
+        config = _make_config("s1")
+        config.kind = SessionKind.JUNIE
+        session = TerminalSession(config, backend=_DeadBackend())
+        session._state = SessionState.RUNNING
+        mgr._sessions["s1"] = session
+        try:
+            await mgr._check_liveness()
+
+            assert mgr.list_sessions() == []
+            assert not path.exists()
         finally:
             await mgr.shutdown()

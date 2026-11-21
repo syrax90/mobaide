@@ -226,7 +226,7 @@ enum SessionDisplay {
 
     /// Whether the agent is mid-turn, so the row shows the spinner and the
     /// "Working" chip. `activity` is nil where the agent cannot see it (a Codex,
-    /// Antigravity, OpenCode, Copilot, Cursor, Junie, Pi or Terminal PTY session, or an older agent): those rows keep
+    /// Antigravity, OpenCode, Copilot, Cursor, Pi or Terminal PTY session, or an older agent): those rows keep
     /// the plain status square. A pending permission prompt wins — the turn is
     /// blocked on the user, not working.
     static func isWorking(_ session: SessionResponse) -> Bool {

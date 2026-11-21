@@ -854,12 +854,14 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         cursor_bin_override=config.cursor_bin,
         worktree_mgr=worktree_mgr,
     )
-    # Junie CLI launcher — sibling of Cursor: no hooks and no auth probe
-    # (Junie's own sign-in screen renders in the PTY when needed). Binary
-    # resolves lazily.
+    # Junie CLI launcher — no auth probe (Junie's own sign-in screen renders
+    # in the PTY when needed). Like Claude, its terminal sessions get attention
+    # hooks posting to /internal/hook. Binary resolves lazily.
     app.state.junie_launcher = JunieLauncher(
         junie_bin_override=config.junie_bin,
         worktree_mgr=worktree_mgr,
+        hook_port=config.port,
+        hook_token=app.state.hook_token,
     )
     # Pi launcher — sibling of Antigravity: no hooks and no auth probe (Pi
     # shows its own sign-in in the PTY when needed, and a chat session offers

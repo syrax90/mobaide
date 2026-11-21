@@ -511,6 +511,19 @@ class SessionManager:
         """Return lightweight DTOs for all sessions."""
         return [s.to_info() for s in self._sessions.values()]
 
+    def _discard_launch_files(self, session: TerminalSession | ChatSession) -> None:
+        """Remove a gone Junie session's hook config.
+
+        Junie fires ``SessionEnd`` on ``/restart`` too, and the shim then
+        relaunches it with the same ``--config-location``, so the file must
+        live as long as the session, not end with that hook.
+        """
+        if self._junie_launcher is None:
+            return
+        kind = session.to_info().kind
+        if (kind.value if isinstance(kind, SessionKind) else kind) == SessionKind.JUNIE.value:
+            self._junie_launcher.discard_session_hooks(session.session_id)
+
     @log_call(name="session_manager.stop_session", log_args=("session_id", "force"))
     async def stop_session(self, session_id: str, force: bool = False) -> None:
         """Stop and remove a session."""
@@ -519,6 +532,7 @@ class SessionManager:
         if session is None:
             raise KeyError(f"Session '{session_id}' not found")
         await session.stop(force=force)
+        self._discard_launch_files(session)
         logger.info("session.removed", session_id=session_id)
         audit_event(
             "audit.session.terminated",
@@ -613,7 +627,7 @@ class SessionManager:
             for sid in list(self._sessions):
                 state = self._sessions[sid].state
                 if state in (SessionState.STOPPED, SessionState.CRASHED):
-                    self._sessions.pop(sid, None)
+                    self._discard_launch_files(self._sessions.pop(sid))
                     logger.info("Cleaned up dead session: %s", sid)
                     if state is SessionState.STOPPED:
                         finished.append(sid)

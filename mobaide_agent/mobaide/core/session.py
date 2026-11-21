@@ -135,10 +135,13 @@ GRACEFUL_TERM_SECONDS = 2.0
 # child's shutdown latency near-instant.
 CHILD_EXIT_POLL_SECONDS = 0.05
 
-# Sessions whose attention comes from Claude Code hooks (``AttentionGate``).
-# Every other terminal session listens to OSC 7501 program-status reports
-# instead; never both, so one event can never alert twice.
-HOOK_DRIVEN_KINDS = frozenset({SessionKind.CLAUDE.value, SessionKind.AUTO_SCAN.value})
+# Sessions whose attention comes from CLI hooks (``AttentionGate``): Claude
+# Code's, and Junie's (which writes no OSC 7501). Every other terminal session
+# listens to OSC 7501 program-status reports instead; never both, so one event
+# can never alert twice.
+HOOK_DRIVEN_KINDS = frozenset({
+    SessionKind.CLAUDE.value, SessionKind.AUTO_SCAN.value, SessionKind.JUNIE.value,
+})
 
 # DEC 1004 focus-in / focus-out reports a client emulator writes on its own.
 _FOCUS_REPORTS = frozenset({b"\x1b[I", b"\x1b[O"})
@@ -148,7 +151,10 @@ _FOCUS_REPORTS = frozenset({b"\x1b[I", b"\x1b[O"})
 # is not one: a call already on its way when the user pressed Esc can land
 # after the key.
 _TURN_BOUNDARY_HOOKS = frozenset(
-    {HookKind.PROMPT_SUBMIT, HookKind.STOP, HookKind.IDLE, HookKind.END},
+    {
+        HookKind.PROMPT_SUBMIT, HookKind.STOP, HookKind.STOP_FAILURE,
+        HookKind.IDLE, HookKind.END,
+    },
 )
 
 # Upper bound on joining each background task (reader, title, stall) during
@@ -538,6 +544,13 @@ class TerminalSession:
         self._interrupt_watch.note_transcript(payload.get("transcript_path"))
         if kind in _TURN_BOUNDARY_HOOKS:
             self._interrupt_watch.cancel()
+        if kind is HookKind.STOP_FAILURE:
+            # Only Junie's terminal hooks send it: a turn that ended on an
+            # API error sends it instead of ``Stop``.
+            self._attention_gate.settle()
+            if self._state == SessionState.RUNNING:
+                self.set_attention("turn_failed")
+            return
         self._attention_gate.handle(kind, payload)
         if kind is HookKind.PROMPT_SUBMIT:
             self.clear_attention()
