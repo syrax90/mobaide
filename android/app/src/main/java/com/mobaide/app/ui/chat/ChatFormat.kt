@@ -4,6 +4,8 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.text.format.DateFormat
+import android.text.format.DateUtils
 import android.widget.Toast
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -20,7 +22,9 @@ import java.text.NumberFormat
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
+import java.time.ZoneId
 import java.time.ZoneOffset
+import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -67,6 +71,26 @@ fun parseIsoMillis(iso: String?): Long? {
     return runCatching { OffsetDateTime.parse(iso).toInstant().toEpochMilli() }.getOrNull()
         ?: runCatching { Instant.parse(iso).toEpochMilli() }.getOrNull()
         ?: runCatching { LocalDateTime.parse(iso).toInstant(ZoneOffset.UTC).toEpochMilli() }.getOrNull()
+}
+
+/** The queued automatic continue, at the device's local time (the date first when not today). */
+fun limitWaitText(continuesAt: String?, nowMs: Long, context: Context): String {
+    val at = parseIsoMillis(continuesAt)
+        ?: return "Usage limit reached. Continues automatically when it resets."
+    val time = DateFormat.getTimeFormat(context).format(Date(at))
+    val zone = ZoneId.systemDefault()
+    val sameDay = Instant.ofEpochMilli(at).atZone(zone).toLocalDate() ==
+        Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
+    val day = if (sameDay) {
+        ""
+    } else {
+        DateUtils.formatDateTime(
+            context,
+            at,
+            DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_ABBREV_MONTH or DateUtils.FORMAT_NO_YEAR,
+        ) + ", "
+    }
+    return "Usage limit reached. Continues automatically at $day$time."
 }
 
 fun usageFraction(usage: ChatUsage): Float =

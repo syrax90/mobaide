@@ -28,6 +28,7 @@ import sys
 import threading
 from collections.abc import Awaitable, Iterator
 from contextlib import contextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -55,7 +56,7 @@ from mobaide.acp.agents import (
 )
 from mobaide.acp.install import AdapterInstallError
 from mobaide.acp.presence import ConversationPresence
-from mobaide.acp.rpc import AcpConnection
+from mobaide.acp.rpc import AcpConnection, AcpRpcError
 from mobaide.acp.session import ChatSession
 from mobaide.acp.wake import COPILOT_CLIENT_META, OPENCODE_CLIENT_META
 from mobaide.core.attention_dedupe import SharedTurnDedupe, real_cwd
@@ -1123,6 +1124,145 @@ class TestTurnAttention:
         await m.until(lambda: "turn_finished" in m.attention)
 
         assert m.session.to_info().attention == "turn_finished"
+
+
+class TestUsageLimitWait:
+    """A Claude prompt refused for a usage limit queues a continue that goes
+    out once the limit resets, without a ``turn_failed`` alert."""
+
+    @staticmethod
+    def _wait(m: TimelineMirror) -> dict[str, Any] | None:
+        return m.state.get("limit_wait")
+
+    async def test_the_continue_waits_first_in_the_queue_until_the_user_writes(self, open_chat):
+        m = await open_chat()
+        await m.command("prompt", text="usagelimit")
+        await m.until(lambda: self._wait(m) is not None and m.status == "ready")
+
+        wait = self._wait(m)
+        assert m.state["queue"] == [
+            {"id": wait["queue_id"], "text": session_mod.AUTO_CONTINUE_PROMPT, "images": 0}
+        ]
+        assert wait["limit_type"] == "five_hour"
+        resets_at = datetime.fromisoformat(wait["resets_at"])
+        continues_at = datetime.fromisoformat(wait["continues_at"])
+        assert continues_at - resets_at == timedelta(seconds=session_mod.LIMIT_WAIT_MARGIN)
+        assert "turn_failed" not in m.attention
+
+        steered = await m.command("steer", queue_id=wait["queue_id"])
+        assert steered["error"] == "This message waits for the usage limit to reset"
+
+        await m.command("prompt", text="hello")
+        await m.until(_turn_done(m, "You said: hello"))
+        assert self._wait(m) is None
+        assert m.state["queue"] == []
+        assert m.texts("user") == ["usagelimit", "hello"]
+
+    async def test_the_continue_goes_out_once_the_limit_resets(self, open_chat, monkeypatch):
+        monkeypatch.setattr(session_mod, "LIMIT_WAIT_MARGIN", 0.0)
+        monkeypatch.setenv("MOBAIDE_FAKE_ACP_LIMIT_RESET", "0")
+        m = await open_chat()
+
+        await m.command("prompt", text="usagelimit")
+        await m.until(_turn_done(m, f"You said: {session_mod.AUTO_CONTINUE_PROMPT}"))
+
+        assert m.texts("user") == ["usagelimit", session_mod.AUTO_CONTINUE_PROMPT]
+        assert self._wait(m) is None
+        assert m.state["queue"] == []
+        assert "turn_failed" not in m.attention
+
+    async def test_automatic_continues_stop_after_three_in_a_row(self, open_chat, monkeypatch):
+        monkeypatch.setattr(session_mod, "LIMIT_WAIT_MARGIN", 0.0)
+        monkeypatch.setenv("MOBAIDE_FAKE_ACP_LIMIT_RESET", "0")
+        m = await open_chat()
+
+        await m.command("prompt", text="usagelimit 9")
+        await m.until(lambda: "turn_failed" in m.attention and m.status == "ready")
+
+        assert m.texts("user") == ["usagelimit 9"] + [session_mod.AUTO_CONTINUE_PROMPT] * 3
+        assert self._wait(m) is None
+        assert m.state["queue"] == []
+
+    async def test_a_reset_too_far_away_alerts_instead(self, open_chat):
+        m = await open_chat()
+
+        await m.command("prompt", text="weeklylimit")
+        await m.until(lambda: "turn_failed" in m.attention and m.status == "ready")
+
+        assert self._wait(m) is None
+        assert m.state["queue"] == []
+
+    @pytest.mark.parametrize("op", ["dequeue", "new_conversation", "clear", "agent_exit"])
+    async def test_the_wait_ends_with_the_conversation_or_on_request(self, open_chat, op):
+        m = await open_chat()
+        await m.command("prompt", text="usagelimit")
+        await m.until(lambda: self._wait(m) is not None and m.status == "ready")
+
+        if op == "agent_exit":
+            psutil.Process(m.session.pid).kill()
+            await m.until(lambda: m.status == "error" and self._wait(m) is None)
+        else:
+            if op == "clear":
+                op, fields = "prompt", {"text": "/clear"}
+            elif op == "dequeue":
+                fields = {"queue_id": self._wait(m)["queue_id"]}
+            else:
+                fields = {}
+            assert (await m.command(op, **fields))["ok"] is True
+            await m.until(lambda: m.status == "ready" and self._wait(m) is None)
+
+        assert m.state["queue"] == []
+        assert m.session._limit_task is None
+
+    @pytest.mark.parametrize("ends_by", ["dequeue", "send_now_in_agents_own_turn"])
+    async def test_a_message_queued_behind_the_continue_goes_out_without_it(
+        self, open_chat, ends_by
+    ):
+        """The continue holds the messages queued behind it. Removing it
+        sends them; so does Send now on one of them while the agent runs a
+        turn by itself, which starts that message as a prompt."""
+        m = await open_chat(hook_port=HOOK_PORT)
+        await m.command("prompt", text="usagelimit")
+        behind = await m.command("prompt", text="after")
+        await m.until(lambda: self._wait(m) is not None and m.status == "ready")
+        assert [q["text"] for q in m.state["queue"]] == [
+            session_mod.AUTO_CONTINUE_PROMPT,
+            "after",
+        ]
+
+        if ends_by == "dequeue":
+            assert (await m.command("dequeue", queue_id=self._wait(m)["queue_id"]))["ok"] is True
+        else:
+            m.session.on_claude_hook(
+                HookKind.PROMPT_SUBMIT, {"prompt_id": "p1", "prompt": TASK_NOTIFICATION}
+            )
+            await m.until(lambda: m.status == "running")
+            steered = await m.command("steer", queue_id=behind["data"]["queue_id"])
+            assert steered["data"] == {"steered": True}
+            assert self._wait(m) is None
+        await m.until(_turn_done(m, "You said: after"))
+
+        assert self._wait(m) is None
+        assert m.state["queue"] == []
+        assert m.session._limit_task is None
+        assert m.texts("user") == ["usagelimit", "after"]
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        ({"errorKind": "rate_limit", "rateLimit": {"rateLimitType": "five_hour", "resetsAt": 1_800_000_000}}, (1_800_000_000.0, "five_hour")),
+        ({"errorKind": "rate_limit", "rateLimit": {"resetsAt": 1_800_000_000_000}}, (1_800_000_000.0, None)),
+        ({"errorKind": "rate_limit", "rateLimit": {"resetsAt": True}}, None),
+        ({"errorKind": "rate_limit", "rateLimit": {"resetsAt": 0}}, None),
+        ({"errorKind": "overloaded", "rateLimit": {"resetsAt": 1_800_000_000}}, None),
+        (None, None),
+    ],
+    ids=["seconds", "milliseconds", "bool", "zero", "other-kind", "no-data"],
+)
+def test_usage_limit_reset_reads_the_adapter_error_data(data, expected):
+    exc = AcpRpcError(-32603, "You've hit your session limit", data)
+    assert session_mod._usage_limit_reset(exc) == expected
 
 
 class TestRequests:

@@ -393,6 +393,7 @@ function ChatView({ model, session, headerLabel, worktreeShared }: ChatViewProps
               queue={state.queue}
               live={live}
               canSteer={state.steering && state.status === 'running'}
+              limitWait={state.limit_wait}
             />
             <ConfigChips
               model={model}

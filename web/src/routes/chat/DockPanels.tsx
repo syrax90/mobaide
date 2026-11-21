@@ -1,6 +1,7 @@
 import { useId, useState } from 'react';
 import type { ChatResult, ChatSessionModel } from '../../chat/chatModel';
-import type { ChatPlanEntry, ChatQueued } from '../../chat/chatWire';
+import { formatClockTime } from '../../chat/chatFormat';
+import type { ChatLimitWait, ChatPlanEntry, ChatQueued } from '../../chat/chatWire';
 import { useToastStore } from '../../stores/toastStore';
 import { CheckIcon, ChevronIcon, CircleIcon, CrossIcon, SendIcon } from './ChatIcons';
 
@@ -70,12 +71,15 @@ export function QueueList({
   queue,
   live,
   canSteer,
+  limitWait = null,
 }: {
   model: ChatSessionModel;
   queue: readonly ChatQueued[];
   live: boolean;
   /** The agent takes a message during the running turn ("Send now"). */
   canSteer: boolean;
+  /** The queued continue that waits for a usage limit to reset. */
+  limitWait?: ChatLimitWait | null;
 }) {
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   if (queue.length === 0) return null;
@@ -92,7 +96,27 @@ export function QueueList({
   };
   return (
     <ul className="chat-queue" aria-label="Queued messages">
-      {queue.map((entry) => (
+      {queue.map((entry) =>
+        entry.id === limitWait?.queue_id ? (
+          <li key={entry.id} className="chat-queue-row">
+            <span className="chat-queue-label">Auto-continue</span>
+            <span className="chat-queue-text chat-queue-text-wrap">
+              {limitWaitText(limitWait.continues_at)}
+            </span>
+            <button
+              type="button"
+              className="chat-icon-button"
+              aria-label="Cancel automatic continue"
+              title="Cancel automatic continue"
+              disabled={!live || busy.has(entry.id)}
+              onClick={() => {
+                run(entry.id, model.dequeue(entry.id), 'Could not cancel the automatic continue');
+              }}
+            >
+              <CrossIcon />
+            </button>
+          </li>
+        ) : (
         <li key={entry.id} className="chat-queue-row">
           <span className="chat-queue-label">Queued</span>
           <span className="chat-queue-text">
@@ -125,7 +149,15 @@ export function QueueList({
             <CrossIcon />
           </button>
         </li>
-      ))}
+        ),
+      )}
     </ul>
   );
+}
+
+function limitWaitText(continuesAt: string): string {
+  const at = formatClockTime(continuesAt, Date.now());
+  return at === null
+    ? 'Usage limit reached. Continues automatically when it resets.'
+    : `Usage limit reached. Continues automatically at ${at}.`;
 }

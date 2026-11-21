@@ -278,6 +278,42 @@
         ]
       }
     },
+    {
+      "name": "events_limit_wait",
+      "frame": {
+        "t": "events",
+        "epoch": "9f3a1c2b7d4e",
+        "seq": 53,
+        "events": [
+          { "type": "state", "seq": 52, "patch": { "queue": [{ "id": "q:20", "text": "Continue from where you stopped. The usage limit has reset.", "images": 0 }] } },
+          {
+            "type": "state",
+            "seq": 53,
+            "patch": {
+              "limit_wait": {
+                "queue_id": "q:20",
+                "resets_at": "2026-11-07T17:00:00+00:00",
+                "continues_at": "2026-11-07T17:01:00+00:00",
+                "limit_type": "five_hour"
+              },
+              "status": "ready",
+              "turn_started_at": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "events_limit_wait_cleared",
+      "frame": {
+        "t": "events",
+        "epoch": "9f3a1c2b7d4e",
+        "seq": 54,
+        "events": [
+          { "type": "state", "seq": 54, "patch": { "queue": [], "limit_wait": null } }
+        ]
+      }
+    },
     { "name": "result_ok", "frame": { "t": "result", "id": "c-3", "ok": true, "data": { "queued": true, "queue_id": "q:14" } } },
     { "name": "result_error", "frame": { "t": "result", "id": "c-8", "ok": false, "error": "This request was already answered" } }
   ]

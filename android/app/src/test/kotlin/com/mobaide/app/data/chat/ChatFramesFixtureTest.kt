@@ -304,6 +304,37 @@ class ChatFramesFixtureTest {
     }
 
     @Test
+    fun limitWait_staysUntilAPatchClearsIt() {
+        val reducer = loaded().apply {
+            apply(batch())
+            apply(server("events_remove") as ChatFrame.Events)
+            apply(server("events_sign_in") as ChatFrame.Events)
+            apply(server("events_background_cleared") as ChatFrame.Events)
+        }
+
+        val reduction = reducer.apply(server("events_limit_wait") as ChatFrame.Events)
+
+        assertNull(reduction.sync)
+        val waiting = reducer.timeline!!
+        assertEquals(53L, waiting.seq)
+        assertEquals(
+            listOf(ChatQueuedMessage("q:20", "Continue from where you stopped. The usage limit has reset.", 0)),
+            waiting.state.queue,
+        )
+        assertEquals(
+            ChatLimitWait("q:20", "2026-11-07T17:00:00+00:00", "2026-11-07T17:01:00+00:00", "five_hour"),
+            waiting.state.limitWait,
+        )
+
+        reducer.apply(server("events_limit_wait_cleared") as ChatFrame.Events)
+
+        val cleared = reducer.timeline!!
+        assertEquals(54L, cleared.seq)
+        assertEquals(emptyList<ChatQueuedMessage>(), cleared.state.queue)
+        assertNull(cleared.state.limitWait)
+    }
+
+    @Test
     fun results_decode() {
         assertEquals(
             ChatFrame.Result(
