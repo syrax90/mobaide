@@ -43,12 +43,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -197,8 +194,11 @@ private fun androidx.compose.foundation.layout.ColumnScope.SignInBody(
         if (request.text.isNotBlank()) {
             Text(text = request.text, style = MaterialTheme.typography.bodyMedium)
         }
+        // Many methods scroll with the text, so a long list never pushes it out of view.
         if (!request.waiting && request.methods.size > 1) {
-            request.methods.forEach { method -> SignInMethodLine(method) }
+            request.methods.forEachIndexed { index, method ->
+                SignInMethodChoice(request, method, primary = index == 0, answering, enabled, onStart)
+            }
         }
         if (request.waiting && request.url != null) {
             PixelButton(
@@ -244,21 +244,8 @@ private fun androidx.compose.foundation.layout.ColumnScope.SignInBody(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (!request.waiting) {
-            request.methods.forEachIndexed { index, method ->
-                val key = ChatViewModel.signInStartKey(method.id)
-                PixelButton(
-                    onClick = { if (answering == null) onStart(request, method.id) },
-                    style = if (index == 0) PixelButtonStyle.Primary else PixelButtonStyle.Ghost,
-                    enabled = enabled && (answering == null || answering == key),
-                ) {
-                    if (answering == key) {
-                        PixelBlinkCursor(height = 14.dp, color = androidx.compose.material3.LocalContentColor.current)
-                        Spacer(modifier = Modifier.width(8.dp))
-                    }
-                    Text(if (request.methods.size == 1) "Sign in" else method.name)
-                }
-            }
+        if (!request.waiting && request.methods.size == 1) {
+            SignInMethodButton(request, request.methods.first(), primary = true, answering, enabled, onStart)
         }
         if (input != null) {
             val sending = request.busy || answering == ChatViewModel.SIGN_IN_SUBMIT
@@ -278,17 +265,47 @@ private fun androidx.compose.foundation.layout.ColumnScope.SignInBody(
 }
 
 @Composable
-private fun SignInMethodLine(method: ChatSignInMethod) {
-    Text(
-        text = buildAnnotatedString {
-            withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)) {
-                append(method.name)
-            }
-            if (method.description.isNotBlank()) append(" — ${method.description}")
-        },
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+private fun SignInMethodChoice(
+    request: ChatRequest.SignIn,
+    method: ChatSignInMethod,
+    primary: Boolean,
+    answering: String?,
+    enabled: Boolean,
+    onStart: (ChatRequest.SignIn, String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        SignInMethodButton(request, method, primary, answering, enabled, onStart)
+        if (method.description.isNotBlank()) {
+            Text(
+                text = method.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SignInMethodButton(
+    request: ChatRequest.SignIn,
+    method: ChatSignInMethod,
+    primary: Boolean,
+    answering: String?,
+    enabled: Boolean,
+    onStart: (ChatRequest.SignIn, String) -> Unit,
+) {
+    val key = ChatViewModel.signInStartKey(method.id)
+    PixelButton(
+        onClick = { if (answering == null) onStart(request, method.id) },
+        style = if (primary) PixelButtonStyle.Primary else PixelButtonStyle.Ghost,
+        enabled = enabled && (answering == null || answering == key),
+    ) {
+        if (answering == key) {
+            PixelBlinkCursor(height = 14.dp, color = androidx.compose.material3.LocalContentColor.current)
+            Spacer(modifier = Modifier.width(8.dp))
+        }
+        Text(if (request.methods.size == 1) "Sign in" else method.name)
+    }
 }
 
 @Composable

@@ -444,9 +444,11 @@ private struct ChatSignInBody: View {
                             .foregroundStyle(colors.text)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    // Many methods scroll with the text, so a long list
+                    // never pushes it out of view.
                     if !request.waiting, request.methods.count > 1 {
-                        ForEach(request.methods, id: \.id) { method in
-                            methodLine(method)
+                        ForEach(Array(request.methods.enumerated()), id: \.element.id) { index, method in
+                            methodChoice(method, primary: index == 0)
                         }
                     }
                 }
@@ -498,18 +500,16 @@ private struct ChatSignInBody: View {
         }
     }
 
-    private func methodLine(_ method: ChatPendingRequest.SignIn.Method) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(method.name)
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(colors.text)
+    private func methodChoice(_ method: ChatPendingRequest.SignIn.Method, primary: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            methodButton(method, primary: primary)
             if !method.description.isEmpty {
                 Text(method.description)
                     .font(.footnote)
                     .foregroundStyle(colors.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder
@@ -546,10 +546,8 @@ private struct ChatSignInBody: View {
 
     private var buttons: some View {
         VStack(spacing: 10) {
-            if !request.waiting {
-                ForEach(Array(request.methods.enumerated()), id: \.element.id) { index, method in
-                    methodButton(method, primary: index == 0)
-                }
+            if !request.waiting, request.methods.count == 1, let method = request.methods.first {
+                methodButton(method, primary: true)
             }
             if input != nil {
                 let sending = request.busy || answering == ChatSessionModel.signInSubmitKey

@@ -1635,6 +1635,36 @@ class TestPrompt:
 
         assert response["error"] == {"code": -32000, "message": "Authentication required"}
 
+    @pytest.mark.parametrize(
+        "error",
+        [
+            '401: {"message":"User not found.","code":401}',
+            'OpenAI API error (401): {"error":{"code":"invalid_api_key"}}',
+            '401 {"type":"error","error":{"type":"authentication_error"}}',
+            "[400] API key not valid. Please pass a valid API key.",
+        ],
+        ids=["openrouter", "openai", "anthropic", "gemini"],
+    )
+    async def test_a_saved_api_key_the_provider_refuses_needs_authentication(
+        self, bridge, work, error
+    ):
+        """Pi saves any key unchecked; the first turn is where a wrong key
+        shows, and the chat must offer the sign-in again."""
+        failed = _message_end([], stop="error", errorMessage=error)
+        client = await bridge(turns={"hello": {"events": [failed]}})
+        session_id = await client.new_session(work)
+
+        response = await client.turn(session_id, "hello")
+
+        assert response["error"] == {"code": -32000, "message": "Authentication required"}
+
+    @pytest.mark.parametrize(
+        "error",
+        ["Context has 401 messages: {too many}", "429 rate limit reached (401)"],
+    )
+    def test_a_401_that_is_not_the_status_is_not_a_sign_in(self, error):
+        assert pi_bridge.UNAUTHORIZED_ERROR.match(error) is None
+
     async def test_a_call_the_model_named_but_pi_never_ran_fails_with_the_turn(self, bridge, work):
         """The model request broke while it wrote the call: no result will
         follow, and the call must not stay pending in the chat."""

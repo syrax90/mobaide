@@ -43,7 +43,7 @@ from . import codex_bridge, pi_bridge
 from . import normalize as nz
 from .install import INSTALL_POOL, PROBE_POOL, AdapterInstaller, NpmAdapter
 from .presence import ConversationPresence, default_app_data_dir
-from .signin import SignInMethod
+from .signin import SignInMethod, run_secret_login
 from .wake import COPILOT_CLIENT_META, OPENCODE_CLIENT_META
 from .trust import (
     AntigravityFolderTrust,
@@ -153,10 +153,24 @@ PI_HINT = (
     "Pi is not installed on the PC. Install it from "
     "https://pi.dev/docs/latest/quickstart, then try again."
 )
-# Pi works with many model providers; the chat can sign in to two of them.
+# Pi works with many model providers; the chat can sign in to some of them.
 PI_SIGN_IN_PROMPT = (
-    "Pi has no model provider to use on your PC. Sign in to one here. For another "
-    "provider or an API key, run Pi on the PC and use /login there."
+    "Pi has no model provider it can use on your PC, or the provider refused its "
+    "key. Sign in to one here. For another provider, run Pi on the PC and use "
+    "/login there."
+)
+# (method id, Pi provider id, name, description) of the API keys the chat
+# can save for Pi. Pi does not check a key: the first message does.
+PI_KEY_PROVIDERS = (
+    ("openrouter-key", "openrouter", "OpenRouter API key", "API usage billing"),
+    ("google-key", "google", "Gemini API key", "Google AI Studio key"),
+    ("openai-key", "openai", "OpenAI API key", "API usage billing"),
+    (
+        "anthropic-key",
+        "anthropic",
+        "Anthropic API key",
+        "Replaces a Claude account login on this PC",
+    ),
 )
 # Test mode: while this file exists the fake agent is signed out, and its
 # fake login removes it.
@@ -337,6 +351,9 @@ CODEX_SIGN_IN_TEXT = (
     "The chat continues when you are done."
 )
 CODEX_KEY_TEXT = "Paste an OpenAI API key. Codex keeps it on your PC."
+PI_KEY_TEXT = (
+    "Paste your {name}. Pi keeps it on your PC. Your first message checks it."
+)
 AGY_SIGN_IN_TEXT = (
     "Open the sign-in page and sign in with Google. Then paste the code that the "
     "page shows, or the full address of the page you land on."
@@ -530,7 +547,9 @@ def pi_sign_in_methods(
     """``pi auth login <provider> --no-browser`` for the two account logins
     that need nothing but a browser on any device: ChatGPT prints a device
     page and a one-time code, Claude prints a sign-in page and reads the code
-    that page shows. Every other provider is set up in Pi itself."""
+    that page shows. ``pi auth login <provider> --api-key`` saves the API key
+    of a few common providers: Pi reads it at its own prompt, in a PTY. Every
+    other provider is set up in Pi itself."""
     if pi_bin is None and not fake:
         return []
     home = os.path.expanduser("~")
@@ -540,6 +559,24 @@ def pi_sign_in_methods(
             return [*fake_login_argv("pi"), *fake_args]
         return shim_safe_argv(pi_bin or "", "auth", "login", provider, "--no-browser")
 
+    def key_login(provider: str) -> Callable[[str], Any]:
+        if fake:
+            return _fake_key_login
+        return functools.partial(
+            pi_login_with_api_key, provider, pi_bin=pi_bin or "", env=dict(env)
+        )
+
+    keys = [
+        SignInMethod(
+            method_id,
+            name,
+            description,
+            PI_KEY_TEXT.format(name=name),
+            input_label=name,
+            submit_secret=key_login(provider),
+        )
+        for method_id, provider, name, description in PI_KEY_PROVIDERS
+    ]
     return [
         SignInMethod(
             "openai-codex",
@@ -561,7 +598,22 @@ def pi_sign_in_methods(
             cwd=home,
             reads_code=True,
         ),
+        *keys,
     ]
+
+
+async def pi_login_with_api_key(
+    provider: str, api_key: str, *, pi_bin: str, env: Mapping[str, str]
+) -> tuple[bool, str]:
+    """``pi auth login <provider> --api-key``: Pi refuses a pipe and reads the
+    key without echo at its prompt, so the key goes in through a PTY."""
+    return await run_secret_login(
+        shim_safe_argv(pi_bin, "auth", "login", provider, "--api-key"),
+        api_key,
+        env=dict(env),
+        cwd=os.path.expanduser("~"),
+        name="Pi",
+    )
 
 
 def _which_with_fallbacks(name: str) -> str | None:

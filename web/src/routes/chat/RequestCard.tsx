@@ -379,6 +379,23 @@ function SignInCard({
   const waiting = request.stage === 'waiting';
   const submitting = request.busy || pending === 'submit';
 
+  const methodButton = (method: SignInRequest['methods'][number], index: number, noteId?: string) => (
+    <button
+      key={method.id}
+      type="button"
+      className={index === 0 ? 'button button-primary' : 'button'}
+      aria-describedby={noteId}
+      disabled={busy}
+      aria-busy={pending === method.id}
+      onClick={() => {
+        run(method.id, () => model.startSignIn(method.id));
+      }}
+    >
+      {pending === method.id && <span className="chat-spinner" aria-hidden="true" />}
+      {request.methods.length === 1 ? 'Sign in' : method.name}
+    </button>
+  );
+
   return (
     <form
       className="chat-request"
@@ -398,14 +415,19 @@ function SignInCard({
         <p className="chat-request-title">{request.title}</p>
         {request.text !== '' && <p className="chat-signin-text">{request.text}</p>}
         {!waiting && request.methods.length > 1 && (
-          <ul className="chat-signin-methods">
-            {request.methods.map((method) => (
-              <li key={method.id}>
-                <strong>{method.name}</strong>
-                {method.description !== '' && ` — ${method.description}`}
-              </li>
+          // Many methods scroll with the text, so a long list never hides it.
+          <div className="chat-signin-choices">
+            {request.methods.map((method, index) => (
+              <div key={method.id} className="chat-signin-choice">
+                {methodButton(method, index, method.description === '' ? undefined : `${headingId}-${method.id}`)}
+                {method.description !== '' && (
+                  <span className="chat-signin-choice-note" id={`${headingId}-${method.id}`}>
+                    {method.description}
+                  </span>
+                )}
+              </div>
             ))}
-          </ul>
+          </div>
         )}
         {waiting && url !== null && (
           <a className="button button-primary chat-signin-open" href={url} target="_blank" rel="noopener noreferrer">
@@ -458,23 +480,7 @@ function SignInCard({
         )}
       </div>
       <div className="chat-request-actions">
-        {!waiting &&
-          request.methods.map((method, index) => (
-            <button
-              key={method.id}
-              type="button"
-              className={index === 0 ? 'button button-primary' : 'button'}
-              title={method.description === '' ? undefined : method.description}
-              disabled={busy}
-              aria-busy={pending === method.id}
-              onClick={() => {
-                run(method.id, () => model.startSignIn(method.id));
-              }}
-            >
-              {pending === method.id && <span className="chat-spinner" aria-hidden="true" />}
-              {request.methods.length === 1 ? 'Sign in' : method.name}
-            </button>
-          ))}
+        {!waiting && request.methods.length === 1 && request.methods[0] !== undefined && methodButton(request.methods[0], 0)}
         {waiting && request.input !== null && (
           <button
             type="submit"

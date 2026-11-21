@@ -4478,7 +4478,14 @@ class TestSignIn:
         m = await open_chat(**self._pi())
         await m.until(lambda: m.status == "error" and _sign_in(m) is not None)
         assert m.state["error"] == self.NOT_SIGNED_IN
-        assert [x["id"] for x in _sign_in(m)["methods"]] == ["openai-codex", "anthropic"]
+        assert [x["id"] for x in _sign_in(m)["methods"]] == [
+            "openai-codex",
+            "anthropic",
+            "openrouter-key",
+            "google-key",
+            "openai-key",
+            "anthropic-key",
+        ]
         assert _sign_in(m)["text"] == PI_SIGN_IN_PROMPT
 
         await m.command("sign_in", action="start", method="openai-codex")
