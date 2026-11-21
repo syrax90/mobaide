@@ -854,6 +854,11 @@
       },
       "ChatStoredSessionsResponse": {
         "properties": {
+          "can_delete": {
+            "default": false,
+            "title": "Can Delete",
+            "type": "boolean"
+          },
           "next_cursor": {
             "anyOf": [
               {
@@ -5799,6 +5804,66 @@
           }
         },
         "summary": "List Stored Chat Sessions",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/api/chat/{kind}/sessions/{session_id}": {
+      "delete": {
+        "description": "Delete a session the agent stored on this host (ACP ``session/delete``).\n\nThe agent decides how: Claude Code removes the conversation, Codex moves\nit to its archive. An id the agent no longer knows counts as deleted.",
+        "operationId": "delete_stored_chat_session_api_chat__kind__sessions__session_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "description": "Invalid session id"
+          },
+          "404": {
+            "description": "No chat agent of this kind"
+          },
+          "409": {
+            "description": "The agent cannot delete its sessions, or the session is open in a Mobaide chat or in another app on the PC"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "description": "The agent failed"
+          },
+          "503": {
+            "description": "The agent cannot run on this host"
+          }
+        },
+        "summary": "Delete Stored Chat Session",
         "tags": [
           "chat"
         ]

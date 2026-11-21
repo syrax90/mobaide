@@ -187,7 +187,9 @@ from mobaide.acp.wire import (
     FRAME_CHAT_COMMAND,
     LEGACY_CLIENT_NOTICE,
     is_chat_session,
+    delete_chat_session,
     list_chat_sessions,
+    match_chat_session_route,
     match_chat_sessions_route,
 )
 
@@ -883,7 +885,10 @@ class RelayClient:
             path = str(ctrl.get("path", ""))
             if path.startswith(_VOICE_PATH_PREFIX):
                 self._spawn_voice_proxy(ctrl)
-            elif match_chat_sessions_route(path) is not None:
+            elif (
+                match_chat_sessions_route(path) is not None
+                or match_chat_session_route(path) is not None
+            ):
                 self._spawn_chat_proxy(ctrl)
             elif (
                 path.startswith(_AUTOSCAN_GITHUB_PREFIX)
@@ -2714,8 +2719,8 @@ class RelayClient:
         await self._send_proxy_result(ctrl, result)
 
     def _spawn_chat_proxy(self, ctrl: dict) -> None:
-        """A stored-chat-sessions listing: its first call starts the agent
-        process, which takes seconds."""
+        """A stored-chat-sessions listing or delete: the first call starts
+        the agent process, which takes seconds."""
         self._spawn_aside(
             ctrl,
             self._chat_proxy_tasks,
@@ -2755,8 +2760,16 @@ class RelayClient:
         path = str(ctrl.get("path", ""))
         query = ctrl.get("query") or {}
         kind = match_chat_sessions_route(path)
+        stored = match_chat_session_route(path)
         try:
-            if method != "GET" or kind is None:
+            if method == "DELETE" and stored is not None:
+                status, body = await delete_chat_session(
+                    getattr(self._app_state, "chat_catalog", None),
+                    self._session_manager,
+                    *stored,
+                )
+                result = {"status": status, "body": body}
+            elif method != "GET" or kind is None:
                 result = {
                     "status": 405,
                     "body": {"detail": f"Unknown proxy route: {method} {path}"},

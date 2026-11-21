@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -86,6 +87,13 @@ class ChatStoredSessionsDtoFixtureTest {
     @Test
     fun aRowFromAnAgentWithoutTheField_isNotOpenElsewhere() {
         assertEquals(listOf(false, false), decode("page_with_open_session").sessions.map { it.open_elsewhere })
+    }
+
+    @Test
+    fun canDelete_isReadFromTheAgentAndFalseWhenAnOlderAgentLeavesItOut() {
+        assertTrue(decode("page_that_allows_delete").can_delete)
+        assertFalse(decode("row_open_in_another_app").can_delete)
+        assertFalse(decode("page_with_open_session").can_delete)
     }
 
     @Test

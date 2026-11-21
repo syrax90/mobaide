@@ -34,3 +34,20 @@ export async function listChatSessions(
   }
   return chatStoredSessionsResponseSchema.parse(data);
 }
+
+/**
+ * Delete a stored session on the PC (ACP `session/delete`). Call it only when
+ * the list said `can_delete`. The agent answers 409 for a session that is open
+ * in a Mobaide chat or in another app on the PC.
+ */
+export async function deleteChatSession(
+  agentId: string,
+  kind: string,
+  sessionId: string,
+): Promise<void> {
+  const { error, response } = await createAgentClient(agentId).DELETE(
+    '/api/chat/{kind}/sessions/{session_id}',
+    { params: { path: { kind, session_id: sessionId } } },
+  );
+  if (error !== undefined) throw toApiError(response, error);
+}

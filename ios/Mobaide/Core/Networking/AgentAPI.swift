@@ -78,6 +78,15 @@ struct AgentAPI: Sendable {
         )
     }
 
+    /// `DELETE /api/chat/{kind}/sessions/{sessionId}` — the agent deletes (or,
+    /// for Codex, archives) the stored conversation.
+    func deleteChatSession(kind: String, sessionId: String) async throws {
+        try await executeRaw(
+            method: "DELETE",
+            url: "\(try await base())/api/chat/\(Self.encodePathSegment(kind))/sessions/\(Self.encodePathSegment(sessionId))"
+        )
+    }
+
     func codexLogin(apiKey: String) async throws -> CodexLoginResponse {
         try await execute(method: "POST", url: "\(try await base())/api/codex/login", body: CodexLoginRequest(api_key: apiKey))
     }

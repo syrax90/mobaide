@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .catalog import ChatCatalog, ChatCatalogError
+from .catalog import OPEN_IN_MOBAIDE_DETAIL, ChatCatalog, ChatCatalogError
 
 FRAME_CHAT = b"a"
 FRAME_CHAT_COMMAND = b"c"
@@ -22,6 +22,8 @@ LEGACY_CLIENT_NOTICE = (
 )
 
 _CHAT_SESSIONS_ROUTE = re.compile(r"^/api/chat/([a-z0-9_]{1,32})/sessions$")
+# Any id reaches the shared validation, which answers 400 for a bad one.
+_CHAT_SESSION_ROUTE = re.compile(r"^/api/chat/([a-z0-9_]{1,32})/sessions/(.+)$", re.DOTALL)
 CHAT_RESUME_ID_PATTERN = r"^[A-Za-z0-9._:-]+$"
 CHAT_RESUME_ID_MAX = 200
 _CHAT_RESUME_ID = re.compile(CHAT_RESUME_ID_PATTERN)
@@ -55,6 +57,13 @@ def match_chat_sessions_route(path: str) -> str | None:
     return m.group(1) if m else None
 
 
+def match_chat_session_route(path: str) -> tuple[str, str] | None:
+    """The agent kind and stored session id of a
+    ``DELETE /api/chat/{kind}/sessions/{session_id}`` path."""
+    m = _CHAT_SESSION_ROUTE.match(path)
+    return (m.group(1), m.group(2)) if m else None
+
+
 async def list_chat_sessions(
     catalog: ChatCatalog | None,
     manager: Any,
@@ -81,3 +90,29 @@ async def list_chat_sessions(
             # The lock another app sees is this session's own.
             row["open_elsewhere"] = False
     return 200, page
+
+
+async def delete_chat_session(
+    catalog: ChatCatalog | None, manager: Any, kind: str, session_id: str
+) -> tuple[int, dict[str, Any] | None]:
+    """``DELETE /api/chat/{kind}/sessions/{session_id}`` for both transports.
+
+    A conversation that a Mobaide chat session shows is never deleted: the
+    agent leaves that case undefined, and the open chat would lose its
+    history.
+    """
+    if catalog is None:
+        return 404, {"detail": "Chat sessions are not available on this agent"}
+    if not session_id or not is_valid_chat_resume_id(session_id):
+        return 400, {"detail": "Invalid session id"}
+
+    def open_in_mobaide() -> bool:
+        return manager.find_chat_session(kind, session_id) is not None
+
+    if open_in_mobaide():
+        return 409, {"detail": OPEN_IN_MOBAIDE_DETAIL}
+    try:
+        await catalog.delete_session(kind, session_id, open_in_mobaide=open_in_mobaide)
+    except ChatCatalogError as exc:
+        return exc.status, {"detail": exc.detail}
+    return 204, None

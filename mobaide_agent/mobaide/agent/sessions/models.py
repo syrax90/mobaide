@@ -394,3 +394,6 @@ class ChatStoredSession(BaseModel):
 class ChatStoredSessionsResponse(BaseModel):
     sessions: list[ChatStoredSession]
     next_cursor: str | None = None
+    # The agent advertises ``session/delete``: rows that are not open
+    # anywhere can be deleted with ``DELETE /api/chat/{kind}/sessions/{id}``.
+    can_delete: bool = False

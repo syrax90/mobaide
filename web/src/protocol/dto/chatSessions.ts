@@ -1,5 +1,6 @@
 /**
  * `GET /api/chat/{kind}/sessions` — the sessions a chat agent stored on the PC,
+ * and whether `DELETE /api/chat/{kind}/sessions/{session_id}` may remove one;
  * pinned by `tests/protocol_fixtures/dto/agent/ChatStoredSessionsResponse.json`.
  */
 import { z } from 'zod';
@@ -19,6 +20,8 @@ export const chatStoredSessionSchema = z.looseObject({
 export const chatStoredSessionsResponseSchema = z.looseObject({
   sessions: z.array(chatStoredSessionSchema),
   next_cursor: optionalWireString(),
+  /** The agent can delete its stored sessions; missing (an older agent) means it cannot. */
+  can_delete: optionalWireBoolean(),
 });
 
 export type ChatStoredSession = z.infer<typeof chatStoredSessionSchema>;

@@ -418,6 +418,9 @@ fun CreateSessionScreen(
                 val openId = row.open_session_id
                 if (openId != null) onSessionCreated(openId) else viewModel.resumeChatSession(resumeKind, row)
             },
+            onDelete = chatResumeViewModel::askDelete,
+            onConfirmDelete = chatResumeViewModel::confirmDelete,
+            onDismissDelete = chatResumeViewModel::dismissDelete,
             onDismiss = { showResume = false },
         )
     }

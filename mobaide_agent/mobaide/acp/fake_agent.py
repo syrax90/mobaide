@@ -50,6 +50,10 @@ prompt text picks the scenario:
 * ``crash`` — the process exits;
 * anything else — a short echo with a thought.
 
+``session/delete`` (the Claude, Codex, OpenCode and Junie flavors) hides
+a stored session from later ``session/list`` answers of the same process;
+an unknown id gets ``-32002``.
+
 While the file named by ``MOBAIDE_FAKE_ACP_SIGNED_OUT`` exists the agent is
 signed out: the Claude flavor pushes ``_auth/status_update`` and fails each
 prompt, the others fail ``session/new``. ``fake_agent.py login [--flavor F]
@@ -166,6 +170,8 @@ PI_LEVELS = [
     for v, n in (("off", "Off"), ("low", "Low"), ("medium", "Medium"), ("high", "High"), ("xhigh", "Extra high"))
 ]
 SIGNED_OUT_ENV = "MOBAIDE_FAKE_ACP_SIGNED_OUT"
+# The stored sessions ``session/list`` returns (the Antigravity flavor adds one).
+STORED_SESSION_IDS = frozenset({"external-1111", "external-2222", "external-3333"})
 LIMIT_RESET_ENV = "MOBAIDE_FAKE_ACP_LIMIT_RESET"
 AUTH_REQUIRED = -32000
 
@@ -225,6 +231,8 @@ class FakeAgent:
         self.write_lock = threading.Lock()
         self.next_id = 1000
         self.pending: dict[int, asyncio.Future[Any]] = {}
+        # Stored sessions removed by ``session/delete`` (this process only).
+        self.deleted: set[str] = set()
         self.sessions: dict[str, dict[str, Any]] = {}
         self.cancelled: set[str] = set()
         self.turns: dict[str, asyncio.Task[Any]] = {}
@@ -551,7 +559,7 @@ class FakeAgent:
                 "agentCapabilities": {
                     "loadSession": True,
                     "promptCapabilities": {"image": True, "embeddedContext": True},
-                    "sessionCapabilities": {"list": {}, "close": {}, "resume": {}, "systemPrompt": {}},
+                    "sessionCapabilities": {"list": {}, "close": {}, "delete": {}, "resume": {}, "systemPrompt": {}},
                 },
                 "agentInfo": info,
                 "authMethods": [],
@@ -573,6 +581,12 @@ class FakeAgent:
                     {"sessionId": "external-1111", "cwd": params.get("cwd") or here, "title": "Refactor the login flow", "updatedAt": "2026-11-09T08:30:00Z"},
                 ]
             }
+        if method == "session/delete":
+            sid = str(params.get("sessionId"))
+            if sid not in STORED_SESSION_IDS or sid in self.deleted:
+                raise _RpcError(-32002, "Resource not found")
+            self.deleted.add(sid)
+            return {}
         if method == "session/list":
             cwd = params.get("cwd") or os.getcwd()
             now = datetime.now(UTC).isoformat()
@@ -581,12 +595,11 @@ class FakeAgent:
                 if self.codex
                 else ("Refactor the login flow", "Fix flaky upload test")
             )
-            return {
-                "sessions": [
-                    {"sessionId": "external-1111", "cwd": cwd, "title": titles[0], "updatedAt": now},
-                    {"sessionId": "external-2222", "cwd": cwd, "title": titles[1], "updatedAt": now},
-                ]
-            }
+            rows = [
+                {"sessionId": "external-1111", "cwd": cwd, "title": titles[0], "updatedAt": now},
+                {"sessionId": "external-2222", "cwd": cwd, "title": titles[1], "updatedAt": now},
+            ]
+            return {"sessions": [r for r in rows if r["sessionId"] not in self.deleted]}
         if method == "session/load":
             sid = params["sessionId"]
             self.new_session(params.get("cwd") or os.getcwd(), sid=sid, title="Earlier session")

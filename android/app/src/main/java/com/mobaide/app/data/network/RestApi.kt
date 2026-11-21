@@ -177,6 +177,18 @@ class RestApi(
         return executeCancellable(Request.Builder().url(url).get().build())
     }
 
+    /** `DELETE /api/chat/{kind}/sessions/{sessionId}`: the agent deletes (or, for Codex, archives) it. */
+    suspend fun deleteChatSession(kind: String, sessionId: String) {
+        val url = baseUrl().toHttpUrl().newBuilder()
+            .addPathSegment("api")
+            .addPathSegment("chat")
+            .addPathSegment(kind)
+            .addPathSegment("sessions")
+            .addPathSegment(sessionId)
+            .build()
+        executeRaw(Request.Builder().url(url).delete().build())
+    }
+
     /** Authenticate the host's Codex CLI with an OpenAI API key (stdin-piped,
      *  never persisted by app or agent). */
     suspend fun codexLogin(apiKey: String): CodexLoginResponse {

@@ -31,7 +31,10 @@
             "updated_at": "2026-11-07T11:58:00.000Z",
             "open_session_id": "a1b2c3d4e5f6"
           },
-          { "session_id": "0f4e2c1a-9b8d-4c7e-a6f5-112233445566", "cwd": "/home/user/proj" }
+          {
+            "session_id": "0f4e2c1a-9b8d-4c7e-a6f5-112233445566",
+            "cwd": "/home/user/proj"
+          }
         ],
         "next_cursor": "offset:50"
       }
@@ -57,7 +60,8 @@
             "open_elsewhere": false
           }
         ],
-        "next_cursor": null
+        "next_cursor": null,
+        "can_delete": false
       },
       "decoded_canonical": {
         "sessions": [
@@ -74,13 +78,48 @@
             "open_session_id": "a1b2c3d4e5f6",
             "open_elsewhere": false
           }
-        ]
+        ],
+        "can_delete": false
+      }
+    },
+    {
+      "name": "page_that_allows_delete",
+      "wire": {
+        "sessions": [
+          {
+            "session_id": "8d1a3e4f-9c6b-4a5d-9e0f-2a3b4c5d6e7f",
+            "cwd": "/home/user/proj",
+            "title": "Add retries to the sync job",
+            "updated_at": "2026-11-20T09:15:00.000Z",
+            "open_session_id": null,
+            "open_elsewhere": false
+          }
+        ],
+        "next_cursor": null,
+        "can_delete": true
+      },
+      "decoded_canonical": {
+        "sessions": [
+          {
+            "session_id": "8d1a3e4f-9c6b-4a5d-9e0f-2a3b4c5d6e7f",
+            "cwd": "/home/user/proj",
+            "title": "Add retries to the sync job",
+            "updated_at": "2026-11-20T09:15:00.000Z",
+            "open_elsewhere": false
+          }
+        ],
+        "can_delete": true
       }
     },
     {
       "name": "empty_last_page",
-      "wire": { "sessions": [], "next_cursor": null },
-      "decoded_canonical": { "sessions": [] }
+      "wire": {
+        "sessions": [],
+        "next_cursor": null
+      },
+      "decoded_canonical": {
+        "sessions": []
+      }
     }
   ]
 }

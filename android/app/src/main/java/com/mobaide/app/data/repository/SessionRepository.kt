@@ -94,6 +94,8 @@ class SessionRepository(
     suspend fun listChatSessions(kind: String, cwd: String?, cursor: String?): ChatStoredSessionsResponse =
         restApi.listChatSessions(kind, cwd, cursor)
 
+    suspend fun deleteChatSession(kind: String, sessionId: String) = restApi.deleteChatSession(kind, sessionId)
+
     /** One-shot Codex sign-in; the successful retry reconciles the session list
      *  via the existing `SessionsChanged` subscription above. */
     suspend fun codexLogin(apiKey: String): CodexLoginResponse = restApi.codexLogin(apiKey)
