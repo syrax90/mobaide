@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from mobaide.core.git_exec import CmdResult, run_git
+from mobaide.core.git_exec import NO_PROMPT_ENV, CmdResult, run_git
 from mobaide.linear.worktree import (
     BranchDeleteError,
     BranchInfo,
@@ -697,7 +697,7 @@ async def _push_remote_deletes(
     targets: list[tuple[int, GitDeleteItem]],
 ) -> list[tuple[int, GitDeleteResultItem]]:
     """Delete ``targets`` (all tracking ``remote``) with one ``git push``."""
-    from .changes_jobs import _JOB_ENV, classify_job_failure
+    from .changes_jobs import classify_job_failure
 
     # git pushes to every pushurl, else to every url, so any other destination (a fork)
     # would lose the branch too and still report `-`. Raw config values are compared, so
@@ -729,7 +729,7 @@ async def _push_remote_deletes(
         cwd=ctx.workspace_root,
         timeout=_REMOTE_DELETE_TIMEOUT,
         max_bytes=_STATUS_MAX_BYTES,
-        env_extra=_JOB_ENV,
+        env_extra=NO_PROMPT_ENV,
     )
     if result.timed_out:
         return done + [

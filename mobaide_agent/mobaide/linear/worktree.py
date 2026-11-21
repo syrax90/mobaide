@@ -4,18 +4,15 @@ import asyncio
 import hashlib
 import os
 import re
-import subprocess
-import sys
+import shutil
 import threading
+import time
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
+from typing import NoReturn
 
-# Suppress the transient ``git`` console window the Scheduled-Task-spawned
-# agent (no parent console under ``pythonw.exe``) would otherwise pop on
-# every worktree / branch listing call. ``CREATE_NO_WINDOW`` keeps
-# ``capture_output=True``'s stdio inheritance intact.
-_WINDOWS_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+from mobaide.core.git_exec import NO_PROMPT_ENV, git_binary, git_env, run_capped
 
 try:
     from mobaide.agent.logging import audit_event, get_logger, log_call
@@ -28,6 +25,20 @@ except Exception:  # pragma: no cover
     def audit_event(*args, **kwargs): pass
 
 logger = get_logger(__name__)
+
+# A local command (``worktree add`` on a large repo included) finishes well
+# inside _GIT_TIMEOUT. A fetch is best-effort and runs while the relay waits
+# for the create, so it gets a short bound that leaves room for the rest of
+# the create inside the central server's 30 s proxy budget.
+_GIT_TIMEOUT = 60.0
+_FETCH_TIMEOUT = 10.0
+_GIT_MAX_BYTES = 32 * 1024 * 1024
+_TIMEOUT_RC = 124
+# After a fetch times out, the same fetch in the same repo is skipped for a
+# while: creates queue on the repo lock, and each one waiting the full fetch
+# timeout again would push the later ones past the proxy budget.
+_FETCH_BACKOFF = 60.0
+_fetch_timed_out_at: dict[tuple[str, tuple[str, ...]], float] = {}
 
 
 @dataclass
@@ -161,33 +172,64 @@ async def create_standard_worktree(
 
 
 async def _run_git(
-    *args: str, cwd: str
+    *args: str, cwd: str, timeout: float = _GIT_TIMEOUT,
 ) -> tuple[int, str, str]:
     """Run a git command and return (returncode, stdout, stderr).
 
-    Uses ``asyncio.to_thread(subprocess.run, ...)`` rather than
-    ``asyncio.create_subprocess_exec``: the latter raises
-    ``NotImplementedError`` under ``WindowsSelectorEventLoop`` (the policy
-    the agent installs on Windows to work around python-websockets'
-    Proactor recv hangs — see ``mobaide.__main__.main`` for the rationale).
-    Wrapping the blocking ``subprocess.run`` in a thread keeps the
-    coroutine API unchanged for callers while staying loop-agnostic on
-    every platform.
+    Goes through :func:`mobaide.core.git_exec.run_capped`, which kills the
+    whole process tree on timeout (a stalled ``ssh`` or ``git-remote-https``
+    child would otherwise keep the pipes open), with the no-prompt
+    environment, so nothing waits on a sign-in dialog nobody sees. A timeout
+    returns ``_TIMEOUT_RC`` with a "timed out" stderr instead of raising.
     """
     if not os.path.isdir(cwd):
         return (1, "", f"Directory does not exist: {cwd}")
-    completed = await asyncio.to_thread(
-        subprocess.run,
-        ["git", *args],
-        cwd=cwd,
-        capture_output=True,
-        creationflags=_WINDOWS_NO_WINDOW,
-    )
-    return (
-        completed.returncode or 0,
-        completed.stdout.decode(errors="replace"),
-        completed.stderr.decode(errors="replace"),
-    )
+    binary = git_binary()
+    if binary is None:
+        return (127, "", "git is not installed or not on PATH")
+    try:
+        result = await asyncio.to_thread(
+            run_capped,
+            [binary, *args],
+            cwd=cwd,
+            timeout=timeout,
+            max_bytes=_GIT_MAX_BYTES,
+            env=git_env(NO_PROMPT_ENV),
+        )
+    except OSError as exc:
+        return (1, "", str(exc))
+    stdout = result.stdout.decode(errors="replace")
+    stderr = result.stderr.decode(errors="replace")
+    command = args[0] if args else "git"
+    if result.timed_out:
+        return (_TIMEOUT_RC, stdout, f"git {command} timed out after {timeout:.0f} s")
+    if result.truncated:
+        return (1, stdout, f"git {command} printed more than {_GIT_MAX_BYTES} bytes")
+    return (result.rc, stdout, stderr)
+
+
+async def _fetch(*args: str, cwd: str) -> None:
+    """Best-effort fetch: on failure or timeout the cached refs are used."""
+    key = (os.path.normcase(os.path.realpath(cwd)), tuple(a for a in args if a != "--"))
+    timed_out_at = _fetch_timed_out_at.get(key)
+    if timed_out_at is not None and time.monotonic() - timed_out_at < _FETCH_BACKOFF:
+        logger.info(
+            "worktree.fetch_skipped args=%s: timed out %.0f s ago",
+            " ".join(args), time.monotonic() - timed_out_at,
+        )
+        return
+    rc, _, stderr = await _run_git("fetch", *args, cwd=cwd, timeout=_FETCH_TIMEOUT)
+    if rc == _TIMEOUT_RC:
+        _fetch_timed_out_at[key] = time.monotonic()
+    else:
+        _fetch_timed_out_at.pop(key, None)
+    if rc == _TIMEOUT_RC:
+        logger.warning(
+            "worktree.fetch_timeout args=%s: branching from the last fetched state",
+            " ".join(args),
+        )
+    elif rc != 0:
+        logger.info("worktree.fetch_failed args=%s: %s", " ".join(args), stderr.strip())
 
 
 _TRACK_PATTERN = re.compile(r"\[(?:ahead (\d+))?(?:, )?(?:behind (\d+))?\]")
@@ -530,7 +572,7 @@ class WorktreeManager:
         remote = await self._remote_of(workspace_root, base_branch)
         if remote is None:
             return None
-        await _run_git("fetch", "--", remote, cwd=workspace_root)
+        await _fetch("--", remote, cwd=workspace_root)
         tracking = f"refs/remotes/{base_branch}"
         if await self._ref_resolves(workspace_root, tracking):
             return tracking
@@ -543,7 +585,7 @@ class WorktreeManager:
         back to ``HEAD`` so a worktree can still be created in a repo with
         no ``origin`` and no ``<main_branch>``.
         """
-        await _run_git("fetch", "origin", cwd=workspace_root)
+        await _fetch("origin", cwd=workspace_root)
         base = await self.default_base(workspace_root)
         if base is not None:
             return base
@@ -672,6 +714,9 @@ class WorktreeManager:
                     )
                 start_point = resolved
 
+            branch_existed = await self._ref_resolves(
+                workspace_root, f"refs/heads/{branch_name}",
+            )
             logger.info(
                 "Creating worktree at %s with branch %s from %s",
                 wt_dir,
@@ -692,6 +737,12 @@ class WorktreeManager:
                 )
                 return WorktreeResult(path=wt_dir, is_new=True, branch=branch_name)
 
+            if rc == _TIMEOUT_RC:
+                await self._discard_partial_worktree(
+                    workspace_root, wt_dir,
+                    created_branch=None if branch_existed else branch_name,
+                )
+                self._raise_create_failed(branch_name, wt_dir, stderr.strip())
             first_err = stderr.strip()
             logger.warning("Branch may already exist, retrying without -b: %s", first_err)
 
@@ -710,21 +761,37 @@ class WorktreeManager:
             )
             return WorktreeResult(path=wt_dir, is_new=True, branch=branch_name)
 
-        combined_stderr = stderr.strip() or first_err
-        logger.error(
-            "Failed to create worktree at %s: %s",
-            wt_dir, combined_stderr,
-        )
+        if rc == _TIMEOUT_RC:
+            await self._discard_partial_worktree(workspace_root, wt_dir, created_branch=None)
+        self._raise_create_failed(branch_name, wt_dir, stderr.strip() or first_err)
+
+    async def _discard_partial_worktree(
+        self, workspace_root: str, wt_dir: str, *, created_branch: str | None,
+    ) -> None:
+        """Undo a ``worktree add`` killed on timeout. SIGKILL skips git's own
+        cleanup, and a leftover ``wt_dir`` would be reused half checked out by
+        the next create. ``wt_dir`` did not exist before this create."""
+        # git marks a worktree it is still checking out as locked
+        # ("initializing"); a locked entry survives remove --force and prune.
+        await _run_git("worktree", "unlock", "--", wt_dir, cwd=workspace_root)
+        await _run_git("worktree", "remove", "--force", "--", wt_dir, cwd=workspace_root)
+        if os.path.exists(wt_dir):
+            await asyncio.to_thread(shutil.rmtree, wt_dir, ignore_errors=True)
+        await _run_git("worktree", "prune", cwd=workspace_root)
+        if created_branch is not None:
+            await _run_git("branch", "-D", created_branch, cwd=workspace_root)
+
+    @staticmethod
+    def _raise_create_failed(branch_name: str, wt_dir: str, stderr: str) -> NoReturn:
+        logger.error("Failed to create worktree at %s: %s", wt_dir, stderr)
         audit_event(
             "audit.worktree.create_failed",
             target=wt_dir,
             outcome="error",
             branch=branch_name,
-            error=combined_stderr,
+            error=stderr,
         )
-        raise WorktreeCreationError(
-            branch=branch_name, path=wt_dir, stderr=combined_stderr,
-        )
+        raise WorktreeCreationError(branch=branch_name, path=wt_dir, stderr=stderr)
 
     async def _find_branch_worktree(
         self, workspace_root: str, branch_name: str,
