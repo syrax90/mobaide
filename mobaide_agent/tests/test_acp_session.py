@@ -57,6 +57,7 @@ from mobaide.acp.install import AdapterInstallError
 from mobaide.acp.presence import ConversationPresence
 from mobaide.acp.rpc import AcpConnection
 from mobaide.acp.session import ChatSession
+from mobaide.acp.wake import COPILOT_CLIENT_META, OPENCODE_CLIENT_META
 from mobaide.core.attention_dedupe import SharedTurnDedupe, real_cwd
 from mobaide.core.attention_gate import AttentionGate, HookKind
 from mobaide.core.hook_settings import chat_hook_settings
@@ -5355,3 +5356,322 @@ class TestClaudeHooks:
         await m.until(_turn_done(m, "You said: hello"))
         assert m.session.to_info().attention == "turn_finished"
         assert gate_windows.pending == 0
+
+
+# Answers ``work`` at once. Then, as a finished background task would, it
+# wakes when the file argv[1] + ".wake" appears: a tool call that runs until
+# argv[1] + ".done" appears, then a closing message.
+WAKING_AGENT = r"""
+import json, os, sys, time
+base = sys.argv[1]
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+def update(body):
+    send({"method": "session/update", "params": {"sessionId": "woken", "update": body}})
+
+def wait_for(path):
+    while not os.path.exists(path):
+        time.sleep(0.02)
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg or "method" not in msg:
+        continue
+    method = msg["method"]
+    if method == "initialize":
+        send({"id": msg["id"], "result": {"protocolVersion": 1, "agentCapabilities": {}}})
+    elif method == "session/new":
+        send({"id": msg["id"], "result": {"sessionId": "woken"}})
+    elif method == "session/prompt":
+        update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Started"}})
+        send({"id": msg["id"], "result": {"stopReason": "end_turn"}})
+        wait_for(base + ".wake")
+        update({"sessionUpdate": "tool_call", "toolCallId": "w1", "title": "Check",
+                "kind": "execute", "status": "in_progress"})
+        wait_for(base + ".done")
+        update({"sessionUpdate": "tool_call_update", "toolCallId": "w1", "status": "completed"})
+        update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Done"}})
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+"""
+
+
+# WAKING_AGENT with Copilot's session events. On argv[1] + ".wake" it sends
+# ``assistant.turn_start`` only when argv[2] is "signalled", then a message;
+# on argv[1] + ".done" it sends ``session.idle``.
+COPILOT_WAKING_AGENT = r"""
+import json, os, sys, time
+base, flavor = sys.argv[1], sys.argv[2]
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+def update(body):
+    send({"method": "session/update", "params": {"sessionId": "woken", "update": body}})
+
+def event(kind):
+    send({"method": "github.com/copilot/sessionEvent",
+          "params": {"sessionId": "woken", "type": kind, "data": {}}})
+
+def wait_for(path):
+    while not os.path.exists(path):
+        time.sleep(0.02)
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg or "method" not in msg:
+        continue
+    method = msg["method"]
+    if method == "initialize":
+        send({"id": msg["id"], "result": {"protocolVersion": 1, "agentCapabilities": {}}})
+    elif method == "session/new":
+        send({"id": msg["id"], "result": {"sessionId": "woken"}})
+    elif method == "session/prompt":
+        event("assistant.turn_start")
+        update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Started"}})
+        event("assistant.idle")
+        event("session.idle")
+        send({"id": msg["id"], "result": {"stopReason": "end_turn"}})
+        wait_for(base + ".wake")
+        if flavor == "signalled":
+            event("assistant.turn_start")
+        update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Woke"}})
+        wait_for(base + ".done")
+        event("assistant.idle")
+        event("session.idle")
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+"""
+
+
+class WakeWindows(GateWindows):
+    """The quiet windows that end a turn the agent woke for by itself. One
+    elapses only on ``elapse()``; every other timer runs as usual."""
+
+    def call_later(self, delay: float, callback: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        if getattr(callback, "__func__", None) is not ChatSession._on_wake_quiet:
+            return self._call_later(delay, callback, *args, **kwargs)
+        window = _GateWindow(callback)
+        self._windows.append(window)
+        return window
+
+
+@pytest.fixture
+async def wake_windows(monkeypatch) -> WakeWindows:
+    loop = asyncio.get_running_loop()
+    windows = WakeWindows(loop.call_later)
+    monkeypatch.setattr(loop, "call_later", windows.call_later)
+    # The fake agent's work ends this long after the answer; no grace after
+    # the answer, so the test need not wait it out.
+    monkeypatch.setenv("MOBAIDE_FAKE_ACP_WAKE_DELAY", "0.3")
+    monkeypatch.setattr(session_mod, "WAKE_GRACE_SECONDS", 0.0)
+    return windows
+
+
+def _says(m: TimelineMirror, text: str) -> bool:
+    return any(text in said for said in m.texts("agent"))
+
+
+class TestWakeAfterTurn:
+    """OpenCode, Copilot and Antigravity run no hooks, but finished
+    background work wakes them after the prompt's answer. The chat shows that
+    work and alerts at its real end, not at the answer."""
+
+    async def _woken(self, m: TimelineMirror, prompt: str, answer: str) -> None:
+        """The answer of ``prompt``, then the turn the agent wakes for."""
+        await m.command("prompt", text=prompt)
+        await m.until(lambda: m.status == "ready" and _says(m, answer))
+        await m.until(lambda: m.status == "running")
+
+    async def test_a_turn_the_agent_wakes_for_runs_until_its_quiet_window_and_alerts(
+        self, open_chat, wake_windows
+    ):
+        m = await open_chat(argv=fake_agent_argv("antigravity"), wakes_after_turn=True)
+        await self._woken(m, "background", "I started the tests in the background.")
+
+        assert m.state["turn_started_at"] is not None
+        assert m.session.to_info().attention is None
+        await m.until(lambda: _says(m, "The background tests passed."))
+        assert m.status == "running"
+
+        assert wake_windows.elapse() == 1
+        await m.until(lambda: m.status == "ready")
+
+        assert m.session.to_info().attention == "turn_finished"
+        # One alert at the answer (no work was known then), one at the real end.
+        await m.until(lambda: m.attention.count("turn_finished") == 2)
+
+    async def test_an_agent_that_does_not_wake_after_a_turn_shows_no_turn_of_its_own(
+        self, open_chat, wake_windows
+    ):
+        """Every other agent keeps the behaviour it had."""
+        m = await open_chat(argv=fake_agent_argv("antigravity"))
+        await m.command("prompt", text="background")
+        await m.until(lambda: m.status == "ready" and _says(m, "The background tests passed."))
+
+        assert m.state["turn_started_at"] is None
+        assert wake_windows.pending == 0
+        statuses = [
+            ev["patch"]["status"]
+            for frame in m.frames
+            if frame["t"] == "events"
+            for ev in frame["events"]
+            if ev["type"] == "state" and "status" in ev["patch"]
+        ]
+        # Only the prompt the user sent ran.
+        assert statuses.count("running") == 1
+
+    async def test_a_tool_still_running_keeps_the_woken_turn_open(
+        self, open_chat, wake_windows, tmp_path
+    ):
+        base = tmp_path / "agent"
+        m = await open_chat(argv=[sys.executable, "-c", WAKING_AGENT, str(base)], wakes_after_turn=True)
+        await m.command("prompt", text="work")
+        await m.until(lambda: m.status == "ready" and _says(m, "Started"))
+        (tmp_path / "agent.wake").touch()
+        await m.until(lambda: m.status == "running" and "w1" in m.items)
+
+        assert wake_windows.elapse() == 1
+
+        assert m.status == "running"
+        assert wake_windows.pending == 1
+        (tmp_path / "agent.done").touch()
+        await m.until(lambda: _says(m, "Done") and m.items["w1"]["status"] == "completed")
+        assert wake_windows.elapse() == 1
+        await m.until(lambda: m.status == "ready")
+        assert m.session.to_info().attention == "turn_finished"
+
+    async def test_stop_ends_a_woken_turn_with_no_alert(self, open_chat, wake_windows, tmp_path):
+        base = tmp_path / "agent"
+        m = await open_chat(argv=[sys.executable, "-c", WAKING_AGENT, str(base)], wakes_after_turn=True)
+        await m.command("prompt", text="work")
+        await m.until(lambda: m.status == "ready" and _says(m, "Started"))
+        (tmp_path / "agent.wake").touch()
+        await m.until(lambda: m.status == "running" and "w1" in m.items)
+
+        cancelled = await m.command("cancel")
+        await m.until(lambda: m.status == "ready")
+
+        assert cancelled["data"] == {"cancelled": True}
+        assert m.items["w1"]["status"] == "cancelled"
+        assert m.session.to_info().attention is None
+        assert wake_windows.pending == 0
+
+    async def test_opencode_subagents_show_as_background_work_and_hold_the_alert(
+        self, open_chat, wake_windows
+    ):
+        m = await open_chat(
+            argv=fake_agent_argv("opencode"),
+            wakes_after_turn=True,
+            client_meta=OPENCODE_CLIENT_META,
+        )
+        await m.command("prompt", text="background")
+        await m.until(
+            lambda: m.status == "ready" and _says(m, "I started a subagent to explore the code.")
+        )
+
+        assert m.state["background"] == "working"
+        info = m.session.to_info()
+        assert (info.activity, info.attention) == ("working", None)
+        child_tools = [t for t in m.of_type("tool") if t["id"].startswith("ses_child")]
+        assert [t["title"] for t in child_tools] == ["Explore: Read app.py"]
+        assert not _says(m, "child text")
+
+        # The subagent ends and the parent wakes to report its result.
+        await m.until(lambda: m.status == "running")
+        await m.until(lambda: _says(m, "The subagent finished: the code looks fine."))
+        assert m.state["background"] is None
+        assert wake_windows.elapse() == 1
+        await m.until(lambda: m.status == "ready")
+
+        assert m.session.to_info().attention == "turn_finished"
+        await m.until(lambda: "turn_finished" in m.attention)
+        assert m.attention.count("turn_finished") == 1
+
+    async def test_a_copilot_turn_that_waits_on_its_async_shell_reads_background_task(
+        self, open_chat, wake_windows
+    ):
+        m = await open_chat(
+            argv=fake_agent_argv("copilot"),
+            wakes_after_turn=True,
+            client_meta=COPILOT_CLIENT_META,
+        )
+        await m.command("prompt", text="background")
+        await m.until(lambda: m.state.get("background") == "waiting")
+
+        assert m.status == "running"
+        assert m.session.to_info().activity == "waiting"
+
+        await m.until(lambda: m.status == "ready" and _says(m, "The background tests passed."))
+        assert m.state["background"] is None
+        assert m.session.to_info().attention == "turn_finished"
+        assert wake_windows.pending == 0
+
+    async def test_copilot_session_idle_ends_a_woken_turn_with_no_quiet_window(
+        self, open_chat, wake_windows
+    ):
+        m = await open_chat(
+            argv=fake_agent_argv("copilot"),
+            wakes_after_turn=True,
+            client_meta=COPILOT_CLIENT_META,
+        )
+        await self._woken(m, "detached", "I started the tests in the background.")
+
+        await m.until(lambda: m.status == "ready" and _says(m, "The background tests passed."))
+
+        assert m.session.to_info().attention == "turn_finished"
+        assert wake_windows.pending == 0
+        await m.until(lambda: m.attention.count("turn_finished") == 2)
+
+    async def test_a_woken_turn_whose_tool_runs_on_ends_after_the_silent_limit(
+        self, open_chat, wake_windows, tmp_path, monkeypatch
+    ):
+        """A dev server or a watcher never completes: the turn must not hold
+        the chat for good."""
+        monkeypatch.setattr(session_mod, "WAKE_MAX_SILENT_SECONDS", 0.0)
+        base = tmp_path / "agent"
+        m = await open_chat(argv=[sys.executable, "-c", WAKING_AGENT, str(base)], wakes_after_turn=True)
+        await m.command("prompt", text="work")
+        await m.until(lambda: m.status == "ready" and _says(m, "Started"))
+        (tmp_path / "agent.wake").touch()
+        await m.until(lambda: m.status == "running" and "w1" in m.items)
+
+        assert wake_windows.elapse() == 1
+        await m.until(lambda: m.status == "ready")
+
+        assert m.items["w1"]["status"] == "in_progress"
+        assert m.session.to_info().attention == "turn_finished"
+        assert wake_windows.pending == 0
+
+    @pytest.mark.parametrize("flavor", ["signalled", "unsignalled"])
+    async def test_a_copilot_woken_turn_ends_at_session_idle_only_when_turn_start_opened_it(
+        self, open_chat, wake_windows, tmp_path, flavor
+    ):
+        """With ``assistant.turn_start`` the model may think quietly past the
+        quiet window, as ``session.idle`` ends the turn. Without it the
+        quiet window ends the turn."""
+        base = tmp_path / "agent"
+        m = await open_chat(
+            argv=[sys.executable, "-c", COPILOT_WAKING_AGENT, str(base), flavor],
+            wakes_after_turn=True,
+            client_meta=COPILOT_CLIENT_META,
+        )
+        await m.command("prompt", text="work")
+        await m.until(lambda: m.status == "ready" and _says(m, "Started"))
+        (tmp_path / "agent.wake").touch()
+        await m.until(lambda: m.status == "running" and _says(m, "Woke"))
+
+        assert wake_windows.elapse() == 1
+
+        if flavor == "signalled":
+            assert m.status == "running"
+            assert m.session.to_info().attention is None
+            assert wake_windows.pending == 1
+            (tmp_path / "agent.done").touch()
+        await m.until(lambda: m.status == "ready")
+        assert m.session.to_info().attention == "turn_finished"
+        assert wake_windows.pending == 0

@@ -610,8 +610,10 @@ enum ChatStatusLine {
         if model.state.cancelling { return ("Stopping…", nil) }
         switch model.phase {
         case .running:
-            guard let now, let started = model.state.turnStartedAt.flatMap(ChatDates.parse) else { return ("Working", nil) }
-            return ("Working · \(elapsed(max(0, now.timeIntervalSince(started))))", nil)
+            // The turn waits only on background work it started (a Copilot async shell).
+            let label = model.state.background == .waiting ? "Background task" : "Working"
+            guard let now, let started = model.state.turnStartedAt.flatMap(ChatDates.parse) else { return (label, nil) }
+            return ("\(label) · \(elapsed(max(0, now.timeIntervalSince(started))))", nil)
         case .error: return ("Stopped", .danger)
         case .stopped: return ("Session closed", nil)
         default: break

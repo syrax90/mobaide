@@ -88,9 +88,15 @@ A Settings toggle chooses between two modes:
 
 Run and switch between up to 32 concurrent sessions on one agent. 32 is the default `max_sessions`, which is configurable.
 
-A running session that is mid-turn shows an animated accent square and a "Working" chip in the session list and sessions panel. A muted "Background" chip shows while the main agent is parked and only passive background work runs (a background shell, a monitor, a scheduled wakeup). "Needs permission" outranks both, and they outrank "Ready". The agent reports this as the session's `activity` (`working`, `waiting` or `idle`) for Claude and Auto Scan terminal sessions and for Claude chat sessions, and `working` or `idle` for the other chat sessions. Codex, Antigravity, OpenCode, GitHub Copilot, Cursor terminal, Pi, Terminal and custom terminal sessions show no Working state. In a Claude terminal session, interrupting a turn with Esc or Ctrl+C clears "Working" within a second, with no alert. An Esc that only closes a menu or clears the input changes nothing.
+A running session that is mid-turn shows an animated accent square and a "Working" chip in the session list and sessions panel. A muted "Background" chip shows while the main agent is parked and only passive background work runs (a background shell, a monitor, a scheduled wakeup). "Needs permission" outranks both, and they outrank "Ready". The agent reports this as the session's `activity` (`working`, `waiting` or `idle`) for Claude and Auto Scan terminal sessions and for Claude, OpenCode, GitHub Copilot and Antigravity chat sessions, and `working` or `idle` for the other chat sessions. Codex, Antigravity, OpenCode, GitHub Copilot, Cursor terminal, Pi, Terminal and custom terminal sessions show no Working state. In a Claude terminal session, interrupting a turn with Esc or Ctrl+C clears "Working" within a second, with no alert. An Esc that only closes a menu or clears the input changes nothing.
 
 In a Claude chat, a turn can end while work it started still runs. The chat header then shows "Working in background" (a workflow or a sub-agent) or "Background task" (only a background shell, a monitor or a scheduled wakeup) in place of "Ready". You can still send a message. "Ready" comes back when that work ends. Wire details: the chat state key `background` in PROTOCOL.md.
+
+OpenCode, GitHub Copilot and Antigravity chats follow background work too, from each agent's own signal:
+
+- **OpenCode 2.3+.** While a background subagent runs, the header shows "Working in background". Its tool calls show in the chat, with the subagent's name before the title.
+- **GitHub Copilot.** While the reply is done but an attached background shell still holds the prompt, the header shows "Background task" with the elapsed time. Messages you send wait in the queue until the prompt ends.
+- **All three.** When finished background work (a subagent, a shell) wakes the agent after its answer, the chat shows that turn as running. You can stop it, and messages you send wait for it. Copilot reports the end of such a turn. For OpenCode and Antigravity, the turn ends after 20 s with no new output and no tool still running. After 10 minutes with no new output it ends even with a tool still running.
 
 ## Managed CLI agents
 
@@ -401,6 +407,7 @@ The apps raise a notification whenever an agent session needs attention. This co
     - "Ready" comes 2 s after the turn ends, and only when no background work is left (a workflow, a sub-agent, a shell).
     - A turn that Claude starts by itself (after a background task ends) shows as running in the chat. You can stop it, and **Send now** puts a queued message into it.
     - Without hooks (an old CLI, a policy that blocks them), the turn result raises the reason, as for the other chat sessions.
+  - OpenCode, GitHub Copilot and Antigravity chat sessions: the turn result raises the reason, and a turn the agent starts by itself after a background task ends raises `turn_finished` at its own end. In OpenCode, `turn_finished` waits until no background subagent runs: the parent wakes when they end, and that turn alerts. Stopping such a turn raises nothing.
   - Other chat sessions: the agent raises the reason from the turn result. An RPC error on your own prompt gives `turn_failed`.
   - Codex, Antigravity, OpenCode, GitHub Copilot, Pi, Terminal and custom terminal sessions: the CLI writes OSC 7501 program-status reports. The agent maps them to reasons after a 1.5 s quiet window, and one session alerts at most every 5 s.
   - Cursor terminal sessions raise no "your turn" alert and show no activity state, because Cursor's terminal UI does not report its state. Cursor chat sessions raise the alerts.

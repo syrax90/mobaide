@@ -37,7 +37,9 @@ fun chatStatusLine(live: Boolean, state: ChatState, nowMs: Long): ChatStatusLine
     state.cancelling -> ChatStatusLine("Stopping…", ChatStatusTone.Muted)
     state.status == ChatStatus.RUNNING -> {
         val elapsed = parseIsoMillis(state.turnStartedAt)?.let { formatElapsed(nowMs - it) }
-        ChatStatusLine(if (elapsed != null) "Working · $elapsed" else "Working", ChatStatusTone.Muted)
+        // The turn waits only on background work it started (a Copilot async shell).
+        val label = if (state.background == ChatBackgroundWork.WAITING) "Background task" else "Working"
+        ChatStatusLine(if (elapsed != null) "$label · $elapsed" else label, ChatStatusTone.Muted)
     }
     state.status == ChatStatus.ERROR -> ChatStatusLine("Stopped", ChatStatusTone.Danger)
     state.status == ChatStatus.STOPPED -> ChatStatusLine("Session closed", ChatStatusTone.Muted)

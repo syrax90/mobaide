@@ -37,6 +37,7 @@ from mobaide.core.models import (
 
 from . import cursor_ext as cx
 from . import normalize as nz
+from . import wake as wk
 from .agents import ChatLaunchPlan, ConfigIntent
 from .install import INSTALL_POOL, PROBE_POOL, AdapterInstallError
 from .presence import PresenceHold
@@ -95,6 +96,16 @@ _TURN_HOOKS = frozenset(
 # way, which would start the next turn a moment later. Shorter than a terminal
 # session's window: the chat row shows "working" until it ends.
 CHAT_ATTENTION_QUIET_SECONDS = 2.0
+# An agent with no hooks (see ``ChatLaunchPlan.wakes_after_turn``): a turn it
+# started by itself ends after this long with no content update. Long, as a
+# woken model can think quietly for a while: a late alert beats a missed one.
+WAKE_QUIET_SECONDS = 20.0
+# Content updates this soon after a prompt's answer still belong to that turn.
+WAKE_GRACE_SECONDS = 1.0
+# A self turn with no content update for this long ends even while one of its
+# tools still runs (a dev server, a watcher) or Copilot sent no end: it must
+# not hold the queue for good.
+WAKE_MAX_SILENT_SECONDS = 600.0
 
 CLIENT_CAPABILITIES: dict[str, Any] = {
     "session": {
@@ -193,6 +204,30 @@ class ChatSession:
         self._hooks_live = False
         # What the gate last reported, while hooks are live.
         self._gate_activity: str | None = None
+        # An agent with no hooks that finished background work can wake after
+        # a prompt's answer: the turns it then runs, and the work in flight.
+        self._wakes = plan.wakes_after_turn and self._gate is None
+        # Ends a self turn after its quiet window, or sends the alert held for
+        # background work once that work ended and no woken turn followed.
+        self._wake_timer: asyncio.TimerHandle | None = None
+        self._wake_grace_until = 0.0
+        # The last content update of the self turn that runs now.
+        self._wake_last_update = 0.0
+        # Copilot's ``assistant.turn_start`` opened the self turn that runs
+        # now, so its ``session.idle`` will end it.
+        self._wake_turn_signalled = False
+        # Tool calls updated during the self turn that runs now: one still
+        # running keeps the turn open.
+        self._wake_tools: set[str] = set()
+        # OpenCode subagents in flight: child session id → title.
+        self._children: dict[str, str | None] = {}
+        # A finished turn's "turn finished" alert waits for those subagents.
+        self._alert_held = False
+        # Copilot sends its session events: they start and end self turns.
+        self._copilot_events = False
+        # Copilot: the foreground settled, but attached background work (an
+        # async shell) still holds the prompt, or the self turn, open.
+        self._foreground_idle = False
         # The last ``Stop`` hook of the prompt that runs now. The gate gets it
         # at the prompt's answer: only the answer ends a turn this session sent
         # (a ``Stop`` hook can force the turn to continue), so no "turn
@@ -429,6 +464,7 @@ class ChatSession:
         self._stopping = True
         self._state = SessionState.STOPPING
         self._disarm_cancel_watchdog()
+        self._cancel_wake_timer()
         if self._plan.shared_host:
             await self._stop_own_turn()
         for task in (self._bootstrap_task, self._turn_task, *self._command_tasks):
@@ -1077,6 +1113,11 @@ class ChatSession:
             # The quiet window of the turn before must not alert during this
             # one: its UserPromptSubmit hook comes a moment after the prompt.
             self._gate.cancel()
+        # This turn alerts at its own end.
+        self._cancel_wake_timer()
+        self._wake_tools.clear()
+        self._alert_held = False
+        self._foreground_idle = False
         self._timeline.patch_state(
             status="running", turn_started_at=_now_iso(), cancelling=False, urgent=True
         )
@@ -1172,6 +1213,8 @@ class ChatSession:
             self._disarm_cancel_watchdog()
             self._close_streaming_items()
             self._resolve_all_requests_cancelled()
+            self._foreground_idle = False
+            self._wake_grace_until = time.monotonic() + WAKE_GRACE_SECONDS
         if reload:
             # Not ready until the reload: a prompt meanwhile must only queue,
             # never start on the process that is closing.
@@ -1247,7 +1290,9 @@ class ChatSession:
                 self._set_attention("turn_failed")
             elif failed or stop_reason in (None, "cancelled"):
                 self._settle_gate()
-            elif self._gate is None or not self._hooks_live:
+            elif self._gate is None:
+                self._alert_turn_done()
+            elif not self._hooks_live:
                 self._set_attention("turn_finished")
             elif self._turn_stop is not None:
                 # The Stop hook listed what the turn left behind: the gate
@@ -1285,6 +1330,7 @@ class ChatSession:
                 # own (no Stop hook, no prompt answer), so it ends here.
                 self._mark_running_tools("cancelled")
                 self._settle_gate()
+                self._drop_wake_turn()
                 self._on_agent_busy(False)
             else:
                 self._timeline.patch_state(cancelling=True, urgent=True)
@@ -1846,6 +1892,12 @@ class ChatSession:
             # Cursor documents it as a notification; today it is a request.
             self._timeline.patch_state(plan=self._todos.apply(params))
             return
+        if wk.method_is(method, wk.OPENCODE_CHILD_UPDATE):
+            self._on_child_update(params)
+            return
+        if wk.method_is(method, wk.COPILOT_SESSION_EVENT):
+            self._on_copilot_event(params)
+            return
         if method != "session/update" or not isinstance(params, dict):
             return
         sid = params.get("sessionId")
@@ -1853,6 +1905,7 @@ class ChatSession:
             return
         update = params.get("update")
         if isinstance(update, dict):
+            self._note_wake_update(update)
             self._apply_update(update)
 
     def _apply_update(self, update: dict[str, Any]) -> None:
@@ -1962,6 +2015,193 @@ class ChatSession:
                 return
             if self._queue:
                 self._start_next_prompt()
+
+    def _in_self_turn(self) -> bool:
+        return self._external_turn and self._self_turn and not self._own_turn_running()
+
+    def _note_wake_update(self, update: dict[str, Any]) -> None:
+        """A content update while no turn runs: the agent woke by itself
+        (a finished background task), so the chat shows a turn of its own,
+        which the user can stop and which alerts at its end."""
+        if not self._wakes or update.get("sessionUpdate") not in wk.CONTENT_UPDATES:
+            return
+        if not self._in_self_turn():
+            if time.monotonic() < self._wake_grace_until or not self._start_self_turn():
+                return
+        tool_id = update.get("toolCallId")
+        if isinstance(tool_id, str) and tool_id:
+            self._wake_tools.add(tool_id)
+        self._wake_last_update = time.monotonic()
+        self._arm_wake_timer()
+
+    def _start_self_turn(self) -> bool:
+        if (
+            not self._ready.is_set()
+            or self._stopping
+            or self._own_turn_running()
+            or self._external_turn
+            or self._timeline.state.get("status") != "ready"
+        ):
+            # Not while the session opens or replays (``loading``), and
+            # never over a turn that already runs.
+            return False
+        if self._attention in ("turn_finished", "turn_failed"):
+            # The agent works again, and this turn alerts at its own end.
+            self._clear_attention()
+        self._cancel_wake_timer()
+        self._wake_tools.clear()
+        self._wake_last_update = time.monotonic()
+        self._wake_turn_signalled = False
+        self._on_agent_busy(True, self_started=True)
+        return True
+
+    def _end_self_turn(self) -> None:
+        self._cancel_wake_timer()
+        self._wake_tools.clear()
+        self._foreground_idle = False
+        # The next queued message starts now and reports its own end.
+        queued = any(not q.steering for q in self._queue)
+        self._on_agent_busy(False)
+        if not queued and self._timeline.state.get("status") == "ready":
+            self._alert_turn_done()
+
+    def _drop_wake_turn(self) -> None:
+        """The user stopped the self turn: it ends with no alert, and its
+        trailing updates must not start another one."""
+        self._cancel_wake_timer()
+        self._wake_tools.clear()
+        self._alert_held = False
+        self._foreground_idle = False
+        self._wake_grace_until = time.monotonic() + WAKE_GRACE_SECONDS
+
+    def _alert_turn_done(self) -> None:
+        if self._children:
+            # The parent wakes when its subagents end: that turn alerts.
+            self._alert_held = True
+            return
+        self._alert_held = False
+        self._set_attention("turn_finished")
+
+    def _arm_wake_timer(self) -> None:
+        delay = WAKE_QUIET_SECONDS
+        if self._wake_turn_signalled and self._in_self_turn():
+            # ``session.idle`` ends it: a long silent model turn stays open.
+            delay = WAKE_MAX_SILENT_SECONDS
+        self._cancel_wake_timer()
+        self._wake_timer = asyncio.get_running_loop().call_later(delay, self._on_wake_quiet)
+
+    def _cancel_wake_timer(self) -> None:
+        if self._wake_timer is not None:
+            self._wake_timer.cancel()
+            self._wake_timer = None
+
+    def _on_wake_quiet(self) -> None:
+        self._wake_timer = None
+        if self._stopping:
+            return
+        if self._in_self_turn():
+            silent = time.monotonic() - self._wake_last_update >= WAKE_MAX_SILENT_SECONDS
+            busy = self._wake_tool_running() or (
+                self._wake_turn_signalled and self._copilot_events
+            )
+            if self._requests or (busy and not silent):
+                self._arm_wake_timer()
+            else:
+                self._end_self_turn()
+        elif (
+            self._alert_held
+            and not self._children
+            and not self._external_turn
+            and self._timeline.state.get("status") == "ready"
+        ):
+            # The subagents ended and the parent did not wake.
+            self._alert_turn_done()
+
+    def _wake_tool_running(self) -> bool:
+        for tool_id in self._wake_tools:
+            item = self._timeline.get(tool_id)
+            if item is not None and item.get("status") not in nz.TERMINAL_TOOL_STATUSES:
+                return True
+        return False
+
+    def _reset_wake(self) -> None:
+        """No agent process runs the conversation now (a restart, a new
+        conversation, an exit): what it had in flight is void."""
+        self._cancel_wake_timer()
+        self._wake_tools.clear()
+        self._children.clear()
+        self._alert_held = False
+        self._foreground_idle = False
+
+    def _on_child_update(self, params: Any) -> None:
+        """OpenCode reports a subagent (``opencode/session/child_update``).
+        While any runs, the chat reads "Working in background" and the
+        finished turn's alert waits."""
+        if (
+            not self._wakes
+            or not self._ready.is_set()
+            or self._stopping
+            or self._timeline.state.get("status") not in _ACTIVITY_BY_STATUS
+        ):
+            return
+        child = wk.child_update(params, self._acp_session_id)
+        if child is None:
+            return
+        if child.update is not None:
+            self._apply_update(child.update)
+            return
+        if child.status in wk.CHILD_RUNNING:
+            if child.child_id in self._children:
+                return
+            self._children[child.child_id] = child.title
+        elif child.child_id in self._children:
+            del self._children[child.child_id]
+        else:
+            return
+        self._publish_activity()
+        if not self._children and self._alert_held and not self._external_turn:
+            # The parent wakes to read the results: that turn alerts at its
+            # end, or this window does when no turn comes.
+            self._arm_wake_timer()
+
+    def _on_copilot_event(self, params: Any) -> None:
+        """A Copilot session event (``github.com/copilot/sessionEvent``)."""
+        if not self._wakes:
+            return
+        event = wk.copilot_event(params, self._acp_session_id)
+        if event is None:
+            return
+        self._copilot_events = True
+        if (
+            not self._ready.is_set()
+            or self._stopping
+            or self._timeline.state.get("status") not in _ACTIVITY_BY_STATUS
+        ):
+            return
+        kind, data = event
+        busy = self._own_turn_running() or self._in_self_turn()
+        if kind == wk.COPILOT_TURN_START:
+            if busy:
+                self._set_foreground_idle(False)
+                if self._in_self_turn():
+                    self._wake_turn_signalled = True
+                    self._wake_last_update = time.monotonic()
+                    self._arm_wake_timer()
+            elif self._start_self_turn():
+                # A finished detached shell woke the agent.
+                self._wake_turn_signalled = True
+                self._arm_wake_timer()
+        elif kind == wk.COPILOT_FOREGROUND_IDLE:
+            if busy and data.get("aborted") is not True:
+                self._set_foreground_idle(True)
+        elif kind == wk.COPILOT_SESSION_IDLE and self._in_self_turn():
+            # The prompt's answer ends a turn this session sent.
+            self._end_self_turn()
+
+    def _set_foreground_idle(self, idle: bool) -> None:
+        if idle != self._foreground_idle:
+            self._foreground_idle = idle
+            self._publish_activity()
 
     def _append_message(self, role: str, update: dict[str, Any]) -> None:
         part = nz.content_block_part(update.get("content"))
@@ -2498,6 +2738,7 @@ class ChatSession:
             self._gate_activity = None
             if self._gate is not None:
                 self._gate.reset_turn()
+            self._reset_wake()
         self._publish_activity()
 
     def _publish_activity(self) -> None:
@@ -2511,6 +2752,12 @@ class ChatSession:
                 # Work the turn left in flight. Not the quiet window after a
                 # turn that left nothing: the chat header shows "Ready" then.
                 background = activity
+        elif activity == "idle" and self._children:
+            # OpenCode subagents still run, and the parent wakes when they end.
+            activity = background = "working"
+        elif activity == "working" and self._foreground_idle:
+            # Copilot: the turn waits only on attached background work.
+            activity = background = "waiting"
         if self._timeline.state.get("background") != background:
             self._timeline.patch_state(background=background)
         if activity == self._activity:

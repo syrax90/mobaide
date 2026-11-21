@@ -287,6 +287,23 @@ Junie CLI (`junie`, JetBrains) is a managed agent of kind `junie`, for terminal 
 * Not supported for Junie: a model or effort picker in the wizard (`junie list-models` lists every model, also those the account cannot use), sign-in from the chat, "your turn" alerts for terminal sessions.
 * Test mode runs the fake agent with `--flavor junie`.
 
+### Delta 2026-11-21: OpenCode, Copilot and Antigravity chats follow background work
+
+Agent-side delta within proto-v7 (2026-11-21): **no new key, no version bump; `central_server` is untouched.** One value combination is new: `background: "waiting"` while `status` is `running`.
+
+These three agents can finish work after their `session/prompt` answer, or hold the answer while only background work runs. Before, the chat read "Ready" too early, and the real end raised no alert. They run no Claude Code hooks, so the agent reads each one's own signal:
+
+| Agent | Signal (opted in with `clientCapabilities._meta` in `initialize`) | Effect |
+|-------|------|--------|
+| OpenCode 2.3+ | `{"opencode/child-session-updates": true}`. `opencode/session/child_update` notifications: `type: "status"` (`created`, `running` → in flight; `completed`, `failed`, `interrupted` → ended) and `type: "update"` (the subagent's own update) | While a subagent is in flight and `status` is `ready`: `background: "working"`, session `activity` `working`, and the finished turn's `turn_finished` waits. When the last one ends, the parent's woken turn alerts at its end, or the alert comes after 20 s when no turn follows. Of the subagent's updates, only `tool_call` and `tool_call_update` show, as tool items with id `<child id>:<tool call id>` and the subagent's title before the tool title. With the opt-in, OpenCode no longer sends them in the parent stream. An older OpenCode ignores the key. |
+| GitHub Copilot | `{"github.com/copilot": {"events": ["assistant.turn_start", "assistant.idle", "session.idle"]}}`. `github.com/copilot/sessionEvent` notifications; events with `agentId` (a subagent's) are ignored | `assistant.idle` (not `aborted`) during a turn: `background: "waiting"` and `activity` `waiting` while `status` stays `running`, until the next `assistant.turn_start` or the turn's end. With no turn running, `assistant.turn_start` starts a self-started turn, and `session.idle` ends it with `turn_finished`. |
+| Antigravity 1.5.10+ | None (agy sends no busy marker) | The fallback below. |
+
+* Fallback for all three: a content update (`agent_message_chunk`, `agent_thought_chunk`, `tool_call`, `tool_call_update`) that comes while `status` is `ready` starts a self-started turn: `status: "running"` with no "Message sent from another app" notice, queued messages wait, and `cancel` sends `session/cancel` and ends it with no alert. It does not start within 1 s of a prompt's answer, during `loading`, or from metadata updates. The turn ends with `turn_finished` after 20 s with no content update, no open request and no tool call of the turn still `pending` or `in_progress`. A turn that Copilot opened with `assistant.turn_start` ends at its `session.idle` instead. Either way, 10 minutes with no content update and no open request end the turn, even with a tool still running.
+* An OpenCode child status other than the five above counts as an end.
+* Copilot: a second `session/prompt` while the first waits on an attached shell makes Copilot answer the first one `cancelled` (measured on 1.0.112). So queued messages still wait for the prompt's answer.
+* Clients: the chat header shows "Background task" in place of "Working" while `status` is `running` and `background` is `"waiting"`. Older clients keep showing "Working".
+
 ### Delta 2026-11-16: chat state `background`
 
 Additive delta within proto-v7 (2026-11-16): **one chat state key. No version bump; `central_server` is untouched.**
@@ -295,7 +312,7 @@ After the 2026-11-15 delta, a Claude chat session row reads `working` or `waitin
 
 | Where | Change |
 |-------|--------|
-| State key `background` | `"working"` (a workflow or a sub-agent runs), `"waiting"` (only a background shell, a monitor or a scheduled wakeup), or `null`. Not `null` only while `status` is `ready` and the last `Stop` hook listed work in flight. It is then the session row's `activity`. |
+| State key `background` | `"working"` (a workflow or a sub-agent runs), `"waiting"` (only a background shell, a monitor or a scheduled wakeup), or `null`. Not `null` only while `status` is `ready` and the last `Stop` hook listed work in flight (Delta 2026-11-21 adds `"waiting"` while `status` is `running`). It is then the session row's `activity`. |
 
 * Clients show it in the chat header in place of "Ready": "Working in background" for `working`, "Background task" for `waiting`. The composer stays usable, because the main agent waits for input.
 * `null` in the quiet window after a turn that left nothing in flight (the session row reads `working` there), and for every chat session without Claude Code hooks (other agents, a CLI that runs no hooks).
