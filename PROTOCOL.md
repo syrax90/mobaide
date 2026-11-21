@@ -125,6 +125,21 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-21: Claude chat continues after a usage limit
+
+Additive delta within proto-v7 (2026-11-21): **one chat state key. No version bump; `central_server` is untouched.**
+
+| Where | Change |
+|-------|--------|
+| State key `limit_wait` | `{queue_id, resets_at, continues_at, limit_type}` or `null`. Set while an automatic continue waits in the queue for a usage limit to reset. `resets_at` and `continues_at` are ISO 8601 UTC; `limit_type` is the adapter's `rateLimitType` (`five_hour`, …) or `null`. |
+
+* Trigger: the agent answers the user's prompt with an RPC error whose `data` has `errorKind: "rate_limit"` and a number `rateLimit.resetsAt` (epoch seconds; `claude-agent-acp` 0.107.0 or later). Without that data (an older adapter, another agent) nothing changes.
+* The chat puts a continue ("Continue from where you stopped. The usage limit has reset.") first in `queue` and holds the whole queue until `continues_at` (`resets_at` + 60 s). The time is checked on the wall clock every 30 s, so a PC that slept through the reset sends it on wake. Claude Code is expected to keep the refused message in the conversation, so it is not sent again (to be checked against the real adapter with the bump to 0.108.0, #897).
+* No wait when the reset is more than 6 h away (a weekly limit) or after 3 automatic continues in a row without a prompt from the user. The error text from Claude Code says when the limit resets.
+* `dequeue` of `queue_id` cancels the wait; the messages queued behind it then go out. A `prompt` during the wait cancels it and goes out at once. `new_conversation`, `/clear`, `restart`, the restart after a sign-in and an agent exit drop the wait. `steer` of the held continue fails ("This message waits for the usage limit to reset").
+* Attention: a turn that arms a wait raises no `turn_failed`. The continued turn raises `turn_finished` or `turn_failed` as usual.
+* Clients show the queued continue as an **Auto-continue** row, "Usage limit reached. Continues automatically at <local time>.", with a Cancel button that sends `dequeue`. Older clients ignore the key and show the continue as an ordinary queued message they can remove.
+
 ### Delta 2026-11-20: Code Mode in Auto Scan
 
 Additive delta within proto-v7 (2026-11-20): **Auto Scan keeps `code_mode`, and Pi gets an options object. No version bump; `central_server` is untouched.**
@@ -647,10 +662,10 @@ Chat sessions use the same `/ws/session/{id}` and `CH_SESSION_IO` channel. Two f
 | `events` | `epoch`, `seq`, `events[]` with own `seq` | Apply in order: `item` (upsert by `id`), `append` (add `text` to an item), `remove` (drop the item with that `id`; an unknown `id` is a no-op), `state` (shallow-merge `patch`). Skip an unknown event type but count its `seq`. On a gap or another epoch, send `sync`. |
 | `result` | `id`, `ok`, `data?`, `error?` | Resolve the command with that `id`; ignore others. |
 
-* State keys: `status`, `error`, `agent`, `title`, `cwd`, `acp_session_id`, `config`, `commands`, `usage`, `plan`, `requests`, `queue`, `prompt_caps`, `turn_started_at`, `cancelling`, `steering` (Delta 2026-11-08), `background` (Delta 2026-11-16), `new_conversation` (Delta 2026-11-18).
+* State keys: `status`, `error`, `agent`, `title`, `cwd`, `acp_session_id`, `config`, `commands`, `usage`, `plan`, `requests`, `queue`, `prompt_caps`, `turn_started_at`, `cancelling`, `steering` (Delta 2026-11-08), `background` (Delta 2026-11-16), `new_conversation` (Delta 2026-11-18), `limit_wait` (Delta 2026-11-21).
 * Item types: `user`, `agent`, `thought`, `tool`, `notice`, `compaction`, `turn_end`, `error`. Tool content parts: `text`, `diff` (a unified diff the agent computes), `image`, `link`, `resource`, `terminal`.
 * Bounds: text parts 32 KB, message texts 256 KB, diffs 48 KB / 1 200 lines, a snapshot ~2 MB (`truncated` marks dropped older items).
-* Attention works as for terminal sessions: a pending request raises `awaiting_permission`, a finished turn `turn_finished`, an agent exit `ended` (`exit_reason: process_exited`). A Claude chat raises `turn_finished` from Claude Code hooks (Delta 2026-11-15). An RPC error on the user's own prompt raises `turn_failed` (not after Stop, not on process death, not when a queued prompt starts next).
+* Attention works as for terminal sessions: a pending request raises `awaiting_permission`, a finished turn `turn_finished`, an agent exit `ended` (`exit_reason: process_exited`). A Claude chat raises `turn_finished` from Claude Code hooks (Delta 2026-11-15). An RPC error on the user's own prompt raises `turn_failed` (not after Stop, not on process death, not when a queued prompt starts next, not when a usage-limit wait is armed (Delta 2026-11-21)).
 
 #### ACP use
 

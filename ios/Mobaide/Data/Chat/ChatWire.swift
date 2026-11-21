@@ -387,6 +387,25 @@ struct ChatQueuedMessage: Equatable, Sendable, Decodable, Identifiable {
     }
 }
 
+/// An automatic continue that waits in the queue (as `queueId`) for a usage limit to reset.
+struct ChatLimitWait: Equatable, Sendable, Decodable {
+    let queueId: String
+    let resetsAt: String?
+    let continuesAt: String
+    let limitType: String?
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: ChatKey.self)
+        guard let queueId = c.string("queue_id"), let continuesAt = c.string("continues_at") else {
+            throw ChatSkipError()
+        }
+        self.queueId = queueId
+        self.continuesAt = continuesAt
+        resetsAt = c.string("resets_at")
+        limitType = c.string("limit_type")
+    }
+}
+
 struct ChatPermissionOption: Equatable, Sendable, Decodable, Identifiable {
     let id: String
     let name: String
@@ -595,6 +614,7 @@ struct ChatStatePatch: Sendable, Decodable {
     var cancelling: Bool?
     var steering: Bool?
     var background: ChatBackgroundWork??
+    var limitWait: ChatLimitWait??
     var newConversation: Bool?
 
     init(from decoder: any Decoder) throws {
@@ -627,6 +647,7 @@ struct ChatStatePatch: Sendable, Decodable {
         if c.has("background") {
             background = .some(c.string("background").flatMap(ChatBackgroundWork.init(rawValue:)))
         }
+        limitWait = nullable(ChatLimitWait.self, "limit_wait")
         if c.has("new_conversation") { newConversation = c.bool("new_conversation") ?? false }
     }
 }
@@ -651,6 +672,8 @@ struct ChatState: Equatable, Sendable {
     var steering = false
     /// Set while the turn has ended but its work still runs.
     var background: ChatBackgroundWork?
+    /// The queued automatic continue that waits for a usage limit to reset.
+    var limitWait: ChatLimitWait?
     /// The agent takes `new_conversation`; an older one leaves the key out.
     var newConversation = false
 
@@ -672,6 +695,7 @@ struct ChatState: Equatable, Sendable {
         if let value = patch.cancelling { cancelling = value }
         if let value = patch.steering { steering = value }
         if let value = patch.background { background = value }
+        if let value = patch.limitWait { limitWait = value }
         if let value = patch.newConversation { newConversation = value }
     }
 

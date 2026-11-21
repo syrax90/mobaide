@@ -30,6 +30,17 @@ export function formatRelativeTime(iso: string, now: number): string | null {
   });
 }
 
+/** "5:30 PM" today, else "Nov 22, 5:30 PM", in the device's time zone. */
+export function formatClockTime(iso: string, now: number): string | null {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return null;
+  const date = new Date(then);
+  const time = date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  if (date.toDateString() === new Date(now).toDateString()) return time;
+  const day = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return `${day}, ${time}`;
+}
+
 export function formatTokens(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
   if (value >= 1000) return `${(value / 1000).toFixed(1).replace(/\.0$/, '')}k`;

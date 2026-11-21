@@ -69,6 +69,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -88,6 +89,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.mobaide.app.data.chat.ChatConfigOption
 import com.mobaide.app.data.chat.ChatImageEncoder
+import com.mobaide.app.data.chat.ChatLimitWait
 import com.mobaide.app.data.chat.ChatPlanEntry
 import com.mobaide.app.data.chat.ChatQueuedMessage
 import com.mobaide.app.data.chat.ChatSlashCommand
@@ -207,9 +209,38 @@ fun ChatQueueRows(
     onSendNow: ((String) -> Unit)? = null,
     // Rows with a command in flight: their buttons wait for its answer.
     busy: Set<String> = emptySet(),
+    // The queued automatic continue that waits for a usage limit to reset.
+    limitWait: ChatLimitWait? = null,
 ) {
+    val context = LocalContext.current
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         queue.forEach { message ->
+            if (message.id == limitWait?.queueId) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                        .pixelFrame(MaterialTheme.pixel.rule)
+                        .padding(start = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PixelChip("Auto-continue", tone = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = limitWaitText(limitWait.continuesAt, System.currentTimeMillis(), context),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f).padding(vertical = 6.dp),
+                    )
+                    IconButton(onClick = { onDequeue(message.id) }, enabled = enabled && message.id !in busy) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Cancel automatic continue",
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+                return@forEach
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()

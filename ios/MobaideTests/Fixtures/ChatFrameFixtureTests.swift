@@ -314,6 +314,30 @@ final class ChatFrameFixtureTests: XCTestCase {
         XCTAssertNil(timeline.state.background)
     }
 
+    func testLimitWaitStaysUntilAPatchClearsIt() throws {
+        var timeline = try loaded()
+        for name in ["events_batch", "events_remove", "events_sign_in", "events_background_cleared"] {
+            _ = timeline.apply(try server(name))
+        }
+
+        let result = timeline.apply(try server("events_limit_wait"))
+
+        XCTAssertNil(result.sync)
+        XCTAssertEqual(timeline.seq, 53)
+        XCTAssertEqual(timeline.state.queue.map(\.id), ["q:20"])
+        let wait = try XCTUnwrap(timeline.state.limitWait)
+        XCTAssertEqual(wait.queueId, "q:20")
+        XCTAssertEqual(wait.resetsAt, "2026-11-07T17:00:00+00:00")
+        XCTAssertEqual(wait.continuesAt, "2026-11-07T17:01:00+00:00")
+        XCTAssertEqual(wait.limitType, "five_hour")
+
+        _ = timeline.apply(try server("events_limit_wait_cleared"))
+
+        XCTAssertEqual(timeline.seq, 54)
+        XCTAssertTrue(timeline.state.queue.isEmpty)
+        XCTAssertNil(timeline.state.limitWait)
+    }
+
     func testResultsDecode() throws {
         guard case .result(let ok) = try server("result_ok") else { return XCTFail("result_ok is not a result") }
         XCTAssertEqual(ok, ChatResultFrame(
