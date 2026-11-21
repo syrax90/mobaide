@@ -5133,3 +5133,44 @@ class TestSessionCreateRunsAside:
         await client.stop()
 
         await _wait_until(lambda: creates.cancelled == 2)
+
+
+class TestProxyChatSessionDelete:
+    """``DELETE /api/chat/{kind}/sessions/{id}`` through the relay: the
+    first call starts the agent process, so it must run aside from the
+    tunnel reader and answer when the agent does."""
+
+    async def test_a_slow_delete_runs_aside_and_answers_204(
+        self, client, mock_app_state, mock_session_manager,
+    ):
+        gate = asyncio.Event()
+        deleted: list[tuple[str, str]] = []
+
+        class SlowCatalog:
+            async def delete_session(self, kind, session_id, *, open_in_mobaide):
+                await gate.wait()
+                if not open_in_mobaide():
+                    deleted.append((kind, session_id))
+
+        mock_app_state.chat_catalog = SlowCatalog()
+        mock_session_manager.find_chat_session = MagicMock(return_value=None)
+        ws = AsyncMock()
+        client._ws = ws
+        frame = json.dumps({
+            "type": "proxy_request", "request_id": "r-del", "method": "DELETE",
+            "path": "/api/chat/claude/sessions/external-1111",
+        }).encode()
+        try:
+            await asyncio.wait_for(client._handle_control(frame, ws), 1)
+            assert _control_replies(ws) == []
+
+            gate.set()
+            await _wait_until(lambda: len(_control_replies(ws)) == 1)
+        finally:
+            gate.set()
+            await client.stop()
+
+        assert _control_replies(ws) == [
+            {"type": "proxy_response", "request_id": "r-del", "status": 204, "body": None},
+        ]
+        assert deleted == [("claude", "external-1111")]

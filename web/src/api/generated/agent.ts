@@ -295,6 +295,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/chat/{kind}/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Stored Chat Session
+         * @description Delete a session the agent stored on this host (ACP ``session/delete``).
+         *
+         *     The agent decides how: Claude Code removes the conversation, Codex moves
+         *     it to its archive. An id the agent no longer knows counts as deleted.
+         */
+        delete: operations["delete_stored_chat_session_api_chat__kind__sessions__session_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/codex/login": {
         parameters: {
             query?: never;
@@ -1602,6 +1625,11 @@ export interface components {
         };
         /** ChatStoredSessionsResponse */
         ChatStoredSessionsResponse: {
+            /**
+             * Can Delete
+             * @default false
+             */
+            can_delete: boolean;
             /** Next Cursor */
             next_cursor?: string | null;
             /** Sessions */
@@ -3958,6 +3986,71 @@ export interface operations {
                 content?: never;
             };
             /** @description The agent cannot list its sessions */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description The agent failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The agent cannot run on this host */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_stored_chat_session_api_chat__kind__sessions__session_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid session id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No chat agent of this kind */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The agent cannot delete its sessions, or the session is open in a Mobaide chat or in another app on the PC */
             409: {
                 headers: {
                     [name: string]: unknown;

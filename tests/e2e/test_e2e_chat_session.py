@@ -241,6 +241,21 @@ def test_chat_session_over_the_relay(e2e_stack, spawn_agent, tmp_path):
         "external-2222": None,
     }
 
+    # Delete goes over the relay too: a session open in a Mobaide chat and an
+    # agent without session/delete are refused; a free row leaves the list.
+    delete_path = "api/chat/claude/sessions/{}"
+    open_row = client.proxy_request(agent_id, token, "DELETE", delete_path.format("external-1111"))
+    assert open_row.status_code == 409, open_row.text
+    agy_delete = client.proxy_request(
+        agent_id, token, "DELETE", "api/chat/antigravity/sessions/external-2222"
+    )
+    assert agy_delete.status_code == 409, agy_delete.text
+    deleted = client.proxy_request(agent_id, token, "DELETE", delete_path.format("external-2222"))
+    assert deleted.status_code == 204, deleted.text
+    page = client.proxy_request(agent_id, token, "GET", stored_path).json()
+    assert page["can_delete"] is True
+    assert [r["session_id"] for r in page["sessions"]] == ["external-1111"]
+
 
 async def _fail_a_turn(client, url: str, session_id: str) -> dict:
     async with websockets.connect(client.user_events_url(), open_timeout=15) as events:

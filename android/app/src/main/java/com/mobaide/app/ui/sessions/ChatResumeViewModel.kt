@@ -29,7 +29,27 @@ sealed interface ChatResumeListState {
         val nextCursor: String?,
         val loadingMore: Boolean = false,
         val loadMoreError: String? = null,
+        /** The agent can delete its stored sessions. */
+        val canDelete: Boolean = false,
     ) : ChatResumeListState
+}
+
+/** The row waiting for the user to confirm Delete. */
+data class ChatResumeDeleteState(
+    val row: ChatStoredSession,
+    val deleting: Boolean = false,
+    val error: String? = null,
+)
+
+/** Delete is offered only when the agent supports it and nothing has the session open. */
+fun canDeleteRow(canDelete: Boolean, row: ChatStoredSession): Boolean =
+    canDelete && row.open_session_id == null && !row.open_elsewhere
+
+/** What deleting does on the PC; the agent decides between a soft and a hard delete. */
+fun chatDeleteNote(kind: String): String = if (kind == "codex") {
+    "Codex moves this session to its archive on your PC. It no longer shows here or in the Codex terminal app."
+} else {
+    "This session is removed from your PC, also from the history of the agent's terminal app. You cannot undo this."
 }
 
 data class ChatResumeUiState(
@@ -41,6 +61,7 @@ data class ChatResumeUiState(
     val folder: String? = null,
     val allFolders: Boolean = false,
     val list: ChatResumeListState = ChatResumeListState.Loading,
+    val delete: ChatResumeDeleteState? = null,
 )
 
 /**
@@ -122,7 +143,11 @@ class ChatResumeViewModel @Inject constructor(
                     if (page.sessions.isEmpty()) {
                         ChatResumeListState.Empty
                     } else {
-                        ChatResumeListState.Loaded(rows = page.sessions, nextCursor = page.next_cursor)
+                        ChatResumeListState.Loaded(
+                            rows = page.sessions,
+                            nextCursor = page.next_cursor,
+                            canDelete = page.can_delete,
+                        )
                     },
                 )
             } catch (e: CancellationException) {
@@ -133,14 +158,53 @@ class ChatResumeViewModel @Inject constructor(
         }
     }
 
+    fun askDelete(row: ChatStoredSession) {
+        val loaded = _uiState.value.list as? ChatResumeListState.Loaded ?: return
+        if (!canDeleteRow(loaded.canDelete, row)) return
+        _uiState.update { it.copy(delete = ChatResumeDeleteState(row)) }
+    }
+
+    fun dismissDelete() {
+        if (_uiState.value.delete?.deleting == true) return
+        _uiState.update { it.copy(delete = null) }
+    }
+
+    /** On success the row leaves the loaded list in place: a reload would restart paging. */
+    fun confirmDelete() {
+        val pending = _uiState.value.delete ?: return
+        if (pending.deleting) return
+        val kind = _uiState.value.kind
+        _uiState.update { it.copy(delete = pending.copy(deleting = true, error = null)) }
+        viewModelScope.launch {
+            try {
+                sessionRepository.deleteChatSession(kind, pending.row.session_id)
+                _uiState.update { state ->
+                    state.copy(list = withoutRow(state.list, pending.row.session_id), delete = null)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(delete = pending.copy(deleting = false, error = errorMessage(e, "delete the session")))
+                }
+            }
+        }
+    }
+
+    private fun withoutRow(list: ChatResumeListState, sessionId: String): ChatResumeListState {
+        if (list !is ChatResumeListState.Loaded) return list
+        val rows = list.rows.filter { it.session_id != sessionId }
+        return if (rows.isEmpty() && list.nextCursor == null) ChatResumeListState.Empty else list.copy(rows = rows)
+    }
+
     private fun cwdFor(state: ChatResumeUiState): String? = if (state.allFolders) null else state.folder
 
     private fun setList(list: ChatResumeListState) = _uiState.update { it.copy(list = list) }
 
-    private fun errorMessage(e: Exception): String = when (e) {
-        is ApiException -> apiDetail(e.errorBody) ?: "Could not list the sessions (HTTP ${e.code})."
+    private fun errorMessage(e: Exception, action: String = "list the sessions"): String = when (e) {
+        is ApiException -> apiDetail(e.errorBody) ?: "Could not $action (HTTP ${e.code})."
         is IOException -> "Could not reach your PC."
-        else -> e.message ?: "Could not list the sessions."
+        else -> e.message ?: "Could not $action."
     }
 
     /** `{"detail": str}`, or the same object nested under `detail` by the direct REST path. */

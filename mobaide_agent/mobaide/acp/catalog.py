@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from mobaide import __version__
@@ -20,7 +20,9 @@ from .agents import ChatAgentSpec, ChatAgentUnavailableError, ChatLaunchPlan
 from .install import PROBE_POOL, AdapterInstallError
 from .rpc import (
     ERR_AUTH_REQUIRED,
+    ERR_INVALID_PARAMS,
     ERR_METHOD_NOT_FOUND,
+    ERR_NOT_FOUND,
     AcpConnection,
     AcpProcessError,
     AcpRpcError,
@@ -31,6 +33,7 @@ logger = logging.getLogger(__name__)
 IDLE_SECONDS = 60.0
 INIT_TIMEOUT = 120.0
 LIST_TIMEOUT = 30.0
+DELETE_TIMEOUT = 20.0
 # How long a request waits for a first-use adapter install. The relay gives
 # up on a request after 30 s, so a longer install keeps running in the
 # background and the request asks the user to try again.
@@ -41,6 +44,10 @@ HIDDEN_PAGE_HOPS = 10
 TITLE_MAX = 200
 
 
+OPEN_IN_MOBAIDE_DETAIL = "This session is open in a Mobaide chat. Close the chat first."
+OPEN_ELSEWHERE_DETAIL = "Another app on your PC has this session open. Close it there first."
+
+
 class ChatCatalogError(Exception):
     def __init__(self, status: int, detail: str) -> None:
         super().__init__(detail)
@@ -49,9 +56,10 @@ class ChatCatalogError(Exception):
 
 
 class _Lister:
-    def __init__(self, conn: AcpConnection, can_list: bool) -> None:
+    def __init__(self, conn: AcpConnection, can_list: bool, can_delete: bool = False) -> None:
         self.conn = conn
         self.can_list = can_list
+        self.can_delete = can_delete
         self.idle_handle: asyncio.TimerHandle | None = None
 
 
@@ -109,24 +117,11 @@ class ChatCatalog:
                     if page["sessions"] or not page["next_cursor"] or not self._hidden:
                         break
                     params = {**params, "cursor": page["next_cursor"]}
-            except AcpRpcError as exc:
-                if exc.code == ERR_AUTH_REQUIRED:
-                    # An agent can read its login only when it starts: the
-                    # next request must get a new process.
-                    await self._drop(kind)
-                    raise ChatCatalogError(
-                        502,
-                        f"{spec.display_name} is not signed in on the PC. "
-                        "Start a new chat session to sign in.",
-                    ) from None
-                raise ChatCatalogError(
-                    400 if exc.code == -32602 else 502, exc.message
-                ) from None
-            except (AcpProcessError, TimeoutError) as exc:
-                await self._drop(kind)
-                raise ChatCatalogError(502, str(exc) or "The agent did not answer") from None
+            except (AcpRpcError, AcpProcessError, TimeoutError) as exc:
+                raise await self._failure(kind, spec, exc) from None
             finally:
                 self._arm_idle(kind)
+        page["can_delete"] = lister.can_delete
         if real_cwd is not None and real_cwd != cwd:
             # The agent answers with the real path: give the rows back the
             # folder as the client asked for it, so they match its workspace.
@@ -134,6 +129,62 @@ class ChatCatalog:
                 if row["cwd"] == real_cwd:
                     row["cwd"] = cwd
         return page
+
+    async def delete_session(
+        self, kind: str, session_id: str, *, open_in_mobaide: Callable[[], bool]
+    ) -> None:
+        """Sends ``session/delete``. The agent picks a soft or a hard delete.
+
+        ``open_in_mobaide`` is asked again right before the request: the
+        agent process can take seconds to start, and a chat session may open
+        the conversation meanwhile.
+        """
+        spec = self._specs.get(kind)
+        if spec is None or not spec.supports_resume:
+            raise ChatCatalogError(404, f"Chat sessions are not available for {kind}")
+        lock = self._locks.setdefault(kind, asyncio.Lock())
+        async with lock:
+            lister = await self._lister(kind, spec)
+            try:
+                if not lister.can_delete:
+                    raise ChatCatalogError(409, f"{spec.display_name} cannot delete its sessions")
+                presence = getattr(spec, "presence", None)
+                if presence is not None:
+                    loop = asyncio.get_running_loop()
+                    if await loop.run_in_executor(PROBE_POOL, presence.open_elsewhere, session_id):
+                        raise ChatCatalogError(409, OPEN_ELSEWHERE_DETAIL)
+                if open_in_mobaide():
+                    raise ChatCatalogError(409, OPEN_IN_MOBAIDE_DETAIL)
+                try:
+                    await lister.conn.request(
+                        "session/delete", {"sessionId": session_id}, DELETE_TIMEOUT
+                    )
+                except AcpRpcError as exc:
+                    # Already gone: what the user asked for.
+                    if exc.code != ERR_NOT_FOUND:
+                        raise
+            except (AcpRpcError, AcpProcessError, TimeoutError) as exc:
+                raise await self._failure(kind, spec, exc) from None
+            finally:
+                self._arm_idle(kind)
+
+    async def _failure(
+        self, kind: str, spec: ChatAgentSpec, exc: AcpRpcError | AcpProcessError | TimeoutError
+    ) -> ChatCatalogError:
+        """The client error for a failed request to the lister."""
+        if isinstance(exc, AcpRpcError):
+            if exc.code == ERR_AUTH_REQUIRED:
+                # An agent can read its login only when it starts: the
+                # next request must get a new process.
+                await self._drop(kind)
+                return ChatCatalogError(
+                    502,
+                    f"{spec.display_name} is not signed in on the PC. "
+                    "Start a new chat session to sign in.",
+                )
+            return ChatCatalogError(400 if exc.code == ERR_INVALID_PARAMS else 502, exc.message)
+        await self._drop(kind)
+        return ChatCatalogError(502, str(exc) or "The agent did not answer")
 
     async def _page(self, spec: ChatAgentSpec, result: Any, cwd: str | None) -> dict[str, Any]:
         """One ``session/list`` answer as a client page, hidden folders left out."""
@@ -207,7 +258,13 @@ class ChatCatalog:
         caps = init.get("agentCapabilities") if isinstance(init, dict) else None
         session_caps = caps.get("sessionCapabilities") if isinstance(caps, dict) else None
         can_list = isinstance(session_caps, dict) and session_caps.get("list") is not None
-        lister = _Lister(conn, can_list and bool(caps.get("loadSession")))  # type: ignore[union-attr]
+        # ACP: a client must not call ``session/delete`` unless advertised.
+        can_delete = isinstance(session_caps, dict) and session_caps.get("delete") is not None
+        lister = _Lister(
+            conn,
+            can_list and bool(caps.get("loadSession")),  # type: ignore[union-attr]
+            can_delete,
+        )
         self._listers[kind] = lister
         return lister
 

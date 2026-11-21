@@ -125,6 +125,22 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-21: delete a stored chat session
+
+Additive delta within proto-v7 (2026-11-21): **one route, one response field. No version bump; `central_server` is untouched (it already forwards `DELETE`).**
+
+| Where | Change |
+|-------|--------|
+| `GET /api/chat/{kind}/sessions` | `ChatStoredSessionsResponse` gains `can_delete` (bool, default `false`): the agent advertises ACP `sessionCapabilities.delete`. A missing field (older agent) means `false`. |
+| `DELETE /api/chat/{kind}/sessions/{session_id}` | New. Sends ACP `session/delete` and answers `204`. |
+
+* Clients show Delete only on a page with `can_delete: true`, and only for a row without `open_session_id` and without `open_elsewhere`. They ask for confirmation first. On `204` they remove the row locally and do not reload page 1, so the cursor stays valid. On an error they show `detail` and keep the row.
+* The agent picks a soft or a hard delete. Claude Code removes the transcript, also from its terminal history, and this is permanent. Codex moves the thread to its archive.
+* Errors carry `{"detail"}`: `400` invalid id (same rule as `chat_resume_id`), `404` no chat agent of that kind, `409` the agent cannot delete, or a Mobaide chat has the session open, or another app on the PC has it open (presence lock, Antigravity only), `502` the agent failed, `503` it cannot run here. The agent re-checks the open Mobaide chats right before it sends `session/delete`.
+* An agent answer `-32002` (not found) counts as deleted: `204`.
+* Claude Code and Codex have no presence signal, so a session open in their terminal app cannot be blocked. Delete of an active session is implementation-defined in ACP. The confirm text asks the user to close it there first.
+* On the relay it runs aside from the tunnel reader, like the list: its first call can start the agent process.
+
 ### Delta 2026-11-20: Code Mode in Auto Scan
 
 Additive delta within proto-v7 (2026-11-20): **Auto Scan keeps `code_mode`, and Pi gets an options object. No version bump; `central_server` is untouched.**
@@ -633,6 +649,7 @@ A session can now run in the structured **chat UI**. The agent then starts an [A
 * `open_session_id` names the open Mobaide chat session that already shows the row.
 * Errors carry `{"detail"}`: `400` bad `cwd` or cursor, `404` no chat agent of that kind, `409` the agent cannot list, `502` the agent failed, `503` it cannot run here, or its adapter is still installing for first use (the install goes on; retry in a minute).
 * On the relay it runs aside from the tunnel reader, like the voice routes: its first call starts the agent process.
+* `can_delete` and `DELETE /api/chat/{kind}/sessions/{session_id}` (→ `204`): see *Delta 2026-11-21: delete a stored chat session*.
 
 #### Chat frames on the session socket
 

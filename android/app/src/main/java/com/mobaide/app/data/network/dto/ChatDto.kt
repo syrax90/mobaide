@@ -7,6 +7,8 @@ import kotlinx.serialization.Serializable
 data class ChatStoredSessionsResponse(
     val sessions: List<ChatStoredSession> = emptyList(),
     val next_cursor: String? = null,
+    // The agent supports `DELETE /api/chat/{kind}/sessions/{id}`; missing on an older agent.
+    val can_delete: Boolean = false,
 )
 
 @Serializable

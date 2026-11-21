@@ -6703,6 +6703,27 @@ body:has(dialog[open]) {
   font-size: 0.85rem;
 }
 
+.resume-item {
+  display: flex;
+  align-items: stretch;
+  gap: 0.4rem;
+}
+
+.resume-item .resume-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.resume-row-delete {
+  flex: none;
+  min-height: 48px;
+}
+
+.resume-confirm-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
 /* endregion */
 
 /* region responsive — the system's only two breakpoints; do not add a third */

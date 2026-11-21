@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
@@ -37,11 +39,14 @@ import com.mobaide.app.data.network.dto.ChatStoredSession
 import com.mobaide.app.ui.chat.MiddleEllipsisText
 import com.mobaide.app.ui.chat.markdown.CodeFontFamily
 import com.mobaide.app.ui.chat.parseIsoMillis
+import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import com.mobaide.app.ui.common.pixel.PixelBottomSheet
 import com.mobaide.app.ui.common.pixel.PixelButton
 import com.mobaide.app.ui.common.pixel.PixelCard
 import com.mobaide.app.ui.common.pixel.PixelChip
+import com.mobaide.app.ui.common.pixel.PixelIconButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import com.mobaide.app.ui.common.pixel.pixelSegmentedButtonColors
 import com.mobaide.app.ui.theme.MobaideTheme
 import com.mobaide.app.ui.theme.pixel
@@ -61,6 +66,9 @@ fun ChatResumeSheet(
     onRetry: () -> Unit,
     onLoadMore: () -> Unit,
     onPick: (ChatStoredSession) -> Unit,
+    onDelete: (ChatStoredSession) -> Unit,
+    onConfirmDelete: () -> Unit,
+    onDismissDelete: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     PixelBottomSheet(
@@ -73,8 +81,55 @@ fun ChatResumeSheet(
             onRetry = onRetry,
             onLoadMore = onLoadMore,
             onPick = onPick,
+            onDelete = onDelete,
         )
     }
+    state.delete?.let { pending ->
+        DeleteStoredSessionDialog(
+            pending = pending,
+            kind = state.kind,
+            onConfirm = onConfirmDelete,
+            onDismiss = onDismissDelete,
+        )
+    }
+}
+
+@Composable
+private fun DeleteStoredSessionDialog(
+    pending: ChatResumeDeleteState,
+    kind: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    PixelAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Delete this session?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = pending.row.title?.takeIf { it.isNotBlank() } ?: "Untitled session",
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(chatDeleteNote(kind))
+                Text("If the session is still open in a terminal on your PC, close it there first.")
+                pending.error?.let { Text(text = it, color = MaterialTheme.pixel.danger) }
+            }
+        },
+        confirmButton = {
+            PixelTextButton(onClick = onConfirm, enabled = !pending.deleting) {
+                Text(
+                    text = if (pending.deleting) "Deleting…" else "Delete",
+                    color = if (pending.deleting) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.pixel.danger,
+                )
+            }
+        },
+        dismissButton = {
+            PixelTextButton(onClick = onDismiss, enabled = !pending.deleting) { Text("Keep") }
+        },
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -85,6 +140,7 @@ private fun ChatResumeContent(
     onRetry: () -> Unit,
     onLoadMore: () -> Unit,
     onPick: (ChatStoredSession) -> Unit,
+    onDelete: (ChatStoredSession) -> Unit,
 ) {
     val now = remember(state.list) { System.currentTimeMillis() }
     Column(
@@ -161,7 +217,13 @@ private fun ChatResumeContent(
                 contentPadding = PaddingValues(bottom = 24.dp, end = 4.dp),
             ) {
                 items(list.rows, key = { it.session_id }) { row ->
-                    StoredSessionRow(row = row, showFolder = state.allFolders, nowMs = now, onClick = { onPick(row) })
+                    StoredSessionRow(
+                        row = row,
+                        showFolder = state.allFolders,
+                        nowMs = now,
+                        onClick = { onPick(row) },
+                        onDelete = if (canDeleteRow(list.canDelete, row)) ({ onDelete(row) }) else null,
+                    )
                 }
                 if (list.nextCursor != null || list.loadMoreError != null) {
                     item(key = "load-more") {
@@ -210,46 +272,60 @@ private fun StoredSessionRow(
     showFolder: Boolean,
     nowMs: Long,
     onClick: () -> Unit,
+    onDelete: (() -> Unit)?,
 ) {
     PixelCard(modifier = Modifier.fillMaxWidth(), onClick = onClick) {
-        Column(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = row.title?.takeIf { it.isNotBlank() } ?: "Untitled session",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                if (row.open_session_id != null) {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    PixelChip("Open", tone = MaterialTheme.pixel.ok)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 14.dp, end = if (onDelete != null) 0.dp else 14.dp, top = 12.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = row.title?.takeIf { it.isNotBlank() } ?: "Untitled session",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (row.open_session_id != null) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        PixelChip("Open", tone = MaterialTheme.pixel.ok)
+                    }
+                }
+                relativeTime(row.updated_at, nowMs)?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (row.open_elsewhere && row.open_session_id == null) {
+                    Text(
+                        text = "Open in another app on your PC. Close it there first.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.pixel.warning,
+                    )
+                }
+                if (showFolder) {
+                    MiddleEllipsisText(
+                        text = row.cwd,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = CodeFontFamily),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
             }
-            relativeTime(row.updated_at, nowMs)?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (row.open_elsewhere && row.open_session_id == null) {
-                Text(
-                    text = "Open in another app on your PC. Close it there first.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.pixel.warning,
-                )
-            }
-            if (showFolder) {
-                MiddleEllipsisText(
-                    text = row.cwd,
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = CodeFontFamily),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.fillMaxWidth(),
+            if (onDelete != null) {
+                PixelIconButton(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Delete session",
+                    onClick = onDelete,
+                    compact = true,
+                    modifier = Modifier.padding(end = 4.dp),
                 )
             }
         }
@@ -287,12 +363,14 @@ private fun ChatResumeContentPreview() {
                         ChatStoredSession("b", "/home/user/other", null, null, null),
                     ),
                     nextCursor = "offset:50",
+                    canDelete = true,
                 ),
             ),
             onSetAllFolders = {},
             onRetry = {},
             onLoadMore = {},
             onPick = {},
+            onDelete = {},
         )
     }
 }

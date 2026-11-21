@@ -17,8 +17,19 @@ import pytest
 from mobaide.acp import agents as agents_mod
 from mobaide.acp import catalog as catalog_mod
 from mobaide.acp.agents import ChatAgentUnavailableError, ChatLaunchPlan, fake_agent_argv
-from mobaide.acp.catalog import ChatCatalog, ChatCatalogError
-from mobaide.acp.wire import chat_request_error, list_chat_sessions, match_chat_sessions_route
+from mobaide.acp.catalog import (
+    OPEN_ELSEWHERE_DETAIL,
+    OPEN_IN_MOBAIDE_DETAIL,
+    ChatCatalog,
+    ChatCatalogError,
+)
+from mobaide.acp.wire import (
+    chat_request_error,
+    delete_chat_session,
+    list_chat_sessions,
+    match_chat_session_route,
+    match_chat_sessions_route,
+)
 from mobaide.agent.app import create_app
 from mobaide.agent.install_paths import state_prefix
 from mobaide.agent.sessions.models import ChatStoredSessionsResponse
@@ -500,7 +511,116 @@ class TestAllFoldersLister:
             "antigravity", cwd=str(tmp_path) if cwd else None, cursor=None
         )
 
-        assert page == {"sessions": [], "next_cursor": None}
+        assert page == {"sessions": [], "next_cursor": None, "can_delete": False}
+
+
+# Advertises ``session/delete`` and refuses every call to it with the
+# JSON-RPC error code in DELETE_ERROR_CODE.
+FAILING_DELETE_AGENT = r"""
+import json, os, sys
+code = int(os.environ["DELETE_ERROR_CODE"])
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg or "method" not in msg:
+        continue
+    if msg["method"] == "initialize":
+        caps = {"loadSession": True, "sessionCapabilities": {"list": {}, "delete": {}}}
+        reply = {"result": {"protocolVersion": 1, "agentCapabilities": caps}}
+    else:
+        reply = {"error": {"code": code, "message": "Delete failed"}}
+    reply.update({"jsonrpc": "2.0", "id": msg["id"]})
+    sys.stdout.write(json.dumps(reply) + "\n")
+    sys.stdout.flush()
+"""
+
+
+def _failing_delete(code: int) -> StubSpec:
+    return StubSpec(
+        [sys.executable, "-c", FAILING_DELETE_AGENT], env={"DELETE_ERROR_CODE": str(code)}
+    )
+
+
+def _never_open() -> bool:
+    return False
+
+
+class TestChatCatalogDelete:
+    """``ChatCatalog.delete_session`` against the fake ACP agent, whose
+    ``session/delete`` hides a stored session from its later lists."""
+
+    async def _ids(self, catalog: ChatCatalog, cwd: str) -> list[str]:
+        page = await catalog.list_sessions("claude", cwd=cwd, cursor=None)
+        return [row["session_id"] for row in page["sessions"]]
+
+    async def test_a_deleted_session_leaves_the_list_and_a_second_delete_succeeds(
+        self, make_catalog, tmp_path
+    ):
+        spec = StubSpec(fake_agent_argv())
+        catalog = make_catalog(spec)
+        page = await catalog.list_sessions("claude", cwd=str(tmp_path), cursor=None)
+        assert page["can_delete"] is True
+
+        await catalog.delete_session("claude", "external-1111", open_in_mobaide=_never_open)
+        # The agent no longer knows the id (-32002): what the user asked for.
+        await catalog.delete_session("claude", "external-1111", open_in_mobaide=_never_open)
+
+        assert await self._ids(catalog, str(tmp_path)) == ["external-2222"]
+        assert spec.plans == 1
+
+    async def test_a_session_opened_in_mobaide_while_the_agent_starts_is_kept(
+        self, make_catalog, tmp_path
+    ):
+        """The caller checks before the agent process starts; a chat session
+        can open the conversation in those seconds."""
+        catalog = make_catalog(StubSpec(fake_agent_argv()))
+        asked: list[str] = []
+
+        def opened_meanwhile() -> bool:
+            asked.append("open?")
+            return True
+
+        with pytest.raises(ChatCatalogError) as excinfo:
+            await catalog.delete_session("claude", "external-1111", open_in_mobaide=opened_meanwhile)
+
+        assert (excinfo.value.status, excinfo.value.detail) == (409, OPEN_IN_MOBAIDE_DETAIL)
+        assert asked == ["open?"]
+        assert await self._ids(catalog, str(tmp_path)) == ["external-1111", "external-2222"]
+
+    async def test_a_session_open_in_another_app_is_kept(self, make_catalog, tmp_path):
+        spec = StubSpec(fake_agent_argv())
+        spec.presence = FakePresence("external-1111")  # type: ignore[attr-defined]
+        catalog = make_catalog(spec)
+
+        with pytest.raises(ChatCatalogError) as excinfo:
+            await catalog.delete_session("claude", "external-1111", open_in_mobaide=_never_open)
+
+        assert (excinfo.value.status, excinfo.value.detail) == (409, OPEN_ELSEWHERE_DETAIL)
+        assert await self._ids(catalog, str(tmp_path)) == ["external-1111", "external-2222"]
+
+    @pytest.mark.parametrize(
+        ("spec", "kind", "status", "detail"),
+        [
+            (StubSpec(["unused"]), "codex", 404, "Chat sessions are not available for codex"),
+            (StubSpec(["unused"], supports_resume=False), "claude", 404, "Chat sessions are not available for claude"),
+            (_mini(), "claude", 409, "Stub Agent cannot delete its sessions"),
+            (_failing_delete(-32602), "claude", 400, "Delete failed"),
+            (_failing_delete(-32603), "claude", 502, "Delete failed"),
+            (
+                _failing_delete(-32000),
+                "claude",
+                502,
+                "Stub Agent is not signed in on the PC. Start a new chat session to sign in.",
+            ),
+        ],
+        ids=["unknown-kind", "no-resume", "not-advertised", "invalid-params", "agent-error", "signed-out"],
+    )
+    async def test_errors(self, make_catalog, spec, kind, status, detail):
+        catalog = make_catalog(spec)
+
+        with pytest.raises(ChatCatalogError) as excinfo:
+            await catalog.delete_session(kind, "s1", open_in_mobaide=_never_open)
+
+        assert (excinfo.value.status, excinfo.value.detail) == (status, detail)
 
 
 # Like ``junie --acp=true``: ``session/list`` answers the sessions of exactly
@@ -597,6 +717,12 @@ class FakeCatalog:
             "next_cursor": self.page["next_cursor"],
         }
 
+    async def delete_session(self, kind, session_id, *, open_in_mobaide):
+        self.calls.append((kind, session_id, None))
+        self.open_in_mobaide = open_in_mobaide
+        if self.error is not None:
+            raise self.error
+
 
 class TestWire:
     @pytest.mark.parametrize(
@@ -668,11 +794,12 @@ class TestWire:
             ("mob-7", False),
         ]
 
-    def test_the_agent_model_sends_the_golden_wire(self):
+    @pytest.mark.parametrize("case", ["row_open_in_another_app", "page_that_allows_delete"])
+    def test_the_agent_model_sends_the_golden_wire(self, case):
         """The Python arm of the fixture the three clients decode: a page as
         the agent sends it now, every key present."""
         cases = json.loads(_CHAT_FIXTURE.read_text(encoding="utf-8"))["cases"]
-        wire = next(c["wire"] for c in cases if c["name"] == "row_open_in_another_app")
+        wire = next(c["wire"] for c in cases if c["name"] == case)
 
         assert ChatStoredSessionsResponse.model_validate(wire).model_dump(mode="json") == wire
 
@@ -682,6 +809,64 @@ class TestWire:
         assert await list_chat_sessions(catalog, FakeManager(), "claude", cwd=None, cursor=None) == (
             409,
             {"detail": "cannot list"},
+        )
+
+    @pytest.mark.parametrize(
+        ("path", "match"),
+        [
+            ("/api/chat/claude/sessions/0b4e7c2a-11f0", ("claude", "0b4e7c2a-11f0")),
+            ("/api/chat/custom_ab12/sessions/s1", ("custom_ab12", "s1")),
+            # Captured whole: the id validation answers 400, not a 405.
+            ("/api/chat/claude/sessions/../../etc", ("claude", "../../etc")),
+            ("/api/chat/claude/sessions", None),
+            ("/api/chat/claude/sessions/", None),
+            ("/api/chat/Claude/sessions/s1", None),
+        ],
+    )
+    def test_chat_session_route(self, path, match):
+        assert match_chat_session_route(path) == match
+
+    async def test_delete_without_a_catalog_is_not_found(self):
+        status, _ = await delete_chat_session(None, FakeManager(), "claude", "s1")
+
+        assert status == 404
+
+    @pytest.mark.parametrize("session_id", ["", "../../etc/passwd", "a b", "a" * 201])
+    async def test_delete_refuses_an_invalid_id_before_the_agent(self, session_id):
+        catalog = FakeCatalog()
+
+        result = await delete_chat_session(catalog, FakeManager(), "claude", session_id)
+
+        assert result == (400, {"detail": "Invalid session id"})
+        assert catalog.calls == []
+
+    async def test_delete_refuses_a_session_open_in_mobaide_before_the_agent(self):
+        catalog = FakeCatalog()
+        manager = FakeManager(open_sessions={("claude", "s1"): SimpleNamespace(session_id="mob-7")})
+
+        result = await delete_chat_session(catalog, manager, "claude", "s1")
+
+        assert result == (409, {"detail": OPEN_IN_MOBAIDE_DETAIL})
+        assert catalog.calls == []
+
+    async def test_delete_hands_the_catalog_a_live_open_check(self):
+        catalog = FakeCatalog()
+        manager = FakeManager()
+
+        result = await delete_chat_session(catalog, manager, "claude", "s1")
+
+        assert result == (204, None)
+        assert catalog.calls == [("claude", "s1", None)]
+        assert catalog.open_in_mobaide() is False
+        manager._open[("claude", "s1")] = SimpleNamespace(session_id="mob-7")
+        assert catalog.open_in_mobaide() is True
+
+    async def test_delete_catalog_errors_become_status_and_detail(self):
+        catalog = FakeCatalog(error=ChatCatalogError(409, "Stub Agent cannot delete its sessions"))
+
+        assert await delete_chat_session(catalog, FakeManager(), "claude", "s1") == (
+            409,
+            {"detail": "Stub Agent cannot delete its sessions"},
         )
 
 
@@ -935,6 +1120,49 @@ class TestChatRest:
 
     async def test_list_needs_auth(self, client):
         resp = await client.get("/api/chat/claude/sessions")
+        assert resp.status_code == 401
+
+    async def test_delete_a_stored_session(self, client, auth_headers, tmp_path):
+        url = f"/api/chat/claude/sessions?cwd={tmp_path}"
+        before = await client.get(url, headers=auth_headers)
+        assert before.json()["can_delete"] is True
+
+        resp = await client.delete("/api/chat/claude/sessions/external-1111", headers=auth_headers)
+        after = await client.get(url, headers=auth_headers)
+
+        assert resp.status_code == 204
+        assert resp.content == b""
+        assert [r["session_id"] for r in after.json()["sessions"]] == ["external-2222"]
+
+    async def test_delete_keeps_a_session_open_in_a_mobaide_chat(
+        self, client, auth_headers, tmp_path
+    ):
+        body = _chat_body(tmp_path, chat_resume_id="external-1111")
+        opened = await client.post("/api/sessions", headers=auth_headers, json=body)
+        assert opened.status_code == 201, opened.text
+
+        resp = await client.delete("/api/chat/claude/sessions/external-1111", headers=auth_headers)
+        after = await client.get(f"/api/chat/claude/sessions?cwd={tmp_path}", headers=auth_headers)
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == OPEN_IN_MOBAIDE_DETAIL
+        assert [r["session_id"] for r in after.json()["sessions"]] == ["external-1111", "external-2222"]
+
+    @pytest.mark.parametrize(
+        ("url", "status"),
+        [
+            ("/api/chat/shell/sessions/external-1111", 404),
+            ("/api/chat/claude/sessions/bad%20id", 400),
+            ("/api/chat/claude/sessions/a%2F..%2Fb", 400),
+        ],
+        ids=["unknown-kind", "space", "slash"],
+    )
+    async def test_delete_refusals(self, client, auth_headers, url, status):
+        resp = await client.delete(url, headers=auth_headers)
+        assert resp.status_code == status
+
+    async def test_delete_needs_auth(self, client):
+        resp = await client.delete("/api/chat/claude/sessions/external-1111")
         assert resp.status_code == 401
 
     async def test_the_voice_cleanup_work_folder_is_hidden_in_the_app(self, client, auth_headers):

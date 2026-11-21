@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from mobaide.core import (
     CliAuthRequiredError,
@@ -13,7 +13,7 @@ from mobaide.core import (
     SessionManager,
 )
 from mobaide.acp.agents import ChatAgentUnavailableError
-from mobaide.acp.wire import chat_request_error, list_chat_sessions
+from mobaide.acp.wire import chat_request_error, delete_chat_session, list_chat_sessions
 from mobaide.core.models import resolve_spawn_args
 from mobaide.core.shell import resolve_default_shell
 from mobaide.linear.worktree import WorktreeCreationError
@@ -380,3 +380,44 @@ async def list_stored_chat_sessions(
     if code != 200:
         raise HTTPException(status_code=code, detail=body.get("detail"))
     return ChatStoredSessionsResponse.model_validate(body)
+
+
+@chat_router.delete(
+    "/{kind}/sessions/{session_id:path}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    responses={
+        400: {"description": "Invalid session id"},
+        404: {"description": "No chat agent of this kind"},
+        409: {
+            "description": (
+                "The agent cannot delete its sessions, or the session is open "
+                "in a Mobaide chat or in another app on the PC"
+            )
+        },
+        502: {"description": "The agent failed"},
+        503: {"description": "The agent cannot run on this host"},
+    },
+)
+async def delete_stored_chat_session(kind: str, session_id: str, request: Request) -> Response:
+    """Delete a session the agent stored on this host (ACP ``session/delete``).
+
+    The agent decides how: Claude Code removes the conversation, Codex moves
+    it to its archive. An id the agent no longer knows counts as deleted.
+    """
+    code, body = await delete_chat_session(
+        getattr(request.app.state, "chat_catalog", None),
+        _get_manager(request),
+        kind,
+        session_id,
+    )
+    audit_event(
+        "audit.chat_session.deleted",
+        actor=getattr(request.state, "username", None),
+        target=f"{kind}:{session_id[:200]}",
+        outcome="ok" if code == 204 else "error",
+        status=code,
+    )
+    if code != 204:
+        raise HTTPException(status_code=code, detail=(body or {}).get("detail"))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
