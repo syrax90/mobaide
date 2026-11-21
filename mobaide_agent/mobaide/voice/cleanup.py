@@ -119,6 +119,9 @@ _OPENCODE_DENY_ALL = {"action": "*", "resource": "*", "effect": "deny"}
 # spaced path (see ``ClaudeCleanup.command``).
 _OPENCODE_SESSION_TITLE = "Voice-cleanup"
 _OPENCODE_CONFIG_ENV = "OPENCODE_CONFIG_CONTENT"
+# OpenCode 2.2.0-2.2.5 reject ``--archived``: "Unrecognized flag: --archived
+# in command opencode run". Only the flag name is fixed, not the wording.
+_OPENCODE_UNKNOWN_ARCHIVED = re.compile(r"unrecognized flag\W+--archived\b", re.IGNORECASE)
 # Copilot's ``--available-tools`` is the list of tools the model may see. No
 # value means every tool, so the list names one that does not exist: the
 # model then has no tool to call.
@@ -452,6 +455,8 @@ def parse_opencode_result(result: CmdResult, source: str) -> str:
     # OpenCode 1 does not know ``--standalone`` and prints its usage. It also
     # ignores the agent's deny rule, so it must not run a cleanup at all.
     if result.rc != 0 and not events and stderr.lstrip().startswith("opencode run [message"):
+        raise _outdated(name, "opencode upgrade")
+    if result.rc != 0 and not events and _OPENCODE_UNKNOWN_ARCHIVED.search(stderr):
         raise _outdated(name, "opencode upgrade")
     texts: list[str] = []
     finished = False
@@ -888,8 +893,10 @@ class OpenCodeCleanup(CleanupCli):
     """OpenCode names no cheapest model, so the run uses the user's default
     one. The rules are an inline agent that denies every tool; project config
     is off, because OpenCode merges it from every parent folder of the cwd.
-    The user's global config still applies (its rules file, its MCP servers),
-    and OpenCode keeps the run in its session history."""
+    ``~/.claude/CLAUDE.md`` is off too: OpenCode 2.3.1+ loads it as the global
+    rules file when the user has no ``AGENTS.md``. The user's global config
+    still applies (its ``AGENTS.md``, its MCP servers). ``--archived`` (2.2.6+)
+    keeps the run out of OpenCode's session picker and ``--continue``."""
 
     name = "OpenCode"
 
@@ -903,6 +910,7 @@ class OpenCodeCleanup(CleanupCli):
             "--standalone",
             "--agent", _OPENCODE_AGENT,
             "--title", _OPENCODE_SESSION_TITLE,
+            "--archived",
             "--format", "json",
         )
         env = _cli_env(binary)
@@ -910,6 +918,7 @@ class OpenCodeCleanup(CleanupCli):
         # the run under the agent's own folder, not under the run's cwd.
         env.pop("PWD", None)
         env["OPENCODE_DISABLE_PROJECT_CONFIG"] = "1"
+        env["OPENCODE_DISABLE_CLAUDE_CODE"] = "1"
         env[_OPENCODE_CONFIG_ENV] = _opencode_config(env.get(_OPENCODE_CONFIG_ENV))
         return CleanupCommand(argv=argv, env=env, stdin=_wrap(source).encode(), model="default")
 

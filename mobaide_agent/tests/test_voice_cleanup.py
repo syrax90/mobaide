@@ -837,6 +837,20 @@ class TestParseOpenCodeResult:
         assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_outdated")
         assert "opencode upgrade" in excinfo.value.message
 
+    def test_rejected_archived_flag_on_a_failed_run_means_the_cli_is_too_old(self):
+        # OpenCode 2.2.0-2.2.5 know ``--standalone`` but not ``--archived``.
+        result = CmdResult(
+            rc=1,
+            stdout=b"opencode run [message..]\n\nrun opencode with a message\n",
+            stderr=b"ERROR\n  Unrecognized flag: --archived in command opencode run\n",
+        )
+
+        with pytest.raises(VoiceError) as excinfo:
+            parse_opencode_result(result, "text")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_outdated")
+        assert "opencode upgrade" in excinfo.value.message
+
     def test_timeout_wins_over_whatever_was_printed(self):
         result = CmdResult(rc=-9, stdout=_opencode_answer("Half.").stdout, stderr=b"", timed_out=True)
 
@@ -1263,6 +1277,7 @@ class TestOpenCodeCommand:
             "--standalone",
             "--agent", "mobaide-voice-cleanup",
             "--title", "Voice-cleanup",
+            "--archived",
             "--format", "json",
         ]
         assert call["stdin"] == b"<transcript>\num fix the bug uh then run the tests\n</transcript>"
@@ -1271,11 +1286,12 @@ class TestOpenCodeCommand:
         assert "PWD" not in call["env"]
         assert call["env"]["PATH"].split(os.pathsep)[0] == os.path.dirname(opencode_binary)
 
-    async def test_rules_are_an_inline_agent_that_denies_every_tool_with_project_config_off(
+    async def test_rules_are_an_inline_agent_that_denies_every_tool_with_project_and_claude_config_off(
         self, work_dir, opencode_binary, monkeypatch
     ):
         # OpenCode merges the config of every parent folder of the run's cwd;
         # the user's own inline config (a provider, say) must survive.
+        monkeypatch.delenv("OPENCODE_DISABLE_CLAUDE_CODE", raising=False)
         monkeypatch.setenv(
             "OPENCODE_CONFIG_CONTENT",
             json.dumps({"model": "acme/big", "permissions": [{"action": "*", "resource": "*", "effect": "allow"}]}),
@@ -1286,6 +1302,9 @@ class TestOpenCodeCommand:
 
         env = run.calls[0]["env"]
         assert env["OPENCODE_DISABLE_PROJECT_CONFIG"] == "1"
+        # OpenCode 2.3.1+ would load ~/.claude/CLAUDE.md as the global rules.
+        assert env["OPENCODE_DISABLE_CLAUDE_CODE"] == "1"
+        assert "OPENCODE_DISABLE_CLAUDE_CODE" not in os.environ
         config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
         deny = {"action": "*", "resource": "*", "effect": "deny"}
         assert config["model"] == "acme/big"
