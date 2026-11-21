@@ -1,9 +1,10 @@
-"""Detect a Claude Code turn that the user ended with Esc or Ctrl+C.
+"""Detect a Claude Code or Junie turn that the user ended with Esc or Ctrl+C.
 
-Such a turn fires no ``Stop`` and no ``idle_prompt``, but the CLI appends a
+Such a turn fires no ``Stop`` and no ``idle_prompt``, but Claude Code appends a
 main-chain user entry starting ``[Request interrupted by user`` to the
-transcript. An interrupt key while the session works opens a short watch on the
-transcript path from the hooks' ``transcript_path``; only that entry ends the
+transcript, and Junie a ``CancelAgentEvent`` line to its session's
+``events.jsonl``. An interrupt key while the session works opens a short watch
+on the path from the hooks' ``transcript_path``; only that entry ends the
 turn, because Esc alone may just close a menu.
 """
 from __future__ import annotations
@@ -25,6 +26,9 @@ INTERRUPT_KEYS = frozenset({b"\x1b", b"\x1b\x1b", b"\x03"})
 INTERRUPT_MARKER = "[Request interrupted by user"
 _INTERRUPT_MARKER_BYTES = INTERRUPT_MARKER.encode()
 
+JUNIE_CANCEL_EVENT = "CancelAgentEvent"
+_JUNIE_CANCEL_EVENT_BYTES = JUNIE_CANCEL_EVENT.encode()
+
 # The CLI writes the entry within milliseconds of the key; the window only
 # leaves room for a tool call that is slow to abort.
 INTERRUPT_WATCH_SECONDS = 15.0
@@ -37,13 +41,17 @@ _READ_LIMIT_BYTES = 1 << 20
 
 def is_interrupt_entry(line: bytes) -> bool:
     """Whether one transcript line is the CLI's record of an interrupted turn."""
-    if _INTERRUPT_MARKER_BYTES not in line:
+    if _INTERRUPT_MARKER_BYTES not in line and _JUNIE_CANCEL_EVENT_BYTES not in line:
         return False
     try:
         entry: Any = json.loads(line)
     except ValueError:
         return False
-    if not isinstance(entry, dict) or entry.get("type") != "user":
+    if not isinstance(entry, dict):
+        return False
+    if entry.get("kind") == JUNIE_CANCEL_EVENT:
+        return True
+    if entry.get("type") != "user":
         return False
     if entry.get("isSidechain") is True:
         return False

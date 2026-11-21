@@ -24,7 +24,8 @@ external binary, so they behave identically on Windows and POSIX (unlike a
 ``Invoke-WebRequest``).
 
 A chat session gets the same kind of hooks as a settings object, with no file:
-see :func:`chat_hook_settings`.
+see :func:`chat_hook_settings`. A Junie terminal session gets a Junie config
+file in the same place instead: see :func:`write_junie_session_hooks`.
 
 Files live under a per-port temp directory so two agents on one host don't sweep
 each other's files. They are removed on ``SessionEnd`` and swept on startup;
@@ -35,6 +36,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
+import stat
+import sys
 import tempfile
 from pathlib import Path
 from urllib.parse import quote
@@ -191,25 +195,97 @@ def write_session_hooks(
     whether that should abort the launch (it does not: a session without hooks
     still runs, it just won't produce attention notifications).
     """
+    settings = _build_settings(session_id, port, token, fail_open=fail_open)
+    if extra:
+        settings.update(extra)
+    return _write_owner_only(port, session_id, settings)
+
+
+# Junie runs only ``command`` hooks, so each one starts this stdlib script,
+# which posts the hook to ``/internal/hook`` (see :mod:`.junie_hook_post`).
+JUNIE_HOOK_POST_SCRIPT = str(Path(__file__).with_name("junie_hook_post.py"))
+
+# Junie event -> gate kind. Every entry must be ``async``: a sync
+# ``PermissionRequest`` hook that exits 0 approves with no dialog, and the poster
+# always exits 0. No ``SessionEnd``: Junie fires it on ``/restart`` too and the
+# shim relaunches with the same file; the session manager deletes it instead.
+_JUNIE_HOOK_EVENTS = (
+    ("UserPromptSubmit", HookKind.PROMPT_SUBMIT),
+    ("PreToolUse", HookKind.TOOL),
+    ("PermissionRequest", HookKind.PERMISSION),
+    ("Stop", HookKind.STOP),
+    ("StopFailure", HookKind.STOP_FAILURE),
+)
+
+
+def junie_hook_config(session_id: str, port: int) -> dict:
+    """The Junie config document that wires a terminal session's hooks.
+
+    Holds no token: the poster reads it from ``HOOK_TOKEN_ENV``, which the
+    launcher puts in the Junie process environment.
+    """
+    def entry(kind: HookKind) -> list[dict]:
+        command = shlex.join([
+            sys.executable, "-I", JUNIE_HOOK_POST_SCRIPT,
+            str(port), session_id, kind.value,
+        ])
+        return [{
+            "hooks": [{
+                "type": "command",
+                "command": command,
+                "async": True,
+                "timeout": _HOOK_TIMEOUT_SECONDS,
+            }],
+        }]
+
+    return {"hooks": {event: entry(kind) for event, kind in _JUNIE_HOOK_EVENTS}}
+
+
+def write_junie_session_hooks(session_id: str, port: int) -> Path:
+    """Write a Junie terminal session's hook config and return its path.
+
+    Same directory and name as :func:`write_session_hooks`, so
+    :func:`sweep_hooks_dir` covers it too. Raises ``OSError`` when the file
+    cannot be written.
+    """
+    return _write_owner_only(port, session_id, junie_hook_config(session_id, port))
+
+
+def _write_owner_only(port: int, session_id: str, document: dict) -> Path:
     directory = _hooks_dir(port)
     directory.mkdir(parents=True, exist_ok=True)
+    _check_own_directory(directory)
     try:
         os.chmod(directory, 0o700)
     except OSError:
         pass  # best-effort (no-op on Windows)
     target = _settings_path(port, session_id)
-    settings = _build_settings(session_id, port, token, fail_open=fail_open)
-    if extra:
-        settings.update(extra)
-    payload = json.dumps(settings, indent=2)
+    payload = json.dumps(document, indent=2)
     # O_CREAT|O_TRUNC with an explicit 0600 mode makes the file owner-only from
     # creation (modulo umask), closing the write-then-chmod race on POSIX /tmp.
-    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # O_NOFOLLOW: a planted symlink must not redirect the write.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(target, flags, 0o600)
     try:
         os.write(fd, payload.encode("utf-8"))
     finally:
         os.close(fd)
     return target
+
+
+def _check_own_directory(directory: Path) -> None:
+    """Refuse a hooks directory another local user could control.
+
+    On a multi-user POSIX host the directory sits in the shared ``/tmp``, and
+    the files in it name commands (Junie) or URLs with the token (Claude).
+    Raises ``OSError``, which the launchers treat as "launch without hooks".
+    """
+    info = os.lstat(directory)
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise OSError(f"hooks directory is not a plain directory: {directory}")
+    getuid = getattr(os, "getuid", None)
+    if getuid is not None and info.st_uid != getuid():
+        raise OSError(f"hooks directory belongs to another user: {directory}")
 
 
 def remove_session_hooks(session_id: str, port: int) -> None:

@@ -266,6 +266,36 @@ describe('chat frame golden fixtures', () => {
     expect(cleared.state.background).toBeNull();
   });
 
+  it('shows the usage-limit continue until a patch clears it', () => {
+    let timeline = applySnapshot(INITIAL_CHAT_TIMELINE, decodeServer('snapshot_full') as SnapshotFrame).timeline;
+    for (const name of ['events_batch', 'events_remove', 'events_sign_in', 'events_background_cleared']) {
+      timeline = applyEvents(timeline, decodeServer(name) as EventsFrame).timeline;
+    }
+
+    const waiting = applyEvents(timeline, decodeServer('events_limit_wait') as EventsFrame);
+
+    expect(waiting.sync).toBeUndefined();
+    expect(waiting.timeline.seq).toBe(53);
+    expect(waiting.timeline.state.queue).toEqual([
+      { id: 'q:20', text: 'Continue from where you stopped. The usage limit has reset.', images: 0 },
+    ]);
+    expect(waiting.timeline.state.limit_wait).toEqual({
+      queue_id: 'q:20',
+      resets_at: '2026-11-07T17:00:00+00:00',
+      continues_at: '2026-11-07T17:01:00+00:00',
+      limit_type: 'five_hour',
+    });
+
+    const { timeline: cleared } = applyEvents(
+      waiting.timeline,
+      decodeServer('events_limit_wait_cleared') as EventsFrame,
+    );
+
+    expect(cleared.seq).toBe(54);
+    expect(cleared.state.queue).toEqual([]);
+    expect(cleared.state.limit_wait).toBeNull();
+  });
+
   it('decodes results', () => {
     expect(decodeServer('result_ok')).toEqual({
       t: 'result',

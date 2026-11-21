@@ -79,8 +79,9 @@ class TestInterruptWatch:
         [
             INTERRUPT,
             {"type": "user", "message": {"role": "user", "content": "[Request interrupted by user]"}},
+            {"kind": "CancelAgentEvent"},
         ],
-        ids=["tool-use-list-content", "plain-string-content"],
+        ids=["tool-use-list-content", "plain-string-content", "junie-cancel-event"],
     )
     async def test_an_interrupt_entry_after_the_key_fires_once(
         self, transcript, entry,
@@ -103,8 +104,12 @@ class TestInterruptWatch:
             [_entry("assistant", "[Request interrupted by user]")],
             [_entry("user", "why did I see [Request interrupted by user] here?")],
             [{"type": "system", "content": "[Request interrupted by user]"}],
+            [{"kind": "UserPromptEvent", "text": "CancelAgentEvent"}],
         ],
-        ids=["no-entry", "sidechain", "assistant", "marker-mid-text", "not-user"],
+        ids=[
+            "no-entry", "sidechain", "assistant", "marker-mid-text", "not-user",
+            "junie-cancel-mid-text",
+        ],
     )
     async def test_anything_but_a_main_chain_interrupt_entry_is_ignored(
         self, transcript, entries,

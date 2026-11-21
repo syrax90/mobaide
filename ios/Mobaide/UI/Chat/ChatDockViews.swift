@@ -141,55 +141,100 @@ struct ChatQueueList: View {
     var body: some View {
         VStack(spacing: 6) {
             ForEach(model.state.queue) { queued in
-                HStack(spacing: 8) {
-                    PixelChip("Queued", .status(.muted))
-                    Text(queued.text.isEmpty ? "\(queued.images) image(s)" : queued.text)
-                        .font(.footnote)
-                        .foregroundStyle(colors.text)
-                        .lineLimit(1)
-                    if queued.images > 0, !queued.text.isEmpty {
-                        Image(systemName: "photo")
-                            .font(.caption)
-                            .foregroundStyle(colors.textMuted)
-                    }
-                    Spacer(minLength: 4)
-                    if model.dequeuing.contains(queued.id) {
-                        PixelLoadingBlock(width: 7, height: 12)
-                            .frame(width: 44, height: 44)
-                    } else {
-                        if model.canSteer {
-                            Button {
-                                model.steer(queued)
-                            } label: {
-                                Image(systemName: "arrow.up")
-                                    .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(colors.accent)
-                                    .frame(width: 44, height: 44)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!model.isLive)
-                            .accessibilityLabel("Send now")
-                        }
-                        Button {
-                            model.dequeue(queued)
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(colors.textMuted)
-                                .frame(width: 44, height: 44)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!model.isLive)
-                        .accessibilityLabel("Remove queued message")
-                    }
+                if let wait = model.state.limitWait, wait.queueId == queued.id {
+                    limitWaitRow(queued, wait)
+                } else {
+                    queuedRow(queued)
                 }
-                .padding(.leading, 10)
-                .background(colors.bg2)
-                .pixelRing(colors.surface2)
             }
         }
+    }
+
+    private func limitWaitRow(_ queued: ChatQueuedMessage, _ wait: ChatLimitWait) -> some View {
+        HStack(spacing: 8) {
+            // The chip above the text: the text wraps, and the chip keeps its
+            // one line even at accessibility text sizes.
+            VStack(alignment: .leading, spacing: 4) {
+                PixelChip("Auto-continue", .status(.accent))
+                    .fixedSize()
+                Text(ChatDates.limitWaitText(wait.continuesAt))
+                    .font(.footnote)
+                    .foregroundStyle(colors.text)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 8)
+            Spacer(minLength: 4)
+            if model.dequeuing.contains(queued.id) {
+                PixelLoadingBlock(width: 7, height: 12)
+                    .frame(width: 44, height: 44)
+            } else {
+                Button {
+                    model.dequeue(queued)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(colors.textMuted)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!model.isLive)
+                .accessibilityLabel("Cancel automatic continue")
+            }
+        }
+        .padding(.leading, 10)
+        .background(colors.bg2)
+        .pixelRing(colors.surface2)
+    }
+
+    private func queuedRow(_ queued: ChatQueuedMessage) -> some View {
+        HStack(spacing: 8) {
+            PixelChip("Queued", .status(.muted))
+            Text(queued.text.isEmpty ? "\(queued.images) image(s)" : queued.text)
+                .font(.footnote)
+                .foregroundStyle(colors.text)
+                .lineLimit(1)
+            if queued.images > 0, !queued.text.isEmpty {
+                Image(systemName: "photo")
+                    .font(.caption)
+                    .foregroundStyle(colors.textMuted)
+            }
+            Spacer(minLength: 4)
+            if model.dequeuing.contains(queued.id) {
+                PixelLoadingBlock(width: 7, height: 12)
+                    .frame(width: 44, height: 44)
+            } else {
+                if model.canSteer {
+                    Button {
+                        model.steer(queued)
+                    } label: {
+                        Image(systemName: "arrow.up")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(colors.accent)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!model.isLive)
+                    .accessibilityLabel("Send now")
+                }
+                Button {
+                    model.dequeue(queued)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(colors.textMuted)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!model.isLive)
+                .accessibilityLabel("Remove queued message")
+            }
+        }
+        .padding(.leading, 10)
+        .background(colors.bg2)
+        .pixelRing(colors.surface2)
     }
 }
 

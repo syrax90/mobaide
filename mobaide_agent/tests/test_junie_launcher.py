@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import stat
+import sys
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from mobaide.core import junie_launcher
+from mobaide.core import hook_settings, junie_launcher
 from mobaide.core.claude_launcher import AdHocLaunch
 from mobaide.core.junie_launcher import (
     JunieBinaryNotFoundError,
@@ -156,3 +161,212 @@ def test_windows_fallbacks_are_the_install_script_launchers(monkeypatch, tmp_pat
         os.path.join(root, "junie.exe"),
     ]
 
+
+
+_HELP_WITH_CONFIG_LOCATION = (
+    "Usage: junie [OPTIONS]\n"
+    "  --config-location=<path>  Extra config file to load\n"
+    "  --brave                   Run commands without asking\n"
+)
+_HELP_WITHOUT_CONFIG_LOCATION = "Usage: junie [OPTIONS]\n  --brave\n"
+
+
+class _HelpProbe:
+    """Stands in for ``cli_help_text``; ``None`` is a probe that failed."""
+
+    def __init__(self, text: str | None) -> None:
+        self.text = text
+        self.calls = 0
+
+    def __call__(self, _binary: str, _env, _timeout: float) -> str | None:
+        self.calls += 1
+        return self.text
+
+
+class _HookHost:
+    """A real ``junie`` file, a scripted help probe, and the hooks temp dir
+    redirected under ``tmp_path``."""
+
+    def __init__(self, monkeypatch, tmp_path: Path) -> None:
+        self.binary = str(_make_executable(tmp_path / "bin" / "junie"))
+        self.probe = _HelpProbe(_HELP_WITH_CONFIG_LOCATION)
+        self.temp = tmp_path / "tmp"
+        self.temp.mkdir()
+        monkeypatch.setattr(junie_launcher, "_resolve_junie_binary", lambda *_a, **_kw: self.binary)
+        monkeypatch.setattr(junie_launcher, "cli_help_text", self.probe)
+        monkeypatch.setattr(hook_settings.tempfile, "gettempdir", lambda: str(self.temp))
+        # The agent's own env may carry a token when it runs inside a session.
+        monkeypatch.delenv(hook_settings.HOOK_TOKEN_ENV, raising=False)
+
+    def hook_files(self) -> list[Path]:
+        return sorted(self.temp.rglob("*.json"))
+
+
+@pytest.fixture
+def hook_host(monkeypatch, tmp_path) -> _HookHost:
+    return _HookHost(monkeypatch, tmp_path)
+
+
+def _hooked_launcher() -> JunieLauncher:
+    return JunieLauncher(hook_port=9100, hook_token="tok-secret")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows sessions run without hooks")
+async def test_a_terminal_session_gets_its_hook_config(hook_host, tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    spec = await _hooked_launcher().build(
+        _make_workspace(str(workspace)), JunieOptions(brave=True), session_id="sid-1",
+    )
+
+    [created] = spec.created_files
+    assert hook_host.hook_files() == [Path(created)]
+    assert spec.argv == [hook_host.binary, f"--config-location={created}", "--brave"]
+    text = Path(created).read_text(encoding="utf-8")
+    assert json.loads(text) == hook_settings.junie_hook_config("sid-1", 9100)
+    # The token reaches the poster only through the Junie process env:
+    # argv and the config file are readable by other local users.
+    assert spec.env[hook_settings.HOOK_TOKEN_ENV] == "tok-secret"
+    assert spec.env["MOBAIDE_SESSION_ID"] == "sid-1"
+    assert "tok-secret" not in text
+    assert not any("tok-secret" in arg for arg in spec.argv)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("launcher_kwargs", "session_id", "help_text", "platform"),
+    [
+        ({"hook_port": 9100, "hook_token": "tok"}, None, _HELP_WITH_CONFIG_LOCATION, "linux"),
+        ({}, "sid-1", _HELP_WITH_CONFIG_LOCATION, "linux"),
+        ({"hook_port": 9100, "hook_token": "tok"}, "sid-1", _HELP_WITHOUT_CONFIG_LOCATION, "linux"),
+        ({"hook_port": 9100, "hook_token": "tok"}, "sid-1", None, "linux"),
+        ({"hook_port": 9100, "hook_token": "tok"}, "sid-1", _HELP_WITH_CONFIG_LOCATION, "win32"),
+    ],
+    ids=["no-session-id", "no-hook-endpoint", "old-junie", "help-probe-failed", "windows"],
+)
+async def test_without_hook_support_the_session_launches_hookless(
+    hook_host, tmp_path, monkeypatch, launcher_kwargs, session_id, help_text, platform,
+):
+    # An older Junie exits with "no such option" on --config-location, so the
+    # flag may appear only when the binary's help lists it.
+    hook_host.probe.text = help_text
+    monkeypatch.setattr(sys, "platform", platform)
+
+    spec = await JunieLauncher(**launcher_kwargs).build(
+        _make_workspace(str(tmp_path)), JunieOptions(), session_id=session_id,
+    )
+
+    assert spec.argv == [hook_host.binary]
+    assert spec.created_files == []
+    assert hook_settings.HOOK_TOKEN_ENV not in spec.env
+    assert hook_host.hook_files() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows sessions run without hooks")
+async def test_a_failed_config_write_launches_hookless(hook_host, tmp_path, monkeypatch):
+    def full_disk(*_a, **_kw):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(junie_launcher, "write_junie_session_hooks", full_disk)
+
+    spec = await _hooked_launcher().build(
+        _make_workspace(str(tmp_path)), JunieOptions(), session_id="sid-1",
+    )
+
+    assert spec.argv == [hook_host.binary]
+    assert spec.created_files == []
+    assert hook_settings.HOOK_TOKEN_ENV not in spec.env
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows sessions run without hooks")
+async def test_a_build_that_fails_after_the_write_removes_the_config(
+    hook_host, tmp_path, monkeypatch,
+):
+    # A session that never spawns never reaches the session manager's cleanup.
+    async def no_worktree(*_a, **_kw):
+        raise RuntimeError("worktree failed")
+
+    launcher = _hooked_launcher()
+    monkeypatch.setattr(launcher, "resolve_cwd", no_worktree)
+
+    with pytest.raises(RuntimeError):
+        await launcher.build(_make_workspace(str(tmp_path)), JunieOptions(), session_id="sid-1")
+
+    assert hook_host.hook_files() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "help_text",
+    [_HELP_WITH_CONFIG_LOCATION, _HELP_WITHOUT_CONFIG_LOCATION, None],
+    ids=["supported", "unsupported", "probe-failed"],
+)
+async def test_the_help_probe_answer_stands_for_the_next_launch(hook_host, help_text):
+    # The probe starts a JVM: a launch right after another must not pay for
+    # it again, whatever the first answer was.
+    hook_host.probe.text = help_text
+    launcher = _hooked_launcher()
+
+    first = await launcher.supports_config_location({})
+    second = await launcher.supports_config_location({})
+
+    assert first == second == (help_text == _HELP_WITH_CONFIG_LOCATION)
+    assert hook_host.probe.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_only_a_negative_answer_expires(hook_host, monkeypatch):
+    # Junie updates itself by switching a ``current`` link, so the shim path
+    # stays the same: "no flag" (or a failed probe) must be asked again later.
+    # A newer Junie keeps the flag, so "yes" stands.
+    clock = [1000.0]
+    monkeypatch.setattr(junie_launcher, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    retry = junie_launcher._HELP_PROBE_RETRY_SECONDS
+    hook_host.probe.text = _HELP_WITHOUT_CONFIG_LOCATION
+    launcher = _hooked_launcher()
+    assert await launcher.supports_config_location({}) is False
+
+    hook_host.probe.text = _HELP_WITH_CONFIG_LOCATION
+    clock[0] += retry - 1
+    assert await launcher.supports_config_location({}) is False
+    assert hook_host.probe.calls == 1
+
+    clock[0] += 2
+    assert await launcher.supports_config_location({}) is True
+    assert hook_host.probe.calls == 2
+
+    hook_host.probe.text = None
+    clock[0] += retry * 10
+    assert await launcher.supports_config_location({}) is True
+    assert hook_host.probe.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_launches_share_one_probe(hook_host, monkeypatch):
+    # Several sessions starting at once (Auto Scan) must not start one JVM each.
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[str] = []
+
+    def slow_probe(binary: str, _env, _timeout: float) -> str:
+        calls.append(binary)
+        started.set()
+        release.wait(10)
+        return _HELP_WITH_CONFIG_LOCATION
+
+    monkeypatch.setattr(junie_launcher, "cli_help_text", slow_probe)
+    launcher = _hooked_launcher()
+
+    first = asyncio.create_task(launcher.supports_config_location({}))
+    second = asyncio.create_task(launcher.supports_config_location({}))
+    assert await asyncio.to_thread(started.wait, 10)
+    for _ in range(10):
+        await asyncio.sleep(0)  # let the second launch reach the probe
+    release.set()
+
+    assert await asyncio.gather(first, second) == [True, True]
+    assert calls == [hook_host.binary]

@@ -21,6 +21,7 @@ from mobaide.core.cli_launcher import (
     CliBinaryNotFoundError,
     await_model_cache_warmup,
     build_cli_capabilities,
+    cli_help_text,
     cli_version,
     probe_cli_available,
     shim_safe_argv,
@@ -402,6 +403,27 @@ class TestCliVersion:
 
         assert cli_version(cli) == (1, 0, 0)
         assert runs.read_text().count("run") == 2
+
+
+@skip_if_not_linux
+class TestCliHelpText:
+    """The Junie launcher adds ``--config-location`` only when the help of
+    the binary it will run lists it."""
+
+    def test_reads_stdout_and_stderr_with_the_launch_env(self, tmp_path):
+        cli = _fake_cli(
+            tmp_path / "cli",
+            'echo "$1 --config-location=<path>"\necho "--brave $MOBAIDE_FAKE_ENV" >&2\n',
+        )
+
+        text = cli_help_text(cli, {**os.environ, "MOBAIDE_FAKE_ENV": "from-launch-env"})
+
+        assert text is not None
+        assert "--help --config-location=<path>" in text
+        assert "--brave from-launch-env" in text
+
+    def test_none_for_a_missing_cli(self, tmp_path):
+        assert cli_help_text(str(tmp_path / "gone")) is None
 
 
 class TestRequireCodeModeVersion:

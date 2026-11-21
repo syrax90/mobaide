@@ -514,6 +514,26 @@ def cli_version(
     return version
 
 
+def cli_help_text(
+    cli_bin: str, env: Mapping[str, str] | None = None, timeout: float = _VERSION_TIMEOUT,
+) -> str | None:
+    """``<cli> --help`` output (stdout and stderr), or None when the CLI
+    cannot run. Not cached. Blocking: call it off the event loop."""
+    try:
+        done = subprocess.run(
+            shim_safe_argv(cli_bin, "--help"),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+            creationflags=WINDOWS_NO_WINDOW,
+            env=dict(env) if env is not None else None,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return done.stdout.decode("utf-8", "replace")
+
+
 def _version_text(version: tuple[int, int, int]) -> str:
     return ".".join(str(part) for part in version)
 
