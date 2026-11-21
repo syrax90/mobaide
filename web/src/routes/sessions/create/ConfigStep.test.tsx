@@ -356,7 +356,7 @@ describe('ConfigStep — GitHub Copilot', () => {
     fireEvent.click(terminalChoice());
 
     const next = actions.reduce(wizardReducer, STATE);
-    expect(next.copilot).toEqual({ allowAll: true, terminalUi: true });
+    expect(next.copilot).toEqual({ allowAll: true, sandbox: false, terminalUi: true });
     expect({ ...next, copilot: STATE.copilot }).toEqual(STATE);
   });
 

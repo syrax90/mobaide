@@ -81,10 +81,14 @@ class CopilotOptions:
     """GitHub Copilot CLI launch options.
 
     ``allow_all`` maps to ``--allow-all``: Copilot then runs tools and uses
-    paths and URLs without asking.
+    paths and URLs without asking. ``sandbox`` maps to ``--sandbox``: shell
+    commands run in Copilot's OS sandbox, and a command that asks to leave it
+    still prompts under ``--allow-all``. Off adds no flag (not
+    ``--no-sandbox``), so a sandbox the user saved in Copilot stays on.
     """
 
     allow_all: bool = False
+    sandbox: bool = False
     # Worktree intent for a stored git workspace, resolved by ``resolve_cwd``
     # exactly like Codex; ignored for ad-hoc launches.
     worktree: bool = False
@@ -132,6 +136,8 @@ class CopilotLauncher:
         argv = [self.resolve_binary()]
         if options.allow_all:
             argv.append("--allow-all")
+        if options.sandbox:
+            argv.append("--sandbox")
         if options.initial_prompt:
             # One element with ``=``: a prompt that starts with ``-`` can
             # never be read as another flag.

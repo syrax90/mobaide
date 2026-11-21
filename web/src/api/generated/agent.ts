@@ -1848,6 +1848,11 @@ export interface components {
             /** Branch Name */
             branch_name?: string | null;
             /**
+             * Sandbox
+             * @default false
+             */
+            sandbox: boolean;
+            /**
              * Worktree
              * @default false
              */

@@ -119,6 +119,11 @@ export interface OpenCodeBucket {
 export interface CopilotBucket {
   /** Copilot's `--allow-all`: run tools and use paths and URLs without asking. */
   allowAll: boolean;
+  /**
+   * Copilot's `--sandbox`: shell commands run in its OS sandbox. Not part of
+   * Auto Scan's options. Combines with `allowAll`, unlike Antigravity.
+   */
+  sandbox: boolean;
   /** The classic terminal instead of the chat view. */
   terminalUi: boolean;
 }
@@ -330,7 +335,7 @@ export const AUTO_SCAN_AGENT_DEFAULTS: AutoScanAgentBuckets = {
     terminalUi: false,
   },
   opencode: { autoApprove: true, terminalUi: false, codeMode: true },
-  copilot: { allowAll: true, terminalUi: false },
+  copilot: { allowAll: true, sandbox: false, terminalUi: false },
   cursor: { force: true, terminalUi: false },
   junie: { planMode: false, brave: true, terminalUi: false },
   pi: { terminalUi: false, codeMode: false },
@@ -365,7 +370,7 @@ export const INITIAL_WIZARD_STATE: WizardState = {
     terminalUi: false,
   },
   opencode: { autoApprove: false, terminalUi: false, codeMode: true },
-  copilot: { allowAll: false, terminalUi: false },
+  copilot: { allowAll: false, sandbox: false, terminalUi: false },
   cursor: { force: false, terminalUi: false },
   junie: { planMode: false, brave: false, terminalUi: false },
   pi: { terminalUi: false, codeMode: false },
@@ -692,6 +697,7 @@ export function applyAutoScanSettings(
         copilot != null
           ? {
               allowAll: copilot.allow_all ?? AUTO_SCAN_AGENT_DEFAULTS.copilot.allowAll,
+              sandbox: false,
               terminalUi: false,
             }
           : agents.copilot,
@@ -774,6 +780,7 @@ export type WizardAction =
   | { type: 'setOpenCodeTerminalUi'; value: boolean }
   | { type: 'setOpenCodeCodeMode'; value: boolean; target?: AgentBucketTarget }
   | { type: 'setCopilotAllowAll'; value: boolean; target?: AgentBucketTarget }
+  | { type: 'setCopilotSandbox'; value: boolean }
   | { type: 'setCopilotTerminalUi'; value: boolean }
   | { type: 'setCursorForce'; value: boolean; target?: AgentBucketTarget }
   | { type: 'setCursorTerminalUi'; value: boolean }
@@ -1049,6 +1056,9 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         ...copilot,
         allowAll: action.value,
       }));
+
+    case 'setCopilotSandbox':
+      return { ...state, copilot: { ...state.copilot, sandbox: action.value } };
 
     case 'setCopilotTerminalUi':
       return { ...state, copilot: { ...state.copilot, terminalUi: action.value } };

@@ -1089,6 +1089,7 @@ private struct CreateSessionContent: View {
         )
         Section(header: PixelSectionHeader("GitHub Copilot")) {
             CopilotOptionRows(allowAll: $model.copilotAllowAll)
+            CopilotSandboxRows(sandbox: $model.copilotSandbox)
         }
         continueSessionSection(agentName: "GitHub Copilot")
     }

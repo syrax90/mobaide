@@ -135,15 +135,16 @@ class SessionCreateDtoFixtureTest {
         val decoded = fixture("CopilotOptionsModel").decodeAll(CopilotOptionsModel.serializer())
         val full = decoded.getValue("full")
         assertTrue(full.allow_all)
+        assertTrue(full.sandbox)
         assertTrue(full.worktree)
         assertEquals("b", full.branch_name)
         assertEquals("origin/main", full.base_branch)
         assertBaseBranchEncodes(CopilotOptionsModel.serializer(), full, "origin/main")
         val encoded = allKeysJson.encodeToJsonElement(CopilotOptionsModel.serializer(), full) as JsonObject
-        assertEquals(setOf("allow_all", "worktree", "branch_name", "base_branch"), encoded.keys)
+        assertEquals(setOf("allow_all", "sandbox", "worktree", "branch_name", "base_branch"), encoded.keys)
         val defaults = decoded.getValue("empty_defaults_materialize")
-        // `allow_all` must default off.
-        assertEquals(CopilotOptionsModel(allow_all = false, worktree = false), defaults)
+        // `allow_all` and `sandbox` must default off.
+        assertEquals(CopilotOptionsModel(allow_all = false, sandbox = false, worktree = false), defaults)
     }
 
     @Test

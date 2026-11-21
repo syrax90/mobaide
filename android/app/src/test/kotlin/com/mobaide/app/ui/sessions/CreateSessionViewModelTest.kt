@@ -3959,6 +3959,7 @@ class CreateSessionViewModelTest {
         val (request, saved) = copilotSubmit(fx) { vm ->
             assertEquals(CreateSessionStep.CopilotConfig, vm.uiState.value.step)
             vm.setCopilotAllowAll(true)
+            vm.setCopilotSandbox(true)
             vm.toggleWorktree(true)
             vm.setBranchName("feature/x")
         }
@@ -3972,6 +3973,7 @@ class CreateSessionViewModelTest {
         val options = request.copilot_options
         assertNotNull(options)
         assertTrue(options!!.allow_all)
+        assertTrue("sandbox must travel inside copilot_options", options.sandbox)
         assertTrue("worktree must travel inside copilot_options", options.worktree)
         assertEquals("feature/x", options.branch_name)
         assertFalse(
@@ -3979,7 +3981,7 @@ class CreateSessionViewModelTest {
             request.worktree,
         )
         // The same choices are kept for the next Copilot launch, and no other agent's.
-        assertEquals(CopilotLaunchPrefs(allowAll = true, terminalUi = false), saved)
+        assertEquals(CopilotLaunchPrefs(allowAll = true, sandbox = true, terminalUi = false), saved)
         coVerify(exactly = 0) { fx.prefs.setLastUsedClaudeOptions(any()) }
         coVerify(exactly = 0) { fx.prefs.setLastUsedCodexOptions(any()) }
         coVerify(exactly = 0) { fx.prefs.setLastUsedAntigravityOptions(any()) }
@@ -3990,6 +3992,7 @@ class CreateSessionViewModelTest {
         val (request, saved) = copilotSubmit(newFixture())
 
         assertFalse(request.copilot_options!!.allow_all)
+        assertFalse(request.copilot_options!!.sandbox)
         assertFalse(request.copilot_options!!.worktree)
         assertNull(request.copilot_options!!.branch_name)
         assertFalse(saved.allowAll)
@@ -4114,12 +4117,13 @@ class CreateSessionViewModelTest {
     fun init_restoresTheCopilotChoices() = runTest {
         val fx = newFixture()
         coEvery { fx.prefs.getLastUsedCopilotOptions() } returns
-            CopilotLaunchPrefs(allowAll = true, terminalUi = true)
+            CopilotLaunchPrefs(allowAll = true, sandbox = true, terminalUi = true)
 
         val vm = fx.buildVm()
         advanceUntilIdle()
 
         assertTrue(vm.uiState.value.copilotAllowAll)
+        assertTrue(vm.uiState.value.copilotSandbox)
         assertTrue(vm.uiState.value.copilotTerminalUi)
         assertFalse(vm.uiState.value.antigravityTerminalUi)
         assertFalse(vm.uiState.value.skipPermissions)

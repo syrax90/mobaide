@@ -41,6 +41,24 @@ async def test_argv_allow_all_is_one_flag(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [
+        (CopilotOptions(sandbox=True), ["copilot", "--sandbox"]),
+        (
+            CopilotOptions(allow_all=True, sandbox=True, initial_prompt="go"),
+            ["copilot", "--allow-all", "--sandbox", "--interactive=go"],
+        ),
+        # Off adds no flag, never ``--no-sandbox``: a sandbox saved in Copilot stays on.
+        (CopilotOptions(allow_all=True, initial_prompt="go"), ["copilot", "--allow-all", "--interactive=go"]),
+    ],
+)
+async def test_argv_sandbox_flag(tmp_path: Path, options: CopilotOptions, expected: list[str]):
+    spec = await CopilotLauncher().build(_make_workspace(str(tmp_path)), options)
+    assert spec.argv == expected
+
+
+@pytest.mark.asyncio
 async def test_env_prepends_binary_dir_to_path(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         copilot_launcher, "_resolve_copilot_binary",

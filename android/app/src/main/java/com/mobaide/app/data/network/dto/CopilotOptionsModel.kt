@@ -9,6 +9,8 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class CopilotOptionsModel(
     val allow_all: Boolean = false,
+    // Copilot's --sandbox; false sends no flag, so a sandbox saved in Copilot stays on.
+    val sandbox: Boolean = false,
     val worktree: Boolean = false,
     val branch_name: String? = null,
     // The ref the new worktree starts from; null = the agent's default branch.

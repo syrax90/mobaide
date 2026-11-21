@@ -42,7 +42,7 @@ const ANTIGRAVITY_BLOB = {
   terminalUi: true,
 };
 
-const COPILOT_BLOB = { allowAll: true, terminalUi: true };
+const COPILOT_BLOB = { allowAll: true, sandbox: true, terminalUi: true };
 
 const CURSOR_BLOB = { force: true, terminalUi: true };
 
@@ -228,10 +228,12 @@ describe('hydration', () => {
     expect((await rehydrateWith({ copilot: COPILOT_BLOB })).copilot).toEqual(COPILOT_BLOB);
     expect((await rehydrateWith({ copilot: { allowAll: true } })).copilot).toEqual({
       allowAll: true,
+      sandbox: false,
       terminalUi: false,
     });
     // A hand-edited value must never turn "allow all" on.
     expect((await rehydrateWith({ copilot: { ...COPILOT_BLOB, allowAll: 'yes' } })).copilot).toBeNull();
+    expect((await rehydrateWith({ copilot: { ...COPILOT_BLOB, sandbox: 'yes' } })).copilot).toBeNull();
     expect((await rehydrateWith({ copilot: [COPILOT_BLOB] })).copilot).toBeNull();
     expect((await rehydrateWith({ claude: CLAUDE_BLOB })).copilot).toBeNull();
   });

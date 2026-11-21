@@ -1218,6 +1218,10 @@ class CopilotChatSpec(_ChatSpecBase):
         # Before the launcher can create a worktree.
         argv = self._argv()
         fake = argv == fake_agent_argv(self.fake_flavor)
+        if options.sandbox and self._fixed_command() is None:
+            # Copilot 1.0.103+ honours it in ACP, also on session/load. The
+            # sandbox grants the session/new folder, not the process cwd.
+            argv.append("--sandbox")
         cwd = await self._launcher.resolve_cwd(target, options)
         env = self._launcher.build_env(target)
         return ChatLaunchPlan(

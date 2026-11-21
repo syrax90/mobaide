@@ -1334,6 +1334,43 @@ class TestCopilotPrepare:
         assert plan.initial_config == [ConfigIntent("on", option_id="allow_all")]
         assert [m.argv for m in plan.sign_in] == [[*fake_login_argv("copilot"), "--device"]]
 
+    async def test_sandbox_adds_the_launch_flag_to_the_acp_server(self, tmp_path):
+        spec = CopilotChatSpec(FakeCopilotLauncher())
+
+        sandboxed = await spec.prepare(
+            AdHocLaunch(cwd=str(tmp_path)), CopilotOptions(allow_all=True, sandbox=True)
+        )
+        plain = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), CopilotOptions())
+
+        assert sandboxed.argv == ["/opt/copilot/bin/copilot", "--acp", "--sandbox"]
+        # The sandbox is a launch flag; ``allow_all`` stays a session config option.
+        assert sandboxed.initial_config == [ConfigIntent("on", option_id="allow_all")]
+        assert plain.argv == ["/opt/copilot/bin/copilot", "--acp"]
+        # The stored-session list runs without the flag.
+        assert (await spec.catalog_plan()).argv == ["/opt/copilot/bin/copilot", "--acp"]
+
+    @pytest.mark.parametrize(
+        "make_spec",
+        [
+            pytest.param(
+                lambda: CopilotChatSpec(FakeCopilotLauncher(), command_override="copilot-dev --acp"),
+                id="command-override",
+            ),
+            pytest.param(
+                lambda: CopilotChatSpec(FakeCopilotLauncher(binary=None), test_mode=True),
+                id="fake-agent",
+            ),
+        ],
+    )
+    async def test_sandbox_never_reaches_a_fixed_command(self, tmp_path, make_spec):
+        spec = make_spec()
+        fixed = spec.command()
+
+        plan = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), CopilotOptions(sandbox=True))
+
+        assert "--sandbox" not in plan.argv
+        assert plan.argv == fixed
+
     async def test_catalog_plan_finds_the_node_next_to_an_npm_copilot(self, bin_dir):
         """An npm install of Copilot is a Node script whose ``node`` sits next
         to it; without that folder on ``PATH`` the stored sessions do not list."""

@@ -1331,6 +1331,11 @@
             ],
             "title": "Branch Name"
           },
+          "sandbox": {
+            "default": false,
+            "title": "Sandbox",
+            "type": "boolean"
+          },
           "worktree": {
             "default": false,
             "title": "Worktree",

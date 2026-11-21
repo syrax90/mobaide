@@ -2001,6 +2001,7 @@ private fun CopilotConfigSection(
     }
 
     CopilotPermissionControls(state.copilotAllowAll, viewModel::setCopilotAllowAll)
+    CopilotSandboxControls(state.copilotSandbox, viewModel::setCopilotSandbox)
 
     if (showWorktreeToggle) {
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
@@ -2129,6 +2130,26 @@ internal fun CopilotPermissionControls(allowAll: Boolean, onChange: (Boolean) ->
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }
+
+/** Copilot's `--sandbox` switch (Copilot step only). */
+@Composable
+internal fun CopilotSandboxControls(sandbox: Boolean, onChange: (Boolean) -> Unit) {
+    ToggleRow(
+        label = "Sandbox shell commands",
+        checked = sandbox,
+        onChange = onChange,
+    )
+    Text(
+        text = COPILOT_SANDBOX_HINT,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+internal const val COPILOT_SANDBOX_HINT =
+    "Copilot runs shell commands in an OS sandbox. A command that needs to leave the " +
+        "sandbox asks first, even with Allow all. Uses your Copilot sandbox settings. " +
+        "Needs Copilot 1.0.103+; on Linux, bwrap and slirp4netns."
 
 /** Cursor's `--force` switch, shared by the Cursor step and Auto Scan. */
 @Composable

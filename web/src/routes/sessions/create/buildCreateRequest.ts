@@ -257,6 +257,7 @@ function copilotOptions(
 ): CopilotOptions {
   return {
     allow_all: bucket.allowAll,
+    sandbox: bucket.sandbox,
     worktree: extras.worktree,
     branch_name: extras.branchName,
     base_branch: extras.baseBranch,

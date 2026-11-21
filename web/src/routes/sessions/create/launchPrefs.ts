@@ -114,7 +114,11 @@ export function applyLaunchPrefs(base: WizardState, prefs: LaunchPrefs): WizardS
     copilot:
       prefs.copilot === null
         ? base.copilot
-        : { allowAll: prefs.copilot.allowAll, terminalUi: prefs.copilot.terminalUi },
+        : {
+            allowAll: prefs.copilot.allowAll,
+            sandbox: prefs.copilot.sandbox,
+            terminalUi: prefs.copilot.terminalUi,
+          },
     cursor:
       prefs.cursor === null
         ? base.cursor
@@ -214,6 +218,7 @@ export function launchPrefsFromState(
         kind: 'copilot',
         prefs: {
           allowAll: state.copilot.allowAll,
+          sandbox: state.copilot.sandbox,
           terminalUi: state.copilot.terminalUi,
         },
       };

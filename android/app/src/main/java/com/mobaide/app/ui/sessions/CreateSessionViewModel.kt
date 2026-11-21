@@ -327,6 +327,7 @@ data class CreateSessionUiState(
     // capabilities.chat for OpenCode from the ModePick probe; null = not probed yet.
     val opencodeChat: ChatSupport? = null,
     val copilotAllowAll: Boolean = false,
+    val copilotSandbox: Boolean = false,
     // Copilot: start the classic terminal instead of the chat view.
     val copilotTerminalUi: Boolean = false,
     // capabilities.chat for Copilot from the ModePick probe; null = not probed yet.
@@ -596,6 +597,7 @@ private fun CreateSessionUiState.toOpenCodeLaunchPrefs() = OpenCodeLaunchPrefs(
 /** Snapshot of the Copilot launch controls for persistence / re-defaulting. */
 private fun CreateSessionUiState.toCopilotLaunchPrefs() = CopilotLaunchPrefs(
     allowAll = copilotAllowAll,
+    sandbox = copilotSandbox,
     terminalUi = copilotTerminalUi,
 )
 
@@ -994,6 +996,7 @@ class CreateSessionViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         copilotAllowAll = saved.allowAll,
+                        copilotSandbox = saved.sandbox,
                         copilotTerminalUi = saved.terminalUi,
                     )
                 }
@@ -2368,6 +2371,10 @@ class CreateSessionViewModel @Inject constructor(
 
     fun setCopilotAllowAll(v: Boolean) = _uiState.update { it.copy(copilotAllowAll = v) }
 
+    // Unlike Antigravity, Allow all and the sandbox combine: Copilot still asks
+    // before a command leaves the sandbox.
+    fun setCopilotSandbox(v: Boolean) = _uiState.update { it.copy(copilotSandbox = v) }
+
     fun setCursorForce(v: Boolean) = _uiState.update { it.copy(cursorForce = v) }
 
     fun setJuniePlanMode(v: Boolean) = _uiState.update { it.copy(juniePlanMode = v) }
@@ -2541,6 +2548,7 @@ class CreateSessionViewModel @Inject constructor(
         baseBranch: String? = null,
     ) = CopilotOptionsModel(
         allow_all = copilotAllowAll,
+        sandbox = copilotSandbox,
         worktree = worktree,
         branch_name = branchName,
         base_branch = baseBranch,

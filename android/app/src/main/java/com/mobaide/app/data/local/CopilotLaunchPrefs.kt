@@ -11,5 +11,6 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class CopilotLaunchPrefs(
     val allowAll: Boolean = false,
+    val sandbox: Boolean = false,
     val terminalUi: Boolean = false,
 )

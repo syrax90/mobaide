@@ -207,6 +207,7 @@ class CopilotScanOptionsModel(BaseModel):
 class CopilotOptionsModel(CopilotScanOptionsModel):
     """Wire DTO for GitHub Copilot CLI launch options (see :class:`CopilotOptions`)."""
 
+    sandbox: bool = False
     worktree: bool = False
     branch_name: str | None = None
     base_branch: str | None = None

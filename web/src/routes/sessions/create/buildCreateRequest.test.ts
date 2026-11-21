@@ -85,7 +85,7 @@ const POPULATED: WizardState = {
     terminalUi: false,
   },
   opencode: { autoApprove: true, terminalUi: false, codeMode: true },
-  copilot: { allowAll: true, terminalUi: false },
+  copilot: { allowAll: true, sandbox: true, terminalUi: false },
   cursor: { force: true, terminalUi: false },
   junie: { planMode: true, brave: true, terminalUi: false },
   pi: { terminalUi: false, codeMode: false },
@@ -226,7 +226,7 @@ const OPENCODE_BOOLEANS: Record<
 const COPILOT_BOOLEANS: Record<
   RequiredBooleans<components['schemas']['CopilotOptionsModel']>,
   true
-> = { allow_all: true, worktree: true };
+> = { allow_all: true, sandbox: true, worktree: true };
 
 const CURSOR_BOOLEANS: Record<
   RequiredBooleans<components['schemas']['CursorOptionsModel']>,
@@ -290,6 +290,8 @@ describe('buildCreateRequest — every boolean explicit', () => {
     });
 
     expect(request.copilot_options?.allow_all).toBe(false);
+    // Off is sent as false, never omitted: the agent then adds no flag.
+    expect(request.copilot_options?.sandbox).toBe(false);
   });
 
   it('declares every Cursor boolean', () => {
@@ -741,6 +743,7 @@ describe('Copilot — chat view', () => {
     expect(request?.worktree).toBe(false);
     expect(request?.copilot_options).toEqual({
       allow_all: true,
+      sandbox: true,
       worktree: true,
       branch_name: 'feature/x',
       base_branch: null,
@@ -782,7 +785,7 @@ describe('Cursor — chat view', () => {
     const request = build('cursor', {
       ...POPULATED,
       cursor: { force: false, terminalUi: false },
-      copilot: { allowAll: true, terminalUi: true },
+      copilot: { allowAll: true, sandbox: true, terminalUi: true },
     });
 
     expect(request.cursor_options?.force).toBe(false);
@@ -1005,6 +1008,7 @@ describe('buildResumeRequest', () => {
     });
     expect(request.copilot_options).toEqual({
       allow_all: true,
+      sandbox: true,
       worktree: false,
       branch_name: undefined,
       base_branch: null,

@@ -125,6 +125,20 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-21: Copilot sandbox switch
+
+Additive delta within proto-v7 (2026-11-21): **one optional field. No version bump; `central_server` is untouched.**
+
+| Where | Change |
+|-------|--------|
+| `copilot_options.sandbox` | New bool on `POST /api/sessions` and relay `create_session`, default `false`. Not kept by Auto Scan. |
+
+* `true` adds `--sandbox` to the Copilot process: `copilot [--allow-all] --sandbox` in a terminal session, `copilot --acp --sandbox` in a chat (also on Restart, and on Continue when the client sends it). The session list command (`copilot --acp` for `session/list`) never gets it, and neither does a `MOBAIDE_ACP_COPILOT_COMMAND` override or the test-mode fake agent.
+* `false` adds no flag, not `--no-sandbox`: a sandbox the user saved in Copilot (`sandbox.enabled`) stays on.
+* Shell commands then run in Copilot's OS sandbox (macOS Seatbelt; Linux needs `bwrap` 0.5.0+, `slirp4netns` and the other tools `copilot help sandbox` names; Windows needs BaseContainer). The policy is the user's own Copilot sandbox policy. Copilot grants the `session/new` folder, not the chat process's home-folder cwd (measured on 1.0.114: a sandboxed chat could not write to `~`). On a host that cannot run the sandbox, every sandboxed shell command fails.
+* `sandbox` and `allow_all` combine: even with allow-all on, a command that asks to leave the sandbox prompts (a permission card in the chat). Copilot honours the flag over ACP since 1.0.103.
+* Old agents ignore the field, so the session runs without the sandbox.
+
 ### Delta 2026-11-20: Code Mode in Auto Scan
 
 Additive delta within proto-v7 (2026-11-20): **Auto Scan keeps `code_mode`, and Pi gets an options object. No version bump; `central_server` is untouched.**

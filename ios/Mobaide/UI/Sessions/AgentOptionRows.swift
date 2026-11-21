@@ -169,6 +169,24 @@ struct CopilotOptionRows: View {
     }
 }
 
+/// Copilot's `--sandbox` switch (Copilot step only, not Auto Scan).
+struct CopilotSandboxRows: View {
+    let sandbox: Binding<Bool>
+
+    @Environment(\.mobaideColors) private var colors
+
+    var body: some View {
+        Toggle("Sandbox shell commands", isOn: sandbox)
+        Text(
+            "Copilot runs shell commands in an OS sandbox. A command that needs to leave the "
+                + "sandbox asks first, even with Allow all. Uses your Copilot sandbox settings. "
+                + "Needs Copilot 1.0.103+; on Linux, bwrap and slirp4netns."
+        )
+        .font(.footnote)
+        .foregroundStyle(colors.textMuted)
+    }
+}
+
 struct CursorOptionRows: View {
     let force: Binding<Bool>
 

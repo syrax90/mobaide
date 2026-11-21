@@ -514,6 +514,7 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(request.cwd, "/abs/path")
         XCTAssertNil(request.workspace_name)
         XCTAssertEqual(request.copilot_options?.allow_all, false, "allow-all stays off until the user turns it on")
+        XCTAssertEqual(request.copilot_options?.sandbox, false, "the sandbox stays off until the user turns it on")
         XCTAssertEqual(request.copilot_options?.worktree, false)
         XCTAssertNil(request.copilot_options?.branch_name)
     }
@@ -525,6 +526,7 @@ final class CreateSessionModelTests: XCTestCase {
         model.selection = .stored("a")
         model.mode = .copilot
         model.copilotAllowAll = true
+        model.copilotSandbox = true
         model.copilotTerminalUI = true
         StubURLProtocol.enqueue(
             status: 200,
@@ -539,14 +541,19 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(body["ui"] as? String, "terminal")
         let options = try XCTUnwrap(body["copilot_options"] as? [String: Any])
         XCTAssertEqual(options["allow_all"] as? Bool, true)
+        XCTAssertEqual(options["sandbox"] as? Bool, true)
         XCTAssertEqual(options["worktree"] as? Bool, false)
         XCTAssertNil(body["claude_options"])
         XCTAssertNil(body["antigravity_options"])
-        XCTAssertEqual(prefs.getLastUsedCopilotOptions(), CopilotLaunchPrefs(allowAll: true, terminalUI: true))
+        XCTAssertEqual(
+            prefs.getLastUsedCopilotOptions(),
+            CopilotLaunchPrefs(allowAll: true, sandbox: true, terminalUI: true)
+        )
         XCTAssertNil(prefs.getLastUsedAntigravityOptions(), "a Copilot launch writes no other agent's choices")
 
         let next = stubbedModel(prefs: prefs)
         XCTAssertTrue(next.copilotAllowAll, "the next wizard starts from the remembered choices")
+        XCTAssertTrue(next.copilotSandbox)
         XCTAssertTrue(next.copilotTerminalUI)
         XCTAssertFalse(next.antigravityTerminalUI)
     }

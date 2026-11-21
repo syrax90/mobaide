@@ -141,6 +141,8 @@ export const opencodeOptionsSchema = z.strictObject({
 
 export const copilotOptionsSchema = z.strictObject({
   allow_all: z.boolean().default(false),
+  /** Copilot's `--sandbox`; false sends no flag, so a sandbox saved in Copilot stays on. */
+  sandbox: z.boolean().default(false),
   worktree: z.boolean().default(false),
   branch_name: optionalWireString(),
   base_branch: optionalWireString(),

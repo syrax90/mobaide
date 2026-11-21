@@ -88,6 +88,7 @@ export interface OpenCodeLaunchPrefs {
 /** Android `CopilotLaunchPrefs`, iOS `CopilotLaunchPrefs`. */
 export interface CopilotLaunchPrefs {
   allowAll: boolean;
+  sandbox: boolean;
   terminalUi: boolean;
 }
 
@@ -201,6 +202,7 @@ export const OPENCODE_PREFS_DEFAULTS: OpenCodeLaunchPrefs = {
 
 export const COPILOT_PREFS_DEFAULTS: CopilotLaunchPrefs = {
   allowAll: false,
+  sandbox: false,
   terminalUi: false,
 };
 
@@ -404,9 +406,10 @@ function sanitizeOpenCodePrefs(raw: unknown): OpenCodeLaunchPrefs | null {
 function sanitizeCopilotPrefs(raw: unknown): CopilotLaunchPrefs | null {
   if (!isRecord(raw)) return null;
   const allowAll = field(raw, 'allowAll', COPILOT_PREFS_DEFAULTS.allowAll, isBoolean);
+  const sandbox = field(raw, 'sandbox', COPILOT_PREFS_DEFAULTS.sandbox, isBoolean);
   const terminalUi = field(raw, 'terminalUi', COPILOT_PREFS_DEFAULTS.terminalUi, isBoolean);
-  if (allowAll === undefined || terminalUi === undefined) return null;
-  return { allowAll, terminalUi };
+  if (allowAll === undefined || sandbox === undefined || terminalUi === undefined) return null;
+  return { allowAll, sandbox, terminalUi };
 }
 
 function sanitizeCursorPrefs(raw: unknown): CursorLaunchPrefs | null {

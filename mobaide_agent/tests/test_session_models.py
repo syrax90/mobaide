@@ -397,6 +397,15 @@ class TestCopilotOptionsModel:
             base_branch="origin/main",
         )
 
+    def test_sandbox_reaches_the_launcher_but_not_the_auto_scan_options(self):
+        from mobaide.agent.sessions.models import CopilotOptionsModel, CopilotScanOptionsModel
+
+        wire = self._cases("CopilotOptionsModel")["full"]["wire"]
+
+        assert CopilotOptionsModel.model_validate(wire).to_options().sandbox is True
+        # An Auto Scan keeps only the options its sessions share.
+        assert "sandbox" not in CopilotScanOptionsModel.model_fields
+
 
 class TestCursorOptionsModel:
     """``CursorOptionsModel`` is the wire form of ``CursorOptions``: the

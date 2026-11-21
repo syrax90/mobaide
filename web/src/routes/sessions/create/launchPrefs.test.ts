@@ -173,24 +173,24 @@ describe('applyLaunchPrefs', () => {
 describe('the Copilot bucket', () => {
   const dialled: WizardState = {
     ...INITIAL_WIZARD_STATE,
-    copilot: { allowAll: true, terminalUi: true },
+    copilot: { allowAll: true, sandbox: true, terminalUi: true },
     git: { worktree: true, branchName: 'wip' },
   };
 
   it('is filed under its own kind, without the per-session git fields', () => {
     expect(launchPrefsFromState(dialled, 'copilot')).toEqual({
       kind: 'copilot',
-      prefs: { allowAll: true, terminalUi: true },
+      prefs: { allowAll: true, sandbox: true, terminalUi: true },
     });
   });
 
   it('is restored into Copilot only', () => {
     const seeded = applyLaunchPrefs(INITIAL_WIZARD_STATE, {
       ...NEVER_LAUNCHED,
-      copilot: { allowAll: true, terminalUi: true },
+      copilot: { allowAll: true, sandbox: true, terminalUi: true },
     });
 
-    expect(seeded.copilot).toEqual({ allowAll: true, terminalUi: true });
+    expect(seeded.copilot).toEqual({ allowAll: true, sandbox: true, terminalUi: true });
     expect(seeded.claude).toEqual(INITIAL_WIZARD_STATE.claude);
     expect(seeded.antigravity).toEqual(INITIAL_WIZARD_STATE.antigravity);
     expect(seeded.codex.terminalUi).toBe(false);
@@ -199,9 +199,10 @@ describe('the Copilot bucket', () => {
   it('stays at the wizard defaults for a profile that never launched Copilot', () => {
     const seeded = applyLaunchPrefs(dialled, NEVER_LAUNCHED);
 
-    expect(seeded.copilot).toEqual({ allowAll: true, terminalUi: true });
+    expect(seeded.copilot).toEqual({ allowAll: true, sandbox: true, terminalUi: true });
     expect(applyLaunchPrefs(INITIAL_WIZARD_STATE, NEVER_LAUNCHED).copilot).toEqual({
       allowAll: false,
+      sandbox: false,
       terminalUi: false,
     });
   });
@@ -236,7 +237,7 @@ describe('the Cursor bucket', () => {
   it('is not seeded from the saved Copilot bucket', () => {
     const seeded = applyLaunchPrefs(INITIAL_WIZARD_STATE, {
       ...NEVER_LAUNCHED,
-      copilot: { allowAll: true, terminalUi: true },
+      copilot: { allowAll: true, sandbox: true, terminalUi: true },
     });
 
     expect(seeded.cursor).toEqual({ force: false, terminalUi: false });

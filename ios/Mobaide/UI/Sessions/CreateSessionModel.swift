@@ -289,6 +289,9 @@ final class CreateSessionModel {
 
     // Copilot
     var copilotAllowAll = false
+    /// Unlike Antigravity, Allow all and the sandbox combine: Copilot still
+    /// asks before a command leaves the sandbox.
+    var copilotSandbox = false
     /// Off by default: a Copilot session opens in the chat view whenever the
     /// agent can run it.
     var copilotTerminalUI = false
@@ -1905,6 +1908,7 @@ final class CreateSessionModel {
     private func copilotOptions(worktree: Bool, branchName: String?, baseBranch: String? = nil) -> CopilotOptionsModel {
         CopilotOptionsModel(
             allow_all: copilotAllowAll,
+            sandbox: copilotSandbox,
             worktree: worktree,
             branch_name: branchName,
             base_branch: baseBranch
@@ -2165,6 +2169,7 @@ final class CreateSessionModel {
         case .copilot:
             preferencesStore.setLastUsedCopilotOptions(CopilotLaunchPrefs(
                 allowAll: copilotAllowAll,
+                sandbox: copilotSandbox,
                 terminalUI: copilotTerminalUI
             ))
         case .cursor:
@@ -2237,6 +2242,7 @@ final class CreateSessionModel {
         }
         if let copilot = preferencesStore.getLastUsedCopilotOptions() {
             copilotAllowAll = copilot.allowAll
+            copilotSandbox = copilot.sandbox
             copilotTerminalUI = copilot.terminalUI
         }
         if let cursor = preferencesStore.getLastUsedCursorOptions() {
