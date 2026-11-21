@@ -2112,7 +2112,9 @@ class TestSignInMethods:
 
     def test_pi_signs_in_to_chatgpt_with_a_code_and_to_claude_with_a_pasted_one(self):
         """The two account logins that need only a browser on any device."""
-        chatgpt, claude = pi_sign_in_methods("/opt/pi/bin/pi", {"PI_CODING_AGENT_DIR": "/p"})
+        chatgpt, claude, *_keys = pi_sign_in_methods(
+            "/opt/pi/bin/pi", {"PI_CODING_AGENT_DIR": "/p"}
+        )
 
         assert chatgpt.id == "openai-codex"
         assert chatgpt.argv == ["/opt/pi/bin/pi", "auth", "login", "openai-codex", "--no-browser"]
@@ -2128,11 +2130,51 @@ class TestSignInMethods:
             assert method.cwd == os.path.expanduser("~")
             assert method.submit_secret is None
 
-    def test_the_fake_pi_login_is_the_fake_agent(self):
-        chatgpt, claude = pi_sign_in_methods(None, {}, fake=True)
+    async def test_pi_saves_an_api_key_typed_at_its_prompt_never_in_argv_or_env(
+        self, monkeypatch
+    ):
+        runs: list[tuple[list[str], str, dict[str, object]]] = []
+
+        async def run(argv, secret, **kw):
+            runs.append((argv, secret, kw))
+            return True, ""
+
+        monkeypatch.setattr(agents, "run_secret_login", run)
+        methods = pi_sign_in_methods("/opt/pi/bin/pi", {"PI_CODING_AGENT_DIR": "/p"})
+        keys = {m.id: m for m in methods if m.submit_secret is not None}
+        assert list(keys) == ["openrouter-key", "google-key", "openai-key", "anthropic-key"]
+        for method in keys.values():
+            assert method.argv is None
+            assert method.input_label
+
+        for method_id, provider in [
+            ("openrouter-key", "openrouter"),
+            ("google-key", "google"),
+            ("openai-key", "openai"),
+            ("anthropic-key", "anthropic"),
+        ]:
+            runs.clear()
+            assert await keys[method_id].submit_secret("sk-test") == (True, "")
+            ((argv, secret, kw),) = runs
+            assert argv == ["/opt/pi/bin/pi", "auth", "login", provider, "--api-key"]
+            assert secret == "sk-test"
+            assert kw["env"] == {"PI_CODING_AGENT_DIR": "/p"}
+            assert kw["cwd"] == os.path.expanduser("~")
+            assert "sk-test" not in kw["env"].values()
+
+    async def test_the_fake_pi_login_is_the_fake_agent(self, tmp_path, monkeypatch):
+        chatgpt, claude, *keys = pi_sign_in_methods(None, {}, fake=True)
 
         assert chatgpt.argv == [*fake_login_argv("pi"), "--device"]
         assert claude.argv == fake_login_argv("pi")
+        marker = tmp_path / "signed-out"
+        marker.write_text("", encoding="utf-8")
+        monkeypatch.setenv(agents.FAKE_SIGNED_OUT_ENV, str(marker))
+        assert len(keys) == 4
+        assert (await keys[0].submit_secret("bad"))[0] is False
+        assert marker.exists()
+        assert await keys[0].submit_secret("sk-test") == (True, "")
+        assert not marker.exists()
 
 
 class TestPiCommand:
@@ -2203,6 +2245,10 @@ class TestPiPrepare:
         assert [(m.id, m.argv) for m in plan.sign_in] == [
             ("openai-codex", ["/opt/pi/bin/pi", "auth", "login", "openai-codex", "--no-browser"]),
             ("anthropic", ["/opt/pi/bin/pi", "auth", "login", "anthropic", "--no-browser"]),
+            ("openrouter-key", None),
+            ("google-key", None),
+            ("openai-key", None),
+            ("anthropic-key", None),
         ]
         assert plan.sign_in[0].env["PI_CODING_AGENT_DIR"] == str(pi_dir)
         assert plan.sign_in_prompt == agents.PI_SIGN_IN_PROMPT
@@ -2244,6 +2290,10 @@ class TestPiPrepare:
         assert [m.argv for m in plan.sign_in] == [
             [*fake_login_argv("pi"), "--device"],
             fake_login_argv("pi"),
+            None,
+            None,
+            None,
+            None,
         ]
 
     async def test_catalog_plan_finds_the_node_next_to_an_npm_pi(self, bin_dir):

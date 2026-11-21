@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
+from mobaide.core.codex_auth import sanitize_codex_output
 from mobaide.core.pty_backend import PtyBackend, create_pty_backend
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,10 @@ SUBMIT_SETTLE = 1.5
 INPUT_MAX = 4096
 ERROR_LINES = 3
 ERROR_LINE_MAX = 200
+# A login that reads a secret at its own prompt: how long it may take to ask,
+# and to save the secret and exit once asked.
+SECRET_PROMPT_WAIT = 30.0
+SECRET_SAVE_WAIT = 30.0
 
 _OSC = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 _CSI = re.compile(r"\x1b\[[0-?]*[ -/]*([@-~])")
@@ -53,6 +58,8 @@ _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 # login's terminal as signals or extra lines.
 _INPUT_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _URL = re.compile(r"https://[^\s<>\"'`\x00-\x1f\x7f]+")
+# The last line of a login that asks for a key: "Enter OpenRouter API key: ".
+KEY_PROMPT = re.compile(r"\bkey\b[^\n]*:\s*$", re.IGNORECASE)
 
 
 def terminal_text(raw: str) -> str:
@@ -220,6 +227,89 @@ class LoginProcess:
             self._loop.call_soon_threadsafe(callback, value)
         except RuntimeError:
             pass
+
+
+async def run_secret_login(
+    argv: list[str],
+    secret: str,
+    *,
+    env: dict[str, str] | None,
+    cwd: str | None,
+    name: str,
+    prompt: re.Pattern[str] = KEY_PROMPT,
+    backend_factory: Callable[[], PtyBackend] = create_pty_backend,
+    prompt_wait: float = SECRET_PROMPT_WAIT,
+    save_wait: float = SECRET_SAVE_WAIT,
+) -> tuple[bool, str]:
+    """A login command that reads a secret at its own terminal prompt,
+    without echo. The secret goes only to the PTY, never to argv, the
+    environment or a log. Returns (True, "") on exit 0, else (False, reason)
+    with the secret taken out of the reason. The command never outlives the
+    call, also when the call is cancelled."""
+    loop = asyncio.get_running_loop()
+    output = ""
+    asked = asyncio.Event()
+    exited: asyncio.Future[int | None] = loop.create_future()
+
+    def on_output(chunk: str) -> None:
+        nonlocal output
+        output = (output + chunk)[-OUTPUT_MAX:]
+        if not asked.is_set():
+            last = terminal_text(output).rstrip("\n").rsplit("\n", 1)[-1]
+            if prompt.search(last):
+                asked.set()
+
+    def on_exit(code: int | None) -> None:
+        if not exited.done():
+            exited.set_result(code)
+
+    proc = LoginProcess(
+        SignInMethod(name, name, "", "", argv=argv, env=env, cwd=cwd),
+        loop=loop,
+        on_output=on_output,
+        on_exit=on_exit,
+        backend_factory=backend_factory,
+    )
+    code: int | None = None
+    finished = False
+    try:
+        try:
+            await loop.run_in_executor(SIGN_IN_POOL, proc.start)
+        except Exception as exc:
+            logger.warning("sign_in.key_start_failed name=%s: %s", name, type(exc).__name__)
+            return False, f"{name} could not start: {sanitize_codex_output(str(exc), secret)}"
+        ask = asyncio.ensure_future(asked.wait())
+        try:
+            await asyncio.wait({ask, exited}, timeout=prompt_wait, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            ask.cancel()
+        if asked.is_set() and not exited.done():
+            try:
+                await loop.run_in_executor(SIGN_IN_POOL, proc.write_line, secret)
+            except OSError:
+                logger.info("sign_in.key_write_failed name=%s", name)
+            try:
+                code = await asyncio.wait_for(asyncio.shield(exited), save_wait)
+            except TimeoutError:
+                code = None
+        elif exited.done():
+            code = exited.result()
+        finished = exited.done()
+    finally:
+        if not finished:
+            proc.stop()
+    if code == 0:
+        return True, ""
+    prompted = asked.is_set()
+    detail = sanitize_codex_output(last_lines(terminal_text(output), typed=secret), secret)
+    if not prompted:
+        reason = f"{name} did not ask for the key."
+    elif not finished:
+        reason = f"{name} did not save the key in time."
+    else:
+        reason = f"{name} did not save the key."
+    logger.info("sign_in.key_failed name=%s code=%s prompted=%s", name, code, prompted)
+    return False, f"{reason}\n{detail}" if detail else reason
 
 
 class SignInFlow:

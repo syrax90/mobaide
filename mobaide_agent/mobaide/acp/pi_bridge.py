@@ -87,7 +87,14 @@ NO_CREDENTIALS_MARKERS = (
     'Authentication failed for "',
     # A subscription login that Pi could not renew.
     "OAuth refresh failed for ",
+    # A provider that refused a saved API key (Pi saves any key unchecked).
+    "API key not valid",
+    "invalid_api_key",
+    "authentication_error",
 )
+# The provider's HTTP 401 at the start of the error: "401: {...}" (OpenRouter),
+# "401 {...}" (Anthropic), "OpenAI API error (401): ...".
+UNAUTHORIZED_ERROR = re.compile(r"^[^\d\n]{0,40}(?:\(401\)|401:?\s*\{)")
 SHELL_TOOLS = frozenset({"bash", "powershell"})
 TOOL_KINDS = {
     "read": "read",
@@ -1076,7 +1083,8 @@ class Bridge:
             self._reply(request_id, {"stopReason": "end_turn"})
 
     def _fail_turn(self, request_id: Any, error: str) -> None:
-        if any(marker in error for marker in NO_CREDENTIALS_MARKERS):
+        signed_out = any(marker in error for marker in NO_CREDENTIALS_MARKERS)
+        if signed_out or UNAUTHORIZED_ERROR.match(error):
             self._fail(request_id, ERR_AUTH_REQUIRED, "Authentication required")
         else:
             self._fail(request_id, ERR_INTERNAL, _first_line(error) or "The turn failed")

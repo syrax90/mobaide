@@ -21,6 +21,7 @@ from mobaide.acp.signin import (
     SignInMethod,
     find_url,
     last_lines,
+    run_secret_login,
     terminal_text,
 )
 
@@ -647,6 +648,155 @@ class TestKeyLogin:
 
         assert h.public["error"] == "codex is not installed"
         assert h.signed_in == 0
+
+
+class KeyPromptPty(LoginPty):
+    """A login that asks for a key at its own prompt; ``on_typed`` plays
+    its answer to what was typed."""
+
+    def __init__(self, prompt: str = "Enter OpenRouter API key: ", on_typed=None, **kw) -> None:
+        super().__init__(**kw)
+        self.prompt = prompt
+        self.on_typed = on_typed
+
+    def spawn(self, cmd, cwd, env, rows, cols) -> None:
+        super().spawn(cmd, cwd, env, rows, cols)
+        if self.prompt:
+            self.say(self.prompt)
+
+    def write(self, data: bytes) -> None:
+        super().write(data)
+        if self.on_typed is not None:
+            self.on_typed(self)
+
+
+async def _secret_login(pty: LoginPty, secret: str = "sk-or-secret", **kw: Any) -> tuple[bool, str]:
+    return await run_secret_login(
+        ["pi", "auth", "login", "openrouter", "--api-key"],
+        secret,
+        env={"PI_CODING_AGENT_DIR": "/p"},
+        cwd="/home/me",
+        name="Pi",
+        backend_factory=lambda: pty,
+        **kw,
+    )
+
+
+class TestSecretLogin:
+    async def test_the_key_is_typed_only_at_the_prompt_and_exit_zero_signs_in(self):
+        pty = KeyPromptPty(on_typed=lambda p: p.exit(0))
+
+        assert await _secret_login(pty) == (True, "")
+        assert pty.typed == [b"sk-or-secret\r"]
+        # The key is never part of the command.
+        assert pty.spawned == [
+            (["pi", "auth", "login", "openrouter", "--api-key"], "/home/me", signin.PTY_ROWS, signin.PTY_COLS)
+        ]
+        assert pty.terminated is False
+
+    async def test_a_prompt_split_over_reads_and_styled_is_still_found(self):
+        pty = KeyPromptPty(prompt="", on_typed=lambda p: p.exit(0))
+
+        task = asyncio.create_task(_secret_login(pty))
+        pty.say("\x1b[1mEnter Gemini API ")
+        await asyncio.sleep(0)
+        pty.say("key\x1b[0m: ")
+
+        assert await task == (True, "")
+        assert pty.typed == [b"sk-or-secret\r"]
+
+    async def test_a_login_that_never_asks_gets_no_key_and_shows_its_last_lines(self):
+        pty = KeyPromptPty(prompt="")
+        pty.say("Unknown provider: nope\r\n")
+        pty.exit(1)
+
+        ok, reason = await _secret_login(pty)
+
+        assert ok is False
+        assert reason == "Pi did not ask for the key.\nUnknown provider: nope"
+        assert pty.typed == []
+
+    async def test_a_refused_key_never_shows_in_the_reason(self):
+        def refuse(p: LoginPty) -> None:
+            p.say("\r\nInvalid key sk-or-secret\r\n")
+            p.exit(1)
+
+        pty = KeyPromptPty(on_typed=refuse)
+
+        ok, reason = await _secret_login(pty)
+
+        assert ok is False
+        assert reason.startswith("Pi did not save the key.\n")
+        assert "Invalid key ***" in reason
+        assert "sk-or-secret" not in reason
+
+    async def test_a_login_that_does_not_exit_after_the_key_is_stopped(self):
+        pty = KeyPromptPty()
+
+        ok, reason = await _secret_login(pty, save_wait=0.05)
+
+        assert ok is False
+        assert reason.startswith("Pi did not save the key in time.")
+        assert pty.typed == [b"sk-or-secret\r"]
+        assert pty.terminated is True
+
+    async def test_a_login_that_never_asks_and_hangs_is_stopped(self):
+        pty = KeyPromptPty(prompt="")
+
+        ok, reason = await _secret_login(pty, prompt_wait=0.05)
+
+        assert ok is False
+        assert reason == "Pi did not ask for the key."
+        assert pty.typed == []
+        assert pty.terminated is True
+
+    async def test_a_command_that_cannot_start_says_so(self):
+        pty = KeyPromptPty(spawn_error=FileNotFoundError("No such file: pi"))
+
+        assert await _secret_login(pty) == (False, "Pi could not start: No such file: pi")
+
+    async def test_cancel_stops_the_login_and_types_nothing(self):
+        pty = KeyPromptPty(prompt="")
+        task = asyncio.create_task(_secret_login(pty))
+        while not pty.spawned:
+            await asyncio.sleep(0.01)
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 10
+        while not pty.terminated:
+            assert loop.time() < deadline, "the login was not stopped"
+            await asyncio.sleep(0.01)
+        assert pty.typed == []
+
+    async def test_cancel_while_the_command_spawns_still_ends_it(self):
+        pty = SpawnRacePty()
+        spawning = threading.Event()
+        release = threading.Event()
+
+        def block() -> None:
+            spawning.set()
+            release.wait(5)
+
+        pty.on_spawn = block
+        task = asyncio.create_task(_secret_login(pty))
+        loop = asyncio.get_running_loop()
+        assert await loop.run_in_executor(None, spawning.wait, 5)
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        release.set()
+
+        deadline = loop.time() + 10
+        while not pty.terminated:
+            assert loop.time() < deadline, "the login was not stopped"
+            await asyncio.sleep(0.01)
+        assert pty.spawned
+        assert pty.typed == []
 
 
 class SpawnRacePty(LoginPty):
