@@ -28,6 +28,14 @@ prompt text picks the scenario:
   (``_session/steering``);
 * ``external`` — after the answer, a turn that another app on the PC
   started (thread status ``_meta`` as Codex sends it);
+* ``background`` — work that outlives the answer: the OpenCode flavor starts
+  a subagent (``opencode/session/child_update``, when the client opts in)
+  that ends a moment after the answer and wakes the parent; the Copilot
+  flavor keeps the prompt open on an async shell after ``assistant.idle``;
+  the other flavors leave a command running that ends after the answer and
+  wakes the agent, with no prompt pending;
+* ``detached`` — the Copilot flavor's detached shell: it ends after the
+  answer and wakes the agent (the other flavors: as ``background``);
 * ``fail`` — the turn fails with an error;
 * ``crash`` — the process exits;
 * anything else — a short echo with a thought.
@@ -50,6 +58,9 @@ import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
+
+# How long the ``background`` scenario's work runs on after the answer.
+WAKE_DELAY = float(os.environ.get("MOBAIDE_FAKE_ACP_WAKE_DELAY") or 1.0)
 
 MODES = [
     {"value": "default", "name": "Ask first", "description": "Ask before edits and commands"},
@@ -205,6 +216,8 @@ class FakeAgent:
         self.cancelled: set[str] = set()
         self.turns: dict[str, asyncio.Task[Any]] = {}
         self.tool_seq = 0
+        # ``clientCapabilities._meta`` of ``initialize``.
+        self.client_meta: dict[str, Any] = {}
 
     def send(self, message: dict[str, Any]) -> None:
         data = (json.dumps(message) + "\n").encode("utf-8")
@@ -440,6 +453,9 @@ class FakeAgent:
             # Cursor lists its sessions only when it is signed in.
             raise _RpcError(AUTH_REQUIRED, "Authentication required")
         if method == "initialize":
+            caps = params.get("clientCapabilities")
+            meta = caps.get("_meta") if isinstance(caps, dict) else None
+            self.client_meta = meta if isinstance(meta, dict) else {}
             if self.agy:
                 return {
                     "protocolVersion": 1,
@@ -590,7 +606,7 @@ class FakeAgent:
             if sid not in self.sessions:
                 raise _RpcError(-32002, "Unknown session")
             self.cancelled.discard(sid)
-            task = asyncio.ensure_future(self.turn(sid, params.get("prompt") or []))
+            task = asyncio.ensure_future(self.prompt_turn(sid, params.get("prompt") or []))
             self.turns[sid] = task
             return await task
         if method == "session/cancel":
@@ -641,6 +657,111 @@ class FakeAgent:
             await asyncio.sleep(delay)
         return True
 
+    async def prompt_turn(self, sid: str, prompt: list[dict[str, Any]]) -> dict[str, Any]:
+        self.copilot_event(sid, "assistant.turn_start")
+        try:
+            return await self.turn(sid, prompt)
+        finally:
+            self.copilot_event(sid, "assistant.idle", {"aborted": True} if self.stopped(sid) else {})
+            self.copilot_event(sid, "session.idle")
+
+    def copilot_event(self, sid: str, kind: str, data: dict[str, Any] | None = None) -> None:
+        """A Copilot session event, sent only to a client that opted in."""
+        meta = self.client_meta.get("github.com/copilot")
+        events = meta.get("events") if isinstance(meta, dict) else None
+        if not self.copilot or not isinstance(events, list) or kind not in events:
+            return
+        self.send({"jsonrpc": "2.0", "method": "github.com/copilot/sessionEvent",
+                   "params": {"sessionId": sid, "type": kind, "timestamp": datetime.now(UTC).isoformat(), "data": data or {}}})
+
+    def child_update(self, sid: str, child: str, event: dict[str, Any]) -> None:
+        self.send({"jsonrpc": "2.0", "method": "opencode/session/child_update",
+                   "params": {"rootSessionId": sid, "childSessionId": child, "parentSessionId": sid,
+                              "depth": 1, "title": "Explore", **event}})
+
+    async def wake_later(self, sid: str) -> bool:
+        """A command that ends after the answer and wakes the agent."""
+        run = self.tool_id("exec")
+        ok = await self.stream(sid, "I started the tests in the background.")
+        rest = {"kind": "execute", "title": "Run tests in the background",
+                "rawInput": {"command": "sleep 1 && echo done", "detach": True}}
+        if self.copilot:
+            self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": run, "status": "pending", **rest})
+            self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": run, "status": "completed",
+                              "content": [{"type": "content", "content": {"type": "text", "text": "<command started in detached background with shellId: 0>"}}]})
+        else:
+            self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": run, "status": "in_progress", **rest})
+        if ok:
+            self.loop.call_later(WAKE_DELAY, lambda: asyncio.ensure_future(self.woken_turn(sid, run)))
+        return ok
+
+    async def woken_turn(self, sid: str, run: str) -> None:
+        if sid not in self.sessions:
+            return
+        if self.copilot:
+            self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": self.tool_id("read"), "title": "Reading shell output",
+                              "kind": "read", "status": "completed",
+                              "content": [{"type": "content", "content": {"type": "text", "text": "done\n<detached command with shellId: 0 completed with exit code 0>"}}]})
+        else:
+            self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": run, "status": "completed",
+                              "content": [{"type": "content", "content": {"type": "text", "text": "done"}}]})
+        self.copilot_event(sid, "assistant.turn_start")
+        await self.stream(sid, "The background tests passed.")
+        self.copilot_event(sid, "assistant.idle")
+        self.copilot_event(sid, "session.idle")
+
+    async def opencode_background(self, sid: str) -> bool:
+        """A subagent that runs on after the answer and wakes the parent."""
+        if self.client_meta.get("opencode/child-session-updates") is not True:
+            # OpenCode before 2.3 ran the subagent inside the turn.
+            return await self.stream(sid, "The subagent finished: the code looks fine.")
+        child = f"ses_child{self.tool_id('c')}"
+        read = f"{child}:{self.tool_id('read')}"
+        meta = {"opencode/child-session": {"id": child, "parentID": sid, "depth": 1, "title": "Explore"}}
+        self.child_update(sid, child, {"type": "status", "status": "created"})
+        self.child_update(sid, child, {"type": "status", "status": "running"})
+        self.child_update(sid, child, {"type": "update", "update": {
+            "sessionUpdate": "tool_call", "toolCallId": read, "title": "Explore: Read app.py", "kind": "read",
+            "status": "in_progress", "_meta": meta}})
+        # Only its tool calls show in the parent chat.
+        self.child_update(sid, child, {"type": "update", "update": {
+            "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "child text"}, "_meta": meta}})
+        ok = await self.stream(sid, "I started a subagent to explore the code.")
+
+        async def finish() -> None:
+            await asyncio.sleep(WAKE_DELAY)
+            if sid not in self.sessions:
+                return
+            self.child_update(sid, child, {"type": "update", "update": {
+                "sessionUpdate": "tool_call_update", "toolCallId": read, "status": "completed", "_meta": meta}})
+            self.child_update(sid, child, {"type": "status", "status": "completed"})
+            await asyncio.sleep(0.2)
+            await self.stream(sid, "The subagent finished: the code looks fine.")
+
+        if ok:
+            asyncio.ensure_future(finish())
+        return ok
+
+    async def copilot_background(self, sid: str) -> bool:
+        """An async shell: the prompt stays open after the foreground settled."""
+        run = self.tool_id("exec")
+        self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": run, "kind": "execute", "status": "pending",
+                          "title": "Run tests in the background", "rawInput": {"command": "sleep 1 && echo done", "mode": "async"}})
+        self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": run, "status": "completed",
+                          "content": [{"type": "content", "content": {"type": "text", "text": "<command started in background with shellId: 0>"}}]})
+        if not await self.stream(sid, "I started the tests in the background."):
+            return False
+        self.copilot_event(sid, "assistant.idle")
+        for _ in range(int(WAKE_DELAY / 0.05)):
+            if self.stopped(sid):
+                return False
+            await asyncio.sleep(0.05)
+        self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": self.tool_id("read"), "title": "Reading shell output",
+                          "kind": "read", "status": "completed",
+                          "content": [{"type": "content", "content": {"type": "text", "text": "done\n<shellId: 0 completed with exit code 0>"}}]})
+        self.copilot_event(sid, "assistant.turn_start")
+        return await self.stream(sid, "The background tests passed.")
+
     async def turn(self, sid: str, prompt: list[dict[str, Any]]) -> dict[str, Any]:
         text = " ".join(b.get("text", "") for b in prompt if b.get("type") == "text").strip()
         images = sum(1 for b in prompt if b.get("type") == "image")
@@ -663,7 +784,13 @@ class FakeAgent:
         if self.junie and "nomodel" in lower:
             raise _RpcError(-32002, "No models are currently available for submission", {"reason": "model_not_available"})
         ok = True
-        if "tool" in lower and self.agy:
+        if "background" in lower and self.opencode:
+            ok = await self.opencode_background(sid)
+        elif "background" in lower and self.copilot:
+            ok = await self.copilot_background(sid)
+        elif "background" in lower or "detached" in lower:
+            ok = await self.wake_later(sid)
+        elif "tool" in lower and self.agy:
             ok = await self.agy_tools(sid)
         elif "tool" in lower:
             ok = await self.tools(sid)

@@ -44,6 +44,7 @@ from . import normalize as nz
 from .install import INSTALL_POOL, PROBE_POOL, AdapterInstaller, NpmAdapter
 from .presence import ConversationPresence, default_app_data_dir
 from .signin import SignInMethod
+from .wake import COPILOT_CLIENT_META, OPENCODE_CLIENT_META
 from .trust import (
     AntigravityFolderTrust,
     ClaudeFolderTrust,
@@ -255,6 +256,10 @@ class ChatLaunchPlan:
     # the ``session/prompt`` answer cannot: work a turn leaves behind, and
     # turns the agent starts itself.
     hook_port: int | None = None
+    # The agent has no hooks, but finished background work (a subagent, a
+    # shell) can wake it after a prompt's answer: content updates that come
+    # while no turn runs show as a turn of its own (see :mod:`.wake`).
+    wakes_after_turn: bool = False
     # Agent SDK options for claude-agent-acp, sent as
     # ``_meta.claudeCode.options`` with ``session/new`` and ``session/load``.
     claude_sdk_options: Mapping[str, Any] = field(default_factory=dict)
@@ -1079,6 +1084,7 @@ class AntigravityChatSpec(_ChatSpecBase):
             sign_in=antigravity_sign_in_methods(
                 None if fake else self._agy_identity_path(), spec.env, fake=fake
             ),
+            wakes_after_turn=True,
         )
 
     def _agy_identity_path(self) -> str | None:
@@ -1146,6 +1152,10 @@ class OpenCodeChatSpec(_ChatSpecBase):
             process_cwd=os.path.expanduser("~"),
             sign_in_hint=OPENCODE_SIGN_IN_HINT,
             auto_approve=options.auto_approve,
+            # OpenCode 2.3+ reports its background subagents; older ones
+            # ignore the key.
+            client_meta=OPENCODE_CLIENT_META,
+            wakes_after_turn=True,
         )
 
 
@@ -1221,6 +1231,8 @@ class CopilotChatSpec(_ChatSpecBase):
             sign_in=copilot_sign_in_methods(
                 None if fake else self._copilot_bin(), env, fake=fake
             ),
+            client_meta=COPILOT_CLIENT_META,
+            wakes_after_turn=True,
         )
 
 
