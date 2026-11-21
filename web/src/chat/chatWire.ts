@@ -312,6 +312,18 @@ export type SignInRequest = z.infer<typeof signInRequestSchema>;
 const queuedSchema = z.object({ id: z.string(), text, images: count });
 export type ChatQueued = z.infer<typeof queuedSchema>;
 
+/** An automatic continue that waits in the queue for a usage limit to reset. */
+const limitWaitSchema = z
+  .object({
+    queue_id: z.string(),
+    resets_at: nullableText,
+    continues_at: z.string(),
+    limit_type: nullableText,
+  })
+  .nullable()
+  .catch(null);
+export type ChatLimitWait = NonNullable<z.infer<typeof limitWaitSchema>>;
+
 const agentInfoSchema = z
   .object({ name: text, title: text, version: text })
   .nullable()
@@ -335,6 +347,7 @@ const STATE_FIELDS = {
   cancelling: flag,
   steering: flag,
   background: oneOf(BACKGROUND_WORK, null),
+  limit_wait: limitWaitSchema,
   /** The agent takes `new_conversation`; an older one leaves it out. */
   new_conversation: flag,
 };
@@ -360,6 +373,7 @@ export const INITIAL_CHAT_STATE: ChatState = {
   cancelling: false,
   steering: false,
   background: null,
+  limit_wait: null,
   new_conversation: false,
 };
 

@@ -29,6 +29,11 @@ prompt text picks the scenario:
 * ``external`` — after the answer, a turn that another app on the PC
   started (thread status ``_meta`` as Codex sends it);
 * ``fail`` — the turn fails with an error;
+* ``usagelimit [N]`` — the Claude flavor refuses this prompt and the next
+  N-1 ones (default 1) for a usage limit that resets in
+  ``MOBAIDE_FAKE_ACP_LIMIT_RESET`` seconds (default 5), with the
+  ``rateLimit`` error data of claude-agent-acp ≥ 0.107; ``weeklylimit`` does
+  the same for a limit that resets in 7 days;
 * ``crash`` — the process exits;
 * anything else — a short echo with a thought.
 
@@ -143,6 +148,7 @@ PI_LEVELS = [
     for v, n in (("off", "Off"), ("low", "Low"), ("medium", "Medium"), ("high", "High"), ("xhigh", "Extra high"))
 ]
 SIGNED_OUT_ENV = "MOBAIDE_FAKE_ACP_SIGNED_OUT"
+LIMIT_RESET_ENV = "MOBAIDE_FAKE_ACP_LIMIT_RESET"
 AUTH_REQUIRED = -32000
 
 
@@ -657,6 +663,8 @@ class FakeAgent:
         if "fail" in lower:
             await asyncio.sleep(0.2)
             raise _RpcError(-32603, "The model request failed (fake error)")
+        if not (self.codex or self.agy or self.opencode or self.copilot or self.cursor or self.junie or self.pi):
+            await self.usage_limit(s, lower)
         if signed_out():
             await asyncio.sleep(0.2)
             raise _RpcError(AUTH_REQUIRED, "Authentication required")
@@ -710,6 +718,33 @@ class FakeAgent:
                     "usage": {"inputTokens": s["used"], "outputTokens": 120, "totalTokens": s["used"] + 120}}
         self.update(sid, {"sessionUpdate": "usage_update", "used": s["used"], "size": 200000, "cost": {"amount": round(s["used"] / 1e6, 4), "currency": "USD"}})
         return {"stopReason": "end_turn" if ok else "cancelled"}
+
+    async def usage_limit(self, s: dict[str, Any], lower: str) -> None:
+        """Refuse the prompt for a usage limit, as claude-agent-acp ≥ 0.107 does."""
+        words = lower.split()
+        if "weeklylimit" in words:
+            s["limit_left"], s["limit_type"] = 1, "seven_day"
+        elif "usagelimit" in words:
+            at = words.index("usagelimit")
+            count = words[at + 1] if at + 1 < len(words) else ""
+            s["limit_left"] = int(count) if count.isdigit() and int(count) > 0 else 1
+            s["limit_type"] = "five_hour"
+        if not s.get("limit_left"):
+            return
+        s["limit_left"] -= 1
+        weekly = s["limit_type"] == "seven_day"
+        delay = 7 * 86400 if weekly else float(os.environ.get(LIMIT_RESET_ENV) or 5)
+        resets_at = int(time.time() + delay)
+        when = datetime.fromtimestamp(resets_at, UTC).strftime("%H:%M UTC")
+        await asyncio.sleep(0.2)
+        raise _RpcError(
+            -32603,
+            f"You've hit your {'weekly' if weekly else 'session'} limit · resets {when}",
+            {
+                "errorKind": "rate_limit",
+                "rateLimit": {"status": "rejected", "rateLimitType": s["limit_type"], "resetsAt": resets_at},
+            },
+        )
 
     def thread_status(self, sid: str, kind: str) -> None:
         status: dict[str, Any] = {"type": kind}

@@ -641,6 +641,19 @@ enum ChatDates {
         return try? Date(raw, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true))
     }
 
+    /// "Usage limit reached. Continues automatically at 5:30 PM." in local
+    /// time, with the date first when it is not today.
+    static func limitWaitText(_ continuesAt: String, now: Date = Date(), calendar: Calendar = .current) -> String {
+        guard let date = parse(continuesAt) else {
+            return "Usage limit reached. Continues automatically when it resets."
+        }
+        let time = date.formatted(date: .omitted, time: .shortened)
+        let day = calendar.isDate(date, inSameDayAs: now)
+            ? ""
+            : date.formatted(.dateTime.month(.abbreviated).day()) + ", "
+        return "Usage limit reached. Continues automatically at \(day)\(time)."
+    }
+
     /// "Just now", "5 min ago", "3 h ago", "Yesterday", "4 days ago", then a date.
     static func relative(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
         let seconds = now.timeIntervalSince(date)

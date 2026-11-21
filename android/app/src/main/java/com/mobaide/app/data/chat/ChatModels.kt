@@ -79,6 +79,10 @@ data class ChatPlanEntry(val content: String, val status: String, val priority: 
 @Immutable
 data class ChatQueuedMessage(val id: String, val text: String, val images: Int)
 
+/** An automatic continue that waits in the queue (as [queueId]) for a usage limit to reset. */
+@Immutable
+data class ChatLimitWait(val queueId: String, val resetsAt: String?, val continuesAt: String, val limitType: String?)
+
 @Immutable
 data class ChatPermissionOption(val id: String, val name: String, val kind: String) {
     val isAllow: Boolean get() = kind.startsWith("allow")
@@ -277,6 +281,7 @@ data class ChatState(
     val steering: Boolean = false,
     // A [ChatBackgroundWork] value while the turn has ended but its work still runs.
     val background: String? = null,
+    val limitWait: ChatLimitWait? = null,
     // The agent takes `new_conversation`; an older one leaves the key out.
     val newConversation: Boolean = false,
 )
@@ -328,6 +333,11 @@ internal object ChatJson {
         cancelling = obj.bool("cancelling") == true,
         steering = obj.bool("steering") == true,
         background = ChatBackgroundWork.normalize(obj.str("background")),
+        limitWait = obj.obj("limit_wait")?.let { wait ->
+            val queueId = wait.str("queue_id") ?: return@let null
+            val continuesAt = wait.str("continues_at") ?: return@let null
+            ChatLimitWait(queueId, wait.str("resets_at"), continuesAt, wait.str("limit_type"))
+        },
         newConversation = obj.bool("new_conversation") == true,
     )
 

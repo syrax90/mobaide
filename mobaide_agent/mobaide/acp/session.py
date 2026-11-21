@@ -14,6 +14,7 @@ import base64
 import binascii
 import collections
 import logging
+import math
 import os
 import time
 from collections.abc import Mapping
@@ -83,6 +84,19 @@ CONSOLE_TOOLS_MAX = 64
 # Copilot follows a file tool with a message that only names the file again.
 TOOL_PATH_NOTE = "Info: "
 ACP_PROTOCOL_VERSION = 1
+# A Claude usage limit (claude-agent-acp ≥ 0.107 sends its reset time): a
+# continue waits first in the queue and goes out this long after the reset.
+LIMIT_WAIT_MARGIN = 60.0
+# Only a reset at most this far away is waited for (the five-hour window);
+# a weekly limit only shows its reset time.
+LIMIT_WAIT_MAX = 6 * 3600.0
+# The wall clock is read this often: the monotonic clock behind
+# asyncio.sleep stops while the PC sleeps on macOS.
+LIMIT_WAIT_TICK = 30.0
+# Automatic continues in a row without a prompt from the user (Claude Code's
+# own terminal rule).
+AUTO_CONTINUE_MAX = 3
+AUTO_CONTINUE_PROMPT = "Continue from where you stopped. The usage limit has reset."
 # Timeline status → the session row's ``activity``; the other statuses
 # (``starting``, ``loading``, ``error``, ``stopped``) are no turn at all.
 _ACTIVITY_BY_STATUS = {"running": "working", "ready": "idle"}
@@ -132,6 +146,11 @@ class _QueuedPrompt:
     steering: bool = False
     # The agent mode to switch to before the message is sent.
     mode: str | None = None
+    # Wall-clock time before which the queue must not send it: an automatic
+    # continue that waits for a usage limit to reset. It holds the whole queue.
+    not_before: float | None = None
+    # Mobaide sent it, not the user: it does not reset the automatic-continue count.
+    auto: bool = False
 
 
 @dataclass
@@ -289,6 +308,10 @@ class ChatSession:
         self._auth_retry: list[_QueuedPrompt] = []
         # A turn has finished, so the agent has stored the conversation.
         self._has_turns = False
+        # Automatic continues sent since the user's last prompt.
+        self._auto_continues = 0
+        # Releases the queued continue once the usage limit has reset.
+        self._limit_task: asyncio.Task[None] | None = None
         # The slash commands the agent itself lists.
         self._agent_commands: set[str] = set()
         self._timeline.state["commands"] = self._with_own_commands([])
@@ -435,6 +458,8 @@ class ChatSession:
             if task is not None and not task.done():
                 task.cancel()
         self._sign_in.close()
+        if self._limit_task is not None:
+            self._limit_task.cancel()
         self._resolve_all_requests_cancelled()
         conn = self._conn
         if conn is not None:
@@ -980,6 +1005,8 @@ class ChatSession:
         status = self._timeline.state.get("status")
         if status in ("error", "stopped"):
             raise ChatCommandError("The agent is not running. Use Restart to start it again.")
+        # The user is back: their message goes out now, not a continue later.
+        self._cancel_limit_wait()
         key = self._enqueue_or_send(text, images)
         return {"queued": key is not None, "queue_id": key}
 
@@ -1026,8 +1053,12 @@ class ChatSession:
         key = self._next_id("q")
         self._queue.append(_QueuedPrompt(key, text, images))
         self._publish_queue()
-        if self._ready.is_set() and not self._own_turn_running() and not self._external_turn:
-            self._start_next_prompt()
+        if (
+            self._ready.is_set()
+            and not self._own_turn_running()
+            and not self._external_turn
+            and self._start_next_prompt()
+        ):
             return None
         return key
 
@@ -1051,17 +1082,27 @@ class ChatSession:
             urgent=True,
         )
 
-    def _start_next_prompt(self) -> None:
+    def _start_next_prompt(self) -> bool:
         nxt = next((q for q in self._queue if not q.steering), None)
-        if nxt is None:
-            return
+        if nxt is None or nxt.not_before is not None:
+            return False
         self._queue.remove(nxt)
         self._publish_queue()
-        self._start_prompt(nxt.text, nxt.images, mode=nxt.mode)
+        self._start_prompt(nxt.text, nxt.images, mode=nxt.mode, auto=nxt.auto)
+        return True
 
     def _start_prompt(
-        self, text: str, images: list[dict[str, str]], *, mode: str | None = None
+        self,
+        text: str,
+        images: list[dict[str, str]],
+        *,
+        mode: str | None = None,
+        auto: bool = False,
     ) -> None:
+        if not auto:
+            # A message from the user, by any path: no continue may follow it.
+            self._cancel_limit_wait()
+        self._auto_continues = self._auto_continues + 1 if auto else 0
         self._close_streaming_items()
         user_item = {
             "id": self._next_id("u"),
@@ -1115,6 +1156,8 @@ class ChatSession:
         # overload): the user has to act, the same as after a finished turn.
         failed = False
         auth_failed = False
+        # The reset time of the usage limit that refused the prompt.
+        limit: tuple[float, str | None] | None = None
         try:
             conn = self._require_conn()
             if self._presence_hold is None and self._plan.presence is not None:
@@ -1153,6 +1196,7 @@ class ChatSession:
             tl.upsert({"id": self._next_id("err"), "type": "error", "text": str(exc)})
         except AcpRpcError as exc:
             failed = True
+            limit = _usage_limit_reset(exc)
             tl.upsert(
                 {"id": self._next_id("err"), "type": "error", "text": self._describe_rpc_error(exc)}
             )
@@ -1209,13 +1253,27 @@ class ChatSession:
             # the queue, never this process.
             return
         alive = self._conn is not None and self._conn.alive
+        # An error answering the user's own Stop is not news to them.
+        cancelling = bool(tl.state.get("cancelling"))
         if alive and not self._stopping and self._resume_pending:
             # The turn's own alert goes out before the restart clears it.
-            if failed and not tl.state.get("cancelling"):
+            if failed and not cancelling:
                 self._set_attention("turn_failed")
             elif stop_reason not in (None, "cancelled"):
                 self._set_attention("turn_finished")
             self._resume_if_pending()
+            return
+        if (
+            limit is not None
+            and alive
+            and not self._stopping
+            and not cancelling
+            and self._arm_limit_wait(*limit)
+        ):
+            # No alert: the user does not have to act. The continue reports
+            # its own end.
+            tl.patch_state(status="ready", turn_started_at=None, cancelling=False, urgent=True)
+            self._settle_gate()
             return
         finished = not failed and stop_reason not in (None, "cancelled")
         if any(not q.steering for q in self._queue) and alive and not self._stopping:
@@ -1233,8 +1291,6 @@ class ChatSession:
             self._self_turn = True
             tl.patch_state(turn_started_at=_now_iso(), cancelling=False, urgent=True)
             return
-        # An error answering the user's own Stop is not news to them.
-        cancelling = bool(tl.state.get("cancelling"))
         tl.patch_state(status="ready" if alive else "error", turn_started_at=None, cancelling=False)
         # One frame: the turn's end and the work it left in flight (which the
         # gate reads from its Stop below), so the header never shows "Ready"
@@ -1404,12 +1460,77 @@ class ChatSession:
         key = cmd.get("queue_id")
         if any(q.key == key and q.steering for q in self._queue):
             raise ChatCommandError("This message is being sent now")
+        held = any(q.key == key and q.not_before is not None for q in self._queue)
         before = len(self._queue)
         self._queue = [q for q in self._queue if q.key != key]
         if len(self._queue) == before:
             raise ChatCommandError("This message was already sent")
         self._publish_queue()
+        if held:
+            self._cancel_limit_wait()
+            # The continue held the messages queued behind it.
+            self._start_queue_if_idle()
         return {}
+
+    def _arm_limit_wait(self, resets_at: float, limit_type: str | None) -> bool:
+        """Queue a continue for when the usage limit resets. False when the
+        reset is too far away or the automatic continues ran out: the user
+        has to act."""
+        now = time.time()
+        if resets_at - now > LIMIT_WAIT_MAX or self._auto_continues >= AUTO_CONTINUE_MAX:
+            return False
+        self._cancel_limit_wait()
+        continues_at = max(resets_at, now) + LIMIT_WAIT_MARGIN
+        entry = _QueuedPrompt(
+            self._next_id("q"), AUTO_CONTINUE_PROMPT, [], not_before=continues_at, auto=True
+        )
+        self._queue.insert(0, entry)
+        self._publish_queue()
+        self._timeline.patch_state(
+            limit_wait={
+                "queue_id": entry.key,
+                "resets_at": _iso(resets_at),
+                "continues_at": _iso(continues_at),
+                "limit_type": limit_type,
+            },
+            urgent=True,
+        )
+        self._limit_task = asyncio.create_task(
+            self._release_after_reset(entry), name=f"chat-limit-{self.session_id}"
+        )
+        logger.info(
+            "chat.limit_wait_armed session=%s type=%s in=%.0fs count=%d",
+            self.session_id,
+            limit_type,
+            continues_at - now,
+            self._auto_continues,
+        )
+        return True
+
+    async def _release_after_reset(self, entry: _QueuedPrompt) -> None:
+        while entry.not_before is not None:
+            remaining = entry.not_before - time.time()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(LIMIT_WAIT_TICK, remaining))
+        if not any(q is entry for q in self._queue):
+            return
+        self._limit_task = None
+        entry.not_before = None
+        self._timeline.patch_state(limit_wait=None, urgent=True)
+        self._start_queue_if_idle()
+
+    def _cancel_limit_wait(self) -> None:
+        """Drop the continue that waits for a usage limit to reset."""
+        task, self._limit_task = self._limit_task, None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+        # A released continue that has not started yet goes too.
+        if any(q.not_before is not None or q.auto for q in self._queue):
+            self._queue = [q for q in self._queue if q.not_before is None and not q.auto]
+            self._publish_queue()
+        if self._timeline.state.get("limit_wait") is not None:
+            self._timeline.patch_state(limit_wait=None, urgent=True)
 
     async def _cmd_steer(self, cmd: dict[str, Any]) -> dict[str, Any]:
         """Send a queued message into the running turn now (``_session/steering``)."""
@@ -1417,6 +1538,8 @@ class ChatSession:
         queued = next((q for q in self._queue if q.key == key), None)
         if queued is None or queued.steering:
             raise ChatCommandError("This message was already sent")
+        if queued.not_before is not None:
+            raise ChatCommandError("This message waits for the usage limit to reset")
         if not self._ready.is_set():
             # The agent is starting: the message goes out once it is ready.
             return {"steered": False}
@@ -1431,7 +1554,7 @@ class ChatSession:
             self._external_turn = False
             self._queue.remove(queued)
             self._publish_queue()
-            self._start_prompt(queued.text, queued.images, mode=queued.mode)
+            self._start_prompt(queued.text, queued.images, mode=queued.mode, auto=queued.auto)
             return {"steered": True}
         if not self._steering:
             raise ChatCommandError("This agent cannot take a message during a turn")
@@ -1493,6 +1616,7 @@ class ChatSession:
         # Set before the first await: a second Restart (double tap, another
         # client) must not spawn a second adapter that nothing would close.
         self._restarting = True
+        self._cancel_limit_wait()
         try:
             await self._restart()
         finally:
@@ -1586,6 +1710,8 @@ class ChatSession:
         # Nothing may start on the process that is closing: a message sent
         # from here on waits in the queue for the new conversation.
         self._ready.clear()
+        self._cancel_limit_wait()
+        self._auto_continues = 0
         self._queue.clear()
         self._publish_queue()
         self._auth_retry.clear()
@@ -1780,6 +1906,7 @@ class ChatSession:
         # Shown once the agent is back: a reload replays the conversation first.
         self._signed_in_notice = True
         self._restarting = True
+        self._cancel_limit_wait()
         # A message sent meanwhile must only queue, never start on the
         # process that is closing (bootstrap sends the queue).
         self._ready.clear()
@@ -1939,6 +2066,9 @@ class ChatSession:
             return
         tl = self._timeline
         if busy and not self._external_turn:
+            if not self_started:
+                # The user went on from another app: no continue may follow.
+                self._cancel_limit_wait()
             self._external_turn = True
             self._self_turn = self_started
             self._close_streaming_items()
@@ -2466,6 +2596,8 @@ class ChatSession:
             if tail:
                 message = f"{message}: {tail[-1][:300]}"
         logger.warning("chat.agent_exited session=%s: %s", self.session_id, message)
+        # Restart drops it anyway: the wait must not read as armed meanwhile.
+        self._cancel_limit_wait()
         self._release_presence()
         self._resolve_all_requests_cancelled()
         self._mark_running_tools("failed")
@@ -2689,6 +2821,33 @@ def _release_acquired(future: asyncio.Future[PresenceHold | None]) -> None:
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _iso(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp, UTC).isoformat(timespec="seconds")
+
+
+def _usage_limit_reset(exc: AcpRpcError) -> tuple[float, str | None] | None:
+    """The reset time (epoch seconds) and type of the usage limit that
+    refused a prompt, from claude-agent-acp's error data
+    (``{errorKind: "rate_limit", rateLimit: {rateLimitType, resetsAt}}``)."""
+    data = exc.data
+    if not isinstance(data, dict) or data.get("errorKind") != "rate_limit":
+        return None
+    info = data.get("rateLimit")
+    if not isinstance(info, dict):
+        return None
+    resets_at = info.get("resetsAt")
+    if isinstance(resets_at, bool) or not isinstance(resets_at, int | float):
+        return None
+    resets_at = float(resets_at)
+    if not math.isfinite(resets_at) or resets_at <= 0:
+        return None
+    if resets_at > 1e12:
+        # Milliseconds.
+        resets_at /= 1000
+    limit_type = info.get("rateLimitType")
+    return resets_at, limit_type if isinstance(limit_type, str) and limit_type else None
 
 
 def _prompt_blocks(text: str, images: list[dict[str, str]]) -> list[dict[str, Any]]:

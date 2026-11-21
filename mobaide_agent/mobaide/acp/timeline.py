@@ -86,6 +86,8 @@ def default_state() -> dict[str, Any]:
         "cancelling": False,
         "steering": False,
         "background": None,
+        # An automatic continue waits for a usage limit to reset.
+        "limit_wait": None,
         # The agent takes the ``new_conversation`` command.
         "new_conversation": True,
     }

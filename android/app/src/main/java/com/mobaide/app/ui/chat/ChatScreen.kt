@@ -653,6 +653,7 @@ private fun ChatDockArea(
                         ui.state.steering && ui.state.status == ChatStatus.RUNNING
                     },
                     busy = ui.queueBusy,
+                    limitWait = ui.state.limitWait,
                 )
             }
             if (suggestions != null) {

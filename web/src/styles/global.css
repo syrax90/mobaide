@@ -5806,6 +5806,11 @@ body:has(dialog[open]) {
   font-size: 0.9rem;
 }
 
+/* The automatic continue's line holds a time: it wraps rather than cut it off. */
+.chat-queue-text-wrap {
+  white-space: normal;
+}
+
 .chat-queue-row .chat-icon-button {
   width: 32px;
   height: 32px;
