@@ -76,8 +76,10 @@ export function chatStatusLine(
   if (state.cancelling) return { text: 'Stopping…', tone: 'muted' };
   if (state.status === 'running') {
     const started = state.turn_started_at === null ? Number.NaN : Date.parse(state.turn_started_at);
+    // The turn waits only on background work it started (a Copilot async shell).
+    const label = state.background === 'waiting' ? BACKGROUND_TEXT.waiting : 'Working';
     return {
-      text: Number.isNaN(started) ? 'Working' : `Working · ${formatElapsed(now - started)}`,
+      text: Number.isNaN(started) ? label : `${label} · ${formatElapsed(now - started)}`,
       tone: 'muted',
     };
   }
