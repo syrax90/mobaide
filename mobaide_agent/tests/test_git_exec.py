@@ -7,6 +7,7 @@ fake ``git`` on PATH.
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import sys
 import time
@@ -30,6 +31,7 @@ from mobaide.core.git_exec import (
 )
 
 GIT_BIN = shutil.which("git")
+FAKE_GIT = os.path.abspath("/opt/git")
 requires_git = pytest.mark.skipif(GIT_BIN is None, reason="git binary not on PATH")
 
 
@@ -195,14 +197,14 @@ class TestGitEnv:
 
 class TestGitBinary:
     def test_hit_is_cached_but_miss_is_retried(self, monkeypatch):
-        monkeypatch.setattr(git_exec.shutil, "which", lambda _name: None)
+        monkeypatch.setattr(shutil, "which", lambda _name: None)
         assert git_binary() is None
 
-        monkeypatch.setattr(git_exec.shutil, "which", lambda _name: "/opt/git")
-        assert git_binary() == "/opt/git"
+        monkeypatch.setattr(shutil, "which", lambda _name: "/opt/git")
+        assert git_binary() == FAKE_GIT
 
-        monkeypatch.setattr(git_exec.shutil, "which", lambda _name: None)
-        assert git_binary() == "/opt/git"
+        monkeypatch.setattr(shutil, "which", lambda _name: None)
+        assert git_binary() == FAKE_GIT
 
         reset_caches()
         assert git_binary() is None
@@ -210,7 +212,7 @@ class TestGitBinary:
 
 class TestRunGit:
     async def test_no_binary_raises_unavailable(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(git_exec.shutil, "which", lambda _name: None)
+        monkeypatch.setattr(shutil, "which", lambda _name: None)
 
         with pytest.raises(GitUnavailableError):
             await run_git(["status"], cwd=str(tmp_path), timeout=5.0, max_bytes=1024)
@@ -242,7 +244,7 @@ class TestRunGit:
             captured.update(argv=list(argv), cwd=cwd, env=env, stdin=stdin)
             return CmdResult(rc=0, stdout=b"", stderr=b"")
 
-        monkeypatch.setattr(git_exec.shutil, "which", lambda _name: "/opt/git")
+        monkeypatch.setattr(shutil, "which", lambda _name: "/opt/git")
         monkeypatch.setattr(git_exec, "run_capped", fake_run_capped)
         monkeypatch.setenv("GIT_DIR", "/elsewhere/.git")
 
@@ -251,7 +253,7 @@ class TestRunGit:
             cwd="/repo", timeout=1.0, max_bytes=10, env_extra={"X": "1"},
         )
 
-        assert captured["argv"] == ["/opt/git", *GIT_ARGV_PREFIX, "status", "--", "a b"]
+        assert captured["argv"] == [FAKE_GIT, *GIT_ARGV_PREFIX, "status", "--", "a b"]
         assert captured["cwd"] == "/repo"
         env = captured["env"]
         assert "GIT_DIR" not in env
@@ -274,7 +276,7 @@ class TestGitVersion:
         assert await git_version() == version
 
     async def test_parses_vendor_suffix(self, monkeypatch):
-        monkeypatch.setattr(git_exec.shutil, "which", lambda _name: "/opt/git")
+        monkeypatch.setattr(shutil, "which", lambda _name: "/opt/git")
         monkeypatch.setattr(
             git_exec, "run_capped",
             lambda *_a, **_k: CmdResult(
@@ -285,7 +287,7 @@ class TestGitVersion:
         assert await git_version() == (2, 39, 2)
 
     async def test_failure_is_none_and_not_cached(self, monkeypatch):
-        monkeypatch.setattr(git_exec.shutil, "which", lambda _name: "/opt/git")
+        monkeypatch.setattr(shutil, "which", lambda _name: "/opt/git")
         monkeypatch.setattr(
             git_exec, "run_capped",
             lambda *_a, **_k: CmdResult(rc=1, stdout=b"", stderr=b"boom"),

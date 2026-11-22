@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import stat
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -288,6 +289,22 @@ def test_real_resolver_uses_env_var_override(monkeypatch, tmp_path, _clean_agy_e
     fake = _make_executable(tmp_path / "myagy")
     monkeypatch.setenv("MOBAIDE_AGY_BIN", str(fake))
     assert _REAL_AGY_RESOLVER() == str(fake)
+
+
+def test_real_resolver_finds_the_official_windows_install_off_path(
+    monkeypatch, tmp_path, _clean_agy_env
+):
+    """The official Windows installer puts agy in ``%LOCALAPPDATA%\\agy\\bin``;
+    an agent whose PATH predates the install must still find it there."""
+    local = tmp_path / "local"
+    agy = _make_executable(local / "agy" / "bin" / "agy.exe")
+    monkeypatch.setattr(antigravity_launcher, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    monkeypatch.delenv("USERPROFILE", raising=False)
+    monkeypatch.delenv("ProgramFiles", raising=False)
+
+    assert _REAL_AGY_RESOLVER() == str(agy)
 
 
 # no auth probe / options guard

@@ -75,6 +75,8 @@ def _windows_fallback_candidates() -> list[str]:
         candidates.append(os.path.join(user_profile, ".local", "bin", "agy.exe"))
     local_app_data = os.environ.get("LOCALAPPDATA")
     if local_app_data:
+        # Where the official Windows installer puts agy.
+        candidates.append(os.path.join(local_app_data, "agy", "bin", "agy.exe"))
         candidates.append(
             os.path.join(local_app_data, "Programs", "Antigravity", "agy.exe")
         )
@@ -189,7 +191,7 @@ class AntigravityLauncher:
         self._cached_models: tuple[str, ...] | None = None
 
     def _resolve_binary(self) -> str:
-        if self._resolved_binary is None:
+        if self._resolved_binary is None or not os.path.isfile(self._resolved_binary):
             self._resolved_binary = _resolve_agy_binary(
                 override=self._agy_bin_override,
             )

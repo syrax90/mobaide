@@ -13,7 +13,6 @@ import functools
 import hashlib
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import threading
@@ -27,6 +26,7 @@ from mobaide.agent._env_writer import atomic_write
 from mobaide.core.codex_auth import codex_login_with_api_key, sanitize_codex_output
 from mobaide.core.claude_launcher import CLAUDE_SESSION_PRESET_ENV
 from mobaide.core.hook_settings import HOOK_TOKEN_ENV
+from mobaide.core.host_path import which_first
 from mobaide.core.pi_launcher import PI_CODE_MODE_ARGS
 from mobaide.core.cli_launcher import (
     WINDOWS_NO_WINDOW,
@@ -618,16 +618,13 @@ async def pi_login_with_api_key(
 
 def _which_with_fallbacks(name: str) -> str | None:
     if sys.platform == "win32":
-        for candidate in (f"{name}.cmd", f"{name}.exe", name):
-            hit = shutil.which(candidate)
-            if hit:
-                return os.path.abspath(hit)
+        hit = which_first((f"{name}.cmd", f"{name}.exe", name))
         fallbacks = windows_npm_fallbacks(name)
     else:
-        hit = shutil.which(name)
-        if hit:
-            return os.path.abspath(hit)
+        hit = which_first((name,))
         fallbacks = posix_npm_fallbacks(name)
+    if hit:
+        return hit
     for candidate in fallbacks:
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
@@ -636,8 +633,7 @@ def _which_with_fallbacks(name: str) -> str | None:
 
 def _which_node() -> str | None:
     if sys.platform == "win32":
-        hit = shutil.which("node.exe") or shutil.which("node")
-        return os.path.abspath(hit) if hit else None
+        return which_first(("node.exe", "node"))
     return _which_with_fallbacks("node")
 
 

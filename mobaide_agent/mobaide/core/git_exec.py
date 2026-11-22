@@ -28,7 +28,6 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import shutil
 import signal
 import subprocess
 import sys
@@ -36,6 +35,8 @@ import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+
+from .host_path import which_first
 
 # Suppress the transient ``git`` console window the Scheduled-Task-spawned
 # agent (no parent console under ``pythonw.exe``) would otherwise pop.
@@ -117,7 +118,7 @@ def git_binary() -> str | None:
     with _cache_lock:
         if _binary_cache is not None:
             return _binary_cache
-    found = shutil.which("git")
+    found = which_first(("git",))
     if found:
         with _cache_lock:
             _binary_cache = found

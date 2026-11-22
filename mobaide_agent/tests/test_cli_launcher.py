@@ -535,23 +535,45 @@ class TestProbeWithRealLaunchers:
         assert captured["override"] == override_path
         assert probe_cli_available(launcher) is True
 
-    def test_claude_resolve_binary_caches_on_success(self, monkeypatch):
-        """``resolve_binary`` delegates to the cached ``_resolve_binary``: the
-        underlying module resolver runs once per launcher instance, so repeated
-        probes don't re-stat PATH. (A miss is never cached — covered by the
-        per-open freshness requirement — so only the success path memoises.)"""
-        from mobaide.core import claude_launcher
-        from mobaide.core.claude_launcher import ClaudeLauncher
+    @pytest.mark.parametrize(
+        ("module_name", "class_name", "resolver_name"),
+        [
+            ("antigravity_launcher", "AntigravityLauncher", "_resolve_agy_binary"),
+            ("claude_launcher", "ClaudeLauncher", "_resolve_claude_binary"),
+            ("codex_launcher", "CodexLauncher", "_resolve_codex_binary"),
+            ("copilot_launcher", "CopilotLauncher", "_resolve_copilot_binary"),
+            ("cursor_launcher", "CursorLauncher", "_resolve_cursor_binary"),
+            ("junie_launcher", "JunieLauncher", "_resolve_junie_binary"),
+            ("opencode_launcher", "OpenCodeLauncher", "_resolve_opencode_binary"),
+            ("pi_launcher", "PiLauncher", "_resolve_pi_binary"),
+        ],
+    )
+    def test_resolution_is_cached_until_the_cli_file_is_gone(
+        self, monkeypatch, tmp_path, module_name, class_name, resolver_name
+    ):
+        """The resolved path is reused while the file exists; once the CLI is
+        uninstalled the launcher resolves again, so it is no longer reported
+        available from a stale cached path."""
+        import importlib
 
+        module = importlib.import_module(f"mobaide.core.{module_name}")
+        installed = tmp_path / "cli.exe"
+        installed.write_text("", encoding="utf-8")
         calls = {"n": 0}
 
-        def _count(override=None):
+        def _resolver(override=None):
             calls["n"] += 1
-            return "claude"
+            if not installed.exists():
+                raise _MissingError([f"PATH:{module_name}"])
+            return str(installed)
 
-        monkeypatch.setattr(claude_launcher, "_resolve_claude_binary", _count)
+        monkeypatch.setattr(module, resolver_name, _resolver)
+        launcher = getattr(module, class_name)()
 
-        launcher = ClaudeLauncher()
-        assert launcher.resolve_binary() == "claude"
-        assert launcher.resolve_binary() == "claude"
+        assert launcher.resolve_binary() == str(installed)
+        assert launcher.resolve_binary() == str(installed)
         assert calls["n"] == 1
+
+        installed.unlink()
+
+        assert probe_cli_available(launcher) is False

@@ -114,7 +114,7 @@ class PiLauncher:
     def resolve_binary(self) -> str:
         """The resolved ``pi`` binary (honours the configured override),
         so availability probes match what a session spawn would use."""
-        if self._resolved_binary is None:
+        if self._resolved_binary is None or not os.path.isfile(self._resolved_binary):
             self._resolved_binary = _resolve_pi_binary(
                 override=self._pi_bin_override,
             )
