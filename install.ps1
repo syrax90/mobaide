@@ -426,8 +426,8 @@ function Find-CodexBinary {
 
 # Optional Antigravity CLI counterpart of Find-ClaudeBinary / Find-CodexBinary.
 # Unlike Claude/Codex, agy is a standalone binary (not npm): its installer
-# lands in %USERPROFILE%\.local\bin, so the PATH-miss fallbacks probe that and
-# the conventional Programs locations instead of the npm dirs; the same
+# lands in %LOCALAPPDATA%\agy\bin, so the PATH-miss fallbacks probe that,
+# %USERPROFILE%\.local\bin and the conventional Programs locations instead of the npm dirs; the same
 # WindowsApps App Execution Alias guard applies. Returns the absolute agy
 # path, or $null if not found. Like Codex, a miss is not warned — optional.
 function Find-AgyBinary {
@@ -443,6 +443,7 @@ function Find-AgyBinary {
         $candidates.Add((Join-Path $env:USERPROFILE '.local\bin\agy.cmd'))
     }
     if ($env:LOCALAPPDATA) {
+        $candidates.Add((Join-Path $env:LOCALAPPDATA 'agy\bin\agy.exe'))
         $candidates.Add((Join-Path $env:LOCALAPPDATA 'Programs\Antigravity\agy.exe'))
     }
     if ($env:ProgramFiles) {
