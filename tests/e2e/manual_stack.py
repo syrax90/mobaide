@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
+import io
 import json
 import os
 import platform
@@ -41,6 +43,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
@@ -121,6 +124,15 @@ IOS_BUNDLE_ID = "com.mobaide.app"
 IOS_DEFAULT_SIM = "iPhone 16"
 
 WEB_DIR = REPO_ROOT / "web"
+
+# `up --wsl` (Windows only): a second agent inside a WSL distro. The machine
+# specific bits (distro name, snapshot and install paths) live in a gitignored
+# config next to this script; the tracked .example shows the format.
+WSL_CONFIG_PATH = SCRIPT_DIR / "wsl_agent.toml"
+WSL_CONFIG_EXAMPLE_PATH = SCRIPT_DIR / "wsl_agent.example.toml"
+DEFAULT_WSL_AGENT_NAME = "manual-e2e-wsl-agent"
+# Relative to the Linux user's $HOME: source copy, venv, agent prefix, pidfile.
+WSL_WORK_DIR_NAME = ".mobaide-manual-e2e"
 
 # Put ahead of the env's editable installs (sys.path for this process,
 # PYTHONPATH for the server + agent children): the env usually points at the
@@ -376,6 +388,9 @@ def default_state() -> dict:
         "agent_name": DEFAULT_AGENT_NAME,
         "agent_id": None,
         "agent_token": None,
+        "wsl_agent_name": DEFAULT_WSL_AGENT_NAME,
+        "wsl_agent_id": None,
+        "wsl_agent_token": None,
         "server_port": DEFAULT_PORT,
         "server_host": DEFAULT_HOST,
         "android": _default_client_state(),
@@ -745,6 +760,7 @@ STALE_PROCESS_MATCHERS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("server", "central_server", ("python",)),
     ("agent", "mobaide", ("python",)),
     ("web", "npm", ("node", "npm", "cmd")),
+    ("wsl_agent", "mobaide", ("wsl",)),
 )
 
 
@@ -779,6 +795,10 @@ def kill_stale_processes(state: dict, psutil_mod) -> None:
             continue
         log(f"reaping stale {name} from a previous run (pid {pid})")
         kill_tree(psutil_mod, pid)
+    # Killing wsl.exe does not reliably end the Linux process behind it.
+    wsl_target = runtime.get("wsl_agent")
+    if isinstance(wsl_target, dict) and os.name == "nt":
+        stop_wsl_agent(wsl_target)
     state["runtime"] = {}
 
 
@@ -934,17 +954,25 @@ def provision(deps, client, state: dict, save) -> None:
             "The credentials in state.json no longer match the server DB.\n"
             "Rerun with --fresh (new account) or pass matching --email/--password."
         )
-    if state.get("agent_id") and state.get("agent_token"):
+    ensure_agent(client, state, save)
+
+
+def ensure_agent(client, state: dict, save, prefix: str = "") -> None:
+    """Reuse the persisted agent ``<prefix>agent_*`` or create it."""
+    name_key, id_key, token_key = (
+        f"{prefix}agent_name", f"{prefix}agent_id", f"{prefix}agent_token")
+    name = state[name_key]
+    if state.get(id_key) and state.get(token_key):
         known_ids = {a.get("agent_id") for a in client.list_agents()}
-        if state["agent_id"] in known_ids:
-            log(f"reusing agent '{state['agent_name']}' ({state['agent_id'][:8]}...)")
+        if state[id_key] in known_ids:
+            log(f"reusing agent '{name}' ({state[id_key][:8]}...)")
             return
-        log("persisted agent no longer exists on the server; creating a new one")
-    agent_id, agent_token = client.create_agent(state["agent_name"])
-    state["agent_id"] = agent_id
-    state["agent_token"] = agent_token
+        log(f"persisted agent '{name}' no longer exists on the server; creating a new one")
+    agent_id, agent_token = client.create_agent(name)
+    state[id_key] = agent_id
+    state[token_key] = agent_token
     save()  # persist BEFORE the agent boots: the raw token is shown only once
-    log(f"created agent '{state['agent_name']}' ({agent_id[:8]}...)")
+    log(f"created agent '{name}' ({agent_id[:8]}...)")
 
 
 def run_smoke(deps, client, state: dict) -> None:
@@ -969,6 +997,518 @@ def run_smoke(deps, client, state: dict) -> None:
         )
     )
     log(f"smoke PASS: marker echoed through the relay ({len(output)} bytes)")
+
+
+# --------------------------------------------------------------------------
+# WSL agent (Windows only, `up --wsl`)
+# --------------------------------------------------------------------------
+
+# Top-level mobaide_agent entries never copied into WSL: dev-checkout state
+# (.env, stores) that would give the WSL agent the Windows agent's identity,
+# plus tests and build output it does not need.
+_WSL_SOURCE_SKIP_TOP = frozenset({
+    ".env", "users.json", "projects.json", "state", "tests", "dist", "build",
+    "venv", ".venv",
+})
+_WSL_SOURCE_SKIP_ANY = frozenset({"__pycache__", ".pytest_cache"})
+
+# Positional args: $1 = work dir. `bash -l` so ~/.profile puts the CLIs
+# installed in the distro (~/.local/bin, ...) on PATH for managed sessions.
+_WSL_AGENT_RUN_SCRIPT = (
+    'set -eu; work="$1"; mkdir -p "$work/agent"; cd "$work/agent"; '
+    'echo $$ > "$work/agent.pid"; '
+    'exec "$work/venv/bin/python" -u -m mobaide'
+)
+# Identity gate: the pid must still run this stack's venv python, so a
+# recycled pid (or a real agent installed in the distro) is never killed.
+_WSL_AGENT_STOP_SCRIPT = (
+    'work="$1"; pidfile="$work/agent.pid"; [ -f "$pidfile" ] || exit 0; '
+    'p=$(cat "$pidfile"); rm -f "$pidfile"; '
+    'case "$p" in ""|*[!0-9]*) exit 0;; esac; '
+    'tr "\\0" " " < "/proc/$p/cmdline" 2>/dev/null | grep -qF "$work/venv/bin/python" || exit 0; '
+    'kill -TERM "$p" 2>/dev/null || exit 0; '
+    'for _ in $(seq 50); do kill -0 "$p" 2>/dev/null || exit 0; sleep 0.2; done; '
+    'kill -KILL "$p" 2>/dev/null || true'
+)
+_WSL_SYNC_SOURCE_SCRIPT = (
+    'set -eu; d="$1"; rm -rf "$d.new"; mkdir -p "$d.new"; tar -x -C "$d.new"; '
+    'rm -rf "$d"; mv "$d.new" "$d"'
+)
+# $1 work dir, $2 wanted deps marker, $3 "1" to force the pip install.
+_WSL_VENV_SCRIPT = (
+    'set -eu; work="$1"; want="$2"; force="$3"; marker="$work/venv/.mobaide-deps"; '
+    '[ -x "$work/venv/bin/python" ] || python3 -m venv "$work/venv"; '
+    'if [ "$force" = 1 ] || [ "$(cat "$marker" 2>/dev/null)" != "$want" ]; then '
+    '"$work/venv/bin/python" -m pip install --disable-pip-version-check -q '
+    '-e "$work/src/mobaide_agent"; printf %s "$want" > "$marker"; fi'
+)
+# argv: "1" to also try the default gateway (the Windows host under NAT
+# networking), the port, then candidate hosts. Prints the first host serving
+# /api/health. With argv "gateway" it only prints the default gateway.
+_WSL_RELAY_PROBE = r'''
+import socket, struct, sys, urllib.request
+def gateway():
+    try:
+        for line in open("/proc/net/route").read().splitlines()[1:]:
+            f = line.split()
+            if f[1] == "00000000":
+                return socket.inet_ntoa(struct.pack("<L", int(f[2], 16)))
+    except (OSError, IndexError, ValueError):
+        pass
+    return None
+if sys.argv[1] == "gateway":
+    print(gateway() or "")
+    sys.exit(0)
+port, hosts = sys.argv[2], [h for h in sys.argv[3:] if h]
+if sys.argv[1] == "1" and gateway():
+    hosts.append(gateway())
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+for host in dict.fromkeys(hosts):
+    try:
+        with opener.open(f"http://{host}:{port}/api/health", timeout=3) as resp:
+            if resp.status == 200:
+                print(host)
+                sys.exit(0)
+    except Exception:
+        pass
+sys.exit(1)
+'''
+
+
+def load_wsl_config(path: Path) -> SimpleNamespace:
+    """Read the gitignored WSL config (see wsl_agent.example.toml)."""
+    import tomllib
+
+    if not path.is_file():
+        die(f"--wsl needs the config file {path} (gitignored).\n"
+            f"Copy {WSL_CONFIG_EXAMPLE_PATH.name} next to it and fill it in, "
+            "or pass --wsl-config PATH")
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError) as exc:
+        die(f"unreadable WSL config {path} ({exc})")
+    section = data.get("wsl")
+    if not isinstance(section, dict):
+        die(f"WSL config {path} has no [wsl] table")
+
+    def text(key: str, required: bool = False) -> str:
+        value = section.get(key, "")
+        if not isinstance(value, str):
+            die(f"WSL config {path}: '{key}' must be a string")
+        value = value.strip()
+        if required and not value:
+            die(f"WSL config {path}: '{key}' is required")
+        return value
+
+    return SimpleNamespace(
+        distro=text("distro", required=True),
+        user=text("user"),
+        install_dir=text("install_dir"),
+        snapshot=text("snapshot"),
+        relay_host=text("relay_host"),
+    )
+
+
+def wsl_command(distro: str, user: str, *argv: str) -> list[str]:
+    """`wsl.exe` running argv directly: `--exec` skips the default shell,
+    which would re-split and re-expand the arguments."""
+    cmd = ["wsl.exe", "-d", distro]
+    if user:
+        cmd += ["-u", user]
+    return cmd + ["--exec", *argv]
+
+
+def _wsl_tool_env() -> dict:
+    env = dict(os.environ)
+    env["WSL_UTF8"] = "1"  # wsl.exe's own messages are UTF-16 without it
+    return env
+
+
+def run_wsl(
+    target: SimpleNamespace | dict,
+    script: str,
+    *args: str,
+    root: bool = False,
+    stdin: bytes | None = None,
+    timeout: float | None = 600,
+) -> subprocess.CompletedProcess:
+    """Run a bash script in the distro (`$1..` = args); output is captured."""
+    fields = target if isinstance(target, dict) else vars(target)
+    user = "root" if root else (fields.get("user") or "")
+    return subprocess.run(
+        wsl_command(fields["distro"], user, "bash", "-c", script, "_", *args),
+        input=stdin,
+        capture_output=True,
+        env=_wsl_tool_env(),
+        timeout=timeout,
+    )
+
+
+def _wsl_output(result: subprocess.CompletedProcess) -> str:
+    return (result.stdout or b"").decode("utf-8", "replace").replace("\x00", "")
+
+
+def _wsl_error(result: subprocess.CompletedProcess) -> str:
+    code = result.returncode
+    if code >= 2**31:
+        code -= 2**32  # wsl.exe's own failures arrive as unsigned 32-bit values
+    err = (result.stderr or b"").decode("utf-8", "replace").replace("\x00", "")
+    text = (_wsl_output(result) + err).strip()
+    return f"exit {code}" + (f": {text}" if text else ", no message")
+
+
+def _wsl_check(result: subprocess.CompletedProcess, what: str) -> str:
+    if result.returncode != 0:
+        die(f"WSL: {what} failed ({_wsl_error(result)})")
+    return _wsl_output(result)
+
+
+def wsl_wait_ready(cfg: SimpleNamespace, timeout: float = 240) -> str:
+    """Start the distro and return the agent user's $HOME.
+
+    The first start after an import, or while an emulator and Gradle load the
+    machine, can fail without a message (wsl.exe exit -1); a retry, after one
+    `wsl --terminate` of the half-started distro, normally gets through.
+    """
+    deadline = time.monotonic() + timeout
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            result = run_wsl(cfg, 'printf %s "$HOME"', timeout=180)
+        except subprocess.TimeoutExpired:
+            result = subprocess.CompletedProcess([], -1, b"", b"timed out after 180 s")
+        home = _wsl_output(result).strip()
+        if result.returncode == 0 and home.startswith("/"):
+            return home.splitlines()[0].strip()
+        error = _wsl_error(result) if result.returncode != 0 else f"unexpected $HOME {home!r}"
+        if time.monotonic() >= deadline:
+            die(f"WSL: distro '{cfg.distro}' does not start ({error}).\n"
+                f"Run `wsl -d {cfg.distro}` by hand to see why.")
+        log(f"WSL: distro '{cfg.distro}' did not start ({error}); retrying")
+        if attempt == 2:
+            subprocess.run(["wsl.exe", "--terminate", cfg.distro], capture_output=True,
+                           env=_wsl_tool_env(), timeout=120)
+        time.sleep(5)
+
+
+def wsl_registered_distros() -> list[str]:
+    result = subprocess.run(["wsl.exe", "--list", "--quiet"], capture_output=True,
+                            env=_wsl_tool_env(), timeout=60)
+    return [line.strip() for line in _wsl_output(result).splitlines() if line.strip()]
+
+
+def reset_wsl_distro(cfg: SimpleNamespace) -> None:
+    """`wsl --unregister` + `wsl --import` from the configured snapshot."""
+    if not cfg.install_dir or not cfg.snapshot:
+        die("--wsl-reset needs 'install_dir' and 'snapshot' in the WSL config")
+    snapshot = Path(cfg.snapshot)
+    # Checked before anything is unregistered: a typo must not cost the distro.
+    if not snapshot.is_file():
+        die(f"WSL snapshot {snapshot} not found; distro '{cfg.distro}' left untouched")
+    env = _wsl_tool_env()
+    if cfg.distro.lower() in (d.lower() for d in wsl_registered_distros()):
+        log(f"--wsl-reset: unregistering WSL distro '{cfg.distro}' (its disk is deleted)")
+        subprocess.run(["wsl.exe", "--unregister", cfg.distro], check=True, env=env)
+    Path(cfg.install_dir).mkdir(parents=True, exist_ok=True)
+    log(f"--wsl-reset: importing '{cfg.distro}' from {snapshot}")
+    try:
+        subprocess.run(["wsl.exe", "--import", cfg.distro, cfg.install_dir, str(snapshot)],
+                       check=True, env=env)
+    except subprocess.CalledProcessError as exc:
+        die(f"wsl --import failed ({exc})")
+
+
+def agent_source_tarball(root: Path) -> bytes:
+    """The checkout's mobaide_agent as an uncompressed tar, minus local state."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for dirpath, dirnames, filenames in os.walk(root):
+            top = Path(dirpath) == root
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if d not in _WSL_SOURCE_SKIP_ANY
+                and not d.endswith(".egg-info")
+                and not (top and d in _WSL_SOURCE_SKIP_TOP)
+            )
+            for name in sorted(filenames):
+                if (top and name in _WSL_SOURCE_SKIP_TOP) or name.endswith(".pyc"):
+                    continue
+                path = Path(dirpath) / name
+                tar.add(path, arcname=path.relative_to(root).as_posix(), recursive=False)
+    return buf.getvalue()
+
+
+def prepare_wsl_agent(cfg: SimpleNamespace, *, reinstall: bool, fresh: bool) -> str:
+    """Copy this checkout's agent into the distro and ready its venv.
+
+    Returns the Linux work dir. The copy lives on the distro's own disk (not
+    /mnt/<drive>), so the agent runs at native speed and the Windows checkout
+    never gets Linux build files written into it.
+    """
+    if shutil.which("wsl.exe") is None:
+        die("--wsl: wsl.exe not found (is WSL installed?)")
+    if cfg.distro.lower() not in (d.lower() for d in wsl_registered_distros()):
+        die(f"WSL distro '{cfg.distro}' is not registered; "
+            "add --wsl-reset to import it from the configured snapshot")
+    log(f"WSL: starting distro '{cfg.distro}'")
+    home = wsl_wait_ready(cfg)
+    work = f"{home}/{WSL_WORK_DIR_NAME}"
+    _wsl_check(
+        run_wsl(cfg, "python3 -c 'import sys; sys.exit(sys.version_info < (3, 12))'"),
+        f"Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ check (install python3 >= 3.12 "
+        f"in '{cfg.distro}')",
+    )
+    has_venv = run_wsl(
+        cfg, '[ -x "$1/venv/bin/python" ] || python3 -c "import ensurepip"', work
+    ).returncode == 0
+    if not has_venv:
+        log(f"WSL: installing python3-venv in '{cfg.distro}' (apt, as root)")
+        _wsl_check(run_wsl(
+            cfg,
+            "export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && "
+            "apt-get install -y -qq python3-venv",
+            root=True,
+        ), "apt-get install python3-venv")
+    if fresh:
+        # Mirrors --fresh wiping the Windows agent's prefix in the state dir.
+        _wsl_check(run_wsl(cfg, 'rm -rf "$1/agent"', work), "wiping the agent prefix")
+    log(f"WSL: copying {REPO_ROOT / 'mobaide_agent'} to {cfg.distro}:{work}/src")
+    _wsl_check(run_wsl(
+        cfg, _WSL_SYNC_SOURCE_SCRIPT, f"{work}/src/mobaide_agent",
+        stdin=agent_source_tarball(REPO_ROOT / "mobaide_agent"),
+    ), "copying the agent source")
+    deps = hashlib.sha256(
+        (REPO_ROOT / "mobaide_agent" / "pyproject.toml").read_bytes()
+    ).hexdigest()
+    log("WSL: checking the agent venv (pip installs dependencies on the first run)")
+    _wsl_check(run_wsl(cfg, _WSL_VENV_SCRIPT, work, deps, "1" if reinstall else "0",
+                       timeout=1200), "setting up the agent venv")
+    return work
+
+
+class LoopbackForwarder:
+    """Plain TCP relay from `listen_host:port` to the server on 127.0.0.1.
+
+    Lets the WSL agent reach a loopback-only server under NAT networking,
+    where the distro sees Windows only at its vEthernet (WSL) address. The
+    listener sits on that virtual adapter, so the LAN still cannot connect.
+    """
+
+    def __init__(self, listen_host: str, port: int):
+        self.listen_host = listen_host
+        self._target = ("127.0.0.1", port)
+        self._sock = socket.create_server((listen_host, port))
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self) -> None:
+        while True:
+            try:
+                conn, _ = self._sock.accept()
+            except OSError:
+                return  # listener closed
+            threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
+
+    def _serve(self, conn: socket.socket) -> None:
+        try:
+            upstream = socket.create_connection(self._target, timeout=10)
+        except OSError:
+            conn.close()
+            return
+        upstream.settimeout(None)
+        threading.Thread(target=self._pipe, args=(upstream, conn), daemon=True).start()
+        self._pipe(conn, upstream)
+
+    @staticmethod
+    def _pipe(src: socket.socket, dst: socket.socket) -> None:
+        try:
+            while data := src.recv(65536):
+                dst.sendall(data)
+        except OSError:
+            pass
+        finally:
+            # Either side ending ends the pair; the other pump then sees an error.
+            for s in (src, dst):
+                with contextlib.suppress(OSError):
+                    s.shutdown(socket.SHUT_RDWR)
+                with contextlib.suppress(OSError):
+                    s.close()
+
+    def close(self) -> None:
+        with contextlib.suppress(OSError):
+            self._sock.close()
+
+
+def _wsl_probe(cfg: SimpleNamespace, port: int, hosts: list[str], *,
+               with_gateway: bool, wait: float = 0.0) -> str | None:
+    """First host the distro reaches the server on; with `wait`, keeps
+    retrying that long (a firewall prompt may still be open)."""
+    deadline = time.monotonic() + wait
+    told = False
+    while True:
+        result = run_wsl(cfg, 'exec python3 - "$@"', "1" if with_gateway else "0",
+                         str(port), *hosts, stdin=_WSL_RELAY_PROBE.encode(),
+                         timeout=120)
+        lines = _wsl_output(result).strip().splitlines()
+        if result.returncode == 0 and lines:
+            return lines[-1].strip()
+        if time.monotonic() >= deadline:
+            return None
+        if not told:
+            log("WSL: the agent cannot reach the server yet. If Windows Defender "
+                "Firewall asks about Python, tick Public networks too and allow it; "
+                f"retrying for {wait:.0f}s")
+            told = True
+        time.sleep(3)
+
+
+def _interface_with_address(address: str) -> str | None:
+    try:
+        import psutil
+    except ImportError:
+        return None
+    for name, addrs in psutil.net_if_addrs().items():
+        if any(a.address == address for a in addrs):
+            return name
+    return None
+
+
+def _wsl_firewall_hint(port: int, gateway: str) -> str:
+    alias = (_interface_with_address(gateway) if gateway else None) or "vEthernet (WSL*"
+    return (
+        "Windows Defender Firewall most likely blocks this Python on the WSL "
+        "adapter (a Public network). Allow it once from an ADMIN PowerShell -- the "
+        "rule only covers this interpreter, this port and the WSL adapter:\n"
+        f'  New-NetFirewallRule -DisplayName "Mobaide manual E2E (WSL)" '
+        f"-Direction Inbound -Action Allow -Protocol TCP -LocalPort {port} "
+        f'-Program "{sys.executable}" -InterfaceAlias "{alias}"\n'
+        "Or set relay_host in the WSL config if the server is reachable elsewhere."
+    )
+
+
+def wsl_relay_host(
+    cfg: SimpleNamespace, args: argparse.Namespace, lan_ip: str
+) -> tuple[str, LoopbackForwarder | None]:
+    """The address the WSL agent reaches the server on, plus the forwarder
+    started for a loopback-only server under NAT networking (else None)."""
+    loopback_bind = args.host in ("127.0.0.1", "localhost")
+    if cfg.relay_host:
+        candidates, with_gateway = [cfg.relay_host], False
+    elif loopback_bind:
+        candidates, with_gateway = ["127.0.0.1"], False  # mirrored networking
+    elif args.host not in ("0.0.0.0", "::"):
+        candidates, with_gateway = [args.host], False  # one interface bound
+    else:
+        candidates, with_gateway = ["127.0.0.1", lan_ip], True
+    gateway_out = _wsl_output(run_wsl(cfg, 'exec python3 - "$@"', "gateway",
+                                      stdin=_WSL_RELAY_PROBE.encode()))
+    gateway = gateway_out.strip().splitlines()[-1].strip() if gateway_out.strip() else ""
+
+    forwarder = None
+    if loopback_bind and not cfg.relay_host:
+        host = _wsl_probe(cfg, args.port, candidates, with_gateway=False)
+        if host:
+            return host, None
+        if gateway:
+            try:
+                forwarder = LoopbackForwarder(gateway, args.port)
+            except OSError as exc:
+                log(f"WSL: could not listen on {gateway}:{args.port} ({exc})")
+            else:
+                log(f"WSL: server is bound to {args.host}; forwarding "
+                    f"{gateway}:{args.port} (the WSL network only) to it")
+                candidates = [gateway]
+    host = _wsl_probe(cfg, args.port, candidates, with_gateway=with_gateway, wait=90)
+    if host:
+        return host, forwarder
+    if forwarder is not None:
+        forwarder.close()
+    tried = candidates + ([gateway] if with_gateway and gateway else [])
+    die(
+        f"WSL: the agent in '{cfg.distro}' cannot reach the server on port "
+        f"{args.port} (tried {', '.join(dict.fromkeys(tried))}).\n"
+        + _wsl_firewall_hint(args.port, gateway)
+    )
+
+
+def build_wsl_agent_env(
+    state: dict, args: argparse.Namespace, work: str, relay_host: str, agent_port: int
+) -> dict:
+    """Env for wsl.exe; WSLENV forwards the agent's variables into Linux, so
+    the token never appears on a command line."""
+    agent_vars = {
+        "MOBAIDE_ENV": "test" if args.fake_pty else "production",
+        "JWT_SECRET_KEY": state["jwt_secret_key"],
+        "HOST": "127.0.0.1",
+        "PORT": str(agent_port),
+        "RELAY_SERVER_URL": f"ws://{relay_host}:{args.port}",
+        "RELAY_AGENT_ID": state["wsl_agent_id"],
+        "RELAY_AGENT_TOKEN": state["wsl_agent_token"],
+        "MOBAIDE_AGENT_ALLOW_INSECURE_WS": "1",
+        "MOBAIDE_AGENT_PREFIX": f"{work}/agent",
+        "USER_STORE_PATH": "users.json",
+        "PROJECTS_STORE_PATH": "projects.json",
+        "MOBAIDE_WORKTREES_DIR": f"{work}/agent/worktrees",
+        "MOBAIDE_VOICE_FAKE": "1" if getattr(args, "fake_voice", False) else "0",
+        "LOG_FORMAT": "console",
+        "LOG_LEVEL": "INFO",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONIOENCODING": "utf-8",
+    }
+    env = dict(os.environ)
+    for var in SANITIZED_ENV_VARS:
+        env.pop(var, None)
+    env.update(agent_vars)
+    inherited = [v for v in env.get("WSLENV", "").split(":")
+                 if v and v.split("/")[0] not in agent_vars]
+    env["WSLENV"] = ":".join(inherited + [f"{name}/u" for name in agent_vars])
+    env["WSL_UTF8"] = "1"
+    return env
+
+
+def stop_wsl_agent(target: dict) -> None:
+    """Stop the agent recorded by `up --wsl` inside its distro (best effort)."""
+    if not target.get("distro") or not target.get("work"):
+        return
+    try:
+        run_wsl(target, _WSL_AGENT_STOP_SCRIPT, target["work"], timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        log(f"could not stop the WSL agent in '{target['distro']}' ({exc})")
+
+
+class WslAgentProcess(ChildProcess):
+    """The WSL agent: killing wsl.exe alone may leave the Linux process."""
+
+    def __init__(self, target: dict, env: dict, cwd: Path, log_path: Path):
+        self.target = target
+        super().__init__(
+            "wsl-agent",
+            wsl_command(target["distro"], target.get("user") or "",
+                        "bash", "-lc", _WSL_AGENT_RUN_SCRIPT, "_", target["work"]),
+            env, cwd, log_path,
+        )
+
+    def stop(self, psutil_mod) -> None:
+        stop_wsl_agent(self.target)
+        super().stop(psutil_mod)
+
+
+def wait_for_agents_online(client, token: str, minimum: int, *, timeout: float,
+                           children: list[ChildProcess]) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for child in children:
+            if not child.alive():
+                child.dump_tail()
+                die(f"{child.name} exited with code {child.proc.returncode} during "
+                    "startup (last log lines above; full log in the state dir)")
+        with contextlib.suppress(Exception):
+            if client.health(token=token).get("agents_online", 0) >= minimum:
+                return
+        time.sleep(0.5)
+    for child in children:
+        child.dump_tail()
+    die(f"agents_online < {minimum} after {timeout:.0f}s")
 
 
 # --------------------------------------------------------------------------
@@ -2092,6 +2632,7 @@ def print_ready_banner(
     ios: SimpleNamespace,
     emulator: SimpleNamespace | None = None,
     simulator_udid: str | None = None,
+    wsl_distro: str | None = None,
 ) -> None:
     port = args.port
     gradle_cmd = (
@@ -2118,6 +2659,10 @@ def print_ready_banner(
         "launched by this script sign in by themselves)",
         f"  Agent:              {state['agent_name']} (online, id {state['agent_id'][:8]}...)",
     ]
+    if wsl_distro:
+        lines.append(f"  WSL agent:          {state['wsl_agent_name']} (online in WSL "
+                     f"'{wsl_distro}', id {state['wsl_agent_id'][:8]}...; log "
+                     "logs/wsl-agent.log)")
     if args.web:
         opens = "opens in your browser" if not args.no_browser else "--no-browser"
         lines.append(f"  Web client:         http://localhost:{args.web_port}  "
@@ -2238,6 +2783,11 @@ def merge_external_install_state(state_dir: Path, state: dict) -> None:
 
 
 def cmd_up(args: argparse.Namespace) -> int:
+    wsl_cfg = None
+    if args.wsl or args.wsl_reset:
+        if os.name != "nt":
+            die("--wsl and --wsl-reset need Windows (an agent inside a WSL distro)")
+        wsl_cfg = load_wsl_config(args.wsl_config)
     deps = load_deps(auto_install=True, reinstall=args.reinstall)
     report_checkout_code()
 
@@ -2336,11 +2886,21 @@ def cmd_up(args: argparse.Namespace) -> int:
     ios_installed = False
     children: list[ChildProcess] = []
     client = None
+    wsl_work = None
+    wsl_forwarder = None
     exit_code = 0
     # The client sync, emulator boot and app install run inside the guard too:
     # Ctrl+C or SIGTERM during a minutes-long Gradle build or emulator boot
     # must still stop an owned emulator and restore the client files.
     try:
+        # Before the emulator and Gradle: the WSL VM starts more reliably on an
+        # idle machine, and a broken distro then fails the run before any build.
+        if wsl_cfg is not None:
+            if args.wsl_reset:
+                reset_wsl_distro(wsl_cfg)
+            wsl_work = prepare_wsl_agent(wsl_cfg, reinstall=args.reinstall,
+                                         fresh=args.fresh)
+
         if not args.no_android:
             android.url = resolve_android_url(args, lan_ip)
             state["runtime"]["synced"].append("android")
@@ -2437,6 +2997,33 @@ def cmd_up(args: argparse.Namespace) -> int:
         client.wait_agents_online(1, timeout=45, token=admin_token)
         log("agent tunnel is online (agents_online >= 1)")
 
+        if wsl_cfg is not None:
+            assert wsl_work is not None
+            state.setdefault("wsl_agent_name", DEFAULT_WSL_AGENT_NAME)
+            ensure_agent(client, state, save, prefix="wsl_")
+            relay_host, wsl_forwarder = wsl_relay_host(wsl_cfg, args, lan_ip)
+            wsl_target = {"distro": wsl_cfg.distro, "user": wsl_cfg.user,
+                          "work": wsl_work}
+            # Recorded before the spawn: a hard-killed run's Linux process is
+            # then still reaped by the next up/stop/clean.
+            state["runtime"]["wsl_agent"] = wsl_target
+            save()
+            log(f"starting WSL agent in '{wsl_cfg.distro}' "
+                f"(relay ws://{relay_host}:{args.port})")
+            wsl_agent = WslAgentProcess(
+                wsl_target,
+                build_wsl_agent_env(state, args, wsl_work, relay_host,
+                                    free_loopback_port()),
+                agent_dir,
+                logs_dir / "wsl-agent.log",
+            )
+            children.append(wsl_agent)
+            record_runtime_process(state, "wsl_agent", wsl_agent.proc.pid, deps.psutil)
+            save()
+            wait_for_agents_online(client, admin_token, 2, timeout=90,
+                                   children=[wsl_agent])
+            log("WSL agent tunnel is online (agents_online >= 2)")
+
         if args.smoke:
             if args.fake_pty:
                 run_smoke(deps, client, state)
@@ -2466,7 +3053,8 @@ def cmd_up(args: argparse.Namespace) -> int:
             )
 
         print_ready_banner(args, state, lan_ip, all_ips, android, ios, emulator,
-                           simulator_udid)
+                           simulator_udid,
+                           wsl_distro=wsl_cfg.distro if wsl_cfg is not None else None)
 
         if args.web and not args.no_browser:
             open_web_client(args.web_port)
@@ -2495,6 +3083,8 @@ def cmd_up(args: argparse.Namespace) -> int:
     finally:
         for child in reversed(children):  # reverse boot order
             child.stop(deps.psutil)
+        if wsl_forwarder is not None:
+            wsl_forwarder.close()
         if client is not None:
             client.close()
         if not args.keep_emulator:
@@ -2617,6 +3207,9 @@ def cmd_status(args: argparse.Namespace) -> int:
         log(f"state dir: {args.state_dir}")
         log(f"account:   {state.get('email')}")
         log(f"agent:     {state.get('agent_name')} ({(state.get('agent_id') or '-')[:8]}...)")
+        wsl_target = (state.get("runtime") or {}).get("wsl_agent")
+        if isinstance(wsl_target, dict):
+            log(f"wsl agent: {state.get('wsl_agent_name')} in '{wsl_target.get('distro')}'")
         android = state.get("android") or {}
         if android.get("managed_url"):
             log(f"android:   CENTRAL_SERVER_URL={android['managed_url']}")
@@ -2905,7 +3498,18 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--projects", default=None,
                     help="optional PROJECTS seed for the agent (real workspace dirs)")
     up.add_argument("--reinstall", action="store_true",
-                    help="re-run the editable pip installs before booting")
+                    help="re-run the editable pip installs before booting "
+                         "(also in the WSL agent's venv with --wsl)")
+    up.add_argument("--wsl", action="store_true",
+                    help="Windows only: also run a second agent inside the WSL "
+                         "distro named in --wsl-config, from this checkout's code")
+    up.add_argument("--wsl-reset", action="store_true",
+                    help="implies --wsl: first re-create the distro from its "
+                         "snapshot (wsl --unregister + wsl --import; DELETES the "
+                         "distro's disk)")
+    up.add_argument("--wsl-config", type=Path, default=WSL_CONFIG_PATH,
+                    help=f"WSL agent config (default: {WSL_CONFIG_PATH.name} next "
+                         f"to this script, gitignored; see {WSL_CONFIG_EXAMPLE_PATH.name})")
     up.add_argument("--web", action="store_true",
                     help="also serve the web client (web/) via the Vite dev "
                          "server, proxied to this stack; auto-runs `npm ci` in "

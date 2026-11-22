@@ -1,0 +1,25 @@
+# Config for `manual_stack.py up --wsl` (Windows only): runs a second agent
+# inside a WSL distro, next to the one on Windows.
+#
+# Copy this file to wsl_agent.toml in the same folder and fill it in. That copy
+# is gitignored, because it holds paths from your machine. Use single quotes
+# for Windows paths so backslashes stay as they are.
+
+[wsl]
+# Name of the WSL distro (`wsl --list`). Required.
+distro = "Ubuntu"
+
+# Only for `up --wsl-reset`, which runs
+#   wsl --unregister <distro>
+#   wsl --import <distro> <install_dir> <snapshot>
+# before the agent starts. The reset deletes the distro's disk.
+install_dir = 'C:\WSL\instances\ubuntu'
+snapshot = 'C:\WSL\snapshots\ubuntu.tar'
+
+# Optional. Linux user that runs the agent. Default: the distro's default user.
+# user = ""
+
+# Optional. Address the WSL agent uses to reach the server on Windows.
+# Default: found by itself (127.0.0.1 with mirrored networking, the Windows
+# host's address with NAT networking).
+# relay_host = ""

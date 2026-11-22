@@ -14,6 +14,7 @@ One command, cross-platform (Windows / macOS / Linux), repeatable, and safe: **n
 - [What the script does](#what-the-script-does)
 - [What the script writes into your checkout](#what-the-script-writes-into-your-checkout)
 - [Connectivity modes](#connectivity-modes)
+- [Second agent in WSL (Windows)](#second-agent-in-wsl-windows)
 - [Day-2 commands](#day-2-commands)
 - [Troubleshooting](#troubleshooting)
 - [Production safety](#production-safety)
@@ -181,6 +182,43 @@ The failure is asymmetric and confusing, which is why the script warns loudly ab
 
 **Testing against a real iPhone over Wi-Fi therefore needs an ATS exception added to that tracked plist by hand**; the script deliberately does not add one, because it would ship in release builds. Use the simulator over loopback instead.
 
+## Second agent in WSL (Windows)
+
+On Windows, `up --wsl` also runs a second agent, `manual-e2e-wsl-agent`, inside a WSL distro. The app then lists two agents: the Windows one and the Linux one. Both run this checkout's code.
+
+**One-time setup.** Copy `tests/e2e/wsl_agent.example.toml` to `tests/e2e/wsl_agent.toml` and fill it in. The copy is gitignored, because it holds paths from your machine:
+
+| Key | Meaning |
+|---|---|
+| `distro` | WSL distro name (`wsl --list`). Required. |
+| `install_dir`, `snapshot` | Only for `--wsl-reset`: where `wsl --import` puts the distro, and the `.tar` it imports. |
+| `user` | Optional. Linux user for the agent. Default: the distro's default user. |
+| `relay_host` | Optional. Address the WSL agent uses to reach the server. Default: found by itself. |
+
+`--wsl-config PATH` reads another file.
+
+**Commands.**
+
+- `up --wsl`: start the stack with the WSL agent. The distro must already be registered.
+- `up --wsl-reset`: first re-create the distro from the snapshot, then the same as `--wsl`. It runs `wsl --unregister <distro>` and `wsl --import <distro> <install_dir> <snapshot>`, so **everything in the distro is deleted**. The snapshot is checked before anything is unregistered.
+- Both work with the other `up` flags, for example `up --all --wsl-reset`. On macOS and Linux they stop with an error.
+
+**What it does in the distro.**
+
+1. Checks for Python 3.12+. When `python3-venv` is missing (a fresh Ubuntu image), installs it with `apt-get` as root.
+2. Copies `mobaide_agent/` to `~/.mobaide-manual-e2e/src` on every `up`, without `.env`, `users.json`, `projects.json`, `state/` and `tests/`, so the WSL agent never takes the Windows dev agent's identity.
+3. Creates `~/.mobaide-manual-e2e/venv` and pip-installs the agent into it. Later runs reinstall only when `pyproject.toml` changed, or with `--reinstall`.
+4. Starts the agent through `wsl.exe` with its prefix in `~/.mobaide-manual-e2e/agent`. The agent id and token travel through `WSLENV`, never on a command line.
+   - The agent runs in a login shell, so CLIs installed in the distro (`~/.local/bin` and so on) are on `PATH` for managed sessions.
+5. Waits until `agents_online >= 2`. Logs show as `[wsl-agent]` and go to `<state>/logs/wsl-agent.log`.
+
+**Networking.** The agent tries `127.0.0.1` (mirrored networking), the PC's LAN IP, and the distro's default gateway (the Windows host under NAT networking), and uses the first one that serves `/api/health`.
+
+- With `--host 127.0.0.1` (or a saved loopback host) under NAT networking, the distro cannot see the server's loopback. The script then listens on the Windows side of the WSL network (the distro's default gateway, e.g. `172.31.112.1`) and forwards to the loopback server. Only the WSL network can use that address, so the LAN still cannot connect.
+- If no address works, allow Python through Windows Defender Firewall on **Public** networks as well (the `vEthernet (WSL)` adapter is Public), or set `relay_host`.
+
+**Stopping.** `Ctrl+C`, `stop` and the reaping after a hard kill also stop the agent inside the distro. `--fresh` also empties `~/.mobaide-manual-e2e/agent`. `clean` leaves `~/.mobaide-manual-e2e` in place, so the next run reuses the venv.
+
 ## Day-2 commands
 
 | Command | Effect |
@@ -197,6 +235,7 @@ The failure is asymmetric and confusing, which is why the script warns loudly ab
 | `up --emulator [AVD]` | boot (or reuse) an Android emulator, default AVD `Mobaide-E2E`, created once if missing; shut down on stop when this run booted it (`--keep-emulator` leaves it running) |
 | `android --emulator --install-app` | boot/reuse the emulator, install the debug app on it and launch it (the emulator stays up; this command has no teardown) |
 | `stop` | gracefully stop the running `up` from another shell (any OS; the only graceful stop on Windows); reaps a hard-killed run's leftovers |
+| `up --wsl` / `up --wsl-reset` | Windows: also run a second agent inside the WSL distro from `tests/e2e/wsl_agent.toml`; `--wsl-reset` re-imports the distro from its snapshot first (see [Second agent in WSL](#second-agent-in-wsl-windows)) |
 | `up --projects <paths>` | seed the agent's workspace list with real directories |
 | `up --keep-android` / `--keep-ios` | on stop, leave the test URL in place (default: restore it) |
 | `up --no-android` / `--no-ios` | skip that client's file sync entirely |
@@ -233,6 +272,10 @@ The failure is asymmetric and confusing, which is why the script warns loudly ab
 | `the emulator exited during boot` | See `<state>/logs/emulator.log`. On Windows enable the **Windows Hypervisor Platform** feature (hardware acceleration); also check the AVD is not already open in Android Studio. |
 | `AVD ... cannot be created` | Install the SDK *Command-line Tools* and a phone system image (`sdkmanager "system-images;android-36;google_apis;x86_64"`), or create the AVD in Android Studio's Device Manager. |
 | Background `up` on Windows will not stop | Use `python tests/e2e/manual_stack.py stop`; `taskkill` without `/F` cannot end a console process. |
+| `--wsl needs the config file ...` | Copy `tests/e2e/wsl_agent.example.toml` to `tests/e2e/wsl_agent.toml` and fill it in. |
+| `WSL: distro '...' did not start (exit -1, no message)` | Usually a slow first start after an import; the script retries for up to 4 minutes and terminates the half-started distro once. If it keeps failing, run `wsl -d <distro>` by hand to see the error. |
+| `WSL distro '...' is not registered` | Run with `--wsl-reset` to import it from the snapshot, or fix `distro` in the config. |
+| `the agent in '...' cannot reach the server` | Windows Defender Firewall blocks this env's `python.exe` on the WSL adapter (a Public network). Run the `New-NetFirewallRule` command the error prints, once, in an admin PowerShell; or set `relay_host`. |
 | State vanished after reboot (Linux/macOS) | `/tmp` may be cleared on reboot; use `--state-dir ~/mobaide-manual-e2e`. |
 
 ## Production safety

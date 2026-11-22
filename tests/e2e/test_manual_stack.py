@@ -9,9 +9,11 @@ subprocesses. Run just this file with::
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import shlex
+import tarfile
 import xml.dom.minidom as minidom
 from pathlib import Path
 
@@ -662,3 +664,49 @@ def test_dependency_probe_ignores_the_checkout_source_dirs(monkeypatch):
         ms._require_installed_distributions()
     monkeypatch.setattr(importlib.metadata, "distribution", real)
     ms._require_installed_distributions()  # this env has both
+
+
+def test_wsl_source_copy_leaves_out_the_checkouts_agent_identity(tmp_path):
+    """`up --wsl` copies mobaide_agent into the distro. The checkout's own
+    .env and stores hold the Windows dev agent's identity and must never ride
+    along, or the WSL agent would boot as that agent."""
+    root = tmp_path / "mobaide_agent"
+    for rel in (
+        "pyproject.toml", "mobaide/__init__.py", "mobaide/agent/env.template",
+        "mobaide/agent/state/keep.py", ".env", "users.json", "projects.json",
+        "state/agent.json", "tests/test_x.py", "mobaide/__pycache__/x.pyc",
+        "mobaide_agent.egg-info/PKG-INFO",
+    ):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("x", encoding="utf-8")
+
+    with tarfile.open(fileobj=io.BytesIO(ms.agent_source_tarball(root))) as tar:
+        names = set(tar.getnames())
+
+    assert names == {
+        "pyproject.toml", "mobaide/__init__.py", "mobaide/agent/env.template",
+        "mobaide/agent/state/keep.py",
+    }
+
+
+def test_wsl_agent_token_travels_in_wslenv_not_on_the_command_line(monkeypatch):
+    monkeypatch.setenv("WSLENV", "USERPROFILE/p")
+    monkeypatch.setenv("RELAY_AGENT_TOKEN", "stale-shell-token")
+    state = {**ms.default_state(), "wsl_agent_id": "wsl-id",
+             "wsl_agent_token": "wsl-secret"}
+    args = argparse.Namespace(fake_pty=False, fake_voice=False, port=9000)
+
+    env = ms.build_wsl_agent_env(state, args, "/home/u/.mobaide-manual-e2e",
+                                 "172.20.0.1", 8765)
+
+    assert env["RELAY_AGENT_TOKEN"] == "wsl-secret"
+    assert env["RELAY_SERVER_URL"] == "ws://172.20.0.1:9000"
+    assert env["MOBAIDE_AGENT_PREFIX"] == "/home/u/.mobaide-manual-e2e/agent"
+    forwarded = env["WSLENV"].split(":")
+    assert forwarded[0] == "USERPROFILE/p"
+    assert {"RELAY_AGENT_ID/u", "RELAY_AGENT_TOKEN/u", "MOBAIDE_AGENT_PREFIX/u",
+            "MOBAIDE_ENV/u"} <= set(forwarded)
+    argv = ms.wsl_command("Ubuntu", "", "bash", "-lc", ms._WSL_AGENT_RUN_SCRIPT,
+                          "_", "/home/u/.mobaide-manual-e2e")
+    assert "--exec" in argv
+    assert not any("wsl-secret" in a for a in argv)
