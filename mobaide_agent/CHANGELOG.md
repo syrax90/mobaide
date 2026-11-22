@@ -1,5 +1,25 @@
 # mobaide_agent Changelog
 
+## [0.3.35](https://github.com/syrax90/mobaide/compare/agent-v0.3.34...agent-v0.3.35) (2026-11-22)
+
+
+### Features
+
+* **agent,android,ios,web:** add API key sign-in for Pi providers ([#944](https://github.com/syrax90/mobaide/issues/944)) ([1377f4a](https://github.com/syrax90/mobaide/commit/1377f4a425690b1f32777c26b2cd7177653570fe))
+* **agent,android,ios,web:** continue a Claude chat automatically when the usage limit resets ([#938](https://github.com/syrax90/mobaide/issues/938)) ([bcf8f36](https://github.com/syrax90/mobaide/commit/bcf8f36d07378e44eb0e88ece8553ce2880d7041))
+* **agent,android,ios,web:** delete sessions from the Continue a session list ([#943](https://github.com/syrax90/mobaide/issues/943)) ([6b4a0a1](https://github.com/syrax90/mobaide/commit/6b4a0a1aff07eaf18b8c39a55fcb423221eb810a))
+* **agent,android,ios,web:** follow background work in OpenCode, Copilot and Antigravity chats ([#936](https://github.com/syrax90/mobaide/issues/936)) ([9ce7e71](https://github.com/syrax90/mobaide/commit/9ce7e712cb1cb74631eb6394930b543d144b8a97))
+* **agent,ios:** raise your-turn, approval and activity alerts for Junie terminal sessions ([#945](https://github.com/syrax90/mobaide/issues/945)) ([f2eed77](https://github.com/syrax90/mobaide/commit/f2eed77a48f36ee9ea45c4a2826215c8a50c6a7a))
+
+
+### Bug Fixes
+
+* **agent:** bound worktree git calls and create sessions off the event loop ([#935](https://github.com/syrax90/mobaide/issues/935)) ([a198758](https://github.com/syrax90/mobaide/commit/a198758796b24de5b3fc04231ed7d4ccd3b20916))
+* **agent:** bump claude-agent-acp from 0.101.0 to 0.108.1 ([#934](https://github.com/syrax90/mobaide/issues/934)) ([39e61a5](https://github.com/syrax90/mobaide/commit/39e61a5e2dddd8584bfa9b858b1ded62d4a397af))
+* **agent:** bump codex-acp from 2.5.0 to 2.7.0 ([#940](https://github.com/syrax90/mobaide/issues/940)) ([e0f511d](https://github.com/syrax90/mobaide/commit/e0f511d0c6653169a8a7c33e742870f3fbe262cd))
+* **agent:** detect CLIs installed after the agent started ([#946](https://github.com/syrax90/mobaide/issues/946)) ([f5aa0b7](https://github.com/syrax90/mobaide/commit/f5aa0b799ef45680d78642ff3a6a12487a19c297))
+* **agent:** keep OpenCode voice cleanup free of Claude Code context ([#941](https://github.com/syrax90/mobaide/issues/941)) ([b4c6806](https://github.com/syrax90/mobaide/commit/b4c6806cd677f385e0daa4cc7a3fd4f2d2cfa692))
+
 ## [0.3.34](https://github.com/syrax90/mobaide/compare/agent-v0.3.33...agent-v0.3.34) (2026-11-20)
 
 

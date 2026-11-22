@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.1.9](https://github.com/syrax90/mobaide/compare/ios-v1.1.8...ios-v1.1.9) (2026-11-22)
+
+
+### Features
+
+* **agent,android,ios,web:** add API key sign-in for Pi providers ([#944](https://github.com/syrax90/mobaide/issues/944)) ([1377f4a](https://github.com/syrax90/mobaide/commit/1377f4a425690b1f32777c26b2cd7177653570fe))
+* **agent,android,ios,web:** continue a Claude chat automatically when the usage limit resets ([#938](https://github.com/syrax90/mobaide/issues/938)) ([bcf8f36](https://github.com/syrax90/mobaide/commit/bcf8f36d07378e44eb0e88ece8553ce2880d7041))
+* **agent,android,ios,web:** delete sessions from the Continue a session list ([#943](https://github.com/syrax90/mobaide/issues/943)) ([6b4a0a1](https://github.com/syrax90/mobaide/commit/6b4a0a1aff07eaf18b8c39a55fcb423221eb810a))
+* **agent,android,ios,web:** follow background work in OpenCode, Copilot and Antigravity chats ([#936](https://github.com/syrax90/mobaide/issues/936)) ([9ce7e71](https://github.com/syrax90/mobaide/commit/9ce7e712cb1cb74631eb6394930b543d144b8a97))
+* **agent,ios:** raise your-turn, approval and activity alerts for Junie terminal sessions ([#945](https://github.com/syrax90/mobaide/issues/945)) ([f2eed77](https://github.com/syrax90/mobaide/commit/f2eed77a48f36ee9ea45c4a2826215c8a50c6a7a))
+
 ## [1.1.8](https://github.com/syrax90/mobaide/compare/ios-v1.1.7...ios-v1.1.8) (2026-11-20)
 
 
