@@ -289,7 +289,7 @@ class TestStatusAndDiff:
 class TestErrorMapping:
     async def test_missing_git_is_503(self, http, headers, relay, session_at, tmp_path, monkeypatch):
         session_at(str(tmp_path))
-        monkeypatch.setattr(git_exec.shutil, "which", lambda _name: None)
+        monkeypatch.setattr(shutil, "which", lambda _name: None)
         reset_caches()
 
         resp = await _assert_parity(http, headers, relay, _status_url())

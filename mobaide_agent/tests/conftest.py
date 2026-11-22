@@ -187,6 +187,21 @@ def _pin_pi_binary(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _pin_saved_windows_path(monkeypatch):
+    """Pin the saved (registry) PATH to empty for every test.
+
+    On a Windows host a PATH miss re-reads the registry PATH and appends its
+    folders, so a test that empties PATH to model a missing CLI would find the
+    host's real install. Tests of the re-read re-patch
+    ``host_path._saved_windows_path`` in their test body.
+    """
+    from mobaide.core import host_path
+
+    monkeypatch.setattr(host_path, "_saved_windows_path", lambda: [])
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _pin_model_enumeration(monkeypatch):
     """Pin the model-enumeration subprocess seams to canned failures.
 

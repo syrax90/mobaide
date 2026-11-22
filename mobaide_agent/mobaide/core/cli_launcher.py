@@ -17,7 +17,6 @@ import logging
 import os
 import platform
 import re
-import shutil
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -25,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
+from .host_path import which_first
 from .workspaces_config import WorkspaceConfig
 
 if TYPE_CHECKING:
@@ -300,11 +300,12 @@ def resolve_cli_binary(
     Resolution order (high → low):
       1. ``override`` arg (config-supplied bin path).
       2. ``env_var`` (a direct shell export, e.g. ``MOBAIDE_CODEX_BIN``).
-      3. ``shutil.which`` against the current PATH for each of ``which_names``.
+      3. PATH, for each of ``which_names``, including folders added to the
+         saved PATH since the agent started (:func:`which_first`).
       4. ``fallbacks`` (platform-specific candidate paths the caller built).
 
     Stateless — caching is the caller's responsibility (each launcher caches the
-    result for its lifetime). Raises ``error_cls`` with every probed path tagged
+    result until that file disappears). Raises ``error_cls`` with every probed path tagged
     by source (``override:`` / ``env:`` / ``PATH:name`` / ``fallback:``) so the
     mobile client can tell the operator which lookup channel was tried.
     """
@@ -322,11 +323,10 @@ def resolve_cli_binary(
         if _is_executable_file(path):
             return path
 
-    for name in which_names:
-        hit = shutil.which(name)
-        searched.append(f"PATH:{name}")
-        if hit:
-            return os.path.abspath(hit)
+    searched.extend(f"PATH:{name}" for name in which_names)
+    hit = which_first(which_names)
+    if hit:
+        return hit
 
     for candidate in fallbacks:
         searched.append(f"fallback:{candidate}")
@@ -342,8 +342,9 @@ def probe_cli_available(launcher: CliLauncher) -> bool:
     Wraps the launcher's own ``resolve_binary`` (override → env → PATH →
     fallbacks) so the verdict matches what a real session spawn would resolve —
     an enabled mode in the UI therefore implies a spawnable CLI. Never raises
-    and never spawns a subprocess: resolution only reads PATH and stats
-    candidate files, so a missing binary returns ``False``.
+    and never spawns a subprocess: resolution only reads PATH (and, on Windows,
+    the saved PATH in the registry) and stats candidate files, so a missing
+    binary returns ``False``.
     """
     try:
         launcher.resolve_binary()

@@ -200,7 +200,7 @@ class ClaudeLauncher:
         return self._hook_port, self._hook_token
 
     def _resolve_binary(self) -> str:
-        if self._resolved_binary is None:
+        if self._resolved_binary is None or not os.path.isfile(self._resolved_binary):
             self._resolved_binary = _resolve_claude_binary(
                 override=self._claude_bin_override,
             )

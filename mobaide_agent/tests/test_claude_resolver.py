@@ -217,10 +217,11 @@ async def test_launcher_caches_resolution_per_instance(monkeypatch, tmp_path):
     exactly once. The previous module-level cache is gone; the launcher
     holds the cached value now and the test pins that contract."""
     call_count = {"n": 0}
+    installed = _make_executable(tmp_path / "bin" / "claude")
 
     def _counting(override=None):
         call_count["n"] += 1
-        return "/abs/path/to/claude"
+        return str(installed)
 
     monkeypatch.setattr(claude_launcher, "_resolve_claude_binary", _counting)
     workspace = WorkspaceConfig(name="test", path=str(tmp_path))

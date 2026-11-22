@@ -264,7 +264,7 @@ class CodexLauncher:
         self._cached_model_details: tuple[CodexModelInfo, ...] | None = None
 
     def _resolve_binary(self) -> str:
-        if self._resolved_binary is None:
+        if self._resolved_binary is None or not os.path.isfile(self._resolved_binary):
             self._resolved_binary = _resolve_codex_binary(
                 override=self._codex_bin_override,
             )

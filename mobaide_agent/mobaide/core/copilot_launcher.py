@@ -109,7 +109,7 @@ class CopilotLauncher:
     def resolve_binary(self) -> str:
         """The resolved ``copilot`` binary (honours the configured override),
         so availability probes match what a session spawn would use."""
-        if self._resolved_binary is None:
+        if self._resolved_binary is None or not os.path.isfile(self._resolved_binary):
             self._resolved_binary = _resolve_copilot_binary(
                 override=self._copilot_bin_override,
             )
