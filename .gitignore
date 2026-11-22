@@ -41,6 +41,10 @@ config/.active
 # store these under .pytest_cache/ (already ignored above); older/standalone
 # versions write a top-level .xprocess/. Ignore both.
 .xprocess/
+# Machine-specific config for `tests/e2e/manual_stack.py up --wsl`
+# (WSL distro name, snapshot and install paths); the tracked
+# tests/e2e/wsl_agent.example.toml shows the format.
+tests/e2e/wsl_agent.toml
 # Web client (web/) toolchain — installs and per-run artifacts, never sources
 **/node_modules/
 android/release.keystore

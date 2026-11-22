@@ -76,4 +76,4 @@ Every documentation file in this repository, grouped by topic. Read this first, 
 | File | What it covers |
 |---|---|
 | [e2e-harness.md](e2e-harness.md) | Python E2E harness in `tests/e2e/`: real server + agent subprocesses and a mock mobile client over the real protocol. |
-| [manual-e2e-testing.md](manual-e2e-testing.md) | `tests/e2e/manual_stack.py`: a LAN-reachable stack for real devices, emulators and the web client, with connectivity modes, iOS ATS traps and troubleshooting. |
+| [manual-e2e-testing.md](manual-e2e-testing.md) | `tests/e2e/manual_stack.py`: a LAN-reachable stack for real devices, emulators and the web client, with connectivity modes, an optional second agent inside WSL on Windows (`up --wsl`), iOS ATS traps and troubleshooting. |
