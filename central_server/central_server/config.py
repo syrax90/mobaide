@@ -438,8 +438,8 @@ class CentralServerConfig:
     # Replaces the built-in transcription instruction when set.
     cloud_voice_prompt: str | None = None
     # Seconds of audio per UTC day: one account, and all accounts together.
-    cloud_voice_user_daily_seconds: int = 1800
-    cloud_voice_global_daily_seconds: int = 72000
+    cloud_voice_user_daily_seconds: int = 0
+    cloud_voice_global_daily_seconds: int = 0
     # Requests to the speech service in flight at once; the rest wait.
     cloud_voice_max_concurrency: int = 4
     # When not empty, only these accounts are offered cloud voice input.
@@ -696,10 +696,10 @@ class CentralServerConfig:
             cloud_voice_enabled=_env_bool("CLOUD_VOICE_ENABLED", True),
             cloud_voice_prompt=(os.getenv("CLOUD_VOICE_PROMPT") or "").strip() or None,
             cloud_voice_user_daily_seconds=_env_int_clamped(
-                "CLOUD_VOICE_USER_DAILY_SECONDS", 1800, 0, 86400
+                "CLOUD_VOICE_USER_DAILY_SECONDS", 0, 0, 86400
             ),
             cloud_voice_global_daily_seconds=_env_int_clamped(
-                "CLOUD_VOICE_GLOBAL_DAILY_SECONDS", 72000, 0, 10_000_000
+                "CLOUD_VOICE_GLOBAL_DAILY_SECONDS", 0, 0, 10_000_000
             ),
             cloud_voice_max_concurrency=_env_int_clamped(
                 "CLOUD_VOICE_MAX_CONCURRENCY", 4, 1, 64

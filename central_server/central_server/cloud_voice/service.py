@@ -155,6 +155,11 @@ def usage_cutoff_day() -> str:
     return oldest.isoformat()
 
 
+def _over(used: int, limit: int) -> bool:
+    """A limit of 0 means no limit."""
+    return limit > 0 and used >= limit
+
+
 class CloudVoiceService:
     def __init__(
         self,
@@ -223,11 +228,12 @@ class CloudVoiceService:
         used = 0
         if not self._offered(user):
             state = STATE_OFF
-        elif (used := await self._db.get_cloud_voice_seconds(user.sub, day)) >= (
-            self._user_daily_seconds
+        elif _over(
+            used := await self._db.get_cloud_voice_seconds(user.sub, day),
+            self._user_daily_seconds,
         ):
             state = STATE_LIMIT_REACHED
-        elif await self._db.get_cloud_voice_seconds_total(day) >= self._global_daily_seconds:
+        elif await self._global_limit_reached(day):
             state = STATE_UNAVAILABLE
         elif not (
             await self._healthy(_FRESH_FOR_STATUS_SECONDS, wait=_STATUS_PROBE_WAIT_SECONDS)
@@ -247,6 +253,11 @@ class CloudVoiceService:
             },
             "engines": await self._db.get_voice_engines(user.sub),
         }
+
+    async def _global_limit_reached(self, day: str) -> bool:
+        if not self._global_daily_seconds:
+            return False
+        return await self._db.get_cloud_voice_seconds_total(day) >= self._global_daily_seconds
 
     async def set_engine(
         self, user: "UserTokenPayload", agent_id: str, engine: str
@@ -273,9 +284,9 @@ class CloudVoiceService:
         if await self._rate.try_acquire(user.sub) is not None:
             raise busy("Too many dictations in a minute. Try again shortly.")
         day = _today()
-        if await self._db.get_cloud_voice_seconds(user.sub, day) >= self._user_daily_seconds:
+        if _over(await self._db.get_cloud_voice_seconds(user.sub, day), self._user_daily_seconds):
             raise limit_reached(_resets_at())
-        if await self._db.get_cloud_voice_seconds_total(day) >= self._global_daily_seconds:
+        if await self._global_limit_reached(day):
             logger.warning("cloud_voice.global_limit_reached day=%s", day)
             raise unavailable()
         # Asked before the user has said much, so an outage costs them a few

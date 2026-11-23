@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { PRIVACY_POLICY_URL } from '../routes/settings/supportLinks';
 import { CLOUD_VOICE_STATE, type CloudVoice } from '../protocol/dto/cloudVoice';
+import { hasDailyLimit } from './cloudVoiceCopy';
 import { VoiceSessionToggles } from './VoiceSessionToggles';
 import { formatAllowance, formatUsage, resetTimeLabel } from './voiceEngine';
 
@@ -132,10 +133,12 @@ export function CloudVoicePanel({
       {settings && (
         <>
           <dl className="voice-model">
-            <div>
-              <dt>Used today</dt>
-              <dd>{formatUsage(cloud.usage.used_seconds, cloud.usage.limit_seconds)}</dd>
-            </div>
+            {hasDailyLimit(cloud) && (
+              <div>
+                <dt>Used today</dt>
+                <dd>{formatUsage(cloud.usage.used_seconds, cloud.usage.limit_seconds)}</dd>
+              </div>
+            )}
             <div>
               <dt>Recording</dt>
               <dd>Up to {formatAllowance(cloud.limits.max_seconds)} each</dd>

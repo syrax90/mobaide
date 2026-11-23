@@ -1,7 +1,7 @@
 # Privacy Policy for Mobaide
 
 **Effective date:** 22 May 2026
-**Last updated:** 22 November 2026
+**Last updated:** 23 November 2026
 
 This Privacy Policy describes how the Mobaide mobile application ("**Mobaide**", "**the app**", "**we**", "**our**") collects, uses, stores, and discloses information about you ("**you**", "**user**") when you install and use the app on an Android or iOS device, when you use the browser client at `app.mobaide.com`, and when you use the supporting Mobaide central server hosted at `api.mobaide.com`.
 
@@ -175,7 +175,7 @@ When you dictate with Mobaide Cloud:
 - **What is sent.** The recording of what you said, from the moment you tap the microphone until you stop, and nothing else from your microphone. It travels over TLS from your device or browser to the central server and from there, again over TLS, to our speech service, together with your account's internal identifier (a random ID, not your email address).
 - **The audio is not kept.** The central server holds the recording in memory until the text comes back, or for at most a few minutes if it does not, and never writes it to disk, to a log or to a backup. The speech service processes the recording to produce the text and does not store it.
 - **The text comes back to you.** It appears in the app's command field (or the review dialog in the browser) for you to check. It is never sent to your session on its own.
-- **What we keep.** The speech service keeps a log entry for each recording, with the time, your account's internal identifier, the length of the recording and the recognised text, for up to 14 days. We use it only to find and stop abuse of the service, for example its use for something other than dictating into your Mobaide sessions, and to investigate faults. The central server keeps how many seconds of audio your account used on each day, to apply the daily limits, and your choice (Mobaide Cloud or your computer) for each agent.
+- **What we keep.** The speech service keeps a log entry for each recording, with the time, your account's internal identifier, the length of the recording and the recognised text, for up to 14 days. We use it only to find and stop abuse of the service, for example its use for something other than dictating into your Mobaide sessions, and to investigate faults. The central server keeps how many seconds of audio your account used on each day, to apply a daily limit if we set one, and your choice (Mobaide Cloud or your computer) for each agent.
 - **What we do not do.** We do not use your recordings or their text for advertising, for profiling, or to train machine-learning models, and we do not pass them to any third party. No third-party speech service is involved.
 - **Limits and blocking.** A recording can be up to 2 minutes long and an account can use a limited amount per day; the app shows both. If an account abuses the service, we may turn Mobaide Cloud off for that account. On-computer voice input and every other feature keep working.
 

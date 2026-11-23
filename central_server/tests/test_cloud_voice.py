@@ -467,12 +467,12 @@ class TestDictation:
         body_text = json.dumps(sent.body)
         assert viewer_user["email"] not in body_text
         assert SPEECH_KEY not in body_text
-        # 1.5 s of audio counts as 2 s of today's allowance.
+        # 1.5 s of audio counts as 2 s of today's use.
         status = (await client.get(URL, headers=api_auth_headers)).json()
         assert status["state"] == "ready"
         assert status["usage"] == {
             "used_seconds": 2,
-            "limit_seconds": 1800,
+            "limit_seconds": 0,
             "resets_at": RESETS_AT,
         }
 
@@ -882,6 +882,20 @@ class TestDailyLimits:
         assert speech.requests == []
 
 
+    async def test_zero_limits_mean_no_limit(
+        self, client, install, speech, db, viewer_user, other_user, api_auth_headers
+    ):
+        install(cloud_voice_user_daily_seconds=0, cloud_voice_global_daily_seconds=0)
+        await db.add_cloud_voice_usage(viewer_user["id"], DAY, 86_400)
+        await db.add_cloud_voice_usage(other_user["id"], DAY, 10_000_000)
+
+        status = (await client.get(URL, headers=api_auth_headers)).json()
+
+        assert status["state"] == "ready"
+        assert status["usage"]["limit_seconds"] == 0
+        await _open(client, api_auth_headers)
+
+
 class TestUsageCharge:
     """A recording is charged before it is sent, and given back only when the
     speech service refuses it or cannot be reached: a client must not get free
@@ -1032,8 +1046,10 @@ class TestSpeechServiceHealth:
         await service.create(user)
 
     async def test_concurrent_callers_share_one_probe(
-        self, service, speech, db, viewer_user, monkeypatch
+        self, install, speech, db, viewer_user, monkeypatch
     ):
+        # A global limit, so that each caller reads the total.
+        service = install(cloud_voice_global_daily_seconds=72_000)
         user = _payload(viewer_user["id"])
         callers = 5
         asked = 0

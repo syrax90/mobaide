@@ -45,10 +45,10 @@ The choice is stored on the central server (`PUT /api/voice/cloud/engines/{agent
 - **Mic.** With Mobaide Cloud, the mic records when the state is `ready`. For `unavailable` and `limit_reached` it shows the warning glyph, and a tap opens a sheet that says why. The sheet has **Try again** and, when the agent has voice of its own, **Use this computer instead**.
 - **Settings.** The agent's Voice input settings start with **Speech recognition**: Mobaide Cloud or On this computer.
   - Before a choice, nothing is selected and one line says "Choose one to turn on voice input for {agent}." The on-computer install panel is not shown there.
-  - With Mobaide Cloud they show today's use and the limits. The on-computer controls stay available while the model is installed there.
+  - With Mobaide Cloud they show the per-recording limit, and today's use against the daily limit only when one is set. The on-computer controls stay available while the model is installed there.
   - A disabled **On this computer** says why under the option: the agent is still being checked, did not answer, or cannot run voice input.
   - When the agent did not answer, the section says "Couldn’t reach {agent}. Is it online?" and asks again every 5 s while a voice surface is shown, so it recovers when the agent returns. On web it also asks again at once when the agent list shows the agent online.
-- **Failures.** `cloud_unavailable` keeps the recording and offers **Retry**. The server checks the speech service when a dictation opens, so an outage stops the recording after a few words. `cloud_limit_reached` and `cloud_disabled` say so and do not offer Retry. A recording the speech service does not answer in time still counts against the daily allowance; a refusal or a failed connection does not.
+- **Failures.** `cloud_unavailable` keeps the recording and offers **Retry**. The server checks the speech service when a dictation opens, so an outage stops the recording after a few words. `cloud_limit_reached` and `cloud_disabled` say so and do not offer Retry. A recording the speech service does not answer in time still counts toward today's use; a refusal or a failed connection does not.
 - **Held until it is over.** A cloud dictation keeps its controller until it ends, also when the status turns `unavailable` meanwhile. The failure and its buffered audio then stay on screen for Retry. On web, a review that waits for more dictation keeps its text the same way.
 - **No cleanup.** The speech service already returns clean text, so cloud transcripts skip the transcript cleanup below, and its toggle is hidden while Mobaide Cloud is selected.
 
@@ -63,7 +63,7 @@ The choice is stored on the central server (`PUT /api/voice/cloud/engines/{agent
 | `speech_client.py` | The HTTP client of the speech service (an OpenAI-compatible chat API with inline audio) and the transcription instruction |
 | `audio.py` | Chunk decoding, the silence check, WAV wrapping, and the cleanup of the returned text (control characters, runaway repetition) |
 
-- **Limits.** 2 minutes per recording. 30 minutes per account per UTC day, and 20 hours for all accounts (both configurable). The counts are in SQLite (`cloud_voice_usage`), so a deploy does not reset them. At most 4 requests go to the speech service at once.
+- **Limits.** 2 minutes per recording. No daily limit by default: the per-account and all-accounts daily caps are optional settings (`0` = no limit). With no per-account cap, `usage.limit_seconds` is `0` and the apps show no allowance. The counts are in SQLite (`cloud_voice_usage`), so a deploy does not reset them. At most 4 requests go to the speech service at once.
 - **Health.** A failed request marks the speech service as down. While it is down, the server asks it again at most every 5 s, and only when a client asks for the status, opens a dictation or retries one.
 - **Privacy.** The central server holds the audio in memory until the speech service answers, and stores neither audio nor text. It sends the account's internal id with each request, so the operator of the speech service can find and block an account that abuses it. `central_server/legal/privacy.md` §3.9 says what the speech service keeps.
 

@@ -1053,8 +1053,8 @@ The speech service is any server that speaks the OpenAI chat-completions API wit
 | `CLOUD_VOICE_MODEL` | The model name to request. |
 | `CLOUD_VOICE_ENABLED` | Kill switch, default `true`. `false` turns the feature off without removing the three settings. |
 | `CLOUD_VOICE_PROMPT` | Optional. Replaces the built-in transcription instruction. The built-in one is a plain sentence; put the wording you tuned for your speech service here. |
-| `CLOUD_VOICE_USER_DAILY_SECONDS` | Audio per account per UTC day. Default 1800 (30 minutes). |
-| `CLOUD_VOICE_GLOBAL_DAILY_SECONDS` | Audio for all accounts per UTC day. Default 72000 (20 hours). |
+| `CLOUD_VOICE_USER_DAILY_SECONDS` | Optional cap on audio per account per UTC day. Default 0: no limit. |
+| `CLOUD_VOICE_GLOBAL_DAILY_SECONDS` | Optional cap on audio for all accounts per UTC day. Default 0: no limit. |
 | `CLOUD_VOICE_MAX_CONCURRENCY` | Requests to the speech service at once. Default 4. Keep it at or below what the key allows in parallel. |
 | `CLOUD_VOICE_ALLOWED_EMAILS` | Optional, comma-separated. When set, only these accounts are offered cloud voice input (a staged rollout). |
 

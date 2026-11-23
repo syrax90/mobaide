@@ -11,10 +11,17 @@ enum CloudVoiceCopy {
     static let cloudSummary = "Works right away. Nothing to install on your computer."
 
     static func cloudDetails(_ cloud: CloudVoiceStatus) -> String {
-        "Your recording goes over an encrypted connection to Mobaide's speech service, which "
+        let perDay = hasDailyLimit(cloud)
+            ? " and \(formatAllowance(seconds: cloud.usage.limit_seconds)) per day"
+            : ""
+        return "Your recording goes over an encrypted connection to Mobaide's speech service, which "
             + "turns it into text. The audio is not kept. The text is kept for a short time to "
-            + "prevent abuse. Up to \(formatAllowance(seconds: cloud.limits.max_seconds)) per recording and "
-            + "\(formatAllowance(seconds: cloud.usage.limit_seconds)) per day."
+            + "prevent abuse. Up to \(formatAllowance(seconds: cloud.limits.max_seconds)) per recording\(perDay)."
+    }
+
+    /// A `limit_seconds` of 0 means the server sets no daily limit.
+    static func hasDailyLimit(_ cloud: CloudVoiceStatus) -> Bool {
+        cloud.usage.limit_seconds > 0
     }
 
     static func localSummary(agent: String) -> String {
