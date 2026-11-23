@@ -12,6 +12,7 @@ import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.repository.AgentUpdateRepository
 import com.mobaide.app.data.repository.AgentVersionMonitor
 import com.mobaide.app.data.repository.AutoScanRepository
+import com.mobaide.app.data.repository.autoScanNotRunningMessage
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.review.ReviewPromptCoordinator
@@ -463,6 +464,37 @@ class SessionListViewModelTest {
         advanceUntilIdle()
 
         assertEquals("Failed to stop scan: network", vm.uiState.value.error)
+    }
+
+    @Test
+    fun stopAutoScan_404_saysTheScanIsNoLongerRunning() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        coEvery { fx.autoScanRepo.stopScan("p1") } throws
+            ApiException(404, """{"detail":"No auto scan running for p1"}""")
+
+        vm.stopAutoScan("p1")
+        advanceUntilIdle()
+
+        assertEquals(autoScanNotRunningMessage("stop"), vm.uiState.value.error)
+    }
+
+    @Test
+    fun stopAutoScan_otherHttpFailure_keepsTheFailedToStopPrefix() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        coEvery { fx.autoScanRepo.stopScan("p1") } throws
+            ApiException(500, "internal server error")
+
+        vm.stopAutoScan("p1")
+        advanceUntilIdle()
+
+        assertEquals(
+            "Failed to stop scan: HTTP 500: internal server error",
+            vm.uiState.value.error,
+        )
     }
 
     @Test

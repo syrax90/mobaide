@@ -10,6 +10,7 @@ import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.repository.AgentUpdateRepository
 import com.mobaide.app.data.repository.AgentVersionMonitor
 import com.mobaide.app.data.repository.AutoScanRepository
+import com.mobaide.app.data.repository.autoScanNotRunningMessage
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.review.ReviewPromptCoordinator
@@ -215,7 +216,12 @@ class SessionListViewModel @Inject constructor(
                 autoScanRepository.stopScan(workspaceName)
             } catch (e: Exception) {
                 reviewPromptCoordinator.noteError()
-                _uiState.update { it.copy(error = "Failed to stop scan: ${e.message}") }
+                val message = if (e is ApiException && e.code == 404) {
+                    autoScanNotRunningMessage("stop")
+                } else {
+                    "Failed to stop scan: ${e.message}"
+                }
+                _uiState.update { it.copy(error = message) }
             }
         }
     }

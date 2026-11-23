@@ -57,6 +57,10 @@ internal fun apiErrorDetail(body: String): String? = runCatching {
         ?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
 }.getOrNull()
 
+/** What a Stop or Run now answered with 404 tells the user: the PC no longer runs the scan. */
+internal fun autoScanNotRunningMessage(verb: String): String =
+    "Cannot $verb the scan: it is no longer running on the PC."
+
 /** One-shot UI events emitted by the repository (e.g. rollback errors). */
 sealed interface AutoScanUiEvent {
     data class Error(val message: String) : AutoScanUiEvent
@@ -207,7 +211,7 @@ class AutoScanRepository(
     /** A 404 means the PC no longer runs the scan; say so instead of "HTTP 404". */
     private fun scanFailureMessage(e: Exception, verb: String, fallback: String): String =
         if (e.isNotRunning()) {
-            "Cannot $verb the scan: it is no longer running on the PC."
+            autoScanNotRunningMessage(verb)
         } else {
             e.message ?: fallback
         }

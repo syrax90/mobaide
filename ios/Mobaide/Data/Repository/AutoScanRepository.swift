@@ -155,7 +155,12 @@ final class AutoScanRepository {
     private func dropNotRunning(_ list: AutoScanListResponse, workspaceName: String, verb: String) {
         setList(list)
         setScans(currentList.scans.filter { $0.workspace_name != workspaceName })
-        errorBroadcaster.emit(AutoScanUiError(message: "Cannot \(verb) the scan: it is no longer running on the PC."))
+        errorBroadcaster.emit(AutoScanUiError(message: Self.notRunningMessage(verb: verb)))
+    }
+
+    /// What a Stop or Run now answered with 404 tells the user.
+    static func notRunningMessage(verb: String) -> String {
+        "Cannot \(verb) the scan: it is no longer running on the PC."
     }
 
     private func rollback(_ list: AutoScanListResponse, message: String) {
