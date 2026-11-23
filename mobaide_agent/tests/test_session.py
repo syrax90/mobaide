@@ -1183,6 +1183,54 @@ class TestProgramStatusAttention:
         assert await _read_script(session, backend) == ["awaiting_permission", None]
         assert session._status_gate._timer is None
 
+    @pytest.mark.parametrize(
+        "kind",
+        [SessionKind.SHELL, SessionKind.CODEX, SessionKind.ANTIGRAVITY, _CUSTOM_KIND],
+        ids=["shell", "codex", "antigravity", "custom"],
+    )
+    @pytest.mark.parametrize(
+        ("reports", "activity", "changes"),
+        [
+            ([_WORKING_REPORT], "working", 1),
+            ([_WORKING_REPORT] * 3, "working", 1),
+            ([_WORKING_REPORT, _BLOCKED_REPORT], "working", 1),
+            ([_WORKING_REPORT, _DONE_REPORT], "idle", 2),
+            ([_WORKING_REPORT, _ERROR_REPORT], "idle", 2),
+            ([_WORKING_REPORT, _BLOCKED_REPORT, _CLEAR_REPORT], "idle", 2),
+            ([_OPENCODE_WORKING_REPORT, _OPENCODE_IDLE_REPORT], "idle", 2),
+        ],
+        ids=["working", "repeated", "blocked-keeps", "done", "error", "clear", "idle"],
+    )
+    async def test_hookless_sessions_take_their_activity_from_reports(
+        self, kind, reports, activity, changes,
+    ) -> None:
+        backend = _ScriptedPtyBackend(reports)
+        session = TerminalSession(_status_config(kind), backend=cast(PtyBackend, backend))
+        backend.close()
+        session._state = SessionState.RUNNING
+        await session._reader_loop()
+        session._state = SessionState.RUNNING
+
+        assert session.to_info().activity == activity
+        assert _drain_event_types(session).count("activity") == changes
+
+    @pytest.mark.parametrize(
+        "kind",
+        [SessionKind.CLAUDE, SessionKind.AUTO_SCAN, SessionKind.JUNIE],
+        ids=["claude", "auto_scan", "junie"],
+    )
+    async def test_hook_driven_sessions_take_no_activity_from_reports(self, kind) -> None:
+        # Their hooks own the activity; a report would fight them.
+        backend = _ScriptedPtyBackend([_WORKING_REPORT])
+        session = TerminalSession(_status_config(kind), backend=cast(PtyBackend, backend))
+        backend.close()
+        session._state = SessionState.RUNNING
+        await session._reader_loop()
+        session._state = SessionState.RUNNING
+
+        assert session.to_info().activity is None
+        assert "activity" not in _drain_event_types(session)
+
     async def test_client_input_cancels_a_pending_done_window(self) -> None:
         backend = _ScriptedPtyBackend([_DONE_REPORT])
         session = TerminalSession(
