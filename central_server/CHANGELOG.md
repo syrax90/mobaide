@@ -1,5 +1,12 @@
 # central_server Changelog
 
+## [0.2.30](https://github.com/syrax90/mobaide/compare/server-v0.2.29...server-v0.2.30) (2026-11-23)
+
+
+### Features
+
+* **server,android,ios,web:** add cloud voice input (Mobaide Cloud) ([#948](https://github.com/syrax90/mobaide/issues/948)) ([2bdaa26](https://github.com/syrax90/mobaide/commit/2bdaa26a96932689ddcc38e11f26a8aa218b1fde))
+
 ## [0.2.29](https://github.com/syrax90/mobaide/compare/server-v0.2.28...server-v0.2.29) (2026-11-20)
 
 
