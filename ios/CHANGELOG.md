@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.10](https://github.com/syrax90/mobaide/compare/ios-v1.1.9...ios-v1.1.10) (2026-11-23)
+
+
+### Features
+
+* **server,android,ios,web:** add cloud voice input (Mobaide Cloud) ([#948](https://github.com/syrax90/mobaide/issues/948)) ([2bdaa26](https://github.com/syrax90/mobaide/commit/2bdaa26a96932689ddcc38e11f26a8aa218b1fde))
+
 ## [1.1.9](https://github.com/syrax90/mobaide/compare/ios-v1.1.8...ios-v1.1.9) (2026-11-22)
 
 
