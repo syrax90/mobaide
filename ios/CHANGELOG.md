@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.11](https://github.com/syrax90/mobaide/compare/ios-v1.1.10...ios-v1.1.11) (2026-11-23)
+
+
+### Features
+
+* **server,android,ios,web:** drop the daily limits of cloud voice input ([#950](https://github.com/syrax90/mobaide/issues/950)) ([c94e4ad](https://github.com/syrax90/mobaide/commit/c94e4ad45c811b2d3d40b95cf6cc54c16c4e7072))
+
 ## [1.1.10](https://github.com/syrax90/mobaide/compare/ios-v1.1.9...ios-v1.1.10) (2026-11-23)
 
 
