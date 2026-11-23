@@ -529,6 +529,7 @@ answer and the shared footer; the sitemap lists it.
   | `dictation.py` | The two-minute cap |
   | `helper.py` | The three-minute idle exit |
   | `central_server/central_server/cloud_voice/` and its `CLOUD_VOICE_*` settings | Mobaide Cloud: the 2-minute recording cap, the daily limits, the text kept up to 14 days by the speech service and never the audio |
+  | *Mobaide Cloud* section of [`docs/voice-input.md`](voice-input.md) | The 28 Mobaide Cloud languages (the speech service's list; this repo has no other source) |
   | `cleanup.py` | The opt-in transcript cleanup through the session's AI agent, stated in *Where your voice goes* and the FAQ |
   | *Voice input* section of [`docs/deployment.md`](deployment.md) | Disk, download hosts, the CLI |
 
